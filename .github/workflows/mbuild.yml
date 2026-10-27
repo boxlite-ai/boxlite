@@ -263,14 +263,15 @@ jobs:
         working-directory: apps/infra
         run: |
           set -Eeuo pipefail
-          # Retried, but not blindly. mbuild exits 78 when the image scan
-          # refuses a publish, and that answer does not change on a second ask:
-          # retrying it spends three attempts and ninety seconds of backoff
-          # re-reading the same findings before reporting them. Only the push
-          # and the token endpoint around it fail transiently.
+          # Audit failures (65) and image scan refusals (78) stop immediately.
+          # Other publication failures retain retries for transient errors.
           for attempt in 1 2 3; do
             npm run --silent mbuild publish -- --tag "$IMAGE_TAG" --stage "$TARGET_STAGE" && exit 0
             status=$?
+            if [ "$status" -eq 65 ]; then
+              echo "::error title=publish::$IMAGE_TAG failed the dependency audit; details are above"
+              exit 1
+            fi
             if [ "$status" -eq 78 ]; then
               echo "::error title=publish::$IMAGE_TAG was refused by the image scan gate; findings are above"
               exit 1

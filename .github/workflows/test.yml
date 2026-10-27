@@ -37,6 +37,9 @@ on:
       - 'scripts/setup/**'
       - 'scripts/build/**'
       - 'scripts/*.sh'
+      - 'scripts/ci/**'
+      - 'scripts/test/coverage-bindings.sh'
+      - 'tests/scripts/**'
       - 'Makefile'
       - 'make/**'
       - 'flake.nix'
@@ -148,6 +151,12 @@ jobs:
               - 'sdks/c/src/**/!(*.md)'
               - 'sdks/c/build.rs'
               - 'sdks/python/src/**/!(*.md)'
+              # The rust job also runs the external collector, whose Python
+              # suite drives these bindings through a built extension.
+              - 'sdks/python/boxlite/**/!(*.md)'
+              - 'sdks/python/tests/**/!(*.md)'
+              - 'scripts/test/coverage-bindings.sh'
+              - 'tests/scripts/**/!(*.md)'
               - 'sdks/node/src/**/!(*.md)'
               - 'sdks/node/build.rs'
               - 'src/test-utils/**/!(*.md)'
@@ -299,6 +308,10 @@ jobs:
               - 'Makefile'
               - 'make/test.mk'
               - 'make/changes.mk'
+              # tests/scripts and the scripts it drives.
+              - 'tests/scripts/**'
+              - 'scripts/ci/**/!(*.md)'
+              - 'scripts/test/coverage-bindings.sh'
               # The infra suite asserts Codecov's ignore list covers every test
               # source, so a change to it has to run that suite.
               - 'codecov.yml'
@@ -320,6 +333,8 @@ jobs:
           cache-dependency-path: apps/infra/package-lock.json
       - name: Type-check and test infrastructure scripts and workflows
         run: make test:apps:infra
+      - name: Test CI and coverage scripts against fake tools
+        run: make test:unit:scripts
 
   # Merge core, shared, REST, CLI, native VMM and Linux guest coverage.
   # Codecov gates changed lines at 90% and reports total coverage separately.

@@ -24,6 +24,11 @@ def target_dir():
     return Path(os.environ["CARGO_TARGET_DIR"]).resolve()
 
 if tool == "make":
+    import json
+
+    target_dir().mkdir(parents=True, exist_ok=True)
+    with (target_dir() / "make-invocations.jsonl").open("a") as log:
+        log.write(json.dumps(args) + "\\n")
     for target in args:
         if target in ("dev:python", "dev:node", "test:unit:c"):
             sdk = target.split(":")[-1]
@@ -31,6 +36,14 @@ if tool == "make":
             destination = target_dir()
             destination.mkdir(parents=True, exist_ok=True)
             (destination / (sdk + ".o")).touch()
+        elif target == "coverage:python":
+            # The Python suite must run under the native gate: with the
+            # extension built first, absence or breakage then fails the
+            # collection instead of silently skipping the native tests.
+            target_dir().mkdir(parents=True, exist_ok=True)
+            (target_dir() / "python-gate").write_text(
+                os.environ.get("BOXLITE_REQUIRE_NATIVE", "")
+            )
 elif tool == "rustc":
     print("host: aarch64-apple-darwin")
 elif args[:2] == ["llvm-cov", "report"]:
@@ -46,7 +59,7 @@ elif args[:2] == ["llvm-cov", "report"]:
 
 
 class NativeCoveragePathsTest(unittest.TestCase):
-    def run_collector(self, override):
+    def run_collector(self, override, gate_required=False):
         with tempfile.TemporaryDirectory() as scratch:
             root = Path(scratch).resolve() / "repository with spaces"
             collector = root / "scripts/test/coverage-bindings.sh"
@@ -65,6 +78,9 @@ class NativeCoveragePathsTest(unittest.TestCase):
             env["PATH"] = str(tools) + os.pathsep + env["PATH"]
             env["COVERAGE_TEST_ROOT"] = str(root)
             env.pop("CARGO_TARGET_DIR", None)
+            # The gate assertion must observe only what the collector sets;
+            # an inherited variable would mask a reverted script.
+            env.pop("BOXLITE_REQUIRE_NATIVE", None)
             if override == "absolute":
                 expected = Path(scratch).resolve() / "external target"
                 env["CARGO_TARGET_DIR"] = str(expected)
@@ -85,8 +101,52 @@ class NativeCoveragePathsTest(unittest.TestCase):
             )
             self.assertEqual(result.returncode, 0, result.stderr)
             report = (root / "target/coverage/native-sdk/lcov.info").read_text()
+            # The Node integration step must stay scoped to the no-VM
+            # loopback suites. Read the make argv the collector actually
+            # passed and apply its FILTER the way vitest applies a
+            # testNamePattern: the loopback suites are selected and the
+            # VM-booting SSH suites are not.
+            import json
+
+            invocations_path = (
+                root / "target/native-sdk-coverage/make-invocations.jsonl"
+                if override is None
+                else expected / "make-invocations.jsonl"
+            )
+            node_runs = []
+            for line in invocations_path.read_text().splitlines():
+                argv = json.loads(line)
+                if "test:integration:node" in argv:
+                    node_runs.append(argv)
+            self.assertTrue(node_runs, str(invocations_path))
+            for argv in node_runs:
+                filters = [a for a in argv if a.startswith("FILTER=")]
+                self.assertEqual(
+                    len(filters), 1, "test:integration:node ran unfiltered: %r" % argv
+                )
+                pattern = filters[0][len("FILTER="):]
+                for suite in (
+                    "image catalog",
+                    "registry logins",
+                    "box.ssh over a REST transport",
+                    "SimpleBox.ssh over a REST transport",
+                ):
+                    self.assertRegex(suite, pattern)
+                for vm_suite in (
+                    "SimpleBox.ssh",
+                    "SimpleBox.ssh with an explicit main command",
+                ):
+                    self.assertNotRegex(vm_suite, pattern)
             for sdk in ("python", "node", "c"):
                 self.assertIn("SF:" + str(expected / (sdk + ".o")), report)
+            if gate_required:
+                marker = expected / "python-gate"
+                self.assertTrue(marker.is_file(), "make coverage:python never ran")
+                self.assertEqual(
+                    marker.read_text(),
+                    "1",
+                    "the Python suite must run with BOXLITE_REQUIRE_NATIVE=1",
+                )
 
     def test_relative_target_keeps_sdk_objects_in_the_report(self):
         self.run_collector("relative target")
@@ -96,6 +156,10 @@ class NativeCoveragePathsTest(unittest.TestCase):
 
     def test_default_target_keeps_sdk_objects_in_the_report(self):
         self.run_collector(None)
+
+
+    def test_the_python_suite_runs_under_the_native_gate(self):
+        self.run_collector(None, gate_required=True)
 
 
 if __name__ == "__main__":

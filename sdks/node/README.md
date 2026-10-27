@@ -241,6 +241,36 @@ console.log(refreshed?.network?.publishedPorts);
 await box.stop();
 ```
 
+### Guest SSH Control
+
+`JsBox` and `SimpleBox` expose `box.ssh` to configure, observe, and disable
+the guest SSH listener.
+
+```typescript
+import { readFile } from 'node:fs/promises';
+
+const status = await box.ssh.configure({
+  listenAddress: '0.0.0.0:2222',
+  hostPrivateKey: await readFile('host_key', 'utf8'), // OpenSSH private key
+  accounts: [
+    {
+      login: 'alice',
+      authorizedKeys: [await readFile('alice.pub', 'utf8')],
+      // Certificate auth instead of authorizedKeys:
+      // ca: { publicKey: caPublicKey, principal: 'alice' },
+    },
+  ],
+});
+// { enabled: true, generation: 1n, listenAddress, hostPublicKey,
+//   hostKeyFingerprint } — generation is a bigint (full u64).
+
+await box.ssh.status();
+await box.ssh.disable();
+```
+
+See the [Node.js SSH reference](../../docs/reference/nodejs/README.md#guest-ssh-control)
+for configuration types, return values, and errors.
+
 ### Runtime Image Management
 
 `runtime.images` holds the images a runtime can boot from: the local cache on

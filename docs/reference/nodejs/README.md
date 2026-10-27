@@ -10,6 +10,7 @@ Complete API reference for the BoxLite Node.js/TypeScript SDK.
 - [Runtime Management](#runtime-management)
 - [Box Handle](#box-handle)
 - [Network Tunnels](#network-tunnels)
+- [Guest SSH Control](#guest-ssh-control)
 - [Command Execution](#command-execution)
 - [Box Types](#box-types)
 - [Error Types](#error-types)
@@ -301,6 +302,7 @@ Handle to a running or stopped box.
 | `id` | `string` | Unique box identifier (ULID) |
 | `name` | `string \| null` | User-defined name |
 | `network` | `JsNetworkHandle` | Box-scoped tunnel operations |
+| `ssh` | `JsSshHandle` | Configure, query, or disable guest SSH |
 
 #### Methods
 
@@ -392,6 +394,54 @@ Each tunnel is one-shot. Choose `connect()` or `forward()`; a forwarder opens
 fresh tunnels for additional clients. This differs from `ports`, which
 creates a persistent, local-only host listener that accepts repeated
 connections from ordinary host applications.
+
+---
+
+## Guest SSH control
+
+`JsBox` and `SimpleBox` expose `box.ssh`.
+
+| Operation | Signature | Description |
+|-----------|-----------|-------------|
+| Configure | `await box.ssh.configure(config)` | Apply `SshConfig` and return `SshStatus` |
+| Observe | `await box.ssh.status()` | Return `SshStatus` |
+| Disable | `await box.ssh.disable()` | Disable SSH and return `SshStatus` |
+
+```typescript
+interface SshConfig {
+  listenAddress: string;      // e.g. "0.0.0.0:2222"
+  hostPrivateKey: string;     // unencrypted OpenSSH host private key
+  accounts: SshAccount[];     // non-empty; each has a key or a CA
+}
+
+interface SshAccount {
+  login: string;              // 1-128 chars: [A-Za-z0-9._-]
+  authorizedKeys?: string[];  // OpenSSH public keys
+  ca?: SshCaConfig;           // certificate authority alternative
+}
+
+interface SshCaConfig {
+  publicKey: string;
+  principal: string;          // required certificate principal
+}
+
+interface SshStatus {
+  enabled: boolean;
+  generation: bigint;         // full u64 precision
+  listenAddress: string;
+  hostPublicKey: string;      // comment-free public host key
+  hostKeyFingerprint: string; // SHA-256 fingerprint
+}
+```
+
+On a `SimpleBox`, a first `configure` call lazily creates or fetches the box
+before validating the configuration: a wrong-typed configuration can leave the
+created box behind, but no SSH operation is sent for it. `status` and
+`disable` never start the VM.
+
+Invalid configuration field types report `InvalidArg` with the message
+`invalid SSH configuration`, without echoing rejected values. Other errors
+use the SDK's existing [error types](#error-types).
 
 ---
 

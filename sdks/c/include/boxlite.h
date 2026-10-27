@@ -630,6 +630,31 @@ typedef struct VolumeHandle CBoxliteVolumeHandle;
 // Runtime shutdown completion.
 typedef void (*CRuntimeShutdownCb)(CBoxliteError*, void*);
 
+// Guest SSH listener state as observed by one call; carries no credentials.
+//
+// The callback that receives it by pointer owns it, nested strings included,
+// and releases it once with `boxlite_free_ssh_status`. `enabled` is non-zero
+// while the guest listener runs. Disabling a running listener preserves its
+// generation; a never-enabled one reports zero, as Configured and Stopped
+// boxes do.
+typedef struct CSshStatus {
+  int enabled;
+  uint64_t generation;
+  char *listen_address;
+  char *host_public_key;
+  char *host_key_fingerprint;
+} CSshStatus;
+
+// SSH configure completion. A successful callback owns the status and must
+// release it with `boxlite_free_ssh_status`; on failure it is null.
+typedef void (*CBoxSshConfigureCb)(struct CSshStatus*, CBoxliteError*, void*);
+
+// SSH status completion with the same ownership contract as SSH configure.
+typedef void (*CBoxSshStatusCb)(struct CSshStatus*, CBoxliteError*, void*);
+
+// SSH disable completion with the same ownership contract as SSH configure.
+typedef void (*CBoxSshDisableCb)(struct CSshStatus*, CBoxliteError*, void*);
+
 // C ABI representation of volume metadata.
 //
 // `id` and `created_at` are non-null, heap-owned C strings. A standalone value
@@ -1556,6 +1581,57 @@ void boxlite_runtime_free(CBoxliteRuntime *runtime);
 //
 // Returns the number of dispatched events, or `-1` on error.
 int boxlite_runtime_drain(CBoxliteRuntime *runtime, int timeout_ms, CBoxliteError *out_error);
+
+// Queue SSH configuration replacement. The caller's JSON is copied and
+// deserialized into the runtime's `SshConfig` at entry — a malformed or
+// non-UTF-8 body returns `InvalidArgument` with a constant message before
+// anything is queued, so key material never reaches the error. The core
+// applies its own startup policy: with an explicit main command a Configured
+// or Stopped box fails the callback with `InvalidState`.
+//
+// # Safety
+//
+// `handle`, `config_json`, and `cb` must be non-null; `config_json` must be
+// UTF-8 and only needs to stay valid for this call. A successful callback
+// owns the status and must release it with `boxlite_free_ssh_status`; the
+// error pointer is borrowed for the callback only.
+enum BoxliteErrorCode boxlite_box_ssh_configure(CBoxHandle *handle,
+                                                const char *config_json,
+                                                CBoxSshConfigureCb cb,
+                                                void *user_data,
+                                                struct FFIError *out_error);
+
+// Queue a read of SSH state. Never starts the VM or its main command: a
+// Configured or Stopped box completes with disabled status, generation zero,
+// and empty fields.
+//
+// # Safety
+//
+// `handle` and `cb` must be non-null. Ownership is as for
+// [`boxlite_box_ssh_configure`].
+enum BoxliteErrorCode boxlite_box_ssh_status(CBoxHandle *handle,
+                                             CBoxSshStatusCb cb,
+                                             void *user_data,
+                                             struct FFIError *out_error);
+
+// Queue SSH shutdown, disconnecting clients. Repeated calls are supported and
+// never start the box.
+//
+// # Safety
+//
+// As for [`boxlite_box_ssh_status`].
+enum BoxliteErrorCode boxlite_box_ssh_disable(CBoxHandle *handle,
+                                              CBoxSshDisableCb cb,
+                                              void *user_data,
+                                              struct FFIError *out_error);
+
+// Release a status handed to an SSH callback.
+//
+// # Safety
+//
+// `status` must be null or a pointer from an SSH callback that has not
+// already been freed.
+void boxlite_free_ssh_status(struct CSshStatus *status);
 
 void boxlite_free_string(char *s);
 

@@ -20,9 +20,11 @@ cargo llvm-cov clean --workspace
 
 make dev:python dev:node
 make test:unit:c
-make coverage:python
+# The suite must exercise the extension just built: the gate turns an
+# absent or broken module into a collection failure, not a silent skip.
+BOXLITE_REQUIRE_NATIVE=1 make coverage:python
 # These suites use loopback HTTP and an empty local cache; they never boot a VM.
-make test:integration:node FILTER='image catalog|registry logins'
+make test:integration:node FILTER='image catalog|registry logins|ssh over a REST transport'
 
 mkdir -p "$root/target/coverage/native-sdk"
 # napi builds under the explicit host triple; also scan it alongside debug/.

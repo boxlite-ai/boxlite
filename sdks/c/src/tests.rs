@@ -1487,3 +1487,6 @@ mod image_catalog {
         );
     }
 }
+
+#[path = "tests/ssh.rs"]
+mod ssh_control;

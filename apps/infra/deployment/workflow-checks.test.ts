@@ -41,10 +41,24 @@ for (const path of ['sdks/go/README.md', 'sdks/python/README.md', 'sdks/node/REA
   })
 }
 
+test('SDK test documentation does not rebuild SDKs: sdks/python/tests/README.md', () => {
+  assert.deepEqual(testSuites(['sdks/python/tests/README.md']), [])
+})
+
+// The infra job runs the script tests on any tests/scripts change; that
+// directory's prose still builds no SDK.
+test('script test documentation selects only the infra suite: tests/scripts/README.md', () => {
+  assert.deepEqual(testSuites(['tests/scripts/README.md']), ['infra'])
+})
+
 for (const [path, expected] of [
   ['sdks/go/options.go', ['go']],
   ['apps/runner/cmd/runner/main.go', ['go']],
-  ['sdks/python/boxlite/options.py', ['python']],
+  ['sdks/python/boxlite/options.py', ['rust', 'python']],
+  ['sdks/python/boxlite/sync_api/_ssh.py', ['rust', 'python']],
+  ['sdks/python/tests/test_ssh_native_rest.py', ['rust', 'python']],
+  ['scripts/test/coverage-bindings.sh', ['rust', 'infra']],
+  ['tests/scripts/test_native_coverage.py', ['rust', 'infra']],
   ['sdks/node/lib/options.ts', ['node']],
   ['src/cli/src/main.rs', ['rust']],
   ['src/vmm/src/vm.rs', ['rust', 'vmm']],
@@ -64,6 +78,14 @@ for (const [path, expected] of [
 // the filter, or a push to main changes the suite's inputs and tests nothing.
 for (const path of ['apps/runner/cmd/runner/main.go', 'apps/go.work', 'apps/go.work.sum', 'openapi/box.openapi.yaml', 'openapi/admin.openapi.yaml']) {
   test(`a push that selects a suite reaches the Test workflow: ${path}`, () => {
+    assert.equal(acceptsFiles('test.yml', 'push', [path]), true)
+  })
+}
+
+// The rust job runs the external coverage collector; its inputs must also
+// reach the workflow on push, or a main-branch change tests nothing.
+for (const path of ['scripts/test/coverage-bindings.sh', 'tests/scripts/test_native_coverage.py']) {
+  test(`a push that selects the rust suite reaches the Test workflow: ${path}`, () => {
     assert.equal(acceptsFiles('test.yml', 'push', [path]), true)
   })
 }
@@ -313,6 +335,18 @@ test('Linux x64 builds the kernel and runs the boot tests only for vmm changes, 
     }
   }
   assert.equal(steps[bootAt]['continue-on-error'], undefined, 'failed boot tests must fail CI')
+})
+
+// tests/scripts drives these scripts through fakes; the infra job runs it.
+for (const path of ['scripts/ci/gcp-e2e-vm.sh', 'scripts/test/coverage-bindings.sh', 'tests/scripts/test_gcp_e2e_vm.py']) {
+  test(`a change to a script under tests/scripts runs those tests: ${path}`, () => {
+    assert.ok(testSuites([path]).includes('infra'))
+    assert.equal(acceptsFiles('test.yml', 'push', [path]), true)
+  })
+}
+
+test('the infra job runs the script tests', () => {
+  assert.ok(workflow('test.yml').jobs.infra.steps.some((step: any) => step.run === 'make test:unit:scripts'))
 })
 
 // The check below only guards the ignore list if editing that list runs it.

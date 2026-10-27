@@ -653,6 +653,21 @@ unsafe fn dispatch_event(event: RuntimeEvent) {
                 user_data,
                 result,
             } => dispatch_unit_event(result, user_data, cb),
+            RuntimeEvent::SshConfigure {
+                cb,
+                user_data,
+                result,
+            } => dispatch_handle_event::<crate::ssh::CSshStatus>(result, user_data, cb),
+            RuntimeEvent::SshStatus {
+                cb,
+                user_data,
+                result,
+            } => dispatch_handle_event::<crate::ssh::CSshStatus>(result, user_data, cb),
+            RuntimeEvent::SshDisable {
+                cb,
+                user_data,
+                result,
+            } => dispatch_handle_event::<crate::ssh::CSshStatus>(result, user_data, cb),
             RuntimeEvent::Info {
                 cb,
                 user_data,

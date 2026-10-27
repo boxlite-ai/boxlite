@@ -43,6 +43,27 @@ Key test entry points:
 - `make test:apps:runner FILTER=NetworkPolicy` - runner Go tests with the local C/Go SDK
 - `make fmt:apps FILES='api/src/path.ts'` - format selected files relative to `apps/`
 
+Python SDK tests run in two environments. Without the native extension
+(`make test:unit:python`, `make coverage:python` — the shape of the CI unit
+job, which never builds it), extension-dependent tests skip and everything
+else — pure-Python wrappers, sync wrappers over a stand-in native module,
+and SDK export checks — must pass. After `make dev:python` (or
+`make coverage:python:integration`), the same suite also exercises the
+native classes; there an extension that exists but cannot load, or that
+lacks an expected type, fails instead of skipping. Run both before
+shipping Python SDK changes.
+
+`BOXLITE_REQUIRE_NATIVE=1` makes the second environment mandatory for a
+single run: the shared pytest configuration then imports the extension
+module directly and fails collection when it is absent, unloadable, or
+missing SSH types, instead of letting native tests skip. After
+`make dev:python`, run the gated suite with
+`BOXLITE_REQUIRE_NATIVE=1 make coverage:python` — the same invocation
+`scripts/test/coverage-bindings.sh` (the external coverage collector, run by
+the Test workflow's Rust job) uses after building the extension, so the
+coverage it attributes to the Rust bindings always comes from a suite that
+really ran them.
+
 ### Coverage
 
 `make codecov` collects fresh Rust coverage. Codecov requires **90% coverage
@@ -73,8 +94,9 @@ components when their path-filtered jobs are skipped.
 | `make coverage:bindings:external` | `native-sdk/lcov.info` and `python/coverage.xml` | Rust LLVM tools, Python, Node.js, CMake |
 
 The external binding collector rebuilds the native libraries with Rust
-instrumentation, then runs the C unit suite, Python unit tests and Node image
-catalog/registry loopback tests against them. It uses a separate
+instrumentation, then runs the C unit suite, Python unit tests, and the Node
+image catalog/registry and SSH REST transport loopback tests against them.
+It uses a separate
 `target/native-sdk-coverage` build directory by default; CMake receives that
 library directory explicitly. CI uploads its Rust report alongside the core
 report. These tests establish SDK conversion, error and callback behavior;
