@@ -253,6 +253,61 @@ Choose `Connect` or `Forward`; a forwarder prepares fresh tunnels for later
 clients. This differs from `WithPort`, which creates a persistent,
 local-only host listener that accepts repeated connections.
 
+## Guest SSH
+
+`box.SSH()` configures, observes, and disables the box's guest SSH listener.
+SSH starts disabled; the SDK is not an SSH client.
+
+```go
+hostKey, err := os.ReadFile("host_ed25519") // unencrypted OpenSSH private key
+if err != nil { log.Fatal(err) }
+status, err := box.SSH().Configure(ctx, boxlite.SSHConfig{
+	ListenAddress:  "0.0.0.0:2222",
+	HostPrivateKey: string(hostKey),
+	Accounts: []boxlite.SSHAccount{{
+		Login:          "alice",
+		AuthorizedKeys: []string{"ssh-ed25519 AAAA... alice@laptop"},
+		// CA: &boxlite.SSHCAConfig{PublicKey: "ssh-ed25519 AAAA...", Principal: "alice"},
+	}},
+})
+if err != nil { log.Fatal(err) }
+fmt.Println(status.Generation, status.HostKeyFingerprint)
+
+current, err := box.SSH().Status(ctx)
+if err != nil { log.Fatal(err) }
+fmt.Println(current.Enabled)
+
+disabled, err := box.SSH().Disable(ctx)
+if err != nil { log.Fatal(err) }
+fmt.Println(disabled.Enabled, disabled.Generation) // false, generation kept
+```
+
+`SSH` has no `Close`: it refers to its `Box` and shares the box's and
+runtime's lifetime.
+
+- **Lifecycle:** `Configure` replaces the whole configuration, restarts the
+  listener, and may start the box. With `WithCmd` or `WithEntrypoint`, call
+  `box.Start` first or `Configure` returns `ErrInvalidState`. `Status` and
+  `Disable` never start the box; a box that is not running reports disabled
+  with generation zero. `Disable` is safe to repeat and keeps the generation.
+- **Keys:** the runtime parses and validates keys and never persists them. A
+  rejected configuration returns `ErrInvalidArgument` without echoing key
+  material. `%v`, `%+v`, `%s`, and `%#v` redact keys and CA values; JSON
+  encoding of these types does not.
+- **Errors:** a closed `Box` returns `ErrInvalidState`; a closed runtime
+  returns `ErrRuntimeClosed`. Canceling the context returns promptly but does
+  not undo a configuration the guest already applied, so do not retry
+  `Configure` automatically.
+- **Connecting:** SSH publishes no host port. Reach `ListenAddress`'s port
+  with `WithPort(boxlite.PortSpec{Guest: 2222})` on a local runtime, or a
+  [service tunnel](#service-tunnels) such as `network.Tunnel(ctx, 2222)`.
+- **Native library:** SSH needs a `boxlite.h` and native library that export
+  `boxlite_box_ssh_configure`, `_status`, and `_disable`. `cmd/setup` fetches
+  the pair matching your module version; an older library fails to link.
+
+See the [SSH guide](../../docs/guides/ssh.md) for listener behavior,
+authentication rules, and the HTTP contract.
+
 ## Development
 
 Build from source (requires Rust toolchain):

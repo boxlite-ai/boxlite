@@ -644,6 +644,7 @@ dependencies = [
  "reqwest",
  "rpassword",
  "rstest",
+ "russh",
  "secrecy",
  "serde",
  "serde_json",

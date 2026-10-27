@@ -198,6 +198,22 @@ Inbound accepts no list; disabled outbound accepts no `--allow-net`. Each comman
 one direction without retaining earlier rules. See [networking](../../docs/guides/networking.md#updating-a-running-box)
 for runtime support, connection lifetime and persistence.
 
+### Guest SSH
+
+```bash
+boxlite run -d --name dev alpine:latest tail -f /dev/null
+boxlite ssh configure-and-forward dev --host-key ./host_key --login alice \
+  --authorized-key ~/.ssh/id_ed25519.pub
+# stdout: tcp://127.0.0.1:52811   stderr: host key, fingerprint, connect hint
+ssh -p 52811 -l alice 127.0.0.1
+```
+
+`configure`, `status`, and `disable` print `SshStatus` JSON; `configure-and-forward`
+configures once and forwards, and `forward` forwards to SSH that is already enabled. The
+CLI never generates keys.
+See [`boxlite ssh`](../../docs/reference/cli/README.md#boxlite-ssh) for flags and the
+[SSH guide](../../docs/guides/ssh.md#cli) for lifecycle rules.
+
 ### `boxlite auth login`
 
 Log in to a BoxLite REST server. Supports three flows that all save to

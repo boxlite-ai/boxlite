@@ -23,8 +23,8 @@ control answer `404` or reject with `Unsupported`; there is no capability
 negotiation. See the [SDK API references](../reference/README.md#sdk-api-references)
 for language-specific control APIs.
 
-SSH does not publish a host port; configure network forwarding separately when
-needed. For component diagrams and implementation details, see
+SSH does not publish a host port; forward one with [`boxlite ssh configure-and-forward` or
+`boxlite ssh forward`](#cli) or other network forwarding. For component diagrams and implementation details, see
 [Guest SSH architecture](../../src/guest/src/service/ssh/README.md).
 
 ```rust,ignore
@@ -62,6 +62,29 @@ Invalidated handles return `Stopped`; drop all references to the old box and
 obtain a fresh handle with `runtime.get()`. That handle can query or disable SSH
 without restarting the box. A stopped box with an explicit main command still
 requires `start()` before `configure()`.
+
+## CLI
+
+`boxlite ssh` wraps the same handle for local and REST boxes; the
+[CLI reference](../reference/cli/README.md#boxlite-ssh) lists every flag.
+
+```bash
+boxlite ssh configure dev --ssh-config ssh-config.json   # complete SshConfig; prints SshStatus
+boxlite ssh forward dev                                  # forwards 127.0.0.1:<random> to guest SSH
+boxlite ssh configure-and-forward dev --host-key host_key --login alice --authorized-key alice.pub
+boxlite ssh disable dev
+```
+
+- `configure` and `configure-and-forward` replace the whole configuration once, which disconnects
+  every SSH client, including those connected through another tunnel.
+- `forward` and `configure-and-forward` target the port in the returned status, so a guest
+  listener on port `0` works. Ctrl-C ends only local forwarding; guest SSH stays enabled.
+- SSH lives in guest memory. A local CLI exit stops boxes that are not detached
+  (plain `boxlite run`, SDK boxes with `detach=false`); a box such a command started
+  loses SSH with its VM. Boxes from `boxlite create` and `run -d` keep running.
+- Over REST, forwarding opens the box's public tunnel for the SSH port and leaves it
+  open, so anyone who reaches it can attempt a login and wake a stopped box; SSH keys
+  remain the access control. Close it with `boxlite network tunnel BOX PORT --revoke`.
 
 ## HTTP control with `boxlite serve`
 

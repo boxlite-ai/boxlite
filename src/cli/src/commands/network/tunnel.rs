@@ -5,7 +5,7 @@ use std::net::{Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 
 use anyhow::{Context, Result, anyhow};
-use boxlite::SocketAddress;
+use boxlite::{BoxTunnel, SocketAddress};
 use clap::Args;
 
 use crate::cli::GlobalFlags;
@@ -29,7 +29,7 @@ pub struct TunnelArgs {
     pub revoke: bool,
 }
 
-fn parse_socket_address(value: &str) -> std::result::Result<SocketAddress, String> {
+pub(crate) fn parse_socket_address(value: &str) -> std::result::Result<SocketAddress, String> {
     if let Some(path) = value.strip_prefix("unix:") {
         let path = PathBuf::from(path);
         if !path.is_absolute() {
@@ -79,12 +79,24 @@ pub async fn execute(args: TunnelArgs, global: &GlobalFlags) -> Result<()> {
         return Ok(());
     };
 
+    forward_until_interrupted(tunnel, listen, |_| {}).await
+}
+
+/// Print the bound address to stdout, run `announce`, then forward until the
+/// listener fails or Ctrl-C closes it and its relays.
+pub(crate) async fn forward_until_interrupted(
+    tunnel: BoxTunnel,
+    listen: SocketAddress,
+    announce: impl FnOnce(&SocketAddress),
+) -> Result<()> {
     let forwarder = tunnel
         .forward_with_bound(listen, |address| {
             println!("{address}");
             std::io::stdout().flush().map_err(|error| {
                 boxlite::BoxliteError::Internal(format!("flush tunnel listener address: {error}"))
-            })
+            })?;
+            announce(address);
+            Ok(())
         })
         .await?;
 

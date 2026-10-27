@@ -184,6 +184,72 @@ fn command_help_only_advertises_meaningful_global_options() {
                 "--path-prefix",
             ],
         ),
+        (
+            &["ssh"],
+            &[
+                "--debug",
+                "--home",
+                "--config",
+                "--url",
+                "--profile",
+                "--path-prefix",
+            ],
+        ),
+        (
+            &["ssh", "configure"],
+            &[
+                "--debug",
+                "--home",
+                "--config",
+                "--url",
+                "--profile",
+                "--path-prefix",
+            ],
+        ),
+        (
+            &["ssh", "status"],
+            &[
+                "--debug",
+                "--home",
+                "--config",
+                "--url",
+                "--profile",
+                "--path-prefix",
+            ],
+        ),
+        (
+            &["ssh", "disable"],
+            &[
+                "--debug",
+                "--home",
+                "--config",
+                "--url",
+                "--profile",
+                "--path-prefix",
+            ],
+        ),
+        (
+            &["ssh", "configure-and-forward"],
+            &[
+                "--debug",
+                "--home",
+                "--config",
+                "--url",
+                "--profile",
+                "--path-prefix",
+            ],
+        ),
+        (
+            &["ssh", "forward"],
+            &[
+                "--debug",
+                "--home",
+                "--config",
+                "--url",
+                "--profile",
+                "--path-prefix",
+            ],
+        ),
         (&["serve"], &["--debug", "--home", "--registry", "--config"]),
         (&["auth"], &["--debug", "--home", "--profile"]),
         (

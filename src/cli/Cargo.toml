@@ -90,6 +90,9 @@ tempfile = "3.24.0"
 # resolved and compiled for this crate — axum pulls the same 0.29 for the server
 # half — so this line adds a test-only path to it, not a new dependency.
 tokio-tungstenite = "0.29"
+# The SSH client the real-VM `boxlite ssh` tests log in with; the guest
+# already locks this version, so it adds a test-only edge, not a new crate.
+russh = { version = "0.62.4", default-features = false, features = ["ring", "flate2", "rsa"] }
 
 [package.metadata.binstall]
 pkg-url = "{ repo }/releases/download/v{ version }/boxlite-cli-v{ version }-{ target }.tar.gz"
