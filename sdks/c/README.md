@@ -340,7 +340,7 @@ organization catalog. Free either with `boxlite_snapshot_free(handle)`.
 | `boxlite_create_box_from_snapshot(runtime, snapshot, options, callback, data, &error)` | Cloud only; callback receives a new running box; required options carries the optional box name |
 
 These functions use the native post-and-drain event queue. On accepted requests,
-callbacks run during `boxlite_runtime_drain_events`; immediate errors do not
+callbacks run during `boxlite_runtime_drain`; immediate errors do not
 invoke the callback. Create options with `boxlite_options_new("alpine:latest", &options, &error)`;
 this default image is omitted from the snapshot request. Set a name with
 `boxlite_options_set_name` or leave it unset for a generated name.
@@ -348,7 +348,8 @@ New-box creation consumes `options` only after
 synchronous validation succeeds. Free returned single records with
 `boxlite_free_snapshot_info`, and whole lists with
 `boxlite_free_snapshot_info_list`; do not free list entries individually. Free
-callback errors with `boxlite_error_free`. Metadata strings remain valid until
+immediate `out_error` values with `boxlite_error_free`; callback error pointers
+are borrowed only for the callback duration. Metadata strings remain valid until
 the owning record/list is freed. `boxlite_box_name` returns an owned string
 (or null for an unnamed box); release it with `boxlite_free_string`.
 
