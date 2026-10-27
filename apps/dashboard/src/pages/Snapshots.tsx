@@ -12,7 +12,6 @@ import { toast } from 'sonner'
 import { SnapshotCreateDialog } from '@/components/SnapshotCreateDialog'
 import { SnapshotTable } from '@/components/SnapshotTable'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
 import { Plus, Search } from '@/components/ui/icon'
 import {
   AlertDialog,
@@ -70,21 +69,27 @@ function SnapshotPage() {
         </p>
       ) : (
         <>
-          <div className="flex flex-wrap items-center gap-3">
-            <div className="flex h-9 w-full items-center gap-3 border border-dashed border-border bg-card px-3 sm:max-w-[380px]">
-              <Search className="size-4 text-brand" />
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-stretch">
+            <div className="flex h-11 w-full min-w-0 items-center gap-[11px] border border-dashed border-border bg-card px-[14px] sm:h-9 sm:max-w-[380px] sm:flex-none">
+              <Search className="size-[15px] shrink-0 text-brand" strokeWidth={2} />
               <input
                 aria-label="Filter snapshots"
                 placeholder="Filter snapshots…"
                 value={filter}
                 onChange={(event) => setFilter(event.target.value)}
-                className="min-w-0 flex-1 bg-transparent text-body outline-none placeholder:text-muted-foreground"
+                className="w-full border-0 bg-transparent p-0 text-[13px] text-foreground outline-none placeholder:text-muted-foreground"
               />
-              <span className="font-mono text-label text-muted-foreground">{rows.length}</span>
+              <span className="whitespace-nowrap font-mono text-[10px] uppercase tracking-[1px] text-muted-foreground">
+                {rows.length}
+              </span>
             </div>
             <div className="flex-1" />
-            <Button disabled={!canWrite || !capabilities.data?.snapshots_enabled} onClick={() => setCreateOpen(true)}>
-              <Plus className="size-3.5" /> New Snapshot
+            <Button
+              className="h-11 gap-[7px] px-[15px] text-[12.5px] font-semibold tracking-normal hover:bg-primary hover:opacity-85 sm:h-9"
+              disabled={!canWrite || !capabilities.data?.snapshots_enabled}
+              onClick={() => setCreateOpen(true)}
+            >
+              <Plus className="size-3.5" strokeWidth={2.4} /> New Snapshot
             </Button>
           </div>
           {snapshots.isError ? (
@@ -137,15 +142,21 @@ function SnapshotPage() {
                   This permanently removes the snapshot. You will no longer be able to restore its disk data.
                 </AlertDialogDescription>
               </AlertDialogHeader>
-              <label className="space-y-2 text-sm">
-                <span>Type {pendingDelete?.name} to confirm</span>
-                <Input
+              <div className="flex flex-col gap-[7px]">
+                <label htmlFor="snapshot-delete-confirm" className="font-mono text-[11px] text-muted-foreground">
+                  Type <span className="text-foreground">{pendingDelete?.name}</span> to confirm
+                </label>
+                <input
+                  id="snapshot-delete-confirm"
                   aria-label="Confirm snapshot name"
                   value={confirmName}
                   onChange={(event) => setConfirmName(event.target.value)}
+                  autoComplete="off"
+                  spellCheck={false}
                   disabled={remove.isPending}
+                  className="w-full border border-border bg-card px-[13px] py-[10px] font-mono text-[13px] text-foreground outline-none focus:border-destructive"
                 />
-              </label>
+              </div>
               {remove.error && (
                 <p role="alert" className="text-sm text-destructive">
                   {snapshotErrorMessage(remove.error)}
@@ -156,6 +167,7 @@ function SnapshotPage() {
                 <AlertDialogAction
                   variant="destructive"
                   disabled={!canDelete || !deleteConfirmed || remove.isPending}
+                  className="disabled:cursor-not-allowed disabled:opacity-40"
                   onClick={async (event) => {
                     event.preventDefault()
                     if (!canDelete || !deleteConfirmed || !pendingDelete || remove.isPending) return
@@ -171,7 +183,7 @@ function SnapshotPage() {
                     }
                   }}
                 >
-                  {remove.isPending ? 'Deleting…' : 'Delete snapshot'}
+                  {remove.isPending ? 'Deleting…' : 'Delete'}
                 </AlertDialogAction>
               </AlertDialogFooter>
             </AlertDialogContent>

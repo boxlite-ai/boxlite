@@ -262,7 +262,7 @@ meantime, the console falls back to their personal organization.
 
 Snapshots sits after Volumes in the navigation. On Boxes, an idle stopped box's
 **More → + Snapshot** opens the creation dialog; the plus icon aligns with the
-Delete icon. On Snapshots, a ready snapshot's **Create Box** opens the box naming
+Delete icon. On Snapshots, a ready snapshot's **+ Box** opens the box naming
 dialog. Both match the Boxes creation modal's layout and controls, and label the
 field **Name**. Leaving it blank lets the server generate an adjective-animal
 name, such as `cozy-otter`. Success shows the returned name. Creation requires
@@ -270,8 +270,14 @@ name, such as `cozy-otter`. Success shows the returned name. Creation requires
 names keep the dialog open with the server's conflict reason. Generated names use
 a unique-ID suffix only when their first choice collides.
 
-The list follows Volumes: transparent rows, subtle bottom separators, compact
-monospace headings and outlined row actions.
+The list follows Volumes: a 380px search field on desktop (36px high, 44px on
+mobile), transparent 55px rows, subtle bottom separators, compact monospace
+headings and outlined row actions. Long names and source identifiers truncate
+instead of increasing the row height; the box action uses a Plus icon and `Box`.
+Names have a 28px wireframe disk-and-clock glyph in the same style as Volumes.
+A ready snapshot has a cyan disk marker; creating uses a dashed outline, and
+failed uses a red broken seam. The adjacent status text remains the accessible
+state description.
 
 Snapshot operations use the existing `/api/v1` REST surface through the shared
 authenticated client. Creating a snapshot posts to `/boxes/{box}/snapshots`;
@@ -279,7 +285,9 @@ creating a box posts to `/snapshots/{snapshot}/boxes`. The new box uses the
 snapshot's disk size and region, with ordinary defaults for other settings.
 Capability flags gate these actions. Memory snapshots and cross-runner snapshot
 copies remain unavailable. The [REST API contract](../API.md) describes admission
-and permissions. Deletion requires typing the snapshot's exact name.
+and permissions. Deletion requires typing the snapshot's exact name. Its dialog
+matches Volumes: an 11px muted monospace confirmation label highlights the name
+in foreground text, above a 13px monospace input and the Delete action.
 
 Creating snapshots refresh every five seconds until ready or failed. New boxes
 appear on Boxes, where their ordinary lifecycle shows creation progress and

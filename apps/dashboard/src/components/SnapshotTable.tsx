@@ -9,6 +9,7 @@ import { Link, generatePath } from 'react-router-dom'
 import { RoutePath } from '@/enums/RoutePath'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { formatBytes, timeAgo } from '@/lib/format'
+import { SnapshotGlyph } from './SnapshotGlyph'
 import { Database, Plus, Trash } from './ui/icon'
 import { Button } from './ui/button'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './ui/table'
@@ -46,14 +47,14 @@ export function SnapshotTable({
           {['Name', 'Source box', 'Status', 'Size', 'Disk (GiB)', 'Created', 'Actions'].map((label) => (
             <TableHead
               key={label}
-              className="h-auto pb-2 font-mono text-[10px] uppercase tracking-[1px] last:text-right"
+              className="h-auto pb-2 font-mono text-[10px] uppercase leading-normal tracking-[1px] last:text-right"
             >
               {label}
             </TableHead>
           ))}
         </TableRow>
       </TableHeader>
-      <TableBody className="[&_tr:last-child]:border-b [&_td]:py-[13px] [&_td]:tracking-normal">
+      <TableBody className="[&_tr]:h-[55px] [&_tr:last-child]:border-b [&_td]:py-[13px] [&_td]:tracking-normal">
         {loading ? (
           <TableRow className="border-border/60 bg-transparent hover:bg-transparent">
             <TableCell colSpan={7} className="h-40 text-center" role="status">
@@ -86,11 +87,20 @@ export function SnapshotTable({
             const ready = snapshot.status === SnapshotStatus.READY
             const failed = snapshot.status === SnapshotStatus.FAILED
             return (
-              <TableRow key={snapshot.id} className="border-border/60 bg-transparent hover:bg-transparent">
-                <TableCell className="font-mono text-[13px] font-medium" title={snapshot.id}>
-                  {snapshot.name}
+              <TableRow
+                key={snapshot.id}
+                className="border-border/60 bg-transparent hover:bg-transparent [&_td]:whitespace-nowrap"
+              >
+                <TableCell className="max-w-[220px] font-mono text-[13px] font-medium" title={snapshot.id}>
+                  <span className="flex min-w-0 items-center gap-3">
+                    <SnapshotGlyph state={snapshot.status} size={28} className="text-muted-foreground" />
+                    <span className="truncate">{snapshot.name}</span>
+                  </span>
                 </TableCell>
-                <TableCell className="font-mono text-xs">
+                <TableCell
+                  className="max-w-[240px] truncate font-mono text-xs"
+                  title={deleted ? `${snapshot.sourceBoxId} (deleted)` : source?.name || snapshot.sourceBoxId}
+                >
                   {deleted ? (
                     <span className="text-muted-foreground">{snapshot.sourceBoxId} (deleted)</span>
                   ) : source ? (
@@ -127,17 +137,17 @@ export function SnapshotTable({
                     <Button
                       size="sm"
                       variant="outline"
-                      className="h-auto gap-[6px] px-[9px] py-[5px] font-mono text-[11px] text-muted-foreground hover:border-brand hover:bg-transparent hover:text-foreground"
+                      className="h-7 gap-[6px] border-border bg-transparent px-[9px] py-[5px] font-mono text-[11px] font-normal tracking-normal text-muted-foreground hover:border-brand hover:bg-transparent hover:text-foreground"
                       aria-label={`Create Box from ${snapshot.name}`}
                       disabled={!canWrite || !ready || !createBoxEnabled}
                       onClick={() => onCreateBox(snapshot)}
                     >
-                      <Plus className="size-[13px]" /> Create Box
+                      <Plus className="size-[13px]" /> Box
                     </Button>
                     <Button
                       size="sm"
                       variant="outline"
-                      className="h-auto p-[6px] text-muted-foreground hover:border-destructive hover:bg-transparent hover:text-destructive"
+                      className="h-auto border-border bg-transparent p-[6px] text-muted-foreground hover:border-destructive hover:bg-transparent hover:text-destructive"
                       aria-label={`Delete ${snapshot.name}`}
                       disabled={!canDelete || (!ready && !failed)}
                       onClick={() => onDelete(snapshot)}

@@ -92,6 +92,38 @@ server's untrusted-upload policy.
 Export and Import never delete the archive. The caller owns its retention and
 must explicitly remove it when it is no longer needed.
 
+### Disk Snapshots
+
+```go
+snapshots, err := box.Snapshots()
+if err != nil { return err }
+defer snapshots.Close()
+saved, err := snapshots.Create(ctx, "") // generated name; cloud box must be stopped
+if err != nil { return err }
+
+catalog, err := rt.Snapshots()
+if err != nil { return err }
+defer catalog.Close()
+all, err := catalog.List(ctx)
+if err != nil { return err }
+_ = all
+child, err := rt.CreateFromSnapshot(ctx, saved.Id, boxlite.WithName("worker"), boxlite.WithCPUs(2))
+if err != nil { return err }
+defer child.Close()
+```
+
+`*Snapshots` also exposes `Get(ctx, idOrName)` and
+`Remove(ctx, idOrName, force)`. Box-scoped `Get` returns `(nil, nil)` for absence;
+organization `Get` returns an error. `force` ignores absence only. `Create` and
+`Restore(ctx, idOrName)` require a box-scoped handle; cloud restore replaces the
+stopped target's disk. `SnapshotInfo` includes `Status`, `Error`, source `BoxId`,
+Unix `CreatedAt`, `ContainerDiskBytes`, and `SizeBytes`.
+
+Close snapshot handles when done. Context cancellation stops waiting, while
+native completions are still drained and released; server work may continue.
+See [snapshot contracts](../../docs/reference/README.md#snapshot-sdk-and-cli)
+for completion, options, and local-runtime support.
+
 ### Runtime Image Management
 
 `rt.Images()` holds the images a runtime can boot from: the local cache on a

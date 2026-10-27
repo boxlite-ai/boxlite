@@ -104,3 +104,10 @@ CExecutionSignalCb cbExecutionSignal(void) { return (CExecutionSignalCb)goBoxlit
 CExecutionResizeCb cbExecutionResize(void) { return (CExecutionResizeCb)goBoxliteOnExecutionResize; }
 CTunnelForwarderWaitCb cbTunnelForwarderWait(void) { return (CTunnelForwarderWaitCb)goBoxliteOnTunnelForwarderWait; }
 CTunnelForwarderCloseCb cbTunnelForwarderClose(void) { return (CTunnelForwarderCloseCb)goBoxliteOnTunnelForwarderClose; }
+
+extern void goBoxliteOnSnapshotInfo(CSnapshotInfo *info, CBoxliteError *err, void *ud);
+extern void goBoxliteOnSnapshotList(CSnapshotInfoList *list, CBoxliteError *err, void *ud);
+extern void goBoxliteOnSnapshotOp(CBoxliteError *err, void *ud);
+CBoxSnapshotInfoCb cbSnapshotInfo(void) { return goBoxliteOnSnapshotInfo; }
+CBoxSnapshotListCb cbSnapshotList(void) { return goBoxliteOnSnapshotList; }
+CBoxSnapshotOpCb cbSnapshotOp(void) { return goBoxliteOnSnapshotOp; }

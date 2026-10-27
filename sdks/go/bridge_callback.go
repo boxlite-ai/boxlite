@@ -426,6 +426,76 @@ func goBoxliteOnVolumeRemove(errPtr *C.CBoxliteError, userData unsafe.Pointer) {
 	deliverUnitResult(userData, errPtr)
 }
 
+// goBoxliteOnSnapshot delivers a single CSnapshotInfo. Shared by Create and Get
+// (their C typedefs differ but the payload shape is identical).
+//
+//export goBoxliteOnSnapshotInfo
+func goBoxliteOnSnapshotInfo(info *C.CSnapshotInfo, errPtr *C.CBoxliteError, userData unsafe.Pointer) {
+	h := ptrToHandle(userData)
+	if h == 0 {
+		return
+	}
+	if !claimOrFreePayload(h, &info, func(i **C.CSnapshotInfo) {
+		if i != nil && *i != nil {
+			C.boxlite_free_snapshot_info(*i)
+		}
+	}) {
+		return
+	}
+	defer h.Delete()
+	if info != nil {
+		defer C.boxlite_free_snapshot_info(info)
+	}
+	ch, ok := h.Value().(chan snapshotResult)
+	if !ok {
+		return
+	}
+	if err := errorFromCError(errPtr); err != nil {
+		ch <- snapshotResult{err: err}
+		return
+	}
+	if info == nil {
+		ch <- snapshotResult{}
+		return
+	}
+	v := cSnapshotInfoToGo(info)
+	ch <- snapshotResult{value: &v}
+}
+
+//export goBoxliteOnSnapshotList
+func goBoxliteOnSnapshotList(list *C.CSnapshotInfoList, errPtr *C.CBoxliteError, userData unsafe.Pointer) {
+	h := ptrToHandle(userData)
+	if h == 0 {
+		return
+	}
+	if !claimOrFreePayload(h, &list, func(l **C.CSnapshotInfoList) {
+		if l != nil && *l != nil {
+			C.boxlite_free_snapshot_info_list(*l)
+		}
+	}) {
+		return
+	}
+	defer h.Delete()
+	if list != nil {
+		defer C.boxlite_free_snapshot_info_list(list)
+	}
+	ch, ok := h.Value().(chan snapshotListResult)
+	if !ok {
+		return
+	}
+	if err := errorFromCError(errPtr); err != nil {
+		ch <- snapshotListResult{err: err}
+		return
+	}
+	snapshots := convertSnapshotInfoList(list)
+	ch <- snapshotListResult{value: snapshots}
+}
+
+//export goBoxliteOnSnapshotOp
+func goBoxliteOnSnapshotOp(errPtr *C.CBoxliteError, userData unsafe.Pointer) {
+	deliverUnitResult(userData, errPtr)
+}
+
 //export goBoxliteOnRegistryCreate
 func goBoxliteOnRegistryCreate(login *C.CRegistryCredential, errPtr *C.CBoxliteError, userData unsafe.Pointer) {
 	h := ptrToHandle(userData)
@@ -799,4 +869,13 @@ type runtimeMetricsResult struct {
 type executionWaitResult struct {
 	exitCode int
 	err      error
+}
+
+type snapshotResult struct {
+	value *SnapshotInfo
+	err   error
+}
+type snapshotListResult struct {
+	value []SnapshotInfo
+	err   error
 }

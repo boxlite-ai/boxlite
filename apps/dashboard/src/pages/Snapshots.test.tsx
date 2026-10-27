@@ -193,7 +193,7 @@ describe('Snapshots page', () => {
 
   it('lets the server name a new box and displays the returned name', async () => {
     await ready()
-    await click(button('Create Box'))
+    await click(button('Box'))
     expect(document.querySelector('[role="dialog"]')?.textContent).not.toContain('(optional)')
     expect(document.querySelector('[aria-label="Box name"]')).toHaveProperty('value', '')
     await click(button('Create Box', '[role="dialog"] button'))
@@ -204,7 +204,7 @@ describe('Snapshots page', () => {
 
   it('rejects invalid custom box names before sending a request', async () => {
     await ready()
-    await click(button('Create Box'))
+    await click(button('Box'))
     await fill('Box name', 'invalid/name')
     expect(button('Create Box', '[role="dialog"] button')).toHaveProperty('disabled', true)
     await click(button('Create Box', '[role="dialog"] button'))
@@ -261,11 +261,11 @@ describe('Snapshots page', () => {
     api.deleteSnapshot.mockRejectedValue(refusal(409, 'Snapshot checkpoint is being restored into a box'))
     await ready()
     await click(document.querySelector('[aria-label="Delete checkpoint"]')!)
-    expect(button('Delete snapshot')).toHaveProperty('disabled', true)
+    expect(button('Delete')).toHaveProperty('disabled', true)
     await fill('Confirm snapshot name', 'Checkpoint')
-    expect(button('Delete snapshot')).toHaveProperty('disabled', true)
+    expect(button('Delete')).toHaveProperty('disabled', true)
     await fill('Confirm snapshot name', 'checkpoint')
-    await click(button('Delete snapshot'))
+    await click(button('Delete'))
     await waitFor(() =>
       expect(document.querySelector('[role="alertdialog"]')?.textContent).toContain('is being restored into a box'),
     )
