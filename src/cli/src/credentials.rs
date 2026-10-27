@@ -349,7 +349,7 @@ fn write_secure(path: &std::path::Path, data: &[u8]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::defaults::LOCAL_SERVE_URL;
+    use crate::defaults::DEFAULT_REST_URL;
     use std::sync::Mutex;
     use tempfile::TempDir;
 
@@ -392,7 +392,7 @@ mod tests {
 
     fn sample_api_key_profile() -> Profile {
         Profile {
-            url: LOCAL_SERVE_URL.to_string(),
+            url: DEFAULT_REST_URL.to_string(),
             api_key: Some(SecretString::from("opaque-key-123".to_string())),
             ..Profile::default()
         }
@@ -503,7 +503,7 @@ mod tests {
 
         let legacy = format!(
             "[profiles.default]\nurl = \"{}\"\napi_key = \"legacy-key\"\n",
-            LOCAL_SERVE_URL
+            DEFAULT_REST_URL
         );
         let file_path = path().expect("path");
         std::fs::create_dir_all(file_path.parent().unwrap()).expect("mkdir");
@@ -512,7 +512,7 @@ mod tests {
         let loaded = load_named(DEFAULT_PROFILE)
             .expect("load")
             .expect("profile present");
-        assert_eq!(loaded.url, LOCAL_SERVE_URL);
+        assert_eq!(loaded.url, DEFAULT_REST_URL);
         assert_eq!(
             loaded.api_key.as_ref().map(|s| s.expose_secret()),
             Some("legacy-key")
@@ -642,7 +642,7 @@ mod tests {
     #[test]
     fn into_rest_options_no_creds_is_none() {
         let profile = Profile {
-            url: LOCAL_SERVE_URL.to_string(),
+            url: DEFAULT_REST_URL.to_string(),
             ..Profile::default()
         };
         let options = into_rest_options(profile);

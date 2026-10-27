@@ -5,7 +5,7 @@ use anyhow::{Context, Result};
 
 use crate::cli::GlobalFlags;
 use crate::credentials::{AuthMethod, CredentialStore};
-use crate::defaults::LOCAL_SERVE_URL;
+use crate::defaults::DEFAULT_REST_URL;
 
 const API_KEY_ENV: &str = "BOXLITE_API_KEY";
 
@@ -57,7 +57,7 @@ pub fn run(global: &GlobalFlags, store: &CredentialStore) -> Result<()> {
 }
 
 /// Resolve the active credential source. Env vars win over the file. An API
-/// key without a configured URL targets the zero-config local `serve`
+/// key without a configured URL targets the hosted API
 /// endpoint for this auth probe; ordinary box commands still default to the
 /// embedded runtime until a REST URL is configured.
 fn resolve_identity(global: &GlobalFlags, store: &CredentialStore) -> Result<Option<Identity>> {
@@ -77,7 +77,7 @@ fn resolve_identity(global: &GlobalFlags, store: &CredentialStore) -> Result<Opt
             .clone()
             .filter(|url| !url.is_empty())
             .or(stored_url)
-            .unwrap_or_else(|| LOCAL_SERVE_URL.to_string());
+            .unwrap_or_else(|| DEFAULT_REST_URL.to_string());
         return Ok(Some(Identity {
             url,
             source: Source::EnvApiKey,

@@ -12,7 +12,7 @@ use boxlite::{BoxliteError, BoxliteRuntime, Principal};
 use secrecy::SecretString;
 
 use crate::credentials::{self, CredentialStore, Profile};
-use crate::defaults::LOCAL_SERVE_URL;
+use crate::defaults::DEFAULT_REST_URL;
 
 const URL_ENV: &str = "BOXLITE_REST_URL";
 
@@ -89,9 +89,9 @@ fn resolve_url(flag: Option<&str>, non_interactive: bool) -> Result<String> {
         return Ok(env_url);
     }
     if non_interactive {
-        return Ok(LOCAL_SERVE_URL.to_string());
+        return Ok(DEFAULT_REST_URL.to_string());
     }
-    prompt_with_default("Server URL", LOCAL_SERVE_URL)
+    prompt_with_default("Server URL", DEFAULT_REST_URL)
 }
 
 fn prompt_api_key() -> Result<String> {

@@ -12,7 +12,7 @@ use secrecy::SecretString;
 use crate::cli::GlobalFlags;
 use crate::commands::auth::oidc::discovery;
 use crate::credentials::{CredentialStore, Profile};
-use crate::defaults::LOCAL_SERVE_URL;
+use crate::defaults::DEFAULT_REST_URL;
 
 const API_KEY_ENV: &str = "BOXLITE_API_KEY";
 
@@ -69,7 +69,7 @@ pub async fn run(global: &GlobalFlags, store: &CredentialStore) -> Result<()> {
 /// Active credential, ready to attach to a REST runtime.
 ///
 /// `$BOXLITE_API_KEY` (+ `$BOXLITE_REST_URL`) wins over the stored profile.
-/// An API key without a URL targets the zero-config local `serve` endpoint
+/// An API key without a URL targets the hosted API
 /// for this auth probe; ordinary box commands still default to the embedded
 /// runtime. The env path returns fresh `BoxliteRestOptions`; the file path goes through
 /// [`CredentialStore::load_active`], which is also where OIDC tokens get
@@ -87,7 +87,7 @@ async fn resolve_options(
             return Ok(Some(options));
         }
         let profile = Profile {
-            url: LOCAL_SERVE_URL.to_string(),
+            url: DEFAULT_REST_URL.to_string(),
             api_key: Some(SecretString::from(api_key)),
             ..Profile::default()
         };

@@ -210,7 +210,7 @@ Credentials are stored at `<BOXLITE_HOME>/credentials.toml` (default
 
 | Flag | Description |
 |------|-------------|
-| `--url URL` | Server URL. Precedence: flag, `BOXLITE_REST_URL`, selected profile URL, then `http://localhost:8100`. |
+| `--url URL` | Server URL. Precedence: flag, `BOXLITE_REST_URL`, selected profile URL, then `https://api.boxlite.ai`. |
 | `--method <api-key\|browser\|device>` | Select the login flow explicitly. |
 | `--api-key-stdin` | Read the API key from stdin (one line); selects `api-key` and conflicts with explicit browser/device methods. |
 | `--no-browser` | Use device-code login when no method is explicit; conflicts with API-key stdin and explicit `api-key`/`browser` methods. |
@@ -255,12 +255,12 @@ the logged-in URL and the source (stored file vs env var). If neither the
 file nor env vars are present, prints
 ``Not logged in (profile `NAME`).`` An explicit `--url`
 overrides the stored URL in the report. With only `BOXLITE_API_KEY` set, the
-auth probe reports the local `serve` default, `http://localhost:8100`.
+auth probe reports the default API endpoint, `https://api.boxlite.ai`.
 
 **Example output:**
 
 ```
-Logged in to:    http://localhost:8100
+Logged in to:    https://api.boxlite.ai
 Credential:      API key (from <BOXLITE_HOME>/credentials.toml [default])
 ```
 
