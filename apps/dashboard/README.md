@@ -274,6 +274,10 @@ The list follows Volumes: a 380px search field on desktop (36px high, 44px on
 mobile), transparent 55px rows, subtle bottom separators, compact monospace
 headings and outlined row actions. Long names and source identifiers truncate
 instead of increasing the row height; the box action uses a Plus icon and `Box`.
+Names have a 28px wireframe disk-and-clock glyph in the same style as Volumes.
+A ready snapshot has a cyan disk marker; creating uses a dashed outline, and
+failed uses a red broken seam. The adjacent status text remains the accessible
+state description.
 
 Snapshot operations use the existing `/api/v1` REST surface through the shared
 authenticated client. Creating a snapshot posts to `/boxes/{box}/snapshots`;
