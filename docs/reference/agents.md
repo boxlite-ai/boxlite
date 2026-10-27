@@ -1,6 +1,6 @@
 ## TL;DR
 
-The P0 agent API is declared in Rust, Python, Node.js, Go and C; every agent operation currently reports “not implemented.”
+The P0 agent API is declared in Rust, Python, Node.js, Go, C and the CLI; every agent operation currently reports “not implemented.”
 
 ## Details
 
@@ -32,6 +32,7 @@ and `SimpleBox`. The four language SDKs retain their existing error conventions.
 | Node.js | Rejected operation promises; synchronous getter/event errors |
 | Go | `*Error` with `Code: ErrUnsupported` and no result |
 | C | Synchronous `Unsupported` return and optional `CBoxliteError`; no callback is invoked |
+| CLI | `boxlite agent …` reports the unavailable operation on stderr and exits with code 1 |
 
 Event opening never returns an empty successful stream. Python/Node fail when
 `events()` is called; Rust fails when its future is awaited; Go returns a nil
@@ -158,6 +159,13 @@ Use `boxlite_error_free` for returned error messages. Reserved
 `boxlite_agent_events_free` release local handles only; they never close a session
 or interrupt work. Null handles may be freed. No operation currently allocates
 session, turn, subscription or JSON result objects.
+
+### CLI commands
+
+The [CLI reference](cli/README.md#boxlite-agent) lists the corresponding
+`agent create/get`, `agent session …` and `agent turn …` commands and flags.
+CLI options use the same five groups; parsing/help work, while command execution
+fails before creating a runtime or contacting a server.
 
 ### Deferred surface
 

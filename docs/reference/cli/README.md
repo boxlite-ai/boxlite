@@ -36,6 +36,7 @@ For a quick start, see [`src/cli/README.md`](../../../src/cli/README.md).
   - [`boxlite network tunnel`](#boxlite-network-tunnel)
   - [`boxlite network inbound / outbound`](#boxlite-network-inbound--outbound)
   - [`boxlite ssh`](#boxlite-ssh)
+  - [`boxlite agent`](#boxlite-agent)
   - [`boxlite serve`](#boxlite-serve)
   - [`boxlite volume`](#boxlite-volume)
   - [`boxlite completion`](#boxlite-completion)
@@ -792,6 +793,54 @@ the error says so; the configuration is not rolled back.
   route, so there `configure-and-forward` and `forward` fail after the SSH step.
 
 ---
+
+### `boxlite agent`
+
+**Experimental declarations only.** All P0 operations report “not implemented” on
+stderr and exit with code 1, before loading runtime configuration, credentials or
+a Box, or contacting a server. No agent work or event stream is started. Help and
+shell completion work; malformed arguments use the normal CLI usage error (code 2).
+
+| Purpose | Command after `boxlite agent` |
+|---|---|
+| Create/lookup | `create BOX AGENT`, `get BOX SESSION` |
+| Submit/close | `session send BOX SESSION TEXT`, `session close BOX SESSION` |
+| Turn lookup | `session get-turn BOX SESSION TURN` |
+| Session observations | `session state/config/capabilities/requests BOX SESSION` |
+| Session events | `session events BOX SESSION` |
+| Reply | `session respond BOX SESSION REQUEST JSON` |
+| Wait/observe | `turn wait/state/events BOX SESSION TURN` |
+| Steer/interrupt | `turn steer BOX SESSION TURN TEXT`, `turn interrupt BOX SESSION TURN` |
+
+Slashes in the table separate command choices. IDs and message text remain
+positional. The optional flags are grouped in typed `XxxOptions` structs:
+
+| Group | Commands | Flags |
+|---|---|---|
+| `AgentCreateOptions` | `create` | `--cwd PATH`, `--agent-config JSON`, `--idempotency-key KEY` |
+| `AgentSendOptions` | `session send` | `--mode queue\|reject` (default `queue`), `--data JSON`, `--idempotency-key KEY` |
+| `AgentControlOptions` | close, respond, steer, interrupt | `--idempotency-key KEY` |
+| `AgentWaitOptions` | `turn wait` | `--timeout-seconds SECONDS` (nonnegative whole seconds; omitted means no deadline) |
+| `AgentEventsOptions` | both events commands | `--after CURSOR` |
+
+`--agent-config` is distinct from the global runtime `--config FILE`. Config,
+data and response arguments must be valid JSON; schema validation and all runtime
+semantics remain unimplemented. Response JSON uses either
+`{"type":"answer","text":"yes"}` (optional `data`) or
+`{"type":"permission","approved":false}`. The
+[agent API reference](../agents.md#inputs-and-records) describes other record fields.
+
+```bash
+boxlite agent create dev coder --cwd /workspace --agent-config '{"model":"model-id"}'
+boxlite agent session send dev session-id "Review this code" --mode reject
+boxlite agent turn steer dev session-id turn-id "Focus on tests" --idempotency-key steer-1
+boxlite agent turn events dev session-id turn-id --after cursor-1
+```
+
+Each example currently fails explicitly. Agent commands accept the usual Box
+targeting globals (`--home`, `--config`, `--url`, `--profile`, `--path-prefix`)
+and `--debug`; `--registry` is irrelevant and rejected. Existing diagnostic
+logging still applies. P1/P2 commands are absent.
 
 ### `boxlite serve`
 
