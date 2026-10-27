@@ -72,6 +72,8 @@ function clearReauthAttempted(): void {
 // Prefer bash when the image has it; every image has sh.
 const LOGIN_SHELL = 'if command -v bash >/dev/null 2>&1; then exec bash -l; else exec sh -l; fi'
 
+const activityHeaders = { 'X-BoxLite-Source': 'dashboard' }
+
 export class ApiClient {
   private config: Configuration
   private http: AxiosInstance
@@ -99,7 +101,7 @@ export class ApiClient {
       accessToken: accessToken,
     })
 
-    const axiosInstance = axios.create()
+    const axiosInstance = axios.create({ headers: activityHeaders })
     axiosInstance.interceptors.request.use((request) => {
       request.headers?.delete?.('User-Agent')
       if (request.headers) {
@@ -352,6 +354,7 @@ export class ApiClient {
     const axiosInstance = axios.create({
       baseURL: this.config.basePath,
       headers: {
+        ...activityHeaders,
         Authorization: `Bearer ${this.config.accessToken}`,
       },
     })
@@ -367,6 +370,7 @@ export class ApiClient {
     return axios.create({
       baseURL: this.config.basePath,
       headers: {
+        ...activityHeaders,
         Authorization: `Bearer ${this.config.accessToken}`,
       },
     })
