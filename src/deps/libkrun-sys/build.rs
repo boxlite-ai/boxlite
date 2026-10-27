@@ -13,20 +13,20 @@ const LIBKRUNFW_VERSION: &str = "v5.4.0";
 
 // macOS: Download prebuilt kernel.c, compile locally to .dylib
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-const LIBKRUNFW_PREBUILT_URL: &str =
+const LIBKRUNFW_URL: &str =
     "https://github.com/boxlite-ai/libkrunfw/releases/download/v5.4.0/libkrunfw-prebuilt-aarch64.tgz";
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 const LIBKRUNFW_SHA256: &str = "1d1b848cee7053c3d26915f30312560343a4e382b5b4e83be1d6755939582de6";
 
 // Linux: Download pre-compiled .so directly (no build needed)
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-const LIBKRUNFW_SO_URL: &str =
+const LIBKRUNFW_URL: &str =
     "https://github.com/boxlite-ai/libkrunfw/releases/download/v5.4.0/libkrunfw-x86_64.tgz";
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 const LIBKRUNFW_SHA256: &str = "63df4e4cc99d6c876757fb2f374ce2fee00f3408a1133b2c44600ce0195286b5";
 
 #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
-const LIBKRUNFW_SO_URL: &str =
+const LIBKRUNFW_URL: &str =
     "https://github.com/boxlite-ai/libkrunfw/releases/download/v5.4.0/libkrunfw-aarch64.tgz";
 #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
 const LIBKRUNFW_SHA256: &str = "e52a05f83baf1e0f6d3e58b96837bcd8729820ecea74a55a1903bd47e0505c57";
@@ -159,8 +159,33 @@ impl Fetcher {
     }
 }
 
-fn libkrunfw_cache_key() -> String {
-    format!("{LIBKRUNFW_VERSION}-{}", &LIBKRUNFW_SHA256[..12])
+/// Select a release package; explicit source builds bypass this selection.
+fn libkrunfw_release() -> (&'static str, &'static str) {
+    let variant = match env::var("BOXLITE_LIBKRUNFW_VARIANT") {
+        Ok(value) => value,
+        Err(env::VarError::NotPresent) => "generic".to_string(),
+        Err(error) => panic!("Invalid BOXLITE_LIBKRUNFW_VARIANT: {error}"),
+    };
+    println!("cargo:warning=Selecting libkrunfw variant: {variant}");
+    match variant.as_str() {
+        "generic" => (LIBKRUNFW_URL, LIBKRUNFW_SHA256),
+        "dind" => {
+            #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+            {
+                (
+                    "https://github.com/boxlite-ai/libkrunfw/releases/download/v5.4.0/libkrunfw-dind-x86_64.tgz",
+                    "28bd8aa05a6cf054f3ae8d92b5d025b3a2739fb45025c5058ec737191d338b7c",
+                )
+            }
+            #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+            panic!("BOXLITE_LIBKRUNFW_VARIANT=dind is only available on Linux x86_64");
+        }
+        _ => panic!("BOXLITE_LIBKRUNFW_VARIANT must be generic or dind, got {variant:?}"),
+    }
+}
+
+fn libkrunfw_cache_key(sha256: &str) -> String {
+    format!("{LIBKRUNFW_VERSION}-{}", &sha256[..12])
 }
 
 /// Downloads and extracts the prebuilt libkrunfw tarball (macOS).
@@ -181,7 +206,8 @@ fn download_libkrunfw_prebuilt(out_dir: &Path) -> PathBuf {
         );
         return source;
     }
-    let cache_key = libkrunfw_cache_key();
+    let (url, sha256) = libkrunfw_release();
+    let cache_key = libkrunfw_cache_key(sha256);
     let versioned_dir = format!("libkrunfw-src-{cache_key}");
     let tarball_path = out_dir.join(format!("libkrunfw-prebuilt-{cache_key}.tar.gz"));
     let extract_dir = out_dir.join(&versioned_dir);
@@ -197,13 +223,8 @@ fn download_libkrunfw_prebuilt(out_dir: &Path) -> PathBuf {
         fs::remove_dir_all(&extract_dir).ok();
     }
 
-    Fetcher::fetch(
-        LIBKRUNFW_PREBUILT_URL,
-        LIBKRUNFW_SHA256,
-        &tarball_path,
-        &extract_dir,
-    )
-    .unwrap_or_else(|e| panic!("Failed to fetch libkrunfw: {}", e));
+    Fetcher::fetch(url, sha256, &tarball_path, &extract_dir)
+        .unwrap_or_else(|e| panic!("Failed to fetch libkrunfw: {}", e));
 
     println!("cargo:warning=Extracted libkrunfw to {}", src_dir.display());
     src_dir
@@ -214,7 +235,8 @@ fn download_libkrunfw_prebuilt(out_dir: &Path) -> PathBuf {
 #[cfg(target_os = "linux")]
 fn download_libkrunfw_so(install_dir: &Path) {
     let lib_dir = install_dir.join(LIB_DIR);
-    let cache_key = libkrunfw_cache_key();
+    let (url, sha256) = libkrunfw_release();
+    let cache_key = libkrunfw_cache_key(sha256);
 
     let version_marker = install_dir.join(format!(".version-{cache_key}"));
     if version_marker.exists() {
@@ -232,13 +254,8 @@ fn download_libkrunfw_so(install_dir: &Path) {
 
     let tarball_path = install_dir.join(format!("libkrunfw-{cache_key}.tgz"));
 
-    Fetcher::fetch(
-        LIBKRUNFW_SO_URL,
-        LIBKRUNFW_SHA256,
-        &tarball_path,
-        install_dir,
-    )
-    .unwrap_or_else(|e| panic!("Failed to fetch libkrunfw: {}", e));
+    Fetcher::fetch(url, sha256, &tarball_path, install_dir)
+        .unwrap_or_else(|e| panic!("Failed to fetch libkrunfw: {}", e));
 
     fs::write(&version_marker, &cache_key)
         .unwrap_or_else(|e| panic!("Failed to write version marker: {}", e));
@@ -979,8 +996,8 @@ fn build() {
             assert!(path.is_file(), "missing firmware input: {}", path.display());
             println!("cargo:rerun-if-changed={}", path.display());
         }
-        // An override must not leave the ordinary firmware's cache marker behind:
-        // unsetting it on the next build must restore the ordinary firmware.
+        // A source override must not leave a release package's cache marker behind:
+        // unsetting it must restore the selected release firmware.
         if libkrunfw_install.exists() {
             fs::remove_dir_all(&libkrunfw_install).expect("remove previous firmware install");
         }
@@ -1048,6 +1065,7 @@ fn main() {
     println!("cargo:rerun-if-changed=vendor/libkrun");
     println!("cargo:rerun-if-changed=vendor/libkrunfw");
     println!("cargo:rerun-if-env-changed=BOXLITE_DEPS_STUB");
+    println!("cargo:rerun-if-env-changed=BOXLITE_LIBKRUNFW_VARIANT");
     #[cfg(target_os = "macos")]
     println!("cargo:rerun-if-env-changed=BOXLITE_LIBKRUN_CC_LINUX");
 

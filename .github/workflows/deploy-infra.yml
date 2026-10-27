@@ -36,6 +36,11 @@ on:
           - api+runner
           - api
           - runner
+      libkrunfw_variant:
+        description: 'Linux x86_64 firmware for both C SDK and Runner builds.'
+        type: choice
+        default: dind
+        options: [dind, generic]
       apply:
         description: Preview again, then deploy the selected components
         required: true
@@ -209,6 +214,7 @@ jobs:
     with:
       ref: ${{ needs.resolve-ref.outputs.sha }}
       linux_x64_only: true
+      libkrunfw_variant: ${{ inputs.libkrunfw_variant }}
 
   build-runner:
     name: Build commit Runner
@@ -226,6 +232,7 @@ jobs:
     with:
       ref: ${{ needs.resolve-ref.outputs.sha }}
       libboxlite_source: artifact
+      libkrunfw_variant: ${{ inputs.libkrunfw_variant }}
 
   deploy:
     name: Deploy ${{ inputs.components }} to ${{ inputs.stage }}

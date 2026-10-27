@@ -4,17 +4,17 @@ Use a privileged guest for each Docker Engine. On Linux x86_64, the `v5.4.0`
 DinD release asset refreshed on 2026-10-23 includes built-in IPVS TCP/UDP,
 round-robin scheduling, conntrack netlink, xtables IPVS/u32 and VXLAN. Follow
 the [DinD build instructions](docker-in-docker.md#build-the-runtime) for
-prerequisites and replacing an older firmware cache, then package the release
+prerequisites and firmware selection, then package the release
 kernel through the normal runtime:
 
 ```sh
-make kernel:dind
-export BOXLITE_LIBKRUNFW_SOURCE="$PWD/.apps-local/runner-acceptance/firmware"
+unset BOXLITE_LIBKRUNFW_SOURCE BOXLITE_BUILD_LIBKRUNFW
+export BOXLITE_LIBKRUNFW_VARIANT=dind
 make dev:runner-ci
 ```
 
 The release kernel uses `iptables-nft`; legacy tables remain disabled. The
-ordinary prebuilt firmware is not interchangeable with this DinD asset.
+`generic` firmware package is not interchangeable with this DinD asset.
 
 For a local source build, `make kernel:swarm` remains available. Set
 `BOXLITE_LIBKRUNFW_SOURCE` to

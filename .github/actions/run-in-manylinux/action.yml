@@ -31,6 +31,10 @@ inputs:
       prologue alone.
     required: false
     default: ''
+  libkrunfw-variant:
+    description: 'Firmware package for both the runtime prologue and caller build: generic or dind.'
+    required: false
+    default: generic
 
 runs:
   using: composite
@@ -41,6 +45,7 @@ runs:
         # than event data, but executable source stays free of expressions regardless.
         TARGET: ${{ inputs.target }}
         BUILD_SCRIPT: ${{ inputs.script }}
+        BOXLITE_LIBKRUNFW_VARIANT: ${{ inputs.libkrunfw-variant }}
       run: |
         {
           cat <<'PROLOGUE'
@@ -119,5 +124,6 @@ runs:
           "${SCCACHE_DOCKER_ARGS[@]}" \
           -w /work \
           -e CARGO_HOME=/work/.cargo-manylinux \
+          -e BOXLITE_LIBKRUNFW_VARIANT \
           "quay.io/pypa/manylinux_2_28_$image_arch" \
           bash /tmp/build.sh

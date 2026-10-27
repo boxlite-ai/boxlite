@@ -290,6 +290,98 @@ for (const cached of [true, false]) {
   })
 }
 
+for (const variant of ['generic', 'dind']) {
+  test(`manylinux passes ${variant} to both runtime and C SDK builds`, () => {
+    const dir = mkdtempSync(join(tmpdir(), 'boxlite-firmware-'))
+    try {
+      const bin = join(dir, 'bin')
+      mkdirSync(bin)
+      mkdirSync(join(dir, 'scripts'))
+      writeFileSync(join(dir, 'scripts/util.sh'), '#!/bin/sh\necho x86_64-unknown-linux-musl\n', { mode: 0o755 })
+      for (const name of ['git', 'make', 'cargo']) {
+        writeFileSync(join(bin, name), `#!/bin/sh\nprintf '${name} %s\\n' "\${BOXLITE_LIBKRUNFW_VARIANT:-unset}" >> "$TRACE"\n`, { mode: 0o755 })
+      }
+      // Model Docker's env boundary: only -e inputs reach the generated build script.
+      writeFileSync(join(bin, 'docker'), `#!/bin/bash
+        forwarded=()
+        while [ "$#" -gt 0 ]; do
+          if [ "$1" = -e ]; then
+            shift
+            case "$1" in
+              BOXLITE_LIBKRUNFW_VARIANT) forwarded+=("$1=\${!1}") ;;
+              BOXLITE_LIBKRUNFW_VARIANT=*) forwarded+=("$1") ;;
+            esac
+          fi
+          shift
+        done
+        exec env -i PATH="$PATH" TRACE="$TRACE" CARGO_HOME="$PWD" "\${forwarded[@]}" bash "$RUNNER_TEMP/build.sh"
+      `, { mode: 0o755 })
+      const step = readAction('run-in-manylinux').runs.steps[0]
+      const result = runShell(step.run, {
+        PATH: `${bin}:/usr/bin:/bin`, RUNNER_TEMP: dir, GITHUB_WORKSPACE: dir,
+        SCCACHE_DIR: join(dir, 'absent'), TARGET: 'linux-x64-gnu', TRACE: join(dir, 'trace'),
+        BUILD_SCRIPT: 'cargo build --release -p boxlite-c', BOXLITE_LIBKRUNFW_VARIANT: variant,
+      }, dir)
+      assert.equal(result.status, 0, result.stderr)
+      assert.deepEqual(readFileSync(join(dir, 'trace'), 'utf8').trim().split('\n'),
+        [`git ${variant}`, `make ${variant}`, `cargo ${variant}`])
+      assert.equal(step.env.BOXLITE_LIBKRUNFW_VARIANT, '${{ inputs.libkrunfw-variant }}')
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+}
+
+test('native workflows select firmware by platform and forward it before the runtime build', () => {
+  for (const file of ['build-runtime.yml', 'build-c.yml']) {
+    const workflow: any = loadYaml(readFileSync(join(WORKFLOWS_DIR, file), 'utf8'))
+    const job = workflow.jobs.build
+    for (const [target, input, expected] of [
+      ['linux-x64-gnu', 'dind', 'dind'], ['linux-x64-gnu', 'generic', 'generic'],
+      ['linux-x64-gnu', '', 'generic'], ['linux-arm64-gnu', 'dind', 'generic'],
+      ['darwin-arm64', 'dind', 'generic'],
+    ]) {
+      const expression = job.env?.BOXLITE_LIBKRUNFW_VARIANT ?? 'generic'
+      const selected = expression.replace(/\$\{\{\s*(.*?)\s*\}\}/g, (_: string, body: string) =>
+        runInNewContext(body, { matrix: { target }, inputs: { libkrunfw_variant: input } }))
+      assert.equal(selected, expected, `${file}: ${target}, input=${input}`)
+    }
+    assert.equal(workflow.on.workflow_dispatch.inputs.libkrunfw_variant.default, 'dind')
+    const container = job.steps.find((step: any) => step.uses === './.github/actions/run-in-manylinux')
+    assert.equal(container.with['libkrunfw-variant'], '${{ env.BOXLITE_LIBKRUNFW_VARIANT }}')
+  }
+})
+
+test('manual Runner builds first build the selected C SDK; cloud calls reuse their SDK', () => {
+  const workflow: any = loadYaml(readFileSync(join(WORKFLOWS_DIR, 'build-runner-binary.yml'), 'utf8'))
+  const build = workflow.jobs['build-c']
+  assert.ok(build, 'a manual Runner build must produce its selected firmware before linking')
+  assert.ok(workflow.jobs.build.needs.includes('build-c'))
+  assert.equal(build.with.libkrunfw_variant, '${{ inputs.libkrunfw_variant }}')
+  for (const source of ['', 'artifact', 'release']) {
+    const selected = runInNewContext(build.if, { github: { event_name: 'workflow_dispatch' }, inputs: { libboxlite_source: source } })
+    assert.equal(selected, source === '')
+  }
+})
+
+test('Runner refuses a C SDK with missing or mismatched firmware metadata', () => {
+  const workflow: any = loadYaml(readFileSync(join(WORKFLOWS_DIR, 'build-runner-binary.yml'), 'utf8'))
+  const step = workflow.jobs.build.steps.find((candidate: any) => candidate.name === 'Verify C SDK firmware')
+  const dir = mkdtempSync(join(tmpdir(), 'boxlite-sdk-firmware-'))
+  try {
+    mkdirSync(join(dir, 'sdks/go'), { recursive: true })
+    for (const actual of [undefined, 'generic', 'dind']) {
+      if (actual) writeFileSync(join(dir, 'sdks/go/libkrunfw-variant'), `${actual}\n`)
+      const result = runShell(step?.run ?? '', {
+        PATH: '/usr/bin:/bin', BOXLITE_LIBKRUNFW_VARIANT: 'dind',
+      }, dir)
+      assert.equal(result.status === 0, actual === 'dind', `SDK=${actual}: ${result.stderr}`)
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 for (const status of [0, 17]) {
   test(`the container flushes its disk cache when the build exits ${status}`, () => {
     const dir = mkdtempSync(join(tmpdir(), 'boxlite-container-'))

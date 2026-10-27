@@ -47,16 +47,19 @@ The [one-dispatch workflow](deployment.md#deploy-through-github-actions) prepare
 
 ### Development firmware
 
-`runner:build` uses `apps/runner/packaging/dev-artifact.Dockerfile` to embed the
-checksum-pinned v5.4.0 DinD kernel. The shared
-`scripts/build/prepare_dind_firmware.py` verifies both downloaded and cached
-ELF bytes, packages them with the vendored ABI generator, and writes
-`SHA256SUMS`. Local Linux acceptance uses the same helper and pin.
+`runner:build` uses `apps/runner/packaging/dev-artifact.Dockerfile`, whose
+`BOXLITE_LIBKRUNFW_VARIANT` build argument defaults to `dind`. Both runtime and
+C SDK compilation receive it through `ENV`; `libkrun-sys` verifies and installs
+the v5.4.0 `libkrunfw-dind-x86_64.tgz` package. Direct Docker builds may pass
+`--build-arg BOXLITE_LIBKRUNFW_VARIANT=generic`. Local source builds still default
+to `generic` unless the environment selects `dind`.
 
-The Dockerfile keeps `BOXLITE_LIBKRUNFW_SOURCE` set through both runtime and
-C SDK builds; a command-scoped override would let the second build restore
-ordinary firmware. This choice is committed with the artifact identity, so
-changing firmware requires a new commit rather than a deployment flag.
+The GitHub Runtime, C SDK and Runner workflows expose `libkrunfw_variant`,
+defaulting to `dind` for manual builds. `deploy-infra` passes the same selection
+to C SDK and Runner. Manual Runner builds produce their C SDK first; reusable
+Runner calls verify the supplied C SDK's `libkrunfw-variant` metadata before
+linking. Automatic public Release builds keep `generic`. Selecting a variant
+at Runner startup cannot change an existing binary's embedded firmware.
 
 For dev, dispatch `mdeploy-all` from branch `x_features` with the `ref` input
 empty. Do not enter `x_features` in `ref`: that input accepts a commit SHA,

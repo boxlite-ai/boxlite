@@ -5,22 +5,60 @@ networking features; the runner's host sandbox remains enabled.
 
 ## Development runner artifacts
 
-Development runner artifacts embed the checksum-pinned v5.4.0 DinD firmware.
+Development runner artifacts default to the checksum-pinned v5.4.0 DinD firmware.
 Every Box started on that runner uses this kernel, including non-privileged
 Boxes; Docker still requires the privileged guest option below. After upgrading
 the runner, restart running Boxes to use the new kernel. The published release
 runner and SDK/wheel firmware defaults are unchanged.
 
 See [runner operations](../../apps/infra/docs/runners.md#development-firmware)
-for the build and deployment procedure. Local native builds still use the
-explicit firmware selection below.
+for the build and deployment procedure. Local native builds select firmware
+with the build option below.
 
 ## Build the runtime
 
-On Linux x86_64, `make kernel:dind` prepares the checksum-pinned
-[`v5.4.0` DinD ELF release](https://github.com/boxlite-ai/libkrunfw/releases/tag/v5.4.0)
-with the vendored firmware ABI generator. Run `make _ensure-python-deps` first.
-This packages the downloaded kernel without rebuilding or modifying it.
+`BOXLITE_LIBKRUNFW_VARIANT=generic|dind` selects the firmware package when
+`libkrun-sys` builds. Unset means `generic`. On Linux x86_64, `dind` downloads
+the checksum-pinned `libkrunfw-dind-x86_64.tgz` from
+[`v5.4.0`](https://github.com/boxlite-ai/libkrunfw/releases/tag/v5.4.0), containing
+the ABI 5 library with the IPVS/VXLAN-enabled kernel. It does not rebuild the
+kernel or download the standalone `.bin`.
+
+```sh
+unset BOXLITE_LIBKRUNFW_SOURCE BOXLITE_BUILD_LIBKRUNFW
+export BOXLITE_LIBKRUNFW_VARIANT=dind
+make runtime          # Release runtime
+make dist:c           # C SDK embedding that runtime
+# Or build the local Go SDK, Python SDK and Runner together:
+make dev:runner-ci
+```
+
+Keep the variable set throughout native compilation. Switching it to `generic`
+or unsetting it rebuilds against the ordinary package; the package checksum
+invalidates the previous firmware cache. Changing it only when starting an
+already-built Runner, or compiling Go against an existing `libboxlite.a`, does
+not change the embedded kernel. Deploy the rebuilt Runner and restart its Boxes.
+
+| Build entry point | Default for Linux x86_64 |
+| --- | --- |
+| Local native build | `generic` |
+| GitHub manual Runtime, C SDK, Runner builds | `dind`, selectable via `libkrunfw_variant` |
+| Cloud reusable C SDK/Runner and `deploy-infra` | `dind` |
+| Development Runner Dockerfile | `dind`, configurable with `--build-arg BOXLITE_LIBKRUNFW_VARIANT=generic` |
+| Automatic public Release and scheduled Runtime builds | `generic` |
+
+Only Linux x86_64 has a published DinD library package. Explicit `dind` on
+other native platforms fails; multi-platform GitHub workflows use `generic`
+for their ARM64/macOS jobs. Python/Node release workflows retain their defaults.
+Runtime and C SDK workflow archives include `libkrunfw-variant`. Manual Runner
+builds first build a matching C SDK; reusable Runner builds check that metadata
+and reject a mismatched SDK or an older archive without it. Rebuild such SDKs
+with the desired variant before linking the Runner.
+
+Explicit `BOXLITE_LIBKRUNFW_SOURCE` and `BOXLITE_BUILD_LIBKRUNFW` source builds
+take precedence over package selection. The standalone ELF preparation path
+remains available: `make kernel:dind` verifies and packages the downloaded
+kernel using the vendored ABI generator. Run `make _ensure-python-deps` first.
 
 The x86_64 release asset was replaced on 2026-10-23 with a kernel containing
 built-in IPVS and VXLAN. When upgrading an existing checkout, move its
@@ -45,8 +83,8 @@ make dev:runner-ci
 
 Keep `BOXLITE_LIBKRUNFW_SOURCE` set for subsequent native builds and regression
 tests. The native build compiles that directory's kernel.c into libkrunfw and
-packages it through the normal runtime build. Removing the override selects the
-ordinary prebuilt firmware again. `SHA256SUMS` identifies the generated inputs.
+packages it through the normal runtime build. Removing the source override
+returns to `BOXLITE_LIBKRUNFW_VARIANT` (default `generic`). `SHA256SUMS` identifies the generated inputs.
 The macOS-built guest reports `6.12.87-boxlite-dind`; the published x86_64
 kernel reports `6.12.87`. Verify the packaged kernel's checksum and runtime
 behavior before qualifying Docker. The refreshed x86_64 DinD kernel includes

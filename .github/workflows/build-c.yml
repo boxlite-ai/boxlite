@@ -22,8 +22,18 @@ on:
   release:
     types: [ published ]
   workflow_dispatch:
+    inputs:
+      libkrunfw_variant:
+        description: 'Linux x86_64 firmware package (other platforms use generic).'
+        type: choice
+        default: dind
+        options: [dind, generic]
   workflow_call:
     inputs:
+      libkrunfw_variant:
+        description: 'Linux x86_64 firmware package: generic or dind.'
+        type: string
+        default: dind
       ref:
         description: 'Full commit SHA to build. Defaults to the event commit.'
         required: false
@@ -94,6 +104,9 @@ jobs:
     name: Build (${{ matrix.target }})
     needs: [ config, resolve-ref ]
     runs-on: ${{ matrix.os }}
+    env:
+      # Public releases retain generic; manual and cloud callers select their variant.
+      BOXLITE_LIBKRUNFW_VARIANT: ${{ matrix.target == 'linux-x64-gnu' && (inputs.libkrunfw_variant || 'generic') || 'generic' }}
     strategy:
       fail-fast: false
       matrix:
@@ -126,6 +139,7 @@ jobs:
         uses: ./.github/actions/run-in-manylinux
         with:
           target: ${{ matrix.target }}
+          libkrunfw-variant: ${{ env.BOXLITE_LIBKRUNFW_VARIANT }}
           script: |
             # Build the C FFI library (static + shared)
             cargo build --release -p boxlite-c
@@ -152,6 +166,7 @@ jobs:
           ARCHIVE_DIR="boxlite-c-v${VERSION}-${{ matrix.target }}"
 
           mkdir -p "${ARCHIVE_DIR}/lib" "${ARCHIVE_DIR}/include"
+          printf '%s\n' "$BOXLITE_LIBKRUNFW_VARIANT" > "${ARCHIVE_DIR}/libkrunfw-variant"
           cp target/release/libboxlite.a "${ARCHIVE_DIR}/lib/"
           cp sdks/c/include/boxlite.h "${ARCHIVE_DIR}/include/"
 

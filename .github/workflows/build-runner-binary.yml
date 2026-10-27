@@ -19,12 +19,21 @@ on:
     types: [completed]
   workflow_dispatch:
     inputs:
+      libkrunfw_variant:
+        description: 'Firmware to embed; builds a matching Linux x86_64 C SDK first.'
+        type: choice
+        default: dind
+        options: [dind, generic]
       ref:
-        description: 'Full commit SHA to build against its published C SDK version.'
+        description: 'Full commit SHA to build, including its C SDK. Defaults to the event commit.'
         required: false
         type: string
   workflow_call:
     inputs:
+      libkrunfw_variant:
+        description: 'Required firmware in the consumed C SDK: generic or dind.'
+        type: string
+        default: dind
       libboxlite_source:
         required: false
         default: release
@@ -77,13 +86,29 @@ jobs:
           git cat-file -e "$candidate^{commit}"
           echo "sha=$candidate" >> "$GITHUB_OUTPUT"
 
+  # Direct dispatch owns its C SDK build. Reusable callers supply a matching artifact/release.
+  build-c:
+    needs: resolve-ref
+    if: github.event_name == 'workflow_dispatch' && inputs.libboxlite_source == ''
+    permissions:
+      contents: write # Required by the reusable C workflow's release-upload declaration.
+    uses: ./.github/workflows/build-c.yml
+    with:
+      ref: ${{ needs.resolve-ref.outputs.sha }}
+      linux_x64_only: true
+      libkrunfw_variant: ${{ inputs.libkrunfw_variant }}
+
   build:
     name: Build Runner (linux-amd64)
-    needs: [config, resolve-ref]
+    needs: [config, resolve-ref, build-c]
     if: >-
-      github.event_name != 'workflow_run' ||
-      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'release')
+      !cancelled() && needs.config.result == 'success' && needs.resolve-ref.result == 'success' &&
+      (needs.build-c.result == 'success' || needs.build-c.result == 'skipped') &&
+      (github.event_name != 'workflow_run' ||
+      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'release'))
     runs-on: ubuntu-latest
+    env:
+      BOXLITE_LIBKRUNFW_VARIANT: ${{ inputs.libkrunfw_variant || 'generic' }}
     permissions:
       contents: read
 
@@ -107,7 +132,7 @@ jobs:
         shell: bash
         env:
           BUILD_SHA: ${{ needs.resolve-ref.outputs.sha }}
-          INPUT_SOURCE: ${{ inputs.libboxlite_source }}
+          INPUT_SOURCE: ${{ inputs.libboxlite_source || (github.event_name == 'workflow_dispatch' && 'artifact' || 'release') }}
         run: |
           set -euo pipefail
           VERSION=$(grep '^version = ' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
@@ -142,6 +167,7 @@ jobs:
           echo "Downloading $URL"
           curl -fsSL "$URL" | tar xz -C /tmp/
           cp "/tmp/boxlite-c-v${VERSION}-linux-x64-gnu/lib/libboxlite.a" sdks/go/libboxlite.a
+          cp "/tmp/boxlite-c-v${VERSION}-linux-x64-gnu/libkrunfw-variant" sdks/go/libkrunfw-variant
 
       - name: Download commit libboxlite.a
         if: steps.artifact.outputs.source == 'artifact'
@@ -164,6 +190,21 @@ jobs:
           # returns non-zero for the permission errors even when it matched — which under `set -e`
           # failed this step with the library sitting right there.
           cp "/tmp/$(basename "$archive" .tar.gz)/lib/libboxlite.a" sdks/go/libboxlite.a
+          cp "/tmp/$(basename "$archive" .tar.gz)/libkrunfw-variant" sdks/go/libkrunfw-variant
+
+      - name: Verify C SDK firmware
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$BOXLITE_LIBKRUNFW_VARIANT" in
+            generic|dind) ;;
+            *) echo "libkrunfw_variant must be generic or dind" >&2; exit 1 ;;
+          esac
+          actual=$(cat sdks/go/libkrunfw-variant)
+          if [ "$actual" != "$BOXLITE_LIBKRUNFW_VARIANT" ]; then
+            echo "C SDK firmware is '$actual'; rebuild the SDK with BOXLITE_LIBKRUNFW_VARIANT=$BOXLITE_LIBKRUNFW_VARIANT" >&2
+            exit 1
+          fi
 
       - name: Rewrite go.work for minimal modules
         run: |

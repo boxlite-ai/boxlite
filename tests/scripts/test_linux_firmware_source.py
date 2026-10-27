@@ -98,6 +98,143 @@ class LinuxFirmwareSourceTest(unittest.TestCase):
             )
 
 
+@unittest.skipUnless(
+    sys.platform == "linux" and os.uname().machine == "x86_64", "Linux x86_64 firmware"
+)
+class LinuxFirmwareVariantTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.scratch = tempfile.TemporaryDirectory(prefix="boxlite firmware ")
+        cls.addClassCleanup(cls.scratch.cleanup)
+        cls.root = Path(cls.scratch.name)
+        wrapper = cls.root / "build.rs"
+        wrapper.write_text(
+            "mod num_cpus { pub fn get() -> usize { 1 } }\n"
+            + f'include!(r#"{ROOT / "src/deps/libkrun-sys/build.rs"}"#);\n'
+        )
+        cls.binary = cls.root / "build"
+        subprocess.run(
+            [
+                "rustc",
+                "--edition=2021",
+                "--cfg",
+                'feature="krunfw"',
+                str(wrapper),
+                "-o",
+                str(cls.binary),
+            ],
+            check=True,
+            capture_output=True,
+        )
+        # Exercise the real selection and checksum verification without network access.
+        curl = cls.root / "curl"
+        curl.write_text(
+            '#!/bin/sh\nprintf "%s\\n" "$4" > "$REQUEST_LOG"\nprintf corrupt > "$3"\n'
+        )
+        curl.chmod(0o755)
+
+    def run_build(self, variant, cached=None):
+        scratch = tempfile.TemporaryDirectory(dir=self.root)
+        self.addCleanup(scratch.cleanup)
+        out = Path(scratch.name)
+        install = out / "libkrunfw"
+        if cached:
+            lib = install / "lib64"
+            lib.mkdir(parents=True)
+            subprocess.run(
+                [
+                    "cc",
+                    "-shared",
+                    "-fPIC",
+                    "-x",
+                    "c",
+                    "-",
+                    "-o",
+                    str(lib / "libkrunfw.so.5"),
+                ],
+                input="int proof(void) { return 1; }",
+                text=True,
+                check=True,
+                capture_output=True,
+            )
+            (install / f".version-v5.4.0-{cached}").touch()
+        env = dict(
+            os.environ,
+            OUT_DIR=str(out),
+            CARGO_MANIFEST_DIR=str(ROOT),
+            CARGO_CFG_TARGET_ARCH="x86_64",
+            PATH=f"{self.root}:{os.environ['PATH']}",
+            REQUEST_LOG=str(out / "requested-url"),
+        )
+        for name in [
+            "BOXLITE_DEPS_STUB",
+            "BOXLITE_BUILD_LIBKRUNFW",
+            "BOXLITE_LIBKRUNFW_SOURCE",
+            "BOXLITE_LIBKRUNFW_VARIANT",
+        ]:
+            env.pop(name, None)
+        if variant is not None:
+            env["BOXLITE_LIBKRUNFW_VARIANT"] = variant
+        result = subprocess.run(
+            [str(self.binary)], env=env, check=False, capture_output=True, text=True
+        )
+        return result, out
+
+    def test_selects_release_and_rejects_corrupt_download(self):
+        for variant, asset in [
+            (None, "libkrunfw-x86_64.tgz"),
+            ("generic", "libkrunfw-x86_64.tgz"),
+            ("dind", "libkrunfw-dind-x86_64.tgz"),
+        ]:
+            with self.subTest(variant=variant):
+                result, out = self.run_build(variant)
+                self.assertEqual(
+                    (out / "requested-url").read_text().strip().split("/")[-1], asset
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("SHA256 mismatch", result.stderr)
+                self.assertEqual(list((out / "libkrunfw").glob(".version-*")), [])
+
+    def test_switching_variant_invalidates_both_cache_directions(self):
+        for variant, cached, asset in [
+            ("dind", "63df4e4cc99d", "libkrunfw-dind-x86_64.tgz"),
+            (None, "28bd8aa05a6c", "libkrunfw-x86_64.tgz"),
+        ]:
+            with self.subTest(variant=variant):
+                result, out = self.run_build(variant, cached)
+                self.assertTrue(
+                    (out / "requested-url").exists(),
+                    "stale firmware cache suppressed download",
+                )
+                self.assertTrue(
+                    (out / "requested-url").read_text().strip().endswith(asset)
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("SHA256 mismatch", result.stderr)
+                self.assertEqual(list((out / "libkrunfw").glob(".version-*")), [])
+
+    def test_unset_and_generic_reuse_generic_cache(self):
+        for variant in [None, "generic"]:
+            with self.subTest(variant=variant):
+                result, out = self.run_build(variant, "63df4e4cc99d")
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertFalse((out / "requested-url").exists())
+                self.assertIn(
+                    "cargo:rerun-if-env-changed=BOXLITE_LIBKRUNFW_VARIANT",
+                    result.stdout,
+                )
+
+    def test_invalid_variant_fails_before_download(self):
+        for variant in ["typo", ""]:
+            with self.subTest(variant=variant):
+                result, out = self.run_build(variant)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(
+                    "BOXLITE_LIBKRUNFW_VARIANT must be generic or dind", result.stderr
+                )
+                self.assertFalse((out / "requested-url").exists())
+
+
 class LinuxFirmwarePreparationTest(unittest.TestCase):
     def setUp(self):
         sys.path.insert(0, str(ROOT / "scripts/build"))

@@ -73,6 +73,15 @@ runbook](../../docs/contributing/development/e2e-local.md), [deployment](../../a
 
 ## Routine checks
 
+Manual `build-runtime`, `build-c`, and `build-runner-binary` runs expose
+`libkrunfw_variant` (`dind` by default, or `generic`). The choice applies to
+Linux x86_64; other matrix platforms use `generic`. Automatic public Release
+and scheduled Runtime builds retain `generic`. C SDK and Runner reusable
+calls default to `dind`, and `deploy-infra` forwards its choice to both.
+Manual Runner builds first build a matching C SDK. Consumed SDK archives must
+record the requested variant; older archives without metadata require a rebuild.
+See the [firmware build contract](../../docs/guides/docker-in-docker.md#build-the-runtime).
+
 `lint` and `test` always report their required conclusion on PRs and merge groups. A newer PR
 commit cancels its superseded lint, test and client-drift runs. Release and deployment jobs keep
 their existing sequencing.
