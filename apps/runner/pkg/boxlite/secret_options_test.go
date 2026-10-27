@@ -4,8 +4,10 @@
 package boxlite
 
 import (
+	"reflect"
 	"testing"
 
+	boxlite "github.com/boxlite-ai/boxlite/sdks/go"
 	"github.com/boxlite-ai/runner/pkg/api/dto"
 )
 
@@ -32,6 +34,23 @@ func TestSecretSpecsPreservesFields(t *testing.T) {
 	// Empty placeholder is passed through verbatim: the SDK applies the default.
 	if got[1].Placeholder != "" {
 		t.Errorf("secret 1 placeholder should be empty, got %q", got[1].Placeholder)
+	}
+}
+
+// TestSecretSpecsDropsSecretsWithoutHosts covers boxes stored before create
+// began rejecting a secret without hosts. Recovery and re-create send such a
+// box's secrets through Create, which must drop the never-substituted ones
+// rather than fail.
+func TestSecretSpecsDropsSecretsWithoutHosts(t *testing.T) {
+	got := secretSpecs([]dto.SecretDTO{
+		{Name: "openai", Value: "sk-test", Hosts: []string{"", "api.openai.com"}},
+		{Name: "github", Value: "gh-test"},
+		{Name: "blank", Value: "b-test", Hosts: []string{""}},
+	})
+
+	want := []boxlite.Secret{{Name: "openai", Value: "sk-test", Hosts: []string{"api.openai.com"}}}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("secretSpecs = %+v, want %+v", got, want)
 	}
 }
 

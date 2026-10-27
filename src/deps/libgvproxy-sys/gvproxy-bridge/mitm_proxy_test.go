@@ -192,8 +192,10 @@ func TestMitmProxy_HTTP1_PostWithBody(t *testing.T) {
 		t.Fatal("failed to read response:", err)
 	}
 
+	// The upstream reflects the body. Had the proxy written the value into
+	// it, the guest would now hold the real secret (#1500).
 	got := string(body)
-	expected := `{"key":"real-value"}`
+	expected := `{"key":"<BOXLITE_SECRET:k>"}`
 	if got != expected {
 		t.Errorf("expected body %q, got %q", expected, got)
 	}
@@ -383,7 +385,7 @@ func TestMitmProxy_ChunkedRequestBody(t *testing.T) {
 		t.Fatal("failed to read response:", err)
 	}
 
-	expected := "chunk1-real-value-chunk2"
+	expected := "chunk1-<BOXLITE_SECRET:k>-chunk2"
 	if string(got) != expected {
 		t.Errorf("expected %q, got %q", expected, string(got))
 	}
@@ -433,7 +435,7 @@ func TestMitmProxy_StreamingRequestBody(t *testing.T) {
 
 	select {
 	case got := <-received:
-		expected := "prefix-real-value-suffix"
+		expected := "prefix-<BOXLITE_SECRET:k>-suffix"
 		if got != expected {
 			t.Errorf("expected %q, got %q", expected, got)
 		}
@@ -496,7 +498,8 @@ func TestMitmProxy_LargeResponseStreaming(t *testing.T) {
 
 // --- Content-Length Tests ---
 
-func TestMitmProxy_ContentLengthAdjustment(t *testing.T) {
+// The body is forwarded as sent: same bytes, same Content-Length.
+func TestMitmProxy_BodyKeepsContentLength(t *testing.T) {
 	ca := newTestCA(t)
 
 	secrets := testSecrets()
@@ -513,7 +516,6 @@ func TestMitmProxy_ContentLengthAdjustment(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	// Body with placeholder - after substitution length changes
 	bodyStr := `{"token":"<BOXLITE_SECRET:k>"}`
 	req, err := http.NewRequestWithContext(ctx, "POST", "https://api.example.com/data", strings.NewReader(bodyStr))
 	if err != nil {
@@ -530,9 +532,9 @@ func TestMitmProxy_ContentLengthAdjustment(t *testing.T) {
 	got, _ := io.ReadAll(resp.Body)
 	gotStr := string(got)
 
-	// Upstream should have received the substituted body completely
-	if !strings.Contains(gotStr, `body={"token":"real-value"}`) {
-		t.Errorf("expected substituted body at upstream, got: %s", gotStr)
+	want := fmt.Sprintf("body=%s;cl=%d", bodyStr, len(bodyStr))
+	if gotStr != want {
+		t.Errorf("upstream saw %q, want %q", gotStr, want)
 	}
 }
 

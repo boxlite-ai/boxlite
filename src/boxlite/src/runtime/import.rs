@@ -332,6 +332,31 @@ mod tests {
         );
     }
 
+    /// Create refuses a secret without hosts, but an archive exported before
+    /// that rule may carry one. Import must keep it as stored: it was never
+    /// substituted, and rejecting it would strand the box.
+    #[test]
+    fn import_keeps_a_stored_secret_without_hosts() {
+        let options = BoxOptions {
+            secrets: vec![crate::runtime::options::Secret {
+                name: "github".to_string(),
+                value: "gh-test".to_string(),
+                hosts: vec![],
+                placeholder: "<BOXLITE_SECRET:github>".to_string(),
+            }],
+            ..Default::default()
+        };
+
+        for policy in [
+            ArchiveImportPolicy::Trusted,
+            ArchiveImportPolicy::UntrustedRemote,
+        ] {
+            let imported = options_from_manifest(&v3_manifest(options.clone()), policy)
+                .expect("an archive stored before the create rule must import");
+            assert_eq!(imported.secrets, options.secrets);
+        }
+    }
+
     #[test]
     fn untrusted_import_rejects_nested_virtualization() {
         let mut advanced = crate::runtime::advanced_options::AdvancedBoxOptions::default();

@@ -432,10 +432,26 @@ describe('CreateBoxDto secrets', () => {
     expect(errors).toHaveLength(0)
   })
 
-  it('accepts a secret with only name+value', async () => {
-    const errors = await validate(plainToInstance(CreateBoxDto, { secrets: [{ name: 'openai', value: 'sk-test' }] }))
+  it('accepts a secret without a placeholder', async () => {
+    const errors = await validate(
+      plainToInstance(CreateBoxDto, { secrets: [{ name: 'openai', value: 'sk-test', hosts: ['api.openai.com'] }] }),
+    )
 
     expect(errors).toHaveLength(0)
+  })
+
+  // gvproxy substitutes a secret only for the hosts it lists, and an empty
+  // placeholder would splice the value into every header byte. Both are refused
+  // at the request boundary rather than stored as an inert or dangerous secret.
+  it.each([
+    ['no hosts field', { name: 'openai', value: 'sk-test' }],
+    ['an empty hosts list', { name: 'openai', value: 'sk-test', hosts: [] }],
+    ['an empty host', { name: 'openai', value: 'sk-test', hosts: [''] }],
+    ['an empty placeholder', { name: 'openai', value: 'sk-test', hosts: ['api.openai.com'], placeholder: '' }],
+  ])('rejects a secret with %s', async (_case, body) => {
+    const errors = await validate(plainToInstance(CreateBoxDto, { secrets: [body] }))
+
+    expect(errors.find((error) => error.property === 'secrets')).toBeDefined()
   })
 
   it('rejects a secret missing its name', async () => {
