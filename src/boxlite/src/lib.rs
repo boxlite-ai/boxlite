@@ -54,6 +54,7 @@ pub use litebox::{
     AttachOptions, BoxCommand, CopyOptions, CopySourceKind, ExecResult, ExecStderr, ExecStdin,
     ExecStdout, Execution, ExecutionId, HealthState, HealthStatus,
 };
+pub use litebox::{BoxResources, ResizeOptions};
 pub use litebox::{SshAccount, SshCaConfig, SshConfig, SshHandle, SshStatus};
 pub use metrics::{BoxMetrics, RuntimeMetrics};
 pub use runtime::advanced_options::{

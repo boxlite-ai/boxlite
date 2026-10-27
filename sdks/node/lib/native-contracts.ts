@@ -218,7 +218,8 @@ export interface JsEnvVar {
   value: string;
 }
 
-export type JsVolumeSpec = JsManagedVolumeSpec | JsHostPathVolumeSpec | JsCacheVolumeSpec;
+export type JsVolumeSpec =
+  JsManagedVolumeSpec | JsHostPathVolumeSpec | JsCacheVolumeSpec;
 
 export interface JsCacheVolumeSpec {
   /** Runner-local logical cache ID. Contents are independent on each runner. */
@@ -590,6 +591,18 @@ export type JsCloneOptions = Record<string, never>;
 
 export type JsExportOptions = Record<string, never>;
 
+export interface JsResizeOptions {
+  cpus?: number;
+  memoryMib?: number;
+}
+
+export interface JsBoxResources {
+  cpus: number;
+  memoryMib: number;
+  maxCpus: number;
+  maxMemoryMib: number;
+}
+
 export interface JsBox {
   readonly id: string;
   readonly name: string | null;
@@ -611,6 +624,7 @@ export interface JsBox {
   ): Promise<JsBox>;
   export(dest: string, options?: JsExportOptions | null): Promise<string>;
   start(): Promise<void>;
+  resize(options: JsResizeOptions): Promise<JsBoxResources>;
   stop(): Promise<void>;
   metrics(): Promise<JsBoxMetrics>;
   copyIn(

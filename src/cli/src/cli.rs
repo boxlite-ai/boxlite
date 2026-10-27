@@ -284,6 +284,11 @@ const COMMAND_SCOPES: &[CommandScope] = &[
         children: &[],
     },
     CommandScope {
+        name: "resize",
+        globals: BOX_GLOBALS,
+        children: &[],
+    },
+    CommandScope {
         name: "pull",
         globals: LOCAL_IMAGE_GLOBALS,
         children: &[],
@@ -599,6 +604,9 @@ pub enum Commands {
 
     /// Restart one or more boxes
     Restart(crate::commands::restart::RestartArgs),
+
+    /// Grow a running box, or show its allocation and boot ceilings
+    Resize(crate::commands::resize::ResizeArgs),
 
     /// Pull an image from a registry
     Pull(crate::commands::pull::PullArgs),
@@ -1549,6 +1557,34 @@ mod tests {
 
     fn parse_projected(args: &[&str]) -> Cli {
         try_parse_from(args).expect("parse")
+    }
+
+    #[test]
+    fn resize_accepts_absolute_targets_and_remote_options() {
+        let cli = parse_projected(&[
+            "boxlite",
+            "resize",
+            "mybox",
+            "--cpus",
+            "2",
+            "--memory",
+            "512",
+            "--url",
+            "https://example.test",
+        ]);
+        assert_eq!(cli.global.url.as_deref(), Some("https://example.test"));
+        let Commands::Resize(args) = cli.command else {
+            panic!("expected resize")
+        };
+        assert_eq!(args.target, "mybox");
+        assert_eq!(args.cpus, Some(2));
+        assert_eq!(args.memory, Some(512));
+        let query = parse_projected(&["boxlite", "resize", "mybox"]);
+        let Commands::Resize(args) = query.command else {
+            panic!("expected resize")
+        };
+        assert!(args.cpus.is_none() && args.memory.is_none());
+        assert!(try_parse_from(["boxlite", "resize", "mybox", "--cpus", "256"]).is_err());
     }
 
     #[test]

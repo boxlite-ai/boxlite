@@ -109,6 +109,12 @@ pub(crate) type CRuntimeImportFn =
 pub type CBoxStartBoxCb = Option<extern "C" fn(*mut crate::CBoxliteError, *mut c_void)>;
 pub(crate) type CBoxStartBoxFn = extern "C" fn(*mut crate::CBoxliteError, *mut c_void);
 
+/// Resize completion. Both pointers are borrowed for callback dispatch only.
+pub type CBoxResizeCb =
+    Option<extern "C" fn(*mut crate::CBoxResources, *mut crate::CBoxliteError, *mut c_void)>;
+pub(crate) type CBoxResizeFn =
+    extern "C" fn(*mut crate::CBoxResources, *mut crate::CBoxliteError, *mut c_void);
+
 /// Box stop completion.
 pub type CBoxStopBoxCb = Option<extern "C" fn(*mut crate::CBoxliteError, *mut c_void)>;
 pub(crate) type CBoxStopBoxFn = extern "C" fn(*mut crate::CBoxliteError, *mut c_void);
@@ -404,6 +410,11 @@ pub enum RuntimeEvent {
         cb: CBoxStartBoxFn,
         user_data: usize,
         result: Result<(), BoxliteError>,
+    },
+    ResizeBox {
+        cb: CBoxResizeFn,
+        user_data: usize,
+        result: Result<crate::CBoxResources, BoxliteError>,
     },
     StopBox {
         cb: CBoxStopBoxFn,

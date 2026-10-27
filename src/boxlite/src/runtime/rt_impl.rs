@@ -676,7 +676,7 @@ impl RuntimeImpl {
         };
 
         if let Some(box_impl) = cached_box {
-            box_impl.refresh_network_policy()?;
+            box_impl.refresh_configuration()?;
             return Ok(Some(box_impl.info()));
         }
 

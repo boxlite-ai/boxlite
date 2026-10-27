@@ -115,6 +115,19 @@ impl PipelineTask<InitCtx> for GuestInitTask {
             .inspect_err(|e| log_task_error(&box_id, task_name, e))?;
 
         let mut ctx = ctx.lock().await;
+        #[cfg(target_os = "linux")]
+        if let Some(layout) = &ctx.layout {
+            let socket = layout.sockets().memory_sock();
+            if socket.exists() {
+                let status = crate::vmm::memory_control::request(&socket, 0).await?;
+                if status.active
+                    && status.request_error == 0
+                    && let Some(resources) = &mut ctx.resources
+                {
+                    resources.max_memory_mib = status.max_mib;
+                }
+            }
+        }
         ctx.guest_session = Some(guest_session);
         ctx.volume_mgr = Some(volume_mgr);
         ctx.rootfs_init = Some(rootfs_init);

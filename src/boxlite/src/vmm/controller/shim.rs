@@ -8,6 +8,7 @@ use crate::{
     vmm::{InstanceSpec, VmmKind},
 };
 
+use crate::runtime::constants::vm_defaults::DEFAULT_CPUS;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
 use super::watchdog;
@@ -327,6 +328,8 @@ impl VmmController for ShimController {
             nested_virtualization: config.nested_virtualization,
             // VM configuration
             cpus: config.cpus,
+            max_cpus: config.max_cpus,
+            max_memory_mib: config.max_memory_mib,
             memory_mib: config.memory_mib,
             kernel: config.kernel.clone(),
             fs_shares: config.fs_shares.clone(),
@@ -374,7 +377,14 @@ impl VmmController for ShimController {
             self.box_id.as_str(),
             &self.options,
         )
-        .with_nested_virtualization(config.nested_virtualization);
+        .with_nested_virtualization(config.nested_virtualization)
+        .with_vcpus(
+            config.cpus.unwrap_or(DEFAULT_CPUS),
+            config
+                .max_cpus
+                .unwrap_or(0)
+                .max(config.cpus.unwrap_or(DEFAULT_CPUS)),
+        );
         let spawned = spawner.spawn(&config_json, config.detach)?;
         // spawn_duration: time to create Box subprocess
         let shim_spawn_duration = shim_spawn_start.elapsed();

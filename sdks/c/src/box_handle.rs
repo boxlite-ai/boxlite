@@ -38,6 +38,63 @@ pub struct BoxHandle {
     pub queue: Arc<EventQueue>,
 }
 
+/// Current resource allocation and the ceilings fixed at this boot.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct CBoxResources {
+    pub cpus: u8,
+    pub memory_mib: u32,
+    pub max_cpus: u8,
+    pub max_memory_mib: u32,
+}
+
+/// Grow a running box. Zero leaves that resource unchanged. The callback's
+/// resources and error pointers are borrowed only during dispatch; copy them
+/// to retain the result. Completion is delivered by boxlite_runtime_drain.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_resize_box(
+    handle: *mut CBoxHandle,
+    cpus: u8,
+    memory_mib: u32,
+    cb: crate::event_queue::CBoxResizeCb,
+    user_data: *mut c_void,
+    out_error: *mut CBoxliteError,
+) -> BoxliteErrorCode {
+    if handle.is_null() {
+        write_error(out_error, null_pointer_error("handle"));
+        return BoxliteErrorCode::InvalidArgument;
+    }
+    let cb = crate::unwrap_cb_or_return!(cb, out_error);
+    let handle = &*handle;
+    let lite = handle.handle.clone();
+    let queue = handle.queue.clone();
+    let user_data = user_data as usize;
+    handle.tokio_rt.spawn(async move {
+        let result = lite
+            .resize(boxlite::ResizeOptions {
+                cpus: (cpus != 0).then_some(cpus),
+                memory_mib: (memory_mib != 0).then_some(memory_mib),
+            })
+            .await
+            .map(|r| CBoxResources {
+                cpus: r.cpus,
+                memory_mib: r.memory_mib,
+                max_cpus: r.max_cpus,
+                max_memory_mib: r.max_memory_mib,
+            });
+        push_event(
+            &queue,
+            RuntimeEvent::ResizeBox {
+                cb,
+                user_data,
+                result,
+            },
+        )
+        .await;
+    });
+    BoxliteErrorCode::Ok
+}
+
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_create_box(
     runtime: *mut CBoxliteRuntime,

@@ -54,7 +54,7 @@ pub type SharedBoxImpl = Arc<BoxImpl>;
 pub(crate) struct LiveState {
     // VM process control
     handler: std::sync::Mutex<Box<dyn VmmHandler>>,
-    guest_session: GuestSession,
+    pub(super) guest_session: GuestSession,
 
     /// Host-side network control backend (gvproxy ServicesMux client), owned
     /// beside `guest_session`. `None` when the box was created network-disabled.
@@ -126,7 +126,8 @@ pub(crate) struct BoxImpl {
     /// Serializes disk-mutating snapshot/clone/export operations.
     /// Prevents concurrent disk mutations (rename, delete, flatten) from racing.
     pub(crate) disk_ops: tokio::sync::Mutex<()>,
-    network_updates: tokio::sync::Mutex<()>,
+    /// Serializes online configuration with shutdown on this handle.
+    pub(super) configuration_updates: tokio::sync::Mutex<()>,
 
     /// Event listeners (from runtime options).
     pub(crate) event_listeners: Vec<Arc<dyn EventListener>>,
@@ -186,7 +187,7 @@ impl BoxImpl {
             layout,
             shutdown_token,
             disk_ops: tokio::sync::Mutex::new(()),
-            network_updates: tokio::sync::Mutex::new(()),
+            configuration_updates: tokio::sync::Mutex::new(()),
             event_listeners: Vec::new(), // populated from runtime options
             live: OnceCell::new(),
             watcher: std::sync::OnceLock::new(),
@@ -268,9 +269,11 @@ impl BoxImpl {
         info
     }
 
-    pub(crate) fn refresh_network_policy(&self) -> BoxliteResult<()> {
+    pub(crate) fn refresh_configuration(&self) -> BoxliteResult<()> {
         let persisted = self.runtime.box_manager.update_box(&self.config.id)?;
-        self.state.write().outbound_policy = persisted.outbound_policy;
+        let mut state = self.state.write();
+        state.outbound_policy = persisted.outbound_policy;
+        state.resources = persisted.resources;
         Ok(())
     }
 
@@ -682,7 +685,7 @@ impl BoxImpl {
     }
 
     pub(crate) async fn stop(&self) -> BoxliteResult<()> {
-        let _network_update = self.network_updates.lock().await;
+        let _update = self.configuration_updates.lock().await;
         let t0 = Instant::now();
 
         // Early exit if already stopped (idempotent, prevents double-counting)
@@ -1113,7 +1116,7 @@ impl BoxImpl {
     /// container, so this starts it (once, and safely alongside an explicit
     /// `start()`). `attach` deliberately does *not* use this: it boots without
     /// running init, so a client can attach before `start()`.
-    async fn live_state(&self) -> BoxliteResult<&LiveState> {
+    pub(super) async fn live_state(&self) -> BoxliteResult<&LiveState> {
         let live = self.ensure_booted().await?;
         self.ensure_container_started(live).await?;
         Ok(live)
@@ -1257,16 +1260,15 @@ impl BoxImpl {
         // operations succeed. If any operation fails, the guard's Drop will
         // cleanup the VM process and directory.
         let mut state = state;
-        state.outbound_policy = self
-            .runtime
-            .box_manager
-            .update_box(&self.config.id)?
-            .outbound_policy;
+        let persisted = self.runtime.box_manager.update_box(&self.config.id)?;
+        state.outbound_policy = persisted.outbound_policy;
+        state.resources = persisted.resources;
         let builder = BoxBuilder::new(Arc::clone(&self.runtime), self.config.clone(), state)?;
         let crate::litebox::init::BuiltBox {
             live: live_state,
             guard: mut cleanup_guard,
             resolved_image,
+            resources,
         } = builder.build().await?;
 
         // The box is up. If we adopted one whose init was already running, that
@@ -1333,6 +1335,12 @@ impl BoxImpl {
 
             // Save to DB (cache for queries and recovery)
             self.runtime.box_manager.save_box(&self.config.id, &state)?;
+            if let Some(resources) = resources {
+                self.runtime
+                    .box_manager
+                    .save_resources(&self.config.id, &resources)?;
+                state.resources = Some(resources);
+            }
 
             // Arm the watcher under the *same* lock that publishes Running+pid.
             // A concurrent handout runs `arm_watcher(None)`, which reads the state
@@ -1564,12 +1572,16 @@ impl crate::runtime::backend::BoxBackend for BoxImpl {
     }
 
     async fn info(&self) -> BoxliteResult<BoxInfo> {
-        self.refresh_network_policy()?;
+        self.refresh_configuration()?;
         Ok(BoxImpl::info(self))
     }
 
     async fn start(&self) -> BoxliteResult<()> {
         self.start().await
+    }
+
+    async fn resize(&self, options: crate::ResizeOptions) -> BoxliteResult<crate::BoxResources> {
+        BoxImpl::resize(self, options).await
     }
 
     async fn exec(&self, command: BoxCommand) -> BoxliteResult<Execution> {
@@ -1657,7 +1669,7 @@ impl crate::runtime::backend::BoxNetworkBackend for BoxImpl {
         &self,
         policy: crate::runtime::options::OutboundNetworkConfig,
     ) -> BoxliteResult<()> {
-        let _update = self.network_updates.lock().await;
+        let _update = self.configuration_updates.lock().await;
         if self.shutdown_token.is_cancelled() || self.state.read().status != BoxStatus::Running {
             return Err(BoxliteError::InvalidState(
                 "outbound policy updates require a running box".into(),

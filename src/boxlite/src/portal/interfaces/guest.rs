@@ -68,6 +68,26 @@ impl GuestInterface {
         Ok(())
     }
 
+    /// Bring spare CPUs online, retaining partial completion information.
+    pub async fn online_cpus(
+        &mut self,
+        count: u8,
+    ) -> BoxliteResult<boxlite_shared::OnlineCpusResponse> {
+        self.client
+            .online_cpus(boxlite_shared::OnlineCpusRequest {
+                count: u32::from(count),
+            })
+            .await
+            .map(tonic::Response::into_inner)
+            .map_err(|error| {
+                if error.code() == tonic::Code::Unimplemented {
+                    BoxliteError::Unsupported("this guest agent does not support CPU resize".into())
+                } else {
+                    error.into()
+                }
+            })
+    }
+
     /// Fail before initialization if the guest predates a required field.
     ///
     /// A guest built before the field existed decodes it as an unknown proto

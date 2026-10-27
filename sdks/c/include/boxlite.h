@@ -194,6 +194,17 @@ typedef struct RuntimeHandle CBoxliteRuntime;
 // Runtime import completion.
 typedef void (*CRuntimeImportCb)(CBoxHandle*, CBoxliteError*, void*);
 
+// Current resource allocation and the ceilings fixed at this boot.
+typedef struct CBoxResources {
+  uint8_t cpus;
+  uint32_t memory_mib;
+  uint8_t max_cpus;
+  uint32_t max_memory_mib;
+} CBoxResources;
+
+// Resize completion. Both pointers are borrowed for callback dispatch only.
+typedef void (*CBoxResizeCb)(struct CBoxResources*, CBoxliteError*, void*);
+
 typedef struct OptionsHandle CBoxliteOptions;
 
 // Box creation completion.
@@ -761,6 +772,16 @@ enum BoxliteErrorCode boxlite_runtime_import(CBoxliteRuntime *runtime,
                                              CRuntimeImportCb cb,
                                              void *user_data,
                                              CBoxliteError *out_error);
+
+// Grow a running box. Zero leaves that resource unchanged. The callback's
+// resources and error pointers are borrowed only during dispatch; copy them
+// to retain the result. Completion is delivered by boxlite_runtime_drain.
+enum BoxliteErrorCode boxlite_resize_box(CBoxHandle *handle,
+                                         uint8_t cpus,
+                                         uint32_t memory_mib,
+                                         CBoxResizeCb cb,
+                                         void *user_data,
+                                         CBoxliteError *out_error);
 
 enum BoxliteErrorCode boxlite_create_box(CBoxliteRuntime *runtime,
                                          CBoxliteOptions *opts,

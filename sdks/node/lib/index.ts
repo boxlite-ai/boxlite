@@ -46,6 +46,8 @@ export type {
   JsImageRegistry,
   JsImageRegistryAuth,
   JsBoxInfo,
+  JsResizeOptions,
+  JsBoxResources,
   JsNetworkInfo,
   JsOptions,
   JsPublishedPort,

@@ -14,6 +14,8 @@ import { getJsBoxlite } from "./native.js";
 import type {
   JsBox,
   JsBoxInfo,
+  JsResizeOptions,
+  JsBoxResources,
   JsBoxOptions,
   JsVolumeSpec,
   NativeBoxConnection,
@@ -680,10 +682,16 @@ export class SimpleBox {
   }
 
   /**
-   * Get box metadata.
-   *
-   * Note: The promise rejects if called before the box is created.
+   * Grow a running box without restarting it; an empty request reads its allocation.
    */
+  async resize(options: JsResizeOptions = {}): Promise<JsBoxResources> {
+    if (!this._box) {
+      throw new Error("Box not started; call await box.start() first.");
+    }
+    return this._box.resize(options);
+  }
+
+  /** Get box metadata. Rejects if the box has not been created. */
   async info(): Promise<JsBoxInfo> {
     if (!this._box) {
       throw new Error("Box not yet created. Call exec() first.");

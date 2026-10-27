@@ -7,7 +7,7 @@ Box metadata is intentionally available only through the async ``Box.info()`` AP
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from ..boxlite import Box, BoxMetrics
+    from ..boxlite import Box, BoxMetrics, BoxResources
     from ._boxlite import SyncBoxlite
     from ._execution import SyncExecution
     from ._network import SyncNetworkHandle
@@ -126,6 +126,12 @@ class SyncBox:
     def stop(self) -> None:
         """Stop the box (preserves state for potential restart)."""
         self._sync(self._box.stop())
+
+    def resize(
+        self, *, cpus: int | None = None, memory_mib: int | None = None
+    ) -> "BoxResources":
+        """Grow a running box; omitted resources retain their allocation."""
+        return self._sync(self._box.resize(cpus=cpus, memory_mib=memory_mib))
 
     def metrics(self) -> "BoxMetrics":
         """Get box metrics (CPU, memory usage, etc.)."""
