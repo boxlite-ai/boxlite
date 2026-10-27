@@ -1,5 +1,9 @@
 # BoxLite C SDK
 
+The [P0 agent declarations](../../docs/reference/agents.md#c-declarations-and-ownership)
+return `Unsupported` synchronously and never invoke callbacks. Only acquiring/freeing
+the Box-owned agent namespace is available.
+
 C bindings for the BoxLite runtime, providing a stable C API for integrating BoxLite into C/C++ applications.
 
 **C Standard:** C11-compatible compiler (GCC/Clang)

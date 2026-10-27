@@ -8,6 +8,7 @@
 #![allow(clippy::too_many_arguments)]
 
 mod advanced_options;
+mod agents;
 mod archive;
 mod box_handle;
 mod copy;
@@ -76,6 +77,7 @@ pub type BoxliteCommand = exec::BoxliteCommand;
 pub type CAdvancedBoxOptions = advanced_options::AdvancedBoxOptionsHandle;
 
 pub use advanced_options::*;
+pub use agents::*;
 pub use box_handle::*;
 pub use copy::*;
 pub use error::*;

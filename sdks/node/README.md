@@ -1,5 +1,8 @@
 # BoxLite Node.js/TypeScript SDK
 
+The [P0 agent API](../../docs/reference/agents.md) is declared on JsBox and SimpleBox.
+Agent operation promises reject with “not implemented”; getters and event opening throw.
+
 Embeddable VM runtime for secure, isolated code execution environments.
 
 **Think "SQLite for sandboxing"** - a lightweight library embedded directly in your application without requiring a daemon or root privileges.

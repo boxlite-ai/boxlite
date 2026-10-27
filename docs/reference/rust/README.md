@@ -24,6 +24,7 @@ The Rust SDK is the core implementation of BoxLite. It provides async-first APIs
   - [BoxStatus](#boxstatus)
   - [BoxState](#boxstate)
 - [Network Tunnels](#network-tunnels)
+- [Agent API declarations](../agents.md) — P0 only; all operations are unimplemented.
 - [Command Execution](#command-execution)
   - [BoxCommand](#boxcommand)
   - [Execution](#execution)

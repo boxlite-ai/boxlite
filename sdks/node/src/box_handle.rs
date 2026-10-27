@@ -25,6 +25,12 @@ pub struct JsBox {
 
 #[napi]
 impl JsBox {
+    /// Get the inert P0 agent namespace without starting the Box.
+    #[napi(getter)]
+    pub fn agents(&self) -> crate::agents::JsAgentHandle {
+        crate::agents::JsAgentHandle::new()
+    }
+
     /// Get the box's unique identifier (ULID).
     #[napi(getter)]
     pub fn id(&self) -> String {

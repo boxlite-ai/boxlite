@@ -224,6 +224,12 @@ impl LiteBox {
         })
     }
 
+    /// Get the P0 agent namespace without starting the Box.
+    /// All agent operations currently return `BoxliteError::Unsupported`.
+    pub fn agents(&self) -> crate::AgentHandle {
+        crate::AgentHandle { _private: () }
+    }
+
     /// Get a network handle for raw tunnel operations.
     pub fn network(&self) -> NetworkHandle {
         NetworkHandle::new(Arc::clone(&self.network_backend))

@@ -16,8 +16,9 @@ boxlite = { path = "../../src/boxlite", features = ["rest"] }
 boxlite-shared.workspace = true
 
 # napi-rs for Node.js bindings
-napi = { version = "3", features = ["async", "napi8", "tokio_rt"] }
+napi = { version = "3", features = ["async", "napi8", "tokio_rt", "serde-json"] }
 napi-derive = "3"
+serde_json = "1.0"
 
 # Async runtime
 tokio = { version = "1.37", features = ["io-util", "net", "sync", "rt-multi-thread"] }

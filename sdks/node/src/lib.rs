@@ -6,6 +6,7 @@
 //! applications to create and manage isolated VM-based containers.
 
 mod advanced_options;
+mod agents;
 mod box_handle;
 mod copy;
 mod exec;

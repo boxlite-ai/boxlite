@@ -10,6 +10,7 @@ use tracing_subscriber::EnvFilter;
 // Only set when an executable explicitly calls `init_logging_for`.
 static LOG_GUARD: OnceLock<tracing_appender::non_blocking::WorkerGuard> = OnceLock::new();
 
+pub mod agents;
 pub mod event_listener;
 pub mod experimental;
 pub mod jailer;
@@ -36,6 +37,7 @@ mod volumes;
 #[cfg(test)]
 mod default_runtime_dir;
 
+pub use agents::{AgentHandle, AgentSession, AgentTurn};
 pub use litebox::{
     BoxConnection, BoxReader, BoxTunnel, BoxWriter, LiteBox, SocketAddress, TunnelForwarder,
 };

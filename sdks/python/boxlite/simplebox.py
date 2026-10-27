@@ -9,6 +9,7 @@ import logging
 from enum import IntEnum
 from typing import TYPE_CHECKING, Optional
 
+from .agents import AgentHandle
 from .exec import ExecResult
 
 if TYPE_CHECKING:
@@ -94,6 +95,11 @@ class SimpleBox:
     - _create_box_options(): Return BoxOptions for their specific use case
     - Add domain-specific methods (e.g., CodeBox.run(), BrowserBox.navigate())
     """
+
+    @property
+    def agents(self) -> AgentHandle:
+        """Get the P0 namespace; operations raise UnsupportedError."""
+        return AgentHandle()
 
     def __init__(
         self,

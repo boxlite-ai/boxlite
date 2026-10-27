@@ -89,6 +89,7 @@ class BoxliteWithBagRest extends (nativeBoxlite as unknown as {
 
 export const JsBoxlite = BoxliteWithBagRest as unknown as BoxliteConstructor;
 export { BoxliteRestOptions } from "./options.js";
+export type * from "./agents.js";
 export type { CopyOptions } from "./copy.js";
 
 // Credential abstraction: structural `Credential` interface + concrete

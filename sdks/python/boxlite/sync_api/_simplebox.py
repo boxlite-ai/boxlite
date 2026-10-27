@@ -10,6 +10,7 @@ import logging
 from typing import TYPE_CHECKING, Optional
 
 from ..exec import ExecResult
+from ._agents import SyncAgentHandle
 
 if TYPE_CHECKING:
     from ._box import SyncBox
@@ -39,6 +40,11 @@ class SyncSimpleBox:
                 result = box.exec("ls", "-la")
                 print(result.stdout)
     """
+
+    @property
+    def agents(self) -> SyncAgentHandle:
+        """Get the unimplemented P0 agent namespace."""
+        return SyncAgentHandle()
 
     def __init__(
         self,

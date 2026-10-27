@@ -10,7 +10,8 @@
 
 import type { CopyOptions } from "./copy.js";
 import type { ExecResult } from "./exec.js";
-import { getJsBoxlite } from "./native.js";
+import { getJsBoxlite, getNativeModule } from "./native.js";
+import type { AgentHandle } from "./agents.js";
 import type {
   JsBox,
   JsBoxInfo,
@@ -549,6 +550,11 @@ export class BoxTunnel {
  * ```
  */
 export class SimpleBox {
+  /** Inert P0 namespace; every operation reports not implemented. */
+  get agents(): AgentHandle {
+    return new (getNativeModule().AgentHandle)();
+  }
+
   protected _runtime: BoxRuntime;
   protected _box: BoxLike | null = null;
   protected _boxPromise: Promise<BoxLike> | null = null;

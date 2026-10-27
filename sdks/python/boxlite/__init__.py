@@ -131,6 +131,49 @@ except ImportError as e:
     __all__ = []
 
 # Import Python convenience wrappers (re-exported via __all__)
+# Agent declarations do not require a native runtime.
+from .agents import (  # noqa: F401 - re-exported through __all__ below
+    AgentCapabilities,
+    AgentConfig,
+    AgentControlOptions,
+    AgentCreateOptions,
+    AgentEvent,
+    AgentEventsOptions,
+    AgentHandle,
+    AgentRequest,
+    AgentResponse,
+    AgentResult,
+    AgentSendOptions,
+    AgentSession,
+    AgentSessionState,
+    AgentSteeringReceipt,
+    AgentTurn,
+    AgentTurnState,
+    AgentWaitOptions,
+)
+
+__all__.extend(
+    [
+        "AgentCapabilities",
+        "AgentConfig",
+        "AgentControlOptions",
+        "AgentCreateOptions",
+        "AgentEvent",
+        "AgentEventsOptions",
+        "AgentHandle",
+        "AgentRequest",
+        "AgentResponse",
+        "AgentResult",
+        "AgentSendOptions",
+        "AgentSession",
+        "AgentSessionState",
+        "AgentSteeringReceipt",
+        "AgentTurn",
+        "AgentTurnState",
+        "AgentWaitOptions",
+    ]
+)
+
 try:
     from .codebox import CodeBox  # noqa: F401
     from .errors import *  # every error type, listed once in errors.__all__
@@ -192,6 +235,9 @@ except ImportError:
 # Requires greenlet: pip install boxlite[sync]
 try:
     from .sync_api import (  # noqa: F401
+        SyncAgentHandle,
+        SyncAgentSession,
+        SyncAgentTurn,
         SyncBox,
         SyncBoxlite,
         SyncCodeBox,
@@ -209,6 +255,9 @@ try:
 
     __all__.extend(
         [
+            "SyncAgentHandle",
+            "SyncAgentSession",
+            "SyncAgentTurn",
             "SyncBox",
             "SyncBoxlite",
             "SyncCodeBox",

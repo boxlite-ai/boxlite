@@ -18,6 +18,12 @@ pub(crate) struct PyBox {
 
 #[pymethods]
 impl PyBox {
+    /// Get the provisional agent API without creating or starting any work.
+    #[getter]
+    fn agents<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        py.import("boxlite.agents")?.getattr("AgentHandle")?.call0()
+    }
+
     #[getter]
     fn id(&self) -> PyResult<String> {
         Ok(self.handle.id().to_string())
