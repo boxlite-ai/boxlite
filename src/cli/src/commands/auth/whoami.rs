@@ -105,3 +105,37 @@ async fn resolve_options(
     }
     Ok(options)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    /// An environment API key supplies the bearer token for the hosted fallback.
+    #[tokio::test]
+    async fn env_api_key_defaults_to_hosted_api_without_a_profile() {
+        let home = TempDir::new().unwrap();
+        let store = CredentialStore::new(Some(home.path().to_path_buf()));
+        let global = GlobalFlags {
+            debug: false,
+            home: None,
+            registry: vec![],
+            config: None,
+            url: None,
+            profile: None,
+            path_prefix: None,
+            experimental_features: Default::default(),
+        };
+
+        // SAFETY: nextest isolates tests in processes; the Cargo fallback runs
+        // CLI unit tests with --test-threads=1.
+        unsafe { std::env::set_var(API_KEY_ENV, "env-test-key") };
+        let options = resolve_options(&global, &store).await;
+        unsafe { std::env::remove_var(API_KEY_ENV) };
+
+        let options = options.unwrap().expect("REST options for the API key");
+        assert_eq!(options.url, "https://api.boxlite.ai");
+        let token = options.credential.unwrap().get_token().await.unwrap();
+        assert_eq!(token.token, "env-test-key");
+    }
+}

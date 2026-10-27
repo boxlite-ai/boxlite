@@ -91,7 +91,7 @@ pub async fn run(args: LoginArgs, profile_name: &str, store: &CredentialStore) -
     let url = resolve_target(&args, stored_url.as_deref())?;
 
     match method {
-        Method::ApiKey => api_key::run(Some(&url), args.api_key_stdin, profile_name, store).await,
+        Method::ApiKey => api_key::run(&url, args.api_key_stdin, profile_name, store).await,
         Method::Browser => run_browser(&args, &url, profile_name, store).await,
         Method::Device => run_device(&args, &url, profile_name, store).await,
     }

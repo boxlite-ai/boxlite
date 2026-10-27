@@ -64,6 +64,12 @@ The `serve` command has two test surfaces with different responsibilities:
 The [CI coverage selection](../../../make/coverage.mk) includes CLI unit
 tests and the `auth` integration target, excluding VM suites such as `ssh_rest.rs`.
 
+Authentication unit tests inspect the resolved REST endpoint and bearer
+credential without contacting the hosted API. Login resolves the server URL
+once before dispatching to API-key, browser, or device login; each flow receives
+that resolved URL. The `auth` integration target validates authentication and
+credential storage against loopback HTTP services with isolated credential stores.
+
 VM integration tests pull images, create boxes, and run real commands. They require a working VM environment (KVM on Linux or Hypervisor.framework on macOS). Tests use a shared test home (`/tmp/bl`), a global lock to avoid concurrent use, and pre-pulled images (`alpine:latest`, `python:alpine`) to reduce rate limits.
 
 ### CLI test layout
