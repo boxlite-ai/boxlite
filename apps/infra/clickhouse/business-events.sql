@@ -1,6 +1,6 @@
 -- Business events the API logs, copied out of otel.otel_logs as they arrive and kept for 400 days
 -- in organization order, so one organization's activity reads without scanning telemetry.
--- Only events naming an organization are copied; rows logged before the view existed are not.
+-- Copy events naming an organization and user.login, which may name none; no historical backfill.
 CREATE DATABASE IF NOT EXISTS analytics;
 
 CREATE TABLE IF NOT EXISTS analytics.business_events (
@@ -37,4 +37,5 @@ SELECT
     LogAttributes['client.source'] AS ClientSource,
     LogAttributes['sdk.version'] AS SdkVersion
 FROM otel.otel_logs
-WHERE LogAttributes['event.name'] != '' AND LogAttributes['organization.id'] != '';
+WHERE LogAttributes['event.name'] != ''
+  AND (LogAttributes['organization.id'] != '' OR LogAttributes['event.name'] = 'user.login');

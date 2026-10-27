@@ -25,7 +25,7 @@ test('both clouds provision a writer whose inserts outlive a failing view', () =
   assert.match(gcpStartup(), /CREATE USER OR REPLACE otel_writer IDENTIFIED WITH sha256_hash BY '\$WRITER_HASH' SETTINGS materialized_views_ignore_errors = 1"/)
 })
 
-test('real ClickHouse copies organization business events once, and a broken copy never fails telemetry', {
+test('real ClickHouse copies organization events and logins once, and a broken copy never fails telemetry', {
   skip: process.env.BOXLITE_CLICKHOUSE_INTEGRATION !== '1', timeout: 240_000,
 }, async () => {
   const container = `boxlite-business-events-${process.pid}`
@@ -53,13 +53,16 @@ test('real ClickHouse copies organization business events once, and a broken cop
     query(`INSERT INTO otel.otel_logs (Timestamp, ServiceName, Body, LogAttributes) VALUES
   ('2026-10-27 16:00:00.123456789', 'api', 'box.exec requested', map('event.name', 'box.exec', 'event.outcome', 'requested',
     'organization.id', 'org-1', 'correlation.id', 'box-1', 'actor.kind', 'user', 'user.id', 'user-1', 'auth.method', 'api_key')),
-  ('2026-10-27 16:00:01', 'api', 'user.login success', map('event.name', 'user.login', 'event.outcome', 'success', 'correlation.id', 'user-1')),
-  ('2026-10-27 16:00:02', 'api', 'GET /health', map('organization.id', 'org-1'))`)
+  ('2026-10-27 16:00:01', 'api', 'user.login success', map('event.name', 'user.login', 'event.outcome', 'success',
+    'correlation.id', 'user-1', 'user.id', 'user-1', 'actor.kind', 'user', 'auth.method', 'jwt')),
+  ('2026-10-27 16:00:02', 'api', 'GET /health', map('organization.id', 'org-1')),
+  ('2026-10-27 16:00:03', 'api', 'box.exec requested without organization', map('event.name', 'box.exec',
+    'event.outcome', 'requested', 'user.id', 'user-1'))`)
     // Reapplying at the next boot or readiness run must neither fail nor copy twice.
     query(renderClickHouseSchema())
 
-    const copied = query('SELECT * FROM analytics.business_events FORMAT JSONEachRow')
-    assert.deepEqual(JSON.parse(copied), {
+    const copied = query('SELECT * FROM analytics.business_events ORDER BY Timestamp FORMAT JSONEachRow')
+    assert.deepEqual(copied.split('\n').map(row => JSON.parse(row)), [{
       Timestamp: '2026-10-27 16:00:00.123456789',
       OrganizationId: 'org-1',
       UserId: 'user-1',
@@ -72,7 +75,20 @@ test('real ClickHouse copies organization business events once, and a broken cop
       AuthMethod: 'api_key',
       ClientSource: '',
       SdkVersion: '',
-    })
+    }, {
+      Timestamp: '2026-10-27 16:00:01.000000000',
+      OrganizationId: '',
+      UserId: 'user-1',
+      EventName: 'user.login',
+      Outcome: 'success',
+      CorrelationId: 'user-1',
+      ActorKind: 'user',
+      Reason: '',
+      ExceptionType: '',
+      AuthMethod: 'jwt',
+      ClientSource: '',
+      SdkVersion: '',
+    }])
     assert.equal(query("SELECT sorting_key FROM system.tables WHERE database = 'analytics' AND name = 'business_events'"),
       'OrganizationId, Timestamp')
 
