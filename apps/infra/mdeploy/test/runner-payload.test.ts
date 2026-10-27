@@ -323,10 +323,12 @@ const converge = ({
   contents,
   work,
   registryProxyHost = null,
+  runnerEnv,
 }: {
   contents: string
   work: string
   registryProxyHost?: string | null
+  runnerEnv?: string
 }) => {
   const envFile = join(work, 'runner.env')
   writeFileSync(envFile, contents)
@@ -350,6 +352,7 @@ const converge = ({
     otlpUrl: 'http://collector:4318',
     volumeBackend: 'gcs',
     registryProxyHost,
+    ...{ runnerEnv },
   })
   const result = spawnSync('bash', ['-c', enforce], {
     encoding: 'utf8',
@@ -540,4 +543,77 @@ test('a host booted before the stage ran a registry proxy is given its host once
   const second = converge({ contents: first.file, work, registryProxyHost: proxy })
   assert.equal(second.code, 100)
   assert.equal(second.restarts, 1, 'a converged host must not restart again')
+})
+
+test('runner environment changes converge once and removal agrees with fresh boot', () => {
+  const work = mkdtempSync(join(tmpdir(), 'runner-custom-env-'))
+  const boot = (runnerEnv: string) => {
+    const script = Buffer.from(
+      renderRunnerBoot({
+        apiUrl: 'https://api.dev.boxlite.ai',
+        otlpUrl: 'http://collector:4318',
+        port: 3003,
+        binary: {
+          tarballUrl: 'https://example.invalid/runner.tar.gz',
+          checksumUrl: 'https://example.invalid/runner.tar.gz.sha256',
+          tarballName: 'runner.tar.gz',
+          transport: 'https',
+        },
+        environment: {
+          BOXLITE_RUNNER_TOKEN: 'host-token',
+          OTEL_LOGGING_ENABLED: 'false',
+          BOXLITE_RUNNER_ENV: runnerEnv,
+        },
+        platform: {
+          hostAddress: '',
+          installVolumeMount: '',
+          prepareKvm: '',
+          prepareHome: '',
+          startWrapper: null,
+          unitEnvironment: { VOLUME_STORAGE_BACKEND: 'gcs' },
+        },
+      }),
+      'base64',
+    ).toString()
+    assert.equal(bash(`bash -n <<'PAYLOAD'\n${script}\nPAYLOAD`).code, 0)
+    return script.split("<< 'RUNNERENV'\n")[1]!.split('\nRUNNERENV')[0]! + '\n'
+  }
+  const raw = JSON.stringify({
+    Z_LITERAL: `quotes" \\ $HOME $(touch ${work}/executed) \`touch ${work}/executed\``,
+    BOXLITE_EXPERIMENTAL: 'nested-virtualization',
+  })
+  const baseline = boot('{}')
+  // Migrate an old manually injected value without resurrecting it on removal.
+  const first = converge({ contents: baseline + 'BOXLITE_EXPERIMENTAL=old\n', work, runnerEnv: raw })
+  assert.equal(first.code, 100, first.out)
+  assert.match(first.file, /^BOXLITE_EXPERIMENTAL="nested-virtualization"$/m)
+  assert.equal(first.file, boot(raw))
+  assert.equal(first.restarts, 1)
+  assert.equal(first.mode, 0o640)
+  assert.deepEqual(first.leftovers, [])
+  assert.equal(existsSync(join(work, 'executed')), false)
+  const reordered = JSON.stringify(Object.fromEntries(Object.entries(JSON.parse(raw)).reverse()))
+  const second = converge({ contents: first.file, work, runnerEnv: reordered })
+  assert.equal(second.code, 100, second.out)
+  assert.equal(second.restarts, 1)
+  const changed = converge({ contents: second.file, work, runnerEnv: '{"BOXLITE_EXPERIMENTAL":""}' })
+  assert.equal(changed.code, 100, changed.out)
+  assert.equal(changed.restarts, 2)
+  assert.doesNotMatch(changed.file, /^Z_LITERAL=/m)
+  const removed = converge({ contents: changed.file, work })
+  assert.equal(removed.code, 100, removed.out)
+  assert.equal(removed.restarts, 3)
+  assert.equal(removed.file, baseline)
+  assert.equal(converge({ contents: removed.file, work, runnerEnv: '{}' }).restarts, 3)
+  const duplicate = converge({ contents: first.file + 'BOXLITE_EXPERIMENTAL=drift\n', work, runnerEnv: raw })
+  assert.equal(duplicate.code, 100, duplicate.out)
+  assert.equal(duplicate.file, first.file)
+  assert.equal(duplicate.restarts, 4)
+  // A truncated managed block must leave the original file intact and avoid restart.
+  const malformed = first.file.replace('# END BOXLITE_RUNNER_ENV', '')
+  const rejected = converge({ contents: malformed, work, runnerEnv: raw })
+  assert.equal(rejected.code, 101, rejected.out)
+  assert.equal(rejected.file, malformed)
+  assert.equal(rejected.restarts, 4)
+  assert.deepEqual(rejected.leftovers, [])
 })

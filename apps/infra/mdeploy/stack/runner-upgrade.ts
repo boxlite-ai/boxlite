@@ -33,6 +33,7 @@
  */
 
 import { RUNNER_ENV_FILE, runnerApiUrl } from './runner-boot.ts'
+import { renderRunnerEnvironment, RUNNER_ENV_BEGIN, RUNNER_ENV_END } from './runner-environment.ts'
 import { CLOUD_RUNNER_KERNEL, kernelDeployment } from '../../runner/kernel.ts'
 import { dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -161,6 +162,8 @@ export type UpgradeTarget = {
    * lacks it pulls a private image with no key for the proxy and is refused.
    */
   registryProxyHost?: string | null
+  /** JSON map of additional Runner process settings, owned by stage configuration. */
+  runnerEnv?: string
   /** Force an older binary over a newer one. A real rollback, asked for. */
   allowDowngrade?: boolean
 }
@@ -484,8 +487,12 @@ export const unitEnvironmentBlock = ({
   otlpUrl,
   volumeBackend,
   registryProxyHost,
-}: Pick<UpgradeTarget, 'otlpUrl' | 'volumeBackend' | 'registryProxyHost'> & { apiUrl: string }): string => {
+  runnerEnv,
+}: Pick<UpgradeTarget, 'otlpUrl' | 'volumeBackend' | 'registryProxyHost' | 'runnerEnv'> & {
+  apiUrl: string
+}): string => {
   assertUnitEnvironment({ apiUrl, otlpUrl, volumeBackend, registryProxyHost })
+  const custom = renderRunnerEnvironment(runnerEnv)
   // An array, so an optional key is absent rather than empty: an AWS host's
   // boot script writes no backend, a caller that supplied no collector has no
   // endpoint to enforce, and a stage without a registry proxy has no host to
@@ -512,12 +519,33 @@ export const unitEnvironmentBlock = ({
    */
   return `UNIT_ENV_FILE="\${BOXLITE_RUNNER_ENV_FILE:-${RUNNER_ENV_FILE}}"
 UNIT_ENV_EXPECTED=(${expected})
+UNIT_ENV_CUSTOM="$(printf '%s' '${Buffer.from(custom.block).toString('base64')}' | base64 -d)"
+UNIT_ENV_KEYS='${custom.keys.join(' ')}'
+
+# Extract the managed block or its complement. Invalid boundaries fail closed;
+# newly managed names outside the block are migrated, never left to resurface.
+custom_unit_environment() {
+  awk -v mode="$1" -v keys="$UNIT_ENV_KEYS" -v begin='${RUNNER_ENV_BEGIN}' -v end='${RUNNER_ENV_END}' '
+    BEGIN { count = split(keys, names, " "); for (i = 1; i <= count; i++) owned[names[i]] = 1 }
+    $0 == begin { if (inside || seen++) exit 2; inside = 1; if (mode == "block") print; next }
+    $0 == end { if (!inside) exit 2; inside = 0; if (mode == "block") print; next }
+    inside { if (mode == "block") print; next }
+    {
+      key = $0; sub(/=.*/, "", key); gsub(/^[ \\t]+|[ \\t]+$/, "", key)
+      if (key in owned) { if (mode == "block") exit 2; next }
+      if (mode == "rest") print
+    }
+    END { if (inside) exit 2 }
+  ' "$UNIT_ENV_FILE"
+}
 
 unit_environment_matches() {
-  local line
+  local line current
   for line in "\${UNIT_ENV_EXPECTED[@]}"; do
     grep -qxF "$line" "$UNIT_ENV_FILE" || return 1
   done
+  current="$(custom_unit_environment block)" || return 1
+  [ "$current" = "$UNIT_ENV_CUSTOM" ]
 }
 
 # Bail out as settled while a host is still bootstrapping: the boot script
@@ -568,6 +596,15 @@ rewrite_unit_environment() {
     fi
     rm -f "$next"
   done
+  if ! (umask 077; custom_unit_environment rest > "$next"); then
+    rm -f "$next"
+    return 1
+  fi
+  if [ -n "$UNIT_ENV_CUSTOM" ]; then
+    if ! printf '%s\\n' "$UNIT_ENV_CUSTOM" >> "$next"; then rm -f "$next"; return 1; fi
+  fi
+  if ! cat "$next" > "$UNIT_ENV_FILE"; then rm -f "$next"; return 1; fi
+  rm -f "$next"
 }
 
 converge_unit_environment() {
@@ -600,11 +637,12 @@ export const renderUnitEnvironmentPolicyScripts = ({
   otlpUrl,
   volumeBackend,
   registryProxyHost,
-}: Pick<UpgradeTarget, 'otlpUrl' | 'volumeBackend' | 'registryProxyHost'> & {
+  runnerEnv,
+}: Pick<UpgradeTarget, 'otlpUrl' | 'volumeBackend' | 'registryProxyHost' | 'runnerEnv'> & {
   apiUrl: string
 }): UpgradePolicyScripts => {
   const block = `set -euo pipefail
-${unitEnvironmentBlock({ apiUrl, otlpUrl, volumeBackend, registryProxyHost })}`
+${unitEnvironmentBlock({ apiUrl, otlpUrl, volumeBackend, registryProxyHost, runnerEnv })}`
   return {
     validate: `${SHEBANG}${block}
 if unit_environment_settled; then exit 100; fi
@@ -647,6 +685,7 @@ ${guards('return 0')}${swapSequence(target)}}
         otlpUrl: target.otlpUrl,
         volumeBackend: target.volumeBackend,
         registryProxyHost: target.registryProxyHost,
+        runnerEnv: target.runnerEnv,
       })}
 converge_unit_environment
 `

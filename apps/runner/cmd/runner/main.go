@@ -115,6 +115,7 @@ func run() int {
 		Logger:                       logger,
 		HomeDir:                      cfg.BoxliteHomeDir,
 		KernelPath:                   cfg.KernelPath,
+		ExperimentalFeatures:         cfg.ExperimentalFeatures,
 		InsecureRegistries:           insecureRegs,
 		RegistryProxy:                registryProxy,
 		AWSRegion:                    cfg.AWSRegion,

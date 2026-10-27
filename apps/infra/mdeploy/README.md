@@ -48,6 +48,34 @@ Updates verify artifact checksums and readiness. Already-converged hosts need no
 release downgrade requires the explicit operator command. Follow [GCP runner convergence](../docs/gcp/runners.md)
 or [AWS runner convergence](../docs/aws/runners.md) for the update mechanism and its completion boundary.
 
+### Runner process environment
+
+`BOXLITE_RUNNER_ENV` is an optional JSON object in mstage's `runner` environment
+group. From `apps/infra`, for example:
+
+```sh
+npm run mstage env set -- --stage dev --json 'BOXLITE_RUNNER_ENV={"BOXLITE_EXPERIMENTAL":"nested-virtualization"}'
+```
+
+Apply the stage with mdeploy after changing the value. New hosts receive the map
+at boot; existing GCP hosts converge through OS Config and AWS hosts through the
+existing update payload. Changes restart the Runner process, without rebooting
+or replacing the instance. Running boxes are affected by that process restart.
+An unchanged map, including reordered keys, causes no environment-driven restart.
+
+Values must be single-line strings; JSON trailing commas are invalid. The map
+adds process settings, not guest environment or secret references. Deployment-owned
+identity, API, storage, kernel and telemetry keys, direct runner-group settings,
+and secret names/address keys cannot be overridden here. Use their existing
+configuration channels. Map values appear in deployment state and host configuration;
+use the secret channel for credentials.
+
+Removing a map entry removes its previously managed value; `{}` or removing the
+wrapper clears all managed entries. Unrelated settings and file permissions are
+preserved. A previously injected duplicate of a newly managed key is replaced
+when adopted and does not return after removal. The Runner's nesting switch
+defaults to off; see [runtime behavior](../../runner/README.md#nested-virtualization).
+
 ## Cloud implementations
 
 Each stage declares `home`; that field selects credentials, store backend, engine and provider bundle.

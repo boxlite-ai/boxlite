@@ -50,6 +50,12 @@ const narrow = (group: string, values: Record<string, string>) =>
     optional: config.envOptional[group] ?? [],
   })
 
+test('the runner group delivers its optional JSON environment map', () => {
+  const values = { BOXLITE_RUNNER_ENV: '{"BOXLITE_EXPERIMENTAL":"nested-virtualization"}' }
+  assert.deepEqual(narrow('runner', values), values)
+  assert.deepEqual(narrow('runner', {}), {})
+})
+
 test('a stage that seeded only the required keys can deploy', () => {
   // The reproducer. Before the split this threw, naming forty keys — including
   // four no store could ever hold.

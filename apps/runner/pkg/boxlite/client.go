@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/user"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -36,13 +37,14 @@ type PulledImage struct {
 // Client wraps the BoxLite Go SDK to provide the same interface as the Docker client.
 // It manages VMs instead of containers, providing hardware-level isolation.
 type Client struct {
-	runtime    *boxlite.Runtime
-	logger     *slog.Logger
-	homeDir    string
-	kernelPath string
-	cacheMu    sync.Mutex
-	mu         sync.RWMutex
-	boxes      map[string]*boxlite.Box
+	runtime              *boxlite.Runtime
+	logger               *slog.Logger
+	homeDir              string
+	kernelPath           string
+	nestedVirtualization bool
+	cacheMu              sync.Mutex
+	mu                   sync.RWMutex
+	boxes                map[string]*boxlite.Box
 	// What each freshly created box's image resolved to, until it has been
 	// reported once. Held in memory only: an entry lost to a runner restart is
 	// simply gone, and the control plane re-resolves on the next create.
@@ -69,6 +71,7 @@ type ClientConfig struct {
 	Logger                       *slog.Logger
 	HomeDir                      string
 	KernelPath                   string
+	ExperimentalFeatures         string
 	InsecureRegistries           []string
 	RegistryProxy                RegistryProxy
 	AWSRegion                    string
@@ -321,10 +324,17 @@ func NewClient(ctx context.Context, config ClientConfig) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	opts := []boxlite.RuntimeOption{boxlite.WithHomeDir(homeDir)}
-	if config.KernelPath != "" {
-		opts = append(opts, boxlite.WithExperimentalFeatures("custom-kernel"))
+	var features []string
+	if raw := strings.TrimSpace(config.ExperimentalFeatures); raw != "" {
+		features = strings.Split(raw, ",")
+		for i := range features {
+			features[i] = strings.TrimSpace(features[i])
+		}
 	}
+	if config.KernelPath != "" {
+		features = append(features, "custom-kernel")
+	}
+	opts := []boxlite.RuntimeOption{boxlite.WithHomeDir(homeDir), boxlite.WithExperimentalFeatures(features...)}
 	logger := config.Logger
 	if logger == nil {
 		logger = slog.Default()
@@ -343,18 +353,19 @@ func NewClient(ctx context.Context, config ClientConfig) (*Client, error) {
 	}
 
 	return &Client{
-		runtime:             rt,
-		logger:              logger,
-		homeDir:             homeDir,
-		kernelPath:          config.KernelPath,
-		boxes:               make(map[string]*boxlite.Box),
-		pendingImageReports: make(map[string]PulledImage),
-		awsRegion:           config.AWSRegion,
-		awsEndpointUrl:      config.AWSEndpointUrl,
-		awsAccessKeyId:      config.AWSAccessKeyId,
-		awsSecretAccessKey:  config.AWSSecretAccessKey,
-		volumeBackend:       config.VolumeStorageBackend,
-		volumeMutexes:       make(map[string]*sync.Mutex),
+		runtime:              rt,
+		logger:               logger,
+		homeDir:              homeDir,
+		kernelPath:           config.KernelPath,
+		nestedVirtualization: slices.Contains(features, "nested-virtualization"),
+		boxes:                make(map[string]*boxlite.Box),
+		pendingImageReports:  make(map[string]PulledImage),
+		awsRegion:            config.AWSRegion,
+		awsEndpointUrl:       config.AWSEndpointUrl,
+		awsAccessKeyId:       config.AWSAccessKeyId,
+		awsSecretAccessKey:   config.AWSSecretAccessKey,
+		volumeBackend:        config.VolumeStorageBackend,
+		volumeMutexes:        make(map[string]*sync.Mutex),
 		volumeCleanup: volumeCleanupConfig{
 			interval:        config.VolumeCleanupInterval,
 			dryRun:          config.VolumeCleanupDryRun,
@@ -473,12 +484,15 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 		opts = append(opts, boxlite.WithUser(boxDto.RunAsUser))
 	}
 
-	if boxDto.Privileged || c.kernelPath != "" {
+	if boxDto.Privileged || c.kernelPath != "" || c.nestedVirtualization {
 		advanced, advancedErr := boxlite.NewAdvancedBoxOptions()
 		if advancedErr != nil {
 			return "", "", advancedErr
 		}
 		defer advanced.Close()
+		if advancedErr = advanced.SetNestedVirtualization(c.nestedVirtualization); advancedErr != nil {
+			return "", "", fmt.Errorf("set nested virtualization: %w", advancedErr)
+		}
 		if advancedErr = advanced.SetPrivileged(boxDto.Privileged); advancedErr != nil {
 			return "", "", advancedErr
 		}
