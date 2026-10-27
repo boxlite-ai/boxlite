@@ -47,10 +47,16 @@ use crate::disk::{BackingFormat, Qcow2Helper};
 pub struct SnapshotInfo {
     /// Unique snapshot ID (nanoid).
     pub id: String,
-    /// ID of the box this snapshot belongs to.
+    /// ID of the source box that produced this snapshot.
     pub box_id: String,
-    /// User-provided snapshot name (unique per box).
+    /// Snapshot name, unique per box locally or per organization in the cloud.
     pub name: String,
+    /// Cloud capture state: creating, ready or failed. Local snapshots are ready.
+    #[serde(default = "ready_snapshot_status")]
+    pub status: String,
+    /// Failure reason reported by the server, when present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
     /// Unix timestamp (seconds since epoch) when the snapshot was created.
     pub created_at: i64,
     /// Disk path and size metadata.
@@ -61,6 +67,10 @@ pub struct SnapshotInfo {
 // ============================================================================
 // Name Validation
 // ============================================================================
+
+fn ready_snapshot_status() -> String {
+    "ready".into()
+}
 
 /// Validate that a snapshot name is safe (no path traversal, no special chars).
 pub(crate) fn validate_snapshot_name(name: &str) -> BoxliteResult<()> {
@@ -183,6 +193,8 @@ impl SnapshotManager {
             box_id: box_id.to_string(),
             name: name.to_string(),
             created_at: now,
+            status: "ready".into(),
+            error: None,
             disk_info,
         };
         self.store.save(&info)?;

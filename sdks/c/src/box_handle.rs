@@ -36,6 +36,7 @@ pub struct BoxHandle {
     pub box_id: BoxID,
     pub tokio_rt: Arc<TokioRuntime>,
     pub queue: Arc<EventQueue>,
+    pub liveness: Arc<crate::runtime::RuntimeLiveness>,
 }
 
 #[unsafe(no_mangle)]
@@ -65,6 +66,19 @@ pub unsafe extern "C" fn boxlite_get_or_create_box(
     out_error: *mut CBoxliteError,
 ) -> BoxliteErrorCode {
     get_or_create_box(runtime, opts, cb, user_data, out_error)
+}
+
+/// Read the server-assigned name cached in this box handle. Null means unnamed.
+/// Free a non-null result with boxlite_free_string.
+/// # Safety
+/// handle must be null or a live box handle with no concurrent free.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_box_name(handle: *mut CBoxHandle) -> *mut c_char {
+    handle
+        .as_ref()
+        .and_then(|bx| bx.handle.name())
+        .map(crate::util::alloc_c_string)
+        .unwrap_or(ptr::null_mut())
 }
 
 #[unsafe(no_mangle)]
@@ -149,6 +163,7 @@ unsafe fn create_box(
         let user_data_addr = user_data as usize;
         let task_tokio_rt = tokio_rt.clone();
         let task_queue = queue.clone();
+        let liveness = runtime_ref.liveness.clone();
 
         tokio_rt.spawn(async move {
             let result = runtime_clone
@@ -161,6 +176,7 @@ unsafe fn create_box(
                         box_id,
                         tokio_rt: task_tokio_rt,
                         queue: task_queue.clone(),
+                        liveness,
                     });
                     crate::event_queue::OwnedFfiPtr::new(boxed)
                 });
@@ -205,6 +221,7 @@ unsafe fn get_or_create_box(
         let user_data_addr = user_data as usize;
         let task_tokio_rt = tokio_rt.clone();
         let task_queue = queue.clone();
+        let liveness = runtime_ref.liveness.clone();
 
         tokio_rt.spawn(async move {
             let result = runtime_clone
@@ -217,6 +234,7 @@ unsafe fn get_or_create_box(
                         box_id,
                         tokio_rt: task_tokio_rt,
                         queue: task_queue.clone(),
+                        liveness,
                     });
                     (crate::event_queue::OwnedFfiPtr::new(boxed), created)
                 });
@@ -299,6 +317,7 @@ unsafe fn attach_box(
         let user_data_addr = user_data as usize;
         let task_tokio_rt = tokio_rt.clone();
         let task_queue = queue.clone();
+        let liveness = runtime_ref.liveness.clone();
 
         tokio_rt.spawn(async move {
             let result = match runtime_clone.get(&id_str).await {
@@ -309,6 +328,7 @@ unsafe fn attach_box(
                         box_id,
                         tokio_rt: task_tokio_rt,
                         queue: task_queue.clone(),
+                        liveness,
                     });
                     Ok(crate::event_queue::OwnedFfiPtr::new(boxed))
                 }

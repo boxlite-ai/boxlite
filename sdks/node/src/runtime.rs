@@ -266,6 +266,44 @@ impl JsBoxlite {
         Ok(js_box)
     }
 
+    /// Create a cloud box from a ready snapshot and wait for startup.
+    #[napi]
+    pub async fn create_from_snapshot(
+        &self,
+        snapshot: String,
+        options: Option<JsBoxOptions>,
+        name: Option<String>,
+    ) -> Result<JsBox> {
+        if options
+            .as_ref()
+            .is_some_and(|o| o.image.is_some() || o.rootfs_path.is_some())
+        {
+            return Err(map_err(boxlite::BoxliteError::InvalidArgument(
+                "Snapshot creation cannot specify image or rootfsPath".into(),
+            )));
+        }
+        let options = options
+            .map(BoxOptions::try_from)
+            .transpose()
+            .map_err(map_err)?
+            .unwrap_or_default();
+        let handle = self
+            .runtime
+            .create_from_snapshot(&snapshot, options, name)
+            .await
+            .map_err(map_err)?;
+        Ok(JsBox {
+            handle: Arc::new(handle),
+        })
+    }
+
+    #[napi(getter)]
+    pub fn snapshots(&self) -> Result<crate::snapshots::JsRuntimeSnapshotHandle> {
+        Ok(crate::snapshots::JsRuntimeSnapshotHandle {
+            handle: self.runtime.snapshots().map_err(map_err)?,
+        })
+    }
+
     /// Get runtime metrics.
     ///
     /// Returns aggregated statistics about all boxes managed by this runtime.

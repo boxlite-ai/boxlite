@@ -21,6 +21,7 @@ if TYPE_CHECKING:
     )
     from ._box import SyncBox
     from ._images import SyncImageHandle
+    from ._snapshots import SyncRuntimeSnapshotHandle
 
 logger = logging.getLogger("boxlite.sync_boxlite")
 
@@ -304,6 +305,28 @@ class SyncBoxlite:
 
         native_box = self._sync(self._boxlite.create(options, name=name))
         return SyncBox(self, native_box)
+
+    @property
+    def snapshots(self) -> "SyncRuntimeSnapshotHandle":
+        from ._snapshots import SyncRuntimeSnapshotHandle
+
+        self._require_started()
+        return SyncRuntimeSnapshotHandle(self, self._boxlite.snapshots)
+
+    def create_from_snapshot(
+        self,
+        snapshot: str,
+        options: "BoxOptions | None" = None,
+        name: str | None = None,
+    ) -> "SyncBox":
+        """Create a cloud box from a snapshot and wait for startup."""
+        from ._box import SyncBox
+
+        self._require_started()
+        return SyncBox(
+            self,
+            self._sync(self._boxlite.create_from_snapshot(snapshot, options, name)),
+        )
 
     def get_or_create(
         self,

@@ -86,6 +86,47 @@ impl PyBoxlite {
         })
     }
 
+    /// Create a new cloud box from a ready snapshot, waiting for startup.
+    #[pyo3(signature = (snapshot, options=None, name=None))]
+    fn create_from_snapshot<'py>(
+        &self,
+        py: Python<'py>,
+        snapshot: String,
+        options: Option<PyBoxOptions>,
+        name: Option<String>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        if options
+            .as_ref()
+            .is_some_and(|o| o.image.is_some() || o.rootfs_path.is_some())
+        {
+            return Err(map_err(boxlite::BoxliteError::InvalidArgument(
+                "Snapshot creation cannot specify image or rootfs_path".into(),
+            )));
+        }
+        let options = options
+            .map(BoxOptions::try_from)
+            .transpose()
+            .map_err(map_err)?
+            .unwrap_or_default();
+        let runtime = Arc::clone(&self.runtime);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let handle = runtime
+                .create_from_snapshot(&snapshot, options, name)
+                .await
+                .map_err(map_err)?;
+            Ok(PyBox {
+                handle: Arc::new(handle),
+            })
+        })
+    }
+
+    #[getter]
+    fn snapshots(&self) -> PyResult<crate::snapshots::PyRuntimeSnapshotHandle> {
+        Ok(crate::snapshots::PyRuntimeSnapshotHandle {
+            handle: self.runtime.snapshots().map_err(map_err)?,
+        })
+    }
+
     #[pyo3(signature = (_state=None))]
     fn list_info<'py>(
         &self,

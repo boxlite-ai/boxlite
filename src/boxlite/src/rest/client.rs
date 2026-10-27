@@ -540,6 +540,18 @@ impl ApiClient {
         ensure_capability("snapshots", capabilities.snapshots_enabled)
     }
 
+    pub async fn require_create_from_snapshot_enabled(&self) -> BoxliteResult<()> {
+        let capabilities = self.get_config().await?.capabilities.ok_or_else(|| {
+            BoxliteError::Unsupported(
+                "Remote server did not advertise snapshot box creation".into(),
+            )
+        })?;
+        ensure_capability(
+            "create_from_snapshot",
+            capabilities.create_from_snapshot_enabled,
+        )
+    }
+
     pub async fn require_linux_capabilities_enabled(&self) -> BoxliteResult<()> {
         // This gate protects a security policy, so a cached positive response
         // is insufficient after a server rollback or replacement. Recheck the

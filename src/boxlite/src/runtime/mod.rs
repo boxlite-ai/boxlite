@@ -9,6 +9,7 @@ pub(crate) mod lock;
 pub mod options;
 pub mod registries;
 pub(crate) mod signal_handler;
+pub mod snapshots;
 pub mod types;
 pub mod volumes;
 
@@ -22,4 +23,5 @@ pub use auth::{AuthHandle, Principal};
 pub use core::BoxliteRuntime;
 pub use images::ImageHandle;
 pub use registries::{NewRegistryCredential, RegistryCredential, RegistryHandle};
+pub use snapshots::RuntimeSnapshotHandle;
 pub use volumes::VolumeHandle;

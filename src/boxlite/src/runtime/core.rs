@@ -12,6 +12,7 @@ use crate::runtime::options::{BoxArchive, BoxOptions, BoxliteOptions};
 use crate::runtime::registries::RegistryBackend;
 use crate::runtime::rt_impl::{LocalRuntime, RuntimeImpl};
 use crate::runtime::signal_handler::install_signal_handler;
+use crate::runtime::snapshots::{RuntimeSnapshotBackend, RuntimeSnapshotHandle};
 use crate::runtime::types::BoxInfo;
 use crate::runtime::volumes::VolumeBackend;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
@@ -73,6 +74,7 @@ pub struct BoxliteRuntime {
     /// Registry-login capability — `Some` only for REST, like `auth_backend`.
     /// Surfaced via `registries()`.
     registry_backend: Option<Arc<dyn RegistryBackend>>,
+    snapshot_backend: Option<Arc<dyn RuntimeSnapshotBackend>>,
 }
 
 // ============================================================================
@@ -125,6 +127,7 @@ impl BoxliteRuntime {
             volume_backend: Some(volume_backend),
             auth_backend: None,
             registry_backend: None,
+            snapshot_backend: None,
         }
     }
 
@@ -152,12 +155,14 @@ impl BoxliteRuntime {
         let image_backend = Arc::clone(&rest_runtime) as Arc<dyn ImageBackend>;
         let volume_backend = Arc::clone(&rest_runtime) as Arc<dyn VolumeBackend>;
         let registry_backend = Arc::clone(&rest_runtime) as Arc<dyn RegistryBackend>;
+        let snapshot_backend = Arc::clone(&rest_runtime) as Arc<dyn RuntimeSnapshotBackend>;
         Ok(Self {
             backend: rest_runtime,
             image_backend,
             volume_backend: Some(volume_backend),
             auth_backend: Some(auth_backend),
             registry_backend: Some(registry_backend),
+            snapshot_backend: Some(snapshot_backend),
         })
     }
 
@@ -315,6 +320,44 @@ impl BoxliteRuntime {
         // here, not at start), uniformly for the local and REST backends.
         options.sanitize_create()?;
         self.backend.create(options, name).await
+    }
+
+    /// Create an independent cloud box from a ready organization snapshot.
+    ///
+    /// Waits for startup; disk capacity and region come from the snapshot.
+    /// The default rootfs option is omitted from the request. Explicit rootfs
+    /// paths and non-default images are rejected. A timeout leaves the created
+    /// box intact and includes its ID, so callers can inspect it without retrying.
+    /// Local runtimes return Unsupported.
+    pub async fn create_from_snapshot(
+        &self,
+        snapshot: &str,
+        options: BoxOptions,
+        name: Option<String>,
+    ) -> BoxliteResult<LiteBox> {
+        options.sanitize_create()?;
+        self.snapshot_backend
+            .as_ref()
+            .ok_or_else(|| {
+                BoxliteError::Unsupported(
+                    "Creating a box from an organization snapshot requires a cloud runtime".into(),
+                )
+            })?
+            .create_from_snapshot(snapshot, options, name)
+            .await
+    }
+
+    /// Manage organization snapshots independently of their source boxes.
+    pub fn snapshots(&self) -> BoxliteResult<RuntimeSnapshotHandle> {
+        self.snapshot_backend
+            .as_ref()
+            .map(|backend| RuntimeSnapshotHandle::new(Arc::clone(backend)))
+            .ok_or_else(|| {
+                BoxliteError::Unsupported(
+                    "Organization snapshots require a cloud runtime; use box.snapshots() locally"
+                        .into(),
+                )
+            })
     }
 
     /// Get an existing box by name, or create a new one if it doesn't exist.
