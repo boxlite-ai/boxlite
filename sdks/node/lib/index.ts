@@ -31,6 +31,10 @@ import type {
   JsOptions,
 } from "./native-contracts.js";
 export type {
+  Domain,
+  DomainHandle,
+  DomainList,
+  DomainTarget,
   ImageDetail,
   ImageHandle,
   ImageInfo,

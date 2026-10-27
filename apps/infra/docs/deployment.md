@@ -87,8 +87,17 @@ protected stage. For a commit runner build, use the selectors in the [runner run
 ### Cloudflare API token
 
 Provide an account-owned token with **Zone:Read** and **DNS:Edit**, restricted to the zone used by
-`STACK_DOMAIN` and `PROXY_DOMAIN`. Set `CLOUDFLARE_DEFAULT_ACCOUNT_ID` and `CLOUDFLARE_ZONE_ID`
+`STACK_DOMAIN` and `PROXY_DOMAIN`, plus the user domain's zone when the stage sets one (below). Set `CLOUDFLARE_DEFAULT_ACCOUNT_ID` and `CLOUDFLARE_ZONE_ID`
 to the intended account/zone. Both are required by the current deployment group, alongside the token.
+Users' named apps (`demo.<STACK_USER_DOMAIN>`) live under a registrable domain of their own, so a
+named app is never same-site with the dashboard and a blocklisted one does not take the platform's
+domain with it. Generated box URLs still sit under `PROXY_DOMAIN`; moving them is separate work. A stage that sets `STACK_USER_DOMAIN` also sets `CLOUDFLARE_USER_ZONE_ID`, the zone
+holding that domain. On GCP the edge writes
+`*.<STACK_USER_DOMAIN>` into that zone and issues its certificate through its own DNS authorization;
+the apex is not used. The API and the proxy learn the domain as `PROXY_APP_DOMAIN`. Unset, the stage
+offers no named apps. The deploy refuses a user domain under the same registrable domain as
+`STACK_DOMAIN` (a sibling such as `apps.boxlite.ai` beside `dev.boxlite.ai` included), and refuses one
+on AWS, whose edge serves none.
 The token is created in Cloudflare's dashboard; a provider login does not generate it.
 
 Follow the selected cloud’s [deployment guide](#bootstrap-a-stage) for credential storage and rotation destinations.

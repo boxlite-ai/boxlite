@@ -52,6 +52,40 @@ test('the dashboard stays on the stage domain unless the stage names another hos
   assert.equal(read({ ...complete, DASHBOARD_DOMAIN: 'app.dev.boxlite.ai' }).dashboardDomain, 'app.dev.boxlite.ai')
 })
 
+test('a stage names a user domain of its own, in its own zone, or offers named apps nowhere', () => {
+  // Unset is a stage with no named apps: no fallback under the stage domain.
+  assert.equal(read(complete).userDomain, null)
+  assert.deepEqual(
+    read({ ...complete, STACK_USER_DOMAIN: ' Apps.Example ', CLOUDFLARE_USER_ZONE_ID: 'user-zone' }).userDomain,
+    { domain: 'apps.example', dnsZoneId: 'user-zone' },
+  )
+  // A different registrable domain sits in a different zone, so the stage names it.
+  assert.throws(
+    () => read({ ...complete, STACK_USER_DOMAIN: 'apps.example' }),
+    /CLOUDFLARE_USER_ZONE_ID is required/,
+  )
+})
+
+test("a user domain under the stage's registrable domain is refused", () => {
+  // Anywhere under boxlite.ai a user's page is same-site with the dashboard and
+  // a blocklist entry lands on the platform's domain; that separation is the
+  // setting's whole point, so a sibling of the stage domain is refused too.
+  for (const domain of ['dev.boxlite.ai', 'app.dev.boxlite.ai', 'boxlite.ai', 'apps.boxlite.ai', 'DEV.boxlite.ai']) {
+    assert.throws(
+      () => read({ ...complete, STACK_USER_DOMAIN: domain, CLOUDFLARE_USER_ZONE_ID: 'user-zone' }),
+      /shares boxlite\.ai with STACK_DOMAIN dev\.boxlite\.ai/,
+      domain,
+    )
+  }
+  // Another registrable domain is accepted, including one that merely ends in the same letters.
+  for (const domain of ['boxlite.page', 'dev.boxlite.site', 'xboxlite.ai']) {
+    assert.equal(
+      read({ ...complete, STACK_USER_DOMAIN: domain, CLOUDFLARE_USER_ZONE_ID: 'user-zone' }).userDomain?.domain,
+      domain,
+    )
+  }
+})
+
 test('the OpenAPI reader uses only the fixed feature flag', () => {
   for (const flag of [undefined, '', ' ', 'false', 'true', ' true ']) {
     const result = read({ ...complete, OTEL_OPENAPI_ENABLED: flag })

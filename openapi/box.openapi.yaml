@@ -147,6 +147,8 @@ tags:
     description: Managed persistent volumes
   - name: Registries
     description: Logins the server pulls private images with
+  - name: Domains
+    description: Names the organization holds and the box ports they route to
 
 # ===========================================================================
 # Paths
@@ -1140,6 +1142,10 @@ paths:
         Returns 409 while the box's inbound access is `disabled`. Enable it
         with `network.inbound.mode` at create, or later with
         `PUT /{prefix}/boxes/{box_id}/network/inbound`.
+
+        The URI is always the port's generated one. Domains bound to the
+        port (`bindDomain`) start answering once it is declared here; list
+        them with `listDomains`.
       tags: [Network]
       parameters:
         - name: port
@@ -1185,7 +1191,9 @@ paths:
         ports of the box are unaffected.
 
         Safe to repeat, and succeeds for a port that was never opened.
-        Calling `prepareTunnel` again reopens the port at the same URI.
+        Calling `prepareTunnel` again reopens the port at the same URI. A
+        platform hostname bound to the port stays bound: it answers `404`
+        while the port is revoked and serves again once it is reopened.
       tags: [Network]
       parameters:
         - name: port
@@ -1289,6 +1297,107 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+
+  /{prefix}/domains:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+    get:
+      operationId: listDomains
+      summary: List the domains the organization holds
+      description: |
+        Every domain the organization holds, bound to a box port or not,
+        with the allowance they count against. An unbound domain still
+        occupies a slot and is listed with a null `target`, so this is how a
+        caller finds a name to bind again. `min_length` is the shortest
+        platform name a new claim may use; names held before it rose stay
+        bindable.
+      tags: [Domains]
+      responses:
+        "200":
+          description: Held domains and the organization's allowance
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DomainList"
+
+  /{prefix}/domains/{domain}/target:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+      - name: domain
+        in: path
+        required: true
+        description: |
+          A platform name (`demo`) or its full hostname
+          (`demo.apps.example`). Case and a trailing dot are not
+          significant. A hostname outside the platform domain is refused
+          until custom domains are supported.
+        schema:
+          type: string
+          minLength: 1
+          maxLength: 253
+        example: demo-app
+    put:
+      operationId: bindDomain
+      summary: Route a domain to a box port
+      description: |
+        Routes the domain to the target, claiming the name for the caller's
+        organization if it holds it not yet. The box port is not declared
+        public here: the domain answers once `POST …/network/tunnel` has
+        declared the port and the box has inbound access enabled, in either
+        order, and 404 until then. A new name is lowercase letters, digits and hyphens, not
+        starting or ending with a hyphen, at least `min_length` characters,
+        not of the shape `<digits>-…`, and not one of the platform's own
+        names. It counts against the organization's allowance whether bound
+        or not.
+
+        A domain bound to another of the organization's box ports moves to
+        this one. A port can have several domains; binding one leaves the
+        others in place. Repeating the same binding changes nothing.
+
+        Error codes: `platform_domain_not_configured`, `subdomain_too_short`,
+        `domain_count_limit_reached` and `region_not_supported` (400);
+        `subdomain_taken` (409) when another organization holds the name.
+      tags: [Domains]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DomainTarget"
+      responses:
+        "200":
+          description: The domain as now bound
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Domain"
+        "400":
+          $ref: "#/components/responses/BadRequestError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
+    delete:
+      operationId: unbindDomain
+      summary: Stop routing a domain
+      description: |
+        Stops routing the domain to whatever box port it is bound to.
+        Requests that start after this returns get `404` on it; connections
+        already open run until they close. The organization keeps the name,
+        it still counts against the allowance, and `bindDomain` can bind it
+        again to any target. The port's own URL stays public until
+        `revokeTunnel`.
+
+        Safe to repeat on a domain the organization holds, bound or not. One
+        it does not hold is `404`.
+      tags: [Domains]
+      responses:
+        "204":
+          description: The domain routes nowhere
+        "400":
+          $ref: "#/components/responses/BadRequestError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
 
   # -------------------------------------------------------------------------
   # Metrics
@@ -2930,6 +3039,75 @@ components:
         token:
           type: [string, "null"]
           description: Null for public tunnels; complete on private creation, masked on subsequent calls.
+
+    DomainTarget:
+      type: object
+      description: |
+        What a domain routes to. `type` decides which fields apply; `box` is
+        the only kind today.
+      required: [type, box, port]
+      properties:
+        type:
+          type: string
+          enum: [box]
+        box:
+          type: string
+          description: |
+            The box, by id or name, when binding; the box id when read back.
+          example: web-a
+        port:
+          type: integer
+          minimum: 1
+          maximum: 65535
+          example: 3000
+
+    Domain:
+      type: object
+      description: A domain the organization holds and what it currently routes to.
+      required: [name, hostname, url, target]
+      properties:
+        name:
+          type: string
+          description: What the domain is bound by — the label of a platform name.
+          example: demo-app
+        hostname:
+          type: string
+          example: demo-app.app.example.test
+        url:
+          type: string
+          example: https://demo-app.app.example.test
+        target:
+          description: Where the domain routes; null while it is held but unbound.
+          oneOf:
+            - $ref: "#/components/schemas/DomainTarget"
+            - type: "null"
+
+    DomainList:
+      type: object
+      required: [domains, limit, used, remaining, min_length]
+      properties:
+        domains:
+          type: array
+          items:
+            $ref: "#/components/schemas/Domain"
+        limit:
+          type: integer
+          description: How many domains the organization may hold, bound or not.
+          example: 1
+        used:
+          type: integer
+          description: How many it holds now.
+          example: 1
+        remaining:
+          type: integer
+          minimum: 0
+          example: 0
+        min_length:
+          type: integer
+          minimum: 1
+          maximum: 63
+          description: The shortest platform name a new claim may use.
+          example: 5
 
     # =======================================================================
     # Metrics

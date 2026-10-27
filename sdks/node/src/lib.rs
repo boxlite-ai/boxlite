@@ -9,6 +9,7 @@ mod advanced_options;
 mod agents;
 mod box_handle;
 mod copy;
+mod domains;
 mod exec;
 mod images;
 mod info;
@@ -27,6 +28,7 @@ mod volumes;
 pub use advanced_options::{JsAdvancedBoxOptions, JsContainerCapabilities, JsSecurityOptions};
 pub use box_handle::JsBox;
 pub use copy::JsCopyOptions;
+pub use domains::{JsDomain, JsDomainHandle, JsDomainList, JsDomainTarget};
 pub use exec::{JsExecResult, JsExecStderr, JsExecStdin, JsExecStdout, JsExecution};
 pub use images::{
     JsImageDetail, JsImageHandle, JsImageInfo, JsImagePullResult, JsImageUsage, JsImageVersion,

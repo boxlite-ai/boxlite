@@ -22,6 +22,7 @@ import { BoxliteRegistryController } from './boxlite-registry.controller'
 import { RegistryModule } from '../registry/registry.module'
 import { BoxliteMemberController } from './boxlite-member.controller'
 import { BoxliteInvitationController } from './boxlite-invitation.controller'
+import { BoxliteDomainController } from './boxlite-domain.controller'
 import { CommerceBoxLimitService } from './commerce-box-limit.service'
 
 @Module({
@@ -36,6 +37,7 @@ import { CommerceBoxLimitService } from './commerce-box-limit.service'
     BoxliteImageController,
     BoxliteMemberController,
     BoxliteInvitationController,
+    BoxliteDomainController,
   ],
   providers: [BoxliteWsProxyService, CommerceBoxLimitService],
   exports: [BoxliteWsProxyService],

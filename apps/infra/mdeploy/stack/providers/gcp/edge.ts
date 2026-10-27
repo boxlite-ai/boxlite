@@ -647,6 +647,60 @@ export const gcpEdgeProvider =
       ttl: 60,
     })
 
+    /*
+     * Platform tunnel subdomains: one wildcard beside the box domain's, on the
+     * same address, backend and certificate map. Its own authorization and
+     * certificate under their own names, so the existing proxy chain — whose
+     * authorization domain is immutable — is not touched, and the balancer
+     * picks this certificate by SNI through the map entry's hostname. The user
+     * domain is a registrable domain of its own, so its records go into its own
+     * zone; its apex is not covered or recorded. Binding a name later writes a
+     * database row and nothing here.
+     */
+    const platformResources: any[] = []
+    if (request.userDomain) {
+      const { domain: appDomain, dnsZoneId: appZoneId } = request.userDomain
+      const appName = instanceFor({ app: $app.name, stage: $app.stage, artifact: 'proxy-app' })
+      const appAuthorization = new gcp.certificatemanager.DnsAuthorization('ProxyAppDnsAuthorization', {
+        name: appName,
+        project,
+        domain: appDomain,
+      })
+      const appChallenge = new cloudflare.Record('ProxyAppDnsAuthorizationRecord', {
+        zoneId: appZoneId,
+        name: appAuthorization.dnsResourceRecords[0].name,
+        type: appAuthorization.dnsResourceRecords[0].type,
+        content: appAuthorization.dnsResourceRecords[0].data,
+        proxied: false,
+        ttl: 60,
+      })
+      const appCertificate = new gcp.certificatemanager.Certificate(
+        'ProxyAppCertificate',
+        {
+          name: certificateNameFor({ key: appDomain, base: appName }),
+          project,
+          managed: { domains: [`*.${appDomain}`], dnsAuthorizations: [appAuthorization.id] },
+        },
+        { deleteBeforeReplace: false },
+      )
+      const appEntry = new gcp.certificatemanager.CertificateMapEntry('ProxyAppCertificateEntry', {
+        name: appName,
+        project,
+        map: certificates.name,
+        certificates: [appCertificate.id],
+        hostname: `*.${appDomain}`,
+      })
+      const appWildcard = new cloudflare.Record('ProxyAppWildcardRecord', {
+        zoneId: appZoneId,
+        name: `*.${appDomain}`,
+        type: 'A',
+        content: address.address,
+        proxied: false,
+        ttl: 60,
+      })
+      platformResources.push(appChallenge, appEntry, appWildcard)
+    }
+
     return {
       url: $util.output(`https://${request.domain}`),
       /*
@@ -675,6 +729,7 @@ export const gcpEdgeProvider =
         challenge,
         apex,
         wildcard,
+        ...platformResources,
         ...ownedSecretResources,
       ],
     }

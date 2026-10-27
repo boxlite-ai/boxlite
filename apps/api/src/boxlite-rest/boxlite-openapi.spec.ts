@@ -10,6 +10,7 @@ import { resolve } from 'node:path'
 import { parse } from 'yaml'
 import { ImageCatalogService } from '../image/services/image-catalog.service'
 import { RegistriesService } from '../registry/services/registries.service'
+import { BoxliteDomainController } from './boxlite-domain.controller'
 import { BoxliteImageController } from './boxlite-image.controller'
 import { BoxliteRegistryController } from './boxlite-registry.controller'
 
@@ -126,6 +127,29 @@ describe('Box API JSON Schema nullability', () => {
     const validate = validator('ImageDetail')
     expect(validate(detail)).toBe(true)
     expect(validate({ ...detail, versions: [{ ...detail.versions[0], size_bytes: 'unknown' }] })).toBe(false)
+  })
+
+  it('validates an actual domain list with a bound and an unbound domain', async () => {
+    const tunnelDomains = {
+      listHeld: jest.fn().mockResolvedValue({
+        domains: [
+          { name: 'demo1', hostname: 'demo1.app.test', url: 'https://demo1.app.test', boxId: 'box-1', port: 3000 },
+          { name: 'spare', hostname: 'spare.app.test', url: 'https://spare.app.test', boxId: null, port: null },
+        ],
+        limit: 2,
+        used: 2,
+        remaining: 0,
+        minLength: 5,
+      }),
+    }
+    const controller = new BoxliteDomainController(tunnelDomains as never, {} as never)
+    const list = JSON.parse(JSON.stringify(await controller.list({ organizationId: 'org-1' } as never)))
+
+    const validate = validator('DomainList')
+    expect(validate(list)).toBe(true)
+    expect(validate({ ...list, domains: [{ ...list.domains[0], target: { type: 'app', box: 'b', port: 1 } }] })).toBe(
+      false,
+    )
   })
 
   it('validates actual registry responses without a creating user', async () => {

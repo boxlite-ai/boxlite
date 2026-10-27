@@ -21,6 +21,7 @@ use super::types::{
 };
 use crate::images::ImageObject;
 use crate::runtime::auth::{AuthBackend, Principal};
+use crate::runtime::domains::{Domain, DomainBackend, DomainList, DomainTarget};
 use crate::runtime::images::ImageBackend;
 use crate::runtime::registries::{NewRegistryCredential, RegistryBackend, RegistryCredential};
 use crate::runtime::types::{ImageDetail, ImageInfo, ImageUsage};
@@ -75,6 +76,25 @@ impl VolumeBackend for RestRuntime {
         } else {
             self.client.delete(&path).await
         }
+    }
+}
+
+#[async_trait::async_trait]
+impl DomainBackend for RestRuntime {
+    async fn list_domains(&self) -> BoxliteResult<DomainList> {
+        self.client.get("/domains").await
+    }
+
+    async fn bind_domain(&self, domain: &str, target: &DomainTarget) -> BoxliteResult<Domain> {
+        self.client
+            .put(&format!("/domains/{domain}/target"), target)
+            .await
+    }
+
+    async fn unbind_domain(&self, domain: &str) -> BoxliteResult<()> {
+        self.client
+            .delete(&format!("/domains/{domain}/target"))
+            .await
     }
 }
 
@@ -1640,5 +1660,41 @@ mod tests {
         let error = registries_on(1).remove("../images").await.unwrap_err();
 
         assert!(matches!(error, BoxliteError::InvalidArgument(_)), "{error}");
+    }
+
+    /// Domains are organization routes: listed at `/domains`, bound and
+    /// unbound on the domain's `target`.
+    #[tokio::test]
+    async fn domains_use_the_organization_routes() {
+        const DOMAIN: &str = r#"{"name":"demo1","hostname":"demo1.app.test","url":"https://demo1.app.test","target":{"type":"box","box":"box-id","port":3000}}"#;
+        let (port, server) = http_server(vec![
+            (
+                200,
+                r#"{"domains":[],"limit":1,"used":0,"remaining":1,"min_length":5}"#,
+            ),
+            (200, DOMAIN),
+            (204, ""),
+        ])
+        .await;
+        let runtime =
+            RestRuntime::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}"))).unwrap();
+        let target = DomainTarget::Box {
+            box_ref: "web-a".into(),
+            port: 3000,
+        };
+
+        assert_eq!(runtime.list_domains().await.unwrap().remaining, 1);
+        let bound = runtime.bind_domain("demo1", &target).await.unwrap();
+        runtime.unbind_domain("demo1").await.unwrap();
+
+        assert_eq!(bound.hostname, "demo1.app.test");
+        assert_eq!(
+            server.await.unwrap(),
+            [
+                "GET /v1/domains HTTP/1.1",
+                "PUT /v1/domains/demo1/target HTTP/1.1",
+                "DELETE /v1/domains/demo1/target HTTP/1.1",
+            ]
+        );
     }
 }
