@@ -57,6 +57,7 @@ import {
 } from '../dto/list-boxes-query.dto'
 import { createRangeFilter } from '../../common/utils/range-filter'
 import { recordBoxRequested, recordWarmPoolClaim } from '../utils/box-business-event.util'
+import { recordBusinessEvent } from '../../common/utils/business-event.util'
 import { Context } from '../../common/context/context'
 import { PlatformReason } from '../../common/context/platform-reason.enum'
 import { LogExecution } from '../../common/decorators/log-execution.decorator'
@@ -1049,8 +1050,22 @@ export class BoxService {
     })
   }
 
-  async updateLastActivityAt(boxId: string, lastActivityAt: Date): Promise<void> {
+  async updateLastActivityAt(boxId: string, lastActivityAt: Date, previewOpen = false): Promise<void> {
     await this.boxActivityService.updateLastActivityAt(boxId, lastActivityAt)
+    if (!previewOpen) return
+    try {
+      // Shared across proxy/API replicas; a failed Redis call suppresses telemetry.
+      if ((await this.redis.set(`box:preview-open:${boxId}`, '1', 'EX', 60, 'NX')) !== 'OK') return
+      const box = await this.findOne(boxId)
+      recordBusinessEvent({
+        name: 'box.open',
+        outcome: 'success',
+        correlationId: box.id,
+        organizationId: box.organizationId,
+      })
+    } catch {
+      this.logger.warn('Preview activity observation could not be recorded')
+    }
   }
 
   async getToolboxProxyUrl(boxId: string): Promise<string> {

@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { Logger } from '@nestjs/common'
+import { HttpException, Logger } from '@nestjs/common'
 import { getServiceType } from './app-mode'
 import { Context } from '../context/context'
 
@@ -18,16 +18,20 @@ export type BusinessEventName =
   | 'box.exec'
   | 'box.file_upload'
   | 'tunnel.create'
+  | 'box.open'
+  | 'api_key.create'
+  | 'volume.create'
+  | 'volume.delete'
 
 export interface BusinessEventBase {
   name: BusinessEventName
-  // The user id for a user event or org.active, the box id for a box or tunnel event.
+  // User/box/volume id, or a fresh non-secret UUID for an API-key creation attempt.
   correlationId: string
   // The organization the event belongs to, so its activity can be counted per
   // organization from the log alone. Absent on user.login, which spans organizations,
   // and on a registration until its default organization exists.
   organizationId?: string
-  // Absent only on job outcome events: the runner reports after the request ends.
+  // Absent for runner outcomes and anonymous preview presence.
   ctx?: Context
 }
 
@@ -39,6 +43,19 @@ export type BusinessEvent =
   | (BusinessEventBase & { outcome: 'exception'; exceptionType: string })
 
 const logger = new Logger('BusinessEvent')
+
+/** Fixed categories keep exception messages, resource names and credentials out of telemetry. */
+export function mutationFailureType(error: unknown): string {
+  const status = error instanceof HttpException ? error.getStatus() : 500
+  return (
+    (
+      { 400: 'invalid_request', 403: 'forbidden', 404: 'not_found', 409: 'conflict', 503: 'unavailable' } as Record<
+        number,
+        string
+      >
+    )[status] ?? 'internal'
+  )
+}
 
 /**
  * Emits one business event as a structured log record. The attributes reach

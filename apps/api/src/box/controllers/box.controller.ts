@@ -16,7 +16,9 @@ import {
   HttpCode,
   UseInterceptors,
   Put,
+  Req,
 } from '@nestjs/common'
+import type { Request } from 'express'
 import { CombinedAuthGuard } from '../../auth/combined-auth.guard'
 import { BoxService } from '../services/box.service'
 import {
@@ -44,7 +46,8 @@ import { CustomHeaders } from '../../common/constants/header.constants'
 import { AuthContext } from '../../common/decorators/auth-context.decorator'
 import { UserContext } from '../../common/decorators/user-context.decorator'
 import { Context } from '../../common/context/context'
-import { OrganizationAuthContext } from '../../common/interfaces/auth-context.interface'
+import { OrganizationAuthContext, AuthContextType } from '../../common/interfaces/auth-context.interface'
+import { isProxyContext } from '../../common/interfaces/proxy-context.interface'
 import { RequiredOrganizationResourcePermissions } from '../../organization/decorators/required-organization-resource-permissions.decorator'
 import { OrganizationResourcePermission } from '../../organization/enums/organization-resource-permission.enum'
 import { OrganizationResourceActionGuard } from '../../organization/guards/organization-resource-action.guard'
@@ -413,7 +416,15 @@ export class BoxController {
     description: 'Last activity has been updated',
   })
   @UseGuards(OrGuard([BoxAccessGuard, ProxyGuard, RegionBoxAccessGuard]))
-  async updateLastActivity(@Param('boxId') boxId: string): Promise<void> {
+  async updateLastActivity(
+    @Param('boxId') boxId: string,
+    @AuthContext() authContext: AuthContextType,
+    @Req() request: Request,
+  ): Promise<void> {
+    if (request.headers['x-boxlite-preview-open'] === '1' && authContext && isProxyContext(authContext)) {
+      await this.boxService.updateLastActivityAt(boxId, new Date(), true)
+      return
+    }
     await this.boxService.updateLastActivityAt(boxId, new Date())
   }
 

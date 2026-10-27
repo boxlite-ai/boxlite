@@ -201,6 +201,9 @@ fmt\:go:
 	@cd apps/image-service && go fmt ./...
 	@cd apps/runner && gofmt -w .
 
+fmt\:proxy:
+	@cd apps/proxy && gofmt -w pkg/proxy
+
 fmt\:check\:go:
 	@echo "🔍 Checking Go formatting..."
 	@cd sdks/go && test -z "$$(gofmt -l .)" || (gofmt -l . && exit 1)

@@ -30,6 +30,8 @@ import { BoxRepository } from '../repositories/box.repository'
 import { BoxDesiredState } from '../enums/box-desired-state.enum'
 import { setTimeout as sleep } from 'timers/promises'
 import { isVolumeStorageConfigured } from '../stores/volume-bucket.store'
+import { Context } from '../../common/context/context'
+import { mutationFailureType, recordOutcomes } from '../../common/utils/business-event.util'
 
 // Shape Postgres accepts for a `uuid` column. Used to keep plain names out of
 // an id predicate, not to validate ids - the database is the authority.
@@ -48,7 +50,20 @@ export class VolumeService {
     private readonly redisLockProvider: RedisLockProvider,
   ) {}
 
-  async create(organization: Organization, createVolumeDto: CreateVolumeDto): Promise<Volume> {
+  async create(organization: Organization, createVolumeDto: CreateVolumeDto, ctx: Context): Promise<Volume> {
+    const volumeId = uuidv4()
+    return recordOutcomes(
+      { name: 'volume.create', organizationId: organization.id, correlationId: volumeId, ctx },
+      () => this.enqueueCreation(organization, createVolumeDto, volumeId),
+      mutationFailureType,
+    )
+  }
+
+  private async enqueueCreation(
+    organization: Organization,
+    createVolumeDto: CreateVolumeDto,
+    volumeId: string,
+  ): Promise<Volume> {
     if (!isVolumeStorageConfigured(this.configService)) {
       throw new ServiceUnavailableException('Object storage is not configured')
     }
@@ -58,7 +73,7 @@ export class VolumeService {
     const volume = new Volume()
 
     // Generate ID
-    volume.id = uuidv4()
+    volume.id = volumeId
 
     // Set name from DTO or use ID as default
     volume.name = createVolumeDto.name || volume.id
@@ -107,7 +122,7 @@ export class VolumeService {
     }
   }
 
-  async delete(volumeId: string, force = false): Promise<void> {
+  async delete(volumeId: string, ctx: Context, force = false): Promise<void> {
     const volume = await this.volumeRepository.findOne({
       where: {
         id: volumeId,
@@ -124,6 +139,16 @@ export class VolumeService {
     if (force && [VolumeState.PENDING_DELETE, VolumeState.DELETING, VolumeState.DELETED].includes(volume.state)) {
       return
     }
+
+    return recordOutcomes(
+      { name: 'volume.delete', organizationId: volume.organizationId, correlationId: volume.id, ctx },
+      () => this.enqueueDeletion(volume),
+      mutationFailureType,
+    )
+  }
+
+  private async enqueueDeletion(volume: Volume): Promise<void> {
+    const volumeId = volume.id
 
     if (volume.state !== VolumeState.READY && volume.state !== VolumeState.ERROR) {
       throw new BadRequestError(

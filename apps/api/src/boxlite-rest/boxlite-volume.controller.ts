@@ -4,6 +4,8 @@ import { CombinedAuthGuard } from '../auth/combined-auth.guard'
 import { OrganizationResourceActionGuard } from '../organization/guards/organization-resource-action.guard'
 import { AuthContext } from '../common/decorators/auth-context.decorator'
 import { OrganizationAuthContext } from '../common/interfaces/auth-context.interface'
+import { UserContext } from '../common/decorators/user-context.decorator'
+import { Context } from '../common/context/context'
 import { VolumeService } from '../box/services/volume.service'
 import { CreateVolumeDto } from '../box/dto/create-volume.dto'
 import { RequiredOrganizationResourcePermissions } from '../organization/decorators/required-organization-resource-permissions.decorator'
@@ -34,10 +36,11 @@ export class BoxliteVolumeController {
   @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_VOLUMES])
   async create(
     @AuthContext() authContext: OrganizationAuthContext,
-    @Body() dto?: CreateVolumeDto,
+    @Body() dto: CreateVolumeDto | undefined,
+    @UserContext() ctx: Context,
   ): Promise<RestVolumeResponse> {
     // An absent body is an unnamed volume; VolumeService falls back to the id.
-    const volume = await this.volumeService.create(authContext.organization, dto ?? {})
+    const volume = await this.volumeService.create(authContext.organization, dto ?? {}, ctx)
     return this.toResponse(await this.volumeService.waitForReady(volume.id, 30))
   }
 
@@ -59,8 +62,12 @@ export class BoxliteVolumeController {
   @HttpCode(204)
   @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.DELETE_VOLUMES])
   @UseGuards(VolumeAccessGuard)
-  async remove(@Param('volumeId') volumeId: string, @Query('force') force?: string): Promise<void> {
-    await this.volumeService.delete(volumeId, force === 'true')
+  async remove(
+    @Param('volumeId') volumeId: string,
+    @Query('force') force: string | undefined,
+    @UserContext() ctx: Context,
+  ): Promise<void> {
+    await this.volumeService.delete(volumeId, ctx, force === 'true')
   }
 
   private toResponse(volume: Awaited<ReturnType<VolumeService['findOne']>>): RestVolumeResponse {

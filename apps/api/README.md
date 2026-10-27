@@ -17,13 +17,37 @@ per business event; the attributes reach OTLP through nestjs-pino, where alerts 
 | `box.create`, `box.start`, `box.stop`, `box.delete` | `JobStateHandler`, when the runner job finishes | success, exception |
 | `box.exec`, `box.file_upload` | `BoxliteProxyController`, for `POST …/exec` and `PUT …/files` | requested, then success or exception by the response status |
 | `tunnel.create` | `BoxliteProxyController`, through `recordOutcomes` | requested, success, exception |
+| `api_key.create` | `ApiKeyService`, including platform bootstrap | requested, success, exception |
+| `volume.create`, `volume.delete` | `VolumeService`, shared by REST and Dashboard | requested, success, exception |
+| `box.open` | Authenticated preview proxy through the last-activity endpoint | success (sampled anonymous presence) |
+
+Volume success means the command entered the lifecycle queue, not that backing storage is ready or deleted.
+Force-deleting a missing or already-deleting volume is a no-op and emits no event. Mutation failures carry fixed
+categories, never resource names, key material or database error messages. API-key correlation is a fresh UUID
+for the attempt; volume correlation is the volume ID.
+
+Browser presence requires an admitted GET with `Sec-Fetch-Mode: navigate` and `Sec-Fetch-Dest: document`.
+The proxy sends `X-BoxLite-Preview-Open: 1` to the existing last-activity route; only the proxy role may trigger
+an observation. The API derives organization from the stored box and leaves user/actor unknown. Assets, iframes,
+polls and denied requests do not emit it; admission does not prove the guest rendered successfully.
+Per-box proxy singleflight and a separate 60-second cooldown bound attempts (including failed delivery), with a
+two-second request timeout. API Redis NX/EX 60 deduplicates across replicas; Redis failure suppresses the event.
+Forwarding continues on telemetry failure. Reloads collapse and delivery is best effort: this is neither a
+navigation count nor a visitor count, and it does not add to requested-operation totals.
+
+The preview marker is internal to the proxy/API exchange and is absent from the public OpenAPI parameters;
+ordinary heartbeat clients keep their existing signature and need no new header.
+
+At most 1,440 preview rows per continuously active box/day add 0.15552 GB over 400 days at 270 bytes/row.
+Before production, measure seven days of preview-active minutes and actual row sizes with other new events.
+Recheck the 20% storage budget as traffic grows; provision capacity or reduce retention before exceeding it.
 
 Box events go through `src/box/utils/box-business-event.util.ts`: the request and the outcome are
 recorded in different places, so one call cannot cover both. A proxied call that fails with an
 HTTP status records `http_<status>`; a client that disconnects first records `client_closed`.
 
 An event names its entity by `correlation.id`: the user id for `user.*` and `org.active`, the box
-id for box and tunnel events. It also carries `organization.id`, so an organization's activity
+id for box and tunnel events (volume ID or an API-key attempt UUID for those mutations). It also carries `organization.id`, so an organization's activity
 can be counted from the log alone. `user.login` has none, since a login spans organizations, and a
 registration carries its default organization on success only.
 

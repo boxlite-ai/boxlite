@@ -24,6 +24,8 @@ import { AuditAction } from '../audit/enums/audit-action.enum'
 import { AuditTarget } from '../audit/enums/audit-target.enum'
 import { ApiKey } from './api-key.entity'
 import { AuthenticatedRateLimitGuard } from '../common/guards/authenticated-rate-limit.guard'
+import { UserContext } from '../common/decorators/user-context.decorator'
+import { Context } from '../common/context/context'
 
 @ApiTags('api-keys')
 @Controller('api-keys')
@@ -59,6 +61,7 @@ export class ApiKeyController {
   async createApiKey(
     @AuthContext() authContext: OrganizationAuthContext,
     @Body() createApiKeyDto: CreateApiKeyDto,
+    @UserContext() ctx: Context,
   ): Promise<ApiKeyResponseDto> {
     this.validateRequestedApiKeyPermissions(authContext, createApiKeyDto.permissions)
 
@@ -67,6 +70,7 @@ export class ApiKeyController {
       authContext.userId,
       createApiKeyDto.name,
       createApiKeyDto.permissions,
+      ctx,
       createApiKeyDto.expiresAt,
     )
 

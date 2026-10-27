@@ -11,6 +11,8 @@ import { NestExpressApplication } from '@nestjs/platform-express'
 import { AppModule } from './app.module'
 import { SwaggerModule } from '@nestjs/swagger'
 import { INestApplication, Logger, ValidationPipe } from '@nestjs/common'
+import { Context } from './common/context/context'
+import { PlatformReason } from './common/context/platform-reason.enum'
 import { AllExceptionsFilter } from './filters/all-exceptions.filter'
 import { MetricsInterceptor } from './interceptors/metrics.interceptor'
 import { HttpsOptions } from '@nestjs/common/interfaces/external/https-options.interface'
@@ -258,7 +260,13 @@ async function createAdminApiKey(app: INestApplication, apiKeyName: string) {
   const organizationService = app.get(OrganizationService)
 
   const defaultOrg = await organizationService.findDefaultForUser(BOXLITE_ADMIN_USER_ID)
-  const { value } = await apiKeyService.createApiKey(defaultOrg.id, BOXLITE_ADMIN_USER_ID, apiKeyName, [])
+  const { value } = await apiKeyService.createApiKey(
+    defaultOrg.id,
+    BOXLITE_ADMIN_USER_ID,
+    apiKeyName,
+    [],
+    Context.platform(PlatformReason.BOOTSTRAP),
+  )
   Logger.log(
     `
 =========================================

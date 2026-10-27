@@ -48,6 +48,9 @@ build\:apps: _ensure-apps-deps
 	@cd apps && yarn build
 	@echo "✅ apps workspace built → dist/apps"
 
+build\:apps\:api: _ensure-apps-deps
+	@cd apps && yarn nx run api:build
+
 # Build SkillBox container image (all-in-one AI CLI with noVNC)
 # Usage: make skillbox-image [APT_SOURCE=mirrors.aliyun.com]
 skillbox-image:
