@@ -47,6 +47,10 @@ import type { AdminRunner } from '../models';
 import type { Box } from '../models';
 // @ts-ignore
 import type { CreateRunnerResponse } from '../models';
+// @ts-ignore
+import type { RunnerDrainStatusDto } from '../models';
+// @ts-ignore
+import type { UpdateRunnerDrainingDto } from '../models';
 /**
  * AdminApi - axios parameter creator
  */
@@ -395,6 +399,46 @@ export const AdminApiAxiosParamCreator = function (configuration?: Configuration
         },
         /**
          * 
+         * @summary Inspect runner drain progress
+         * @param {string} id 
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        adminGetRunnerDrainStatus: async (id: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'id' is not null or undefined
+            assertParamExists('adminGetRunnerDrainStatus', 'id', id)
+            const localVarPath = `/admin/runners/{id}/draining`
+                .replace('{id}', encodeURIComponent(String(id)));
+            // use dummy base URL string because the URL constructor only accepts absolute URLs.
+            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
+            let baseOptions;
+            if (configuration) {
+                baseOptions = configuration.baseOptions;
+            }
+
+            const localVarRequestOptions = { method: 'GET', ...baseOptions, ...options};
+            const localVarHeaderParameter = {} as any;
+            const localVarQueryParameter = {} as any;
+
+            // authentication bearer required
+            // http bearer authentication required
+            await setBearerAuthToObject(localVarHeaderParameter, configuration)
+
+            // authentication oauth2 required
+
+            localVarHeaderParameter['Accept'] = 'application/json';
+
+            setSearchParams(localVarUrlObj, localVarQueryParameter);
+            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
+            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+
+            return {
+                url: toPathString(localVarUrlObj),
+                options: localVarRequestOptions,
+            };
+        },
+        /**
+         * 
          * @summary List boxes with placement and health
          * @param {string} [cursor] Opaque cursor returned by the previous page
          * @param {number} [limit] 
@@ -665,6 +709,50 @@ export const AdminApiAxiosParamCreator = function (configuration?: Configuration
         },
         /**
          * 
+         * @summary Update runner draining status
+         * @param {string} id 
+         * @param {UpdateRunnerDrainingDto} updateRunnerDrainingDto 
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        adminUpdateRunnerDraining: async (id: string, updateRunnerDrainingDto: UpdateRunnerDrainingDto, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'id' is not null or undefined
+            assertParamExists('adminUpdateRunnerDraining', 'id', id)
+            // verify required parameter 'updateRunnerDrainingDto' is not null or undefined
+            assertParamExists('adminUpdateRunnerDraining', 'updateRunnerDrainingDto', updateRunnerDrainingDto)
+            const localVarPath = `/admin/runners/{id}/draining`
+                .replace('{id}', encodeURIComponent(String(id)));
+            // use dummy base URL string because the URL constructor only accepts absolute URLs.
+            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
+            let baseOptions;
+            if (configuration) {
+                baseOptions = configuration.baseOptions;
+            }
+
+            const localVarRequestOptions = { method: 'PATCH', ...baseOptions, ...options};
+            const localVarHeaderParameter = {} as any;
+            const localVarQueryParameter = {} as any;
+
+            // authentication bearer required
+            // http bearer authentication required
+            await setBearerAuthToObject(localVarHeaderParameter, configuration)
+
+            // authentication oauth2 required
+
+            localVarHeaderParameter['Content-Type'] = 'application/json';
+
+            setSearchParams(localVarUrlObj, localVarQueryParameter);
+            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
+            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+            localVarRequestOptions.data = serializeDataIfNeeded(updateRunnerDrainingDto, localVarRequestOptions, configuration)
+
+            return {
+                url: toPathString(localVarUrlObj),
+                options: localVarRequestOptions,
+            };
+        },
+        /**
+         * 
          * @summary Update runner scheduling status
          * @param {string} id 
          * @param {*} [options] Override http request option.
@@ -821,6 +909,19 @@ export const AdminApiFp = function(configuration?: Configuration) {
         },
         /**
          * 
+         * @summary Inspect runner drain progress
+         * @param {string} id 
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        async adminGetRunnerDrainStatus(id: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<RunnerDrainStatusDto>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.adminGetRunnerDrainStatus(id, options);
+            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
+            const localVarOperationServerBasePath = operationServerMap['AdminApi.adminGetRunnerDrainStatus']?.[localVarOperationServerIndex]?.url;
+            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
+        },
+        /**
+         * 
          * @summary List boxes with placement and health
          * @param {string} [cursor] Opaque cursor returned by the previous page
          * @param {number} [limit] 
@@ -900,6 +1001,20 @@ export const AdminApiFp = function(configuration?: Configuration) {
             const localVarAxiosArgs = await localVarAxiosParamCreator.adminRecoverBox(boxId, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['AdminApi.adminRecoverBox']?.[localVarOperationServerIndex]?.url;
+            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
+        },
+        /**
+         * 
+         * @summary Update runner draining status
+         * @param {string} id 
+         * @param {UpdateRunnerDrainingDto} updateRunnerDrainingDto 
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        async adminUpdateRunnerDraining(id: string, updateRunnerDrainingDto: UpdateRunnerDrainingDto, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<void>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.adminUpdateRunnerDraining(id, updateRunnerDrainingDto, options);
+            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
+            const localVarOperationServerBasePath = operationServerMap['AdminApi.adminUpdateRunnerDraining']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
@@ -1010,6 +1125,16 @@ export const AdminApiFactory = function (configuration?: Configuration, basePath
         },
         /**
          * 
+         * @summary Inspect runner drain progress
+         * @param {string} id 
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        adminGetRunnerDrainStatus(id: string, options?: RawAxiosRequestConfig): AxiosPromise<RunnerDrainStatusDto> {
+            return localVarFp.adminGetRunnerDrainStatus(id, options).then((request) => request(axios, basePath));
+        },
+        /**
+         * 
          * @summary List boxes with placement and health
          * @param {string} [cursor] Opaque cursor returned by the previous page
          * @param {number} [limit] 
@@ -1072,6 +1197,17 @@ export const AdminApiFactory = function (configuration?: Configuration, basePath
          */
         adminRecoverBox(boxId: string, options?: RawAxiosRequestConfig): AxiosPromise<Box> {
             return localVarFp.adminRecoverBox(boxId, options).then((request) => request(axios, basePath));
+        },
+        /**
+         * 
+         * @summary Update runner draining status
+         * @param {string} id 
+         * @param {UpdateRunnerDrainingDto} updateRunnerDrainingDto 
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        adminUpdateRunnerDraining(id: string, updateRunnerDrainingDto: UpdateRunnerDrainingDto, options?: RawAxiosRequestConfig): AxiosPromise<void> {
+            return localVarFp.adminUpdateRunnerDraining(id, updateRunnerDrainingDto, options).then((request) => request(axios, basePath));
         },
         /**
          * 
@@ -1184,6 +1320,17 @@ export class AdminApi extends BaseAPI {
 
     /**
      * 
+     * @summary Inspect runner drain progress
+     * @param {string} id 
+     * @param {*} [options] Override http request option.
+     * @throws {RequiredError}
+     */
+    public adminGetRunnerDrainStatus(id: string, options?: RawAxiosRequestConfig) {
+        return AdminApiFp(this.configuration).adminGetRunnerDrainStatus(id, options).then((request) => request(this.axios, this.basePath));
+    }
+
+    /**
+     * 
      * @summary List boxes with placement and health
      * @param {string} [cursor] Opaque cursor returned by the previous page
      * @param {number} [limit] 
@@ -1251,6 +1398,18 @@ export class AdminApi extends BaseAPI {
      */
     public adminRecoverBox(boxId: string, options?: RawAxiosRequestConfig) {
         return AdminApiFp(this.configuration).adminRecoverBox(boxId, options).then((request) => request(this.axios, this.basePath));
+    }
+
+    /**
+     * 
+     * @summary Update runner draining status
+     * @param {string} id 
+     * @param {UpdateRunnerDrainingDto} updateRunnerDrainingDto 
+     * @param {*} [options] Override http request option.
+     * @throws {RequiredError}
+     */
+    public adminUpdateRunnerDraining(id: string, updateRunnerDrainingDto: UpdateRunnerDrainingDto, options?: RawAxiosRequestConfig) {
+        return AdminApiFp(this.configuration).adminUpdateRunnerDraining(id, updateRunnerDrainingDto, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**

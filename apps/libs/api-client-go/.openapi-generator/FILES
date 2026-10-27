@@ -119,6 +119,7 @@ model_region_type.go
 model_registry_credential.go
 model_registry_credential_kind.go
 model_runner.go
+model_runner_drain_status_dto.go
 model_runner_full.go
 model_runner_health_metrics.go
 model_runner_healthcheck.go
@@ -137,6 +138,7 @@ model_update_organization_member_access.go
 model_update_organization_name.go
 model_update_organization_role.go
 model_update_region.go
+model_update_runner_draining_dto.go
 model_usage_concurrency_point_dto.go
 model_usage_concurrency_series_dto.go
 model_user.go
