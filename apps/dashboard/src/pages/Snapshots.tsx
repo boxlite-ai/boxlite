@@ -12,7 +12,6 @@ import { toast } from 'sonner'
 import { SnapshotCreateDialog } from '@/components/SnapshotCreateDialog'
 import { SnapshotTable } from '@/components/SnapshotTable'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
 import { Plus, Search } from '@/components/ui/icon'
 import {
   AlertDialog,
@@ -143,15 +142,21 @@ function SnapshotPage() {
                   This permanently removes the snapshot. You will no longer be able to restore its disk data.
                 </AlertDialogDescription>
               </AlertDialogHeader>
-              <label className="space-y-2 text-sm">
-                <span>Type {pendingDelete?.name} to confirm</span>
-                <Input
+              <div className="flex flex-col gap-[7px]">
+                <label htmlFor="snapshot-delete-confirm" className="font-mono text-[11px] text-muted-foreground">
+                  Type <span className="text-foreground">{pendingDelete?.name}</span> to confirm
+                </label>
+                <input
+                  id="snapshot-delete-confirm"
                   aria-label="Confirm snapshot name"
                   value={confirmName}
                   onChange={(event) => setConfirmName(event.target.value)}
+                  autoComplete="off"
+                  spellCheck={false}
                   disabled={remove.isPending}
+                  className="w-full border border-border bg-card px-[13px] py-[10px] font-mono text-[13px] text-foreground outline-none focus:border-destructive"
                 />
-              </label>
+              </div>
               {remove.error && (
                 <p role="alert" className="text-sm text-destructive">
                   {snapshotErrorMessage(remove.error)}
@@ -162,6 +167,7 @@ function SnapshotPage() {
                 <AlertDialogAction
                   variant="destructive"
                   disabled={!canDelete || !deleteConfirmed || remove.isPending}
+                  className="disabled:cursor-not-allowed disabled:opacity-40"
                   onClick={async (event) => {
                     event.preventDefault()
                     if (!canDelete || !deleteConfirmed || !pendingDelete || remove.isPending) return
@@ -177,7 +183,7 @@ function SnapshotPage() {
                     }
                   }}
                 >
-                  {remove.isPending ? 'Deleting…' : 'Delete snapshot'}
+                  {remove.isPending ? 'Deleting…' : 'Delete'}
                 </AlertDialogAction>
               </AlertDialogFooter>
             </AlertDialogContent>
