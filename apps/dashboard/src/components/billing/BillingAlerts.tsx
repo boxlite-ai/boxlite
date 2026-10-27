@@ -3,8 +3,8 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { SparklesIcon, TriangleAlertIcon } from '@/components/ui/icon'
-import { useOwnerWalletQuery } from '@/hooks/queries/billingQueries'
+import { Loader2Icon, SparklesIcon, TriangleAlertIcon } from '@/components/ui/icon'
+import { useOwnerSignupCreditPending, useOwnerWalletQuery } from '@/hooks/queries/billingQueries'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { ReactNode } from 'react'
 import { useAuth } from 'react-oidc-context'
@@ -39,6 +39,30 @@ export function BillingAlerts() {
           </StatusBanner>
         )}
     </>
+  )
+}
+
+/**
+ * Explains a $0 wallet while the signup credit is on its way. Only a verified
+ * owner's default organization is granted one, so no one else asks: for them
+ * `delivered: false` would never change.
+ */
+export function SignupCreditBanner() {
+  const { selectedOrganization } = useSelectedOrganization()
+  const { user } = useAuth()
+  const eligible = Boolean(user?.profile.email_verified && selectedOrganization?.isDefaultForAuthenticatedUser)
+  const pending = useOwnerSignupCreditPending(eligible)
+
+  if (!pending) {
+    return null
+  }
+
+  return (
+    <div role="status">
+      <StatusBanner tone="neutral" icon={<Loader2Icon className="size-4 shrink-0 animate-spin" />}>
+        Registration rewards are being distributed, please wait patiently.
+      </StatusBanner>
+    </div>
   )
 }
 

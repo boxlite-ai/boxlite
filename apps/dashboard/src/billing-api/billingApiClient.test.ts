@@ -151,6 +151,16 @@ describe('topUpWallet', () => {
   })
 })
 
+describe('getSignupCreditDelivery', () => {
+  it('reads the registration coupon route and returns its delivery flag', async () => {
+    const api = serve({ delivered: false })
+
+    await expect(api.getSignupCreditDelivery('org-1')).resolves.toEqual({ delivered: false })
+    expect(requestedMethod).toBe('get')
+    expect(requestedUrl).toBe('http://billing.test/api/billing/organization/org-1/coupon/register')
+  })
+})
+
 describe('getUsageFundingSeries', () => {
   it('sends granularity and ISO bounds, and maps bucket bounds to Dates', async () => {
     const api = serve([

@@ -38,6 +38,7 @@ export const queryKeys = {
 
     plan: (organizationId: string) => [...queryKeys.organization.all, organizationId, 'plan'] as const,
     wallet: (organizationId: string) => [...queryKeys.organization.all, organizationId, 'wallet'] as const,
+    signupCredit: (organizationId: string) => [...queryKeys.organization.all, organizationId, 'signup-credit'] as const,
   },
   user: {
     all: ['users'] as const,

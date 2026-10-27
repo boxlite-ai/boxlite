@@ -18,6 +18,7 @@ import { useOrganizationInvoicesQuery } from './useOrganizationInvoicesQuery'
 import { useOrganizationWalletTransactionsQuery } from './useOrganizationWalletTransactionsQuery'
 import { useOrganizationPaymentMethodsQuery } from './useOrganizationPaymentMethodsQuery'
 import { useOrganizationPlanQuery } from './useOrganizationPlanQuery'
+import { useOrganizationSignupCreditPending } from './useOrganizationSignupCreditPending'
 import { useOrganizationWalletQuery } from './useOrganizationWalletQuery'
 import { useUsageFundingSeriesQuery } from './useUsageFundingSeriesQuery'
 import { useOrganizationConcurrencyQuery } from './useOrganizationConcurrencyQuery'
@@ -40,6 +41,15 @@ export function useOwnerWalletQuery(
   return useOrganizationWalletQuery({
     ...scope,
     ...queryOptions,
+  })
+}
+
+/** `enabled` is the caller's own eligibility check, on top of the owner scope. */
+export function useOwnerSignupCreditPending(enabled: boolean) {
+  const scope = useSelectedOrgBillingScope()
+  return useOrganizationSignupCreditPending({
+    organizationId: scope.organizationId,
+    enabled: scope.enabled && enabled,
   })
 }
 
