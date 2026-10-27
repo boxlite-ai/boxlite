@@ -73,13 +73,13 @@ is.
 
 A new owner's wallet reads $0.00 until the signup credit is granted, so the
 Wallet tab says it is on its way: "Registration rewards are being distributed,
-please wait patiently." The billing API's `coupon/register` answers
-`{ delivered }`, and its `false` also covers a credit that never comes: one
+please wait patiently." The billing service only reports whether the credit
+has been delivered, and "not yet" also covers a credit that never comes: one
 switched off, or an organization that does not qualify. Three rules keep the
 notice from promising money that is not coming:
 
 - Only a verified owner asks, and only for their default organization. No one
-  else is granted a credit, so for anyone else `false` would never change.
+  else is granted a credit, so for anyone else "not yet" would never change.
 - Reads stop after about two minutes, 2, 4, 8, 16, 30, 30 and 30 s apart, and
   the notice goes with them. Returning after the cached answer is dropped
   starts a fresh window.
