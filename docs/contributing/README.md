@@ -32,7 +32,6 @@ How to build, test, and change the code.
 
 Dated root-cause analyses and design studies, newest first.
 
-- 2026-10-27 · [Go SDK guest SSH control](investigations/2026-10-27-go-sdk-ssh.md): `Box.SSH()` over the C callback bridge, status ownership, and redaction.
 - 2026-10-08 · [BoxLite skills in Claude Code](investigations/claude-code-plugin.md): describes the Claude adapter, shared package layout, and installation/acceptance checks.
 - 2026-10-08 · [CLI device authorization discovery](investigations/cli-device-authorization.md)
 - 2026-07-19 · [Reaper: one wait, one place](investigations/reaper-exit-slot.md)
