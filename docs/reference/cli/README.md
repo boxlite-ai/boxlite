@@ -819,7 +819,7 @@ active turn. `inspect --view config|capabilities|requests` selects a session-onl
 read and cannot be combined with `--turn`; omission reads state. The SDK's
 `get`/`get_turn` handle lookups are implicit in CLI targeting.
 
-The optional flags are grouped in typed `XxxOptions` structs:
+The optional flags are grouped by operation:
 
 | Group | Commands | Flags |
 |---|---|---|
