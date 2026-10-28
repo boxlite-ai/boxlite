@@ -1,6 +1,6 @@
 ## TL;DR
 
-Expose Box-owned agent sessions and turns through nine HTTP operations, with shared snapshots, resumable events and explicit control actions.
+Expose Box-owned agents and turns through nine HTTP operations, with shared snapshots, resumable events and explicit control actions.
 
 ## Details
 
@@ -14,7 +14,7 @@ The declared SDK operations continue to return Unsupported.
 | Evidence | Lesson for BoxLite |
 |---|---|
 | [Shelley API: streaming and conversation endpoints](https://github.com/boldsoftware/shelley/blob/main/API.md) uses snapshots and SSE; conversation creation also sends a prompt. | Adopt snapshots and events. Separate creation from sending so configuration can be inspected before execution. |
-| [Rivet agent sessions](https://github.com/rivet-dev/agents/blob/main/sandbox-agent/docs/content/docs/agent-sessions.mdx) separates agent selection, sessions, event subscriptions and permission replies. | Keep the selected agent separate from session identity; use typed replies. This source describes SDK behavior, not wire routes. |
+| [Rivet agent sessions](https://github.com/rivet-dev/agents/blob/main/sandbox-agent/docs/content/docs/agent-sessions.mdx) separates agent selection, sessions, event subscriptions and permission replies. | Keep implementation selection separate from instance identity; use typed replies. This source describes SDK behavior, not wire routes. |
 | [OpenHands: get conversation](https://docs.openhands.dev/sdk/guides/agent-server/api-reference/conversations/get-conversation) returns a conversation resource containing agent configuration and state. | Combine read-only views in one resource instead of adding a route for every getter. |
 | [OpenComputer OpenAPI](https://opencomputer.dev/openapi.json), session and turn operations, separates creation from submission, supports retry keys and exposes a polled event log. | Adopt durable identities and retry reconciliation. Use SSE for BoxLite streams; target interruption at a turn and confirm it, unlike OpenComputer's session-level asynchronous interrupt. |
 
@@ -28,37 +28,43 @@ A single action endpoint would hide resource identity and response types.
 Resource reads plus explicit mutation routes keep both visible. Keeping SDK-only
 access would leave remote Box clients without this contract.
 
+BoxLite calls the conversation-owning instance `Agent`, matching `agents.create`
+and `boxlite agent create`. The collection is `Agents`, and submitted work is
+`AgentTurn`. OpenComputer and OpenHands use session/conversation terminology;
+BoxLite's choice keeps its own SDK, CLI and REST resource names consistent.
+
 ### Routes by purpose
 
 Use the existing Bearer authentication and deployment routing prefix:
 
 ```text
 B = /v1/{prefix}/boxes/{box_id}
-S = B/agent-sessions/{session_id}
-T = S/turns/{turn_id}
+A = B/agents/{agent_id}
+T = A/turns/{turn_id}
 ```
 
 `{prefix}` is the existing optional routing slot; without it, `B` starts with
-`/v1/boxes`. Encode each opaque ID as one path segment. `agent-sessions` names
-conversations; the selected agent is an input, not another resource instance.
+`/v1/boxes`. Encode each opaque ID as one path segment. `/agents` is the instance
+collection. The create body's `agent` selects an implementation; `state.id` in
+the returned resource identifies the new instance and becomes `{agent_id}`.
 
 | Purpose | Method and path | Input | Success |
 |---|---|---|---|
-| Sessions | `POST B/agent-sessions` | `agent`, creation `options` | `201 AgentSessionResource`; `Location: S` |
-| Sessions/read | `GET S` | — | `200 AgentSessionResource` |
-| Sessions | `POST S/close` | — | `200 AgentSessionResource`, confirmed closed |
-| Work | `POST S/turns` | `text`, send `options` | `201 AgentTurnState`; `Location: T` |
+| Agents | `POST B/agents` | `agent`, creation `options` | `201 AgentResource`; `Location: A` |
+| Agents/read | `GET A` | — | `200 AgentResource` |
+| Agents | `POST A/close` | — | `200 AgentResource`, confirmed closed |
+| Work | `POST A/turns` | `text`, send `options` | `201 AgentTurnState`; `Location: T` |
 | Work/read | `GET T` | — | `200 AgentTurnState` |
-| Observe | `GET S/events` | optional `after`, `turn_id` query | `200 text/event-stream` |
-| Interact | `POST S/requests/{request_id}/respond` | typed `response` | `200 AgentTurnState` |
+| Observe | `GET A/events` | optional `after`, `turn_id` query | `200 text/event-stream` |
+| Interact | `POST A/requests/{request_id}/respond` | typed `response` | `200 AgentTurnState` |
 | Interact | `POST T/steer` | `text` | `200 AgentSteeringReceipt` |
 | Interact | `POST T/interrupt` | — | `200 AgentTurnState`, confirmed stopped |
 
 All JSON uses `application/json`, snake_case fields and the record shapes in
 [Inputs and records](../../reference/agents.md#inputs-and-records) and
 [C JSON fields](../../reference/agents.md#c-api-and-ownership).
-`AgentSessionResource` is the wire envelope
-`{ "agent": string, "state": AgentSessionState, "config": AgentConfig, "capabilities": AgentCapabilities }`.
+`AgentResource` is the wire envelope
+`{ "agent": string, "state": AgentState, "config": AgentConfig, "capabilities": AgentCapabilities }`.
 These shapes require explicit serialization; the Rust records are not wire DTOs.
 
 Every resource read is an atomic snapshot. Nullable response fields are present
@@ -86,7 +92,7 @@ Illustrative bodies, not runnable examples against the current server:
 {"response":{"type":"permission","approved":false}}
 ```
 
-The bodies above create a session, send a turn, steer that turn and deny a
+The bodies above create an agent, send a turn, steer that turn and deny a
 permission request, respectively. An answer uses
 `{"response":{"type":"answer","text":"Use option A","data":{}}}`.
 
@@ -110,18 +116,18 @@ Close/interrupt accept an empty body or `{}` only.
 | SDK operation | Transport behavior |
 |---|---|
 | `box.agents()` | Local namespace; no HTTP request |
-| `agents.create/get`, `session.close` | Session create/read/close routes |
-| `session.send/get_turn/respond` | Turn create/read and request response routes |
-| `session.state/config/capabilities`, `turn.state` | Read the handle's cached snapshot synchronously |
-| `session.requests()` | Fetch `GET S`, then return `state.requests` |
-| `session.events`, `turn.events` | Same SSE route; turn view sets `turn_id` |
+| `agents.create/get`, `agent.close` | Agent create/read/close routes |
+| `agent.send/get_turn/respond` | Turn create/read and request response routes |
+| `agent.state/config/capabilities`, `turn.state` | Read the handle's cached snapshot synchronously |
+| `agent.requests()` | Fetch `GET A`, then return `state.requests` |
+| `agent.events`, `turn.events` | Same SSE route; turn view sets `turn_id` |
 | `turn.steer/interrupt` | Targeted control routes |
 | `turn.wait` | Fetch `GET T` until a result or the caller's deadline |
 
 Async create/get/send/get_turn/respond hydrate returned handles. Close/interrupt
 responses refresh their target handle; getters do not perform blocking network
 requests. Existing handles are snapshots, not live views of other handles.
-Call `agents.get` or `session.get_turn` for a fresh handle.
+Call `agents.get` or `agent.get_turn` for a fresh handle.
 
 Serialize refreshes of one handle; never compare opaque cursors or overwrite a
 newer snapshot with a response from an earlier concurrent read. A deduplicated
@@ -167,24 +173,24 @@ Use the [SSE format and Last-Event-ID header](https://html.spec.whatwg.org/multi
 ```text
 id: opaque-cursor
 event: agent
-data: {"cursor":"opaque-cursor","session_id":"s1","turn_id":"t1","kind":"turn.state","data":{"status":"running"}}
+data: {"cursor":"opaque-cursor","agent_id":"a1","turn_id":"t1","kind":"turn.state","data":{"status":"running"}}
 
 ```
 
 `kind` is an extensible adapter/event string; the example is illustrative.
 The `id` equals the record's cursor. Replay is strictly after that cursor,
 followed by live records with no replay-to-live gap. Snapshots and events share
-one durable session journal. Clients deduplicate reconnect delivery by cursor.
+one durable agent journal. Clients deduplicate reconnect delivery by cursor.
 
 Read a snapshot, then open the stream with `after=state.cursor` for race-free
 recovery. With no cursor, tail from the stream's opening watermark; do not imply
 complete history. On reconnect, `Last-Event-ID` takes precedence over `after`:
 SSE clients may reuse the initial URL while advancing that header. A cursor
-from another session is invalid.
+from another agent is invalid.
 
 `turn_id` filters the same journal to that turn; cursors need not be consecutive.
 Validate the turn's parent even if no events match. A turn stream drains through
-its terminal transition; a session stream drains through closure. Clients check
+its terminal transition; an agent stream drains through closure. Clients check
 the snapshot after EOF before reconnecting. Stream disconnect never cancels work.
 
 An expired cursor returns `410 cursor_expired` before opening the stream; recover
@@ -196,7 +202,7 @@ credentials in query strings.
 ### Retries, ownership and errors
 
 Authorize every request against its Box and validate all parent-child bindings.
-Missing, inaccessible or wrong-parent session/turn/request IDs return 404.
+Missing, inaccessible or wrong-parent agent/turn/request IDs return 404.
 No control implicitly selects the currently active turn.
 
 For every mutation, authenticate and validate syntax before looking up the retry
@@ -216,7 +222,7 @@ Do not widen the existing parameter or change other Box operations.
 
 Publish the retention guarantee in `GET /v1/config`'s
 `capabilities.idempotency_key_lifetime` (ISO 8601 duration), and the same guarantee
-as `idempotency_retention_seconds` in session capabilities. Retention starts
+as `idempotency_retention_seconds` in agent capabilities. Retention starts
 when an operation finishes; pending records cannot expire. After expiry, or
 without a key, clients must reconcile before retrying uncertain mutations.
 
@@ -252,7 +258,7 @@ Implementation acceptance checks:
 - Capture each SDK request at a local HTTP server: method, encoded target, options, retry header and false/null preservation match this contract.
 - Race duplicate sends/replies/controls, including lost responses: one logical effect; different input under one key yields 422.
 - Reconnect after a snapshot and during live delivery: no gaps; Last-Event-ID overrides the initial URL cursor; duplicate cursors are harmless; expired cursors require explicit recovery.
-- Cross Box/session targets fail; late permission replies cannot revive revoked requests; steering never grants approval or changes turn identity.
+- Cross Box/agent targets fail; late permission replies cannot revive revoked requests; steering never grants approval or changes turn identity.
 - Cache reads perform no I/O; explicit get refreshes; wait expiry does not interrupt; close/interrupt succeed only after confirmed shutdown.
 
 List/discovery, deletion, configuration updates, history, pause/resume, attachments,

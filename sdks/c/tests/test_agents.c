@@ -4,9 +4,9 @@
 #include <string.h>
 
 static int callbacks = 0;
-static void session_cb(struct CAgentSession *session,
-                       const CBoxliteError *error, void *data) {
-  (void)session;
+static void agent_cb(struct CAgent *agent, const CBoxliteError *error,
+                     void *data) {
+  (void)agent;
   (void)error;
   (void)data;
   callbacks++;
@@ -49,33 +49,30 @@ int main(void) {
                                            .idempotency_key = "send-1"};
   struct CAgentWaitOptions wait_options = {.timeout_seconds = 1};
   struct CAgentEventsOptions events_options = {.after = "cursor"};
-  struct CAgentHandle *agents = NULL;
+  struct CAgents *agents = NULL;
   assert(boxlite_box_agents(NULL, &agents, &error) == InvalidArgument);
   assert(agents == NULL);
   boxlite_error_free(&error);
-  CHECK_UNIMPLEMENTED(boxlite_agent_create(NULL, "agent", &create_options,
-                                           session_cb, NULL, &error),
+  CHECK_UNIMPLEMENTED(boxlite_agents_create(NULL, "agent", &create_options,
+                                            agent_cb, NULL, &error),
                       "agents.create");
+  CHECK_UNIMPLEMENTED(boxlite_agents_get(NULL, "agent", agent_cb, NULL, &error),
+                      "agents.get");
+  CHECK_UNIMPLEMENTED(boxlite_agent_close(NULL, NULL, done_cb, NULL, &error),
+                      "agent.close");
   CHECK_UNIMPLEMENTED(
-      boxlite_agent_get(NULL, "session", session_cb, NULL, &error),
-      "agents.get");
+      boxlite_agent_send(NULL, "task", &send_options, turn_cb, NULL, &error),
+      "agent.send");
   CHECK_UNIMPLEMENTED(
-      boxlite_agent_session_close(NULL, NULL, done_cb, NULL, &error),
-      "session.close");
-  CHECK_UNIMPLEMENTED(boxlite_agent_session_send(NULL, "task", &send_options,
-                                                 turn_cb, NULL, &error),
-                      "session.send");
+      boxlite_agent_get_turn(NULL, "turn", turn_cb, NULL, &error),
+      "agent.get_turn");
+  CHECK_UNIMPLEMENTED(boxlite_agent_requests(NULL, json_cb, NULL, &error),
+                      "agent.requests");
   CHECK_UNIMPLEMENTED(
-      boxlite_agent_session_get_turn(NULL, "turn", turn_cb, NULL, &error),
-      "session.get_turn");
-  CHECK_UNIMPLEMENTED(
-      boxlite_agent_session_requests(NULL, json_cb, NULL, &error),
-      "session.requests");
-  CHECK_UNIMPLEMENTED(boxlite_agent_session_respond(
-                          NULL, "request",
-                          "{\"type\":\"permission\",\"approved\":false}", NULL,
-                          turn_cb, NULL, &error),
-                      "session.respond");
+      boxlite_agent_respond(NULL, "request",
+                            "{\"type\":\"permission\",\"approved\":false}",
+                            NULL, turn_cb, NULL, &error),
+      "agent.respond");
   CHECK_UNIMPLEMENTED(
       boxlite_agent_turn_wait(NULL, &wait_options, json_cb, NULL, &error),
       "turn.wait");
@@ -86,10 +83,9 @@ int main(void) {
       boxlite_agent_turn_interrupt(NULL, NULL, done_cb, NULL, &error),
       "turn.interrupt");
   struct CAgentEvents *events = (struct CAgentEvents *)&callbacks;
-  CHECK_UNIMPLEMENTED(boxlite_agent_session_events(NULL, &events_options,
-                                                   json_cb, NULL, &events,
-                                                   &error),
-                      "session.events");
+  CHECK_UNIMPLEMENTED(boxlite_agent_events(NULL, &events_options, json_cb, NULL,
+                                           &events, &error),
+                      "agent.events");
   assert(events == NULL);
   events = (struct CAgentEvents *)&callbacks;
   CHECK_UNIMPLEMENTED(
@@ -97,24 +93,23 @@ int main(void) {
       "turn.events");
   assert(events == NULL);
   char *json = (char *)&callbacks;
-  CHECK_UNIMPLEMENTED(boxlite_agent_session_state(NULL, &json, &error),
-                      "session.state");
+  CHECK_UNIMPLEMENTED(boxlite_agent_state(NULL, &json, &error), "agent.state");
   assert(json == NULL);
   json = (char *)&callbacks;
-  CHECK_UNIMPLEMENTED(boxlite_agent_session_config(NULL, &json, &error),
-                      "session.config");
+  CHECK_UNIMPLEMENTED(boxlite_agent_config(NULL, &json, &error),
+                      "agent.config");
   assert(json == NULL);
   json = (char *)&callbacks;
-  CHECK_UNIMPLEMENTED(boxlite_agent_session_capabilities(NULL, &json, &error),
-                      "session.capabilities");
+  CHECK_UNIMPLEMENTED(boxlite_agent_capabilities(NULL, &json, &error),
+                      "agent.capabilities");
   assert(json == NULL);
   json = (char *)&callbacks;
   CHECK_UNIMPLEMENTED(boxlite_agent_turn_state(NULL, &json, &error),
                       "turn.state");
   assert(json == NULL);
   assert(callbacks == 0);
+  boxlite_agents_free(NULL);
   boxlite_agent_free(NULL);
-  boxlite_agent_session_free(NULL);
   boxlite_agent_turn_free(NULL);
   boxlite_agent_events_free(NULL);
   return 0;

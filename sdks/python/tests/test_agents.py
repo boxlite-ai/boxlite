@@ -4,34 +4,28 @@ import pytest
 
 import boxlite
 from boxlite.agents import (
+    Agent,
     AgentAnswer,
     AgentCreateOptions,
     AgentEventsOptions,
-    AgentHandle,
+    Agents,
     AgentSendOptions,
-    AgentSession,
     AgentTurn,
     AgentWaitOptions,
 )
 from boxlite.errors import UnsupportedError
 from boxlite.simplebox import SimpleBox
-from boxlite.sync_api import SyncAgentHandle, SyncAgentSession, SyncAgentTurn
+from boxlite.sync_api import SyncAgent, SyncAgents, SyncAgentTurn
 
 ASYNC_CALLS = [
-    lambda: AgentHandle().create(
-        "agent", AgentCreateOptions(config={"model": "model"})
-    ),
-    lambda: AgentHandle().get("session"),
-    lambda: AgentSession().close(),
-    lambda: AgentSession().send("task"),
-    lambda: AgentSession().send(
-        "task", AgentSendOptions(mode="reject", data={"key": 1})
-    ),
-    lambda: AgentSession().get_turn("turn"),
-    lambda: AgentSession().requests(),
-    lambda: AgentSession().respond(
-        "request", {"type": "permission", "approved": False}
-    ),
+    lambda: Agents().create("agent", AgentCreateOptions(config={"model": "model"})),
+    lambda: Agents().get("agent"),
+    lambda: Agent().close(),
+    lambda: Agent().send("task"),
+    lambda: Agent().send("task", AgentSendOptions(mode="reject", data={"key": 1})),
+    lambda: Agent().get_turn("turn"),
+    lambda: Agent().requests(),
+    lambda: Agent().respond("request", {"type": "permission", "approved": False}),
     lambda: AgentTurn().wait(AgentWaitOptions(timeout=1)),
     lambda: AgentTurn().steer("new direction"),
     lambda: AgentTurn().interrupt(),
@@ -45,7 +39,7 @@ async def test_agents_async_operations_raise_unsupported(call):
         await call()
 
 
-@pytest.mark.parametrize("handle", [AgentSession(), AgentTurn()])
+@pytest.mark.parametrize("handle", [Agent(), AgentTurn()])
 def test_agents_event_opening_fails_immediately(handle):
     with pytest.raises(UnsupportedError, match="events is not implemented"):
         handle.events(AgentEventsOptions(after="cursor"))
@@ -54,13 +48,13 @@ def test_agents_event_opening_fails_immediately(handle):
 @pytest.mark.parametrize(
     "handle,field",
     [
-        (AgentSession(), "state"),
-        (AgentSession(), "config"),
-        (AgentSession(), "capabilities"),
+        (Agent(), "state"),
+        (Agent(), "config"),
+        (Agent(), "capabilities"),
         (AgentTurn(), "state"),
-        (SyncAgentSession(), "state"),
-        (SyncAgentSession(), "config"),
-        (SyncAgentSession(), "capabilities"),
+        (SyncAgent(), "state"),
+        (SyncAgent(), "config"),
+        (SyncAgent(), "capabilities"),
         (SyncAgentTurn(), "state"),
     ],
 )
@@ -72,14 +66,14 @@ def test_agents_getters_do_not_fabricate_state(handle, field):
 @pytest.mark.parametrize(
     "call",
     [
-        lambda: SyncAgentHandle().create("agent"),
-        lambda: SyncAgentHandle().get("session"),
-        lambda: SyncAgentSession().close(),
-        lambda: SyncAgentSession().send("task"),
-        lambda: SyncAgentSession().get_turn("turn"),
-        lambda: SyncAgentSession().events(),
-        lambda: SyncAgentSession().requests(),
-        lambda: SyncAgentSession().respond(
+        lambda: SyncAgents().create("agent"),
+        lambda: SyncAgents().get("agent"),
+        lambda: SyncAgent().close(),
+        lambda: SyncAgent().send("task"),
+        lambda: SyncAgent().get_turn("turn"),
+        lambda: SyncAgent().events(),
+        lambda: SyncAgent().requests(),
+        lambda: SyncAgent().respond(
             "request", {"type": "answer", "text": "ok", "data": None}
         ),
         lambda: SyncAgentTurn().wait(),
@@ -96,8 +90,8 @@ def test_agents_sync_operations_raise_unsupported(call):
 def test_agents_simple_namespace_needs_no_runtime_initialization():
     # Only exercise the property: touching an uninitialized runtime would fail.
     box = object.__new__(SimpleBox)
-    assert isinstance(box.agents, AgentHandle)
-    assert boxlite.AgentSession is AgentSession
+    assert isinstance(box.agents, Agents)
+    assert boxlite.Agent is Agent
 
 
 @pytest.mark.asyncio

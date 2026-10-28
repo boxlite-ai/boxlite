@@ -1,5 +1,5 @@
 import { describe, expect, test, vi } from "vitest";
-import type { AgentHandle } from "../lib/agents.js";
+import type { Agents } from "../lib/agents.js";
 import { SimpleBox } from "../lib/simplebox.js";
 
 describe("agent namespace", () => {
@@ -9,11 +9,11 @@ describe("agent namespace", () => {
       image: "alpine:latest",
       runtime: { create } as never,
     });
-    const agents: AgentHandle = box.agents;
+    const agents: Agents = box.agents;
     await expect(
       agents.create("agent", { config: { model: "model" } }),
     ).rejects.toThrow("agents.create is not implemented");
-    await expect(agents.get("session")).rejects.toThrow(
+    await expect(agents.get("agent")).rejects.toThrow(
       "agents.get is not implemented",
     );
     expect(create).not.toHaveBeenCalled();

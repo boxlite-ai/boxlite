@@ -1,4 +1,4 @@
-//! Box-owned agent sessions and turns.
+//! Box-owned agents and turns.
 
 mod types;
 pub use types::*;
@@ -7,13 +7,13 @@ use crate::{BoxliteError, BoxliteResult};
 
 /// Box-owned agent namespace, obtained from [`crate::LiteBox::agents`].
 #[derive(Debug, Clone)]
-pub struct AgentHandle {
+pub struct Agents {
     pub(crate) _private: (),
 }
 
-/// Conversation handle.
+/// Box-owned agent instance with its conversation.
 #[derive(Debug, Clone)]
-pub struct AgentSession {
+pub struct Agent {
     _private: (),
 }
 
@@ -23,46 +23,42 @@ pub struct AgentTurn {
     _private: (),
 }
 
-impl AgentHandle {
-    /// Create a session with initial configuration.
-    pub async fn create(
-        &self,
-        _agent: &str,
-        _options: AgentCreateOptions,
-    ) -> BoxliteResult<AgentSession> {
+impl Agents {
+    /// Create an agent with initial configuration.
+    pub async fn create(&self, _agent: &str, _options: AgentCreateOptions) -> BoxliteResult<Agent> {
         not_implemented("agents.create")
     }
 
-    /// Look up a session without replaying work.
-    pub async fn get(&self, _session_id: &str) -> BoxliteResult<AgentSession> {
+    /// Look up an agent without replaying work.
+    pub async fn get(&self, _agent_id: &str) -> BoxliteResult<Agent> {
         not_implemented("agents.get")
     }
 }
 
-impl AgentSession {
+impl Agent {
     /// Stop admissions and close the agent loop.
     pub async fn close(&self, _options: AgentControlOptions) -> BoxliteResult<()> {
-        not_implemented("session.close")
+        not_implemented("agent.close")
     }
 
     /// Submit text with optional JSON data; queue is the default admission mode.
     pub async fn send(&self, _text: &str, _options: AgentSendOptions) -> BoxliteResult<AgentTurn> {
-        not_implemented("session.send")
+        not_implemented("agent.send")
     }
 
     /// Look up a turn without executing it.
     pub async fn get_turn(&self, _turn_id: &str) -> BoxliteResult<AgentTurn> {
-        not_implemented("session.get_turn")
+        not_implemented("agent.get_turn")
     }
 
-    /// Open the session journal after an opaque cursor.
+    /// Open the agent journal after an opaque cursor.
     pub async fn events(&self, _options: AgentEventsOptions) -> BoxliteResult<AgentEventStream> {
-        not_implemented("session.events")
+        not_implemented("agent.events")
     }
 
     /// Read outstanding questions and permissions.
     pub async fn requests(&self) -> BoxliteResult<Vec<AgentRequest>> {
-        not_implemented("session.requests")
+        not_implemented("agent.requests")
     }
 
     /// Answer a typed request; a terminal question may create an answering turn.
@@ -72,22 +68,22 @@ impl AgentSession {
         _response: AgentResponse,
         _options: AgentControlOptions,
     ) -> BoxliteResult<AgentTurn> {
-        not_implemented("session.respond")
+        not_implemented("agent.respond")
     }
 
     /// Read a consistent snapshot.
-    pub fn state(&self) -> BoxliteResult<AgentSessionState> {
-        not_implemented("session.state")
+    pub fn state(&self) -> BoxliteResult<AgentState> {
+        not_implemented("agent.state")
     }
 
     /// Read effective configuration.
     pub fn config(&self) -> BoxliteResult<AgentConfig> {
-        not_implemented("session.config")
+        not_implemented("agent.config")
     }
 
     /// Read adapter guarantees and limits.
     pub fn capabilities(&self) -> BoxliteResult<AgentCapabilities> {
-        not_implemented("session.capabilities")
+        not_implemented("agent.capabilities")
     }
 }
 
@@ -97,7 +93,7 @@ impl AgentTurn {
         not_implemented("turn.wait")
     }
 
-    /// Open this turn's view of the session journal.
+    /// Open this turn's view of the agent journal.
     pub async fn events(&self, _options: AgentEventsOptions) -> BoxliteResult<AgentEventStream> {
         not_implemented("turn.events")
     }

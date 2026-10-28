@@ -9,7 +9,7 @@ import logging
 from enum import IntEnum
 from typing import TYPE_CHECKING, Optional
 
-from .agents import AgentHandle
+from .agents import Agents
 from .exec import ExecResult
 
 if TYPE_CHECKING:
@@ -97,9 +97,9 @@ class SimpleBox:
     """
 
     @property
-    def agents(self) -> AgentHandle:
+    def agents(self) -> Agents:
         """Get the agent namespace without starting the Box."""
-        return AgentHandle()
+        return Agents()
 
     def __init__(
         self,

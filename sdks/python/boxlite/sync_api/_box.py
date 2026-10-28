@@ -6,7 +6,7 @@ Box metadata is intentionally available only through the async ``Box.info()`` AP
 
 from typing import TYPE_CHECKING
 
-from ._agents import SyncAgentHandle
+from ._agents import SyncAgents
 
 if TYPE_CHECKING:
     from ..boxlite import Box, BoxMetrics
@@ -42,9 +42,9 @@ class SyncBox:
     """
 
     @property
-    def agents(self) -> SyncAgentHandle:
+    def agents(self) -> SyncAgents:
         """Get the agent namespace without starting the Box."""
-        return SyncAgentHandle()
+        return SyncAgents()
 
     def __init__(
         self,

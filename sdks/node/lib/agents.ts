@@ -1,4 +1,4 @@
-/** Agent sessions, turns, configuration, and events. */
+/** Agents, turns, configuration, and events. */
 export type AgentJson =
   null | boolean | number | string | AgentJson[] | { [key: string]: AgentJson };
 export interface AgentConfig {
@@ -29,8 +29,7 @@ export interface AgentSendOptions extends AgentControlOptions {
   mode?: "queue" | "reject";
   data?: AgentJson;
 }
-export type AgentSessionStatus =
-  "ready" | "busy" | "closing" | "closed" | "unknown";
+export type AgentStatus = "ready" | "busy" | "closing" | "closed" | "unknown";
 export type AgentTurnStatus =
   | "queued"
   | "running"
@@ -65,9 +64,9 @@ export interface AgentResult {
   usage?: AgentJson;
   error?: string;
 }
-export interface AgentSessionState {
+export interface AgentState {
   id: string;
-  status: AgentSessionStatus;
+  status: AgentStatus;
   cursor: string;
   activeTurnId?: string;
   queuedTurnIds: string[];
@@ -76,7 +75,7 @@ export interface AgentSessionState {
 }
 export interface AgentTurnState {
   id: string;
-  sessionId: string;
+  agentId: string;
   status: AgentTurnStatus;
   cursor: string;
   result?: AgentResult;
@@ -92,20 +91,20 @@ export interface AgentCapabilities {
 }
 export interface AgentEvent {
   cursor: string;
-  sessionId: string;
+  agentId: string;
   turnId?: string;
   kind: string;
   data: AgentJson;
 }
-export interface AgentHandle {
-  create(agent: string, options?: AgentCreateOptions): Promise<AgentSession>;
-  get(sessionId: string): Promise<AgentSession>;
+export interface Agents {
+  create(agent: string, options?: AgentCreateOptions): Promise<Agent>;
+  get(agentId: string): Promise<Agent>;
 }
-export interface AgentSession {
+export interface Agent {
   close(options?: AgentControlOptions): Promise<void>;
   send(text: string, options?: AgentSendOptions): Promise<AgentTurn>;
   getTurn(turnId: string): Promise<AgentTurn>;
-  /** Open the session journal after an opaque cursor. */
+  /** Open the agent journal after an opaque cursor. */
   events(options?: AgentEventsOptions): AsyncIterable<AgentEvent>;
   requests(): Promise<AgentRequest[]>;
   respond(
@@ -113,7 +112,7 @@ export interface AgentSession {
     response: AgentResponse,
     options?: AgentControlOptions,
   ): Promise<AgentTurn>;
-  readonly state: AgentSessionState;
+  readonly state: AgentState;
   readonly config: AgentConfig;
   readonly capabilities: AgentCapabilities;
 }

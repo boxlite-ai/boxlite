@@ -15,12 +15,12 @@ Sources checked on 2026-10-28:
 
 | Source | Observation | BoxLite decision |
 |---|---|---|
-| [Kubernetes exec](https://kubernetes.io/docs/reference/kubectl/generated/kubectl_exec/) | Selects a Pod positionally and a container with `-c`. | Keep BOX positional, consistent with `boxlite exec`; name session and turn selectors. |
+| [Kubernetes exec](https://kubernetes.io/docs/reference/kubectl/generated/kubectl_exec/) | Selects a Pod positionally and a container with `-c`. | Keep BOX positional, consistent with `boxlite exec`; name agent and turn selectors. |
 | [AWS ECS exec](https://docs.aws.amazon.com/cli/latest/reference/ecs/execute-command.html) | Selects a task and container through separate flags. | Multiple runtime targets do not require more command levels. |
 | [exe.dev API](https://exe.dev/docs/api) and [Shelley API](https://github.com/boldsoftware/shelley/blob/main/API.md#single-conversation) | Infrastructure uses SSH commands; Shelley separately exposes chat, streams, cancellation and settings. | Preserve distinct agent effects; VM CLI simplicity does not determine an agent command hierarchy. |
 | [Rivet CLI](https://github.com/rivet-dev/agents/blob/main/sandbox-agent/docs/content/docs/cli.mdx#api) | Its scripting API uses nested resources such as `api agents list`. | Nesting helps protocol discovery. Nine BoxLite task verbs need less navigation. |
-| [OpenHands CLI](https://docs.openhands.dev/openhands/usage/cli/command-reference#global-options) | Task, resume and headless flags serve conversation workflows. | Adapt the workflow focus, while retaining separately addressed sessions and turns. |
-| [OpenComputer developer resources](https://opencomputer.dev/developers/) | Its quickstart emphasizes initialization/deployment; the Management API separately exposes sessions, turns and events. | Keep deployment outside the agent session API. This does not establish parity with its complete CLI. |
+| [OpenHands CLI](https://docs.openhands.dev/openhands/usage/cli/command-reference#global-options) | Task, resume and headless flags serve conversation workflows. | Adapt the workflow focus, while retaining separately addressed agents and turns. |
+| [OpenComputer developer resources](https://opencomputer.dev/developers/) | Its quickstart emphasizes initialization/deployment; the Management API separately exposes sessions, turns and events. | Keep deployment outside the agent instance API. This does not establish parity with its complete CLI. |
 
 The OpenComputer comparison is limited to its developer portal; its agent API
 reference could not be retrieved reliably during this study.
@@ -29,7 +29,7 @@ reference could not be retrieved reliably during this study.
 
 | Choice | Assessment |
 |---|---|
-| Sixteen nested leaves | Makes SDK ownership explicit, but exposes handle lookup as a shell task and repeats session/turn navigation. |
+| Sixteen nested leaves | Makes SDK ownership explicit, but exposes handle lookup as a shell task and repeats agent/turn navigation. |
 | Flatten all sixteen | Shortens spelling while retaining duplicate reads. |
 | Nine flat verbs with named targets | Combines read selection and event scope; keeps different mutations visible. Chosen. |
 | One action command with mode flags | Moves the same operations into flags and obscures whether a call submits, steers or interrupts. |
@@ -37,20 +37,21 @@ reference could not be retrieved reliably during this study.
 This is an interface judgment, not a measured usability result. Removing
 capabilities or hiding mutations would not be justified by command count alone.
 
-`inspect` selects state or session config/capabilities/requests. Session-only
+`inspect` selects state or agent config/capabilities/requests. Agent-only
 views conflict with `--turn`. SDKs expose `get`/`get_turn` methods; CLI targeting
-subsumes them. Explicit session/turn/request IDs prevent commands from guessing
+subsumes them. Explicit agent/turn/request IDs prevent commands from guessing
 which conversation or turn to affect.
 
-Creation uses `create BOX --agent AGENT`. The required flag distinguishes the
-agent selection from the Box target, matching the named selectors on other
-commands. SDK calls take the agent identifier positionally.
+Creation uses `create BOX --agent IMPLEMENTATION`; other commands use `--agent ID`
+to target an instance. The subcommand determines whether the value selects an
+implementation or an existing agent. SDK create calls take the implementation
+identifier positionally, and get calls take the instance ID.
 
 ```bash
 boxlite agent create dev --agent coder
-boxlite agent send dev --session session-id "Review this code"
-boxlite agent inspect dev --session session-id --view requests
-boxlite agent steer dev --session session-id --turn turn-id "Focus on tests"
+boxlite agent send dev --agent agent-id "Review this code"
+boxlite agent inspect dev --agent agent-id --view requests
+boxlite agent steer dev --agent agent-id --turn turn-id "Focus on tests"
 ```
 
 Option groups cover JSON input, queue/reject mode, retry keys, cursors

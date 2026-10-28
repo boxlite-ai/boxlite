@@ -11,7 +11,7 @@
 import type { CopyOptions } from "./copy.js";
 import type { ExecResult } from "./exec.js";
 import { getJsBoxlite, getNativeModule } from "./native.js";
-import type { AgentHandle } from "./agents.js";
+import type { Agents } from "./agents.js";
 import type {
   JsBox,
   JsBoxInfo,
@@ -551,8 +551,8 @@ export class BoxTunnel {
  */
 export class SimpleBox {
   /** Get the agent namespace without starting the Box. */
-  get agents(): AgentHandle {
-    return new (getNativeModule().AgentHandle)();
+  get agents(): Agents {
+    return new (getNativeModule().Agents)();
   }
 
   protected _runtime: BoxRuntime;

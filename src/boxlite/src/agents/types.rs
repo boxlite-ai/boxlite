@@ -67,7 +67,7 @@ pub struct AgentControlOptions {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AgentSessionStatus {
+pub enum AgentStatus {
     Ready,
     Busy,
     Closing,
@@ -89,9 +89,9 @@ pub enum AgentTurnStatus {
 
 /// Snapshot cursor and pending interaction state are retained together.
 #[derive(Debug, Clone)]
-pub struct AgentSessionState {
+pub struct AgentState {
     pub id: String,
-    pub status: AgentSessionStatus,
+    pub status: AgentStatus,
     pub cursor: String,
     pub active_turn_id: Option<String>,
     pub queued_turn_ids: Vec<String>,
@@ -102,7 +102,7 @@ pub struct AgentSessionState {
 #[derive(Debug, Clone)]
 pub struct AgentTurnState {
     pub id: String,
-    pub session_id: String,
+    pub agent_id: String,
     pub status: AgentTurnStatus,
     pub cursor: String,
     pub result: Option<AgentResult>,
@@ -120,7 +120,7 @@ pub struct AgentCapabilities {
     pub idempotency_retention: Duration,
 }
 
-/// Session-owned request with the turn that produced it.
+/// Agent-owned request with the turn that produced it.
 #[derive(Debug, Clone)]
 pub struct AgentRequest {
     pub id: String,
@@ -180,7 +180,7 @@ pub struct AgentResult {
 #[derive(Debug, Clone)]
 pub struct AgentEvent {
     pub cursor: String,
-    pub session_id: String,
+    pub agent_id: String,
     pub turn_id: Option<String>,
     pub kind: String,
     pub data: Value,

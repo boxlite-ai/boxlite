@@ -21,7 +21,7 @@ impl PyBox {
     /// Get the agent namespace without starting the Box.
     #[getter]
     fn agents<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        py.import("boxlite.agents")?.getattr("AgentHandle")?.call0()
+        py.import("boxlite.agents")?.getattr("Agents")?.call0()
     }
 
     #[getter]

@@ -1,4 +1,4 @@
-"""Agent sessions, turns, configuration, and events."""
+"""Agents, turns, configuration, and events."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from typing import Literal, NoReturn, TypedDict
 from .errors import UnsupportedError
 
 JsonValue = str | int | float | bool | None | list["JsonValue"] | dict[str, "JsonValue"]
-AgentSessionStatus = Literal["ready", "busy", "closing", "closed", "unknown"]
+AgentStatus = Literal["ready", "busy", "closing", "closed", "unknown"]
 AgentTurnStatus = Literal[
     "queued",
     "running",
@@ -88,9 +88,9 @@ class AgentResult(TypedDict):
     error: str | None
 
 
-class AgentSessionState(TypedDict):
+class AgentState(TypedDict):
     id: str
-    status: AgentSessionStatus
+    status: AgentStatus
     cursor: str
     active_turn_id: str | None
     queued_turn_ids: list[str]
@@ -100,7 +100,7 @@ class AgentSessionState(TypedDict):
 
 class AgentTurnState(TypedDict):
     id: str
-    session_id: str
+    agent_id: str
     status: AgentTurnStatus
     cursor: str
     result: AgentResult | None
@@ -118,7 +118,7 @@ class AgentCapabilities(TypedDict):
 
 class AgentEvent(TypedDict):
     cursor: str
-    session_id: str
+    agent_id: str
     turn_id: str | None
     kind: str
     data: JsonValue
@@ -155,40 +155,40 @@ def _not_implemented(operation: str) -> NoReturn:
     raise UnsupportedError(f"{operation} is not implemented")
 
 
-class AgentHandle:
+class Agents:
     """Box-owned agent namespace."""
 
     async def create(
         self, agent: str, options: AgentCreateOptions | None = None
-    ) -> AgentSession:
+    ) -> Agent:
         _not_implemented("agents.create")
 
-    async def get(self, session_id: str) -> AgentSession:
+    async def get(self, agent_id: str) -> Agent:
         _not_implemented("agents.get")
 
 
-class AgentSession:
+class Agent:
     """An agent conversation."""
 
     async def close(self, options: AgentControlOptions | None = None) -> None:
-        _not_implemented("session.close")
+        _not_implemented("agent.close")
 
     async def send(
         self, text: str, options: AgentSendOptions | None = None
     ) -> AgentTurn:
-        _not_implemented("session.send")
+        _not_implemented("agent.send")
 
     async def get_turn(self, turn_id: str) -> AgentTurn:
-        _not_implemented("session.get_turn")
+        _not_implemented("agent.get_turn")
 
     def events(
         self, options: AgentEventsOptions | None = None
     ) -> AsyncIterator[AgentEvent]:
-        """Open the session journal after an opaque cursor."""
-        _not_implemented("session.events")
+        """Open the agent journal after an opaque cursor."""
+        _not_implemented("agent.events")
 
     async def requests(self) -> list[AgentRequest]:
-        _not_implemented("session.requests")
+        _not_implemented("agent.requests")
 
     async def respond(
         self,
@@ -196,19 +196,19 @@ class AgentSession:
         response: AgentResponse,
         options: AgentControlOptions | None = None,
     ) -> AgentTurn:
-        _not_implemented("session.respond")
+        _not_implemented("agent.respond")
 
     @property
-    def state(self) -> AgentSessionState:
-        _not_implemented("session.state")
+    def state(self) -> AgentState:
+        _not_implemented("agent.state")
 
     @property
     def config(self) -> AgentConfig:
-        _not_implemented("session.config")
+        _not_implemented("agent.config")
 
     @property
     def capabilities(self) -> AgentCapabilities:
-        _not_implemented("session.capabilities")
+        _not_implemented("agent.capabilities")
 
 
 class AgentTurn:

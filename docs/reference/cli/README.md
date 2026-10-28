@@ -796,27 +796,27 @@ the error says so; the configuration is not rolled back.
 
 ### `boxlite agent`
 
-Agent commands address a Box, a session and, where needed, a turn. See the
+Agent commands address a Box, an agent and, where needed, a turn. See the
 [failure contract](../agents.md#failure-contract) for operation availability.
 Unsupported operations report an error on stderr and exit with code 1 before
 runtime initialization. Malformed arguments use the normal CLI usage error (code 2).
 
 | Purpose | Command after `boxlite agent` | Operation |
 |---|---|---|
-| Lifecycle | `create BOX --agent AGENT` | Create a session using the selected agent and initial configuration. |
-| Lifecycle | `close BOX --session SESSION` | End the session. |
-| Work | `send BOX --session SESSION TEXT` | Submit a new turn. |
-| Work | `wait BOX --session SESSION --turn TURN` | Wait for an existing turn's result. |
-| Observe | `inspect BOX --session SESSION [--turn TURN]` | Read session or turn state. |
-| Observe | `events BOX --session SESSION [--turn TURN]` | Follow session or turn events. |
-| Interact | `steer BOX --session SESSION --turn TURN TEXT` | Redirect that turn without submitting another. |
-| Interact | `interrupt BOX --session SESSION --turn TURN` | Interrupt that turn's agent loop. |
-| Interact | `respond BOX --session SESSION --request REQUEST JSON` | Answer a question or approve/deny a permission request. |
+| Lifecycle | `create BOX --agent IMPLEMENTATION` | Create an instance with the selected implementation and initial configuration. |
+| Lifecycle | `close BOX --agent AGENT` | End the agent. |
+| Work | `send BOX --agent AGENT TEXT` | Submit a new turn. |
+| Work | `wait BOX --agent AGENT --turn TURN` | Wait for an existing turn's result. |
+| Observe | `inspect BOX --agent AGENT [--turn TURN]` | Read agent or turn state. |
+| Observe | `events BOX --agent AGENT [--turn TURN]` | Follow agent or turn events. |
+| Interact | `steer BOX --agent AGENT --turn TURN TEXT` | Redirect that turn without submitting another. |
+| Interact | `interrupt BOX --agent AGENT --turn TURN` | Interrupt that turn's agent loop. |
+| Interact | `respond BOX --agent AGENT --request REQUEST JSON` | Answer a question or approve/deny a permission request. |
 
-`BOX` is positional, as in `boxlite exec`. Creation requires `--agent AGENT`
-to select the agent for the new session. For example, `boxlite agent create dev --agent coder`
-selects agent `coder` inside Box `dev`. `--session` selects an existing conversation.
-Mutations never infer an active turn. `inspect --view config|capabilities|requests` selects a session-only
+`BOX` is positional, as in `boxlite exec`. Creation requires `--agent IMPLEMENTATION`.
+For example, `boxlite agent create dev --agent coder` selects implementation
+`coder` inside Box `dev`. Other commands use `--agent ID` for a created instance.
+Mutations never infer an active turn. `inspect --view config|capabilities|requests` selects an agent-only
 read and cannot be combined with `--turn`; omission reads state. The SDK's
 `get`/`get_turn` handle lookups are implicit in CLI targeting.
 
@@ -839,10 +839,10 @@ data and response arguments must be valid JSON. Response JSON uses either
 
 ```bash
 boxlite agent create dev --agent coder --cwd /workspace --agent-config '{"model":"model-id"}'
-boxlite agent send dev --session session-id "Review this code" --mode reject
-boxlite agent inspect dev --session session-id --view requests
-boxlite agent steer dev --session session-id --turn turn-id "Focus on tests" --idempotency-key steer-1
-boxlite agent events dev --session session-id --turn turn-id --after cursor-1
+boxlite agent send dev --agent agent-id "Review this code" --mode reject
+boxlite agent inspect dev --agent agent-id --view requests
+boxlite agent steer dev --agent agent-id --turn turn-id "Focus on tests" --idempotency-key steer-1
+boxlite agent events dev --agent agent-id --turn turn-id --after cursor-1
 ```
 
 Agent commands accept the usual Box

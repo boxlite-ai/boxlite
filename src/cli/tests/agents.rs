@@ -11,77 +11,61 @@ fn agents_flat_targets_fail_before_runtime_setup() {
     let cases: &[(&[&str], &str)] = &[
         (&["create", "box", "--agent", "coder"], "agents.create"),
         (&["create", "--agent", "coder", "box"], "agents.create"),
-        (&["close", "box", "--session", "session"], "session.close"),
+        (&["close", "box", "--agent", "agent"], "agent.close"),
+        (&["send", "box", "--agent", "agent", "hello"], "agent.send"),
         (
-            &["send", "box", "--session", "session", "hello"],
-            "session.send",
-        ),
-        (
-            &["inspect", "box", "--session", "session", "--turn", "turn"],
+            &["inspect", "box", "--agent", "agent", "--turn", "turn"],
             "turn.state",
         ),
-        (&["events", "box", "--session", "session"], "session.events"),
+        (&["events", "box", "--agent", "agent"], "agent.events"),
         (
-            &[
-                "inspect",
-                "box",
-                "--session",
-                "session",
-                "--view",
-                "requests",
-            ],
-            "session.requests",
+            &["inspect", "box", "--agent", "agent", "--view", "requests"],
+            "agent.requests",
         ),
         (
             &[
                 "respond",
                 "box",
-                "--session",
-                "session",
+                "--agent",
+                "agent",
                 "--request",
                 "request",
                 r#"{"type":"answer","text":"yes"}"#,
             ],
-            "session.respond",
+            "agent.respond",
         ),
-        (&["inspect", "box", "--session", "session"], "session.state"),
+        (&["inspect", "box", "--agent", "agent"], "agent.state"),
         (
-            &["inspect", "box", "--session", "session", "--view", "config"],
-            "session.config",
+            &["inspect", "box", "--agent", "agent", "--view", "config"],
+            "agent.config",
         ),
         (
             &[
                 "inspect",
                 "box",
-                "--session",
-                "session",
+                "--agent",
+                "agent",
                 "--view",
                 "capabilities",
             ],
-            "session.capabilities",
+            "agent.capabilities",
         ),
         (
-            &["wait", "box", "--session", "session", "--turn", "turn"],
+            &["wait", "box", "--agent", "agent", "--turn", "turn"],
             "turn.wait",
         ),
         (
-            &["events", "box", "--session", "session", "--turn", "turn"],
+            &["events", "box", "--agent", "agent", "--turn", "turn"],
             "turn.events",
         ),
         (
             &[
-                "steer",
-                "box",
-                "--session",
-                "session",
-                "--turn",
-                "turn",
-                "use Rust",
+                "steer", "box", "--agent", "agent", "--turn", "turn", "use Rust",
             ],
             "turn.steer",
         ),
         (
-            &["interrupt", "box", "--session", "session", "--turn", "turn"],
+            &["interrupt", "box", "--agent", "agent", "--turn", "turn"],
             "turn.interrupt",
         ),
     ];
@@ -115,7 +99,7 @@ fn agents_binary_help_works_and_malformed_input_is_a_usage_error() {
         .args(["agent", "create", "--help"])
         .assert()
         .success()
-        .stdout(contains("--agent <AGENT>"));
+        .stdout(contains("--agent <IMPLEMENTATION>"));
     Command::new(assert_cmd::cargo::cargo_bin!("boxlite"))
         .env_clear()
         .args([
@@ -142,29 +126,16 @@ fn agents_invalid_target_combinations_are_usage_errors() {
         &["create", "box", "--agent", "coder", "extra"],
         &["create", "box", "--agent", "coder", "--name", "worker"],
         &["send", "box", "hello"],
-        &["steer", "box", "--session", "session", "hello"],
-        &["respond", "box", "--session", "session", "{}"],
+        &["send", "box", "--session", "agent", "hello"],
+        &["steer", "box", "--agent", "agent", "hello"],
+        &["respond", "box", "--agent", "agent", "{}"],
         &[
-            "inspect",
-            "box",
-            "--session",
-            "session",
-            "--turn",
-            "turn",
-            "--view",
-            "config",
+            "inspect", "box", "--agent", "agent", "--turn", "turn", "--view", "config",
         ],
-        &[
-            "inspect",
-            "box",
-            "--session",
-            "session",
-            "--view",
-            "unknown",
-        ],
-        &["session", "send", "box", "session", "hello"],
-        &["turn", "wait", "box", "session", "turn"],
-        &["get", "box", "session"],
+        &["inspect", "box", "--agent", "agent", "--view", "unknown"],
+        &["agent", "send", "box", "agent", "hello"],
+        &["turn", "wait", "box", "agent", "turn"],
+        &["get", "box", "agent"],
     ];
     for args in cases {
         Command::new(assert_cmd::cargo::cargo_bin!("boxlite"))
@@ -206,27 +177,27 @@ fn agents_fish_completion_uses_command_paths_not_message_words() {
             "--timeout-seconds",
         ),
         (
-            "boxlite agent send box --session SESSION text --",
+            "boxlite agent send box --agent AGENT text --",
             "--mode",
-            "--agent",
+            "--session",
         ),
         (
-            "boxlite agent wait box --session session --turn turn --",
+            "boxlite agent wait box --agent agent --turn turn --",
             "--timeout-seconds",
             "--mode",
         ),
         (
-            "boxlite agent send wait --session SESSION wait --",
+            "boxlite agent send wait --agent AGENT wait --",
             "--mode",
             "--timeout-seconds",
         ),
         (
-            "boxlite --profile wait agent --url https://example.test send turn --session SESSION wait --",
+            "boxlite --profile wait agent --url https://example.test send turn --agent AGENT wait --",
             "--mode",
             "--timeout-seconds",
         ),
         (
-            "boxlite agent --profile send wait box --session SESSION --turn TURN --",
+            "boxlite agent --profile send wait box --agent AGENT --turn TURN --",
             "--timeout-seconds",
             "--mode",
         ),

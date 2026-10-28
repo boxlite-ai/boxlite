@@ -10,7 +10,7 @@ import logging
 from typing import TYPE_CHECKING, Optional
 
 from ..exec import ExecResult
-from ._agents import SyncAgentHandle
+from ._agents import SyncAgents
 
 if TYPE_CHECKING:
     from ._box import SyncBox
@@ -42,9 +42,9 @@ class SyncSimpleBox:
     """
 
     @property
-    def agents(self) -> SyncAgentHandle:
+    def agents(self) -> SyncAgents:
         """Get the agent namespace without starting the Box."""
-        return SyncAgentHandle()
+        return SyncAgents()
 
     def __init__(
         self,

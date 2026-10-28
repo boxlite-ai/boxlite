@@ -46,14 +46,14 @@ type AgentEventsOptions struct{ After string }
 
 type AgentControlOptions struct{ IdempotencyKey string }
 
-type AgentSessionStatus string
+type AgentStatus string
 
 const (
-	AgentSessionReady   AgentSessionStatus = "ready"
-	AgentSessionBusy    AgentSessionStatus = "busy"
-	AgentSessionClosing AgentSessionStatus = "closing"
-	AgentSessionClosed  AgentSessionStatus = "closed"
-	AgentSessionUnknown AgentSessionStatus = "unknown"
+	AgentReady   AgentStatus = "ready"
+	AgentBusy    AgentStatus = "busy"
+	AgentClosing AgentStatus = "closing"
+	AgentClosed  AgentStatus = "closed"
+	AgentUnknown AgentStatus = "unknown"
 )
 
 type AgentTurnStatus string
@@ -136,9 +136,9 @@ type AgentResult struct {
 	Usage     json.RawMessage
 	Error     string
 }
-type AgentSessionState struct {
+type AgentState struct {
 	ID            string
-	Status        AgentSessionStatus
+	Status        AgentStatus
 	Cursor        string
 	ActiveTurnID  string
 	QueuedTurnIDs []string
@@ -146,13 +146,13 @@ type AgentSessionState struct {
 	Steering      []AgentSteeringReceipt
 }
 type AgentTurnState struct {
-	ID        string
-	SessionID string
-	Status    AgentTurnStatus
-	Cursor    string
-	Result    *AgentResult
-	Requests  []AgentRequest
-	Steering  []AgentSteeringReceipt
+	ID       string
+	AgentID  string
+	Status   AgentTurnStatus
+	Cursor   string
+	Result   *AgentResult
+	Requests []AgentRequest
+	Steering []AgentSteeringReceipt
 }
 type AgentCapabilities struct {
 	Operations           []string
@@ -162,11 +162,11 @@ type AgentCapabilities struct {
 	IdempotencyRetention time.Duration
 }
 type AgentEvent struct {
-	Cursor    string
-	SessionID string
-	TurnID    string
-	Kind      string
-	Data      json.RawMessage
+	Cursor  string
+	AgentID string
+	TurnID  string
+	Kind    string
+	Data    json.RawMessage
 }
 
 // AgentEventStream reads the agent journal.
@@ -175,50 +175,50 @@ type AgentEventStream interface {
 	Close() error
 }
 
-// AgentHandle, AgentSession and AgentTurn address agent conversations and work.
-type AgentHandle struct{}
-type AgentSession struct{}
+// Agents, Agent and AgentTurn address agent conversations and work.
+type Agents struct{}
+type Agent struct{}
 type AgentTurn struct{}
 
 // Agents obtains the namespace without starting the Box.
-func (b *Box) Agents() *AgentHandle { return &AgentHandle{} }
+func (b *Box) Agents() *Agents { return &Agents{} }
 
 func agentNotImplemented(operation string) error {
 	return &Error{Code: ErrUnsupported, Message: operation + " is not implemented"}
 }
 
-func (a *AgentHandle) Create(ctx context.Context, agent string, options AgentCreateOptions) (*AgentSession, error) {
+func (a *Agents) Create(ctx context.Context, agent string, options AgentCreateOptions) (*Agent, error) {
 	return nil, agentNotImplemented("agents.create")
 }
-func (a *AgentHandle) Get(ctx context.Context, sessionID string) (*AgentSession, error) {
+func (a *Agents) Get(ctx context.Context, agentID string) (*Agent, error) {
 	return nil, agentNotImplemented("agents.get")
 }
-func (s *AgentSession) Close(ctx context.Context, options AgentControlOptions) error {
-	return agentNotImplemented("session.close")
+func (s *Agent) Close(ctx context.Context, options AgentControlOptions) error {
+	return agentNotImplemented("agent.close")
 }
-func (s *AgentSession) Send(ctx context.Context, text string, options AgentSendOptions) (*AgentTurn, error) {
-	return nil, agentNotImplemented("session.send")
+func (s *Agent) Send(ctx context.Context, text string, options AgentSendOptions) (*AgentTurn, error) {
+	return nil, agentNotImplemented("agent.send")
 }
-func (s *AgentSession) GetTurn(ctx context.Context, turnID string) (*AgentTurn, error) {
-	return nil, agentNotImplemented("session.get_turn")
+func (s *Agent) GetTurn(ctx context.Context, turnID string) (*AgentTurn, error) {
+	return nil, agentNotImplemented("agent.get_turn")
 }
-func (s *AgentSession) Events(ctx context.Context, options AgentEventsOptions) (AgentEventStream, error) {
-	return nil, agentNotImplemented("session.events")
+func (s *Agent) Events(ctx context.Context, options AgentEventsOptions) (AgentEventStream, error) {
+	return nil, agentNotImplemented("agent.events")
 }
-func (s *AgentSession) Requests(ctx context.Context) ([]AgentRequest, error) {
-	return nil, agentNotImplemented("session.requests")
+func (s *Agent) Requests(ctx context.Context) ([]AgentRequest, error) {
+	return nil, agentNotImplemented("agent.requests")
 }
-func (s *AgentSession) Respond(ctx context.Context, requestID string, response AgentResponse, options AgentControlOptions) (*AgentTurn, error) {
-	return nil, agentNotImplemented("session.respond")
+func (s *Agent) Respond(ctx context.Context, requestID string, response AgentResponse, options AgentControlOptions) (*AgentTurn, error) {
+	return nil, agentNotImplemented("agent.respond")
 }
-func (s *AgentSession) State() (*AgentSessionState, error) {
-	return nil, agentNotImplemented("session.state")
+func (s *Agent) State() (*AgentState, error) {
+	return nil, agentNotImplemented("agent.state")
 }
-func (s *AgentSession) Config() (*AgentConfig, error) {
-	return nil, agentNotImplemented("session.config")
+func (s *Agent) Config() (*AgentConfig, error) {
+	return nil, agentNotImplemented("agent.config")
 }
-func (s *AgentSession) Capabilities() (*AgentCapabilities, error) {
-	return nil, agentNotImplemented("session.capabilities")
+func (s *Agent) Capabilities() (*AgentCapabilities, error) {
+	return nil, agentNotImplemented("agent.capabilities")
 }
 func (t *AgentTurn) Wait(ctx context.Context, options AgentWaitOptions) (*AgentResult, error) {
 	return nil, agentNotImplemented("turn.wait")

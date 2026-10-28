@@ -58,8 +58,7 @@ fn agents_create_groups_options_and_keeps_runtime_config_separate() {
 
 #[test]
 fn agents_send_defaults_to_queue_and_accepts_reject_and_json() {
-    let AgentCommand::Send { options, .. } =
-        parse(&["send", "box", "--session", "session", "hello"])
+    let AgentCommand::Send { options, .. } = parse(&["send", "box", "--agent", "agent", "hello"])
     else {
         panic!("expected send")
     };
@@ -74,8 +73,8 @@ fn agents_send_defaults_to_queue_and_accepts_reject_and_json() {
     } = parse(&[
         "send",
         "box",
-        "--session",
-        "session",
+        "--agent",
+        "agent",
         "hello",
         "--mode",
         "reject",
@@ -88,7 +87,7 @@ fn agents_send_defaults_to_queue_and_accepts_reject_and_json() {
         panic!("expected send")
     };
     assert_eq!(target.sandbox.target, "box");
-    assert_eq!(target.session, "session");
+    assert_eq!(target.agent_id, "agent");
     assert_eq!(text, "hello");
     assert_eq!(options.mode, SendMode::Reject);
     assert_eq!(options.data, Some(json!({"value": 1})));
@@ -100,8 +99,8 @@ fn agents_turn_options_preserve_target_timeout_cursor_and_retry_key() {
     let AgentCommand::Wait { target, options } = parse(&[
         "wait",
         "box",
-        "--session",
-        "session",
+        "--agent",
+        "agent",
         "--turn",
         "turn",
         "--timeout-seconds",
@@ -109,27 +108,20 @@ fn agents_turn_options_preserve_target_timeout_cursor_and_retry_key() {
     ]) else {
         panic!("expected wait")
     };
-    assert_eq!(target.session.sandbox.target, "box");
-    assert_eq!(target.session.session, "session");
+    assert_eq!(target.agent.sandbox.target, "box");
+    assert_eq!(target.agent.agent_id, "agent");
     assert_eq!(target.turn, "turn");
     assert_eq!(options.timeout_seconds, Some(0));
 
     let AgentCommand::Wait { options, .. } =
-        parse(&["wait", "box", "--session", "session", "--turn", "turn"])
+        parse(&["wait", "box", "--agent", "agent", "--turn", "turn"])
     else {
         panic!("expected wait")
     };
     assert_eq!(options.timeout_seconds, None);
 
     let AgentCommand::Events { target, options } = parse(&[
-        "events",
-        "box",
-        "--session",
-        "session",
-        "--turn",
-        "turn",
-        "--after",
-        "cursor",
+        "events", "box", "--agent", "agent", "--turn", "turn", "--after", "cursor",
     ]) else {
         panic!("expected events")
     };
@@ -139,8 +131,8 @@ fn agents_turn_options_preserve_target_timeout_cursor_and_retry_key() {
     let AgentCommand::Steer { text, options, .. } = parse(&[
         "steer",
         "box",
-        "--session",
-        "session",
+        "--agent",
+        "agent",
         "--turn",
         "turn",
         "use Rust",
@@ -167,8 +159,8 @@ fn agents_responses_keep_answer_and_permission_json_distinct() {
         } = parse(&[
             "respond",
             "box",
-            "--session",
-            "session",
+            "--agent",
+            "agent",
             "--request",
             "request",
             response,
@@ -185,43 +177,31 @@ fn agents_responses_keep_answer_and_permission_json_distinct() {
 }
 
 #[test]
-fn agents_inspection_selects_state_or_a_session_view() {
+fn agents_inspection_selects_state_or_an_agent_view() {
     for (extra, turn, view) in [
         (vec![], None, None),
         (vec!["--turn", "turn"], Some("turn"), None),
-        (vec!["--view", "config"], None, Some(SessionView::Config)),
+        (vec!["--view", "config"], None, Some(AgentView::Config)),
         (
             vec!["--view", "capabilities"],
             None,
-            Some(SessionView::Capabilities),
+            Some(AgentView::Capabilities),
         ),
-        (
-            vec!["--view", "requests"],
-            None,
-            Some(SessionView::Requests),
-        ),
+        (vec!["--view", "requests"], None, Some(AgentView::Requests)),
     ] {
-        let mut args = vec!["inspect", "box", "--session", "session"];
+        let mut args = vec!["inspect", "box", "--agent", "agent"];
         args.extend(extra);
         let AgentCommand::Inspect { target, options } = parse(&args) else {
             panic!("expected inspect");
         };
-        assert_eq!(target.session.sandbox.target, "box");
-        assert_eq!(target.session.session, "session");
+        assert_eq!(target.agent.sandbox.target, "box");
+        assert_eq!(target.agent.agent_id, "agent");
         assert_eq!(target.turn.as_deref(), turn);
         assert_eq!(options.view, view);
     }
     for view in ["config", "capabilities", "requests"] {
         let error = try_parse_from([
-            "boxlite",
-            "agent",
-            "inspect",
-            "box",
-            "--session",
-            "session",
-            "--turn",
-            "turn",
-            "--view",
+            "boxlite", "agent", "inspect", "box", "--agent", "agent", "--turn", "turn", "--view",
             view,
         ])
         .unwrap_err();
@@ -238,6 +218,10 @@ fn agents_parser_rejects_invalid_options_and_missing_targets() {
             ErrorKind::MissingRequiredArgument,
         ),
         (&["create", "box", "coder"], ErrorKind::UnknownArgument),
+        (
+            &["send", "box", "--session", "agent", "text"],
+            ErrorKind::UnknownArgument,
+        ),
         (
             &["create", "box", "--agent", "coder", "--name", "worker"],
             ErrorKind::UnknownArgument,
@@ -257,8 +241,8 @@ fn agents_parser_rejects_invalid_options_and_missing_targets() {
             &[
                 "send",
                 "box",
-                "--session",
-                "session",
+                "--agent",
+                "agent",
                 "text",
                 "--mode",
                 "interrupt",
@@ -266,15 +250,15 @@ fn agents_parser_rejects_invalid_options_and_missing_targets() {
             ErrorKind::InvalidValue,
         ),
         (
-            &["send", "box", "--session", "session", "text", "--data", "{"],
+            &["send", "box", "--agent", "agent", "text", "--data", "{"],
             ErrorKind::ValueValidation,
         ),
         (
             &[
                 "respond",
                 "box",
-                "--session",
-                "session",
+                "--agent",
+                "agent",
                 "--request",
                 "request",
                 "not-json",
@@ -282,15 +266,15 @@ fn agents_parser_rejects_invalid_options_and_missing_targets() {
             ErrorKind::ValueValidation,
         ),
         (
-            &["steer", "box", "--session", "session", "--turn", "turn"],
+            &["steer", "box", "--agent", "agent", "--turn", "turn"],
             ErrorKind::MissingRequiredArgument,
         ),
         (
             &[
                 "wait",
                 "box",
-                "--session",
-                "session",
+                "--agent",
+                "agent",
                 "--turn",
                 "turn",
                 "--timeout-seconds=-1",
@@ -301,8 +285,8 @@ fn agents_parser_rejects_invalid_options_and_missing_targets() {
             &[
                 "wait",
                 "box",
-                "--session",
-                "session",
+                "--agent",
+                "agent",
                 "--turn",
                 "turn",
                 "--timeout-seconds=NaN",
@@ -313,8 +297,8 @@ fn agents_parser_rejects_invalid_options_and_missing_targets() {
             &[
                 "inspect",
                 "box",
-                "--session",
-                "session",
+                "--agent",
+                "agent",
                 "--registry",
                 "irrelevant.test",
             ],
@@ -352,7 +336,7 @@ fn agents_help_and_completion_include_nine_flat_commands() {
     ] {
         assert!(agent.find_subcommand(name).is_some(), "{name}");
     }
-    for unsupported in ["session", "turn", "get", "get-turn"] {
+    for unsupported in ["agent", "turn", "get", "get-turn"] {
         assert!(
             agent.find_subcommand(unsupported).is_none(),
             "{unsupported}"
@@ -367,7 +351,7 @@ fn agents_help_and_completion_include_nine_flat_commands() {
         .lines()
         .find(|line| line.starts_with("Usage:"))
         .unwrap();
-    assert!(usage.contains("--agent <AGENT>"), "{usage}");
+    assert!(usage.contains("--agent <IMPLEMENTATION>"), "{usage}");
     assert!(usage.contains("<BOX>"), "{usage}");
     assert!(!create_help.contains("--name"), "{create_help}");
     let help = agent
@@ -378,7 +362,7 @@ fn agents_help_and_completion_include_nine_flat_commands() {
     for text in [
         "Submit text and optional JSON data",
         "<BOX>",
-        "--session <SESSION>",
+        "--agent <AGENT>",
         "<TEXT>",
         "--mode",
         "--data",
@@ -387,6 +371,7 @@ fn agents_help_and_completion_include_nine_flat_commands() {
         assert!(help.contains(text), "{text}: {help}");
     }
     assert!(!help.contains("--registry"));
+    assert!(!help.contains("--session"));
     for shell in [Shell::Bash, Shell::Zsh, Shell::Fish] {
         let mut output = Vec::new();
         generate_completion(&shell, "boxlite", &mut output);
@@ -417,7 +402,9 @@ fn agents_help_and_completion_include_nine_flat_commands() {
         if matches!(shell, Shell::Fish) {
             let create = output
                 .lines()
-                .find(|line| line.contains(" -l agent "))
+                .find(|line| {
+                    line.contains(" -l agent ") && line.contains("__fish_boxlite_agent_path create")
+                })
                 .unwrap();
             assert!(create.contains("__fish_boxlite_agent_path create"));
             let wait = output

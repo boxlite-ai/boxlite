@@ -1,11 +1,15 @@
 ## TL;DR
 
-The agent API groups Box-owned sessions, submitted turns, and interaction across Rust, Python, Node.js, Go, C and the CLI.
+The agent API groups Box-owned agents, submitted turns, and interaction across Rust, Python, Node.js, Go, C and the CLI.
 
 ## Details
 
-Sessions represent conversations and configuration; turns represent submitted work.
-Use session methods to send work and handle requests, and turn methods to observe,
+`Agents` is the Box-owned collection. `agents.create("coder", options)`
+selects an implementation and returns an `Agent` instance; `agents.get(agent_id)`
+looks up that instance. Each agent owns its conversation and configuration;
+turns represent submitted work. The create argument selects an implementation,
+while `agent_id` identifies a created instance.
+Use agent methods to send work and handle requests, and turn methods to observe,
 steer or interrupt that work. See [the failure contract](#failure-contract) for
 operation availability.
 
@@ -14,11 +18,11 @@ operation availability.
 | Purpose | Rust | Python | Node.js | Go |
 |---|---|---|---|---|
 | Namespace | `box.agents()` | `box.agents` | `box.agents` | `box.Agents()` |
-| Sessions | `agents.create/get`, `session.close` | Same | Same | `Create/Get`, `Close` |
-| Work | `session.send/get_turn`, `turn.wait` | Same | `send/getTurn`, `wait` | `Send/GetTurn`, `Wait` |
-| Events | `session.events`, `turn.events` | Same | Same | `Events` |
-| Interaction | `turn.steer/interrupt`, `session.requests/respond` | Same | Same | `Steer/Interrupt`, `Requests/Respond` |
-| Read-only state | `session.state/config/capabilities()`, `turn.state()` | Properties | Properties | `State/Config/Capabilities()` |
+| Agents | `agents.create/get`, `agent.close` | Same | Same | `Create/Get`, `Close` |
+| Work | `agent.send/get_turn`, `turn.wait` | Same | `send/getTurn`, `wait` | `Send/GetTurn`, `Wait` |
+| Events | `agent.events`, `turn.events` | Same | Same | `Events` |
+| Interaction | `turn.steer/interrupt`, `agent.requests/respond` | Same | Same | `Steer/Interrupt`, `Requests/Respond` |
+| Read-only state | `agent.state/config/capabilities()`, `turn.state()` | Properties | Properties | `State/Config/Capabilities()` |
 
 Python exposes both async and synchronous handles, including `SimpleBox`,
 `SyncBox` and `SyncSimpleBox`. Node exposes the namespace on native `JsBox`
@@ -43,8 +47,8 @@ Event opening never returns an empty successful stream. Python/Node fail when
 `events()` is called; Rust fails when its future is awaited; Go returns a nil
 stream with an error. C clears the subscription output pointer.
 
-No session or turn is returned by `create`, `get`, `send` or `respond`.
-C getters clear output pointers; callbacks are not invoked and no session, turn,
+No agent or turn is returned by `create`, `get`, `send` or `respond`.
+C getters clear output pointers; callbacks are not invoked and no agent, turn,
 subscription or JSON result object is allocated.
 
 ### Grouped options
@@ -54,7 +58,7 @@ In SDK calls, keep identifiers and message text positional; group optional argum
 | Options type | Used by | Fields |
 |---|---|---|
 | `AgentCreateOptions` | `agents.create` | working directory, config, retry key |
-| `AgentSendOptions` | `session.send` | queue/reject mode, JSON data, retry key |
+| `AgentSendOptions` | `agent.send` | queue/reject mode, JSON data, retry key |
 | `AgentControlOptions` | close, respond, steer, interrupt | retry key |
 | `AgentWaitOptions` | `turn.wait` | timeout |
 | `AgentEventsOptions` | both `events` methods | cursor |
@@ -68,12 +72,12 @@ option structs. C uses corresponding `CAgent…Options` pointers; null means omi
 Rust types live in `boxlite::agents`; Python types in `boxlite.agents`;
 TypeScript types are exported from the package; Go types use the `Agent` prefix.
 
-- Create selects the agent by identifier and accepts a working directory, initial configuration and retry key.
+- Create selects an agent implementation and accepts a working directory, initial configuration and retry key.
 - Send accepts text, optional JSON data, a retry key, and `queue` (default) or `reject` mode.
 - Close, respond, steer and interrupt accept a retry key. Wait accepts an optional timeout.
 - Config includes model, reasoning, instructions, tools/MCP references, permissions, limits and output schema.
 - Requests retain their originating turn and distinguish a question from a permission request. Responses distinguish an answer from explicit permission approval/denial.
-- Session/turn snapshots include an opaque cursor, requests and steering receipts. Results retain the turn ID, status, outcome, output, artifacts, usage and errors.
+- Agent/turn snapshots include an opaque cursor, requests and steering receipts. Results retain the turn ID, status, outcome, output, artifacts, usage and errors.
 - Unknown execution and steering states are representable. Accepted and applied steering are distinct; a question outcome is distinct from a final answer.
 
 These records define SDK data types. The
@@ -90,7 +94,7 @@ Python (the Box may already exist; this call starts no work):
 from boxlite import AgentCreateOptions, UnsupportedError
 
 try:
-    session = await box.agents.create(
+    agent = await box.agents.create(
         "agent-id", AgentCreateOptions(cwd="/workspace")
     )
 except UnsupportedError as error:
@@ -112,17 +116,17 @@ async fn example(sandbox: &LiteBox) {
 
 ### C API and ownership
 
-Include `boxlite.h`. `boxlite_box_agents` obtains `CAgentHandle` from a live
-`CBoxHandle`; release it with `boxlite_agent_free`. A null Box/output pointer
+Include `boxlite.h`. `boxlite_box_agents` obtains `CAgents` from a live
+`CBoxHandle`; release it with `boxlite_agents_free`. A null Box/output pointer
 returns `InvalidArgument`.
 
 | Purpose | C entry points |
 |---|---|
-| Sessions | `boxlite_agent_create`, `boxlite_agent_get`, `boxlite_agent_session_close` |
-| Work | `boxlite_agent_session_send`, `boxlite_agent_session_get_turn`, `boxlite_agent_turn_wait` |
-| Events | `boxlite_agent_session_events`, `boxlite_agent_turn_events` |
-| Interaction | `boxlite_agent_turn_steer`, `boxlite_agent_turn_interrupt`, `boxlite_agent_session_requests`, `boxlite_agent_session_respond` |
-| Getters | `boxlite_agent_session_state/config/capabilities`, `boxlite_agent_turn_state` |
+| Agents | `boxlite_agents_create`, `boxlite_agents_get`, `boxlite_agent_close` |
+| Work | `boxlite_agent_send`, `boxlite_agent_get_turn`, `boxlite_agent_turn_wait` |
+| Events | `boxlite_agent_events`, `boxlite_agent_turn_events` |
+| Interaction | `boxlite_agent_turn_steer`, `boxlite_agent_turn_interrupt`, `boxlite_agent_requests`, `boxlite_agent_respond` |
+| Getters | `boxlite_agent_state/config/capabilities`, `boxlite_agent_turn_state` |
 
 C option structs group the related arguments. `CAgentCreateOptions` contains
 `cwd`, `config_json` and `idempotency_key`; `CAgentSendOptions` contains
@@ -145,13 +149,13 @@ The C JSON fields use the following shapes. A question's
 | Request | `id`, `turn_id`, `kind`: either `{"type":"question","text":"…","schema":null}` or `{"type":"permission","tool":"…","arguments":{}}` |
 | Response | `{"type":"answer","text":"yes"}` with optional `data`, or `{"type":"permission","approved":false}` |
 | Steering receipt | `id`, `turn_id`, `status`: `accepted`, `applied`, `unused` or `unknown` |
-| Session snapshot | `id`, `status`, `cursor`, nullable `active_turn_id`, `queued_turn_ids`, `requests`, `steering` |
-| Turn snapshot | `id`, `session_id`, `status`, `cursor`, nullable `result`, `requests`, `steering` |
-| Event | `cursor`, `session_id`, nullable `turn_id`, `kind` string, JSON `data` |
+| Agent snapshot | `id`, `status`, `cursor`, nullable `active_turn_id`, `queued_turn_ids`, `requests`, `steering` |
+| Turn snapshot | `id`, `agent_id`, `status`, `cursor`, nullable `result`, `requests`, `steering` |
+| Event | `cursor`, `agent_id`, nullable `turn_id`, `kind` string, JSON `data` |
 | Result | `turn_id`, `status`, nullable `outcome` (`answer` or `question`), nullable `text`, JSON `data`, `artifacts` string array, nullable JSON `usage`, nullable `error` string |
 | Capabilities | `operations`, `input_kinds` string arrays; integer `max_queued_turns`, `max_pending_steering`; `idempotency_retention_seconds` number |
 
-Session status is `ready`, `busy`, `closing`, `closed` or `unknown`.
+Agent status is `ready`, `busy`, `closing`, `closed` or `unknown`.
 Turn status is `queued`, `running`, `waiting_input`, `interrupting`,
 `completed`, `cancelled`, `failed` or `unknown`. Requests callbacks carry an
 array of request records; wait/steer callbacks carry a result/receipt respectively.
@@ -165,16 +169,16 @@ Errors written to `out_error` belong to the caller; release their messages with
 the callback's duration; copy their contents to retain them. JSON strings returned
 through getter output pointers belong to the caller; use `boxlite_free_string`.
 
-`boxlite_agent_session_free`, `boxlite_agent_turn_free` and
-`boxlite_agent_events_free` release local handles only; they never close a session
+`boxlite_agent_free`, `boxlite_agent_turn_free` and
+`boxlite_agent_events_free` release local handles only; they never close an agent
 or interrupt work. Null handles may be freed.
 
 ### CLI commands
 
 The [CLI reference](cli/README.md#boxlite-agent) lists nine flat `agent` commands.
-BOX is positional; creation requires `--agent AGENT` to select the agent for a new
-session. Existing work is selected with `--session`, `--turn` and `--request`.
-`inspect` combines state and session views, and `events` selects either scope.
+BOX is positional. Creation uses `--agent IMPLEMENTATION`; other commands use
+`--agent ID` to select an instance, with `--turn` and `--request` selecting its work.
+`inspect` combines state and agent views, and `events` selects either scope.
 SDKs expose `get`/`get_turn` methods; CLI targeting subsumes handle lookup.
 CLI options reuse the five groups above and add `AgentInspectOptions` for view
 selection.

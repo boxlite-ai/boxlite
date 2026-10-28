@@ -37,7 +37,7 @@ mod volumes;
 #[cfg(test)]
 mod default_runtime_dir;
 
-pub use agents::{AgentHandle, AgentSession, AgentTurn};
+pub use agents::{Agent, AgentTurn, Agents};
 pub use litebox::{
     BoxConnection, BoxReader, BoxTunnel, BoxWriter, LiteBox, SocketAddress, TunnelForwarder,
 };

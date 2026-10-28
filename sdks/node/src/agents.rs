@@ -1,4 +1,4 @@
-//! Native bindings for agent sessions and turns.
+//! Native bindings for agents and turns.
 
 use napi::Result;
 use napi_derive::napi;
@@ -6,18 +6,18 @@ use serde_json::Value;
 
 use crate::util::map_err;
 
-#[napi(js_name = "AgentHandle")]
+#[napi(js_name = "Agents")]
 #[derive(Default)]
-pub struct JsAgentHandle {}
+pub struct JsAgents {}
 
-#[napi(js_name = "AgentSession")]
-pub struct JsAgentSession {}
+#[napi(js_name = "Agent")]
+pub struct JsAgent {}
 
 #[napi(js_name = "AgentTurn")]
 pub struct JsAgentTurn {}
 
 #[napi]
-impl JsAgentHandle {
+impl JsAgents {
     /// Create a namespace without starting agent work.
     #[napi(constructor)]
     pub fn new() -> Self {
@@ -25,42 +25,42 @@ impl JsAgentHandle {
     }
 
     #[napi]
-    pub async fn create(&self, _agent: String, _options: Option<Value>) -> Result<JsAgentSession> {
+    pub async fn create(&self, _agent: String, _options: Option<Value>) -> Result<JsAgent> {
         not_implemented("agents.create")
     }
 
     #[napi]
-    pub async fn get(&self, _session_id: String) -> Result<JsAgentSession> {
+    pub async fn get(&self, _agent_id: String) -> Result<JsAgent> {
         not_implemented("agents.get")
     }
 }
 
 #[napi]
-impl JsAgentSession {
+impl JsAgent {
     #[napi]
     pub async fn close(&self, _options: Option<Value>) -> Result<()> {
-        not_implemented("session.close")
+        not_implemented("agent.close")
     }
 
     #[napi]
     pub async fn send(&self, _text: String, _options: Option<Value>) -> Result<JsAgentTurn> {
-        not_implemented("session.send")
+        not_implemented("agent.send")
     }
 
     #[napi]
     pub async fn get_turn(&self, _turn_id: String) -> Result<JsAgentTurn> {
-        not_implemented("session.get_turn")
+        not_implemented("agent.get_turn")
     }
 
-    /// Open the session journal after an opaque cursor.
+    /// Open the agent journal after an opaque cursor.
     #[napi]
     pub fn events(&self, _options: Option<Value>) -> Result<Value> {
-        not_implemented("session.events")
+        not_implemented("agent.events")
     }
 
     #[napi]
     pub async fn requests(&self) -> Result<Vec<Value>> {
-        not_implemented("session.requests")
+        not_implemented("agent.requests")
     }
 
     #[napi]
@@ -70,22 +70,22 @@ impl JsAgentSession {
         _response: Value,
         _options: Option<Value>,
     ) -> Result<JsAgentTurn> {
-        not_implemented("session.respond")
+        not_implemented("agent.respond")
     }
 
     #[napi(getter)]
     pub fn state(&self) -> Result<Value> {
-        not_implemented("session.state")
+        not_implemented("agent.state")
     }
 
     #[napi(getter)]
     pub fn config(&self) -> Result<Value> {
-        not_implemented("session.config")
+        not_implemented("agent.config")
     }
 
     #[napi(getter)]
     pub fn capabilities(&self) -> Result<Value> {
-        not_implemented("session.capabilities")
+        not_implemented("agent.capabilities")
     }
 }
 
@@ -139,31 +139,31 @@ mod tests {
 
     #[tokio::test]
     async fn agents_return_unsupported() {
-        let agents = JsAgentHandle::new();
+        let agents = JsAgents::new();
         unsupported(agents.create("agent".into(), None).await, "agents.create");
-        unsupported(agents.get("session".into()).await, "agents.get");
-        let session = JsAgentSession {};
-        unsupported(session.close(None).await, "session.close");
-        unsupported(session.send("task".into(), None).await, "session.send");
-        unsupported(session.get_turn("turn".into()).await, "session.get_turn");
+        unsupported(agents.get("agent".into()).await, "agents.get");
+        let agent = JsAgent {};
+        unsupported(agent.close(None).await, "agent.close");
+        unsupported(agent.send("task".into(), None).await, "agent.send");
+        unsupported(agent.get_turn("turn".into()).await, "agent.get_turn");
         unsupported(
-            session.events(Some(serde_json::json!({"after": "cursor"}))),
-            "session.events",
+            agent.events(Some(serde_json::json!({"after": "cursor"}))),
+            "agent.events",
         );
-        unsupported(session.requests().await, "session.requests");
+        unsupported(agent.requests().await, "agent.requests");
         unsupported(
-            session
+            agent
                 .respond(
                     "request".into(),
                     serde_json::json!({"type": "permission", "approved": false}),
                     None,
                 )
                 .await,
-            "session.respond",
+            "agent.respond",
         );
-        unsupported(session.state(), "session.state");
-        unsupported(session.config(), "session.config");
-        unsupported(session.capabilities(), "session.capabilities");
+        unsupported(agent.state(), "agent.state");
+        unsupported(agent.config(), "agent.config");
+        unsupported(agent.capabilities(), "agent.capabilities");
         let turn = JsAgentTurn {};
         unsupported(
             turn.wait(Some(serde_json::json!({"timeoutSeconds": 1.0})))

@@ -1,4 +1,4 @@
-"""Synchronous agent sessions and turns."""
+"""Synchronous agents and turns."""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ from ..agents import (
     AgentResponse,
     AgentResult,
     AgentSendOptions,
-    AgentSessionState,
+    AgentState,
     AgentSteeringReceipt,
     AgentTurnState,
     AgentWaitOptions,
@@ -23,36 +23,36 @@ from ..agents import (
 )
 
 
-class SyncAgentHandle:
+class SyncAgents:
     """Box-owned agent namespace."""
 
     def create(
         self, agent: str, options: AgentCreateOptions | None = None
-    ) -> SyncAgentSession:
+    ) -> SyncAgent:
         _not_implemented("agents.create")
 
-    def get(self, session_id: str) -> SyncAgentSession:
+    def get(self, agent_id: str) -> SyncAgent:
         _not_implemented("agents.get")
 
 
-class SyncAgentSession:
+class SyncAgent:
     """An agent conversation."""
 
     def close(self, options: AgentControlOptions | None = None) -> None:
-        _not_implemented("session.close")
+        _not_implemented("agent.close")
 
     def send(self, text: str, options: AgentSendOptions | None = None) -> SyncAgentTurn:
-        _not_implemented("session.send")
+        _not_implemented("agent.send")
 
     def get_turn(self, turn_id: str) -> SyncAgentTurn:
-        _not_implemented("session.get_turn")
+        _not_implemented("agent.get_turn")
 
     def events(self, options: AgentEventsOptions | None = None) -> Iterator[AgentEvent]:
-        """Open the session journal after an opaque cursor."""
-        _not_implemented("session.events")
+        """Open the agent journal after an opaque cursor."""
+        _not_implemented("agent.events")
 
     def requests(self) -> list[AgentRequest]:
-        _not_implemented("session.requests")
+        _not_implemented("agent.requests")
 
     def respond(
         self,
@@ -60,19 +60,19 @@ class SyncAgentSession:
         response: AgentResponse,
         options: AgentControlOptions | None = None,
     ) -> SyncAgentTurn:
-        _not_implemented("session.respond")
+        _not_implemented("agent.respond")
 
     @property
-    def state(self) -> AgentSessionState:
-        _not_implemented("session.state")
+    def state(self) -> AgentState:
+        _not_implemented("agent.state")
 
     @property
     def config(self) -> AgentConfig:
-        _not_implemented("session.config")
+        _not_implemented("agent.config")
 
     @property
     def capabilities(self) -> AgentCapabilities:
-        _not_implemented("session.capabilities")
+        _not_implemented("agent.capabilities")
 
 
 class SyncAgentTurn:

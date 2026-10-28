@@ -35,20 +35,20 @@ async fn namespace_does_not_start_box() {
         agents.create("agent", AgentCreateOptions::default()).await,
         "agents.create",
     );
-    unsupported(agents.get("session").await, "agents.get");
+    unsupported(agents.get("agent").await, "agents.get");
     assert_eq!(sandbox.info().await.unwrap().status, BoxStatus::Configured);
 }
 
 #[tokio::test]
-async fn session_operations_return_unsupported() {
-    let session = AgentSession { _private: () };
+async fn agent_operations_return_unsupported() {
+    let agent = Agent { _private: () };
     unsupported(
-        session.close(AgentControlOptions::default()).await,
-        "session.close",
+        agent.close(AgentControlOptions::default()).await,
+        "agent.close",
     );
     for mode in [AgentSendMode::Queue, AgentSendMode::Reject] {
         unsupported(
-            session
+            agent
                 .send(
                     "task",
                     AgentSendOptions {
@@ -57,19 +57,19 @@ async fn session_operations_return_unsupported() {
                     },
                 )
                 .await,
-            "session.send",
+            "agent.send",
         );
     }
-    unsupported(session.get_turn("turn").await, "session.get_turn");
+    unsupported(agent.get_turn("turn").await, "agent.get_turn");
     unsupported(
-        session
+        agent
             .events(AgentEventsOptions {
                 after: Some("cursor".into()),
             })
             .await,
-        "session.events",
+        "agent.events",
     );
-    unsupported(session.requests().await, "session.requests");
+    unsupported(agent.requests().await, "agent.requests");
     for response in [
         AgentResponse::Answer {
             text: "answer".into(),
@@ -78,15 +78,15 @@ async fn session_operations_return_unsupported() {
         AgentResponse::Permission { approved: false },
     ] {
         unsupported(
-            session
+            agent
                 .respond("request", response, AgentControlOptions::default())
                 .await,
-            "session.respond",
+            "agent.respond",
         );
     }
-    unsupported(session.state(), "session.state");
-    unsupported(session.config(), "session.config");
-    unsupported(session.capabilities(), "session.capabilities");
+    unsupported(agent.state(), "agent.state");
+    unsupported(agent.config(), "agent.config");
+    unsupported(agent.capabilities(), "agent.capabilities");
 }
 
 #[tokio::test]

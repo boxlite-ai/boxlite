@@ -1,4 +1,4 @@
-//! Agent session and turn commands.
+//! Agent instance and turn commands.
 
 use anyhow::Result;
 use boxlite::BoxliteError;
@@ -17,27 +17,27 @@ pub struct AgentArgs {
 
 #[derive(Subcommand, Debug)]
 pub enum AgentCommand {
-    /// Create an agent session.
+    /// Create an agent instance.
     Create {
         #[command(flatten)]
         target: BoxTarget,
-        /// Agent to use for the new session
-        #[arg(long, value_name = "AGENT")]
+        /// Agent implementation to use
+        #[arg(long, value_name = "IMPLEMENTATION")]
         agent: String,
         #[command(flatten)]
         options: AgentCreateOptions,
     },
-    /// Close a session.
+    /// Close an agent.
     Close {
         #[command(flatten)]
-        target: SessionTarget,
+        target: AgentTarget,
         #[command(flatten)]
         options: AgentControlOptions,
     },
     /// Submit text and optional JSON data.
     Send {
         #[command(flatten)]
-        target: SessionTarget,
+        target: AgentTarget,
         /// Message text
         text: String,
         #[command(flatten)]
@@ -50,7 +50,7 @@ pub enum AgentCommand {
         #[command(flatten)]
         options: AgentInspectOptions,
     },
-    /// Open session or turn events after a cursor.
+    /// Open agent or turn events after a cursor.
     Events {
         #[command(flatten)]
         target: ReadTarget,
@@ -60,7 +60,7 @@ pub enum AgentCommand {
     /// Submit an answer or permission response as JSON.
     Respond {
         #[command(flatten)]
-        target: SessionTarget,
+        target: AgentTarget,
         /// Request identifier
         #[arg(long, value_name = "REQUEST")]
         request: String,
@@ -103,18 +103,18 @@ pub struct BoxTarget {
 }
 
 #[derive(Args, Debug)]
-pub struct SessionTarget {
+pub struct AgentTarget {
     #[command(flatten)]
     sandbox: BoxTarget,
-    /// Session identifier
-    #[arg(long, value_name = "SESSION")]
-    session: String,
+    /// Agent instance identifier
+    #[arg(long = "agent", value_name = "AGENT")]
+    agent_id: String,
 }
 
 #[derive(Args, Debug)]
 pub struct TurnTarget {
     #[command(flatten)]
-    session: SessionTarget,
+    agent: AgentTarget,
     /// Turn identifier
     #[arg(long, value_name = "TURN")]
     turn: String,
@@ -123,8 +123,8 @@ pub struct TurnTarget {
 #[derive(Args, Debug)]
 pub struct ReadTarget {
     #[command(flatten)]
-    session: SessionTarget,
-    /// Select one turn instead of the whole session
+    agent: AgentTarget,
+    /// Select one turn instead of the whole agent
     #[arg(long, value_name = "TURN")]
     turn: Option<String>,
 }
@@ -182,13 +182,13 @@ pub struct AgentEventsOptions {
 
 #[derive(Args, Debug)]
 pub struct AgentInspectOptions {
-    /// Read a session view instead of state; cannot be combined with --turn
+    /// Read an agent view instead of state; cannot be combined with --turn
     #[arg(long, value_enum, conflicts_with = "turn")]
-    view: Option<SessionView>,
+    view: Option<AgentView>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, ValueEnum)]
-pub enum SessionView {
+pub enum AgentView {
     Config,
     Capabilities,
     Requests,
@@ -201,18 +201,18 @@ fn parse_json(input: &str) -> serde_json::Result<Value> {
 pub fn execute(args: AgentArgs) -> Result<()> {
     let operation = match args.command {
         AgentCommand::Create { .. } => "agents.create",
-        AgentCommand::Close { .. } => "session.close",
-        AgentCommand::Send { .. } => "session.send",
-        AgentCommand::Respond { .. } => "session.respond",
+        AgentCommand::Close { .. } => "agent.close",
+        AgentCommand::Send { .. } => "agent.send",
+        AgentCommand::Respond { .. } => "agent.respond",
         AgentCommand::Inspect { target, options } => match options.view {
-            Some(SessionView::Config) => "session.config",
-            Some(SessionView::Capabilities) => "session.capabilities",
-            Some(SessionView::Requests) => "session.requests",
+            Some(AgentView::Config) => "agent.config",
+            Some(AgentView::Capabilities) => "agent.capabilities",
+            Some(AgentView::Requests) => "agent.requests",
             None if target.turn.is_some() => "turn.state",
-            None => "session.state",
+            None => "agent.state",
         },
         AgentCommand::Events { target, .. } if target.turn.is_some() => "turn.events",
-        AgentCommand::Events { .. } => "session.events",
+        AgentCommand::Events { .. } => "agent.events",
         AgentCommand::Wait { .. } => "turn.wait",
         AgentCommand::Steer { .. } => "turn.steer",
         AgentCommand::Interrupt { .. } => "turn.interrupt",
