@@ -17,8 +17,11 @@ managed plans. Administrator-defined quota exceptions remain in effect.
 | Custom maximum | 16 subscribed / 4 otherwise | 32 GiB subscribed / 8 GiB otherwise | 100 GiB | 10 GiB |
 
 The creation dialog refreshes organization quotas when opened and clamps all
-presets and custom inputs to the returned limits. REST and SDK creation requests
-are independently checked by the server; over-limit requests return HTTP 400.
+presets and custom inputs to the returned limits. Size controls and Create stay
+disabled while that refresh is pending, so a preset cannot be truncated using
+an old quota before the response arrives. If the refresh fails, editing resumes
+with the last available quotas. REST and SDK creation requests are independently
+checked by the server; over-limit requests return HTTP 400.
 The REST maximum is `cpus=16`, `memory_mib=32768`, `disk_size_gb=100`.
 Memory and disk use binary units (GiB), including the historical `disk_size_gb` name.
 
