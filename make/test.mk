@@ -533,6 +533,13 @@ test\:integration\:c:
 test\:all\:c:
 	$(call run_suites,test:unit:c test:integration:c)
 
+# Linux/KVM memory layout and virtio-mem tests in the vendored libkrun workspace.
+PHONY_TARGETS += test\:unit\:libkrun
+test\:unit\:libkrun:
+	@cargo test --manifest-path src/deps/libkrun-sys/vendor/libkrun/Cargo.toml -p krun-arch --lib $(shell uname -m)::tests -- --nocapture
+	@cargo test --manifest-path src/deps/libkrun-sys/vendor/libkrun/Cargo.toml -p krun-devices --lib virtio::mem:: -- --nocapture
+	@cargo test --manifest-path src/deps/libkrun-sys/vendor/libkrun/Cargo.toml -p krun-vmm --lib memory_hotplug -- --nocapture
+
 # Go SDK unit tests.
 test\:unit\:go:
 	@echo "🧪 Running Go SDK unit tests..."

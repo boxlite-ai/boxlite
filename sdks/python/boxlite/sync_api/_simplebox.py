@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Optional
 from ..exec import ExecResult
 
 if TYPE_CHECKING:
+    from ..boxlite import BoxResources
     from ._box import SyncBox
     from ._boxlite import SyncBoxlite
 
@@ -147,6 +148,14 @@ class SyncSimpleBox:
         Returns None if the box hasn't been started yet.
         """
         return self._created
+
+    def resize(
+        self, *, cpus: int | None = None, memory_mib: int | None = None
+    ) -> "BoxResources":
+        """Grow the running box without restarting its workload."""
+        if self._box is None:
+            raise RuntimeError("Box not created; enter its context first.")
+        return self._box.resize(cpus=cpus, memory_mib=memory_mib)
 
     def exec(
         self,

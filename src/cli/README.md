@@ -532,6 +532,17 @@ Restart one or more boxes.
 
 **Usage:** `boxlite restart BOX [BOX ...]`
 
+### `boxlite resize`
+
+Grow a running Linux/KVM box without restarting it. CPU and memory targets are
+absolute; memory increases must be multiples of 128 MiB. Shrinking is rejected.
+
+**Usage:** `boxlite resize BOX [--cpus N] [--memory MiB]`
+
+With no resource flags, print the current allocation and boot ceilings as JSON.
+Applied allocations survive a restart. See [resource limits](../../docs/guides/resource-limits.md#online-growth)
+for prerequisites and partial-completion behavior.
+
 ### `boxlite rm`
 
 Remove one or more boxes.

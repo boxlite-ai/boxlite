@@ -274,6 +274,39 @@ fn enable_controllers(cgroup_path: &Path) -> Result<(), JailerError> {
     Ok(())
 }
 
+/// CFS period for `cpu.max`, in microseconds (the kernel default).
+const CPU_PERIOD_US: u64 = 100_000;
+
+/// Whether box cgroups can get the `cpu` controller, so `cpu.max` can cap a box.
+///
+/// Rootless sessions are often delegated only `memory` and `pids`; see
+/// [`enable_controllers`].
+pub fn cpu_controller_available() -> bool {
+    if !is_cgroup_v2_available() {
+        return false;
+    }
+    let base = get_cgroup_base();
+    let boxlite = base.join(BOXLITE_CGROUP).join("cgroup.controllers");
+    let delegated = fs::read_to_string(&boxlite)
+        .or_else(|_| fs::read_to_string(base.join("cgroup.subtree_control")))
+        .unwrap_or_default();
+    delegated.split_whitespace().any(|c| c == "cpu")
+}
+
+/// Cap a box at `cpus` CPUs of runtime, whatever the guest brings online.
+pub fn set_cpu_max(box_id: &str, cpus: u8, limits: &ResourceLimits) -> Result<(), JailerError> {
+    // Preserve the pre-existing max_cpu_time-to-cgroup conversion. Its
+    // separate RLIMIT_CPU meaning is unchanged by online resizing.
+    let requested = u64::from(cpus) * CPU_PERIOD_US;
+    let quota = limits.max_cpu_time.map_or(requested, |limit| {
+        requested.min(limit.saturating_mul(CPU_PERIOD_US))
+    });
+    write_file(
+        &cgroup_path(box_id).join("cpu.max"),
+        &format!("{quota} {CPU_PERIOD_US}"),
+    )
+}
+
 /// Apply resource limits to a cgroup.
 fn apply_limits(cgroup_path: &Path, config: &CgroupConfig) -> Result<(), JailerError> {
     // Memory limit

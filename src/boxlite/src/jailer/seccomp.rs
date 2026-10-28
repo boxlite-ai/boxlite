@@ -513,4 +513,55 @@ mod tests {
         );
         assert_eq!(libc::WEXITSTATUS(status), 0);
     }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn test_vmm_filter_allows_private_memory_socket_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("memory.sock");
+        let _listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
+        let bytes = include_bytes!(concat!(env!("OUT_DIR"), "/seccomp_filter.bpf"));
+        let filters = deserialize_binary(&bytes[..]).unwrap();
+        let filter = get_filter(&filters, SeccompRole::Vmm).unwrap();
+        for mode in [0o600, 0o644] {
+            let pid = unsafe { libc::fork() };
+            assert!(pid >= 0);
+            if pid == 0 {
+                if apply_filter(filter).is_err() {
+                    unsafe { libc::_exit(2) };
+                }
+                // The memory control server uses this call after VMM confinement.
+                let result = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode));
+                unsafe { libc::_exit(i32::from(result.is_err())) };
+            }
+            let mut status = 0;
+            loop {
+                let waited = unsafe { libc::waitpid(pid, &mut status, 0) };
+                if waited == pid {
+                    break;
+                }
+                assert!(waited == -1 && unsafe { *libc::__errno_location() } == libc::EINTR);
+            }
+            if mode == 0o600 {
+                assert!(
+                    libc::WIFEXITED(status),
+                    "private memory socket killed by signal {}",
+                    libc::WTERMSIG(status)
+                );
+                assert_eq!(libc::WEXITSTATUS(status), 0);
+            } else {
+                assert!(libc::WIFSIGNALED(status));
+                assert_eq!(
+                    libc::WTERMSIG(status),
+                    libc::SIGSYS,
+                    "broader permissions must remain forbidden"
+                );
+            }
+        }
+        assert_eq!(
+            std::fs::metadata(path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+    }
 }

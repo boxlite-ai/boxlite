@@ -33,12 +33,30 @@ pub const KRUN_KERNEL_FORMAT_IMAGE_BZ2: u32 = 3;
 pub const KRUN_KERNEL_FORMAT_IMAGE_GZ: u32 = 4;
 pub const KRUN_KERNEL_FORMAT_IMAGE_ZSTD: u32 = 5;
 
+#[repr(C)]
+#[derive(Default)]
+pub struct KrunMemoryStatus {
+    pub max_mib: u32,
+    pub requested_mib: u32,
+    pub plugged_mib: u32,
+    pub mapped_mib: u32,
+    pub error: i32,
+    pub active: u32,
+}
+
 extern "C" {
+    #[cfg(target_os = "linux")]
+    pub fn krun_set_memory_hotplug(ctx_id: u32, max_mib: u32) -> i32;
+    #[cfg(target_os = "linux")]
+    pub fn krun_request_memory(ctx_id: u32, total_mib: u32) -> i32;
+    #[cfg(target_os = "linux")]
+    pub fn krun_get_memory_status(ctx_id: u32, output: *mut KrunMemoryStatus) -> i32;
     pub fn krun_init_log(target: i32, level: u32, style: u32, flags: u32) -> i32;
     pub fn krun_set_log_level(level: u32) -> i32;
     pub fn krun_create_ctx() -> i32;
     pub fn krun_free_ctx(ctx_id: u32) -> i32;
     pub fn krun_set_vm_config(ctx_id: u32, num_vcpus: u8, ram_mib: u32) -> i32;
+    pub fn krun_add_kernel_cmdline(ctx_id: u32, param: *const c_char) -> i32;
     pub fn krun_set_root(ctx_id: u32, root_path: *const c_char) -> i32;
     pub fn krun_add_virtiofs(
         ctx_id: u32,

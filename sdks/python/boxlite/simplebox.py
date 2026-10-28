@@ -14,6 +14,7 @@ from .exec import ExecResult
 if TYPE_CHECKING:
     from .boxlite import (
         Boxlite,
+        BoxResources,
         InboundNetworkSpec,
         OutboundNetworkSpec,
         TunnelForwarder,
@@ -226,6 +227,14 @@ class SimpleBox:
                 "or call 'await box.start()' first."
             )
         return self._box.id
+
+    async def resize(
+        self, *, cpus: int | None = None, memory_mib: int | None = None
+    ) -> "BoxResources":
+        """Grow a running box; omitted targets retain their current allocation."""
+        if self._box is None:
+            raise RuntimeError("Box not started; call await box.start() first.")
+        return await self._box.resize(cpus=cpus, memory_mib=memory_mib)
 
     async def info(self):
         """Get box information."""
