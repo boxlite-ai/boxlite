@@ -260,6 +260,24 @@ class SimpleBox:
             )
         return await self._box.info()
 
+    async def list_executions(self):
+        """List live guest executions, including the main process, without booting."""
+        if self._box is None:
+            return []
+        return await self._box.list_executions()
+
+    async def get_execution(self, execution_id: str):
+        """Recover control without claiming the session's output reader."""
+        if self._box is None:
+            raise RuntimeError("Box not started. Call 'await box.start()' first.")
+        return await self._box.get_execution(execution_id)
+
+    async def attach(self, execution_id: str, *, stdin: bool = True):
+        """Attach to a listed live session without starting the box."""
+        if self._box is None:
+            raise RuntimeError("Box not started. Call 'await box.start()' first.")
+        return await self._box.attach(execution_id, stdin=stdin)
+
     @property
     def created(self) -> bool | None:
         """Whether this box was newly created (True) or an existing box was reused (False).

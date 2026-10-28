@@ -14,6 +14,44 @@ import (
 
 var execManager = boxlite.NewExecManager()
 
+var getExecutionBox = func(ctx *gin.Context, boxID string) (*sdkboxlite.Box, error) {
+	r, err := runner.GetInstance(nil)
+	if err != nil {
+		return nil, err
+	}
+	return r.Boxlite.GetBox(ctx.Request.Context(), boxID)
+}
+
+func resolveManagedExecution(ctx *gin.Context, boxID, execID string, attach bool) (*boxlite.ManagedExec, error) {
+	if !attach {
+		if current, err := execManager.GetForBox(execID, boxID); !errors.Is(err, boxlite.ErrExecNotFound) {
+			return current, err
+		}
+	}
+	bx, err := getExecutionBox(ctx, boxID)
+	if err != nil {
+		return nil, fmt.Errorf("box not found: %w", err)
+	}
+	if attach {
+		return execManager.Attach(ctx.Request.Context(), bx, execID, bx.ID())
+	}
+	return execManager.Resolve(ctx.Request.Context(), bx, execID, bx.ID())
+}
+
+func BoxliteListExecutions(ctx *gin.Context) {
+	bx, err := getExecutionBox(ctx, ctx.Param("boxId"))
+	if err != nil {
+		ctx.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("box not found: %s", err)})
+		return
+	}
+	entries, err := bx.ListExecutions(ctx.Request.Context())
+	if err != nil {
+		ctx.JSON(execStartStatus(err), gin.H{"error": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusOK, gin.H{"executions": entries})
+}
+
 type ExecRequest struct {
 	Command        string            `json:"command"`
 	Args           []string          `json:"args"`
@@ -58,7 +96,7 @@ func BoxliteExec(ctx *gin.Context) {
 		return
 	}
 
-	execId, err := execManager.Start(ctx.Request.Context(), bx, boxId, startOptionsFrom(req))
+	execId, err := execManager.Start(ctx.Request.Context(), bx, bx.ID(), startOptionsFrom(req))
 	if err != nil {
 		ctx.JSON(execStartStatus(err), gin.H{"error": fmt.Sprintf("exec failed: %s", err)})
 		return
@@ -93,9 +131,11 @@ func startOptionsFrom(req ExecRequest) boxlite.StartOptions {
 // execStartStatus classifies a failed exec start into the HTTP status the
 // caller should see. A stopped / wrong-state box is a 409: the box exists
 // but isn't accepting execs right now, and answering 500 leaks
-//   internal error: HTTP 500 Internal Server Error:
-//   {"error":"exec failed: failed to start execution: boxlite: stopped:
-//    Handle invalidated after stop(). ... (code=11)"}
+//
+//	internal error: HTTP 500 Internal Server Error:
+//	{"error":"exec failed: failed to start execution: boxlite: stopped:
+//	 Handle invalidated after stop(). ... (code=11)"}
+//
 // and fires the SDK's 'all 5xx is bug' guard. An unknown user or group is
 // the caller's mistake (400), not a runner fault — answering 500 there would
 // hide the #2116 misclassification. Everything else is a runner fault (500).
@@ -146,7 +186,7 @@ func BoxliteExecSignal(ctx *gin.Context) {
 		return
 	}
 
-	if _, err := execManager.GetForBox(execId, boxId); err != nil {
+	if _, err := resolveManagedExecution(ctx, boxId, execId, false); err != nil {
 		ctx.JSON(classifyExecError(err), gin.H{"error": err.Error()})
 		return
 	}
@@ -166,7 +206,7 @@ func BoxliteExecKill(ctx *gin.Context) {
 	boxId := ctx.Param("boxId")
 	execId := ctx.Param("execId")
 
-	if _, err := execManager.GetForBox(execId, boxId); err != nil {
+	if _, err := resolveManagedExecution(ctx, boxId, execId, false); err != nil {
 		ctx.JSON(classifyExecError(err), gin.H{"error": err.Error()})
 		return
 	}
@@ -187,7 +227,7 @@ func BoxliteGetExecution(ctx *gin.Context) {
 	boxId := ctx.Param("boxId")
 	execId := ctx.Param("execId")
 
-	exec, err := execManager.GetForBox(execId, boxId)
+	exec, err := resolveManagedExecution(ctx, boxId, execId, false)
 	if err != nil {
 		ctx.JSON(classifyExecError(err), gin.H{"error": err.Error()})
 		return
@@ -238,7 +278,7 @@ func BoxliteExecResize(ctx *gin.Context) {
 		return
 	}
 
-	if _, err := execManager.GetForBox(execId, boxId); err != nil {
+	if _, err := resolveManagedExecution(ctx, boxId, execId, false); err != nil {
 		ctx.JSON(classifyExecError(err), gin.H{"error": err.Error()})
 		return
 	}
@@ -253,11 +293,12 @@ func BoxliteExecResize(ctx *gin.Context) {
 
 func classifyExecError(err error) int {
 	switch {
-	case errors.Is(err, boxlite.ErrExecNotFound), errors.Is(err, boxlite.ErrBoxMismatch):
+	case errors.Is(err, boxlite.ErrExecNotFound), errors.Is(err, boxlite.ErrBoxMismatch), sdkboxlite.IsNotFound(err):
 		return http.StatusNotFound
-	case errors.Is(err, boxlite.ErrExecClosed), errors.Is(err, boxlite.ErrExecReaping):
+	case errors.Is(err, boxlite.ErrExecClosed), errors.Is(err, boxlite.ErrExecReaping),
+		sdkboxlite.IsAlreadyExists(err), sdkboxlite.IsInvalidState(err), sdkboxlite.IsStopped(err):
 		return http.StatusConflict
-	case errors.Is(err, boxlite.ErrExecNotTTY):
+	case errors.Is(err, boxlite.ErrExecNotTTY), sdkboxlite.IsInvalidArgument(err):
 		return http.StatusBadRequest
 	default:
 		return http.StatusInternalServerError

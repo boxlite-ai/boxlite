@@ -219,6 +219,15 @@ impl Execution for GuestServer {
         Ok(Response::new(start_execution(self, req, None).await))
     }
 
+    async fn list_executions(
+        &self,
+        _request: Request<boxlite_shared::ListExecutionsRequest>,
+    ) -> Result<Response<boxlite_shared::ListExecutionsResponse>, Status> {
+        Ok(Response::new(boxlite_shared::ListExecutionsResponse {
+            executions: self.registry.list_executions().await,
+        }))
+    }
+
     type AttachStream = Pin<Box<dyn Stream<Item = Result<ExecOutput, Status>> + Send + 'static>>;
 
     async fn attach(
@@ -435,6 +444,16 @@ async fn spawn_execution(
             (state, pid, process)
         }
     };
+    let state = state.with_metadata(boxlite_shared::ExecutionInfo {
+        execution_id: execution_id.clone(),
+        argv: std::iter::once(req.program.clone())
+            .chain(req.args.iter().cloned())
+            .collect(),
+        pid,
+        started_at: started_at_ms,
+        tty: req.tty.is_some(),
+        is_main: false,
+    });
     if let Some(reservation) = reservation {
         if !server.registry.publish(reservation, state.clone()).await {
             state.abort_unpublished().await;

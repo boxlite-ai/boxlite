@@ -17,6 +17,7 @@ import type {
   JsBox,
   JsBoxInfo,
   JsBoxOptions,
+  ExecutionInfo,
   JsSshAccount,
   JsSshCaConfig,
   JsSshConfig,
@@ -975,6 +976,26 @@ export class SimpleBox {
   ): Promise<void> {
     const box = await this._ensureBox();
     await box.copyOut(containerSrc, hostDest, options);
+  }
+
+  /** List live executions without creating or starting a box. */
+  async listExecutions(): Promise<ExecutionInfo[]> {
+    const box = this._box ?? (this._boxPromise ? await this._boxPromise : null);
+    return box ? box.listExecutions() : [];
+  }
+
+  /** Recover control without taking output from its current reader. */
+  async getExecution(executionId: string) {
+    const box = this._box ?? (this._boxPromise ? await this._boxPromise : null);
+    if (!box) throw new Error("Box has not been created");
+    return box.getExecution(executionId);
+  }
+
+  /** Attach to a discovered live session; never creates or starts a box. */
+  async attach(executionId: string, stdin = true) {
+    const box = this._box ?? (this._boxPromise ? await this._boxPromise : null);
+    if (!box) throw new Error("Box has not been created");
+    return box.attach(executionId, stdin);
   }
 
   /**

@@ -565,6 +565,30 @@ if (boxlite_execute(box, &cmd, my_callback, NULL, &execution, &error) == Ok) {
 }
 ```
 
+#### Live Execution Discovery and Recovery
+
+`boxlite_list_executions(box, cb, user_data, &error)` queues a live guest query.
+Drain the runtime as for other async operations. On success the callback owns
+the `CExecutionInfoList*` and must free it with
+`boxlite_free_execution_info_list`. Each record has `execution_id` (canonical
+guest ID), `argv`/`argc`, `pid`, `started_at` (Unix milliseconds), `tty`, and
+`is_main`. The main process is included; completed executions disappear.
+Listing never boots a box; a stopped/unstarted box returns an empty list.
+
+`boxlite_execution_id(execution)` returns an owned ID string; release it with
+`boxlite_free_string`. `boxlite_box_get_execution(box, id, &execution, &error)`
+synchronously recovers control without taking stdin/stdout/stderr. The existing
+wait, kill, signal, and TTY resize callback APIs work on that handle, even while
+another client reads output. Freeing recovered controls does not kill the
+process.
+
+`boxlite_box_attach_execution(box, id, &execution, &error)` synchronously opens
+live streams for an existing ID without starting the box. Register stdout,
+stderr, and exit callbacks as for `boxlite_box_exec`. If a reader is already
+active, attach reports a conflict without stealing its output. A new client can
+attach after the former reader disconnects; old output is not replayed.
+Freeing an attached handle releases its reader without killing the process.
+
 #### Network Tunnels
 
 ```c

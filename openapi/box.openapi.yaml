@@ -84,12 +84,21 @@ info:
 
     ## Execution Model
 
-    Command execution is two-step:
-    1. `POST /exec` creates the execution and returns an `execution_id`.
+    Command execution has three related operations:
+    1. `POST /exec` creates the execution and returns its guest-assigned `execution_id`.
     2. `GET /executions/{exec_id}/attach` upgrades to a bidirectional
        WebSocket carrying stdin, stdout, stderr, and in-band control
-       (resize, signal, exit). One attach at a time per exec; the exec
+       (resize, signal, exit). One attach at a time per session; the exec
        continues running across WebSocket close so a client can reattach.
+    3. `GET /executions` lists current live sessions from the guest registry,
+       including the main command. Use their IDs with the existing attach and
+       control endpoints to recover a session after losing a client handle.
+
+    Finished sessions disappear from the live list as soon as the guest sees
+    exit. Wait status and output may remain available in the guest's bounded
+    retention window, but this API does not promise durable execution history.
+    Listing does not start or restart a box; a non-running box returns its
+    normal not-running error.
 
     Out-of-band control endpoints exist for clients that prefer a
     request/response style: `GET /executions/{exec_id}` (status),
@@ -749,6 +758,11 @@ paths:
         - Send signal: `POST /executions/{exec_id}/signal`
         - Resize PTY: `POST /executions/{exec_id}/resize`
         - Kill: `DELETE /executions/{exec_id}`
+
+        An `execution_id` is not the only way back in: `GET
+        /executions` enumerates the sessions that are still running, so a
+        client that lost its handle — a crashed process, a dropped
+        connection — can recover the id and attach or kill it.
       tags: [Execution]
       parameters:
         - $ref: "#/components/parameters/idempotencyKey"
@@ -776,6 +790,35 @@ paths:
           $ref: "#/components/responses/NotFoundError"
         "409":
           $ref: "#/components/responses/ConflictError"
+
+  /{prefix}/boxes/{box_id}/executions:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+      - $ref: "#/components/parameters/boxId"
+    get:
+      operationId: listExecutions
+      summary: List live executions
+      description: |
+        Returns the guest registry's live-session snapshot, not a parsed
+        process listing. The main command session is included with
+        `is_main: true`; each returned guest execution ID is usable with the
+        existing attach and control endpoints. Finished sessions are excluded
+        immediately, including the interval before registry cleanup. Existing
+        wait status/output retention is bounded and is not durable history.
+
+        Listing never starts or restarts a box, and a box that is not running
+        has no live sessions: it answers `{"executions": []}` rather than an
+        error, so a monitor can poll it without waking anything.
+      tags: [Execution]
+      responses:
+        "200":
+          description: Live executions, oldest first
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListExecutionsResponse"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
 
   /{prefix}/boxes/{box_id}/executions/{exec_id}:
     parameters:
@@ -2803,6 +2846,48 @@ components:
         error_message:
           type: [string, "null"]
           description: Diagnostic message if process died unexpectedly
+
+    ListExecutionsResponse:
+      type: object
+      required: [executions]
+      properties:
+        executions:
+          type: array
+          items:
+            $ref: "#/components/schemas/ExecutionSummary"
+
+    ExecutionSummary:
+      type: object
+      description: |
+        Metadata captured when a session was spawned. The SDKs expose this same
+        object as `ExecutionInfo`; the wire schema keeps a distinct name
+        because `ExecutionInfo` here is the status shape returned by
+        `GET /executions/{exec_id}`.
+      required: [execution_id, argv, pid, started_at, tty, is_main]
+      properties:
+        execution_id:
+          type: string
+          description: Identifier accepted by attach and kill
+        argv:
+          type: array
+          items:
+            type: string
+          description: The command as it was requested, program first
+        pid:
+          type: integer
+          description: PID in the guest agent's namespace
+        started_at:
+          type: integer
+          format: int64
+          description: Spawn time, Unix epoch milliseconds
+        tty:
+          type: boolean
+          description: Whether the session owns a PTY
+        is_main:
+          type: boolean
+          description: |
+            True for the box's main command session (the container init),
+            which is registered under the container id.
 
     SignalRequest:
       type: object

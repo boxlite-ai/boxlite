@@ -4,6 +4,31 @@ use pyo3::{Bound, PyAny, PyRef, PyResult, Python, pyclass, pymethods};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
+/// A live guest execution, including the container's main process.
+#[pyclass(name = "ExecutionInfo", get_all, frozen)]
+pub(crate) struct PyExecutionInfo {
+    pub(crate) execution_id: String,
+    pub(crate) argv: Vec<String>,
+    pub(crate) pid: u32,
+    /// Start time in Unix milliseconds.
+    pub(crate) started_at: u64,
+    pub(crate) tty: bool,
+    pub(crate) is_main: bool,
+}
+
+impl From<boxlite::litebox::ExecutionInfo> for PyExecutionInfo {
+    fn from(info: boxlite::litebox::ExecutionInfo) -> Self {
+        Self {
+            execution_id: info.execution_id,
+            argv: info.argv,
+            pid: info.pid,
+            started_at: info.started_at,
+            tty: info.tty,
+            is_main: info.is_main,
+        }
+    }
+}
+
 #[pyclass(name = "ExecStdout")]
 pub(crate) struct PyExecStdout {
     pub(crate) stream: Arc<Mutex<boxlite::ExecStdout>>,

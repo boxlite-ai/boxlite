@@ -67,6 +67,9 @@ service Execution {
   // Start execution immediately.
   rpc Exec(ExecRequest) returns (ExecResponse);
 
+  // Snapshot of live registered sessions, including the container init.
+  rpc ListExecutions(ListExecutionsRequest) returns (ListExecutionsResponse);
+
   // Attach to stdout/stderr (output only).
   rpc Attach(AttachRequest) returns (stream ExecOutput);
 
@@ -82,6 +85,19 @@ service Execution {
   // Resize TTY window (PTY executions only)
   rpc ResizeTty(ResizeTtyRequest) returns (ResizeTtyResponse);
 }
+
+// Metadata captured at spawn, not reconstructed from a process listing.
+message ExecutionInfo {
+  string execution_id = 1;
+  repeated string argv = 2;
+  uint32 pid = 3; // PID in the guest agent's namespace
+  uint64 started_at = 4; // Unix epoch milliseconds
+  bool tty = 5;
+  bool is_main = 6;
+}
+
+message ListExecutionsRequest {}
+message ListExecutionsResponse { repeated ExecutionInfo executions = 1; }
 
 // File transfer between host and container rootfs
 service Files {

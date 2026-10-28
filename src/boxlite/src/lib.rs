@@ -55,7 +55,7 @@ pub use litebox::archive::ArchiveManifest;
 pub use litebox::snapshot_mgr::SnapshotInfo;
 pub use litebox::{
     AttachOptions, BoxCommand, CopyOptions, CopySourceKind, ExecResult, ExecStderr, ExecStdin,
-    ExecStdout, Execution, ExecutionId, HealthState, HealthStatus,
+    ExecStdout, Execution, ExecutionId, ExecutionInfo, HealthState, HealthStatus,
 };
 pub use litebox::{SshAccount, SshCaConfig, SshConfig, SshHandle, SshStatus};
 pub use metrics::{BoxMetrics, RuntimeMetrics};

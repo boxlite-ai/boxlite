@@ -342,9 +342,18 @@ Handle to a running or stopped box.
 |--------|-----------|-------------|
 | `exec()` | `(cmd, args, env, tty) -> Execution` | Execute command (async) |
 | `attach()` | `(execution_id=None, stdin=True) -> Execution` | Follow a running session (async) |
+| `list_executions()` | `() -> list[ExecutionInfo]` | List live sessions, including the main command (async) |
+| `get_execution()` | `(execution_id: str) -> Execution` | Recover control without taking the output reader (async) |
 | `stop()` | `() -> None` | Stop the box gracefully (async) |
 | `info()` | `async () -> BoxInfo` | Get box metadata |
 | `metrics()` | `() -> BoxMetrics` | Get resource usage metrics (async) |
+
+`list_executions()` returns the box's live sessions, so an execution whose
+handle was lost — a crashed client, a dropped connection — can be named again
+and driven through `attach()` or `Execution.kill()`. It reads the guest's own
+registry, never boots or resumes a box, and lists only unfinished sessions: a
+finished execution's exit status is read through `wait()`. See
+[`ExecutionInfo`](#boxliteexecutioninfo) for the fields.
 
 `attach()` with no argument follows the box's main command — the container
 init, which is what `run IMAGE COMMAND` starts. Pass `execution_id` to
@@ -533,6 +542,31 @@ async for line in execution.stdout():
 # Wait for completion
 result = await execution.wait()
 print(f"Exit code: {result.exit_code}")
+```
+
+---
+
+### `boxlite.ExecutionInfo`
+
+Metadata for one live session, captured when it was spawned — not derived from
+a process listing, so `execution_id` is always addressable.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `execution_id` | `str` | Identifier accepted by `attach()` and `Execution.kill()` |
+| `argv` | `list[str]` | The command as requested, program first |
+| `pid` | `int` | PID in the guest agent's namespace |
+| `started_at` | `int` | Spawn time, Unix epoch milliseconds |
+| `tty` | `bool` | Whether the session owns a PTY |
+| `is_main` | `bool` | `True` for the box's main command (the container init) |
+
+The main session's `execution_id` is the container id, the same convention the
+wire layer uses.
+
+```python
+for session in await box.list_executions():
+    marker = " (main)" if session.is_main else ""
+    print(f"{session.execution_id}{marker}: {' '.join(session.argv)}")
 ```
 
 ---

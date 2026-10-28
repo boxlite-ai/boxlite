@@ -1879,6 +1879,10 @@ fn build_router(state: Arc<AppState>) -> Router {
             post(executions::start_execution),
         )
         .route(
+            "/v1/boxes/{box_id}/executions",
+            get(executions::list_executions),
+        )
+        .route(
             "/v1/boxes/{box_id}/executions/{exec_id}",
             get(executions::get_execution).delete(executions::kill_execution),
         )

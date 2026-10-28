@@ -182,6 +182,72 @@ impl BoxBackend for RestBox {
         Ok(())
     }
 
+    async fn list_executions(&self) -> BoxliteResult<Vec<crate::ExecutionInfo>> {
+        #[derive(serde::Deserialize)]
+        struct Inventory {
+            executions: Vec<crate::ExecutionInfo>,
+        }
+        let response: Inventory = self
+            .client
+            .get(&format!("/boxes/{}/executions", self.box_id_str()))
+            .await?;
+        Ok(response.executions)
+    }
+
+    async fn get_execution(&self, execution_id: &str) -> BoxliteResult<Execution> {
+        if !self
+            .list_executions()
+            .await?
+            .iter()
+            .any(|info| info.execution_id == execution_id)
+        {
+            return Err(BoxliteError::NotFound(format!(
+                "Live execution {execution_id} not found in box {}",
+                self.id
+            )));
+        }
+        let (tx, rx) = mpsc::unbounded_channel();
+        let client = self.client.clone();
+        let path = format!("/boxes/{}/executions/{}", self.box_id_str(), execution_id);
+        tokio::spawn(async move {
+            loop {
+                let response = tokio::select! {
+                    _ = tx.closed() => return,
+                    result = client.get::<ExecutionStatusResponse>(&path) => result,
+                };
+                match response {
+                    Ok(info)
+                        if matches!(info.status.as_str(), "completed" | "killed" | "timed_out") =>
+                    {
+                        let _ = tx.send(ExecResult {
+                            exit_code: info.exit_code.unwrap_or(-1),
+                            error_message: None,
+                        });
+                        return;
+                    }
+                    Ok(_) => tokio::select! {
+                        _ = tx.closed() => return,
+                        _ = tokio::time::sleep(std::time::Duration::from_millis(100)) => {}
+                    },
+                    Err(error) => {
+                        let _ = tx.send(ExecResult {
+                            exit_code: -1,
+                            error_message: Some(error.to_string()),
+                        });
+                        return;
+                    }
+                }
+            }
+        });
+        Ok(Execution::new(
+            execution_id.to_owned(),
+            Box::new(RestExecControl::new(self.client.clone(), self.box_id_str())),
+            rx,
+            None,
+            None,
+            None,
+        ))
+    }
     async fn exec(&self, command: BoxCommand) -> BoxliteResult<Execution> {
         let box_id = self.box_id_str();
         if command.user.is_some() {
@@ -235,21 +301,9 @@ impl BoxBackend for RestBox {
 
     /// Attach to a session in the box.
     ///
-    /// - `None` — the main command session (the container's init). Hits the
-    ///   container-attach route (docker's `POST /containers/{id}/attach`), a
-    ///   distinct resource from exec-attach: the client cannot name the init
-    ///   session (its execution id is the container id, which `BoxInfo` does not
-    ///   carry), so the server returns it on the upgrade header. The route boots
-    ///   the box and subscribes to init's session but does not run it —
-    ///   `POST /start` does. `run --url` calls `attach(None)` then `start()`, the
-    ///   same create → attach → start it does locally, so a command that finishes
-    ///   instantly cannot outrun the stream.
-    /// - `Some(id)` — reattach to an existing exec session on
-    ///   `/executions/{id}/attach`.
-    ///
-    /// Either way the returned `Execution` is a fully ordinary one — signal,
-    /// resize and kill go out over the same `/executions/{id}/…` routes, and the
-    /// pump reconnects through them too.
+    /// `None` follows create-before-start for the main command; an explicit
+    /// guest ID addresses an existing exec or init session. The server must
+    /// reject output-reader conflicts before accepting the WebSocket upgrade.
     async fn attach(&self, options: AttachOptions) -> BoxliteResult<Execution> {
         let box_id = self.box_id_str();
 

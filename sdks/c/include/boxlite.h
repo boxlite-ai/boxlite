@@ -279,6 +279,8 @@ typedef void (*CBoxStartBoxCb)(CBoxliteError*, void*);
 // Copy (into / out of) completion.
 typedef void (*CBoxCopyCb)(CBoxliteError*, void*);
 
+typedef struct ExecutionHandle CExecutionHandle;
+
 // C-compatible command descriptor with all BoxCommand options.
 //
 // All string fields are nullable — NULL means "use default".
@@ -303,8 +305,6 @@ typedef struct BoxliteCommand {
   // Enable TTY mode for interactive programs.
   int tty;
 } BoxliteCommand;
-
-typedef struct ExecutionHandle CExecutionHandle;
 
 // Streaming stdout chunk callback.
 typedef void (*CBoxStdoutCb)(const uint8_t*, size_t, void*);
@@ -340,6 +340,28 @@ typedef struct ExecResult {
 } ExecResult;
 
 typedef struct ExecResult CBoxliteExecResult;
+
+// Owned metadata for one live guest execution, including the main process.
+typedef struct CExecutionInfo {
+  char *execution_id;
+  char **argv;
+  int argc;
+  uint32_t pid;
+  // Start time in Unix milliseconds.
+  uint64_t started_at;
+  bool tty;
+  bool is_main;
+} CExecutionInfo;
+
+// Owned list. Release it with `boxlite_free_execution_info_list`.
+typedef struct CExecutionInfoList {
+  struct CExecutionInfo *items;
+  int count;
+} CExecutionInfoList;
+
+// Live execution inventory completion. The caller owns the returned list and
+// must release it with `boxlite_free_execution_info_list`.
+typedef void (*CExecutionInfoListCb)(struct CExecutionInfoList*, CBoxliteError*, void*);
 
 typedef struct ImageHandle CBoxliteImageHandle;
 
@@ -1126,6 +1148,25 @@ void boxlite_copy_in_free(struct CBoxCopyInStream *stream);
 
 void boxlite_error_free(CBoxliteError *error);
 
+// Recover control of a live execution without claiming its output reader.
+// Freeing this handle releases control only; it never kills the process.
+enum BoxliteErrorCode boxlite_box_get_execution(CBoxHandle *handle,
+                                                const char *execution_id,
+                                                CExecutionHandle **out_execution,
+                                                CBoxliteError *out_error);
+
+// Attach live streams to an existing guest execution. A current reader causes
+// an immediate conflict error rather than stealing output. This never boots
+// the box; freeing the attached handle does not kill the guest process.
+enum BoxliteErrorCode boxlite_box_attach_execution(CBoxHandle *handle,
+                                                   const char *execution_id,
+                                                   CExecutionHandle **out_execution,
+                                                   CBoxliteError *out_error);
+
+// Return an owned copy of the canonical guest execution ID. Null means an
+// invalid handle; release a non-null result with `boxlite_free_string`.
+char *boxlite_execution_id(CExecutionHandle *execution);
+
 enum BoxliteErrorCode boxlite_box_exec(CBoxHandle *handle,
                                        const struct BoxliteCommand *cmd,
                                        CExecutionHandle **out_execution,
@@ -1206,6 +1247,15 @@ enum BoxliteErrorCode boxlite_simple_run(CBoxliteSimple *box_runner,
 void boxlite_simple_free(CBoxliteSimple *box_runner);
 
 void boxlite_result_free(CBoxliteExecResult *result);
+
+// Callback owns the returned list; errors are borrowed during dispatch only.
+enum BoxliteErrorCode boxlite_list_executions(CBoxHandle *handle,
+                                              CExecutionInfoListCb cb,
+                                              void *user_data,
+                                              CBoxliteError *out_error);
+
+// Free the list and all IDs/argv strings. Null is accepted.
+void boxlite_free_execution_info_list(struct CExecutionInfoList *list);
 
 enum BoxliteErrorCode boxlite_image_pull(CBoxliteImageHandle *handle,
                                          const char *image_ref,

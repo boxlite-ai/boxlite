@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 from ._agents import SyncAgents
 
 if TYPE_CHECKING:
-    from ..boxlite import Box, BoxMetrics, TunnelOptions
+    from ..boxlite import Box, BoxMetrics, ExecutionInfo, TunnelOptions
     from ._boxlite import SyncBoxlite
     from ._execution import SyncExecution
     from ._network import SyncNetworkHandle
@@ -140,6 +140,26 @@ class SyncBox:
     def stop(self) -> None:
         """Stop the box (preserves state for potential restart)."""
         self._sync(self._box.stop())
+
+    def list_executions(self) -> list["ExecutionInfo"]:
+        """List live guest executions without starting a stopped box."""
+        return self._sync(self._box.list_executions())
+
+    def get_execution(self, execution_id: str) -> "SyncExecution":
+        """Recover control without claiming the session's output reader."""
+        from ._execution import SyncExecution
+
+        return SyncExecution(
+            self._runtime, self._sync(self._box.get_execution(execution_id))
+        )
+
+    def attach(self, execution_id: str, *, stdin: bool = True) -> "SyncExecution":
+        """Attach to a listed live session without starting the box."""
+        from ._execution import SyncExecution
+
+        return SyncExecution(
+            self._runtime, self._sync(self._box.attach(execution_id, stdin=stdin))
+        )
 
     def metrics(self) -> "BoxMetrics":
         """Get box metrics (CPU, memory usage, etc.)."""

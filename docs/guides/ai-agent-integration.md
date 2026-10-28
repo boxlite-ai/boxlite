@@ -225,6 +225,47 @@ async def main():
 
 **When to use:** Most AI agent scenarios. Keeps VM boot cost to one-time.
 
+#### Recovering control after losing the handle
+
+An `Execution` object is a handle, not the process. If the client that started
+a long-running exec crashes, or the connection to a REST server drops, the
+process keeps running inside the box — and the handle that named it is gone.
+`list_executions()` closes that gap: it reports the box's live sessions, and
+every id it returns is directly usable with `attach()` and `kill()`.
+
+```python
+# A new process: no Execution objects survive from the one that started them.
+runtime = boxlite.Boxlite.default()
+box = await runtime.get(box_id)
+
+for session in await box.list_executions():
+    print(session.execution_id, session.pid, session.argv, session.is_main)
+
+target = next(s for s in await box.list_executions() if s.argv[:1] == ["pytest"])
+execution = await box.attach(target.execution_id)
+await execution.kill()
+```
+
+From the CLI, the same three steps are `boxlite top BOX`,
+`boxlite attach BOX EXECUTION_ID` and `boxlite kill BOX EXECUTION_ID`.
+
+What the list contains, and what it does not:
+
+- **Live sessions only.** A finished execution disappears immediately; the
+  list keeps no completed-session history. Existing handles can still use
+  `wait()`. Guest replay/status normally has a five-minute grace period,
+  followed by a terminal-metadata tombstone for another fifteen minutes.
+  The replay cache is bounded to 64 entries / 8 MiB; tombstones to
+  1,024 entries / 5 MiB, so pressure can evict either earlier. Active readers
+  finish before their replay is retired. None of this survives guest shutdown.
+- **The main command is included**, with `is_main=True`. Its id is the
+  container id, the same convention the wire layer uses.
+- **Metadata, not a process listing.** `argv`, `pid`, `started_at` and `tty`
+  are captured when the session is spawned, so they describe the BoxLite
+  execution rather than whatever a `ps` parse would report.
+- **Listing never starts a box.** A stopped box lists nothing; it is not
+  woken to answer.
+
 ### One box per agent
 
 Use separate boxes when you need strict isolation between agents, different images, or independent resource limits.

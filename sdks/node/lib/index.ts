@@ -31,6 +31,7 @@ import type {
   JsOptions,
 } from "./native-contracts.js";
 export type {
+  ExecutionInfo,
   ImageDetail,
   ImageHandle,
   ImageInfo,
