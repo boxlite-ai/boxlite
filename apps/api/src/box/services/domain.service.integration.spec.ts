@@ -4,20 +4,22 @@
  */
 
 import { randomUUID } from 'node:crypto'
+import { NotFoundException } from '@nestjs/common'
 import { DataSource, Repository } from 'typeorm'
 import { CustomNamingStrategy } from '../../common/utils/naming-strategy.util'
 import { Box } from '../entities/box.entity'
 import { BoxLastActivity } from '../entities/box-last-activity.entity'
 import { BoxMigration } from '../entities/box-migration.entity'
 import { Tunnel } from '../entities/tunnel.entity'
-import { TunnelDomain } from '../entities/tunnel-domain.entity'
-import { DOMAIN_COUNT_LIMIT_CODE, SUBDOMAIN_TAKEN_CODE, SUBDOMAIN_TOO_SHORT_CODE } from '../errors/tunnel-domain.error'
-import { AddTunnelDomain1792972800000 } from '../../migrations/pre-deploy/1792972800000-add-tunnel-domain-migration'
-import { TunnelDomainService } from './tunnel-domain.service'
+import { Domain } from '../entities/domain.entity'
+import { DOMAIN_COUNT_LIMIT_CODE, SUBDOMAIN_TAKEN_CODE, SUBDOMAIN_TOO_SHORT_CODE } from '../errors/domain.error'
+import { AddDomain1792972800000 } from '../../migrations/pre-deploy/1792972800000-add-domain-migration'
+import { DomainService } from './domain.service'
 import { TunnelService } from './tunnel.service'
+import { PreviewController } from '../controllers/preview.controller'
 
 const describeIfDatabase = process.env.DB_HOST ? describe : describe.skip
-const schemaName = `tunnel_domain_${process.pid}_${randomUUID().replaceAll('-', '')}`
+const schemaName = `domain_${process.pid}_${randomUUID().replaceAll('-', '')}`
 const ORG = '00000000-0000-4000-8000-000000000001'
 const OTHER_ORG = '00000000-0000-4000-8000-000000000002'
 const APP_DOMAIN = 'app.boxlite.test'
@@ -31,19 +33,20 @@ function memoryRedis() {
   }
 }
 
-describeIfDatabase('TunnelDomainService (integration, real Postgres)', () => {
+describeIfDatabase('DomainService (integration, real Postgres)', () => {
   let dataSource: DataSource
   let boxes: Repository<Box>
   let tunnels: TunnelService
-  let service: TunnelDomainService
+  let service: DomainService
+  let preview: PreviewController
   let ownsSchema = false
   let minLength = 5
 
   const configService = {
-    get: (key: string) => (key === 'tunnelDomain.appDomain' || key === 'tunnelDomain.appHost' ? APP_DOMAIN : undefined),
+    get: (key: string) => (key === 'domain.appDomain' || key === 'domain.appHost' ? APP_DOMAIN : undefined),
     getOrThrow: (key: string) => {
       switch (key) {
-        case 'tunnelDomain.platformSubdomainMinLength':
+        case 'domain.platformSubdomainMinLength':
           return minLength
         case 'proxy.domain':
           return 'proxy.boxlite.test'
@@ -66,7 +69,7 @@ describeIfDatabase('TunnelDomainService (integration, real Postgres)', () => {
       password: process.env.DB_PASSWORD,
       database: process.env.DB_DATABASE,
       schema: schemaName,
-      entities: [Box, BoxLastActivity, BoxMigration, Tunnel, TunnelDomain],
+      entities: [Box, BoxLastActivity, BoxMigration, Tunnel, Domain],
       namingStrategy: new CustomNamingStrategy(),
       entitySkipConstructor: true,
       synchronize: false,
@@ -78,11 +81,11 @@ describeIfDatabase('TunnelDomainService (integration, real Postgres)', () => {
     await dataSource.synchronize()
     // The domain table comes from its migration, the schema production runs.
     // The organization table has just its id; the migration adds the limit.
-    await dataSource.query(`DROP TABLE "${schemaName}"."tunnel_domain"`)
+    await dataSource.query(`DROP TABLE "${schemaName}"."domain"`)
     await dataSource.query(`CREATE TABLE "${schemaName}"."organization" ("id" uuid PRIMARY KEY)`)
     const runner = dataSource.createQueryRunner()
     try {
-      await new AddTunnelDomain1792972800000().up(runner)
+      await new AddDomain1792972800000().up(runner)
     } finally {
       await runner.release()
     }
@@ -104,14 +107,28 @@ describeIfDatabase('TunnelDomainService (integration, real Postgres)', () => {
 
   beforeEach(async () => {
     minLength = 5
-    await dataSource.query(`DELETE FROM "${schemaName}"."tunnel_domain"`)
+    await dataSource.query(`DELETE FROM "${schemaName}"."domain"`)
     await dataSource.query(`DELETE FROM "${schemaName}"."tunnel"`)
     await dataSource.query(`DELETE FROM "${schemaName}"."box"`)
     await dataSource.query(`DELETE FROM "${schemaName}"."organization"`)
     await dataSource.query(`INSERT INTO "${schemaName}"."organization" ("id") VALUES ($1), ($2)`, [ORG, OTHER_ORG])
     tunnels = new TunnelService(dataSource.getRepository(Tunnel), memoryRedis() as never)
-    service = new TunnelDomainService(dataSource, regionService as never, tunnels, configService as never)
+    service = new DomainService(dataSource, regionService as never, configService as never)
+    preview = createPreview(tunnels)
   })
+
+  function createPreview(tunnelService: TunnelService): PreviewController {
+    return new PreviewController(
+      null as never,
+      null as never,
+      null as never,
+      tunnelService,
+      null as never,
+      null as never,
+      null as never,
+      service,
+    )
+  }
 
   async function makeBox(organizationId = ORG): Promise<Box> {
     const box = new Box('us', `domain-${randomUUID().slice(0, 8)}`)
@@ -129,25 +146,41 @@ describeIfDatabase('TunnelDomainService (integration, real Postgres)', () => {
     ])
   }
 
-  function heldNames(organizationId: string): Promise<{ hostname: string; box_id: string | null; port: number | null }[]> {
+  function heldNames(
+    organizationId: string,
+  ): Promise<{ hostname: string; box_id: string | null; port: number | null }[]> {
     return dataSource.query(
-      `SELECT "hostname", "box_id", "port" FROM "${schemaName}"."tunnel_domain"
+      `SELECT "hostname", "box_id", "port" FROM "${schemaName}"."domain"
        WHERE "organization_id" = $1 ORDER BY "hostname"`,
       [organizationId],
     )
   }
 
-  it('binds a name before its port is public, and resolves it once the port is declared', async () => {
+  it('resolves the stored target independently of tunnel publication', async () => {
+    const box = await makeBox()
+    await service.bind(box, 3000, 'demo1')
+    const target = { boxId: box.id, port: 3000 }
+
+    await expect(service.resolve(`demo1.${APP_DOMAIN}`)).resolves.toEqual(target)
+
+    await tunnels.prepare(box.id, 3000, false)
+    await expect(service.resolve(`demo1.${APP_DOMAIN}`)).resolves.toEqual(target)
+
+    await tunnels.revoke(box.id, 3000)
+    await expect(service.resolve(`demo1.${APP_DOMAIN}`)).resolves.toEqual(target)
+  })
+
+  it('binds a name before its port is public, and admits preview once the port is declared', async () => {
     const box = await makeBox()
 
     await expect(service.bind(box, 3000, 'demo1')).resolves.toMatchObject({ url: `https://demo1.${APP_DOMAIN}` })
 
     await expect(tunnels.isPublicAccessAllowed(box.id, 3000)).resolves.toBe(false)
-    await expect(service.resolve(`demo1.${APP_DOMAIN}`)).resolves.toBeNull()
+    await expect(preview.resolveDomain(`demo1.${APP_DOMAIN}`)).rejects.toBeInstanceOf(NotFoundException)
 
     await tunnels.prepare(box.id, 3000)
 
-    await expect(service.resolve(`demo1.${APP_DOMAIN}`)).resolves.toEqual({ boxId: box.id, port: 3000 })
+    await expect(preview.resolveDomain(`demo1.${APP_DOMAIN}`)).resolves.toEqual({ boxId: box.id, port: 3000 })
   })
 
   it('keeps a private tunnel private when a domain is bound to its port', async () => {
@@ -156,11 +189,11 @@ describeIfDatabase('TunnelDomainService (integration, real Postgres)', () => {
     const prepared = await tunnels.prepare(box.id, 3000, false)
 
     await expect(tunnels.access(box.id, 3000, prepared.token!)).resolves.toMatchObject({ isPublic: false })
-    await expect(service.resolve(`demo1.${APP_DOMAIN}`)).resolves.toBeNull()
+    await expect(preview.resolveDomain(`demo1.${APP_DOMAIN}`)).rejects.toBeInstanceOf(NotFoundException)
 
     await tunnels.revoke(box.id, 3000)
     await tunnels.prepare(box.id, 3000)
-    await expect(service.resolve(`demo1.${APP_DOMAIN}`)).resolves.toEqual({ boxId: box.id, port: 3000 })
+    await expect(preview.resolveDomain(`demo1.${APP_DOMAIN}`)).resolves.toEqual({ boxId: box.id, port: 3000 })
   })
 
   it('routes several names to one port', async () => {
@@ -171,8 +204,8 @@ describeIfDatabase('TunnelDomainService (integration, real Postgres)', () => {
     await service.bind(box, 3000, 'first1')
     await service.bind(box, 3000, 'second')
 
-    await expect(service.resolve(`first1.${APP_DOMAIN}`)).resolves.toEqual({ boxId: box.id, port: 3000 })
-    await expect(service.resolve(`second.${APP_DOMAIN}`)).resolves.toEqual({ boxId: box.id, port: 3000 })
+    await expect(preview.resolveDomain(`first1.${APP_DOMAIN}`)).resolves.toEqual({ boxId: box.id, port: 3000 })
+    await expect(preview.resolveDomain(`second.${APP_DOMAIN}`)).resolves.toEqual({ boxId: box.id, port: 3000 })
     expect(await heldNames(ORG)).toEqual([
       { hostname: `first1.${APP_DOMAIN}`, box_id: box.id, port: 3000 },
       { hostname: `second.${APP_DOMAIN}`, box_id: box.id, port: 3000 },
@@ -311,7 +344,7 @@ describeIfDatabase('TunnelDomainService (integration, real Postgres)', () => {
     expect(outcomes.filter((outcome) => outcome.status === 'fulfilled')).toHaveLength(1)
     expect(outcomes.filter((outcome) => outcome.status === 'rejected')).toHaveLength(1)
     const rows: { organization_id: string }[] = await dataSource.query(
-      `SELECT "organization_id" FROM "${schemaName}"."tunnel_domain"`,
+      `SELECT "organization_id" FROM "${schemaName}"."domain"`,
     )
     expect(rows).toHaveLength(1)
   })
@@ -323,12 +356,12 @@ describeIfDatabase('TunnelDomainService (integration, real Postgres)', () => {
 
     await tunnels.revoke(box.id, 3000)
 
-    await expect(service.resolve(`demo1.${APP_DOMAIN}`)).resolves.toBeNull()
+    await expect(preview.resolveDomain(`demo1.${APP_DOMAIN}`)).rejects.toBeInstanceOf(NotFoundException)
     expect(await heldNames(ORG)).toEqual([{ hostname: `demo1.${APP_DOMAIN}`, box_id: box.id, port: 3000 }])
 
     await tunnels.prepare(box.id, 3000)
 
-    await expect(service.resolve(`demo1.${APP_DOMAIN}`)).resolves.toEqual({ boxId: box.id, port: 3000 })
+    await expect(preview.resolveDomain(`demo1.${APP_DOMAIN}`)).resolves.toEqual({ boxId: box.id, port: 3000 })
   })
 
   it('releases every binding of a destroyed box and keeps the names', async () => {
@@ -358,7 +391,7 @@ describeIfDatabase('TunnelDomainService (integration, real Postgres)', () => {
     await expect(service.resolve(`demo1.${APP_DOMAIN}`)).resolves.toBeNull()
   })
 
-  it('stops resolving a name as soon as its box disables inbound access', async () => {
+  it('keeps the target but refuses preview when its box disables inbound access', async () => {
     const box = await makeBox()
     await tunnels.prepare(box.id, 3000)
     await service.bind(box, 3000, 'demo1')
@@ -366,12 +399,8 @@ describeIfDatabase('TunnelDomainService (integration, real Postgres)', () => {
     await boxes.update(box.id, { inboundEnabled: false })
     // The access verdict is cached for 3 seconds by design; a fresh service
     // shares the database but not that cache.
-    const fresh = new TunnelDomainService(
-      dataSource,
-      regionService as never,
-      new TunnelService(dataSource.getRepository(Tunnel), memoryRedis() as never),
-      configService as never,
-    )
-    await expect(fresh.resolve(`demo1.${APP_DOMAIN}`)).resolves.toBeNull()
+    const fresh = createPreview(new TunnelService(dataSource.getRepository(Tunnel), memoryRedis() as never))
+    await expect(service.resolve(`demo1.${APP_DOMAIN}`)).resolves.toEqual({ boxId: box.id, port: 3000 })
+    await expect(fresh.resolveDomain(`demo1.${APP_DOMAIN}`)).rejects.toBeInstanceOf(NotFoundException)
   })
 })

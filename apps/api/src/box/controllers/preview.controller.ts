@@ -37,7 +37,7 @@ import { InjectRedis } from '@nestjs-modules/ioredis'
 import { CombinedAuthGuard } from '../../auth/combined-auth.guard'
 import { OrganizationUserService } from '../../organization/services/organization-user.service'
 import { TunnelService } from '../services/tunnel.service'
-import { TunnelDomainService } from '../services/tunnel-domain.service'
+import { DomainService } from '../services/domain.service'
 import { ProxyGuard } from '../guards/proxy.guard'
 import { OrganizationService } from '../../organization/services/organization.service'
 import { AUTO_RESUMABLE_STATES, BoxAutoResumeService } from '../services/box-auto-resume.service'
@@ -66,7 +66,7 @@ export class PreviewController {
     private readonly organizationService: OrganizationService,
     private readonly autoResume: BoxAutoResumeService,
     private readonly users: UserService,
-    private readonly tunnelDomainService: TunnelDomainService,
+    private readonly domainService: DomainService,
   ) {}
 
   @Get(':boxId/tunnels/:port')
@@ -131,10 +131,10 @@ export class PreviewController {
   @Get('domains/:hostname')
   @ApiExcludeEndpoint()
   @UseGuards(CombinedAuthGuard, ProxyGuard)
-  async resolveTunnelDomain(@Param('hostname') hostname: string): Promise<{ boxId: string; port: number }> {
-    const target = await this.tunnelDomainService.resolve(hostname)
-    if (!target) {
-      throw new NotFoundException('Tunnel domain not found')
+  async resolveDomain(@Param('hostname') hostname: string): Promise<{ boxId: string; port: number }> {
+    const target = await this.domainService.resolve(hostname)
+    if (!target || !(await this.tunnelService.isPublicAccessAllowed(target.boxId, target.port))) {
+      throw new NotFoundException('Domain not found')
     }
     return target
   }

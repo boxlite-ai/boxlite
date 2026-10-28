@@ -648,7 +648,7 @@ export const gcpEdgeProvider =
     })
 
     /*
-     * Platform tunnel subdomains: one wildcard beside the box domain's, on the
+     * Platform subdomains: one wildcard beside the box domain's, on the
      * same address, backend and certificate map. Its own authorization and
      * certificate under their own names, so the existing proxy chain — whose
      * authorization domain is immutable — is not touched, and the balancer

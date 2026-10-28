@@ -130,7 +130,7 @@ describe('Box API JSON Schema nullability', () => {
   })
 
   it('validates an actual domain list with a bound and an unbound domain', async () => {
-    const tunnelDomains = {
+    const domains = {
       listHeld: jest.fn().mockResolvedValue({
         domains: [
           { name: 'demo1', hostname: 'demo1.app.test', url: 'https://demo1.app.test', boxId: 'box-1', port: 3000 },
@@ -142,7 +142,7 @@ describe('Box API JSON Schema nullability', () => {
         minLength: 5,
       }),
     }
-    const controller = new BoxliteDomainController(tunnelDomains as never, {} as never)
+    const controller = new BoxliteDomainController(domains as never, {} as never)
     const list = JSON.parse(JSON.stringify(await controller.list({ organizationId: 'org-1' } as never)))
 
     const validate = validator('DomainList')
