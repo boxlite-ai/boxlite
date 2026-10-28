@@ -978,7 +978,6 @@ mod tests {
     #[derive(Default)]
     struct HoldingNetworkBackend {
         attempts: Arc<AtomicUsize>,
-        peers: Arc<Mutex<Vec<UnixStream>>>,
     }
 
     #[async_trait::async_trait]
@@ -989,12 +988,10 @@ mod tests {
             _options: TunnelOptions,
         ) -> BoxliteResult<BoxTunnel> {
             let attempts = Arc::clone(&self.attempts);
-            let peers = Arc::clone(&self.peers);
-            Ok(pending_tunnel(move || {
-                let (sdk, peer) = UnixStream::pair().unwrap();
+            Ok(BoxTunnel::new(None, move || {
                 attempts.fetch_add(1, Ordering::SeqCst);
-                peers.lock().unwrap().push(peer);
-                Ok(BoxConnection::new(sdk))
+                // Hold the permit without allocating extra kernel sockets.
+                std::future::pending()
             }))
         }
     }

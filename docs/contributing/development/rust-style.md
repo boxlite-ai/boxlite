@@ -84,6 +84,16 @@ pub struct LiteBox {
 }
 ```
 
+### Resource-bound test fixtures
+
+Capacity tests should spend kernel resources on the behavior under test, not
+on unrelated fixture plumbing. The forwarder's 64-permit test holds remote
+opens pending instead of creating extra Unix socket pairs, so its client and
+listener sockets fit a 256-descriptor process limit. Separate relay tests
+exercise successful I/O and half-close behavior. Preserve the real capacity
+and backlog assertions rather than raising host limits or accepting connection
+failures as a pass.
+
 ## Formatting and linting
 
 - **Formatting**: `cargo fmt` (enforced in CI)
