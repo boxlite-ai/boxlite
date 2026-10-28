@@ -108,8 +108,25 @@ The retry header is `Idempotency-Key`; do not duplicate it in JSON.
 Omitted options/config mean `{}`; omitted mode means `queue`. Omitted cwd leaves
 directory selection to the adapter. Reject null option/config objects, unknown
 structural fields, invalid enum values and malformed identifiers with 400.
-Preserve explicit `false`, zero and JSON `null` in arbitrary JSON fields.
+SDK encoders omit absent structural fields: Python's default `config=None`
+means no `options.config`, not a JSON null object.
 Close/interrupt accept an empty body or `{}` only.
+
+For send only, omitted `options.data` and explicit JSON `null` both mean no
+supplemental data and normalize to `null`. [Python defaults this field to
+None](../../../sdks/python/boxlite/agents.py), so distinguishing them would require
+a new SDK sentinel. Preserve `false`, zero, empty strings/collections and nested
+JSON nulls; do not apply this omission rule to other JSON fields.
+
+These send bodies have the same meaning and retry fingerprint:
+
+```json
+{"text":"Review the change"}
+```
+
+```json
+{"text":"Review the change","options":{"mode":"queue","data":null}}
+```
 
 ### SDK coverage and snapshot freshness
 
@@ -207,7 +224,10 @@ No control implicitly selects the currently active turn.
 
 For every mutation, authenticate and validate syntax before looking up the retry
 key; deduplicate before mutable-state checks. Scope keys to principal, routing
-prefix and Box. Compare method, target and normalized input, including defaults.
+prefix and Box. Compare method, target and normalized input using the documented
+wire defaults above. Compare JSON values independent of object-key order;
+preserve array order and value types. Do not re-resolve adapter defaults when
+fingerprinting a retry.
 Equal retries replay the original status/body/Location; pending retries join the
 same operation. A different fingerprint returns 422, following the Box API.
 
@@ -223,8 +243,17 @@ Do not widen the existing parameter or change other Box operations.
 Publish the retention guarantee in `GET /v1/config`'s
 `capabilities.idempotency_key_lifetime` (ISO 8601 duration), and the same guarantee
 as `idempotency_retention_seconds` in agent capabilities. Retention starts
-when an operation finishes; pending records cannot expire. After expiry, or
-without a key, clients must reconcile before retrying uncertain mutations.
+when an operation finishes; pending records cannot expire.
+
+For an uncertain mutation, retry the same request and key while its record is
+retained. A known resource ID permits a GET, but retry only when reconciliation
+can establish that no duplicate effect will occur. A snapshot alone does not
+identify which mutation produced it.
+
+If a create response is lost without a retained key or returned agent ID, this
+slice has no discovery route to recover that identity. Report an uncertain
+outcome; never automatically repeat creation with a new or expired key. A caller
+may explicitly start another creation, accepting that the first agent may exist.
 
 Use the existing nested Box error envelope and [typed mapping](../../../src/shared/src/errors.rs):
 
@@ -255,8 +284,10 @@ No server or adapter conformance is claimed.
 
 Implementation acceptance checks:
 
-- Capture each SDK request at a local HTTP server: method, encoded target, options, retry header and false/null preservation match this contract.
+- Capture each SDK request at a local HTTP server: method, encoded target, options and retry header match this contract. Python's absent config is omitted; false, zero, empty values and nested nulls survive encoding.
+- Compare omitted/null send data and explicit wire defaults under one key: the same turn is returned. Different data conflicts; object-key order does not, while array order does.
 - Race duplicate sends/replies/controls, including lost responses: one logical effect; different input under one key yields 422.
+- Lose a create response with retained, absent and expired keys: only a retained key permits automatic replay; an unknown identity without it reports uncertainty and issues no second creation.
 - Reconnect after a snapshot and during live delivery: no gaps; Last-Event-ID overrides the initial URL cursor; duplicate cursors are harmless; expired cursors require explicit recovery.
 - Cross Box/agent targets fail; late permission replies cannot revive revoked requests; steering never grants approval or changes turn identity.
 - Cache reads perform no I/O; explicit get refreshes; wait expiry does not interrupt; close/interrupt succeed only after confirmed shutdown.

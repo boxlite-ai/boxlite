@@ -95,7 +95,7 @@ from boxlite import AgentCreateOptions, UnsupportedError
 
 try:
     agent = await box.agents.create(
-        "agent-id", AgentCreateOptions(cwd="/workspace")
+        "coder", AgentCreateOptions(cwd="/workspace")
     )
 except UnsupportedError as error:
     print(error)
@@ -109,7 +109,7 @@ use boxlite::agents::AgentCreateOptions;
 
 async fn example(sandbox: &LiteBox) {
     let result = sandbox.agents()
-        .create("agent-id", AgentCreateOptions::default()).await;
+        .create("coder", AgentCreateOptions::default()).await;
     assert!(matches!(result, Err(BoxliteError::Unsupported(_))));
 }
 ```
