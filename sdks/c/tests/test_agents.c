@@ -97,7 +97,6 @@ int main(void) {
       "turn.events");
   assert(events == NULL);
   char *json = (char *)&callbacks;
-  json = (char *)&callbacks;
   CHECK_UNIMPLEMENTED(boxlite_agent_session_state(NULL, &json, &error),
                       "session.state");
   assert(json == NULL);

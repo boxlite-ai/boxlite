@@ -4,10 +4,10 @@ Use nine flat agent commands with a positional Box and named inner targets; comb
 
 ## Details
 
-This study revises the agent CLI from
-[#2140](https://github.com/boxlite-ai/boxlite/issues/2140). Rust and SDK signatures
-stay unchanged. The [CLI reference](../../reference/cli/README.md#boxlite-agent)
-owns the command and option definitions.
+This study explains the agent CLI design in
+[#2140](https://github.com/boxlite-ai/boxlite/issues/2140). The
+[CLI reference](../../reference/cli/README.md#boxlite-agent) owns the command and
+option definitions.
 
 ### Research
 
@@ -22,16 +22,14 @@ Sources checked on 2026-10-28:
 | [OpenHands CLI](https://docs.openhands.dev/openhands/usage/cli/command-reference#global-options) | Task, resume and headless flags serve conversation workflows. | Adapt the workflow focus, while retaining separately addressed sessions and turns. |
 | [OpenComputer developer resources](https://opencomputer.dev/developers/) | Its quickstart emphasizes initialization/deployment; the Management API separately exposes sessions, turns and events. | Keep deployment outside the agent session API. This does not establish parity with its complete CLI. |
 
-Rivet's former repository redirects to `rivet-dev/agents`; older search snippets
-for its session CLI differ from the linked CLI reference. OpenComputer's old
-API URL and sessions/logs Markdown could not be retrieved reliably during
-this study; its developer portal supports only the narrower observation above.
+The OpenComputer comparison is limited to its developer portal; its agent API
+reference could not be retrieved reliably during this study.
 
 ### Alternatives and boundaries
 
 | Choice | Assessment |
 |---|---|
-| Keep sixteen nested leaves | Makes SDK ownership explicit, but exposes handle lookup as a shell task and repeats session/turn navigation. |
+| Sixteen nested leaves | Makes SDK ownership explicit, but exposes handle lookup as a shell task and repeats session/turn navigation. |
 | Flatten all sixteen | Shortens spelling while retaining duplicate reads. |
 | Nine flat verbs with named targets | Combines read selection and event scope; keeps different mutations visible. Chosen. |
 | One action command with mode flags | Moves the same operations into flags and obscures whether a call submits, steers or interrupts. |
@@ -40,13 +38,13 @@ This is an interface judgment, not a measured usability result. Removing
 capabilities or hiding mutations would not be justified by command count alone.
 
 `inspect` selects state or session config/capabilities/requests. Session-only
-views conflict with `--turn`. SDKs retain the `get`/`get_turn` methods; CLI targeting
+views conflict with `--turn`. SDKs expose `get`/`get_turn` methods; CLI targeting
 subsumes them. Explicit session/turn/request IDs prevent commands from guessing
 which conversation or turn to affect.
 
 Creation uses `create BOX --agent AGENT`. The required flag distinguishes the
 agent selection from the Box target, matching the named selectors on other
-commands. SDK calls retain their positional agent argument.
+commands. SDK calls take the agent identifier positionally.
 
 ```bash
 boxlite agent create dev --agent coder
@@ -55,8 +53,8 @@ boxlite agent inspect dev --session session-id --view requests
 boxlite agent steer dev --session session-id --turn turn-id "Focus on tests"
 ```
 
-Preserve option groups, JSON validation, queue/reject mode, retry keys, cursors
-and wait timeouts. Flat commands replace the nested spellings. The
+Option groups cover JSON input, queue/reject mode, retry keys, cursors
+and wait timeouts. The
 [failure contract](../../reference/agents.md#failure-contract) describes operation
 availability.
 
@@ -64,14 +62,14 @@ availability.
 
 The process test exercises each verb and read selector against the real binary,
 including missing runtime files and an invalid server URL. Invalid target/view
-combinations, missing agent selection and superseded spellings must produce usage
+combinations, missing agent selection and unknown subcommands must produce usage
 errors. Help and completion checks cover the resulting command tree.
 
 Real Fish cases use command names inside IDs, messages and option values,
 including option values before the verb is selected.
-`clap_complete` 4.6.3 matches token presence at two levels, so the old depth
-supplement becomes a replacement of agent conditions with exact path checks.
-The generated option values and quoting remain unchanged.
+`clap_complete` 4.6.3 matches token presence at two levels. Agent completion
+conditions use exact command-path checks while preserving generated option
+values and quoting.
 
 CLI tests, Rust lint and formatting validate parsing and error behavior. They do not
 establish backend execution or replace the full VM matrix.

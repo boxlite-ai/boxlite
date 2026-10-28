@@ -1,9 +1,9 @@
 # BoxLite Python SDK
 
+Python bindings for BoxLite - an embeddable virtual machine runtime for secure, isolated code execution.
+
 Access the [agent API](../../docs/reference/agents.md) through `Box.agents`
 and `SimpleBox.agents`, including synchronous wrappers, grouped options and error handling.
-
-Python bindings for BoxLite - an embeddable virtual machine runtime for secure, isolated code execution.
 
 ## Overview
 

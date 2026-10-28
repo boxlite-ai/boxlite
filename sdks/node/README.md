@@ -1,9 +1,9 @@
 # BoxLite Node.js/TypeScript SDK
 
+Embeddable VM runtime for secure, isolated code execution environments.
+
 Access the [agent API](../../docs/reference/agents.md) through `JsBox.agents`
 and `SimpleBox.agents` for session and turn methods, grouped options and error handling.
-
-Embeddable VM runtime for secure, isolated code execution environments.
 
 **Think "SQLite for sandboxing"** - a lightweight library embedded directly in your application without requiring a daemon or root privileges.
 

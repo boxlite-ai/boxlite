@@ -180,7 +180,7 @@ type AgentHandle struct{}
 type AgentSession struct{}
 type AgentTurn struct{}
 
-// Agents obtains the namespace without calling native code or starting the Box.
+// Agents obtains the namespace without starting the Box.
 func (b *Box) Agents() *AgentHandle { return &AgentHandle{} }
 
 func agentNotImplemented(operation string) error {

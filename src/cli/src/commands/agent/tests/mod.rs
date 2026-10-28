@@ -352,8 +352,11 @@ fn agents_help_and_completion_include_nine_flat_commands() {
     ] {
         assert!(agent.find_subcommand(name).is_some(), "{name}");
     }
-    for removed in ["session", "turn", "get", "get-turn"] {
-        assert!(agent.find_subcommand(removed).is_none(), "{removed}");
+    for unsupported in ["session", "turn", "get", "get-turn"] {
+        assert!(
+            agent.find_subcommand(unsupported).is_none(),
+            "{unsupported}"
+        );
     }
     let create_help = agent
         .find_subcommand_mut("create")

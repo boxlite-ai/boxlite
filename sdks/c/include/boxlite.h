@@ -209,6 +209,8 @@ typedef struct CAgentCreateOptions {
   const char *idempotency_key;
 } CAgentCreateOptions;
 
+// On success, receives an owned session; release it with boxlite_agent_session_free.
+// The error pointer is borrowed for callback dispatch only.
 typedef void (*CAgentSessionCb)(struct CAgentSession*, const CBoxliteError*, void*);
 
 // Shared retry identity for close, reply, steering and interruption.
@@ -216,6 +218,7 @@ typedef struct CAgentControlOptions {
   const char *idempotency_key;
 } CAgentControlOptions;
 
+// The error pointer is borrowed for callback dispatch only.
 typedef void (*CAgentDoneCb)(const CBoxliteError*, void*);
 
 // Optional JSON accompanies positional message text.
@@ -225,8 +228,12 @@ typedef struct CAgentSendOptions {
   const char *idempotency_key;
 } CAgentSendOptions;
 
+// On success, receives an owned turn; release it with boxlite_agent_turn_free.
+// The error pointer is borrowed for callback dispatch only.
 typedef void (*CAgentTurnCb)(struct CAgentTurn*, const CBoxliteError*, void*);
 
+// JSON and error pointers are borrowed for callback dispatch only.
+// Copy their contents to retain them after the callback returns.
 typedef void (*CAgentJsonCb)(const char*, const CBoxliteError*, void*);
 
 // Timeout in seconds; negative or a null options pointer means no deadline.
@@ -910,24 +917,28 @@ enum BoxliteErrorCode boxlite_agent_turn_events(struct CAgentTurn *_handle,
                                                 CBoxliteError *out_error);
 
 // Read a consistent session state snapshot.
+// Release a returned JSON string with boxlite_free_string.
 // out_json and out_error may be null or writable. out_json is cleared on error.
 enum BoxliteErrorCode boxlite_agent_session_state(struct CAgentSession *_handle,
                                                   char **out_json,
                                                   CBoxliteError *out_error);
 
 // Read effective agent configuration.
+// Release a returned JSON string with boxlite_free_string.
 // out_json and out_error may be null or writable. out_json is cleared on error.
 enum BoxliteErrorCode boxlite_agent_session_config(struct CAgentSession *_handle,
                                                    char **out_json,
                                                    CBoxliteError *out_error);
 
 // Read adapter guarantees and limits.
+// Release a returned JSON string with boxlite_free_string.
 // out_json and out_error may be null or writable. out_json is cleared on error.
 enum BoxliteErrorCode boxlite_agent_session_capabilities(struct CAgentSession *_handle,
                                                          char **out_json,
                                                          CBoxliteError *out_error);
 
 // Read a consistent turn state snapshot.
+// Release a returned JSON string with boxlite_free_string.
 // out_json and out_error may be null or writable. out_json is cleared on error.
 enum BoxliteErrorCode boxlite_agent_turn_state(struct CAgentTurn *_handle,
                                                char **out_json,

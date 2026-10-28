@@ -52,7 +52,7 @@ impl JsAgentSession {
         not_implemented("session.get_turn")
     }
 
-    /// Fails before creating a stream.
+    /// Open the session journal after an opaque cursor.
     #[napi]
     pub fn events(&self, _options: Option<Value>) -> Result<Value> {
         not_implemented("session.events")

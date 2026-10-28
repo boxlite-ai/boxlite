@@ -1,4 +1,4 @@
-"""Check agent errors and namespace access without a native runtime."""
+"""Check agent errors and namespace access across Python and native bindings."""
 
 import pytest
 
@@ -101,7 +101,7 @@ def test_agents_simple_namespace_needs_no_runtime_initialization():
 
 
 @pytest.mark.asyncio
-@pytest.mark.skipif(not hasattr(boxlite, "Box"), reason="native extension not built")
+@pytest.mark.integration
 async def test_agents_native_box_namespace(tmp_path):
     runtime = boxlite.Boxlite(boxlite.Options(home_dir=str(tmp_path)))
     box = await runtime.create(boxlite.BoxOptions(image="alpine:latest"))

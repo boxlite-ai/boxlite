@@ -105,7 +105,7 @@ export interface AgentSession {
   close(options?: AgentControlOptions): Promise<void>;
   send(text: string, options?: AgentSendOptions): Promise<AgentTurn>;
   getTurn(turnId: string): Promise<AgentTurn>;
-  /** Throws immediately; no empty successful stream is returned. */
+  /** Open the session journal after an opaque cursor. */
   events(options?: AgentEventsOptions): AsyncIterable<AgentEvent>;
   requests(): Promise<AgentRequest[]>;
   respond(

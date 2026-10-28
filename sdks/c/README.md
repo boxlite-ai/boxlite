@@ -1,9 +1,9 @@
 # BoxLite C SDK
 
+C bindings for the BoxLite runtime, providing a stable C API for integrating BoxLite into C/C++ applications.
+
 The [agent API](../../docs/reference/agents.md#c-api-and-ownership) covers
 Box-owned sessions, turns, callbacks and handle ownership.
-
-C bindings for the BoxLite runtime, providing a stable C API for integrating BoxLite into C/C++ applications.
 
 **C Standard:** C11-compatible compiler (GCC/Clang)
 

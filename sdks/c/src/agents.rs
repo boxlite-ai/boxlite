@@ -1,6 +1,4 @@
 //! Agent sessions, turns, and journal subscriptions.
-//! JSON callback payloads are borrowed for the callback; getter strings use
-//! boxlite_free_string. Error pointers use boxlite_error_free.
 
 use std::ffi::{c_char, c_void};
 use std::ptr;
@@ -70,12 +68,19 @@ pub struct CAgentEventsOptions {
     pub after: *const c_char,
 }
 
+/// On success, receives an owned session; release it with boxlite_agent_session_free.
+/// The error pointer is borrowed for callback dispatch only.
 pub type CAgentSessionCb =
     Option<unsafe extern "C" fn(*mut CAgentSession, *const CBoxliteError, *mut c_void)>;
+/// On success, receives an owned turn; release it with boxlite_agent_turn_free.
+/// The error pointer is borrowed for callback dispatch only.
 pub type CAgentTurnCb =
     Option<unsafe extern "C" fn(*mut CAgentTurn, *const CBoxliteError, *mut c_void)>;
+/// JSON and error pointers are borrowed for callback dispatch only.
+/// Copy their contents to retain them after the callback returns.
 pub type CAgentJsonCb =
     Option<unsafe extern "C" fn(*const c_char, *const CBoxliteError, *mut c_void)>;
+/// The error pointer is borrowed for callback dispatch only.
 pub type CAgentDoneCb = Option<unsafe extern "C" fn(*const CBoxliteError, *mut c_void)>;
 
 /// Obtain a namespace without starting the Box.
@@ -278,6 +283,7 @@ pub unsafe extern "C" fn boxlite_agent_turn_events(
 }
 
 /// Read a consistent session state snapshot.
+/// Release a returned JSON string with boxlite_free_string.
 /// out_json and out_error may be null or writable. out_json is cleared on error.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_agent_session_state(
@@ -294,6 +300,7 @@ pub unsafe extern "C" fn boxlite_agent_session_state(
 }
 
 /// Read effective agent configuration.
+/// Release a returned JSON string with boxlite_free_string.
 /// out_json and out_error may be null or writable. out_json is cleared on error.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_agent_session_config(
@@ -310,6 +317,7 @@ pub unsafe extern "C" fn boxlite_agent_session_config(
 }
 
 /// Read adapter guarantees and limits.
+/// Release a returned JSON string with boxlite_free_string.
 /// out_json and out_error may be null or writable. out_json is cleared on error.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_agent_session_capabilities(
@@ -326,6 +334,7 @@ pub unsafe extern "C" fn boxlite_agent_session_capabilities(
 }
 
 /// Read a consistent turn state snapshot.
+/// Release a returned JSON string with boxlite_free_string.
 /// out_json and out_error may be null or writable. out_json is cleared on error.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_agent_turn_state(

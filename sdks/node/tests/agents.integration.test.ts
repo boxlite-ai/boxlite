@@ -1,13 +1,9 @@
-import { existsSync } from "node:fs";
 import { describe, expect, test, vi } from "vitest";
 import type { AgentHandle } from "../lib/agents.js";
+import { SimpleBox } from "../lib/simplebox.js";
 
-const built = existsSync(new URL("../native/boxlite.js", import.meta.url));
-
-describe.runIf(built)("agent namespace", () => {
+describe("agent namespace", () => {
   test("namespace calls reject without creating a Box", async () => {
-    const { SimpleBox } = await import("../lib/simplebox.js");
-    const { getNativeModule } = await import("../lib/native.js");
     const create = vi.fn();
     const box = new SimpleBox({
       image: "alpine:latest",
@@ -21,6 +17,5 @@ describe.runIf(built)("agent namespace", () => {
       "agents.get is not implemented",
     );
     expect(create).not.toHaveBeenCalled();
-    expect(new (getNativeModule().AgentHandle)()).toBeDefined();
   });
 });

@@ -156,7 +156,11 @@ A synchronous error means no callback will run. State/config/capability getters
 clear `out_json` on error; event openers clear `out`.
 Output/error pointers must be null or writable.
 
-Use `boxlite_error_free` for returned error messages.
+Errors written to `out_error` belong to the caller; release their messages with
+`boxlite_error_free`. Callback error pointers and JSON strings are borrowed for
+the callback's duration; copy their contents to retain them. JSON strings returned
+through getter output pointers belong to the caller; use `boxlite_free_string`.
+
 `boxlite_agent_session_free`, `boxlite_agent_turn_free` and
 `boxlite_agent_events_free` release local handles only; they never close a session
 or interrupt work. Null handles may be freed.
@@ -167,6 +171,6 @@ The [CLI reference](cli/README.md#boxlite-agent) lists nine flat `agent` command
 BOX is positional; creation requires `--agent AGENT` to select the agent for a new
 session. Existing work is selected with `--session`, `--turn` and `--request`.
 `inspect` combines state and session views, and `events` selects either scope.
-SDKs retain the `get`/`get_turn` methods; CLI targeting subsumes handle lookup.
+SDKs expose `get`/`get_turn` methods; CLI targeting subsumes handle lookup.
 CLI options reuse the five groups above and add `AgentInspectOptions` for view
 selection.
