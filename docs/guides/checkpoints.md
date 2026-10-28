@@ -86,7 +86,7 @@ after its writers have exited. References and roots must remain recoverable afte
 and across later runtime restarts; a temporary FD alone is not durable retention.
 
 `LocalCheckpointProvider` adapts explicit local bindings. A configuration has this
-shape (the object list is illustrative; every retained external object must be bound):
+shape (the object list is illustrative; bind every available external object):
 
 ```json
 {
@@ -127,9 +127,40 @@ supply inherited descriptor numbers:
 
 `fd` identifies the retained object. Handle/DAX descriptors must independently have
 the saved access/status flags and identify that object. The provider duplicates
-inherited FDs before use. Missing objects or roles fail explicitly. Cached directory
-names and cookies alone do not demand object FDs, including deleted listing-only
-names and `.`/`..`. Hard links and aliases must preserve the same recovered inode.
+inherited FDs before use. A checkpoint records whether each regular file was already
+unlinked at capture. For those files, import tolerates an omitted object key or an
+inherited descriptor that fails duplication with `EBADF`. Omitted handle descriptors
+are also allowed for those files; losing one handle preserves other valid handles
+and the object. There is no opt-in switch. Export still requires retained objects.
+
+To mark a whole orphan unavailable, omit its object key and its handle roles. In the
+Rust provider API, keep its saved `BoundShare.objects` slot as `None` and omit its
+handles; available objects use `Some(File)`. The descriptor ABI represents missing
+object slots as JSON `null`. A supplied handle without its object identity binding
+is rejected. Every alias across shares must agree about the object's availability.
+
+Missing backend nodes/handles are omitted during restore. Requests reaching them
+return the existing `EBADF` through FUSE; RELEASE does the same and FORGET has no
+resource to free. No replacement file is created. Guest cached reads or writeback
+writes may still succeed without reaching the server. Existing file-backed DAX
+mappings require their actual objects and every DAX access role: import rejects
+missing backing before VM allocation, since direct mappings bypass FUSE requests.
+When only a handle is missing, DAX can also establish a new mapping through the
+surviving inode without consulting that handle. Its reads/writes can therefore
+succeed; handle-based backend operations such as `fsync` still return `EBADF`.
+
+Missing linked objects, roots, boot data and DAX roles remain errors. Configured
+path lookup failures, negative descriptor numbers, wrong kinds/identities/flags,
+permission errors and other provider errors also remain errors. Caller-supplied
+inherited numbers must still identify the intended live objects; never reuse them
+for replacements. Cached directory names and cookies alone do not demand object
+FDs, including deleted listing-only names and `.`/`..`. Hard links and aliases must
+preserve the same recovered inode.
+
+Later checkpoints contain the surviving backend records and preserve allocation
+counters, so missing guest node/handle IDs cannot be reused after another import.
+A stopped cold start creates a new guest session against retained roots and does
+not recover the previous guest's open orphan handles.
 
 The readonly guest boot disk is an external dependency, not a third artifact. The
 runtime can use an exact digest-matching cached base or the explicit `boot_disks`
@@ -154,6 +185,10 @@ consistency limits and always resume/thaw after a known copy failure.
 
 Older full checkpoints are refused with an explicit unsupported-version error and
 left intact. No RAW container conversion or share extraction path is provided.
+Version-9 images without recorded unlink eligibility still require every object
+and handle. New readers accept their complete bindings. Older readers reject the
+new `unlinked: true` metadata and nullable object indices. Rust import providers
+must adapt `BoundShare.objects` from `File` entries to `Some(File)` or eligible `None`.
 Ordinary disk-only `.boxlite` archives retain their existing format and compatibility.
 Checkpoint endpoints are available in Rust and the embedded CLI; no SDK or REST
 checkpoint endpoints are added.

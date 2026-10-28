@@ -312,7 +312,7 @@ test\:checkpoint\:acceptance\:build: test\:checkpoint\:helper
 # Run it: needs /dev/kvm, the debug runtime and registry access for alpine:latest.
 test\:checkpoint\:acceptance: _ensure-kvm $(if $(SETUP_DONE),,runtime\:debug) test\:checkpoint\:helper
 	@BOXLITE_CHECKPOINT_HELPER="$(CHECKPOINT_HELPER)" $(CHECKPOINT_ACCEPTANCE) -- --ignored \
-		--exact checkpoint_continues_the_same_guest_process_in_a_new_runtime --test-threads=1 --nocapture
+		--exact $(if $(FILTER),$(FILTER),checkpoint_continues_the_same_guest_process_in_a_new_runtime) --test-threads=1 --nocapture
 
 # Missing /dev/kvm must fail hardware qualification, not report skipped tests as a pass.
 _ensure-kvm:

@@ -25,8 +25,20 @@ pub struct ObjectDependency {
     pub guest_ino: u64,
     pub ctime: (i64, i64),
     pub kind: u32,
+    /// True only for a regular file already unlinked at capture.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub unlinked: bool,
     pub reference: Option<ObjectReference>,
     pub recipe: Option<String>,
+}
+
+impl ObjectDependency {
+    pub(crate) fn allows_missing(&self) -> bool {
+        self.unlinked
+            && self.kind == 0o100000 // S_IFREG, independent of the host's mode_t width.
+            && self.recipe.is_none()
+            && self.reference.is_some()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

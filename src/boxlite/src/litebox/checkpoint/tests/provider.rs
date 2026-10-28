@@ -19,6 +19,7 @@ fn share(root: &Path) -> ShareDependency {
             guest_ino: st.ino(),
             ctime: (st.ctime(), st.ctime_nsec()),
             kind: st.mode() & 0o170000,
+            unlinked: false,
             reference: None,
             recipe: None,
         })
@@ -196,7 +197,15 @@ async fn checkpoint_provider_accepts_pinned_proc_fd_orphan_and_requires_independ
     let dependencies = dependencies(share);
     let bindings = provider.bind(&dependencies).await.unwrap();
     bindings.validate(&dependencies).unwrap();
-    assert_eq!(bindings.shares[0].objects[1].metadata().unwrap().nlink(), 0);
+    assert_eq!(
+        bindings.shares[0].objects[1]
+            .as_ref()
+            .unwrap()
+            .metadata()
+            .unwrap()
+            .nlink(),
+        0
+    );
     if let LocalObject::Fd { handles, .. } = provider
         .resources
         .get_mut("resource")

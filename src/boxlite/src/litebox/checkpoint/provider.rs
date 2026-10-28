@@ -39,7 +39,9 @@ impl CheckpointLease for () {}
 #[derive(Debug)]
 pub struct BoundShare {
     pub root: PathBuf,
-    pub objects: Vec<File>,
+    /// Saved object order; None is allowed only for a saved unlinked regular file.
+    pub objects: Vec<Option<File>>,
+    /// Missing descriptions may be omitted only for saved unlinked regular files.
     pub handles: BTreeMap<u64, File>,
     pub dax: Vec<(u64, bool, File)>,
 }
@@ -120,15 +122,31 @@ impl CheckpointBindings {
                 return Err(invalid("bound share root is not a directory"));
             }
             for (saved, object) in share.objects.iter().zip(&bound.objects) {
+                let identity = object
+                    .as_ref()
+                    .map(|file| file.metadata().map(|st| (st.dev(), st.ino())))
+                    .transpose()
+                    .map_err(invalid)?;
+                if aliases
+                    .insert(saved.alias, identity)
+                    .is_some_and(|old| old != identity)
+                {
+                    return Err(invalid("cross-share object presence or alias mismatch"));
+                }
+                let Some(object) = object else {
+                    if !saved.allows_missing() {
+                        return Err(invalid(
+                            "missing object was not a saved unlinked regular file",
+                        ));
+                    }
+                    continue;
+                };
                 let st = object.metadata().map_err(invalid)?;
                 let identity = (st.dev(), st.ino());
                 if st.mode() & 0o170000 != saved.kind
                     || saved.recipe.is_some()
                     || saved.reference.is_none()
                     || mount_id(object)? != root_mount
-                    || aliases
-                        .insert(saved.alias, identity)
-                        .is_some_and(|old| old != identity)
                     || identities
                         .insert(identity, saved.alias)
                         .is_some_and(|old| old != saved.alias)
@@ -155,6 +173,7 @@ impl CheckpointBindings {
                         let object = bound
                             .objects
                             .get(index)
+                            .and_then(Option::as_ref)
                             .ok_or_else(|| invalid("root object missing"))?
                             .metadata()
                             .map_err(invalid)?;
@@ -167,8 +186,12 @@ impl CheckpointBindings {
             let handles = share.state["handles"]
                 .as_array()
                 .ok_or_else(|| invalid("saved handle table missing"))?;
-            if handles.len() != bound.handles.len() {
-                return Err(invalid("independent handle bindings missing or extra"));
+            let handle_ids: std::collections::BTreeSet<_> = handles
+                .iter()
+                .filter_map(|handle| handle["handle"].as_u64())
+                .collect();
+            if bound.handles.keys().any(|id| !handle_ids.contains(id)) {
+                return Err(invalid("extra independent handle binding"));
             }
             for handle in handles {
                 let id = handle["handle"]
@@ -178,19 +201,29 @@ impl CheckpointBindings {
                     .as_u64()
                     .ok_or_else(|| invalid("invalid handle object"))?
                     as usize;
+                let saved = share
+                    .objects
+                    .get(index)
+                    .ok_or_else(|| invalid("handle object absent"))?;
+                let expected: i32 =
+                    serde_json::from_value(handle["flags"].clone()).map_err(invalid)?;
+                if expected & (libc::O_CREAT | libc::O_TRUNC | libc::O_EXCL) != 0 {
+                    return Err(invalid("unsafe saved handle creation flags"));
+                }
+                let Some(file) = bound.handles.get(&id) else {
+                    if !saved.allows_missing() {
+                        return Err(invalid("retained handle FD absent"));
+                    }
+                    continue;
+                };
                 let object = bound
                     .objects
                     .get(index)
+                    .and_then(Option::as_ref)
                     .ok_or_else(|| invalid("handle object absent"))?
                     .metadata()
                     .map_err(invalid)?;
-                let file = bound
-                    .handles
-                    .get(&id)
-                    .ok_or_else(|| invalid("retained/unlinked handle FD absent"))?;
                 let st = file.metadata().map_err(invalid)?;
-                let expected: i32 =
-                    serde_json::from_value(handle["flags"].clone()).map_err(invalid)?;
                 // SAFETY: file is a live borrowed descriptor.
                 let flags = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_GETFL) };
                 if (st.dev(), st.ino()) != (object.dev(), object.ino())
@@ -210,6 +243,14 @@ impl CheckpointBindings {
             {
                 let file = &mapping["kind"]["file"];
                 if let Some(object) = file["object"].as_u64() {
+                    if bound
+                        .objects
+                        .get(object as usize)
+                        .and_then(Option::as_ref)
+                        .is_none()
+                    {
+                        return Err(invalid("missing object has an existing DAX mapping"));
+                    }
                     expected.insert((
                         object,
                         file["writable"]
@@ -223,6 +264,7 @@ impl CheckpointBindings {
                 let object = bound
                     .objects
                     .get(*index as usize)
+                    .and_then(Option::as_ref)
                     .ok_or_else(|| invalid("DAX object absent"))?
                     .metadata()
                     .map_err(invalid)?;
@@ -256,7 +298,8 @@ impl CheckpointBindings {
 )]
 #[async_trait]
 pub trait CheckpointImportProvider: Send + Sync {
-    /// Prepare persistent roots and all independent handle/DAX descriptions.
+    /// Prepare persistent roots, available objects and independent access descriptions.
+    /// Only saved unlinked regular objects/handles may be explicitly absent.
     /// Roots and recovery points must remain available for the box's lifetime.
     async fn bind(
         &self,
@@ -302,15 +345,12 @@ pub struct LocalCheckpointProvider {
     pub boot_disks: BTreeMap<String, PathBuf>,
 }
 
-fn duplicate(fd: i32) -> BoxliteResult<File> {
+fn duplicate(fd: i32) -> std::io::Result<File> {
     // SAFETY: fcntl validates an inherited integer descriptor and returns a new
     // owned description reference; it does not dereference application memory.
     let copy = unsafe { libc::fcntl(fd, libc::F_DUPFD_CLOEXEC, 0) };
     if copy < 0 {
-        return Err(invalid(format!(
-            "inherited descriptor {fd}: {}",
-            std::io::Error::last_os_error()
-        )));
+        return Err(std::io::Error::last_os_error());
     }
     // SAFETY: successful fcntl returned an owned descriptor.
     Ok(unsafe { File::from_raw_fd(copy) })
@@ -385,8 +425,19 @@ impl LocalObject {
         flags: i32,
         role: Option<(u64, Option<bool>)>,
     ) -> BoxliteResult<File> {
+        self.open_available(root, flags, role, false)?
+            .ok_or_else(|| invalid("retained descriptor absent"))
+    }
+
+    fn open_available(
+        &self,
+        root: &Path,
+        flags: i32,
+        role: Option<(u64, Option<bool>)>,
+        allow_missing: bool,
+    ) -> BoxliteResult<Option<File>> {
         match self {
-            Self::Path { path } => path_object(root, path, flags),
+            Self::Path { path } => path_object(root, path, flags).map(Some),
             Self::Fd {
                 fd,
                 handles,
@@ -394,16 +445,33 @@ impl LocalObject {
                 dax_write,
             } => {
                 let fd = match role {
-                    None => *fd,
-                    Some((handle, None)) => *handles.get(&handle).ok_or_else(|| {
-                        invalid("unlinked object needs an independently supplied handle FD")
-                    })?,
-                    Some((_, Some(writable))) => (if writable { dax_write } else { dax_read })
-                        .ok_or_else(|| {
-                            invalid("unlinked object needs an independently supplied DAX FD")
-                        })?,
+                    None => Some(*fd),
+                    Some((handle, None)) => handles.get(&handle).copied(),
+                    Some((_, Some(writable))) => {
+                        if writable {
+                            *dax_write
+                        } else {
+                            *dax_read
+                        }
+                    }
                 };
-                duplicate(fd)
+                let Some(fd) = fd else {
+                    return if allow_missing {
+                        Ok(None)
+                    } else {
+                        Err(invalid("independently supplied handle/DAX FD absent"))
+                    };
+                };
+                if fd < 0 {
+                    return Err(invalid("inherited descriptor must be nonnegative"));
+                }
+                match duplicate(fd) {
+                    Ok(file) => Ok(Some(file)),
+                    Err(error) if allow_missing && error.raw_os_error() == Some(libc::EBADF) => {
+                        Ok(None)
+                    }
+                    Err(error) => Err(invalid(format!("inherited descriptor {fd}: {error}"))),
+                }
             }
         }
     }
@@ -499,13 +567,19 @@ impl CheckpointImportProvider for LocalCheckpointProvider {
                 {
                     return Err(invalid("resource or recovery point mismatch"));
                 }
-                let locator = resource
-                    .objects
-                    .get(&reference.object_key)
-                    .ok_or_else(|| invalid("retained object key is not bound"))?;
-                bound
-                    .objects
-                    .push(locator.open(&resource.root, object_flags(), None)?);
+                let Some(locator) = resource.objects.get(&reference.object_key) else {
+                    if object.allows_missing() {
+                        bound.objects.push(None);
+                        continue;
+                    }
+                    return Err(invalid("retained object key is not bound"));
+                };
+                bound.objects.push(locator.open_available(
+                    &resource.root,
+                    object_flags(),
+                    None,
+                    object.allows_missing(),
+                )?);
                 for handle in share.state["handles"]
                     .as_array()
                     .ok_or_else(|| invalid("handle table missing"))?
@@ -521,9 +595,14 @@ impl CheckpointImportProvider for LocalCheckpointProvider {
                     if flags & (libc::O_CREAT | libc::O_TRUNC | libc::O_EXCL) != 0 {
                         return Err(invalid("unsafe saved handle creation flags"));
                     }
-                    bound
-                        .handles
-                        .insert(id, locator.open(&resource.root, flags, Some((id, None)))?);
+                    if let Some(file) = locator.open_available(
+                        &resource.root,
+                        flags,
+                        Some((id, None)),
+                        object.allows_missing(),
+                    )? {
+                        bound.handles.insert(id, file);
+                    }
                 }
                 let mut roles = std::collections::BTreeSet::new();
                 if let Some(mappings) = share.state["dax"]["mappings"].as_array() {

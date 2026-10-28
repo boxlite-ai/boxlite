@@ -110,13 +110,87 @@ static void print_mount(const char *dir) {
     printf("mount %s\n", best);
 }
 
+/* Aligned O_DIRECT avoids the page cache. DAX setupmapping resolves an inode
+ * without consulting its handle, so fsync probes the independent handle
+ * table. A control file on the container disk starts probes after import. */
+static int missing_orphans(const char *disk, const char *share) {
+    const char *names[] = {"whole.dat", "handle.dat", "normal.dat"};
+    int fds[4];
+    char path[4096], probe[4096];
+    void *buffer = NULL;
+    if (posix_memalign(&buffer, 4096, 4096) != 0)
+        die("aligned buffer");
+    memset(buffer, 'Q', 4096);
+    for (int i = 0; i < 3; i++) {
+        snprintf(path, sizeof(path), "%s/%s", share, names[i]);
+        fds[i] = open(path, O_RDWR | O_DIRECT);
+        if (fds[i] < 0)
+            die("direct file setup");
+        if (i == 1) {
+            fds[3] = open(path, O_RDWR | O_DIRECT);
+            if (fds[3] < 0)
+                die("second independent handle");
+        }
+        if (i < 2 && unlink(path) != 0)
+            die("unlink direct file");
+    }
+    int mapped = open_file(share, "mapped.dat", 0);
+    if (ftruncate(mapped, MAP_LEN) != 0)
+        die("mapped truncate");
+    char *map = mmap(NULL, MAP_LEN, PROT_READ | PROT_WRITE, MAP_SHARED, mapped, 0);
+    if (map == MAP_FAILED)
+        die("mapped mmap");
+    map[0] = 'M';
+    uint64_t *watermark = (uint64_t *)(map + WATERMARK);
+    __atomic_store_n(watermark, 0, __ATOMIC_SEQ_CST);
+    if (msync(map, MAP_LEN, MS_SYNC) != 0)
+        die("mapped sync");
+    close(mapped);
+    snprintf(probe, sizeof(probe), "%s/probe", disk);
+    printf("ready pid=%d\n", getpid());
+    unsigned long long n = 0;
+    for (;;) {
+        if (access(probe, F_OK) == 0) {
+            errno = 0;
+            ssize_t r = pread(fds[0], buffer, 4096, 0);
+            int re = errno;
+            errno = 0;
+            ssize_t w = pwrite(fds[0], buffer, 4096, 0);
+            int we = errno;
+            printf("missing whole.dat read=%zd errno=%d write=%zd errno=%d\n", r, re, w, we);
+            if (r != -1 || re != EBADF || w != -1 || we != EBADF)
+                die("missing descriptor did not return EBADF");
+            errno = 0;
+            int sync = fsync(fds[1]);
+            int se = errno;
+            printf("missing handle.dat fsync=%d errno=%d\n", sync, se);
+            if (sync != -1 || se != EBADF)
+                die("missing handle fsync did not return EBADF");
+            for (int i = 2; i < 4; i++) {
+                if (pread(fds[i], buffer, 4096, 4 * 1024 * 1024) != 4096 || ((char *)buffer)[0] != 'Q' ||
+                    pwrite(fds[i], buffer, 4096, 4 * 1024 * 1024) != 4096 || fsync(fds[i]) != 0)
+                    die("surviving direct handle");
+            }
+            if (map[0] != 'M')
+                die("surviving DAX mapping");
+            __atomic_store_n(watermark, ++n, __ATOMIC_SEQ_CST);
+            printf("probe pid=%d n=%llu normal=ok other-handle=ok dax=ok\n", getpid(), n);
+        }
+        struct timespec delay = {0, 200 * 1000 * 1000};
+        nanosleep(&delay, NULL);
+    }
+    return 0;
+}
+
 int main(int argc, char **argv) {
-    if (argc != 3) {
+    if (argc != 3 && argc != 4) {
         fprintf(stderr, "usage: %s <disk-dir> <share-dir>\n", argv[0]);
         return 2;
     }
     const char *disk = argv[1], *share = argv[2];
     setvbuf(stdout, NULL, _IOLBF, 0);
+    if (argc == 4 && strcmp(argv[3], "missing") == 0)
+        return missing_orphans(disk, share);
 
     unsigned char raw[16];
     if (getrandom(raw, sizeof(raw), 0) != sizeof(raw))

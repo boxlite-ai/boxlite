@@ -276,8 +276,16 @@ impl boxlite::CheckpointExportProvider for RecoveryProvider {
                 let orphan = source.metadata().unwrap().nlink() == 0;
                 let relative = if orphan {
                     assert_eq!(share.tag, "uservol0", "unexpected retained orphan");
-                    // The test retained this inode before the guest unlinked it.
-                    PathBuf::from("unlinked.dat")
+                    // procfs preserves the original name of a deleted inode.
+                    PathBuf::from(
+                        source_path
+                            .file_name()
+                            .unwrap()
+                            .to_str()
+                            .unwrap()
+                            .strip_suffix(" (deleted)")
+                            .expect("deleted source name"),
+                    )
                 } else {
                     source_path
                         .strip_prefix(source_root)
@@ -658,6 +666,351 @@ async fn assert_vmm_filter_on_every_thread(home: &Path, litebox: &LiteBox) {
         !log.contains("Seccomp disabled"),
         "the shim skipped seccomp"
     );
+}
+
+/// Missing backend IDs must reach the real guest as EBADF, while independent
+/// surviving handles and the original guest process keep working.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "real KVM acceptance; run with FILTER=checkpoint_missing_orphans_return_guest_ebadf"]
+async fn checkpoint_missing_orphans_return_guest_ebadf() {
+    use boxlite::CheckpointImportProvider;
+    init_tracing();
+    require_kvm();
+    let home = PerTestBoxHome::isolated();
+    let _logs = BoxLogs::new(&home.path, "missing-source");
+    let share = tempfile::tempdir().unwrap();
+    for name in ["whole.dat", "handle.dat", "normal.dat"] {
+        std::fs::write(share.path().join(name), vec![b'Q'; 8 * 1024 * 1024]).unwrap();
+    }
+    let recovery = tempfile::tempdir().unwrap();
+    let pairs = tempfile::tempdir().unwrap();
+    let rt = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+        ..Default::default()
+    })
+    .unwrap();
+    let source = rt
+        .create(
+            BoxOptions {
+                rootfs: RootfsSpec::Image("alpine:latest".into()),
+                memory_mib: Some(256),
+                auto_delete: Some(0),
+                volumes: vec![VolumeSpec {
+                    managed_volume: None,
+                    host_path: share.path().to_str().unwrap().into(),
+                    guest_path: SHARE_GUEST.into(),
+                    read_only: false,
+                }],
+                ..Default::default()
+            },
+            None,
+        )
+        .await
+        .unwrap();
+    source.start().await.unwrap();
+    source
+        .copy_into(helper_binary(), HELPER_GUEST, CopyOptions::default())
+        .await
+        .unwrap();
+    run_ok(&source, "chmod", &["0755", HELPER_GUEST]).await;
+    run_ok(&source, "mkdir", &["-p", DISK_DIR]).await;
+    let mut execution = source
+        .exec(BoxCommand::new(HELPER_GUEST).args([DISK_DIR, SHARE_GUEST, "missing"]))
+        .await
+        .unwrap();
+    let execution_id = execution.id().clone();
+    let mut lines = Lines::new(execution.stdout().unwrap(), None);
+    let ready = lines.next().await;
+    let pid: u32 = ready
+        .strip_prefix("ready pid=")
+        .expect(&ready)
+        .parse()
+        .unwrap();
+    let started = start_time(&source, pid).await;
+    source
+        .pause(PauseOptions {
+            host_writers_stopped: true,
+        })
+        .await
+        .unwrap();
+    let provider = RecoveryProvider {
+        roots: std::collections::BTreeMap::from([
+            (
+                "uservol0".into(),
+                (share.path().into(), recovery.path().join("volume")),
+            ),
+            (
+                "BoxLiteShared".into(),
+                (
+                    home.path
+                        .join("boxes")
+                        .join(source.id().as_str())
+                        .join("shared"),
+                    recovery.path().join("shared"),
+                ),
+            ),
+        ]),
+        saved: std::sync::Mutex::new(None),
+        boot: recovery.path().join("boot.ext4"),
+    };
+    let pair = pairs.path().join("first");
+    source.export_checkpoint(&pair, &provider).await.unwrap();
+    let deps = BoxliteRuntime::inspect_checkpoint(&pair).unwrap();
+    use sha2::{Digest, Sha256};
+    let boot = std::fs::read_dir(home.path.join("bases"))
+        .unwrap()
+        .flatten()
+        .map(|e| e.path())
+        .find(|p| {
+            p.is_file()
+                && std::fs::metadata(p).unwrap().len() == deps.boot_disk_bytes
+                && hex::encode(Sha256::digest(std::fs::read(p).unwrap())) == deps.boot_disk_sha256
+        })
+        .expect("exact boot");
+    std::fs::copy(boot, &provider.boot).unwrap();
+    let mut local = provider
+        .saved
+        .lock()
+        .unwrap()
+        .as_ref()
+        .unwrap()
+        .provider
+        .clone();
+    local
+        .boot_disks
+        .insert(deps.boot_disk_sha256.clone(), provider.boot.clone());
+    let resource = &local.resources["uservol0"];
+    let key = |name: &str| {
+        resource
+            .objects
+            .iter()
+            .find_map(|(key, object)| {
+                if let boxlite::LocalObject::Fd { fd, .. } = object {
+                    let path = std::fs::read_link(format!("/proc/self/fd/{fd}")).unwrap();
+                    let filename = path.file_name().unwrap().to_str().unwrap();
+                    if filename.trim_end_matches(" (deleted)") == name {
+                        return Some(key.clone());
+                    }
+                }
+                None
+            })
+            .unwrap_or_else(|| panic!("no captured {name}"))
+    };
+    let whole = key("whole.dat");
+    let handle = key("handle.dat");
+    let mapped = key("mapped.dat");
+    let whole_index = deps
+        .shares
+        .iter()
+        .find(|s| s.tag == "uservol0")
+        .unwrap()
+        .objects
+        .iter()
+        .position(|o| o.reference.as_ref().unwrap().object_key == whole)
+        .unwrap();
+    assert!(
+        deps.shares
+            .iter()
+            .find(|s| s.tag == "uservol0")
+            .unwrap()
+            .objects[whole_index]
+            .unlinked
+    );
+    let objects = &mut local.resources.get_mut("uservol0").unwrap().objects;
+    let removed = objects.remove(&whole).unwrap();
+    let boxlite::LocalObject::Fd {
+        fd,
+        handles: lost_handles,
+        ..
+    } = removed
+    else {
+        panic!("orphan locator")
+    };
+    let mut lost_fds: std::collections::BTreeSet<_> = lost_handles.into_values().collect();
+    lost_fds.insert(fd);
+    let boxlite::LocalObject::Fd { handles, .. } = objects.get_mut(&handle).unwrap() else {
+        panic!("handle locator")
+    };
+    assert_eq!(handles.len(), 2, "two independent access descriptions");
+    lost_fds.insert(handles.pop_first().unwrap().1);
+
+    let mut old = deps.clone();
+    old.shares
+        .iter_mut()
+        .find(|s| s.tag == "uservol0")
+        .unwrap()
+        .objects[whole_index]
+        .unlinked = false;
+    assert!(
+        local.bind(&old).await.is_err(),
+        "old metadata must remain strict"
+    );
+    let mut invalid = local.clone();
+    invalid
+        .resources
+        .get_mut("uservol0")
+        .unwrap()
+        .objects
+        .insert(
+            whole.clone(),
+            boxlite::LocalObject::Fd {
+                fd: -1,
+                handles: Default::default(),
+                dax_read: None,
+                dax_write: None,
+            },
+        );
+    assert!(
+        invalid.bind(&deps).await.is_err(),
+        "negative supplied FD must remain invalid"
+    );
+    source.stop().await.unwrap();
+    rt.remove(source.id().as_str(), true).await.unwrap();
+    rt.shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT))
+        .await
+        .unwrap();
+    drop(lines);
+    drop(execution);
+    drop(source);
+    drop(rt);
+    drop(share);
+    use std::os::fd::AsRawFd;
+    provider
+        .saved
+        .lock()
+        .unwrap()
+        .as_mut()
+        .unwrap()
+        ._files
+        .retain(|file| !lost_fds.contains(&file.as_raw_fd()));
+    let target_home = PerTestBoxHome::isolated();
+    let _target_logs = BoxLogs::new(&target_home.path, "missing-restored");
+    let target = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: target_home.path.clone(),
+        ..Default::default()
+    })
+    .unwrap();
+    let mut bad_dax = local.clone();
+    let boxlite::LocalObject::Fd { dax_write, .. } = bad_dax
+        .resources
+        .get_mut("uservol0")
+        .unwrap()
+        .objects
+        .get_mut(&mapped)
+        .unwrap()
+    else {
+        panic!("DAX locator")
+    };
+    assert!(dax_write.take().is_some());
+    let rejected = target
+        .import_checkpoint(&pair, Default::default(), &bad_dax)
+        .await;
+    let error = rejected
+        .err()
+        .expect("missing DAX role must reject")
+        .to_string();
+    assert!(error.contains("DAX"), "{error}");
+    eprintln!("missing DAX rejected: {error}");
+    let restored = target
+        .import_checkpoint(&pair, Default::default(), &local)
+        .await
+        .unwrap();
+    assert_eq!(status(&restored).await, BoxStatus::Paused);
+    restored.resume().await.unwrap();
+    assert_eq!(start_time(&restored, pid).await, started);
+    assert_vmm_filter_on_every_thread(&target_home.path, &restored).await;
+    run_ok(&restored, "touch", &[&format!("{DISK_DIR}/probe")]).await;
+    let mut attached = restored
+        .attach(AttachOptions::execution(execution_id.clone()).read_only())
+        .await
+        .unwrap();
+    let mut lines = Lines::new(attached.stdout().unwrap(), None);
+    let mut probes = 0;
+    while probes < 3 {
+        let line = lines.next().await;
+        eprintln!("guest: {line}");
+        assert!(!line.starts_with("fatal"), "{line}");
+        if line.starts_with("probe ") {
+            assert!(
+                line.contains(&format!("pid={pid} "))
+                    && line.ends_with("normal=ok other-handle=ok dax=ok"),
+                "{line}"
+            );
+            probes += 1;
+        }
+    }
+    // Allocate fresh IDs before a second checkpoint; old guest descriptors must
+    // still fail after another import rather than alias these new resources.
+    run_ok(&restored, "sh", &["-c", "echo new > /mnt/share/new.dat"]).await;
+    restored
+        .pause(PauseOptions {
+            host_writers_stopped: true,
+        })
+        .await
+        .unwrap();
+    let second_cut = cut_counter(&recovery.path().join("volume"));
+    let second_provider = RecoveryProvider {
+        roots: std::collections::BTreeMap::from([
+            (
+                "uservol0".into(),
+                (
+                    recovery.path().join("volume"),
+                    recovery.path().join("second-volume"),
+                ),
+            ),
+            (
+                "BoxLiteShared".into(),
+                (
+                    recovery.path().join("shared"),
+                    recovery.path().join("second-shared"),
+                ),
+            ),
+        ]),
+        saved: std::sync::Mutex::new(None),
+        boot: provider.boot.clone(),
+    };
+    let second = pairs.path().join("second");
+    restored
+        .export_checkpoint(&second, &second_provider)
+        .await
+        .unwrap();
+    restored.stop().await.unwrap();
+    let again = target
+        .import_checkpoint(&second, Default::default(), &second_provider)
+        .await
+        .unwrap();
+    again.resume().await.unwrap();
+    assert_eq!(start_time(&again, pid).await, started);
+    let mut attached_again = again
+        .attach(AttachOptions::execution(execution_id).read_only())
+        .await
+        .unwrap();
+    let mut lines = Lines::new(attached_again.stdout().unwrap(), None);
+    loop {
+        let line = lines.next().await;
+        eprintln!("repeat guest: {line}");
+        assert!(!line.starts_with("fatal"), "{line}");
+        if line.starts_with("probe ")
+            && line
+                .split(" n=")
+                .nth(1)
+                .unwrap()
+                .split(' ')
+                .next()
+                .unwrap()
+                .parse::<u64>()
+                .unwrap()
+                > second_cut + 3
+        {
+            break;
+        }
+    }
+    again.stop().await.unwrap();
+    target
+        .shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT))
+        .await
+        .unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread")]

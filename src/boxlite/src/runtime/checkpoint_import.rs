@@ -272,8 +272,11 @@ pub(crate) async fn import_checkpoint(
             }
             let mut objects = Vec::new();
             for object in bound.objects.drain(..) {
-                objects.push(files.len());
-                files.push(object.into());
+                objects.push(object.map(|file| {
+                    let index = files.len();
+                    files.push(file.into());
+                    index
+                }));
             }
             let mut handles = serde_json::Map::new();
             for (id, file) in std::mem::take(&mut bound.handles) {

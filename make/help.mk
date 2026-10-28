@@ -57,7 +57,7 @@ help:
 	@echo "    make test:snapshot:rootless - Run libkrun's rootless archive tests under bwrap and the VMM seccomp filter"
 	@echo "    make test:shim:linkage      - Build the real static Linux shim and check libkrun's checkpoint ABI links into it"
 	@echo "    make test:checkpoint:acceptance:build - Compile the real-KVM checkpoint acceptance test and its guest helper (Linux x86_64)"
-	@echo "    make test:checkpoint:acceptance - Run it: export, destroy, import and resume the same guest process (needs /dev/kvm)"
+	@echo "    make test:checkpoint:acceptance - Run export/import guest continuation; FILTER selects an exact test name (needs /dev/kvm)"
 	@echo "    make test:integration:vmm:elf - Load VMM_KERNEL into guest RAM and verify through KVM"
 	@echo "    make test:integration:vmm:linux - Boot VMM_KERNEL on KVM, with and without a test initramfs"
 	@echo "    make test:integration:vmm:kvm - Qualify KVM VMs, RAM mapping and the buses on KVM (Linux x86_64)"
