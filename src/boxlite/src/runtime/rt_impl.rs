@@ -2904,16 +2904,9 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn test_recovery_marks_unverified_live_shim_running() {
-        use std::os::unix::process::CommandExt;
-
         let (runtime, _dir) = create_test_runtime();
 
-        let mut child = std::process::Command::new("sleep")
-            .arg0("boxlite-shim")
-            .arg("300")
-            .spawn()
-            .expect("Failed to spawn legacy shim process");
-        let pid = child.id();
+        let (pid, mut child) = spawn_dummy_process();
 
         let config = test_box_config_in_layout(false, &runtime);
         let state = running_state(pid);
