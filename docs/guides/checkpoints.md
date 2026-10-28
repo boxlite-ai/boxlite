@@ -29,6 +29,9 @@ memory-image file-size allowances; RAM, init bytes and anonymous DAX pages do.
 | Stopped | Allow | Refuse | Allow |
 | Other or unknown | Refuse | Refuse | Refuse |
 
+A never-started (`Configured`) box also accepts disk archive restore, which leaves
+it Stopped; this exception does not permit snapshot restore or disk capture.
+
 Each lifecycle/storage operation takes a nonblocking reservation across processes.
 Conflicts return `Busy`. A Running disk capture drains and copies the frozen view
 without replacing the live disk. Batch clones share one copied base; children and
@@ -237,3 +240,11 @@ bytes, removes source dependencies, and transfers the pair over HTTP. It checks
 Paused import, explicit resume, original PID/marker/execution ID, guest file access,
 repeated export/import, cold start, bwrap and the VMM seccomp filter on every shim
 thread. The log directory also retains both `serve` processes’ stderr.
+
+### Self-hosted server mount policy
+
+Checkpoint imports through `boxlite serve` apply the same `--host-path-root`
+policy as box creation: host volumes are disabled unless roots are configured,
+and each restored volume must be a direct child of an allowed root. HTTP
+transfers require current v2 path metadata; re-export older checkpoints before
+uploading them. Local imports retain their existing compatibility.

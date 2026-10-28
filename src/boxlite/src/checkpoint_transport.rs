@@ -125,6 +125,16 @@ pub fn unpack(mut input: File, destination: &Path) -> BoxliteResult<()> {
         .map_err(invalid)
 }
 
+/// Read the target volumes so the reference server can enforce its host-path policy.
+pub fn import_volumes(directory: &Path) -> BoxliteResult<Vec<crate::runtime::options::VolumeSpec>> {
+    let pair = pair::open(directory)?;
+    require_relocatable(&pair)?;
+    let options: crate::BoxOptions =
+        serde_json::from_value(pair.dependencies.application["options"].clone())
+            .map_err(invalid)?;
+    Ok(options.volumes)
+}
+
 fn require_relocatable(pair: &pair::VerifiedPair) -> BoxliteResult<()> {
     if pair.dependencies.application["local_paths"]["version"] != 2 {
         return Err(BoxliteError::Unsupported(

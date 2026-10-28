@@ -14,6 +14,7 @@ pub(crate) enum Action {
     DiskCapture,
     Checkpoint,
     DiskRestore,
+    ArchiveRestore,
     SnapshotRemove,
 }
 
@@ -85,7 +86,10 @@ impl BoxImpl {
     pub(crate) async fn reserve(&self, action: Action) -> BoxliteResult<Reservation> {
         let guard = Reservation::acquire(&self.runtime.layout, self.id())?;
         let mut state = self.runtime.box_manager.update_box(self.id())?;
-        if !matches!(action, Action::Lifecycle | Action::Stop)
+        let initializing_archive =
+            matches!(action, Action::ArchiveRestore) && state.status == BoxStatus::Configured;
+        if !initializing_archive
+            && !matches!(action, Action::Lifecycle | Action::Stop)
             && !matches!(
                 state.status,
                 BoxStatus::Running | BoxStatus::Paused | BoxStatus::Stopped
@@ -133,6 +137,9 @@ impl BoxImpl {
             Action::DiskCapture => matches!(state.status, BoxStatus::Running | BoxStatus::Stopped),
             Action::Checkpoint => state.status == BoxStatus::Paused && owner,
             Action::DiskRestore => state.status == BoxStatus::Stopped,
+            Action::ArchiveRestore => {
+                matches!(state.status, BoxStatus::Configured | BoxStatus::Stopped)
+            }
             Action::SnapshotRemove => true,
         };
         if !allowed {

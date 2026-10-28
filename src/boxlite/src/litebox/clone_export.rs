@@ -92,7 +92,7 @@ impl BoxImpl {
         }
 
         // Phase A: Create shared base layer inside quiesce bracket (VM paused).
-        // This is the same operation as snapshot creation: rename + COW child.
+        // Snapshot creation uses the same captured standalone disk.
         let source_box_id = self.id().to_string();
         let captured = self.capture_disk(&_lock).await?;
         let layer = rt
@@ -225,14 +225,15 @@ impl BoxImpl {
     ///
     /// A stopped or never-started box qualifies. Installing the disk moves a
     /// configured box to Stopped so its first start reuses that disk. The disk
-    /// lock excludes start, export and snapshots while it is replaced.
+    /// reservation excludes start, export and snapshots while it is replaced.
     pub(crate) async fn restore_from_archive(
         &self,
         archive: crate::runtime::options::BoxArchive,
     ) -> BoxliteResult<()> {
-        self.refuse_for_checkpoint("restoring from an archive")?;
         let t0 = Instant::now();
-        let _lock = self.disk_ops.lock().await;
+        let reservation = self
+            .reserve(super::operation::Action::ArchiveRestore)
+            .await?;
 
         let status = self.state.read().status;
         if !matches!(status, BoxStatus::Stopped | BoxStatus::Configured) {
@@ -246,7 +247,9 @@ impl BoxImpl {
         let archive_path = archive.path().to_path_buf();
         let layout = self.runtime.layout.clone();
         let disks_dir = self.config.box_home.join("disks");
+        let writer_reservation = reservation.duplicate()?;
         tokio::task::spawn_blocking(move || {
+            let _reservation = writer_reservation;
             crate::runtime::import::replace_container_disk(&archive_path, &layout, &disks_dir)
         })
         .await
@@ -340,7 +343,7 @@ fn do_export_finalize(
 }
 
 #[cfg(test)]
-mod tests {
+mod archive_restore_tests {
     use super::*;
     use crate::litebox::config::{BoxConfig, ContainerRuntimeConfig};
     use crate::litebox::state::BoxState;
@@ -405,6 +408,7 @@ mod tests {
             let mut state = BoxState::new();
             state.status = status;
             runtime.box_manager.add_box(&config, &state).unwrap();
+            crate::litebox::operation::Reservation::provision(&runtime.layout, &id).unwrap();
             let box_impl = BoxImpl::new(
                 config,
                 state,

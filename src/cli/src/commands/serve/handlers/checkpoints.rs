@@ -1,5 +1,5 @@
 //! Checkpoint transfers use temporary files, never checkpoint-sized buffers.
-use super::super::types::ImportQuery;
+use super::super::types::{ImportQuery, VolumeSpecRequest};
 use super::super::{AppState, error_from_boxlite, get_or_fetch_box};
 use axum::Json;
 use axum::body::Body;
@@ -138,9 +138,22 @@ pub(in crate::commands::serve) async fn import(
         }
         file.flush().await.map_err(storage)?;
         let file = file.into_std().await;
+        let policy_state = state.clone();
         let directory = tokio::task::spawn_blocking(move || {
             let directory = tempfile::tempdir().map_err(storage)?;
             boxlite::checkpoint_transport::unpack(file, &directory.path().join("pair"))?;
+            let volumes =
+                boxlite::checkpoint_transport::import_volumes(&directory.path().join("pair"))?;
+            let requests: Vec<_> = volumes
+                .into_iter()
+                .map(|volume| VolumeSpecRequest {
+                    managed_volume: volume.managed_volume,
+                    host_path: Some(volume.host_path),
+                    guest_path: volume.guest_path,
+                    read_only: volume.read_only,
+                })
+                .collect();
+            policy_state.host_paths.resolve(&requests)?;
             Ok::<_, boxlite::BoxliteError>(directory)
         })
         .await
