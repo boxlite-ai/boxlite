@@ -420,7 +420,7 @@ mod tests {
 
     #[test]
     fn null_arguments_are_invalid_and_clear_the_output() {
-        let mut out = 1usize as *mut CDomainList;
+        let mut out = ptr::dangling_mut::<CDomainList>();
         let code = unsafe { boxlite_domain_list(ptr::null_mut(), &mut out, ptr::null_mut()) };
         assert_eq!(code, BoxliteErrorCode::InvalidArgument);
         assert!(out.is_null());
