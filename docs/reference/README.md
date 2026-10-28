@@ -32,6 +32,7 @@ Complete API documentation for each SDK:
 | Surface | Documentation | Description |
 |---------|---------------|-------------|
 | **Box API** | [`openapi/box.openapi.yaml`](../../openapi/box.openapi.yaml) | The portable REST contract, 32 paths. Groups: configuration & discovery, authentication, volumes, boxes, box lifecycle, snapshot/portability, execution, files, network, metrics, images, registries |
+| **Agent REST design** | [Sessions and turns](../contributing/investigations/2026-10-28-agent-rest-api-design.md) | Nine proposed HTTP operations covering the agent SDK API; no server routes or OpenAPI paths are added yet |
 | **Admin API** | [`openapi/admin.openapi.yaml`](../../openapi/admin.openapi.yaml) | Cloud-only contract for organization members and invitations, 4 paths, meant for the CLI and SDKs, which do not call it yet. Shares the Box API's host and credentials, but uses the hosted service's flat error response; local servers do not serve it |
 | **Reference server** | [`openapi/reference-server/`](../../openapi/reference-server/README.md) | A partial implementation used as a client test fixture, not a conformance target |
 

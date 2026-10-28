@@ -76,7 +76,11 @@ TypeScript types are exported from the package; Go types use the `Agent` prefix.
 - Session/turn snapshots include an opaque cursor, requests and steering receipts. Results retain the turn ID, status, outcome, output, artifacts, usage and errors.
 - Unknown execution and steering states are representable. Accepted and applied steering are distinct; a question outcome is distinct from a final answer.
 
-These records define SDK data types, not a network wire protocol.
+These records define SDK data types. The
+[REST design](../contributing/investigations/2026-10-28-agent-rest-api-design.md)
+maps them to nine HTTP operations, including snapshot reads, resumable events,
+steering and typed replies. It also defines cached getter behavior and retry
+headers. Agent HTTP routes and REST client support are unavailable.
 
 ### Example: handle operation errors
 
