@@ -304,6 +304,8 @@ impl Drop for CleanupGuard {
 /// Tasks read from config/runtime and write to Option fields.
 pub struct InitPipelineContext {
     pub outbound_policy: Option<crate::runtime::options::OutboundNetworkConfig>,
+    /// Persisted resources on input; what this boot runs with after vmm_spawn.
+    pub resources: Option<crate::litebox::BoxResources>,
     pub config: BoxConfig,
     pub runtime: SharedRuntimeImpl,
     pub guard: CleanupGuard,
@@ -357,6 +359,7 @@ impl InitPipelineContext {
         let guard = CleanupGuard::new(runtime.clone(), config.id.clone());
         Self {
             outbound_policy: None,
+            resources: None,
             config,
             runtime,
             guard,

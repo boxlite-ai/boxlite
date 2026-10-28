@@ -33,6 +33,7 @@
  */
 
 import { RUNNER_ENV_FILE, runnerApiUrl } from './runner-boot.ts'
+import { CLOUD_RUNNER_KERNEL, kernelDeployment } from '../../runner/kernel.ts'
 import { dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { artifactFetchCommand, verifyAgainstManifest } from './runner-binary.ts'
@@ -121,6 +122,7 @@ export const upgradeResourceName = (slot: RunnerSlot): string =>
  * would skip every dev deploy after the first.
  */
 export type UpgradeTarget = {
+  kernel?: typeof CLOUD_RUNNER_KERNEL
   identity: string
   /** The same pair the boot script installs from. See `runner-binary.ts`. */
   binary: RunnerBinary
@@ -164,19 +166,17 @@ export type UpgradeTarget = {
 }
 
 /**
- * The one thing that should make a host's upgrade run again.
- *
- * The identity and the address, which together are everything about the run
- * that could change. Not the digest: the stack never reads one — the host does,
- * from the manifest beside the tarball — so a republished asset under one
- * version is a case this cannot see, and `runner-binary.ts` records that as the
- * cost of resolving from the checkout rather than on the deployer.
+ * Runner identity, artifact name and kernel digest determine when to upgrade.
+ * The kernel pin can change independently of the runner package. The runner's
+ * own checksum is read on the host, so republishing a runner asset under the
+ * same identity is still invisible here; see `runner-binary.ts`.
  *
  * The instance id is added by the provider, because a replaced host is also due
  * an upgrade.
  */
-export const upgradeTrigger = (target: Pick<UpgradeTarget, 'identity'> & { binary: Pick<RunnerBinary, 'tarballName'> }): string =>
-  `${target.identity}:${target.binary.tarballName}`
+export const upgradeTrigger = (
+  target: Pick<UpgradeTarget, 'identity' | 'kernel'> & { binary: Pick<RunnerBinary, 'tarballName'> },
+): string => `${target.identity}:${target.binary.tarballName}:${(target.kernel ?? CLOUD_RUNNER_KERNEL).sha256}`
 
 /**
  * Never move a host backwards by accident.
@@ -335,7 +335,7 @@ probe_identity() {
  * environment after it still runs. Passing the statement rather than a code is
  * what keeps one copy of the checks.
  */
-const guards = (satisfied: string): string => `if [ ! -x /usr/local/bin/boxlite-runner ] ||
+const guards = (satisfied: string, kernelCheck = ''): string => `if [ ! -x /usr/local/bin/boxlite-runner ] ||
   [ ! -f /etc/systemd/system/boxlite-runner.service ] ||
   ! systemctl is-enabled --quiet boxlite-runner 2>/dev/null; then
   echo "still bootstrapping (binary or unit not in place, or not enabled); the boot script installs $TARGET itself — nothing to do"
@@ -344,7 +344,7 @@ fi
 
 CURRENT=$(probe_identity || true)
 echo "current identity: \${CURRENT:-<not serving>}"
-if [ "$CURRENT" = "$TARGET" ]; then
+if [ "$CURRENT" = "$TARGET" ]${kernelCheck}; then
   echo "already serving $TARGET; leaving the unit untouched"
   ${satisfied}
 fi
@@ -403,16 +403,19 @@ fi
 
 export const renderUpgradePayload = (target: UpgradeTarget): string => {
   assertUpgradeTarget(target)
-  return `${preamble(target)}${guards('exit 0')}${swapSequence(target)}`
+  return `set -euo pipefail
+(
+${preamble(target)}${guards('exit 0')}${swapSequence(target)}
+)
+${kernelDeployment(target.kernel).enforce}`
 }
 
 /**
  * The same work as an OS policy's two scripts, graded by exit code.
  *
- * `validate` answers the two guards and nothing else: 100 means the host is in
- * the desired state, 101 is the only answer that makes the agent run `enforce`.
- * `enforce` is the tail of the same script — it re-checks nothing, because the
- * agent reaches it only after `validate` said to.
+ * `validate` checks bootstrap readiness, runner identity and the kernel pin.
+ * 100 means no work is due; 101 asks the agent to run `enforce`. Enforcement
+ * rechecks the host before applying either the binary or kernel update.
  */
 export type UpgradePolicyScripts = { validate: string; enforce: string }
 
@@ -431,7 +434,7 @@ const SHEBANG = '#!/bin/bash\n'
 export const renderPolicyScripts = (target: UpgradeTarget): UpgradePolicyScripts => {
   assertUpgradeTarget(target)
   return {
-    validate: `${SHEBANG}${preamble(target)}${guards('exit 100')}echo "not serving $TARGET"
+    validate: `${SHEBANG}${preamble(target)}${kernelDeployment(target.kernel).setup}${guards('exit 100', ' && runner_kernel_matches')}echo "runner binary or kernel needs updating"
 exit 101
 `,
     /*
@@ -597,7 +600,9 @@ export const renderUnitEnvironmentPolicyScripts = ({
   otlpUrl,
   volumeBackend,
   registryProxyHost,
-}: Pick<UpgradeTarget, 'otlpUrl' | 'volumeBackend' | 'registryProxyHost'> & { apiUrl: string }): UpgradePolicyScripts => {
+}: Pick<UpgradeTarget, 'otlpUrl' | 'volumeBackend' | 'registryProxyHost'> & {
+  apiUrl: string
+}): UpgradePolicyScripts => {
   const block = `set -euo pipefail
 ${unitEnvironmentBlock({ apiUrl, otlpUrl, volumeBackend, registryProxyHost })}`
   return {
@@ -626,14 +631,10 @@ exit 101
 /**
  * Everything one command has to do to a host, for the transports that send one.
  *
- * SSM and ssh carry a script rather than a desired state, so both halves travel
- * together: the binary first, then the unit environment — the order GCP's two
- * policy resources run in. One command per host is also what keeps the restarts
- * to the host whose turn it is; two would let each restart it in its own time.
- *
- * The binary half becomes a function so that "already serving this identity"
- * ends that half rather than the payload, which is the case where only the
- * environment has moved — a stage that changed its domain and nothing else.
+ * SSM and ssh converge the binary, optional unit environment and kernel in one
+ * command per host, keeping restarts on the host whose turn it is. The binary
+ * guard returns from its function so an unchanged identity still lets the
+ * environment and kernel converge.
  */
 export const renderHostConvergence = (target: UpgradeTarget): string => {
   assertUpgradeTarget(target)
@@ -651,7 +652,8 @@ converge_unit_environment
 `
     : ''
   return `${preamble(target)}${binary}upgrade_binary
-${environment}`
+${environment}
+${kernelDeployment(target.kernel).enforce}`
 }
 
 /**

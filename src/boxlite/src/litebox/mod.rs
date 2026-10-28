@@ -37,7 +37,9 @@ pub use network::{
 };
 pub use snapshot::SnapshotHandle;
 pub use ssh::{SshAccount, SshCaConfig, SshConfig, SshHandle, SshStatus};
-pub use state::{BoxState, BoxStatus, HealthState, HealthStatus};
+pub use state::{BoxResources, BoxState, BoxStatus, HealthState, HealthStatus};
+mod resize;
+pub use resize::ResizeOptions;
 
 pub(crate) use box_impl::SharedBoxImpl;
 pub(crate) use init::BoxBuilder;
@@ -101,6 +103,19 @@ impl LiteBox {
     /// Get metadata for this box.
     pub async fn info(&self) -> BoxliteResult<BoxInfo> {
         self.box_backend.info().await
+    }
+
+    /// Grow a running box without restarting it. Omitted resources retain
+    /// their current allocation; omitting both queries the allocation and ceilings.
+    /// Requires Linux/KVM. Memory grows in increments of 128 MiB, and includes
+    /// the kernel mapping. Shrinking and exceeding the boot ceiling fail.
+    /// Once started, an update completes even if the caller drops its future;
+    /// inspect the box or retry the same target after a transport interruption.
+    pub async fn resize(&self, options: ResizeOptions) -> BoxliteResult<BoxResources> {
+        let backend = self.box_backend.clone();
+        tokio::spawn(async move { backend.resize(options).await })
+            .await
+            .map_err(|error| BoxliteError::Internal(format!("resize task failed: {error}")))?
     }
 
     /// Start the box (initialize VM).

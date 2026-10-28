@@ -156,6 +156,37 @@ session and does not recover old orphan handles.
 
 ## Failure and compatibility
 
+Live CPU and memory growth remain available on checkpoint-owner boxes. For
+example, a box created with 1 CPU / 256 MiB can grow to 2 CPUs / 512 MiB,
+pause and export, then import, resume and grow to 3 CPUs / 640 MiB within its
+saved ceilings. Resize requires Running and shares the cross-process operation
+reservation with pause, resume, checkpoint export and disk capture; a competing
+operation receives Busy. The native memory mailbox rejects growth while paused.
+
+The current version-9 schema saves every provisioned vCPU, the actual CPU/RAM
+allocation, virtio-mem queues/configuration, plugged blocks, reserved capacity and
+pending memory target. Only mapped hotplug slots contribute RAM bytes. A pending
+request can continue after resume; allocation records count mapped host memory,
+which can exceed guest-plugged memory after partial completion. Import restores
+the mailbox and applies the saved CPU quota before any vCPU runs. The importing
+host must support the saved resource ceilings. Cold starts retain the last
+allocation and establish new ceilings as usual.
+
+Checkpoint file-size headroom covers the boot's memory ceiling, so a later growth
+does not leave the shim capped at its creation-time image size. Native schema
+additions extend version 9 directly: images lacking the memory section or saved
+allocation require re-export with the current runtime. No conversion is provided.
+
+Focused Linux x86_64/KVM validation passed on 2026-10-28: the
+`checkpoint_continues_the_same_guest_process_in_a_new_runtime` scenario covered
+growth before and after restore, a 300 MiB heap, DAX, process identity, repeated
+export and cold restart; `checkpoint_rest_preserves_process_across_independent_homes`
+covered REST transfer/import/resume across separate homes and prepared volumes.
+Both checked default bwrap isolation and VMM seccomp on source/restored threads.
+The host required a privileged test runner because AppArmor restricted
+unprivileged user namespaces; its host policy was unchanged. Unit tests, broader
+regressions, other platforms, lint and formatting were outside this validation.
+
 Import binds resources through SCM_RIGHTS after sandbox installation and before any
 vCPU is released. It publishes only after the owner confirms Paused. Failure stops
 and joins the new shim before removing attempt-owned storage; existing share roots,

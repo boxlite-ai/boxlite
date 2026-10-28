@@ -13,6 +13,7 @@ use std::time::{Duration, Instant};
 use tokio::runtime::Runtime as TokioRuntime;
 
 use boxlite::BoxliteError;
+use boxlite::experimental::{ExperimentalFeatures, RuntimeBuilder};
 use boxlite::runtime::BoxliteRuntime;
 use boxlite::runtime::options::{
     BoxliteOptions, ImageRegistry, ImageRegistryAuth, RegistryTransport,
@@ -107,6 +108,29 @@ pub unsafe extern "C" fn boxlite_runtime_new(
         home_dir,
         image_registries,
         image_registries_count,
+        ptr::null(),
+        out_runtime,
+        out_error,
+    )
+}
+
+/// Create a local runtime with an explicit comma-separated RC feature allowlist
+/// (for example, "custom-kernel"). Null enables none; unknown tokens fail.
+/// Does not read BOXLITE_EXPERIMENTAL. Ownership matches boxlite_runtime_new.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_runtime_new_experimental(
+    home_dir: *const c_char,
+    image_registries: *const BoxliteImageRegistry,
+    image_registries_count: c_int,
+    features: *const c_char,
+    out_runtime: *mut *mut CBoxliteRuntime,
+    out_error: *mut CBoxliteError,
+) -> BoxliteErrorCode {
+    runtime_new(
+        home_dir,
+        image_registries,
+        image_registries_count,
+        features,
         out_runtime,
         out_error,
     )
@@ -189,6 +213,7 @@ unsafe fn runtime_new(
     home_dir: *const c_char,
     image_registries: *const BoxliteImageRegistry,
     image_registries_count: c_int,
+    features: *const c_char,
     out_runtime: *mut *mut RuntimeHandle,
     out_error: *mut FFIError,
 ) -> BoxliteErrorCode {
@@ -197,6 +222,20 @@ unsafe fn runtime_new(
             write_error(out_error, null_pointer_error("out_runtime"));
             return BoxliteErrorCode::InvalidArgument;
         }
+
+        let features = if features.is_null() {
+            Ok(ExperimentalFeatures::default())
+        } else {
+            c_str_to_string(features).and_then(|value| ExperimentalFeatures::parse(&value))
+        };
+        let features = match features {
+            Ok(features) => features,
+            Err(error) => {
+                let code = error_to_code(&error);
+                write_error(out_error, error);
+                return code;
+            }
+        };
 
         let tokio_rt = match create_tokio_runtime() {
             Ok(rt) => rt,
@@ -233,10 +272,11 @@ unsafe fn runtime_new(
 
         // Unit tests exercise FFI validation and lifecycle without a hypervisor.
         // The exported library keeps host validation for C integration tests.
+        let builder = RuntimeBuilder::new(options).with_features(features);
         #[cfg(test)]
-        let runtime_result = BoxliteRuntime::new_for_test(options);
+        let runtime_result = builder.build_for_test();
         #[cfg(not(test))]
-        let runtime_result = BoxliteRuntime::new(options);
+        let runtime_result = builder.build();
         let runtime = match runtime_result {
             Ok(rt) => rt,
             Err(e) => {
@@ -578,6 +618,11 @@ unsafe fn dispatch_event(event: RuntimeEvent) {
                 user_data,
                 result,
             } => dispatch_unit_event(result, user_data, cb),
+            RuntimeEvent::ResizeBox {
+                cb,
+                user_data,
+                result,
+            } => dispatch_value_event::<crate::CBoxResources>(result, user_data, cb),
             RuntimeEvent::StopBox {
                 cb,
                 user_data,

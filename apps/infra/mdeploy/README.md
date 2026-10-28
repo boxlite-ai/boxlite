@@ -39,8 +39,10 @@ Use [mbuild](../mbuild/README.md) and the [runner runbook](../docs/runners.md) t
 
 ## Runner convergence
 
-Runner hosts retain local box state and are protected against replacement. Boot-image, startup and
-attached-disk changes are ignored for existing hosts; binary and unit-environment updates have a separate path.
+Runner hosts retain local box state and are protected against replacement. Machine type and disk sizes
+are creation defaults: increasing `RUNNERS` adds hosts with the current specifications while existing
+hosts retain theirs. Boot-image, startup and attached-disk changes are also ignored for existing hosts;
+binary and unit-environment updates have a separate path. See [fleet sizing](../docs/configuration.md#runner-fleet-sizing).
 
 Updates verify artifact checksums and readiness. Already-converged hosts need no restart;
 release downgrade requires the explicit operator command. Follow [GCP runner convergence](../docs/gcp/runners.md)

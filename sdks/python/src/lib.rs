@@ -74,6 +74,7 @@ fn boxlite_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyRegistryHandle>()?;
     m.add_class::<PyRegistryCredential>()?;
     m.add_class::<PyBoxInfo>()?;
+    m.add_class::<info::PyBoxResources>()?;
     m.add_class::<PyBoxStateInfo>()?;
     m.add_class::<PyNetworkInfo>()?;
     m.add_class::<PyOutboundNetworkInfo>()?;

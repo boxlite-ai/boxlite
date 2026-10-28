@@ -22,6 +22,34 @@ pub struct JsBox {
     pub(crate) handle: Arc<LiteBox>,
 }
 
+#[napi(object)]
+pub struct JsResizeOptions {
+    pub cpus: Option<f64>,
+    pub memory_mib: Option<f64>,
+}
+
+#[napi(object)]
+pub struct JsBoxResources {
+    pub cpus: u32,
+    pub memory_mib: u32,
+    pub max_cpus: u32,
+    pub max_memory_mib: u32,
+}
+
+fn resize_target(value: Option<f64>, max: u32, name: &str) -> Result<Option<u32>> {
+    value
+        .map(|value| {
+            if value.fract() != 0.0 || !(1.0..=f64::from(max)).contains(&value) {
+                Err(map_err(boxlite::BoxliteError::InvalidArgument(format!(
+                    "{name} must be an integer between 1 and {max}"
+                ))))
+            } else {
+                Ok(value as u32)
+            }
+        })
+        .transpose()
+}
+
 #[napi]
 impl JsBox {
     /// Get the box's unique identifier (ULID).
@@ -41,6 +69,26 @@ impl JsBox {
     pub async fn info(&self) -> Result<JsBoxInfo> {
         let info = self.handle.info().await.map_err(map_err)?;
         Ok(JsBoxInfo::from(info))
+    }
+
+    /// Grow a running box. An empty options object reads its current limits.
+    #[napi]
+    pub async fn resize(&self, options: JsResizeOptions) -> Result<JsBoxResources> {
+        // Read JS numbers without napi's integer coercion, which truncates
+        // fractions and wraps values larger than u32 before we can reject them.
+        let cpus = resize_target(options.cpus, u8::MAX.into(), "cpus")?.map(|n| n as u8);
+        let memory_mib = resize_target(options.memory_mib, u32::MAX, "memoryMib")?;
+        let value = self
+            .handle
+            .resize(boxlite::ResizeOptions { cpus, memory_mib })
+            .await
+            .map_err(map_err)?;
+        Ok(JsBoxResources {
+            cpus: value.cpus.into(),
+            memory_mib: value.memory_mib,
+            max_cpus: value.max_cpus.into(),
+            max_memory_mib: value.max_memory_mib,
+        })
     }
 
     /// Execute a command inside the box.

@@ -47,6 +47,10 @@ pub struct ShimSpawner<'a> {
     options: &'a BoxOptions,
     nested_virtualization: bool,
     storage_paths: Vec<PathAccess>,
+
+    /// (online, created) vCPUs; see [`Self::with_vcpus`].
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    vcpus: Option<(u8, u8)>,
 }
 
 impl<'a> ShimSpawner<'a> {
@@ -63,7 +67,37 @@ impl<'a> ShimSpawner<'a> {
             options,
             nested_virtualization: false,
             storage_paths: Vec::new(),
+
+            vcpus: None,
         }
+    }
+
+    /// Boot `max_cpus` vCPUs with only `cpus` online. The offline ones are
+    /// safe only behind a cgroup cap of `cpus` CPUs, so the spawn fails when
+    /// that cap cannot be set. Boxes without spare vCPUs keep today's
+    /// uncapped cgroup.
+    pub fn with_vcpus(mut self, cpus: u8, max_cpus: u8) -> Self {
+        self.vcpus = Some((cpus, max_cpus));
+        self
+    }
+
+    #[cfg(target_os = "linux")]
+    fn apply_cpu_quota(&self) -> BoxliteResult<()> {
+        let Some((cpus, max_cpus)) = self.vcpus.filter(|(cpus, max)| max > cpus) else {
+            return Ok(());
+        };
+        let security = &self.options.advanced.security;
+        let result = if security.jailer_enabled {
+            crate::jailer::cgroup::set_cpu_max(self.box_id, cpus, &security.resource_limits)
+                .map_err(|e| e.to_string())
+        } else {
+            Err("the jailer is disabled, so the box has no cgroup".to_string())
+        };
+        result.map_err(|error| {
+            BoxliteError::Engine(format!(
+                "cannot cap the box at {cpus} CPUs before booting {max_cpus} vCPUs: {error}"
+            ))
+        })
     }
 
     /// Grant the confined shim the host files libkrun probes before enabling
@@ -157,6 +191,8 @@ impl<'a> ShimSpawner<'a> {
 
         // 3. Setup pre-spawn isolation (cgroups on Linux, no-op on macOS)
         jail.prepare()?;
+        #[cfg(target_os = "linux")]
+        self.apply_cpu_quota()?;
 
         // 4. Build isolated command — no CLI args, config sent via stdin pipe
         let no_args: &[String] = &[];

@@ -11,12 +11,13 @@ use std::{ffi::CString, ptr};
 use crate::vmm::krun::check_status;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use libkrun_sys::{
-    krun_add_disk2, krun_add_net_unixgram, krun_add_net_unixstream, krun_add_virtiofs3,
-    krun_add_vsock, krun_add_vsock_port2, krun_check_nested_virt, krun_create_ctx,
-    krun_disable_implicit_vsock, krun_free_ctx, krun_init_log, krun_set_console_output,
-    krun_set_env, krun_set_exec, krun_set_gpu_options, krun_set_kernel, krun_set_nested_virt,
-    krun_set_port_map, krun_set_rlimits, krun_set_root, krun_set_root_disk_remount,
-    krun_set_vm_config, krun_set_workdir, krun_setgid, krun_setuid, krun_snapshot_enable,
+    krun_add_disk2, krun_add_kernel_cmdline, krun_add_net_unixgram, krun_add_net_unixstream,
+    krun_add_virtiofs3, krun_add_vsock, krun_add_vsock_port2, krun_check_nested_virt,
+    krun_create_ctx, krun_disable_implicit_vsock, krun_free_ctx, krun_init_log,
+    krun_set_console_output, krun_set_env, krun_set_exec, krun_set_gpu_options, krun_set_kernel,
+    krun_set_nested_virt, krun_set_port_map, krun_set_rlimits, krun_set_root,
+    krun_set_root_disk_remount, krun_set_vm_config, krun_set_workdir, krun_setgid, krun_setuid,
+    krun_snapshot_enable,
     krun_split_irqchip, krun_start_enter,
 };
 
@@ -104,6 +105,14 @@ impl KrunContext {
     pub unsafe fn set_vm_config(&self, cpus: u8, memory_mib: u32) -> BoxliteResult<()> {
         check_status("krun_set_vm_config", unsafe {
             krun_set_vm_config(self.ctx_id, cpus, memory_mib)
+        })
+    }
+
+    pub unsafe fn add_kernel_cmdline(&self, param: &str) -> BoxliteResult<()> {
+        let param = CString::new(param)
+            .map_err(|e| BoxliteError::Engine(format!("invalid kernel parameter: {e}")))?;
+        check_status("krun_add_kernel_cmdline", unsafe {
+            krun_add_kernel_cmdline(self.ctx_id, param.as_ptr())
         })
     }
 

@@ -80,6 +80,7 @@ async fn checkpoint_operation_state_matrix_refreshes_the_persisted_record() {
                 matches!(status, BoxStatus::Running | BoxStatus::Stopped),
             ),
             (Action::Checkpoint, status == BoxStatus::Paused),
+            (Action::Resize, status == BoxStatus::Running),
             (Action::DiskRestore, status == BoxStatus::Stopped),
         ] {
             let result = backend.reserve(action).await;

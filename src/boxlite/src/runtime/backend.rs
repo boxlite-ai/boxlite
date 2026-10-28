@@ -107,6 +107,12 @@ pub(crate) trait BoxBackend: Send + Sync + Any {
 
     async fn start(&self) -> BoxliteResult<()>;
 
+    async fn resize(&self, _options: crate::ResizeOptions) -> BoxliteResult<crate::BoxResources> {
+        Err(BoxliteError::Unsupported(
+            "this backend does not support online resize".into(),
+        ))
+    }
+
     async fn exec(&self, command: BoxCommand) -> BoxliteResult<Execution>;
 
     /// Attach to a session in the box.

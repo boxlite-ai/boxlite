@@ -1,7 +1,7 @@
 /*
  * Guest workload for the checkpoint acceptance test (checkpoint_acceptance.rs).
  *
- * Usage: checkpoint_helper <disk-dir> <share-dir>
+ * Usage: checkpoint_helper <disk-dir> <share-dir> [missing|resize]
  *
  * Holds state that only a continued process has: a random marker generated at
  * start and kept only in heap memory, a counter, open files on the container
@@ -217,6 +217,15 @@ int main(int argc, char **argv) {
     for (size_t i = 0; i < sizeof(raw); i++)
         sprintf(marker + 2 * i, "%02x", raw[i]);
 
+    /* Force more physical guest RAM than the 256 MiB boot allocation can
+     * provide. Checking every page after import exercises hotplug payloads. */
+    size_t heap_bytes = argc == 4 && strcmp(argv[3], "resize") == 0 ? 300UL << 20 : 0;
+    unsigned char *heap = heap_bytes ? malloc(heap_bytes) : NULL;
+    if (heap_bytes && !heap)
+        die("resize heap");
+    for (size_t i = 0; i < heap_bytes; i += 4096)
+        heap[i] = raw[(i / 4096) % sizeof(raw)] ^ (unsigned char)(i / 4096);
+
     struct {
         const char *tag;
         int fd;
@@ -256,6 +265,9 @@ int main(int argc, char **argv) {
 
     for (;;) {
         const char *bad = NULL;
+        for (size_t i = 0; i < heap_bytes && !bad; i += 4096)
+            if (heap[i] != (unsigned char)(raw[(i / 4096) % sizeof(raw)] ^ (unsigned char)(i / 4096)))
+                bad = "resize-heap";
         char want[SLOT];
         for (size_t i = 0; i < nfiles && !bad; i++)
             if (!slot_matches(files[i].fd, files[i].tag, n))

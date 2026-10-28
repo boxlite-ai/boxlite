@@ -318,6 +318,7 @@ impl BoxImpl {
             .reserve(crate::litebox::operation::Action::Checkpoint)
             .await?;
         self.require_checkpoint("export a checkpoint")?;
+        let resources = self.checkpoint_resources().await?;
         let (parent_path, name) = destination(path)?;
         let persisted = self.runtime.box_manager.update_box(self.id())?;
         let mut local_paths = persisted.checkpoint_paths.clone().ok_or_else(|| {
@@ -340,6 +341,7 @@ impl BoxImpl {
             source_box_id: self.id().to_string(),
             guest,
             options,
+            resources,
             container_image_config: self.boot_image_config().await?,
             outbound_policy: persisted.outbound_policy,
             local_paths: Some(local_paths.clone()),

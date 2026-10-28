@@ -21,7 +21,7 @@ pub(crate) fn fixture() -> tempfile::TempDir {
     crate::disk::Qcow2Helper::flatten(&overlay, &directory.path().join(DISK)).unwrap();
     let metadata = serde_json::json!({"compatibility":{},"cpus":[{}],"vm":{},"regions":[{"gpa":0,"len":4096,"attributes":0}],
         "disks":[{"read_only":false,"disk_bytes":1048576},{"read_only":true,"disk_bytes":4096}],
-        "nic":null,"rng":null,"balloon":null,"vsock":null,"console":null,"legacy":null,"fs":null,
+        "nic":null,"rng":null,"balloon":null,"memory":null,"vsock":null,"console":null,"legacy":null,"fs":null,
         "application_schema":1,"application":{"local_paths":{"version":2}},"disk_dependencies":["container_qcow2",{"external_readonly_boot":{"length":4096,"sha256":vec![0u8;32]}}]});
     seal(directory.path(), &metadata);
     directory

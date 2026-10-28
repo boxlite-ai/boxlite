@@ -406,15 +406,33 @@ impl Vmm for Krun {
             // Import descriptors arrive through the sandboxed control socket
             // after endpoints are configured and before start_enter.
 
+
+            let cpus = config.cpus.unwrap_or(DEFAULT_CPUS);
+            let max_cpus = config.max_cpus.unwrap_or(cpus).max(cpus);
             tracing::debug!(
-                cpus = config.cpus.unwrap_or(DEFAULT_CPUS),
+                cpus,
+                max_cpus,
                 memory_mib = config.memory_mib.unwrap_or(DEFAULT_MEMORY_MIB),
                 "Setting VM config"
             );
-            ctx.set_vm_config(
-                config.cpus.unwrap_or(DEFAULT_CPUS),
-                config.memory_mib.unwrap_or(DEFAULT_MEMORY_MIB),
-            )?;
+            ctx.set_vm_config(max_cpus, config.memory_mib.unwrap_or(DEFAULT_MEMORY_MIB))?;
+            #[cfg(target_os = "linux")]
+            if import.is_none() && let Some(max) = config
+                .max_memory_mib
+                .filter(|&max| max > config.memory_mib.unwrap_or(DEFAULT_MEMORY_MIB))
+            {
+                super::check_status(
+                    "krun_set_memory_hotplug",
+                    libkrun_sys::krun_set_memory_hotplug(ctx.id(), max),
+                )?;
+                ctx.add_kernel_cmdline("memhp_default_state=online")?;
+                ctx.add_kernel_cmdline("memory_hotplug.memmap_on_memory=1")?;
+            }
+            if max_cpus > cpus {
+                // Every vCPU exists; the guest boots `cpus` of them and onlines
+                // the rest on resize. The host cgroup quota caps their use.
+                ctx.add_kernel_cmdline(&format!("maxcpus={cpus}"))?;
+            }
 
             if import.is_none() {
                 Self::set_kernel(&config, &ctx)?;
@@ -590,6 +608,21 @@ impl Vmm for Krun {
 
             ctx
         };
+
+        #[cfg(target_os = "linux")]
+        {
+            let memory_ctx = config
+                .max_memory_mib
+                .filter(|&max| max > config.memory_mib.unwrap_or(DEFAULT_MEMORY_MIB))
+                .map(|_| ctx.id());
+            let box_dir = config
+                .exit_file
+                .parent()
+                .ok_or_else(|| BoxliteError::Engine("missing box directory".into()))?;
+            let sockets =
+                crate::net::socket_path::BoxSockets::new(&config.box_id, box_dir.join("sockets"));
+            crate::vmm::memory_control::configure(&sockets.memory_sock(), memory_ctx)?;
+        }
 
         // Return a VmmInstance that wraps the configured context
         // The actual VM start will happen when enter() is called

@@ -8,6 +8,7 @@ use crate::{
     vmm::{InstanceSpec, VmmKind},
 };
 
+use crate::runtime::constants::vm_defaults::DEFAULT_CPUS;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
 use super::watchdog;
@@ -327,6 +328,8 @@ impl VmmController for ShimController {
             nested_virtualization: config.nested_virtualization,
             // VM configuration
             cpus: config.cpus,
+            max_cpus: config.max_cpus,
+            max_memory_mib: config.max_memory_mib,
             memory_mib: config.memory_mib,
             kernel: config.kernel.clone(),
             fs_shares: config.fs_shares.clone(),
@@ -369,14 +372,33 @@ impl VmmController for ShimController {
 
         // Measure subprocess spawn time
         let shim_spawn_start = Instant::now();
+        let mut spawn_options = self.options.clone();
+        if config.checkpoint.is_some() {
+            use crate::runtime::constants::vm_defaults::DEFAULT_MEMORY_MIB;
+            // Reserve image-file headroom for every permitted future memory
+            // target, including a restored guest whose creation size is stale.
+            let boot = spawn_options.memory_mib.unwrap_or(DEFAULT_MEMORY_MIB);
+            let capacity = config.max_memory_mib.or(config.memory_mib).unwrap_or(boot);
+            let limits = &mut spawn_options.advanced.security.resource_limits;
+            limits.max_file_size = limits.max_file_size.map(|limit| {
+                limit.saturating_add(u64::from(capacity.saturating_sub(boot)) << 20)
+            });
+        }
         let spawner = ShimSpawner::new(
             &self.binary_path,
             &self.layout,
             self.box_id.as_str(),
-            &self.options,
+            &spawn_options,
         )
         .with_nested_virtualization(config.nested_virtualization)
-        .with_storage_access(config);
+        .with_storage_access(config)
+        .with_vcpus(
+            config.cpus.unwrap_or(DEFAULT_CPUS),
+            config
+                .max_cpus
+                .unwrap_or(0)
+                .max(config.cpus.unwrap_or(DEFAULT_CPUS)),
+        );
         let spawned = spawner.spawn(&config_json, config.detach)?;
         // spawn_duration: time to create Box subprocess
         let shim_spawn_duration = shim_spawn_start.elapsed();

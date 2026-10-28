@@ -45,29 +45,43 @@ To select a staged runner in a local deployment, set `RUNNER_ARTIFACT_SOURCE=bui
 `RUNNER_ARTIFACT_REF=<full-sha>` alongside a valid `BOXLITE_IMAGE_TAG`, then preview with mdeploy.
 The [one-dispatch workflow](deployment.md#deploy-through-github-actions) prepares these values for you.
 
-### Development firmware
+### Cloud kernel
 
-`runner:build` uses `apps/runner/packaging/dev-artifact.Dockerfile` to embed the
-checksum-pinned v5.4.0 DinD kernel. The shared
-`scripts/build/prepare_dind_firmware.py` verifies both downloaded and cached
-ELF bytes, packages them with the vendored ABI generator, and writes
-`SHA256SUMS`. Local Linux acceptance uses the same helper and pin.
+Runner and C SDK packages use the ordinary firmware dependency. On Linux
+x86_64 cloud hosts, deployment downloads the standalone v5.4.0 DinD ELF using
+the URL and SHA256 pinned in [`runner/kernel.ts`](../runner/kernel.ts).
+AWS/GCP first boot and updates share this policy, including the legacy AWS
+deployment. Updating this pin and deploying changes the kernel independently
+of the Runner binary; no SDK rebuild or new firmware archive is required.
 
-The Dockerfile keeps `BOXLITE_LIBKRUNFW_SOURCE` set through both runtime and
-C SDK builds; a command-scoped override would let the second build restore
-ordinary firmware. This choice is committed with the artifact identity, so
-changing firmware requires a new commit rather than a deployment flag.
+The verified file is installed read-only at
+`/opt/boxlite/kernels/<sha256>/kernel.bin`. A systemd drop-in loads
+`BOXLITE_KERNEL_PATH` from `/etc/boxlite/kernel.env`. The Runner must include
+the custom-kernel SDK support described in the [custom-kernel guide](../../../docs/guides/custom-kernel.md#c-and-go-sdks).
+It validates the operator's path at startup, explicitly enables `custom-kernel`,
+and applies it to newly created Boxes, including snapshot-backed creation and
+recovery. Tenant requests cannot select a host kernel path.
+
+Deployment verifies bytes before changing configuration or restarting the
+service. An unchanged kernel causes no download or restart; a failed restart
+restores the previous kernel configuration. A kernel-only change still reaches
+hosts serving the same Runner version. Rollout restarts the Runner and can
+interrupt its running Boxes.
 
 For dev, dispatch `mdeploy-all` from branch `x_features` with the `ref` input
 empty. Do not enter `x_features` in `ref`: that input accepts a commit SHA,
 PR number or release tag, and rejects branch names.
 
-Every Box on the updated runner uses the DinD kernel on its next start.
-Restart running Boxes after rollout; they retain their old kernel until then.
-The runtime cache includes a hash of its embedded contents, so hosts need no
-cache cleanup. Follow the [DinD guide](../../../docs/guides/docker-in-docker.md)
-for guest options and acceptance checks. The published release runner still
-links the prebuilt C SDK and keeps its existing firmware selection.
+Existing Boxes keep their saved boot configuration and staged kernel; a restart
+does not migrate them to the newly selected kernel. Recreate a Box to change its
+kernel. Old content-addressed kernel files are retained: a trusted archive
+records its source path, so a destination Runner needs that version installed
+before importing it. Kernel garbage collection is not automatic.
+
+Self-hosted Runners without `BOXLITE_KERNEL_PATH` retain their bundled kernel.
+For a manual override, set it to an absolute readable kernel file in the
+Runner's service environment. Docker still requires privileged guest options;
+see the [DinD guide](../../../docs/guides/docker-in-docker.md).
 
 ## Upgrade or roll back a release
 
@@ -88,17 +102,20 @@ an older runner would bind the volume read-write. Until such a runner is up, tho
 
 ## Scale out
 
-`RUNNERS` controls the declared fleet count. Set it in the encrypted stage store, update the digest,
-and preview the same artifact selection you intend to deploy:
+`RUNNERS` controls the declared fleet count. Set the [creation defaults](configuration.md#runner-fleet-sizing)
+in the stage declaration and its CI copy, then increase the count in the encrypted stage store.
+For example, to add a third host:
 
 ```bash
-npm run mstage env set -- RUNNERS=2 --stage dev --digest
+npm run mstage env set -- RUNNERS=3 --stage dev --digest
 ```
 
-Review that the diff creates the additional host without replacing existing hosts. Then apply and
+Preview the same artifact selection you intend to deploy. Review that the diff creates the additional
+host without resizing or replacing existing hosts or disks. Then apply and
 check registration, target version, capacity and a test box on the new host. Extra runners have
-individual registration tokens. Machine size and root disk size come from `deploy.runners` in the stage declaration;
-a GCP host's data disk is sized by its machine size.
+individual registration tokens. `deploy.runners.size`, `rootDiskGb` and optional GCP `dataDiskGb`
+apply only to newly created hosts. Existing sizing is retained in deployment state; changing the
+defaults alone does not resize a host. Separate binary or environment updates can still restart runners.
 
 Scale-in is a separate retirement operation: reducing a count attempts to delete a protected host,
 and on GCP its protected data disk.

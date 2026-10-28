@@ -28,7 +28,7 @@ use std::time::Duration;
 use boxlite::runtime::options::VolumeSpec;
 use boxlite::{
     AttachOptions, BoxCommand, BoxOptions, BoxStatus, BoxliteError, BoxliteOptions, BoxliteRuntime,
-    CheckpointImportOptions, CopyOptions, ExecStdout, LiteBox, PauseOptions, RootfsSpec,
+    CheckpointImportOptions, CopyOptions, ExecStdout, LiteBox, PauseOptions, ResizeOptions, RootfsSpec,
 };
 use boxlite_test_utils::home::{PerTestBoxHome, live_shim_pids};
 use futures::StreamExt;
@@ -470,12 +470,10 @@ async fn checkpoint_missing_orphans_return_guest_ebadf() {
                 rootfs: RootfsSpec::Image("alpine:latest".into()),
                 memory_mib: Some(256),
                 auto_delete: Some(0),
-                volumes: vec![VolumeSpec {
-                    managed_volume: None,
-                    host_path: share.path().to_str().unwrap().into(),
-                    guest_path: SHARE_GUEST.into(),
-                    read_only: false,
-                }],
+                volumes: vec![VolumeSpec::bind_mount(
+                    share.path().to_str().unwrap(),
+                    SHARE_GUEST,
+                )],
                 ..Default::default()
             },
             None,
@@ -671,6 +669,7 @@ async fn checkpoint_continues_the_same_guest_process_in_a_new_runtime() {
     .expect("source runtime");
     let options = BoxOptions {
         rootfs: RootfsSpec::Image("alpine:latest".into()),
+        cpus: Some(1),
         memory_mib: Some(256),
         auto_delete: Some(0),
         volumes: vec![VolumeSpec::bind_mount(
@@ -685,6 +684,15 @@ async fn checkpoint_continues_the_same_guest_process_in_a_new_runtime() {
         .expect("create default box");
     let source_id = source.id().clone();
     source.start().await.expect("start");
+    let source_shim = source.info().await.unwrap().pid;
+    let ceiling = source.resize(ResizeOptions::default()).await.unwrap();
+    assert!(ceiling.max_cpus >= 3 && ceiling.max_memory_mib >= 640,
+        "resize/checkpoint acceptance needs 3 CPUs and 640 MiB of capacity");
+    let before_capture = source.resize(ResizeOptions {
+        cpus: Some(2), memory_mib: Some(512),
+    }).await.expect("grow before checkpoint");
+    assert_eq!((before_capture.cpus, before_capture.memory_mib), (2, 512));
+    assert_eq!(source.info().await.unwrap().pid, source_shim);
 
     source
         .copy_into(&helper, HELPER_GUEST, CopyOptions::default())
@@ -696,7 +704,7 @@ async fn checkpoint_continues_the_same_guest_process_in_a_new_runtime() {
 
     // ── Long-lived guest process ──
     let mut workload = source
-        .exec(BoxCommand::new(HELPER_GUEST).args([DISK_DIR, SHARE_GUEST]))
+        .exec(BoxCommand::new(HELPER_GUEST).args([DISK_DIR, SHARE_GUEST, "resize"]))
         .await
         .expect("start helper");
     let execution_id = workload.id().clone();
@@ -762,6 +770,7 @@ async fn checkpoint_continues_the_same_guest_process_in_a_new_runtime() {
         .await
         .expect("pause");
     assert_eq!(status(&source).await, BoxStatus::Paused);
+    assert!(source.resize(ResizeOptions::default()).await.is_err(), "paused owner must refuse resize");
     assert!(
         source.exec(BoxCommand::new("true")).await.is_err(),
         "a paused box must refuse exec"
@@ -798,6 +807,8 @@ async fn checkpoint_continues_the_same_guest_process_in_a_new_runtime() {
     let dependencies = BoxliteRuntime::inspect_checkpoint(&checkpoint).expect("inspect pair");
     use sha2::{Digest, Sha256};
     assert_eq!(dependencies.version, 9);
+    assert_eq!(dependencies.memory_bytes, 512 << 20);
+    assert_eq!(dependencies.cpus, u16::from(before_capture.max_cpus));
     let original_disk_digest =
         Sha256::digest(std::fs::read(checkpoint.join("snapshot.qcow2")).unwrap());
     let exported_len = std::fs::metadata(checkpoint.join("snapshot.mem"))
@@ -881,6 +892,14 @@ async fn checkpoint_continues_the_same_guest_process_in_a_new_runtime() {
     // the manifest retained (`container_id`) running and initialized.
     restored.resume().await.expect("resume restored box");
     assert_eq!(status(&restored).await, BoxStatus::Running);
+    let restored_shim = restored.info().await.unwrap().pid;
+    assert_eq!(restored.resize(ResizeOptions::default()).await.unwrap(), before_capture);
+    let after_restore = restored.resize(ResizeOptions {
+        cpus: Some(3), memory_mib: Some(640),
+    }).await.expect("grow the imported continuation");
+    assert_eq!((after_restore.cpus, after_restore.memory_mib), (3, 640));
+    assert_eq!(restored.info().await.unwrap().pid, restored_shim);
+    assert_eq!(run_ok(&restored, "cat", &["/sys/devices/system/cpu/online"]).await, "0-2");
 
     // ── Same process, same execution, state from the cut, still counting ──
     let mut attached = restored

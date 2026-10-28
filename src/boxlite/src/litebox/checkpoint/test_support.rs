@@ -10,7 +10,7 @@ use boxlite_shared::{
 use boxlite_shared::{
     Container, ContainerInitRequest, ContainerInitResponse, ContainerRunningState, ContainerServer,
     ContainerStartRequest, ContainerStartResponse, Guest, GuestInitRequest, GuestInitResponse,
-    GuestServer, PingRequest, PingResponse, QuiesceRequest, QuiesceResponse, RunningStateRequest,
+    GuestServer, OnlineCpusRequest, OnlineCpusResponse, PingRequest, PingResponse, QuiesceRequest, QuiesceResponse, RunningStateRequest,
     RunningStateResponse, ShutdownRequest, ShutdownResponse, ThawRequest, ThawResponse,
 };
 use std::path::Path;
@@ -94,6 +94,13 @@ impl Guest for Service {
     }
     async fn thaw(&self, _: Request<ThawRequest>) -> Result<Response<ThawResponse>, Status> {
         self.0.call("Guest.Thaw");
+        Err(Status::unimplemented("fake guest"))
+    }
+    async fn online_cpus(
+        &self,
+        _: Request<OnlineCpusRequest>,
+    ) -> Result<Response<OnlineCpusResponse>, Status> {
+        self.0.call("Guest.OnlineCpus");
         Err(Status::unimplemented("fake guest"))
     }
     async fn running_state(

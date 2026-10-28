@@ -214,6 +214,12 @@ impl BoxBackend for RestBox {
         Ok(())
     }
 
+    async fn resize(&self, options: crate::ResizeOptions) -> BoxliteResult<crate::BoxResources> {
+        self.client
+            .post(&format!("/boxes/{}/resize", self.id), &options)
+            .await
+    }
+
     async fn exec(&self, command: BoxCommand) -> BoxliteResult<Execution> {
         let box_id = self.box_id_str();
 

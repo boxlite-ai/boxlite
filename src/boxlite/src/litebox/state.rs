@@ -202,6 +202,19 @@ impl std::fmt::Display for BoxStatus {
     }
 }
 
+/// Allocated resources and the ceilings for online growth.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BoxResources {
+    /// Allocated vCPUs, which may differ from the guest's online CPU count.
+    pub cpus: u8,
+    /// Allocated guest RAM in MiB, including the kernel mapping.
+    pub memory_mib: u32,
+    /// vCPUs this boot created; resize can bring up to this many online.
+    pub max_cpus: u8,
+    /// Memory this boot can grow to, in MiB.
+    pub max_memory_mib: u32,
+}
+
 /// Dynamic box state (changes during lifecycle).
 ///
 /// This is updated frequently and persisted to database.
@@ -212,6 +225,12 @@ pub struct BoxState {
     /// whether the VM has a NIC; an override never adds or removes the device.
     #[serde(default)]
     pub outbound_policy: Option<crate::runtime::options::OutboundNetworkConfig>,
+    /// Resources from the last boot or resize. They override the creation
+    /// options, so a resized box keeps its size across restarts. Like
+    /// `outbound_policy`, only [`crate::db::BoxStore::update_resources`]
+    /// writes them, so a stale handle cannot roll back a resize.
+    #[serde(default)]
+    pub resources: Option<BoxResources>,
     /// Current lifecycle status.
     pub status: BoxStatus,
     pub pid: Option<u32>,
@@ -379,6 +398,7 @@ impl BoxState {
         Self {
             status: BoxStatus::Configured,
             outbound_policy: None,
+            resources: None,
             pid: None,
             container_id: None,
             last_updated: Utc::now(),

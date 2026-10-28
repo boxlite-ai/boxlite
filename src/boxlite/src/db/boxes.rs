@@ -137,7 +137,8 @@ impl BoxStore {
 
         let rows_affected = db_err!(conn.execute(
             "UPDATE box_state SET status = ?1, pid = ?2, \
-             json = json_set(?3, '$.outbound_policy', json_extract(json, '$.outbound_policy')) \
+             json = json_set(?3, '$.outbound_policy', json_extract(json, '$.outbound_policy'), \
+             '$.resources', json_extract(json, '$.resources')) \
              WHERE id = ?4",
             params![state.status.as_str(), state.pid, json, box_id],
         ))?;
@@ -160,6 +161,24 @@ impl BoxStore {
             .map_err(|error| BoxliteError::Database(error.to_string()))?;
         let changed = db_err!(self.db.conn().execute(
             "UPDATE box_state SET json = json_set(json, '$.outbound_policy', json(?1)) WHERE id = ?2",
+            params![body, box_id],
+        ))?;
+        if changed == 0 {
+            return Err(BoxliteError::NotFound(box_id.into()));
+        }
+        Ok(())
+    }
+
+    /// Resource changes must survive lifecycle writes from older handles.
+    pub fn update_resources(
+        &self,
+        box_id: &str,
+        resources: &crate::litebox::BoxResources,
+    ) -> BoxliteResult<()> {
+        let body = serde_json::to_string(resources)
+            .map_err(|error| BoxliteError::Database(error.to_string()))?;
+        let changed = db_err!(self.db.conn().execute(
+            "UPDATE box_state SET json = json_set(json, '$.resources', json(?1)) WHERE id = ?2",
             params![body, box_id],
         ))?;
         if changed == 0 {
@@ -446,6 +465,27 @@ mod tests {
         assert!(
             matches!(config.options.network, crate::NetworkSpec::Enabled { allow_net } if allow_net.is_empty())
         );
+    }
+
+    #[test]
+    fn resources_survive_stale_lifecycle_writes_and_drive_box_info() {
+        let (store, _dir) = create_test_db();
+        let config = create_test_config(TEST_ID_1);
+        let mut stale = BoxState::new();
+        store.save(&config, &stale).unwrap();
+        let resources = crate::litebox::BoxResources {
+            cpus: 3,
+            memory_mib: 1536,
+            max_cpus: 8,
+            max_memory_mib: 1536,
+        };
+        store.update_resources(TEST_ID_1, &resources).unwrap();
+        stale.status = BoxStatus::Stopped;
+        store.update_state(TEST_ID_1, &stale).unwrap();
+        let (config, state) = store.load(TEST_ID_1).unwrap().unwrap();
+        assert_eq!(state.resources, Some(resources));
+        let info = crate::BoxInfo::new(&config, &state);
+        assert_eq!((info.cpus, info.memory_mib), (3, 1536));
     }
 
     #[test]

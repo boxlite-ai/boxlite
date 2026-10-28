@@ -192,7 +192,11 @@ async fn checkpoint_rest_preserves_process_across_independent_homes() {
     drop(seed);
     drop(target_local);
     let source_server = ServeChild::start_in(source_home, &[], None);
-    let target_server = ServeChild::start_in(target_home, &[], None);
+    let target_server = ServeChild::start_in(
+        target_home,
+        &["--host-path-root", storage.path().to_str().unwrap()],
+        None,
+    );
     let source_rt = BoxliteRuntime::rest(BoxliteRestOptions::new(source_server.url())).unwrap();
     let target_rt = BoxliteRuntime::rest(BoxliteRestOptions::new(target_server.url())).unwrap();
     let source = source_rt.get(source_id.as_str()).await.unwrap().unwrap();

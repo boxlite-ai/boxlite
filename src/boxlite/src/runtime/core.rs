@@ -117,6 +117,16 @@ impl BoxliteRuntime {
         Ok(Self::from_local(local))
     }
 
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn new_for_test_with_features(
+        options: BoxliteOptions,
+        features: ExperimentalFeatures,
+    ) -> BoxliteResult<Self> {
+        Ok(Self::from_local(LocalRuntime(RuntimeImpl::initialize(
+            options, features,
+        )?)))
+    }
+
     fn from_local(local: LocalRuntime) -> Self {
         let backend_arc = Arc::new(local);
         let image_backend = Arc::clone(&backend_arc) as Arc<dyn ImageBackend>;

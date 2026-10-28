@@ -315,7 +315,29 @@ impl BoxImpl {
             })
             .await
         };
-        self.settle("pause", outcome).await.map(drop)
+        self.settle("pause", outcome).await?;
+        self.checkpoint_resources().await.map(drop)
+    }
+
+    /// Read allocation only at a confirmed frozen cut. A cancelled resize can
+    /// leave a submitted memory target progressing beyond its persisted size.
+    pub(super) async fn checkpoint_resources(&self) -> BoxliteResult<crate::BoxResources> {
+        #[cfg_attr(not(target_os = "linux"), allow(unused_mut))]
+        let mut resources = self.runtime.box_manager.update_box(self.id())?.resources
+            .ok_or_else(|| BoxliteError::Unsupported("restart this box before checkpointing its allocation".into()))?;
+        #[cfg(target_os = "linux")]
+        if self.layout.sockets().memory_sock().exists() {
+            let status = crate::vmm::memory_control::request(&self.layout.sockets().memory_sock(), 0).await?;
+            if status.request_error != 0 || status.mapped_mib < resources.memory_mib
+                || status.mapped_mib > status.max_mib || status.plugged_mib > status.mapped_mib {
+                return Err(BoxliteError::Engine("checkpoint memory allocation is inconsistent".into()));
+            }
+            resources.memory_mib = status.mapped_mib;
+            resources.max_memory_mib = status.max_mib;
+            self.runtime.box_manager.save_resources(self.id(), &resources)?;
+            self.state.write().resources = Some(resources);
+        }
+        Ok(resources)
     }
 
     /// Let a paused guest run again, then reconnect to it and check it is

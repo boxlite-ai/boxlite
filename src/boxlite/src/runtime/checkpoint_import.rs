@@ -89,29 +89,10 @@ pub(crate) async fn import_checkpoint(
     ))?;
     pair.verify_disk()?;
     let mut box_options = application.options.clone();
-    if u16::from(
-        box_options
-            .cpus
-            .unwrap_or(crate::runtime::constants::vm_defaults::DEFAULT_CPUS),
-    ) != pair.dependencies.cpus
-        // The boot loader maps low RAM and the copied kernel in addition to
-        // the configured MiB below the MMIO gap. Mapped bytes may exceed that
-        // logical setting; they must still cover it.
-        || (u64::from(
-            box_options
-                .memory_mib
-                .unwrap_or(crate::runtime::constants::vm_defaults::DEFAULT_MEMORY_MIB),
-        ) << 20)
-            > pair.dependencies.memory_bytes
-    {
-        return Err(invalid(format!(
-            "saved application resources exceed memory/device layout: cpus={:?}/{}, memory_mib={:?}, mapped_bytes={}",
-            box_options.cpus,
-            pair.dependencies.cpus,
-            box_options.memory_mib,
-            pair.dependencies.memory_bytes,
-        )));
-    }
+    let resources = application.resources;
+    pair::validate_resources(resources, &pair.dependencies)?;
+    crate::runtime::capacity::ResourceCeiling::detect()
+        .check(resources.max_cpus, resources.max_memory_mib)?;
     let container_id = ContainerID::parse(&application.guest.container_id)
         .ok_or_else(|| invalid("invalid saved container ID"))?;
     let boot_dependency = pair
@@ -357,6 +338,10 @@ pub(crate) async fn import_checkpoint(
             application.outbound_policy.as_ref(),
             launch,
         )?;
+        spec.cpus = Some(resources.cpus);
+        spec.max_cpus = Some(resources.max_cpus);
+        spec.memory_mib = Some(pair.dependencies.boot_memory_mib);
+        spec.max_memory_mib = Some(resources.max_memory_mib);
         for (share, bound) in pair.dependencies.shares.iter().zip(&bindings.shares) {
             spec.fs_shares
                 .add(share.tag.clone(), bound.root.clone(), share.read_only);
@@ -418,6 +403,7 @@ pub(crate) async fn import_checkpoint(
         };
         let mut state = BoxState::new();
         state.set_status(BoxStatus::Paused);
+        state.resources = Some(resources);
         state.set_pid(Some(pid));
         state.start_mode = Some(support::StartMode::Owner { protocol: 2 });
         state.outbound_policy = application.outbound_policy;

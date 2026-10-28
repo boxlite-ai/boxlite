@@ -148,6 +148,7 @@ pub fn validate_spec(spec: &InstanceSpec) -> BoxliteResult<()> {
         return Err(unsupported("nested virtualization is not supported"));
     }
     check_vcpus(spec.cpus.unwrap_or(DEFAULT_CPUS))?;
+    check_vcpus(spec.max_cpus.unwrap_or(spec.cpus.unwrap_or(DEFAULT_CPUS)))?;
     // Without a gvproxy NIC libkrun falls back to TSI, whose host sockets
     // live outside the guest and cannot be captured.
     let nic = spec.network_backend_spec.is_some();

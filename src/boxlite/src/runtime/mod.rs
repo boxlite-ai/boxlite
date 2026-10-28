@@ -1,6 +1,7 @@
 pub mod advanced_options;
 pub mod auth;
 pub(crate) mod backend;
+pub(crate) mod capacity;
 pub mod constants;
 pub mod id;
 pub mod images;

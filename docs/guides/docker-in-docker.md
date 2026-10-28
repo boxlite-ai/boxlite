@@ -3,17 +3,17 @@
 Run Docker inside a privileged Box guest using firmware built with Docker's
 networking features; the runner's host sandbox remains enabled.
 
-## Development runner artifacts
+## Cloud runner deployment
 
-Development runner artifacts embed the checksum-pinned v5.4.0 DinD firmware.
-Every Box started on that runner uses this kernel, including non-privileged
-Boxes; Docker still requires the privileged guest option below. After upgrading
-the runner, restart running Boxes to use the new kernel. The published release
-runner and SDK/wheel firmware defaults are unchanged.
+Cloud deployment downloads and verifies the standalone v5.4.0 DinD kernel,
+then sets the Runner's `BOXLITE_KERNEL_PATH`. Newly created Boxes use that
+file, including non-privileged Boxes; Docker still requires the privileged
+guest option below. Existing Boxes keep their saved kernel. Package builds
+and self-hosted Runners without this setting retain their ordinary defaults.
 
-See [runner operations](../../apps/infra/docs/runners.md#development-firmware)
-for the build and deployment procedure. Local native builds still use the
-explicit firmware selection below.
+See [runner operations](../../apps/infra/docs/runners.md#cloud-kernel) for
+installation and updates. The build-time selection below remains available
+for local firmware development and acceptance.
 
 ## Build the runtime
 

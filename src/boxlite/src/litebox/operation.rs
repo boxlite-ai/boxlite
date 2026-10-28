@@ -16,6 +16,7 @@ pub(crate) enum Action {
     DiskRestore,
     ArchiveRestore,
     SnapshotRemove,
+    Resize,
 }
 
 /// Independent of VM-lifetime locks; never unlink or recycle its inode.
@@ -136,6 +137,7 @@ impl BoxImpl {
             Action::Lifecycle | Action::Stop => true,
             Action::DiskCapture => matches!(state.status, BoxStatus::Running | BoxStatus::Stopped),
             Action::Checkpoint => state.status == BoxStatus::Paused && owner,
+            Action::Resize => state.status == BoxStatus::Running,
             Action::DiskRestore => state.status == BoxStatus::Stopped,
             Action::ArchiveRestore => {
                 matches!(state.status, BoxStatus::Configured | BoxStatus::Stopped)

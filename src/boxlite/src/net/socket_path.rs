@@ -132,6 +132,11 @@ impl BoxSockets {
         self.binding_dir().join(CTL_SOCK)
     }
 
+    /// Host-only shim memory control; never bridged into guest vsock.
+    pub fn memory_sock(&self) -> PathBuf {
+        self.binding_dir().join("memory.sock")
+    }
+
     /// Network backend socket (gvproxy binds; libkrun derives a sibling
     /// `net.sock-krun.sock` from this path — the longest path in the dir).
     pub fn net_backend_sock(&self) -> PathBuf {

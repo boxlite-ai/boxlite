@@ -49,6 +49,9 @@ pub(crate) struct GuestServer {
     /// Mount points frozen by Quiesce RPC, thawed by Thaw RPC.
     pub frozen_mounts: Mutex<Vec<PathBuf>>,
 
+    /// Held by the blocking sysfs operation even if its RPC is cancelled.
+    pub cpu_updates: Arc<Mutex<()>>,
+
     /// Set when a host-driven Shutdown RPC is in progress. The reaper's
     /// init-exit action checks this to avoid powering the VM off underneath a
     /// host-orchestrated teardown.
@@ -80,6 +83,7 @@ impl GuestServer {
             registry: ExecutionRegistry::new(),
             ssh_manager: crate::service::ssh::SshManager::default(),
             frozen_mounts: Mutex::new(Vec::new()),
+            cpu_updates: Arc::new(Mutex::new(())),
             shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             init_exits: Arc::new(Mutex::new(HashMap::new())),
         }

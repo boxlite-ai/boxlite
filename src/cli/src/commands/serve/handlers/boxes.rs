@@ -175,6 +175,32 @@ pub(in crate::commands::serve) async fn start_box(
     Json(state.box_response(&info).await).into_response()
 }
 
+pub(in crate::commands::serve) async fn resize_box(
+    State(state): State<Arc<AppState>>,
+    Path(box_id): Path<String>,
+    body: Result<Json<boxlite::ResizeOptions>, axum::extract::rejection::JsonRejection>,
+) -> Response {
+    let options = match body {
+        Ok(Json(options)) => options,
+        Err(error) => {
+            return error_response(
+                StatusCode::BAD_REQUEST,
+                error.body_text(),
+                "InvalidArgumentError",
+                "invalid_argument",
+            );
+        }
+    };
+    let bx = match get_or_fetch_box(&state, &box_id).await {
+        Ok(bx) => bx,
+        Err(response) => return response,
+    };
+    match bx.resize(options).await {
+        Ok(resources) => Json(resources).into_response(),
+        Err(error) => error_from_boxlite(&error),
+    }
+}
+
 pub(in crate::commands::serve) async fn stop_box(
     State(state): State<Arc<AppState>>,
     Path(box_id): Path<String>,
