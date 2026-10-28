@@ -107,7 +107,9 @@ async def test_preview_deleted_box_invalidates_its_uri(rt, image, transport):
         tunnel = await prepare(box, public=False)
         credentials = {"X-BoxLite-Access-Token": tunnel.token()}
         await ready(tunnel.uri(), marker, credentials)
-    await eventually_status(tunnel.uri(), transport, 404, credentials)
+    # Missing-box inbound metadata denies access with 403 after cache expiry;
+    # a cached enabled mode reaches the missing tunnel and returns 404.
+    await eventually_status(tunnel.uri(), transport, (403, 404), credentials)
 
 
 @pytest.mark.parametrize("restriction,status", [("revoked", 404), ("inbound-disabled", 403)])

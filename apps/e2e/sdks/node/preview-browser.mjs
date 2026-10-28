@@ -13,11 +13,24 @@ const browser = await chromium.launch({
 try {
   const context = await browser.newContext({
     ignoreHTTPSErrors: process.env.BOXLITE_E2E_BROWSER_LOCAL_CA === '1',
+    // The proxy treats HeadlessChrome as a non-browser and skips its warning.
+    userAgent: `Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${browser.version()} Safari/537.36`,
   })
   const page = await context.newPage()
   const url = new URL('/browser', uri)
   url.searchParams.set('boxlite-access-token', token)
   assert.equal((await page.goto(url.href)).status(), 200)
+  const warning = page.locator('form[action="/accept-boxlite-preview-warning"]')
+  if (await warning.isVisible()) {
+    const [response] = await Promise.all([
+      page.waitForResponse((reply) => reply.url() === url.href && reply.request().isNavigationRequest()),
+      warning.getByRole('button', { name: 'I Understand, Continue', exact: true }).click(),
+    ])
+    assert.equal(response.status(), 200, 'warning acceptance did not return the preview page')
+    assert(page.url() === url.href, 'warning acceptance changed the preview URL')
+    const accepted = (await context.cookies(uri)).find((cookie) => cookie.name === 'boxlite-preview-page-accepted')
+    assert.equal(accepted?.value, 'true', 'browser did not store warning acceptance')
+  }
   await page.waitForFunction((expected) => window.fixtureAsset === expected, marker)
   const cookies = (await context.cookies(uri)).filter((cookie) => cookie.name === '__Host-boxlite-tunnel-session')
   assert.equal(cookies.length, 1, 'browser did not store platform session')

@@ -52,13 +52,14 @@ async def state(rt, box_id, expected):
         await asyncio.sleep(0.2)
 
 
-async def eventually_status(uri, transport, expected, headers=None):
+async def eventually_status(uri, transport, expected: int | tuple[int, ...], headers=None):
     # Three-second server cache contract, plus one second for request scheduling.
     uri, headers = PreviewURL(uri), PreviewHeaders(headers or {})
+    expected_statuses = (expected,) if isinstance(expected, int) else expected
     deadline = asyncio.get_running_loop().time() + 4
     while True:
         reply = await access(uri, transport, headers)
-        if reply.status == expected:
+        if reply.status in expected_statuses:
             require(asyncio.get_running_loop().time() <= deadline,
                     "proxy authorization change exceeded cache window and scheduling allowance")
             return reply

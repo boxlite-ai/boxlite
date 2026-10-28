@@ -10,13 +10,50 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
+import test_sdk_tunnel
 from test_network_egress import _reaches
-from test_sdk_tunnel import _request
+from network_fixtures import eventually_status
 
 
 @pytest.fixture(autouse=True)
 def verify_runner_saw_all_boxes():
     yield  # These tests exercise the harness, not a remote box.
+
+
+@pytest.mark.parametrize("expected,status,accepted", [
+    ((403, 404), 403, True),
+    ((403, 404), 404, True),
+    ((403, 404), 200, False),
+    ((403, 404), 401, False),
+    ((403, 404), 500, False),
+    (404, 403, False),
+    (404, 404, True),
+])
+async def test_network_harness_expected_statuses(expected, status, accepted):
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(status)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        def log_message(self, *_args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    try:
+        uri = f"http://127.0.0.1:{server.server_port}/"
+        if accepted:
+            reply = await eventually_status(uri, "http", expected)
+            assert reply.status == status
+        else:
+            with pytest.raises(AssertionError, match="after cache window"):
+                await eventually_status(uri, "http", expected)
+    finally:
+        server.shutdown()
+        server.server_close()
+        worker.join(timeout=5)
 
 
 async def test_network_harness_required_identity_cannot_skip(monkeypatch):
@@ -118,15 +155,13 @@ async def test_network_harness_reads_complete_http_without_waiting_for_tls_eof()
         async def connect(self):
             return connection
 
-    response = await _request(Tunnel(), b"GET / HTTP/1.1\r\nHost: example.test\r\n\r\n")
+    response = await test_sdk_tunnel._request(Tunnel(), b"GET / HTTP/1.1\r\nHost: example.test\r\n\r\n")
     assert response.endswith(b"\r\n\r\nbody")
     assert connection.closed
 
 
 @pytest.mark.parametrize("status", [b"200 OK", b"502 Bad Gateway"])
 async def test_network_harness_half_close_does_not_hide_complete_wrong_response(monkeypatch, status):
-    import test_sdk_tunnel
-
     chunks = iter([b"HTTP/1.1 " + status + b"\r\nContent-Length: 5\r\n\r\nwrong", b""])
 
     async def ignore(*_args, **_kwargs):

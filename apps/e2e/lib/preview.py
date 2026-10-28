@@ -82,7 +82,9 @@ class Wire:
         )
         try:
             if self.target.scheme == "https":
-                self.socket = ssl.create_default_context().wrap_socket(self.socket, server_hostname=self.target.hostname)
+                context = ssl.create_default_context()
+                context.minimum_version = ssl.TLSVersion.TLSv1_2
+                self.socket = context.wrap_socket(self.socket, server_hostname=self.target.hostname)
             self.stream = self.socket.makefile("rb")
         except BaseException:
             self.socket.close()

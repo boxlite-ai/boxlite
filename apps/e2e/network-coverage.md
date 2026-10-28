@@ -15,7 +15,7 @@ CONNECT does not stand in for the direct proxy path.
 | Session protocol | `test_private_tunnel.py` | Explicit bad proof cannot fall back to a cookie; ambiguous proofs 400; exact-origin cookie checks; platform credentials and token Referer stripped; application credentials retained; reserved guest cookies removed |
 | Revoke | `test_tunnel_revoke.py` | Public/private new access denied; other port unaffected; idempotence; token rotation invalidates old cookie/token; existing WS/TCP remains usable; revoke works while stopped or inbound-disabled |
 | Lifecycle | `test_preview_lifecycle.py` | Authorization before wake; explicit no-auto-resume rejection; declaration/session survive restart; keep-alive requests reauthorize; SDK forward cannot silently re-prepare; deletion invalidates URI; denied declarations do not wake |
-| Chromium | `test_preview_browser.py` | Real HTTPS cookie storage and attributes; HttpOnly; page/subresource/fetch/same-origin WS; reload without token; no platform credentials in guest echo |
+| Chromium | `test_preview_browser.py` | Accept optional preview warning; real HTTPS cookie storage and attributes; HttpOnly; page/subresource/fetch/same-origin WS; reload without token; no platform credentials in guest echo |
 | Outbound | `test_network_egress.py`, `test_network_updates.py` | Healthy controls; runtime disable/re-enable; full allowlist replacement; process identity preserved; API get/list and SDK handle readback; restart persistence; no-NIC/stopped rejection; invalid create/update input; HTTP Host, wildcard TLS, IPv4 and CIDR |
 | SDK and CLI | `test_sdk_tunnel.py`, `test_node_tunnel.py`, `test_cli_network.py` | Framed HTTP, exact WS echo, concurrent/large transfers and lifecycle; private access/revoke; Node and CLI live policy update/readback; CLI private descriptors consumed through all three proxy entrances; CLI forwarding cannot undo revoke |
 | Harness only | `test_network_harness.py` | Missing/failed probes fail; HTTP does not wait for TLS EOF; complete wrong responses cannot match half-close xfail; Node rejects missing/wrong WS echo; redirects do not change the probe destination; rule probes reject mismatched IPv4/TLS targets |
@@ -25,6 +25,12 @@ tunnels. Reachability polls after revocation use the existing URI. They never
 call prepare, which would undo the operation under test. The three-second
 authorization-cache window has a one-second request-scheduling allowance;
 a late successful rejection still fails the timing check.
+
+After box deletion, HTTP/WS/CONNECT accept 403 or 404: expired inbound metadata
+denies access with 403, while a cached enabled mode reaches the missing tunnel
+and returns 404. Revoking a port on an existing box still requires 404.
+Raw HTTPS WebSocket/CONNECT probes explicitly require TLS 1.2 or newer and retain
+the default certificate and hostname verification.
 
 Egress probes return a complete JSON record and a successful exit status.
 Timeout/refusal/transport EOF can count as blocked only with an unrestricted
@@ -82,6 +88,19 @@ browser context. For an isolated local certificate only,
 and SDK probes still require their normal CA configuration (for example
 `SSL_CERT_FILE`). The lane rejects HTTP because it cannot validate Secure
 cookie behavior. Browser OIDC login and expiry are separate outstanding work.
+
+The driver uses a normal Chrome user agent so headless detection cannot bypass
+the proxy's browser warning. When the warning appears, it submits the existing
+form, checks the return to the original token URL and the acceptance cookie,
+then runs all session, asset, fetch, WebSocket and reload checks.
+
+`TestBrowserPreviewWarning` in `apps/proxy/pkg/proxy/browser_preview_test.go`
+runs this same driver against real proxy middleware and local API/guest fixtures
+with the warning both enabled and disabled. This is not cloud E2E evidence:
+
+```bash
+BOXLITE_E2E_BROWSER_EXECUTABLE=/path/to/chromium make test:apps:proxy FILTER=TestBrowserPreviewWarning
+```
 
 `BOXLITE_E2E_READONLY_PROFILE` and `BOXLITE_E2E_FOREIGN_PROFILE` name dedicated
 profiles in the shared credentials file. The former must belong to the owner
