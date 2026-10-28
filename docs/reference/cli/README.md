@@ -803,7 +803,7 @@ runtime initialization. Malformed arguments use the normal CLI usage error (code
 
 | Purpose | Command after `boxlite agent` | Operation |
 |---|---|---|
-| Lifecycle | `create BOX --agent AGENT` | Create a session with initial configuration. |
+| Lifecycle | `create BOX --agent AGENT` | Create a session using the selected agent and initial configuration. |
 | Lifecycle | `close BOX --session SESSION` | End the session. |
 | Work | `send BOX --session SESSION TEXT` | Submit a new turn. |
 | Work | `wait BOX --session SESSION --turn TURN` | Wait for an existing turn's result. |
@@ -813,9 +813,10 @@ runtime initialization. Malformed arguments use the normal CLI usage error (code
 | Interact | `interrupt BOX --session SESSION --turn TURN` | Interrupt that turn's agent loop. |
 | Interact | `respond BOX --session SESSION --request REQUEST JSON` | Answer a question or approve/deny a permission request. |
 
-`BOX` remains positional, as in `boxlite exec`. Creation requires `--agent AGENT`
-to select the agent; `--session` selects an existing conversation. Mutations never
-infer an active turn. `inspect --view config|capabilities|requests` selects a session-only
+`BOX` is positional, as in `boxlite exec`. Creation requires `--agent AGENT`
+to select the agent for the new session. For example, `boxlite agent create dev --agent coder`
+selects agent `coder` inside Box `dev`. `--session` selects an existing conversation.
+Mutations never infer an active turn. `inspect --view config|capabilities|requests` selects a session-only
 read and cannot be combined with `--turn`; omission reads state. The SDK's
 `get`/`get_turn` handle lookups are implicit in CLI targeting.
 

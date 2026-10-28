@@ -21,7 +21,7 @@ pub enum AgentCommand {
     Create {
         #[command(flatten)]
         target: BoxTarget,
-        /// Agent identifier
+        /// Agent to use for the new session
         #[arg(long, value_name = "AGENT")]
         agent: String,
         #[command(flatten)]

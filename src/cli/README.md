@@ -26,8 +26,8 @@ The BoxLite CLI (`boxlite`) lets you create, run, and manage BoxLite boxes from 
 - **Shell completion** — Bash, Zsh, Fish
 
 The `boxlite agent` namespace groups nine commands for sessions and turns,
-including steering. BOX is positional; creation requires `--agent AGENT`.
-Named `--session` and `--turn` flags select existing work.
+including steering. BOX is positional; `--agent AGENT` selects the agent for a new
+session. Named `--session` and `--turn` flags select existing work.
 See the [agent CLI reference](../../docs/reference/cli/README.md#boxlite-agent)
 for commands, grouped options and error behavior.
 

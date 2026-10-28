@@ -68,7 +68,7 @@ option structs. C uses corresponding `CAgent…Options` pointers; null means omi
 Rust types live in `boxlite::agents`; Python types in `boxlite.agents`;
 TypeScript types are exported from the package; Go types use the `Agent` prefix.
 
-- Create accepts an agent identifier, working directory, initial configuration and retry key.
+- Create selects the agent by identifier and accepts a working directory, initial configuration and retry key.
 - Send accepts text, optional JSON data, a retry key, and `queue` (default) or `reject` mode.
 - Close, respond, steer and interrupt accept a retry key. Wait accepts an optional timeout.
 - Config includes model, reasoning, instructions, tools/MCP references, permissions, limits and output schema.
@@ -164,8 +164,8 @@ or interrupt work. Null handles may be freed.
 ### CLI commands
 
 The [CLI reference](cli/README.md#boxlite-agent) lists nine flat `agent` commands.
-BOX is positional; creation requires `--agent AGENT`. Existing work is selected
-with `--session`, `--turn` and `--request`.
+BOX is positional; creation requires `--agent AGENT` to select the agent for a new
+session. Existing work is selected with `--session`, `--turn` and `--request`.
 `inspect` combines state and session views, and `events` selects either scope.
 SDKs retain the `get`/`get_turn` methods; CLI targeting subsumes handle lookup.
 CLI options reuse the five groups above and add `AgentInspectOptions` for view
