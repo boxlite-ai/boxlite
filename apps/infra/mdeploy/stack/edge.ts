@@ -36,7 +36,7 @@ export type EdgeRequest = {
   /** The zone `*.<domain>` is written into. Every box is a name under it. */
   domain: string
   /**
-   * The parent of platform tunnel subdomains and its zone, or null for a stage
+   * The parent of platform subdomains and its zone, or null for a stage
    * that offers none. Its wildcard gets a record and a certificate beside the
    * box domain's; nothing is created per name.
    */

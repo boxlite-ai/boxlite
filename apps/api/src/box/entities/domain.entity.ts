@@ -17,7 +17,7 @@ import {
 } from 'typeorm'
 import { Box } from './box.entity'
 
-export type TunnelDomainKind = 'platform' | 'custom'
+export type DomainKind = 'platform' | 'custom'
 
 /**
  * A hostname an organization holds, and the box port it currently routes to.
@@ -31,14 +31,14 @@ export type TunnelDomainKind = 'platform' | 'custom'
  * only, which is all a foreign key's SET NULL reaches; the port left beside it
  * is ignored. There is no foreign key to the organization, like `box`.
  */
-@Entity('tunnel_domain')
-@Unique('tunnel_domain_hostname_unique', ['hostname'])
-@Index('tunnel_domain_organization_id_index', ['organizationId'])
-@Index('tunnel_domain_target_index', ['boxId', 'port'])
-@Check('tunnel_domain_kind', `"kind" IN ('platform', 'custom')`)
-@Check('tunnel_domain_target', `("box_id" IS NULL OR "port" IS NOT NULL) AND "port" BETWEEN 1 AND 65535`)
-export class TunnelDomain {
-  @PrimaryGeneratedColumn('uuid', { primaryKeyConstraintName: 'tunnel_domain_id_pk' })
+@Entity('domain')
+@Unique('domain_hostname_unique', ['hostname'])
+@Index('domain_organization_id_index', ['organizationId'])
+@Index('domain_target_index', ['boxId', 'port'])
+@Check('domain_kind', `"kind" IN ('platform', 'custom')`)
+@Check('domain_target', `("box_id" IS NULL OR "port" IS NOT NULL) AND "port" BETWEEN 1 AND 65535`)
+export class Domain {
+  @PrimaryGeneratedColumn('uuid', { primaryKeyConstraintName: 'domain_id_pk' })
   id: string
 
   /** The full lowercase hostname, such as `demo.apps.example`. */
@@ -46,7 +46,7 @@ export class TunnelDomain {
   hostname: string
 
   @Column({ type: 'character varying' })
-  kind: TunnelDomainKind
+  kind: DomainKind
 
   @Column({ name: 'organization_id', type: 'uuid' })
   organizationId: string
@@ -66,6 +66,6 @@ export class TunnelDomain {
   updatedAt: Date
 
   @ManyToOne(() => Box, { onDelete: 'SET NULL' })
-  @JoinColumn({ name: 'box_id', foreignKeyConstraintName: 'tunnel_domain_box_id_fk' })
+  @JoinColumn({ name: 'box_id', foreignKeyConstraintName: 'domain_box_id_fk' })
   box?: Box | null
 }

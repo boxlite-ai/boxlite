@@ -12,7 +12,7 @@ export const REGION_NOT_SUPPORTED_CODE = 'region_not_supported'
 export const PLATFORM_DOMAIN_NOT_CONFIGURED_CODE = 'platform_domain_not_configured'
 
 /**
- * The organization already holds as many tunnel hostnames as it may.
+ * The organization already holds as many domain names as it may.
  *
  * Unbinding a name does not free a slot: the name stays the organization's,
  * so the same name can be bound again without counting twice. The message says
@@ -23,7 +23,7 @@ export class DomainCountLimitReachedError extends HttpException {
     super(
       {
         message:
-          `This organization holds ${used} of its ${limit} tunnel domain names. ` +
+          `This organization holds ${used} of its ${limit} domain names. ` +
           'Unbinding keeps a name for the organization, so reuse a held name or ask for a higher limit.',
         code: DOMAIN_COUNT_LIMIT_CODE,
       },
@@ -75,7 +75,7 @@ export class PlatformDomainNotConfiguredError extends HttpException {
   constructor() {
     super(
       {
-        message: 'This deployment has no platform tunnel domain; subdomains cannot be bound.',
+        message: 'This deployment has no platform domain; subdomains cannot be bound.',
         code: PLATFORM_DOMAIN_NOT_CONFIGURED_CODE,
       },
       HttpStatus.BAD_REQUEST,

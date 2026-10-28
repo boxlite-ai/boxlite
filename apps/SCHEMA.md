@@ -51,7 +51,7 @@ flowchart LR
         t_activity["box_last_activity"]
         t_migration["box_migration"]
         t_tunnel["tunnel"]
-        t_tunneldomain["tunnel_domain"]
+        t_domain["domain"]
         t_runner["runner"]
         t_region["region"]
         t_volume["volume"]
@@ -80,7 +80,7 @@ flowchart LR
     t_activity ==>|"boxId"| t_box
     t_migration ==>|"boxId"| t_box
     t_tunnel ==>|"box_id"| t_box
-    t_tunneldomain -.->|"box_id"| t_box
+    t_domain -.->|"box_id"| t_box
     t_imgver ==>|"imageId"| t_image
     t_imgtag ==>|"imageId"| t_image
     t_imgtag ==>|"versionId"| t_imgver
@@ -135,7 +135,7 @@ that no longer resolves.
 | `box_last_activity`                      | `boxId`                      | `box.id`                       | foreign key | `CASCADE` |
 | `box_migration`                          | `boxId`                      | `box.id`                       | foreign key | `CASCADE` |
 | `tunnel`                                 | `box_id`                     | `box.id`                       | foreign key | `CASCADE` |
-| `tunnel_domain`                          | `box_id`                     | `box.id`                       | foreign key | `SET NULL` |
+| `domain`                                | `box_id`                     | `box.id`                       | foreign key | `SET NULL` |
 | `image_version`                          | `imageId`                    | `image.id`                     | foreign key | `CASCADE` |
 | `image_tag`                              | `imageId`                    | `image.id`                     | foreign key | `CASCADE` |
 | `image_tag`                              | `versionId`                  | `image_version.id`             | foreign key | `RESTRICT` |
@@ -205,7 +205,7 @@ state inline.
 | `suspensionReason` | `character varying` | nullable |
 | `suspensionCleanupGracePeriodHours` | `integer` | default `24` |
 | `image_count_limit` | `integer` | default `20`; catalog entries an organization may keep |
-| `domain_count_limit` | `integer` | default `1`; tunnel hostnames an organization may hold, bound or released |
+| `domain_count_limit` | `integer` | default `1`; domain names an organization may hold, bound or released |
 | `boxLimitedNetworkEgress` | `boolean` | default `false` |
 | `experimentalConfig` | `jsonb` | nullable |
 | `createdAt` / `updatedAt` | `timestamptz` | |
@@ -736,7 +736,7 @@ tunnel hostnames become reachable only after the owner prepares that port with
 `POST /api/v1/boxes/{boxId}/network/tunnel?port={port}`. Rows survive box
 stop/start and proxy restart; hard deletion of a box removes its rows.
 
-### `tunnel_domain`
+### `domain`
 
 A hostname an organization holds, and the box port it currently routes to. The
 name belongs to the organization for as long as the row exists; the binding is
@@ -767,6 +767,13 @@ destroying the box each clear both and keep the row; deleting the box row
 outright clears `box_id` through the foreign key. Revoking the tunnel changes
 nothing here: the name answers 404 until the port is declared again. A released name still counts against the limit
 and can be bound again only by the organization that holds it.
+
+`DomainService.resolve` reads the stored target independently of port publication.
+`PreviewController.resolveDomain` then applies `TunnelService.isPublicAccessAllowed`
+before returning a routable target to the proxy. This keeps domain ownership and
+binding separate from tunnel policy while preserving the same public-access,
+inbound and box-state checks. A stored target may therefore resolve internally
+while its preview endpoint returns 404.
 
 ### `box_last_activity`
 

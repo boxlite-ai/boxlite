@@ -25,7 +25,7 @@ type Config struct {
 	ProxyProtocol   string `envconfig:"PROXY_PROTOCOL" validate:"required"`
 	ProxyApiKey     string `envconfig:"PROXY_API_KEY" validate:"required"`
 	TunnelCookieKey string `envconfig:"TUNNEL_COOKIE_KEY"`
-	// The parent of platform tunnel subdomains, the stage's user domain. A request
+	// The parent of platform subdomains, the stage's user domain. A request
 	// whose Host is one label under it is resolved through the API's domain
 	// lookup instead of the `<port>-<box>` encoding. Unset disables that path.
 	ProxyAppDomain        string             `envconfig:"PROXY_APP_DOMAIN"`

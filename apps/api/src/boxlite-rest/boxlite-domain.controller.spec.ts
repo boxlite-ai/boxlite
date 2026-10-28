@@ -11,12 +11,12 @@ import { BoxliteDomainController } from './boxlite-domain.controller'
 import { DomainTargetDto } from './dto/domain-target.dto'
 import { RequiredOrganizationResourcePermissions } from '../organization/decorators/required-organization-resource-permissions.decorator'
 import { OrganizationResourcePermission } from '../organization/enums/organization-resource-permission.enum'
-import { REST_COLLECTION_NAMES, RESERVED_PLATFORM_SUBDOMAINS } from '../box/services/tunnel-domain.service'
+import { REST_COLLECTION_NAMES, RESERVED_PLATFORM_SUBDOMAINS } from '../box/services/domain.service'
 
 const auth = { organizationId: 'org-1', organization: { id: 'org-1' } }
 
 function makeHarness() {
-  const tunnelDomainService = {
+  const domainService = {
     listHeld: jest.fn().mockResolvedValue({
       domains: [
         {
@@ -45,8 +45,8 @@ function makeHarness() {
   const boxService = {
     findOneByIdOrName: jest.fn().mockResolvedValue({ id: 'box-uuid', inboundEnabled: true }),
   }
-  const controller = new BoxliteDomainController(tunnelDomainService as never, boxService as never)
-  return { controller, tunnelDomainService, boxService }
+  const controller = new BoxliteDomainController(domainService as never, boxService as never)
+  return { controller, domainService, boxService }
 }
 
 function validateTarget(body: unknown) {
@@ -99,7 +99,7 @@ describe('BoxliteDomainController', () => {
   })
 
   it('binds with PUT on the target, resolving the box by id or name in the organization', async () => {
-    const { controller, tunnelDomainService, boxService } = makeHarness()
+    const { controller, domainService, boxService } = makeHarness()
     const handler = BoxliteDomainController.prototype.bind
     expect(Reflect.getMetadata(METHOD_METADATA, handler)).toBe(RequestMethod.PUT)
     expect(Reflect.getMetadata(PATH_METADATA, handler)).toBe(':domain/target')
@@ -110,7 +110,7 @@ describe('BoxliteDomainController', () => {
     const result = await controller.bind(auth as never, 'demo1', { type: 'box', box: 'web-a', port: 3000 })
 
     expect(boxService.findOneByIdOrName).toHaveBeenCalledWith('web-a', 'org-1')
-    expect(tunnelDomainService.bind).toHaveBeenCalledWith(expect.objectContaining({ id: 'box-uuid' }), 3000, 'demo1')
+    expect(domainService.bind).toHaveBeenCalledWith(expect.objectContaining({ id: 'box-uuid' }), 3000, 'demo1')
     expect(result).toEqual({
       name: 'demo1',
       hostname: 'demo1.app.test',
@@ -122,12 +122,12 @@ describe('BoxliteDomainController', () => {
   // Inbound access is checked on every request to the name, like the port's
   // own URL; binding only records the target, so it can come first.
   it('binds to a box whose inbound access is still disabled', async () => {
-    const { controller, tunnelDomainService, boxService } = makeHarness()
+    const { controller, domainService, boxService } = makeHarness()
     boxService.findOneByIdOrName.mockResolvedValue({ id: 'box-uuid', inboundEnabled: false })
 
     await controller.bind(auth as never, 'demo1', { type: 'box', box: 'web-a', port: 3000 })
 
-    expect(tunnelDomainService.bind).toHaveBeenCalledWith(expect.objectContaining({ id: 'box-uuid' }), 3000, 'demo1')
+    expect(domainService.bind).toHaveBeenCalledWith(expect.objectContaining({ id: 'box-uuid' }), 3000, 'demo1')
   })
 
   it('accepts a box target and rejects a target whose type and fields disagree', async () => {
@@ -145,7 +145,7 @@ describe('BoxliteDomainController', () => {
   })
 
   it('unbinds by name for the calling organization with DELETE on the target, answering 204', async () => {
-    const { controller, tunnelDomainService } = makeHarness()
+    const { controller, domainService } = makeHarness()
     const handler = BoxliteDomainController.prototype.unbind
     expect(Reflect.getMetadata(METHOD_METADATA, handler)).toBe(RequestMethod.DELETE)
     expect(Reflect.getMetadata(PATH_METADATA, handler)).toBe(':domain/target')
@@ -156,6 +156,6 @@ describe('BoxliteDomainController', () => {
 
     await controller.unbind(auth as never, 'demo1.app.test')
 
-    expect(tunnelDomainService.unbind).toHaveBeenCalledWith('org-1', 'demo1.app.test')
+    expect(domainService.unbind).toHaveBeenCalledWith('org-1', 'demo1.app.test')
   })
 })

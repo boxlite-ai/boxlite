@@ -418,7 +418,7 @@ export const deployStack = ({
   /** What the API writes into private refs, and what a runner presents its key to. */
   const registryProxyHost = registryProxy.active ? registryProxy.url.apply(registryProxyHostOf) : null
 
-  // One answer for the API, the proxy and the edge, so a named tunnel's URL is
+  // One answer for the API, the proxy and the edge, so a domain's URL is
   // minted, resolved and served under the same wildcard — or not offered at all.
   // Refused rather than dropped on a cloud that cannot serve it: a stage that
   // sets the domain expects its users' apps to answer there.
@@ -427,7 +427,7 @@ export const deployStack = ({
       `STACK_USER_DOMAIN is ${inputs.userDomain.domain}, and this cloud's edge serves no user domain; unset it`,
     )
   }
-  const platformTunnelDomain = inputs.userDomain?.domain ?? null
+  const platformDomain = inputs.userDomain?.domain ?? null
 
   const apiEnvironment = {
     ...inputs.apiEnvironment,
@@ -461,9 +461,9 @@ export const deployStack = ({
     PROXY_PROTOCOL: inputs.proxyProtocol,
     PROXY_TEMPLATE_URL: inputs.proxyTemplateUrl,
     // The API mints `demo.<userDomain>` URLs only where the edge below serves
-    // that wildcard. Absent, it refuses named tunnels with a clear error
+    // that wildcard. Absent, it refuses domain binding with a clear error
     // instead of minting URLs nothing answers.
-    ...(platformTunnelDomain ? { PROXY_APP_DOMAIN: platformTunnelDomain } : {}),
+    ...(platformDomain ? { PROXY_APP_DOMAIN: platformDomain } : {}),
     S3_DEFAULT_BUCKET: storage.name,
   }
   assertOneChannelPerName({
@@ -520,7 +520,7 @@ export const deployStack = ({
     OTEL_TRACING_ENABLED: 'true',
     ...inputs.proxyEnvironment,
     OTEL_EXPORTER_OTLP_ENDPOINT: collector.otlpUrl,
-    ...(platformTunnelDomain ? { PROXY_APP_DOMAIN: platformTunnelDomain } : {}),
+    ...(platformDomain ? { PROXY_APP_DOMAIN: platformDomain } : {}),
   }
   assertOneChannelPerName({
     workload: 'proxy',

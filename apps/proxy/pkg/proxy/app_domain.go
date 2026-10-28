@@ -19,7 +19,7 @@ import (
 // errAppDomainNotFound is an unknown, unbound or currently unreachable platform
 // hostname. The API folds the tunnel, inbound and box-state checks into its
 // answer, so this is the one refusal the proxy forwards as 404.
-var errAppDomainNotFound = errors.New("tunnel domain not found")
+var errAppDomainNotFound = errors.New("domain not found")
 
 // appDomain is the configured platform domain without any port: like
 // PROXY_DOMAIN, a local stack may configure `app.localhost:4000`, and the port
@@ -68,7 +68,7 @@ func (p *Proxy) resolveAppDomain(ctx context.Context, hostname string) (string, 
 	}
 	response, err := p.previewGet(ctx, "preview", "domains", hostname)
 	if err != nil {
-		return "", 0, fmt.Errorf("resolve tunnel domain %s: %w", hostname, err)
+		return "", 0, fmt.Errorf("resolve domain %s: %w", hostname, err)
 	}
 	defer response.Body.Close()
 	switch response.StatusCode {
@@ -78,16 +78,16 @@ func (p *Proxy) resolveAppDomain(ctx context.Context, hostname string) (string, 
 			Port  uint16 `json:"port"`
 		}
 		if err := json.NewDecoder(io.LimitReader(response.Body, 4096)).Decode(&target); err != nil {
-			return "", 0, fmt.Errorf("resolve tunnel domain %s: malformed answer: %w", hostname, err)
+			return "", 0, fmt.Errorf("resolve domain %s: malformed answer: %w", hostname, err)
 		}
 		if target.BoxID == "" || target.Port == 0 {
-			return "", 0, fmt.Errorf("resolve tunnel domain %s: incomplete answer", hostname)
+			return "", 0, fmt.Errorf("resolve domain %s: incomplete answer", hostname)
 		}
 		return target.BoxID, target.Port, nil
 	case http.StatusNotFound:
 		return "", 0, errAppDomainNotFound
 	default:
-		return "", 0, fmt.Errorf("resolve tunnel domain %s: API returned %d", hostname, response.StatusCode)
+		return "", 0, fmt.Errorf("resolve domain %s: API returned %d", hostname, response.StatusCode)
 	}
 }
 

@@ -394,7 +394,7 @@ export const DEFAULT_PLATFORM_SUBDOMAIN_MIN_LENGTH = 5
 export const DNS_LABEL_MAX_LENGTH = 63
 
 /**
- * Platform tunnel subdomains: `<name>.<appDomain>` routes to one box port.
+ * Platform subdomains: `<name>.<appDomain>` routes to one box port.
  *
  * `appDomain` is unset where the deployment has no wildcard certificate and
  * record for it; the API then refuses explicit names rather than minting URLs
@@ -407,7 +407,7 @@ export const DNS_LABEL_MAX_LENGTH = 63
  * Exported so its rules can be tested directly rather than through an import
  * whose side effect is reading the process environment.
  */
-export function tunnelDomainConfig(env: NodeJS.ProcessEnv = process.env) {
+export function domainConfig(env: NodeJS.ProcessEnv = process.env) {
   const appDomain = env.PROXY_APP_DOMAIN?.trim().toLowerCase() || undefined
   const appDomainShape =
     /^(?<host>[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+)(:(?<port>[1-9][0-9]{0,4}))?$/
@@ -547,7 +547,7 @@ const configuration = {
       (process.env.PROXY_TOOLBOX_BASE_URL || `${process.env.PROXY_PROTOCOL}://${process.env.PROXY_DOMAIN}`) +
       '/toolbox',
   },
-  tunnelDomain: tunnelDomainConfig(),
+  domain: domainConfig(),
   audit: {
     toolboxRequestsEnabled: process.env.AUDIT_TOOLBOX_REQUESTS_ENABLED === 'true',
     retentionDays: process.env.AUDIT_LOG_RETENTION_DAYS

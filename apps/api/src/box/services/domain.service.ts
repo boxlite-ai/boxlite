@@ -13,7 +13,7 @@ import { BadRequestError } from '../../exceptions/bad-request.exception'
 import { RegionService } from '../../region/services/region.service'
 import { BoxEvents } from '../constants/box-events.constants'
 import { Box } from '../entities/box.entity'
-import { TunnelDomain, TunnelDomainKind } from '../entities/tunnel-domain.entity'
+import { Domain, DomainKind } from '../entities/domain.entity'
 import { BoxDestroyedEvent } from '../events/box-destroyed.event'
 import {
   DomainCountLimitReachedError,
@@ -21,8 +21,7 @@ import {
   RegionNotSupportedError,
   SubdomainTakenError,
   SubdomainTooShortError,
-} from '../errors/tunnel-domain.error'
-import { TunnelService } from './tunnel.service'
+} from '../errors/domain.error'
 
 /**
  * The collections mounted under `v1/:prefix/`. A name equal to one of them
@@ -78,26 +77,23 @@ export type HeldDomains = {
 }
 
 /**
- * Platform subdomains for public tunnels: `demo.<appDomain>` routes to one
- * box port, and the name belongs to the organization that claimed it.
+ * Organization-owned platform subdomains and their box-port targets.
  *
  * A name and a tunnel are separate resources. Binding records which box port
  * a name routes to, under the organization row lock that also holds the count
  * of names against `domainCountLimit`; it neither declares the port public nor
  * needs it to be, and several names may route to one port. Unbinding is by
  * name and keeps it held; destroying the box releases its bindings the same
- * way; revoking the tunnel does not touch them. Resolution for the proxy runs
- * the port's own public access check, so an unbound target, an undeclared or
- * revoked port, or an inbound-disabled box is a 404, never a stale forward.
+ * way; revoking the tunnel does not touch them. Resolution returns the stored
+ * target; the preview controller applies the port's public access policy.
  */
 @Injectable()
-export class TunnelDomainService {
-  private readonly logger = new Logger(TunnelDomainService.name)
+export class DomainService {
+  private readonly logger = new Logger(DomainService.name)
 
   constructor(
     @InjectDataSource() private readonly dataSource: DataSource,
     private readonly regionService: RegionService,
-    private readonly tunnelService: TunnelService,
     private readonly configService: TypedConfigService,
   ) {}
 
@@ -107,8 +103,8 @@ export class TunnelDomainService {
    * `appDomain` may add the port a local proxy listens on, for the URL only.
    */
   appDomain(): { appDomain: string; appHost: string } | undefined {
-    const appDomain = this.configService.get('tunnelDomain.appDomain')
-    const appHost = this.configService.get('tunnelDomain.appHost')
+    const appDomain = this.configService.get('domain.appDomain')
+    const appHost = this.configService.get('domain.appHost')
     return appDomain && appHost ? { appDomain, appHost } : undefined
   }
 
@@ -166,16 +162,16 @@ export class TunnelDomainService {
     await this.dataSource.transaction(async (manager) => {
       const limit = await this.lockOrganizationLimit(manager, box.organizationId)
 
-      const held = await manager.findOne(TunnelDomain, { where: { hostname } })
+      const held = await manager.findOne(Domain, { where: { hostname } })
       if (held && held.organizationId !== box.organizationId) {
         throw new SubdomainTakenError(hostname)
       }
       if (!held) {
-        const minLength = this.configService.getOrThrow('tunnelDomain.platformSubdomainMinLength')
+        const minLength = this.configService.getOrThrow('domain.platformSubdomainMinLength')
         if (subdomain.length < minLength) {
           throw new SubdomainTooShortError(subdomain, minLength)
         }
-        const used = await manager.count(TunnelDomain, { where: { organizationId: box.organizationId } })
+        const used = await manager.count(Domain, { where: { organizationId: box.organizationId } })
         if (used >= limit) {
           throw new DomainCountLimitReachedError(limit, used)
         }
@@ -186,11 +182,11 @@ export class TunnelDomainService {
       // Within the organization the row lock above orders binds, so moving a
       // name off another port is a plain update.
       const bound: { id: string }[] = await manager.query(
-        `INSERT INTO "tunnel_domain" ("hostname", "kind", "organization_id", "box_id", "port")
+        `INSERT INTO "domain" ("hostname", "kind", "organization_id", "box_id", "port")
          VALUES ($1, 'platform', $2, $3, $4)
          ON CONFLICT ("hostname") DO UPDATE
          SET "box_id" = EXCLUDED."box_id", "port" = EXCLUDED."port", "updated_at" = now()
-         WHERE "tunnel_domain"."organization_id" = EXCLUDED."organization_id"
+         WHERE "domain"."organization_id" = EXCLUDED."organization_id"
          RETURNING "id"`,
         [hostname, box.organizationId, box.id, port],
       )
@@ -215,31 +211,30 @@ export class TunnelDomainService {
     // TypeORM answers an UPDATE with [rows, rowCount]; the count says whether
     // the organization holds the name, bound or not.
     const [, released]: [unknown[], number] = await this.dataSource.query(
-      `UPDATE "tunnel_domain" SET "box_id" = NULL, "port" = NULL, "updated_at" = now()
+      `UPDATE "domain" SET "box_id" = NULL, "port" = NULL, "updated_at" = now()
        WHERE "hostname" = $1 AND "organization_id" = $2`,
       [hostname, organizationId],
     )
     if (released === 0) {
-      throw new NotFoundException(`This organization holds no tunnel domain ${hostname}`)
+      throw new NotFoundException(`This organization holds no domain ${hostname}`)
     }
   }
 
   /**
-   * The box port a hostname may be forwarded to right now, or null. Applies
-   * the public-declaration, inbound and box-state rules of a public tunnel,
-   * with that check's 3-second cache; the hostname lookup itself is not cached.
+   * The stored box-port target, or null for an unknown or unbound name.
+   * Lookup is uncached and independent of the target's publication or access
+   * policy. Callers admitting traffic must authorize the returned target.
    */
   async resolve(rawHostname: string): Promise<{ boxId: string; port: number } | null> {
     const hostname = rawHostname.trim().toLowerCase()
     const rows: { boxId: string; port: number }[] = await this.dataSource.query(
-      `SELECT "box_id" AS "boxId", "port" FROM "tunnel_domain" WHERE "hostname" = $1 AND "box_id" IS NOT NULL`,
+      `SELECT "box_id" AS "boxId", "port" FROM "domain" WHERE "hostname" = $1 AND "box_id" IS NOT NULL`,
       [hostname],
     )
     if (rows.length === 0) {
       return null
     }
-    const target = { boxId: rows[0].boxId, port: Number(rows[0].port) }
-    return (await this.tunnelService.isPublicAccessAllowed(target.boxId, target.port)) ? target : null
+    return { boxId: rows[0].boxId, port: Number(rows[0].port) }
   }
 
   /** Every name the organization holds, bound or not, with its allowance. */
@@ -251,9 +246,9 @@ export class TunnelDomainService {
     if (!organization) {
       throw new NotFoundException(`Organization ${organizationId} not found`)
     }
-    const rows: { hostname: string; kind: TunnelDomainKind; boxId: string | null; port: number | null }[] =
+    const rows: { hostname: string; kind: DomainKind; boxId: string | null; port: number | null }[] =
       await this.dataSource.query(
-        `SELECT "hostname", "kind", "box_id" AS "boxId", "port" FROM "tunnel_domain"
+        `SELECT "hostname", "kind", "box_id" AS "boxId", "port" FROM "domain"
          WHERE "organization_id" = $1 ORDER BY "hostname"`,
         [organizationId],
       )
@@ -270,7 +265,7 @@ export class TunnelDomainService {
       limit,
       used: rows.length,
       remaining: Math.max(0, limit - rows.length),
-      minLength: this.configService.getOrThrow('tunnelDomain.platformSubdomainMinLength'),
+      minLength: this.configService.getOrThrow('domain.platformSubdomainMinLength'),
     }
   }
 
@@ -284,7 +279,7 @@ export class TunnelDomainService {
   async releaseBoxBindings(event: BoxDestroyedEvent): Promise<void> {
     try {
       await this.dataSource.query(
-        `UPDATE "tunnel_domain" SET "box_id" = NULL, "port" = NULL, "updated_at" = now() WHERE "box_id" = $1`,
+        `UPDATE "domain" SET "box_id" = NULL, "port" = NULL, "updated_at" = now() WHERE "box_id" = $1`,
         [event.box.id],
       )
     } catch (error) {
@@ -293,7 +288,7 @@ export class TunnelDomainService {
   }
 
   /** What a caller binds a stored hostname by: the label of a platform name, a custom hostname whole. */
-  private nameOf(hostname: string, kind: TunnelDomainKind): string {
+  private nameOf(hostname: string, kind: DomainKind): string {
     return kind === 'platform' ? hostname.slice(0, hostname.indexOf('.')) : hostname
   }
 

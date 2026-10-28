@@ -11,7 +11,6 @@ import { Box } from '../entities/box.entity'
 import { BoxLastActivity } from '../entities/box-last-activity.entity'
 import { BoxMigration } from '../entities/box-migration.entity'
 import { Tunnel } from '../entities/tunnel.entity'
-import { TunnelDomain } from '../entities/tunnel-domain.entity'
 import { TunnelService } from './tunnel.service'
 import { AddTunnelAuth1791100000000 } from '../../migrations/pre-deploy/1791100000000-add-tunnel-auth-migration'
 
@@ -49,8 +48,7 @@ describeIfDatabase('TunnelService revoke (integration, real Postgres)', () => {
       password: process.env.DB_PASSWORD,
       database: process.env.DB_DATABASE,
       schema: schemaName,
-      // tunnel_domain is here because a revoke releases the port's hostname.
-      entities: [Box, BoxLastActivity, BoxMigration, Tunnel, TunnelDomain],
+      entities: [Box, BoxLastActivity, BoxMigration, Tunnel],
       namingStrategy: new CustomNamingStrategy(),
       entitySkipConstructor: true,
       synchronize: false,

@@ -22,7 +22,7 @@ import { OrganizationResourcePermission } from '../organization/enums/organizati
 import { AuthContext } from '../common/decorators/auth-context.decorator'
 import { OrganizationAuthContext } from '../common/interfaces/auth-context.interface'
 import { BoxService } from '../box/services/box.service'
-import { HeldDomain, TunnelDomainService } from '../box/services/tunnel-domain.service'
+import { HeldDomain, DomainService } from '../box/services/domain.service'
 import { DomainTargetDto } from './dto/domain-target.dto'
 
 type RestDomainTarget = { type: 'box'; box: string; port: number }
@@ -64,7 +64,7 @@ function toRestDomain(domain: HeldDomain): RestDomain {
 @UseGuards(CombinedAuthGuard, OrganizationResourceActionGuard)
 export class BoxliteDomainController {
   constructor(
-    private readonly tunnelDomainService: TunnelDomainService,
+    private readonly domainService: DomainService,
     private readonly boxService: BoxService,
   ) {}
 
@@ -76,7 +76,7 @@ export class BoxliteDomainController {
   @Get()
   @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
   async list(@AuthContext() authContext: OrganizationAuthContext): Promise<RestDomainList> {
-    const held = await this.tunnelDomainService.listHeld(authContext.organizationId)
+    const held = await this.domainService.listHeld(authContext.organizationId)
     return {
       domains: held.domains.map(toRestDomain),
       limit: held.limit,
@@ -102,7 +102,7 @@ export class BoxliteDomainController {
   ): Promise<RestDomain> {
     // findOneByIdOrName already 404s for a missing/destroyed box.
     const box = await this.boxService.findOneByIdOrName(target.box, authContext.organizationId)
-    return toRestDomain(await this.tunnelDomainService.bind(box, target.port, domain))
+    return toRestDomain(await this.domainService.bind(box, target.port, domain))
   }
 
   /**
@@ -114,6 +114,6 @@ export class BoxliteDomainController {
   @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
   @HttpCode(HttpStatus.NO_CONTENT)
   async unbind(@AuthContext() authContext: OrganizationAuthContext, @Param('domain') domain: string): Promise<void> {
-    await this.tunnelDomainService.unbind(authContext.organizationId, domain)
+    await this.domainService.unbind(authContext.organizationId, domain)
   }
 }

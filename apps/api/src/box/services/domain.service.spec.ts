@@ -10,8 +10,8 @@ import {
   REGION_NOT_SUPPORTED_CODE,
   SUBDOMAIN_TAKEN_CODE,
   SUBDOMAIN_TOO_SHORT_CODE,
-} from '../errors/tunnel-domain.error'
-import { TunnelDomainService } from './tunnel-domain.service'
+} from '../errors/domain.error'
+import { DomainService } from './domain.service'
 
 const ORG = '00000000-0000-4000-8000-000000000001'
 const OTHER_ORG = '00000000-0000-4000-8000-000000000002'
@@ -47,24 +47,21 @@ function makeService(
   query.mockImplementation((sql: string) => {
     if (sql.includes('SET LOCAL lock_timeout')) return Promise.resolve([])
     if (sql.includes('FOR UPDATE')) return Promise.resolve([{ limit: options.limit ?? 1 }])
-    if (sql.includes('INSERT INTO "tunnel_domain"')) {
+    if (sql.includes('INSERT INTO "domain"')) {
       return Promise.resolve(Array.from({ length: options.upsertRows ?? 1 }, () => ({ id: 'domain-1' })))
     }
     return Promise.resolve([])
   })
   const dataSource = { transaction: jest.fn((work: (m: unknown) => Promise<unknown>) => work(manager)), query }
-  const tunnelService = {
-    isPublicAccessAllowed: jest.fn().mockResolvedValue(true),
-  }
   const regionService = {
     findOne: jest
       .fn()
       .mockResolvedValue(options.regionProxyUrl === undefined ? null : { proxyUrl: options.regionProxyUrl }),
   }
   const config: Record<string, unknown> = {
-    'tunnelDomain.appDomain': 'appDomain' in options ? options.appDomain : 'app.boxlite.test',
-    'tunnelDomain.appHost': 'appDomain' in options ? options.appDomain : 'app.boxlite.test',
-    'tunnelDomain.platformSubdomainMinLength': options.minLength ?? 5,
+    'domain.appDomain': 'appDomain' in options ? options.appDomain : 'app.boxlite.test',
+    'domain.appHost': 'appDomain' in options ? options.appDomain : 'app.boxlite.test',
+    'domain.platformSubdomainMinLength': options.minLength ?? 5,
     'proxy.domain': 'proxy.boxlite.test',
     'proxy.protocol': 'https',
   }
@@ -72,16 +69,11 @@ function makeService(
     get: jest.fn((key: string) => config[key]),
     getOrThrow: jest.fn((key: string) => config[key]),
   }
-  const service = new TunnelDomainService(
-    dataSource as never,
-    regionService as never,
-    tunnelService as never,
-    configService as never,
-  )
-  return { service, manager, query, tunnelService }
+  const service = new DomainService(dataSource as never, regionService as never, configService as never)
+  return { service, manager, query }
 }
 
-describe('TunnelDomainService.parseSubdomain', () => {
+describe('DomainService.parseSubdomain', () => {
   const { service } = makeService()
 
   it('lowercases a valid label', () => {
@@ -105,7 +97,7 @@ describe('TunnelDomainService.parseSubdomain', () => {
   })
 })
 
-describe('TunnelDomainService.hostnameFor', () => {
+describe('DomainService.hostnameFor', () => {
   const { service } = makeService()
 
   it('reads a bare label and the full platform hostname as the same name', () => {
@@ -125,7 +117,7 @@ describe('TunnelDomainService.hostnameFor', () => {
   })
 })
 
-describe('TunnelDomainService.bind', () => {
+describe('DomainService.bind', () => {
   it('refuses every name where the deployment has no app domain', async () => {
     const { service, query } = makeService({ appDomain: undefined })
 
@@ -170,7 +162,7 @@ describe('TunnelDomainService.bind', () => {
     expect(statements).toHaveLength(3)
     expect(statements[0]).toContain('SET LOCAL lock_timeout')
     expect(statements[1]).toContain('FOR UPDATE')
-    expect(statements[2]).toContain('INSERT INTO "tunnel_domain"')
+    expect(statements[2]).toContain('INSERT INTO "domain"')
     expect(query.mock.calls[2][1]).toEqual(['demo1.app.boxlite.test', ORG, box.id, 3000])
   })
 
@@ -210,13 +202,13 @@ describe('TunnelDomainService.bind', () => {
     })
   })
 
-  it('moves a held name to the new target and leaves the port\'s other names alone', async () => {
+  it("moves a held name to the new target and leaves the port's other names alone", async () => {
     const { service, query } = makeService({ held: { organizationId: ORG } })
 
     await expect(service.bind(makeBox(), 3000, 'demo1')).resolves.toMatchObject({ port: 3000 })
 
     const statements = query.mock.calls.map(([sql]) => sql as string)
-    const upsert = statements.find((sql) => sql.includes('INSERT INTO "tunnel_domain"'))
+    const upsert = statements.find((sql) => sql.includes('INSERT INTO "domain"'))
     expect(upsert).toContain('SET "box_id" = EXCLUDED."box_id", "port" = EXCLUDED."port"')
     expect(statements.some((sql) => sql.startsWith('UPDATE'))).toBe(false)
   })
@@ -228,23 +220,19 @@ describe('TunnelDomainService.bind', () => {
   })
 })
 
-describe('TunnelDomainService.resolve', () => {
-  it('returns the bound target only while the port passes the public access check', async () => {
-    const { service, query, tunnelService } = makeService()
+describe('DomainService.resolve', () => {
+  it('returns the stored target with a numeric port and a normalized hostname', async () => {
+    const { service, query } = makeService()
     query.mockResolvedValue([{ boxId: 'AbCdEf123456', port: '3000' }])
-    tunnelService.isPublicAccessAllowed.mockResolvedValueOnce(true).mockResolvedValueOnce(false)
 
     await expect(service.resolve('Demo1.App.BoxLite.test')).resolves.toEqual({ boxId: 'AbCdEf123456', port: 3000 })
-    await expect(service.resolve('demo1.app.boxlite.test')).resolves.toBeNull()
     expect(query).toHaveBeenCalledWith(expect.any(String), ['demo1.app.boxlite.test'])
-    expect(tunnelService.isPublicAccessAllowed).toHaveBeenCalledWith('AbCdEf123456', 3000)
   })
 
-  it('returns null for an unknown or unbound name without consulting the access check', async () => {
-    const { service, query, tunnelService } = makeService()
+  it('returns null for an unknown or unbound name', async () => {
+    const { service, query } = makeService()
     query.mockResolvedValue([])
 
     await expect(service.resolve('nobody.app.boxlite.test')).resolves.toBeNull()
-    expect(tunnelService.isPublicAccessAllowed).not.toHaveBeenCalled()
   })
 })
