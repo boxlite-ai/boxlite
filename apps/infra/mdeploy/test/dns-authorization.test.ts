@@ -84,7 +84,7 @@ test('the proxy authorization is asked what it proves, not what it is called', (
   assert.throws(refuse, (error: Error) => {
     assert.ok(error instanceof DnsAuthorizationError)
     assert.match(error.message, /proves proxy\.old\.boxlite\.ai/)
-    assert.match(error.message, new RegExp(`needs it to prove ${PROXY_DOMAIN.replace(/\./g, '\\.')}`))
+    assert.ok(error.message.includes(`needs it to prove ${PROXY_DOMAIN}`))
     return true
   })
 })
@@ -111,7 +111,7 @@ test('the platform tunnel authorization follows the proxy rule, under its own st
   assert.throws(refuse, (error: Error) => {
     assert.ok(error instanceof DnsAuthorizationError)
     assert.match(error.message, new RegExp(`${APP_NAME}\\b`))
-    assert.match(error.message, new RegExp(`needs it to prove ${APP_DOMAIN.replace(/\./g, '\\.')}`))
+    assert.ok(error.message.includes(`needs it to prove ${APP_DOMAIN}`))
     return true
   })
   // Converging, or absent, says nothing.
