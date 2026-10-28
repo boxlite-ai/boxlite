@@ -82,8 +82,10 @@ macOS 15. Design and research: [#2103](https://github.com/boxlite-ai/boxlite/iss
 - **Exits.** `run` decodes the exception syndrome itself:
   - data aborts with a valid syndrome become `MmioRead` and `MmioWrite`. The
     next `run` or `complete_pending_io` writes a read's value, sign- or
-    zero-extended by the syndrome, and moves PC past the access. Register 31
-    is XZR, never HVF's PC. A cache-maintenance abort is skipped, as in QEMU;
+    zero-extended by the syndrome, and moves PC past the access. PC advancement
+    wraps at 64 bits: an instruction at `0xffff_ffff_ffff_fffc` completes at
+    PC zero even with overflow checks enabled. Register 31 is XZR, never HVF's
+    PC. A cache-maintenance abort is skipped, as in QEMU;
   - HVC is PSCI 0.2. The backend answers `VERSION` and `MIGRATE_INFO_TYPE`
     itself, and any other call it does not act on with `NOT_SUPPORTED`, without
     an exit. `SYSTEM_OFF` and `SYSTEM_RESET` end the VM, and `CPU_ON` becomes

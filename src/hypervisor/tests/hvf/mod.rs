@@ -706,6 +706,81 @@ fn completing_a_read_without_entry_writes_it_once_and_moves_past_it() {
 
 #[test]
 #[ignore = "requires Hypervisor.framework; run make test:integration:vmm:hvf"]
+fn completing_mmio_at_the_last_virtual_instruction_wraps_pc() {
+    use super::ffi;
+
+    let guest = Guest::new();
+    let write_entry = |offset: usize, value: u64| {
+        // SAFETY: these aligned table entries are inside RAM before guest entry.
+        unsafe { guest.ram.0.as_ptr().add(offset).cast::<u64>().write(value) };
+    };
+    // TTBR0 uses 39-bit virtual addresses and 1 GiB identity-mapped blocks.
+    // MAIR index 0 is device memory; index 1 is normal, inner-shareable memory.
+    let normal = (1 << 10) | (3 << 8) | (1 << 2); // AF, SH, AttrIndx
+    write_entry(0x1000, (1 << 10) | 1);
+    write_entry(0x1010, RAM | normal | 1);
+    // TTBR1 walks three 4 KiB tables to map the final virtual page to RAM.
+    write_entry(0x2000 + 511 * 8, (RAM + 0x3000) | 3);
+    write_entry(0x3000 + 511 * 8, (RAM + 0x4000) | 3);
+    write_entry(0x4000 + 511 * 8, (RAM + 0xf000) | normal | 3);
+    // SAFETY: this aligned word is inside RAM, and no vCPU runs yet.
+    unsafe {
+        guest
+            .ram
+            .0
+            .as_ptr()
+            .add(0xfffc)
+            .cast::<u32>()
+            .write(a64::store64(a64::XZR, 0));
+    }
+    // 40-bit physical addresses, 4 KiB granules, and 39-bit virtual addresses;
+    // both table walks use inner-shareable, write-back cacheable memory.
+    let tcr = (2u64 << 32)
+        | (2 << 30)
+        | (3 << 28)
+        | (1 << 26)
+        | (1 << 24)
+        | (25 << 16)
+        | (3 << 12)
+        | (1 << 10)
+        | (1 << 8)
+        | 25;
+    let mut code = Vec::new();
+    for (register, value) in [
+        ((3, 0, 2, 0, 0), RAM + 0x1000), // TTBR0_EL1
+        ((3, 0, 2, 0, 1), RAM + 0x2000), // TTBR1_EL1
+        ((3, 0, 2, 0, 2), tcr),          // TCR_EL1
+        ((3, 0, 10, 2, 0), 0xff00),      // MAIR_EL1
+    ] {
+        code.extend(a64::mov(0, value));
+        code.push(a64::msr(register, 0));
+    }
+    code.extend(a64::mov(10, u64::MAX - 3));
+    code.extend([
+        0xd503_3f9f,                  // dsb sy
+        0xd503_3fdf,                  // isb
+        a64::mrs(0, (3, 0, 1, 0, 0)), // mrs x0, sctlr_el1
+        0xb240_0000,                  // orr x0, x0, #1: enable the MMU
+        a64::msr((3, 0, 1, 0, 0), 0), // msr sctlr_el1, x0
+        0xd503_3fdf,                  // isb
+        0xd61f_0140,                  // br x10
+    ]);
+    let mut vcpu = guest.vcpu(&code);
+    assert_eq!(next_write(&mut vcpu), (0, 0));
+
+    let mut pc = 0;
+    // SAFETY: this live vCPU belongs to the calling thread.
+    check(unsafe { ffi::hv_vcpu_get_reg(vcpu.vcpu, ffi::HV_REG_PC, &mut pc) }).unwrap();
+    assert_eq!(pc, u64::MAX - 3, "the guest reached the boundary itself");
+    eprintln!("MMIO exit at PC {pc:#018x}");
+    vcpu.complete_pending_io().unwrap();
+    // SAFETY: completion keeps the vCPU alive on this thread without guest entry.
+    check(unsafe { ffi::hv_vcpu_get_reg(vcpu.vcpu, ffi::HV_REG_PC, &mut pc) }).unwrap();
+    assert_eq!(pc, 0, "completion wraps the 64-bit PC");
+}
+
+#[test]
+#[ignore = "requires Hypervisor.framework; run make test:integration:vmm:hvf"]
 fn cache_maintenance_on_mmio_is_skipped_without_an_exit() {
     let guest = Guest::new();
     let mut vcpu = guest.vcpu(&[a64::DC_CIVAC, a64::store64(a64::XZR, 8)]);

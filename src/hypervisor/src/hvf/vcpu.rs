@@ -256,7 +256,7 @@ impl HvfVcpu {
 
     fn advance_pc(&self) -> io::Result<()> {
         let pc = self.reg(ffi::HV_REG_PC)?;
-        self.set_reg(ffi::HV_REG_PC, pc + 4)
+        self.set_reg(ffi::HV_REG_PC, pc.wrapping_add(4))
     }
 
     fn reg(&self, reg: u32) -> io::Result<u64> {
