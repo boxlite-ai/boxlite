@@ -19,7 +19,10 @@ describe('OrganizationBoxLimitsService', () => {
     jest.resetAllMocks()
     jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined)
     config = { billingApiUrl: 'https://commerce.test/api/billing/', 'usageExport.token': 'service-token' }
-    service = new OrganizationBoxLimitsService({ get: (key: string) => config[key] } as never)
+    service = new OrganizationBoxLimitsService(
+      { get: (key: string) => config[key] } as never,
+      { get: jest.fn().mockResolvedValue(null), set: jest.fn().mockResolvedValue('OK') } as never,
+    )
   })
 
   afterEach(() => jest.restoreAllMocks())
@@ -96,7 +99,7 @@ describe('OrganizationBoxLimitsService', () => {
     expect(get).not.toHaveBeenCalled()
   })
 
-  it('follows the current grant and falls back when it is removed or unavailable', async () => {
+  it('refreshes the current grant on cache misses and falls back when it is removed or unavailable', async () => {
     response()
     expect(await service.resolve(organization)).toEqual(subscribed)
     response({ perBoxLimits: baseline })

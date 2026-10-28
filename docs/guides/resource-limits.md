@@ -24,8 +24,13 @@ Memory and disk use binary units (GiB), including the historical `disk_size_gb` 
 
 Canceling renewal retains the higher limits until the paid period ends. Payment
 grace also retains them; suspended subscription entitlements or expiry restore
-the default creation limits. If the billing service cannot verify a grant, the
-default limits apply. Existing Boxes keep their resources and may be restarted.
+the default creation limits. Effective limits are cached for 30 seconds across
+API instances; reads do not extend this lifetime. Subscription upgrades and
+withdrawals can therefore take about 30 seconds to appear, including when the
+creation dialog is reopened. Concurrent lookups for one organization share a
+request within each API process. If no valid cache entry exists and the billing
+service cannot verify a grant, the default limits apply. Existing Boxes keep
+their resources and may be restarted.
 Available runner capacity still determines whether an allowed request can run.
 
 ## CPU configuration
