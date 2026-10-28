@@ -9,7 +9,8 @@ fn agents_flat_targets_fail_before_runtime_setup() {
     let home = directory.path().join("runtime-must-not-exist");
     let config = directory.path().join("missing-config.json");
     let cases: &[(&[&str], &str)] = &[
-        (&["create", "box", "coder"], "agents.create"),
+        (&["create", "box", "--agent", "coder"], "agents.create"),
+        (&["create", "--agent", "coder", "box"], "agents.create"),
         (&["close", "box", "--session", "session"], "session.close"),
         (
             &["send", "box", "--session", "session", "hello"],
@@ -111,10 +112,17 @@ fn agents_binary_help_works_and_malformed_input_is_a_usage_error() {
         .stdout(contains("Steer this turn without creating another turn"));
     Command::new(assert_cmd::cargo::cargo_bin!("boxlite"))
         .env_clear()
+        .args(["agent", "create", "--help"])
+        .assert()
+        .success()
+        .stdout(contains("--agent <AGENT>"));
+    Command::new(assert_cmd::cargo::cargo_bin!("boxlite"))
+        .env_clear()
         .args([
             "agent",
             "create",
             "box",
+            "--agent",
             "coder",
             "--agent-config",
             "not-json",
@@ -127,6 +135,12 @@ fn agents_binary_help_works_and_malformed_input_is_a_usage_error() {
 #[test]
 fn agents_invalid_target_combinations_are_usage_errors() {
     let cases: &[&[&str]] = &[
+        &["create", "box"],
+        &["create", "box", "--agent"],
+        &["create", "--agent", "coder"],
+        &["create", "box", "coder"],
+        &["create", "box", "--agent", "coder", "extra"],
+        &["create", "box", "--agent", "coder", "--name", "worker"],
         &["send", "box", "hello"],
         &["steer", "box", "--session", "session", "hello"],
         &["respond", "box", "--session", "session", "{}"],
@@ -185,6 +199,17 @@ fn agents_fish_completion_uses_command_paths_not_message_words() {
         ("boxlite agent ", "steer", "exec"),
         ("boxlite --profile send agent ", "steer", "exec"),
         ("boxlite agent --profile wait ", "steer", "exec"),
+        ("boxlite agent create box --", "--agent", "--name"),
+        (
+            "boxlite agent create box --agent wait --",
+            "--agent-config",
+            "--timeout-seconds",
+        ),
+        (
+            "boxlite agent send box --session SESSION text --",
+            "--mode",
+            "--agent",
+        ),
         (
             "boxlite agent wait box --session session --turn turn --",
             "--timeout-seconds",

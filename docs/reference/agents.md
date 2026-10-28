@@ -164,7 +164,8 @@ or interrupt work. Null handles may be freed.
 ### CLI commands
 
 The [CLI reference](cli/README.md#boxlite-agent) lists nine flat `agent` commands.
-BOX is positional; `--session`, `--turn` and `--request` identify inner targets.
+BOX is positional; creation requires `--agent AGENT`. Existing work is selected
+with `--session`, `--turn` and `--request`.
 `inspect` combines state and session views, and `events` selects either scope.
 SDKs retain the `get`/`get_turn` methods; CLI targeting subsumes handle lookup.
 CLI options reuse the five groups above and add `AgentInspectOptions` for view

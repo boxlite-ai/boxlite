@@ -803,7 +803,7 @@ runtime initialization. Malformed arguments use the normal CLI usage error (code
 
 | Purpose | Command after `boxlite agent` | Operation |
 |---|---|---|
-| Lifecycle | `create BOX AGENT` | Create a session with initial configuration. |
+| Lifecycle | `create BOX --agent AGENT` | Create a session with initial configuration. |
 | Lifecycle | `close BOX --session SESSION` | End the session. |
 | Work | `send BOX --session SESSION TEXT` | Submit a new turn. |
 | Work | `wait BOX --session SESSION --turn TURN` | Wait for an existing turn's result. |
@@ -813,9 +813,9 @@ runtime initialization. Malformed arguments use the normal CLI usage error (code
 | Interact | `interrupt BOX --session SESSION --turn TURN` | Interrupt that turn's agent loop. |
 | Interact | `respond BOX --session SESSION --request REQUEST JSON` | Answer a question or approve/deny a permission request. |
 
-`BOX` remains positional, as in `boxlite exec`. `AGENT` identifies the agent to
-start; `--session` selects an existing conversation. Mutations never infer an
-active turn. `inspect --view config|capabilities|requests` selects a session-only
+`BOX` remains positional, as in `boxlite exec`. Creation requires `--agent AGENT`
+to select the agent; `--session` selects an existing conversation. Mutations never
+infer an active turn. `inspect --view config|capabilities|requests` selects a session-only
 read and cannot be combined with `--turn`; omission reads state. The SDK's
 `get`/`get_turn` handle lookups are implicit in CLI targeting.
 
@@ -837,7 +837,7 @@ data and response arguments must be valid JSON. Response JSON uses either
 [agent API reference](../agents.md#inputs-and-records) describes other record fields.
 
 ```bash
-boxlite agent create dev coder --cwd /workspace --agent-config '{"model":"model-id"}'
+boxlite agent create dev --agent coder --cwd /workspace --agent-config '{"model":"model-id"}'
 boxlite agent send dev --session session-id "Review this code" --mode reject
 boxlite agent inspect dev --session session-id --view requests
 boxlite agent steer dev --session session-id --turn turn-id "Focus on tests" --idempotency-key steer-1

@@ -22,6 +22,7 @@ pub enum AgentCommand {
         #[command(flatten)]
         target: BoxTarget,
         /// Agent identifier
+        #[arg(long, value_name = "AGENT")]
         agent: String,
         #[command(flatten)]
         options: AgentCreateOptions,

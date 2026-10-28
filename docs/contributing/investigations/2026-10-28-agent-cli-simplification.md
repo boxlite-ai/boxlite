@@ -44,7 +44,12 @@ views conflict with `--turn`. SDKs retain the `get`/`get_turn` methods; CLI targ
 subsumes them. Explicit session/turn/request IDs prevent commands from guessing
 which conversation or turn to affect.
 
+Creation uses `create BOX --agent AGENT`. The required flag distinguishes the
+agent selection from the Box target, matching the named selectors on other
+commands. SDK calls retain their positional agent argument.
+
 ```bash
+boxlite agent create dev --agent coder
 boxlite agent send dev --session session-id "Review this code"
 boxlite agent inspect dev --session session-id --view requests
 boxlite agent steer dev --session session-id --turn turn-id "Focus on tests"
@@ -59,8 +64,8 @@ availability.
 
 The process test exercises each verb and read selector against the real binary,
 including missing runtime files and an invalid server URL. Invalid target/view
-combinations and superseded spellings must produce usage errors. Help and
-completion checks cover the resulting command tree.
+combinations, missing agent selection and superseded spellings must produce usage
+errors. Help and completion checks cover the resulting command tree.
 
 Real Fish cases use command names inside IDs, messages and option values,
 including option values before the verb is selected.

@@ -18,6 +18,7 @@ fn agents_create_groups_options_and_keeps_runtime_config_separate() {
         "agent",
         "create",
         "box",
+        "--agent",
         "coder",
         "--cwd",
         "/workspace",
@@ -46,6 +47,13 @@ fn agents_create_groups_options_and_keeps_runtime_config_separate() {
     assert_eq!(options.cwd, Some(PathBuf::from("/workspace")));
     assert_eq!(options.agent_config, Some(json!({"model": "model-id"})));
     assert_eq!(options.control.idempotency_key.as_deref(), Some("retry"));
+
+    let AgentCommand::Create { target, agent, .. } = parse(&["create", "--agent", "coder", "box"])
+    else {
+        panic!("expected create")
+    };
+    assert_eq!(target.target, "box");
+    assert_eq!(agent, "coder");
 }
 
 #[test]
@@ -226,7 +234,23 @@ fn agents_parser_rejects_invalid_options_and_missing_targets() {
     let cases: &[(&[&str], ErrorKind)] = &[
         (&["create", "box"], ErrorKind::MissingRequiredArgument),
         (
-            &["create", "box", "coder", "--agent-config", "not-json"],
+            &["create", "--agent", "coder"],
+            ErrorKind::MissingRequiredArgument,
+        ),
+        (&["create", "box", "coder"], ErrorKind::UnknownArgument),
+        (
+            &["create", "box", "--agent", "coder", "--name", "worker"],
+            ErrorKind::UnknownArgument,
+        ),
+        (
+            &[
+                "create",
+                "box",
+                "--agent",
+                "coder",
+                "--agent-config",
+                "not-json",
+            ],
             ErrorKind::ValueValidation,
         ),
         (
@@ -331,6 +355,18 @@ fn agents_help_and_completion_include_nine_flat_commands() {
     for removed in ["session", "turn", "get", "get-turn"] {
         assert!(agent.find_subcommand(removed).is_none(), "{removed}");
     }
+    let create_help = agent
+        .find_subcommand_mut("create")
+        .unwrap()
+        .render_long_help()
+        .to_string();
+    let usage = create_help
+        .lines()
+        .find(|line| line.starts_with("Usage:"))
+        .unwrap();
+    assert!(usage.contains("--agent <AGENT>"), "{usage}");
+    assert!(usage.contains("<BOX>"), "{usage}");
+    assert!(!create_help.contains("--name"), "{create_help}");
     let help = agent
         .find_subcommand_mut("send")
         .unwrap()
@@ -366,7 +402,21 @@ fn agents_help_and_completion_include_nine_flat_commands() {
                 "{flag} missing from {shell:?}"
             );
         }
+        let agent_flag = match shell {
+            Shell::Bash => "--agent ",
+            Shell::Zsh => "--agent=",
+            Shell::Fish => "-l agent ",
+        };
+        assert!(
+            output.contains(agent_flag),
+            "--agent missing from {shell:?}"
+        );
         if matches!(shell, Shell::Fish) {
+            let create = output
+                .lines()
+                .find(|line| line.contains(" -l agent "))
+                .unwrap();
+            assert!(create.contains("__fish_boxlite_agent_path create"));
             let wait = output
                 .lines()
                 .find(|line| line.contains(" -l timeout-seconds "))
@@ -384,7 +434,7 @@ fn agents_help_and_completion_include_nine_flat_commands() {
 #[test]
 fn agents_handler_returns_typed_unsupported() {
     let error = execute(AgentArgs {
-        command: parse(&["create", "box", "coder"]),
+        command: parse(&["create", "box", "--agent", "coder"]),
     })
     .unwrap_err();
     assert!(matches!(
