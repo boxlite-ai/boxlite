@@ -71,6 +71,10 @@ own.
 Longer treatments live with their subject rather than here: [E2E local
 runbook](../../docs/contributing/development/e2e-local.md), [deployment](../../apps/infra/docs/deployment.md).
 
+Cloud dev E2E also requires the three-profile [identity configuration](../../apps/e2e/README.md#the-cloud-legs-ci).
+Its separate identity step verifies cross-organization isolation and same-organization
+read-only access; missing or mis-scoped credentials fail setup. Prod keeps its single-key smoke suite.
+
 ## Routine checks
 
 `lint` and `test` always report their required conclusion on PRs and merge groups. A newer PR

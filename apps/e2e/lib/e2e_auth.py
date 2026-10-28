@@ -151,19 +151,38 @@ def refresh_stored_oidc_profile(profile_name: str, profile: dict[str, Any]) -> d
     return load_profile(profile_name)
 
 
-def discover_path_prefix(url: str, token: str) -> str:
+class _NoIdentityRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def _identity_json(url: str, token: str, path: str) -> dict[str, Any]:
     req = urllib.request.Request(
-        f"{url.rstrip('/')}/v1/me",
+        f"{url.rstrip('/')}{path}",
         method="GET",
         headers={"Authorization": f"Bearer {token}"},
     )
     try:
-        with urllib.request.urlopen(req, timeout=15) as response:
-            body = json.loads(response.read() or "null")
+        with urllib.request.build_opener(_NoIdentityRedirect()).open(req, timeout=15) as response:
+            body = json.load(response)
     except urllib.error.HTTPError as exc:
-        raw = exc.read().decode("utf-8", "replace")
-        raise RuntimeError(f"GET /v1/me failed with HTTP {exc.code}: {raw}") from exc
-    return (body or {}).get("path_prefix") or ""
+        raise RuntimeError(f"GET {path} failed with HTTP {exc.code}") from None
+    except (OSError, ValueError) as exc:
+        raise RuntimeError(f"GET {path} failed: {type(exc).__name__}") from None
+    if not isinstance(body, dict):
+        raise RuntimeError(f"GET {path} returned invalid metadata")
+    return body
+
+
+def discover_path_prefix(url: str, token: str) -> str:
+    return _identity_json(url, token, "/v1/me").get("path_prefix") or ""
+
+
+def api_key_permissions(url: str, token: str) -> set[str]:
+    permissions = _identity_json(url, token, "/api-keys/current").get("permissions")
+    if not isinstance(permissions, list) or not all(isinstance(p, str) for p in permissions):
+        raise RuntimeError("GET /api-keys/current returned invalid permissions")
+    return set(permissions)
 
 
 def request_json(

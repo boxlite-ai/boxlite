@@ -29,9 +29,10 @@
 #
 # ── Authentication ───────────────────────────────────────────────────
 #
-# One boxlite API key per stage, in repo secrets:
+# Stage-specific API keys in repository secrets:
 #
 #   dev    BOXLITE_DEV_API_KEY
+#          BOXLITE_DEV_P2_API_KEY, BOXLITE_DEV_P2_READONLY_API_KEY
 #   prod   BOXLITE_PROD_API_KEY
 #
 # Both are named, not inherited, so a run can only ever hold the key for
@@ -42,8 +43,9 @@
 # added before the prod leg can run at all; until then it resolves to empty
 # and the credential step says so by name.
 #
-# That is the whole of it — the suite reads [profiles.p1] from
-# ~/.boxlite/credentials.toml and every request is
+# The main suite reads [profiles.p1]. Dev additionally tests private access
+# with p2 as owner, p2_readonly in the same org, and p1 in a different org.
+# Profiles are written to ~/.boxlite/credentials.toml and every request is
 # `Authorization: Bearer <token>` (apps/e2e/lib/e2e_auth.py).
 # `path_prefix` is derived from the same key via /v1/me, not a second
 # credential. No AWS, no OIDC.
@@ -137,7 +139,13 @@ on:
         # that comes from OIDC, and `permissions` below is what withholds
         # it.
         description: 'Dev-stack boxlite API key for profile p1.'
-        required: true
+        required: false
+      BOXLITE_DEV_P2_API_KEY:
+        description: 'Dev key for p2, in a different organization from p1. Required at runtime on dev.'
+        required: false
+      BOXLITE_DEV_P2_READONLY_API_KEY:
+        description: 'Dev read-only key in p2 organization. Required at runtime on dev.'
+        required: false
       BOXLITE_PROD_API_KEY:
         # Declared, not required: the call path only ever targets dev. It is
         # here so the same expression resolves on both triggers.
@@ -206,7 +214,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  BOXLITE_DEPS_STUB: "1"
+  BOXLITE_DEPS_STUB: '1'
   STAGE: ${{ inputs.stage || 'dev' }}
 
 jobs:
@@ -264,73 +272,13 @@ jobs:
       # worse than failing. Its only writes go through the public API: the
       # boxes the suite creates and deletes, and the stale ones the sweep
       # step reclaims.
-      - name: Configure pytest profile p1
+      - name: Configure pytest profiles
         env:
-          DEV_API_KEY: ${{ secrets.BOXLITE_DEV_API_KEY }}
-          PROD_API_KEY: ${{ secrets.BOXLITE_PROD_API_KEY }}
-        run: |
-          set -euo pipefail
-
-          # `stage` is a choice on dispatch but a free string over
-          # workflow_call, and every branch below treats anything that is not
-          # `prod` as dev — so an unrecognised value would quietly run the full
-          # dev suite under a concurrency group of its own, racing the real dev
-          # run over the same boxes. Refuse it instead.
-          case "$STAGE" in
-            dev|prod) ;;
-            *) echo "::error::stage must be dev or prod, got '${STAGE}'"; exit 1 ;;
-          esac
-
-          # The URL can come from a dispatch input or a repo variable, and the
-          # very next thing this step does is send a bearer token to it. Over
-          # plain HTTP that hands the stage's API key to anyone on the path.
-          case "$API_URL" in
-            https://*) ;;
-            *) echo "::error::API_URL must be https, got '${API_URL}'"; exit 1 ;;
-          esac
-
-          if [ "$STAGE" = prod ]; then
-            API_KEY="${PROD_API_KEY:-}"
-            KEY_SECRET_NAME="BOXLITE_PROD_API_KEY"
-          else
-            API_KEY="${DEV_API_KEY:-}"
-            KEY_SECRET_NAME="BOXLITE_DEV_API_KEY"
-          fi
-
-          if [ -z "$API_KEY" ]; then
-            echo "::error::Secret ${KEY_SECRET_NAME} is not set. Add it in Settings → Secrets → Actions."
-            exit 1
-          fi
-          echo "::add-mask::$API_KEY"
-
-          # /v1/me is the auth smoke test — it exercises auth + DB + Redis
-          # in one call, the same way bootstrap.sh probes a fresh stack.
-          # Report the status code so a failure names itself instead of
-          # surfacing later as an empty path_prefix.
-          ME_HTTP=$(curl -sS -o /tmp/me.json -w '%{http_code}' \
-            -H "Authorization: Bearer $API_KEY" "${API_URL}/v1/me" || echo 000)
-          if [ "$ME_HTTP" != "200" ]; then
-            echo "::error::/v1/me on ${STAGE} returned HTTP ${ME_HTTP}."
-            if [ "$ME_HTTP" = "401" ]; then
-              echo "::error::401 means the key is no longer valid for this stage. Check it belongs to ${STAGE} at all, then that the account still exists: these keys belong to a person, and ApiKeyStrategy throws 'User not found' once that account is deleted, killing the key for good."
-            fi
-            exit 1
-          fi
-
-          PATH_PREFIX=$(python3 -c 'import json;print(json.load(open("/tmp/me.json"))["path_prefix"])')
-          rm -f /tmp/me.json
-          [ -n "$PATH_PREFIX" ] || { echo "::error::Empty path_prefix from /v1/me"; exit 1; }
-          echo "Resolved path_prefix=${PATH_PREFIX}"
-
-          mkdir -p ~/.boxlite
-          chmod 700 ~/.boxlite
-          {
-              printf '[profiles.p1]\n'
-              printf 'url = "%s"\n'         "$API_URL"
-              printf 'api_key = "%s"\n'     "$API_KEY"
-              printf 'path_prefix = "%s"\n' "$PATH_PREFIX"
-          } > ~/.boxlite/credentials.toml
-          chmod 600 ~/.boxlite/credentials.toml
+          BOXLITE_DEV_API_KEY: ${{ (inputs.stage || 'dev') == 'dev' && secrets.BOXLITE_DEV_API_KEY || '' }}
+          BOXLITE_DEV_P2_API_KEY: ${{ (inputs.stage || 'dev') == 'dev' && secrets.BOXLITE_DEV_P2_API_KEY || '' }}
+          BOXLITE_DEV_P2_READONLY_API_KEY: ${{ (inputs.stage || 'dev') == 'dev' && secrets.BOXLITE_DEV_P2_READONLY_API_KEY || '' }}
+          BOXLITE_PROD_API_KEY: ${{ inputs.stage == 'prod' && secrets.BOXLITE_PROD_API_KEY || '' }}
+        run: python3 apps/e2e/configure_cloud_profiles.py
 
       # ── Reclaim what earlier runs stranded (dev only) ─────────────
       # The org's disk quota is a shared, finite resource, and a box whose
@@ -415,34 +363,52 @@ jobs:
       # touches the journal; it proves the API→Runner chain via the
       # X-BoxLite-Api-Version response header + an exec marker.
       #
-      # The two legs differ in one thing only: prod narrows to `-m smoke`.
-      # An array rather than a string so the empty dev case adds no argument
-      # at all and the prod case cannot be re-split by the shell.
+      # The identity lane reuses these builds but owns its boxes in p2's org.
+      # A separate pytest process keeps the session runtime and auth cache scoped.
+      - name: Run identity E2E (dev)
+        if: ${{ (inputs.stage || 'dev') == 'dev' }}
+        timeout-minutes: 5
+        env:
+          BOXLITE_E2E_SKIP_PATH_VERIFY: '1'
+          BOXLITE_E2E_PROFILE: p2
+          BOXLITE_E2E_READONLY_PROFILE: p2_readonly
+          BOXLITE_E2E_FOREIGN_PROFILE: p1
+          BOXLITE_E2E_REQUIRE_IDENTITIES: '1'
+          PYTEST_ADDOPTS: >-
+            --tb=short --no-header -p no:cacheprovider
+            --timeout=180 --timeout-method=thread
+            --junit-xml=${{ github.workspace }}/pytest-identities.xml
+        run: |
+          unset BOXLITE_E2E_API_URL BOXLITE_E2E_API_KEY BOXLITE_E2E_PREFIX
+          make test:rest:e2e AUTH=api-key FILTER=preview_private_identity_permissions
+
       - name: Run E2E suite
+        timeout-minutes: 35
         env:
           BOXLITE_E2E_SKIP_PATH_VERIFY: '1'
           BOXLITE_E2E_PROFILE: p1
+          PYTEST_ADDOPTS: >-
+            --ignore=cases/test_c_entry.py --ignore=cases/test_c_coverage.py
+            --ignore=cases/test_go_entry.py --ignore=cases/test_go_coverage.py
+            --ignore=cases/test_node_entry.py --ignore=cases/test_exec_timeout.py
+            -s --tb=short --no-header -p no:cacheprovider
+            --timeout=180 --timeout-method=thread
+            --junit-xml=${{ github.workspace }}/pytest-junit.xml
         run: |
           set -euo pipefail
-          selection=()
+          selection='not preview_private_identity_permissions'
           if [ "$STAGE" = prod ]; then
-            selection+=(-m smoke)
+            export PYTEST_ADDOPTS="$PYTEST_ADDOPTS -m smoke"
+            selection=''
           fi
-          timeout 35m python3 -m pytest apps/e2e/cases/ "${selection[@]}" \
-              --ignore=apps/e2e/cases/test_c_entry.py \
-              --ignore=apps/e2e/cases/test_c_coverage.py \
-              --ignore=apps/e2e/cases/test_go_entry.py \
-              --ignore=apps/e2e/cases/test_go_coverage.py \
-              --ignore=apps/e2e/cases/test_node_entry.py \
-              --ignore=apps/e2e/cases/test_exec_timeout.py \
-              -v -s --tb=short --no-header -p no:cacheprovider \
-              --timeout=180 --timeout-method=thread \
-              --junit-xml=pytest-junit.xml
+          make test:rest:e2e AUTH=api-key FILTER="$selection"
 
       - name: Upload pytest junit XML
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: pytest-junit-${{ inputs.stage || 'dev' }}
-          path: pytest-junit.xml
+          path: |
+            pytest-junit.xml
+            pytest-identities.xml
           if-no-files-found: ignore

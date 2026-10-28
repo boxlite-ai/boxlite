@@ -1,11 +1,12 @@
 """POL-1221: real public preview and private authorization on all three entrances."""
+import json
 import os
 from urllib.parse import urlsplit, urlunsplit
 
 import boxlite
 import pytest
 
-from e2e_auth import load_profile
+from e2e_auth import discover_path_prefix, load_profile
 from network_fixtures import PORT, eventually_status, prepare, ready, service_box
 from preview import access, api, require
 
@@ -106,16 +107,28 @@ async def test_preview_private_token_is_scoped_to_port_and_box(rt, image, transp
 async def test_preview_private_identity_permissions(rt, image, e2e_auth, identity):
     name = f"BOXLITE_E2E_{identity.upper()}_PROFILE"
     if not os.environ.get(name):
+        if os.environ.get("BOXLITE_E2E_REQUIRE_IDENTITIES") == "1":
+            pytest.fail(f"required identity is not configured: {name}")
         pytest.skip(f"not exercised: {name} must name an existing E2E credential profile")
     profile = load_profile(os.environ[name])
     token = profile.get("api_key") or profile.get("access_token")
     require(bool(token), "identity profile has no credential")
+    require(profile.get("url", "").rstrip("/") == e2e_auth.url.rstrip("/"),
+            "identity profile must use the owner's API URL")
+    prefix = discover_path_prefix(e2e_auth.url, token)
+    require(isinstance(prefix, str) and bool(prefix), "identity has no organization")
+    require((prefix == e2e_auth.path_prefix) == (identity == "readonly"),
+            f"{identity} profile has the wrong organization relationship")
     async with service_box(rt, image) as (box, marker):
         tunnel = await prepare(box, public=False)
         await ready(tunnel.uri(), marker, {"X-BoxLite-Access-Token": tunnel.token()})
+        before = await api(e2e_auth, "GET", f"boxes/{box.id}")
+        assert before.status == 200
         for transport in TRANSPORTS:
             reply = await access(tunnel.uri(), transport, {"X-BoxLite-Authorization": f"Bearer {token}"})
             assert reply.status == (401 if identity == "foreign" else (101 if transport == "ws" else 200))
+            if identity == "readonly":
+                assert reply.body == (marker + b":preview-e2e" if transport == "ws" else marker)
         for method, suffix, body in [
             ("POST", f"tunnel?port={PORT}", {"isPublic": False}),
             ("DELETE", f"tunnel?port={PORT}", None),
@@ -123,5 +136,8 @@ async def test_preview_private_identity_permissions(rt, image, e2e_auth, identit
             ("PUT", "outbound", {"mode": "disabled"}),
         ]:
             reply = await api(e2e_auth, method, f"boxes/{box.id}/network/{suffix}", body, token)
-            assert reply.status in (403, 404)  # Authorization or tenant non-disclosure.
-        assert (await access(tunnel.uri(), headers={"X-BoxLite-Access-Token": tunnel.token()})).status == 200
+            assert reply.status in ((403,) if identity == "readonly" else (403, 404))
+        after = await api(e2e_auth, "GET", f"boxes/{box.id}")
+        assert after.status == 200
+        assert json.loads(after.body)["network"] == json.loads(before.body)["network"]
+        await ready(tunnel.uri(), marker, {"X-BoxLite-Access-Token": tunnel.token()})

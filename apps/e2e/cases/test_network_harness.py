@@ -19,6 +19,36 @@ def verify_runner_saw_all_boxes():
     yield  # These tests exercise the harness, not a remote box.
 
 
+async def test_network_harness_required_identity_cannot_skip(monkeypatch):
+    import test_preview_access as case
+
+    monkeypatch.delenv("BOXLITE_E2E_READONLY_PROFILE", raising=False)
+    monkeypatch.setenv("BOXLITE_E2E_REQUIRE_IDENTITIES", "1")
+    try:
+        with pytest.raises(pytest.fail.Exception, match="required identity"):
+            await case.test_preview_private_identity_permissions(None, None, None, "readonly")
+    except pytest.skip.Exception:
+        pytest.fail("required identity was silently skipped")
+
+
+@pytest.mark.parametrize("identity,prefix", [("readonly", "foreign-org"), ("foreign", "owner-org")])
+async def test_network_harness_wrong_identity_fails_before_creating_box(monkeypatch, identity, prefix):
+    import test_preview_access as case
+
+    owner = SimpleNamespace(url="https://api.example", path_prefix="owner-org")
+    monkeypatch.setenv(f"BOXLITE_E2E_{identity.upper()}_PROFILE", "probe")
+    monkeypatch.setattr(case, "load_profile", lambda _: {"url": owner.url, "api_key": "probe-key"})
+    # raising=False also permits the pre-fix case, which did not discover identity.
+    monkeypatch.setattr(case, "discover_path_prefix", lambda *_: prefix, raising=False)
+
+    def create_before_validation(*_args):
+        raise AssertionError("box creation reached before identity validation")
+
+    monkeypatch.setattr(case, "service_box", create_before_validation)
+    with pytest.raises(AssertionError, match="wrong organization relationship"):
+        await case.test_preview_private_identity_permissions(None, None, owner, identity)
+
+
 @pytest.mark.parametrize("setting,url", [
     ("BOXLITE_E2E_EGRESS_IP_URL", "https://example.com/"),
     ("BOXLITE_E2E_EGRESS_WILDCARD_URL", "http://www.example.com/"),

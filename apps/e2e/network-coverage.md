@@ -86,7 +86,13 @@ cookie behavior. Browser OIDC login and expiry are separate outstanding work.
 `BOXLITE_E2E_READONLY_PROFILE` and `BOXLITE_E2E_FOREIGN_PROFILE` name dedicated
 profiles in the shared credentials file. The former must belong to the owner
 organization and lack `write:boxes`; the latter must belong to another org.
-Their absence produces explicit skips, not successful identity coverage.
+Cases authenticate these profiles and check their organization relationship
+before creating a box. Their absence produces explicit skips locally;
+`BOXLITE_E2E_REQUIRE_IDENTITIES=1` makes absence fail. The [cloud identity
+lane](README.md#the-cloud-legs-ci) requires both: p2 owns the box, p2_readonly
+is its reader, and p1 is foreign. Readonly preview responses must contain the
+guest marker (or exact WS echo), network mutations must return 403, and the
+owner's network readback and private preview remain unchanged after rejection.
 
 The tracking issue remains open for these matrix entries:
 

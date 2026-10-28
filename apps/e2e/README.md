@@ -166,9 +166,8 @@ Run:
 pytest apps/e2e/cases/ -v --timeout=120
 ```
 
-For CI, store `BOXLITE_E2E_API_KEY` as a repository secret and pass it
-as an environment variable. No local bootstrap, Postgres, or runner
-services are needed — the remote stack provides everything.
+For CI, use the stage-specific secrets below. No local bootstrap, Postgres,
+or runner services are needed — the remote stack provides everything.
 
 ## The cloud legs (CI)
 
@@ -180,9 +179,46 @@ stage. It is dispatch-only, plus one call from `deploy-infra.yml`:
 | `dev` | `api.dev.boxlite.ai/api` | everything | yes |
 | `prod` | `api.boxlite.ai/api` | `-m smoke` | no |
 
-Each stage authenticates with its own repo secret — `BOXLITE_DEV_API_KEY` and
-`BOXLITE_PROD_API_KEY` — so a run only ever holds the key for the stage it
-targets.
+The workflow writes the selected stage's credentials to
+`~/.boxlite/credentials.toml` with mode `0600`. Each key's organization is
+discovered through `/v1/me`; API-key permissions come from `/api-keys/current`,
+not the placeholder scopes in `/v1/me`.
+
+| Stage | Repository secret | Profile | Role |
+| --- | --- | --- | --- |
+| dev | `BOXLITE_DEV_API_KEY` | `p1` | Existing main suite and sweep; foreign identity for p2 boxes |
+| dev | `BOXLITE_DEV_P2_API_KEY` | `p2` | Owns identity-test boxes in a different organization from p1 |
+| dev | `BOXLITE_DEV_P2_READONLY_API_KEY` | `p2_readonly` | Reads p2's private previews; cannot manage their network |
+| prod | `BOXLITE_PROD_API_KEY` | `p1` | Smoke suite only |
+
+Both dev owner keys need `write:boxes` and `delete:boxes`; the readonly key
+may carry only `read:*` permissions or none. Configuration fails before box
+creation if any required key is missing/invalid, if p1 and p2 share an
+organization, or if p2_readonly belongs to a different organization from p2.
+`deploy-infra.yml` explicitly forwards all three dev secrets to the reusable
+workflow. Prod neither receives nor requires dev keys.
+
+The dev identity step reuses the SDK builds and runs
+`test_preview_private_identity_permissions` with p2 as primary, p2_readonly
+as same-org reader, and p1 as foreign identity. It sets
+`BOXLITE_E2E_REQUIRE_IDENTITIES=1`, so missing profiles fail instead of skip.
+The p1 main suite deselects this case; the identity result is uploaded alongside
+the main result as `pytest-identities.xml`. These cases exercise API-key scopes,
+not different users, member removal, or OIDC roles.
+
+Run the same identity pair locally with three profiles targeting one API:
+
+```bash
+unset BOXLITE_E2E_API_URL BOXLITE_E2E_API_KEY BOXLITE_E2E_PREFIX
+BOXLITE_E2E_PROFILE=p2 BOXLITE_E2E_READONLY_PROFILE=p2_readonly \
+BOXLITE_E2E_FOREIGN_PROFILE=p1 BOXLITE_E2E_REQUIRE_IDENTITIES=1 \
+BOXLITE_E2E_SKIP_PATH_VERIFY=1 \
+make test:rest:e2e AUTH=api-key FILTER=preview_private_identity_permissions
+```
+
+Use ordinary user-owned API keys: a system administrator can bypass resource
+permission checks even when its key declares only read scopes. The actual
+denied-write assertions must pass; credential metadata alone is not acceptance.
 
 `smoke` marks the cases that are safe against a paying stage — one box at a
 time, no quota probing, no deliberate error storms. Mark a new case

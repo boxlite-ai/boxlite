@@ -512,3 +512,5 @@ jobs:
       ref: ${{ needs.resolve-ref.outputs.sha }}
     secrets:
       BOXLITE_DEV_API_KEY: ${{ secrets.BOXLITE_DEV_API_KEY }}
+      BOXLITE_DEV_P2_API_KEY: ${{ secrets.BOXLITE_DEV_P2_API_KEY }}
+      BOXLITE_DEV_P2_READONLY_API_KEY: ${{ secrets.BOXLITE_DEV_P2_READONLY_API_KEY }}

@@ -1360,7 +1360,7 @@ test('the cloud E2E suite is reachable only from a deploy or a human', () => {
   // substring match while making deploy-infra's call dead.
   assert.ok(workflow.on.workflow_call, 'e2e-cloud.yml is no longer callable as a reusable workflow')
   assert.equal(workflow.on.workflow_call.inputs.ref.required, true)
-  assert.equal(workflow.on.workflow_call.secrets.BOXLITE_DEV_API_KEY.required, true)
+  assert.equal(workflow.on.workflow_call.secrets.BOXLITE_DEV_API_KEY.required, false)
 
   // A callee inherits the caller's token and may only narrow it, so this line — not anything in
   // deploy-infra.yml — is what keeps `id-token: write`, the deploy role's entry, away from a job
@@ -1378,6 +1378,43 @@ test('the cloud E2E suite is reachable only from a deploy or a human', () => {
   )
   assert.ok(checkout, 'the e2e job no longer checks out a ref')
   assert.equal(checkout.with.ref, '${{ inputs.ref || github.sha }}')
+})
+
+test('cloud E2E requires the dev identity lane and forwards its scoped credentials', () => {
+  const workflow = load(readFileSync(E2E_CLOUD_WORKFLOW, 'utf8'))
+  const caller = load(readFileSync(DEPLOY_WORKFLOW, 'utf8'))
+  const steps = workflow.jobs.e2e.steps
+  const identity = steps.find((step: any) => step.name === 'Run identity E2E (dev)')
+  assert.ok(identity, 'dev must execute the cross-org and readonly identity cases')
+  assert.equal(identity.if, "${{ (inputs.stage || 'dev') == 'dev' }}")
+  assert.equal(identity.env.BOXLITE_E2E_PROFILE, 'p2')
+  assert.equal(identity.env.BOXLITE_E2E_READONLY_PROFILE, 'p2_readonly')
+  assert.equal(identity.env.BOXLITE_E2E_FOREIGN_PROFILE, 'p1')
+  assert.equal(identity.env.BOXLITE_E2E_REQUIRE_IDENTITIES, '1')
+  assertShellLine(identity.run, /make test:rest:e2e.*FILTER=preview_private_identity_permissions/)
+  assertShellLine(identity.run, /unset BOXLITE_E2E_API_URL BOXLITE_E2E_API_KEY BOXLITE_E2E_PREFIX/)
+  assert.equal(identity['continue-on-error'], undefined)
+
+  const configure = steps.find((step: any) => step.name === 'Configure pytest profiles')
+  assert.ok(configure)
+  assertShellLine(configure.run, /python3 apps\/e2e\/configure_cloud_profiles.py/)
+  for (const name of ['BOXLITE_DEV_API_KEY', 'BOXLITE_DEV_P2_API_KEY', 'BOXLITE_DEV_P2_READONLY_API_KEY']) {
+    assert.equal(workflow.on.workflow_call.secrets[name].required, false, 'prod must not require dev credentials')
+    assert.equal(caller.jobs.e2e.secrets[name], '${{ secrets.' + name + ' }}')
+    assert.equal(configure.env[name], "${{ (inputs.stage || 'dev') == 'dev' && secrets." + name + " || '' }}")
+  }
+  assert.equal(
+    configure.env.BOXLITE_PROD_API_KEY,
+    "${{ inputs.stage == 'prod' && secrets.BOXLITE_PROD_API_KEY || '' }}",
+  )
+  const main = steps.find((step: any) => step.name === 'Run E2E suite')
+  assert.equal(main.env.BOXLITE_E2E_PROFILE, 'p1')
+  assertShellLine(main.run, /not preview_private_identity_permissions/)
+  assertShellLine(main.run, /-m smoke/)
+  assert.ok(steps.indexOf(identity) < steps.indexOf(main))
+  const upload = steps.find((step: any) => step.name === 'Upload pytest junit XML')
+  assert.match(upload.with.path, /pytest-identities.xml/)
+  assert.equal(upload.if, 'always()')
 })
 
 test('the deploy role cannot reach another stage in the SST backing store', () => {
