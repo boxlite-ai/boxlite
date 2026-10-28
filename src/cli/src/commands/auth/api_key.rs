@@ -1,35 +1,26 @@
 //! API-key login: collect a long-lived key (paste or stdin), validate it
 //! against the server's `/v1/me`, and persist it under `profile_name`.
-//!
-//! This is the original `boxlite auth login` behavior — preserved unchanged
-//! so anyone who only uses `--api-key-stdin` in CI is not affected by the
-//! OIDC work.
 
-use std::io::{BufRead, Write};
+use std::io::BufRead;
 
 use anyhow::{Context, Result, anyhow, bail};
 use boxlite::{BoxliteError, BoxliteRuntime, Principal};
 use secrecy::SecretString;
 
 use crate::credentials::{self, CredentialStore, Profile};
-use crate::defaults::LOCAL_SERVE_URL;
-
-const URL_ENV: &str = "BOXLITE_REST_URL";
 
 /// Run the API-key flow.
 ///
-/// - `url_flag`: explicit `--url`, if any.
+/// - `url`: server URL resolved by the login dispatcher.
 /// - `api_key_stdin`: when `true`, read the key from stdin (single line).
 ///   When `false`, prompt with `rpassword` for an interactive paste.
 /// - `profile_name`: which profile in `<BOXLITE_HOME>/credentials.toml` to write.
 pub async fn run(
-    url_flag: Option<&str>,
+    url: &str,
     api_key_stdin: bool,
     profile_name: &str,
     store: &CredentialStore,
 ) -> Result<()> {
-    let url = resolve_url(url_flag, api_key_stdin)?;
-
     let api_key = if api_key_stdin {
         read_stdin_line("API key")?
     } else {
@@ -37,7 +28,7 @@ pub async fn run(
     };
 
     let mut profile = Profile {
-        url: url.clone(),
+        url: url.to_string(),
         api_key: Some(SecretString::from(api_key)),
         ..Profile::default()
     };
@@ -73,27 +64,6 @@ pub async fn run(
     Ok(())
 }
 
-/// Resolve the effective server URL.
-///
-/// Precedence: explicit `--url` > `$BOXLITE_REST_URL` > (interactive: prompt
-/// with default) or (non-interactive: silently fall back to default). The
-/// non-interactive default keeps piped one-liners (`echo $KEY | boxlite auth
-/// login --api-key-stdin`) ergonomic without forcing `--url`.
-fn resolve_url(flag: Option<&str>, non_interactive: bool) -> Result<String> {
-    if let Some(url) = flag {
-        return Ok(url.to_string());
-    }
-    if let Ok(env_url) = std::env::var(URL_ENV)
-        && !env_url.is_empty()
-    {
-        return Ok(env_url);
-    }
-    if non_interactive {
-        return Ok(LOCAL_SERVE_URL.to_string());
-    }
-    prompt_with_default("Server URL", LOCAL_SERVE_URL)
-}
-
 fn prompt_api_key() -> Result<String> {
     let key = rpassword::prompt_password("API key: ").context("reading API key from terminal")?;
     let key = key.trim().to_string();
@@ -101,22 +71,6 @@ fn prompt_api_key() -> Result<String> {
         bail!("API key cannot be empty");
     }
     Ok(key)
-}
-
-fn prompt_with_default(label: &str, default: &str) -> Result<String> {
-    print!("{} [{}]: ", label, default);
-    std::io::stdout().flush().ok();
-    let mut buf = String::new();
-    std::io::stdin()
-        .lock()
-        .read_line(&mut buf)
-        .with_context(|| format!("reading {} from stdin", label))?;
-    let value = buf.trim();
-    if value.is_empty() {
-        Ok(default.to_string())
-    } else {
-        Ok(value.to_string())
-    }
 }
 
 /// Read exactly one line from stdin, trim trailing newline, error on empty.

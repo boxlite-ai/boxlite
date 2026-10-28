@@ -6,8 +6,8 @@ package proxy
 
 import (
 	"fmt"
+	"html"
 	"net/http"
-	"net/url"
 	"slices"
 	"strings"
 
@@ -43,8 +43,12 @@ func handleAcceptProxyWarning(ctx *gin.Context, secure bool) {
 		true,
 	)
 
-	// Redirect to the original URL or root
-	redirectURL := ctx.Query("redirect")
+	// Redirect to the original URL or root. The page posts it in the body so
+	// a tunnel access token never lands in this request's query.
+	redirectURL := ctx.PostForm("redirect")
+	if redirectURL == "" {
+		redirectURL = ctx.Query("redirect")
+	}
 	if redirectURL == "" {
 		redirectURL = "/"
 	}
@@ -55,6 +59,10 @@ func handleAcceptProxyWarning(ctx *gin.Context, secure bool) {
 // browserWarningMiddleware is the middleware that checks for browsers and shows warning
 func (p *Proxy) browserWarningMiddleware() gin.HandlerFunc {
 	return func(ctx *gin.Context) {
+		if ctx.Request.URL.Path == loginCallbackPath {
+			ctx.Next()
+			return
+		}
 		if ctx.Request.Header.Get(SKIP_PREVIEW_WARNING_HEADER) == "true" {
 			ctx.Next()
 			return
@@ -86,7 +94,7 @@ func (p *Proxy) browserWarningMiddleware() gin.HandlerFunc {
 			switch ctx.Request.Method {
 			case "GET":
 				switch ctx.Request.URL.Path {
-				case "/callback", "/health":
+				case "/callback", "/login", "/health":
 					ctx.Next()
 					return
 				}
@@ -99,7 +107,7 @@ func (p *Proxy) browserWarningMiddleware() gin.HandlerFunc {
 		}
 
 		// Serve the warning page
-		serveWarningPage(ctx, p.config.EnableTLS)
+		serveWarningPage(ctx, p.config.ProxyProtocol == "https")
 		ctx.Abort() // Stop further processing
 	}
 }
@@ -279,6 +287,7 @@ func serveWarningPage(c *gin.Context, https bool) {
         </div>
 
         <form action="%s" method="POST" style="margin: 0">
+          <input type="hidden" name="redirect" value="%s" />
           <div class="button-container">
             <button type="submit" class="btn btn-primary">I Understand, Continue</button>
           </div>
@@ -296,10 +305,18 @@ func serveWarningPage(c *gin.Context, https bool) {
 	}
 
 	redirectPath := protocol + c.Request.Host + c.Request.URL.String()
-	redirectUrl := ACCEPT_PREVIEW_PAGE_WARNING_PATH + "?redirect=" + url.QueryEscape(redirectPath)
+	// The proxy already stripped the access token from the request URL; put it
+	// back so the browser returns to the URL it was given.
+	returnTo := *c.Request.URL
+	if token, _ := tunnelToken(c.Request); token != nil {
+		query := returnTo.Query()
+		query.Set(accessTokenQuery, *token)
+		returnTo.RawQuery = query.Encode()
+	}
 
 	c.Header("Content-Type", "text/html; charset=utf-8")
-	c.String(http.StatusOK, fmt.Sprintf(htmlContent, redirectPath, redirectUrl))
+	c.String(http.StatusOK, fmt.Sprintf(htmlContent, html.EscapeString(redirectPath),
+		ACCEPT_PREVIEW_PAGE_WARNING_PATH, html.EscapeString(protocol+c.Request.Host+returnTo.String())))
 }
 
 // isBrowser checks if the request is coming from a web browser

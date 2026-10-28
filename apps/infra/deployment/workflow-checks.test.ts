@@ -372,6 +372,7 @@ test('every test source is ignored, so a test-only change still qualifies for th
     'scripts/setup/setup-test.sh',                   // installs test tooling
     'sdks/go/images_cgo_test_support_dev.go',        // dev-tag cgo bridge, shipped
     'sdks/go/info_cgo_test_support_dev.go',          // dev-tag cgo bridge, shipped
+    'sdks/go/ssh_cgo_test_support_dev.go',           // dev-tag cgo bridge, shipped
     'src/boxlite/examples/disk_attachment_test.rs',  // an example, built as one
     'src/guest/src/container/spec.rs',               // the OCI runtime spec
   ]

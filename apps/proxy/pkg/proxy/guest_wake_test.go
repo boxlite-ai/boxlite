@@ -122,8 +122,8 @@ func newFakeAPI(t *testing.T, runner *fakeRunner, ensureStatus int) *fakeAPI {
 				api.startsRunning.start()
 			}
 			writer.WriteHeader(api.ensureStatus)
-		case "/preview/" + wakeTestBoxID + "/tunnels/3000":
-			writer.WriteHeader(http.StatusOK)
+		case "/preview/" + wakeTestBoxID + "/tunnels/3000/access":
+			_ = json.NewEncoder(writer).Encode(tunnelGrant{ID: "tunnel-1", BoxID: wakeTestBoxID, Port: 3000, IsPublic: true, Generation: 1})
 		default:
 			writer.WriteHeader(http.StatusCreated) // activity renewals
 		}

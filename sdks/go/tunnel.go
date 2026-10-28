@@ -10,6 +10,7 @@ package boxlite
 import "C"
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net"
 	"os"
@@ -109,6 +110,8 @@ type BoxTunnel struct {
 	mu      sync.Mutex
 	handle  *C.CBoxTunnelHandle
 	runtime *Runtime
+	// Read once at preparation so it outlives the consumed native handle.
+	descriptor TunnelDescriptor
 }
 
 // Network returns the box-scoped handle for network operations.
@@ -243,8 +246,38 @@ func (n *Network) Close() error {
 	return nil
 }
 
-// Tunnel prepares a one-shot tunnel to a service port inside the box.
-func (n *Network) Tunnel(ctx context.Context, port uint16) (*BoxTunnel, error) {
+// TunnelOptions configures Network.Tunnel. The zero value requests a private
+// tunnel; use DefaultTunnelOptions for a public one.
+type TunnelOptions struct {
+	// IsPublic makes the tunnel reachable without credentials. A private
+	// tunnel requires a cloud runtime and is never downgraded to public.
+	IsPublic bool
+}
+
+// DefaultTunnelOptions returns the options for a public tunnel.
+func DefaultTunnelOptions() TunnelOptions {
+	return TunnelOptions{IsPublic: true}
+}
+
+// parseTunnelTarget reads a target: a *net.TCPAddr whose IP is localhost or
+// the guest IP. An empty IP means localhost.
+func parseTunnelTarget(address *net.TCPAddr) (string, uint16, error) {
+	if address == nil || address.Port < 0 || address.Port > 65535 {
+		return "", 0, fmt.Errorf("tunnel target must be a *net.TCPAddr")
+	}
+	if address.Zone != "" {
+		return "", 0, fmt.Errorf("tunnel target zones are not supported")
+	}
+	if len(address.IP) == 0 {
+		return "127.0.0.1", uint16(address.Port), nil
+	}
+	return address.IP.String(), uint16(address.Port), nil
+}
+
+// Tunnel prepares a one-shot tunnel to target, the service's TCP address as
+// seen from the box. For now target must be localhost or the guest IP, with a
+// non-zero port.
+func (n *Network) Tunnel(ctx context.Context, target *net.TCPAddr, opts TunnelOptions) (*BoxTunnel, error) {
 	if n == nil {
 		return nil, ErrRuntimeClosed
 	}
@@ -253,24 +286,37 @@ func (n *Network) Tunnel(ctx context.Context, port uint16) (*BoxTunnel, error) {
 	if n.handle == nil {
 		return nil, ErrRuntimeClosed
 	}
-	if port == 0 {
-		return nil, fmt.Errorf("invalid tunnel port %d", port)
+	host, port, err := parseTunnelTarget(target)
+	if err != nil {
+		return nil, err
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	cAddress := C.CString(net.JoinHostPort(host, fmt.Sprint(port)))
+	defer C.free(unsafe.Pointer(cAddress))
+	var cTarget C.struct_sockaddr_storage
+	options := C.BoxliteTunnelOptions{is_public: C.bool(opts.IsPublic)}
 	var cTunnel *C.CBoxTunnelHandle
 	var cerr C.CBoxliteError
-	code := C.boxlite_network_tunnel(n.handle, C.uint16_t(port), &cTunnel, &cerr)
+	if code := C.boxlite_socket_address_parse(cAddress, &cTarget, &cerr); code != C.Ok {
+		return nil, freeError(&cerr)
+	}
+	code := C.boxlite_network_tunnel(n.handle, &cTarget, &options, &cTunnel, &cerr)
 	if code != C.Ok {
 		return nil, freeError(&cerr)
 	}
-	tunnel := &BoxTunnel{handle: cTunnel, runtime: n.runtime}
+	descriptor, err := readTunnelDescriptor(cTunnel)
+	if err != nil {
+		C.boxlite_tunnel_free(cTunnel)
+		return nil, err
+	}
+	tunnel := &BoxTunnel{handle: cTunnel, runtime: n.runtime, descriptor: descriptor}
 	runtime.SetFinalizer(tunnel, (*BoxTunnel).Close)
 	return tunnel, nil
 }
 
-// RevokeTunnel withdraws public access to a service port inside the box.
+// RevokeTunnel revokes the tunnel for a service port inside the box.
 // It is safe to repeat; connections already open are not closed.
 func (n *Network) RevokeTunnel(ctx context.Context, port uint16) error {
 	if n == nil || n.handle == nil {
@@ -325,25 +371,39 @@ func (t *BoxTunnel) Close() error {
 }
 
 // URI returns the prepared tunnel's public URL. An empty string means local.
+// It stays readable after Connect or Forward consumes the tunnel.
 func (t *BoxTunnel) URI() (string, error) {
 	if t == nil {
 		return "", ErrRuntimeClosed
 	}
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	if t.handle == nil {
-		return "", ErrRuntimeClosed
+	return t.descriptor.URI, nil
+}
+
+type TunnelDescriptor struct {
+	URI      string  `json:"uri"`
+	IsPublic bool    `json:"isPublic"`
+	Token    *string `json:"token"`
+}
+
+// Descriptor returns the complete token only for the preparation that created it.
+// It stays readable after Connect or Forward consumes the tunnel.
+func (t *BoxTunnel) Descriptor() (TunnelDescriptor, error) {
+	if t == nil {
+		return TunnelDescriptor{}, ErrRuntimeClosed
 	}
-	var uri *C.char
+	return t.descriptor, nil
+}
+
+func readTunnelDescriptor(handle *C.CBoxTunnelHandle) (TunnelDescriptor, error) {
+	var descriptor TunnelDescriptor
+	var value *C.char
 	var cerr C.CBoxliteError
-	if code := C.boxlite_tunnel_uri(t.handle, &uri, &cerr); code != C.Ok {
-		return "", freeError(&cerr)
+	if code := C.boxlite_tunnel_descriptor(handle, &value, &cerr); code != C.Ok {
+		return descriptor, freeError(&cerr)
 	}
-	if uri == nil {
-		return "", nil
-	}
-	defer C.boxlite_free_string(uri)
-	return C.GoString(uri), nil
+	defer C.boxlite_free_string(value)
+	err := json.Unmarshal([]byte(C.GoString(value)), &descriptor)
+	return descriptor, err
 }
 
 // Connect consumes the tunnel's single raw byte stream.

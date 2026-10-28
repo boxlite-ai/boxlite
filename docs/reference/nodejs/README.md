@@ -182,7 +182,7 @@ Configuration options for creating a box.
 |-------|------|---------|-------------|
 | `image` | `string` | - | OCI image URI |
 | `rootfsPath` | `string` | - | Pre-prepared rootfs directory (alternative to image) |
-| `cpus` | `number` | `1` | Number of CPU cores |
+| `cpus` | `number` | `1` | Number of CPU cores (1–16, the guest kernel's limit) |
 | `memoryMib` | `number` | `512` | Memory limit in MiB |
 | `diskSizeGb` | `number` | - | Container disk size in GB, never smaller than the image |
 | `workingDir` | `string` | `"/root"` | Working directory inside container |
@@ -272,7 +272,7 @@ interface JsPortSpec {
 ```
 
 Port publication is available only with a local runtime. For code that should
-work with both local and remote runtimes, use `box.network.tunnel(port)`; each
+work with both local and remote runtimes, use `box.network.tunnel(new SocketAddress({ port }))`; each
 tunnel is one-shot; call `forward()` to consume it into a listener.
 OCI `EXPOSE` declarations do not publish host ports.
 
@@ -374,12 +374,18 @@ live binding data yet, so box, get, or list info may report
 
 ## Network tunnels
 
+Create targets with `new SocketAddress({ address: "127.0.0.1", port: 3000 })`
+from `node:net`; IPv6 also sets `family: "ipv6"`. Flowlabel must be zero.
+The old `{ type: "tcp", ... }` target is rejected; that shape remains a listener
+argument to `forward()`.
+
 `JsBox` and `SimpleBox` expose the same `box.network` workflow.
 
 | Operation | Signature | Description |
 |-----------|-----------|-------------|
-| Tunnel | `await box.network.tunnel(port)` | Prepare a one-shot `JsBoxTunnel` or `BoxTunnel` |
-| Revoke | `await box.network.revokeTunnel(port)` | Withdraw the port's public URL; open connections stay open |
+| Tunnel | `await box.network.tunnel(target, options?)` | Prepare a `JsBoxTunnel` or `BoxTunnel`; `target` is `SocketAddress` imported from `node:net` (loopback or the guest IP), `options` is `{ isPublic?: boolean }`, public by default. Bare port and boolean arguments are rejected; invalid types throw synchronously on the native `JsBox.network` handle |
+| Token | `tunnel.token(): string \| null` | Full on creation, masked on later preparations; `isPublic()` reports the mode |
+| Revoke | `await box.network.revokeTunnel(port)` | Withdraw the port's tunnel; open connections stay open |
 | Forward | `await tunnel.forward(listen)` | Return a listener-backed `TunnelForwarder` |
 | Inspect | `tunnel.uri(): string \| null` | Read the prepared public URL; `null` for a local box |
 | Connect | `await tunnel.connect()` | Consume the prepared tunnel into its connection |
@@ -391,7 +397,8 @@ live binding data yet, so box, get, or list info may report
 and repeatable `close()`.
 
 Each tunnel is one-shot. Choose `connect()` or `forward()`; a forwarder opens
-fresh tunnels for additional clients. This differs from `ports`, which
+fresh connections against the prepared declaration without preparing again.
+It cannot undo revocation. This differs from `ports`, which
 creates a persistent, local-only host listener that accepts repeated
 connections from ordinary host applications.
 

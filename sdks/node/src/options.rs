@@ -174,7 +174,7 @@ pub struct JsBoxOptions {
     /// Path to pre-prepared rootfs directory (alternative to image)
     pub rootfs_path: Option<String>,
 
-    /// Number of CPU cores (default: 1)
+    /// Number of CPU cores (default: 1, range: 1-16, the guest kernel's limit)
     pub cpus: Option<u8>,
 
     /// Memory limit in MiB (default: 512)
@@ -386,7 +386,7 @@ pub struct JsOutboundNetworkSpec {
 }
 
 /// Aligned field-for-field with `JsOutboundNetworkSpec`: `mode="enabled"`
-/// means services the box exposes are reachable without sign-in;
+/// means exposed services follow each tunnel's access policy;
 /// `mode="disabled"` means unreachable from outside. `allowNet` exists for
 /// shape symmetry only — no layer enforces an inbound allowlist yet, so a
 /// non-empty value is rejected.

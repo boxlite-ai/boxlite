@@ -38,6 +38,7 @@ mod default_runtime_dir;
 
 pub use litebox::{
     BoxConnection, BoxReader, BoxTunnel, BoxWriter, LiteBox, SocketAddress, TunnelForwarder,
+    TunnelOptions,
 };
 pub use portal::GuestSession;
 pub use runtime::{AuthHandle, BoxliteRuntime, ImageHandle, Principal};

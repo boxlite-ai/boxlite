@@ -21,7 +21,6 @@ import (
 	"github.com/boxlite-ai/proxy/internal"
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
-	"github.com/gorilla/securecookie"
 	"go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin"
 	"golang.org/x/sync/singleflight"
 
@@ -60,9 +59,7 @@ func stopActivityPoll(ctx *gin.Context) {
 }
 
 type Proxy struct {
-	config       *config.Config
-	secureCookie *securecookie.SecureCookie
-	cookieDomain *string
+	config *config.Config
 
 	apiclient                  *apiclient.APIClient
 	runnerCache                common_cache.ICache[RunnerInfo]
@@ -81,12 +78,6 @@ type Proxy struct {
 func StartProxy(ctx context.Context, config *config.Config) error {
 	proxy := &Proxy{
 		config: config,
-	}
-
-	proxy.secureCookie = securecookie.New([]byte(config.ProxyApiKey), nil)
-	if config.CookieDomain != nil {
-		cookieDomain := GetCookieDomainFromHost(*config.CookieDomain)
-		proxy.cookieDomain = &cookieDomain
 	}
 
 	proxy.apiclient = config.ApiClient
@@ -194,6 +185,9 @@ func StartProxy(ctx context.Context, config *config.Config) error {
 			case "GET":
 				{
 					switch ctx.Request.URL.Path {
+					case "/login":
+						proxy.StartTunnelLogin(ctx)
+						return
 					case "/callback":
 						proxy.AuthCallback(ctx)
 						return
@@ -208,12 +202,16 @@ func StartProxy(ctx context.Context, config *config.Config) error {
 			return
 		}
 
+		if ctx.Request.Method == http.MethodGet && ctx.Request.URL.Path == loginCallbackPath {
+			proxy.FinishTunnelLogin(ctx)
+			return
+		}
 		common_proxy.NewProxyRequestHandler(proxy.GetProxyTarget, nil)(ctx)
 	})
 
 	httpServer := &http.Server{
 		Addr:              fmt.Sprintf(":%d", config.ProxyPort),
-		Handler:           connectAwareHandler(http.HandlerFunc(proxy.handleTunnelConnect), router, shutdownWg),
+		Handler:           sanitizeTunnelRequests(connectAwareHandler(http.HandlerFunc(proxy.handleTunnelConnect), router, shutdownWg)),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 

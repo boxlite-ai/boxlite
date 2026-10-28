@@ -191,14 +191,19 @@ pub(crate) trait BoxNetworkBackend: Send + Sync {
         ))
     }
 
-    /// Prepare a one-shot tunnel to a service port inside the box.
+    /// Prepare a one-shot tunnel to a service inside the box under `options`.
+    /// `target` is already resolved to the guest address.
     ///
     /// Check here that the box can carry the tunnel and mint any public URI,
     /// but open no connection: return a [`BoxTunnel::new`] whose future opens
     /// it on `connect()`, so a port nothing listens on fails there.
-    async fn tunnel(&self, target: SocketAddr) -> BoxliteResult<BoxTunnel>;
+    async fn tunnel(
+        &self,
+        target: SocketAddr,
+        options: crate::litebox::TunnelOptions,
+    ) -> BoxliteResult<BoxTunnel>;
 
-    /// Withdraw any public access `tunnel()` granted to `port`.
+    /// Withdraw the tunnel declaration `tunnel()` made for `port`.
     ///
     /// A backend that publishes nothing, like the local one, has nothing to
     /// withdraw. Connections already open are not closed.

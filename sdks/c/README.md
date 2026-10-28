@@ -572,9 +572,16 @@ BoxliteErrorCode boxlite_box_network(
 );
 void boxlite_network_free(CBoxNetworkHandle* network);
 
+BoxliteErrorCode boxlite_socket_address_parse(
+    const char* address,
+    struct sockaddr_storage* out_address,
+    CBoxliteError* out_error
+);
+
 BoxliteErrorCode boxlite_network_tunnel(
     CBoxNetworkHandle* network,
-    uint16_t port,
+    const struct sockaddr_storage* target,
+    const BoxliteTunnelOptions* options,
     CBoxTunnelHandle** out_tunnel,
     CBoxliteError* out_error
 );
@@ -601,6 +608,35 @@ Each `CBoxTunnelHandle` is one-shot. Choose `boxlite_tunnel_connect()` or
 `boxlite_tunnel_uri()` reports where a remotely served tunnel can be reached, as
 an allocated string the caller frees with `boxlite_free_string()`. It writes NULL
 for a local tunnel.
+
+Create a target with the system's `sockaddr_storage` and the numeric address parser:
+
+```c
+struct sockaddr_storage target;
+CBoxliteError error = {0};
+BoxliteErrorCode rc = boxlite_socket_address_parse("127.0.0.1:3000", &target, &error);
+if (rc != Ok) {
+    /* Inspect error.message, then release it with boxlite_error_free(). */
+    return rc;
+}
+BoxliteTunnelOptions options = { .is_public = false };
+CBoxTunnelHandle* tunnel = NULL;
+rc = boxlite_network_tunnel(network, &target, &options, &tunnel, &error);
+```
+
+The parser accepts numeric `IPv4:port` and `[IPv6]:port`, performs no DNS lookup,
+and leaves output unchanged on error. Storage belongs to the caller and needs no
+cleanup. Pass a complete `sockaddr_storage`, never a cast pointer to a smaller
+`sockaddr_in` or `sockaddr_in6`. Tunnel targets must have a loopback or guest IP,
+a nonzero port, and zero IPv6 scope/flow information. Address and options are borrowed
+only for the call. NULL `options` defaults to public; set `is_public = false` for
+private cloud access. This replaces the custom target and JSON options arguments;
+`BoxliteSocketAddress` remains the separate TCP/Unix listener input to `forward`.
+Read `uri`, `isPublic`, and `token`
+with `boxlite_tunnel_descriptor()`, before or after connect/forward consumes the
+handle, freeing its JSON with `boxlite_free_string()`. Only creation returns a full token; later preparations
+return a mask. Forwarding reuses the declaration and authenticates CONNECT with
+the runtime's API key or JWT; it never recreates a revoked tunnel.
 
 This differs from `boxlite_options_add_port()`, which creates a persistent,
 local-only host listener that accepts repeated connections.

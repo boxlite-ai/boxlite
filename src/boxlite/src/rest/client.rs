@@ -57,6 +57,19 @@ async fn read_connect_refusal(response: hyper::Response<hyper::body::Incoming>) 
 type TunnelConnector =
     hyper_rustls::HttpsConnector<hyper_util::client::legacy::connect::HttpConnector>;
 
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct TunnelDescriptor {
+    pub uri: String,
+    #[serde(default = "public_tunnel_default")]
+    pub is_public: bool,
+    pub token: Option<String>,
+}
+
+fn public_tunnel_default() -> bool {
+    true
+}
+
 /// Bound on the WebSocket handshake (TCP + TLS + HTTP upgrade). Without it a
 /// stalled connect blocks the attach caller indefinitely — unlike HTTP calls,
 /// which ride the reqwest client's own timeout.
@@ -427,10 +440,14 @@ impl ApiClient {
         tokio::spawn(async move {
             let _ = connection.with_upgrades().await;
         });
-        let request = Request::builder()
+        let mut request = Request::builder()
             .method(Method::CONNECT)
             .uri(authority.as_str())
-            .header("Host", authority.as_str())
+            .header("Host", authority.as_str());
+        if let Some(token) = self.current_bearer().await? {
+            request = request.header("X-BoxLite-Authorization", format!("Bearer {token}"));
+        }
+        let request = request
             .body(Empty::<bytes::Bytes>::new())
             .map_err(|e| BoxliteError::Internal(format!("CONNECT request build failed: {e}")))?;
         let response = tokio::time::timeout(TUNNEL_SETUP_TIMEOUT, sender.send_request(request))
@@ -456,25 +473,36 @@ impl ApiClient {
         Ok(TokioIo::new(upgraded))
     }
 
-    /// Prepare a box service tunnel and return its public descriptor.
+    /// Prepare a box service tunnel and return its access descriptor.
     pub(crate) async fn prepare_box_tunnel(
         &self,
         box_id: impl AsRef<str>,
         port: u16,
-    ) -> BoxliteResult<String> {
-        #[derive(serde::Deserialize)]
-        struct TunnelDescriptor {
-            uri: String,
-        }
+        is_public: bool,
+    ) -> BoxliteResult<TunnelDescriptor> {
         let path = format!("/boxes/{}/network/tunnel?port={port}", box_id.as_ref());
-        let builder = self
-            .empty_post_request(&path)
-            .header(reqwest::header::ACCEPT, "application/json");
+        // Public is the server default, so it keeps the bodiless request older
+        // servers already accept; only private sends the field.
+        let builder = if is_public {
+            self.empty_post_request(&path)
+        } else {
+            // Older APIs ignore the POST body and would publish this port.
+            self.require_private_tunnels_enabled().await?;
+            self.http
+                .post(self.url(&path))
+                .json(&serde_json::json!({"isPublic": false}))
+        }
+        .header(reqwest::header::ACCEPT, "application/json");
         let descriptor: TunnelDescriptor = self.send_json(builder).await?;
-        Ok(descriptor.uri)
+        if descriptor.is_public != is_public || (!is_public && descriptor.token.is_none()) {
+            return Err(BoxliteError::Unsupported(
+                "server did not honor tunnel access policy".into(),
+            ));
+        }
+        Ok(descriptor)
     }
 
-    /// Withdraw public access to a box service port.
+    /// Withdraw the declaration of a box service port, regardless of access mode.
     pub(crate) async fn revoke_box_tunnel(
         &self,
         box_id: impl AsRef<str>,
@@ -548,6 +576,18 @@ impl ApiClient {
             "Linux capabilities",
             capabilities.linux_capabilities_enabled,
         )
+    }
+
+    async fn require_private_tunnels_enabled(&self) -> BoxliteResult<()> {
+        // Like Linux capabilities: an older replica would publish the port,
+        // so a cached positive response is not enough.
+        let config = self.fetch_config().await?;
+        let capabilities = config.capabilities.ok_or_else(|| {
+            BoxliteError::Unsupported(
+                "Remote server did not advertise private tunnel support".to_string(),
+            )
+        })?;
+        ensure_capability("private tunnel", capabilities.private_tunnels_enabled)
     }
 
     pub async fn require_clone_enabled(&self) -> BoxliteResult<()> {
@@ -899,6 +939,33 @@ mod tests {
         server.await.unwrap();
     }
 
+    #[tokio::test]
+    async fn private_tunnel_connect_sends_platform_credentials() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let uri = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut headers = Vec::new();
+            while !headers.ends_with(b"\r\n\r\n") {
+                headers.push(socket.read_u8().await.unwrap());
+            }
+            socket
+                .write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n")
+                .await
+                .unwrap();
+            String::from_utf8(headers).unwrap()
+        });
+        let client =
+            ApiClient::new(&BoxliteRestOptions::new(uri.clone()).with_api_key("tunnel-test-key"))
+                .unwrap();
+        let _stream = client.connect_box_network_tunnel(&uri).await.unwrap();
+        let headers = server.await.unwrap().to_ascii_lowercase();
+        assert!(
+            headers.contains("x-boxlite-authorization: bearer tunnel-test-key\r\n"),
+            "CONNECT must carry the runtime's platform credential"
+        );
+    }
+
     /// Our proxy answers this handshake with a verdict of its own and states
     /// it in plain text. Each refusal must keep the class its status names and
     /// the sentence the proxy wrote: a bad target is the caller's error, a
@@ -1130,10 +1197,47 @@ mod tests {
 
         let client =
             ApiClient::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}"))).unwrap();
-        let uri = client.prepare_box_tunnel("box1", 8080).await.unwrap();
+        let descriptor = client.prepare_box_tunnel("box1", 8080, true).await.unwrap();
 
-        assert_eq!(uri, "http://127.0.0.1:9/tunnel");
+        assert_eq!(descriptor.uri, "http://127.0.0.1:9/tunnel");
         server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn private_tunnel_rejects_old_servers_before_posting() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut head = Vec::new();
+            while !head.ends_with(b"\r\n\r\n") {
+                head.push(socket.read_u8().await.unwrap());
+            }
+            // An older API's config lists capabilities without private tunnels.
+            let body = r#"{"capabilities":{"inbound_update_enabled":true}}"#;
+            socket
+                .write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes())
+                .await
+                .unwrap();
+            // A POST after the refusal would arrive as a second connection.
+            let posted = tokio::time::timeout(Duration::from_millis(500), listener.accept())
+                .await
+                .is_ok();
+            (String::from_utf8(head).unwrap(), posted)
+        });
+        let client = ApiClient::new(&BoxliteRestOptions::new(url)).unwrap();
+        let error = client
+            .prepare_box_tunnel("box1", 3000, false)
+            .await
+            .err()
+            .unwrap();
+        assert!(matches!(error, BoxliteError::Unsupported(_)));
+        let (head, posted) = server.await.unwrap();
+        assert!(head.starts_with("GET /v1/config "), "{head}");
+        assert!(
+            !posted,
+            "private prepare reached a server without the capability"
+        );
     }
 
     #[tokio::test]

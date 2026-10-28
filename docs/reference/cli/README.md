@@ -210,7 +210,7 @@ Credentials are stored at `<BOXLITE_HOME>/credentials.toml` (default
 
 | Flag | Description |
 |------|-------------|
-| `--url URL` | Server URL. Precedence: flag, `BOXLITE_REST_URL`, selected profile URL, then `http://localhost:8100`. |
+| `--url URL` | Server URL. Precedence: flag, `BOXLITE_REST_URL`, selected profile URL, then `https://api.boxlite.ai`. |
 | `--method <api-key\|browser\|device>` | Select the login flow explicitly. |
 | `--api-key-stdin` | Read the API key from stdin (one line); selects `api-key` and conflicts with explicit browser/device methods. |
 | `--no-browser` | Use device-code login when no method is explicit; conflicts with API-key stdin and explicit `api-key`/`browser` methods. |
@@ -255,12 +255,12 @@ the logged-in URL and the source (stored file vs env var). If neither the
 file nor env vars are present, prints
 ``Not logged in (profile `NAME`).`` An explicit `--url`
 overrides the stored URL in the report. With only `BOXLITE_API_KEY` set, the
-auth probe reports the local `serve` default, `http://localhost:8100`.
+auth probe reports the default API endpoint, `https://api.boxlite.ai`.
 
 **Example output:**
 
 ```
-Logged in to:    http://localhost:8100
+Logged in to:    https://api.boxlite.ai
 Credential:      API key (from <BOXLITE_HOME>/credentials.toml [default])
 ```
 
@@ -681,7 +681,7 @@ contract. See [runtime behavior and persistence](../../guides/networking.md#upda
 
 ### `boxlite network tunnel`
 
-**Synopsis:** `boxlite network tunnel BOX GUEST_PORT [--listen ADDRESS | --revoke]`
+**Synopsis:** `boxlite network tunnel BOX GUEST_PORT [--private] [--listen ADDRESS | --revoke]`
 
 Without `--listen`, print the public URL supplied by a remote REST service;
 local boxes have no public URL. With `--listen`, bind a local listener and
@@ -704,7 +704,24 @@ addresses, and Unix socket paths must be absolute.
 A remote box needs inbound access enabled before it can be tunneled: create it
 with `--inbound enabled`.
 
-`--revoke` withdraws the port's public URL instead. New requests to it get
+For a private cloud tunnel, use the profile's API key or JWT:
+
+```bash
+boxlite --profile cloud network tunnel mybox 3000 --private
+boxlite --profile cloud network tunnel mybox 3000 --private --listen 8080
+```
+
+Private creation prints one JSON line containing `uri`, `isPublic`, and `token`.
+Only creation returns the complete token; repeating the same command returns its
+mask. An existing public tunnel must be revoked before recreating it as private.
+With `--listen`, the descriptor is printed and flushed **before** binding, followed
+by the bound address on the next line. A bind failure leaves the created tunnel
+and its already-printed token available; Ctrl-C closes only the local forwarder.
+Each accepted client opens an authenticated CONNECT without preparing again.
+There is no `--token` option: external visitors use the URL query or HTTP header,
+while CLI traffic uses the configured organization credential.
+
+`--revoke` withdraws the port's public or private tunnel instead, without `--private`. New requests to it get
 `404` within 3 seconds; connections already open are not closed. It is safe to
 repeat, and running the command again without `--revoke` reopens the same URL:
 
@@ -917,7 +934,7 @@ Used by `run` and `create` (defined in `src/cli/src/cli.rs`).
 
 | Flag | Type | Description |
 |------|------|-------------|
-| `--cpus N` | u32 | Number of CPUs (capped at 255; values above 255 log a warning) |
+| `--cpus N` | u8 | Number of CPUs, 1–16 with the bundled guest kernel. 17–255 are rejected when the box is created; 0 and values above 255 fail while parsing the command line |
 | `--memory MiB` | u32 | Memory limit in mebibytes |
 | `--disk-size GB` | u64 | Sparse root filesystem disk size in gigabytes |
 

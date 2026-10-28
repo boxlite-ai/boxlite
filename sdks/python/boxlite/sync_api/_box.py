@@ -7,7 +7,7 @@ Box metadata is intentionally available only through the async ``Box.info()`` AP
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from ..boxlite import Box, BoxMetrics
+    from ..boxlite import Box, BoxMetrics, TunnelOptions
     from ._boxlite import SyncBoxlite
     from ._execution import SyncExecution
     from ._network import SyncNetworkHandle
@@ -64,12 +64,16 @@ class SyncBox:
         """Run async operation synchronously."""
         return self._sync_helper._sync(coro)
 
-    def _create_tunnel(self, port: int):
-        """Establish a native tunnel handle for a service port."""
-        return self._sync(self._box.network.tunnel(port))
+    def _create_tunnel(
+        self,
+        target: "tuple[str, int] | tuple[str, int, int, int]",
+        options: "TunnelOptions | None" = None,
+    ):
+        """Establish a native tunnel handle for a TCP service."""
+        return self._sync(self._box.network.tunnel(target, options))
 
     def _revoke_tunnel(self, port: int) -> None:
-        """Withdraw public access to a service port."""
+        """Revoke the tunnel for a service port."""
         self._sync(self._box.network.revoke_tunnel(port))
 
     @property
@@ -152,9 +156,13 @@ class SyncBox:
             self._ssh = SyncSshHandle(self)
         return self._ssh
 
-    def tunnel(self, port: int):
-        """Prepare a one-shot tunnel for a port inside this box."""
-        return self.network.tunnel(port)
+    def tunnel(
+        self,
+        target: "tuple[str, int] | tuple[str, int, int, int]",
+        options: "TunnelOptions | None" = None,
+    ):
+        """Prepare a one-shot tunnel to a TCP service inside this box."""
+        return self.network.tunnel(target, options)
 
     # Context manager support
     def __enter__(self) -> "SyncBox":  # noqa: PYI034 - typing.Self needs 3.11+; project supports 3.10+

@@ -206,7 +206,7 @@ Configuration options for creating a box.
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `image` | `str` | Required | OCI image URI (e.g., `"python:slim"`, `"alpine:latest"`) |
-| `cpus` | `int` | `1` | Number of CPU cores (1 to host CPU count) |
+| `cpus` | `int` | `1` | Number of CPU cores (1–16, the guest kernel's limit) |
 | `memory_mib` | `int` | `512` | Memory limit in MiB (128-65536) |
 | `disk_size_gb` | `int \| None` | `None` | Container disk size in GB, never smaller than the image (None = image size) |
 | `working_dir` | `str` | `"/root"` | Working directory inside container |
@@ -296,7 +296,7 @@ ports=[
 ```
 
 Port publication is local-only and TCP-only. For portable local/remote access,
-use `box.network.tunnel(port)`; each returned tunnel is one-shot.
+use `box.network.tunnel(("127.0.0.1", port))`; each returned tunnel is one-shot.
 
 #### Secret format
 
@@ -478,20 +478,26 @@ Both `boxlite.Box` and `boxlite.SimpleBox` expose `box.network`.
 
 | Operation | Signature | Description |
 |-----------|-----------|-------------|
-| Tunnel | `await box.network.tunnel(port) -> BoxTunnel` | Prepare a one-shot tunnel to a TCP service in the box |
-| Revoke | `await box.network.revoke_tunnel(port) -> None` | Withdraw the port's public URL; open connections stay open |
+| Tunnel | `await box.network.tunnel(target, options=None) -> BoxTunnel` | Prepare a tunnel; `target` is a socket address tuple `(ip, port)` (loopback or the guest IP), `options` is `TunnelOptions(is_public=False)` for a private cloud tunnel, public by default |
+| Token | `tunnel.token() -> str \| None` | Full on creation, masked on later preparations; `is_public()` reports the mode |
+| Revoke | `await box.network.revoke_tunnel(port) -> None` | Withdraw the port's tunnel; open connections stay open |
 | Forward | `await tunnel.forward(listen) -> TunnelForwarder` | Bind one local listener and forward every client |
 | Inspect | `tunnel.uri() -> str \| None` | Read the prepared public URL; `None` for a local box |
 | Connect | `await tunnel.connect() -> BoxConnection` | Consume the prepared tunnel into its byte stream |
 | Read/write | `await connection.read(max_bytes)`, `await connection.write(data)` | Exchange bytes with the service |
 | Close | `await connection.close()` | Close the connection |
 
-Use `SocketAddress.tcp(host="127.0.0.1", port=0)` or
+Creation accepts `(ip, port)` and IPv6 `(ip, port, 0, 0)` tuples. IPs must be
+numeric; hostnames and nonzero IPv6 flowinfo/scope_id are rejected. Bare ports and
+`SocketAddress` objects are no longer creation arguments.
+
+For the separate `forward(listen)` operation, use `SocketAddress.tcp(host="127.0.0.1", port=0)` or
 `SocketAddress.unix(path)`. A forwarder exposes `local_addr()`, `await
 wait()`, and repeatable `await close()`; synchronous and `SimpleBox` wrappers
 provide the same operations.
 
-Each `BoxTunnel` is one-shot: choose `connect()` or `forward()`. This differs
+Each `BoxTunnel` is one-shot: choose `connect()` or `forward()`. Forwarding opens
+authenticated connections against the existing declaration and cannot undo revocation. This differs
 from `BoxOptions.ports`, which creates a persistent, local-only host listener
 that accepts repeated connections from ordinary host applications.
 

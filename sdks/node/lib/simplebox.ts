@@ -1,3 +1,4 @@
+import type { SocketAddress as NativeSocketAddress } from "node:net";
 /**
  * SimpleBox - Foundation for specialized container types.
  *
@@ -24,11 +25,12 @@ import type {
   NativeBoxTunnel,
   NativeTunnelForwarder,
   SocketAddress,
+  TunnelOptions,
   JsExecStderr,
   JsExecStdout,
 } from "./native-contracts.js";
 
-export type { SocketAddress } from "./native-contracts.js";
+export type { SocketAddress, TunnelOptions } from "./native-contracts.js";
 
 export type SshCaConfig = JsSshCaConfig;
 export type SshAccount = JsSshAccount;
@@ -39,7 +41,10 @@ type BoxLike = Omit<JsBox, "network"> & {
   readonly network: {
     updateInbound(spec: InboundNetworkSpec): Promise<void>;
     updateOutbound(spec: OutboundNetworkSpec): Promise<void>;
-    tunnel(port: number): Promise<NativeBoxTunnel>;
+    tunnel(
+      target: NativeSocketAddress,
+      options?: TunnelOptions,
+    ): Promise<NativeBoxTunnel>;
     revokeTunnel(port: number): Promise<void>;
   };
 };
@@ -142,7 +147,7 @@ export interface OutboundNetworkSpec {
 }
 
 export interface InboundNetworkSpec {
-  /** Inbound mode: "enabled" (reachable without sign-in) or "disabled" (unreachable from outside). */
+  /** Inbound mode: "enabled" (subject to the tunnel policy) or "disabled" (unreachable from outside). */
   mode: "enabled" | "disabled";
   /**
    * Not supported yet: a non-empty value is rejected. Exists for shape
@@ -402,16 +407,19 @@ export class NetworkHandle {
     await box.network.updateOutbound(spec);
   }
 
-  /** Prepare a one-shot tunnel for a port inside this box. */
-  async tunnel(port: number): Promise<BoxTunnel> {
-    if (!Number.isInteger(port) || port < 1 || port > 65535) {
-      throw new RangeError("port must be an integer between 1 and 65535");
-    }
+  /**
+   * Prepare a one-shot tunnel to `target`, the service's TCP address as seen
+   * from the box. For now its host must be localhost or the guest IP.
+   */
+  async tunnel(
+    target: NativeSocketAddress,
+    options?: TunnelOptions,
+  ): Promise<BoxTunnel> {
     const box = await this.ensureBox();
-    return new BoxTunnel(await box.network.tunnel(port));
+    return new BoxTunnel(await box.network.tunnel(target, options));
   }
 
-  /** Withdraw public access to a port; open connections are not closed. */
+  /** Revoke the tunnel for a port; open connections are not closed. */
   async revokeTunnel(port: number): Promise<void> {
     if (!Number.isInteger(port) || port < 1 || port > 65535) {
       throw new RangeError("port must be an integer between 1 and 65535");
@@ -498,6 +506,15 @@ export class BoxTunnel {
   /** Public URL of a remotely served tunnel, or null for a local one. */
   uri(): string | null {
     return this.tunnel.uri();
+  }
+
+  isPublic(): boolean {
+    return this.tunnel.isPublic();
+  }
+
+  /** Full token on creation; masked on subsequent preparations. */
+  token(): string | null {
+    return this.tunnel.token();
   }
 
   /** Consume the tunnel and return its bidirectional byte stream. */
@@ -964,9 +981,12 @@ export class SimpleBox {
     return box.metrics();
   }
 
-  /** Prepare a one-shot tunnel to a port inside this box. */
-  async tunnel(port: number): Promise<BoxTunnel> {
-    return this.network.tunnel(port);
+  /** Prepare a one-shot tunnel to a TCP service inside this box. */
+  async tunnel(
+    target: NativeSocketAddress,
+    options?: TunnelOptions,
+  ): Promise<BoxTunnel> {
+    return this.network.tunnel(target, options);
   }
 
   /**

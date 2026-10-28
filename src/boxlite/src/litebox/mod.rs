@@ -28,6 +28,7 @@ pub use exec::{BoxCommand, ExecResult, ExecStderr, ExecStdin, ExecStdout, Execut
 pub(crate) use manager::BoxManager;
 pub use network::{
     BoxConnection, BoxReader, BoxTunnel, BoxWriter, NetworkHandle, SocketAddress, TunnelForwarder,
+    TunnelOptions,
 };
 pub use snapshot::SnapshotHandle;
 pub use ssh::{SshAccount, SshCaConfig, SshConfig, SshHandle, SshStatus};

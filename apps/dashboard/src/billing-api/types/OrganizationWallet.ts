@@ -34,3 +34,12 @@ export interface WalletTopUpRequest {
 export interface PaymentUrl {
   url: string
 }
+
+/**
+ * Whether the organization's signup credit is in its wallet. Once true it
+ * stays true. False covers a credit still on its way and one that never comes:
+ * the credit switched off, or an organization that is not granted one.
+ */
+export interface SignupCreditDelivery {
+  delivered: boolean
+}

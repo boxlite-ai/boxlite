@@ -12,7 +12,7 @@ import (
 
 func TestNetworkTunnelRejectsClosedHandle(t *testing.T) {
 	var network *Network
-	if _, err := network.Tunnel(context.Background(), 3000); !errors.Is(err, ErrRuntimeClosed) {
+	if _, err := network.Tunnel(context.Background(), localhost(3000), DefaultTunnelOptions()); !errors.Is(err, ErrRuntimeClosed) {
 		t.Fatalf("Tunnel() error = %v, want ErrRuntimeClosed", err)
 	}
 }
@@ -96,6 +96,9 @@ func TestBoxNetworkRejectsClosedHandle(t *testing.T) {
 
 func TestTunnelMethodsRejectClosedHandle(t *testing.T) {
 	var tunnel *BoxTunnel
+	if _, err := tunnel.Descriptor(); !errors.Is(err, ErrRuntimeClosed) {
+		t.Fatalf("Descriptor() error = %v, want ErrRuntimeClosed", err)
+	}
 	if _, err := tunnel.URI(); !errors.Is(err, ErrRuntimeClosed) {
 		t.Fatalf("URI() error = %v, want ErrRuntimeClosed", err)
 	}

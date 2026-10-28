@@ -335,6 +335,19 @@ fn status_treats_empty_env_api_key_as_not_logged_in() {
 }
 
 #[test]
+fn status_defaults_to_hosted_api_with_only_an_env_api_key() {
+    let home = TempDir::new().unwrap();
+    auth_cmd(&home)
+        .env("BOXLITE_API_KEY", "k_test")
+        .args(["auth", "status"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "Logged in to:    https://api.boxlite.ai",
+        ));
+}
+
+#[test]
 fn status_treats_an_empty_url_environment_value_as_unset() {
     let home = TempDir::new().unwrap();
     let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("boxlite"));
@@ -346,7 +359,7 @@ fn status_treats_an_empty_url_environment_value_as_unset() {
         .assert()
         .success()
         .stdout(predicate::str::contains(
-            "Logged in to:    http://localhost:8100",
+            "Logged in to:    https://api.boxlite.ai",
         ));
 }
 

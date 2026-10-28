@@ -38,7 +38,8 @@ The inventory is implementation-grounded:
 `openapi/box.openapi.yaml` also describes portable capabilities that the hosted
 service does not currently register, including snapshots, clone, export,
 import, and runtime-wide metrics. They are intentionally absent below;
-`GET /api/v1/config` reports snapshots, clone, export, and import as disabled.
+`GET /api/v1/config` reports snapshots, clone, export, and import as disabled,
+and private tunnels as enabled; clients check that before every private prepare.
 
 ## Services at a glance
 
@@ -188,7 +189,7 @@ organization boundaries.
 </details>
 
 <details>
-<summary><b>Boxes and preview access</b> · 16 routes</summary>
+<summary><b>Boxes and preview access</b> · 19 routes</summary>
 
 | Method | Path                                                                    | What it does                                          |
 | ------ | ----------------------------------------------------------------------- | ----------------------------------------------------- |
@@ -206,6 +207,9 @@ organization boundaries.
 | `POST` | `/api/box/{boxIdOrName}/attach-tickets`                                 | Issues a 30-second, single-use ticket for one `/v1` attach upgrade. |
 | `GET`  | `/api/preview/{boxId}/inbound`                                          | Reports a box's inbound mode (`enabled` or `disabled`) to the proxy. |
 | `GET`  | `/api/preview/{boxId}/tunnels/{port}`                                   | Checks an active public tunnel for the proxy.          |
+| `POST` | `/api/preview/{boxId}/tunnels/{port}/access`                            | Proxy-only active tunnel policy, token verification and browser-user revalidation; returns no token verifier. |
+| `GET`  | `/api/preview/{boxId}/tunnels/{port}/session`                            | Checks a user JWT and returns the tunnel grant and user ID for browser login. |
+| `POST` | `/api/preview/tunnel-handoff`                                          | Proxy-only issue or single-use consumption of a 30-second browser login handoff. |
 | `POST` | `/api/preview/{boxId}/ensure-ready`                                     | Wakes a stopped box for the proxy, by auto-resume rules. |
 | `GET`  | `/api/preview/{boxId}/access`                                           | Checks whether the caller may preview a box.          |
 
@@ -477,8 +481,8 @@ organization membership.
 | `PUT`    | `/api/v1[/{prefix}]/boxes/{boxId}/files?path={path}`          | Uploads a tar stream into a box path.                   |
 | `GET`    | `/api/v1[/{prefix}]/boxes/{boxId}/files?path={path}`          | Downloads a box path as a tar stream.                   |
 | `GET`    | `/api/v1[/{prefix}]/boxes/{boxId}/metrics`                    | Returns metrics for one box without marking it active.  |
-| `POST`   | `/api/v1[/{prefix}]/boxes/{boxId}/network/tunnel?port={port}` | Returns the runner tunnel URI for a guest TCP port.     |
-| `DELETE` | `/api/v1[/{prefix}]/boxes/{boxId}/network/tunnel?port={port}` | Revokes a port's public declaration; `204`, idempotent. |
+| `POST`   | `/api/v1[/{prefix}]/boxes/{boxId}/network/tunnel?port={port}` | Prepares a tunnel with optional `isPublic` (default true); returns `uri`, `isPublic`, `token`. Private tokens are complete once, then masked. |
+| `DELETE` | `/api/v1[/{prefix}]/boxes/{boxId}/network/tunnel?port={port}` | Revokes either access mode; `204`, idempotent. |
 | `PUT`    | `/api/v1[/{prefix}]/boxes/{boxId}/network/inbound`            | Enables or disables a box's inbound access.             |
 | `POST`   | `/api/v1[/{prefix}]/boxes/{boxId}/ssh`                        | Replaces guest SSH configuration once; counts as activity and may auto-resume a box. |
 | `GET`    | `/api/v1[/{prefix}]/boxes/{boxId}/ssh`                        | Reads guest SSH status without resuming the box or counting as activity. |
@@ -683,15 +687,17 @@ routing, so it works on every host. How the proxy authenticates these requests
 and tunnels them to guest ports is in [`proxy/README.md`](./proxy/README.md).
 
 <details>
-<summary><b>Proxy routes</b> · 5 routes</summary>
+<summary><b>Proxy routes</b> · 7 routes</summary>
 
 | Method    | Host and path                                              | What it does                                                                                     |
 | --------- | ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
 | `GET`     | `proxy.<domain>/health`                                    | Reports proxy health and version.                                                                |
+| `GET`     | `proxy.<domain>/login`                                     | Starts OIDC login with a host-only PKCE cookie and signed target state. |
 | `GET`     | `proxy.<domain>/callback`                                  | Completes the OIDC preview authentication flow.                                                  |
-| `POST`    | `<any host>/accept-boxlite-preview-warning?redirect={url}` | Records preview-warning acceptance and redirects the browser.                                    |
+| `GET`     | `<port>-<box>.proxy.<domain>/__boxlite/auth/callback`       | Consumes the login handoff and issues a host-only tunnel session cookie. |
+| `POST`    | `<any host>/accept-boxlite-preview-warning`                | Records preview-warning acceptance and redirects to the `redirect` form field (the query form is still accepted). |
 | `ANY`     | `<port>-<box>.proxy.<domain>/{path...}`                    | Reverse-proxies HTTP and WebSocket traffic to the selected box port after preview access checks. |
-| `CONNECT` | `<port>-<box>.proxy.<domain>`                              | Opens a bidirectional TCP tunnel through the runner; allowed only with inbound enabled.               |
+| `CONNECT` | `<port>-<box>.proxy.<domain>`                              | Opens a TCP stream after inbound and tunnel authorization; SDK/CLI sends its organization bearer. |
 
 </details>
 
@@ -888,7 +894,7 @@ is unset; the same document carries PostHog's key and host to the browser.
 | Interface     | Client                                                                                  | Base URL source                  | What it covers                                                                                                                                                                                             |
 | ------------- | --------------------------------------------------------------------------------------- | -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Analytics API | [`libs/analytics-api-client`](./libs/analytics-api-client/), generated                  | `analyticsApiUrl`                | 8 routes: per-box and organization usage, aggregates, and charts, plus box logs, metrics, and traces.                                                                                                      |
-| Billing API   | [`billingApiClient.ts`](./dashboard/src/billing-api/billingApiClient.ts), hand-written  | `billingApiUrl`                  | 20 routes: wallet and top-ups, plans, payment methods, invoices, usage series and prices, coupons, billing emails, portal and checkout URLs.                                                               |
+| Billing API   | [`billingApiClient.ts`](./dashboard/src/billing-api/billingApiClient.ts), hand-written  | `billingApiUrl`                  | 22 routes: wallet and top-ups, signup credit delivery, plans, payment methods, invoices, usage series and prices, coupons, billing emails, portal and checkout URLs.                                                               |
 | Box admission | [`commerce-box-limit.service.ts`](./api/src/boxlite-rest/commerce-box-limit.service.ts) | `billingApiUrl`                  | 2 server-side reads on Commerce: `GET /plan` and `GET /organization/{organizationId}/plan`, bearer `USAGE_EXPORT_TOKEN`, used by hosted CREATE BOX.                                                        |
 | Usage export  | [`api/src/usage/services`](./api/src/usage/services/), hand-written                     | `usageExport.url`                | 2 routes on the same Commerce service, server-side: `POST /internal/usage-events` and `POST /internal/allocation-snapshot`, bearer `USAGE_EXPORT_TOKEN`, which must equal Commerce's `USAGE_INGEST_TOKEN`. |
 | PostHog       | `posthog-js` in the dashboard; `posthog-node` in the API                                | `posthog.apiKey`, `posthog.host` | Browser product analytics; server-side `api_*` operation events from the global metrics interceptor, two `groupIdentify` calls, and feature-flag evaluation.                                               |

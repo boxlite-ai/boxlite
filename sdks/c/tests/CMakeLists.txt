@@ -37,6 +37,7 @@ include_directories(${BOXLITE_INCLUDE_DIR})
 set(TEST_TARGETS
     test_simple_api
     test_null_callback
+    test_socket_address
     test_volume_ffi
     test_rest
     test_info
@@ -78,6 +79,7 @@ set_tests_properties(test_simple_api PROPERTIES LABELS "integration")
 # test_null_callback only exercises the FFI argument-validation path;
 # no VM is required, but we still link the runtime dylib.
 set_tests_properties(test_null_callback PROPERTIES LABELS "unit;ffi")
+set_tests_properties(test_socket_address PROPERTIES LABELS "unit;ffi")
 # test_volume_ffi only exercises signatures and argument validation, so it
 # needs no VM either.
 set_tests_properties(test_volume_ffi PROPERTIES LABELS "unit;ffi")

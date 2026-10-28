@@ -250,7 +250,7 @@ picker in a detected headless/SSH environment, the CLI falls back to `device`.
 
 | Option | Description |
 |--------|-------------|
-| `--url URL` | Server URL (precedence: flag, `BOXLITE_REST_URL`, selected profile URL, then `http://localhost:8100`). For cloud control planes include the `/api` prefix. |
+| `--url URL` | Server URL (precedence: flag, `BOXLITE_REST_URL`, selected profile URL, then `https://api.boxlite.ai`). Self-hosted deployments may require a base path such as `/api`. |
 | `--method <api-key\|browser\|device>` | Explicit flow choice. Overrides inference. |
 | `--api-key-stdin` | Read the API key from stdin (one line). The flag takes no value, so the secret never appears on argv. Selects API-key login and conflicts with explicit browser/device methods. |
 | `--no-browser` | Use device code when no method is explicit; conflicts with API-key stdin and explicit API-key/browser methods. |
@@ -317,7 +317,8 @@ Remove the selected profile from `<BOXLITE_HOME>/credentials.toml` (default
 Print the current authentication state: the logged-in URL, the source
 (stored file vs env var), the credential type (API key vs OIDC), and for
 OIDC sessions the access token's expiry. Offline — no network calls,
-no secret material printed.
+no secret material printed. With only `BOXLITE_API_KEY` set, it reports
+`https://api.boxlite.ai`.
 
 **Usage:** `boxlite auth status [--url URL] [--profile NAME]`
 
@@ -331,7 +332,7 @@ Credential:      API key (from <BOXLITE_HOME>/credentials.toml [local])
 **Example output (OIDC session):**
 
 ```
-Logged in to:    https://api.boxlite.ai/api
+Logged in to:    https://api.boxlite.ai
 Credential:      OIDC bearer token (from <BOXLITE_HOME>/credentials.toml [cloud])
 Expires:         2026-05-21T15:42:00+00:00
 ```
@@ -353,7 +354,7 @@ Logged in as:    dev@acme.test
 Name:            Dev McAcme
 Principal:       auth0|abc123 (user)
 Path prefix:     acme
-Server:          https://api.boxlite.ai/api
+Server:          https://api.boxlite.ai
 Scopes:          box:read, box:write, box:exec, image:read, snapshot:read
 ```
 

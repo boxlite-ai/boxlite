@@ -44,7 +44,7 @@ flowchart TB
     proxy proxy_to_runner@-->|"tunnel"| runner_api
     runner_api runner_to_boxlite@-->|"DialGuestPort"| boxlite_core
     boxlite_core boxlite_to_boxes@-->|"guest TCP"| boxes
-    client client_to_idp@-.->|"login, inbound disabled"| idp
+    client client_to_idp@-.->|"login, private tunnel"| idp
     proxy proxy_to_idp@-.->|"code exchange"| idp
 
     class external scope_external
@@ -53,7 +53,7 @@ flowchart TB
 ```
 
 The proxy asks the API whether the box has inbound access enabled and whether the requested guest
-port has an active public tunnel. It resolves the box's runner and records activity before forwarding.
+port has an active tunnel and the caller meets its access policy. It resolves the box's runner and records activity before forwarding.
 
 ## Preview hosts
 
@@ -77,18 +77,17 @@ A host without a `<port>-` label serves only the utility routes listed in
 The HTTP path in code:
 
 ```text
-  StartProxy (— · apps/proxy/pkg/proxy/proxy.go:80) — registers the catch-all route for preview hosts
+  StartProxy (— · apps/proxy/pkg/proxy/proxy.go:78) — registers the catch-all route for preview hosts
     └─ NewProxyRequestHandler (— · apps/libs/common-go/pkg/proxy/proxy.go:116) — reverse proxy for one request
       ├─ GetProxyTarget (Proxy · apps/proxy/pkg/proxy/get_box_target.go:49) — choose the upstream
-        ├─ parseHost (Proxy · apps/proxy/pkg/proxy/get_box_target.go:340) — canonical port plus box ID
-        ├─ getBoxInboundEnabled (Proxy · apps/proxy/pkg/proxy/get_box_target.go:229) — ask the API for the inbound mode, cached 3 s
-        ├─ Authenticate (Proxy · apps/proxy/pkg/proxy/auth.go:17) — authorize access to a box with inbound disabled
-        ├─ hasPublicTunnelAccess (Proxy · apps/proxy/pkg/proxy/tunnel_access.go:15) — check every guest service port
-        └─ updateLastActivity (Proxy · apps/proxy/pkg/proxy/get_box_target.go:411) — renew activity every 50 s
-      └─ dialGuestPort (Proxy · apps/proxy/pkg/proxy/get_box_target.go:145) — dial each new upstream connection
+        ├─ parseHost (Proxy · apps/proxy/pkg/proxy/get_box_target.go:311) — canonical port plus box ID
+        ├─ getBoxInboundEnabled (Proxy · apps/proxy/pkg/proxy/get_box_target.go:224) — ask the API for the inbound mode, cached 3 s
+        ├─ authorizeTunnel (Proxy · apps/proxy/pkg/proxy/tunnel_auth.go:140) — check active declaration, credentials and cookie scope before any guest dial
+        └─ updateLastActivity (Proxy · apps/proxy/pkg/proxy/get_box_target.go:382) — renew activity every 50 s
+      └─ dialGuestPort (Proxy · apps/proxy/pkg/proxy/get_box_target.go:140) — dial each new upstream connection
         └─ dialGuestPortWithWake (Proxy · apps/proxy/pkg/proxy/guest_wake.go:52) — dial, waking a stopped box
-          ├─ getBoxRunnerInfo (Proxy · apps/proxy/pkg/proxy/get_box_target.go:187) — runner URL and key, cached 2 min
-          ├─ dialRunnerTunnel (— · apps/proxy/pkg/proxy/tunnel.go:118) — CONNECT through the runner to the guest port
+          ├─ getBoxRunnerInfo (Proxy · apps/proxy/pkg/proxy/get_box_target.go:182) — runner URL and key, cached 2 min
+          ├─ dialRunnerTunnel (— · apps/proxy/pkg/proxy/tunnel.go:113) — CONNECT through the runner to the guest port
           ├─ wakeBox (Proxy · apps/proxy/pkg/proxy/guest_wake.go:174) — POST ensure-ready to the API, once per box
           └─ waitForGuestPort (Proxy · apps/proxy/pkg/proxy/guest_wake.go:125) — poll the woken port, once per port
 ```
@@ -99,15 +98,14 @@ pooling reuses tunnels per box and port. Raw `CONNECT` requests skip this router
 `handleTunnelConnect` in [`tunnel.go`](pkg/proxy/tunnel.go), which dials through the same
 `dialGuestPortWithWake`.
 
-Every new HTTP/WebSocket guest service request and raw CONNECT checks the API's public tunnel
-endpoint. It requires an unrevoked public declaration, inbound access enabled, and a box outside the
-destroying/archiving states. The API caches allowed and denied verdicts in Redis for 3 seconds;
-the proxy does not cache tunnel verdicts. Declaring a port clears its cached denial, and
-`DELETE /api/v1/boxes/{boxId}/network/tunnel?port={port}` clears its cached allowance. A check that
-races the revoke, or a box whose inbound access was disabled, can still admit new requests until a
-cached allowance expires, so revocation takes effect within 3 seconds; existing connections
-continue until they close. If the tunnel check fails, both paths return
-502. Ports are parsed as numbers, so `03000` and `3000` name the same guest port.
+Every HTTP/WebSocket request and CONNECT checks `POST /api/preview/{boxId}/tunnels/{port}/access`.
+It requires an active declaration, inbound enabled, and a box outside destroying/archiving states.
+The endpoint returns only the tunnel ID, box, port, mode and authorization generation; it never
+returns token hashes. Token verification happens in the API. The proxy does not cache grants;
+the API caches each `boxId:port` lookup in Redis for three seconds, keyed without any token.
+The legacy public-only GET endpoint remains for rolling upgrades and never admits private tunnels.
+Prepare and revoke evict that entry, so revocation blocks the next request; inbound and box-state
+changes take effect within the three-second window. Already-open streams continue until they close. A failed access check never records activity or wakes the box.
 
 ## Waking a stopped box
 
@@ -142,24 +140,75 @@ box.
 
 ## Authentication
 
-A box with inbound disabled takes the first credential that works ([`auth.go`](pkg/proxy/auth.go)):
+Inbound disabled rejects every caller with 403. An undeclared or revoked port returns 404.
+Public tunnels need no credential. Any access token or `X-BoxLite-Authorization` sent to a public
+tunnel is stripped without being checked, so even an invalid or repeated one still gets through.
+Private tunnels use these sources:
 
-1. `Authorization: Bearer <API key or JWT>`: the API checks box access with the caller's own token.
-2. `boxlite-box-auth-<id>` cookie: signed with `PROXY_API_KEY` and trusted without an API call.
-3. Otherwise, a 307 redirect to the OIDC provider with PKCE. `/callback` exchanges the code, checks
-   access, sets the cookie, and sends the browser back to the original URL.
+1. `X-BoxLite-Authorization: Bearer <API key or JWT>` for SDK/CLI CONNECT and explicit platform auth.
+2. `X-BoxLite-Access-Token` or the `boxlite-access-token` query parameter for external visitors.
+3. A valid `__Host-boxlite-tunnel-session` cookie.
+4. `Authorization: Bearer ...` as a compatibility fallback when no token or valid platform session
+   exists. Otherwise the application's own Authorization header is preserved.
 
-Credential checks cache only rejections, for 2 minutes. Accepted credentials go back to the API on
-every request, so a revoked key stops working at once. The cookie is the exception: browsers keep
-it for 1 hour, the signature check accepts it for securecookie's default of 30 days, and nothing
-re-checks it with the API.
+An explicitly supplied invalid platform credential fails; it cannot fall back to a cookie.
+Reaching a tunnel needs only membership in the box's organization: API keys must belong to that
+organization, with any permissions, and JWT users must be members. Creating or revoking a tunnel
+needs `write:boxes`. Accepted credentials, including membership, are revalidated for every request
+without a positive cache, so a removed member loses access on the next request. Rejection-cache
+keys contain a credential hash, never its plaintext.
+
+The signed session binds tunnel ID, box ID, port, authorization generation, authentication kind,
+issue time and expiry. It lasts one hour and is renewed on an authorized HTTP response in its last
+fifteen minutes. User sessions recheck membership before renewal and access.
+It is host-only (`Secure; HttpOnly; Path=/; SameSite=Lax`, no Domain), including behind TLS termination.
+Browser sessions need an HTTPS browser-facing scheme (`PROXY_PROTOCOL=https`). Over plain HTTP the
+browser drops the cookie: the token URL authorizes only that document request, so its scripts,
+styles, fetches and in-app links fail with 401. SDK/CLI CONNECT and the token header work over
+either scheme. Revoke/recreate changes the generation, invalidating old
+sessions. Existing legacy cookies expire naturally and cannot authorize a new private tunnel.
+
+The browser keeps a token URL. Before tracing and guest forwarding, the proxy removes the token
+query/header and a Referer containing it; private responses use no-store and no-referrer.
+All platform cookies, including other boxes' legacy cookies, are removed before reaching the guest.
+Guest Set-Cookie values using reserved platform names are discarded; application cookies remain.
+Cookie-authenticated cross-origin fetches, writes and WebSocket upgrades are rejected.
+Without an `Origin`, a cookie request passes only as a top-level `GET`/`HEAD` document
+navigation, with `Sec-Fetch-Site` of `same-origin` or `none`, or with no Fetch Metadata at all.
+Safe top-level navigation remains allowed, including the OIDC return redirect.
+
+A long-lived WebSocket has no HTTP responses on which to renew a cookie. It remains connected after
+cookie expiry. An idle page also cannot renew silently without a request; reloading its retained
+token URL creates a new session. Tokenless background requests after expiry receive 401.
+
+HTML navigation without credentials can sign in with OIDC. The target sets a host-only browser
+nonce and sends signed state to `/login` on the base host. That host keeps its own host-only PKCE
+cookie, verifies state at `/callback`, and checks organization access. A 30-second, single-use
+handoff ticket (stored under its SHA-256 hash in the API's Redis) then returns to the target host.
+Only the matching browser and target can exchange it for the tunnel cookie. No parent-domain
+platform cookie is issued; neither the JWT nor the persistent tunnel token appears in the handoff.
+
+## Rollout
+
+Apply the additive migration, upgrade **all API replicas**, then the proxies, then SDK/CLI clients.
+No switch gates private creation once the API advertises `private_tunnels_enabled`, so create
+private tunnels only after all proxies have upgraded. Older proxies use the public-only
+endpoint and reject private tunnels. Before every private prepare, new SDKs fetch `GET /v1/config`
+live and require `capabilities.private_tunnels_enabled`; an older API omits it, so the client refuses
+before its POST handler, which ignores `isPublic`, could publish the port. The check and the POST
+may reach different replicas, so do not expose mixed old/new API replicas to private creation. Configure edge/load-balancer logging to redact the token query too; proxy-side sanitization
+cannot change logs already written by the edge.
 
 ## Failure responses
 
 | Situation                                                  | HTTP or WebSocket                                                   | `CONNECT`                    |
 | ---------------------------------------------------------- | ------------------------------------------------------------------- | ---------------------------- |
-| Inbound is disabled                                        | `404` after credential resolution; previews need inbound enabled | `403`, whatever the credential |
+| Inbound is disabled                                        | `403`, whatever the credential                                      | `403`, whatever the credential |
 | Inbound is enabled but the port has no active declaration  | `404`                                     | `404` |
+| A private tunnel gets no credential                        | `302` to OIDC login for HTML navigation when OIDC is configured; otherwise `401` | `401` |
+| A private tunnel gets an invalid token or platform credential, or a session from another generation | `401` | `401` |
+| A private tunnel gets ambiguous or malformed token parameters | `400`                                                            | `400`                        |
+| A cookie-authenticated cross-origin fetch, write or WebSocket upgrade | `403`                                                    | Not applicable               |
 | The tunnel access API is unavailable                       | `502`                                     | `502` |
 | The host has no `<port>-<id>` label                        | `404`, except the utility routes                                    | `400`                        |
 | The API still fails the visibility check after its retries | `400`                                                               | `502`                        |
@@ -169,8 +218,7 @@ re-checks it with the API.
 | The runner, or a running box's port, is unreachable        | `502`, code `BAD_GATEWAY`                                           | `502`                        |
 
 Guest-dial failures on the HTTP path return the JSON error body that the proxy's other errors use.
-A box with inbound disabled needs a credential. SDK and CLI callers should always send one: without it
-they get the browser redirect, not a `401`.
+Access failures happen before the proxy wakes the box or records activity.
 
 ## Box activity
 
@@ -184,7 +232,7 @@ per-box cache drops reports made within the previous 45 seconds.
 | ------------------------- | ------------------- | ----- |
 | Box inbound mode          | box ID              | 3 s   |
 | Runner URL and API key    | box ID              | 2 min |
-| Rejected credential       | box ID + credential | 2 min |
+| Rejected credential       | box ID + credential hash | 2 min |
 | Activity already reported | box ID              | 45 s  |
 
 The caches live in Redis when `REDIS_HOST` is set, as in the local stack
@@ -194,11 +242,14 @@ caches in memory unless its stage adds them.
 
 ## Other behavior
 
-- **CORS** allows any origin, with credentials. A request carrying `X-BoxLite-Disable-CORS: true`
+- **CORS** permits explicit-credential requests; private cookie authentication additionally requires the exact tunnel origin. A request carrying `X-BoxLite-Disable-CORS: true`
   leaves CORS to the app in the box.
 - **Preview warning**: with `PREVIEW_WARNING_ENABLED`, browsers see an interstitial page until they
   accept it, which sets a cookie for 1 day. Non-browser clients, WebSockets, and requests
-  carrying `X-BoxLite-Skip-Preview-Warning: true` skip it.
+  carrying `X-BoxLite-Skip-Preview-Warning: true` skip it. An access token does not skip it, since
+  public tunnels ignore tokens; the page posts the return URL, token included, in its form body,
+  and accepting returns the browser to that token URL. The return URL uses the `PROXY_PROTOCOL`
+  scheme, so behind a TLS-terminating load balancer (`ENABLE_TLS` unset) it stays `https`.
 - **Shutdown** waits up to `SHUTDOWN_TIMEOUT_SEC` (default 1 hour) for open requests and tunnels. A
   second signal forces the exit.
 - **Tracing** stamps `boxlite.box_id` on the span of each proxied HTTP request. CONNECT tunnels
@@ -212,7 +263,7 @@ is internal and changes together with the API and the runner.
 | Service | Call                                                                                                     | Credential                                              |
 | ------- | -------------------------------------------------------------------------------------------------------- | ------------------------------------------------------- |
 | API     | `GET /api/config` at startup, for unset OIDC settings                                                    | `PROXY_API_KEY`                                         |
-| API     | `GET /api/preview/{boxId}/inbound`, `/tunnels/{port}`                                                    | `PROXY_API_KEY`                                         |
+| API     | `GET /api/preview/{boxId}/inbound`, `POST /api/preview/{boxId}/tunnels/{port}/access`                                                    | `PROXY_API_KEY`                                         |
 | API     | `GET /api/preview/{boxId}/access`                                                                        | The caller's bearer token                               |
 | API     | `GET /api/runners/by-box/{boxId}`, `POST /api/box/{boxId}/last-activity`                                 | `PROXY_API_KEY`                                         |
 | API     | `POST /api/preview/{boxId}/ensure-ready`, when the runner reports the box is not running                 | `PROXY_API_KEY`                                         |
@@ -228,11 +279,12 @@ working directory override it, but loading stops at the first file that is missi
 | -------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
 | `PROXY_PORT`                                                                     | Listen port (required)                                                                  |
 | `PROXY_PROTOCOL`                                                                 | `http` or `https`, for redirects and `X-Forwarded-Proto` (required)                     |
-| `PROXY_API_KEY`                                                                  | Bearer key for API calls and the cookie-signing key (required)                          |
+| `PROXY_API_KEY`                                                                  | Bearer key for API calls; fallback input to purpose-separated session signing (required)                          |
 | `BOXLITE_API_URL`                                                                | Control-plane API base URL, ending in `/api` (required)                                 |
-| `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`, `OIDC_DOMAIN`, `OIDC_PUBLIC_DOMAIN`, `OIDC_AUDIENCE` | Login for boxes with inbound disabled; an unset client ID, domain, or audience comes from the API's `/config` at startup |
-| `COOKIE_DOMAIN`                                                                  | Cookie domain; defaults to `.<request host>`                                            |
-| `ENABLE_TLS`, `TLS_CERT_FILE`, `TLS_KEY_FILE`                                    | Serve TLS directly; `ENABLE_TLS` also marks auth cookies `Secure`                       |
+| `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`, `OIDC_DOMAIN`, `OIDC_PUBLIC_DOMAIN`, `OIDC_AUDIENCE` | Login for private tunnels; an unset client ID, domain, or audience comes from the API's `/config` at startup |
+| `TUNNEL_COOKIE_KEY` | Optional independent cookie-signing secret, shared by all proxy replicas; rotating it invalidates browser sessions |
+| `COOKIE_DOMAIN`                                                                  | Legacy setting; platform session and login cookies are always host-only                                            |
+| `ENABLE_TLS`, `TLS_CERT_FILE`, `TLS_KEY_FILE`                                    | Serve TLS directly; platform auth cookies are always `Secure`                       |
 | `REDIS_HOST` and the other `REDIS_*` settings                                    | Shared caches                                                                           |
 | `PREVIEW_WARNING_ENABLED`                                                        | Browser warning page                                                                    |
 | `SHUTDOWN_TIMEOUT_SEC`                                                           | Drain limit                                                                             |
@@ -241,9 +293,8 @@ working directory override it, but loading stops at the first file that is missi
 ## Build and test
 
 ```bash
-cd apps/proxy
-go build ./cmd/proxy
-go test ./...
+make test:apps:proxy
+make fmt:apps:proxy
 ```
 
 From `apps/`, the Nx project `proxy` wraps the same commands in its `build`, `serve`, `test`, and
@@ -257,8 +308,8 @@ runs the proxy on port 4000 with the rest of the local stack.
 - [`pkg/proxy/proxy.go`](pkg/proxy/proxy.go): router, middleware, caches, and the CONNECT split
 - [`pkg/proxy/get_box_target.go`](pkg/proxy/get_box_target.go): host parsing, upstream choice, API
   lookups, and activity
-- [`pkg/proxy/auth.go`](pkg/proxy/auth.go), [`pkg/proxy/auth_callback.go`](pkg/proxy/auth_callback.go):
-  credentials and OIDC login
+- [`pkg/proxy/tunnel_auth.go`](pkg/proxy/tunnel_auth.go), [`pkg/proxy/tunnel_login.go`](pkg/proxy/tunnel_login.go):
+  credentials, session isolation and OIDC login
 - [`pkg/proxy/tunnel.go`](pkg/proxy/tunnel.go): CONNECT tunnels to the runner
 - [`pkg/proxy/guest_wake.go`](pkg/proxy/guest_wake.go): waking a stopped box and retrying the guest dial
 - [`pkg/proxy/warning_page.go`](pkg/proxy/warning_page.go): preview warning page

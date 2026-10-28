@@ -42,7 +42,7 @@
 - High-cohesion facade (the shared Design rule's exemplar here): [`ImageManager`](src/boxlite/src/images/manager.rs) exposes `new`/`pull`/`list`/`load_from_local` and hides `Arc<ImageStore>`, blob sources, and manifest handling.
 - Facade exception — stateless utilities: [`jailer/common/`](src/boxlite/src/jailer/common/) async-signal-safe helpers.
 
-<!-- agent-tooling:guidance:begin rev=592fd726154f sha256=c3ed8d66f7e1 -->
+<!-- agent-tooling:guidance:begin rev=90458f0cb02a sha256=6ec13e833313 -->
 
 > Managed by **boxlite-ai/agent-tooling** — do not edit between the markers. Change `plugins/boxlite-agent-tooling/guidance/workflow.md` there, then rerun `./.agent-tooling/install.sh` here.
 
@@ -76,12 +76,15 @@ Apply the `boxlite-design-doc` skill before implementation.
 
 #### PR size and decomposition
 
-- Target 100–200 added code lines; cap 400 code additions, including drafts. Count source, scripts, configuration, and generated code; exclude `*.spec.ts`, `*_test.go`, files under `tests` directories, recognized documentation, data/assets, and lockfiles. Unclassified files count. Estimate before coding; measure against the intended base before every PR creation/update.
-- Split into tested PRs under one tracking issue; use native GitHub stacks for dependencies. Follow the installed plugin's `.agents/prompts/pr/split-pr-tracking-issue.md`.
-- Exceptions: human justification within **5 minutes**, otherwise split. Diff changes invalidate approval. Follow the installed plugin's `.agents/prompts/pr/pr-size-exception.md` and `.agents/prompts/pr/pr-size-expired.md`.
+- Prefer 100–200 added code lines; 400 is a bypassable guideline, including drafts. Estimate before coding; measure against the intended base before every PR creation/update.
+- Count source, scripts, configuration, generated code, and unfamiliar files; exclude `*.spec.ts`, `*_test.go`, `tests` directories, recognized documentation, data/assets, and lockfiles.
+- Above 400, ask the user to choose **Bypass limit** or **Split PR**. Bypass needs no written justification and applies only to the current diff. Never infer a choice; diff changes require a new decision.
+- When splitting, use tested PRs under one tracking issue and native GitHub stacks for dependencies. Follow the installed plugin's `.agents/prompts/pr/split-pr-tracking-issue.md`.
+- Allow **5 minutes** to choose; silence defaults to splitting. Reconsider a split choice or expired request only after explicit human instruction. Follow the installed plugin's `.agents/prompts/pr/pr-size-exception.md` and `.agents/prompts/pr/pr-size-expired.md`.
 
 ### Test
 
+- OpenAPI files matching `*openapi*.yaml` require the installed plugin's `guidance/api-compatibility.md`: explain breaking/default changes, recommend GitHub issue discussion, and require explicit user confirmation to skip the gate; new optional SDK parameters need local before/after request tests.
 - For each test added with a fix, manually run both steps in order:
   1. Revert **every** production change: restore every non-test file to its pre-fix state; only the test remains. If API, signature, or schema changes prevent compilation or reaching the defect check, keep production reverted and add the smallest temporary test-only compatibility adapter for the old contract. The test-only compatibility adapter may adjust setup or invocation only; it must not implement the fix, alter the defect check, or become the failure signal. Run the test: it must reach the defect check and fail for the original bug. Log the failure signal (assertion, hang, panic). **Partial reverts, mental simulation, and assumed failure are cheating.** If no adapter preserves the signal, stop and report the blocker.
   2. Remove the adapter, restore all production changes, and rerun: the test must pass. Without step 1, a pass cannot prove the test catches the bug or the fix is necessary.
@@ -107,6 +110,6 @@ Public artifacts/delegates: public evidence or disclosure approval for exact con
 
 Apply the `boxlite-writing` skill.
 
-- Check PR explanations against the diff, including drafts and description edits. State the problem, resulting behavior, and decisive verification once; file lists alone do not explain a change. Omit work logs and exhaustive test counts. Adapt repository templates.
+- Apply `boxlite-pr-preparation` for every PR, including drafts and description edits.
 
 <!-- agent-tooling:guidance:end -->

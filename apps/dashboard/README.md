@@ -69,6 +69,27 @@ entirely. They are sibling tabs now, and each is paged rather than rendered
 whole — an account with hundreds of documents must not decide how tall this page
 is.
 
+## A pending signup credit is announced only while it can still arrive
+
+A new owner's wallet reads $0.00 until the signup credit is granted, so the
+Wallet tab says it is on its way: "Registration rewards are being distributed,
+please wait patiently." The billing service only reports whether the credit
+has been delivered, and "not yet" also covers a credit that never comes: one
+switched off, or an organization that does not qualify. Three rules keep the
+notice from promising money that is not coming:
+
+- Only a verified owner asks, and only for their default organization. No one
+  else is granted a credit, so for anyone else "not yet" would never change.
+- Reads stop after about two minutes, 2, 4, 8, 16, 30, 30 and 30 s apart, and
+  the notice goes with them. Returning after the cached answer is dropped
+  starts a fresh window.
+- A failed read ends the wait as well, rather than polling the error.
+
+When the credit lands, the wallet and its ledger are refetched before the
+notice goes, so the balance changes as it disappears. `npm run start:mock`
+reports every credit delivered; `localStorage['signup-credit-pending'] = '1'`
+holds it back for six seconds.
+
 ## A choice says what it does, and shows which one is picked
 
 The quickstart offers two paths, so each card names its outcome ("Build an app

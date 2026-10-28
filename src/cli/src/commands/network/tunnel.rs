@@ -5,7 +5,7 @@ use std::net::{Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 
 use anyhow::{Context, Result, anyhow};
-use boxlite::{BoxTunnel, SocketAddress};
+use boxlite::{BoxTunnel, SocketAddress, TunnelOptions};
 use clap::Args;
 
 use crate::cli::GlobalFlags;
@@ -24,7 +24,11 @@ pub struct TunnelArgs {
     #[arg(long, value_name = "ADDRESS", value_parser = parse_socket_address)]
     pub listen: Option<SocketAddress>,
 
-    /// Withdraw the port's public URL; open connections are not closed
+    /// Require platform credentials or the tunnel's access token
+    #[arg(long, conflicts_with = "revoke")]
+    pub private: bool,
+
+    /// Withdraw the port's tunnel; open connections are not closed
     #[arg(long, conflicts_with = "listen")]
     pub revoke: bool,
 }
@@ -64,18 +68,35 @@ pub async fn execute(args: TunnelArgs, global: &GlobalFlags) -> Result<()> {
     let network = box_handle.network();
     if args.revoke {
         network.revoke_tunnel(args.port).await?;
-        println!("Revoked public access to {}:{}", args.target, args.port);
+        println!("Revoked tunnel access to {}:{}", args.target, args.port);
         return Ok(());
     }
-    let guest_ip = boxlite::net::constants::GUEST_IP
-        .parse()
-        .context("BoxLite guest IP constant is invalid")?;
-    let tunnel = network.tunnel(SocketAddr::new(guest_ip, args.port)).await?;
+    let tunnel = network
+        .tunnel(
+            SocketAddr::new(Ipv4Addr::LOCALHOST.into(), args.port),
+            TunnelOptions {
+                is_public: !args.private,
+            },
+        )
+        .await?;
+    if args.private {
+        println!(
+            "{}",
+            serde_json::json!({
+                "uri": tunnel.uri(), "isPublic": tunnel.is_public(), "token": tunnel.token(),
+            })
+        );
+        std::io::stdout()
+            .flush()
+            .context("flush tunnel descriptor")?;
+    }
     let Some(listen) = args.listen else {
         let url = tunnel.uri().ok_or_else(|| {
             anyhow!("local boxes have no public URL; point boxlite at a remote service with --url or --profile")
         })?;
-        println!("{url}");
+        if !args.private {
+            println!("{url}");
+        }
         return Ok(());
     };
 
@@ -139,5 +160,14 @@ mod tests {
     fn revoke_cannot_be_combined_with_a_local_listener() {
         let err = tunnel_args(&["mybox", "3000", "--revoke", "--listen", "8080"]).unwrap_err();
         assert_eq!(err.kind(), clap::error::ErrorKind::ArgumentConflict);
+    }
+
+    #[test]
+    fn private_tunnel_can_listen_but_revoke_is_mode_independent() {
+        let args = tunnel_args(&["mybox", "3000", "--private", "--listen", "8080"]).unwrap();
+        assert!(args.private && args.listen.is_some());
+        assert!(!tunnel_args(&["mybox", "3000"]).unwrap().private);
+        assert!(tunnel_args(&["mybox", "3000", "--private", "--revoke"]).is_err());
+        assert!(tunnel_args(&["mybox", "3000", "--token", "secret"]).is_err());
     }
 }

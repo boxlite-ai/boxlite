@@ -24,6 +24,7 @@ type Config struct {
 	ProxyPort             int                `envconfig:"PROXY_PORT" validate:"required"`
 	ProxyProtocol         string             `envconfig:"PROXY_PROTOCOL" validate:"required"`
 	ProxyApiKey           string             `envconfig:"PROXY_API_KEY" validate:"required"`
+	TunnelCookieKey       string             `envconfig:"TUNNEL_COOKIE_KEY"`
 	CookieDomain          *string            `envconfig:"COOKIE_DOMAIN"`
 	TLSCertFile           string             `envconfig:"TLS_CERT_FILE"`
 	TLSKeyFile            string             `envconfig:"TLS_KEY_FILE"`

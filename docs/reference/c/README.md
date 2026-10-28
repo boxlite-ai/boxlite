@@ -698,6 +698,15 @@ Safe to call with NULL. Use when you need to release a box handle without freein
 
 ### Network tunnels
 
+Creation takes a complete system `sockaddr_storage` and a `BoxliteTunnelOptions`
+containing `bool is_public`. Initialize the address with
+`boxlite_socket_address_parse("127.0.0.1:3000", &target, &error)` (IPv6 uses
+`"[::1]:3000"`). NULL options mean public. The parser performs no DNS resolution
+and leaves output unchanged on error. Inputs are borrowed for the call; never cast
+a smaller `sockaddr_in`/`sockaddr_in6` allocation to the storage parameter.
+Targets require a nonzero port, loopback or guest IP, and zero IPv6 scope/flow
+information. See the [C example](../../../sdks/c/README.md#network-tunnels).
+
 ```c
 BoxliteErrorCode boxlite_box_network(
     CBoxHandle* handle,
@@ -706,9 +715,16 @@ BoxliteErrorCode boxlite_box_network(
 );
 void boxlite_network_free(CBoxNetworkHandle* network);
 
+BoxliteErrorCode boxlite_socket_address_parse(
+    const char* address,
+    struct sockaddr_storage* out_address,
+    CBoxliteError* out_error
+);
+
 BoxliteErrorCode boxlite_network_tunnel(
     CBoxNetworkHandle* network,
-    uint16_t port,
+    const struct sockaddr_storage* target,
+    const BoxliteTunnelOptions* options,
     CBoxTunnelHandle** out_tunnel,
     CBoxliteError* out_error
 );
@@ -757,11 +773,17 @@ void boxlite_tunnel_forwarder_free(CTunnelForwarderHandle* forwarder);
 
 Each `CBoxTunnelHandle` is one-shot. Choose `boxlite_tunnel_connect()` or
 `boxlite_tunnel_forward()`; either consumes the prepared tunnel.
+The target storage and typed options are described above. Read `uri`, `isPublic`,
+and `token` with
+`boxlite_tunnel_descriptor()`, before or after connect/forward consumes the tunnel,
+freeing the result with `boxlite_free_string()`.
+Only creation returns the full token; later preparations return a mask.
+Forwarding opens connections against the existing declaration and cannot undo revocation.
 `boxlite_tunnel_uri()` reports where a remotely served tunnel can be reached, as
 an allocated string the caller frees with `boxlite_free_string()`. It writes NULL
 for a local tunnel.
 
-`boxlite_network_revoke_tunnel()` withdraws the public URL of `port`. It is
+`boxlite_network_revoke_tunnel()` withdraws the public or private tunnel of `port`. It is
 safe to repeat, leaves open connections running, and does nothing for a local
 box.
 

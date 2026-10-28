@@ -23,6 +23,9 @@ import {
   ParseIntPipe,
   Post,
   Query,
+  Body,
+  Header,
+  ValidationPipe,
 } from '@nestjs/common'
 import { ApiTags, ApiBearerAuth, ApiExcludeController } from '@nestjs/swagger'
 import { createProxyMiddleware, fixRequestBody, Options } from 'http-proxy-middleware'
@@ -40,6 +43,7 @@ import { BoxState } from '../box/enums/box-state.enum'
 import { BoxDesiredState } from '../box/enums/box-desired-state.enum'
 import { Box } from '../box/entities/box.entity'
 import { TunnelService } from '../box/services/tunnel.service'
+import { PrepareTunnelDto } from '../box/dto/tunnel.dto'
 
 type ProxyActivityPolicy = { activity: boolean; autoResume: boolean }
 const USER_OPERATION: ProxyActivityPolicy = { activity: true, autoResume: true }
@@ -306,12 +310,14 @@ export class BoxliteProxyController {
   }
 
   @Post(':boxId/network/tunnel')
+  @Header('Cache-Control', 'no-store')
   @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
   @HttpCode(HttpStatus.OK)
   async proxyNetworkTunnel(
     @AuthContext() authContext: OrganizationAuthContext,
     @Param('boxId') boxId: string,
     @Query('port', ParseIntPipe) port: number,
+    @Body(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true })) options: PrepareTunnelDto = {},
   ) {
     // findOneByIdOrName already 404s for a missing/destroyed box.
     const box = await this.boxService.findOneByIdOrName(boxId, authContext.organizationId)
@@ -342,8 +348,8 @@ export class BoxliteProxyController {
     }
 
     const uri = await this.boxService.getNetworkTunnelUrl(boxId, authContext.organizationId, port)
-    await this.tunnelService.declarePublic(box.id, port)
-    return { uri }
+    const access = await this.tunnelService.prepare(box.id, port, options.isPublic ?? true)
+    return { uri, ...access }
   }
 
   // Revoking needs neither inbound access nor a running box: it only withdraws

@@ -180,14 +180,15 @@ export function BoxNetworkPanel({
           <AlertDialogHeader>
             <AlertDialogTitle>Enable inbound access for this box?</AlertDialogTitle>
             {/* Scoped deliberately. Inbound access only lets the proxy serve
-                ports opened as tunnels without authentication. The web
+                ports opened as tunnels, under each tunnel's access policy. The web
                 terminal does not go through the proxy: it attaches over `/v1`
                 with the member's own credentials, and the management API is
                 untouched. An earlier "Make this box public?" read as handing
                 over the whole box. */}
             <AlertDialogDescription>
-              Anyone with the URL of a <strong>port opened as a tunnel</strong> reaches it without signing in. The URL
-              is not a secret — it ends up in browser history, proxy logs and Referer headers.
+              Anyone with the URL of a <strong>port opened as a public tunnel</strong> reaches it without signing in. The
+              URL is not a secret — it ends up in browser history, proxy logs and Referer headers. A private tunnel
+              also needs its access token or a sign-in to your organization.
               <br />
               <br />
               The web terminal and the box&apos;s files, commands and settings are not affected; those still require

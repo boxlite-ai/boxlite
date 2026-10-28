@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Optional
 from ..exec import ExecResult
 
 if TYPE_CHECKING:
+    from ..boxlite import TunnelOptions
     from ._box import SyncBox
     from ._boxlite import SyncBoxlite
 
@@ -251,13 +252,17 @@ class SyncSimpleBox:
 
         return self._runtime._sync(_exec_and_collect())
 
-    def tunnel(self, port: int):
-        """Prepare a one-shot tunnel for a port inside this box."""
+    def tunnel(
+        self,
+        target: "tuple[str, int] | tuple[str, int, int, int]",
+        options: "TunnelOptions | None" = None,
+    ):
+        """Prepare a one-shot tunnel to a TCP service inside this box."""
         if self._box is None:
             raise RuntimeError(
                 "Box not started. Use 'with SyncSimpleBox(...) as box:' first."
             )
-        return self.network.tunnel(port)
+        return self.network.tunnel(target, options)
 
     @property
     def network(self):

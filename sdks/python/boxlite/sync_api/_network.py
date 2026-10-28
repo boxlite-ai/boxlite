@@ -3,7 +3,11 @@
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from boxlite import InboundNetworkSpec, OutboundNetworkSpec
+    from boxlite import (
+        InboundNetworkSpec,
+        OutboundNetworkSpec,
+        TunnelOptions,
+    )
 
     from ._box import SyncBox
 
@@ -40,6 +44,12 @@ class SyncBoxTunnel:
         """Return the public URL of a remote tunnel, or ``None`` for a local one."""
         return self._tunnel.uri()
 
+    def is_public(self) -> bool:
+        return self._tunnel.is_public()
+
+    def token(self) -> str | None:
+        return self._tunnel.token()
+
     def forward(self, listen) -> SyncTunnelForwarder:
         return SyncTunnelForwarder(
             self._box, self._box._sync(self._tunnel.forward(listen))
@@ -60,15 +70,21 @@ class SyncNetworkHandle:
         """Replace outbound policy. Enabled with an empty list clears restrictions."""
         self._owner._sync(self._owner._box.network.update_outbound(spec))
 
-    def tunnel(self, port: int) -> SyncBoxTunnel:
-        """Prepare a one-shot tunnel for a port inside the box."""
-        if not isinstance(port, int) or not 1 <= port <= 65535:
-            raise ValueError("port must be an integer between 1 and 65535")
-        tunnel = self._owner._create_tunnel(port)
+    def tunnel(
+        self,
+        target: "tuple[str, int] | tuple[str, int, int, int]",
+        options: "TunnelOptions | None" = None,
+    ) -> SyncBoxTunnel:
+        """Prepare a one-shot tunnel to a TCP service inside the box.
+
+        ``target`` is the service's address as seen from the box; its host must
+        be localhost or the guest IP for now. ``options`` defaults to public.
+        """
+        tunnel = self._owner._create_tunnel(target, options)
         return SyncBoxTunnel(self._owner, tunnel)
 
     def revoke_tunnel(self, port: int) -> None:
-        """Withdraw public access to a port; open connections are not closed."""
+        """Revoke the tunnel for a port; open connections are not closed."""
         if not isinstance(port, int) or not 1 <= port <= 65535:
             raise ValueError("port must be an integer between 1 and 65535")
         self._owner._revoke_tunnel(port)

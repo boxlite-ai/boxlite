@@ -29,6 +29,12 @@ export class Tunnel {
   @Column({ name: 'token_hash', type: 'character varying', nullable: true })
   tokenHash: string | null
 
+  @Column({ name: 'token_mask', type: 'character varying', nullable: true })
+  tokenMask: string | null
+
+  @Column({ name: 'auth_generation', type: 'integer', default: 1 })
+  authGeneration: number
+
   @CreateDateColumn({ name: 'created_at', type: 'timestamp with time zone', default: () => 'now()' })
   createdAt: Date
 

@@ -217,6 +217,16 @@ describe('BoxLite REST routing', () => {
     expect((await response.json()).capabilities.inbound_update_enabled).toBe(true)
   })
 
+  // An older API ignores isPublic and would publish the port, so clients
+  // refuse private prepare unless /v1/config advertises it.
+  it('advertises private tunnels in /v1/config', async () => {
+    await startRoutingTestApp()
+
+    const response = await get('/api/v1/config')
+
+    expect((await response.json()).capabilities.private_tunnels_enabled).toBe(true)
+  })
+
   it('answers image usage on its own route, with or without a routing prefix', async () => {
     const catalog = {
       usage: jest.fn().mockResolvedValue({ count: 1, limit: 20, knownBytes: 0 }),

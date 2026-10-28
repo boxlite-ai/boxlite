@@ -14,7 +14,7 @@ import { Box, BoxState, NetworkMode } from '@boxlite-ai/api-client'
  */
 export type BoxShape = 'reachable' | 'persistent' | 'disposable'
 
-/** Whether the services the box exposes are reachable without signing in. */
+/** Whether the services the box exposes are reachable through the proxy, under each tunnel's access policy. */
 export function isInboundEnabled(box: Pick<Box, 'network'>): boolean {
   return box.network?.inbound.mode === NetworkMode.ENABLED
 }

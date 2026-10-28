@@ -4,6 +4,59 @@ import { CombinedAuthGuard } from '../../auth/combined-auth.guard'
 import { ProxyGuard } from '../guards/proxy.guard'
 import { BoxState } from '../enums/box-state.enum'
 
+describe('PreviewController private tunnel credential scope', () => {
+  function fixture(membership: object | null = { role: 'owner', assignedRoles: [] }) {
+    const redis = { get: jest.fn().mockResolvedValue(null), setex: jest.fn() }
+    const memberships = {
+      exists: jest.fn().mockResolvedValue(membership !== null),
+      findOne: jest.fn().mockResolvedValue(membership),
+    }
+    const controller = new PreviewController(
+      redis as never,
+      { findOne: jest.fn().mockResolvedValue({ organizationId: 'box-org' }) } as never,
+      memberships as never,
+      null as never,
+      { findOne: jest.fn().mockResolvedValue({ id: 'box-org' }) } as never,
+      null as never,
+      null as never,
+    )
+    return controller
+  }
+
+  it('rejects an API key for another organization even when its owner belongs to both', async () => {
+    const request = {
+      user: {
+        userId: 'user-1',
+        role: 'user',
+        organizationId: 'other-org',
+        apiKey: { organizationId: 'other-org', permissions: ['write:boxes'] },
+      },
+    }
+    await expect(fixture().hasBoxAccess(request as never, 'box-1')).rejects.toBeInstanceOf(NotFoundException)
+  })
+
+  // Reaching a tunnel needs membership only; creating one needs write:boxes.
+  it('accepts a same-organization API key or read-only member without write:boxes', async () => {
+    const readOnly = { role: 'member', assignedRoles: [] }
+    const apiKey = {
+      user: {
+        userId: 'user-1',
+        role: 'user',
+        organizationId: 'box-org',
+        apiKey: { organizationId: 'box-org', permissions: [] },
+      },
+    }
+    const jwt = { user: { userId: 'user-1', role: 'user' } }
+    await expect(fixture(readOnly).hasBoxAccess(apiKey as never, 'box-1')).resolves.toBe(true)
+    await expect(fixture(readOnly).hasBoxAccess(jwt as never, 'box-1')).resolves.toBe(true)
+  })
+
+  it('rejects a user who is no longer a member', async () => {
+    const jwt = { user: { userId: 'user-1', role: 'user' } }
+    await expect(fixture(null).hasBoxAccess(jwt as never, 'box-1')).rejects.toBeInstanceOf(NotFoundException)
+  })
+})
+
 describe('PreviewController public tunnel check', () => {
   const access = jest.fn()
   const controller = new PreviewController(
@@ -13,12 +66,15 @@ describe('PreviewController public tunnel check', () => {
     { isPublicAccessAllowed: access } as never,
     null as never,
     null as never,
+    null as never,
   )
 
   beforeEach(() => access.mockReset())
 
   it('keeps the proxy-only endpoint out of generated API clients', () => {
-    expect(Reflect.getMetadata('swagger/apiExcludeEndpoint', controller.isPublicTunnelActive)).toEqual({ disable: true })
+    expect(Reflect.getMetadata('swagger/apiExcludeEndpoint', controller.isPublicTunnelActive)).toEqual({
+      disable: true,
+    })
   })
 
   it('accepts only an active public tunnel', async () => {
@@ -27,6 +83,30 @@ describe('PreviewController public tunnel check', () => {
     await expect(controller.isPublicTunnelActive('box-1', 3000)).rejects.toBeInstanceOf(NotFoundException)
     await expect(controller.isPublicTunnelActive('box-1', 3000)).resolves.toBe(true)
     expect(access).toHaveBeenCalledWith('box-1', 3000)
+  })
+})
+
+describe('PreviewController browser tunnel sessions', () => {
+  it('rechecks current membership before accepting a signed user session', async () => {
+    const memberships = { exists: jest.fn().mockResolvedValue(true) }
+    const users = { findOne: jest.fn().mockResolvedValue({ id: 'user-1', role: 'user' }) }
+    const tunnels = { access: jest.fn().mockResolvedValue({ id: 'tunnel-1', authGeneration: 1 }) }
+    const controller = new PreviewController(
+      null as never,
+      { findOne: jest.fn().mockResolvedValue({ organizationId: 'org-1' }) } as never,
+      memberships as never,
+      tunnels as never,
+      null as never,
+      null as never,
+      users as never,
+    )
+    await expect(controller.tunnelAccess('box-1', 3000, { userId: 'user-1' })).resolves.toMatchObject({
+      id: 'tunnel-1',
+    })
+    memberships.exists.mockResolvedValue(false)
+    await expect(controller.tunnelAccess('box-1', 3000, { userId: 'user-1' })).rejects.toBeInstanceOf(NotFoundException)
+    expect(tunnels.access).toHaveBeenCalledTimes(1)
+    expect(users.findOne).toHaveBeenCalledTimes(2)
   })
 })
 
@@ -60,6 +140,7 @@ describe('PreviewController ensure-ready', () => {
       null as never,
       organizationService as never,
       autoResume as never,
+      null as never,
     )
   })
 
@@ -84,7 +165,12 @@ describe('PreviewController ensure-ready', () => {
   })
 
   it('lets the proxy keep polling a started box, such as one paused for a snapshot, even with auto-resume off', async () => {
-    boxService.findOne.mockResolvedValue({ ...box, state: BoxState.STARTED, desiredState: 'started', autoResume: false })
+    boxService.findOne.mockResolvedValue({
+      ...box,
+      state: BoxState.STARTED,
+      desiredState: 'started',
+      autoResume: false,
+    })
 
     await expect(controller.ensureReady('box-1')).resolves.toBeUndefined()
     expect(autoResume.ensureReady).not.toHaveBeenCalled()

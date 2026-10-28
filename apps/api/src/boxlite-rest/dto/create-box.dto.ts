@@ -16,6 +16,7 @@ import {
   IsBoolean,
   IsObject,
   IsArray,
+  Max,
   Min,
   IsIn,
   Validate,
@@ -24,6 +25,7 @@ import {
   ValidatorConstraint,
   ValidatorConstraintInterface,
 } from 'class-validator'
+import { MAX_CPU_PER_BOX } from '../../box/services/per-box-limits'
 import { isValidNetworkAllowEntry, MAX_NETWORK_ALLOW_LIST_ENTRIES } from '../../box/utils/network-validation.util'
 
 const logger = new Logger('CreateBoxDto')
@@ -67,7 +69,8 @@ class IsUnsupportedInboundAllowNetConstraint implements ValidatorConstraintInter
 }
 
 // Aligned field-for-field with OutboundNetworkSpecDto: mode="enabled" means
-// services the box exposes are reachable through the proxy without sign-in;
+// services the box exposes are reachable through the proxy under each
+// tunnel's access policy (public: no sign-in; private: token or membership);
 // mode="disabled" makes them unreachable through the proxy, even with a
 // credential. allow_net exists for wire-shape symmetry but is rejected when
 // non-empty until enforcement exists.
@@ -209,12 +212,13 @@ export class CreateBoxDto {
   image?: string
 
   // A box with 0 vCPUs can never boot (libkrun set_vm_config(0, ...) → EINVAL),
-  // so reject undersized resources at the request boundary instead of accepting
-  // a box that fails to start.
+  // and the guest kernel ignores vCPUs past MAX_CPU_PER_BOX, so reject both at
+  // the request boundary instead of accepting a box that fails or under-runs.
   @IsOptional()
   @IsNumber()
   @IsInt()
   @Min(1)
+  @Max(MAX_CPU_PER_BOX)
   cpus?: number
 
   @IsOptional()

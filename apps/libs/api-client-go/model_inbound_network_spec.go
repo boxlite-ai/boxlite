@@ -21,7 +21,7 @@ var _ MappedNullable = &InboundNetworkSpec{}
 
 // InboundNetworkSpec struct for InboundNetworkSpec
 type InboundNetworkSpec struct {
-	// Whether exposed services are reachable through the proxy without sign-in
+	// Whether exposed services are reachable through the proxy, subject to each tunnel's access policy
 	Mode NetworkMode `json:"mode"`
 	// Reserved; no layer enforces an inbound allowlist yet
 	AllowNet []string `json:"allow_net"`

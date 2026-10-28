@@ -286,7 +286,7 @@ curl http://localhost:8080
 
 Port publication is local-only and TCP-only. It creates a listener that ordinary
 host applications can use for repeated connections. Remote runtimes reject
-`ports`; use `box.network.tunnel(port)` for portable SDK access. Each tunnel is
+`ports`; use `box.network.tunnel(...)` with the service address for portable SDK access. Each tunnel is
 a prepared one-shot connection; call `forward()` to turn it into a listener.
 Image `EXPOSE` declarations do not publish host ports.
 
@@ -387,7 +387,7 @@ async def run_100_boxes():
 - Limited by host storage
 
 **CPUs:**
-- Range: 1 to host CPU count
+- Range: 1 to 16 (the bundled guest kernel brings up at most 16 vCPUs)
 - Can oversubscribe (shares-based)
 
 **Tested configurations:**

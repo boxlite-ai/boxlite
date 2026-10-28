@@ -128,7 +128,7 @@ unsafe fn runner_new(
 
         let options = BoxOptions {
             rootfs: RootfsSpec::Image(image_str),
-            cpus: if cpus > 0 { Some(cpus as u8) } else { None },
+            cpus: crate::options::cpus_from_c(cpus),
             memory_mib: if memory_mib > 0 {
                 Some(memory_mib as u32)
             } else {

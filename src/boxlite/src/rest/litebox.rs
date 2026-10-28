@@ -19,7 +19,7 @@ use crate::litebox::copy::CopyOptions;
 use crate::litebox::snapshot_mgr::SnapshotInfo;
 use crate::litebox::{
     AttachOptions, BoxCommand, BoxConnection, BoxTunnel, ExecResult, ExecStderr, ExecStdin,
-    ExecStdout, Execution, SshConfig, SshStatus,
+    ExecStdout, Execution, SshConfig, SshStatus, TunnelOptions,
 };
 use crate::metrics::BoxMetrics;
 use crate::runtime::backend::{BoxBackend, BoxNetworkBackend, SnapshotBackend};
@@ -602,13 +602,19 @@ impl BoxNetworkBackend for RestBox {
             .await
     }
 
-    async fn tunnel(&self, target: SocketAddr) -> BoxliteResult<BoxTunnel> {
-        let endpoint = self.tunnel_endpoint(target).await?;
+    async fn tunnel(&self, target: SocketAddr, options: TunnelOptions) -> BoxliteResult<BoxTunnel> {
+        let descriptor = self.tunnel_endpoint(target, options).await?;
+        let endpoint = descriptor.uri;
         let client = self.client.clone();
-        Ok(BoxTunnel::new(Some(endpoint.clone()), async move {
-            let connection = client.connect_box_network_tunnel(&endpoint).await?;
-            Ok(BoxConnection::new(connection))
-        }))
+        Ok(BoxTunnel::new(Some(endpoint.clone()), move || {
+            let client = client.clone();
+            let endpoint = endpoint.clone();
+            async move {
+                let connection = client.connect_box_network_tunnel(&endpoint).await?;
+                Ok(BoxConnection::new(connection))
+            }
+        })
+        .with_access(descriptor.is_public, descriptor.token))
     }
 
     async fn revoke_tunnel(&self, port: u16) -> BoxliteResult<()> {
@@ -619,15 +625,19 @@ impl BoxNetworkBackend for RestBox {
 }
 
 impl RestBox {
-    /// Register `target`'s port as a public tunnel and return its URI.
-    async fn tunnel_endpoint(&self, target: SocketAddr) -> BoxliteResult<String> {
+    /// Register `target`'s port under `options` and return its descriptor.
+    async fn tunnel_endpoint(
+        &self,
+        target: SocketAddr,
+        options: TunnelOptions,
+    ) -> BoxliteResult<super::client::TunnelDescriptor> {
         if target.ip().to_string() != crate::net::constants::GUEST_IP {
             return Err(BoxliteError::Unsupported(
                 "REST box tunnels only support service ports on the guest IP".into(),
             ));
         }
         self.client
-            .prepare_box_tunnel(&self.box_id_str(), target.port())
+            .prepare_box_tunnel(&self.box_id_str(), target.port(), options.is_public)
             .await
     }
 }
@@ -1413,6 +1423,9 @@ mod tests {
         Response as HandshakeResponse,
     };
     use tokio_tungstenite::tungstenite::http::{HeaderName, HeaderValue};
+
+    /// A tunnel target as SDK callers write it.
+    const LOCAL_3000: &str = "127.0.0.1:3000";
 
     /// Pull the path out of an HTTP request line (`GET /v1/... HTTP/1.1`).
     fn request_path(head: &str) -> Option<String> {
@@ -2783,8 +2796,10 @@ mod tests {
         });
 
         let network = crate::litebox::NetworkHandle::new(Arc::new(rest_box_for(port, "tun-box")));
-        let target = format!("{}:3000", crate::net::constants::GUEST_IP);
-        let tunnel = network.tunnel(target.parse().unwrap()).await.unwrap();
+        let tunnel = network
+            .tunnel(LOCAL_3000.parse().unwrap(), TunnelOptions::default())
+            .await
+            .unwrap();
         assert_eq!(
             tunnel.uri(),
             Some(format!("http://127.0.0.1:{port}").as_str())
@@ -2796,6 +2811,190 @@ mod tests {
         connection.read_exact(&mut echoed).await.unwrap();
         assert_eq!(&echoed, b"ping");
         assert_eq!(posts.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    /// `isPublic` is a new optional field: omitted or left at its default it
+    /// must not appear, so the prepare request matches the one older servers
+    /// already accept; only a private request carries it.
+    #[tokio::test]
+    async fn tunnel_prepare_sends_is_public_only_when_private() {
+        for (options, expected_body) in [
+            (None, ""),
+            (Some(TunnelOptions { is_public: true }), ""),
+            (
+                Some(TunnelOptions { is_public: false }),
+                r#"{"isPublic":false}"#,
+            ),
+        ] {
+            let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let server = tokio::spawn(async move {
+                loop {
+                    let (mut socket, _) = listener.accept().await.unwrap();
+                    let mut head = Vec::new();
+                    while !head.ends_with(b"\r\n\r\n") {
+                        head.push(socket.read_u8().await.unwrap());
+                    }
+                    let head = String::from_utf8(head).unwrap();
+                    if head.starts_with("GET /v1/config ") {
+                        let body = r#"{"capabilities":{"private_tunnels_enabled":true}}"#;
+                        socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
+                        continue;
+                    }
+                    let length = head
+                        .lines()
+                        .find_map(|line| {
+                            line.to_lowercase()
+                                .strip_prefix("content-length: ")
+                                .and_then(|value| value.parse::<usize>().ok())
+                        })
+                        .unwrap_or(0);
+                    let mut body = vec![0; length];
+                    socket.read_exact(&mut body).await.unwrap();
+                    let body = String::from_utf8(body).unwrap();
+                    let reply = if body.contains(r#""isPublic":false"#) {
+                        r#"{"uri":"http://127.0.0.1:9","isPublic":false,"token":"blt_new"}"#
+                    } else {
+                        r#"{"uri":"http://127.0.0.1:9","isPublic":true,"token":null}"#
+                    };
+                    socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}", reply.len()).as_bytes()).await.unwrap();
+                    return (head, body);
+                }
+            });
+            let network = crate::litebox::NetworkHandle::new(Arc::new(rest_box_for(port, "box1")));
+            network
+                .tunnel(LOCAL_3000.parse().unwrap(), options.unwrap_or_default())
+                .await
+                .unwrap();
+            let (head, body) = server.await.unwrap();
+            assert!(
+                head.starts_with("POST /v1/boxes/box1/network/tunnel?port=3000 "),
+                "{head}"
+            );
+            assert_eq!(body, expected_body, "{options:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn private_tunnel_forward_does_not_restore_revoked_declarations() {
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let posts = Arc::new(AtomicUsize::new(0));
+        let active = Arc::new(AtomicBool::new(false));
+        let server_posts = posts.clone();
+        let server_active = active.clone();
+        let server = tokio::spawn(async move {
+            loop {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let posts = server_posts.clone();
+                let active = server_active.clone();
+                tokio::spawn(async move {
+                    let mut head = Vec::new();
+                    while !head.ends_with(b"\r\n\r\n") {
+                        head.push(socket.read_u8().await.unwrap());
+                    }
+                    let head = String::from_utf8(head).unwrap();
+                    if head.starts_with("GET /v1/config ") {
+                        let body = r#"{"capabilities":{"private_tunnels_enabled":true}}"#;
+                        socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
+                    } else if head.starts_with("POST ") {
+                        let length = head
+                            .lines()
+                            .find_map(|line| {
+                                line.to_lowercase()
+                                    .strip_prefix("content-length: ")
+                                    .and_then(|s| s.parse::<usize>().ok())
+                            })
+                            .unwrap();
+                        let mut payload = vec![0; length];
+                        socket.read_exact(&mut payload).await.unwrap();
+                        assert_eq!(
+                            serde_json::from_slice::<serde_json::Value>(&payload).unwrap()["isPublic"],
+                            false
+                        );
+                        posts.fetch_add(1, Ordering::SeqCst);
+                        active.store(true, Ordering::SeqCst);
+                        let body = format!(
+                            r#"{{"uri":"http://127.0.0.1:{port}","isPublic":false,"token":"blt_created_token"}}"#
+                        );
+                        socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
+                    } else if head.starts_with("DELETE ") {
+                        active.store(false, Ordering::SeqCst);
+                        socket
+                            .write_all(b"HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n")
+                            .await
+                            .unwrap();
+                    } else {
+                        assert!(
+                            head.to_lowercase()
+                                .contains("x-boxlite-authorization: bearer owner-key")
+                        );
+                        if !active.load(Ordering::SeqCst) {
+                            socket.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").await.unwrap();
+                            return;
+                        }
+                        socket
+                            .write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n")
+                            .await
+                            .unwrap();
+                        let (mut reader, mut writer) = socket.split();
+                        let _ = tokio::io::copy(&mut reader, &mut writer).await;
+                    }
+                });
+            }
+        });
+        let mut rest_box = rest_box_for(port, "tun-box");
+        rest_box.client = ApiClient::new(
+            &BoxliteRestOptions::new(format!("http://127.0.0.1:{port}")).with_api_key("owner-key"),
+        )
+        .unwrap();
+        let network = crate::litebox::NetworkHandle::new(Arc::new(rest_box));
+        let tunnel = network
+            .tunnel(
+                LOCAL_3000.parse().unwrap(),
+                TunnelOptions { is_public: false },
+            )
+            .await
+            .unwrap();
+        assert!(!tunnel.is_public());
+        assert_eq!(tunnel.token(), Some("blt_created_token"));
+        let forwarder = tunnel
+            .forward(crate::SocketAddress::Tcp("127.0.0.1:0".parse().unwrap()))
+            .await
+            .unwrap();
+        let crate::SocketAddress::Tcp(address) = forwarder.local_addr() else {
+            panic!("expected TCP")
+        };
+        for _ in 0..2 {
+            let mut socket = tokio::net::TcpStream::connect(address).await.unwrap();
+            socket.write_all(b"ping").await.unwrap();
+            let mut echoed = [0; 4];
+            socket.read_exact(&mut echoed).await.unwrap();
+            assert_eq!(&echoed, b"ping");
+        }
+        network.revoke_tunnel(3000).await.unwrap();
+        let mut socket = tokio::net::TcpStream::connect(address).await.unwrap();
+        let mut byte = [0];
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(3), socket.read(&mut byte))
+                .await
+                .unwrap()
+                .unwrap(),
+            0
+        );
+        assert_eq!(posts.load(Ordering::SeqCst), 1);
+        assert!(!active.load(Ordering::SeqCst));
+        forwarder.close().await.unwrap();
+        network
+            .tunnel(
+                LOCAL_3000.parse().unwrap(),
+                TunnelOptions { is_public: false },
+            )
+            .await
+            .unwrap();
+        assert_eq!(posts.load(Ordering::SeqCst), 2);
+        server.abort();
     }
 
     /// Serve one request with `reply`, handing back its request head.

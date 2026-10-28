@@ -22,14 +22,14 @@ use dialoguer::{Select, theme::ColorfulTheme};
 use super::api_key;
 use super::oidc::{self, DiscoveryOverrides, OidcConfig, OidcTokens, discovery};
 use crate::credentials::{self, CredentialStore, Profile};
-use crate::defaults::LOCAL_SERVE_URL;
+use crate::defaults::DEFAULT_REST_URL;
 
 const URL_ENV: &str = "BOXLITE_REST_URL";
 
 #[derive(Args, Debug, Clone)]
 pub struct LoginArgs {
     /// Server URL. Defaults to `BOXLITE_REST_URL`, the selected profile's URL,
-    /// then `LOCAL_SERVE_URL` (matching `boxlite serve`).
+    /// then `https://api.boxlite.ai`.
     #[arg(
         long,
         value_parser = clap::builder::NonEmptyStringValueParser::new()
@@ -91,7 +91,7 @@ pub async fn run(args: LoginArgs, profile_name: &str, store: &CredentialStore) -
     let url = resolve_target(&args, stored_url.as_deref())?;
 
     match method {
-        Method::ApiKey => api_key::run(Some(&url), args.api_key_stdin, profile_name, store).await,
+        Method::ApiKey => api_key::run(&url, args.api_key_stdin, profile_name, store).await,
         Method::Browser => run_browser(&args, &url, profile_name, store).await,
         Method::Device => run_device(&args, &url, profile_name, store).await,
     }
@@ -270,28 +270,8 @@ fn prompt_method() -> Result<Method> {
     })
 }
 
-// =============================================================================
-// Decision A — see plan §A.
-//
-// `resolve_target` decides which server URL the login flow points at. Today
-// the precedence is **`--url` > `BOXLITE_REST_URL` env > stored profile's
-// `url` > `LOCAL_SERVE_URL` default**, matching what the API-key flow has
-// always done. This is a safe baseline — if you have feelings about whether
-// `--profile cloud --url http://localhost:8100` should override stored OR
-// merge, or whether `BOXLITE_REST_URL` should beat a saved cloud profile
-// during a CI run, this is where to encode them.
-//
-// Things to weigh (do not implement here — change this function instead):
-//   - Should `--url` ALWAYS win, including over the active profile's URL?
-//     (current answer: yes — flag > anything else.)
-//   - Should `BOXLITE_REST_URL` override a stored OIDC profile? (current
-//     answer: yes — env beats file. Same precedence the API-key path used.)
-//   - Should `--profile` without `--url` reuse the stored URL? (current
-//     answer: yes — that's the whole point of saved profiles.)
-//   - Anything that's missing? E.g., refusing to mix `--profile cloud` with
-//     `--url http://localhost:8100` because the URL clearly belongs to a
-//     different profile.
-// =============================================================================
+/// Resolve the server URL from the flag, environment, selected profile,
+/// then the default REST API endpoint.
 fn resolve_target(args: &LoginArgs, stored_url: Option<&str>) -> Result<String> {
     if let Some(url) = args.url.as_deref() {
         return Ok(url.to_string());
@@ -306,7 +286,7 @@ fn resolve_target(args: &LoginArgs, stored_url: Option<&str>) -> Result<String> 
     if let Some(stored_url) = stored_url.filter(|url| !url.is_empty()) {
         return Ok(stored_url.to_string());
     }
-    Ok(LOCAL_SERVE_URL.to_string())
+    Ok(DEFAULT_REST_URL.to_string())
 }
 
 // =============================================================================
@@ -433,11 +413,8 @@ mod tests {
         }
     }
 
-    /// Today's `resolve_target` falls back to the local serve URL — locks
-    /// in that default so a future plan-§A change can prove it's
-    /// intentionally different.
     #[test]
-    fn resolve_target_defaults_to_local_serve() {
+    fn resolve_target_defaults_to_hosted_api() {
         // SAFETY: tests run on a fresh process by default; no env vars are
         // shared.
         // Note: if a parallel test sets BOXLITE_REST_URL we'd be wrong
@@ -455,7 +432,10 @@ mod tests {
             audience: None,
             callback_port: None,
         };
-        assert_eq!(resolve_target(&args, None).unwrap(), LOCAL_SERVE_URL);
+        assert_eq!(
+            resolve_target(&args, None).unwrap(),
+            "https://api.boxlite.ai"
+        );
     }
 
     #[test]

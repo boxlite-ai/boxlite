@@ -7,6 +7,7 @@ pragma_once = true
 cpp_compat = true
 documentation = true
 documentation_style = "c99"
+sys_includes = ["sys/socket.h"]
 
 # Style settings
 style = "both"
@@ -20,3 +21,7 @@ parse_deps = false
 # the ABI expects, so the names must remain exported.
 [export]
 include = ["BoxliteCopySourceKind"]
+exclude = ["sockaddr_storage"]
+
+[export.rename]
+sockaddr_storage = "struct sockaddr_storage"

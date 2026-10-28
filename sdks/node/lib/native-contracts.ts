@@ -1,3 +1,4 @@
+import type { SocketAddress as NativeSocketAddress } from "node:net";
 import type { CopyOptions } from "./copy.js";
 
 /**
@@ -259,7 +260,7 @@ export interface JsOutboundNetworkSpec {
 }
 
 export interface JsInboundNetworkSpec {
-  /** Inbound mode: "enabled" (reachable without sign-in) or "disabled" (unreachable from outside). */
+  /** Inbound mode: "enabled" (subject to the tunnel policy) or "disabled" (unreachable from outside). */
   mode: "enabled" | "disabled";
   /**
    * Not supported yet: a non-empty value is rejected. Exists for shape
@@ -591,14 +592,23 @@ export interface JsNetworkHandle {
     mode: "enabled" | "disabled";
     allowNet?: string[];
   }): Promise<void>;
-  /** Prepare a one-shot tunnel to a service port inside the box. */
-  tunnel(port: number): Promise<NativeBoxTunnel>;
-  /** Withdraw public access to a service port; open connections stay open. */
+  /** Prepare a one-shot tunnel to a TCP service inside the box.
+   * Invalid argument types throw synchronously at the native boundary. */
+  tunnel(
+    target: NativeSocketAddress,
+    options?: TunnelOptions,
+  ): Promise<NativeBoxTunnel>;
+  /** Revoke the tunnel for a service port; open connections stay open. */
   revokeTunnel(port: number): Promise<void>;
 }
 
 export type SocketAddress =
   { type: "tcp"; host?: string; port: number } | { type: "unix"; path: string };
+
+/** Access policy for a tunnel; `isPublic` defaults to true. */
+export interface TunnelOptions {
+  isPublic?: boolean;
+}
 
 export interface NativeTunnelForwarder {
   localAddr(): SocketAddress;
@@ -610,6 +620,8 @@ export interface NativeTunnelForwarder {
 export interface NativeBoxTunnel {
   /** Public URL of a remotely served tunnel, or null for a local one. */
   uri(): string | null;
+  isPublic(): boolean;
+  token(): string | null;
   /** Consume the tunnel and return its bidirectional byte stream. */
   connect(): Promise<NativeBoxConnection>;
   forward(listen: SocketAddress): Promise<NativeTunnelForwarder>;
