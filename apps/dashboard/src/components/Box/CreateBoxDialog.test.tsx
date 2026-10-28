@@ -107,7 +107,8 @@ describe('CreateBoxDialog per-org resource cap', () => {
     state.config = { billingApiUrl: 'http://billing.test' }
     state.pricesQuery = { data: LIVE_PRICES, isLoading: false }
     state.catalogImages = []
-    mutationMocks.refreshOrganizations.mockClear()
+    mutationMocks.refreshOrganizations.mockReset().mockResolvedValue(undefined)
+    mutationMocks.createBox.mockReset().mockResolvedValue({ id: 'created-box' })
   })
 
   afterEach(() => {
@@ -421,6 +422,86 @@ describe('CreateBoxDialog per-org resource cap', () => {
   it('refreshes organization limits when the create dialog opens', async () => {
     await renderOpen()
     expect(mutationMocks.refreshOrganizations).toHaveBeenCalledTimes(1)
+  })
+
+  function button(label: string) {
+    const found = [...document.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent === label)
+    if (!found) throw new Error(`Missing button: ${label}`)
+    return found
+  }
+
+  function deferRefresh() {
+    let resolve!: () => void
+    let reject!: (error: Error) => void
+    const promise = new Promise<void>((yes, no) => {
+      resolve = yes
+      reject = no
+    })
+    mutationMocks.refreshOrganizations.mockReturnValueOnce(promise)
+    return { resolve, reject }
+  }
+
+  it.each([
+    ['Medium', 20],
+    ['Large', 50],
+  ])('waits for refreshed limits before selecting %s', async (label, diskSize) => {
+    const refresh = deferRefresh()
+    await rerenderOpen()
+    expect(button(String(label)).matches(':disabled')).toBe(true)
+    expect(button('Create Box').disabled).toBe(true)
+    expect(button('Cancel').disabled).toBe(false)
+    await act(async () => {
+      button(String(label)).click()
+      button('Create Box').click()
+    })
+    expect(mutationMocks.createBox).not.toHaveBeenCalled()
+    await act(async () => {
+      state.org = makeOrg({ maxCpuPerBox: 16, maxMemoryPerBox: 32, maxDiskPerBox: 100 })
+      refresh.resolve()
+    })
+    await rerenderOpen()
+    expect(button(String(label)).matches(':disabled')).toBe(false)
+    await act(async () => button(String(label)).click())
+    await submit()
+    expect(toBoxApiCreateRequest(mutationMocks.createBox.mock.calls[0][0]).disk_size_gb).toBe(diskSize)
+  })
+
+  it('restores size selection and creation after the limit refresh fails', async () => {
+    const refresh = deferRefresh()
+    await rerenderOpen()
+    expect(button('Create Box').disabled).toBe(true)
+    await act(async () => refresh.reject(new Error('network unavailable')))
+    expect(button('Large').matches(':disabled')).toBe(false)
+    await act(async () => button('Large').click())
+    await submit()
+    expect(toBoxApiCreateRequest(mutationMocks.createBox.mock.calls[0][0]).disk_size_gb).toBe(10)
+  })
+
+  it('does not let an earlier opening unlock a pending refresh after reopening', async () => {
+    const earlier = deferRefresh()
+    await rerenderOpen()
+    await act(async () => root?.render(<CreateBoxDialog open={false} onOpenChange={() => {}} />))
+    const current = deferRefresh()
+    await rerenderOpen()
+    expect(mutationMocks.refreshOrganizations).toHaveBeenCalledTimes(2)
+    await act(async () => earlier.resolve())
+    expect(button('Medium').matches(':disabled')).toBe(true)
+    expect(button('Create Box').disabled).toBe(true)
+    await act(async () => current.resolve())
+    expect(button('Medium').matches(':disabled')).toBe(false)
+    expect(button('Create Box').disabled).toBe(false)
+  })
+
+  it('disables visible Custom controls when the refresh callback changes', async () => {
+    await renderOpen()
+    mutationMocks.refreshOrganizations = vi.fn().mockResolvedValue(undefined)
+    const refresh = deferRefresh()
+    await rerenderOpen()
+    const inputs = [...document.querySelectorAll<HTMLInputElement>('input[aria-label="value"]')]
+    expect(inputs).toHaveLength(3)
+    expect(inputs.every((input) => input.matches(':disabled'))).toBe(true)
+    await act(async () => refresh.resolve())
+    expect(inputs.every((input) => !input.matches(':disabled'))).toBe(true)
   })
 
   describe('the image field', () => {

@@ -589,9 +589,20 @@ export const CreateBoxDialog = ({
 
   const { selectedOrganization } = useSelectedOrganization()
   const { refreshOrganizations } = useOrganizations()
+  const [refreshingLimits, setRefreshingLimits] = useState(true)
   useEffect(() => {
-    // Organization quotas can change after subscribing or recovering a payment.
-    if (open) void refreshOrganizations().catch(() => undefined)
+    // Keep each opening locked until its own quota refresh settles.
+    setRefreshingLimits(true)
+    if (!open) return
+    let cancelled = false
+    void refreshOrganizations()
+      .catch(() => undefined)
+      .finally(() => {
+        if (!cancelled) setRefreshingLimits(false)
+      })
+    return () => {
+      cancelled = true
+    }
   }, [open, refreshOrganizations])
   const createBoxMutation = useCreateBoxMutation()
   const { data: availableVolumes = [] } = useVolumesQuery()
@@ -715,6 +726,7 @@ export const CreateBoxDialog = ({
   }
 
   const handleCreate = async () => {
+    if (refreshingLimits) return
     if (!selectedOrganization?.id) {
       toast.error('Select an organization to create a box.')
       return
@@ -848,7 +860,12 @@ export const CreateBoxDialog = ({
               content was ever these three numbers. What a box can do and what
               it costs is not an advanced concern; it gets the same visibility
               as Lifecycle and Volumes below. */}
-          <div className="flex flex-col gap-[13px] border-t border-border pt-5">
+          <fieldset
+            disabled={refreshingLimits}
+            aria-busy={refreshingLimits}
+            aria-label="Box resources"
+            className="flex min-w-0 flex-col gap-[13px] border-t border-border pt-5"
+          >
             {/* Matches the sibling `▸ Lifecycle` / `▸ Volumes` treatment rather
                 than `ascii.SectionTitle`: inside this dialog the established
                 label scale is 10px/1.2px (Name, Image), and SectionTitle's
@@ -858,6 +875,11 @@ export const CreateBoxDialog = ({
               <span style={{ color: BRAND }}>▸</span> Size
             </div>
 
+            {refreshingLimits && (
+              <p role="status" className="font-mono text-meta text-muted-foreground">
+                Refreshing limits…
+              </p>
+            )}
             <div role="group" aria-label="Size" className="grid grid-cols-2 gap-[6px] sm:grid-cols-4">
               {SIZE_PRESETS.map((p) => (
                 <AsciiChip
@@ -865,7 +887,7 @@ export const CreateBoxDialog = ({
                   selected={sizePreset === p.id}
                   aria-pressed={sizePreset === p.id}
                   onClick={() => applySizePreset(p.id)}
-                  className="px-2 py-[7px] text-[12px]"
+                  className="px-2 py-[7px] text-[12px] disabled:cursor-wait disabled:opacity-50"
                 >
                   {p.label}
                 </AsciiChip>
@@ -922,7 +944,7 @@ export const CreateBoxDialog = ({
                 />
               </div>
             )}
-          </div>
+          </fieldset>
 
           {/* Volumes and lifecycle are real controls, but they are the third
               and fourth decision on a screen whose promise is "a box for your
@@ -1078,7 +1100,12 @@ export const CreateBoxDialog = ({
             type="button"
             onClick={handleCreate}
             disabled={
-              submitting || !selectedOrganization?.id || !nameValid || Boolean(lifecycleError) || Boolean(mountError)
+              refreshingLimits ||
+              submitting ||
+              !selectedOrganization?.id ||
+              !nameValid ||
+              Boolean(lifecycleError) ||
+              Boolean(mountError)
             }
             className="bg-primary px-5 py-[11px] text-[13px] font-semibold text-primary-foreground transition-opacity hover:opacity-85 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/35 disabled:cursor-not-allowed disabled:opacity-50 sm:py-[10px]"
           >
