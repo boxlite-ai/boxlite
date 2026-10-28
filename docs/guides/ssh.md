@@ -139,16 +139,9 @@ body and calls the guest once.
 | `GET`    | membership    | None      | `started` or `stopped` only; a stopped box reports disabled status with generation `0`. Other states answer `409`. |
 | `DELETE` | `write:boxes` | None      | Same as `GET`; idempotent. |
 
-A box already starting (`creating`, `starting`, `restoring`) is waited for, even
-with an explicit `cmd` or `entrypoint`, because configure joins that start instead
-of submitting one. This includes a start the API has accepted before the runner
-reports its new state: a box still stored as `stopped` or `unknown` with desired
-state `started` is already starting or being created. With auto-resume enabled,
-you can request start, then configure SSH while that start completes.
-The API waits for readiness before forwarding configure; the runner also
-checks that the box is running and otherwise returns `409 invalid_state`.
-Before submitting a start, the API rechecks the SSH startup restrictions against
-the current box state under its lifecycle lock.
+With auto-resume enabled, configuring SSH waits for a box already starting
+(`creating`, `starting`, `restoring`), even with an explicit `cmd` or `entrypoint`.
+You can request start, then configure SSH while that start completes.
 
 Errors follow the [HTTP control](#http-control-with-boxlite-serve) rules, with two
 differences:

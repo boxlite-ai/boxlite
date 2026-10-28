@@ -492,6 +492,15 @@ The exec, signal, resize, files, and metrics handlers are registered as
 catch-all reverse proxies to the box's assigned runner; the methods shown are
 the portable contract, which the runner's own route registration enforces.
 
+SSH configuration uses the reported lifecycle state for admission: a stored
+`stopped` or `unknown` state with desired state `started` is treated as `starting`
+or `creating`, respectively. With auto-resume enabled, configuration waits for
+that start, including for boxes with an explicit `cmd` or `entrypoint`. Before
+submitting a new start, the API rechecks SSH startup restrictions against the
+current box state under its lifecycle lock. The API waits for readiness before
+forwarding configuration; the runner checks that the box is running and returns
+`409 invalid_state` if that check fails.
+
 </details>
 
 <details>
