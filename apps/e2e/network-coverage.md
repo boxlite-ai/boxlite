@@ -124,8 +124,35 @@ The regression covers nested and deprecated flat creation, verifies that no
 box remains after rejection, and accepts disabled with omitted or empty rules.
 The API and Runner fix is the production change accompanying these cases.
 
-The CLI forwarding case also fails before revoke: the private descriptor's
-preview returns the guest marker, but the CLI's local `--listen` connection
-closes without an HTTP response. This reproduces with HTTP and HTTPS preview
-endpoints; Python forwarding passes. The CLI case remains a failing regression
-pending diagnosis, rather than accepting an arbitrary connection error.
+The CLI listener prints `tcp://host:port`. The forwarding case now checks that
+prefix and replaces it with `http://` before probing the listener. Previously
+it built `http://tcp://host:port` and contacted the wrong host. Both CLI network
+cases pass on infra-local with the original guest-response, revoke and
+no-reprepare assertions intact.
+
+## Half-close diagnosis on infra-local
+
+Python and Node still lose the response after closing only their write side.
+Running both cases with `PYTEST_ADDOPTS=--runxfail` exposes the failures.
+A plain TCP CONNECT to the real guest also returns zero response bytes,
+bypassing both the SDK stream wrappers and the temporary TLS ingress.
+
+Two server boundaries independently discard the reply:
+
+- [AcceptConnect](../libs/common-go/pkg/proxy/connect.go) retains the HTTP
+  server's buffered reader. Reading EOF through it cancels the request context;
+  [ProxyBidirectionalStream](../libs/common-go/pkg/proxy/proxy.go) then closes
+  both directions. Proxy and Runner both use this combination. A real TCP
+  reproduction loses the response with the request context; a diagnostic
+  control detaching that context receives it. This control is evidence, not
+  a production fix that discards cancellation requirements.
+- The [guest tunnel adapter](../../src/deps/libgvproxy-sys/gvproxy-bridge/tunnel_mux.go)
+  delegates to `gvisor-tap-vsock v0.8.7`'s `tcpproxy.DialProxy.HandleConn`.
+  It returns after either copy direction ends and closes both sockets. An
+  independent test through `dialFirstTunnel` confirms that a guest reply sent
+  after request EOF never reaches the client.
+
+Enabling `allowHalfOpen` on the temporary local TLS relay alone does not fix
+these failures. That diagnostic configuration was restored. No SDK or server
+code changed during this investigation; both strict half-close xfails remain
+open. The diagnosis does not establish the cause on an older cloud deployment.

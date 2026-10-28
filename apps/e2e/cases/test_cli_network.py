@@ -66,7 +66,8 @@ async def test_cli_network_forward_cannot_reprepare_after_revoke(cli, rt, image,
             local_address = (await asyncio.wait_for(process.stdout.readline(), 10)).decode().strip()
             uri = descriptor["uri"]
             await ready(uri, marker, {"X-BoxLite-Access-Token": descriptor["token"]})
-            local_uri = "http://" + local_address
+            assert local_address.startswith("tcp://"), "CLI listener must return a TCP address"
+            local_uri = "http://" + local_address.removeprefix("tcp://")
             try:
                 reply = await access(local_uri)
             except OSError as error:
