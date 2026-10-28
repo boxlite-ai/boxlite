@@ -11,7 +11,7 @@ import { RoutePath } from '@/enums/RoutePath'
 import { useCreateBoxMutation } from '@/hooks/mutations/useCreateBoxMutation'
 import { useConfig } from '@/hooks/useConfig'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
-import { useOrganizations } from '@/hooks/useOrganizations'
+import { useApi } from '@/hooks/useApi'
 import { getBoxRouteId } from '@/lib/box-identity'
 import { boxHourlyPrice, formatPriceCents, type BoxSpec } from '@/lib/box-price'
 import { handleApiError } from '@/lib/error-handling'
@@ -588,28 +588,37 @@ export const CreateBoxDialog = ({
   const setOpen = onOpenChange ?? setInternalOpen
 
   const { selectedOrganization } = useSelectedOrganization()
-  const { refreshOrganizations } = useOrganizations()
-  const [refreshingLimits, setRefreshingLimits] = useState(true)
+  const { organizationsApi } = useApi()
+  const [limitsRefresh, setLimitsRefresh] = useState<{
+    organization: typeof selectedOrganization
+    limits?: OrgPerBoxLimits
+  }>()
+  const currentRefresh = limitsRefresh?.organization === selectedOrganization ? limitsRefresh : undefined
+  const refreshingLimits = Boolean(selectedOrganization && !currentRefresh)
   useEffect(() => {
-    // Keep each opening locked until its own quota refresh settles.
-    setRefreshingLimits(true)
-    if (!open) return
+    setLimitsRefresh(undefined)
+    if (!open || !selectedOrganization) return
     let cancelled = false
-    void refreshOrganizations()
-      .catch(() => undefined)
-      .finally(() => {
-        if (!cancelled) setRefreshingLimits(false)
+    void organizationsApi
+      .getOrganization(selectedOrganization.id)
+      .then(({ data }) => {
+        if (!cancelled) setLimitsRefresh({ organization: selectedOrganization, limits: data })
+      })
+      .catch((error) => {
+        if (cancelled) return
+        handleApiError(error, 'Failed to refresh organization limits')
+        setLimitsRefresh({ organization: selectedOrganization })
       })
     return () => {
       cancelled = true
     }
-  }, [open, refreshOrganizations])
+  }, [open, organizationsApi, selectedOrganization])
   const createBoxMutation = useCreateBoxMutation()
   const { data: availableVolumes = [] } = useVolumesQuery()
   const { data: catalogImages = [] } = useImagesQuery()
 
   // Per-box ceilings for the current org (backend rejects a create above these).
-  const limits = resolvePerBoxLimits(selectedOrganization)
+  const limits = resolvePerBoxLimits(currentRefresh?.limits ?? selectedOrganization)
 
   // A DEFAULT value can exceed a stricter per-org cap (e.g. DEFAULTS.disk=10
   // vs an org's maxDiskPerBox=3), which would otherwise send an over-limit
@@ -665,7 +674,8 @@ export const CreateBoxDialog = ({
   }, [open, initialCpu, initialMemory, initialDisk, prefillVolume, prefillImage])
 
   useEffect(() => {
-    if (!open) return
+    // Stored list quotas must not truncate an existing selection while detail loads.
+    if (!open || refreshingLimits) return
 
     const nextCpu = limits.cpu == null ? cpu : Math.min(cpu, limits.cpu)
     const nextMemory = limits.memory == null ? memory : Math.min(memory, limits.memory)
@@ -680,7 +690,7 @@ export const CreateBoxDialog = ({
       memory: limits.memory != null && (nextMemory !== memory || (current.memory && nextMemory >= limits.memory)),
       disk: limits.disk != null && (nextDisk !== disk || (current.disk && nextDisk >= limits.disk)),
     }))
-  }, [open, cpu, memory, disk, limits.cpu, limits.memory, limits.disk])
+  }, [open, refreshingLimits, cpu, memory, disk, limits.cpu, limits.memory, limits.disk])
 
   // What the catalog already holds, as references that can be typed back in.
   // A curated image goes in under its short name — that is what the API
