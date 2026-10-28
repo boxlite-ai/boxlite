@@ -40,9 +40,9 @@ pub struct CheckpointArgs {
 pub enum CheckpointCommand {
     /// Inspect external dependencies without provisioning or starting a box
     Inspect { path: PathBuf },
-    /// Write a paused box's memory, devices and disks to one new file
+    /// Write a paused box's memory, devices and disks to a new two-file directory
     Export(ExportArgs),
-    /// Create a new, paused box from a checkpoint file
+    /// Create a new, paused box from a checkpoint directory
     Import(ImportArgs),
 }
 
@@ -51,20 +51,14 @@ pub struct ExportArgs {
     /// Name or ID of a paused box
     pub target: String,
 
-    /// Checkpoint file to create; it must not exist yet
+    /// Checkpoint directory to create; it must not exist yet
     pub path: PathBuf,
-    /// Explicit resource/recovery-point/root/object binding JSON input
-    #[arg(long)]
-    pub bindings: PathBuf,
 }
 
 #[derive(Args, Debug)]
 pub struct ImportArgs {
-    /// Checkpoint file written by `boxlite checkpoint export`
+    /// Checkpoint directory written by `boxlite checkpoint export`
     pub path: PathBuf,
-    /// Explicit resource binding JSON input, never a checkpoint artifact
-    #[arg(long)]
-    pub bindings: PathBuf,
 
     /// Assign a name to the new box
     #[arg(long)]
@@ -113,20 +107,16 @@ pub async fn checkpoint(args: CheckpointArgs, global: &GlobalFlags) -> anyhow::R
         }
         CheckpointCommand::Export(args) => {
             let runtime = local_runtime(global)?;
-            let provider: boxlite::LocalCheckpointProvider =
-                serde_json::from_slice(&std::fs::read(&args.bindings)?)?;
             let path = std::path::absolute(&args.path)?;
             let litebox = find_box(&runtime, &args.target).await?;
-            litebox.export_checkpoint(&path, &provider).await?;
+            litebox.export_checkpoint(&path).await?;
             println!("{}", path.display());
         }
         CheckpointCommand::Import(args) => {
             let runtime = local_runtime(global)?;
-            let provider: boxlite::LocalCheckpointProvider =
-                serde_json::from_slice(&std::fs::read(&args.bindings)?)?;
             let path = std::path::absolute(&args.path)?;
             let options = CheckpointImportOptions { name: args.name };
-            let litebox = runtime.import_checkpoint(&path, options, &provider).await?;
+            let litebox = runtime.import_checkpoint(&path, options).await?;
             println!("{}", litebox.id());
         }
     }
@@ -176,22 +166,12 @@ mod tests {
     fn checkpoint_subcommands_parse_their_operands() {
         let Commands::Checkpoint(CheckpointArgs {
             command: CheckpointCommand::Export(export),
-        }) = parse(&[
-            "boxlite",
-            "checkpoint",
-            "export",
-            "web",
-            "checkpoint-dir",
-            "--bindings",
-            "bindings.json",
-        ])
-        .command
+        }) = parse(&["boxlite", "checkpoint", "export", "web", "checkpoint-dir"]).command
         else {
             panic!("expected checkpoint export");
         };
         assert_eq!(export.target, "web");
         assert_eq!(export.path, PathBuf::from("checkpoint-dir"));
-        assert_eq!(export.bindings, PathBuf::from("bindings.json"));
 
         let Commands::Checkpoint(CheckpointArgs {
             command: CheckpointCommand::Import(import),
@@ -202,8 +182,6 @@ mod tests {
             "--name",
             "web2",
             "web.boxckpt",
-            "--bindings",
-            "bindings.json",
         ])
         .command
         else {
@@ -280,27 +258,12 @@ mod tests {
     #[tokio::test]
     async fn import_of_a_non_checkpoint_creates_no_box() {
         let temp = tempfile::tempdir().expect("temp");
-        let bindings = temp.path().join("bindings.json");
-        std::fs::write(
-            &bindings,
-            serde_json::to_vec(&boxlite::LocalCheckpointProvider::default()).unwrap(),
-        )
-        .unwrap();
         let file = temp.path().join("not-a-checkpoint");
         std::fs::write(&file, b"plain bytes").expect("write");
         let home = temp.path().join("boxlite");
         let home = home.to_str().expect("utf-8 home");
         let file = file.to_str().expect("utf-8 path");
-        let cli = parse(&[
-            "boxlite",
-            "--home",
-            home,
-            "checkpoint",
-            "import",
-            file,
-            "--bindings",
-            bindings.to_str().unwrap(),
-        ]);
+        let cli = parse(&["boxlite", "--home", home, "checkpoint", "import", file]);
         let Commands::Checkpoint(args) = cli.command else {
             panic!("expected checkpoint");
         };

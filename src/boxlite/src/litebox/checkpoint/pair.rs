@@ -62,6 +62,9 @@ pub struct CheckpointDependencies {
     pub qcow2_bytes: u64,
     pub qcow2_sha256: String,
     pub shares: Vec<ShareDependency>,
+    /// Concrete local roots which must remain available for import and cold starts.
+    pub local_roots: std::collections::BTreeMap<String, std::path::PathBuf>,
+    pub boot_disk_path: Option<std::path::PathBuf>,
     pub disk_dependencies: serde_json::Value,
     #[serde(skip_serializing)]
     pub(crate) application: serde_json::Value,
@@ -80,6 +83,8 @@ pub(crate) struct Application {
     pub options: crate::BoxOptions,
     pub container_image_config: crate::images::ContainerImageConfig,
     pub outbound_policy: Option<crate::runtime::options::OutboundNetworkConfig>,
+    #[serde(default)]
+    pub local_paths: Option<super::provider::LocalPaths>,
 }
 
 pub(crate) fn invalid(message: impl std::fmt::Display) -> BoxliteError {
@@ -319,6 +324,15 @@ pub(crate) fn inspect_memory(mut memory: &File) -> BoxliteResult<CheckpointDepen
         qcow2_bytes: number(40),
         qcow2_sha256: hex::encode(&header[112..144]),
         shares: shares(&metadata["fs"])?,
+        local_roots: metadata["application"]["local_paths"]["shares"]
+            .as_object()
+            .into_iter()
+            .flatten()
+            .filter_map(|(tag, root)| root["path"].as_str().map(|path| (tag.clone(), path.into())))
+            .collect(),
+        boot_disk_path: metadata["application"]["local_paths"]["boot_disk"]
+            .as_str()
+            .map(Into::into),
         disk_dependencies: metadata["disk_dependencies"].clone(),
         application: metadata["application"].clone(),
     })

@@ -5,7 +5,8 @@
  *
  * Holds state that only a continued process has: a random marker generated at
  * start and kept only in heap memory, a counter, open files on the container
- * disk and on a virtio-fs share (one of each unlinked), and a MAP_SHARED
+ * disk (including an unlinked file) and linked files on a virtio-fs share,
+ * and a MAP_SHARED
  * mapping of a share file, which must be a DAX file. Every tick it checks that
  * each file and the mapping still hold exactly the value it wrote last, writes
  * the next value and prints
@@ -115,7 +116,8 @@ static void print_mount(const char *dir) {
  * table. A control file on the container disk starts probes after import. */
 static int missing_orphans(const char *disk, const char *share) {
     const char *names[] = {"whole.dat", "handle.dat", "normal.dat"};
-    int fds[4];
+    int fds[6];
+    off_t positions[2] = {4096, 8192};
     char path[4096], probe[4096];
     void *buffer = NULL;
     if (posix_memalign(&buffer, 4096, 4096) != 0)
@@ -126,10 +128,15 @@ static int missing_orphans(const char *disk, const char *share) {
         fds[i] = open(path, O_RDWR | O_DIRECT);
         if (fds[i] < 0)
             die("direct file setup");
-        if (i == 1) {
-            fds[3] = open(path, O_RDWR | O_DIRECT);
+        if (i == 2) {
+            fds[3] = open(path, O_RDWR | O_DIRECT | O_DSYNC);
             if (fds[3] < 0)
                 die("second independent handle");
+            for (int j = 0; j < 2; j++) {
+                fds[4 + j] = open(path, O_RDONLY | O_DIRECT);
+                if (fds[4 + j] < 0 || lseek(fds[4 + j], positions[j], SEEK_SET) != positions[j])
+                    die("independent position setup");
+            }
         }
         if (i < 2 && unlink(path) != 0)
             die("unlink direct file");
@@ -171,10 +178,19 @@ static int missing_orphans(const char *disk, const char *share) {
                     pwrite(fds[i], buffer, 4096, 4 * 1024 * 1024) != 4096 || fsync(fds[i]) != 0)
                     die("surviving direct handle");
             }
+            if ((fcntl(fds[3], F_GETFL) & (O_DIRECT | O_DSYNC)) != (O_DIRECT | O_DSYNC) ||
+                (fcntl(fds[2], F_GETFL) & O_DSYNC) != 0)
+                die("independent status flags");
+            for (int j = 0; j < 2; j++) {
+                if (lseek(fds[4 + j], 0, SEEK_CUR) != positions[j] ||
+                    read(fds[4 + j], buffer, 4096) != 4096 || ((char *)buffer)[0] != 'Q')
+                    die("independent guest position");
+                positions[j] += 4096;
+            }
             if (map[0] != 'M')
                 die("surviving DAX mapping");
             __atomic_store_n(watermark, ++n, __ATOMIC_SEQ_CST);
-            printf("probe pid=%d n=%llu normal=ok other-handle=ok dax=ok\n", getpid(), n);
+            printf("probe pid=%d n=%llu normal=ok other-handle=ok flags=ok positions=ok dax=ok\n", getpid(), n);
         }
         struct timespec delay = {0, 200 * 1000 * 1000};
         nanosleep(&delay, NULL);
@@ -208,7 +224,7 @@ int main(int argc, char **argv) {
         {"disk", open_file(disk, "disk.dat", 0)},
         {"disk-unlinked", open_file(disk, "unlinked.dat", 1)},
         {"share", open_file(share, "share.dat", 0)},
-        {"share-unlinked", open_file(share, "unlinked.dat", 1)},
+        {"share-secondary", open_file(share, "secondary.dat", 0)},
     };
     const size_t nfiles = sizeof(files) / sizeof(files[0]);
 

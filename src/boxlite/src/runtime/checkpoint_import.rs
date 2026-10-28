@@ -6,7 +6,7 @@ use crate::litebox::{
     checkpoint::{
         RestoredDisk, RestoredStorage,
         pair::{self, Application},
-        provider::CheckpointImportProvider,
+        provider::{LocalCheckpointProvider, check_handle_flags},
     },
 };
 use crate::lock::LockId;
@@ -41,15 +41,16 @@ pub(crate) async fn import_checkpoint(
     runtime: &SharedRuntimeImpl,
     path: &Path,
     options: CheckpointImportOptions,
-    provider: &dyn CheckpointImportProvider,
 ) -> BoxliteResult<LiteBox> {
     support::check_host(Host::current())?;
     let pair = pair::open(path)?;
-    let mut bindings = provider.bind(&pair.dependencies).await?;
-    bindings.validate(&pair.dependencies)?;
-    pair.verify_disk()?;
     let application: Application =
         serde_json::from_value(pair.dependencies.application.clone()).map_err(invalid)?;
+    let local_paths = application.local_paths.as_ref().ok_or_else(|| invalid(
+        "unsupported provider-era checkpoint: automatic local paths are absent; export a local-path checkpoint"
+    ))?;
+    let mut bindings = LocalCheckpointProvider::bind(&pair.dependencies, local_paths)?;
+    pair.verify_disk()?;
     let mut box_options = application.options.clone();
     if u16::from(
         box_options
@@ -92,8 +93,8 @@ pub(crate) async fn import_checkpoint(
         .as_u64()
         .ok_or_else(|| invalid("invalid boot length"))?;
     let mut cached_pin = None;
-    let boot_path = if let Some(path) = bindings.boot_disk.take() {
-        path
+    let boot_path = if local_paths.boot_disk.try_exists().map_err(invalid)? {
+        local_paths.boot_disk.clone()
     } else {
         let records = runtime
             .base_disk_mgr
@@ -116,7 +117,7 @@ pub(crate) async fn import_checkpoint(
             }
         }
         found.ok_or_else(|| {
-            invalid("exact readonly boot disk is absent; supply its digest binding")
+            invalid("exact readonly boot disk is absent at its saved path and in the runtime cache")
         })?
     };
     let boot_path = boot_path.canonicalize().map_err(invalid)?;
@@ -167,7 +168,6 @@ pub(crate) async fn import_checkpoint(
             handler: None,
             lock: None,
             armed: true,
-            lease: Some(bindings.lease.clone()),
         };
         layout.prepare()?;
         let private_disk = layout.root().join("disks/disk.qcow2");
@@ -251,9 +251,7 @@ pub(crate) async fn import_checkpoint(
                     }
                     let flags: i32 =
                         serde_json::from_value(handle["flags"].clone()).map_err(invalid)?;
-                    if flags & (libc::O_CREAT | libc::O_TRUNC | libc::O_EXCL) != 0 {
-                        return Err(invalid("unsafe boot handle flags"));
-                    }
+                    check_handle_flags(flags)?;
                     let file = OpenOptions::new()
                         .read(true)
                         .custom_flags(flags | libc::O_NOFOLLOW | libc::O_CLOEXEC)
@@ -310,24 +308,6 @@ pub(crate) async fn import_checkpoint(
                 sha256: boot_hash,
                 base_id: cached_pin.clone(),
             }),
-            bindings: pair
-                .dependencies
-                .shares
-                .iter()
-                .zip(&bindings.shares)
-                .filter(|(share, _)| !share.vm_owned)
-                .map(
-                    |(share, bound)| crate::litebox::checkpoint::RestartBinding {
-                        tag: share.tag.clone(),
-                        root: bound.root.clone(),
-                        objects: share
-                            .objects
-                            .iter()
-                            .filter_map(|object| object.reference.clone())
-                            .collect(),
-                    },
-                )
-                .collect(),
         };
         let launch = ImportLaunch {
             console_output: layout.console_output_path(),
@@ -405,6 +385,10 @@ pub(crate) async fn import_checkpoint(
         state.start_mode = Some(support::StartMode::Owner { protocol: 2 });
         state.outbound_policy = application.outbound_policy;
         state.checkpoint_guest = Some(application.guest);
+        state.checkpoint_paths = application.local_paths.map(|mut paths| {
+            paths.boot_disk = storage.disks[1].path.clone();
+            paths
+        });
         state.restored_storage = Some(storage);
         let lock = runtime.lock_manager.allocate()?;
         attempt.lock = Some(lock);
@@ -415,20 +399,15 @@ pub(crate) async fn import_checkpoint(
                 .store()
                 .add_ref(pin, box_id.as_str())?;
         }
-        Ok((attempt, config, state, bindings.lease))
+        Ok((attempt, config, state))
     });
-    let (attempt, config, state, lease) = task.await.map_err(invalid)??;
+    let (attempt, config, state) = task.await.map_err(invalid)??;
     if canceller.0.is_cancelled() {
         return Err(BoxliteError::Stopped(
             "checkpoint import cancelled before publication".into(),
         ));
     }
     let box_id = config.id.clone();
-    runtime
-        .checkpoint_leases
-        .lock()
-        .map_err(|_| invalid("resource lease lock poisoned"))?
-        .insert(box_id.clone(), lease);
     runtime.box_manager.add_box(&config, &state)?;
     let (box_impl, inserted) = runtime.get_or_create_box_impl(config, state);
     if !inserted {
@@ -493,7 +472,6 @@ struct Attempt {
     handler: Option<Box<dyn VmmHandler>>,
     lock: Option<LockId>,
     armed: bool,
-    lease: Option<std::sync::Arc<dyn crate::CheckpointLease>>,
 }
 
 impl Attempt {
@@ -524,9 +502,6 @@ impl Drop for Attempt {
             ) {
                 tracing::error!(pid, %error, home = %self.layout.root().display(),
                     "Failed import writer could not be joined; retaining attempt resources");
-                if let Some(lease) = self.lease.take() {
-                    std::mem::forget(lease);
-                }
                 return;
             }
         }
@@ -536,9 +511,6 @@ impl Drop for Attempt {
             tracing::warn!(error = %e, "Failed to free the import's lock");
         }
         if let Some(id) = self.layout.root().file_name().and_then(|id| id.to_str()) {
-            if let Ok(mut leases) = self.runtime.checkpoint_leases.lock() {
-                leases.retain(|box_id, _| box_id.as_str() != id);
-            }
             if let Err(error) = self
                 .runtime
                 .base_disk_mgr

@@ -625,7 +625,6 @@ mod tests {
             &runtime,
             std::path::Path::new("/tmp/ignored.ckpt"),
             Default::default(),
-            &crate::LocalCheckpointProvider::default(),
         )
         .await;
         assert!(

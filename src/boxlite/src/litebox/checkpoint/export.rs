@@ -3,7 +3,7 @@ use super::{
     BoxImpl,
     capture::{self, CancelOnDrop, Session},
     pair::{self, Application},
-    provider::{CheckpointExportProvider, CheckpointExportRequest},
+    provider::LocalCheckpointProvider,
 };
 use crate::images::ContainerImageConfig;
 use crate::litebox::init::restart_image_config;
@@ -313,17 +313,19 @@ fn publish(
 }
 
 impl BoxImpl {
-    pub(crate) async fn export_checkpoint(
-        &self,
-        path: &Path,
-        provider: &dyn CheckpointExportProvider,
-    ) -> BoxliteResult<()> {
+    pub(crate) async fn export_checkpoint(&self, path: &Path) -> BoxliteResult<()> {
         let reservation = self
             .reserve(crate::litebox::operation::Action::Checkpoint)
             .await?;
         self.require_checkpoint("export a checkpoint")?;
         let (parent_path, name) = destination(path)?;
         let persisted = self.runtime.box_manager.update_box(self.id())?;
+        let local_paths = persisted.checkpoint_paths.clone().ok_or_else(|| {
+            BoxliteError::Unsupported(
+                "source has no saved local checkpoint paths; stop and restart it before export"
+                    .into(),
+            )
+        })?;
         let guest = persisted.checkpoint_guest.ok_or_else(|| {
             BoxliteError::InvalidState(
                 "no recorded paused guest identity; resume and pause again".into(),
@@ -343,6 +345,7 @@ impl BoxImpl {
             options,
             container_image_config: self.boot_image_config().await?,
             outbound_policy: persisted.outbound_policy,
+            local_paths: Some(local_paths.clone()),
         };
         let session = Session::begin(self.checkpoint_control(), false).await?;
         let prepared = async {
@@ -354,12 +357,11 @@ impl BoxImpl {
                 Vec::new(),
             )
             .await?;
-            provider
-                .prepare(CheckpointExportRequest {
-                    shares: pair::shares(&reply.metadata)?,
-                    objects: files.into_iter().map(File::from).collect(),
-                })
-                .await
+            LocalCheckpointProvider::prepare(
+                &pair::shares(&reply.metadata)?,
+                files.into_iter().map(File::from).collect(),
+                &local_paths,
+            )
         }
         .await;
         let references = match prepared {

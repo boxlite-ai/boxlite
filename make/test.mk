@@ -261,9 +261,9 @@ test\:unit\:rust:
 # CLI integration binaries need a VM; this target runs only inline unit-test modules.
 test\:unit\:cli:
 	@if command -v cargo-nextest >/dev/null 2>&1; then \
-		cargo nextest run -p boxlite-cli $(NEXTEST_PROFILE_FLAG) -E 'test(::tests::)'; \
+		cargo nextest run -p boxlite-cli $(NEXTEST_PROFILE_FLAG) -E 'test(::tests::)$(if $(FILTER), and test(~$(FILTER)),)'; \
 	else \
-		cargo test -p boxlite-cli --bins -- --test-threads=1 '::tests::'; \
+		cargo test -p boxlite-cli --bins -- --test-threads=1 $(if $(FILTER),$(FILTER),'::tests::'); \
 	fi
 
 # Hypervisor and VMM crate unit tests alone; they need no VM and no vendored
@@ -287,7 +287,8 @@ test\:shim\:linkage:
 	@bash "$(PROJECT_ROOT)/scripts/test/test-shim-linkage.sh"
 
 # Checkpoint acceptance (src/boxlite/tests/checkpoint_acceptance.rs): one box is
-# paused, exported, destroyed and imported into an empty runtime, and the same
+# paused, exported and stopped with paths retained, then imported into an empty
+# runtime, and the same
 # guest process must continue. The test is #[ignore]d so ordinary suites never
 # count it; only these targets run or build it, and they fail off Linux x86_64.
 CHECKPOINT_HELPER ?= $(or $(CARGO_TARGET_DIR),$(CURDIR)/target)/checkpoint-helper/checkpoint_helper

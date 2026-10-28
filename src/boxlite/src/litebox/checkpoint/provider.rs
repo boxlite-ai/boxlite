@@ -1,6 +1,5 @@
-//! Caller-owned storage retention and explicit local resource bindings.
+//! Concrete local paths for checkpoint dependencies; no descriptors outlive an operation.
 use super::pair::{CheckpointDependencies, ObjectReference, ShareDependency, invalid};
-use async_trait::async_trait;
 use boxlite_shared::errors::BoxliteResult;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -8,50 +7,78 @@ use std::fs::{File, OpenOptions};
 use std::os::fd::{AsRawFd, FromRawFd};
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Component, Path, PathBuf};
-use std::sync::Arc;
 
-#[derive(Debug)]
-pub struct CheckpointExportRequest {
-    pub shares: Vec<ShareDependency>,
-    /// Duplicated source objects in share/object order, including recipe objects.
-    pub objects: Vec<File>,
+const LOCAL_REFERENCE: &str = "local-path-v1";
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct LocalPaths {
+    pub version: u32,
+    pub shares: BTreeMap<String, LocalRoot>,
+    pub boot_disk: PathBuf,
 }
 
-#[expect(
-    clippy::double_must_use,
-    reason = "async_trait adds must_use to future-returning methods"
-)]
-#[async_trait]
-pub trait CheckpointExportProvider: Send + Sync {
-    /// Retain external objects for the caller-defined checkpoint lifetime,
-    /// including after source destruction. Return external references only.
-    async fn prepare(
-        &self,
-        request: CheckpointExportRequest,
-    ) -> BoxliteResult<Vec<Vec<ObjectReference>>>;
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct LocalRoot {
+    pub path: PathBuf,
+    pub device: u64,
+    pub inode: u64,
 }
 
-/// A provider lease complements durable references; process-local FDs alone
-/// never satisfy retention across runtime shutdown and future cold starts.
-pub trait CheckpointLease: std::fmt::Debug + Send + Sync {}
-impl CheckpointLease for () {}
+impl LocalPaths {
+    pub(crate) fn capture(spec: &crate::vmm::InstanceSpec) -> BoxliteResult<Self> {
+        let shares = spec
+            .fs_shares
+            .shares()
+            .iter()
+            .map(|share| Ok((share.tag.clone(), LocalRoot::capture(&share.host_path)?)))
+            .collect::<BoxliteResult<_>>()?;
+        let crate::rootfs::guest::Strategy::Disk { disk_path, .. } = &spec.guest_rootfs.strategy
+        else {
+            return Err(invalid("local checkpoint needs a readonly boot disk"));
+        };
+        Ok(Self {
+            version: 1,
+            shares,
+            boot_disk: disk_path.canonicalize().map_err(invalid)?,
+        })
+    }
+}
+
+impl LocalRoot {
+    pub(crate) fn capture(path: &Path) -> BoxliteResult<Self> {
+        let path = path.canonicalize().map_err(invalid)?;
+        let file = path_object(&path, Path::new("."), object_flags())?;
+        let stat = file.metadata().map_err(invalid)?;
+        Ok(Self {
+            path,
+            device: stat.dev(),
+            inode: stat.ino(),
+        })
+    }
+}
 
 #[derive(Debug)]
-pub struct BoundShare {
+pub(crate) struct BoundShare {
     pub root: PathBuf,
-    /// Saved object order; None is allowed only for a saved unlinked regular file.
     pub objects: Vec<Option<File>>,
-    /// Missing descriptions may be omitted only for saved unlinked regular files.
     pub handles: BTreeMap<u64, File>,
     pub dax: Vec<(u64, bool, File)>,
 }
 
 #[derive(Debug)]
-pub struct CheckpointBindings {
+pub(crate) struct CheckpointBindings {
     pub shares: Vec<BoundShare>,
-    /// Exact readonly boot content, or None to use the verified runtime cache.
-    pub boot_disk: Option<PathBuf>,
-    pub lease: Arc<dyn CheckpointLease>,
+}
+
+// Reject these before opening: saved handles must never create or truncate.
+pub(crate) fn check_handle_flags(flags: i32) -> BoxliteResult<()> {
+    let creation = libc::O_CREAT | libc::O_TRUNC | libc::O_EXCL;
+    #[cfg(target_os = "linux")]
+    let creation = creation | (libc::O_TMPFILE & !libc::O_DIRECTORY);
+    if flags & creation != 0 {
+        return Err(invalid("unsafe saved handle creation flags"));
+    }
+    Ok(())
 }
 
 fn status_flags(flags: i32) -> i32 {
@@ -207,9 +234,7 @@ impl CheckpointBindings {
                     .ok_or_else(|| invalid("handle object absent"))?;
                 let expected: i32 =
                     serde_json::from_value(handle["flags"].clone()).map_err(invalid)?;
-                if expected & (libc::O_CREAT | libc::O_TRUNC | libc::O_EXCL) != 0 {
-                    return Err(invalid("unsafe saved handle creation flags"));
-                }
+                check_handle_flags(expected)?;
                 let Some(file) = bound.handles.get(&id) else {
                     if !saved.allows_missing() {
                         return Err(invalid("retained handle FD absent"));
@@ -292,70 +317,6 @@ impl CheckpointBindings {
     }
 }
 
-#[expect(
-    clippy::double_must_use,
-    reason = "async_trait adds must_use to future-returning methods"
-)]
-#[async_trait]
-pub trait CheckpointImportProvider: Send + Sync {
-    /// Prepare persistent roots, available objects and independent access descriptions.
-    /// Only saved unlinked regular objects/handles may be explicitly absent.
-    /// Roots and recovery points must remain available for the box's lifetime.
-    async fn bind(
-        &self,
-        dependencies: &CheckpointDependencies,
-    ) -> BoxliteResult<CheckpointBindings>;
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, untagged)]
-pub enum LocalObject {
-    Path {
-        path: PathBuf,
-    },
-    Fd {
-        fd: i32,
-        #[serde(default)]
-        handles: BTreeMap<u64, i32>,
-        #[serde(default)]
-        dax_read: Option<i32>,
-        #[serde(default)]
-        dax_write: Option<i32>,
-    },
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LocalResource {
-    pub recovery_point: String,
-    pub root: PathBuf,
-    /// Source-side locators may differ from a prepared recovery root.
-    pub source_root: Option<PathBuf>,
-    pub objects: BTreeMap<String, LocalObject>,
-}
-
-/// Explicit input configuration, never a third checkpoint artifact. No search,
-/// tree walk, filesystem content copying, or retention daemon is performed.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LocalCheckpointProvider {
-    pub shares: BTreeMap<String, String>,
-    pub resources: BTreeMap<String, LocalResource>,
-    #[serde(default)]
-    pub boot_disks: BTreeMap<String, PathBuf>,
-}
-
-fn duplicate(fd: i32) -> std::io::Result<File> {
-    // SAFETY: fcntl validates an inherited integer descriptor and returns a new
-    // owned description reference; it does not dereference application memory.
-    let copy = unsafe { libc::fcntl(fd, libc::F_DUPFD_CLOEXEC, 0) };
-    if copy < 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-    // SAFETY: successful fcntl returned an owned descriptor.
-    Ok(unsafe { File::from_raw_fd(copy) })
-}
-
 fn path_object(root: &Path, path: &Path, flags: i32) -> BoxliteResult<File> {
     if !root.is_absolute() {
         return Err(invalid("binding root must be absolute"));
@@ -418,168 +379,127 @@ fn object_flags() -> i32 {
     }
 }
 
-impl LocalObject {
-    fn open(
-        &self,
-        root: &Path,
-        flags: i32,
-        role: Option<(u64, Option<bool>)>,
-    ) -> BoxliteResult<File> {
-        self.open_available(root, flags, role, false)?
-            .ok_or_else(|| invalid("retained descriptor absent"))
-    }
+/// Stateless adapter: descriptors are opened anew and transferred only for this import.
+pub(crate) struct LocalCheckpointProvider;
 
-    fn open_available(
-        &self,
-        root: &Path,
-        flags: i32,
-        role: Option<(u64, Option<bool>)>,
-        allow_missing: bool,
-    ) -> BoxliteResult<Option<File>> {
-        match self {
-            Self::Path { path } => path_object(root, path, flags).map(Some),
-            Self::Fd {
-                fd,
-                handles,
-                dax_read,
-                dax_write,
-            } => {
-                let fd = match role {
-                    None => Some(*fd),
-                    Some((handle, None)) => handles.get(&handle).copied(),
-                    Some((_, Some(writable))) => {
-                        if writable {
-                            *dax_write
-                        } else {
-                            *dax_read
-                        }
-                    }
-                };
-                let Some(fd) = fd else {
-                    return if allow_missing {
-                        Ok(None)
-                    } else {
-                        Err(invalid("independently supplied handle/DAX FD absent"))
-                    };
-                };
-                if fd < 0 {
-                    return Err(invalid("inherited descriptor must be nonnegative"));
-                }
-                match duplicate(fd) {
-                    Ok(file) => Ok(Some(file)),
-                    Err(error) if allow_missing && error.raw_os_error() == Some(libc::EBADF) => {
-                        Ok(None)
-                    }
-                    Err(error) => Err(invalid(format!("inherited descriptor {fd}: {error}"))),
-                }
-            }
-        }
-    }
-}
-
-#[async_trait]
-impl CheckpointExportProvider for LocalCheckpointProvider {
-    async fn prepare(
-        &self,
-        request: CheckpointExportRequest,
+impl LocalCheckpointProvider {
+    pub(crate) fn prepare(
+        shares: &[ShareDependency],
+        objects: Vec<File>,
+        paths: &LocalPaths,
     ) -> BoxliteResult<Vec<Vec<ObjectReference>>> {
-        let mut files = request.objects.into_iter();
-        let mut result = Vec::new();
-        for share in request.shares {
-            let mut references = Vec::new();
-            for object in share.objects {
-                let file = files
+        let mut files = objects.into_iter();
+        let mut references = Vec::new();
+        for share in shares {
+            let mut refs = Vec::new();
+            for object in &share.objects {
+                let source = files
                     .next()
                     .ok_or_else(|| invalid("prepared object FD count differs"))?;
-                if object.recipe.is_some() {
+                if share.vm_owned {
                     continue;
                 }
-                let resource_id = self.shares.get(&share.tag).ok_or_else(|| {
-                    invalid(format!("missing resource binding for share {}", share.tag))
-                })?;
-                let resource = self
-                    .resources
-                    .get(resource_id)
-                    .ok_or_else(|| invalid("missing resource configuration"))?;
-                let root = resource.source_root.as_ref().unwrap_or(&resource.root);
-                let source = file.metadata().map_err(invalid)?;
-                let mut key = None;
-                for (candidate, locator) in &resource.objects {
-                    let bound = locator
-                        .open(root, object_flags(), None)?
-                        .metadata()
-                        .map_err(invalid)?;
-                    if (bound.dev(), bound.ino()) == (source.dev(), source.ino()) {
-                        key = Some(candidate.clone());
-                        break;
+                let root = paths
+                    .shares
+                    .get(&share.tag)
+                    .ok_or_else(|| invalid("source share root missing"))?;
+                let stat = source.metadata().map_err(invalid)?;
+                // nlink, not a procfs name suffix, determines deletion. Never open
+                // a former orphan name: it may already name a replacement inode.
+                let key = if object.unlinked && stat.nlink() == 0 && stat.is_file() {
+                    // An absolute sentinel can never become a valid relative
+                    // locator if unlink eligibility is absent or corrupted.
+                    "/".to_owned()
+                } else {
+                    let path = source_path(&source)?;
+                    let relative = path.strip_prefix(&root.path).map_err(|_| {
+                        invalid(format!(
+                            "source object {} is outside share {}",
+                            path.display(),
+                            root.path.display()
+                        ))
+                    })?;
+                    let relative = if relative.as_os_str().is_empty() {
+                        Path::new(".")
+                    } else {
+                        relative
+                    };
+                    let reopened = path_object(&root.path, relative, object_flags())?;
+                    let found = reopened.metadata().map_err(invalid)?;
+                    if (found.dev(), found.ino()) != (stat.dev(), stat.ino()) {
+                        return Err(invalid("source path identity changed during capture"));
                     }
-                }
-                references.push(ObjectReference { resource_id: resource_id.clone(), recovery_point: resource.recovery_point.clone(),
-                    object_key: key.ok_or_else(|| invalid(format!("share {} retained object has no explicit locator; retain an unlinked object with an FD", share.tag)))? });
+                    relative
+                        .to_str()
+                        .ok_or_else(|| invalid("local checkpoint path is not UTF-8"))?
+                        .to_owned()
+                };
+                refs.push(ObjectReference {
+                    resource_id: LOCAL_REFERENCE.into(),
+                    recovery_point: format!("{}:{}", stat.dev(), stat.ino()),
+                    object_key: key,
+                });
             }
-            result.push(references);
+            references.push(refs);
         }
         if files.next().is_some() {
             return Err(invalid("unused prepared object FDs"));
         }
-        Ok(result)
+        Ok(references)
     }
-}
 
-#[async_trait]
-impl CheckpointImportProvider for LocalCheckpointProvider {
-    async fn bind(
-        &self,
+    pub(crate) fn bind(
         dependencies: &CheckpointDependencies,
+        paths: &LocalPaths,
     ) -> BoxliteResult<CheckpointBindings> {
+        if paths.version != 1 {
+            return Err(invalid("unsupported local checkpoint path schema"));
+        }
         let mut shares = Vec::new();
         for share in &dependencies.shares {
-            if share.vm_owned {
-                shares.push(BoundShare {
-                    root: PathBuf::new(),
-                    objects: Vec::new(),
-                    handles: BTreeMap::new(),
-                    dax: Vec::new(),
-                });
-                continue;
-            }
-            let resource_id = self
-                .shares
-                .get(&share.tag)
-                .ok_or_else(|| invalid(format!("missing share binding {}", share.tag)))?;
-            let resource = self
-                .resources
-                .get(resource_id)
-                .ok_or_else(|| invalid("missing resource binding"))?;
             let mut bound = BoundShare {
-                root: resource.root.clone(),
+                root: PathBuf::new(),
                 objects: Vec::new(),
                 handles: BTreeMap::new(),
                 dax: Vec::new(),
             };
+            if share.vm_owned {
+                shares.push(bound);
+                continue;
+            }
+            let root = paths
+                .shares
+                .get(&share.tag)
+                .ok_or_else(|| invalid("saved local share root missing"))?;
+            let root_file = path_object(&root.path, Path::new("."), object_flags())?;
+            let root_stat = root_file.metadata().map_err(invalid)?;
+            if (root_stat.dev(), root_stat.ino()) != (root.device, root.inode) {
+                return Err(invalid("saved local share root identity changed"));
+            }
+            bound.root = root.path.clone();
             for (index, object) in share.objects.iter().enumerate() {
                 let reference = object
                     .reference
                     .as_ref()
                     .ok_or_else(|| invalid("external object reference missing"))?;
-                if reference.resource_id != *resource_id
-                    || reference.recovery_point != resource.recovery_point
-                {
-                    return Err(invalid("resource or recovery point mismatch"));
+                if reference.resource_id != LOCAL_REFERENCE {
+                    return Err(invalid(
+                        "unsupported provider-era checkpoint references; export a local-path checkpoint",
+                    ));
                 }
-                let Some(locator) = resource.objects.get(&reference.object_key) else {
-                    if object.allows_missing() {
-                        bound.objects.push(None);
-                        continue;
+                let missing = object.allows_missing();
+                let file = if missing {
+                    None
+                } else {
+                    let file =
+                        path_object(&root.path, Path::new(&reference.object_key), object_flags())?;
+                    let stat = file.metadata().map_err(invalid)?;
+                    if reference.recovery_point != format!("{}:{}", stat.dev(), stat.ino()) {
+                        return Err(invalid("saved local object identity changed"));
                     }
-                    return Err(invalid("retained object key is not bound"));
+                    Some(file)
                 };
-                bound.objects.push(locator.open_available(
-                    &resource.root,
-                    object_flags(),
-                    None,
-                    object.allows_missing(),
-                )?);
+                bound.objects.push(file);
                 for handle in share.state["handles"]
                     .as_array()
                     .ok_or_else(|| invalid("handle table missing"))?
@@ -592,68 +512,68 @@ impl CheckpointImportProvider for LocalCheckpointProvider {
                         .ok_or_else(|| invalid("handle ID invalid"))?;
                     let flags: i32 =
                         serde_json::from_value(handle["flags"].clone()).map_err(invalid)?;
-                    if flags & (libc::O_CREAT | libc::O_TRUNC | libc::O_EXCL) != 0 {
-                        return Err(invalid("unsafe saved handle creation flags"));
-                    }
-                    if let Some(file) = locator.open_available(
-                        &resource.root,
-                        flags,
-                        Some((id, None)),
-                        object.allows_missing(),
-                    )? {
-                        bound.handles.insert(id, file);
+                    check_handle_flags(flags)?;
+                    if !missing {
+                        bound.handles.insert(
+                            id,
+                            path_object(&root.path, Path::new(&reference.object_key), flags)?,
+                        );
                     }
                 }
                 let mut roles = std::collections::BTreeSet::new();
-                if let Some(mappings) = share.state["dax"]["mappings"].as_array() {
-                    for mapping in mappings {
-                        let file = &mapping["kind"]["file"];
-                        if file["object"].as_u64() == Some(index as u64) {
-                            roles.insert(
-                                file["writable"]
-                                    .as_bool()
-                                    .ok_or_else(|| invalid("DAX access invalid"))?,
-                            );
-                        }
+                for mapping in share.state["dax"]["mappings"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                {
+                    let file = &mapping["kind"]["file"];
+                    if file["object"].as_u64() == Some(index as u64) {
+                        roles.insert(
+                            file["writable"]
+                                .as_bool()
+                                .ok_or_else(|| invalid("DAX access invalid"))?,
+                        );
                     }
+                }
+                if missing && !roles.is_empty() {
+                    return Err(invalid("missing object has an existing DAX mapping"));
                 }
                 for writable in roles {
                     bound.dax.push((
                         index as u64,
                         writable,
-                        locator.open(
-                            &resource.root,
+                        path_object(
+                            &root.path,
+                            Path::new(&reference.object_key),
                             if writable {
                                 libc::O_RDWR
                             } else {
                                 libc::O_RDONLY
                             },
-                            Some((0, Some(writable))),
                         )?,
                     ));
                 }
             }
             shares.push(bound);
         }
-        let boot_disk = dependencies
-            .disk_dependencies
-            .as_array()
-            .into_iter()
-            .flatten()
-            .find_map(|disk| {
-                let bytes: [u8; 32] =
-                    serde_json::from_value(disk["external_readonly_boot"]["sha256"].clone())
-                        .ok()?;
-                self.boot_disks.get(&hex::encode(bytes)).cloned()
-            });
-        Ok(CheckpointBindings {
-            shares,
-            boot_disk,
-            lease: Arc::new(()),
-        })
+        let bindings = CheckpointBindings { shares };
+        bindings.validate(dependencies)?;
+        Ok(bindings)
     }
 }
 
-#[cfg(test)]
+fn source_path(file: &File) -> BoxliteResult<PathBuf> {
+    #[cfg(target_os = "linux")]
+    {
+        std::fs::read_link(format!("/proc/self/fd/{}", file.as_raw_fd())).map_err(invalid)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = file;
+        Err(invalid("local checkpoint paths require Linux procfs"))
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
 #[path = "tests/provider.rs"]
 mod tests;

@@ -526,19 +526,21 @@ paused (same container, initialized); otherwise it stops the VM and fails. Same 
 
 **Synopsis:**
 
-- `boxlite checkpoint export BOX DIRECTORY --bindings CONFIG.json`
+- `boxlite checkpoint export BOX DIRECTORY`
 - `boxlite checkpoint inspect DIRECTORY`
-- `boxlite checkpoint import [--name NAME] DIRECTORY --bindings CONFIG.json`
+- `boxlite checkpoint import [--name NAME] DIRECTORY`
 
 `export` requires owner-confirmed Paused and publishes exactly `snapshot.mem` and
 `snapshot.qcow2` into a new directory; the box stays Paused. `inspect` reads dependency
 metadata without creating a runtime or opening shares. `import` verifies the pair
-and explicit resource bindings, then publishes a new Paused box. Resume is explicit.
+and its saved local paths, then publishes a new Paused box. Resume is explicit.
 
-Binding configuration is input, not an output artifact. It maps stable resource and
-recovery-point IDs to prepared roots, relative object locators or inherited FDs.
-The exact readonly boot disk must be available from the runtime cache or an explicit
-binding. No share contents are archived. Same global options as `pause`; no REST
+An internal local provider records concrete roots and file identities automatically;
+no binding file or inherited-FD configuration is accepted. Keep those exact files
+and roots available, including the source box's shared directory. Removing the
+source box can invalidate the checkpoint. The readonly boot disk is checked at its
+saved path or in the runtime's exact-digest cache. No share contents are archived.
+Same global options as `pause`; no REST
 checkpoint endpoints. See the [checkpoints guide](../../guides/checkpoints.md).
 
 ---

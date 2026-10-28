@@ -276,6 +276,10 @@ pub struct BoxState {
     /// it over; a cold start clears it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) checkpoint_guest: Option<super::checkpoint::GuestIdentity>,
+    /// Concrete roots and boot backend from the VM specification, for later
+    /// exports through a different runtime process. No descriptors are retained.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) checkpoint_paths: Option<super::checkpoint::provider::LocalPaths>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) start_mode: Option<crate::vmm::checkpoint::support::StartMode>,
     /// The storage an imported box runs from instead of an image. Set once,
@@ -385,6 +389,7 @@ impl BoxState {
             started_at: None,
             resolved_image: None,
             checkpoint_guest: None,
+            checkpoint_paths: None,
             start_mode: None,
             restored_storage: None,
         }

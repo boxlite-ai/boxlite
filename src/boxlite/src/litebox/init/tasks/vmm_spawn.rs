@@ -105,12 +105,19 @@ impl PipelineTask<InitCtx> for VmmSpawnTask {
                 .await
                 .inspect_err(|e| log_task_error(&box_id, task_name, e))?;
 
+        let checkpoint_paths = instance_spec
+            .checkpoint
+            .as_ref()
+            .map(|_| crate::litebox::checkpoint::provider::LocalPaths::capture(&instance_spec))
+            .transpose()?;
+
         // Spawn VM
         let handler = spawn_vm(&box_id, &instance_spec, &inputs.options, &inputs.layout)
             .await
             .inspect_err(|e| log_task_error(&box_id, task_name, e))?;
 
         let mut state = inputs.runtime.box_manager.update_box(&box_id)?;
+        state.checkpoint_paths = checkpoint_paths;
         state.start_mode = Some(if instance_spec.checkpoint.is_some() {
             crate::vmm::checkpoint::support::StartMode::Owner { protocol: 2 }
         } else {
@@ -729,7 +736,6 @@ mod tests {
                 .unwrap(),
                 base_id: None,
             }),
-            bindings: Vec::new(),
         });
         let ctx = Arc::new(tokio::sync::Mutex::new(ctx));
         Box::new(FilesystemTask).run(ctx.clone()).await.unwrap();

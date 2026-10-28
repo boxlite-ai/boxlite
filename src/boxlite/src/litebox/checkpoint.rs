@@ -72,21 +72,19 @@ impl GuestIdentity {
     }
 }
 
-/// Imported storage: a private QCOW2 plus explicit external recovery roots
-/// and the exact readonly boot backend. Cold starts use these dependencies. Pinned for the box's life, unlike [`GuestIdentity`].
+/// Imported storage: a private QCOW2, existing local share roots and the exact
+/// readonly boot backend. Cold starts reuse these paths with a fresh guest.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct RestoredStorage {
     /// Disks in guest order: the container rootfs (`/dev/vda`), then the
     /// read-only guest rootfs (`/dev/vdb`).
     pub(crate) disks: Vec<RestoredDisk>,
-    /// Caller-owned recovery root served as the `BoxLiteShared` share.
+    /// Saved local root served as the `BoxLiteShared` share.
     pub(crate) shared_dir: PathBuf,
     /// The container's image config as the source box last booted it.
     pub(crate) container_image_config: ContainerImageConfig,
     #[serde(default)]
     pub(crate) boot: Option<BootDependency>,
-    #[serde(default)]
-    pub(crate) bindings: Vec<RestartBinding>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -94,13 +92,6 @@ pub(crate) struct BootDependency {
     pub length: u64,
     pub sha256: [u8; 32],
     pub base_id: Option<crate::BaseDiskID>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct RestartBinding {
-    pub tag: String,
-    pub root: PathBuf,
-    pub objects: Vec<pair::ObjectReference>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1118,12 +1109,16 @@ mod tests {
                     container_id: "unused".into(),
                     init_pid: 42,
                 });
+                state.checkpoint_paths = Some(provider::LocalPaths {
+                    version: 1,
+                    shares: Default::default(),
+                    boot_disk: "/unused".into(),
+                });
                 state.restored_storage = Some(RestoredStorage {
                     disks: Vec::new(),
                     shared_dir: "/unused".into(),
                     container_image_config: ContainerImageConfig::default(),
                     boot: None,
-                    bindings: Vec::new(),
                 });
             },
         );
@@ -1143,10 +1138,7 @@ mod tests {
         let inode = std::fs::metadata(&source).unwrap().ino();
         let box_ = fx.litebox().await;
         let destination = parent.join("must-not-publish");
-        let error = box_
-            .export_checkpoint(&destination, &crate::LocalCheckpointProvider::default())
-            .await
-            .unwrap_err();
+        let error = box_.export_checkpoint(&destination).await.unwrap_err();
         assert!(
             error.to_string().contains("os error 28"),
             "must reach real ENOSPC: {error}"

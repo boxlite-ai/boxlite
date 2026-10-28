@@ -1329,7 +1329,12 @@ impl BoxImpl {
             guard: mut cleanup_guard,
             resolved_image,
         } = builder.build().await?;
-        self.state.write().start_mode = self.runtime.box_manager.update_box(self.id())?.start_mode;
+        {
+            let persisted = self.runtime.box_manager.update_box(self.id())?;
+            let mut state = self.state.write();
+            state.start_mode = persisted.start_mode;
+            state.checkpoint_paths = persisted.checkpoint_paths;
+        }
 
         // The box is up. If we adopted one whose init was already running, that
         // init needs no `Container.Start`; recording it now keeps

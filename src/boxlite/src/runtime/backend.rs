@@ -73,7 +73,6 @@ pub(crate) trait RuntimeBackend: Send + Sync {
         &self,
         _path: &Path,
         _options: crate::runtime::options::CheckpointImportOptions,
-        _provider: &dyn crate::CheckpointImportProvider,
     ) -> BoxliteResult<LiteBox> {
         Err(BoxliteError::Unsupported(
             "checkpoint import is only supported for local runtimes (not REST backends)"

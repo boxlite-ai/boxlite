@@ -145,7 +145,6 @@ async fn checkpoint_operation_public_mutations_conflict_across_processes() {
         .unwrap();
         let id = std::env::var("BOXLITE_CHECKPOINT_OPERATION_BOX").unwrap();
         let box_ = runtime.get(&id).await.unwrap().unwrap();
-        let provider = crate::LocalCheckpointProvider::default();
         let destination = runtime.layout.home_dir().join("must-not-stage");
         let results = [
             box_.start().await,
@@ -162,7 +161,7 @@ async fn checkpoint_operation_public_mutations_conflict_across_processes() {
             box_.clone_boxes(crate::CloneOptions::default(), 1, Vec::new())
                 .await
                 .map(|_| ()),
-            box_.export_checkpoint(&destination, &provider).await,
+            box_.export_checkpoint(&destination).await,
         ];
         for (operation, result) in results.into_iter().enumerate() {
             let error = result.expect_err("parent owns the operation");

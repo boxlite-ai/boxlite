@@ -554,19 +554,20 @@ Let a paused box run again; it is checked to be the guest that was paused, or st
 
 Export a Paused owner to a new directory containing exactly `snapshot.mem` and
 `snapshot.qcow2`. Shared files and the exact readonly boot disk remain external
-resources. Explicit binding JSON is input, not a third artifact.
+resources whose concrete paths are saved automatically; no binding file is needed.
+Keep these paths available: removing the source box may remove its shared root.
 
-- `boxlite checkpoint export BOX DIRECTORY --bindings CONFIG.json`
+- `boxlite checkpoint export BOX DIRECTORY`
 - `boxlite checkpoint inspect DIRECTORY`
-- `boxlite checkpoint import [--name NAME] DIRECTORY --bindings CONFIG.json`
+- `boxlite checkpoint import [--name NAME] DIRECTORY`
 
 Inspection opens no shares and creates no runtime. Import verifies dependencies
 and publishes a new Paused box; `boxlite resume BOX` continues execution. Older full
 checkpoint formats are refused. Default supported configurations need no creation
 flag; ordinary disk-only `.boxlite` compatibility is unchanged.
 
-See the [checkpoints guide](../../docs/guides/checkpoints.md) for binding configuration,
-retention responsibilities, state matrix and failure behavior.
+See the [checkpoints guide](../../docs/guides/checkpoints.md) for saved-path dependencies,
+writer coordination, state matrix and failure behavior.
 
 ### `boxlite rm`
 

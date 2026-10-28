@@ -28,10 +28,6 @@ pub use checkpoint::PauseOptions;
 pub use checkpoint::pair::{
     CheckpointDependencies, ObjectDependency, ObjectReference, ShareDependency,
 };
-pub use checkpoint::provider::{
-    BoundShare, CheckpointBindings, CheckpointExportProvider, CheckpointExportRequest,
-    CheckpointImportProvider, CheckpointLease, LocalCheckpointProvider, LocalObject, LocalResource,
-};
 pub use copy::{CopyOptions, CopySourceKind};
 pub(crate) use crash_report::CrashReport;
 pub use exec::{BoxCommand, ExecResult, ExecStderr, ExecStdin, ExecStdout, Execution, ExecutionId};
@@ -250,13 +246,9 @@ impl LiteBox {
     /// Write a paused checkpoint-enabled box to a new two-file checkpoint directory
     /// at `path`, which must not exist yet. The box stays paused whether the
     /// export succeeds or fails. Local runtime only.
-    pub async fn export_checkpoint(
-        &self,
-        path: impl AsRef<std::path::Path>,
-        provider: &dyn CheckpointExportProvider,
-    ) -> BoxliteResult<()> {
+    pub async fn export_checkpoint(&self, path: impl AsRef<std::path::Path>) -> BoxliteResult<()> {
         self.local_backend("export_checkpoint")?
-            .export_checkpoint(path.as_ref(), provider)
+            .export_checkpoint(path.as_ref())
             .await
     }
 

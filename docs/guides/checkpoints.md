@@ -2,8 +2,8 @@
 
 A checkpoint preserves a paused Linux x86_64/KVM guest as two files:
 `snapshot.mem` and `snapshot.qcow2`. Shared files remain external resources.
-Callers supply stable storage references when exporting and explicit roots and
-file descriptors when importing. Imported boxes appear **Paused**; resume is explicit.
+The runtime records concrete local dependency paths automatically and opens them
+anew on import. Imported boxes appear **Paused**; resume is explicit.
 
 ## Support and lifecycle
 
@@ -42,15 +42,15 @@ process no longer holds the host-side reservation.
 boxlite create --name web -v /srv/live/data:/data alpine:latest sleep 3600
 # Stop every host writer of external resources before making this assertion.
 boxlite pause --host-writers-stopped web
-boxlite checkpoint export web /srv/checkpoints/web --bindings /srv/export-bindings.json
+boxlite checkpoint export web /srv/checkpoints/web
 boxlite checkpoint inspect /srv/checkpoints/web
-boxlite checkpoint import /srv/checkpoints/web --name web-copy --bindings /srv/restore-bindings.json
+boxlite checkpoint import /srv/checkpoints/web --name web-copy
 boxlite resume web-copy
 ```
 
 `pause` stops guest vCPUs and devices. It does not stop host writers. Keep external
-storage at its coordinated recovery point until export finishes; retain that point
-for the lifetime of the checkpoint. Export never implicitly starts or pauses a box.
+storage unchanged through export and import. Keep every saved local root and
+readonly boot file available for the checkpoint and imported box lifetimes. Export never implicitly starts or pauses a box.
 
 Inspection reads the memory image and lists dependencies and the paired disk digest.
 It opens no shares and provisions no runtime or box. Import additionally checks the
@@ -64,7 +64,8 @@ web/
 └── snapshot.qcow2     # Standalone container disk, without a backing file
 ```
 
-The binding JSON is an **input**, stored outside that directory. Export publishes
+Paths and source identities are recorded inside the memory metadata; no binding
+configuration or third artifact is required. Export publishes
 through a private staging directory and atomic no-overwrite rename after syncing
 both files and the directory. Keep the destination unchanged while export or
 rollback is in flight. On invalidation or parent-sync failure, rollback quarantines
@@ -74,110 +75,79 @@ quarantine residue. This ownership contract does not promise atomic conditional
 unlink against arbitrary concurrent mutation by the same host user. No unsynced
 publication is reported as success.
 
-## External resource bindings
+## Local paths and external files
 
-The Rust API accepts `CheckpointExportProvider` and `CheckpointImportProvider`.
-Export preparation supplies retained object descriptors and their share, guest inode,
-access-role and alias metadata. Providers return stable
-`(resource_id, recovery_point, object_key)` references. Import supplies recovered
-roots, O_PATH object descriptors, independently opened handles and DAX descriptors,
-and a lease. The runtime holds the import lease until box removal, releasing it
-after its writers have exited. References and roots must remain recoverable after source destruction
-and across later runtime restarts; a temporary FD alone is not durable retention.
+The Rust API uses the same path-only flow as the CLI:
 
-`LocalCheckpointProvider` adapts explicit local bindings. A configuration has this
-shape (the object list is illustrative; bind every available external object):
-
-```json
-{
-  "shares": { "BoxLiteShared": "runtime-shared", "uservol0": "app-data" },
-  "resources": {
-    "runtime-shared": {
-      "recovery_point": "cut-42",
-      "source_root": "/srv/live/runtime-shared",
-      "root": "/srv/recovery/cut-42/runtime-shared",
-      "objects": { "root": { "path": "." } }
-    },
-    "app-data": {
-      "recovery_point": "cut-42",
-      "source_root": "/srv/live/data",
-      "root": "/srv/recovery/cut-42/data",
-      "objects": {
-        "root": { "path": "." },
-        "database": { "path": "database.sqlite" }
-      }
-    }
-  },
-  "boot_disks": { "FULL_SHA256_FROM_INSPECTION": "/srv/boot/exact.ext4" }
-}
+```rust
+source.export_checkpoint("/srv/checkpoints/web").await?;
+let restored = runtime.import_checkpoint(
+    "/srv/checkpoints/web",
+    CheckpointImportOptions { name: Some("web-copy".into()) },
+).await?;
+restored.resume().await?;
 ```
 
-`source_root` is optional and used only to associate source descriptors with explicit
-locators. Import matches resource/recovery-point IDs exactly. Relative locators open
-beneath a pinned root without parent traversal or symlink escape. There is no tree
-search, share archive or background retention service. `BoxLiteShared` is required
-like any other external share; coordinate its recovery root explicitly.
+An internal `LocalCheckpointProvider` records the actual share roots and exact
+readonly boot path used at VM start. Export discovers linked object paths from
+capture descriptors, checks their identities, and saves root-relative locators.
+It does not search the tree, copy shared files, retain orphan descriptors, or
+require an inherited-FD configuration. `checkpoint inspect` reports the saved
+local roots and boot path without opening those resources.
 
-An unlinked retained object cannot be recovered from a path. Its locator can instead
-supply inherited descriptor numbers:
+Import opens each saved path afresh. Handles receive independent open file
+descriptions with their saved access/status flags; creation and truncation flags
+are refused. Guest positions stay in saved guest memory, and saved FUSE directory
+listings/cookies continue unchanged. Object device/inode identity, kind, share mount, hard-link
+aliases and handle/DAX access roles are checked before restoration. Path traversal,
+intermediate symlink escape, linked-file disappearance, changed identities and access
+errors fail import. These checks do not prove immutable content or detect every inode
+reuse after all prior descriptors close; external writer coordination is required. A symlink object itself may be retained with `O_PATH` without
+following its target.
 
-```json
-{ "fd": 12, "handles": { "7": 13 }, "dax_read": 14, "dax_write": 15 }
-```
+These checkpoints depend on the **same local files and roots**. Keep them at their
+saved paths and coordinate all host writers; external share contents are not
+rolled back by importing memory. Renaming or replacing a saved object may invalidate
+its locator. Export does not promise discovery through another hard link.
+`BoxLiteShared` is also a required root, normally inside the source box directory:
+**removing the source box or its runtime home can invalidate the checkpoint and
+imported box**. Stopping the source and shutting down its runtime preserve the paths.
+Do not run two restored guests against the same writable roots concurrently.
 
-`fd` identifies the retained object. Handle/DAX descriptors must independently have
-the saved access/status flags and identify that object. The provider duplicates
-inherited FDs before use. A checkpoint records whether each regular file was already
-unlinked at capture. For those files, import tolerates an omitted object key or an
-inherited descriptor that fails duplication with `EBADF`. Omitted handle descriptors
-are also allowed for those files; losing one handle preserves other valid handles
-and the object. There is no opt-in switch. Export still requires retained objects.
+An external regular file already unlinked at capture cannot be reopened by path.
+When it has no existing file DAX mapping, import omits its backend node/handles;
+subsequent requests using those missing IDs return guest `EBADF`. A replacement at
+its former name is never substituted. A legitimate linked filename ending in
+` (deleted)` remains a normal linked file: inode link count determines deletion.
+Missing directories, linked files, boot recipes and **existing file DAX mappings**
+remain strict dependencies. Missing mapped backing rejects import; no empty file
+or anonymous mapping is substituted.
 
-To mark a whole orphan unavailable, omit its object key and its handle roles. In the
-Rust provider API, keep its saved `BoundShare.objects` slot as `None` and omit its
-handles; available objects use `Some(File)`. The descriptor ABI represents missing
-object slots as JSON `null`. A supplied handle without its object identity binding
-is rejected. Every alias across shares must agree about the object's availability.
+Guest caching can satisfy a read or write without a backend request. A new DAX
+mapping may also resolve a surviving inode independently of its former handle.
+The `EBADF` guarantee applies to requests that reach a missing backend ID; the
+focused guest test uses aligned direct I/O for an absent whole object and `fsync`
+for an absent handle. Later exports preserve allocation counters and omit missing
+backend records, so stale guest IDs cannot alias newly allocated objects.
 
-Missing backend nodes/handles are omitted during restore. Requests reaching them
-return the existing `EBADF` through FUSE; RELEASE does the same and FORGET has no
-resource to free. No replacement file is created. Guest cached reads or writeback
-writes may still succeed without reaching the server. Existing file-backed DAX
-mappings require their actual objects and every DAX access role: import rejects
-missing backing before VM allocation, since direct mappings bypass FUSE requests.
-When only a handle is missing, DAX can also establish a new mapping through the
-surviving inode without consulting that handle. Its reads/writes can therefore
-succeed; handle-based backend operations such as `fsync` still return `EBADF`.
-
-Missing linked objects, roots, boot data and DAX roles remain errors. Configured
-path lookup failures, negative descriptor numbers, wrong kinds/identities/flags,
-permission errors and other provider errors also remain errors. Caller-supplied
-inherited numbers must still identify the intended live objects; never reuse them
-for replacements. Cached directory names and cookies alone do not demand object
-FDs, including deleted listing-only names and `.`/`..`. Hard links and aliases must
-preserve the same recovered inode.
-
-Later checkpoints contain the surviving backend records and preserve allocation
-counters, so missing guest node/handle IDs cannot be reused after another import.
-A stopped cold start creates a new guest session against retained roots and does
-not recover the previous guest's open orphan handles.
-
-The readonly guest boot disk is an external dependency, not a third artifact. The
-runtime can use an exact digest-matching cached base or the explicit `boot_disks`
-binding. Its full bytes are checked and its lifetime is pinned. Import never rebuilds
-a substitute on cache miss. The private imported container remains QCOW2 through
-resume, stopped cold starts, disk snapshots and later checkpoints.
+The readonly guest boot disk is external. Import checks the saved boot path's full
+length and digest, or uses an exact digest-matching entry in the importing runtime's
+cache when that path is absent. It never rebuilds a substitute on cache miss.
+The imported container disk is a private QCOW2 and stays private through resume,
+stopped cold starts, disk snapshots and later checkpoints. Share roots and the
+selected boot path persist across runtime restarts; a cold start creates a new guest
+session and does not recover old orphan handles.
 
 ## Failure and compatibility
 
 Import binds resources through SCM_RIGHTS after sandbox installation and before any
 vCPU is released. It publishes only after the owner confirms Paused. Failure stops
-and joins the new shim before removing attempt-owned storage; caller recovery points,
-mounts and original checkpoint files remain caller-owned.
+and joins the new shim before removing attempt-owned storage; existing share roots,
+mounts and original checkpoint files remain untouched.
 
 Cancellation or an uncertain capture outcome stops the source owner and joins writers
 before cleanup. A missing or corrupt shim identity file while its PID is live is an
-uncertain join: storage and leases are retained, and the unverified PID receives no
+uncertain join: attempt storage is retained, and the unverified PID receives no
 signal. Exiting the launcher or queuing a cgroup kill alone does not prove that
 descendant writers exited. Known export failures preserve Paused. Never blindly retry a control
 operation whose outcome is unknown. Ordinary backend captures retain their documented
@@ -185,10 +155,13 @@ consistency limits and always resume/thaw after a known copy failure.
 
 Older full checkpoints are refused with an explicit unsupported-version error and
 left intact. No RAW container conversion or share extraction path is provided.
-Version-9 images without recorded unlink eligibility still require every object
-and handle. New readers accept their complete bindings. Older readers reject the
-new `unlinked: true` metadata and nullable object indices. Rust import providers
-must adapt `BoundShare.objects` from `File` entries to `Some(File)` or eligible `None`.
+Provider-era version-9 checkpoints without automatic local-path metadata cannot be
+imported through this API: import reports explicit incompatibility before provisioning
+a box. Inspection still accepts their envelope and reports dependencies. Current
+artifacts use a versioned local-path marker inside the unchanged native reference
+triple; native descriptor transport is unchanged. A box started by an older runtime
+must stop and restart before exporting through this API so its concrete paths are
+recorded. Older runtimes do not provide this automatic path resolution.
 Ordinary disk-only `.boxlite` archives retain their existing format and compatibility.
 Checkpoint endpoints are available in Rust and the embedded CLI; no SDK or REST
 checkpoint endpoints are added.

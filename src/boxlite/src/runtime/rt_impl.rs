@@ -155,8 +155,6 @@ pub struct RuntimeImpl {
 
     /// Snapshot manager for per-box snapshot lifecycle (create, remove, restore).
     pub(crate) snapshot_mgr: crate::litebox::snapshot_mgr::SnapshotManager,
-    pub(crate) checkpoint_leases:
-        std::sync::Mutex<std::collections::HashMap<BoxID, Arc<dyn crate::CheckpointLease>>>,
 
     /// Per-entity lock manager for multiprocess-safe locking.
     ///
@@ -367,7 +365,6 @@ impl RuntimeImpl {
             experimental_features,
             base_disk_mgr,
             snapshot_mgr,
-            checkpoint_leases: std::sync::Mutex::new(std::collections::HashMap::new()),
             lock_manager,
             network_factory: crate::net::default_factory(),
             _runtime_lock: runtime_lock,
@@ -439,14 +436,13 @@ impl RuntimeImpl {
         self: &Arc<Self>,
         path: &std::path::Path,
         options: crate::runtime::options::CheckpointImportOptions,
-        provider: &dyn crate::CheckpointImportProvider,
     ) -> BoxliteResult<LiteBox> {
         if self.shutdown_token.is_cancelled() {
             return Err(BoxliteError::Stopped(
                 "Cannot import checkpoint: runtime has been shut down".into(),
             ));
         }
-        super::checkpoint_import::import_checkpoint(self, path, options, provider).await
+        super::checkpoint_import::import_checkpoint(self, path, options).await
     }
 
     /// Inner create logic shared by `create()` and `get_or_create()`.
@@ -1075,10 +1071,6 @@ impl RuntimeImpl {
 
             // Remove from BoxManager (database-first)
             self.box_manager.remove_box(id)?;
-            self.checkpoint_leases
-                .lock()
-                .map_err(|_| BoxliteError::Internal("resource lease lock poisoned".into()))?
-                .remove(id);
 
             // Free the lock if one was allocated
             if let Some(lock_id) = state.lock_id {
@@ -1929,9 +1921,8 @@ impl super::backend::RuntimeBackend for LocalRuntime {
         &self,
         path: &std::path::Path,
         options: crate::runtime::options::CheckpointImportOptions,
-        provider: &dyn crate::CheckpointImportProvider,
     ) -> BoxliteResult<LiteBox> {
-        self.0.import_checkpoint(path, options, provider).await
+        self.0.import_checkpoint(path, options).await
     }
 
     fn shutdown_sync(&self) {
@@ -3688,29 +3679,6 @@ mod tests {
         assert!(
             std::fs::symlink_metadata(&binding_dir).is_err(),
             "remove_box must unlink the socket binding symlink"
-        );
-    }
-
-    #[test]
-    fn checkpoint_removal_releases_the_runtime_provider_lease() {
-        let (runtime, _dir) = create_test_runtime();
-        let config = test_box_config_in_layout(false, &runtime);
-        crate::litebox::operation::Reservation::provision(&runtime.layout, &config.id).unwrap();
-        runtime
-            .box_manager
-            .add_box(&config, &BoxState::new())
-            .unwrap();
-        let lease: Arc<dyn crate::CheckpointLease> = Arc::new(());
-        let retained = Arc::downgrade(&lease);
-        runtime
-            .checkpoint_leases
-            .lock()
-            .unwrap()
-            .insert(config.id.clone(), lease);
-        runtime.remove_box(&config.id, false).unwrap();
-        assert!(
-            retained.upgrade().is_none(),
-            "removed box retained its provider lease"
         );
     }
 
