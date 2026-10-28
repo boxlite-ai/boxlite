@@ -356,6 +356,32 @@ func goBoxliteOnImageUsage(usage *C.CImageUsage, errPtr *C.CBoxliteError, userDa
 	}}
 }
 
+//export goBoxliteOnResizeBox
+func goBoxliteOnResizeBox(resources *C.CBoxResources, errPtr *C.CBoxliteError, userData unsafe.Pointer) {
+	h := ptrToHandle(userData)
+	if h == 0 || !claimHandleForDispatch(h) {
+		return
+	}
+	defer h.Delete()
+	ch, ok := h.Value().(chan resizeResult)
+	if !ok {
+		return
+	}
+	if err := errorFromCError(errPtr); err != nil {
+		ch <- resizeResult{err: err}
+		return
+	}
+	if resources == nil {
+		ch <- resizeResult{err: &Error{Code: ErrInternal, Message: "resize returned no resources"}}
+		return
+	}
+	// Rust lends this struct only for the duration of the callback.
+	ch <- resizeResult{value: &BoxResources{
+		CPUs: uint8(resources.cpus), MemoryMiB: uint32(resources.memory_mib),
+		MaxCPUs: uint8(resources.max_cpus), MaxMemoryMiB: uint32(resources.max_memory_mib),
+	}}
+}
+
 // ─── Volume callbacks ──────────────────────────────────────────────────────
 
 // goBoxliteOnVolume delivers a single CVolumeInfo. Shared by Create and Get

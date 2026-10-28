@@ -7,10 +7,13 @@ use super::guest_entrypoint::GuestEntrypointBuilder;
 use super::{InitCtx, log_task_error, task_start};
 use crate::disk::DiskFormat;
 use crate::images::ContainerImageConfig;
+use crate::litebox::BoxResources;
 use crate::litebox::init::types::{InitPipelineContext, resolve_user_volumes};
 use crate::net::{NetworkBackend, NetworkBackendConfig};
 use crate::pipeline::PipelineTask;
 use crate::rootfs::guest::{GuestRootfs, Strategy};
+use crate::runtime::capacity::ResourceCeiling;
+use crate::runtime::constants::vm_defaults::{DEFAULT_CPUS, DEFAULT_MEMORY_MIB};
 use crate::runtime::constants::{guest_paths, mount_tags};
 use crate::runtime::id::BoxID;
 use crate::runtime::layout::BoxFilesystemLayout;
@@ -32,6 +35,7 @@ pub struct VmmSpawnTask;
 
 struct VmmSpawnInputs {
     outbound_policy: Option<crate::runtime::options::OutboundNetworkConfig>,
+    resources: Option<BoxResources>,
     options: BoxOptions,
     layout: BoxFilesystemLayout,
     container_image_config: ContainerImageConfig,
@@ -67,6 +71,7 @@ impl VmmSpawnInputs {
 
         Ok(Self {
             outbound_policy: ctx.outbound_policy.clone(),
+            resources: ctx.resources,
             options: ctx.config.options.clone(),
             layout,
             container_image_config,
@@ -92,10 +97,28 @@ impl PipelineTask<InitCtx> for VmmSpawnTask {
         };
 
         // Build config and get outputs
-        let (instance_spec, volume_mgr, rootfs_init, container_mounts, network_backend) =
+        let (mut instance_spec, volume_mgr, rootfs_init, container_mounts, network_backend) =
             build_config(&box_id, &inputs)
                 .await
                 .inspect_err(|e| log_task_error(&box_id, task_name, e))?;
+        let ceiling = cpu_quota_supported(&inputs.options).then(ResourceCeiling::detect);
+        let resources = boot_resources(&inputs.options, inputs.resources, ceiling);
+        instance_spec.cpus = Some(resources.cpus);
+        instance_spec.max_cpus = Some(resources.max_cpus);
+        instance_spec.memory_mib = Some(resources.memory_mib);
+        #[cfg(target_os = "linux")]
+        if inputs
+            .options
+            .advanced
+            .security
+            .resource_limits
+            .max_memory
+            .is_none()
+        {
+            let max = ResourceCeiling::detect().max_memory_mib;
+            instance_spec.max_memory_mib =
+                Some(resources.memory_mib + max.saturating_sub(resources.memory_mib) / 128 * 128);
+        }
 
         // Spawn VM
         let handler = spawn_vm(&box_id, &instance_spec, &inputs.options, &inputs.layout)
@@ -104,6 +127,7 @@ impl PipelineTask<InitCtx> for VmmSpawnTask {
 
         let mut ctx = ctx.lock().await;
         ctx.guard.set_handler(handler);
+        ctx.resources = Some(resources);
         ctx.volume_mgr = Some(volume_mgr);
         ctx.rootfs_init = Some(rootfs_init);
         ctx.container_mounts = Some(container_mounts);
@@ -135,6 +159,7 @@ async fn build_config(
 )> {
     let VmmSpawnInputs {
         outbound_policy,
+        resources: _,
         options,
         layout,
         container_image_config,
@@ -246,8 +271,11 @@ async fn build_config(
         security: options.advanced.security.clone(),
         nested_virtualization: options.advanced.nested_virtualization,
         // VM resources
-        cpus: options.cpus,
-        memory_mib: options.memory_mib,
+        // Set from the boot resources by the caller.
+        cpus: None,
+        max_cpus: None,
+        max_memory_mib: None,
+        memory_mib: None,
         kernel: prepared_kernel.clone(),
         // Filesystem and devices
         fs_shares: vmm_config.fs_shares,
@@ -421,6 +449,40 @@ fn warn_cpus_beyond_guest_kernel(options: &BoxOptions) {
     }
 }
 
+/// Whether spare vCPUs can be kept unusable: only a box cgroup with the `cpu`
+/// controller can cap them.
+fn cpu_quota_supported(options: &BoxOptions) -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        options.advanced.security.jailer_enabled
+            && crate::jailer::cgroup::cpu_controller_available()
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = options;
+        false
+    }
+}
+
+/// Resources for this boot: the last resize, else the creation options. Spare
+/// vCPUs up to `ceiling` are created only when a CPU quota can cap them.
+fn boot_resources(
+    options: &BoxOptions,
+    persisted: Option<BoxResources>,
+    ceiling: Option<ResourceCeiling>,
+) -> BoxResources {
+    let cpus = persisted.map_or(options.cpus.unwrap_or(DEFAULT_CPUS), |r| r.cpus);
+    let memory_mib = persisted.map_or(options.memory_mib.unwrap_or(DEFAULT_MEMORY_MIB), |r| {
+        r.memory_mib
+    });
+    BoxResources {
+        cpus,
+        memory_mib,
+        max_cpus: ceiling.map_or(cpus, |c| c.max_cpus.max(cpus)),
+        max_memory_mib: memory_mib,
+    }
+}
+
 /// Spawn VM subprocess and return handler.
 async fn spawn_vm(
     box_id: &BoxID,
@@ -442,6 +504,53 @@ async fn spawn_vm(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn ceiling(max_cpus: u8) -> Option<ResourceCeiling> {
+        Some(ResourceCeiling {
+            max_cpus,
+            max_memory_mib: 65536,
+        })
+    }
+
+    fn two_cpu_options() -> BoxOptions {
+        BoxOptions {
+            cpus: Some(2),
+            memory_mib: Some(512),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn boot_without_a_cpu_quota_creates_only_the_online_vcpus() {
+        let resources = boot_resources(&two_cpu_options(), None, None);
+        assert_eq!((resources.cpus, resources.max_cpus), (2, 2));
+        assert_eq!(resources.memory_mib, 512);
+    }
+
+    #[test]
+    fn boot_with_a_cpu_quota_creates_spare_vcpus_up_to_the_ceiling() {
+        let resources = boot_resources(&two_cpu_options(), None, ceiling(8));
+        assert_eq!((resources.cpus, resources.max_cpus), (2, 8));
+    }
+
+    #[test]
+    fn boot_keeps_the_last_resize_over_the_creation_options() {
+        let resized = BoxResources {
+            cpus: 4,
+            memory_mib: 2048,
+            max_cpus: 8,
+            max_memory_mib: 2048,
+        };
+        let resources = boot_resources(&two_cpu_options(), Some(resized), ceiling(6));
+        assert_eq!((resources.cpus, resources.max_cpus), (4, 6));
+        assert_eq!(resources.memory_mib, 2048);
+    }
+
+    #[test]
+    fn boot_never_drops_online_vcpus_below_a_smaller_ceiling() {
+        let resources = boot_resources(&two_cpu_options(), None, ceiling(1));
+        assert_eq!((resources.cpus, resources.max_cpus), (2, 2));
+    }
     use crate::images::ContainerImageConfig;
     use crate::runtime::options::{PortProtocol, PortSpec};
 

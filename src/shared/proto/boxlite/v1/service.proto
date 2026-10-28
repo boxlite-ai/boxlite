@@ -33,6 +33,10 @@ service Guest {
   // Health check
   rpc Ping(PingRequest) returns (PingResponse);
 
+  // Online pre-created CPUs. A count of zero only queries the current count.
+  // A partial grow returns its observed count and error; never offlines CPUs.
+  rpc OnlineCpus(OnlineCpusRequest) returns (OnlineCpusResponse);
+
   // Shutdown guest agent gracefully
   rpc Shutdown(ShutdownRequest) returns (ShutdownResponse);
 
@@ -95,6 +99,15 @@ service Files {
 // ============================================================================
 // Guest Service Messages
 // ============================================================================
+
+message OnlineCpusRequest {
+  uint32 count = 1;
+}
+
+message OnlineCpusResponse {
+  uint32 online = 1;
+  string error = 2;
+}
 
 message GuestInitRequest {
   // Unified volume mounts (virtiofs + block devices)

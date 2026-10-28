@@ -34,16 +34,30 @@ boxlite.BoxOptions(
 )
 ```
 
-**Range:** 1 to 16. The bundled guest kernel is built with `CONFIG_NR_CPUS=16`
-and brings up at most 16 vCPUs, so creating a box with `cpus` outside this
-range fails with an invalid-argument error. A box created with a custom kernel
-(experimental) is not bound by this limit. A box created with more than 16
-vCPUs before this check still starts, logs a warning, and runs on 16.
+**Range:** 1 to the host ceiling: the smallest of the CPUs the runtime may use
+(affinity and cgroup quota) and the hypervisor's per-VM vCPU limit. The bundled
+guest kernel additionally limits new boxes to 16 vCPUs; custom kernels are not
+bound by that bundled-kernel limit. New boxes above their ceiling fail with
+`InvalidArgument`. Reusing an existing box preserves its saved allocation.
+Legacy boxes above 16 vCPUs still boot with a warning when using the bundled kernel.
 
 **Behavior:**
-- Proportional scheduling (shares-based)
 - Does not reserve physical cores
 - Multiple boxes can exceed host CPU count
+
+**Spare vCPUs (Linux):** so a running box can later gain CPUs, a box boots
+with vCPUs up to the host ceiling but only `cpus` online (`maxcpus=` on the
+guest kernel command line). `nproc` and `/proc/cpuinfo` show the online CPUs;
+`/sys/devices/system/cpu/present` shows the ceiling.
+
+- The box cgroup's `cpu.max` caps the whole VMM process at `cpus` CPUs, so
+  vCPUs a guest brings online by itself add no CPU time. VMM I/O threads share
+  that cap.
+- A stricter `max_cpu_time` host limit is kept.
+- Without the cgroup `cpu` controller (rootless sessions often lack it) or with
+  the jailer disabled, the box boots exactly `cpus` vCPUs and has no spares.
+- If the cap cannot be written, the box fails to start rather than run
+  uncapped. macOS boots exactly `cpus` vCPUs.
 
 **Monitor Usage:**
 
@@ -62,13 +76,18 @@ boxlite.BoxOptions(
 )
 ```
 
-**Range:** 128 to 65536 MiB (64 GiB)
+**Range:** 1 MiB up to host memory, or the runtime cgroup `memory.max` when
+it is lower. Creating a box above that fails with `InvalidArgument`.
 
-**Default:** 512 MiB
+**Default:** 1024 MiB
+
+`memory_mib` includes all boot RAM, including the kernel mapping. The guest
+reports less in `MemTotal` because the kernel reserves some of it. In particular,
+x86 boxes below the MMIO gap no longer receive extra RAM on top of this budget.
 
 **Behavior:**
-- Hard limit (box killed if exceeded)
-- Minimum 128 MiB required
+- The guest can use only allocated RAM; a workload exhausting it can trigger the guest OOM killer.
+- Use at least 128 MiB to leave space for the kernel and guest agent.
 
 **Monitor Usage:**
 
@@ -78,10 +97,61 @@ memory_mb = metrics.memory_usage_bytes / (1024**2)
 print(f"Memory: {memory_mb:.2f} MB")
 ```
 
-**Out of Memory:**
-- Box process is killed
-- Check stderr for OOM messages
-- Increase `memory_mib` if needed
+**Out of Memory:** check the guest console for OOM messages. Increase the allocation
+before the workload exhausts it; host memory limits can also terminate the VMM.
+
+## Online growth
+
+A running Linux/KVM box can grow CPUs and memory without restarting its workload.
+Targets are absolute. Omitting a resource retains its allocation; omitting both
+queries the allocation and the ceilings established for that boot.
+
+```python
+resources = await box.resize()
+resources = await box.resize(cpus=2, memory_mib=2048)
+print(resources.cpus, resources.memory_mib)
+print(resources.max_cpus, resources.max_memory_mib)
+```
+
+The same operation is available as Rust `LiteBox::resize(ResizeOptions)`,
+Node `box.resize({ cpus: 2, memoryMib: 2048 })`, Go `Box.Resize`,
+C `boxlite_resize_box`, and the Python synchronous wrappers. In C and Go,
+zero means leave that resource unchanged.
+
+```bash
+boxlite resize mybox --cpus 2 --memory 2048
+boxlite resize mybox
+```
+
+REST clients use `POST /v1/boxes/{box_id}/resize` with
+`{"cpus":2,"memory_mib":2048}`. The response contains `cpus`, `memory_mib`,
+`max_cpus`, and `max_memory_mib`.
+
+- Both targets are validated before applying either. Shrinking, exceeding a
+  ceiling, and resizing a stopped box are rejected.
+- Memory grows in increments of 128 MiB relative to the current allocation.
+  Its ceiling is limited by host/cgroup memory, KVM slots, and guest address space.
+- Unallocated hotplug slots have no KVM mapping and are protected with
+  `PROT_NONE`. The reservation adds no guest-usable RAM and commits no host RAM.
+  Slots become accessible as the virtio-mem driver plugs them.
+- Setting a host memory limit (`SecurityOptions.max_memory` in Python,
+  `advanced.security.resource_limits.max_memory` in Rust) disables memory growth:
+  that limit also constrains VMM virtual address space. Its memory ceiling equals
+  the starting allocation. A kernel without `CONFIG_VIRTIO_MEM=y` likewise
+  cannot grow memory.
+- Successful allocations survive stop/start and handle recovery. Concurrent
+  requests are serialized. A failed request can leave a partial allocation;
+  query again and retry the original target. A submitted operation can finish
+  after its caller disconnects.
+- `cpus` reports the last committed CPU allocation. If a CPU RPC reply is lost,
+  the guest may have brought additional CPUs online while the host attempts
+  to restore the previous quota. A resource query still reports the committed
+  allocation; retry the original target to reconcile the guest and host state.
+  Guest CPU changes alone never increase the host allocation.
+- macOS does not support online resize.
+
+See [building from source](../contributing/development/building.md#guest-firmware)
+for the firmware needed by memory growth.
 
 ## Disk configuration
 

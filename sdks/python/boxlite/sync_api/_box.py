@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 from ._agents import SyncAgents
 
 if TYPE_CHECKING:
-    from ..boxlite import Box, BoxMetrics, TunnelOptions
+    from ..boxlite import Box, BoxMetrics, BoxResources, TunnelOptions
     from ._boxlite import SyncBoxlite
     from ._execution import SyncExecution
     from ._network import SyncNetworkHandle
@@ -148,6 +148,12 @@ class SyncBox:
     def stop(self) -> None:
         """Stop the box (preserves state for potential restart)."""
         self._sync(self._box.stop())
+
+    def resize(
+        self, *, cpus: int | None = None, memory_mib: int | None = None
+    ) -> "BoxResources":
+        """Grow a running box; omitted resources retain their allocation."""
+        return self._sync(self._box.resize(cpus=cpus, memory_mib=memory_mib))
 
     def metrics(self) -> "BoxMetrics":
         """Get box metrics (CPU, memory usage, etc.)."""

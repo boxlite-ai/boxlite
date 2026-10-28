@@ -430,6 +430,48 @@ paths:
         "409":
           $ref: "#/components/responses/ConflictError"
 
+  /{prefix}/boxes/{box_id}/resize:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+      - $ref: "#/components/parameters/boxId"
+    post:
+      operationId: resizeBox
+      summary: Grow the CPU or memory allocation of a running box
+      description: |
+        Absolute targets, never deltas. Omitted fields retain their current
+        allocation; an empty object reads allocations and boot ceilings.
+        Shrinking or exceeding a boot ceiling is rejected before changes.
+        Memory growth must be a multiple of 128 MiB. The allocation includes
+        all guest RAM, including the kernel mapping.
+        Requires a running Linux/KVM box. An interrupted or failed request
+        may have partially completed; inspect the box or retry the same target.
+        Successfully allocated resources survive restart.
+      tags: [Boxes]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ResizeBoxRequest"
+      responses:
+        "200":
+          description: Current allocation and boot ceilings
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BoxResources"
+        "400":
+          $ref: "#/components/responses/BadRequestError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
+        "500":
+          description: Resize failed; query the allocation before retrying a possibly partial change
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
   /{prefix}/boxes/{box_id}/stop:
     parameters:
       - $ref: "#/components/parameters/prefix"
@@ -2391,6 +2433,37 @@ components:
     # =======================================================================
     # Box
     # =======================================================================
+    ResizeBoxRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        cpus:
+          type: integer
+          minimum: 1
+          maximum: 255
+        memory_mib:
+          type: integer
+          minimum: 1
+          maximum: 4294967295
+
+    BoxResources:
+      type: object
+      required: [cpus, memory_mib, max_cpus, max_memory_mib]
+      properties:
+        cpus:
+          type: integer
+          minimum: 1
+          maximum: 255
+        memory_mib:
+          type: integer
+          minimum: 1
+        max_cpus:
+          type: integer
+          description: Maximum CPUs this boot can bring online
+        max_memory_mib:
+          type: integer
+          description: Maximum memory this boot can expose, in MiB
+
     Box:
       type: object
       description: REST box metadata

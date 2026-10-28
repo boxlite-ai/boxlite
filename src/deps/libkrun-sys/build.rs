@@ -18,7 +18,7 @@ const LIBKRUNFW_PREBUILT_URL: &str =
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 const LIBKRUNFW_SHA256: &str = "1d1b848cee7053c3d26915f30312560343a4e382b5b4e83be1d6755939582de6";
 
-// Linux: Download pre-compiled .so directly (no build needed)
+// Linux opt-out: BOXLITE_BUILD_LIBKRUNFW=0 downloads the precompiled .so.
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 const LIBKRUNFW_SO_URL: &str =
     "https://github.com/boxlite-ai/libkrunfw/releases/download/v5.4.0/libkrunfw-x86_64.tgz";
@@ -966,10 +966,11 @@ fn build() {
     let libkrun_install = out_dir.join("libkrun");
     let libkrunfw_lib_dir = libkrunfw_install.join(LIB_DIR);
 
-    // Step 1: Download/build libkrunfw.
+    // Step 1: Build the firmware containing the virtio-mem guest driver.
     // Needed for both features: krunfw bundles the .so,
     // krun needs libkrunfw's pkgconfig for compilation.
-    let build_from_source = env::var("BOXLITE_BUILD_LIBKRUNFW").is_ok();
+    println!("cargo:rerun-if-env-changed=BOXLITE_BUILD_LIBKRUNFW");
+    let build_from_source = env::var("BOXLITE_BUILD_LIBKRUNFW").as_deref() != Ok("0");
 
     println!("cargo:rerun-if-env-changed=BOXLITE_LIBKRUNFW_SOURCE");
     if let Some(source) = env::var_os("BOXLITE_LIBKRUNFW_SOURCE") {
@@ -993,8 +994,14 @@ fn build() {
         );
     } else if build_from_source {
         let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
-        println!("cargo:warning=Building libkrunfw from source (BOXLITE_BUILD_LIBKRUNFW=1)");
+        println!("cargo:warning=Building libkrunfw with virtio-mem from vendored source");
         verify_vendored_sources(&manifest_dir, true);
+        // A source build replaces the prebuilt contents. Drop its cache marker
+        // so an explicit switch back to prebuilt verifies/extracts it again.
+        let prebuilt_marker = libkrunfw_install.join(format!(".version-{}", libkrunfw_cache_key()));
+        if prebuilt_marker.exists() {
+            fs::remove_file(prebuilt_marker).expect("remove prebuilt firmware cache marker");
+        }
 
         let libkrunfw_src = manifest_dir.join("vendor/libkrunfw");
         build_with_make(

@@ -1848,6 +1848,7 @@ fn build_router(state: Arc<AppState>) -> Router {
         // Box lifecycle
         .route("/v1/boxes/{box_id}/network/inbound", put(network::set_inbound))
         .route("/v1/boxes/{box_id}/network/outbound", put(network::set_outbound))
+        .route("/v1/boxes/{box_id}/resize", post(boxes::resize_box))
         .route(
             "/v1/boxes/{box_id}/start",
             post(boxes::start_box),
@@ -2007,6 +2008,7 @@ mod tests {
     use boxlite::runtime::options::NetworkSpec;
     use std::time::Duration;
 
+    mod resize;
     mod ssh;
 
     // --- API-key auth decision (pure; no runtime/network needed) ---
