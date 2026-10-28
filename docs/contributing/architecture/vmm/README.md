@@ -217,8 +217,9 @@ target's owning thread, and writes `CpuOnResult` into `result`; the next `run`
 returns it to the guest as the PSCI code, and `result` starts as
 `InternalFailure` so an unanswered call fails. On arm64 only the boot vCPU
 starts at the kernel's entry point, through `Arm64Vcpu::set_boot_registers`;
-each secondary starts powered off until `CPU_ON` gives it one. An HVF secondary
-waits parked, so the stop path's unpark also wakes one the guest never started.
+each secondary starts powered off until `CPU_ON` gives it one. A secondary
+waits outside the guest, and the stop path wakes it too, so one the guest never
+started also ends.
 
 How each host completes an access on the next `run`:
 
@@ -280,7 +281,7 @@ keeps RAM at `0x8000_0000` as libkrun does today.
 
 | Address | Use | Precedent |
 | --- | --- | --- |
-| below `0x3FFF_0000` | GICv3 redistributors, 128 KiB per vCPU | Firecracker, crosvm, dragonball |
+| below `0x3FFF_0000` | GICv3 redistributors, 128 KiB per vCPU from `0x3DFF_0000`, the base of the 32 MiB region HVF sizes for every vCPU it supports | Firecracker, crosvm, dragonball |
 | `0x3FFF_0000` | GICv3 distributor, 64 KiB | Firecracker, crosvm, dragonball |
 | `0x4000_1000` | PL031 RTC, SPI INTID 33 | Firecracker |
 | `0x4000_2000` | PL011 UART, SPI INTID 32 | Firecracker's serial slot |
@@ -404,7 +405,8 @@ today.
   event sets the stop flag before it queues, so the vCPU that sent it, such as
   the one that reset the i8042, never enters the guest again; every vCPU
   checks the flag before each entry. The `run()` thread then:
-  1. kicks and unparks every vCPU;
+  1. kicks every vCPU, and wakes the arm64 secondaries still waiting for
+     `CPU_ON`;
   2. joins the vCPU threads;
   3. stops and joins the device workers;
   4. returns.

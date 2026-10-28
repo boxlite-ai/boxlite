@@ -792,6 +792,7 @@ dependencies = [
  "linux-loader",
  "mio 1.2.0",
  "tracing",
+ "vm-fdt",
  "vm-memory 0.18.0",
  "vm-superio",
 ]
@@ -6965,6 +6966,12 @@ name = "virtue"
 version = "0.0.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "051eb1abcf10076295e815102942cc58f9d5e3b4560e46e53c21e8ff6f3af7b1"
+
+[[package]]
+name = "vm-fdt"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7e21282841a059bb62627ce8441c491f09603622cd5a21c43bfedc85a2952f23"
 
 [[package]]
 name = "vm-memory"

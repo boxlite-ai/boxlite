@@ -16,7 +16,7 @@ use crate::{
 pub(crate) const MAX_VCPUS: u8 = 64;
 
 /// Bytes of the command line the kernel copies, NUL included
-/// (`COMMAND_LINE_SIZE` in `arch/x86/include/asm/setup.h`).
+/// (`COMMAND_LINE_SIZE` on both x86_64 and arm64).
 pub(crate) const MAX_CMDLINE_BYTES: usize = 2048;
 
 /// The machine the VMM builds. The M2 engine adapter fills it from the
@@ -27,7 +27,7 @@ pub struct VmConfig {
     pub vcpu_count: u8,
     /// Guest RAM in MiB, `1..=MAX_MEMORY_MIB`.
     pub memory_mib: u32,
-    /// The ELF kernel image to load.
+    /// The kernel to load: ELF `vmlinux` on x86_64, an uncompressed `Image` on arm64.
     pub kernel: PathBuf,
     /// The kernel command line: printable ASCII, under `MAX_CMDLINE_BYTES`.
     pub cmdline: String,

@@ -9,7 +9,7 @@
 use std::{
     collections::VecDeque,
     io,
-    sync::{Arc, Condvar, Mutex},
+    sync::{Arc, Condvar, Mutex, mpsc},
 };
 
 use boxlite_hypervisor::{Error, MemoryRegion, Result, Vcpu, VcpuExit, VcpuHandle, Vm};
@@ -32,14 +32,35 @@ pub(crate) enum Call {
         line: u32,
         level: bool,
     },
+    #[cfg(target_arch = "x86_64")]
     SetCpuFeatures {
         id: u32,
     },
+    #[cfg(target_arch = "x86_64")]
     SetBootRegisters {
         id: u32,
     },
     DropVcpu {
         id: u32,
+    },
+    /// arm64: the MPIDR a vCPU got before its first entry.
+    #[cfg(target_arch = "aarch64")]
+    SetMpidr {
+        id: u32,
+        mpidr: u64,
+    },
+    /// arm64: where a vCPU enters the guest, and its X0.
+    #[cfg(target_arch = "aarch64")]
+    SetBootRegisters {
+        id: u32,
+        pc: u64,
+        x0: u64,
+    },
+    /// arm64: the VMM's answer to a vCPU's `CPU_ON`, as its next run reads it.
+    #[cfg(target_arch = "aarch64")]
+    CpuOnAnswer {
+        id: u32,
+        result: boxlite_hypervisor::CpuOnResult,
     },
 }
 
@@ -57,6 +78,13 @@ pub(crate) enum Step {
     Halted,
     /// `run` fails with `RunVcpu`.
     Fail,
+    /// arm64: a PSCI `CPU_ON` for the vCPU whose MPIDR is `target`.
+    #[cfg(target_arch = "aarch64")]
+    CpuOn {
+        target: u64,
+        entry: u64,
+        context_id: u64,
+    },
 }
 
 impl Call {
@@ -90,6 +118,7 @@ pub(crate) struct MockVm {
     fail_setup: Option<u32>,
     /// The id of each vCPU entry into the guest, in order.
     entries: Arc<Mutex<Vec<u32>>>,
+    entry_notifications: Option<mpsc::Sender<u32>>,
 }
 
 impl MockVm {
@@ -131,6 +160,11 @@ impl MockVm {
         Arc::clone(&self.entries)
     }
 
+    pub(crate) fn notifying_entries(mut self, sender: mpsc::Sender<u32>) -> Self {
+        self.entry_notifications = Some(sender);
+        self
+    }
+
     /// The call log, which outlives the backend so tests can read it after a drop.
     pub(crate) fn log(&self) -> Arc<Mutex<Vec<Call>>> {
         Arc::clone(&self.log)
@@ -164,9 +198,7 @@ impl MockVm {
                 source,
             },
             Call::SetIrqLine { line, .. } => Error::SetIrqLine { line, source },
-            Call::SetCpuFeatures { .. } | Call::SetBootRegisters { .. } | Call::DropVcpu { .. } => {
-                unreachable!("only memory and interrupt calls fail by index")
-            }
+            _ => unreachable!("only memory and interrupt calls fail by index"),
         })
     }
 }
@@ -190,8 +222,11 @@ impl Vm for MockVm {
             log: Arc::clone(&self.log),
             fail_setup: self.fail_setup == Some(id),
             entries: Arc::clone(&self.entries),
+            entry_notifications: self.entry_notifications.clone(),
             kick: Arc::default(),
             data: [0],
+            #[cfg(target_arch = "aarch64")]
+            cpu_on: None,
         })
     }
 
@@ -206,8 +241,12 @@ pub(crate) struct MockVcpu {
     log: Arc<Mutex<Vec<Call>>>,
     fail_setup: bool,
     entries: Arc<Mutex<Vec<u32>>>,
+    entry_notifications: Option<mpsc::Sender<u32>>,
     kick: Arc<Kick>,
     data: [u8; 1],
+    /// arm64: the answer slot of the `CPU_ON` this vCPU last exited with.
+    #[cfg(target_arch = "aarch64")]
+    cpu_on: Option<boxlite_hypervisor::CpuOnResult>,
 }
 
 impl MockVcpu {
@@ -246,6 +285,13 @@ impl Vcpu for MockVcpu {
     fn run(&mut self) -> Result<VcpuExit<'_>> {
         let id = self.id;
         self.entries.lock().unwrap().push(id);
+        if let Some(sender) = &self.entry_notifications {
+            let _ = sender.send(id);
+        }
+        #[cfg(target_arch = "aarch64")]
+        if let Some(result) = self.cpu_on.take() {
+            self.record(Call::CpuOnAnswer { id, result });
+        }
         Ok(match self.steps.pop_front() {
             Some(Step::Write { addr, byte }) => {
                 self.data = [byte];
@@ -261,6 +307,19 @@ impl Vcpu for MockVcpu {
                 let source = io::Error::from(io::ErrorKind::Other);
                 return Err(Error::RunVcpu { id, source });
             }
+            #[cfg(target_arch = "aarch64")]
+            Some(Step::CpuOn {
+                target,
+                entry,
+                context_id,
+            }) => VcpuExit::CpuOn {
+                target,
+                entry,
+                context_id,
+                result: self
+                    .cpu_on
+                    .insert(boxlite_hypervisor::CpuOnResult::InternalFailure),
+            },
             None => {
                 let pending = self.kick.pending.lock().unwrap();
                 let mut pending = self
@@ -312,6 +371,32 @@ impl boxlite_hypervisor::X86Vcpu for MockVcpu {
 
     fn set_boot_registers(&mut self, _state: &boxlite_hypervisor::X86BootRegisters) -> Result<()> {
         self.record(Call::SetBootRegisters { id: self.id });
+        Ok(())
+    }
+}
+
+#[cfg(target_arch = "aarch64")]
+impl boxlite_hypervisor::Arm64Vcpu for MockVcpu {
+    fn set_mpidr(&mut self, mpidr: u64) -> Result<()> {
+        self.record(Call::SetMpidr { id: self.id, mpidr });
+        if self.fail_setup {
+            let source = io::Error::from(io::ErrorKind::InvalidInput);
+            let (id, operation) = (self.id, "set MPIDR_EL1");
+            return Err(Error::ConfigureVcpu {
+                id,
+                operation,
+                source,
+            });
+        }
+        Ok(())
+    }
+
+    fn set_boot_registers(&mut self, regs: &boxlite_hypervisor::Arm64BootRegisters) -> Result<()> {
+        self.record(Call::SetBootRegisters {
+            id: self.id,
+            pc: regs.pc,
+            x0: regs.x0,
+        });
         Ok(())
     }
 }
