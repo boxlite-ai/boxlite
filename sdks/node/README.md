@@ -618,6 +618,20 @@ The SDK uses a dual-layer architecture:
 
 See [../../CONTRIBUTING.md](../../CONTRIBUTING.md) for development guidelines.
 
+### Agent binding tests
+
+From the repository root, run
+`make test:integration:node FILTER='agent namespace'`. The native Box getter test
+obtains a handle from a loopback REST server and checks namespace access without
+starting a VM or sending agent requests. Separate tests reject plain-object and
+prototype-only method receivers before the agent operation runs.
+
+These receiver tests exercise napi-rs callback unwrapping. They do not exercise
+the generated `FromNapiRef` and `FromNapiMutRef` conversions flagged by CodeQL,
+so passing them does not establish that those pointer alerts are false positives.
+The conversions are generated in the locked
+[napi-rs backend](https://github.com/napi-rs/napi-rs/blob/5ed87dd7e930961e9273f95cd0ed77c2da967bc1/crates/backend/src/codegen/struct.rs#L112-L146).
+
 ## License
 
 Apache 2.0 - See [../../LICENSE](../../LICENSE)

@@ -3,6 +3,7 @@ package boxlite
 import (
 	"context"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -17,6 +18,9 @@ func TestAgentsReturnUnsupported(t *testing.T) {
 		var typed *Error
 		if !errors.As(err, &typed) || typed.Code != ErrUnsupported || !strings.Contains(typed.Message, name+" is not implemented") {
 			t.Fatalf("%s returned %v, %v", name, value, err)
+		}
+		if value != nil && !reflect.ValueOf(value).IsZero() {
+			t.Fatalf("%s returned a value with an error: %v", name, value)
 		}
 	}
 	s, err := agents.Create(ctx, "agent", AgentCreateOptions{})

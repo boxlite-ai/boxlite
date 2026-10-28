@@ -9,18 +9,22 @@ use crate::error::{BoxliteErrorCode, null_pointer_error, write_error};
 use crate::{CBoxHandle, CBoxliteError};
 
 /// Box-owned namespace; release with boxlite_agents_free.
+#[derive(Debug)]
 pub struct CAgents {
     _core: boxlite::Agents,
 }
 /// Agent instance handle.
+#[derive(Debug)]
 pub struct CAgent {
     _private: (),
 }
 /// Agent turn handle.
+#[derive(Debug)]
 pub struct CAgentTurn {
     _private: (),
 }
 /// Journal subscription. Freeing it does not cancel agent work.
+#[derive(Debug)]
 pub struct CAgentEvents {
     _private: (),
 }
@@ -28,6 +32,7 @@ pub struct CAgentEvents {
 /// Initial agent settings. Null strings mean omitted; config_json uses the
 /// AgentConfig keys documented in docs/reference/agents.md.
 #[repr(C)]
+#[derive(Debug)]
 pub struct CAgentCreateOptions {
     pub cwd: *const c_char,
     pub config_json: *const c_char,
@@ -36,7 +41,7 @@ pub struct CAgentCreateOptions {
 
 /// Admission modes; zero-initialized options select queue.
 #[repr(C)]
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub enum CAgentSendMode {
     AgentSendQueue = 0,
     AgentSendReject = 1,
@@ -44,6 +49,7 @@ pub enum CAgentSendMode {
 
 /// Optional JSON accompanies positional message text.
 #[repr(C)]
+#[derive(Debug)]
 pub struct CAgentSendOptions {
     pub mode: CAgentSendMode,
     pub data_json: *const c_char,
@@ -52,18 +58,21 @@ pub struct CAgentSendOptions {
 
 /// Shared retry identity for close, reply, steering and interruption.
 #[repr(C)]
+#[derive(Debug)]
 pub struct CAgentControlOptions {
     pub idempotency_key: *const c_char,
 }
 
 /// Timeout in seconds; negative or a null options pointer means no deadline.
 #[repr(C)]
+#[derive(Debug)]
 pub struct CAgentWaitOptions {
     pub timeout_seconds: f64,
 }
 
 /// Resume after an opaque cursor; null means no cursor.
 #[repr(C)]
+#[derive(Debug)]
 pub struct CAgentEventsOptions {
     pub after: *const c_char,
 }

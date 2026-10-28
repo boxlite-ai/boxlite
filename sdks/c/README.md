@@ -1266,6 +1266,7 @@ cargo build -p boxlite-c
 See `sdks/c/tests/` for the test suite.
 
 - `make test:unit:ffi` runs the Rust-side FFI tests; `make test:unit:c` and `make test:integration:c` build and run the C tests. `FILTER=<pattern>` narrows each.
+- `make test:unit:c FILTER=agents` obtains a live Box handle from a loopback REST server, checks successful namespace allocation and release, and verifies agent-operation errors without starting a VM. Null-handle checks alone cannot cover namespace ownership.
 - C integration tests pin `alpine:3.19`, which avoids drifting to the latest Alpine release line; the tag still receives patch updates, so it does not guarantee an immutable userland. `test_ssh_integration.c` pulls it through the same registry mirrors the Python and Node suites use.
 - `FREE_STR_CALLS` counts string frees across the whole test process. A Rust test that frees a counted FFI payload, or reads the counter, must hold `FREE_STR_LOCK` for as long as it does so, even if it never reads the counter. Without the lock, plain `cargo test` threads count its frees in another test's delta. nextest's process-per-test runs hide this.
 

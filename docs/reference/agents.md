@@ -51,6 +51,18 @@ No agent or turn is returned by `create`, `get`, `send` or `respond`.
 C getters clear output pointers; callbacks are not invoked and no agent, turn,
 subscription or JSON result object is allocated.
 
+### Namespace ownership
+
+Accessing a Box's agent namespace does not start or resume the Box. Python's
+`SimpleBox`, `SyncBox` and `SyncSimpleBox` accessors need no runtime initialization.
+Node's native `JsBox.agents` and `SimpleBox.agents` both expose `Agents`.
+
+In C, `boxlite_box_agents` requires a live `CBoxHandle` and a writable output
+pointer. It returns `Ok` with an owned `CAgents` namespace even while agent
+operations return `Unsupported`. Release that namespace with
+`boxlite_agents_free`; release the Box separately with `boxlite_box_free`.
+A null Box handle or output pointer returns `InvalidArgument`.
+
 ### Grouped options
 
 In SDK calls, keep identifiers and message text positional; group optional arguments in these types:

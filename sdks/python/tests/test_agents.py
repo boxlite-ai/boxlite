@@ -15,7 +15,13 @@ from boxlite.agents import (
 )
 from boxlite.errors import UnsupportedError
 from boxlite.simplebox import SimpleBox
-from boxlite.sync_api import SyncAgent, SyncAgents, SyncAgentTurn
+from boxlite.sync_api import (
+    SyncAgent,
+    SyncAgents,
+    SyncAgentTurn,
+    SyncBox,
+    SyncSimpleBox,
+)
 
 ASYNC_CALLS = [
     lambda: Agents().create("agent", AgentCreateOptions(config={"model": "model"})),
@@ -92,6 +98,12 @@ def test_agents_simple_namespace_needs_no_runtime_initialization():
     box = object.__new__(SimpleBox)
     assert isinstance(box.agents, Agents)
     assert boxlite.Agent is Agent
+
+
+@pytest.mark.parametrize("box_type", [SyncBox, SyncSimpleBox])
+def test_agents_sync_namespace_needs_no_runtime_initialization(box_type):
+    box = object.__new__(box_type)
+    assert isinstance(box.agents, SyncAgents)
 
 
 @pytest.mark.asyncio

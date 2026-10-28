@@ -7,13 +7,15 @@ use serde_json::Value;
 use crate::util::map_err;
 
 #[napi(js_name = "Agents")]
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct JsAgents {}
 
 #[napi(js_name = "Agent")]
+#[derive(Debug)]
 pub struct JsAgent {}
 
 #[napi(js_name = "AgentTurn")]
+#[derive(Debug)]
 pub struct JsAgentTurn {}
 
 #[napi]
