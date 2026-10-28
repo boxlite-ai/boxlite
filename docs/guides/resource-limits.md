@@ -16,11 +16,18 @@ managed plans. Administrator-defined quota exceptions remain in effect.
 | Large | 4 | 8 GiB | 50 GiB | 10 GiB |
 | Custom maximum | 16 subscribed / 4 otherwise | 32 GiB subscribed / 8 GiB otherwise | 100 GiB | 10 GiB |
 
-The creation dialog refreshes organization quotas when opened and clamps all
-presets and custom inputs to the returned limits. Size controls and Create stay
-disabled while that refresh is pending, so a preset cannot be truncated using
-an old quota before the response arrives. If the refresh fails, editing resumes
-with the last available quotas. REST and SDK creation requests are independently
+The organization list (`GET /organizations`) returns stored quotas and membership
+metadata without looking up subscription grants. For effective creation limits,
+use the individual organization endpoint (`GET /organizations/{organizationId}`).
+
+The creation dialog reads only the selected organization's effective quotas when
+opened or when the selected organization changes. Presets and custom inputs are
+clamped to the returned limits. Size controls and Create stay disabled during
+refresh, and existing selections are not truncated until it settles. Responses
+from a previous selection or opening are ignored. If the refresh fails, an error
+is shown and editing resumes with the selected organization's stored quotas.
+The global organization list is not changed by the dialog's quota lookup.
+REST and SDK creation requests are independently
 checked by the server; over-limit requests return HTTP 400.
 The REST maximum is `cpus=16`, `memory_mib=32768`, `disk_size_gb=100`.
 Memory and disk use binary units (GiB), including the historical `disk_size_gb` name.

@@ -37,6 +37,9 @@ const mutationMocks = vi.hoisted(() => ({
   refreshOrganizations: vi.fn().mockResolvedValue(undefined),
 }))
 
+const organizationsApi = vi.hoisted(() => ({ getOrganization: vi.fn() }))
+vi.mock('@/hooks/useApi', () => ({ useApi: () => ({ organizationsApi }) }))
+
 vi.mock('@/hooks/useOrganizations', () => ({
   useOrganizations: () => ({ refreshOrganizations: mutationMocks.refreshOrganizations }),
 }))
@@ -108,6 +111,7 @@ describe('CreateBoxDialog per-org resource cap', () => {
     state.pricesQuery = { data: LIVE_PRICES, isLoading: false }
     state.catalogImages = []
     mutationMocks.refreshOrganizations.mockReset().mockResolvedValue(undefined)
+    organizationsApi.getOrganization.mockReset().mockImplementation(async () => ({ data: state.org }))
     mutationMocks.createBox.mockReset().mockResolvedValue({ id: 'created-box' })
   })
 
@@ -419,9 +423,10 @@ describe('CreateBoxDialog per-org resource cap', () => {
     )
   })
 
-  it('refreshes organization limits when the create dialog opens', async () => {
+  it('refreshes only the selected organization when the create dialog opens', async () => {
     await renderOpen()
-    expect(mutationMocks.refreshOrganizations).toHaveBeenCalledTimes(1)
+    expect(organizationsApi.getOrganization).toHaveBeenCalledExactlyOnceWith('org-1')
+    expect(mutationMocks.refreshOrganizations).not.toHaveBeenCalled()
   })
 
   function button(label: string) {
@@ -431,14 +436,14 @@ describe('CreateBoxDialog per-org resource cap', () => {
   }
 
   function deferRefresh() {
-    let resolve!: () => void
+    let resolve!: (response: { data: unknown }) => void
     let reject!: (error: Error) => void
-    const promise = new Promise<void>((yes, no) => {
+    const promise = new Promise<{ data: unknown }>((yes, no) => {
       resolve = yes
       reject = no
     })
-    mutationMocks.refreshOrganizations.mockReturnValueOnce(promise)
-    return { resolve, reject }
+    organizationsApi.getOrganization.mockReturnValueOnce(promise)
+    return { resolve: (data = state.org) => resolve({ data }), reject }
   }
 
   it.each([
@@ -456,8 +461,7 @@ describe('CreateBoxDialog per-org resource cap', () => {
     })
     expect(mutationMocks.createBox).not.toHaveBeenCalled()
     await act(async () => {
-      state.org = makeOrg({ maxCpuPerBox: 16, maxMemoryPerBox: 32, maxDiskPerBox: 100 })
-      refresh.resolve()
+      refresh.resolve(makeOrg({ maxCpuPerBox: 16, maxMemoryPerBox: 32, maxDiskPerBox: 100 }))
     })
     await rerenderOpen()
     expect(button(String(label)).matches(':disabled')).toBe(false)
@@ -483,7 +487,7 @@ describe('CreateBoxDialog per-org resource cap', () => {
     await act(async () => root?.render(<CreateBoxDialog open={false} onOpenChange={() => {}} />))
     const current = deferRefresh()
     await rerenderOpen()
-    expect(mutationMocks.refreshOrganizations).toHaveBeenCalledTimes(2)
+    expect(organizationsApi.getOrganization).toHaveBeenCalledTimes(2)
     await act(async () => earlier.resolve())
     expect(button('Medium').matches(':disabled')).toBe(true)
     expect(button('Create Box').disabled).toBe(true)
@@ -492,16 +496,54 @@ describe('CreateBoxDialog per-org resource cap', () => {
     expect(button('Create Box').disabled).toBe(false)
   })
 
-  it('disables visible Custom controls when the refresh callback changes', async () => {
+  it('locks Custom controls on organization changes and ignores obsolete results', async () => {
     await renderOpen()
-    mutationMocks.refreshOrganizations = vi.fn().mockResolvedValue(undefined)
-    const refresh = deferRefresh()
+    const earlier = deferRefresh()
+    state.org = makeOrg({ maxCpuPerBox: 4, maxMemoryPerBox: 8, maxDiskPerBox: 10 })
     await rerenderOpen()
+    const refresh = deferRefresh()
+    state.org = makeOrg({ id: 'org-2', maxCpuPerBox: 2, maxMemoryPerBox: 4, maxDiskPerBox: 5 })
+    await rerenderOpen()
+    expect(organizationsApi.getOrganization).toHaveBeenLastCalledWith('org-2')
     const inputs = [...document.querySelectorAll<HTMLInputElement>('input[aria-label="value"]')]
     expect(inputs).toHaveLength(3)
+    await act(async () => earlier.resolve(makeOrg({ maxCpuPerBox: 16, maxMemoryPerBox: 32, maxDiskPerBox: 100 })))
     expect(inputs.every((input) => input.matches(':disabled'))).toBe(true)
     await act(async () => refresh.resolve())
     expect(inputs.every((input) => !input.matches(':disabled'))).toBe(true)
+    await act(async () => button('Large').click())
+    await submit()
+    expect(toBoxApiCreateRequest(mutationMocks.createBox.mock.calls[0][0])).toMatchObject({
+      cpus: 2,
+      memory_mib: 4096,
+      disk_size_gb: 5,
+    })
+  })
+
+  it('preserves a selected preset while refreshing a replacement organization snapshot', async () => {
+    const subscribed = makeOrg({ maxCpuPerBox: 16, maxMemoryPerBox: 32, maxDiskPerBox: 100 })
+    state.org = subscribed
+    await renderOpen()
+    await act(async () => button('Medium').click())
+    const name = nameInput()
+    if (!name) throw new Error('expected name input to be rendered')
+    await act(async () => typeInto(name, 'kept-name'))
+    const refresh = deferRefresh()
+    state.org = makeOrg({ name: 'Renamed', maxCpuPerBox: 4, maxMemoryPerBox: 8, maxDiskPerBox: 10 })
+    await rerenderOpen()
+    expect(document.body.textContent).toMatch(/2 vCPU.*4 GiB.*20 GiB/)
+    expect(button('Create Box').disabled).toBe(true)
+    await act(async () => refresh.resolve(subscribed))
+    expect(nameInput()?.value).toBe('kept-name')
+    await submit()
+    expect(toBoxApiCreateRequest(mutationMocks.createBox.mock.calls[0][0]).disk_size_gb).toBe(20)
+  })
+
+  it('does not request limits or allow creation without a selected organization', async () => {
+    state.org = null
+    await rerenderOpen()
+    expect(organizationsApi.getOrganization).not.toHaveBeenCalled()
+    expect(button('Create Box').disabled).toBe(true)
   })
 
   describe('the image field', () => {

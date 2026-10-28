@@ -68,19 +68,33 @@ describe('subscription Box resource limits', () => {
     expect(insert).not.toHaveBeenCalled()
   })
 
-  it('returns the effective limits in organization detail and list responses', async () => {
+  it('lists stored quotas without resolving grants and resolves only the requested detail', async () => {
+    const custom = { ...organization, id: 'org-custom', maxDiskPerBox: 200 }
     const controller = Object.create(OrganizationController.prototype) as OrganizationController
     Object.assign(controller, {
       organizationBoxLimits: { resolve },
       organizationService: {
         findOne: jest.fn().mockResolvedValue(organization),
-        findByUserWithDefaultFlag: jest.fn().mockResolvedValue([{ organization, isDefaultForAuthenticatedUser: true }]),
+        findByUserWithDefaultFlag: jest.fn().mockResolvedValue([
+          { organization, isDefaultForAuthenticatedUser: true },
+          { organization: custom, isDefaultForAuthenticatedUser: false },
+        ]),
       },
     })
-    expect(await controller.findOne('org-1')).toMatchObject(subscribed)
     expect(await controller.findAll({ userId: 'user-1' } as never)).toEqual([
-      expect.objectContaining({ ...subscribed, isDefaultForAuthenticatedUser: true }),
+      expect.objectContaining({ id: 'org-1', ...baseline, isDefaultForAuthenticatedUser: true, personal: true }),
+      expect.objectContaining({
+        id: 'org-custom',
+        ...baseline,
+        maxDiskPerBox: 200,
+        isDefaultForAuthenticatedUser: false,
+        personal: false,
+      }),
     ])
+    expect(resolve).not.toHaveBeenCalled()
+    expect(await controller.findOne('org-1')).toMatchObject(subscribed)
+    expect(resolve).toHaveBeenCalledTimes(1)
+    expect(resolve).toHaveBeenCalledWith(organization)
     expect(organization).toMatchObject(baseline)
   })
 })

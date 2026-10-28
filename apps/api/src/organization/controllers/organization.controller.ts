@@ -72,9 +72,9 @@ export class OrganizationController {
     private readonly organizationBoxLimits: OrganizationBoxLimitsService,
   ) {}
 
-  private async toOrganizationDto(organization: Organization, isDefault = false): Promise<OrganizationDto> {
+  private async toOrganizationDto(organization: Organization): Promise<OrganizationDto> {
     return Object.assign(
-      OrganizationDto.fromOrganization(organization, isDefault),
+      OrganizationDto.fromOrganization(organization),
       await this.organizationBoxLimits.resolve(organization),
     )
   }
@@ -309,10 +309,8 @@ export class OrganizationController {
   @UseGuards(AuthGuard('jwt'))
   async findAll(@AuthContext() authContext: IAuthContext): Promise<OrganizationDto[]> {
     const organizations = await this.organizationService.findByUserWithDefaultFlag(authContext.userId)
-    return Promise.all(
-      organizations.map(({ organization, isDefaultForAuthenticatedUser }) =>
-        this.toOrganizationDto(organization, isDefaultForAuthenticatedUser),
-      ),
+    return organizations.map(({ organization, isDefaultForAuthenticatedUser }) =>
+      OrganizationDto.fromOrganization(organization, isDefaultForAuthenticatedUser),
     )
   }
 
