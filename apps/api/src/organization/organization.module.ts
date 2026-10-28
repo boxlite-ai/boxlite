@@ -18,6 +18,7 @@ import { OrganizationRole } from './entities/organization-role.entity'
 import { OrganizationUser } from './entities/organization-user.entity'
 import { OrganizationInvitation } from './entities/organization-invitation.entity'
 import { OrganizationService } from './services/organization.service'
+import { OrganizationBoxLimitsService } from './services/organization-box-limits.service'
 import { OrganizationRoleService } from './services/organization-role.service'
 import { OrganizationUserService } from './services/organization-user.service'
 import { OrganizationInvitationService } from './services/organization-invitation.service'
@@ -65,6 +66,7 @@ import { UsageController } from '../usage/controllers/usage.controller'
   ],
   providers: [
     OnboardingService,
+    OrganizationBoxLimitsService,
     OrganizationService,
     OrganizationRoleService,
     OrganizationUserService,
@@ -81,6 +83,12 @@ import { UsageController } from '../usage/controllers/usage.controller'
       ) => new BoxRepository(dataSource, eventEmitter, boxLookupCacheInvalidationService),
     },
   ],
-  exports: [OrganizationService, OrganizationRoleService, OrganizationUserService, OrganizationInvitationService],
+  exports: [
+    OrganizationService,
+    OrganizationBoxLimitsService,
+    OrganizationRoleService,
+    OrganizationUserService,
+    OrganizationInvitationService,
+  ],
 })
 export class OrganizationModule {}

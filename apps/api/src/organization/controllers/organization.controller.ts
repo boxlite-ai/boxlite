@@ -53,6 +53,8 @@ import { OrGuard } from '../../auth/or.guard'
 import { OtelCollectorGuard } from '../../auth/otel-collector.guard'
 import { OtelConfigDto } from '../dto/otel-config.dto'
 import { OrganizationReferralCodeDto } from '../dto/organization-referral-code.dto'
+import { OrganizationBoxLimitsService } from '../services/organization-box-limits.service'
+import { Organization } from '../entities/organization.entity'
 
 @ApiTags('organizations')
 @Controller('organizations')
@@ -67,7 +69,15 @@ export class OrganizationController {
     private readonly organizationInvitationService: OrganizationInvitationService,
     private readonly userService: UserService,
     private readonly configService: TypedConfigService,
+    private readonly organizationBoxLimits: OrganizationBoxLimitsService,
   ) {}
+
+  private async toOrganizationDto(organization: Organization, isDefault = false): Promise<OrganizationDto> {
+    return Object.assign(
+      OrganizationDto.fromOrganization(organization, isDefault),
+      await this.organizationBoxLimits.resolve(organization),
+    )
+  }
 
   @Get('/invitations')
   @ApiOperation({
@@ -206,7 +216,7 @@ export class OrganizationController {
     }
 
     const organization = await this.organizationService.create(createOrganizationDto, authContext.userId, false, true)
-    return OrganizationDto.fromOrganization(organization)
+    return this.toOrganizationDto(organization)
   }
 
   @Patch('/:organizationId/name')
@@ -245,7 +255,7 @@ export class OrganizationController {
     @Body() updateOrganizationNameDto: UpdateOrganizationNameDto,
   ): Promise<OrganizationDto> {
     const organization = await this.organizationService.updateName(organizationId, updateOrganizationNameDto.name)
-    return OrganizationDto.fromOrganization(organization)
+    return this.toOrganizationDto(organization)
   }
 
   @Patch('/:organizationId/default-region')
@@ -299,8 +309,10 @@ export class OrganizationController {
   @UseGuards(AuthGuard('jwt'))
   async findAll(@AuthContext() authContext: IAuthContext): Promise<OrganizationDto[]> {
     const organizations = await this.organizationService.findByUserWithDefaultFlag(authContext.userId)
-    return organizations.map(({ organization, isDefaultForAuthenticatedUser }) =>
-      OrganizationDto.fromOrganization(organization, isDefaultForAuthenticatedUser),
+    return Promise.all(
+      organizations.map(({ organization, isDefaultForAuthenticatedUser }) =>
+        this.toOrganizationDto(organization, isDefaultForAuthenticatedUser),
+      ),
     )
   }
 
@@ -342,7 +354,7 @@ export class OrganizationController {
       throw new NotFoundException(`Organization with ID ${organizationId} not found`)
     }
 
-    return OrganizationDto.fromOrganization(organization)
+    return this.toOrganizationDto(organization)
   }
 
   @Delete('/:organizationId')
@@ -497,7 +509,7 @@ export class OrganizationController {
       throw new NotFoundException(`Organization with box ID ${boxId} not found`)
     }
 
-    return OrganizationDto.fromOrganization(organization)
+    return this.toOrganizationDto(organization)
   }
 
   @Get('/otel-config/by-box-auth-token/:authToken')

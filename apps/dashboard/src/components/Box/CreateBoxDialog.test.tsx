@@ -8,7 +8,7 @@ import { act, type ReactNode } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { CreateBoxDialog, resolvePerBoxLimits } from './CreateBoxDialog'
-import { validateMountPath, validateMounts } from '@/lib/cloudBox'
+import { toBoxApiCreateRequest, validateMountPath, validateMounts } from '@/lib/cloudBox'
 
 // Mutable org returned by the mocked hook; each test sets `state.org`.
 const state = vi.hoisted(() => ({
@@ -34,6 +34,11 @@ const LIVE_PRICES = {
 
 const mutationMocks = vi.hoisted(() => ({
   createBox: vi.fn(),
+  refreshOrganizations: vi.fn().mockResolvedValue(undefined),
+}))
+
+vi.mock('@/hooks/useOrganizations', () => ({
+  useOrganizations: () => ({ refreshOrganizations: mutationMocks.refreshOrganizations }),
 }))
 
 vi.mock('@/hooks/useSelectedOrganization', () => ({
@@ -102,6 +107,7 @@ describe('CreateBoxDialog per-org resource cap', () => {
     state.config = { billingApiUrl: 'http://billing.test' }
     state.pricesQuery = { data: LIVE_PRICES, isLoading: false }
     state.catalogImages = []
+    mutationMocks.refreshOrganizations.mockClear()
   })
 
   afterEach(() => {
@@ -346,6 +352,76 @@ describe('CreateBoxDialog per-org resource cap', () => {
     await act(async () => createButton?.click())
     await flush()
   }
+
+  describe('subscribed Cloud resource limits', () => {
+    beforeEach(() => {
+      state.org = makeOrg({ maxCpuPerBox: 16, maxMemoryPerBox: 32, maxDiskPerBox: 100 })
+      mutationMocks.createBox.mockReset()
+      mutationMocks.createBox.mockResolvedValue({ id: 'created-box' })
+    })
+
+    it.each([
+      ['Small', 1, 1024, 10],
+      ['Medium', 2, 4096, 20],
+      ['Large', 4, 8192, 50],
+    ])('submits the %s preset through the REST resource mapper', async (label, cpus, memory_mib, disk_size_gb) => {
+      await renderOpen()
+      const button = [...document.querySelectorAll<HTMLButtonElement>('[aria-label="Size"] button')].find((button) =>
+        button.textContent?.startsWith(String(label)),
+      )
+      expect(button).toBeTruthy()
+      await act(async () => button?.click())
+      await submit()
+
+      expect(mutationMocks.createBox).toHaveBeenCalledTimes(1)
+      expect(toBoxApiCreateRequest(mutationMocks.createBox.mock.calls[0][0])).toMatchObject({
+        cpus,
+        memory_mib,
+        disk_size_gb,
+      })
+    })
+
+    it('submits the exact Custom maximum in MiB without a cap warning', async () => {
+      await renderOpen()
+      const inputs = document.querySelectorAll<HTMLInputElement>('input[aria-label="value"]')
+      for (const [index, value] of ['16', '32', '100'].entries()) {
+        await act(async () => typeInto(inputs[index], value))
+        await act(async () => inputs[index].dispatchEvent(new FocusEvent('focusout', { bubbles: true })))
+      }
+      await submit()
+
+      expect(document.body.textContent).not.toContain('support@boxlite.ai')
+      expect(mutationMocks.createBox).toHaveBeenCalledTimes(1)
+      expect(toBoxApiCreateRequest(mutationMocks.createBox.mock.calls[0][0])).toMatchObject({
+        cpus: 16,
+        memory_mib: 32768,
+        disk_size_gb: 100,
+      })
+    })
+
+    it.each([
+      [0, '17', '16', /CPU\s*16\s*vCPU/],
+      [1, '33', '32', /Memory\s*32\s*GiB/],
+      [2, '101', '100', /Disk\s*100\s*GiB/],
+    ])(
+      'clamps resource %s to the returned organization limit and explains the cap',
+      async (index, value, max, hint) => {
+        await renderOpen()
+        const input = document.querySelectorAll<HTMLInputElement>('input[aria-label="value"]')[index]
+        await act(async () => typeInto(input, value))
+        await flush()
+
+        expect(input.value).toBe(max)
+        expect(document.body.textContent).toMatch(hint)
+        expect(document.querySelector('a[href^="mailto:support@boxlite.ai"]')).toBeTruthy()
+      },
+    )
+  })
+
+  it('refreshes organization limits when the create dialog opens', async () => {
+    await renderOpen()
+    expect(mutationMocks.refreshOrganizations).toHaveBeenCalledTimes(1)
+  })
 
   describe('the image field', () => {
     function imageInput() {

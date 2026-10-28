@@ -89,6 +89,7 @@ import { BoxLookupCacheInvalidationService } from './box-lookup-cache-invalidati
 import { Region } from '../../region/entities/region.entity'
 import { BoxActivityService } from './box-activity.service'
 import { assertWithinPerBoxLimits } from './per-box-limits'
+import { OrganizationBoxLimitsService } from '../../organization/services/organization-box-limits.service'
 import { requiresFreshBox } from '../utils/warm-pool-eligibility.util'
 import { OutboundPolicy, setRunnerOutbound } from '../runner-adapter/network-policy'
 import { isCuratedSelector, withoutRegistryProxy } from '../../image/utils/image-ref.util'
@@ -144,6 +145,7 @@ export class BoxService {
     private readonly imageRegistrarService: ImageRegistrarService,
     private readonly imagePreparationService: ImagePreparationService,
     private readonly imagePullFailureService: ImagePullFailureService,
+    private readonly organizationBoxLimits: OrganizationBoxLimitsService,
   ) {}
 
   protected getLockKey(id: string): string {
@@ -247,7 +249,8 @@ export class BoxService {
       const gpu = createBoxDto.gpu ?? DEFAULT_BOX_GPU
       // Reject over-limit requests at the boundary (the "security option"
       // per-box ceilings) rather than persisting out-of-range values.
-      assertWithinPerBoxLimits(cpu, mem, disk, organization)
+      const limits = await this.organizationBoxLimits.resolve(organization)
+      assertWithinPerBoxLimits(cpu, mem, disk, limits)
       this.organizationService.assertOrganizationIsNotSuspended(organization)
 
       // Admission decides whether this organization may boot from this image at

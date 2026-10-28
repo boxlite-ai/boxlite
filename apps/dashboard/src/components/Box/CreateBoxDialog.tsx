@@ -11,6 +11,7 @@ import { RoutePath } from '@/enums/RoutePath'
 import { useCreateBoxMutation } from '@/hooks/mutations/useCreateBoxMutation'
 import { useConfig } from '@/hooks/useConfig'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
+import { useOrganizations } from '@/hooks/useOrganizations'
 import { getBoxRouteId } from '@/lib/box-identity'
 import { boxHourlyPrice, formatPriceCents, type BoxSpec } from '@/lib/box-price'
 import { handleApiError } from '@/lib/error-handling'
@@ -587,6 +588,11 @@ export const CreateBoxDialog = ({
   const setOpen = onOpenChange ?? setInternalOpen
 
   const { selectedOrganization } = useSelectedOrganization()
+  const { refreshOrganizations } = useOrganizations()
+  useEffect(() => {
+    // Organization quotas can change after subscribing or recovering a payment.
+    if (open) void refreshOrganizations().catch(() => undefined)
+  }, [open, refreshOrganizations])
   const createBoxMutation = useCreateBoxMutation()
   const { data: availableVolumes = [] } = useVolumesQuery()
   const { data: catalogImages = [] } = useImagesQuery()
