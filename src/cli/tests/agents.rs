@@ -4,55 +4,85 @@ use assert_cmd::Command;
 use predicates::str::contains;
 
 #[test]
-fn agents_p0_all_operations_fail_before_runtime_setup() {
+fn agents_p0_flat_targets_fail_before_runtime_setup() {
     let directory = tempfile::tempdir().unwrap();
     let home = directory.path().join("runtime-must-not-exist");
     let config = directory.path().join("missing-config.json");
     let cases: &[(&[&str], &str)] = &[
         (&["create", "box", "coder"], "agents.create"),
-        (&["get", "box", "session"], "agents.get"),
-        (&["session", "close", "box", "session"], "session.close"),
+        (&["close", "box", "--session", "session"], "session.close"),
         (
-            &["session", "send", "box", "session", "hello"],
+            &["send", "box", "--session", "session", "hello"],
             "session.send",
         ),
         (
-            &["session", "get-turn", "box", "session", "turn"],
-            "session.get_turn",
+            &["inspect", "box", "--session", "session", "--turn", "turn"],
+            "turn.state",
         ),
-        (&["session", "events", "box", "session"], "session.events"),
+        (&["events", "box", "--session", "session"], "session.events"),
         (
-            &["session", "requests", "box", "session"],
+            &[
+                "inspect",
+                "box",
+                "--session",
+                "session",
+                "--view",
+                "requests",
+            ],
             "session.requests",
         ),
         (
             &[
-                "session",
                 "respond",
                 "box",
+                "--session",
                 "session",
+                "--request",
                 "request",
                 r#"{"type":"answer","text":"yes"}"#,
             ],
             "session.respond",
         ),
-        (&["session", "state", "box", "session"], "session.state"),
-        (&["session", "config", "box", "session"], "session.config"),
+        (&["inspect", "box", "--session", "session"], "session.state"),
         (
-            &["session", "capabilities", "box", "session"],
+            &["inspect", "box", "--session", "session", "--view", "config"],
+            "session.config",
+        ),
+        (
+            &[
+                "inspect",
+                "box",
+                "--session",
+                "session",
+                "--view",
+                "capabilities",
+            ],
             "session.capabilities",
         ),
-        (&["turn", "wait", "box", "session", "turn"], "turn.wait"),
-        (&["turn", "events", "box", "session", "turn"], "turn.events"),
         (
-            &["turn", "steer", "box", "session", "turn", "use Rust"],
+            &["wait", "box", "--session", "session", "--turn", "turn"],
+            "turn.wait",
+        ),
+        (
+            &["events", "box", "--session", "session", "--turn", "turn"],
+            "turn.events",
+        ),
+        (
+            &[
+                "steer",
+                "box",
+                "--session",
+                "session",
+                "--turn",
+                "turn",
+                "use Rust",
+            ],
             "turn.steer",
         ),
         (
-            &["turn", "interrupt", "box", "session", "turn"],
+            &["interrupt", "box", "--session", "session", "--turn", "turn"],
             "turn.interrupt",
         ),
-        (&["turn", "state", "box", "session", "turn"], "turn.state"),
     ];
     for (args, operation) in cases {
         Command::new(assert_cmd::cargo::cargo_bin!("boxlite"))
@@ -75,7 +105,7 @@ fn agents_p0_all_operations_fail_before_runtime_setup() {
 fn agents_p0_binary_help_works_and_malformed_input_is_a_usage_error() {
     Command::new(assert_cmd::cargo::cargo_bin!("boxlite"))
         .env_clear()
-        .args(["agent", "turn", "steer", "--help"])
+        .args(["agent", "steer", "--help"])
         .assert()
         .success()
         .stdout(contains("not implemented"));
@@ -92,6 +122,45 @@ fn agents_p0_binary_help_works_and_malformed_input_is_a_usage_error() {
         .assert()
         .code(2)
         .stdout("");
+}
+
+#[test]
+fn agents_p0_invalid_target_combinations_are_usage_errors() {
+    let cases: &[&[&str]] = &[
+        &["send", "box", "hello"],
+        &["steer", "box", "--session", "session", "hello"],
+        &["respond", "box", "--session", "session", "{}"],
+        &[
+            "inspect",
+            "box",
+            "--session",
+            "session",
+            "--turn",
+            "turn",
+            "--view",
+            "config",
+        ],
+        &[
+            "inspect",
+            "box",
+            "--session",
+            "session",
+            "--view",
+            "unknown",
+        ],
+        &["session", "send", "box", "session", "hello"],
+        &["turn", "wait", "box", "session", "turn"],
+        &["get", "box", "session"],
+    ];
+    for args in cases {
+        Command::new(assert_cmd::cargo::cargo_bin!("boxlite"))
+            .env_clear()
+            .arg("agent")
+            .args(*args)
+            .assert()
+            .code(2)
+            .stdout("");
+    }
 }
 
 #[test]
@@ -113,23 +182,26 @@ fn agents_p0_fish_completion_uses_command_paths_not_message_words() {
         .success();
     std::fs::write(&script, &completion.get_output().stdout).unwrap();
     for (input, expected, forbidden) in [
+        ("boxlite agent ", "steer", "exec"),
+        ("boxlite --profile send agent ", "steer", "exec"),
+        ("boxlite agent --profile wait ", "steer", "exec"),
         (
-            "boxlite agent turn wait box session turn --",
+            "boxlite agent wait box --session session --turn turn --",
             "--timeout-seconds",
             "--mode",
         ),
         (
-            "boxlite agent session send turn SESSION wait --",
+            "boxlite agent send wait --session SESSION wait --",
             "--mode",
             "--timeout-seconds",
         ),
         (
-            "boxlite --profile turn agent --url https://example.test session send turn SESSION wait --",
+            "boxlite --profile wait agent --url https://example.test send turn --session SESSION wait --",
             "--mode",
             "--timeout-seconds",
         ),
         (
-            "boxlite agent --profile session turn --profile send wait box SESSION TURN --",
+            "boxlite agent --profile send wait box --session SESSION --turn TURN --",
             "--timeout-seconds",
             "--mode",
         ),
@@ -143,16 +215,16 @@ fn agents_p0_fish_completion_uses_command_paths_not_message_words() {
             String::from_utf8_lossy(&output.stderr)
         );
         let output = String::from_utf8(output.stdout).unwrap();
-        let flags: Vec<_> = output
+        let suggestions: Vec<_> = output
             .lines()
             .map(|line| line.split('\t').next().unwrap())
             .collect();
         assert!(
-            flags.contains(&expected),
+            suggestions.contains(&expected),
             "missing {expected} for {input}: {output}"
         );
         assert!(
-            !flags.contains(&forbidden),
+            !suggestions.contains(&forbidden),
             "unexpected {forbidden} for {input}: {output}"
         );
     }

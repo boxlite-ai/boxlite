@@ -25,8 +25,9 @@ The BoxLite CLI (`boxlite`) lets you create, run, and manage BoxLite boxes from 
 - **Output formats** — Table, JSON, or YAML for list/images
 - **Shell completion** — Bash, Zsh, Fish
 
-The experimental `boxlite agent` namespace declares P0 session and turn commands,
-including steering. These commands return “not implemented” with exit code 1.
+The experimental `boxlite agent` namespace declares nine flat P0 commands,
+including steering. BOX is positional; named `--session` and `--turn` flags select
+inner targets. These commands return “not implemented” with exit code 1.
 See the [agent CLI reference](../../docs/reference/cli/README.md#boxlite-agent)
 for commands and grouped options.
 

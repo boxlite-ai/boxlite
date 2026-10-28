@@ -32,6 +32,7 @@ How to build, test, and change the code.
 
 Dated root-cause analyses and design studies, newest first.
 
+- 2026-10-28 · [Agent CLI simplification](investigations/2026-10-28-agent-cli-simplification.md): compares command hierarchies and named runtime targets for P0.
 - 2026-10-27 · [CLI guest SSH commands](investigations/cli-ssh-commands.md)
 - 2026-10-08 · [BoxLite skills in Claude Code](investigations/claude-code-plugin.md): describes the Claude adapter, shared package layout, and installation/acceptance checks.
 - 2026-10-08 · [CLI device authorization discovery](investigations/cli-device-authorization.md)

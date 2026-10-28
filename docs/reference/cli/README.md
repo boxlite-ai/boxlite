@@ -801,27 +801,34 @@ stderr and exit with code 1, before loading runtime configuration, credentials o
 a Box, or contacting a server. No agent work or event stream is started. Help and
 shell completion work; malformed arguments use the normal CLI usage error (code 2).
 
-| Purpose | Command after `boxlite agent` |
-|---|---|
-| Create/lookup | `create BOX AGENT`, `get BOX SESSION` |
-| Submit/close | `session send BOX SESSION TEXT`, `session close BOX SESSION` |
-| Turn lookup | `session get-turn BOX SESSION TURN` |
-| Session observations | `session state/config/capabilities/requests BOX SESSION` |
-| Session events | `session events BOX SESSION` |
-| Reply | `session respond BOX SESSION REQUEST JSON` |
-| Wait/observe | `turn wait/state/events BOX SESSION TURN` |
-| Steer/interrupt | `turn steer BOX SESSION TURN TEXT`, `turn interrupt BOX SESSION TURN` |
+| Purpose | Command after `boxlite agent` | Intended operation |
+|---|---|---|
+| Lifecycle | `create BOX AGENT` | Create a session with initial configuration. |
+| Lifecycle | `close BOX --session SESSION` | End the session. |
+| Work | `send BOX --session SESSION TEXT` | Submit a new turn. |
+| Work | `wait BOX --session SESSION --turn TURN` | Wait for an existing turn's result. |
+| Observe | `inspect BOX --session SESSION [--turn TURN]` | Read session or turn state. |
+| Observe | `events BOX --session SESSION [--turn TURN]` | Follow session or turn events. |
+| Interact | `steer BOX --session SESSION --turn TURN TEXT` | Redirect that turn without submitting another. |
+| Interact | `interrupt BOX --session SESSION --turn TURN` | Interrupt that turn's agent loop. |
+| Interact | `respond BOX --session SESSION --request REQUEST JSON` | Answer a question or approve/deny a permission request. |
 
-Slashes in the table separate command choices. IDs and message text remain
-positional. The optional flags are grouped in typed `XxxOptions` structs:
+`BOX` remains positional, as in `boxlite exec`. `AGENT` identifies the agent to
+start; `--session` selects an existing conversation. Mutations never infer an
+active turn. `inspect --view config|capabilities|requests` selects a session-only
+read and cannot be combined with `--turn`; omission reads state. The SDK's
+`get`/`get_turn` handle lookups are implicit in CLI targeting.
+
+The optional flags are grouped in typed `XxxOptions` structs:
 
 | Group | Commands | Flags |
 |---|---|---|
 | `AgentCreateOptions` | `create` | `--cwd PATH`, `--agent-config JSON`, `--idempotency-key KEY` |
-| `AgentSendOptions` | `session send` | `--mode queue\|reject` (default `queue`), `--data JSON`, `--idempotency-key KEY` |
+| `AgentSendOptions` | `send` | `--mode queue\|reject` (default `queue`), `--data JSON`, `--idempotency-key KEY` |
 | `AgentControlOptions` | close, respond, steer, interrupt | `--idempotency-key KEY` |
-| `AgentWaitOptions` | `turn wait` | `--timeout-seconds SECONDS` (nonnegative whole seconds; omitted means no deadline) |
-| `AgentEventsOptions` | both events commands | `--after CURSOR` |
+| `AgentWaitOptions` | `wait` | `--timeout-seconds SECONDS` (nonnegative whole seconds; omitted means no deadline) |
+| `AgentEventsOptions` | `events` | `--after CURSOR` |
+| `AgentInspectOptions` | `inspect` | `--view config\|capabilities\|requests` |
 
 `--agent-config` is distinct from the global runtime `--config FILE`. Config,
 data and response arguments must be valid JSON; schema validation and all runtime
@@ -832,9 +839,10 @@ semantics remain unimplemented. Response JSON uses either
 
 ```bash
 boxlite agent create dev coder --cwd /workspace --agent-config '{"model":"model-id"}'
-boxlite agent session send dev session-id "Review this code" --mode reject
-boxlite agent turn steer dev session-id turn-id "Focus on tests" --idempotency-key steer-1
-boxlite agent turn events dev session-id turn-id --after cursor-1
+boxlite agent send dev --session session-id "Review this code" --mode reject
+boxlite agent inspect dev --session session-id --view requests
+boxlite agent steer dev --session session-id --turn turn-id "Focus on tests" --idempotency-key steer-1
+boxlite agent events dev --session session-id --turn turn-id --after cursor-1
 ```
 
 Each example currently fails explicitly. Agent commands accept the usual Box

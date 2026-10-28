@@ -162,10 +162,12 @@ session, turn, subscription or JSON result objects.
 
 ### CLI commands
 
-The [CLI reference](cli/README.md#boxlite-agent) lists the corresponding
-`agent create/get`, `agent session …` and `agent turn …` commands and flags.
-CLI options use the same five groups; parsing/help work, while command execution
-fails before creating a runtime or contacting a server.
+The [CLI reference](cli/README.md#boxlite-agent) lists nine flat `agent` commands.
+BOX is positional; `--session`, `--turn` and `--request` identify inner targets.
+`inspect` combines state and session views, and `events` selects either scope.
+The SDK's `get`/`get_turn` remain available; CLI targeting subsumes handle lookup.
+CLI options reuse the five groups above and add `AgentInspectOptions` for view
+selection. Parsing/help work; execution fails before runtime or server access.
 
 ### Deferred surface
 

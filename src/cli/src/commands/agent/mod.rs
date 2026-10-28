@@ -26,18 +26,6 @@ pub enum AgentCommand {
         #[command(flatten)]
         options: AgentCreateOptions,
     },
-    /// Look up a session (not implemented).
-    Get(SessionTarget),
-    /// Send work, inspect state, and handle session requests (not implemented).
-    #[command(subcommand)]
-    Session(SessionCommand),
-    /// Observe and control one turn (not implemented).
-    #[command(subcommand)]
-    Turn(TurnCommand),
-}
-
-#[derive(Subcommand, Debug)]
-pub enum SessionCommand {
     /// Close a session (not implemented).
     Close {
         #[command(flatten)]
@@ -54,22 +42,26 @@ pub enum SessionCommand {
         #[command(flatten)]
         options: AgentSendOptions,
     },
-    /// Look up a turn without executing it (not implemented).
-    GetTurn(TurnTarget),
-    /// Open session events after a cursor (not implemented).
+    /// Read state, configuration, capabilities or requests (not implemented).
+    Inspect {
+        #[command(flatten)]
+        target: ReadTarget,
+        #[command(flatten)]
+        options: AgentInspectOptions,
+    },
+    /// Open session or turn events after a cursor (not implemented).
     Events {
         #[command(flatten)]
-        target: SessionTarget,
+        target: ReadTarget,
         #[command(flatten)]
         options: AgentEventsOptions,
     },
-    /// Read outstanding questions and permissions (not implemented).
-    Requests(SessionTarget),
     /// Submit an answer or permission response as JSON (not implemented).
     Respond {
         #[command(flatten)]
         target: SessionTarget,
         /// Request identifier
+        #[arg(long, value_name = "REQUEST")]
         request: String,
         /// Typed answer or permission response
         #[arg(value_name = "JSON", value_parser = parse_json)]
@@ -77,29 +69,12 @@ pub enum SessionCommand {
         #[command(flatten)]
         options: AgentControlOptions,
     },
-    /// Read session state (not implemented).
-    State(SessionTarget),
-    /// Read effective agent configuration (not implemented).
-    Config(SessionTarget),
-    /// Read adapter capabilities and limits (not implemented).
-    Capabilities(SessionTarget),
-}
-
-#[derive(Subcommand, Debug)]
-pub enum TurnCommand {
     /// Wait for a turn result (not implemented).
     Wait {
         #[command(flatten)]
         target: TurnTarget,
         #[command(flatten)]
         options: AgentWaitOptions,
-    },
-    /// Open turn events after a cursor (not implemented).
-    Events {
-        #[command(flatten)]
-        target: TurnTarget,
-        #[command(flatten)]
-        options: AgentEventsOptions,
     },
     /// Steer this turn without creating another turn (not implemented).
     Steer {
@@ -117,8 +92,6 @@ pub enum TurnCommand {
         #[command(flatten)]
         options: AgentControlOptions,
     },
-    /// Read turn state (not implemented).
-    State(TurnTarget),
 }
 
 #[derive(Args, Debug)]
@@ -133,7 +106,7 @@ pub struct SessionTarget {
     #[command(flatten)]
     sandbox: BoxTarget,
     /// Session identifier
-    #[arg(value_name = "SESSION")]
+    #[arg(long, value_name = "SESSION")]
     session: String,
 }
 
@@ -142,8 +115,17 @@ pub struct TurnTarget {
     #[command(flatten)]
     session: SessionTarget,
     /// Turn identifier
-    #[arg(value_name = "TURN")]
+    #[arg(long, value_name = "TURN")]
     turn: String,
+}
+
+#[derive(Args, Debug)]
+pub struct ReadTarget {
+    #[command(flatten)]
+    session: SessionTarget,
+    /// Select one turn instead of the whole session
+    #[arg(long, value_name = "TURN")]
+    turn: Option<String>,
 }
 
 #[derive(Args, Debug)]
@@ -197,6 +179,20 @@ pub struct AgentEventsOptions {
     after: Option<String>,
 }
 
+#[derive(Args, Debug)]
+pub struct AgentInspectOptions {
+    /// Read a session view instead of state; cannot be combined with --turn
+    #[arg(long, value_enum, conflicts_with = "turn")]
+    view: Option<SessionView>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, ValueEnum)]
+pub enum SessionView {
+    Config,
+    Capabilities,
+    Requests,
+}
+
 fn parse_json(input: &str) -> serde_json::Result<Value> {
     serde_json::from_str(input)
 }
@@ -205,25 +201,21 @@ pub fn execute(args: AgentArgs) -> Result<()> {
     // Do not initialize a runtime or resolve a Box just to reach a stub.
     let operation = match args.command {
         AgentCommand::Create { .. } => "agents.create",
-        AgentCommand::Get(_) => "agents.get",
-        AgentCommand::Session(command) => match command {
-            SessionCommand::Close { .. } => "session.close",
-            SessionCommand::Send { .. } => "session.send",
-            SessionCommand::GetTurn(_) => "session.get_turn",
-            SessionCommand::Events { .. } => "session.events",
-            SessionCommand::Requests(_) => "session.requests",
-            SessionCommand::Respond { .. } => "session.respond",
-            SessionCommand::State(_) => "session.state",
-            SessionCommand::Config(_) => "session.config",
-            SessionCommand::Capabilities(_) => "session.capabilities",
+        AgentCommand::Close { .. } => "session.close",
+        AgentCommand::Send { .. } => "session.send",
+        AgentCommand::Respond { .. } => "session.respond",
+        AgentCommand::Inspect { target, options } => match options.view {
+            Some(SessionView::Config) => "session.config",
+            Some(SessionView::Capabilities) => "session.capabilities",
+            Some(SessionView::Requests) => "session.requests",
+            None if target.turn.is_some() => "turn.state",
+            None => "session.state",
         },
-        AgentCommand::Turn(command) => match command {
-            TurnCommand::Wait { .. } => "turn.wait",
-            TurnCommand::Events { .. } => "turn.events",
-            TurnCommand::Steer { .. } => "turn.steer",
-            TurnCommand::Interrupt { .. } => "turn.interrupt",
-            TurnCommand::State(_) => "turn.state",
-        },
+        AgentCommand::Events { target, .. } if target.turn.is_some() => "turn.events",
+        AgentCommand::Events { .. } => "session.events",
+        AgentCommand::Wait { .. } => "turn.wait",
+        AgentCommand::Steer { .. } => "turn.steer",
+        AgentCommand::Interrupt { .. } => "turn.interrupt",
     };
     Err(BoxliteError::Unsupported(format!("{operation} is not implemented")).into())
 }

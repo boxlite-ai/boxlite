@@ -50,8 +50,8 @@ fn agents_p0_create_groups_options_and_keeps_runtime_config_separate() {
 
 #[test]
 fn agents_p0_send_defaults_to_queue_and_accepts_reject_and_json() {
-    let AgentCommand::Session(SessionCommand::Send { options, .. }) =
-        parse(&["session", "send", "box", "session", "hello"])
+    let AgentCommand::Send { options, .. } =
+        parse(&["send", "box", "--session", "session", "hello"])
     else {
         panic!("expected send")
     };
@@ -59,14 +59,14 @@ fn agents_p0_send_defaults_to_queue_and_accepts_reject_and_json() {
     assert_eq!(options.data, None);
     assert_eq!(options.control.idempotency_key, None);
 
-    let AgentCommand::Session(SessionCommand::Send {
+    let AgentCommand::Send {
         target,
         text,
         options,
-    }) = parse(&[
-        "session",
+    } = parse(&[
         "send",
         "box",
+        "--session",
         "session",
         "hello",
         "--mode",
@@ -89,11 +89,12 @@ fn agents_p0_send_defaults_to_queue_and_accepts_reject_and_json() {
 
 #[test]
 fn agents_p0_turn_options_preserve_target_timeout_cursor_and_retry_key() {
-    let AgentCommand::Turn(TurnCommand::Wait { target, options }) = parse(&[
-        "turn",
+    let AgentCommand::Wait { target, options } = parse(&[
         "wait",
         "box",
+        "--session",
         "session",
+        "--turn",
         "turn",
         "--timeout-seconds",
         "0",
@@ -105,25 +106,34 @@ fn agents_p0_turn_options_preserve_target_timeout_cursor_and_retry_key() {
     assert_eq!(target.turn, "turn");
     assert_eq!(options.timeout_seconds, Some(0));
 
-    let AgentCommand::Turn(TurnCommand::Wait { options, .. }) =
-        parse(&["turn", "wait", "box", "session", "turn"])
+    let AgentCommand::Wait { options, .. } =
+        parse(&["wait", "box", "--session", "session", "--turn", "turn"])
     else {
         panic!("expected wait")
     };
     assert_eq!(options.timeout_seconds, None);
 
-    let AgentCommand::Turn(TurnCommand::Events { options, .. }) = parse(&[
-        "turn", "events", "box", "session", "turn", "--after", "cursor",
+    let AgentCommand::Events { target, options } = parse(&[
+        "events",
+        "box",
+        "--session",
+        "session",
+        "--turn",
+        "turn",
+        "--after",
+        "cursor",
     ]) else {
         panic!("expected events")
     };
     assert_eq!(options.after.as_deref(), Some("cursor"));
+    assert_eq!(target.turn.as_deref(), Some("turn"));
 
-    let AgentCommand::Turn(TurnCommand::Steer { text, options, .. }) = parse(&[
-        "turn",
+    let AgentCommand::Steer { text, options, .. } = parse(&[
         "steer",
         "box",
+        "--session",
         "session",
+        "--turn",
         "turn",
         "use Rust",
         "--idempotency-key",
@@ -141,16 +151,17 @@ fn agents_p0_responses_keep_answer_and_permission_json_distinct() {
         r#"{"type":"answer","text":"yes"}"#,
         r#"{"type":"permission","approved":false}"#,
     ] {
-        let AgentCommand::Session(SessionCommand::Respond {
+        let AgentCommand::Respond {
             request,
             response: parsed,
             options,
             ..
-        }) = parse(&[
-            "session",
+        } = parse(&[
             "respond",
             "box",
+            "--session",
             "session",
+            "--request",
             "request",
             response,
             "--idempotency-key",
@@ -166,6 +177,51 @@ fn agents_p0_responses_keep_answer_and_permission_json_distinct() {
 }
 
 #[test]
+fn agents_p0_inspection_selects_state_or_a_session_view() {
+    for (extra, turn, view) in [
+        (vec![], None, None),
+        (vec!["--turn", "turn"], Some("turn"), None),
+        (vec!["--view", "config"], None, Some(SessionView::Config)),
+        (
+            vec!["--view", "capabilities"],
+            None,
+            Some(SessionView::Capabilities),
+        ),
+        (
+            vec!["--view", "requests"],
+            None,
+            Some(SessionView::Requests),
+        ),
+    ] {
+        let mut args = vec!["inspect", "box", "--session", "session"];
+        args.extend(extra);
+        let AgentCommand::Inspect { target, options } = parse(&args) else {
+            panic!("expected inspect");
+        };
+        assert_eq!(target.session.sandbox.target, "box");
+        assert_eq!(target.session.session, "session");
+        assert_eq!(target.turn.as_deref(), turn);
+        assert_eq!(options.view, view);
+    }
+    for view in ["config", "capabilities", "requests"] {
+        let error = try_parse_from([
+            "boxlite",
+            "agent",
+            "inspect",
+            "box",
+            "--session",
+            "session",
+            "--turn",
+            "turn",
+            "--view",
+            view,
+        ])
+        .unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::ArgumentConflict);
+    }
+}
+
+#[test]
 fn agents_p0_parser_rejects_invalid_options_and_missing_targets() {
     let cases: &[(&[&str], ErrorKind)] = &[
         (&["create", "box"], ErrorKind::MissingRequiredArgument),
@@ -175,9 +231,9 @@ fn agents_p0_parser_rejects_invalid_options_and_missing_targets() {
         ),
         (
             &[
-                "session",
                 "send",
                 "box",
+                "--session",
                 "session",
                 "text",
                 "--mode",
@@ -186,25 +242,32 @@ fn agents_p0_parser_rejects_invalid_options_and_missing_targets() {
             ErrorKind::InvalidValue,
         ),
         (
-            &["session", "send", "box", "session", "text", "--data", "{"],
+            &["send", "box", "--session", "session", "text", "--data", "{"],
             ErrorKind::ValueValidation,
         ),
         (
             &[
-                "session", "respond", "box", "session", "request", "not-json",
+                "respond",
+                "box",
+                "--session",
+                "session",
+                "--request",
+                "request",
+                "not-json",
             ],
             ErrorKind::ValueValidation,
         ),
         (
-            &["turn", "steer", "box", "session", "turn"],
+            &["steer", "box", "--session", "session", "--turn", "turn"],
             ErrorKind::MissingRequiredArgument,
         ),
         (
             &[
-                "turn",
                 "wait",
                 "box",
+                "--session",
                 "session",
+                "--turn",
                 "turn",
                 "--timeout-seconds=-1",
             ],
@@ -212,17 +275,25 @@ fn agents_p0_parser_rejects_invalid_options_and_missing_targets() {
         ),
         (
             &[
-                "turn",
                 "wait",
                 "box",
+                "--session",
                 "session",
+                "--turn",
                 "turn",
                 "--timeout-seconds=NaN",
             ],
             ErrorKind::ValueValidation,
         ),
         (
-            &["get", "box", "session", "--registry", "irrelevant.test"],
+            &[
+                "inspect",
+                "box",
+                "--session",
+                "session",
+                "--registry",
+                "irrelevant.test",
+            ],
             ErrorKind::UnknownArgument,
         ),
     ];
@@ -233,25 +304,34 @@ fn agents_p0_parser_rejects_invalid_options_and_missing_targets() {
 }
 
 #[test]
-fn agents_p0_help_and_completion_include_grouped_commands() {
+fn agents_p0_help_and_completion_include_nine_flat_commands() {
     let mut command = crate::cli::command();
     command.build();
     let agent = command.find_subcommand_mut("agent").unwrap();
-    let session = agent.find_subcommand_mut("session").unwrap();
+    assert_eq!(
+        agent
+            .get_subcommands()
+            .filter(|command| command.get_name() != "help")
+            .count(),
+        9
+    );
     for name in [
+        "create",
         "close",
         "send",
-        "get-turn",
+        "inspect",
         "events",
-        "requests",
         "respond",
-        "state",
-        "config",
-        "capabilities",
+        "wait",
+        "steer",
+        "interrupt",
     ] {
-        assert!(session.find_subcommand(name).is_some(), "{name}");
+        assert!(agent.find_subcommand(name).is_some(), "{name}");
     }
-    let help = session
+    for removed in ["session", "turn", "get", "get-turn"] {
+        assert!(agent.find_subcommand(removed).is_none(), "{removed}");
+    }
+    let help = agent
         .find_subcommand_mut("send")
         .unwrap()
         .render_long_help()
@@ -259,7 +339,7 @@ fn agents_p0_help_and_completion_include_grouped_commands() {
     for text in [
         "not implemented",
         "<BOX>",
-        "<SESSION>",
+        "--session <SESSION>",
         "<TEXT>",
         "--mode",
         "--data",
@@ -272,7 +352,7 @@ fn agents_p0_help_and_completion_include_grouped_commands() {
         let mut output = Vec::new();
         generate_completion(&shell, "boxlite", &mut output);
         let output = String::from_utf8(output).unwrap();
-        for command in ["agent", "session", "get-turn", "steer", "interrupt"] {
+        for command in ["agent", "inspect", "events", "steer", "interrupt"] {
             assert!(output.contains(command), "{command} missing from {shell:?}");
         }
         let flag_prefix = if matches!(shell, Shell::Fish) {
@@ -291,12 +371,12 @@ fn agents_p0_help_and_completion_include_grouped_commands() {
                 .lines()
                 .find(|line| line.contains(" -l timeout-seconds "))
                 .unwrap();
-            assert!(wait.contains("__fish_boxlite_agent_path turn wait"));
+            assert!(wait.contains("__fish_boxlite_agent_path wait"));
             let send = output
                 .lines()
                 .find(|line| line.contains(" -l mode "))
                 .unwrap();
-            assert!(send.contains("__fish_boxlite_agent_path session send"));
+            assert!(send.contains("__fish_boxlite_agent_path send"));
         }
     }
 }
