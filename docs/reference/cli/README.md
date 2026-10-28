@@ -500,8 +500,8 @@ Stop then start one or more boxes. If `stop` fails for a box, that box is skippe
 **Synopsis:** `boxlite pause [--host-writers-stopped] BOX`
 
 Pause a box whose supported configuration selected checkpoint owner mode. Every vCPU and device stops at one consistent cut
-(no SIGSTOP, no guest filesystem freeze). Embedded runtime only: accepts `--debug`, `--home` and
-`--config`; `--url` and `--profile` are usage errors, and a configured server profile is not used.
+(no SIGSTOP, no guest filesystem freeze). Uses the normal local/REST runtime selector:
+`--url`, environment variables and configured profiles. The server must advertise checkpoints.
 
 | Flag | Description |
 |------|-------------|
@@ -533,15 +533,19 @@ paused (same container, initialized); otherwise it stops the VM and fails. Same 
 `export` requires owner-confirmed Paused and publishes exactly `snapshot.mem` and
 `snapshot.qcow2` into a new directory; the box stays Paused. `inspect` reads dependency
 metadata without creating a runtime or opening shares. `import` verifies the pair
-and its saved local paths, then publishes a new Paused box. Resume is explicit.
+and prepared target dependencies, then publishes a new Paused box. Resume is explicit.
 
-An internal local provider records concrete roots and file identities automatically;
-no binding file or inherited-FD configuration is accepted. Keep those exact files
-and roots available, including the source box's shared directory. Removing the
-source box can invalidate the checkpoint. The readonly boot disk is checked at its
-saved path or in the runtime's exact-digest cache. No share contents are archived.
-Same global options as `pause`; no REST
-checkpoint endpoints. See the [checkpoints guide](../../guides/checkpoints.md).
+V2 retains mount configuration and reopens relative object paths under prepared target
+volumes; target device/inode values may differ. Internal shared directories are rebuilt
+in the new box. External files and the exact readonly boot disk are dependencies, not
+archive contents. The boot disk is checked at its saved path or in the target’s
+exact-digest cache. V1 keeps strict original-path behavior locally; REST import asks
+you to re-export it.
+
+`export` downloads a remote capture into a new caller-local directory; `import` uploads
+a caller-local pair and creates a remote Paused box. `inspect` is local only and accepts
+no server options. Import is never automatically retried: a lost response can still
+mean a remote box was created. See the [checkpoints guide](../../guides/checkpoints.md).
 
 ---
 

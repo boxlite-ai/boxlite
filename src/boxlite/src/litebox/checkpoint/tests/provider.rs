@@ -50,9 +50,16 @@ fn dependencies(share: ShareDependency) -> CheckpointDependencies {
         application: serde_json::Value::Null,
     }
 }
-fn capture(root: &Path, mut share: ShareDependency) -> (CheckpointDependencies, LocalPaths) {
+fn capture(root: &Path, share: ShareDependency) -> (CheckpointDependencies, LocalPaths) {
+    capture_version(root, share, 1)
+}
+fn capture_version(
+    root: &Path,
+    mut share: ShareDependency,
+    version: u32,
+) -> (CheckpointDependencies, LocalPaths) {
     let paths = LocalPaths {
-        version: 1,
+        version,
         shares: BTreeMap::from([(share.tag.clone(), LocalRoot::capture(root).unwrap())]),
         boot_disk: root.join("boot.ext4"),
     };
@@ -65,6 +72,71 @@ fn capture(root: &Path, mut share: ShareDependency) -> (CheckpointDependencies, 
         object.reference = Some(reference.clone());
     }
     (dependencies(share), paths)
+}
+
+#[test]
+fn checkpoint_v2_rebinds_different_inodes_and_preserves_independent_handles() {
+    let source = tempfile::tempdir().unwrap();
+    let target = tempfile::tempdir().unwrap();
+    std::fs::write(source.path().join("data"), b"source bytes").unwrap();
+    std::fs::write(target.path().join("data"), b"target bytes").unwrap();
+    let mut share = share(source.path());
+    let mut second = share.state["handles"][0].clone();
+    second["handle"] = 6.into();
+    share.state["handles"].as_array_mut().unwrap().push(second);
+    let (deps, mut paths) = capture_version(source.path(), share, 2);
+    paths.shares.insert(
+        "BoxLiteShared".into(),
+        LocalRoot::capture(target.path()).unwrap(),
+    );
+    let mut bound = LocalCheckpointProvider::bind(&deps, &paths).unwrap();
+    use std::io::{Read, Seek};
+    let file = bound.shares[0].handles.get_mut(&5).unwrap();
+    let mut bytes = [0; 6];
+    file.read_exact(&mut bytes).unwrap();
+    assert_eq!(&bytes, b"target");
+    assert_eq!(
+        bound.shares[0]
+            .handles
+            .get_mut(&6)
+            .unwrap()
+            .stream_position()
+            .unwrap(),
+        0
+    );
+    assert_ne!(
+        std::fs::metadata(source.path().join("data")).unwrap().ino(),
+        bound.shares[0].objects[1]
+            .as_ref()
+            .unwrap()
+            .metadata()
+            .unwrap()
+            .ino()
+    );
+    let mut wrong_type = deps.clone();
+    wrong_type.shares[0].objects[1].kind = 0o040000;
+    assert!(LocalCheckpointProvider::bind(&wrong_type, &paths).is_err());
+    let mut alias = deps.clone();
+    alias.shares[0].objects[1].alias = alias.shares[0].objects[0].alias;
+    assert!(
+        LocalCheckpointProvider::bind(&alias, &paths)
+            .unwrap_err()
+            .to_string()
+            .contains("alias")
+    );
+    std::fs::remove_file(target.path().join("data")).unwrap();
+    let mut deleted = deps.clone();
+    deleted.shares[0].objects[1].unlinked = true;
+    assert!(
+        LocalCheckpointProvider::bind(&deleted, &paths)
+            .unwrap_err()
+            .to_string()
+            .contains("DAX")
+    );
+    deleted.shares[0].state["dax"]["mappings"] = serde_json::json!([]);
+    let omitted = LocalCheckpointProvider::bind(&deleted, &paths).unwrap();
+    assert!(omitted.shares[0].objects[1].is_none());
+    assert!(omitted.shares[0].handles.is_empty());
 }
 
 #[test]

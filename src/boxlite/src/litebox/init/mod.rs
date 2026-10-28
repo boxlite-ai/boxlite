@@ -70,6 +70,7 @@ use tasks::{
 };
 pub(crate) use tasks::{checkpoint_import_spec, read_tail, restart_image_config, spawn_vm};
 use types::InitPipelineContext;
+pub(crate) use types::resolve_user_volumes;
 
 // ============================================================================
 // EXECUTION PLAN

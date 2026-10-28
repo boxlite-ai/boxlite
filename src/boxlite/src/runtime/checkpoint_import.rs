@@ -6,7 +6,7 @@ use crate::litebox::{
     checkpoint::{
         RestoredDisk, RestoredStorage,
         pair::{self, Application},
-        provider::{LocalCheckpointProvider, check_handle_flags},
+        provider::{LocalCheckpointProvider, LocalPaths, LocalRoot, check_handle_flags},
     },
 };
 use crate::lock::LockId;
@@ -37,6 +37,44 @@ fn invalid(why: impl std::fmt::Display) -> BoxliteError {
     pair::invalid(why)
 }
 
+/// Recreate only the normal host-side directory layout. Retained internal
+/// files and unknown directories have no recipe and must fail during binding.
+fn target_paths(
+    saved: &LocalPaths,
+    options: &crate::BoxOptions,
+    container_id: &ContainerID,
+    layout: &BoxFilesystemLayout,
+) -> BoxliteResult<LocalPaths> {
+    if !options.mounts.is_empty() {
+        return Err(BoxliteError::Unsupported(
+            "typed mounts are not supported by the local runtime yet".into(),
+        ));
+    }
+    let volumes = crate::litebox::init::resolve_user_volumes(&options.volumes)?;
+    let shared = layout.shared_dir();
+    let container =
+        boxlite_shared::layout::SharedGuestLayout::new(&shared).container(container_id.as_str());
+    container.prepare().map_err(invalid)?;
+    let mut shares = std::collections::BTreeMap::from([(
+        crate::runtime::constants::mount_tags::SHARED.to_owned(),
+        LocalRoot::capture(&shared)?,
+    )]);
+    for volume in volumes {
+        if volume.subpath.is_some() {
+            return Err(BoxliteError::Unsupported(
+                "checkpoint import requires prepared directory volumes".into(),
+            ));
+        }
+        std::fs::create_dir_all(container.volume_dir(&volume.tag)).map_err(invalid)?;
+        shares.insert(volume.tag, LocalRoot::capture(&volume.host_path)?);
+    }
+    Ok(LocalPaths {
+        version: 2,
+        shares,
+        boot_disk: saved.boot_disk.clone(),
+    })
+}
+
 pub(crate) async fn import_checkpoint(
     runtime: &SharedRuntimeImpl,
     path: &Path,
@@ -49,7 +87,6 @@ pub(crate) async fn import_checkpoint(
     let local_paths = application.local_paths.as_ref().ok_or_else(|| invalid(
         "unsupported provider-era checkpoint: automatic local paths are absent; export a local-path checkpoint"
     ))?;
-    let mut bindings = LocalCheckpointProvider::bind(&pair.dependencies, local_paths)?;
     pair.verify_disk()?;
     let mut box_options = application.options.clone();
     if u16::from(
@@ -74,9 +111,6 @@ pub(crate) async fn import_checkpoint(
             box_options.memory_mib,
             pair.dependencies.memory_bytes,
         )));
-    }
-    if bindings.shares.len() != pair.dependencies.shares.len() {
-        return Err(invalid("share binding count differs"));
     }
     let container_id = ContainerID::parse(&application.guest.container_id)
         .ok_or_else(|| invalid("invalid saved container ID"))?;
@@ -138,17 +172,12 @@ pub(crate) async fn import_checkpoint(
     {
         return Err(invalid("readonly boot dependency length/checksum mismatch"));
     }
-    for (index, volume) in box_options.volumes.iter_mut().enumerate() {
-        let tag = format!("uservol{index}");
-        if let Some((_, bound)) = pair
-            .dependencies
-            .shares
-            .iter()
-            .zip(&bindings.shares)
-            .find(|(share, _)| share.tag == tag)
-        {
-            volume.host_path = bound.root.to_string_lossy().into_owned();
-            volume.managed_volume = None;
+    if local_paths.version == 1 {
+        for (index, volume) in box_options.volumes.iter_mut().enumerate() {
+            if let Some(root) = local_paths.shares.get(&format!("uservol{index}")) {
+                volume.host_path = root.path.to_string_lossy().into_owned();
+                volume.managed_volume = None;
+            }
         }
     }
     box_options.sanitize()?;
@@ -170,6 +199,14 @@ pub(crate) async fn import_checkpoint(
             armed: true,
         };
         layout.prepare()?;
+        let mut local_paths = application
+            .local_paths
+            .clone()
+            .expect("checked local metadata");
+        if local_paths.version == 2 {
+            local_paths = target_paths(&local_paths, &box_options, &container_id, &layout)?;
+        }
+        let mut bindings = LocalCheckpointProvider::bind(&pair.dependencies, &local_paths)?;
         let private_disk = layout.root().join("disks/disk.qcow2");
         let copy_path = private_disk.clone();
         let source = pair.disk;
@@ -385,10 +422,8 @@ pub(crate) async fn import_checkpoint(
         state.start_mode = Some(support::StartMode::Owner { protocol: 2 });
         state.outbound_policy = application.outbound_policy;
         state.checkpoint_guest = Some(application.guest);
-        state.checkpoint_paths = application.local_paths.map(|mut paths| {
-            paths.boot_disk = storage.disks[1].path.clone();
-            paths
-        });
+        local_paths.boot_disk = storage.disks[1].path.clone();
+        state.checkpoint_paths = Some(local_paths);
         state.restored_storage = Some(storage);
         let lock = runtime.lock_manager.allocate()?;
         attempt.lock = Some(lock);
@@ -523,5 +558,63 @@ impl Drop for Attempt {
         if let Err(e) = self.layout.cleanup() {
             tracing::warn!(error = %e, "Failed to remove the failed import's box home");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn checkpoint_target_paths_rebuild_normal_dirs_without_fabricating_internal_files() {
+        let home = tempfile::tempdir().unwrap();
+        let external = tempfile::tempdir().unwrap();
+        let layout = BoxFilesystemLayout::new(
+            home.path().join("box"),
+            crate::runtime::layout::FsLayoutConfig::without_bind_mount(),
+            false,
+        );
+        std::fs::create_dir_all(layout.shared_dir()).unwrap();
+        let id = ContainerID::new();
+        let options = crate::BoxOptions {
+            volumes: vec![crate::runtime::options::VolumeSpec::bind_mount(
+                external.path().to_str().unwrap(),
+                "/data",
+            )],
+            ..Default::default()
+        };
+        let saved = LocalPaths {
+            version: 2,
+            shares: Default::default(),
+            boot_disk: "/not-regenerated".into(),
+        };
+        let paths = target_paths(&saved, &options, &id, &layout).unwrap();
+        assert_eq!(
+            paths.shares["uservol0"].path,
+            external.path().canonicalize().unwrap()
+        );
+        let container = boxlite_shared::layout::SharedGuestLayout::new(layout.shared_dir())
+            .container(id.as_str());
+        for directory in [
+            container.rootfs_dir(),
+            container.upper_dir(),
+            container.work_dir(),
+            container.volume_dir("uservol0"),
+        ] {
+            assert!(directory.is_dir(), "{}", directory.display());
+        }
+        assert!(!container.exit_file().exists());
+        assert!(!layout.shared_dir().join("unknown-file").exists());
+        assert!(!paths.boot_disk.exists());
+        let missing = home.path().join("external-not-prepared");
+        let missing_options = crate::BoxOptions {
+            volumes: vec![crate::runtime::options::VolumeSpec::bind_mount(
+                missing.to_str().unwrap(),
+                "/data",
+            )],
+            ..Default::default()
+        };
+        assert!(target_paths(&saved, &missing_options, &id, &layout).is_err());
+        assert!(!missing.exists(), "import must never prepare external data");
     }
 }

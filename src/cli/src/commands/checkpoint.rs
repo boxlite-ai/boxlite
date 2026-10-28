@@ -1,5 +1,5 @@
 //! `pause`, `resume` and `checkpoint export|import` for checkpoint-enabled
-//! boxes. Embedded runtime only: these commands accept no server options.
+//! boxes. Directory operands are always caller-local.
 
 use crate::cli::GlobalFlags;
 use boxlite::{BoxliteError, BoxliteRuntime, CheckpointImportOptions, LiteBox, PauseOptions};
@@ -66,7 +66,7 @@ pub struct ImportArgs {
 }
 
 pub async fn pause(args: PauseArgs, global: &GlobalFlags) -> anyhow::Result<()> {
-    let litebox = find_box(&local_runtime(global)?, &args.target).await?;
+    let litebox = find_box(&global.create_runtime()?, &args.target).await?;
     let options = PauseOptions {
         host_writers_stopped: args.host_writers_stopped,
     };
@@ -91,7 +91,7 @@ pub async fn pause(args: PauseArgs, global: &GlobalFlags) -> anyhow::Result<()> 
 }
 
 pub async fn resume(args: ResumeArgs, global: &GlobalFlags) -> anyhow::Result<()> {
-    let litebox = find_box(&local_runtime(global)?, &args.target).await?;
+    let litebox = find_box(&global.create_runtime()?, &args.target).await?;
     litebox.resume().await?;
     println!("{}", args.target);
     Ok(())
@@ -106,14 +106,14 @@ pub async fn checkpoint(args: CheckpointArgs, global: &GlobalFlags) -> anyhow::R
             );
         }
         CheckpointCommand::Export(args) => {
-            let runtime = local_runtime(global)?;
+            let runtime = global.create_runtime()?;
             let path = std::path::absolute(&args.path)?;
             let litebox = find_box(&runtime, &args.target).await?;
             litebox.export_checkpoint(&path).await?;
             println!("{}", path.display());
         }
         CheckpointCommand::Import(args) => {
-            let runtime = local_runtime(global)?;
+            let runtime = global.create_runtime()?;
             let path = std::path::absolute(&args.path)?;
             let options = CheckpointImportOptions { name: args.name };
             let litebox = runtime.import_checkpoint(&path, options).await?;
@@ -121,12 +121,6 @@ pub async fn checkpoint(args: CheckpointArgs, global: &GlobalFlags) -> anyhow::R
         }
     }
     Ok(())
-}
-
-/// Checkpoints exist only in the embedded runtime, so a configured server
-/// profile is never consulted.
-fn local_runtime(global: &GlobalFlags) -> anyhow::Result<BoxliteRuntime> {
-    global.create_runtime_with_options(global.resolve_runtime_options()?)
 }
 
 async fn find_box(runtime: &BoxliteRuntime, target: &str) -> anyhow::Result<LiteBox> {
@@ -204,12 +198,19 @@ mod tests {
         }
     }
 
-    /// Checkpoints are embedded-runtime only; a server URL or profile on
-    /// these commands is a usage error, not something silently ignored.
     #[test]
-    fn checkpoint_commands_refuse_server_options() {
+    fn checkpoint_commands_accept_server_options() {
         for args in [
             &["boxlite", "pause", "--url", "http://127.0.0.1:1", "web"][..],
+            &[
+                "boxlite",
+                "--url",
+                "http://127.0.0.1:1",
+                "checkpoint",
+                "export",
+                "web",
+                "checkpoint-dir",
+            ][..],
             &["boxlite", "resume", "--profile", "prod", "web"][..],
             &[
                 "boxlite",
@@ -229,9 +230,18 @@ mod tests {
                 "web.boxckpt",
             ][..],
         ] {
-            let error = try_parse_from(args).expect_err("server option must be refused");
-            assert_eq!(error.kind(), ErrorKind::UnknownArgument, "{args:?}");
+            try_parse_from(args).expect("server options must select the REST backend");
         }
+        let error = try_parse_from([
+            "boxlite",
+            "--url",
+            "http://127.0.0.1:1",
+            "checkpoint",
+            "inspect",
+            "checkpoint-dir",
+        ])
+        .unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::UnknownArgument);
     }
 
     #[tokio::test]
@@ -272,7 +282,7 @@ mod tests {
             .await
             .expect_err("a non-checkpoint file must be refused");
 
-        let runtime = local_runtime(&cli.global).expect("runtime");
+        let runtime = cli.global.create_runtime().expect("runtime");
         assert!(runtime.list_info().await.expect("list").is_empty());
     }
 }

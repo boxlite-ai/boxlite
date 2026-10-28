@@ -9,6 +9,7 @@ use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Component, Path, PathBuf};
 
 const LOCAL_REFERENCE: &str = "local-path-v1";
+const TARGET_REFERENCE: &str = "local-path-v2";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct LocalPaths {
@@ -37,7 +38,7 @@ impl LocalPaths {
             return Err(invalid("local checkpoint needs a readonly boot disk"));
         };
         Ok(Self {
-            version: 1,
+            version: 2,
             shares,
             boot_disk: disk_path.canonicalize().map_err(invalid)?,
         })
@@ -435,7 +436,12 @@ impl LocalCheckpointProvider {
                         .to_owned()
                 };
                 refs.push(ObjectReference {
-                    resource_id: LOCAL_REFERENCE.into(),
+                    resource_id: if paths.version == 2 {
+                        TARGET_REFERENCE
+                    } else {
+                        LOCAL_REFERENCE
+                    }
+                    .into(),
                     recovery_point: format!("{}:{}", stat.dev(), stat.ino()),
                     object_key: key,
                 });
@@ -452,7 +458,7 @@ impl LocalCheckpointProvider {
         dependencies: &CheckpointDependencies,
         paths: &LocalPaths,
     ) -> BoxliteResult<CheckpointBindings> {
-        if paths.version != 1 {
+        if ![1, 2].contains(&paths.version) {
             return Err(invalid("unsupported local checkpoint path schema"));
         }
         let mut shares = Vec::new();
@@ -473,7 +479,8 @@ impl LocalCheckpointProvider {
                 .ok_or_else(|| invalid("saved local share root missing"))?;
             let root_file = path_object(&root.path, Path::new("."), object_flags())?;
             let root_stat = root_file.metadata().map_err(invalid)?;
-            if (root_stat.dev(), root_stat.ino()) != (root.device, root.inode) {
+            if paths.version == 1 && (root_stat.dev(), root_stat.ino()) != (root.device, root.inode)
+            {
                 return Err(invalid("saved local share root identity changed"));
             }
             bound.root = root.path.clone();
@@ -482,7 +489,13 @@ impl LocalCheckpointProvider {
                     .reference
                     .as_ref()
                     .ok_or_else(|| invalid("external object reference missing"))?;
-                if reference.resource_id != LOCAL_REFERENCE {
+                if reference.resource_id
+                    != if paths.version == 2 {
+                        TARGET_REFERENCE
+                    } else {
+                        LOCAL_REFERENCE
+                    }
+                {
                     return Err(invalid(
                         "unsupported provider-era checkpoint references; export a local-path checkpoint",
                     ));
@@ -494,7 +507,9 @@ impl LocalCheckpointProvider {
                     let file =
                         path_object(&root.path, Path::new(&reference.object_key), object_flags())?;
                     let stat = file.metadata().map_err(invalid)?;
-                    if reference.recovery_point != format!("{}:{}", stat.dev(), stat.ino()) {
+                    if paths.version == 1
+                        && reference.recovery_point != format!("{}:{}", stat.dev(), stat.ino())
+                    {
                         return Err(invalid("saved local object identity changed"));
                     }
                     Some(file)

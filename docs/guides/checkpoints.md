@@ -2,8 +2,8 @@
 
 A checkpoint preserves a paused Linux x86_64/KVM guest as two files:
 `snapshot.mem` and `snapshot.qcow2`. Shared files remain external resources.
-The runtime records concrete local dependency paths automatically and opens them
-anew on import. Imported boxes appear **Paused**; resume is explicit.
+The runtime records mount configuration and root-relative object paths automatically.
+Import resolves the target runtime’s prepared directories and opens each object anew. Imported boxes appear **Paused**; resume is explicit.
 
 ## Support and lifecycle
 
@@ -49,8 +49,8 @@ boxlite resume web-copy
 ```
 
 `pause` stops guest vCPUs and devices. It does not stop host writers. Keep external
-storage unchanged through export and import. Keep every saved local root and
-readonly boot file available for the checkpoint and imported box lifetimes. Export never implicitly starts or pauses a box.
+storage unchanged through export and import. Prepare the configured external directories and exact readonly boot disk on the
+target runtime before importing. Keep those dependencies available for the imported box’s lifetime. Export never implicitly starts or pauses a box.
 
 Inspection reads the memory image and lists dependencies and the paired disk digest.
 It opens no shares and provisions no runtime or box. Import additionally checks the
@@ -75,7 +75,7 @@ quarantine residue. This ownership contract does not promise atomic conditional
 unlink against arbitrary concurrent mutation by the same host user. No unsynced
 publication is reported as success.
 
-## Local paths and external files
+## Target paths and external files
 
 The Rust API uses the same path-only flow as the CLI:
 
@@ -98,21 +98,34 @@ local roots and boot path without opening those resources.
 Import opens each saved path afresh. Handles receive independent open file
 descriptions with their saved access/status flags; creation and truncation flags
 are refused. Guest positions stay in saved guest memory, and saved FUSE directory
-listings/cookies continue unchanged. Object device/inode identity, kind, share mount, hard-link
-aliases and handle/DAX access roles are checked before restoration. Path traversal,
-intermediate symlink escape, linked-file disappearance, changed identities and access
-errors fail import. These checks do not prove immutable content or detect every inode
+listings/cookies continue unchanged. Object kind, target share mount, hard-link aliases and handle/DAX access roles
+are checked before restoration. V2 permits different source and target device/inode
+identities; aliases must still identify the same target object. Path traversal,
+intermediate symlink escape, linked-file disappearance and access errors fail import. These checks do not prove immutable content or detect every inode
 reuse after all prior descriptors close; external writer coordination is required. A symlink object itself may be retained with `O_PATH` without
 following its target.
 
-These checkpoints depend on the **same local files and roots**. Keep them at their
-saved paths and coordinate all host writers; external share contents are not
-rolled back by importing memory. Renaming or replacing a saved object may invalidate
-its locator. Export does not promise discovery through another hard link.
-`BoxLiteShared` is also a required root, normally inside the source box directory:
-**removing the source box or its runtime home can invalidate the checkpoint and
-imported box**. Stopping the source and shutting down its runtime preserve the paths.
-Do not run two restored guests against the same writable roots concurrently.
+New exports use **path binding metadata v2** inside the unchanged native version-9
+pair. Saved `BoxOptions` retain their mounts. Import creates the new box’s internal
+directories first, resolves already prepared directory volumes from those options,
+and reopens each saved relative path under its target root. External data is never
+copied and import starts no mount service. The local runtime’s existing unsupported
+managed-volume and typed-mount restrictions still apply.
+
+`BoxLiteShared` is rebuilt in the new box with the original guest container ID and
+normal container/volume mount points. Removing the source box no longer removes a
+v2 import’s internal shared root. A retained internal file or directory that cannot
+be reconstructed from configuration/state fails import; no empty file is fabricated.
+The VM-owned boot root retains its deterministic directory recipes.
+
+Prepare external data to match the captured cut and coordinate all host writers;
+importing memory does not roll external contents back. Do not run two restored guests
+against the same writable roots concurrently. Relative locators do not discover
+objects through another hard link if their saved names disappear.
+
+V1 path metadata retains its original local behavior: exact source roots and object
+device/inode identities are required, including the source `BoxLiteShared` tree.
+REST import refuses v1 and asks you to re-export with a current runtime.
 
 An external regular file already unlinked at capture cannot be reopened by path.
 When it has no existing file DAX mapping, import omits its backend node/handles;
@@ -163,5 +176,64 @@ triple; native descriptor transport is unchanged. A box started by an older runt
 must stop and restart before exporting through this API so its concrete paths are
 recorded. Older runtimes do not provide this automatic path resolution.
 Ordinary disk-only `.boxlite` archives retain their existing format and compatibility.
-Checkpoint endpoints are available in Rust and the embedded CLI; no SDK or REST
-checkpoint endpoints are added.
+Checkpoint operations are available in Rust and the CLI for local runtimes and
+independent `boxlite serve` servers advertising `checkpoints_enabled: true`.
+A missing capability on an older server returns `Unsupported`; no local fallback runs.
+Other language SDKs are unchanged.
+
+## REST transfers and caller-local paths
+
+The Rust signatures above are identical for `BoxliteRuntime::rest(...)`.
+`export_checkpoint(directory)` captures on the server and downloads the pair into a
+new **caller-local** directory. `import_checkpoint(directory, options)` uploads a
+caller-local pair and creates a **remote Paused** box. Only its name can be overridden;
+the remaining options come from the checkpoint. `checkpoint inspect` stays local.
+The CLI uses its normal `--url`, environment and profile selection:
+
+```sh
+boxlite --url http://127.0.0.1:8080 pause --host-writers-stopped web
+boxlite --url http://127.0.0.1:8080 checkpoint export web ./downloaded
+boxlite --url http://127.0.0.1:8081 checkpoint import ./downloaded --name restored
+boxlite --url http://127.0.0.1:8081 resume restored
+```
+
+| HTTP operation | Direction / result |
+| --- | --- |
+| `POST /v1/boxes/{id}/pause` with `{"host_writers_stopped": true}` | Pause on the server; 204 |
+| `POST /v1/boxes/{id}/resume` | Explicit resume on the server; 204 |
+| `POST /v1/boxes/{id}/checkpoint/export` | Download temporary tar+zstd containing only the pair |
+| `POST /v1/boxes/checkpoint/import?name=restored` | Upload tar+zstd; 201 with the new box’s metadata |
+
+Configured base URL and routing prefixes apply normally; discovery stays at the
+unprefixed `/v1/config`. Authentication is unchanged. Transport uses temporary files
+and bounded chunks rather than buffering the checkpoint in memory. Downloads validate
+the complete pair and hashes in private staging before atomic no-overwrite publication.
+Uploads finish and validate before VM restoration. Missing, duplicate, extra and
+nonregular archive members fail; transfer temporaries are removed on failure.
+The archive is temporary: the delivered directory still contains only two files.
+
+Import is never retried automatically. A lost response can mean that the server
+created the remote box; inspect the server before issuing another import. Accepted
+server capture/restore jobs may finish after the client disconnects. Native
+cancellation does not permit deleting storage while native capture/restore writers
+are still running. Exact readonly boot disk contents must exist at the recorded path
+or in the target runtime’s digest-matching cache; a missing dependency is reported
+rather than rebuilt.
+
+## Focused REST verification
+
+On a Linux x86_64 KVM host with the actual runtime and shim built, run one exact
+acceptance case and keep its process logs:
+
+```sh
+make runtime:debug
+BOXLITE_CHECKPOINT_LOGS=/tmp/checkpoint-rest-logs \
+  make test:checkpoint:rest:acceptance SETUP_DONE=1 \
+  FILTER=checkpoint_rest_preserves_process_across_independent_homes
+```
+
+The case uses independent runtime homes, prepares target volumes and exact boot
+bytes, removes source dependencies, and transfers the pair over HTTP. It checks
+Paused import, explicit resume, original PID/marker/execution ID, guest file access,
+repeated export/import, cold start, bwrap and the VMM seccomp filter on every shim
+thread. The log directory also retains both `serve` processes’ stderr.

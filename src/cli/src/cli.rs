@@ -250,12 +250,12 @@ const CHECKPOINT_SCOPES: &[CommandScope] = &[
     },
     CommandScope {
         name: "export",
-        globals: LOCAL_GLOBALS,
+        globals: BOX_GLOBALS,
         children: &[],
     },
     CommandScope {
         name: "import",
-        globals: LOCAL_GLOBALS,
+        globals: BOX_GLOBALS,
         children: &[],
     },
 ];
@@ -329,17 +329,17 @@ const COMMAND_SCOPES: &[CommandScope] = &[
     },
     CommandScope {
         name: "pause",
-        globals: LOCAL_GLOBALS,
+        globals: BOX_GLOBALS,
         children: &[],
     },
     CommandScope {
         name: "resume",
-        globals: LOCAL_GLOBALS,
+        globals: BOX_GLOBALS,
         children: &[],
     },
     CommandScope {
         name: "checkpoint",
-        globals: LOCAL_GLOBALS,
+        globals: BOX_GLOBALS,
         children: CHECKPOINT_SCOPES,
     },
     CommandScope {
@@ -1779,17 +1779,17 @@ mod tests {
         (&["boxlite", "images"], 1, LOCAL_WITHOUT_REGISTRY),
         (&["boxlite", "info"], 1, LOCAL_WITHOUT_REGISTRY),
         (&["boxlite", "logs", "box"], 1, LOCAL_WITHOUT_REGISTRY),
-        (&["boxlite", "pause", "box"], 1, LOCAL_WITHOUT_REGISTRY),
-        (&["boxlite", "resume", "box"], 1, LOCAL_WITHOUT_REGISTRY),
+        (&["boxlite", "pause", "box"], 1, REGISTRY),
+        (&["boxlite", "resume", "box"], 1, REGISTRY),
         (
             &["boxlite", "checkpoint", "export", "box", "checkpoint-dir"],
             2,
-            LOCAL_WITHOUT_REGISTRY,
+            REGISTRY,
         ),
         (
             &["boxlite", "checkpoint", "import", "checkpoint-dir"],
             2,
-            LOCAL_WITHOUT_REGISTRY,
+            REGISTRY,
         ),
         (&["boxlite", "pull", "alpine"], 1, LOCAL_WITH_REGISTRY),
         (&["boxlite", "serve"], 1, LOCAL_WITH_REGISTRY),

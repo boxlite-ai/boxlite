@@ -4,7 +4,7 @@ use std::os::unix::fs::FileExt;
 
 // Envelope fixtures exercise the host parser, not CPU/device restore. Their
 // QCOW2 comes through the production copier; placeholder CPU state cannot boot.
-fn fixture() -> tempfile::TempDir {
+pub(crate) fn fixture() -> tempfile::TempDir {
     let directory = tempfile::tempdir().unwrap();
     let source = tempfile::tempdir().unwrap();
     let raw = source.path().join("base.ext4");
@@ -22,7 +22,7 @@ fn fixture() -> tempfile::TempDir {
     let metadata = serde_json::json!({"compatibility":{},"cpus":[{}],"vm":{},"regions":[{"gpa":0,"len":4096,"attributes":0}],
         "disks":[{"read_only":false,"disk_bytes":1048576},{"read_only":true,"disk_bytes":4096}],
         "nic":null,"rng":null,"balloon":null,"vsock":null,"console":null,"legacy":null,"fs":null,
-        "application_schema":1,"application":null,"disk_dependencies":["container_qcow2",{"external_readonly_boot":{"length":4096,"sha256":vec![0u8;32]}}]});
+        "application_schema":1,"application":{"local_paths":{"version":2}},"disk_dependencies":["container_qcow2",{"external_readonly_boot":{"length":4096,"sha256":vec![0u8;32]}}]});
     seal(directory.path(), &metadata);
     directory
 }
@@ -50,6 +50,102 @@ fn seal(directory: &Path, metadata: &serde_json::Value) {
     file.write_all(&header).unwrap();
     file.write_all(&metadata).unwrap();
     file.write_all(&payload).unwrap();
+}
+
+#[test]
+fn checkpoint_transport_roundtrip_no_overwrite_and_cleanup() {
+    use crate::checkpoint_transport::{pack, unpack};
+    let source = fixture();
+    let home = tempfile::tempdir().unwrap();
+    let destination = home.path().join("pair");
+    unpack(pack(source.path()).unwrap(), &destination).unwrap();
+    open(&destination).unwrap().verify_disk().unwrap();
+    assert_eq!(
+        std::fs::read(destination.join(MEMORY)).unwrap(),
+        std::fs::read(source.path().join(MEMORY)).unwrap()
+    );
+    assert!(unpack(pack(source.path()).unwrap(), &destination).is_err());
+    assert_eq!(std::fs::read_dir(home.path()).unwrap().count(), 1);
+    assert_eq!(std::fs::read_dir(&destination).unwrap().count(), 2);
+}
+
+fn transport_archive(source: &Path, names: &[&str]) -> File {
+    let output = tempfile::tempfile().unwrap();
+    let encoder = zstd::stream::write::Encoder::new(output, 1).unwrap();
+    let mut archive = tar::Builder::new(encoder);
+    for name in names {
+        let file = File::open(source.join(if *name == DISK { DISK } else { MEMORY })).unwrap();
+        let mut header = tar::Header::new_ustar();
+        header.set_mode(0o600);
+        header.set_size(file.metadata().unwrap().len());
+        header.set_cksum();
+        archive.append_data(&mut header, name, file).unwrap();
+    }
+    archive.into_inner().unwrap().finish().unwrap()
+}
+
+#[test]
+fn checkpoint_transport_rejects_missing_duplicate_extra_corrupt_and_incomplete() {
+    use crate::checkpoint_transport::{pack, unpack};
+    let source = fixture();
+    let home = tempfile::tempdir().unwrap();
+    let destination = home.path().join("pair");
+    for names in [
+        vec![MEMORY],
+        vec![MEMORY, MEMORY],
+        vec![MEMORY, DISK, "extra"],
+    ] {
+        assert!(unpack(transport_archive(source.path(), &names), &destination).is_err());
+        assert_eq!(std::fs::read_dir(home.path()).unwrap().count(), 0);
+    }
+    let file = pack(source.path()).unwrap();
+    file.set_len(file.metadata().unwrap().len() - 3).unwrap();
+    assert!(unpack(file, &destination).is_err());
+    assert_eq!(std::fs::read_dir(home.path()).unwrap().count(), 0);
+    OpenOptions::new()
+        .write(true)
+        .open(source.path().join(DISK))
+        .unwrap()
+        .write_all_at(b"bad", 104)
+        .unwrap();
+    assert!(
+        unpack(
+            transport_archive(source.path(), &[MEMORY, DISK]),
+            &destination
+        )
+        .is_err()
+    );
+    assert_eq!(std::fs::read_dir(home.path()).unwrap().count(), 0);
+}
+
+#[test]
+fn checkpoint_transport_requires_v2_but_local_inspection_keeps_v1() {
+    let source = fixture();
+    let pair = open(source.path()).unwrap();
+    let mut memory = pair.memory;
+    memory.seek(SeekFrom::Start(24)).unwrap();
+    let mut length = [0; 8];
+    memory.read_exact(&mut length).unwrap();
+    let mut bytes = vec![0; u64::from_le_bytes(length) as usize];
+    memory.seek(SeekFrom::Start(160)).unwrap();
+    memory.read_exact(&mut bytes).unwrap();
+    let mut metadata: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    metadata["application"]["local_paths"]["version"] = 1.into();
+    seal(source.path(), &metadata);
+    open(source.path()).unwrap().verify_disk().unwrap();
+    let error = crate::checkpoint_transport::pack(source.path()).unwrap_err();
+    assert!(
+        matches!(error, BoxliteError::Unsupported(_)) && error.to_string().contains("re-export")
+    );
+    let target = tempfile::tempdir().unwrap();
+    assert!(matches!(
+        crate::checkpoint_transport::unpack(
+            transport_archive(source.path(), &[MEMORY, DISK]),
+            &target.path().join("pair")
+        ),
+        Err(BoxliteError::Unsupported(_))
+    ));
+    assert_eq!(std::fs::read_dir(target.path()).unwrap().count(), 0);
 }
 
 #[test]

@@ -327,6 +327,26 @@ impl BoxOptions {
 
 #[async_trait::async_trait]
 impl RuntimeBackend for RestRuntime {
+    async fn import_checkpoint(
+        &self,
+        path: &std::path::Path,
+        options: crate::CheckpointImportOptions,
+    ) -> BoxliteResult<LiteBox> {
+        self.client.require_checkpoints_enabled().await?;
+        let path = path.to_path_buf();
+        let file = tokio::task::spawn_blocking(move || crate::checkpoint_transport::pack(&path))
+            .await
+            .map_err(|error| BoxliteError::Internal(error.to_string()))??;
+        let response: BoxResponse = self
+            .client
+            .post_checkpoint(file, options.name.as_deref())
+            .await?;
+        Ok(litebox_from_rest(Arc::new(RestBox::new(
+            self.client.clone(),
+            response.to_box_info()?,
+        ))))
+    }
+
     async fn create(&self, options: BoxOptions, name: Option<String>) -> BoxliteResult<LiteBox> {
         self.validate_create_options(&options).await?;
 
@@ -613,25 +633,6 @@ mod tests {
 
         // Should fail trying to reach the server for capability check
         assert!(result.is_err(), "Expected error when server is unreachable");
-    }
-
-    /// A checkpoint needs this host's KVM and jailer: the REST backend
-    /// refuses the import without contacting any server.
-    #[tokio::test]
-    async fn checkpoint_import_is_refused_by_rest_runtimes() {
-        let options = BoxliteRestOptions::new("http://localhost:1"); // unreachable port
-        let runtime = RestRuntime::new(&options).expect("failed to create REST runtime");
-        let result = RuntimeBackend::import_checkpoint(
-            &runtime,
-            std::path::Path::new("/tmp/ignored.ckpt"),
-            Default::default(),
-        )
-        .await;
-        assert!(
-            matches!(result, Err(BoxliteError::Unsupported(_))),
-            "{:?}",
-            result.err()
-        );
     }
 
     #[tokio::test]

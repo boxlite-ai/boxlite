@@ -1508,6 +1508,18 @@ impl crate::runtime::backend::BoxBackend for BoxImpl {
         self.stop().await
     }
 
+    async fn pause(&self, options: crate::PauseOptions) -> BoxliteResult<()> {
+        self.pause(options).await
+    }
+
+    async fn resume(&self) -> BoxliteResult<()> {
+        self.resume().await
+    }
+
+    async fn export_checkpoint(&self, path: &std::path::Path) -> BoxliteResult<()> {
+        self.export_checkpoint(path).await
+    }
+
     async fn copy_into(
         &self,
         host_src: &std::path::Path,

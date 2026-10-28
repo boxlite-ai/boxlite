@@ -10,6 +10,8 @@ use tracing_subscriber::EnvFilter;
 // Only set when an executable explicitly calls `init_logging_for`.
 static LOG_GUARD: OnceLock<tracing_appender::non_blocking::WorkerGuard> = OnceLock::new();
 
+#[doc(hidden)]
+pub mod checkpoint_transport;
 pub mod event_listener;
 pub mod experimental;
 pub mod jailer;

@@ -320,22 +320,19 @@ impl BoxImpl {
         self.require_checkpoint("export a checkpoint")?;
         let (parent_path, name) = destination(path)?;
         let persisted = self.runtime.box_manager.update_box(self.id())?;
-        let local_paths = persisted.checkpoint_paths.clone().ok_or_else(|| {
+        let mut local_paths = persisted.checkpoint_paths.clone().ok_or_else(|| {
             BoxliteError::Unsupported(
                 "source has no saved local checkpoint paths; stop and restart it before export"
                     .into(),
             )
         })?;
+        local_paths.version = 2;
         let guest = persisted.checkpoint_guest.ok_or_else(|| {
             BoxliteError::InvalidState(
                 "no recorded paused guest identity; resume and pause again".into(),
             )
         })?;
         let mut options = self.config.options.clone();
-        for volume in &mut options.volumes {
-            volume.host_path.clear();
-            volume.managed_volume = None;
-        }
         if matches!(options.rootfs, crate::RootfsSpec::RootfsPath(_)) {
             options.rootfs = crate::RootfsSpec::Image("checkpoint:external".into());
         }

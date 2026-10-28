@@ -535,8 +535,8 @@ Restart one or more boxes.
 ### `boxlite pause`
 
 Pause a supported box in automatically selected checkpoint owner mode: every vCPU and device stops at one consistent
-cut. While paused it refuses `exec`, `cp`, attach, metrics and network changes. Embedded runtime
-only (Linux x86_64 with KVM); `--url` and `--profile` are rejected.
+cut. While paused it refuses `exec`, `cp`, attach, metrics and network changes. Uses the
+normal local/REST runtime selector; the owner runtime requires Linux x86_64 with KVM.
 
 **Usage:** `boxlite pause [--host-writers-stopped] BOX`
 
@@ -554,14 +554,15 @@ Let a paused box run again; it is checked to be the guest that was paused, or st
 
 Export a Paused owner to a new directory containing exactly `snapshot.mem` and
 `snapshot.qcow2`. Shared files and the exact readonly boot disk remain external
-resources whose concrete paths are saved automatically; no binding file is needed.
-Keep these paths available: removing the source box may remove its shared root.
+resources prepared on the target according to saved mount options; no binding file is needed.
+V2 rebuilds internal shared directories and permits different target inodes.
 
 - `boxlite checkpoint export BOX DIRECTORY`
 - `boxlite checkpoint inspect DIRECTORY`
 - `boxlite checkpoint import [--name NAME] DIRECTORY`
 
-Inspection opens no shares and creates no runtime. Import verifies dependencies
+Export downloads to a caller-local directory when using REST; import uploads from it.
+Inspection stays local, opens no shares and creates no runtime. Import verifies dependencies
 and publishes a new Paused box; `boxlite resume BOX` continues execution. Older full
 checkpoint formats are refused. Default supported configurations need no creation
 flag; ordinary disk-only `.boxlite` compatibility is unchanged.

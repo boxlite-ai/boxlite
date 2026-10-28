@@ -233,25 +233,25 @@ impl LiteBox {
     /// Pause a checkpoint-enabled box: its vCPUs and devices stop at one
     /// consistent cut (no SIGSTOP, no guest filesystem freeze). While paused
     /// the box refuses exec, attach, copies, metrics, SSH and network changes;
-    /// [`Self::resume`] or [`Self::stop`] end the pause. Local runtime only.
+    /// [`Self::resume`] or [`Self::stop`] end the pause.
     pub async fn pause(&self, options: PauseOptions) -> BoxliteResult<()> {
-        self.local_backend("pause")?.pause(options).await
+        self.box_backend.pause(options).await
     }
 
-    /// Let a paused checkpoint-enabled box run again. Local runtime only.
+    /// Let a paused checkpoint-enabled box run again.
     pub async fn resume(&self) -> BoxliteResult<()> {
-        self.local_backend("resume")?.resume().await
+        self.box_backend.resume().await
     }
 
     /// Write a paused checkpoint-enabled box to a new two-file checkpoint directory
     /// at `path`, which must not exist yet. The box stays paused whether the
-    /// export succeeds or fails. Local runtime only.
+    /// export succeeds or fails. With REST, `path` is caller-local and the
+    /// captured pair is downloaded from the server.
     pub async fn export_checkpoint(&self, path: impl AsRef<std::path::Path>) -> BoxliteResult<()> {
-        self.local_backend("export_checkpoint")?
-            .export_checkpoint(path.as_ref())
-            .await
+        self.box_backend.export_checkpoint(path.as_ref()).await
     }
 
+    #[cfg(test)]
     pub(crate) fn local_backend(&self, op: &str) -> BoxliteResult<Arc<box_impl::BoxImpl>> {
         self.box_backend
             .clone()

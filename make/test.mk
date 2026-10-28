@@ -2,7 +2,7 @@ PHONY_TARGETS += test test\:unit\:cli test\:unit\:vmm test\:unit\:guest test\:gu
 PHONY_TARGETS += test\:integration\:vmm\:kvm test\:integration\:vmm\:elf test\:integration\:vmm\:linux _ensure-kvm test\:vmm\:boot
 PHONY_TARGETS += test\:apps\:runner test\:snapshot\:rootless test\:shim\:linkage
 PHONY_TARGETS += test\:apps\:dashboard
-PHONY_TARGETS += test\:checkpoint\:helper test\:checkpoint\:acceptance\:build test\:checkpoint\:acceptance _ensure-linux-x86_64
+PHONY_TARGETS += test\:checkpoint\:helper test\:checkpoint\:acceptance\:build test\:checkpoint\:acceptance test\:checkpoint\:rest\:acceptance _ensure-linux-x86_64
 
 # Mirrors GitHub Actions strategy.fail-fast. Default false: aggregator
 # targets run every sub-suite even if an earlier one fails, then exit
@@ -295,6 +295,10 @@ CHECKPOINT_HELPER ?= $(or $(CARGO_TARGET_DIR),$(CURDIR)/target)/checkpoint-helpe
 # Default features: the test drives the shim as a separate process, so it links
 # neither the in-process libkrun engine (`krun`) nor libgvproxy (`gvproxy`).
 CHECKPOINT_ACCEPTANCE = cargo test -p boxlite --test checkpoint_acceptance
+
+test\:checkpoint\:rest\:acceptance: _ensure-kvm $(if $(SETUP_DONE),,runtime\:debug)
+	@cargo test -p boxlite-cli --test checkpoint_rest -- --ignored --exact \
+		$(if $(FILTER),$(FILTER),checkpoint_rest_preserves_process_across_independent_homes) --test-threads=1 --nocapture
 
 _ensure-linux-x86_64:
 	@test "$$(uname -s -m)" = "Linux x86_64" || { echo "Linux x86_64 is required" >&2; exit 1; }

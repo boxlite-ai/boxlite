@@ -426,8 +426,9 @@ impl BoxliteRuntime {
     /// [`LiteBox::export_checkpoint`] as a new box with a new ID, paused.
     ///
     /// The guest keeps its container ID, processes and execution IDs;
-    /// [`LiteBox::resume`] continues them. Local runtime on Linux x86_64 with
-    /// KVM only; elsewhere this returns `Unsupported`.
+    /// [`LiteBox::resume`] continues them. A REST runtime uploads this caller-local
+    /// directory and creates the box remotely. The owner runtime requires
+    /// Linux x86_64/KVM and prepared external dependencies.
     pub async fn import_checkpoint(
         &self,
         path: impl AsRef<std::path::Path>,

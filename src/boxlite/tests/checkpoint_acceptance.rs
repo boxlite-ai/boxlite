@@ -517,7 +517,7 @@ async fn checkpoint_missing_orphans_return_guest_ebadf() {
             .any(|share| share.objects.iter().any(|object| object.unlinked))
     );
     let (application, metadata) = read_checkpoint(&pair);
-    assert_eq!(application["local_paths"]["version"], 1);
+    assert_eq!(application["local_paths"]["version"], 2);
     assert!(has_file_dax_mapping(&metadata["fs"]));
     // Former unlinked filenames can be reused, but must never substitute for
     // the captured orphan. Both guest handles still return EBADF after import.

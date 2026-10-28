@@ -468,4 +468,4 @@ impl VerifiedPair {
 
 #[cfg(test)]
 #[path = "tests/pair.rs"]
-mod tests;
+pub(crate) mod tests;
