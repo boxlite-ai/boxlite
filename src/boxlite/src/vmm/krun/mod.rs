@@ -1,5 +1,6 @@
 //! Libkrun-based engine implementation.
 
+pub(crate) mod checkpoint;
 mod constants;
 pub mod context;
 pub mod engine;

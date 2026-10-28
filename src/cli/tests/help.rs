@@ -151,6 +151,17 @@ fn command_help_only_advertises_meaningful_global_options() {
         ),
         (&["info"], &["--debug", "--home", "--config"]),
         (&["logs"], &["--debug", "--home", "--config"]),
+        (&["pause"], &["--debug", "--home", "--config"]),
+        (&["resume"], &["--debug", "--home", "--config"]),
+        (&["checkpoint"], &["--debug", "--home", "--config"]),
+        (
+            &["checkpoint", "export"],
+            &["--debug", "--home", "--config"],
+        ),
+        (
+            &["checkpoint", "import"],
+            &["--debug", "--home", "--config"],
+        ),
         (
             &["stats"],
             &[

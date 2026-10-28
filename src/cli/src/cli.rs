@@ -306,6 +306,23 @@ const VOLUME_SCOPES: &[CommandScope] = &[
         children: &[],
     },
 ];
+const CHECKPOINT_SCOPES: &[CommandScope] = &[
+    CommandScope {
+        name: "inspect",
+        globals: LOCAL_GLOBALS,
+        children: &[],
+    },
+    CommandScope {
+        name: "export",
+        globals: BOX_GLOBALS,
+        children: &[],
+    },
+    CommandScope {
+        name: "import",
+        globals: BOX_GLOBALS,
+        children: &[],
+    },
+];
 const SNAPSHOT_SCOPES: &[CommandScope] = &[
     CommandScope {
         name: "create",
@@ -376,11 +393,27 @@ const COMMAND_SCOPES: &[CommandScope] = &[
         children: &[],
     },
     CommandScope {
+        name: "pause",
+        globals: BOX_GLOBALS,
+        children: &[],
+    },
+    CommandScope {
         name: "resize",
         globals: BOX_GLOBALS,
         children: &[],
     },
     CommandScope {
+        name: "resume",
+        globals: BOX_GLOBALS,
+        children: &[],
+    },
+    CommandScope {
+        name: "checkpoint",
+        globals: BOX_GLOBALS,
+        children: CHECKPOINT_SCOPES,
+    },
+    CommandScope {
+
         name: "pull",
         globals: LOCAL_IMAGE_GLOBALS,
         children: &[],
@@ -764,6 +797,15 @@ pub enum Commands {
 
     /// Restart one or more boxes
     Restart(crate::commands::restart::RestartArgs),
+
+    /// Pause a checkpoint-enabled box
+    Pause(crate::commands::checkpoint::PauseArgs),
+
+    /// Resume a paused box
+    Resume(crate::commands::checkpoint::ResumeArgs),
+
+    /// Export or import a paused box as a two-file checkpoint directory
+    Checkpoint(crate::commands::checkpoint::CheckpointArgs),
 
     /// Grow a running box, or show its allocation and boot ceilings
     Resize(crate::commands::resize::ResizeArgs),
@@ -1983,6 +2025,18 @@ mod tests {
         (&["boxlite", "images"], 1, LOCAL_WITHOUT_REGISTRY),
         (&["boxlite", "info"], 1, LOCAL_WITHOUT_REGISTRY),
         (&["boxlite", "logs", "box"], 1, LOCAL_WITHOUT_REGISTRY),
+        (&["boxlite", "pause", "box"], 1, REGISTRY),
+        (&["boxlite", "resume", "box"], 1, REGISTRY),
+        (
+            &["boxlite", "checkpoint", "export", "box", "checkpoint-dir"],
+            2,
+            REGISTRY,
+        ),
+        (
+            &["boxlite", "checkpoint", "import", "checkpoint-dir"],
+            2,
+            REGISTRY,
+        ),
         (&["boxlite", "pull", "alpine"], 1, LOCAL_WITH_REGISTRY),
         (&["boxlite", "serve"], 1, LOCAL_WITH_REGISTRY),
         (&["boxlite", "auth", "login"], 2, AUTH_WITH_URL),

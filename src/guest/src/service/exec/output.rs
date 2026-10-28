@@ -6,12 +6,18 @@ use std::collections::VecDeque;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
+use std::time::Duration;
 use tokio::sync::{watch, Mutex};
 use tokio::task::JoinHandle;
 use tonic::Status;
 use tracing::error;
 
 const BUFFER_CAPACITY_BYTES: usize = 1024 * 1024;
+/// How long an Attach waits for the current consumer to let go. Every host
+/// connection ends at a checkpoint resume, and the guest may serve the host's
+/// next Attach just before it drops the reset one; a consumer that stays
+/// attached still refuses the Attach once this passes.
+const CONSUMER_HANDOFF: Duration = Duration::from_secs(1);
 
 pub(crate) type AttachStream = Pin<Box<dyn Stream<Item = Result<ExecOutput, Status>> + Send>>;
 
@@ -144,7 +150,7 @@ impl OutputManager {
     // every `Err` costs more than it saves.
     #[allow(clippy::result_large_err)]
     pub(crate) async fn attach(&self) -> Result<AttachStream, Status> {
-        let lease = self.claim_consumer().await?;
+        let lease = self.claim_consumer_within(CONSUMER_HANDOFF).await?;
         if self.inner.lock().await.sealed {
             return Err(Status::failed_precondition(
                 "execution output is finalizing",
@@ -162,6 +168,26 @@ impl OutputManager {
     /// The lease flag itself, so a holder can test it without taking any lock.
     pub(crate) fn consumer_lease_flag(&self) -> Arc<AtomicBool> {
         Arc::clone(&self.consumer_lease)
+    }
+
+    /// Claim the consumer lease, waiting up to `handoff` for its holder to
+    /// drop it; every release notifies `updated`.
+    #[allow(clippy::result_large_err)]
+    async fn claim_consumer_within(&self, handoff: Duration) -> Result<ConsumerLease, Status> {
+        let mut released = self.updated.subscribe();
+        let deadline = tokio::time::Instant::now() + handoff;
+        loop {
+            match self.claim_consumer().await {
+                Err(status) if status.code() == tonic::Code::AlreadyExists => {}
+                claimed => return claimed,
+            }
+            if !matches!(
+                tokio::time::timeout_at(deadline, released.changed()).await,
+                Ok(Ok(()))
+            ) {
+                return Err(Status::already_exists("Already attached"));
+            }
+        }
     }
 
     #[allow(clippy::result_large_err)]
@@ -651,6 +677,25 @@ mod tests {
         drop(first);
 
         assert!(manager.attach().await.is_ok());
+    }
+
+    /// Every host connection ends at a checkpoint resume, and the guest can
+    /// serve the host's next Attach before it drops the reset one: the new
+    /// Attach waits for a consumer that is letting go.
+    #[tokio::test]
+    async fn attach_waits_for_a_consumer_that_is_letting_go() {
+        let manager = OutputManager::new(None, None);
+
+        let first = manager.attach().await.unwrap();
+        let second = manager.attach();
+        tokio::pin!(second);
+        assert!(
+            futures::poll!(&mut second).is_pending(),
+            "the Attach must wait while the output is held"
+        );
+
+        drop(first);
+        assert!(second.await.is_ok());
     }
 
     #[tokio::test]

@@ -77,6 +77,39 @@ A box's disks are copy-on-write overlays on read-only ext4 images:
 
 Deleting these files while boxes exist breaks those boxes.
 
+## Checkpoint directories
+
+A full checkpoint contains exactly `snapshot.mem` and `snapshot.qcow2`.
+The container disk is standalone QCOW2; shares and the exact readonly boot disk
+are external dependencies. Binding configuration is input, not a third artifact.
+
+The memory file starts with a 160-byte little-endian version-9 header:
+
+| Offset | Field |
+| --- | --- |
+| 0 / 8 / 12 | Eight-byte `KRUNVM\0\0` magic / u32 version 9 / u32 header length 160 |
+| 16 / 24 / 32 / 40 | u64 total length / metadata length / payload length / physical QCOW2 length |
+| 48 / 80 / 112 | SHA-256 of metadata / payload / full QCOW2 file |
+| 144 | Sixteen reserved zero bytes |
+
+Metadata is bounded to 16 MiB and records BoxLite application schema 1,
+CPU/KVM/device layout, ordered disk dependencies, FUSE sessions and stable
+external object references. Payload contains RAM, init.krun and anonymous DAX
+pages; file-backed DAX stores mappings and references, not copied file contents.
+Lengths, bounds, supported versions and checksums are validated before restore.
+Checksums detect corruption; they do not authenticate a checkpoint.
+
+The RAM region total is mapped memory, including copied kernel and boot regions.
+It can exceed the application's configured memory MiB. Import requires matching CPU
+counts and enough mapped RAM for that logical setting, while validating every saved
+region and payload extent independently. Cold starts retain the configured setting.
+
+Import copies/reflinks the container into box-owned writable QCOW2 and verifies
+readonly boot content by full digest. It never modifies the original pair.
+Older full formats are explicitly refused without upgrading or converting them.
+Disk-only `.boxlite` archives retain their wire compatibility. See the
+[checkpoints guide](../guides/checkpoints.md) for providers, publication and lifecycle.
+
 ## OCI image cache
 
 BoxLite caches OCI images under `~/.boxlite/images/` at the layer level, so images that share

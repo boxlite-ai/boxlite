@@ -502,6 +502,120 @@ paths:
         "409":
           $ref: "#/components/responses/ConflictError"
 
+  /{prefix}/boxes/{box_id}/pause:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+      - $ref: "#/components/parameters/boxId"
+    post:
+      operationId: pauseBox
+      summary: Pause a checkpoint-enabled box
+      description: |
+        Requires checkpoints_enabled discovery. The caller must stop all external
+        host writers before asserting host_writers_stopped and keep them stopped
+        until resume or stop. The VM remains paused until explicitly resumed.
+      tags: [Boxes]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                host_writers_stopped:
+                  type: boolean
+                  default: false
+      responses:
+        "204":
+          description: Box paused
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
+
+  /{prefix}/boxes/{box_id}/resume:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+      - $ref: "#/components/parameters/boxId"
+    post:
+      operationId: resumeBox
+      summary: Explicitly resume a paused checkpoint-enabled box
+      tags: [Boxes]
+      responses:
+        "204":
+          description: Box resumed
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
+
+  /{prefix}/boxes/{box_id}/checkpoint/export:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+      - $ref: "#/components/parameters/boxId"
+    post:
+      operationId: exportCheckpoint
+      summary: Download a paused box's checkpoint pair
+      description: |
+        Requires checkpoints_enabled. Captures remotely; the box stays Paused.
+        Transport is temporary tar+zstd with exactly two regular members,
+        snapshot.mem and snapshot.qcow2, using path binding metadata v2.
+        External volumes and the exact readonly boot disk are dependencies.
+        Clients validate both files and hashes before no-overwrite publication
+        into a caller-local directory; no third persistent file is produced.
+      tags: [Boxes]
+      responses:
+        "200":
+          description: Complete checkpoint pair archive
+          content:
+            application/zstd:
+              schema:
+                type: string
+                format: binary
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
+
+  /{prefix}/boxes/checkpoint/import:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+    post:
+      operationId: importCheckpoint
+      summary: Upload a caller-local checkpoint and create a remote Paused box
+      description: |
+        Requires checkpoints_enabled. Accepts exactly snapshot.mem and
+        snapshot.qcow2 as regular tar+zstd members; rejects missing, duplicate,
+        extra, incomplete or corrupt entries before VM restore. Path binding
+        metadata v2 is required; v1 must be re-exported with a current runtime.
+        The optional name is the only override. Saved BoxOptions resolve already
+        prepared target volumes; external contents are not copied and no mount
+        service starts. The exact readonly boot dependency must already exist.
+        Resume is explicit. Never automatically retry: response loss may mean
+        that a remote box was created.
+      tags: [Boxes]
+      parameters:
+        - name: name
+          in: query
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/zstd:
+            schema:
+              type: string
+              format: binary
+      responses:
+        "201":
+          description: New remote box, Paused
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Box"
+        "409":
+          $ref: "#/components/responses/ConflictError"
+
   /{prefix}/boxes/{box_id}/ssh:
     parameters:
       - $ref: "#/components/parameters/prefix"
@@ -2214,6 +2328,10 @@ components:
             streaming_enabled:
               type: boolean
               description: Whether WebSocket attach output streaming is supported
+              example: true
+            checkpoints_enabled:
+              type: boolean
+              description: Whether pause, resume and two-file checkpoint upload/download are supported; absent means unsupported
               example: true
             snapshots_enabled:
               type: boolean

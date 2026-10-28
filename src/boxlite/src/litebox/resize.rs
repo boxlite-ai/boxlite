@@ -74,6 +74,7 @@ impl super::box_impl::BoxImpl {
         }
         // Attach before taking the lifecycle lock: recovery uses that lock too.
         let live = self.live_state().await?;
+        let _reservation = self.reserve(super::operation::Action::Resize).await?;
         let lock_id = self
             .state
             .read()

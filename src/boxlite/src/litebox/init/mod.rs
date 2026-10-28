@@ -70,7 +70,9 @@ use tasks::{
     BootAssetsTask, ContainerRootfsTask, FilesystemTask, GuestConnectTask, GuestInitTask,
     GuestRootfsTask, InitCtx, VmmAttachTask, VmmSpawnTask,
 };
+pub(crate) use tasks::{checkpoint_import_spec, read_tail, restart_image_config, spawn_vm};
 use types::InitPipelineContext;
+pub(crate) use types::resolve_user_volumes;
 
 // ============================================================================
 // EXECUTION PLAN
@@ -244,6 +246,8 @@ impl BoxBuilder {
             state.resolved_image.clone(),
         );
         ctx.outbound_policy = state.outbound_policy.clone();
+        ctx.restored = state.restored_storage.clone();
+
         ctx.resources = state.resources;
         let ctx = Arc::new(Mutex::new(ctx));
         let ctx_for_cleanup = Arc::clone(&ctx);

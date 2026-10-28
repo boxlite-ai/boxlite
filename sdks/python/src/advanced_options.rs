@@ -214,7 +214,7 @@ impl PySecurityOptions {
         Self {
             jailer_enabled: true,
             seccomp_enabled: cfg!(target_os = "linux"),
-            max_open_files: Some(1024),
+            max_open_files: None, // Automatic enabled-jailer FD policy.
             max_file_size: Some(1024 * 1024 * 1024), // 1 GiB
             max_processes: Some(100),
             max_memory: None,   // Let VM config handle this
@@ -338,5 +338,24 @@ impl PyAdvancedBoxOptions {
             capabilities,
             privileged,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn checkpoint_python_named_defaults_keep_automatic_fd_policy() {
+        for preset in [PySecurityOptions::standard(), PySecurityOptions::maximum()] {
+            let core: SecurityOptions = preset.into();
+            assert_eq!(core.resource_limits.max_open_files, None);
+        }
+        let mut explicit = PySecurityOptions::maximum();
+        explicit.max_open_files = Some(64);
+        let core: SecurityOptions = explicit.into();
+        assert_eq!(core.resource_limits.max_open_files, Some(64));
+        let disabled: SecurityOptions = PySecurityOptions::development().into();
+        assert!(!disabled.jailer_enabled);
+        assert_eq!(disabled.resource_limits.max_open_files, None);
     }
 }

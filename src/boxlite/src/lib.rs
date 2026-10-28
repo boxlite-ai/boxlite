@@ -11,6 +11,8 @@ use tracing_subscriber::EnvFilter;
 static LOG_GUARD: OnceLock<tracing_appender::non_blocking::WorkerGuard> = OnceLock::new();
 
 pub mod agents;
+#[doc(hidden)]
+pub mod checkpoint_transport;
 pub mod event_listener;
 pub mod experimental;
 pub mod jailer;
@@ -39,8 +41,8 @@ mod default_runtime_dir;
 
 pub use agents::{Agent, AgentTurn, Agents};
 pub use litebox::{
-    BoxConnection, BoxReader, BoxTunnel, BoxWriter, LiteBox, SocketAddress, TunnelForwarder,
-    TunnelOptions,
+    BoxConnection, BoxReader, BoxTunnel, BoxWriter, CheckpointDependencies, LiteBox,
+    ObjectDependency, ObjectReference, ShareDependency, SocketAddress, TunnelForwarder, TunnelOptions,
 };
 pub use portal::GuestSession;
 pub use runtime::{AuthHandle, BoxliteRuntime, ImageHandle, Principal};
@@ -55,7 +57,7 @@ pub use litebox::archive::ArchiveManifest;
 pub use litebox::snapshot_mgr::SnapshotInfo;
 pub use litebox::{
     AttachOptions, BoxCommand, CopyOptions, CopySourceKind, ExecResult, ExecStderr, ExecStdin,
-    ExecStdout, Execution, ExecutionId, HealthState, HealthStatus,
+    ExecStdout, Execution, ExecutionId, HealthState, HealthStatus, PauseOptions,
 };
 pub use litebox::{BoxResources, ResizeOptions};
 pub use litebox::{SshAccount, SshCaConfig, SshConfig, SshHandle, SshStatus};
@@ -65,9 +67,10 @@ pub use runtime::advanced_options::{
     ResourceLimits, SecurityOptions,
 };
 pub use runtime::options::{
-    BoxArchive, BoxOptions, BoxliteOptions, CloneOptions, ExportOptions, ImageRegistry,
-    ImageRegistryAuth, ImageRegistryProxy, InboundNetworkConfig, NetworkMode, NetworkSpec,
-    OutboundNetworkConfig, PortProtocol, RegistryTransport, RootfsSpec, Secret, SnapshotOptions,
+    BoxArchive, BoxOptions, BoxliteOptions, CheckpointImportOptions, CloneOptions, ExportOptions,
+    ImageRegistry, ImageRegistryAuth, ImageRegistryProxy, InboundNetworkConfig, NetworkMode,
+    NetworkSpec, OutboundNetworkConfig, PortProtocol, RegistryTransport, RootfsSpec, Secret,
+    SnapshotOptions,
 };
 /// Boxlite library version (from CARGO_PKG_VERSION at compile time).
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

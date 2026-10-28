@@ -35,6 +35,7 @@ Dated root-cause analyses and design studies, newest first.
 - 2026-10-28 · [Agent REST API design](investigations/2026-10-28-agent-rest-api-design.md): nine HTTP operations for agents, turns and interaction, with snapshot, retry and event-recovery contracts.
 - 2026-10-28 · [Agent CLI simplification](investigations/2026-10-28-agent-cli-simplification.md): compares command hierarchies and named runtime targets for agent instances and turns.
 - 2026-10-27 · [CLI guest SSH commands](investigations/cli-ssh-commands.md)
+- 2026-10-27 · [Two-file checkpoints](investigations/two-file-checkpoint-design.md): proposed memory/QCOW2 format, external bindings, operation reservation, and implementation slices.
 - 2026-10-08 · [BoxLite skills in Claude Code](investigations/claude-code-plugin.md): describes the Claude adapter, shared package layout, and installation/acceptance checks.
 - 2026-10-08 · [CLI device authorization discovery](investigations/cli-device-authorization.md)
 - 2026-07-19 · [Reaper: one wait, one place](investigations/reaper-exit-slot.md)

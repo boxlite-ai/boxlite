@@ -247,11 +247,31 @@ impl Qcow2Helper {
     /// a single standalone QCOW2 at `dst` with no backing file reference.
     /// Only non-zero clusters are written (sparse output).
     ///
-    /// Equivalent to: `qemu-img convert -O qcow2 <src> <dst>`
-    ///
-    /// Errors on compressed clusters (bit 62 in L2 entries).
+    /// Supports unencrypted v2/v3 images with standard, uncompressed L2 entries.
+    /// Rejects unsupported incompatible features; dirty refcounts are harmless
+    /// because only active L1/L2 mappings are read and output refcounts are rebuilt.
+    /// The caller must quiesce writers and owns destination cleanup and syncing.
+    #[cfg(test)]
     pub fn flatten(src: &Path, dst: &Path) -> BoxliteResult<()> {
+        Self::flatten_cancellable(src, dst, &|| false)
+    }
+
+    /// Copy the frozen chain while observing caller cancellation. Cancellation
+    /// leaves a partial destination for the caller to remove after joining.
+    pub(crate) fn flatten_cancellable(
+        src: &Path,
+        dst: &Path,
+        cancelled: &dyn Fn() -> bool,
+    ) -> BoxliteResult<()> {
         use std::io::{Seek, SeekFrom, Write};
+        let check = || {
+            if cancelled() {
+                Err(BoxliteError::Stopped("QCOW2 capture cancelled".into()))
+            } else {
+                Ok(())
+            }
+        };
+        check()?;
 
         tracing::info!(
             src = %src.display(),
@@ -290,6 +310,7 @@ impl Qcow2Helper {
         let l2_start = 1 + l1_clusters;
         let data_start = l2_start + num_l1 as u64;
 
+        check()?;
         let mut output = OpenOptions::new()
             .create(true)
             .write(true)
@@ -305,24 +326,48 @@ impl Qcow2Helper {
         let zero_cluster = vec![0u8; cluster_size as usize];
 
         for vc in 0..num_virtual_clusters {
-            // Resolve cluster through the chain (top-to-bottom).
-            let mut data = None;
-            for layer in chain.iter_mut() {
-                if let Some(d) = layer.read_cluster(vc, cluster_size)? {
-                    data = Some(d);
-                    break;
+            check()?;
+            let cluster_offset = vc * cluster_size;
+            let mut data = vec![0u8; cluster_size as usize];
+            let end = (cluster_offset + cluster_size).min(virtual_size);
+            let mut offset = cluster_offset;
+            while offset < end {
+                check()?;
+                // Split at every layer's cluster and EOF boundaries. A guest
+                // byte offset has different L1/L2 indices in different layers.
+                let length = chain.iter().fold(end - offset, |length, layer| {
+                    let (size, boundary) = match layer {
+                        FlattenLayer::Qcow2 {
+                            cluster_bits,
+                            virtual_size,
+                            ..
+                        } => {
+                            let cs = 1u64 << cluster_bits;
+                            (*virtual_size, cs - offset % cs)
+                        }
+                        FlattenLayer::Raw { size, .. } => (*size, length),
+                    };
+                    length
+                        .min(boundary)
+                        .min(if offset < size { size - offset } else { length })
+                });
+                for layer in chain.iter_mut() {
+                    if let Some(bytes) = layer.read_range(offset, length)? {
+                        let start = (offset - cluster_offset) as usize;
+                        data[start..start + bytes.len()].copy_from_slice(&bytes);
+                        break;
+                    }
                 }
+                offset += length;
             }
 
-            if let Some(ref d) = data
-                && d.as_slice() != zero_cluster.as_slice()
-            {
+            if data != zero_cluster {
                 let offset = next_data_cluster * cluster_size;
                 output
                     .seek(SeekFrom::Start(offset))
                     .map_err(|e| BoxliteError::Storage(format!("flatten: data seek: {}", e)))?;
                 output
-                    .write_all(d)
+                    .write_all(&data)
                     .map_err(|e| BoxliteError::Storage(format!("flatten: data write: {}", e)))?;
 
                 let l1_idx = (vc / l2_entries) as usize;
@@ -349,14 +394,16 @@ impl Qcow2Helper {
         let num_rc_blocks = total_clusters - rc_block_start;
         let rc_table_offset = rc_table_cluster * cluster_size;
 
-        // Phase 3: Write L1 table.
+        // Phase 3: Write L1 table. New L2/data clusters have refcount 1,
+        // so their descriptors must set bit 63 (exclusive/copied).
         output
             .seek(SeekFrom::Start(cluster_size))
             .map_err(|e| BoxliteError::Storage(format!("flatten: L1 seek: {}", e)))?;
         for (i, l2) in l2_tables.iter().enumerate() {
+            check()?;
             let has_data = l2.iter().any(|&e| e != 0);
             let entry: u64 = if has_data {
-                (l2_start + i as u64) * cluster_size
+                ((l2_start + i as u64) * cluster_size) | (1 << 63)
             } else {
                 0
             };
@@ -367,6 +414,7 @@ impl Qcow2Helper {
 
         // Phase 4: Write L2 tables (only those with data).
         for (i, l2) in l2_tables.iter().enumerate() {
+            check()?;
             if l2.iter().all(|&e| e == 0) {
                 continue;
             }
@@ -375,6 +423,7 @@ impl Qcow2Helper {
                 .seek(SeekFrom::Start(offset))
                 .map_err(|e| BoxliteError::Storage(format!("flatten: L2 seek: {}", e)))?;
             for entry in l2 {
+                let entry = if *entry == 0 { 0 } else { *entry | (1 << 63) };
                 output
                     .write_all(&entry.to_be_bytes())
                     .map_err(|e| BoxliteError::Storage(format!("flatten: L2 write: {}", e)))?;
@@ -386,6 +435,7 @@ impl Qcow2Helper {
             .seek(SeekFrom::Start(rc_table_offset))
             .map_err(|e| BoxliteError::Storage(format!("flatten: rc table seek: {}", e)))?;
         for i in 0..num_rc_blocks {
+            check()?;
             let block_offset = (rc_block_start + i) * cluster_size;
             output
                 .write_all(&block_offset.to_be_bytes())
@@ -413,6 +463,7 @@ impl Qcow2Helper {
         }
 
         for bi in 0..num_rc_blocks {
+            check()?;
             let block_offset = (rc_block_start + bi) * cluster_size;
             output
                 .seek(SeekFrom::Start(block_offset))
@@ -431,6 +482,7 @@ impl Qcow2Helper {
         }
 
         // Phase 7: Write QCOW2 v3 header at cluster 0 (standalone, no backing).
+        check()?;
         output
             .seek(SeekFrom::Start(0))
             .map_err(|e| BoxliteError::Storage(format!("flatten: header seek: {}", e)))?;
@@ -1218,12 +1270,46 @@ impl FlattenLayer {
             ))
         })?;
 
+        let version = u32::from_be_bytes(hdr[4..8].try_into().unwrap());
+        if !matches!(version, 2 | 3) {
+            return Err(BoxliteError::Storage(format!(
+                "flatten: unsupported QCOW2 version {version}"
+            )));
+        }
         let backing_offset = u64::from_be_bytes(hdr[8..16].try_into().unwrap());
         let backing_size = u32::from_be_bytes(hdr[16..20].try_into().unwrap());
         let cluster_bits = u32::from_be_bytes(hdr[20..24].try_into().unwrap());
         let virtual_size = u64::from_be_bytes(hdr[24..32].try_into().unwrap());
         let l1_size = u32::from_be_bytes(hdr[36..40].try_into().unwrap());
         let l1_offset = u64::from_be_bytes(hdr[40..48].try_into().unwrap());
+
+        if !(9..=21).contains(&cluster_bits) {
+            return Err(BoxliteError::Storage(format!(
+                "flatten: invalid QCOW2 cluster_bits {cluster_bits}"
+            )));
+        }
+        if u32::from_be_bytes(hdr[32..36].try_into().unwrap()) != 0 {
+            return Err(BoxliteError::Storage(
+                "flatten: encrypted QCOW2 images are not supported".into(),
+            ));
+        }
+        if version == 3 {
+            let incompatible = u64::from_be_bytes(hdr[72..80].try_into().unwrap());
+            if incompatible & !1 != 0 {
+                return Err(BoxliteError::Storage(format!(
+                    "flatten: unsupported QCOW2 incompatible features {incompatible:#x}"
+                )));
+            }
+            let header_length = u32::from_be_bytes(hdr[100..104].try_into().unwrap());
+            if header_length < 104
+                || header_length as u64 > 1u64 << cluster_bits
+                || header_length % 8 != 0
+            {
+                return Err(BoxliteError::Storage(
+                    "flatten: invalid QCOW2 header length".into(),
+                ));
+            }
+        }
 
         // Read backing file path (if any).
         let backing = if backing_offset != 0 && backing_size != 0 {
@@ -1275,27 +1361,22 @@ impl FlattenLayer {
         ))
     }
 
-    /// Read a single virtual cluster from this layer.
+    /// Read guest bytes within one cluster and this layer's virtual EOF.
     ///
-    /// Returns `Some(data)` if the cluster is allocated in this layer,
-    /// `None` if unallocated (should fall through to backing layer).
-    fn read_cluster(
-        &mut self,
-        virtual_cluster: u64,
-        cluster_size: u64,
-    ) -> BoxliteResult<Option<Vec<u8>>> {
+    /// Returns data or explicit zeros (including beyond this layer's EOF).
+    /// Unallocated ranges return `None` to fall through to the backing layer.
+    fn read_range(&mut self, offset: u64, length: u64) -> BoxliteResult<Option<Vec<u8>>> {
         use std::io::{Read, Seek, SeekFrom};
 
         match self {
             FlattenLayer::Raw { file, size } => {
-                let offset = virtual_cluster * cluster_size;
                 if offset >= *size {
-                    return Ok(None);
+                    return Ok(Some(vec![0u8; length as usize]));
                 }
                 file.seek(SeekFrom::Start(offset))
                     .map_err(|e| BoxliteError::Storage(format!("flatten: raw seek: {}", e)))?;
-                let mut buf = vec![0u8; cluster_size as usize];
-                let remaining = (*size - offset).min(cluster_size) as usize;
+                let mut buf = vec![0u8; length as usize];
+                let remaining = (*size - offset).min(length) as usize;
                 file.read_exact(&mut buf[..remaining])
                     .map_err(|e| BoxliteError::Storage(format!("flatten: raw read: {}", e)))?;
                 Ok(Some(buf))
@@ -1304,9 +1385,13 @@ impl FlattenLayer {
                 file,
                 cluster_bits,
                 l1_table,
-                ..
+                virtual_size,
             } => {
+                if offset >= *virtual_size {
+                    return Ok(Some(vec![0u8; length as usize]));
+                }
                 let cs = 1u64 << *cluster_bits;
+                let virtual_cluster = offset / cs;
                 let l2_entries = cs / 8;
                 let l1_idx = (virtual_cluster / l2_entries) as usize;
                 let l2_idx = virtual_cluster % l2_entries;
@@ -1337,15 +1422,34 @@ impl FlattenLayer {
                     ));
                 }
 
+                // Zero descriptors override backing data even when a host
+                // cluster was preallocated and still contains nonzero bytes.
+                if l2_entry & 1 != 0 {
+                    return Ok(Some(vec![0u8; length as usize]));
+                }
                 let data_offset = l2_entry & 0x00FF_FFFF_FFFF_FE00;
                 if data_offset == 0 {
                     return Ok(None); // Unallocated — fall through to backing.
                 }
 
-                file.seek(SeekFrom::Start(data_offset))
+                let file_bytes = file
+                    .metadata()
+                    .map_err(|e| BoxliteError::Storage(format!("flatten: data size: {e}")))?
+                    .len();
+                if data_offset >= file_bytes {
+                    return Err(BoxliteError::Storage(
+                        "flatten: allocated data cluster starts beyond physical EOF".into(),
+                    ));
+                }
+                let read_offset = data_offset + offset % cs;
+                file.seek(SeekFrom::Start(read_offset))
                     .map_err(|e| BoxliteError::Storage(format!("flatten: data seek: {}", e)))?;
-                let mut buf = vec![0u8; cs as usize];
-                file.read_exact(&mut buf)
+                let mut buf = vec![0u8; length as usize];
+                // Imago can leave a zero tail in the final allocated cluster
+                // unmaterialized. Match its EOF-zero semantics while keeping
+                // metadata and wholly out-of-file cluster references strict.
+                let available = file_bytes.saturating_sub(read_offset).min(length) as usize;
+                file.read_exact(&mut buf[..available])
                     .map_err(|e| BoxliteError::Storage(format!("flatten: data read: {}", e)))?;
                 Ok(Some(buf))
             }
@@ -1657,6 +1761,292 @@ mod tests {
 
     // ── Flatten tests ──────────────────────────────────────────────────
 
+    #[test]
+    fn test_flatten_capture_cancellation_before_and_during_copy() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("source.qcow2");
+        let output = directory.path().join("copy.qcow2");
+        write_capture_fixture(&source, 9, None, &[Some(17); 32]);
+        let original = std::fs::read(&source).unwrap();
+        let error = Qcow2Helper::flatten_cancellable(&source, &output, &|| true).unwrap_err();
+        assert!(error.to_string().contains("cancelled"));
+        assert!(!output.exists(), "pre-cancel must not create a destination");
+        let checks = std::cell::Cell::new(0);
+        let error = Qcow2Helper::flatten_cancellable(&source, &output, &|| {
+            checks.set(checks.get() + 1);
+            checks.get() > 6
+        })
+        .unwrap_err();
+        assert!(error.to_string().contains("cancelled"));
+        assert!(
+            std::fs::metadata(&output).unwrap().len() > 0,
+            "cancellation crosses the production copy boundary"
+        );
+        assert_eq!(std::fs::read(&source).unwrap(), original);
+    }
+
+    /// Small on-disk images with ordinary L2 entries and valid refcounts.
+    fn write_capture_fixture(path: &Path, bits: u32, backing: Option<&Path>, data: &[Option<u8>]) {
+        let cs = 1usize << bits;
+        let rc_table = 3 + data.len();
+        let mut bytes = vec![0u8; (rc_table + 2) * cs];
+        bytes[0..4].copy_from_slice(&QCOW2_MAGIC.to_be_bytes());
+        bytes[4..8].copy_from_slice(&3u32.to_be_bytes());
+        bytes[20..24].copy_from_slice(&bits.to_be_bytes());
+        bytes[24..32].copy_from_slice(&(data.len() as u64 * cs as u64).to_be_bytes());
+        bytes[36..40].copy_from_slice(&1u32.to_be_bytes());
+        bytes[40..48].copy_from_slice(&(cs as u64).to_be_bytes());
+        bytes[48..56].copy_from_slice(&((rc_table * cs) as u64).to_be_bytes());
+        bytes[56..60].copy_from_slice(&1u32.to_be_bytes());
+        bytes[96..100].copy_from_slice(&4u32.to_be_bytes());
+        bytes[100..104].copy_from_slice(&104u32.to_be_bytes());
+        if let Some(backing) = backing {
+            let name = backing.to_str().unwrap().as_bytes();
+            bytes[8..16].copy_from_slice(&112u64.to_be_bytes());
+            bytes[16..20].copy_from_slice(&(name.len() as u32).to_be_bytes());
+            bytes[112..112 + name.len()].copy_from_slice(name);
+        }
+        bytes[cs..cs + 8].copy_from_slice(&((2 * cs as u64) | (1 << 63)).to_be_bytes());
+        for (i, value) in data.iter().enumerate() {
+            if let Some(value) = value {
+                bytes[2 * cs + i * 8..2 * cs + i * 8 + 8]
+                    .copy_from_slice(&((((3 + i) * cs) as u64) | (1 << 63)).to_be_bytes());
+                bytes[(3 + i) * cs..(4 + i) * cs].fill(*value);
+            }
+        }
+        bytes[rc_table * cs..rc_table * cs + 8]
+            .copy_from_slice(&(((rc_table + 1) * cs) as u64).to_be_bytes());
+        for i in 0..rc_table + 2 {
+            if i < 3 || i >= rc_table || data[i - 3].is_some() {
+                bytes[(rc_table + 1) * cs + i * 2..(rc_table + 1) * cs + i * 2 + 2]
+                    .copy_from_slice(&1u16.to_be_bytes());
+            }
+        }
+        std::fs::write(path, bytes).unwrap();
+    }
+
+    fn patch_capture_field(path: &Path, offset: u64, bytes: &[u8]) {
+        use std::io::{Seek, SeekFrom};
+        let mut file = OpenOptions::new().write(true).open(path).unwrap();
+        file.seek(SeekFrom::Start(offset)).unwrap();
+        file.write_all(bytes).unwrap();
+    }
+
+    /// Decode output independently of FlattenLayer, including sparse clusters.
+    fn capture_output_bytes(path: &Path) -> Vec<u8> {
+        let bytes = std::fs::read(path).unwrap();
+        let u64_at =
+            |offset: usize| u64::from_be_bytes(bytes[offset..offset + 8].try_into().unwrap());
+        assert_eq!(&bytes[..4], &QCOW2_MAGIC.to_be_bytes());
+        assert_eq!(u64_at(8), 0, "output must have no backing file");
+        assert_eq!(&bytes[16..20], &[0; 4]);
+        let cs = 1usize << u32::from_be_bytes(bytes[20..24].try_into().unwrap());
+        let mut guest = vec![0u8; u64_at(24) as usize];
+        for (i, chunk) in guest.chunks_mut(cs).enumerate() {
+            let l2 =
+                (u64_at(u64_at(40) as usize + i / (cs / 8) * 8) & 0x00FF_FFFF_FFFF_FE00) as usize;
+            if l2 != 0 {
+                let data = (u64_at(l2 + i % (cs / 8) * 8) & 0x00FF_FFFF_FFFF_FE00) as usize;
+                if data != 0 {
+                    chunk.copy_from_slice(&bytes[data..data + chunk.len()]);
+                }
+            }
+        }
+        guest
+    }
+
+    fn capture_zero_override(allocated: bool) {
+        let dir = TempDir::new().unwrap();
+        let base = dir.path().join("base.qcow2");
+        let top = dir.path().join("top.qcow2");
+        let dst = dir.path().join("capture.qcow2");
+        write_capture_fixture(&base, 16, None, &[Some(0x71), Some(0x72)]);
+        write_capture_fixture(&top, 16, Some(&base), &[allocated.then_some(0x33), None]);
+        let entry = if allocated {
+            (3u64 << 16) | (1 << 63) | 1
+        } else {
+            1
+        };
+        patch_capture_field(&top, 2 << 16, &entry.to_be_bytes());
+        let originals = [std::fs::read(&top).unwrap(), std::fs::read(&base).unwrap()];
+        Qcow2Helper::flatten(&top, &dst).unwrap();
+        let mut expected = vec![0u8; 2 << 16];
+        expected[1 << 16..].fill(0x72);
+        assert!(capture_output_bytes(&dst) == expected, "zero override lost");
+        assert_eq!(std::fs::read(&top).unwrap(), originals[0]);
+        assert_eq!(std::fs::read(&base).unwrap(), originals[1]);
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 3);
+    }
+
+    #[test]
+    fn test_flatten_capture_unallocated_zero() {
+        capture_zero_override(false);
+    }
+
+    #[test]
+    fn test_flatten_capture_allocated_zero() {
+        capture_zero_override(true);
+    }
+
+    fn capture_mixed_geometry(backing_bits: u32) {
+        let dir = TempDir::new().unwrap();
+        let base = dir.path().join("base.qcow2");
+        let top = dir.path().join("top.qcow2");
+        let dst = dir.path().join("capture.qcow2");
+        let count = (2 << 16) >> backing_bits;
+        let data: Vec<_> = (0..count).map(|i| Some(0x40 + i as u8)).collect();
+        write_capture_fixture(&base, backing_bits, None, &data);
+        write_capture_fixture(&top, 16, Some(&base), &[None, None]);
+        let originals = [std::fs::read(&top).unwrap(), std::fs::read(&base).unwrap()];
+        Qcow2Helper::flatten(&top, &dst).unwrap();
+        let expected: Vec<_> = (0..count)
+            .flat_map(|i| vec![0x40 + i as u8; 1 << backing_bits])
+            .collect();
+        assert!(
+            capture_output_bytes(&dst) == expected,
+            "backing byte offsets lost"
+        );
+        assert_eq!(std::fs::read(&top).unwrap(), originals[0]);
+        assert_eq!(std::fs::read(&base).unwrap(), originals[1]);
+    }
+
+    #[test]
+    fn test_flatten_capture_smaller_backing_clusters() {
+        capture_mixed_geometry(14);
+    }
+
+    #[test]
+    fn test_flatten_capture_larger_backing_clusters() {
+        capture_mixed_geometry(17);
+    }
+
+    #[test]
+    fn test_flatten_capture_rejects_incompatible_features() {
+        for (bit, in_backing) in [1, 2, 3, 4, 63]
+            .into_iter()
+            .flat_map(|bit| [(bit, false), (bit, true)])
+        {
+            let dir = TempDir::new().unwrap();
+            let src = dir.path().join("src.qcow2");
+            let dst = dir.path().join("capture.qcow2");
+            write_capture_fixture(&src, 16, None, &[Some(0x55)]);
+            patch_capture_field(&src, 72, &(1u64 << bit).to_be_bytes());
+            let before = std::fs::read(&src).unwrap();
+            let top = dir.path().join("top.qcow2");
+            write_capture_fixture(&top, 16, Some(&src), &[None]);
+            let error = Qcow2Helper::flatten(if in_backing { &top } else { &src }, &dst)
+                .expect_err("unsupported incompatible feature accepted");
+            assert!(error.to_string().contains("incompatible"), "{error}");
+            assert!(!dst.exists(), "rejected header created output");
+            assert_eq!(std::fs::read(&src).unwrap(), before);
+        }
+    }
+
+    #[test]
+    fn test_flatten_capture_rejects_invalid_headers() {
+        for (offset, value) in [(4, 4u32), (20, 8), (20, 22), (32, 1), (100, 96), (100, 105)] {
+            let dir = TempDir::new().unwrap();
+            let src = dir.path().join("src.qcow2");
+            let dst = dir.path().join("capture.qcow2");
+            write_capture_fixture(&src, 16, None, &[Some(0x55)]);
+            patch_capture_field(&src, offset, &value.to_be_bytes());
+            assert!(
+                Qcow2Helper::flatten(&src, &dst).is_err(),
+                "invalid header accepted: {offset}={value}"
+            );
+            assert!(!dst.exists());
+        }
+    }
+
+    #[test]
+    fn test_flatten_capture_v2_and_dirty_refcounts() {
+        for version in [2u32, 3] {
+            let dir = TempDir::new().unwrap();
+            let src = dir.path().join("src.qcow2");
+            let dst = dir.path().join("capture.qcow2");
+            write_capture_fixture(&src, 16, None, &[Some(0x55)]);
+            patch_capture_field(&src, 4, &version.to_be_bytes());
+            // v2 ends at byte 72; these bytes are not feature flags there.
+            patch_capture_field(
+                &src,
+                72,
+                &if version == 2 {
+                    0xffff_0000_0000_0000u64
+                } else {
+                    1
+                }
+                .to_be_bytes(),
+            );
+            Qcow2Helper::flatten(&src, &dst).unwrap();
+            assert!(capture_output_bytes(&dst) == vec![0x55; 1 << 16]);
+        }
+    }
+
+    #[test]
+    fn test_flatten_capture_mixed_sparse_chain_and_short_backing() {
+        let dir = TempDir::new().unwrap();
+        let base = dir.path().join("base.qcow2");
+        let mid = dir.path().join("mid.qcow2");
+        let top = dir.path().join("top.qcow2");
+        let dst = dir.path().join("capture.qcow2");
+        write_capture_fixture(&base, 17, None, &[Some(0x41)]);
+        write_capture_fixture(&mid, 14, Some(&base), &[None, Some(0x22), None]);
+        patch_capture_field(&mid, (2 << 14) + 16, &1u64.to_be_bytes());
+        write_capture_fixture(&top, 16, Some(&mid), &[None, None]);
+        Qcow2Helper::flatten(&top, &dst).unwrap();
+        let mut expected = vec![0u8; 2 << 16];
+        expected[..1 << 14].fill(0x41);
+        expected[1 << 14..2 << 14].fill(0x22);
+        assert!(
+            capture_output_bytes(&dst) == expected,
+            "mixed sparse/zero/EOF resolution lost"
+        );
+    }
+
+    #[test]
+    fn test_flatten_capture_partial_cluster_and_raw_eof() {
+        let dir = TempDir::new().unwrap();
+        let base = dir.path().join("base.ext4");
+        let mid = dir.path().join("mid.qcow2");
+        let top = dir.path().join("top.qcow2");
+        let dst = dir.path().join("capture.qcow2");
+        std::fs::write(&base, vec![0x31; (1 << 14) + 512]).unwrap();
+        write_capture_fixture(&mid, 14, Some(&base), &[None, None]);
+        write_capture_fixture(&top, 16, Some(&mid), &[None, None]);
+        patch_capture_field(&top, 24, &((1u64 << 16) + 512).to_be_bytes());
+        Qcow2Helper::flatten(&top, &dst).unwrap();
+        let mut expected = vec![0u8; (1 << 16) + 512];
+        expected[..(1 << 14) + 512].fill(0x31);
+        assert!(
+            capture_output_bytes(&dst) == expected,
+            "partial cluster/EOF bytes lost"
+        );
+    }
+
+    #[test]
+    fn test_flatten_capture_copied_flags() {
+        let dir = TempDir::new().unwrap();
+        let src = dir.path().join("src.qcow2");
+        let dst = dir.path().join("capture.qcow2");
+        write_capture_fixture(&src, 16, None, &[Some(0x55), None]);
+        Qcow2Helper::flatten(&src, &dst).unwrap();
+        let bytes = std::fs::read(&dst).unwrap();
+        let entry = u64::from_be_bytes(bytes[1 << 16..(1 << 16) + 8].try_into().unwrap());
+        assert_ne!(
+            entry & (1 << 63),
+            0,
+            "L1 exclusive refcount missing copied flag"
+        );
+        let l2 = (entry & 0x00FF_FFFF_FFFF_FE00) as usize;
+        let entry = u64::from_be_bytes(bytes[l2..l2 + 8].try_into().unwrap());
+        assert_ne!(
+            entry & (1 << 63),
+            0,
+            "L2 exclusive refcount missing copied flag"
+        );
+        assert_eq!(&bytes[l2 + 8..l2 + 16], &[0; 8], "sparse entry changed");
+    }
+
     /// Create a small raw disk file with a known pattern.
     fn write_raw_disk(path: &Path, size: u64) {
         let mut data = vec![0u8; size as usize];
@@ -1732,14 +2122,14 @@ mod tests {
 
         // Read cluster 0 from the flattened file — should have our pattern.
         let mut chain = Qcow2Helper::open_flatten_chain(&dst).unwrap();
-        let data = chain[0].read_cluster(0, cluster_size).unwrap();
+        let data = chain[0].read_range(0, cluster_size).unwrap();
         assert!(data.is_some(), "cluster 0 should have data");
         let d = data.unwrap();
         let val = u64::from_be_bytes(d[0..8].try_into().unwrap());
         assert_eq!(val, 1, "cluster 0 marker should be 1 (cluster_idx + 1)");
 
         // Read cluster 2.
-        let data = chain[0].read_cluster(2, cluster_size).unwrap();
+        let data = chain[0].read_range(2 * cluster_size, cluster_size).unwrap();
         assert!(data.is_some(), "cluster 2 should have data");
         let d = data.unwrap();
         let val = u64::from_be_bytes(d[0..8].try_into().unwrap());
@@ -1773,7 +2163,7 @@ mod tests {
 
         // Verify data from base propagated through.
         let mut chain = Qcow2Helper::open_flatten_chain(&dst).unwrap();
-        let data = chain[0].read_cluster(1, cluster_size).unwrap();
+        let data = chain[0].read_range(cluster_size, cluster_size).unwrap();
         assert!(data.is_some());
         let val = u64::from_be_bytes(data.unwrap()[0..8].try_into().unwrap());
         assert_eq!(val, 2, "cluster 1 marker should be 2 (cluster_idx + 1)");

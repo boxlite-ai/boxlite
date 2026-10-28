@@ -189,6 +189,21 @@ impl VmmInstance {
 
 ### libkrun (Krun Vmm)
 
+Checkpoint control generation 2 uses dedicated, unbuffered Unix-stream sessions
+with at most 16 MiB of JSON and 64 SCM_RIGHTS descriptors per acknowledged batch.
+The receiver validates peer identity, operation/sequence, descriptor counts and
+FD headroom, and owns received descriptors even when it rejects a frame.
+Imported resource descriptors bind after the shim installs its sandbox and
+before `start_enter`; capture uses a separate silent stream whose loss stops
+the owner. Generation-1 state and stop remain available to diagnose older shims.
+
+Box operations reserve a separate, stable file under `operations/` with a
+nonblocking flock before refreshing state. Provisioning creates the inode;
+operation refusal never creates it, and box deletion never recycles it.
+Frozen QCOW2 copies accept a cancellation predicate checked before destination
+mutation and between cluster/range writes. Their caller joins the writer before
+removing a partial destination.
+
 Current production Vmm implementation using libkrun hypervisor.
 
 **Features:**

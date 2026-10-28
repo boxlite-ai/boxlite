@@ -15,7 +15,6 @@ use crate::runtime::options::{BoxArchive, BoxOptions, BoxliteOptions};
 use crate::runtime::signal_handler::timeout_to_duration;
 use crate::runtime::types::{BoxInfo, BoxState, BoxStatus, ContainerID};
 use crate::vmm::VmmKind;
-use crate::vmm::controller::{ShimHandler, VmmHandler};
 use boxlite_shared::{BoxliteError, BoxliteResult};
 use chrono::Utc;
 use std::collections::HashMap;
@@ -23,7 +22,7 @@ use std::sync::{Arc, RwLock, Weak};
 use tokio::sync::OnceCell;
 use tokio_util::sync::CancellationToken;
 
-fn litebox_from_impl(box_impl: SharedBoxImpl) -> LiteBox {
+pub(crate) fn litebox_from_impl(box_impl: SharedBoxImpl) -> LiteBox {
     // Every handle this runtime hands out starts following its box's main
     // command, if the box is running and nobody is following it yet.
     //
@@ -434,6 +433,20 @@ impl RuntimeImpl {
         super::import::import_box(self, archive, name).await
     }
 
+    /// Import a version-9 checkpoint pair as a new box, paused.
+    pub async fn import_checkpoint(
+        self: &Arc<Self>,
+        path: &std::path::Path,
+        options: crate::runtime::options::CheckpointImportOptions,
+    ) -> BoxliteResult<LiteBox> {
+        if self.shutdown_token.is_cancelled() {
+            return Err(BoxliteError::Stopped(
+                "Cannot import checkpoint: runtime has been shut down".into(),
+            ));
+        }
+        super::checkpoint_import::import_checkpoint(self, path, options).await
+    }
+
     /// Inner create logic shared by `create()` and `get_or_create()`.
     ///
     /// When `reuse_existing` is false, returns an error if a box with the same
@@ -473,6 +486,7 @@ impl RuntimeImpl {
 
         // Initialize box variables with defaults
         let (config, mut state) = self.init_box_variables(&options, name.clone());
+        crate::litebox::operation::Reservation::provision(&self.layout, &config.id)?;
 
         // Allocate lock for this box
         let lock_id = self.lock_manager.allocate()?;
@@ -936,7 +950,8 @@ impl RuntimeImpl {
             let box_layout = self
                 .layout
                 .box_layout(config.id.as_str(), false)
-                .expect("box_layout is infallible");
+                .expect("box_layout is infallible")
+                .with_restored_shared(state.restored_shared_dir());
 
             // The third way a box dies, and it must report the exit code like the
             // other two. `stop()` records it, and so does the live watcher — but
@@ -1006,13 +1021,20 @@ impl RuntimeImpl {
     /// - Box not found
     /// - Box is active and force=false
     pub(crate) fn remove_box(&self, id: &BoxID, force: bool) -> BoxliteResult<()> {
+        let _reservation = crate::litebox::operation::Reservation::acquire(&self.layout, id)?;
         tracing::debug!(box_id = %id, force = force, "RuntimeInnerImpl::remove_box called");
 
         // Try to get box from database first
         if let Some((config, state)) = self.box_manager.box_by_id(id)? {
             // Box exists in database - handle as before
             let mut state = state;
-            if state.status.is_active() || state.pid.is_some() {
+            let reader = crate::util::PidFileReader::at(config.box_home.join("shim.pid"));
+            let pid = match reader.process_identity() {
+                crate::util::ProcessIdentity::Verified(pid)
+                | crate::util::ProcessIdentity::Legacy(pid) => Some(pid),
+                crate::util::ProcessIdentity::Absent => state.pid,
+            };
+            if state.status.is_active() || pid.is_some() {
                 if force {
                     // Stop the box's whole process tree through the same handler
                     // teardown `LiteBox::stop()` uses: it SIGTERMs the recorded
@@ -1020,10 +1042,13 @@ impl RuntimeImpl {
                     // detached box's inner pid-ns tree (inner bwrap + shim + VM) —
                     // which a single-pid kill misses, since #851 stopped tying
                     // detached boxes to the launcher's lifetime.
-                    if let Some(pid) = state.pid {
+                    if let Some(pid) = pid {
                         tracing::info!(box_id = %id, pid = pid, "Force stopping box process tree");
-                        let mut handler = ShimHandler::from_pid(pid, config.id.clone());
-                        let _ = handler.stop();
+                        crate::litebox::checkpoint::capture::stop_and_join_sync(
+                            &reader,
+                            pid,
+                            config.id.clone(),
+                        )?;
                     }
                     // Update status to stopped and save
                     state.set_status(BoxStatus::Stopped);
@@ -1252,6 +1277,8 @@ impl RuntimeImpl {
         let container_id = ContainerID::new();
         let now = Utc::now();
 
+        crate::litebox::operation::Reservation::provision(&self.layout, &box_id)?;
+
         // Move staging dir to canonical path (cross-fs safe: staging may be on
         // a different filesystem than the boxes dir).
         let box_home = self.layout.boxes_dir().join(box_id.as_str());
@@ -1281,7 +1308,22 @@ impl RuntimeImpl {
         let lock_id = self.lock_manager.allocate()?;
         state.set_lock_id(lock_id);
 
-        if let Err(e) = self.box_manager.add_box(&config, &state) {
+        let persisted = (|| {
+            let disk = config.box_home.join("disks/disk.qcow2");
+            if let Some(backing) = crate::disk::read_backing_file_path(&disk)?
+                && let Some(base) = self.base_disk_mgr.store().find_by_base_path(&backing)?
+            {
+                self.base_disk_mgr
+                    .store()
+                    .add_ref(base.id(), box_id.as_str())?;
+            }
+            self.box_manager.add_box(&config, &state)
+        })();
+        if let Err(e) = persisted {
+            let _ = self
+                .base_disk_mgr
+                .store()
+                .remove_all_refs_for_box(box_id.as_str());
             let _ = self.lock_manager.free(lock_id);
             let _ = std::fs::remove_dir_all(&config.box_home);
             config.sockets().remove();
@@ -1428,7 +1470,10 @@ impl RuntimeImpl {
                 }
             }
 
-            let box_layout = self.layout.box_layout(box_id.as_str(), false)?;
+            let box_layout = self
+                .layout
+                .box_layout(box_id.as_str(), false)?
+                .with_restored_shared(state.restored_shared_dir());
             let pid_path = box_layout.pid_file_path();
             let exit_path = box_layout.exit_file_path();
             let had_stale_exit = exit_path.exists();
@@ -1436,9 +1481,19 @@ impl RuntimeImpl {
             // Truth-source precedence: a live shim (ProcessIdentity) is
             // ground truth. The exit file is at-best an artifact of a past
             // lifecycle, so it only matters when no shim is alive.
+            // A checkpoint VM that was paused stays paused with its shim
+            // alive; the owner, asked on the next operation, has the last word.
+            let paused_checkpoint = original_status == BoxStatus::Paused
+                && state.start_mode.as_ref().is_some_and(|mode| mode.owns_vm());
+            let adopt = |state: &mut BoxState, pid| {
+                state.adopt_recovered_shim(pid);
+                if paused_checkpoint {
+                    state.set_status(BoxStatus::Paused);
+                }
+            };
             match PidFileReader::at(&pid_path).process_identity() {
                 ProcessIdentity::Verified(pid) => {
-                    state.adopt_recovered_shim(pid);
+                    adopt(&mut state, pid);
                     // Live shim wins — archive any prior-lifecycle exit
                     // file so the next crash gets the canonical slot.
                     if had_stale_exit {
@@ -1460,7 +1515,7 @@ impl RuntimeImpl {
                     // Pre-fingerprint PID file. Adopt the live PID so VMs
                     // aren't lost on upgrade; the next stop/start writes a
                     // two-line file and the fingerprint check takes over.
-                    state.adopt_recovered_shim(pid);
+                    adopt(&mut state, pid);
                     if had_stale_exit {
                         stash_exit_file(&box_layout);
                         tracing::warn!(
@@ -1501,12 +1556,13 @@ impl RuntimeImpl {
                             box_id = %box_id,
                             "Box crashed; marked Failed with crash report"
                         );
-                    } else if state.status == BoxStatus::Running {
-                        // A Running box whose shim is gone: the guest powered
-                        // off because its main command exited (docker
-                        // semantics), and no live watcher was around to see it
-                        // — this process was not running at the time. Take the
-                        // exit code from the record the guest left behind.
+                    } else if state.status.is_active() {
+                        // A Running (or paused) box whose shim is gone: the
+                        // guest powered off because its main command exited
+                        // (docker semantics), or the shim was stopped, and no
+                        // live watcher was around to see it — this process was
+                        // not running at the time. Take the exit code from the
+                        // record the guest left behind.
                         //
                         // The container id lives in the box *config*
                         // (BoxState.container_id is never persisted).
@@ -1639,7 +1695,7 @@ impl RuntimeImpl {
     ///
     /// Checks both by name (if provided) and by ID. This prevents duplicate names
     /// even for boxes not yet persisted to database.
-    fn get_or_create_box_impl(
+    pub(crate) fn get_or_create_box_impl(
         self: &Arc<Self>,
         config: BoxConfig,
         state: BoxState,
@@ -1869,6 +1925,14 @@ impl super::backend::RuntimeBackend for LocalRuntime {
         name: Option<String>,
     ) -> BoxliteResult<LiteBox> {
         self.0.import_box(archive, name).await
+    }
+
+    async fn import_checkpoint(
+        &self,
+        path: &std::path::Path,
+        options: crate::runtime::options::CheckpointImportOptions,
+    ) -> BoxliteResult<LiteBox> {
+        self.0.import_checkpoint(path, options).await
     }
 
     fn shutdown_sync(&self) {
@@ -2437,6 +2501,7 @@ mod tests {
     fn test_box_config_in_layout(detach: bool, runtime: &RuntimeImpl) -> BoxConfig {
         let id = BoxIDMint::mint();
         let box_home = runtime.layout.boxes_dir().join(id.as_str());
+        crate::litebox::operation::Reservation::provision(&runtime.layout, &id).unwrap();
         BoxConfig {
             id,
             name: None,
@@ -2981,6 +3046,7 @@ mod tests {
 
         let (pid, mut child) = spawn_dummy_process();
         let config = test_box_config_in_layout(false, &runtime);
+        write_pid_file_with_fingerprint(&config.box_home.join("shim.pid"), pid);
         let mut state = BoxState::new();
         state.set_status(BoxStatus::Unknown);
         state.set_pid(Some(pid));
@@ -3027,6 +3093,46 @@ mod tests {
         }
         let st = crate::util::process_start_time(pid).expect("OS reports start_time");
         std::fs::write(pid_file, format!("{pid}\n{st}\n")).expect("write shim.pid");
+    }
+
+    #[test]
+    fn test_recovery_keeps_a_live_paused_checkpoint_box_paused_and_stops_a_dead_one() {
+        let (runtime, _dir) = create_test_runtime();
+        let (pid, child) = spawn_dummy_process();
+        let _child = ChildGuard(child);
+
+        let live = test_box_config_in_layout(false, &runtime);
+        let dead = test_box_config_in_layout(false, &runtime);
+        for (config, pid) in [(&live, Some(pid)), (&dead, None)] {
+            let mut state = BoxState::new();
+            state.status = BoxStatus::Paused;
+            state.start_mode =
+                Some(crate::vmm::checkpoint::support::StartMode::Owner { protocol: 2 });
+            state.pid = Some(pid.unwrap_or(u32::MAX));
+            state.set_lock_id(runtime.lock_manager.allocate().unwrap());
+            let layout = runtime
+                .layout
+                .box_layout(config.id.as_str(), false)
+                .unwrap();
+            match pid {
+                Some(pid) => write_pid_file_with_fingerprint(&layout.pid_file_path(), pid),
+                None => std::fs::create_dir_all(layout.root()).unwrap(),
+            }
+            runtime.box_manager.add_box(config, &state).unwrap();
+        }
+
+        runtime.recover_boxes().expect("Failed to recover boxes");
+
+        let (_, recovered) = runtime.box_manager.box_by_id(&live.id).unwrap().unwrap();
+        assert_eq!(
+            recovered.status,
+            BoxStatus::Paused,
+            "a live paused VM is still paused"
+        );
+        assert_eq!(recovered.pid, Some(pid));
+        let (_, recovered) = runtime.box_manager.box_by_id(&dead.id).unwrap().unwrap();
+        assert_eq!(recovered.status, BoxStatus::Stopped, "its shim is gone");
+        assert_eq!(recovered.pid, None);
     }
 
     #[test]
@@ -3839,5 +3945,46 @@ mod tests {
         // mark_stop runs for non-Configured states; Failed -> Stopped.
         let (_, db_state) = runtime.box_manager.box_by_id(&config.id).unwrap().unwrap();
         assert_eq!(db_state.status, BoxStatus::Stopped);
+    }
+    #[tokio::test]
+    async fn checkpoint_removal_checks_the_live_pidfile_when_database_is_stale() {
+        let home = tempfile::tempdir().unwrap();
+        let runtime = RuntimeImpl::new_for_test(BoxliteOptions {
+            home_dir: home.path().into(),
+            ..Default::default()
+        })
+        .unwrap();
+        let box_ = runtime
+            .create(
+                BoxOptions {
+                    auto_delete: Some(0),
+                    ..Default::default()
+                },
+                None,
+            )
+            .await
+            .unwrap();
+        let backend = box_.local_backend("test").unwrap();
+        std::fs::create_dir_all(&backend.config.box_home).unwrap();
+        let mut state = runtime.box_manager.update_box(box_.id()).unwrap();
+        state.force_status(BoxStatus::Stopped);
+        state.pid = None;
+        runtime.box_manager.save_box(box_.id(), &state).unwrap();
+        let mut writer = std::process::Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .unwrap();
+        let pid = writer.id();
+        let start = crate::util::process_start_time(pid).unwrap();
+        std::fs::write(backend.layout.pid_file_path(), format!("{pid}\n{start}\n")).unwrap();
+        let result = runtime.remove_box(box_.id(), false);
+        let retained = runtime.box_manager.box_by_id(box_.id()).unwrap().is_some();
+        let alive = crate::util::is_process_alive(pid);
+        let _ = writer.kill();
+        let _ = writer.wait();
+        assert!(
+            result.is_err() && retained && alive,
+            "stale stopped state authorized removal of a live writer: result={result:?}, retained={retained}, alive={alive}"
+        );
     }
 }

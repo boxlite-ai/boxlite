@@ -333,7 +333,7 @@ impl JailerBuilder {
     /// Returns [`JailerError::Config`](super::JailerError) with
     /// [`ConfigError::InvalidConfig`](super::ConfigError) if `box_id` or `layout` was not set.
     pub fn build_with<S: Sandbox>(
-        self,
+        mut self,
         sandbox: S,
     ) -> Result<Jailer<S>, crate::jailer::JailerError> {
         let box_id = self.box_id.ok_or_else(|| {
@@ -347,6 +347,12 @@ impl JailerBuilder {
         // Surface fields that this platform silently ignores (flat struct mixes
         // Linux-only and macOS-only knobs).
         self.security.warn_inert_fields();
+        if self.security.jailer_enabled {
+            self.security
+                .resource_limits
+                .max_open_files
+                .get_or_insert(crate::runtime::advanced_options::DEFAULT_MAX_OPEN_FILES);
+        }
 
         Ok(Jailer {
             sandbox,
@@ -671,5 +677,33 @@ mod tests {
         assert!(std_p.security().jailer_enabled);
         // Preset wholesale-replaces, so the uid=0 set above is gone.
         assert_ne!(std_p.security().uid, Some(0));
+    }
+    #[test]
+    fn checkpoint_fd_defaults_resolve_without_changing_explicit_or_disabled_limits() {
+        let security = SecurityOptions::default();
+        let serialized = serde_json::to_vec(&security).unwrap();
+        let automatic: SecurityOptions = serde_json::from_slice(&serialized).unwrap();
+        assert_eq!(automatic.resource_limits.max_open_files, None);
+        let jail = JailerBuilder::new()
+            .with_box_id("test-box")
+            .with_layout(test_layout("/tmp/box"))
+            .with_security(automatic)
+            .build()
+            .unwrap();
+        assert_eq!(jail.resource_limits().max_open_files, Some(1024));
+        let explicit = JailerBuilder::new()
+            .with_box_id("test-box")
+            .with_layout(test_layout("/tmp/box"))
+            .with_max_open_files(64)
+            .build()
+            .unwrap();
+        assert_eq!(explicit.resource_limits().max_open_files, Some(64));
+        let disabled = JailerBuilder::new()
+            .with_box_id("test-box")
+            .with_layout(test_layout("/tmp/box"))
+            .with_security(SecurityOptions::disabled())
+            .build()
+            .unwrap();
+        assert_eq!(disabled.resource_limits().max_open_files, None);
     }
 }

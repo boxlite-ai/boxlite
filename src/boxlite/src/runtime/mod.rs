@@ -14,6 +14,7 @@ pub mod snapshots;
 pub mod types;
 pub mod volumes;
 
+pub(crate) mod checkpoint_import;
 mod core;
 #[cfg(feature = "embedded-runtime")]
 pub(crate) mod embedded;

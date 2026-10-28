@@ -2,8 +2,8 @@
 
 use boxlite_shared::{
     BlockDeviceSource, BoxliteError, BoxliteResult, Filesystem, GuestClient, GuestInitRequest,
-    NetworkInit, PingRequest, QuiesceRequest, ShutdownRequest, ThawRequest, VirtiofsSource, Volume,
-    guest_init_response,
+    NetworkInit, PingRequest, QuiesceRequest, RunningStateRequest, RunningStateResponse,
+    ShutdownRequest, ThawRequest, VirtiofsSource, Volume, guest_init_response,
 };
 use tonic::transport::Channel;
 
@@ -97,6 +97,16 @@ impl GuestInterface {
     pub async fn require_min_version(&mut self, minimum: GuestVersion) -> BoxliteResult<()> {
         let response = self.client.ping(PingRequest {}).await?.into_inner();
         ensure_guest_version(&response.version, minimum)
+    }
+
+    /// The agent's boot ID, containers and executions, read without
+    /// changing any of them.
+    pub async fn running_state(&mut self) -> BoxliteResult<RunningStateResponse> {
+        Ok(self
+            .client
+            .running_state(RunningStateRequest {})
+            .await?
+            .into_inner())
     }
 
     /// Shutdown the guest agent.
@@ -216,6 +226,8 @@ pub enum VolumeConfig {
         read_only: bool,
         /// Optional container_id for convention-based paths
         container_id: Option<String>,
+        /// Mount with DAX (the share has a DAX window)
+        dax: bool,
     },
     /// Block device mount
     BlockDevice {
@@ -239,12 +251,14 @@ impl VolumeConfig {
         mount_point: impl Into<String>,
         read_only: bool,
         container_id: Option<String>,
+        dax: bool,
     ) -> Self {
         Self::Virtiofs {
             tag: tag.into(),
             mount_point: mount_point.into(),
             read_only,
             container_id,
+            dax,
         }
     }
 
@@ -272,11 +286,13 @@ impl VolumeConfig {
                 mount_point,
                 read_only,
                 container_id,
+                dax,
             } => Volume {
                 mount_point,
                 source: Some(boxlite_shared::volume::Source::Virtiofs(VirtiofsSource {
                     tag,
                     read_only,
+                    dax,
                 })),
                 container_id: container_id.unwrap_or_default(),
             },
