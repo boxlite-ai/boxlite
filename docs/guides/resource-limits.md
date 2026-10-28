@@ -2,6 +2,32 @@
 
 Configure and optimize box resource usage.
 
+## Cloud sandbox sizes
+
+For organizations using the default quotas, an effective subscription unlocks
+16 vCPU / 32 GiB memory / 100 GiB disk per Box. Without a subscription, the
+limits remain 4 vCPU / 8 GiB / 10 GiB. All subscription plans qualify, including
+managed plans. Administrator-defined quota exceptions remain in effect.
+
+| Dashboard size | vCPU | Memory | Disk with subscription | Disk without subscription |
+| --- | --- | --- | --- | --- |
+| Small | 1 | 1 GiB | 10 GiB | 10 GiB |
+| Medium | 2 | 4 GiB | 20 GiB | 10 GiB |
+| Large | 4 | 8 GiB | 50 GiB | 10 GiB |
+| Custom maximum | 16 subscribed / 4 otherwise | 32 GiB subscribed / 8 GiB otherwise | 100 GiB | 10 GiB |
+
+The creation dialog refreshes organization quotas when opened and clamps all
+presets and custom inputs to the returned limits. REST and SDK creation requests
+are independently checked by the server; over-limit requests return HTTP 400.
+The REST maximum is `cpus=16`, `memory_mib=32768`, `disk_size_gb=100`.
+Memory and disk use binary units (GiB), including the historical `disk_size_gb` name.
+
+Canceling renewal retains the higher limits until the paid period ends. Payment
+grace also retains them; suspended subscription entitlements or expiry restore
+the default creation limits. If the billing service cannot verify a grant, the
+default limits apply. Existing Boxes keep their resources and may be restarted.
+Available runner capacity still determines whether an allowed request can run.
+
 ## CPU configuration
 
 **Set CPU Count:**
