@@ -108,6 +108,7 @@ impl GlobalOption {
     const fn long(self) -> &'static str {
         match self {
             Self::PathPrefix => "path-prefix",
+            Self::Profile => "context",
             _ => self.id(),
         }
     }
@@ -199,6 +200,23 @@ const AUTH_SCOPES: &[CommandScope] = &[
     },
     CommandScope {
         name: "whoami",
+        globals: AUTH_URL_GLOBALS,
+        children: &[],
+    },
+];
+const CONTEXT_SCOPES: &[CommandScope] = &[
+    CommandScope {
+        name: "use",
+        globals: AUTH_URL_GLOBALS,
+        children: &[],
+    },
+    CommandScope {
+        name: "ls",
+        globals: AUTH_URL_GLOBALS,
+        children: &[],
+    },
+    CommandScope {
+        name: "show",
         globals: AUTH_URL_GLOBALS,
         children: &[],
     },
@@ -386,6 +404,11 @@ const COMMAND_SCOPES: &[CommandScope] = &[
         children: AUTH_SCOPES,
     },
     CommandScope {
+        name: "context",
+        globals: AUTH_URL_GLOBALS,
+        children: CONTEXT_SCOPES,
+    },
+    CommandScope {
         name: "volume",
         globals: VOLUME_GLOBALS,
         children: VOLUME_SCOPES,
@@ -520,7 +543,11 @@ where
             && matches.value_source(id) == Some(ValueSource::CommandLine)
             && matches.get_one::<String>(id).is_some_and(String::is_empty)
         {
-            let option = id.replace('_', "-");
+            let option = if id == "profile" {
+                "context".to_string()
+            } else {
+                id.replace('_', "-")
+            };
             return Err(parser.error(
                 ErrorKind::ValueValidation,
                 format!("--{option} cannot be empty"),
@@ -532,6 +559,8 @@ where
         return Err(parser.error(ErrorKind::ValueValidation, "--registry cannot be empty"));
     }
 
+    let context_explicit = matches.value_source("profile") == Some(ValueSource::CommandLine);
+    let url_explicit = matches.value_source("url") == Some(ValueSource::CommandLine);
     let mut cli = Cli::from_arg_matches_mut(&mut matches)?;
     if scope.allows(GlobalOption::Registry) {
         cli.global.registry = registry_values;
@@ -539,6 +568,51 @@ where
     clear_irrelevant_environment_globals(&mut cli.global, scope);
     merge_root_login_url(&mut cli);
     normalize_empty_urls(&mut cli);
+    if scope.allows(GlobalOption::Profile) {
+        cli.global.profile = cli.global.profile.filter(|name| !name.is_empty());
+        cli.global.context_source = if context_explicit {
+            Some("--context")
+        } else if cli.global.profile.is_some() {
+            Some("BOXLITE_CONTEXT")
+        } else {
+            match std::env::var("BOXLITE_PROFILE") {
+                Ok(name) if !name.is_empty() => {
+                    cli.global.profile = Some(name);
+                    Some("BOXLITE_PROFILE")
+                }
+                Err(std::env::VarError::NotUnicode(_)) => {
+                    return Err(parser.error(
+                        ErrorKind::InvalidUtf8,
+                        "BOXLITE_PROFILE must contain valid UTF-8",
+                    ));
+                }
+                _ => None,
+            }
+        };
+        let login = matches!(&cli.command, Commands::Auth(args) if matches!(args.command, crate::commands::auth::AuthCommand::Login(_)));
+        // Docker's host option maps to --url. Login's URL instead configures
+        // the named credentials, so it can accompany a context selector.
+        if !login {
+            if context_explicit && url_explicit {
+                return Err(parser.error(
+                    ErrorKind::ArgumentConflict,
+                    "cannot specify both --context (or --profile) and --url",
+                ));
+            }
+            if context_explicit
+                && cli.global.profile.as_deref() != Some(crate::credentials::DEFAULT_PROFILE)
+            {
+                cli.global.url = None;
+            } else if !context_explicit && cli.global.url.is_some() {
+                cli.global.profile = Some(crate::credentials::DEFAULT_PROFILE.to_string());
+                cli.global.context_source = Some(if url_explicit {
+                    "--url"
+                } else {
+                    "BOXLITE_REST_URL"
+                });
+            }
+        }
+    }
     Ok(cli)
 }
 
@@ -629,6 +703,8 @@ fn normalize_empty_urls(cli: &mut Cli) {
 #[derive(Subcommand, Debug)]
 #[non_exhaustive]
 pub enum Commands {
+    /// Manage the current local or remote target.
+    Context(crate::contexts::ContextArgs),
     /// Run a command in a new box
     Run(crate::commands::run::RunArgs),
     /// Execute a command in a running box
@@ -751,6 +827,10 @@ end"
     let mut generated = Vec::new();
     clap_complete::generate(Fish, command, name, &mut generated);
     let mut generated = String::from_utf8(generated).expect("generated completions are UTF-8");
+    // clap_complete's Fish optspecs omit aliases, including visible ones.
+    // Keep legacy selectors parseable when deciding which command to complete.
+    let optspecs = format!("function __fish_{escaped_name}_global_optspecs\n");
+    generated = generated.replacen(&optspecs, &format!("{optspecs}    echo profile=\n"), 1);
     let agent = command.find_subcommand("agent").expect("agent command");
     let leaf_names = agent
         .get_subcommands()
@@ -853,19 +933,30 @@ pub struct GlobalFlags {
     #[arg(long, global = true, env = "BOXLITE_REST_URL")]
     pub url: Option<String>,
 
-    /// Named profile in `<BOXLITE_HOME>/credentials.toml`. Lets one machine
-    /// hold separate remote logins. Defaults to `default` if neither flag nor
-    /// env is set.
-    #[arg(long, global = true, env = "BOXLITE_PROFILE")]
+    /// Context to use instead of the saved current context.
+    /// Legacy spelling: --profile / BOXLITE_PROFILE.
+    #[arg(
+        long = "context",
+        alias = "profile",
+        value_name = "NAME",
+        global = true,
+        env = "BOXLITE_CONTEXT"
+    )]
     pub profile: Option<String>,
+
+    #[arg(skip)]
+    pub(crate) context_source: Option<&'static str>,
+
+    #[arg(skip)]
+    pub(crate) selected_context: Option<crate::contexts::SelectedContext>,
 
     /// Routing-slot value for the URL path (`/v1/<prefix>/...`).
     /// Opaque — the server decides what this means (org id, workspace,
     /// catalog, …); the value typically comes from the `auth login`
     /// flow capturing `Principal.path_prefix`. This flag overrides
-    /// the stored profile's path_prefix for users whose credential
+    /// the stored context's path_prefix for users whose credential
     /// has scope over multiple routing values (e.g. multiple orgs on
-    /// the same account). Unset → uses the stored profile's
+    /// the same account). Unset → uses the stored context's
     /// path_prefix, then empty (URL skips the segment —
     /// `/v1/boxes/...`).
     #[arg(long = "path-prefix", global = true, env = "BOXLITE_REST_PATH_PREFIX")]
@@ -880,11 +971,11 @@ impl GlobalFlags {
         crate::credentials::CredentialStore::new(self.home.clone())
     }
 
-    /// Resolve which credential profile to read/write. Order: explicit
-    /// `--profile` flag (which clap also fills from `BOXLITE_PROFILE`) > the
-    /// hard-coded `default` name. Keeping this in one helper means a future
-    /// "tab through last-used profile" UX has exactly one place to change.
-    pub fn resolved_profile(&self) -> String {
+    /// Context name snapshotted before dispatch; auth uses it for credential I/O.
+    pub fn resolved_context(&self) -> String {
+        if let Some(selected) = &self.selected_context {
+            return selected.name.clone();
+        }
         self.profile
             .as_deref()
             .filter(|s| !s.is_empty())
@@ -934,10 +1025,7 @@ impl GlobalFlags {
     /// Whether this invocation talks to a server rather than the embedded
     /// runtime.
     ///
-    /// Resolved exactly as `create_runtime` does, so the two cannot disagree
-    /// about which backend a command is aimed at. It re-reads the credential
-    /// file rather than threading the resolution through; the cost is one extra
-    /// read on the two commands that ask.
+    /// Uses the same context snapshot as `create_runtime`, including credentials.
     pub fn targets_rest(&self) -> anyhow::Result<bool> {
         let stored = self.load_selected_profile()?;
         let env_api_key = std::env::var("BOXLITE_API_KEY").ok();
@@ -961,10 +1049,13 @@ impl GlobalFlags {
     }
 
     fn load_selected_profile(&self) -> anyhow::Result<Option<crate::credentials::Profile>> {
-        let profile = self.resolved_profile();
+        if let Some(selected) = &self.selected_context {
+            return Ok(selected.profile.clone());
+        }
+        let profile = self.resolved_context();
         self.credential_store()
             .load_named(&profile)
-            .with_context(|| format!("loading credential profile `{profile}`"))
+            .with_context(|| format!("loading context `{profile}`"))
     }
 
     /// Build REST connection options from the selected credential profile and
@@ -980,7 +1071,7 @@ impl GlobalFlags {
     /// - bearer credential: `BOXLITE_API_KEY` > stored profile.
     ///
     /// `BOXLITE_API_KEY` overrides ONLY the bearer credential — the selected
-    /// profile's url and path_prefix still apply, so `--profile p1` keeps
+    /// context's url and path_prefix still apply, so `--context p1` keeps
     /// routing to its tenant (`/v1/<prefix>/…`) even with an ambient key set.
     /// Building the options bare in that branch (instead of starting from the
     /// profile) was the cause of the prefix-less `/v1/boxes` 404 against a
@@ -1555,7 +1646,7 @@ pub struct ManagementFlags {
     /// Stop the box after this much inactivity; `0` disables.
     ///
     /// Seconds when bare, or a suffixed duration: `30s`, `15m`, `2h`, `7d`.
-    /// Requires a server (`--url`, or a configured profile): the deadline is
+    /// Requires a server (`--url`, or a configured context): the deadline is
     /// swept on a timer, which only `boxlite serve` and the cloud run. Against
     /// the embedded runtime a non-zero value is rejected.
     #[arg(long = "auto-stop", value_name = "DURATION", value_parser = parse_duration_seconds)]
@@ -1618,7 +1709,7 @@ impl ManagementFlags {
             if seconds.is_some_and(|seconds| seconds > 0) {
                 anyhow::bail!(
                     "{flag} needs a server to enforce it — point at one with --url \
-                     (or a configured profile). Use `boxlite run --rm` when \
+                     (or a configured context). Use `boxlite run --rm` when \
                      immediate local cleanup is required."
                 );
             }
@@ -1780,7 +1871,7 @@ mod tests {
             "registry" => vec!["--registry", "registry.example.test"],
             "config" => vec!["--config", "/tmp/boxlite-config.json"],
             "url" => vec!["--url", "https://example.test"],
-            "profile" => vec!["--profile", "test-profile"],
+            "profile" => vec!["--context", "test-profile"],
             "path_prefix" => vec!["--path-prefix", "tenant"],
             other => panic!("missing command-line spelling for {other}"),
         }
@@ -2071,6 +2162,8 @@ mod tests {
             config: Some(config_path.display().to_string()),
             url: None,
             profile: None,
+            context_source: None,
+            selected_context: None,
             path_prefix: None,
             experimental_features: ExperimentalFeatures::default(),
         };
@@ -2099,6 +2192,8 @@ mod tests {
             config: None,
             url: url.map(str::to_string),
             profile: profile.map(str::to_string),
+            context_source: None,
+            selected_context: None,
             path_prefix: path_prefix.map(str::to_string),
             experimental_features: ExperimentalFeatures::default(),
         }

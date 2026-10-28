@@ -1,11 +1,10 @@
 //! Credential file I/O for `boxlite auth {login,logout,status}`.
 //!
-//! Stores the `default` profile at `<BOXLITE_HOME>/credentials.toml`
+//! Stores named context credentials at `<BOXLITE_HOME>/credentials.toml`
 //! (defaults to `~/.boxlite/credentials.toml`, matching the `~/.aws/credentials`
 //! / `~/.docker/config.json` / `~/.kube/config` convention used by infra
-//! tools). The `[profiles.default]` table is reserved from day one so that
-//! adding a `--profile NAME` flag later does not require a file-format
-//! migration.
+//! tools). `[profiles.<name>]` retains its existing on-disk spelling for
+//! compatibility; the CLI presents these records as contexts.
 
 use std::fs;
 use std::path::PathBuf;
@@ -117,17 +116,14 @@ pub struct Profile {
     pub path_prefix: Option<String>,
 }
 
-/// On-disk file shape: `[profiles.<name>]` tables. v1 only reads/writes
-/// `default`; the map keeps multi-profile forward compatibility.
+/// On-disk file shape: `[profiles.<name>]` tables, shared with older CLIs.
 #[derive(Debug, Default, Serialize, Deserialize)]
 struct CredentialsFile {
     #[serde(default)]
     profiles: std::collections::BTreeMap<String, Profile>,
 }
 
-/// Name used when `--profile` / `BOXLITE_PROFILE` are unset. Public so the
-/// CLI flag layer at `GlobalFlags::resolved_profile` can avoid duplicating
-/// the string.
+/// Virtual context representing the pre-context default configuration.
 pub const DEFAULT_PROFILE: &str = "default";
 
 /// Credential file access rooted at the effective BoxLite home directory.
@@ -161,15 +157,19 @@ impl CredentialStore {
     }
 
     pub fn load_named(&self, name: &str) -> Result<Option<Profile>> {
+        Ok(self.load_all()?.remove(name))
+    }
+
+    pub fn load_all(&self) -> Result<std::collections::BTreeMap<String, Profile>> {
         let file_path = self.path()?;
         if !file_path.exists() {
-            return Ok(None);
+            return Ok(Default::default());
         }
         let raw = fs::read_to_string(&file_path)
             .with_context(|| format!("reading credentials file {}", file_path.display()))?;
         let parsed: CredentialsFile = toml::from_str(&raw)
             .with_context(|| format!("parsing credentials file {}", file_path.display()))?;
-        Ok(parsed.profiles.get(name).cloned())
+        Ok(parsed.profiles)
     }
 
     pub fn save_named(&self, name: &str, profile: &Profile) -> Result<()> {
@@ -304,7 +304,7 @@ pub fn into_rest_options(profile: Profile) -> BoxliteRestOptions {
 }
 
 #[cfg(unix)]
-fn create_secure_dir(dir: &std::path::Path) -> Result<()> {
+pub(crate) fn create_secure_dir(dir: &std::path::Path) -> Result<()> {
     use std::os::unix::fs::DirBuilderExt;
     if dir.exists() {
         return Ok(());
@@ -317,7 +317,7 @@ fn create_secure_dir(dir: &std::path::Path) -> Result<()> {
 }
 
 #[cfg(not(unix))]
-fn create_secure_dir(dir: &std::path::Path) -> Result<()> {
+pub(crate) fn create_secure_dir(dir: &std::path::Path) -> Result<()> {
     fs::create_dir_all(dir).with_context(|| format!("creating directory {}", dir.display()))
 }
 
@@ -650,8 +650,8 @@ mod tests {
     }
 
     /// Two profiles must coexist in the same file and be readable independently.
-    /// Locks in the multi-profile guarantee that lets `boxlite --profile cloud`
-    /// hold a separate login from `boxlite --profile local`.
+    /// Separate contexts let `boxlite --context cloud` hold a different login
+    /// from `boxlite --context local`, using the compatible profiles schema.
     #[test]
     fn save_named_preserves_other_profiles() {
         let tmp = TempDir::new().unwrap();

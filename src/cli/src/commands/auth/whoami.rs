@@ -17,9 +17,9 @@ use crate::defaults::DEFAULT_REST_URL;
 const API_KEY_ENV: &str = "BOXLITE_API_KEY";
 
 pub async fn run(global: &GlobalFlags, store: &CredentialStore) -> Result<()> {
-    let profile_name = global.resolved_profile();
+    let profile_name = global.resolved_context();
     let Some(opts) = resolve_options(global, store).await? else {
-        println!("Not logged in (profile `{}`).", profile_name);
+        println!("Not logged in (context `{}`).", profile_name);
         return Ok(());
     };
     let url = opts.url.clone();
@@ -78,7 +78,7 @@ async fn resolve_options(
     global: &GlobalFlags,
     store: &CredentialStore,
 ) -> Result<Option<BoxliteRestOptions>> {
-    let profile_name = global.resolved_profile();
+    let profile_name = global.resolved_context();
     if let Ok(api_key) = std::env::var(API_KEY_ENV)
         && !api_key.is_empty()
     {
@@ -123,6 +123,8 @@ mod tests {
             config: None,
             url: None,
             profile: None,
+            context_source: None,
+            selected_context: None,
             path_prefix: None,
             experimental_features: Default::default(),
         };

@@ -135,24 +135,27 @@ with `boxlite auth login`. Three login methods are supported:
 | `browser`   | Local developer machine with a desktop browser         | OIDC access token    |
 | `device`    | SSH session / headless container with no browser       | OIDC access token    |
 
-Credential precedence is **`BOXLITE_API_KEY` env > stored file > unauthenticated** (local runtime).
-The `--url` flag overrides the URL specifically without affecting credentials.
-Multiple profiles coexist in one file via `--profile <name>` (or `BOXLITE_PROFILE` env var).
+Create a named context with `auth login`, then select it once with
+`boxlite context use NAME`. Subsequent commands use that context automatically.
+`BOXLITE_API_KEY` overrides the selected context's bearer credential; its URL and
+tenant path remain in effect.
 
 ```bash
 # Browser OIDC against a control plane (default for `auth login` on a TTY).
 # Requires the IdP admin to have registered `http://127.0.0.1:5555/callback`
 # in the SPA application's Allowed Callback URLs — see apps/infra/README.md
 # "Callback URL mismatch" for the one-time setup.
-boxlite --profile cloud auth login --url https://<your-control-plane>/api
+boxlite --context cloud auth login --url https://<your-control-plane>/api
+boxlite context use cloud
+boxlite list
 
 # Same target, headless (SSH / no browser): prints a code + URL to type into
 # any browser on another device.
-boxlite --profile cloud auth login --url https://<your-control-plane>/api --no-browser
+boxlite --context cloud auth login --url https://<your-control-plane>/api --no-browser
 
 # Local boxlite serve with a static API key (unchanged from the original behavior).
-boxlite --profile local auth login --url http://localhost:8100  # interactive paste
-echo "$KEY" | boxlite --profile local auth login --url http://localhost:8100 --api-key-stdin
+boxlite --context local auth login --url http://localhost:8100  # interactive paste
+echo "$KEY" | boxlite --context local auth login --url http://localhost:8100 --api-key-stdin
 
 # CI via env vars only — no `auth login` call needed.
 BOXLITE_API_KEY=$KEY BOXLITE_REST_URL=https://<your-server> boxlite list
@@ -162,6 +165,17 @@ Credentials are stored at `<BOXLITE_HOME>/credentials.toml` (default
 `~/.boxlite/credentials.toml`, perms `0600`). OIDC
 sessions auto-refresh on use when within 5 minutes of expiry; if the refresh
 token is rejected (`invalid_grant`) the CLI prompts you to re-run `auth login`.
+
+`boxlite context ls` marks the effective context with `*`; `boxlite context show`
+prints its name. `--context NAME` or `BOXLITE_CONTEXT=NAME` overrides the saved
+selection without changing it. The old `--profile` and `BOXLITE_PROFILE` spellings
+remain supported. Login saves credentials but does not change the current context.
+
+`boxlite context use default` restores the pre-context configuration: a URL
+override or existing `default` credentials select REST; otherwise commands use
+the embedded runtime. Context selection is stored separately in
+`<BOXLITE_HOME>/cli.toml`. See [context selection and precedence](../../docs/reference/cli/README.md#boxlite-context)
+for URL overrides and missing contexts.
 
 ## Commands Reference
 
@@ -181,12 +195,12 @@ use. Executing invocations reject unsupported options; Clap's `--help` and
 | Flag | Scope | Description |
 |------|-------|-------------|
 | `--debug` | all commands except `completion` | Enable debug output. Precedence: `--debug` > `RUST_LOG` env > default (`warn`). |
-| `--home PATH` | local runtime + credentials | Absolute BoxLite home directory (default: `~/.boxlite`). `BOXLITE_HOME` is the env spelling. |
+| `--home PATH` | local runtime + credentials + contexts | Absolute BoxLite home directory (default: `~/.boxlite`). `BOXLITE_HOME` is the env spelling. |
 | `--registry REGISTRY` | `run`, `create`, `pull`, `serve` | Image registry (repeatable; prepended to config). |
 | `--config PATH` | local-capable commands | JSON config file path (e.g. for `home_dir` and `image_registries`). |
 | `--url URL` | REST-capable commands | Connect to a remote BoxLite REST server instead of the local runtime. Env: `BOXLITE_REST_URL`. |
-| `--profile NAME` | REST-capable commands + `auth` | Named credential profile in `<BOXLITE_HOME>/credentials.toml`. Default `default`. Env: `BOXLITE_PROFILE`. |
-| `--path-prefix VALUE` | REST box/volume commands | Routing-slot value for `/v1/<prefix>/...`; overrides the selected profile. Env: `BOXLITE_REST_PATH_PREFIX`. |
+| `--context NAME` | REST-capable commands + `auth` + `context` | Override the saved current context. Env: `BOXLITE_CONTEXT`. Legacy aliases: `--profile`, `BOXLITE_PROFILE`. |
+| `--path-prefix VALUE` | REST box/volume commands | Routing-slot value for `/v1/<prefix>/...`; overrides the selected context. Env: `BOXLITE_REST_PATH_PREFIX`. |
 
 ### Network policy updates
 
@@ -241,7 +255,7 @@ On a BoxLite Auth0 deployment, an existing unverified database account must
 complete the hosted verification Form through browser login:
 
 ```bash
-boxlite --profile cloud auth login --url https://<your-control-plane>/api --method browser
+boxlite --context cloud auth login --url https://<your-control-plane>/api --method browser
 ```
 
 Auth0 Forms cannot run inside refresh-token, device-code, or other
@@ -256,7 +270,7 @@ picker in a detected headless/SSH environment, the CLI falls back to `device`.
 
 | Option | Description |
 |--------|-------------|
-| `--url URL` | Server URL (precedence: flag, `BOXLITE_REST_URL`, selected profile URL, then `https://api.boxlite.ai`). Self-hosted deployments may require a base path such as `/api`. |
+| `--url URL` | Server URL (precedence: flag, `BOXLITE_REST_URL`, selected context URL, then `https://api.boxlite.ai`). Self-hosted deployments may require a base path such as `/api`. |
 | `--method <api-key\|browser\|device>` | Explicit flow choice. Overrides inference. |
 | `--api-key-stdin` | Read the API key from stdin (one line). The flag takes no value, so the secret never appears on argv. Selects API-key login and conflicts with explicit browser/device methods. |
 | `--no-browser` | Use device code when no method is explicit; conflicts with API-key stdin and explicit API-key/browser methods. |
@@ -265,23 +279,25 @@ picker in a detected headless/SSH environment, the CLI falls back to `device`.
 | `--client-id ID` | OIDC client_id. Overrides `/api/config`. |
 | `--audience VAL` | OIDC audience. Auth0 requires it; Dex tolerates `None`. |
 
-`--profile NAME` selects the credential profile (default `default`), and
-`--home PATH` selects the credential-store root.
+`--context NAME` selects the context to create or update; when omitted, login
+uses the effective current context. Login accepts both `--context` and `--url`
+because the URL configures that context. `--home PATH` selects the credential and
+context preference directory. Login does not switch the saved current context.
 
 **Examples:**
 
 ```bash
 # Cloud control plane via browser (most common; opens system browser).
-boxlite --profile cloud auth login --url https://<your-control-plane>/api
+boxlite --context cloud auth login --url https://<your-control-plane>/api
 
 # Same target, headless: prints a code + URL.
-boxlite --profile cloud auth login --url https://<your-control-plane>/api --no-browser
+boxlite --context cloud auth login --url https://<your-control-plane>/api --no-browser
 
 # Local boxlite serve with paste-API-key (interactive).
-boxlite --profile local auth login --url http://localhost:8100
+boxlite --context local auth login --url http://localhost:8100
 
 # CI: API key from stdin (nothing on argv).
-echo "$KEY" | boxlite --profile local auth login --url http://localhost:8100 --api-key-stdin
+echo "$KEY" | boxlite --context local auth login --url http://localhost:8100 --api-key-stdin
 ```
 
 **Deployment-side setup (one-time, by the IdP admin):**
@@ -309,8 +325,10 @@ excluded from device-login errors to avoid exposing credentials.
 
 ### `boxlite auth logout`
 
-Remove the selected profile from `<BOXLITE_HOME>/credentials.toml` (default
+Remove the selected context from `<BOXLITE_HOME>/credentials.toml` (default
 `~/.boxlite/credentials.toml`). Prompts for confirmation unless `--yes` is given.
+The current context stays selected; commands fail if its credentials are missing.
+Log in again or run `boxlite context use default` to switch back explicitly.
 
 **Usage:** `boxlite auth logout [OPTIONS]`
 
@@ -326,11 +344,12 @@ OIDC sessions the access token's expiry. Offline — no network calls,
 no secret material printed. With only `BOXLITE_API_KEY` set, it reports
 `https://api.boxlite.ai`.
 
-**Usage:** `boxlite auth status [--url URL] [--profile NAME]`
+**Usage:** `boxlite auth status [--url URL | --context NAME]`
 
 **Example output (API key):**
 
 ```
+Context:         local (from saved context)
 Logged in to:    http://localhost:8100
 Credential:      API key (from <BOXLITE_HOME>/credentials.toml [local])
 ```
@@ -338,6 +357,7 @@ Credential:      API key (from <BOXLITE_HOME>/credentials.toml [local])
 **Example output (OIDC session):**
 
 ```
+Context:         cloud (from saved context)
 Logged in to:    https://api.boxlite.ai
 Credential:      OIDC bearer token (from <BOXLITE_HOME>/credentials.toml [cloud])
 Expires:         2026-05-21T15:42:00+00:00
@@ -351,7 +371,7 @@ the credential came from), `whoami` shows the server-resolved principal,
 path prefix, and scopes. Triggers a silent OIDC refresh if the access
 token is within 5 minutes of expiry.
 
-**Usage:** `boxlite auth whoami [--url URL] [--profile NAME]`
+**Usage:** `boxlite auth whoami [--url URL | --context NAME]`
 
 **Example output:**
 
@@ -410,7 +430,7 @@ silently restarting it, because restarting would run the command a second time.
 | `--no-auto-resume` | | Ask a REST server to refuse implicit resume after a box has run; first boot is unaffected, and the embedded runtime records but does not enforce it |
 | `--security <enable\|disable>` | | Embedded-runtime sandbox security (default `enable`; env `BOXLITE_SECURITY`); REST servers own this policy |
 
-`-p` is explicit local publication. Remote REST profiles reject it and direct
+`-p` is explicit local publication. Remote REST contexts reject it and direct
 the caller to `boxlite network tunnel`.
 
 `DURATION` is seconds when bare, or suffixed: `30s`, `15m`, `2h`, `7d`. The two
@@ -469,7 +489,7 @@ default, and `exec` still starts it on demand.
 | `--no-auto-resume` | | Ask a REST server to refuse implicit resume after a box has run; first boot is unaffected, and the embedded runtime records but does not enforce it |
 | `--security <enable\|disable>` | | Embedded-runtime sandbox security (default `enable`; env `BOXLITE_SECURITY`); REST servers own this policy |
 
-`-p` is explicit local publication. Remote REST profiles reject it and direct
+`-p` is explicit local publication. Remote REST contexts reject it and direct
 the caller to `boxlite network tunnel`.
 
 **Examples:**
@@ -670,10 +690,11 @@ Then reload your shell or source the file.
 
 | Variable | Description |
 |----------|-------------|
-| `BOXLITE_HOME` | Runtime and credential home directory (default: `~/.boxlite`). Overridden by `--home`. |
+| `BOXLITE_HOME` | Runtime, credential, and context preference directory (default: `~/.boxlite`). Overridden by `--home`. |
 | `BOXLITE_REST_URL` | REST server endpoint; equivalent to `--url`. |
 | `BOXLITE_API_KEY` | Long-lived API key sent as `Authorization: Bearer`. Overrides any stored credentials. |
-| `BOXLITE_PROFILE` | Credential profile; equivalent to `--profile` (default `default`). |
+| `BOXLITE_CONTEXT` | Override the saved current context; explicit `--context` takes precedence. |
+| `BOXLITE_PROFILE` | Legacy fallback when `BOXLITE_CONTEXT` is unset or empty. |
 | `BOXLITE_REST_PATH_PREFIX` | REST routing path segment; equivalent to `--path-prefix`. |
 | `BOXLITE_SECURITY` | `run`/`create` sandbox preset; equivalent to `--security`. |
 | `BOXLITE_SERVE_API_KEY` | Expected bearer key for `serve`; equivalent to `serve --api-key`. |

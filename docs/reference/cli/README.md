@@ -14,6 +14,7 @@ For a quick start, see [`src/cli/README.md`](../../../src/cli/README.md).
 - [Environment Variables](#environment-variables)
 - [Connecting to the cloud](#connecting-to-the-cloud)
 - [Commands](#commands)
+  - [`boxlite context`](#boxlite-context)
   - [`boxlite auth login`](#boxlite-auth-login)
   - [`boxlite auth logout`](#boxlite-auth-logout)
   - [`boxlite auth status`](#boxlite-auth-status)
@@ -132,16 +133,17 @@ and `--version` display actions remain terminal.
 | Flag | Scope | Env Var | Description |
 |------|-------|---------|-------------|
 | `--debug` | all commands except `completion` | `RUST_LOG` (lower precedence) | Enable debug output. |
-| `--home PATH` | local runtime + credentials | `BOXLITE_HOME` | Absolute runtime data directory and credential-store root. |
+| `--home PATH` | local runtime + credentials + contexts | `BOXLITE_HOME` | Absolute runtime data, credential, and context preference directory. |
 | `--registry REGISTRY` | `run`, `create`, `pull`, `serve` | — | Image registry hostname; repeatable and prepended to config. |
 | `--config PATH` | local-capable commands | — | JSON runtime config (see [Configuration File](#configuration-file)). |
 | `--url URL` | REST-capable commands | `BOXLITE_REST_URL` | Select a REST API server. |
-| `--profile NAME` | REST-capable commands + `auth` | `BOXLITE_PROFILE` | Profile in `<BOXLITE_HOME>/credentials.toml`; default `default`. |
-| `--path-prefix VALUE` | REST box/volume commands | `BOXLITE_REST_PATH_PREFIX` | Override the profile's routing path segment. |
+| `--context NAME` | REST-capable commands + `auth` + `context` | `BOXLITE_CONTEXT` | Override the saved current context. Legacy aliases: `--profile`, `BOXLITE_PROFILE`. |
+| `--path-prefix VALUE` | REST box/volume commands | `BOXLITE_REST_PATH_PREFIX` | Override the context's routing path segment. |
 
 **Precedence** (from `src/cli/src/cli.rs`):
 
-1. On dual-backend commands, `--url` selects REST; local runtime config is then unused.
+1. On dual-backend commands, a REST URL from the selected context or URL override
+   selects REST; local runtime config is then unused. See [context precedence](#boxlite-context).
 2. Otherwise, `--config` is the base, `--home` overrides `home_dir`, and
    `--registry` values are prepended to `image_registries`.
 3. `serve`, `pull`, `images`, `info`, and `logs` always use the embedded local runtime.
@@ -152,11 +154,12 @@ and `--version` display actions remain terminal.
 
 | Variable | Read by | Description |
 |----------|---------|-------------|
-| `BOXLITE_HOME` | `--home` | Runtime data and credential directory; equivalent to `--home` |
+| `BOXLITE_HOME` | `--home` | Runtime data, credentials, and context preferences; equivalent to `--home` |
 | `BOXLITE_REST_URL` | `--url` | REST server endpoint; equivalent to `--url` |
 | `BOXLITE_API_KEY` | REST runtime | Long-lived API key sent as `Authorization: Bearer`. Overrides any stored credentials. |
-| `BOXLITE_PROFILE` | `--profile` | Credential profile; default `default` |
-| `BOXLITE_REST_PATH_PREFIX` | `--path-prefix` | REST routing path segment; overrides the selected profile's value |
+| `BOXLITE_CONTEXT` | context selection | Override the saved current context |
+| `BOXLITE_PROFILE` | context selection | Legacy fallback when `BOXLITE_CONTEXT` is unset or empty |
+| `BOXLITE_REST_PATH_PREFIX` | `--path-prefix` | REST routing path segment; overrides the selected context's value |
 | `BOXLITE_SECURITY` | `run`, `create` | Sandbox preset; equivalent to `--security` |
 | `BOXLITE_SERVE_API_KEY` | `serve` | Expected bearer key; equivalent to `serve --api-key` |
 | `OIDC_ISSUER` | `auth login` | OIDC issuer fallback after an explicit flag and server discovery |
@@ -177,11 +180,15 @@ The three `serve` duration variables accept bare seconds or `Ns`, `Nm`, and
 
 ## Connecting to the cloud
 
-To target a remote BoxLite REST server instead of the local runtime, sign in with `boxlite auth login`. Credential precedence is **env vars > stored file > unauthenticated** (local runtime). The `--url` flag overrides the URL specifically without affecting credentials.
+Create a remote context with `auth login`, then select it with `context use`.
+The selected context supplies the endpoint, tenant path, and stored credentials.
+`BOXLITE_API_KEY` overrides only the bearer credential.
 
 ```bash
-# Interactive
-boxlite auth login
+# Interactive; select once for subsequent commands
+boxlite --context cloud auth login --url https://<your-server>
+boxlite context use cloud
+boxlite list
 
 # CI / scripted (API key from stdin)
 echo "$KEY" | boxlite auth login --api-key-stdin --url https://<your-server>
@@ -199,6 +206,68 @@ and [`boxlite auth whoami`](#boxlite-auth-whoami) for the full command surface.
 
 ## Commands
 
+### `boxlite context`
+
+| Command | Behavior |
+|---------|----------|
+| `boxlite context use NAME` | Save the current context for subsequent commands. Validates that a named context exists; `default` always exists. |
+| `boxlite context show` | Print the effective name, including flag and environment overrides. Does not validate credentials or contact the server. |
+| `boxlite context ls` | List names and endpoints; mark the effective context with `*`. Alias: `list`. `-q` / `--quiet` prints names only. |
+
+Create or update contexts with `boxlite --context NAME auth login --url URL`.
+Login stores credentials without changing the saved selection. All context
+commands work offline and omit tokens from their output.
+
+Selection follows Docker's context/host behavior (`--url` is BoxLite's host
+override). For commands other than `auth login`, resolve in this order:
+
+1. Explicit `--context NAME` (legacy alias `--profile NAME`).
+2. Explicit `--url URL`, selecting `default` with that URL.
+3. Nonempty `BOXLITE_REST_URL`, selecting `default` with that URL.
+4. Nonempty `BOXLITE_CONTEXT`.
+5. Nonempty `BOXLITE_PROFILE` (legacy fallback).
+6. Saved `current_context` in `<BOXLITE_HOME>/cli.toml`.
+7. `default`.
+
+Explicit context and URL flags conflict, except for `auth login`, where the URL
+configures the selected context. An explicit named context ignores the URL
+environment variable; explicit `--context default` still honors it. Empty
+environment values are unset; empty selector flags are errors. Overrides never
+change the saved selection. `context use` warns when an override remains active.
+
+`default` represents the existing BoxLite default configuration: use the URL
+override, otherwise credentials named `default`, otherwise the embedded runtime.
+Existing remote default logins therefore keep working. `local` is an ordinary
+user-defined name. A missing named context fails before a workload starts, without
+falling back to the embedded runtime. Logout removes credentials but keeps the
+selection; log in again or explicitly `context use default` to recover.
+
+Preferences and credentials share the `--home` / `BOXLITE_HOME` directory.
+`cli.toml` stores only the current name; `credentials.toml` retains the compatible
+`[profiles.NAME]` schema. Switching atomically replaces a private preference file
+and does not rewrite credentials. Concurrent switches use the last completed
+write. Malformed or unreadable preferences are errors when selection needs them.
+Workload commands snapshot the context and credentials before dispatch, so a
+concurrent switch cannot redirect a running command. Local-only commands (`serve`,
+`pull`, `images`, `info`, `logs`), help, and completion do not read context state.
+
+```bash
+boxlite context use cloud
+boxlite list                       # cloud
+boxlite --context staging list     # one invocation; cloud stays selected
+boxlite context show              # cloud
+boxlite context use default       # restore the default configuration
+```
+
+The precedence is verified against Docker CLI 29.4.3 and its
+[context resolver source](https://github.com/docker/cli/blob/v28.5.2/cli/command/cli.go#L461-L485).
+Docker's [context use documentation](https://docs.docker.com/reference/cli/docker/context/use/)
+describes persisted switching. Its [environment-variable documentation](https://docs.docker.com/reference/cli/docker/#environment-variables)
+differs from that executable ordering. BoxLite follows the executable behavior above.
+See [design #2167](https://github.com/boxlite-ai/boxlite/issues/2167).
+
+---
+
 ### `boxlite auth login`
 
 **Synopsis:** `boxlite auth login [OPTIONS]`
@@ -206,12 +275,15 @@ and [`boxlite auth whoami`](#boxlite-auth-whoami) for the full command surface.
 Log in with a long-lived API key, browser OIDC, or device-code OIDC.
 Credentials are stored at `<BOXLITE_HOME>/credentials.toml` (default
 `~/.boxlite/credentials.toml`, perms `0600`).
+`--context NAME` selects the context to create or update; otherwise login uses
+the effective current context. `--url` configures that context and does not
+change the selected name. Login never changes the saved current context.
 
 **Options:**
 
 | Flag | Description |
 |------|-------------|
-| `--url URL` | Server URL. Precedence: flag, `BOXLITE_REST_URL`, selected profile URL, then `https://api.boxlite.ai`. |
+| `--url URL` | Server URL. Precedence: flag, `BOXLITE_REST_URL`, selected context URL, then `https://api.boxlite.ai`. |
 | `--method <api-key\|browser\|device>` | Select the login flow explicitly. |
 | `--api-key-stdin` | Read the API key from stdin (one line); selects `api-key` and conflicts with explicit browser/device methods. |
 | `--no-browser` | Use device-code login when no method is explicit; conflicts with API-key stdin and explicit `api-key`/`browser` methods. |
@@ -236,8 +308,10 @@ echo "$KEY" | boxlite auth login --api-key-stdin --url https://<your-server>
 
 **Synopsis:** `boxlite auth logout [OPTIONS]`
 
-Delete the selected profile from `<BOXLITE_HOME>/credentials.toml`. The file is
-removed when its final profile is deleted. Prompts unless `--yes` is given.
+Delete the selected context from `<BOXLITE_HOME>/credentials.toml`. The file is
+removed when its final context is deleted. Prompts unless `--yes` is given.
+The current selection stays unchanged. Workload commands fail if the selected
+named context is now missing; log in again or switch explicitly.
 
 **Options:**
 
@@ -249,18 +323,20 @@ removed when its final profile is deleted. Prompts unless `--yes` is given.
 
 ### `boxlite auth status`
 
-**Synopsis:** `boxlite auth status [--url URL] [--profile NAME]`
+**Synopsis:** `boxlite auth status [--url URL | --context NAME]`
 
 Print the current authentication state without revealing the secret. Reports
-the logged-in URL and the source (stored file vs env var). If neither the
+the context name and selection source, logged-in URL, and credential source
+(stored file vs env var). If neither the
 file nor env vars are present, prints
-``Not logged in (profile `NAME`).`` An explicit `--url`
-overrides the stored URL in the report. With only `BOXLITE_API_KEY` set, the
+``Not logged in (context `NAME`).`` An explicit `--url`
+selects the default context with that endpoint. With only `BOXLITE_API_KEY` set, the
 auth probe reports the default API endpoint, `https://api.boxlite.ai`.
 
 **Example output:**
 
 ```
+Context:         default (from default)
 Logged in to:    https://api.boxlite.ai
 Credential:      API key (from <BOXLITE_HOME>/credentials.toml [default])
 ```
@@ -275,11 +351,11 @@ Credential:      API key (from BOXLITE_API_KEY env var)
 
 ### `boxlite auth whoami`
 
-**Synopsis:** `boxlite auth whoami [--url URL] [--profile NAME]`
+**Synopsis:** `boxlite auth whoami [--url URL | --context NAME]`
 
 Call `GET /v1/me` with the active credential and print the server-resolved
-principal, path prefix, scopes, and server URL. An explicit `--url` overrides
-the selected profile's URL. OIDC credentials refresh when near expiry.
+principal, path prefix, scopes, and server URL. An explicit `--url` selects the
+default context with that endpoint. OIDC credentials refresh when near expiry.
 
 **Example output:**
 
@@ -705,11 +781,11 @@ addresses, and Unix socket paths must be absolute.
 A remote box needs inbound access enabled before it can be tunneled: create it
 with `--inbound enabled`.
 
-For a private cloud tunnel, use the profile's API key or JWT:
+For a private cloud tunnel, use the context's API key or JWT:
 
 ```bash
-boxlite --profile cloud network tunnel mybox 3000 --private
-boxlite --profile cloud network tunnel mybox 3000 --private --listen 8080
+boxlite --context cloud network tunnel mybox 3000 --private
+boxlite --context cloud network tunnel mybox 3000 --private --listen 8080
 ```
 
 Private creation prints one JSON line containing `uri`, `isPublic`, and `token`.
@@ -747,7 +823,7 @@ CONFIG := --ssh-config FILE
         | --host-key FILE --login NAME --authorized-key FILE... [--guest-listen ADDRESS]
 ```
 
-Control the guest SSH server of a local box or a REST box (`--url`/`--profile`).
+Control the guest SSH server of a local box or a REST box (`--url`/`--context`).
 The CLI reads keys from files and never generates or stores them.
 
 These five CLI subcommands reuse existing SDK and HTTP operations; they add no
@@ -863,7 +939,7 @@ boxlite agent events dev --agent agent-id --turn turn-id --after cursor-1
 ```
 
 Agent commands accept the usual Box
-targeting globals (`--home`, `--config`, `--url`, `--profile`, `--path-prefix`)
+targeting globals (`--home`, `--config`, `--url`, `--context`, `--path-prefix`)
 and `--debug`; `--registry` is irrelevant and rejected. Existing diagnostic
 logging still applies.
 
@@ -1158,7 +1234,7 @@ Defaults:
 
 ## Configuration file
 
-`--config PATH` accepts a JSON file deserialized into `BoxliteOptions`. The primary field is `image_registries`; `image_registry_proxy` sets a pull proxy (see [Pull proxy](../../guides/image-registry-configuration.md#pull-proxy)). CLI flags like `--home` and `--registry` are layered on top after loading. A profile that targets a remote server ignores this file.
+`--config PATH` accepts a JSON file deserialized into `BoxliteOptions`. The primary field is `image_registries`; `image_registry_proxy` sets a pull proxy (see [Pull proxy](../../guides/image-registry-configuration.md#pull-proxy)). CLI flags like `--home` and `--registry` are layered on top after loading. A context that targets a remote server ignores this file.
 
 ```json
 {
