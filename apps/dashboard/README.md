@@ -46,6 +46,22 @@ The `test` target is inferred by `@nx/vite` from the `test` block in
 signal CI has about this app — see [the workflows
 README](../../.github/workflows/README.md) for how its coverage is reported.
 
+### API-client test fixtures
+
+`src/api/apiClient.test.ts` resets modules and imports the real axios and API
+client in an asynchronous `beforeEach`. Keep this initialization in the hook:
+cold imports can take longer than a behavior test's five-second deadline when
+the full apps matrix is busy. Initialization still has Vitest's default hook
+deadline; no test or hook timeout is extended.
+
+Each case needs a fresh module because the unauthorized-response guard belongs
+to the page, not an individual client. Static imports or a shared constructor
+would leak the first case's re-login state into later cases. Custom adapters
+then exercise the real interceptor, including 401 recovery and suspension,
+persistent-401 rejection, typed 403 errors, and registry/image refusal messages.
+Import error classes after the hook's reset so `instanceof` uses the same class
+objects as that case's client.
+
 ## Finding your way around
 
 Navigation is the sidebar plus the tables. There is one route per resource, and
