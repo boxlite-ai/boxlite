@@ -25,7 +25,7 @@ export interface AgentCreateOptions extends AgentControlOptions {
   config?: AgentConfig;
 }
 export interface AgentSendOptions extends AgentControlOptions {
-  /** Defaults to queue; interrupt-and-replace is deferred. */
+  /** Defaults to queue. */
   mode?: "queue" | "reject";
   data?: AgentJson;
 }

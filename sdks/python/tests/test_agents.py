@@ -1,4 +1,4 @@
-"""Exercise the actual P0 declarations; no agent runtime is expected."""
+"""Check agent errors and namespace access without a native runtime."""
 
 import pytest
 
@@ -40,7 +40,7 @@ ASYNC_CALLS = [
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("call", ASYNC_CALLS)
-async def test_agents_async_operations_are_unimplemented(call):
+async def test_agents_async_operations_raise_unsupported(call):
     with pytest.raises(UnsupportedError, match="is not implemented"):
         await call()
 
@@ -88,7 +88,7 @@ def test_agents_getters_do_not_fabricate_state(handle, field):
         lambda: SyncAgentTurn().interrupt(),
     ],
 )
-def test_agents_sync_operations_are_unimplemented(call):
+def test_agents_sync_operations_raise_unsupported(call):
     with pytest.raises(UnsupportedError, match="is not implemented"):
         call()
 

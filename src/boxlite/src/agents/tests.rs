@@ -3,7 +3,7 @@ use crate::{BoxOptions, BoxStatus, BoxliteOptions, BoxliteRuntime};
 use std::time::Duration;
 
 fn unsupported<T>(result: BoxliteResult<T>, operation: &str) {
-    let error = result.err().expect("stub must not report success");
+    let error = result.err().expect("operation must return Unsupported");
     match error {
         BoxliteError::Unsupported(message) => {
             assert_eq!(message, format!("{operation} is not implemented"))
@@ -40,7 +40,7 @@ async fn namespace_does_not_start_box() {
 }
 
 #[tokio::test]
-async fn session_operations_are_unimplemented() {
+async fn session_operations_return_unsupported() {
     let session = AgentSession { _private: () };
     unsupported(
         session.close(AgentControlOptions::default()).await,
@@ -90,7 +90,7 @@ async fn session_operations_are_unimplemented() {
 }
 
 #[tokio::test]
-async fn turn_operations_are_unimplemented() {
+async fn turn_operations_return_unsupported() {
     let turn = AgentTurn { _private: () };
     unsupported(
         turn.wait(AgentWaitOptions {

@@ -131,7 +131,7 @@ except ImportError as e:
     __all__ = []
 
 # Import Python convenience wrappers (re-exported via __all__)
-# Agent declarations do not require a native runtime.
+# Agent types do not require a native runtime.
 from .agents import (  # noqa: F401 - re-exported through __all__ below
     AgentCapabilities,
     AgentConfig,

@@ -1,7 +1,7 @@
 # BoxLite Python SDK
 
-The [P0 agent API](../../docs/reference/agents.md) is declared on Box and SimpleBox,
-including synchronous wrappers. All agent operations currently raise `UnsupportedError`.
+Access the [agent API](../../docs/reference/agents.md) through `Box.agents`
+and `SimpleBox.agents`, including synchronous wrappers, grouped options and error handling.
 
 Python bindings for BoxLite - an embeddable virtual machine runtime for secure, isolated code execution.
 

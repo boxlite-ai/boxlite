@@ -796,12 +796,12 @@ the error says so; the configuration is not rolled back.
 
 ### `boxlite agent`
 
-**Experimental declarations only.** All P0 operations report “not implemented” on
-stderr and exit with code 1, before loading runtime configuration, credentials or
-a Box, or contacting a server. No agent work or event stream is started. Help and
-shell completion work; malformed arguments use the normal CLI usage error (code 2).
+Agent commands address a Box, a session and, where needed, a turn. See the
+[failure contract](../agents.md#failure-contract) for operation availability.
+Unsupported operations report an error on stderr and exit with code 1 before
+runtime initialization. Malformed arguments use the normal CLI usage error (code 2).
 
-| Purpose | Command after `boxlite agent` | Intended operation |
+| Purpose | Command after `boxlite agent` | Operation |
 |---|---|---|
 | Lifecycle | `create BOX AGENT` | Create a session with initial configuration. |
 | Lifecycle | `close BOX --session SESSION` | End the session. |
@@ -831,8 +831,7 @@ The optional flags are grouped in typed `XxxOptions` structs:
 | `AgentInspectOptions` | `inspect` | `--view config\|capabilities\|requests` |
 
 `--agent-config` is distinct from the global runtime `--config FILE`. Config,
-data and response arguments must be valid JSON; schema validation and all runtime
-semantics remain unimplemented. Response JSON uses either
+data and response arguments must be valid JSON. Response JSON uses either
 `{"type":"answer","text":"yes"}` (optional `data`) or
 `{"type":"permission","approved":false}`. The
 [agent API reference](../agents.md#inputs-and-records) describes other record fields.
@@ -845,10 +844,10 @@ boxlite agent steer dev --session session-id --turn turn-id "Focus on tests" --i
 boxlite agent events dev --session session-id --turn turn-id --after cursor-1
 ```
 
-Each example currently fails explicitly. Agent commands accept the usual Box
+Agent commands accept the usual Box
 targeting globals (`--home`, `--config`, `--url`, `--profile`, `--path-prefix`)
 and `--debug`; `--registry` is irrelevant and rejected. Existing diagnostic
-logging still applies. P1/P2 commands are absent.
+logging still applies.
 
 ### `boxlite serve`
 

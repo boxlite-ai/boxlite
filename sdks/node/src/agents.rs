@@ -128,7 +128,7 @@ mod tests {
     use super::*;
 
     fn unsupported<T>(result: Result<T>, operation: &str) {
-        let error = result.err().expect("stub must fail");
+        let error = result.err().expect("operation must return Unsupported");
         assert!(
             error
                 .reason
@@ -138,7 +138,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn agents_p0_operations_are_unimplemented() {
+    async fn agents_return_unsupported() {
         let agents = JsAgentHandle::new();
         unsupported(agents.create("agent".into(), None).await, "agents.create");
         unsupported(agents.get("session".into()).await, "agents.get");

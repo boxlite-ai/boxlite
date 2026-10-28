@@ -1,14 +1,15 @@
 ## TL;DR
 
-The P0 agent API is declared in Rust, Python, Node.js, Go, C and the CLI; every agent operation currently reports “not implemented.”
+The agent API groups Box-owned sessions, submitted turns, and interaction across Rust, Python, Node.js, Go, C and the CLI.
 
 ## Details
 
-This is the declaration slice of [#2140](https://github.com/boxlite-ai/boxlite/issues/2140).
-It adds no agent execution, adapter, queue, journal, recovery, permissions engine or network protocol.
-The namespace accessor is inert. Session/turn operations, getters and event opening all fail explicitly.
+Sessions represent conversations and configuration; turns represent submitted work.
+Use session methods to send work and handle requests, and turn methods to observe,
+steer or interrupt that work. See [the failure contract](#failure-contract) for
+operation availability.
 
-### P0 surface by purpose
+### API by purpose
 
 | Purpose | Rust | Python | Node.js | Go |
 |---|---|---|---|---|
@@ -21,11 +22,15 @@ The namespace accessor is inert. Session/turn operations, getters and event open
 
 Python exposes both async and synchronous handles, including `SimpleBox`,
 `SyncBox` and `SyncSimpleBox`. Node exposes the namespace on native `JsBox`
-and `SimpleBox`. The four language SDKs retain their existing error conventions.
+and `SimpleBox`. Each SDK retains its error conventions.
 
 ### Failure contract
 
-| SDK | Current behavior |
+Agent operations return an unsupported error before agent execution. Namespace
+access and data construction work; execution, queues, event delivery, configuration
+validation, retry deduplication and timeout handling are unavailable.
+
+| SDK | Error behavior |
 |---|---|
 | Rust | `Err(BoxliteError::Unsupported("… is not implemented"))`; no panic |
 | Python | `UnsupportedError` on awaiting operations or reading a property |
@@ -38,13 +43,13 @@ Event opening never returns an empty successful stream. Python/Node fail when
 `events()` is called; Rust fails when its future is awaited; Go returns a nil
 stream with an error. C clears the subscription output pointer.
 
-Only obtaining the namespace, allocating/freeing C handles, and ordinary type
-construction work. No session or turn is returned by `create`, `get`, `send`
-or `respond`. Data records describe future results; they are never fabricated by a stub.
+No session or turn is returned by `create`, `get`, `send` or `respond`.
+C getters clear output pointers; callbacks are not invoked and no session, turn,
+subscription or JSON result object is allocated.
 
 ### Grouped options
 
-Keep identifiers and message text positional; group optional arguments in these types:
+In SDK calls, keep identifiers and message text positional; group optional arguments in these types:
 
 | Options type | Used by | Fields |
 |---|---|---|
@@ -71,11 +76,9 @@ TypeScript types are exported from the package; Go types use the `Agent` prefix.
 - Session/turn snapshots include an opaque cursor, requests and steering receipts. Results retain the turn ID, status, outcome, output, artifacts, usage and errors.
 - Unknown execution and steering states are representable. Accepted and applied steering are distinct; a question outcome is distinct from a final answer.
 
-Configuration validation, retry deduplication, timeout handling, event delivery and
-every state transition remain unimplemented. These records are provisional SDK
-contracts; no network wire protocol or adapter compatibility is established.
+These records define SDK data types, not a network wire protocol.
 
-### Example: detect the unavailable API
+### Example: handle operation errors
 
 Python (the Box may already exist; this call starts no work):
 
@@ -87,7 +90,7 @@ try:
         "agent-id", AgentCreateOptions(cwd="/workspace")
     )
 except UnsupportedError as error:
-    print(error)  # agents.create is not implemented
+    print(error)
 ```
 
 Rust:
@@ -103,7 +106,7 @@ async fn example(sandbox: &LiteBox) {
 }
 ```
 
-### C declarations and ownership
+### C API and ownership
 
 Include `boxlite.h`. `boxlite_box_agents` obtains `CAgentHandle` from a live
 `CBoxHandle`; release it with `boxlite_agent_free`. A null Box/output pointer
@@ -124,13 +127,13 @@ C option structs group the related arguments. `CAgentCreateOptions` contains
 `timeout_seconds`. Null strings mean omitted. `AgentSendQueue = 0` and
 `AgentSendReject = 1`.
 
-For future wait semantics, null options or a negative C timeout means no deadline.
+Null options or a negative C timeout means no deadline.
 Rust/Go use optional durations; Python uses `AgentWaitOptions.timeout` in seconds;
 Node uses `AgentWaitOptions.timeoutSeconds`.
 
-The remaining C JSON strings use these provisional shapes. A question's
+The C JSON fields use the following shapes. A question's
 `schema` and an answer's `data` may be omitted. Nullable output fields use JSON
-`null`; arrays remain arrays, including when empty. Stubs parse or emit none of this JSON.
+`null`; arrays remain arrays, including when empty.
 
 | Record | C JSON fields |
 |---|---|
@@ -149,28 +152,20 @@ Turn status is `queued`, `running`, `waiting_input`, `interrupting`,
 `completed`, `cancelled`, `failed` or `unknown`. Requests callbacks carry an
 array of request records; wait/steer callbacks carry a result/receipt respectively.
 
-The asynchronous signatures reserve callbacks for the existing post-and-drain
-convention. Today they return `Unsupported` synchronously, enqueue nothing and never
-call back. State/config/capability getters clear `out_json`; event openers clear
-`out`. Output/error pointers must be null or writable.
+A synchronous error means no callback will run. State/config/capability getters
+clear `out_json` on error; event openers clear `out`.
+Output/error pointers must be null or writable.
 
-Use `boxlite_error_free` for returned error messages. Reserved
+Use `boxlite_error_free` for returned error messages.
 `boxlite_agent_session_free`, `boxlite_agent_turn_free` and
 `boxlite_agent_events_free` release local handles only; they never close a session
-or interrupt work. Null handles may be freed. No operation currently allocates
-session, turn, subscription or JSON result objects.
+or interrupt work. Null handles may be freed.
 
 ### CLI commands
 
 The [CLI reference](cli/README.md#boxlite-agent) lists nine flat `agent` commands.
 BOX is positional; `--session`, `--turn` and `--request` identify inner targets.
 `inspect` combines state and session views, and `events` selects either scope.
-The SDK's `get`/`get_turn` remain available; CLI targeting subsumes handle lookup.
+SDKs retain the `get`/`get_turn` methods; CLI targeting subsumes handle lookup.
 CLI options reuse the five groups above and add `AgentInspectOptions` for view
-selection. Parsing/help work; execution fails before runtime or server access.
-
-### Deferred surface
-
-P1 discovery, listing, configuration updates, history, deletion, pause/resume,
-question dismissal, attachments and interrupt-and-replace are absent.
-P2 fork and compaction are absent.
+selection.

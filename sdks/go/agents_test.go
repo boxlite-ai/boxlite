@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-func TestAgentsP0Unimplemented(t *testing.T) {
+func TestAgentsReturnUnsupported(t *testing.T) {
 	ctx := context.Background()
 	// A namespace operation must not touch the absent native Box/runtime.
 	agents := (&Box{}).Agents()
@@ -33,7 +33,7 @@ func TestAgentsP0Unimplemented(t *testing.T) {
 	events, err := session.Events(ctx, AgentEventsOptions{After: "cursor"})
 	check("session.events", events, err)
 	if events != nil {
-		t.Fatal("unimplemented events must not return a stream")
+		t.Fatal("failed event opening must not return a stream")
 	}
 	requests, err := session.Requests(ctx)
 	check("session.requests", requests, err)
@@ -52,7 +52,7 @@ func TestAgentsP0Unimplemented(t *testing.T) {
 	events, err = turn.Events(ctx, AgentEventsOptions{})
 	check("turn.events", events, err)
 	if events != nil {
-		t.Fatal("unimplemented events must not return a stream")
+		t.Fatal("failed event opening must not return a stream")
 	}
 	receipt, err := turn.Steer(ctx, "direction", AgentControlOptions{})
 	check("turn.steer", receipt, err)

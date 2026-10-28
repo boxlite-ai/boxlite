@@ -5,7 +5,7 @@ step-by-step tasks, see [Guides](../guides/README.md).
 
 ## Pages
 
-- [Agent API declarations](agents.md): P0 sessions, turns and interaction; currently unimplemented in every SDK.
+- [Agent API](agents.md): sessions, turns, interaction and error handling across SDKs.
 - [Configuration](configuration.md): `BoxOptions` parameters, runtime options, and environment variables.
 - [Error codes and handling](errors.md): error types and patterns for handling them.
 - [File formats](file-formats.md): the `~/.boxlite` home directory, QCOW2 and ext4 disk images, the OCI image cache, and the SQLite database.

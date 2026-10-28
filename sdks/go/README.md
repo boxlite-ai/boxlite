@@ -1,7 +1,7 @@
 # BoxLite Go SDK
 
-The [P0 agent API](../../docs/reference/agents.md) is declared through `Box.Agents()`.
-Every agent operation and getter currently returns `ErrUnsupported`.
+Access the [agent API](../../docs/reference/agents.md) through `Box.Agents()`
+for session and turn methods, grouped options and error handling.
 
 Go SDK for BoxLite — an embeddable virtual machine runtime for secure, isolated code execution.
 

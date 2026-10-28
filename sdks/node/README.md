@@ -1,7 +1,7 @@
 # BoxLite Node.js/TypeScript SDK
 
-The [P0 agent API](../../docs/reference/agents.md) is declared on JsBox and SimpleBox.
-Agent operation promises reject with “not implemented”; getters and event opening throw.
+Access the [agent API](../../docs/reference/agents.md) through `JsBox.agents`
+and `SimpleBox.agents` for session and turn methods, grouped options and error handling.
 
 Embeddable VM runtime for secure, isolated code execution environments.
 

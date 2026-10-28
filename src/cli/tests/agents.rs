@@ -4,7 +4,7 @@ use assert_cmd::Command;
 use predicates::str::contains;
 
 #[test]
-fn agents_p0_flat_targets_fail_before_runtime_setup() {
+fn agents_flat_targets_fail_before_runtime_setup() {
     let directory = tempfile::tempdir().unwrap();
     let home = directory.path().join("runtime-must-not-exist");
     let config = directory.path().join("missing-config.json");
@@ -102,7 +102,7 @@ fn agents_p0_flat_targets_fail_before_runtime_setup() {
 }
 
 #[test]
-fn agents_p0_binary_help_works_and_malformed_input_is_a_usage_error() {
+fn agents_binary_help_works_and_malformed_input_is_a_usage_error() {
     Command::new(assert_cmd::cargo::cargo_bin!("boxlite"))
         .env_clear()
         .args(["agent", "steer", "--help"])
@@ -125,7 +125,7 @@ fn agents_p0_binary_help_works_and_malformed_input_is_a_usage_error() {
 }
 
 #[test]
-fn agents_p0_invalid_target_combinations_are_usage_errors() {
+fn agents_invalid_target_combinations_are_usage_errors() {
     let cases: &[&[&str]] = &[
         &["send", "box", "hello"],
         &["steer", "box", "--session", "session", "hello"],
@@ -164,7 +164,7 @@ fn agents_p0_invalid_target_combinations_are_usage_errors() {
 }
 
 #[test]
-fn agents_p0_fish_completion_uses_command_paths_not_message_words() {
+fn agents_fish_completion_uses_command_paths_not_message_words() {
     // Fish is optional for building the CLI; exercise its interpreter when installed.
     match std::process::Command::new("fish").arg("--version").output() {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {

@@ -4,7 +4,7 @@ import type { AgentHandle } from "../lib/agents.js";
 
 const built = existsSync(new URL("../native/boxlite.js", import.meta.url));
 
-describe.runIf(built)("agents P0", () => {
+describe.runIf(built)("agent namespace", () => {
   test("namespace calls reject without creating a Box", async () => {
     const { SimpleBox } = await import("../lib/simplebox.js");
     const { getNativeModule } = await import("../lib/native.js");

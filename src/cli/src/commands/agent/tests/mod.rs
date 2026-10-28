@@ -12,7 +12,7 @@ fn parse(args: &[&str]) -> AgentCommand {
 }
 
 #[test]
-fn agents_p0_create_groups_options_and_keeps_runtime_config_separate() {
+fn agents_create_groups_options_and_keeps_runtime_config_separate() {
     let cli = try_parse_from([
         "boxlite",
         "agent",
@@ -49,7 +49,7 @@ fn agents_p0_create_groups_options_and_keeps_runtime_config_separate() {
 }
 
 #[test]
-fn agents_p0_send_defaults_to_queue_and_accepts_reject_and_json() {
+fn agents_send_defaults_to_queue_and_accepts_reject_and_json() {
     let AgentCommand::Send { options, .. } =
         parse(&["send", "box", "--session", "session", "hello"])
     else {
@@ -88,7 +88,7 @@ fn agents_p0_send_defaults_to_queue_and_accepts_reject_and_json() {
 }
 
 #[test]
-fn agents_p0_turn_options_preserve_target_timeout_cursor_and_retry_key() {
+fn agents_turn_options_preserve_target_timeout_cursor_and_retry_key() {
     let AgentCommand::Wait { target, options } = parse(&[
         "wait",
         "box",
@@ -146,7 +146,7 @@ fn agents_p0_turn_options_preserve_target_timeout_cursor_and_retry_key() {
 }
 
 #[test]
-fn agents_p0_responses_keep_answer_and_permission_json_distinct() {
+fn agents_responses_keep_answer_and_permission_json_distinct() {
     for response in [
         r#"{"type":"answer","text":"yes"}"#,
         r#"{"type":"permission","approved":false}"#,
@@ -177,7 +177,7 @@ fn agents_p0_responses_keep_answer_and_permission_json_distinct() {
 }
 
 #[test]
-fn agents_p0_inspection_selects_state_or_a_session_view() {
+fn agents_inspection_selects_state_or_a_session_view() {
     for (extra, turn, view) in [
         (vec![], None, None),
         (vec!["--turn", "turn"], Some("turn"), None),
@@ -222,7 +222,7 @@ fn agents_p0_inspection_selects_state_or_a_session_view() {
 }
 
 #[test]
-fn agents_p0_parser_rejects_invalid_options_and_missing_targets() {
+fn agents_parser_rejects_invalid_options_and_missing_targets() {
     let cases: &[(&[&str], ErrorKind)] = &[
         (&["create", "box"], ErrorKind::MissingRequiredArgument),
         (
@@ -304,7 +304,7 @@ fn agents_p0_parser_rejects_invalid_options_and_missing_targets() {
 }
 
 #[test]
-fn agents_p0_help_and_completion_include_nine_flat_commands() {
+fn agents_help_and_completion_include_nine_flat_commands() {
     let mut command = crate::cli::command();
     command.build();
     let agent = command.find_subcommand_mut("agent").unwrap();
@@ -382,7 +382,7 @@ fn agents_p0_help_and_completion_include_nine_flat_commands() {
 }
 
 #[test]
-fn agents_p0_handler_returns_typed_unsupported() {
+fn agents_handler_returns_typed_unsupported() {
     let error = execute(AgentArgs {
         command: parse(&["create", "box", "coder"]),
     })
