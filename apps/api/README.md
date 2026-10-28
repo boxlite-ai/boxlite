@@ -3,43 +3,6 @@
 The NestJS control-plane service. See the [apps hub](../README.md) for how it fits with the
 other services and [`API.md`](../API.md) for its interfaces.
 
-## Subscription Box limits
-
-`OrganizationBoxLimitsService` resolves effective creation quotas from Commerce's
-organization-plan `perBoxLimits` field. Organization responses and `BoxService.create`
-use this same resolver. Persisted organization defaults stay at `4/8/10`; only that
-complete tuple is eligible for subscription uplift. Any other tuple, including
-non-positive/unlimited values, remains an administrator override. An explicit
-override equal to `4/8/10` cannot be distinguished from the default.
-
-Lookups use `billingApiUrl` and `usageExport.token` with a two-second timeout and
-no redirects. Grants are not cached or written into organization rows. Missing
-configuration, old Commerce responses without the new field, malformed responses,
-and lookup failures retain `4/8/10`. This deliberately differs from the existing
-concurrency gate's temporary fail-open policy. Admin organization endpoints continue
-to expose stored quotas for administration; ordinary organization endpoints expose
-effective quotas for creation.
-
-Commerce owns subscription eligibility. The resolver consumes its effective
-`perBoxLimits` without checking `planId`, `status`, or `entitlements`; subscription
-metadata can change without changing resource enforcement. Only the response
-envelope and positive safe-integer quota fields are validated locally. Missing or
-invalid grants still fall back to stored defaults, and the guest CPU cap remains
-independently enforced by the creation boundary.
-
-Deploy Commerce first. Deploying this API first is safe but leaves default quotas
-in place until Commerce supplies the grant. Do not combine this change with the
-unconditional `1793088000000-raise-default-box-limits` migration from the separate
-runner fleet branch: it would turn the baseline into an apparent administrator override.
-There is no quota migration or existing-Box resize in this implementation.
-
-See [Cloud sandbox sizes](../../docs/guides/resource-limits.md#cloud-sandbox-sizes)
-and the local [POL-1208 design](../../docs/contributing/investigations/subscription-box-limits.md).
-Run `make test:apps:api TEST_FILES=organization-box-limits` for the resolver,
-`make test:apps:api TEST_FILES=box.service.subscription-limits` for creation and
-organization responses, and `make test:apps:dashboard FILTER='CreateBoxDialog per-org resource cap'`
-for the form. These checks do not boot a maximum-size guest.
-
 ## Business events
 
 `recordBusinessEvent` (`src/common/utils/business-event.util.ts`) writes one structured log record
