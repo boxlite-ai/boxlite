@@ -297,11 +297,6 @@ async def test_python_sdk_tunnel_connect_wakes_stopped_box(rt, image):
         await rt.remove(box.id, force=True)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=HalfCloseResponseLost,
-    reason="TCP half-close currently drops the guest response",
-)
 @pytest.mark.asyncio
 async def test_python_sdk_tunnel_preserves_tcp_half_close(rt, image):
     box = await rt.create(tunnelable_box(image))

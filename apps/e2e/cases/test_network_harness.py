@@ -186,7 +186,7 @@ async def test_network_harness_half_close_does_not_hide_complete_wrong_response(
             SimpleNamespace(create=create, remove=ignore), "unused",
         )
     assert not isinstance(failure.value, test_sdk_tunnel.HalfCloseResponseLost), (
-        "complete wrong responses must fail, not match the known half-close xfail"
+        "complete wrong responses must fail the payload check, not report a lost response"
     )
 
 

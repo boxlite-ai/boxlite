@@ -20,12 +20,16 @@ import (
 
 type bufferedConn struct {
 	net.Conn
-	reader *bufio.Reader
+	reader io.Reader
 }
 
-// NewBufferedConn preserves bytes already read from conn into reader.
+// NewBufferedConn drains reader's buffered bytes, then reads conn directly.
 func NewBufferedConn(conn net.Conn, reader *bufio.Reader) net.Conn {
-	return &bufferedConn{Conn: conn, reader: reader}
+	// A hijacked net/http reader cancels the request context on EOF. Retain
+	// its read-ahead bytes without letting it observe the tunnel's half-close.
+	return &bufferedConn{Conn: conn, reader: io.MultiReader(
+		io.LimitReader(reader, int64(reader.Buffered())), conn,
+	)}
 }
 
 func (c *bufferedConn) Read(payload []byte) (int, error) {

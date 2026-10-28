@@ -172,7 +172,7 @@ async function main(): Promise<void> {
               scenario === 'half-close' &&
               /closed before the complete HTTP response|without sending TLS close_notify/.test(String(error))
             ) {
-              throw new Error('KNOWN_HALF_CLOSE_RESPONSE_LOST')
+              throw new Error('HALF_CLOSE_RESPONSE_LOST')
             }
             throw error
           }

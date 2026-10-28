@@ -245,9 +245,9 @@ Tunnel HTTP exchanges read the complete Content-Length response. Only the
 separate Python/Node TLS-shutdown cases carry the remote-only strict xfail
 for #1950, and only a missing TLS close_notify **after a complete response**
 qualifies. Setup, status, payload and WebSocket failures stay failures.
-The independent half-close cases accept only the specific lost-response
-failure after a healthy tunnel has been demonstrated. Their strict marks
-must be removed when the underlying defect is fixed.
+The independent Python/Node half-close cases require the complete guest reply
+after `shutdown_write` / `shutdownWrite`. They are ordinary regression tests:
+a lost response fails even when a stage still runs an older server.
 
 The preview, private-session, revocation and dynamic-policy matrix, including
 infra-local and browser setup, is in [network-coverage.md](network-coverage.md).

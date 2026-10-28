@@ -2,11 +2,10 @@ package main
 
 import (
 	"context"
+	"io"
 	"net"
 	"net/http"
 	"strconv"
-
-	"github.com/containers/gvisor-tap-vsock/pkg/tcpproxy"
 )
 
 // controlMux is what the control socket serves: gvproxy's ServicesMux with
@@ -44,29 +43,56 @@ func dialFirstTunnel(dial func(ctx context.Context, addr string) (net.Conn, erro
 			http.Error(w, "cannot dial guest: "+err.Error(), http.StatusBadGateway)
 			return
 		}
+		defer guest.Close()
 		hj, ok := w.(http.Hijacker)
 		if !ok {
-			guest.Close()
 			http.Error(w, "webserver doesn't support hijacking", http.StatusInternalServerError)
 			return
 		}
 		conn, bufrw, err := hj.Hijack()
 		if err != nil {
-			guest.Close()
 			return
 		}
 		defer conn.Close()
 		if err := bufrw.Flush(); err != nil {
-			guest.Close()
 			return
 		}
 		if _, err := conn.Write([]byte(`OK`)); err != nil {
-			guest.Close()
 			return
 		}
-		// Same relay as gvproxy's /tunnel, fed the connection dialed above.
-		(&tcpproxy.DialProxy{
-			DialContext: func(context.Context, string, string) (net.Conn, error) { return guest, nil },
-		}).HandleConn(conn)
+		// Never read beyond HTTP's buffered prefix: its reader cancels the
+		// request context on EOF, even after the connection has been hijacked.
+		clientReader := io.MultiReader(io.LimitReader(bufrw.Reader, int64(bufrw.Reader.Buffered())), conn)
+		relayTunnel(r.Context(), conn, guest, clientReader)
 	}
+}
+
+func relayTunnel(ctx context.Context, client, guest net.Conn, clientReader io.Reader) {
+	closeBoth := func() {
+		client.Close()
+		guest.Close()
+	}
+	stop := context.AfterFunc(ctx, closeBoth)
+	defer stop()
+
+	done := make(chan struct{}, 2)
+	copyStream := func(dst net.Conn, src io.Reader) {
+		_, err := io.Copy(dst, src)
+		if err == nil {
+			if writer, ok := dst.(interface{ CloseWrite() error }); ok {
+				err = writer.CloseWrite()
+			} else {
+				err = dst.Close()
+			}
+		}
+		if err != nil {
+			closeBoth()
+		}
+		done <- struct{}{}
+	}
+	go copyStream(guest, clientReader)
+	go copyStream(client, guest)
+	// A clean EOF closes only that direction; the peer can still reply.
+	<-done
+	<-done
 }
