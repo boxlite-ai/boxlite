@@ -499,7 +499,7 @@ Stop then start one or more boxes. If `stop` fails for a box, that box is skippe
 
 **Synopsis:** `boxlite pause [--host-writers-stopped] BOX`
 
-Pause a box created with `--enable-checkpoint`. Every vCPU and device stops at one consistent cut
+Pause a box whose supported configuration selected checkpoint owner mode. Every vCPU and device stops at one consistent cut
 (no SIGSTOP, no guest filesystem freeze). Embedded runtime only: accepts `--debug`, `--home` and
 `--config`; `--url` and `--profile` are usage errors, and a configured server profile is not used.
 
@@ -507,7 +507,7 @@ Pause a box created with `--enable-checkpoint`. Every vCPU and device stops at o
 |------|-------------|
 | `--host-writers-stopped` | Assert every host process that writes the box's volumes (`-v` directories or managed volumes) is stopped and stays stopped until `resume` or `stop`. Required when the box has any; without it the pause fails with `InvalidArgument` and the box keeps running |
 
-**Exit behavior:** prints `BOX` and exits `0`. Fails when the box is not checkpoint-enabled
+**Exit behavior:** prints `BOX` and exits `0`. Fails when checkpoint owner mode is unavailable
 (`Unsupported`), not running (`InvalidState`), or missing (`No such box: BOX`).
 
 ---
@@ -526,23 +526,20 @@ paused (same container, initialized); otherwise it stops the VM and fails. Same 
 
 **Synopsis:**
 
-- `boxlite checkpoint export BOX FILE`
-- `boxlite checkpoint import [--name NAME] FILE`
+- `boxlite checkpoint export BOX DIRECTORY --bindings CONFIG.json`
+- `boxlite checkpoint inspect DIRECTORY`
+- `boxlite checkpoint import [--name NAME] DIRECTORY --bindings CONFIG.json`
 
-| Subcommand | Behavior | Prints |
-|---|---|---|
-| `export` | Writes a **paused** box to the new file `FILE` (absolute or relative to the working directory). `FILE` must not exist and its directory must. The box stays paused on success and on ordinary failure; if the runtime cannot tell whether the export happened, the VM is stopped | the absolute `FILE` path |
-| `import` | Verifies `FILE` and creates a new box from it: new ID, `--name NAME` or unnamed (the source name is never reused), status `paused`. Needs no image or source box. A failed import leaves no box | the new box ID |
+`export` requires owner-confirmed Paused and publishes exactly `snapshot.mem` and
+`snapshot.qcow2` into a new directory; the box stays Paused. `inspect` reads dependency
+metadata without creating a runtime or opening shares. `import` verifies the pair
+and explicit resource bindings, then publishes a new Paused box. Resume is explicit.
 
-Same global options as `pause`. Lifecycle, supported options and failure table:
-[Checkpoints guide](../../guides/checkpoints.md).
-
-```bash
-boxlite pause --host-writers-stopped web
-boxlite checkpoint export web /backups/web.boxckpt
-boxlite checkpoint import --name web2 /backups/web.boxckpt
-boxlite resume web2
-```
+Binding configuration is input, not an output artifact. It maps stable resource and
+recovery-point IDs to prepared roots, relative object locators or inherited FDs.
+The exact readonly boot disk must be available from the runtime cache or an explicit
+binding. No share contents are archived. Same global options as `pause`; no REST
+checkpoint endpoints. See the [checkpoints guide](../../guides/checkpoints.md).
 
 ---
 
@@ -1007,7 +1004,6 @@ Used by `run` and `create` (defined in `src/cli/src/cli.rs`).
 
 | Flag | Description |
 |------|-------------|
-| `--enable-checkpoint` | Let the box be paused and exported (`advanced.checkpoint_enabled`; default off). Embedded runtime on Linux x86_64 with KVM and the default sandbox only; elsewhere, and on REST servers, creation fails with `Unsupported`. Such a box refuses disk snapshots, clone and the disk export |
 
 ---
 

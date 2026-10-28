@@ -8,6 +8,47 @@ use crate::runtime::options::BoxOptions;
 use crate::vmm::checkpoint::CheckpointStart;
 use crate::vmm::{InstanceSpec, VmmKind};
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
+use serde::{Deserialize, Serialize};
+
+/// The mode actually selected for a start, persisted for reconnect/health.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "mode", rename_all = "snake_case")]
+pub(crate) enum StartMode {
+    Owner { protocol: u32 },
+    Ordinary { checkpoint_restriction: String },
+    LegacyOwner,
+}
+
+impl StartMode {
+    pub fn owns_vm(&self) -> bool {
+        matches!(self, Self::Owner { .. } | Self::LegacyOwner)
+    }
+}
+
+pub(crate) fn select(options: &BoxOptions, host: Host) -> StartMode {
+    match eligibility(options, host) {
+        Ok(()) => StartMode::Owner { protocol: 2 },
+        Err(error) => StartMode::Ordinary {
+            checkpoint_restriction: error.to_string(),
+        },
+    }
+}
+
+fn eligibility(options: &BoxOptions, host: Host) -> BoxliteResult<()> {
+    check_host(host)?;
+    if !options.advanced.security.jailer_enabled {
+        return Err(unsupported("default jailer is disabled"));
+    }
+    if options.advanced.nested_virtualization {
+        return Err(unsupported("nested virtualization is enabled"));
+    }
+    check_restorable(options)?;
+    check_vcpus(options.cpus.unwrap_or(DEFAULT_CPUS))?;
+    if options.volumes.len() + options.mounts.len() + 2 > MAX_SHARES {
+        return Err(unsupported("too many filesystem shares"));
+    }
+    Ok(())
+}
 
 /// Most vCPUs the snapshot owner restores.
 const MAX_VCPUS: u8 = 128;
@@ -37,29 +78,9 @@ impl Host {
 
 fn unsupported(reason: impl std::fmt::Display) -> BoxliteError {
     BoxliteError::Unsupported(format!(
-        "advanced.checkpoint_enabled: {reason}. Checkpoints need Linux x86_64 with KVM, the \
+        "checkpoint restriction: {reason}. Checkpoints need Linux x86_64 with KVM, the \
          libkrun engine and the default jailed isolation"
     ))
-}
-
-/// Refuse checkpoint options this host and configuration cannot honor.
-/// A no-op unless `advanced.checkpoint_enabled` is set.
-pub fn validate_options(options: &BoxOptions, host: Host) -> BoxliteResult<()> {
-    let advanced = &options.advanced;
-    if !advanced.checkpoint_enabled {
-        return Ok(());
-    }
-    check_host(host)?;
-    if !advanced.security.jailer_enabled {
-        return Err(unsupported(
-            "advanced.security.jailer_enabled=false is not supported",
-        ));
-    }
-    if advanced.nested_virtualization {
-        return Err(unsupported("nested virtualization is not supported"));
-    }
-    check_restorable(options)?;
-    check_vcpus(options.cpus.unwrap_or(DEFAULT_CPUS))
 }
 
 /// Refuse a host where checkpoints cannot run.
@@ -77,6 +98,11 @@ pub fn check_host(host: Host) -> BoxliteResult<()> {
 /// ever runs.
 fn check_restorable(options: &BoxOptions) -> BoxliteResult<()> {
     let advanced = &options.advanced;
+    if !options.mounts.is_empty() {
+        return Err(unsupported(
+            "typed mounts are not supported by checkpoint restoration",
+        ));
+    }
     // A custom kernel's staged boot assets live outside the VM image.
     if advanced.kernel.is_some() {
         return Err(unsupported("a custom kernel is not supported"));
@@ -158,246 +184,4 @@ fn check_vcpus(cpus: u8) -> BoxliteResult<()> {
         return Err(unsupported(format_args!("{cpus} vCPUs (1 to {MAX_VCPUS})")));
     }
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::rootfs::guest::{GuestRootfs, Strategy};
-    use crate::vmm::checkpoint::{CheckpointLaunch, CheckpointStart};
-    use crate::vmm::{BlockDevice, BlockDevices, DiskFormat, Entrypoint, FsShares};
-    use boxlite_shared::BoxTransport;
-    use std::path::PathBuf;
-
-    const LINUX_X86: Host = Host {
-        os: "linux",
-        arch: "x86_64",
-    };
-
-    fn checkpoint_options() -> BoxOptions {
-        let mut options = BoxOptions::default();
-        options.advanced.checkpoint_enabled = true;
-        options
-    }
-
-    fn reason(result: BoxliteResult<()>) -> String {
-        match result {
-            Err(BoxliteError::Unsupported(reason)) => reason,
-            other => panic!("expected Unsupported, got {other:?}"),
-        }
-    }
-
-    fn spec() -> InstanceSpec {
-        InstanceSpec {
-            engine: VmmKind::Libkrun,
-            box_id: "box".into(),
-            security: Default::default(),
-            nested_virtualization: false,
-            cpus: Some(2),
-            memory_mib: Some(512),
-            kernel: None,
-            fs_shares: FsShares::new(),
-            block_devices: BlockDevices::new(),
-            guest_entrypoint: Entrypoint {
-                executable: "/boxlite/bin/boxlite-guest".into(),
-                args: Vec::new(),
-                env: Vec::new(),
-            },
-            transport: BoxTransport::unix(PathBuf::from("/tmp/box.sock")),
-            ready_transport: BoxTransport::unix(PathBuf::from("/tmp/ready.sock")),
-            guest_rootfs: GuestRootfs {
-                path: PathBuf::from("/rootfs"),
-                strategy: Strategy::Direct,
-                kernel: None,
-                initrd: None,
-                env: Vec::new(),
-            },
-            network_backend_spec: None,
-            network_backend_endpoint: None,
-            disable_network: true,
-            home_dir: PathBuf::from("/home"),
-            console_output: Some(PathBuf::from("/box/logs/console.log")),
-            exit_file: PathBuf::from("/box/exit"),
-            detach: false,
-            checkpoint: Some(CheckpointLaunch {
-                control_socket: PathBuf::from("/tmp/ctl.sock"),
-                export_dir: PathBuf::from("/box/checkpoint"),
-                start: CheckpointStart::Cold,
-            }),
-        }
-    }
-
-    fn disk(i: usize) -> BlockDevice {
-        BlockDevice {
-            block_id: format!("vd{i}"),
-            disk_path: PathBuf::from(format!("/box/disk{i}.qcow2")),
-            read_only: false,
-            format: DiskFormat::Qcow2,
-        }
-    }
-
-    #[test]
-    fn checkpoint_option_is_off_by_default_persists_when_set_and_is_omitted_when_off() {
-        let options = BoxOptions::default();
-        assert!(!options.advanced.checkpoint_enabled);
-        let json = serde_json::to_value(&options.advanced).unwrap();
-        assert!(json.get("checkpoint_enabled").is_none(), "{json}");
-        // Older persisted rows have no key at all.
-        let old: crate::runtime::advanced_options::AdvancedBoxOptions =
-            serde_json::from_str("{}").unwrap();
-        assert!(!old.checkpoint_enabled);
-
-        let options = checkpoint_options();
-        let json = serde_json::to_string(&options).unwrap();
-        let back: BoxOptions = serde_json::from_str(&json).unwrap();
-        assert!(back.advanced.checkpoint_enabled);
-        assert!(back.advanced.clone().checkpoint_enabled);
-    }
-
-    #[test]
-    fn checkpoint_options_are_refused_off_linux_x86_64_and_without_default_isolation() {
-        assert!(validate_options(&BoxOptions::default(), Host::current()).is_ok());
-        assert!(validate_options(&checkpoint_options(), LINUX_X86).is_ok());
-
-        for (os, arch) in [
-            ("macos", "aarch64"),
-            ("linux", "aarch64"),
-            ("macos", "x86_64"),
-        ] {
-            let reason = reason(validate_options(&checkpoint_options(), Host { os, arch }));
-            assert!(reason.contains(&format!("{os} {arch}")), "{reason}");
-        }
-
-        let mut options = checkpoint_options();
-        options.advanced.security.jailer_enabled = false;
-        assert!(reason(validate_options(&options, LINUX_X86)).contains("jailer_enabled"));
-
-        let mut options = checkpoint_options();
-        options.advanced.nested_virtualization = true;
-        assert!(reason(validate_options(&options, LINUX_X86)).contains("nested"));
-
-        let mut options = checkpoint_options();
-        options.advanced.kernel = Some(crate::experimental::custom_kernel::KernelOptions::new(
-            "/boot/vmlinux",
-        ));
-        assert!(reason(validate_options(&options, LINUX_X86)).contains("custom kernel"));
-
-        let mut options = checkpoint_options();
-        options.advanced.isolate_mounts = true;
-        assert!(reason(validate_options(&options, LINUX_X86)).contains("isolate_mounts"));
-
-        let mut options = checkpoint_options();
-        options.secrets.push(crate::runtime::options::Secret {
-            name: "openai".into(),
-            value: "sk".into(),
-            hosts: vec!["api.openai.com".into()],
-            placeholder: "<BOXLITE_SECRET:openai>".into(),
-        });
-        assert!(reason(validate_options(&options, LINUX_X86)).contains("secrets"));
-
-        let file = tempfile::NamedTempFile::new().unwrap();
-        let dir = tempfile::tempdir().unwrap();
-        let mut options = checkpoint_options();
-        options
-            .volumes
-            .push(crate::runtime::options::VolumeSpec::bind_mount(
-                dir.path().to_str().unwrap(),
-                "/data",
-            ));
-        assert!(
-            validate_options(&options, LINUX_X86).is_ok(),
-            "directories are fine"
-        );
-        options
-            .volumes
-            .push(crate::runtime::options::VolumeSpec::bind_mount(
-                file.path().to_str().unwrap(),
-                "/etc/app.conf",
-            ));
-        assert!(reason(validate_options(&options, LINUX_X86)).contains("single file"));
-
-        let mut options = checkpoint_options();
-        options.cpus = Some(129);
-        assert!(reason(validate_options(&options, LINUX_X86)).contains("129 vCPUs"));
-        options.cpus = Some(128);
-        assert!(validate_options(&options, LINUX_X86).is_ok());
-    }
-
-    #[test]
-    fn checkpoint_options_are_refused_by_create_validation_on_unsupported_hosts() {
-        let result = checkpoint_options().sanitize_common();
-        if Host::current() == LINUX_X86 {
-            assert!(result.is_ok(), "{result:?}");
-        } else {
-            assert!(
-                matches!(result, Err(BoxliteError::Unsupported(_))),
-                "{result:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn checkpoint_launch_refuses_what_the_snapshot_owner_cannot_restore() {
-        assert!(validate_spec(&spec()).is_ok());
-        let mut plain = spec();
-        plain.checkpoint = None;
-        plain.disable_network = false;
-        plain.nested_virtualization = true;
-        assert!(
-            validate_spec(&plain).is_ok(),
-            "ordinary launches are untouched"
-        );
-
-        let mut tsi = spec();
-        tsi.disable_network = false;
-        assert!(reason(validate_spec(&tsi)).contains("TSI"));
-
-        let mut engine = spec();
-        engine.engine = VmmKind::Firecracker;
-        assert!(reason(validate_spec(&engine)).contains("Firecracker"));
-
-        let mut jailer = spec();
-        jailer.security.jailer_enabled = false;
-        assert!(reason(validate_spec(&jailer)).contains("jailer_enabled"));
-
-        // The engine adds the guest root (`/dev/root`) to every cold boot, so
-        // six more shares fill the owner's seven.
-        let mut shares = spec();
-        for i in 0..MAX_SHARES - 1 {
-            shares
-                .fs_shares
-                .add(format!("s{i}"), PathBuf::from("/s"), false);
-        }
-        assert!(
-            validate_spec(&shares).is_ok(),
-            "six shares and the root fit"
-        );
-        shares.fs_shares.add("s6", PathBuf::from("/s"), false);
-        assert!(reason(validate_spec(&shares)).contains("7 filesystem shares"));
-
-        let mut disks = spec();
-        for i in 0..MAX_DISKS_AND_NIC {
-            disks.block_devices.add(disk(i));
-        }
-        assert!(validate_spec(&disks).is_ok(), "8 disks fit without a NIC");
-        disks.disable_network = false;
-        disks.network_backend_spec = Some(crate::net::NetworkBackendSpec {
-            outbound_disabled: false,
-            socket_path: PathBuf::from("/tmp/net.sock"),
-            allow_net: Vec::new(),
-            secrets: Vec::new(),
-            ca_cert_pem: None,
-            ca_key_pem: None,
-            rate_limit: Default::default(),
-        });
-        assert!(reason(validate_spec(&disks)).contains("8 disks (at most 7)"));
-
-        let mut console = spec();
-        console.console_output = None;
-        assert!(reason(validate_spec(&console)).contains("console"));
-
-        let mut cpus = spec();
-        cpus.cpus = Some(0);
-        assert!(reason(validate_spec(&cpus)).contains("0 vCPUs"));
-    }
 }

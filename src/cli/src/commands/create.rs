@@ -1,6 +1,6 @@
 use crate::cli::{
-    CapabilityFlags, CheckpointFlags, GlobalFlags, KernelFlags, NetworkFlags, PublishFlags,
-    ResourceFlags, VolumeFlags,
+    CapabilityFlags, GlobalFlags, KernelFlags, NetworkFlags, PublishFlags, ResourceFlags,
+    VolumeFlags,
 };
 use boxlite::{BoxOptions, RootfsSpec};
 use clap::Args;
@@ -51,9 +51,6 @@ pub struct CreateArgs {
     #[command(flatten)]
     pub network: NetworkFlags,
 
-    #[command(flatten)]
-    pub checkpoint: CheckpointFlags,
-
     /// Command to run as the container's init (replaces the image CMD;
     /// the image ENTRYPOINT is preserved), mirroring `docker create`.
     #[arg(index = 2, trailing_var_arg = true)]
@@ -92,7 +89,6 @@ impl CreateArgs {
         self.publish.apply_to(&mut options)?;
         self.volume.apply_to(&mut options, global.home.as_deref())?;
         self.network.apply_to(&mut options)?;
-        self.checkpoint.apply_to(&mut options);
 
         // A `create`d box is a background box: `create` then `start`/`exec` runs
         // its main command detached (docker's create → start), so the launching
@@ -254,26 +250,5 @@ mod tests {
         let capabilities = opts.advanced.capabilities().expect("capabilities set");
         assert_eq!(capabilities.add, vec!["SYS_ADMIN"]);
         assert_eq!(capabilities.drop, vec!["CAP_NET_RAW"]);
-    }
-
-    #[test]
-    fn enable_checkpoint_is_opt_in() {
-        for (flag, expected) in [(None, false), (Some("--enable-checkpoint"), true)] {
-            let args: Vec<&str> = ["boxlite", "create"]
-                .into_iter()
-                .chain(flag)
-                .chain(["alpine:latest"])
-                .collect();
-            let cli = Cli::try_parse_from(args).expect("create should parse");
-            let Commands::Create(args) = cli.command else {
-                panic!("expected create command");
-            };
-
-            let opts = args
-                .to_box_options(&cli.global)
-                .expect("options should build");
-
-            assert_eq!(opts.advanced.checkpoint_enabled, expected, "{flag:?}");
-        }
     }
 }

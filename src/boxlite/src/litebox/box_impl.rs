@@ -135,13 +135,7 @@ pub(crate) struct BoxImpl {
     /// Cancellation token for this box (child of runtime's token).
     /// When cancelled (via stop() or runtime shutdown), all operations abort gracefully.
     pub(crate) shutdown_token: CancellationToken,
-    /// Serializes disk-mutating snapshot/clone/export operations.
-    /// Prevents concurrent disk mutations (rename, delete, flatten) from racing.
-    pub(crate) disk_ops: tokio::sync::Mutex<()>,
     pub(super) network_updates: tokio::sync::Mutex<()>,
-    /// Serializes this process's pause/resume requests to the checkpoint
-    /// owner (the shim serializes across processes).
-    pub(super) checkpoint_ops: tokio::sync::Mutex<()>,
 
     /// Event listeners (from runtime options).
     pub(crate) event_listeners: Vec<Arc<dyn EventListener>>,
@@ -203,9 +197,7 @@ impl BoxImpl {
             runtime,
             layout,
             shutdown_token,
-            disk_ops: tokio::sync::Mutex::new(()),
             network_updates: tokio::sync::Mutex::new(()),
-            checkpoint_ops: tokio::sync::Mutex::new(()),
             event_listeners: Vec::new(), // populated from runtime options
             live: OnceCell::new(),
             imported_shim: std::sync::Mutex::new(None),
@@ -237,7 +229,7 @@ impl BoxImpl {
         };
         // A paused checkpoint box still has a shim whose exit must be seen.
         let status = self.state.read().status;
-        let paused_checkpoint = status == BoxStatus::Paused && self.checkpoint_enabled();
+        let paused_checkpoint = status == BoxStatus::Paused && self.uses_checkpoint_owner();
         if status != BoxStatus::Running && !paused_checkpoint {
             return;
         }
@@ -308,6 +300,11 @@ impl BoxImpl {
     ///
     /// This is idempotent - calling start() on a Running box is a no-op.
     pub(crate) async fn start(&self) -> BoxliteResult<()> {
+        let persisted = self.runtime.box_manager.update_box(self.id())?;
+        if matches!(persisted.status, BoxStatus::Configured | BoxStatus::Stopped) {
+            super::operation::Reservation::provision(&self.runtime.layout, self.id())?;
+        }
+        let _reservation = self.reserve(super::operation::Action::Lifecycle).await?;
         let t0 = Instant::now();
 
         // Check if already shutdown (via stop() or runtime shutdown)
@@ -333,7 +330,7 @@ impl BoxImpl {
         // Boot creates the container; running its init is the separate step that
         // makes `run` docker-shaped — create, attach, then start. `run` slips the
         // attach between these two calls; every other caller just wants both.
-        let live = self.ensure_booted().await?;
+        let live = self.ensure_booted_reserved().await?;
         let guest_session = live.guest_session.clone();
         let container_start = Arc::clone(&self.container_start);
         let shutdown_token = self.shutdown_token.child_token();
@@ -630,7 +627,7 @@ impl BoxImpl {
     /// A checkpoint-enabled box also follows an exec session by ID: after a
     /// restore, the executions the guest kept running are reachable only so.
     pub(crate) async fn attach(&self, options: AttachOptions) -> BoxliteResult<Execution> {
-        if options.execution_id().is_some() && !self.checkpoint_enabled() {
+        if options.execution_id().is_some() && !self.uses_checkpoint_owner() {
             return Err(BoxliteError::Unsupported(
                 "the local backend does not support reattaching to executions by id".into(),
             ));
@@ -715,6 +712,11 @@ impl BoxImpl {
     }
 
     pub(crate) async fn stop(&self) -> BoxliteResult<()> {
+        let _reservation = self.reserve(super::operation::Action::Stop).await?;
+        self.stop_reserved().await
+    }
+
+    pub(super) async fn stop_reserved(&self) -> BoxliteResult<()> {
         let _network_update = self.network_updates.lock().await;
         let t0 = Instant::now();
 
@@ -751,12 +753,12 @@ impl BoxImpl {
         // through the restart pipeline and spawn a new VM — exactly what
         // stop() must NOT do.
         let status = self.state.read().status;
-        if self.checkpoint_enabled() && status.is_active() {
+        if self.uses_checkpoint_owner() && status.is_active() {
             // The owner may be paused, by this process or another one: no
             // guest RPC unless it runs, and no reattach pipeline.
             self.stop_checkpoint_vm().await?;
         } else if status == BoxStatus::Running
-            && let Ok(live) = self.ensure_booted().await
+            && let Ok(live) = self.ensure_booted_reserved().await
         {
             // Recovered boxes lazy-attach here via vmm_attach (now
             // ProcessIdentity-gated). Live boxes hit the cached LiveState.
@@ -1172,6 +1174,11 @@ impl BoxImpl {
     /// booting it is the restart. Only an *initialized* cell on a box that is no
     /// longer Running means the VM behind it is dead.
     pub(super) async fn ensure_booted(&self) -> BoxliteResult<&LiveState> {
+        let _reservation = self.reserve(super::operation::Action::Lifecycle).await?;
+        self.ensure_booted_reserved().await
+    }
+
+    pub(super) async fn ensure_booted_reserved(&self) -> BoxliteResult<&LiveState> {
         self.ensure_guest_running().await?;
         if self.live.initialized() && self.state.read().status != BoxStatus::Running {
             return Err(BoxliteError::Stopped(format!(
@@ -1322,6 +1329,7 @@ impl BoxImpl {
             guard: mut cleanup_guard,
             resolved_image,
         } = builder.build().await?;
+        self.state.write().start_mode = self.runtime.box_manager.update_box(self.id())?.start_mode;
 
         // The box is up. If we adopted one whose init was already running, that
         // init needs no `Container.Start`; recording it now keeps
@@ -1334,7 +1342,7 @@ impl BoxImpl {
         // pause cut, not a fresh boot of the same container. Otherwise the VM
         // is stopped and the armed guard records the failure.
         if adopting_running
-            && self.checkpoint_enabled()
+            && self.uses_checkpoint_owner()
             && let Err(error) = self.check_guest_identity(live_state.guest_session()).await
         {
             if let Err(e) = live_state.stop_handler() {
@@ -1420,7 +1428,7 @@ impl BoxImpl {
                         .expect("guest is fetched only when a health check is configured"),
                     state.health_status,
                 );
-                if self.checkpoint_enabled() {
+                if self.uses_checkpoint_owner() {
                     probe.with_checkpoint_control(self.checkpoint_control())
                 } else {
                     probe
@@ -1450,176 +1458,6 @@ impl BoxImpl {
         );
         // Lock is automatically released when _guard drops
         Ok(live_state)
-    }
-}
-
-// ============================================================================
-// QUIESCE / THAW (QEMU+libvirt style bracket pattern)
-// ============================================================================
-
-impl BoxImpl {
-    /// Execute a future with the VM quiesced for point-in-time consistency.
-    ///
-    /// Follows the QEMU+libvirt quiesce protocol:
-    ///   1. Guest Quiesce RPC (FIFREEZE — flush dirty pages + block new writes)
-    ///   2. SIGSTOP shim process (pause vCPUs)
-    ///   3. `fut` — caller's operation (disk copy, export, etc.)
-    ///   4. SIGCONT shim process (resume vCPUs)
-    ///   5. Guest Thaw RPC (FITHAW — unblock writes)
-    ///
-    /// If the VM is not running, `fut` is executed directly with no quiesce.
-    /// Guest RPCs are best-effort with timeout — failure degrades to
-    /// crash-consistent (SIGSTOP-only), not operation failure.
-    pub(crate) async fn with_quiesce_async<Fut, R>(&self, fut: Fut) -> BoxliteResult<R>
-    where
-        Fut: Future<Output = BoxliteResult<R>>,
-    {
-        // Never SIGSTOP or freeze a VM the snapshot owner controls.
-        self.refuse_for_checkpoint("a disk snapshot, clone or export")?;
-        let (pid, was_running) = {
-            let state = self.state.read();
-            let running = state.status.is_running();
-            let pid = if running {
-                state.pid.map(|p| p as i32)
-            } else {
-                None
-            };
-            (pid, running)
-        };
-
-        let Some(pid) = pid else {
-            if was_running {
-                return Err(BoxliteError::Internal(
-                    "Box is running but has no PID".to_string(),
-                ));
-            }
-            // Not running — execute directly, no quiesce needed.
-            return fut.await;
-        };
-
-        let t0 = Instant::now();
-
-        // Phase 1: Freeze guest I/O (best-effort, 5s timeout)
-        let t_quiesce = Instant::now();
-        let frozen = self.guest_quiesce().await;
-        let quiesce_ms = t_quiesce.elapsed().as_millis() as u64;
-
-        // Phase 2: SIGSTOP — pause vCPUs
-        // SAFETY: sending SIGSTOP to a known valid PID that we own (shim process).
-        let ret = unsafe { libc::kill(pid, libc::SIGSTOP) };
-        if ret != 0 {
-            // If SIGSTOP fails, thaw before returning error
-            if frozen {
-                self.guest_thaw().await;
-            }
-            return Err(BoxliteError::Internal(format!(
-                "Failed to SIGSTOP shim process (pid={}): {}",
-                pid,
-                std::io::Error::last_os_error()
-            )));
-        }
-        {
-            let mut state = self.state.write();
-            state.force_status(BoxStatus::Paused);
-            let _ = self.runtime.box_manager.save_box(self.id(), &state);
-        }
-
-        // Phase 3: Caller's operation
-        let t_op = Instant::now();
-        let result = fut.await;
-        let operation_ms = t_op.elapsed().as_millis() as u64;
-
-        // Phase 4: SIGCONT — resume vCPUs (always, even if f() failed)
-        // SAFETY: Always send SIGCONT — harmless ESRCH if process already dead.
-        unsafe {
-            libc::kill(pid, libc::SIGCONT);
-        }
-        // Only transition to Running if process is still alive after resume.
-        if unsafe { libc::kill(pid, 0) } == 0 {
-            let mut state = self.state.write();
-            state.force_status(BoxStatus::Running);
-            let _ = self.runtime.box_manager.save_box(self.id(), &state);
-        }
-
-        // Phase 5: Thaw guest I/O (always, best-effort)
-        let t_thaw = Instant::now();
-        if frozen {
-            self.guest_thaw().await;
-        }
-        let thaw_ms = t_thaw.elapsed().as_millis() as u64;
-
-        tracing::info!(
-            box_id = %self.id(),
-            total_ms = t0.elapsed().as_millis() as u64,
-            quiesce_ms,
-            operation_ms,
-            thaw_ms,
-            frozen,
-            "Quiesce bracket completed"
-        );
-
-        result
-    }
-
-    /// Best-effort guest filesystem quiesce (FIFREEZE) with timeout.
-    /// Returns true if quiesce succeeded.
-    async fn guest_quiesce(&self) -> bool {
-        let Ok(live) = self.live_state().await else {
-            tracing::warn!("Cannot quiesce: LiveState not available");
-            return false;
-        };
-
-        let result = tokio::time::timeout(Duration::from_secs(5), async {
-            let mut guest = live.guest_session.guest().await?;
-            guest.quiesce().await
-        })
-        .await;
-
-        match result {
-            Ok(Ok(count)) => {
-                tracing::debug!(frozen_count = count, "Guest filesystems quiesced");
-                true
-            }
-            Ok(Err(e)) => {
-                tracing::warn!(
-                    "Guest quiesce RPC failed: {}, proceeding with crash-consistent snapshot",
-                    e
-                );
-                false
-            }
-            Err(_) => {
-                tracing::warn!(
-                    "Guest quiesce timed out, proceeding with crash-consistent snapshot"
-                );
-                false
-            }
-        }
-    }
-
-    /// Best-effort guest filesystem thaw (FITHAW) with timeout.
-    async fn guest_thaw(&self) {
-        let Ok(live) = self.live_state().await else {
-            tracing::warn!("Cannot thaw: LiveState not available");
-            return;
-        };
-
-        let result = tokio::time::timeout(Duration::from_secs(5), async {
-            let mut guest = live.guest_session.guest().await?;
-            guest.thaw().await
-        })
-        .await;
-
-        match result {
-            Ok(Ok(count)) => {
-                tracing::debug!(thawed_count = count, "Guest filesystems thawed");
-            }
-            Ok(Err(e)) => {
-                tracing::warn!("Guest thaw RPC failed: {}", e);
-            }
-            Err(_) => {
-                tracing::warn!("Guest thaw timed out");
-            }
-        }
     }
 }
 

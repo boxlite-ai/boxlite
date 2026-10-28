@@ -168,6 +168,23 @@ pub(super) fn kill_cgroup(box_id: &BoxID) -> bool {
     std::fs::write(&kill_file, "1").is_ok()
 }
 
+/// `cgroup.kill` is asynchronous; an empty tree is the cleanup boundary.
+pub(super) fn has_processes(box_id: &BoxID) -> std::io::Result<Option<bool>> {
+    let events = match fs::read_to_string(cgroup_path(box_id.as_str()).join("cgroup.events")) {
+        Ok(events) => events,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    match events
+        .lines()
+        .find_map(|line| line.strip_prefix("populated "))
+    {
+        Some("0") => Ok(Some(false)),
+        Some("1") => Ok(Some(true)),
+        _ => Err(std::io::Error::other("cgroup populated state unavailable")),
+    }
+}
+
 /// Setup cgroup for a box.
 ///
 /// Creates the cgroup directory and configures resource limits.

@@ -77,20 +77,38 @@ A box's disks are copy-on-write overlays on read-only ext4 images:
 
 Deleting these files while boxes exist breaks those boxes.
 
-## Checkpoint files
+## Checkpoint directories
 
-`boxlite checkpoint export` (Rust `LiteBox::export_checkpoint`) writes one uncompressed tar with
-exactly two regular members, in order:
+A full checkpoint contains exactly `snapshot.mem` and `snapshot.qcow2`.
+The container disk is standalone QCOW2; shares and the exact readonly boot disk
+are external dependencies. Binding configuration is input, not a third artifact.
 
-| Member | Contents |
-|---|---|
-| `checkpoint.json` (≤ 1 MiB) | Manifest: `format: "boxlite-checkpoint"`, `version: 1`, `created_at`, `source_box_id`, `guest` (container ID, guest agent boot ID, init PID), `image` (`krunvm_version: 8`, `length`, `sha256`), `layout` (vCPUs, RAM, disks, shares with their DAX window size, NIC MAC, vsock ports), `boot` (box options, outbound policy and container image config for a later cold start) |
-| `vm.krunvm` | libkrun KRUNVM v8 image of the paused VM: RAM, devices, both disks as raw segments and every share's files |
+The memory file starts with a 160-byte little-endian version-9 header:
 
-The file ends with the tar end marker (two zero blocks) right after `vm.krunvm`. Import refuses any
-other member, member type, order, version, length or checksum, appended or missing bytes, and an
-image whose device layout differs from the manifest or from the layout the box's options boot. The file holds guest memory and data: protect it
-like the box's disks. See the [checkpoints guide](../guides/checkpoints.md).
+| Offset | Field |
+| --- | --- |
+| 0 / 8 / 12 | Eight-byte `KRUNVM\0\0` magic / u32 version 9 / u32 header length 160 |
+| 16 / 24 / 32 / 40 | u64 total length / metadata length / payload length / physical QCOW2 length |
+| 48 / 80 / 112 | SHA-256 of metadata / payload / full QCOW2 file |
+| 144 | Sixteen reserved zero bytes |
+
+Metadata is bounded to 16 MiB and records BoxLite application schema 1,
+CPU/KVM/device layout, ordered disk dependencies, FUSE sessions and stable
+external object references. Payload contains RAM, init.krun and anonymous DAX
+pages; file-backed DAX stores mappings and references, not copied file contents.
+Lengths, bounds, supported versions and checksums are validated before restore.
+Checksums detect corruption; they do not authenticate a checkpoint.
+
+The RAM region total is mapped memory, including copied kernel and boot regions.
+It can exceed the application's configured memory MiB. Import requires matching CPU
+counts and enough mapped RAM for that logical setting, while validating every saved
+region and payload extent independently. Cold starts retain the configured setting.
+
+Import copies/reflinks the container into box-owned writable QCOW2 and verifies
+readonly boot content by full digest. It never modifies the original pair.
+Older full formats are explicitly refused without upgrading or converting them.
+Disk-only `.boxlite` archives retain their wire compatibility. See the
+[checkpoints guide](../guides/checkpoints.md) for providers, publication and lifecycle.
 
 ## OCI image cache
 

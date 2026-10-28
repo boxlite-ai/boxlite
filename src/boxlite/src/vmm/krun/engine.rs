@@ -403,14 +403,8 @@ impl Vmm for Krun {
             if config.checkpoint.is_some() {
                 ctx.snapshot_enable()?;
             }
-            if let Some(import) = import {
-                tracing::info!(image = %import.image.display(), "Importing checkpoint image");
-                ctx.snapshot_import(
-                    &import.image,
-                    import.disk_dir.as_deref(),
-                    import.fs_dir.as_deref(),
-                )?;
-            }
+            // Import descriptors arrive through the sandboxed control socket
+            // after endpoints are configured and before start_enter.
 
             tracing::debug!(
                 cpus = config.cpus.unwrap_or(DEFAULT_CPUS),

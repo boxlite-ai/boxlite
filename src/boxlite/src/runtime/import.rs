@@ -83,16 +83,6 @@ fn options_from_manifest(
         rootfs: RootfsSpec::Image(manifest.image.clone()),
         ..Default::default()
     });
-    // A disk archive never carries a checkpoint-enabled box: such a box
-    // exports only as a BoxCheckpoint. Refused under every policy, so an
-    // upload cannot opt into checkpointing either.
-    if options.advanced.checkpoint_enabled {
-        return Err(BoxliteError::Unsupported(
-            "a .boxlite archive cannot create a checkpoint-enabled box; import its checkpoint \
-             with import_checkpoint"
-                .to_string(),
-        ));
-    }
     // Up to v4 an archive's ports carried no publication semantics: a null
     // host port meant the guest port, and host_ip and protocol were ignored.
     // Canonicalize before sanitize, so the rewritten mappings are validated.
@@ -439,23 +429,6 @@ mod tests {
             preserved.ports, options.ports,
             "a v5 archive carries publication semantics and must survive import intact"
         );
-    }
-
-    /// Checkpoint-enabled boxes travel only as BoxCheckpoint files; a disk
-    /// archive asking for one is refused under either policy, before any
-    /// option is sanitized.
-    #[test]
-    fn archive_import_refuses_checkpoint_enabled_options_under_every_policy() {
-        let mut options = BoxOptions::default();
-        options.advanced.checkpoint_enabled = true;
-        for policy in [
-            ArchiveImportPolicy::Trusted,
-            ArchiveImportPolicy::UntrustedRemote,
-        ] {
-            let error = options_from_manifest(&v3_manifest(options.clone()), policy).unwrap_err();
-            assert!(matches!(error, BoxliteError::Unsupported(_)), "{error:?}");
-            assert!(error.to_string().contains("checkpoint"), "{error}");
-        }
     }
 
     #[test]

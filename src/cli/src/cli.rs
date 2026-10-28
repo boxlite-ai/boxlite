@@ -244,6 +244,11 @@ const VOLUME_SCOPES: &[CommandScope] = &[
 ];
 const CHECKPOINT_SCOPES: &[CommandScope] = &[
     CommandScope {
+        name: "inspect",
+        globals: LOCAL_GLOBALS,
+        children: &[],
+    },
+    CommandScope {
         name: "export",
         globals: LOCAL_GLOBALS,
         children: &[],
@@ -665,7 +670,7 @@ pub enum Commands {
     /// Resume a paused box
     Resume(crate::commands::checkpoint::ResumeArgs),
 
-    /// Export or import a paused box as one checkpoint file
+    /// Export or import a paused box as a two-file checkpoint directory
     Checkpoint(crate::commands::checkpoint::CheckpointArgs),
 
     /// Pull an image from a registry
@@ -1612,25 +1617,6 @@ impl ManagementFlags {
     }
 }
 
-/// Opt a new box into pause, checkpoint export and checkpoint import.
-#[derive(Args, Debug, Default)]
-pub struct CheckpointFlags {
-    /// Let the box be paused and exported as one checkpoint file
-    /// (`boxlite pause`, `boxlite checkpoint export`).
-    ///
-    /// Linux x86_64 with KVM and the default sandbox only; the embedded
-    /// runtime refuses it elsewhere and servers refuse it. A checkpoint-enabled
-    /// box refuses disk snapshots, clone and the disk export.
-    #[arg(long = "enable-checkpoint")]
-    pub enable_checkpoint: bool,
-}
-
-impl CheckpointFlags {
-    pub fn apply_to(&self, opts: &mut BoxOptions) {
-        opts.advanced.checkpoint_enabled = self.enable_checkpoint;
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1796,12 +1782,27 @@ mod tests {
         (&["boxlite", "pause", "box"], 1, LOCAL_WITHOUT_REGISTRY),
         (&["boxlite", "resume", "box"], 1, LOCAL_WITHOUT_REGISTRY),
         (
-            &["boxlite", "checkpoint", "export", "box", "box.boxckpt"],
+            &[
+                "boxlite",
+                "checkpoint",
+                "export",
+                "box",
+                "checkpoint-dir",
+                "--bindings",
+                "bindings.json",
+            ],
             2,
             LOCAL_WITHOUT_REGISTRY,
         ),
         (
-            &["boxlite", "checkpoint", "import", "box.boxckpt"],
+            &[
+                "boxlite",
+                "checkpoint",
+                "import",
+                "checkpoint-dir",
+                "--bindings",
+                "bindings.json",
+            ],
             2,
             LOCAL_WITHOUT_REGISTRY,
         ),

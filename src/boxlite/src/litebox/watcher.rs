@@ -401,10 +401,8 @@ mod tests {
     fn fixture() -> Fixture {
         let dir = tempfile::TempDir::new_in("/tmp").unwrap();
         let socket = dir.path().join("ctl.sock");
-        let export_dir = dir.path().join("checkpoint");
-        std::fs::create_dir(&export_dir).unwrap();
         let owner = FakeOwner::new(VmRunState::Running);
-        fake::serve(&socket, &export_dir, owner.clone());
+        fake::serve(&socket, owner.clone());
         let control = ControlClient::new(&socket);
         let (guest, accepted) = silent_guest();
         let probe = HealthProbe::new(

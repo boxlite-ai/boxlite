@@ -11,8 +11,6 @@ use std::path::PathBuf;
 pub struct CheckpointLaunch {
     /// Where the shim binds the control socket (the short binding path).
     pub control_socket: PathBuf,
-    /// Box-owned directory the shim writes raw exports into.
-    pub export_dir: PathBuf,
     pub start: CheckpointStart,
 }
 
@@ -21,22 +19,14 @@ pub struct CheckpointLaunch {
 pub enum CheckpointStart {
     /// Boot the guest from scratch.
     Cold,
-    /// Restore a raw image paused, without loading a kernel or running cold
+    /// Bind and restore an image paused, without loading a kernel or running cold
     /// guest setup. The NIC, vsock and transport endpoints are the spec's own.
     Import(ImportLaunch),
 }
 
-/// Inputs for restoring a raw image as a new VM.
+/// Inputs for restoring descriptor-bound resources as a new VM.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ImportLaunch {
-    /// The raw VM image to restore.
-    pub image: PathBuf,
-    /// Box-owned directory, not yet existing, for the restored disks. Given
-    /// exactly when the image has disks.
-    pub disk_dir: Option<PathBuf>,
-    /// Box-owned directory, not yet existing, for the restored share copies.
-    /// Given exactly when the image has shares.
-    pub fs_dir: Option<PathBuf>,
     /// Console log for the restored VM. Must not exist yet: the owner creates
     /// it, so a failed import never truncates an earlier log.
     pub console_output: PathBuf,

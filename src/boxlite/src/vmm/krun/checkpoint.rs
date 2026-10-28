@@ -1,14 +1,12 @@
 //! libkrun's checkpoint owner behind the shim's control socket.
 
-use std::ffi::{CString, OsString};
-use std::os::unix::ffi::OsStringExt;
-use std::path::{Path, PathBuf};
+use crate::vmm::checkpoint::{descriptors, protocol::DescriptorRequest};
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 
 use crate::vmm::checkpoint::krun_abi::{self, call_result, run_state};
 use crate::vmm::checkpoint::{CheckpointOwner, FailureKind, OwnerError, VmRunState};
 use libkrun_sys::{
-    KRUN_SNAPSHOT_PAUSE_HOST_WRITERS_STOPPED, krun_snapshot_export,
-    krun_snapshot_get_restored_share, krun_snapshot_get_state, krun_snapshot_pause,
+    KRUN_SNAPSHOT_PAUSE_HOST_WRITERS_STOPPED, krun_snapshot_get_state, krun_snapshot_pause,
     krun_snapshot_resume, krun_snapshot_stop,
 };
 
@@ -48,6 +46,164 @@ impl KrunCheckpoint {
 }
 
 impl CheckpointOwner for KrunCheckpoint {
+    fn descriptors(
+        &self,
+        request: DescriptorRequest,
+        files: Vec<OwnedFd>,
+    ) -> Result<(serde_json::Value, Vec<OwnedFd>), OwnerError> {
+        let exact = |count| {
+            if files.len() == count {
+                Ok(())
+            } else {
+                Err(rejected("checkpoint descriptor count differs"))
+            }
+        };
+        let json = |bytes: Vec<u8>| {
+            serde_json::from_slice(&bytes)
+                .map_err(|e| OwnerError::new(FailureKind::Failed, format!("libkrun metadata: {e}")))
+        };
+        let empty = || Ok((serde_json::Value::Null, Vec::new()));
+        match request {
+            DescriptorRequest::Capabilities => {
+                exact(0)?;
+                // SAFETY: capability query takes no arguments.
+                Ok((
+                    serde_json::json!({"protocol":2,"capabilities":unsafe { libkrun_sys::krun_snapshot_capabilities() }}),
+                    Vec::new(),
+                ))
+            }
+            DescriptorRequest::Begin { disk_only } => {
+                exact(1)?;
+                let mut token = 0;
+                // SAFETY: live borrowed stream FD and writable token outlive the call.
+                self.finish("begin capture", unsafe {
+                    libkrun_sys::krun_snapshot_begin_capture(
+                        self.ctx_id,
+                        u32::from(disk_only),
+                        files[0].as_raw_fd(),
+                        &mut token,
+                    )
+                })?;
+                Ok((serde_json::json!({"token":token}), Vec::new()))
+            }
+            DescriptorRequest::End { token, cancel } => {
+                exact(0)?;
+                // SAFETY: libkrun validates the context and capture token.
+                self.finish("end capture", unsafe {
+                    libkrun_sys::krun_snapshot_end_capture(self.ctx_id, token, u32::from(cancel))
+                })?;
+                empty()
+            }
+            DescriptorRequest::Prepare { token } => {
+                exact(0)?;
+                let (mut length, mut count) = (0, 0);
+                // SAFETY: null buffers request lengths only; no FDs transfer.
+                let status = unsafe {
+                    libkrun_sys::krun_snapshot_prepare_capture(
+                        self.ctx_id,
+                        token,
+                        std::ptr::null_mut(),
+                        &mut length,
+                        std::ptr::null_mut(),
+                        &mut count,
+                    )
+                };
+                if status != -libc::ENOBUFS {
+                    self.finish("prepare capture sizes", status)?;
+                }
+                if length > descriptors::MAX_JSON {
+                    return Err(rejected("checkpoint metadata exceeds 16 MiB"));
+                }
+                descriptors::preflight(count)
+                    .map_err(|e| OwnerError::new(FailureKind::Io, e.to_string()))?;
+                let mut bytes = vec![0; length];
+                let mut raw = vec![-1; count];
+                // SAFETY: buffers have the returned sizes; successful output FDs
+                // transfer ownership exactly once to OwnedFd below.
+                self.finish("prepare capture", unsafe {
+                    libkrun_sys::krun_snapshot_prepare_capture(
+                        self.ctx_id,
+                        token,
+                        bytes.as_mut_ptr(),
+                        &mut length,
+                        raw.as_mut_ptr(),
+                        &mut count,
+                    )
+                })?;
+                let files = raw
+                    .into_iter()
+                    .map(|fd| unsafe { OwnedFd::from_raw_fd(fd) })
+                    .collect();
+                bytes.truncate(length);
+                Ok((json(bytes)?, files))
+            }
+            DescriptorRequest::Export { token, metadata } => {
+                exact(2)?;
+                let bytes = serde_json::to_vec(&metadata).map_err(|e| rejected(e.to_string()))?;
+                // SAFETY: both borrowed FDs and JSON bytes remain valid for the call.
+                self.finish("export capture", unsafe {
+                    libkrun_sys::krun_snapshot_export_fd(
+                        self.ctx_id,
+                        token,
+                        files[0].as_raw_fd(),
+                        files[1].as_raw_fd(),
+                        bytes.as_ptr(),
+                        bytes.len(),
+                    )
+                })?;
+                empty()
+            }
+            DescriptorRequest::Import { bindings } => {
+                if files.is_empty() {
+                    return Err(rejected("missing memory descriptor"));
+                }
+                let bytes = serde_json::to_vec(&bindings).map_err(|e| rejected(e.to_string()))?;
+                let raw: Vec<_> = files[1..].iter().map(AsRawFd::as_raw_fd).collect();
+                // SAFETY: libkrun duplicates the borrowed memory/resource FDs.
+                self.finish("import capture", unsafe {
+                    libkrun_sys::krun_snapshot_import_fd(
+                        self.ctx_id,
+                        files[0].as_raw_fd(),
+                        bytes.as_ptr(),
+                        bytes.len(),
+                        raw.as_ptr(),
+                        raw.len(),
+                    )
+                })?;
+                empty()
+            }
+            DescriptorRequest::Inspect => {
+                exact(1)?;
+                let mut length = 0;
+                // SAFETY: null buffer requests checked metadata length only.
+                let status = unsafe {
+                    libkrun_sys::krun_snapshot_inspect_fd(
+                        files[0].as_raw_fd(),
+                        std::ptr::null_mut(),
+                        &mut length,
+                    )
+                };
+                if status != -libc::ENOBUFS {
+                    self.finish("inspect sizes", status)?;
+                }
+                if length > descriptors::MAX_JSON {
+                    return Err(rejected("checkpoint metadata exceeds 16 MiB"));
+                }
+                let mut bytes = vec![0; length];
+                // SAFETY: metadata buffer has the required size.
+                self.finish("inspect capture", unsafe {
+                    libkrun_sys::krun_snapshot_inspect_fd(
+                        files[0].as_raw_fd(),
+                        bytes.as_mut_ptr(),
+                        &mut length,
+                    )
+                })?;
+                bytes.truncate(length);
+                Ok((json(bytes)?, Vec::new()))
+            }
+        }
+    }
+
     fn state(&self) -> VmRunState {
         let mut state = 0u32;
         let mut exit_code = 0i32;
@@ -80,58 +236,12 @@ impl CheckpointOwner for KrunCheckpoint {
         self.finish("resume", unsafe { krun_snapshot_resume(self.ctx_id) })
     }
 
-    fn export_raw(&self, path: &Path) -> Result<(), OwnerError> {
-        let path = path
-            .to_str()
-            .and_then(|path| CString::new(path).ok())
-            .ok_or_else(|| {
-                OwnerError::new(
-                    FailureKind::Rejected,
-                    format!("export path {} is not a valid C string", path.display()),
-                )
-            })?;
-        // SAFETY: `path` is a NUL-terminated string that outlives the call.
-        self.finish("export", unsafe {
-            krun_snapshot_export(self.ctx_id, path.as_ptr())
-        })
-    }
-
     fn stop(&self) -> Result<(), OwnerError> {
         // SAFETY: plain value; libkrun validates the context ID.
         self.finish("stop", unsafe { krun_snapshot_stop(self.ctx_id) })
     }
+}
 
-    fn restored_share(&self, tag: &str) -> Result<PathBuf, OwnerError> {
-        let c_tag = CString::new(tag).map_err(|_| {
-            OwnerError::new(
-                FailureKind::Rejected,
-                format!("share tag {tag:?} has a NUL"),
-            )
-        })?;
-        let mut path = vec![0u8; libc::PATH_MAX as usize];
-        // SAFETY: `c_tag` is NUL-terminated and `path` is writable for its
-        // length; both outlive the call.
-        let len = unsafe {
-            krun_snapshot_get_restored_share(
-                self.ctx_id,
-                c_tag.as_ptr(),
-                path.as_mut_ptr().cast(),
-                path.len(),
-            )
-        };
-        match usize::try_from(len) {
-            Ok(len) => {
-                path.truncate(len);
-                Ok(PathBuf::from(OsString::from_vec(path)))
-            }
-            // An unknown tag, the VM-owned root, or a VM that was not imported.
-            Err(_) if len == -libc::ENOENT => Err(OwnerError::new(
-                FailureKind::Rejected,
-                format!("the VM has no restored share {tag:?}"),
-            )),
-            Err(_) => Err(self
-                .finish("restored share", len)
-                .expect_err("a negative status is an error")),
-        }
-    }
+fn rejected(message: impl Into<String>) -> OwnerError {
+    OwnerError::new(FailureKind::Rejected, message)
 }

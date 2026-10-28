@@ -37,7 +37,11 @@ mod volumes;
 mod default_runtime_dir;
 
 pub use litebox::{
-    BoxConnection, BoxReader, BoxTunnel, BoxWriter, LiteBox, SocketAddress, TunnelForwarder,
+    BoundShare, BoxConnection, BoxReader, BoxTunnel, BoxWriter, CheckpointBindings,
+    CheckpointDependencies, CheckpointExportProvider, CheckpointExportRequest,
+    CheckpointImportProvider, CheckpointLease, LiteBox, LocalCheckpointProvider, LocalObject,
+    LocalResource, ObjectDependency, ObjectReference, ShareDependency, SocketAddress,
+    TunnelForwarder,
 };
 pub use portal::GuestSession;
 pub use runtime::{AuthHandle, BoxliteRuntime, ImageHandle, Principal};

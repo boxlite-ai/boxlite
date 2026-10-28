@@ -46,6 +46,7 @@ pub struct ShimSpawner<'a> {
     box_id: &'a str,
     options: &'a BoxOptions,
     nested_virtualization: bool,
+    storage_paths: Vec<PathAccess>,
 }
 
 impl<'a> ShimSpawner<'a> {
@@ -61,6 +62,7 @@ impl<'a> ShimSpawner<'a> {
             box_id,
             options,
             nested_virtualization: false,
+            storage_paths: Vec::new(),
         }
     }
 
@@ -85,7 +87,8 @@ impl<'a> ShimSpawner<'a> {
     /// Filesystem grants beyond the jailer's standard set: read-only, and only
     /// the probes this host actually has — bwrap refuses to bind a missing one.
     fn additional_path_access(&self) -> Vec<PathAccess> {
-        self.required_probe_paths()
+        let mut paths: Vec<_> = self
+            .required_probe_paths()
             .iter()
             .map(PathBuf::from)
             .filter(|path| path.exists())
@@ -93,7 +96,25 @@ impl<'a> ShimSpawner<'a> {
                 path,
                 writable: false,
             })
-            .collect()
+            .collect();
+        paths.extend(self.storage_paths.clone());
+        paths
+    }
+
+    /// Include prepared external roots and exact boot dependencies in the
+    /// existing sandbox policy before descriptor restoration begins.
+    pub(crate) fn with_storage_access(mut self, spec: &crate::vmm::InstanceSpec) -> Self {
+        self.storage_paths
+            .extend(spec.fs_shares.shares().iter().map(|share| PathAccess {
+                path: share.host_path.clone(),
+                writable: !share.read_only,
+            }));
+        self.storage_paths
+            .extend(spec.block_devices.devices().iter().map(|disk| PathAccess {
+                path: disk.disk_path.clone(),
+                writable: !disk.read_only,
+            }));
+        self
     }
 
     /// Spawn the shim subprocess with jailer isolation and optional watchdog.

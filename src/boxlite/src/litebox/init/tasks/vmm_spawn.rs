@@ -110,6 +110,17 @@ impl PipelineTask<InitCtx> for VmmSpawnTask {
             .await
             .inspect_err(|e| log_task_error(&box_id, task_name, e))?;
 
+        let mut state = inputs.runtime.box_manager.update_box(&box_id)?;
+        state.start_mode = Some(if instance_spec.checkpoint.is_some() {
+            crate::vmm::checkpoint::support::StartMode::Owner { protocol: 2 }
+        } else {
+            crate::vmm::checkpoint::support::select(
+                &inputs.options,
+                crate::vmm::checkpoint::support::Host::current(),
+            )
+        });
+        inputs.runtime.box_manager.save_box(&box_id, &state)?;
+
         let mut ctx = ctx.lock().await;
         ctx.guard.set_handler(handler);
         ctx.volume_mgr = Some(volume_mgr);
@@ -130,18 +141,21 @@ impl PipelineTask<InitCtx> for VmmSpawnTask {
     }
 }
 
-/// Cold-boot checkpoint settings for a checkpoint-enabled box.
+/// Cold-boot checkpoint settings for a box in checkpoint owner mode.
 fn checkpoint_launch(
     options: &BoxOptions,
     layout: &BoxFilesystemLayout,
 ) -> BoxliteResult<Option<CheckpointLaunch>> {
-    if !options.advanced.checkpoint_enabled {
+    if !crate::vmm::checkpoint::support::select(
+        options,
+        crate::vmm::checkpoint::support::Host::current(),
+    )
+    .owns_vm()
+    {
         return Ok(None);
     }
-    let export_dir = layout.prepare_checkpoint_dir()?;
     Ok(Some(CheckpointLaunch {
         control_socket: layout.control_socket_path(),
-        export_dir,
         start: CheckpointStart::Cold,
     }))
 }
@@ -178,11 +192,15 @@ async fn build_config(
     let user_volumes = resolve_user_volumes(&options.volumes)?;
     // Create-time validation refuses these; a file can replace a directory
     // since, and its staged copy would alias the box's own `shared/` tree.
-    if options.advanced.checkpoint_enabled
+    if crate::vmm::checkpoint::support::select(
+        options,
+        crate::vmm::checkpoint::support::Host::current(),
+    )
+    .owns_vm()
         && let Some(volume) = user_volumes.iter().find(|volume| volume.subpath.is_some())
     {
         return Err(BoxliteError::Unsupported(format!(
-            "advanced.checkpoint_enabled: volume {} is a single file; only directory volumes \
+            "checkpoint restriction: volume {} is a single file; only directory volumes \
              are supported",
             volume.host_path.display()
         )));
@@ -194,9 +212,14 @@ async fn build_config(
 
     // Create GuestVolumeManager and configure volumes
     let mut volume_mgr = GuestVolumeManager::new();
-    // A checkpoint carries the guest's DAX mappings: checkpoint-enabled boxes
+    // A checkpoint carries the guest's DAX mappings: box in checkpoint owner modees
     // mount every share with a fixed DAX window, ordinary boxes without.
-    if options.advanced.checkpoint_enabled {
+    if crate::vmm::checkpoint::support::select(
+        options,
+        crate::vmm::checkpoint::support::Host::current(),
+    )
+    .owns_vm()
+    {
         volume_mgr.set_dax_window(crate::vmm::checkpoint::DAX_WINDOW_BYTES);
     }
 
@@ -382,7 +405,6 @@ pub(crate) fn checkpoint_import_spec(
         detach: options.detach,
         checkpoint: Some(CheckpointLaunch {
             control_socket: layout.control_socket_path(),
-            export_dir: layout.prepare_checkpoint_dir()?,
             start: CheckpointStart::Import(import),
         }),
     };
@@ -625,7 +647,7 @@ mod tests {
         );
     }
 
-    /// An imported box cold-starts from its own restored RAW disks and
+    /// An imported box cold-starts from its private QCOW2 disk, exact readonly boot disk and
     /// shares. Its image reference names nothing that could be pulled, and
     /// the runtime's guest rootfs cache stays untouched.
     #[tokio::test]
@@ -653,14 +675,14 @@ mod tests {
         std::fs::create_dir_all(restored.join("fs/0")).unwrap();
         std::fs::create_dir_all(restored.join("fs/1")).unwrap();
         let disks = [
-            restored.join("disks/disk-0.raw"),
-            restored.join("disks/disk-1.raw"),
+            restored.join("disks/disk.qcow2"),
+            restored.join("disks/boot.ext4"),
         ];
         for disk in &disks {
             std::fs::write(disk, b"raw").unwrap();
         }
 
-        let mut options = BoxOptions {
+        let options = BoxOptions {
             rootfs: RootfsSpec::Image("registry.invalid/never:pulled".into()),
             network: NetworkSpec::Disabled,
             volumes: vec![VolumeSpec::bind_mount(
@@ -669,7 +691,6 @@ mod tests {
             )],
             ..Default::default()
         };
-        options.advanced.checkpoint_enabled = true;
         let config = BoxConfig {
             id: box_id.clone(),
             name: None,
@@ -688,12 +709,27 @@ mod tests {
                 .zip([false, true])
                 .map(|(path, read_only)| RestoredDisk {
                     path: path.clone(),
-                    format: crate::vmm::DiskFormat::Raw,
+                    format: if read_only {
+                        crate::vmm::DiskFormat::Raw
+                    } else {
+                        crate::vmm::DiskFormat::Qcow2
+                    },
                     read_only,
                 })
                 .collect(),
             shared_dir: restored.join("fs/0"),
             container_image_config: ContainerImageConfig::default(),
+            boot: Some(crate::litebox::checkpoint::BootDependency {
+                length: 3,
+                sha256: crate::litebox::checkpoint::pair::digest(
+                    &std::fs::File::open(&disks[1]).unwrap(),
+                    0,
+                    3,
+                )
+                .unwrap(),
+                base_id: None,
+            }),
+            bindings: Vec::new(),
         });
         let ctx = Arc::new(tokio::sync::Mutex::new(ctx));
         Box::new(FilesystemTask).run(ctx.clone()).await.unwrap();
@@ -719,7 +755,7 @@ mod tests {
         assert_eq!(
             devices,
             [
-                (disks[0].clone(), crate::vmm::DiskFormat::Raw, false),
+                (disks[0].clone(), crate::vmm::DiskFormat::Qcow2, false),
                 (disks[1].clone(), crate::vmm::DiskFormat::Raw, true),
             ]
         );
@@ -753,7 +789,7 @@ mod tests {
         let checkpoint = spec.checkpoint.as_ref().unwrap();
         assert!(matches!(checkpoint.start, CheckpointStart::Cold));
 
-        // A checkpoint-enabled box mounts every share through a DAX window.
+        // A box in checkpoint owner mode mounts every share through a DAX window.
         assert!(
             spec.fs_shares
                 .shares()

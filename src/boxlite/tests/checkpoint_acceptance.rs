@@ -1,8 +1,9 @@
 //! Real-KVM acceptance for checkpoint export and import (Linux x86_64 only).
 //!
-//! One box runs a long-lived guest process, pauses, exports one checkpoint
-//! file and is destroyed together with every resource this test created for
-//! it. A fresh runtime with an empty home imports the file and resumes it, and
+//! One box runs a long-lived guest process, pauses, exports a two-file pair,
+//! then is destroyed with its home and original shares. Caller-owned recovery
+//! roots, orphan FDs and the exact boot disk outlive it. A fresh runtime
+//! imports the pair with those explicit bindings and resumes it, and
 //! the same process must continue: same PID, start time, heap-only marker and
 //! execution, with its open and unlinked files and its DAX mapping of a
 //! share file intact, a counter that advances past the cut, and no write the
@@ -195,40 +196,237 @@ fn serve_once(token: &'static str) -> (u16, std::thread::JoinHandle<()>) {
     (port, server)
 }
 
-/// The checkpoint's manifest, and the VM image's metadata JSON.
+/// Read the checked v9 envelope emitted by the real producer.
 fn read_checkpoint(path: &Path) -> (serde_json::Value, serde_json::Value) {
-    let mut archive = tar::Archive::new(std::fs::File::open(path).expect("open checkpoint"));
-    let mut manifest = None;
-    let mut image = None;
-    for entry in archive.entries().expect("checkpoint members") {
-        let mut entry = entry.expect("checkpoint member");
-        let name = entry
-            .path()
-            .expect("member name")
-            .to_string_lossy()
-            .into_owned();
-        match name.as_str() {
-            "checkpoint.json" => {
-                manifest = Some(serde_json::from_reader(&mut entry).expect("manifest"))
-            }
-            "vm.krunvm" => {
-                // KRUNVM v8: 8-byte magic, u32 version, u32 metadata length, metadata JSON.
-                let mut header = [0u8; 16];
-                entry.read_exact(&mut header).expect("image header");
-                assert_eq!(&header[..8], b"KRUNVM\0\0");
-                assert_eq!(u32::from_le_bytes(header[8..12].try_into().unwrap()), 8);
-                let len = u32::from_le_bytes(header[12..].try_into().unwrap()) as usize;
-                let mut metadata = vec![0u8; len];
-                entry.read_exact(&mut metadata).expect("image metadata");
-                image = Some(serde_json::from_slice(&metadata).expect("image metadata JSON"));
-            }
-            other => panic!("unexpected checkpoint member {other}"),
+    let mut members: Vec<_> = std::fs::read_dir(path)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+    members.sort();
+    assert_eq!(members, ["snapshot.mem", "snapshot.qcow2"]);
+    let mut memory = std::fs::File::open(path.join("snapshot.mem")).unwrap();
+    let mut header = [0; 160];
+    memory.read_exact(&mut header).unwrap();
+    assert_eq!(&header[..8], b"KRUNVM\0\0");
+    assert_eq!(u32::from_le_bytes(header[8..12].try_into().unwrap()), 9);
+    assert_eq!(u32::from_le_bytes(header[12..16].try_into().unwrap()), 160);
+    let length = u64::from_le_bytes(header[24..32].try_into().unwrap());
+    assert!(length <= 16 << 20);
+    let mut metadata = vec![0; length as usize];
+    memory.read_exact(&mut metadata).unwrap();
+    let image: serde_json::Value = serde_json::from_slice(&metadata).unwrap();
+    (image["application"].clone(), image)
+}
+
+/// Test-owned recovery points. Only descriptors retained by the guest cross
+/// this boundary; untouched files under the declared roots are never copied.
+struct RecoveryProvider {
+    roots: std::collections::BTreeMap<String, (PathBuf, PathBuf)>,
+    saved: std::sync::Mutex<Option<Recovery>>,
+    boot: PathBuf,
+}
+
+struct Recovery {
+    provider: boxlite::LocalCheckpointProvider,
+    // LocalObject::Fd borrows these integers. Keep each role's independent
+    // open description alive beyond source/runtime destruction and import.
+    _files: Vec<std::fs::File>,
+}
+
+fn open_role(path: &Path, flags: i32) -> std::fs::File {
+    use std::os::unix::fs::OpenOptionsExt;
+    assert_eq!(flags & (libc::O_CREAT | libc::O_TRUNC | libc::O_EXCL), 0);
+    let access = flags & libc::O_ACCMODE;
+    std::fs::OpenOptions::new()
+        .read(access != libc::O_WRONLY)
+        .write(access != libc::O_RDONLY && flags & libc::O_PATH == 0)
+        .custom_flags(flags | libc::O_CLOEXEC)
+        .open(path)
+        .unwrap_or_else(|e| panic!("open recovery role {} ({flags:#x}): {e}", path.display()))
+}
+
+#[async_trait::async_trait]
+impl boxlite::CheckpointExportProvider for RecoveryProvider {
+    async fn prepare(
+        &self,
+        request: boxlite::CheckpointExportRequest,
+    ) -> Result<Vec<Vec<boxlite::ObjectReference>>, BoxliteError> {
+        use std::collections::BTreeMap;
+        use std::os::fd::AsRawFd;
+        use std::os::unix::fs::MetadataExt;
+        let mut provider = boxlite::LocalCheckpointProvider::default();
+        let mut files = Vec::new();
+        let mut source_files = request.objects.into_iter();
+        let mut references = Vec::new();
+        for (_, recovery_root) in self.roots.values() {
+            std::fs::create_dir_all(recovery_root).expect("prepare explicit recovery root");
         }
+        for share in &request.shares {
+            let mut refs = Vec::new();
+            let mut locators = BTreeMap::new();
+            for (index, object) in share.objects.iter().enumerate() {
+                let source = source_files.next().expect("prepared FD");
+                if share.vm_owned {
+                    continue;
+                }
+                let (source_root, recovery_root) =
+                    self.roots.get(&share.tag).expect("declared root");
+                let source_path =
+                    std::fs::read_link(format!("/proc/self/fd/{}", source.as_raw_fd())).unwrap();
+                let orphan = source.metadata().unwrap().nlink() == 0;
+                let relative = if orphan {
+                    assert_eq!(share.tag, "uservol0", "unexpected retained orphan");
+                    // The test retained this inode before the guest unlinked it.
+                    PathBuf::from("unlinked.dat")
+                } else {
+                    source_path
+                        .strip_prefix(source_root)
+                        .unwrap_or_else(|_| {
+                            panic!(
+                                "{} outside declared {}",
+                                source_path.display(),
+                                source_root.display()
+                            )
+                        })
+                        .to_path_buf()
+                };
+                let relative = if relative.as_os_str().is_empty() {
+                    PathBuf::from(".")
+                } else {
+                    relative
+                };
+                let recovered = recovery_root.join(&relative);
+                if source.metadata().unwrap().is_dir() {
+                    std::fs::create_dir_all(&recovered).unwrap_or_else(|error| {
+                        panic!(
+                            "prepare recovery directory {}: {error}",
+                            recovered.display()
+                        )
+                    });
+                } else {
+                    assert!(
+                        source.metadata().unwrap().is_file(),
+                        "fixture only prepares files/directories"
+                    );
+                    std::fs::create_dir_all(recovered.parent().unwrap()).unwrap();
+                    std::fs::copy(format!("/proc/self/fd/{}", source.as_raw_fd()), &recovered)
+                        .unwrap();
+                }
+                let key = format!("object-{index}");
+                let locator = if source.metadata().unwrap().is_file() {
+                    let object_fd = open_role(&recovered, libc::O_PATH);
+                    let mut handles = BTreeMap::new();
+                    for handle in share.state["handles"].as_array().unwrap() {
+                        if handle["object"].as_u64() == Some(index as u64) {
+                            let role =
+                                open_role(&recovered, handle["flags"].as_i64().unwrap() as i32);
+                            handles.insert(handle["handle"].as_u64().unwrap(), role.as_raw_fd());
+                            files.push(role);
+                        }
+                    }
+                    let mut dax_read = None;
+                    let mut dax_write = None;
+                    for mapping in share.state["dax"]["mappings"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                    {
+                        let role = &mapping["kind"]["file"];
+                        if role["object"].as_u64() == Some(index as u64) {
+                            let writable = role["writable"].as_bool().unwrap();
+                            let fd = open_role(
+                                &recovered,
+                                if writable {
+                                    libc::O_RDWR
+                                } else {
+                                    libc::O_RDONLY
+                                },
+                            );
+                            if writable {
+                                dax_write = Some(fd.as_raw_fd());
+                            } else {
+                                dax_read = Some(fd.as_raw_fd());
+                            }
+                            files.push(fd);
+                        }
+                    }
+                    let locator = boxlite::LocalObject::Fd {
+                        fd: object_fd.as_raw_fd(),
+                        handles,
+                        dax_read,
+                        dax_write,
+                    };
+                    files.push(object_fd);
+                    if orphan {
+                        std::fs::remove_file(&recovered).unwrap();
+                    }
+                    locator
+                } else {
+                    boxlite::LocalObject::Path { path: relative }
+                };
+                locators.insert(key.clone(), locator);
+                refs.push(boxlite::ObjectReference {
+                    resource_id: share.tag.clone(),
+                    recovery_point: "paused-cut".into(),
+                    object_key: key,
+                });
+                assert!(object.recipe.is_none());
+            }
+            if !share.vm_owned {
+                let (_, root) = self.roots.get(&share.tag).unwrap();
+                provider.shares.insert(share.tag.clone(), share.tag.clone());
+                provider.resources.insert(
+                    share.tag.clone(),
+                    boxlite::LocalResource {
+                        recovery_point: "paused-cut".into(),
+                        root: root.clone(),
+                        source_root: None,
+                        objects: locators,
+                    },
+                );
+            }
+            references.push(refs);
+        }
+        assert!(source_files.next().is_none());
+        *self.saved.lock().unwrap() = Some(Recovery {
+            provider,
+            _files: files,
+        });
+        Ok(references)
     }
-    (
-        manifest.expect("checkpoint.json"),
-        image.expect("vm.krunvm"),
-    )
+}
+
+#[async_trait::async_trait]
+impl boxlite::CheckpointImportProvider for RecoveryProvider {
+    async fn bind(
+        &self,
+        dependencies: &boxlite::CheckpointDependencies,
+    ) -> Result<boxlite::CheckpointBindings, BoxliteError> {
+        let mut provider = self
+            .saved
+            .lock()
+            .unwrap()
+            .as_ref()
+            .expect("prepared cut")
+            .provider
+            .clone();
+        provider
+            .boot_disks
+            .insert(dependencies.boot_disk_sha256.clone(), self.boot.clone());
+        provider.bind(dependencies).await
+    }
+}
+
+struct HoldPreparation(std::sync::Arc<tokio::sync::Notify>);
+#[async_trait::async_trait]
+impl boxlite::CheckpointExportProvider for HoldPreparation {
+    async fn prepare(
+        &self,
+        _request: boxlite::CheckpointExportRequest,
+    ) -> Result<Vec<Vec<boxlite::ObjectReference>>, BoxliteError> {
+        self.0.notify_one();
+        std::future::pending().await
+    }
 }
 
 /// Whether any virtio-fs DAX ledger in the image metadata maps a file.
@@ -476,7 +674,17 @@ async fn checkpoint_continues_the_same_guest_process_in_a_new_runtime() {
     let share = tempfile::tempdir().expect("share dir");
     let share_path = share.path().to_path_buf();
     let checkpoint_dir = tempfile::tempdir().expect("checkpoint dir");
-    let checkpoint = checkpoint_dir.path().join("source.boxckpt");
+    let checkpoint = checkpoint_dir.path().join("source-checkpoint");
+    let recovery = tempfile::tempdir().expect("caller-owned recovery resources");
+    // Retain the source inode before the helper unlinks it, independently of
+    // the VM's own open file handle.
+    let source_orphan = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .open(share_path.join("unlinked.dat"))
+        .unwrap();
+    std::fs::write(share_path.join("untouched"), b"never retained by the guest").unwrap();
 
     let source_rt = BoxliteRuntime::new(BoxliteOptions {
         home_dir: source_home_path.clone(),
@@ -484,8 +692,9 @@ async fn checkpoint_continues_the_same_guest_process_in_a_new_runtime() {
         ..Default::default()
     })
     .expect("source runtime");
-    let mut options = BoxOptions {
+    let options = BoxOptions {
         rootfs: RootfsSpec::Image("alpine:latest".into()),
+        memory_mib: Some(256),
         auto_delete: Some(0),
         volumes: vec![VolumeSpec::bind_mount(
             share_path.to_str().expect("utf-8 share"),
@@ -493,11 +702,10 @@ async fn checkpoint_continues_the_same_guest_process_in_a_new_runtime() {
         )],
         ..Default::default()
     };
-    options.advanced.checkpoint_enabled = true;
     let source = source_rt
         .create(options, Some("checkpoint-source".into()))
         .await
-        .expect("create checkpoint-enabled box");
+        .expect("create default box");
     let source_id = source.id().clone();
     source.start().await.expect("start");
 
@@ -546,6 +754,23 @@ async fn checkpoint_continues_the_same_guest_process_in_a_new_runtime() {
     // ── The networked source shim runs the project's VMM filter ──
     assert_vmm_filter_on_every_thread(&source_home_path, &source).await;
 
+    // Disk capture and full checkpoints coexist on a default owner. A live
+    // capture preserves the opened source inode and returns Running.
+    let source_disk = source_home_path
+        .join("boxes")
+        .join(source_id.as_str())
+        .join("disks/disk.qcow2");
+    use std::os::unix::fs::MetadataExt;
+    let live_disk = std::fs::File::open(&source_disk).unwrap();
+    let disk_inode = live_disk.metadata().unwrap().ino();
+    source
+        .snapshots()
+        .create(Default::default(), "before-checkpoint")
+        .await
+        .expect("running snapshot");
+    assert_eq!(status(&source).await, BoxStatus::Running);
+    assert_eq!(std::fs::metadata(&source_disk).unwrap().ino(), disk_inode);
+
     // ── Pause: an external share needs the writer assertion ──
     let refused = source.pause(PauseOptions::default()).await;
     assert!(
@@ -564,27 +789,100 @@ async fn checkpoint_continues_the_same_guest_process_in_a_new_runtime() {
         source.exec(BoxCommand::new("true")).await.is_err(),
         "a paused box must refuse exec"
     );
+    assert!(
+        source
+            .snapshots()
+            .create(Default::default(), "must-not-stage")
+            .await
+            .is_err()
+    );
+    assert!(
+        source
+            .snapshots()
+            .get("must-not-stage")
+            .await
+            .unwrap()
+            .is_none()
+    );
     // Buffered output may replay on attach; only a counter past this bound
     // proves the helper ran after the cut.
+    assert_eq!(
+        source_orphan.metadata().unwrap().nlink(),
+        0,
+        "guest did not unlink retained host inode"
+    );
     let cut = cut_counter(&share_path);
     assert!(
         cut >= before_cut.last().expect("ticks").n,
         "the share lags the printed counter"
     );
 
-    // ── Export exactly one checkpoint; an ordinary failure stays paused ──
+    // The exact readonly boot backend must outlive the source cache. Copy
+    // its resolved target, not a rebuilt or merely compatible boot image.
+    let boot = recovery.path().join("exact-boot.ext4");
+    let provider = RecoveryProvider {
+        roots: std::collections::BTreeMap::from([
+            (
+                "uservol0".into(),
+                (share_path.clone(), recovery.path().join("volume")),
+            ),
+            (
+                "BoxLiteShared".into(),
+                (
+                    source_home_path
+                        .join("boxes")
+                        .join(source_id.as_str())
+                        .join("shared"),
+                    recovery.path().join("shared"),
+                ),
+            ),
+        ]),
+        saved: std::sync::Mutex::new(None),
+        boot,
+    };
+    // ── Export exactly two files; an ordinary failure stays paused ──
     source
-        .export_checkpoint(&checkpoint)
+        .export_checkpoint(&checkpoint, &provider)
         .await
         .expect("export checkpoint");
-    assert!(checkpoint.is_file());
-    let exported_len = std::fs::metadata(&checkpoint).expect("checkpoint").len();
+    assert!(checkpoint.is_dir());
+    let dependencies = BoxliteRuntime::inspect_checkpoint(&checkpoint).expect("inspect pair");
+    // The boot dependency is not in the pair. Select the exact source cache
+    // backend by the producer's digest and retain its bytes independently.
+    use sha2::{Digest, Sha256};
+    let mut exact_boot = None;
+    for entry in std::fs::read_dir(source_home_path.join("bases")).unwrap() {
+        let path = entry.unwrap().path();
+        if path.is_file() && std::fs::metadata(&path).unwrap().len() == dependencies.boot_disk_bytes
+        {
+            let digest = hex::encode(Sha256::digest(std::fs::read(&path).unwrap()));
+            if digest == dependencies.boot_disk_sha256 {
+                exact_boot = Some(path);
+                break;
+            }
+        }
+    }
+    std::fs::copy(
+        exact_boot.expect("exact readonly boot backend"),
+        &provider.boot,
+    )
+    .unwrap();
+    let original_disk_digest =
+        Sha256::digest(std::fs::read(checkpoint.join("snapshot.qcow2")).unwrap());
+    let exported_len = std::fs::metadata(checkpoint.join("snapshot.mem"))
+        .expect("checkpoint")
+        .len();
     assert!(
-        source.export_checkpoint(&checkpoint).await.is_err(),
+        source
+            .export_checkpoint(&checkpoint, &provider)
+            .await
+            .is_err(),
         "an existing destination must never be overwritten"
     );
     assert_eq!(
-        std::fs::metadata(&checkpoint).expect("checkpoint").len(),
+        std::fs::metadata(checkpoint.join("snapshot.mem"))
+            .expect("checkpoint")
+            .len(),
         exported_len
     );
     assert_eq!(status(&source).await, BoxStatus::Paused);
@@ -660,9 +958,11 @@ async fn checkpoint_continues_the_same_guest_process_in_a_new_runtime() {
     );
     assert!(live_shim_pids(&source_home_path.join("boxes")).is_empty());
     drop(source_home);
+    drop(source_orphan);
     drop(share);
     assert_absent(&source_home_path);
     assert_absent(&share_path);
+    assert_absent(&recovery.path().join("volume/untouched"));
 
     // ── Import into a fresh, empty runtime: paused until resumed ──
     let target_home = PerTestBoxHome::isolated();
@@ -678,6 +978,7 @@ async fn checkpoint_continues_the_same_guest_process_in_a_new_runtime() {
             CheckpointImportOptions {
                 name: Some("checkpoint-restored".into()),
             },
+            &provider,
         )
         .await
         .expect("import checkpoint");
@@ -777,7 +1078,146 @@ async fn checkpoint_continues_the_same_guest_process_in_a_new_runtime() {
         "import fell back to an image: {images:?}"
     );
 
-    restored.stop().await.expect("stop restored");
+    // Imported boxes also support disk snapshot -> full checkpoint -> resume.
+    let imported_snapshot = restored
+        .snapshots()
+        .create(Default::default(), "imported-disk-cut")
+        .await;
+    if let Err(error) = imported_snapshot {
+        restored
+            .pause(PauseOptions {
+                host_writers_stopped: true,
+            })
+            .await
+            .expect("pause failed disk for diagnostics");
+        if let Some(directory) = std::env::var_os(LOGS_ENV) {
+            let disk = target_home
+                .path
+                .join("boxes")
+                .join(restored.id().as_str())
+                .join("disks/disk.qcow2");
+            std::fs::copy(
+                disk,
+                PathBuf::from(directory).join("failed-imported-disk.qcow2"),
+            )
+            .expect("preserve failed disk");
+        }
+        panic!("imported running snapshot: {error}");
+    }
+    assert_eq!(status(&restored).await, BoxStatus::Running);
+    let second_recovery = tempfile::tempdir().unwrap();
+    let provider2 = RecoveryProvider {
+        roots: std::collections::BTreeMap::from([
+            (
+                "uservol0".into(),
+                (
+                    recovery.path().join("volume"),
+                    second_recovery.path().join("volume"),
+                ),
+            ),
+            (
+                "BoxLiteShared".into(),
+                (
+                    recovery.path().join("shared"),
+                    second_recovery.path().join("shared"),
+                ),
+            ),
+        ]),
+        saved: std::sync::Mutex::new(None),
+        boot: provider.boot.clone(),
+    };
+    restored
+        .pause(PauseOptions {
+            host_writers_stopped: true,
+        })
+        .await
+        .unwrap();
+    let second_pair = checkpoint_dir.path().join("imported-checkpoint");
+    restored
+        .export_checkpoint(&second_pair, &provider2)
+        .await
+        .expect("checkpoint after disk snapshot on import");
+    let _ = read_checkpoint(&second_pair);
+    restored.resume().await.unwrap();
+    assert_eq!(
+        Sha256::digest(std::fs::read(checkpoint.join("snapshot.qcow2")).unwrap()),
+        original_disk_digest,
+        "restored writes changed the input pair"
+    );
+    let private_disk = target_home
+        .path
+        .join("boxes")
+        .join(restored.id().as_str())
+        .join("disks/disk.qcow2");
+    let private = std::fs::metadata(&private_disk).unwrap();
+    let artifact = std::fs::metadata(checkpoint.join("snapshot.qcow2")).unwrap();
+    assert_ne!(
+        (private.dev(), private.ino()),
+        (artifact.dev(), artifact.ino())
+    );
+    assert_eq!(private.nlink(), 1, "writable imported disk must be private");
+
+    // Cancel a real owner session after descriptor preparation. Dropping the
+    // host future closes its silent lifetime stream; the owner must stop,
+    // never silently resume or publish a partial pair.
+    restored
+        .pause(PauseOptions {
+            host_writers_stopped: true,
+        })
+        .await
+        .unwrap();
+    let prepared = std::sync::Arc::new(tokio::sync::Notify::new());
+    let canceller_box = target_rt
+        .get(restored.id().as_str())
+        .await
+        .unwrap()
+        .unwrap();
+    let cancelled_path = checkpoint_dir.path().join("cancelled");
+    let destination = cancelled_path.clone();
+    let signal = prepared.clone();
+    let export = tokio::spawn(async move {
+        canceller_box
+            .export_checkpoint(destination, &HoldPreparation(signal))
+            .await
+    });
+    tokio::time::timeout(TICK_TIMEOUT, prepared.notified())
+        .await
+        .expect("capture never prepared");
+    export.abort();
+    assert!(export.await.unwrap_err().is_cancelled());
+    tokio::time::timeout(TICK_TIMEOUT, async {
+        while status(&restored).await != BoxStatus::Stopped {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("disconnected capture owner did not stop");
+    assert!(
+        !cancelled_path.exists(),
+        "cancelled export published a pair"
+    );
+    restored
+        .stop()
+        .await
+        .expect("join cancelled restored owner");
+    // Cold start uses the saved private QCOW2, exact external boot backend and
+    // persistent roots, after the source cache and box have been destroyed.
+    let restored = target_rt
+        .get(restored.id().as_str())
+        .await
+        .unwrap()
+        .unwrap();
+    restored.start().await.expect("cold start imported storage");
+    assert_eq!(
+        run_ok(
+            &restored,
+            "sh",
+            &["-c", "test -f /root/checkpoint/disk.dat && echo retained"]
+        )
+        .await,
+        "retained"
+    );
+    restored.stop().await.expect("stop cold-started import");
     drop(target_logs);
     target_rt
         .remove(restored.id().as_str(), true)

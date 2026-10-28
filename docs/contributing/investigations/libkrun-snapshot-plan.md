@@ -1,5 +1,7 @@
 # libkrun 分阶段快照计划
 
+Historical record of the superseded single-file implementation. Current checkpoint contracts and implementation follow [the two-file design](two-file-checkpoint-design.md) and [checkpoint guide](../../guides/checkpoints.md); old switches, archives and RAW restore paths described below are no longer supported.
+
 2026-10-26 · **当前状态**：阶段 1–12 已在私有 `RamSnapshotVm` 中实现并经审查：RAM、CPU/KVM、virtio-blk、virtio-net、virtio-vsock、virtio-console、virtio-rng、virtio-balloon、UART、CMOS、i8042 与最多七个 virtio-fs 共享（独立文件副本），统一使用显式 `pause` → `export`（保持暂停，可重复）→ `resume` 生命周期，契约见文末“完整快照统一契约（v7）”。阶段 13 单文件集成已在源码中完成（见文末“阶段 13 批次 1”至“批次 5”各节）：rootless guest-visible 归档与 KRUNVM v8；BoxLite 启动路径以生产 Linux 引导接入快照 owner，含 VM 自有的内部 `/dev/root` 共享；libkrun 公共 C ABI `krun_snapshot_*` 与 shim 控制套接字；Rust `LiteBox::pause`/`resume`/`export_checkpoint` 与 `BoxliteRuntime::import_checkpoint`；CLI `--enable-checkpoint`、`pause`、`resume`、`checkpoint export|import`；单文件 BoxCheckpoint。Python、Node、Go、C SDK 与 REST 没有可用入口，收到该配置时拒绝。用户文档见[检查点指南](../../guides/checkpoints.md)。非 KVM 测试与 Linux x86_64 编译通过；全部 KVM 运行（真实进程延续验收、guest 内核 FUSE DAX、x86_64 seccomp 实际运行）仍为 **UNVERIFIED**，验收测试只编译、未运行。文末阶段 1–4 各节及 v4 契约验证是当时的历史记录，其中 KRUNVM v1–v6、`save_full`/`restore_full`/`restore_full_with_disks`/`restore_full_with_net` 等版本与入口已被 v7 取代。
 
 ## 目标与范围

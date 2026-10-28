@@ -13,7 +13,6 @@ use crate::runtime::options::{BoxArchive, BoxOptions, BoxliteOptions};
 use crate::runtime::signal_handler::timeout_to_duration;
 use crate::runtime::types::{BoxInfo, BoxState, BoxStatus, ContainerID};
 use crate::vmm::VmmKind;
-use crate::vmm::controller::{ShimHandler, VmmHandler};
 use boxlite_shared::{BoxliteError, BoxliteResult};
 use chrono::Utc;
 use std::collections::HashMap;
@@ -156,6 +155,8 @@ pub struct RuntimeImpl {
 
     /// Snapshot manager for per-box snapshot lifecycle (create, remove, restore).
     pub(crate) snapshot_mgr: crate::litebox::snapshot_mgr::SnapshotManager,
+    pub(crate) checkpoint_leases:
+        std::sync::Mutex<std::collections::HashMap<BoxID, Arc<dyn crate::CheckpointLease>>>,
 
     /// Per-entity lock manager for multiprocess-safe locking.
     ///
@@ -366,6 +367,7 @@ impl RuntimeImpl {
             experimental_features,
             base_disk_mgr,
             snapshot_mgr,
+            checkpoint_leases: std::sync::Mutex::new(std::collections::HashMap::new()),
             lock_manager,
             network_factory: crate::net::default_factory(),
             _runtime_lock: runtime_lock,
@@ -432,18 +434,19 @@ impl RuntimeImpl {
         super::import::import_box(self, archive, name).await
     }
 
-    /// Import a BoxCheckpoint file as a new box, paused.
+    /// Import a version-9 checkpoint pair as a new box, paused.
     pub async fn import_checkpoint(
         self: &Arc<Self>,
         path: &std::path::Path,
         options: crate::runtime::options::CheckpointImportOptions,
+        provider: &dyn crate::CheckpointImportProvider,
     ) -> BoxliteResult<LiteBox> {
         if self.shutdown_token.is_cancelled() {
             return Err(BoxliteError::Stopped(
                 "Cannot import checkpoint: runtime has been shut down".into(),
             ));
         }
-        super::checkpoint_import::import_checkpoint(self, path, options).await
+        super::checkpoint_import::import_checkpoint(self, path, options, provider).await
     }
 
     /// Inner create logic shared by `create()` and `get_or_create()`.
@@ -481,6 +484,7 @@ impl RuntimeImpl {
 
         // Initialize box variables with defaults
         let (config, mut state) = self.init_box_variables(&options, name.clone());
+        crate::litebox::operation::Reservation::provision(&self.layout, &config.id)?;
 
         // Allocate lock for this box
         let lock_id = self.lock_manager.allocate()?;
@@ -1015,13 +1019,20 @@ impl RuntimeImpl {
     /// - Box not found
     /// - Box is active and force=false
     pub(crate) fn remove_box(&self, id: &BoxID, force: bool) -> BoxliteResult<()> {
+        let _reservation = crate::litebox::operation::Reservation::acquire(&self.layout, id)?;
         tracing::debug!(box_id = %id, force = force, "RuntimeInnerImpl::remove_box called");
 
         // Try to get box from database first
         if let Some((config, state)) = self.box_manager.box_by_id(id)? {
             // Box exists in database - handle as before
             let mut state = state;
-            if state.status.is_active() || state.pid.is_some() {
+            let reader = crate::util::PidFileReader::at(config.box_home.join("shim.pid"));
+            let pid = match reader.process_identity() {
+                crate::util::ProcessIdentity::Verified(pid)
+                | crate::util::ProcessIdentity::Legacy(pid) => Some(pid),
+                crate::util::ProcessIdentity::Absent => state.pid,
+            };
+            if state.status.is_active() || pid.is_some() {
                 if force {
                     // Stop the box's whole process tree through the same handler
                     // teardown `LiteBox::stop()` uses: it SIGTERMs the recorded
@@ -1029,10 +1040,13 @@ impl RuntimeImpl {
                     // detached box's inner pid-ns tree (inner bwrap + shim + VM) —
                     // which a single-pid kill misses, since #851 stopped tying
                     // detached boxes to the launcher's lifetime.
-                    if let Some(pid) = state.pid {
+                    if let Some(pid) = pid {
                         tracing::info!(box_id = %id, pid = pid, "Force stopping box process tree");
-                        let mut handler = ShimHandler::from_pid(pid, config.id.clone());
-                        let _ = handler.stop();
+                        crate::litebox::checkpoint::capture::stop_and_join_sync(
+                            &reader,
+                            pid,
+                            config.id.clone(),
+                        )?;
                     }
                     // Update status to stopped and save
                     state.set_status(BoxStatus::Stopped);
@@ -1061,6 +1075,10 @@ impl RuntimeImpl {
 
             // Remove from BoxManager (database-first)
             self.box_manager.remove_box(id)?;
+            self.checkpoint_leases
+                .lock()
+                .map_err(|_| BoxliteError::Internal("resource lease lock poisoned".into()))?
+                .remove(id);
 
             // Free the lock if one was allocated
             if let Some(lock_id) = state.lock_id {
@@ -1261,6 +1279,8 @@ impl RuntimeImpl {
         let container_id = ContainerID::new();
         let now = Utc::now();
 
+        crate::litebox::operation::Reservation::provision(&self.layout, &box_id)?;
+
         // Move staging dir to canonical path (cross-fs safe: staging may be on
         // a different filesystem than the boxes dir).
         let box_home = self.layout.boxes_dir().join(box_id.as_str());
@@ -1290,7 +1310,22 @@ impl RuntimeImpl {
         let lock_id = self.lock_manager.allocate()?;
         state.set_lock_id(lock_id);
 
-        if let Err(e) = self.box_manager.add_box(&config, &state) {
+        let persisted = (|| {
+            let disk = config.box_home.join("disks/disk.qcow2");
+            if let Some(backing) = crate::disk::read_backing_file_path(&disk)?
+                && let Some(base) = self.base_disk_mgr.store().find_by_base_path(&backing)?
+            {
+                self.base_disk_mgr
+                    .store()
+                    .add_ref(base.id(), box_id.as_str())?;
+            }
+            self.box_manager.add_box(&config, &state)
+        })();
+        if let Err(e) = persisted {
+            let _ = self
+                .base_disk_mgr
+                .store()
+                .remove_all_refs_for_box(box_id.as_str());
             let _ = self.lock_manager.free(lock_id);
             let _ = std::fs::remove_dir_all(&config.box_home);
             config.sockets().remove();
@@ -1450,8 +1485,8 @@ impl RuntimeImpl {
             // lifecycle, so it only matters when no shim is alive.
             // A checkpoint VM that was paused stays paused with its shim
             // alive; the owner, asked on the next operation, has the last word.
-            let paused_checkpoint =
-                original_status == BoxStatus::Paused && config.options.advanced.checkpoint_enabled;
+            let paused_checkpoint = original_status == BoxStatus::Paused
+                && state.start_mode.as_ref().is_some_and(|mode| mode.owns_vm());
             let adopt = |state: &mut BoxState, pid| {
                 state.adopt_recovered_shim(pid);
                 if paused_checkpoint {
@@ -1894,8 +1929,9 @@ impl super::backend::RuntimeBackend for LocalRuntime {
         &self,
         path: &std::path::Path,
         options: crate::runtime::options::CheckpointImportOptions,
+        provider: &dyn crate::CheckpointImportProvider,
     ) -> BoxliteResult<LiteBox> {
-        self.0.import_checkpoint(path, options).await
+        self.0.import_checkpoint(path, options, provider).await
     }
 
     fn shutdown_sync(&self) {
@@ -2347,6 +2383,7 @@ mod tests {
     fn test_box_config_in_layout(detach: bool, runtime: &RuntimeImpl) -> BoxConfig {
         let id = BoxIDMint::mint();
         let box_home = runtime.layout.boxes_dir().join(id.as_str());
+        crate::litebox::operation::Reservation::provision(&runtime.layout, &id).unwrap();
         BoxConfig {
             id,
             name: None,
@@ -2891,6 +2928,7 @@ mod tests {
 
         let (pid, mut child) = spawn_dummy_process();
         let config = test_box_config_in_layout(false, &runtime);
+        write_pid_file_with_fingerprint(&config.box_home.join("shim.pid"), pid);
         let mut state = BoxState::new();
         state.set_status(BoxStatus::Unknown);
         state.set_pid(Some(pid));
@@ -2945,13 +2983,13 @@ mod tests {
         let (pid, child) = spawn_dummy_process();
         let _child = ChildGuard(child);
 
-        let mut live = test_box_config_in_layout(false, &runtime);
-        live.options.advanced.checkpoint_enabled = true;
-        let mut dead = test_box_config_in_layout(false, &runtime);
-        dead.options.advanced.checkpoint_enabled = true;
+        let live = test_box_config_in_layout(false, &runtime);
+        let dead = test_box_config_in_layout(false, &runtime);
         for (config, pid) in [(&live, Some(pid)), (&dead, None)] {
             let mut state = BoxState::new();
             state.status = BoxStatus::Paused;
+            state.start_mode =
+                Some(crate::vmm::checkpoint::support::StartMode::Owner { protocol: 2 });
             state.pid = Some(pid.unwrap_or(u32::MAX));
             state.set_lock_id(runtime.lock_manager.allocate().unwrap());
             let layout = runtime
@@ -3654,6 +3692,29 @@ mod tests {
     }
 
     #[test]
+    fn checkpoint_removal_releases_the_runtime_provider_lease() {
+        let (runtime, _dir) = create_test_runtime();
+        let config = test_box_config_in_layout(false, &runtime);
+        crate::litebox::operation::Reservation::provision(&runtime.layout, &config.id).unwrap();
+        runtime
+            .box_manager
+            .add_box(&config, &BoxState::new())
+            .unwrap();
+        let lease: Arc<dyn crate::CheckpointLease> = Arc::new(());
+        let retained = Arc::downgrade(&lease);
+        runtime
+            .checkpoint_leases
+            .lock()
+            .unwrap()
+            .insert(config.id.clone(), lease);
+        runtime.remove_box(&config.id, false).unwrap();
+        assert!(
+            retained.upgrade().is_none(),
+            "removed box retained its provider lease"
+        );
+    }
+
+    #[test]
     fn test_remove_box_with_force_ignores_dependents() {
         let (runtime, _dir) = create_test_runtime();
 
@@ -3789,5 +3850,46 @@ mod tests {
         // mark_stop runs for non-Configured states; Failed -> Stopped.
         let (_, db_state) = runtime.box_manager.box_by_id(&config.id).unwrap().unwrap();
         assert_eq!(db_state.status, BoxStatus::Stopped);
+    }
+    #[tokio::test]
+    async fn checkpoint_removal_checks_the_live_pidfile_when_database_is_stale() {
+        let home = tempfile::tempdir().unwrap();
+        let runtime = RuntimeImpl::new_for_test(BoxliteOptions {
+            home_dir: home.path().into(),
+            ..Default::default()
+        })
+        .unwrap();
+        let box_ = runtime
+            .create(
+                BoxOptions {
+                    auto_delete: Some(0),
+                    ..Default::default()
+                },
+                None,
+            )
+            .await
+            .unwrap();
+        let backend = box_.local_backend("test").unwrap();
+        std::fs::create_dir_all(&backend.config.box_home).unwrap();
+        let mut state = runtime.box_manager.update_box(box_.id()).unwrap();
+        state.force_status(BoxStatus::Stopped);
+        state.pid = None;
+        runtime.box_manager.save_box(box_.id(), &state).unwrap();
+        let mut writer = std::process::Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .unwrap();
+        let pid = writer.id();
+        let start = crate::util::process_start_time(pid).unwrap();
+        std::fs::write(backend.layout.pid_file_path(), format!("{pid}\n{start}\n")).unwrap();
+        let result = runtime.remove_box(box_.id(), false);
+        let retained = runtime.box_manager.box_by_id(box_.id()).unwrap().is_some();
+        let alive = crate::util::is_process_alive(pid);
+        let _ = writer.kill();
+        let _ = writer.wait();
+        assert!(
+            result.is_err() && retained && alive,
+            "stale stopped state authorized removal of a live writer: result={result:?}, retained={retained}, alive={alive}"
+        );
     }
 }

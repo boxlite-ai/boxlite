@@ -6,14 +6,17 @@
 //! not happen.
 
 use super::protocol::{
-    ControlFailure, ControlReply, ControlRequest, FailureKind, Operation, VmRunState, read_line,
-    write_line,
+    ControlFailure, ControlReply, ControlRequest, FailureKind, Operation, VmRunState, write_line,
+};
+use super::{
+    descriptors,
+    protocol::{DescriptorReply, DescriptorRequest},
 };
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
-use std::io::BufReader;
+use std::os::fd::{AsRawFd, OwnedFd};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -47,18 +50,24 @@ impl OwnerError {
 /// mutation in progress, and `stop` must work while paused and during an
 /// export.
 pub trait CheckpointOwner: Send + Sync {
+    fn descriptors(
+        &self,
+        _request: DescriptorRequest,
+        _files: Vec<OwnedFd>,
+    ) -> Result<(serde_json::Value, Vec<OwnedFd>), OwnerError> {
+        Err(OwnerError::new(
+            FailureKind::Rejected,
+            "checkpoint protocol requires an explicit box restart",
+        ))
+    }
     fn state(&self) -> VmRunState;
     fn pause(&self, host_writers_stopped: bool) -> Result<(), OwnerError>;
     fn resume(&self) -> Result<(), OwnerError>;
-    fn export_raw(&self, path: &Path) -> Result<(), OwnerError>;
     fn stop(&self) -> Result<(), OwnerError>;
-    /// The root of an imported VM's copy of share `tag`.
-    fn restored_share(&self, tag: &str) -> Result<PathBuf, OwnerError>;
 }
 
 struct Shared {
     owner: Arc<dyn CheckpointOwner>,
-    export_dir: PathBuf,
     /// Held for the whole of a mutation, so one mutation excludes another.
     mutation: Mutex<()>,
     /// Readable without waiting for a mutation in progress.
@@ -82,14 +91,12 @@ struct Mutations {
 #[derive(Debug)]
 pub struct ControlServer {
     path: PathBuf,
-    export_dir: PathBuf,
     listener: UnixListener,
 }
 
 impl ControlServer {
-    /// Bind `socket_path` with owner-only permissions. Exports will be
-    /// written inside `export_dir`.
-    pub fn bind(socket_path: &Path, export_dir: &Path) -> BoxliteResult<Self> {
+    /// Bind the box-private control socket with owner-only permissions.
+    pub fn bind(socket_path: &Path) -> BoxliteResult<Self> {
         match std::fs::remove_file(socket_path) {
             Ok(()) => {}
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
@@ -117,7 +124,6 @@ impl ControlServer {
 
         Ok(Self {
             path: socket_path.to_path_buf(),
-            export_dir: export_dir.to_path_buf(),
             listener,
         })
     }
@@ -126,11 +132,100 @@ impl ControlServer {
         &self.path
     }
 
+    /// Bind imported resources after sandbox installation, before enter can
+    /// create or release vCPUs. Only inspection/capability/import is accepted.
+    pub fn bind_import(&self, owner: &dyn CheckpointOwner) -> BoxliteResult<()> {
+        let deadline = std::time::Instant::now() + Duration::from_secs(60);
+        loop {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            if remaining.is_zero() {
+                return Err(BoxliteError::Engine(
+                    "checkpoint import bindings timed out".into(),
+                ));
+            }
+            let mut poll = libc::pollfd {
+                fd: self.listener.as_raw_fd(),
+                events: libc::POLLIN,
+                revents: 0,
+            };
+            // SAFETY: poll references one live listener, with a bounded timeout.
+            if unsafe { libc::poll(&mut poll, 1, remaining.as_millis() as i32) } <= 0 {
+                return Err(BoxliteError::Engine(
+                    "checkpoint import binding connection unavailable".into(),
+                ));
+            }
+            let (stream, _) = self
+                .listener
+                .accept()
+                .map_err(|e| BoxliteError::Engine(e.to_string()))?;
+            let result = (|| -> std::io::Result<bool> {
+                stream.set_read_timeout(Some(REQUEST_READ_TIMEOUT))?;
+                stream.set_write_timeout(Some(REQUEST_READ_TIMEOUT))?;
+                let request = descriptors::read_control(&stream)?;
+                let ControlRequest::Session { operation } = request else {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        "checkpoint import requires protocol generation 2",
+                    ));
+                };
+                let (request, files) =
+                    descriptors::receive::<DescriptorRequest>(&stream, operation)?;
+                let imported = matches!(request, DescriptorRequest::Import { .. });
+                if !matches!(
+                    request,
+                    DescriptorRequest::Import { .. }
+                        | DescriptorRequest::Capabilities
+                        | DescriptorRequest::Inspect
+                ) {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        "resources must be bound before lifecycle operations",
+                    ));
+                }
+                let result = owner.descriptors(request, files);
+                let succeeded = result.is_ok();
+                let (metadata, files, error) = match result {
+                    Ok((metadata, files)) => (metadata, files, None),
+                    Err(error) => (
+                        serde_json::Value::Null,
+                        Vec::new(),
+                        Some(ControlFailure {
+                            kind: error.kind,
+                            message: error.message,
+                        }),
+                    ),
+                };
+                descriptors::send(
+                    &stream,
+                    operation,
+                    &DescriptorReply {
+                        state: owner.state(),
+                        metadata,
+                        error,
+                    },
+                    &files,
+                )?;
+                if imported && !succeeded {
+                    return Err(std::io::Error::other("checkpoint binding rejected"));
+                }
+                Ok(imported)
+            })();
+            match result {
+                Ok(true) => return Ok(()),
+                Ok(false) => {}
+                Err(error) => {
+                    return Err(BoxliteError::Engine(format!(
+                        "checkpoint import bindings: {error}"
+                    )));
+                }
+            }
+        }
+    }
+
     /// Answer requests for `owner` on background threads.
     pub fn serve(self, owner: Arc<dyn CheckpointOwner>) -> BoxliteResult<()> {
         let shared = Arc::new(Shared {
             owner,
-            export_dir: self.export_dir,
             mutation: Mutex::new(()),
             mutations: Mutex::default(),
             connections: AtomicUsize::new(0),
@@ -179,8 +274,8 @@ fn serve(stream: UnixStream, shared: &Shared) {
         tracing::warn!(error = %e, "Control socket read timeout not set");
         return;
     }
-    let mut reader = BufReader::new(&stream);
-    let request: ControlRequest = match read_line(&mut reader) {
+    // Read no bytes past the newline: a Session switches to recvmsg framing.
+    let request: ControlRequest = match descriptors::read_control(&stream) {
         Ok(request) => request,
         Err(e) => {
             tracing::warn!(error = %e, "Unreadable control request");
@@ -189,6 +284,13 @@ fn serve(stream: UnixStream, shared: &Shared) {
             return;
         }
     };
+    if let ControlRequest::Session { operation } = request {
+        let result = serve_descriptors(&stream, operation, shared);
+        if let Err(error) = result {
+            tracing::warn!(%error, "Checkpoint descriptor session ended without a reply");
+        }
+        return;
+    }
     tracing::info!(request = ?request, "Checkpoint control request");
     let reply = handle(shared, request);
     // The owner already acted; a client that left learns the outcome from a
@@ -200,6 +302,7 @@ fn serve(stream: UnixStream, shared: &Shared) {
 
 fn handle(shared: &Shared, request: ControlRequest) -> ControlReply {
     match request {
+        ControlRequest::Session { .. } => unreachable!("sessions use descriptor framing"),
         ControlRequest::State => reply(shared, None),
         // Not serialized with mutations: stopping is how the host ends an
         // operation it no longer trusts.
@@ -207,29 +310,73 @@ fn handle(shared: &Shared, request: ControlRequest) -> ControlReply {
             let result = shared.owner.stop();
             reply(shared, result.err())
         }
-        ControlRequest::RestoredShare { tag } => match shared.owner.restored_share(&tag) {
-            Ok(path) => ControlReply {
-                share: Some(path),
-                ..reply(shared, None)
-            },
-            Err(error) => reply(shared, Some(error)),
-        },
+        ControlRequest::RestoredShare { .. } | ControlRequest::ExportRaw { .. } => failure(
+            shared,
+            FailureKind::Rejected,
+            "unsupported checkpoint protocol version; generation-2 descriptor binding required"
+                .into(),
+        ),
         ControlRequest::Pause {
             host_writers_stopped,
         } => mutate(shared, Operation::Pause, |owner| {
             owner.pause(host_writers_stopped)
         }),
         ControlRequest::Resume => mutate(shared, Operation::Resume, |owner| owner.resume()),
-        ControlRequest::ExportRaw { name } => {
-            let path = match export_path(&shared.export_dir, &name) {
-                Ok(path) => path,
-                Err(e) => return reply(shared, Some(e)),
-            };
-            mutate(shared, Operation::ExportRaw, |owner| {
-                owner.export_raw(&path)
-            })
+    }
+}
+
+fn serve_descriptors(
+    stream: &UnixStream,
+    operation: [u8; 16],
+    shared: &Shared,
+) -> std::io::Result<()> {
+    let (request, files) = descriptors::receive::<DescriptorRequest>(stream, operation)?;
+    let begin = matches!(request, DescriptorRequest::Begin { .. });
+    let end = matches!(request, DescriptorRequest::End { .. });
+    // Libkrun owns whole-capture exclusion, including clients that lost their
+    // host lock. This lock also orders publication of query bookkeeping.
+    let held = shared.mutation.try_lock();
+    let result = if held.is_err() {
+        Err(OwnerError::new(
+            FailureKind::Busy,
+            "another control operation is in progress",
+        ))
+    } else {
+        if begin {
+            lock(&shared.mutations).started += 1;
+        }
+        shared.owner.descriptors(request, files)
+    };
+    if result.is_ok() {
+        let mut mutations = lock(&shared.mutations);
+        if begin {
+            mutations.in_flight = Some(Operation::Capture);
+        }
+        if end {
+            mutations.in_flight = None;
         }
     }
+    let (metadata, files, error) = match result {
+        Ok((metadata, files)) => (metadata, files, None),
+        Err(error) => (
+            serde_json::Value::Null,
+            Vec::new(),
+            Some(ControlFailure {
+                kind: error.kind,
+                message: error.message,
+            }),
+        ),
+    };
+    descriptors::send(
+        stream,
+        operation,
+        &DescriptorReply {
+            state: shared.owner.state(),
+            metadata,
+            error,
+        },
+        &files,
+    )
 }
 
 fn mutate(
@@ -249,6 +396,9 @@ fn mutate(
         }
         Err(std::sync::TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
     };
+    if lock(&shared.mutations).in_flight == Some(Operation::Capture) {
+        return failure(shared, FailureKind::Busy, "capture in progress".into());
+    }
     {
         let mut mutations = lock(&shared.mutations);
         mutations.in_flight = Some(operation);
@@ -284,16 +434,4 @@ fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     mutex
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
-}
-
-/// Resolve an export name to a file directly inside `export_dir`.
-fn export_path(export_dir: &Path, name: &str) -> Result<PathBuf, OwnerError> {
-    let mut components = Path::new(name).components();
-    match (components.next(), components.next()) {
-        (Some(Component::Normal(file)), None) => Ok(export_dir.join(file)),
-        _ => Err(OwnerError::new(
-            FailureKind::Rejected,
-            format!("export name {name:?} must be a single file name"),
-        )),
-    }
 }

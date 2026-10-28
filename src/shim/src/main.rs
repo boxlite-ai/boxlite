@@ -167,7 +167,7 @@ fn run_shim(mut config: InstanceSpec, timing: impl Fn(&str)) -> BoxliteResult<Op
     let control = config
         .checkpoint
         .as_ref()
-        .map(|launch| ControlServer::bind(&launch.control_socket, &launch.export_dir))
+        .map(|launch| ControlServer::bind(&launch.control_socket))
         .transpose()?;
 
     // Apply VMM seccomp filter with TSYNC (covers all threads including gvproxy)
@@ -217,6 +217,12 @@ fn run_shim(mut config: InstanceSpec, timing: impl Fn(&str)) -> BoxliteResult<Op
     // Save detach/transport before config is moved into engine.create()
     let detach = config.detach;
     let transport = config.transport.clone();
+    let importing = config.checkpoint.as_ref().is_some_and(|launch| {
+        matches!(
+            launch.start,
+            boxlite::vmm::checkpoint::CheckpointStart::Import(_)
+        )
+    });
 
     // Initialize engine options with defaults
     let options = VmmConfig::default();
@@ -245,6 +251,9 @@ fn run_shim(mut config: InstanceSpec, timing: impl Fn(&str)) -> BoxliteResult<Op
         let owner = checkpoint_owner.clone().ok_or_else(|| {
             BoxliteError::Engine("checkpoint launch without a checkpoint owner".into())
         })?;
+        if importing {
+            control.bind_import(owner.as_ref())?;
+        }
         tracing::info!(socket = %control.path().display(), "Serving checkpoint control");
         control.serve(owner)?;
     }

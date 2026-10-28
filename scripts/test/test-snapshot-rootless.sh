@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Run libkrun's guest-visible archive tests without privilege under real
+# Run libkrun's filesystem checkpoint tests, including received v9 orphan/DAX
+# roles, without privilege under real
 # bwrap (snapshot-rootless-runner.sh) and BoxLite's production VMM seccomp
 # filter. Needs Linux x86_64, an unprivileged user that may create user
 # namespaces, bwrap (BOXLITE_TEST_BWRAP or PATH) and the cargo registry
@@ -39,3 +40,13 @@ BOXLITE_TEST_BWRAP="$(command -v "$bwrap")" make -C "$libkrun" snapshot-rootless
     SNAPSHOT_RUNNER="$repo_root/scripts/test/snapshot-rootless-runner.sh" \
     SNAPSHOT_SECCOMP_BPF="$work/vmm.bpf" \
     ${SNAPSHOT_CARGO_FLAGS:+SNAPSHOT_CARGO_FLAGS="$SNAPSHOT_CARGO_FLAGS"}
+
+# The host runtime's real disk copier must handle ENOSPC before publication,
+# keeping its owner Paused. The same runner supplies a one-MiB tmpfs; this
+# does not require a VM and does not change the host mount namespace.
+runner_var="CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER"
+env "$runner_var=$repo_root/scripts/test/snapshot-rootless-runner.sh" \
+    BOXLITE_TEST_BWRAP="$(command -v "$bwrap")" KRUN_TEST_SECCOMP_BPF="$work/vmm.bpf" \
+    cargo test --offline --manifest-path "$repo_root/Cargo.toml" -p boxlite --no-default-features \
+    --lib --target "$target" checkpoint_export_disk_full_preserves_paused_source_and_cleans_staging \
+    -- --ignored --test-threads=1 --nocapture

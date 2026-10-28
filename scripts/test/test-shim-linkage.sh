@@ -34,17 +34,21 @@ readelf -d "$shim" 2>&1 | grep -q "There is no dynamic section" ||
     fail "the shim is dynamically linked"
 
 nm "$shim" >"$work/symbols"
-# Static glibc leaves its own TLS and locale hooks (`__*`, `_nl_current_LC_*`)
-# unresolved; nothing else may be.
-if awk '$1 == "U" && $2 !~ /^(__|_nl_current_LC_)/' "$work/symbols" | grep .; then
+# GNU ld can retain LOCAL/HIDDEN undefined glibc names in .symtab. nm labels
+# those U too, but they are not external linkage requirements. Keep the known
+# static-glibc TLS resolver exception; reject every other strong global import.
+readelf -Ws "$shim" >"$work/elf-symbols"
+if awk '$5 == "GLOBAL" && $7 == "UND" && $8 != "__tls_get_addr"' "$work/elf-symbols" | grep .; then
     fail "undefined symbols above"
 fi
 # The checkpoint ABI the engine calls, the context lifecycle around it, and
 # the network backend.
 for symbol in krun_create_ctx krun_start_enter krun_free_ctx \
-    krun_snapshot_enable krun_snapshot_import krun_snapshot_pause \
-    krun_snapshot_resume krun_snapshot_export krun_snapshot_stop \
-    krun_snapshot_get_state krun_snapshot_get_restored_share \
+    krun_snapshot_enable krun_snapshot_pause krun_snapshot_resume \
+    krun_snapshot_stop krun_snapshot_get_state krun_snapshot_capabilities \
+    krun_snapshot_begin_capture krun_snapshot_prepare_capture \
+    krun_snapshot_export_fd krun_snapshot_end_capture \
+    krun_snapshot_inspect_fd krun_snapshot_import_fd \
     gvproxy_create gvproxy_destroy; do
     grep -qE "^[0-9a-f]+ T ${symbol}$" "$work/symbols" ||
         fail "$symbol is not defined in the shim"

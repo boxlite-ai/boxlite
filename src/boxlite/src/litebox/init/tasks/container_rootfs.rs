@@ -63,14 +63,14 @@ impl PipelineTask<InitCtx> for ContainerRootfsTask {
             )
         };
 
-        // An imported box runs from its restored RAW disk and the config its
+        // An imported box runs from its private QCOW2 disk and the config its
         // source booted with: no image, cache or source path is read.
         let restored = ctx.lock().await.restored.clone();
         if let Some(restored) = restored {
             let disk = restored.container_disk()?;
             let mut ctx = ctx.lock().await;
             ctx.container_image_config = Some(restored.container_image_config.clone());
-            ctx.container_disk = Some(Disk::new(disk.path.clone(), DiskFormat::Ext4, true));
+            ctx.container_disk = Some(Disk::new(disk.path.clone(), DiskFormat::Qcow2, true));
             return Ok(());
         }
 

@@ -1,4 +1,4 @@
-//! Pause and resume for checkpoint-enabled boxes.
+//! Pause and resume for boxes in checkpoint owner mode.
 //!
 //! The VM's real state lives in the shim's snapshot owner. This module asks
 //! it over the box's control socket and records only what the owner
@@ -13,21 +13,20 @@ use crate::util::{PidFileReader, ProcessIdentity};
 use crate::vmm::checkpoint::{
     ControlClient, ControlReply, ControlRequest, FailureKind, Outcome, VmRunState,
 };
-use crate::vmm::controller::{ShimHandler, VmmHandler};
 use boxlite_shared::RunningStateResponse;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+#[cfg(test)]
+use std::time::Instant;
 
-pub(crate) mod archive;
+pub(crate) mod capture;
 mod export;
+pub(crate) mod pair;
+pub(crate) mod provider;
 #[cfg(test)]
 pub(crate) mod test_support;
-
-/// How long `stop` waits for a checkpoint box's shim to be gone after
-/// signalling it (SIGTERM, then SIGKILL after the handler's own grace).
-const SHIM_EXIT_CONFIRM_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Bound for the guest shutdown RPC that flushes disks before a running
 /// checkpoint box stops, matching ordinary boxes.
@@ -73,24 +72,41 @@ impl GuestIdentity {
     }
 }
 
-/// Storage an imported box runs from: the copies libkrun handed over at
-/// import. Cold starts use these, never an image, the image cache or the
-/// source box's files. Pinned for the box's life, unlike [`GuestIdentity`].
+/// Imported storage: a private QCOW2 plus explicit external recovery roots
+/// and the exact readonly boot backend. Cold starts use these dependencies. Pinned for the box's life, unlike [`GuestIdentity`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct RestoredStorage {
     /// Disks in guest order: the container rootfs (`/dev/vda`), then the
     /// read-only guest rootfs (`/dev/vdb`).
     pub(crate) disks: Vec<RestoredDisk>,
-    /// The copy of the box's `shared/` tree, served as its `shared` share.
+    /// Caller-owned recovery root served as the `BoxLiteShared` share.
     pub(crate) shared_dir: PathBuf,
     /// The container's image config as the source box last booted it.
     pub(crate) container_image_config: ContainerImageConfig,
+    #[serde(default)]
+    pub(crate) boot: Option<BootDependency>,
+    #[serde(default)]
+    pub(crate) bindings: Vec<RestartBinding>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct BootDependency {
+    pub length: u64,
+    pub sha256: [u8; 32],
+    pub base_id: Option<crate::BaseDiskID>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct RestartBinding {
+    pub tag: String,
+    pub root: PathBuf,
+    pub objects: Vec<pair::ObjectReference>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct RestoredDisk {
     pub(crate) path: PathBuf,
-    /// Always RAW: libkrun restores every disk as a raw copy.
+    /// Container storage remains QCOW2; readonly boot storage remains ext4.
     pub(crate) format: crate::vmm::DiskFormat,
     pub(crate) read_only: bool,
 }
@@ -98,16 +114,42 @@ pub(crate) struct RestoredDisk {
 impl RestoredStorage {
     /// The container rootfs disk.
     pub(crate) fn container_disk(&self) -> BoxliteResult<&RestoredDisk> {
-        self.disks
-            .first()
-            .ok_or_else(|| BoxliteError::Internal("restored storage has no container disk".into()))
+        let disk = self.disks.first().ok_or_else(|| {
+            BoxliteError::Internal("restored storage has no container disk".into())
+        })?;
+        if disk.format != crate::vmm::DiskFormat::Qcow2 || disk.read_only {
+            return Err(BoxliteError::Unsupported(
+                "unsupported restored checkpoint storage version; version 9 QCOW2 required".into(),
+            ));
+        }
+        Ok(disk)
     }
 
     /// The guest rootfs disk.
     pub(crate) fn guest_disk(&self) -> BoxliteResult<&RestoredDisk> {
-        self.disks.get(1).ok_or_else(|| {
+        let disk = self.disks.get(1).ok_or_else(|| {
             BoxliteError::Internal("restored storage has no guest rootfs disk".into())
-        })
+        })?;
+        let dependency = self.boot.as_ref().ok_or_else(|| {
+            BoxliteError::Unsupported(
+                "restored checkpoint has no version-9 readonly boot pin".into(),
+            )
+        })?;
+        use std::os::unix::fs::OpenOptionsExt;
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+            .open(&disk.path)
+            .map_err(pair::invalid)?;
+        if !disk.read_only
+            || file.metadata().map_err(pair::invalid)?.len() != dependency.length
+            || pair::digest(&file, 0, dependency.length)? != dependency.sha256
+        {
+            return Err(pair::invalid(
+                "persistent readonly boot dependency mismatch",
+            ));
+        }
+        Ok(disk)
     }
 }
 
@@ -178,24 +220,17 @@ fn failure_error(op: &str, kind: FailureKind, message: String) -> BoxliteError {
 }
 
 impl BoxImpl {
-    pub(crate) fn checkpoint_enabled(&self) -> bool {
-        self.config.options.advanced.checkpoint_enabled
+    pub(crate) fn uses_checkpoint_owner(&self) -> bool {
+        self.state
+            .read()
+            .start_mode
+            .as_ref()
+            .map(|mode| mode.owns_vm())
+            .unwrap_or(false)
     }
 
     pub(crate) fn checkpoint_control(&self) -> ControlClient {
         ControlClient::new(self.layout.control_socket_path())
-    }
-
-    /// Refuse a disk-only snapshot, clone or export: a checkpoint-enabled
-    /// box's guest state belongs with its disks, and those operations would
-    /// also SIGSTOP and freeze a VM the snapshot owner controls.
-    pub(crate) fn refuse_for_checkpoint(&self, op: &str) -> BoxliteResult<()> {
-        if self.checkpoint_enabled() {
-            return Err(BoxliteError::Unsupported(format!(
-                "{op} is not supported for a checkpoint-enabled box"
-            )));
-        }
-        Ok(())
     }
 
     /// Whether the box shares directories that processes outside it can
@@ -207,9 +242,24 @@ impl BoxImpl {
     }
 
     fn require_checkpoint(&self, op: &str) -> BoxliteResult<()> {
-        if !self.checkpoint_enabled() {
+        match self.state.read().start_mode.as_ref() {
+            Some(crate::vmm::checkpoint::support::StartMode::Owner { protocol: 2 }) => {}
+            Some(crate::vmm::checkpoint::support::StartMode::Ordinary {
+                checkpoint_restriction,
+            }) => {
+                return Err(BoxliteError::Unsupported(format!(
+                    "{op}: {checkpoint_restriction}"
+                )));
+            }
+            _ => {
+                return Err(BoxliteError::Unsupported(format!(
+                    "{op} requires an explicit restart with checkpoint protocol generation 2"
+                )));
+            }
+        }
+        if !self.uses_checkpoint_owner() {
             return Err(BoxliteError::Unsupported(format!(
-                "{op} needs a box created with advanced.checkpoint_enabled"
+                "{op} is unavailable in this box's recorded start mode; explicitly restart a legacy box"
             )));
         }
         let status = self.state.read().status;
@@ -231,7 +281,7 @@ impl BoxImpl {
         &self,
         options: super::checkpoint::PauseOptions,
     ) -> BoxliteResult<()> {
-        let _serial = self.checkpoint_ops.lock().await;
+        let _reservation = self.reserve(super::operation::Action::Lifecycle).await?;
         self.require_checkpoint("pause")?;
         if self.has_external_shares() && !options.host_writers_stopped {
             return Err(BoxliteError::InvalidArgument(format!(
@@ -281,7 +331,7 @@ impl BoxImpl {
     /// the guest the pause cut before anything uses it. A guest that is not
     /// is stopped.
     pub(crate) async fn resume(&self) -> BoxliteResult<()> {
-        let _serial = self.checkpoint_ops.lock().await;
+        let reservation = self.reserve(super::operation::Action::Lifecycle).await?;
         self.require_checkpoint("resume")?;
         let outcome = {
             let _network = self.network_updates.lock().await;
@@ -289,10 +339,11 @@ impl BoxImpl {
         };
         self.settle("resume", outcome).await?;
         let reconnected = async {
-            let live = self.ensure_booted().await?;
+            let live = self.ensure_booted_reserved().await?;
             self.check_guest_identity(live.guest_session()).await
         };
         if let Err(error) = reconnected.await {
+            drop(reservation);
             tracing::error!(box_id = %self.config.id, %error, "Resumed guest failed its identity check; stopping it");
             let stopped = self.stop().await;
             return Err(BoxliteError::Engine(format!(
@@ -380,7 +431,7 @@ impl BoxImpl {
                     error = %message,
                     "Checkpoint control outcome unknown; stopping the VM"
                 );
-                let stopped = self.stop().await;
+                let stopped = self.stop_reserved().await;
                 Err(BoxliteError::Engine(format!(
                     "{op}: outcome unknown ({message}); {}",
                     match stopped {
@@ -426,7 +477,7 @@ impl BoxImpl {
     /// is. Asking never resumes anything. When the owner gives no answer the
     /// guest's state is unknown, so the box is not used and not rebooted.
     pub(crate) async fn ensure_guest_running(&self) -> BoxliteResult<()> {
-        if !self.checkpoint_enabled() {
+        if !self.uses_checkpoint_owner() {
             return Ok(());
         }
         // A cached stopped status can predate a VM started by another
@@ -535,37 +586,27 @@ impl BoxImpl {
 
         let pid = match PidFileReader::at(self.layout.pid_file_path()).process_identity() {
             ProcessIdentity::Verified(pid) | ProcessIdentity::Legacy(pid) => pid,
-            ProcessIdentity::Absent => return Ok(()),
+            ProcessIdentity::Absent => match self.state.read().pid {
+                Some(pid) => pid,
+                None => return Ok(()),
+            },
         };
-        match self.live_state_if_booted() {
-            Some(live) => live.stop_handler()?,
-            None => ShimHandler::from_pid(pid, self.config.id.clone()).stop()?,
-        }
-
-        let deadline = Instant::now() + SHIM_EXIT_CONFIRM_TIMEOUT;
-        while crate::util::is_process_alive(pid) {
-            if Instant::now() >= deadline {
-                return Err(BoxliteError::Engine(format!(
-                    "box {} shim (pid {pid}) is still alive after stop",
-                    self.config.id
-                )));
-            }
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
-        Ok(())
+        capture::stop_and_join(
+            pid,
+            self.config.id.clone(),
+            PidFileReader::at(self.layout.pid_file_path()),
+        )
+        .await
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::litebox::checkpoint::test_support::{FakeGuest, image_for, layout_for, serve_guest};
+    use crate::litebox::checkpoint::test_support::{FakeGuest, serve_guest};
     use crate::litebox::config::{BoxConfig, ContainerRuntimeConfig};
     use crate::runtime::id::{BoxID, BoxIDMint};
-    use crate::runtime::options::{
-        BoxArchive, BoxOptions, BoxliteOptions, CloneOptions, ExportOptions, RootfsSpec,
-        SnapshotOptions, VolumeSpec,
-    };
+    use crate::runtime::options::{BoxOptions, BoxliteOptions, RootfsSpec, VolumeSpec};
     use crate::runtime::rt_impl::{RuntimeImpl, SharedRuntimeImpl};
     use crate::runtime::types::{BoxState, ContainerID};
     use crate::util::{PidFileWriter, PidRecord, ShimPidRecord, is_process_alive};
@@ -585,7 +626,7 @@ mod tests {
         }
     }
 
-    /// A checkpoint-enabled box in `status`, its shim a stand-in process, its
+    /// A checkpoint-owner box in `status`, its shim a stand-in process, its
     /// control socket served by `owner` (or left unbound) and its guest
     /// socket by a fake guest agent.
     struct Fixture {
@@ -627,7 +668,6 @@ mod tests {
 
             let id = BoxIDMint::mint();
             let mut options = options;
-            options.advanced.checkpoint_enabled = true;
             options.rootfs = RootfsSpec::Image("alpine:latest".into());
             options.auto_delete = Some(0);
             let config = BoxConfig {
@@ -643,6 +683,9 @@ mod tests {
             };
             let mut state = BoxState::new();
             state.status = status;
+            state.start_mode =
+                Some(crate::vmm::checkpoint::support::StartMode::Owner { protocol: 2 });
+            crate::litebox::operation::Reservation::provision(&runtime.layout, &id).unwrap();
             state.pid = Some(pid);
             state.set_lock_id(runtime.lock_manager.allocate().expect("lock"));
             configure(&mut state);
@@ -660,7 +703,7 @@ mod tests {
                 .unwrap();
             let socket = layout.control_socket_path();
             if let Some(owner) = owner {
-                fake::serve(&socket, &layout.prepare_checkpoint_dir().unwrap(), owner);
+                fake::serve(&socket, owner);
             }
             let guest = FakeGuest::new(config.container.id.as_str());
             serve_guest(&layout.socket_path(), guest.clone());
@@ -689,6 +732,7 @@ mod tests {
                 .expect("box exists")
         }
 
+        #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
         async fn status(&self) -> BoxStatus {
             self.runtime
                 .get_info(self.id.as_str())
@@ -747,7 +791,7 @@ mod tests {
     async fn checkpoint_pause_declares_the_runtime_owned_shares_so_an_export_can_succeed() {
         // Every box shares its own `shared/` tree and boot root, and libkrun
         // refuses to export shares whose host writers were not declared stopped.
-        let owner = FakeOwner::new(VmRunState::Running).with_shares();
+        let owner = FakeOwner::new(VmRunState::Running);
         let fx = Fixture::new(
             BoxStatus::Running,
             BoxOptions::default(),
@@ -758,14 +802,9 @@ mod tests {
             .pause(PauseOptions::default())
             .await
             .unwrap();
-        let export = ControlClient::new(&fx.socket)
-            .send(&ControlRequest::ExportRaw {
-                name: "vm.img".into(),
-            })
-            .await;
         assert_eq!(
-            Outcome::from_result(export),
-            Outcome::Done(VmRunState::Paused)
+            crate::vmm::checkpoint::CheckpointOwner::state(&*owner),
+            VmRunState::Paused
         );
         assert_eq!(owner.calls()[0], "pause(true)");
     }
@@ -908,26 +947,17 @@ mod tests {
             BoxOptions::default(),
             Some(owner.clone()),
         );
-        let (entered, release) = owner.hold();
-        let exporter = {
-            let client = ControlClient::new(&fx.socket);
-            tokio::spawn(async move {
-                client
-                    .send(&ControlRequest::ExportRaw {
-                        name: "vm.img".into(),
-                    })
-                    .await
-            })
-        };
-        tokio::task::spawn_blocking(move || entered.recv().unwrap())
-            .await
-            .unwrap();
+        let session = crate::litebox::checkpoint::capture::Session::begin(
+            ControlClient::new(&fx.socket),
+            false,
+        )
+        .await
+        .unwrap();
         let err = fx.litebox().await.resume().await.unwrap_err();
         assert!(matches!(err, BoxliteError::InvalidState(_)), "{err}");
-        assert!(is_process_alive(fx.pid), "Busy must not stop the VM");
+        assert!(is_process_alive(fx.pid));
         assert_eq!(fx.persisted(), BoxStatus::Paused);
-        release.send(()).unwrap();
-        exporter.await.unwrap().unwrap();
+        session.finish().await.unwrap();
 
         // Uncertain: the peer takes the request and hangs up without a reply.
         let fx = Fixture::new(BoxStatus::Running, BoxOptions::default(), None);
@@ -965,44 +995,6 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn checkpoint_boxes_refuse_disk_snapshot_clone_export_and_archive_restore() {
-        let fx = Fixture::new(BoxStatus::Stopped, BoxOptions::default(), None);
-        let litebox = fx.litebox().await;
-        let unsupported = |result: BoxliteResult<()>| {
-            assert!(
-                matches!(result, Err(BoxliteError::Unsupported(_))),
-                "{result:?}"
-            );
-        };
-        unsupported(
-            litebox
-                .snapshots()
-                .create(SnapshotOptions::default(), "snap")
-                .await
-                .map(drop),
-        );
-        unsupported(litebox.snapshots().restore("snap").await);
-        unsupported(
-            litebox
-                .clone_box(CloneOptions::default(), None)
-                .await
-                .map(drop),
-        );
-        unsupported(
-            litebox
-                .export(ExportOptions::default(), fx._home.path())
-                .await
-                .map(drop),
-        );
-        // Replacing the container disk would bypass the checkpoint's disks.
-        unsupported(
-            litebox
-                .restore_from_archive(BoxArchive::new(fx._home.path().join("box.boxlite")))
-                .await,
-        );
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
     async fn checkpoint_health_probe_runs_only_while_the_owner_reports_running() {
         let owner = FakeOwner::new(VmRunState::Running);
         let fx = Fixture::new(
@@ -1018,45 +1010,6 @@ mod tests {
         assert!(running_since(&control).await.is_none());
         let gone = ControlClient::new(fx._home.path().join("none.sock"));
         assert!(running_since(&gone).await.is_none());
-    }
-
-    /// The storage an imported box runs from, so an export reads the boot
-    /// config it recorded instead of an image.
-    fn restored(state: &mut BoxState) {
-        state.restored_storage = Some(RestoredStorage {
-            disks: Vec::new(),
-            shared_dir: std::path::PathBuf::from("/nonexistent/shared"),
-            container_image_config: ContainerImageConfig::default(),
-        });
-    }
-
-    /// A box with one volume, paused through the API, whose owner exports
-    /// `image`.
-    async fn paused_for_export(image: Option<Vec<u8>>) -> (Fixture, Arc<FakeOwner>, LiteBox) {
-        let options = BoxOptions {
-            volumes: vec![VolumeSpec::bind_mount("/srv/source-host-data", "/data")],
-            ..Default::default()
-        };
-        let owner = FakeOwner::new(VmRunState::Running).with_shares();
-        *owner.export_image.lock().unwrap() =
-            image.or_else(|| Some(image_for(&layout_for(&options))));
-        let fx = Fixture::with_state(BoxStatus::Running, options, Some(owner.clone()), restored);
-        let litebox = fx.litebox().await;
-        litebox
-            .pause(PauseOptions {
-                host_writers_stopped: true,
-            })
-            .await
-            .unwrap();
-        (fx, owner, litebox)
-    }
-
-    fn entries(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
-        let mut entries: Vec<_> = std::fs::read_dir(dir)
-            .map(|read| read.map(|entry| entry.unwrap().path()).collect())
-            .unwrap_or_default();
-        entries.sort();
-        entries
     }
 
     // Resuming reattaches through the boot pipeline, which refuses
@@ -1107,170 +1060,6 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn checkpoint_export_publishes_one_file_and_keeps_the_box_paused() {
-        let (fx, owner, litebox) = paused_for_export(None).await;
-        let out = fx._home.path().join("out");
-        std::fs::create_dir(&out).unwrap();
-        let dest = out.join("box.ckpt");
-        litebox.export_checkpoint(&dest).await.unwrap();
-
-        let (manifest, _) = archive::read(&dest, &fx._home.path().join("staged")).unwrap();
-        assert_eq!(manifest.guest, fx.guest.identity());
-        assert_eq!(manifest.source_box_id, fx.id.as_str());
-        manifest.layout.check_for(&manifest.boot.options).unwrap();
-        // The volume's contents travel; its source host path does not.
-        assert_eq!(manifest.boot.options.volumes[0].guest_path, "/data");
-        assert!(manifest.boot.options.volumes[0].host_path.is_empty());
-        assert!(
-            !String::from_utf8_lossy(&std::fs::read(&dest).unwrap()).contains("source-host-data")
-        );
-        assert_eq!(
-            entries(&out),
-            std::slice::from_ref(&dest),
-            "no temporary left"
-        );
-        assert!(
-            entries(&fx.layout.checkpoint_dir()).is_empty(),
-            "raw image removed"
-        );
-        assert_eq!(fx.persisted(), BoxStatus::Paused);
-        assert_eq!(fx.status().await, BoxStatus::Paused);
-        assert_eq!(
-            crate::vmm::checkpoint::CheckpointOwner::state(&*owner),
-            VmRunState::Paused
-        );
-        let calls = owner.calls();
-        assert_eq!(calls.len(), 2, "{calls:?}");
-        assert!(calls[1].starts_with("export("), "{calls:?}");
-        use std::os::unix::fs::PermissionsExt;
-        assert_eq!(
-            std::fs::metadata(&dest).unwrap().permissions().mode() & 0o777,
-            0o600
-        );
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn checkpoint_export_failures_keep_the_box_paused_and_leave_no_file() {
-        // The owner's export fails: still paused, nothing published.
-        let (fx, owner, litebox) = paused_for_export(None).await;
-        *owner.export_error.lock().unwrap() = Some(crate::vmm::checkpoint::OwnerError::new(
-            FailureKind::Io,
-            "disk full",
-        ));
-        let dest = fx._home.path().join("box.ckpt");
-        let error = litebox.export_checkpoint(&dest).await.unwrap_err();
-        assert!(matches!(error, BoxliteError::Storage(_)), "{error}");
-        assert!(!dest.exists());
-        assert_eq!(fx.persisted(), BoxStatus::Paused);
-        assert!(is_process_alive(fx.pid));
-
-        // The raw image does not show the box's devices: refused on the
-        // host, still paused, nothing left behind.
-        let mut wrong = layout_for(&BoxOptions {
-            volumes: vec![VolumeSpec::bind_mount("/srv/source-host-data", "/data")],
-            ..Default::default()
-        });
-        wrong.disks.pop();
-        let (fx, _, litebox) = paused_for_export(Some(image_for(&wrong))).await;
-        let dest = fx._home.path().join("box.ckpt");
-        let error = litebox.export_checkpoint(&dest).await.unwrap_err();
-        assert!(error.to_string().contains("disks"), "{error}");
-        assert!(!dest.exists());
-        assert!(entries(&fx.layout.checkpoint_dir()).is_empty());
-        assert_eq!(fx.persisted(), BoxStatus::Paused);
-        assert!(is_process_alive(fx.pid));
-
-        // An existing destination is never touched.
-        std::fs::write(&dest, b"mine").unwrap();
-        let error = litebox.export_checkpoint(&dest).await.unwrap_err();
-        assert!(matches!(error, BoxliteError::InvalidArgument(_)), "{error}");
-        assert_eq!(std::fs::read(&dest).unwrap(), b"mine");
-
-        // A box that runs (here: resumed by another process) is not exported.
-        let owner = FakeOwner::new(VmRunState::Running);
-        let fx = Fixture::with_state(
-            BoxStatus::Paused,
-            BoxOptions::default(),
-            Some(owner.clone()),
-            |state| {
-                restored(state);
-                state.checkpoint_guest = Some(GuestIdentity {
-                    boot_id: "boot-1".into(),
-                    container_id: String::new(),
-                    init_pid: 1,
-                });
-            },
-        );
-        let dest = fx._home.path().join("box.ckpt");
-        let error = fx
-            .litebox()
-            .await
-            .export_checkpoint(&dest)
-            .await
-            .unwrap_err();
-        assert!(error.to_string().contains("pause it first"), "{error}");
-        assert!(owner.calls().is_empty());
-        assert!(!dest.exists());
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn checkpoint_export_with_an_unknown_outcome_stops_the_vm_and_is_not_repeated() {
-        let fx = Fixture::with_state(BoxStatus::Paused, BoxOptions::default(), None, |state| {
-            restored(state);
-            state.checkpoint_guest = Some(GuestIdentity {
-                boot_id: "boot-1".into(),
-                container_id: String::new(),
-                init_pid: 1,
-            });
-        });
-        let listener = std::os::unix::net::UnixListener::bind(&fx.socket).unwrap();
-        let exports = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let peer = {
-            let exports = exports.clone();
-            std::thread::spawn(move || {
-                // Answer the opening state query; drop the export and the
-                // stop path's query unanswered.
-                for (i, stream) in listener.incoming().take(3).enumerate() {
-                    let stream = stream.unwrap();
-                    let mut reader = std::io::BufReader::new(&stream);
-                    let request: ControlRequest =
-                        crate::vmm::checkpoint::protocol::read_line(&mut reader).unwrap();
-                    if matches!(request, ControlRequest::ExportRaw { .. }) {
-                        exports.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                    }
-                    if i == 0 {
-                        let reply = ControlReply {
-                            state: VmRunState::Paused,
-                            in_flight: None,
-                            mutations: 1,
-                            error: None,
-                            share: None,
-                        };
-                        crate::vmm::checkpoint::protocol::write_line(&mut &stream, &reply).unwrap();
-                    }
-                }
-            })
-        };
-        let dest = fx._home.path().join("box.ckpt");
-        let error = fx
-            .litebox()
-            .await
-            .export_checkpoint(&dest)
-            .await
-            .unwrap_err();
-        assert!(error.to_string().contains("outcome unknown"), "{error}");
-        assert!(
-            !is_process_alive(fx.pid),
-            "an uncertain export stops the VM"
-        );
-        assert_eq!(fx.persisted(), BoxStatus::Stopped);
-        assert!(!dest.exists());
-        assert!(entries(&fx.layout.checkpoint_dir()).is_empty());
-        peer.join().unwrap();
-        assert_eq!(exports.load(std::sync::atomic::Ordering::SeqCst), 1);
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
     async fn checkpoint_stale_stopped_status_never_cold_boots_over_a_live_vm() {
         // Another process started this box and paused it; this one still
         // caches Stopped. The cold pipeline would prepare the box layout
@@ -1308,5 +1097,70 @@ mod tests {
         assert!(error.to_string().contains("live VM"), "{error}");
         assert_eq!(fx.persisted(), BoxStatus::Stopped);
         assert!(!fx.layout.disks_dir().exists());
+    }
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    #[tokio::test(flavor = "multi_thread")]
+    #[ignore = "bounded tmpfs failure injection; make test:snapshot:rootless"]
+    async fn checkpoint_export_disk_full_preserves_paused_source_and_cleans_staging() {
+        use std::os::unix::fs::MetadataExt;
+        let parent = std::path::PathBuf::from(
+            std::env::var_os("BOXLITE_TEST_FULL_DIR")
+                .expect("run through the bounded tmpfs rootless runner"),
+        );
+        let owner = FakeOwner::new(VmRunState::Paused);
+        let fx = Fixture::with_state(
+            BoxStatus::Paused,
+            BoxOptions::default(),
+            Some(owner.clone()),
+            |state| {
+                state.checkpoint_guest = Some(GuestIdentity {
+                    boot_id: "boot-1".into(),
+                    container_id: "unused".into(),
+                    init_pid: 42,
+                });
+                state.restored_storage = Some(RestoredStorage {
+                    disks: Vec::new(),
+                    shared_dir: "/unused".into(),
+                    container_image_config: ContainerImageConfig::default(),
+                    boot: None,
+                    bindings: Vec::new(),
+                });
+            },
+        );
+        crate::litebox::operation::Reservation::provision(&fx.runtime.layout, &fx.id).unwrap();
+        std::fs::create_dir_all(fx.layout.disks_dir()).unwrap();
+        let base = fx._home.path().join("base.ext4");
+        std::fs::write(&base, vec![23; 8 << 20]).unwrap();
+        let source = fx.layout.disk_path();
+        crate::disk::Qcow2Helper::create_cow_child_disk(
+            &base,
+            crate::disk::BackingFormat::Raw,
+            &source,
+            8 << 20,
+        )
+        .unwrap()
+        .leak();
+        let inode = std::fs::metadata(&source).unwrap().ino();
+        let box_ = fx.litebox().await;
+        let destination = parent.join("must-not-publish");
+        let error = box_
+            .export_checkpoint(&destination, &crate::LocalCheckpointProvider::default())
+            .await
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("os error 28"),
+            "must reach real ENOSPC: {error}"
+        );
+        assert_eq!(
+            crate::vmm::checkpoint::CheckpointOwner::state(owner.as_ref()),
+            VmRunState::Paused
+        );
+        assert_eq!(std::fs::metadata(&source).unwrap().ino(), inode);
+        assert!(!destination.exists());
+        assert_eq!(
+            std::fs::read_dir(parent).unwrap().count(),
+            0,
+            "failed copy left staging behind"
+        );
     }
 }

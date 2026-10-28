@@ -103,7 +103,8 @@ let runtime = BoxliteRuntime::default_runtime();
 | `metrics` | `async fn metrics(&self) -> RuntimeMetrics` | Get runtime-wide metrics |
 | `remove` | `async fn remove(&self, id_or_name: &str, force: bool) -> BoxliteResult<()>` | Remove box completely |
 | `images` | `fn images(&self) -> BoxliteResult<ImageHandle>` | The images this runtime can boot from; never fails |
-| `import_checkpoint` | `async fn import_checkpoint(&self, path: impl AsRef<Path>, options: CheckpointImportOptions) -> BoxliteResult<LiteBox>` | Create a new, `Paused` box from a checkpoint file; `CheckpointImportOptions { name: Option<String> }`. Local runtime on Linux x86_64/KVM only, else `Unsupported`. See [checkpoints](../../guides/checkpoints.md) |
+| `import_checkpoint` | `async fn import_checkpoint(&self, dir: impl AsRef<Path>, options: CheckpointImportOptions, provider: &dyn CheckpointImportProvider) -> BoxliteResult<LiteBox>` | Create a new, `Paused` box from a verified checkpoint pair and external bindings; `CheckpointImportOptions { name: Option<String> }`. Local runtime on Linux x86_64/KVM only, else `Unsupported`. See [checkpoints](../../guides/checkpoints.md) |
+| `inspect_checkpoint` | `fn inspect_checkpoint(dir: impl AsRef<Path>) -> BoxliteResult<CheckpointDependencies>` | Associated function; read memory checksums, pair digest and required external bindings without creating a runtime or box |
 
 #### Example
 
@@ -393,12 +394,12 @@ HTTP contract, reconfiguration, disable, and generation semantics.
 | `run` | `async fn run(&self, command: BoxCommand) -> BoxliteResult<Execution>` | Run command |
 | `metrics` | `async fn metrics(&self) -> BoxliteResult<BoxMetrics>` | Get box metrics |
 | `stop` | `async fn stop(&self) -> BoxliteResult<()>` | Stop the box |
-| `pause` | `async fn pause(&self, options: PauseOptions) -> BoxliteResult<()>` | Pause a checkpoint-enabled box at one consistent cut. `PauseOptions { host_writers_stopped: bool }` must be `true` when the box has volumes (else `InvalidArgument`) |
+| `pause` | `async fn pause(&self, options: PauseOptions) -> BoxliteResult<()>` | Pause a supported owner-mode box at one consistent cut. `PauseOptions { host_writers_stopped: bool }` must be `true` when the box has volumes (else `InvalidArgument`) |
 | `resume` | `async fn resume(&self) -> BoxliteResult<()>` | Resume a paused box; a guest that is not the paused one is stopped and `Engine` is returned |
-| `export_checkpoint` | `async fn export_checkpoint(&self, path: impl AsRef<Path>) -> BoxliteResult<()>` | Write a paused box to the new file `path`; the box stays paused |
+| `export_checkpoint` | `async fn export_checkpoint(&self, dir: impl AsRef<Path>, provider: &dyn CheckpointExportProvider) -> BoxliteResult<()>` | Write a paused box to a new two-file directory; retain external dependencies through the provider; the box stays paused |
 
-`pause`, `resume` and `export_checkpoint` need `advanced.checkpoint_enabled` and the local runtime
-(else `Unsupported`); the [checkpoints guide](../../guides/checkpoints.md) has the full contract.
+Supported local configurations automatically select the checkpoint owner; other configurations
+report their restriction. Existing older shims require explicit restart for the new protocol; the [checkpoints guide](../../guides/checkpoints.md) has the full contract.
 
 #### Lifecycle
 
@@ -526,7 +527,7 @@ pub enum BoxStatus {
     Stopped,
 
     /// VM frozen: briefly during a disk export/snapshot, or by `pause()`
-    /// on a checkpoint-enabled box until `resume()` or `stop()`
+    /// on a box in checkpoint owner mode until `resume()` or `stop()`
     Paused,
 
     /// Init pipeline failed; record and rootfs kept
@@ -881,7 +882,6 @@ pub struct AdvancedBoxOptions {
     pub isolate_mounts: bool,
     pub health_check: Option<HealthCheckOptions>,
     pub network_rate_limit: NetworkRateLimit,
-    pub checkpoint_enabled: bool,
 }
 ```
 
@@ -892,7 +892,6 @@ pub struct AdvancedBoxOptions {
 | `isolate_mounts` | `bool` | `false` | Enable bind mount isolation (requires CAP_SYS_ADMIN on Linux) |
 | `health_check` | `Option<HealthCheckOptions>` | `None` | Optional guest-agent health monitoring |
 | `network_rate_limit` | `NetworkRateLimit` | Unlimited | Per-direction rate limit for the box's interface, in kilobits/sec. Local runtime only; see [NetworkRateLimit](#networkratelimit) |
-| `checkpoint_enabled` | `bool` | `false` | Allow pause, checkpoint export and import. Local runtime on Linux x86_64/KVM with the default sandbox; refused elsewhere, by REST runtimes and with the options the [checkpoints guide](../../guides/checkpoints.md#support) lists. Such a box refuses disk snapshots, clone, the disk export and `restore_from_archive` |
 
 ### RootfsSpec
 

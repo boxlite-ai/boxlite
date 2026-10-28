@@ -324,7 +324,6 @@ impl FilesystemLayout {
 /// │   ├── ready.sock      # Ready notification
 /// │   └── ctl.sock        # Checkpoint control (checkpoint-enabled boxes)
 /// ├── tmp/                # Per-box temp files for shim/libkrun
-/// ├── checkpoint/         # Raw VM exports (checkpoint-enabled boxes, 0700)
 /// ├── restored/           # Imported box's restored disks/ and fs/ (0700)
 /// ├── boot/               # Custom direct-boot assets (when configured)
 /// │   ├── current.json        # Atomically published active generation
@@ -537,26 +536,12 @@ impl BoxFilesystemLayout {
         self.box_dir.join("tmp")
     }
 
-    /// Checkpoint working directory: ~/.boxlite/boxes/{box_id}/checkpoint
-    ///
-    /// Owner-only. The jailed shim writes raw VM exports here; the host
-    /// publishes the final archive from it, so the sandbox never needs write
-    /// access to a caller-chosen destination.
-    pub fn checkpoint_dir(&self) -> PathBuf {
-        self.box_dir.join("checkpoint")
-    }
-
     /// Restored storage of an imported box: ~/.boxlite/boxes/{box_id}/restored
     ///
-    /// Owner-only. libkrun creates `disks/` and `fs/` inside it at import and
-    /// hands them over; the box keeps running from them.
+    /// Owner-only deterministic boot-root recipes. The container QCOW2 stays
+    /// under `disks/`; external shares remain at their explicit bound roots.
     pub fn restored_dir(&self) -> PathBuf {
         self.box_dir.join("restored")
-    }
-
-    /// Create [`Self::checkpoint_dir`] with owner-only permissions.
-    pub fn prepare_checkpoint_dir(&self) -> BoxliteResult<PathBuf> {
-        self.prepare_private_dir(self.checkpoint_dir())
     }
 
     /// Create [`Self::restored_dir`] with owner-only permissions.

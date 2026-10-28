@@ -1,6 +1,11 @@
 //! Host side of the checkpoint control socket.
 
 use super::protocol::{ControlReply, ControlRequest, MAX_MESSAGE_BYTES, parse_line};
+use super::{
+    descriptors,
+    protocol::{DescriptorReply, DescriptorRequest, write_line},
+};
+use std::os::fd::OwnedFd;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
@@ -35,18 +40,6 @@ impl std::fmt::Display for ControlError {
     }
 }
 
-/// The reply deadline for `request`.
-///
-/// An export writes the whole guest memory, which can take minutes, so it
-/// waits for its reply or for the shim to close the socket rather than
-/// inheriting the device-control deadline.
-pub fn reply_deadline(request: &ControlRequest) -> Option<Duration> {
-    match request {
-        ControlRequest::ExportRaw { .. } => None,
-        _ => Some(CONTROL_TIMEOUT),
-    }
-}
-
 /// Talks to one box's control socket.
 #[derive(Debug, Clone)]
 pub struct ControlClient {
@@ -54,6 +47,48 @@ pub struct ControlClient {
 }
 
 impl ControlClient {
+    /// One descriptor request; no retry after delivery or uncertain reply.
+    pub async fn descriptors(
+        &self,
+        request: DescriptorRequest,
+        files: Vec<OwnedFd>,
+    ) -> Result<(DescriptorReply, Vec<OwnedFd>), ControlError> {
+        let stream = tokio::time::timeout(CONNECT_TIMEOUT, UnixStream::connect(&self.socket))
+            .await
+            .map_err(|_| ControlError::Unavailable("descriptor connect timed out".into()))?
+            .map_err(|e| ControlError::Unavailable(e.to_string()))?
+            .into_std()
+            .map_err(|e| ControlError::Unavailable(e.to_string()))?;
+        stream
+            .set_nonblocking(false)
+            .map_err(|e| ControlError::Unavailable(e.to_string()))?;
+        tokio::task::spawn_blocking(move || {
+            stream
+                .set_write_timeout(Some(CONTROL_TIMEOUT))
+                .map_err(|e| ControlError::Unavailable(e.to_string()))?;
+            stream
+                .set_read_timeout(Some(CONTROL_TIMEOUT))
+                .map_err(|e| ControlError::Unavailable(e.to_string()))?;
+            let operation = *uuid::Uuid::new_v4().as_bytes();
+            write_line(&mut &stream, &ControlRequest::Session { operation })
+                .map_err(|e| ControlError::Uncertain(e.to_string()))?;
+            descriptors::send(&stream, operation, &request, &files).map_err(|e| {
+                ControlError::Uncertain(format!(
+                    "generation-2 control (restart an older shim): {e}"
+                ))
+            })?;
+            if matches!(request, DescriptorRequest::Export { .. }) {
+                stream
+                    .set_read_timeout(None)
+                    .map_err(|e| ControlError::Uncertain(e.to_string()))?;
+            }
+            descriptors::receive(&stream, operation)
+                .map_err(|e| ControlError::Uncertain(e.to_string()))
+        })
+        .await
+        .map_err(|e| ControlError::Uncertain(e.to_string()))?
+    }
+
     pub fn new(socket: impl Into<PathBuf>) -> Self {
         Self {
             socket: socket.into(),
@@ -66,7 +101,7 @@ impl ControlClient {
 
     /// Send `request` with its standard deadline.
     pub async fn send(&self, request: &ControlRequest) -> Result<ControlReply, ControlError> {
-        self.send_with_deadline(request, reply_deadline(request))
+        self.send_with_deadline(request, Some(CONTROL_TIMEOUT))
             .await
     }
 

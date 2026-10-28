@@ -176,10 +176,13 @@ pub struct SecurityOptions {
     pub network_enabled: bool,
 }
 
+pub(crate) const DEFAULT_MAX_OPEN_FILES: u64 = 1024;
+
 /// Resource limits for the jailed process.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ResourceLimits {
-    /// Maximum number of open file descriptors (RLIMIT_NOFILE).
+    /// Maximum open descriptors (RLIMIT_NOFILE). For an enabled jailer,
+    /// None selects the mode-derived default; Some(n) is an exact caller cap.
     #[serde(default)]
     pub max_open_files: Option<u64>,
 
@@ -231,7 +234,7 @@ impl Default for SecurityOptions {
             sanitize_env: true,
             env_allowlist: vec!["RUST_LOG".to_string()],
             resource_limits: ResourceLimits {
-                max_open_files: Some(1024),
+                max_open_files: None, // Resolve after the VM's mode is selected.
                 max_file_size: Some(1024 * 1024 * 1024), // 1GB
                 // Per-box cgroup `pids.max` — the fork-bomb cap for the box's
                 // host-side process tree (bwrap + shim + libkrun/gvproxy
@@ -837,18 +840,6 @@ pub struct AdvancedBoxOptions {
     #[serde(default)]
     pub privileged: bool,
 
-    /// Run the VM under libkrun's snapshot owner so the box can be paused,
-    /// exported as one checkpoint file and resumed as a new box.
-    ///
-    /// Opt-in and local-only: supported on Linux x86_64 with KVM, the libkrun
-    /// engine and the default jailed (rootless) isolation; anything else is
-    /// refused before launch. A checkpoint-enabled box refuses the disk-only
-    /// snapshot, clone, export and archive-restore operations. Omitted from the serialized form
-    /// when off, so an ordinary box's manifest keeps the shape older importers
-    /// read.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub checkpoint_enabled: bool,
-
     /// Set once `resolve_container_security` has run on this instance.
     /// `set_capabilities` refuses to change the policy afterward — a
     /// resolved request's capabilities shouldn't shift under it before the
@@ -878,7 +869,6 @@ impl Clone for AdvancedBoxOptions {
             kernel: self.kernel.clone(),
             nested_virtualization: self.nested_virtualization,
             privileged: self.privileged,
-            checkpoint_enabled: self.checkpoint_enabled,
             resolved: std::sync::atomic::AtomicBool::new(false),
         }
     }

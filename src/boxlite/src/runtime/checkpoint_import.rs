@@ -1,251 +1,442 @@
-//! Import of a BoxCheckpoint file as a new, paused box.
-//!
-//! Everything in the file is checked before anything box-owned exists. The
-//! new box gets a new host identity (ID, home, sockets, gvproxy socket,
-//! console log); the guest keeps its own (container ID, PIDs, execution IDs).
-//! The shim restores the VM paused: no kernel, no Guest.Init, no
-//! Container.Init or Container.Start, no ready wait. The box is published
-//! only once the owner reports it paused and every restored disk and share
-//! copy is accounted for. Any failure stops the shim this attempt spawned
-//! and then removes only what the attempt created; nothing is published.
-
-use std::collections::HashMap;
-use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
-
-use async_trait::async_trait;
-use boxlite_shared::errors::{BoxliteError, BoxliteResult};
-
-use crate::litebox::LiteBox;
-use crate::litebox::checkpoint::archive::{self, Manifest};
-use crate::litebox::checkpoint::{RestoredDisk, RestoredStorage};
+//! Bind external resources and a private QCOW2 before publishing a Paused box.
 use crate::litebox::config::{BoxConfig, ContainerRuntimeConfig};
 use crate::litebox::init::{checkpoint_import_spec, read_tail, spawn_vm};
+use crate::litebox::{
+    LiteBox,
+    checkpoint::{
+        RestoredDisk, RestoredStorage,
+        pair::{self, Application},
+        provider::CheckpointImportProvider,
+    },
+};
 use crate::lock::LockId;
-use crate::runtime::constants::mount_tags;
-use crate::runtime::id::{BoxID, BoxIDMint};
-use crate::runtime::layout::BoxFilesystemLayout;
-use crate::runtime::options::{BoxOptions, CheckpointImportOptions};
-use crate::runtime::rt_impl::SharedRuntimeImpl;
-use crate::runtime::types::{BoxState, BoxStatus, ContainerID};
-use crate::vmm::checkpoint::support::{self, Host};
-use crate::vmm::checkpoint::{ControlClient, ControlRequest, ImportLaunch, VmRunState};
+use crate::runtime::{
+    id::{BoxID, BoxIDMint},
+    layout::BoxFilesystemLayout,
+    options::CheckpointImportOptions,
+    rt_impl::SharedRuntimeImpl,
+    types::{BoxState, BoxStatus, ContainerID},
+};
+use crate::vmm::checkpoint::{
+    ControlClient, ControlRequest, ImportLaunch, VmRunState,
+    protocol::DescriptorRequest,
+    support::{self, Host},
+};
 use crate::vmm::controller::VmmHandler;
-use crate::vmm::{ExitInfo, InstanceSpec, VmmKind};
-
-/// How long the shim may take to restore the image. A multi-GB image is
-/// read in full, so this is generous; a shim that dies ends the wait at once.
+use crate::vmm::{ExitInfo, VmmKind};
+use boxlite_shared::errors::{BoxliteError, BoxliteResult};
+use std::fs::{File, OpenOptions};
+use std::os::fd::OwnedFd;
+use std::os::unix::fs::OpenOptionsExt;
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 const IMPORT_START_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 const STATE_POLL: Duration = Duration::from_millis(100);
-/// How much of a dead import shim's stderr the operator log keeps.
 const SHIM_STDERR_TAIL: u64 = 16 * 1024;
-/// How long a failed attempt waits for its shim to be gone before it
-/// removes anything.
-const SHIM_EXIT_TIMEOUT: Duration = Duration::from_secs(5);
-/// A volume's host path until its restored copy exists.
-const PENDING_COPY: &str = "/nonexistent/boxlite-restored-volume";
-
-/// Starts the shim that restores the image. A seam for tests; production
-/// spawns the jailed `boxlite-shim`.
-#[allow(
-    clippy::double_must_use,
-    reason = "async_trait generates a must-use boxed future"
-)]
-#[async_trait]
-pub(crate) trait ImportLauncher: Send + Sync {
-    async fn launch(
-        &self,
-        box_id: &BoxID,
-        spec: &InstanceSpec,
-        options: &BoxOptions,
-        layout: &BoxFilesystemLayout,
-    ) -> BoxliteResult<Box<dyn VmmHandler>>;
-}
-
-struct ShimLauncher;
-
-#[async_trait]
-impl ImportLauncher for ShimLauncher {
-    async fn launch(
-        &self,
-        box_id: &BoxID,
-        spec: &InstanceSpec,
-        options: &BoxOptions,
-        layout: &BoxFilesystemLayout,
-    ) -> BoxliteResult<Box<dyn VmmHandler>> {
-        spawn_vm(box_id, spec, options, layout).await
-    }
-}
-
 fn invalid(why: impl std::fmt::Display) -> BoxliteError {
-    BoxliteError::Storage(format!("invalid checkpoint: {why}"))
+    pair::invalid(why)
 }
 
-/// Import the checkpoint at `path` as a new box, paused.
 pub(crate) async fn import_checkpoint(
     runtime: &SharedRuntimeImpl,
     path: &Path,
     options: CheckpointImportOptions,
-) -> BoxliteResult<LiteBox> {
-    import_with(runtime, path, options, &ShimLauncher).await
-}
-
-pub(crate) async fn import_with(
-    runtime: &SharedRuntimeImpl,
-    path: &Path,
-    import: CheckpointImportOptions,
-    launcher: &dyn ImportLauncher,
+    provider: &dyn CheckpointImportProvider,
 ) -> BoxliteResult<LiteBox> {
     support::check_host(Host::current())?;
-
-    // Verify everything into a private staging directory first.
-    let staging = tempfile::Builder::new()
-        .prefix("checkpoint-import-")
-        .tempdir_in(runtime.layout.temp_dir())
-        .map_err(|e| BoxliteError::Storage(format!("checkpoint staging directory: {e}")))?;
-    let staged = staging.path().join("vm.krunvm");
-    let (manifest, share_payloads) = {
-        let (path, staged) = (path.to_path_buf(), staged.clone());
-        tokio::task::spawn_blocking(move || archive::read(&path, &staged))
-            .await
-            .map_err(|e| BoxliteError::Internal(format!("checkpoint read task failed: {e}")))??
-    };
-    let options = verified_options(&manifest, share_payloads)?;
-    let container_id = ContainerID::parse(&manifest.guest.container_id)
-        .ok_or_else(|| invalid("the guest's container ID is malformed"))?;
-
-    // The new box's resources, owned by this attempt until it is published.
-    let box_id = BoxIDMint::mint();
-    let layout = runtime.layout.box_layout(box_id.as_str(), false)?;
-    std::fs::create_dir(layout.root()).map_err(|e| {
-        BoxliteError::Storage(format!("create box home {}: {e}", layout.root().display()))
-    })?;
-    let mut attempt = Attempt {
-        runtime: runtime.clone(),
-        layout: layout.clone(),
-        handler: None,
-        lock: None,
-        armed: true,
-    };
-    layout.prepare()?;
-    let restored = layout.prepare_restored_dir()?;
-    let image = layout.prepare_checkpoint_dir()?.join("import.krunvm");
-    crate::litebox::archive::move_file(&staged, &image)?;
-    let launch = ImportLaunch {
-        image: image.clone(),
-        disk_dir: Some(restored.join("disks")),
-        fs_dir: Some(restored.join("fs")),
-        console_output: layout.console_output_path(),
-    };
-    // The network backend is the box's control client for the new gvproxy;
-    // the reattach after resume creates its own.
-    let (spec, _network) = checkpoint_import_spec(
-        &box_id,
-        &options,
-        &layout,
-        runtime,
-        manifest.boot.outbound_policy.as_ref(),
-        launch,
-    )?;
-    let handler = launcher.launch(&box_id, &spec, &options, &layout).await?;
-    let pid = handler.pid();
-    attempt.handler = Some(handler);
-
-    let control = ControlClient::new(layout.control_socket_path());
-    wait_paused(&control, pid, &layout).await?;
-    // libkrun reads the image only while it restores.
-    let _ = std::fs::remove_file(&image);
-    let (storage, copies) = restored_storage(&control, &manifest, &restored).await?;
-
-    // External shares become the box's own copies; the source paths mean
-    // nothing on this host and are never read.
-    let mut options = options;
-    for (index, volume) in options.volumes.iter_mut().enumerate() {
-        let copy = copies
-            .get(&archive::volume_tag(index))
-            .ok_or_else(|| invalid(format_args!("no restored copy of volume {index}")))?;
-        volume.host_path = copy.to_string_lossy().into_owned();
+    let pair = pair::open(path)?;
+    let mut bindings = provider.bind(&pair.dependencies).await?;
+    bindings.validate(&pair.dependencies)?;
+    pair.verify_disk()?;
+    let application: Application =
+        serde_json::from_value(pair.dependencies.application.clone()).map_err(invalid)?;
+    let mut box_options = application.options.clone();
+    if u16::from(
+        box_options
+            .cpus
+            .unwrap_or(crate::runtime::constants::vm_defaults::DEFAULT_CPUS),
+    ) != pair.dependencies.cpus
+        // The boot loader maps low RAM and the copied kernel in addition to
+        // the configured MiB below the MMIO gap. Mapped bytes may exceed that
+        // logical setting; they must still cover it.
+        || (u64::from(
+            box_options
+                .memory_mib
+                .unwrap_or(crate::runtime::constants::vm_defaults::DEFAULT_MEMORY_MIB),
+        ) << 20)
+            > pair.dependencies.memory_bytes
+    {
+        return Err(invalid(format!(
+            "saved application resources exceed memory/device layout: cpus={:?}/{}, memory_mib={:?}, mapped_bytes={}",
+            box_options.cpus,
+            pair.dependencies.cpus,
+            box_options.memory_mib,
+            pair.dependencies.memory_bytes,
+        )));
     }
-    let config = BoxConfig {
-        id: box_id.clone(),
-        name: import.name,
-        created_at: chrono::Utc::now(),
-        container: ContainerRuntimeConfig { id: container_id },
-        options,
-        engine_kind: VmmKind::Libkrun,
-        box_home: layout.root().to_path_buf(),
+    if bindings.shares.len() != pair.dependencies.shares.len() {
+        return Err(invalid("share binding count differs"));
+    }
+    let container_id = ContainerID::parse(&application.guest.container_id)
+        .ok_or_else(|| invalid("invalid saved container ID"))?;
+    let boot_dependency = pair
+        .dependencies
+        .disk_dependencies
+        .as_array()
+        .and_then(|disks| disks.get(1))
+        .and_then(|disk| disk.get("external_readonly_boot"))
+        .ok_or_else(|| invalid("exact readonly boot dependency missing"))?;
+    let boot_hash: [u8; 32] =
+        serde_json::from_value(boot_dependency["sha256"].clone()).map_err(invalid)?;
+    let boot_length = boot_dependency["length"]
+        .as_u64()
+        .ok_or_else(|| invalid("invalid boot length"))?;
+    let mut cached_pin = None;
+    let boot_path = if let Some(path) = bindings.boot_disk.take() {
+        path
+    } else {
+        let records = runtime
+            .base_disk_mgr
+            .store()
+            .list_by_box("__global__", Some(crate::disk::BaseDiskKind::Rootfs))?;
+        let mut found = None;
+        for record in records {
+            let path = PathBuf::from(record.base_path());
+            let file = match File::open(&path) {
+                Ok(file) => file,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => return Err(invalid(error)),
+            };
+            if file.metadata().map_err(invalid)?.len() == boot_length
+                && pair::digest(&file, 0, boot_length)? == boot_hash
+            {
+                cached_pin = Some(record.id().clone());
+                found = Some(path);
+                break;
+            }
+        }
+        found.ok_or_else(|| {
+            invalid("exact readonly boot disk is absent; supply its digest binding")
+        })?
     };
-    let mut state = BoxState::new();
-    state.set_status(BoxStatus::Paused);
-    state.set_pid(Some(pid));
-    state.outbound_policy = manifest.boot.outbound_policy.clone();
-    state.checkpoint_guest = Some(manifest.guest.clone());
-    state.restored_storage = Some(storage);
-    let lock = runtime.lock_manager.allocate()?;
-    attempt.lock = Some(lock);
-    state.set_lock_id(lock);
-
-    // Publishing is the last step, and nothing after it fails or waits: an
-    // import dropped before it leaves nothing behind.
+    let boot_path = boot_path.canonicalize().map_err(invalid)?;
+    if cached_pin.is_none() {
+        cached_pin = runtime
+            .base_disk_mgr
+            .store()
+            .find_by_base_path(&boot_path.to_string_lossy())?
+            .map(|record| record.id().clone());
+    }
+    let boot = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(&boot_path)
+        .map_err(invalid)?;
+    if boot.metadata().map_err(invalid)?.len() != boot_length
+        || pair::digest(&boot, 0, boot_length)? != boot_hash
+    {
+        return Err(invalid("readonly boot dependency length/checksum mismatch"));
+    }
+    for (index, volume) in box_options.volumes.iter_mut().enumerate() {
+        let tag = format!("uservol{index}");
+        if let Some((_, bound)) = pair
+            .dependencies
+            .shares
+            .iter()
+            .zip(&bindings.shares)
+            .find(|(share, _)| share.tag == tag)
+        {
+            volume.host_path = bound.root.to_string_lossy().into_owned();
+            volume.managed_volume = None;
+        }
+    }
+    box_options.sanitize()?;
+    let runtime = runtime.clone();
+    let worker_runtime = runtime.clone();
+    let cancellation = runtime.shutdown_token.child_token();
+    let canceller = crate::litebox::checkpoint::capture::CancelOnDrop(cancellation.clone());
+    let task = tokio::spawn(async move {
+        let runtime = worker_runtime;
+        let box_id = BoxIDMint::mint();
+        crate::litebox::operation::Reservation::provision(&runtime.layout, &box_id)?;
+        let layout = runtime.layout.box_layout(box_id.as_str(), false)?;
+        std::fs::create_dir(layout.root()).map_err(invalid)?;
+        let mut attempt = Attempt {
+            runtime: runtime.clone(),
+            layout: layout.clone(),
+            handler: None,
+            lock: None,
+            armed: true,
+            lease: Some(bindings.lease.clone()),
+        };
+        layout.prepare()?;
+        let private_disk = layout.root().join("disks/disk.qcow2");
+        let copy_path = private_disk.clone();
+        let source = pair.disk;
+        let copy_cancellation = cancellation.clone();
+        tokio::task::spawn_blocking(move || {
+            use std::io::{Read, Write};
+            let mut source = source;
+            let mut output = OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(copy_path)
+                .map_err(invalid)?;
+            let mut buffer = vec![0; 1 << 20];
+            loop {
+                if copy_cancellation.is_cancelled() {
+                    return Err(BoxliteError::Stopped(
+                        "checkpoint import copy cancelled".into(),
+                    ));
+                }
+                let count = source.read(&mut buffer).map_err(invalid)?;
+                if count == 0 {
+                    break;
+                }
+                output.write_all(&buffer[..count]).map_err(invalid)?;
+            }
+            output.sync_all().map_err(invalid)
+        })
+        .await
+        .map_err(invalid)??;
+        if cancellation.is_cancelled() {
+            return Err(BoxliteError::Stopped(
+                "checkpoint import cancelled before spawn".into(),
+            ));
+        }
+        let mut files: Vec<OwnedFd> = vec![
+            File::open(&private_disk).map_err(invalid)?.into(),
+            boot.into(),
+        ];
+        // The container backend must be writable and private, never the input pair.
+        files[0] = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&private_disk)
+            .map_err(invalid)?
+            .into();
+        let mut shares_json = Vec::new();
+        let mut shared_dir = None;
+        for (index, (share, bound)) in pair
+            .dependencies
+            .shares
+            .iter()
+            .zip(bindings.shares.iter_mut())
+            .enumerate()
+        {
+            if share.vm_owned {
+                let root = layout.root().join(format!("restored/boot-{index}"));
+                std::fs::create_dir_all(&root).map_err(invalid)?;
+                for directory in ["dev", "proc", "sys", "newroot"] {
+                    std::fs::create_dir(root.join(directory)).map_err(invalid)?;
+                }
+                bound.root = root;
+                // Directory handles refer to deterministic recipe objects only.
+                for handle in share.state["handles"]
+                    .as_array()
+                    .ok_or_else(|| invalid("boot handle table missing"))?
+                {
+                    let object = handle["object"]
+                        .as_u64()
+                        .ok_or_else(|| invalid("invalid boot object index"))?
+                        as usize;
+                    let recipe = share
+                        .objects
+                        .get(object)
+                        .and_then(|o| o.recipe.as_deref())
+                        .ok_or_else(|| invalid("missing boot object recipe"))?;
+                    if ![".", "dev", "proc", "sys", "newroot"].contains(&recipe) {
+                        return Err(invalid("non-reconstructible boot object"));
+                    }
+                    let flags: i32 =
+                        serde_json::from_value(handle["flags"].clone()).map_err(invalid)?;
+                    if flags & (libc::O_CREAT | libc::O_TRUNC | libc::O_EXCL) != 0 {
+                        return Err(invalid("unsafe boot handle flags"));
+                    }
+                    let file = OpenOptions::new()
+                        .read(true)
+                        .custom_flags(flags | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+                        .open(bound.root.join(recipe))
+                        .map_err(invalid)?;
+                    bound.handles.insert(
+                        handle["handle"]
+                            .as_u64()
+                            .ok_or_else(|| invalid("invalid handle"))?,
+                        file,
+                    );
+                }
+            }
+            if share.tag == crate::runtime::constants::mount_tags::SHARED {
+                shared_dir = Some(bound.root.clone());
+            }
+            let mut objects = Vec::new();
+            for object in bound.objects.drain(..) {
+                objects.push(files.len());
+                files.push(object.into());
+            }
+            let mut handles = serde_json::Map::new();
+            for (id, file) in std::mem::take(&mut bound.handles) {
+                handles.insert(id.to_string(), serde_json::json!(files.len()));
+                files.push(file.into());
+            }
+            let mut dax = Vec::new();
+            for (object, writable, file) in bound.dax.drain(..) {
+                dax.push(serde_json::json!({"object":object,"writable":writable,"fd":files.len()}));
+                files.push(file.into());
+            }
+            shares_json.push(serde_json::json!({"root":bound.root,"objects":objects,"handles":handles,"dax":dax}));
+        }
+        let storage = RestoredStorage {
+            disks: vec![
+                RestoredDisk {
+                    path: private_disk,
+                    format: crate::vmm::DiskFormat::Qcow2,
+                    read_only: false,
+                },
+                RestoredDisk {
+                    path: boot_path,
+                    format: crate::vmm::DiskFormat::Raw,
+                    read_only: true,
+                },
+            ],
+            shared_dir: shared_dir.ok_or_else(|| invalid("BoxLiteShared root is not bound"))?,
+            container_image_config: application.container_image_config.clone(),
+            boot: Some(crate::litebox::checkpoint::BootDependency {
+                length: boot_length,
+                sha256: boot_hash,
+                base_id: cached_pin.clone(),
+            }),
+            bindings: pair
+                .dependencies
+                .shares
+                .iter()
+                .zip(&bindings.shares)
+                .filter(|(share, _)| !share.vm_owned)
+                .map(
+                    |(share, bound)| crate::litebox::checkpoint::RestartBinding {
+                        tag: share.tag.clone(),
+                        root: bound.root.clone(),
+                        objects: share
+                            .objects
+                            .iter()
+                            .filter_map(|object| object.reference.clone())
+                            .collect(),
+                    },
+                )
+                .collect(),
+        };
+        let launch = ImportLaunch {
+            console_output: layout.console_output_path(),
+        };
+        let (mut spec, _network) = checkpoint_import_spec(
+            &box_id,
+            &box_options,
+            &layout,
+            &runtime,
+            application.outbound_policy.as_ref(),
+            launch,
+        )?;
+        for (share, bound) in pair.dependencies.shares.iter().zip(&bindings.shares) {
+            spec.fs_shares
+                .add(share.tag.clone(), bound.root.clone(), share.read_only);
+        }
+        attempt.handler = Some(spawn_vm(&box_id, &spec, &box_options, &layout).await?);
+        let pid = attempt.handler.as_ref().expect("spawned handler").pid();
+        let control = ControlClient::new(layout.control_socket_path());
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            if cancellation.is_cancelled() {
+                return Err(BoxliteError::Stopped(
+                    "checkpoint import binding cancelled".into(),
+                ));
+            }
+            match control
+                .descriptors(DescriptorRequest::Capabilities, Vec::new())
+                .await
+            {
+                Ok((reply, _)) if reply.error.is_none() => break,
+                Err(crate::vmm::checkpoint::ControlError::Unavailable(_))
+                    if Instant::now() < deadline =>
+                {
+                    tokio::time::sleep(STATE_POLL).await
+                }
+                result => {
+                    return Err(BoxliteError::Engine(format!(
+                        "checkpoint import control unavailable: {result:?}"
+                    )));
+                }
+            }
+        }
+        let mut transfer = vec![pair.memory.into()];
+        transfer.extend(files);
+        crate::litebox::checkpoint::capture::request(
+            &control,
+            DescriptorRequest::Import {
+                bindings: serde_json::json!({"disks":[0,1],"shares":shares_json}),
+            },
+            transfer,
+        )
+        .await?;
+        tokio::select! {
+            result = wait_paused(&control,pid,&layout) => result?,
+            () = cancellation.cancelled() => return Err(BoxliteError::Stopped("checkpoint restore cancelled".into())),
+        }
+        if cancellation.is_cancelled() {
+            return Err(BoxliteError::Stopped(
+                "checkpoint import cancelled before publication".into(),
+            ));
+        }
+        let config = BoxConfig {
+            id: box_id.clone(),
+            name: options.name,
+            created_at: chrono::Utc::now(),
+            container: ContainerRuntimeConfig { id: container_id },
+            options: box_options,
+            engine_kind: VmmKind::Libkrun,
+            box_home: layout.root().into(),
+        };
+        let mut state = BoxState::new();
+        state.set_status(BoxStatus::Paused);
+        state.set_pid(Some(pid));
+        state.start_mode = Some(support::StartMode::Owner { protocol: 2 });
+        state.outbound_policy = application.outbound_policy;
+        state.checkpoint_guest = Some(application.guest);
+        state.restored_storage = Some(storage);
+        let lock = runtime.lock_manager.allocate()?;
+        attempt.lock = Some(lock);
+        state.set_lock_id(lock);
+        if let Some(pin) = &cached_pin {
+            runtime
+                .base_disk_mgr
+                .store()
+                .add_ref(pin, box_id.as_str())?;
+        }
+        Ok((attempt, config, state, bindings.lease))
+    });
+    let (attempt, config, state, lease) = task.await.map_err(invalid)??;
+    if canceller.0.is_cancelled() {
+        return Err(BoxliteError::Stopped(
+            "checkpoint import cancelled before publication".into(),
+        ));
+    }
+    let box_id = config.id.clone();
+    runtime
+        .checkpoint_leases
+        .lock()
+        .map_err(|_| invalid("resource lease lock poisoned"))?
+        .insert(box_id.clone(), lease);
     runtime.box_manager.add_box(&config, &state)?;
     let (box_impl, inserted) = runtime.get_or_create_box_impl(config, state);
     if !inserted {
-        // A live handle of another box holds the name.
-        if let Err(e) = runtime.box_manager.remove_box(&box_id) {
-            tracing::warn!(box_id = %box_id, error = %e, "Failed to unpublish the failed import");
-        }
-        return Err(BoxliteError::InvalidArgument(
-            "box with this name already exists".into(),
-        ));
+        runtime.box_manager.remove_box(&box_id)?;
+        return Err(invalid("box name conflict"));
     }
-    // The handle keeps the shim's watchdog keepalive; resuming reattaches
-    // through the ordinary plan, which checks the guest's identity.
+    // No await or fallible operation follows publication in the caller's poll.
     box_impl.hold_imported_shim(attempt.publish());
-    tracing::info!(box_id = %box_id, source = %manifest.source_box_id, "Imported checkpoint (paused)");
+    drop(canceller);
     Ok(crate::runtime::rt_impl::litebox_from_impl(box_impl))
 }
-
-/// The box options the checkpoint carries, checked as this host would
-/// check a new box's, against the image's devices and file size limit.
-fn verified_options(manifest: &Manifest, share_payloads: u64) -> BoxliteResult<BoxOptions> {
-    let mut options = manifest.boot.options.clone();
-    if !options.advanced.checkpoint_enabled {
-        return Err(invalid("its box options are not checkpoint-enabled"));
-    }
-    if !options.mounts.is_empty() || options.volumes.iter().any(|v| v.managed_volume.is_some()) {
-        return Err(invalid(
-            "typed mounts and managed volumes cannot be restored",
-        ));
-    }
-    // The source host's volume paths mean nothing here and are never read;
-    // the restored copies replace them once they exist.
-    for volume in &mut options.volumes {
-        volume.host_path = PENDING_COPY.to_string();
-    }
-    options.sanitize().map_err(|error| match error {
-        BoxliteError::Unsupported(_) => error,
-        error => invalid(format_args!("box options: {error}")),
-    })?;
-    manifest.layout.check_for(&options)?;
-    // The jailed shim writes every restored disk and share file under this
-    // limit; a larger one would kill it half-way.
-    let limit = options.shim_file_size_limit();
-    let largest = manifest
-        .layout
-        .disks
-        .iter()
-        .map(|disk| disk.bytes)
-        .chain([share_payloads])
-        .max()
-        .unwrap_or(0);
-    if largest > limit {
-        return Err(invalid(format_args!(
-            "a restored file of up to {largest} bytes exceeds the box's file size limit of {limit}"
-        )));
-    }
-    Ok(options)
-}
-
 /// Wait until the owner reports the restored VM paused. The shim dying,
 /// any other state, or the deadline fails the import.
 async fn wait_paused(
@@ -292,81 +483,6 @@ async fn wait_paused(
     }
 }
 
-/// The copies libkrun handed over: each disk at `restored/disks/disk-<i>.raw`
-/// with the image's length, and each share's root as the owner reports it,
-/// a real directory inside `restored/fs`.
-async fn restored_storage(
-    control: &ControlClient,
-    manifest: &Manifest,
-    restored: &Path,
-) -> BoxliteResult<(RestoredStorage, HashMap<String, PathBuf>)> {
-    let fs_root = restored
-        .join("fs")
-        .canonicalize()
-        .map_err(|e| invalid(format_args!("restored shares: {e}")))?;
-    let mut copies = HashMap::new();
-    for share in &manifest.layout.shares {
-        let reply = control
-            .send(&ControlRequest::RestoredShare {
-                tag: share.tag.clone(),
-            })
-            .await
-            .map_err(|e| BoxliteError::Engine(format!("restored share {}: {e}", share.tag)))?;
-        let path = match (reply.error, reply.share) {
-            (None, Some(path)) => path,
-            (Some(failure), _) => {
-                return Err(BoxliteError::Engine(format!(
-                    "restored share {}: {}",
-                    share.tag, failure.message
-                )));
-            }
-            (None, None) => return Err(BoxliteError::Engine("restored share: no path".into())),
-        };
-        // Canonical already (no link anywhere on the way), a directory, and
-        // inside this box's restored tree.
-        let real = path.canonicalize().ok();
-        let is_dir = std::fs::symlink_metadata(&path).is_ok_and(|meta| meta.is_dir());
-        if real.as_deref() != Some(path.as_path()) || !is_dir || !path.starts_with(&fs_root) {
-            return Err(BoxliteError::Engine(format!(
-                "restored share {} at {} is not a directory inside {}",
-                share.tag,
-                path.display(),
-                fs_root.display()
-            )));
-        }
-        copies.insert(share.tag.clone(), path);
-    }
-
-    let mut disks = Vec::new();
-    for (index, disk) in manifest.layout.disks.iter().enumerate() {
-        let path = restored.join("disks").join(format!("disk-{index}.raw"));
-        let meta = std::fs::symlink_metadata(&path)
-            .map_err(|e| BoxliteError::Engine(format!("restored disk {}: {e}", path.display())))?;
-        if !meta.is_file() || meta.len() != disk.bytes {
-            return Err(BoxliteError::Engine(format!(
-                "restored disk {} is not a {}-byte file",
-                path.display(),
-                disk.bytes
-            )));
-        }
-        disks.push(RestoredDisk {
-            path,
-            format: crate::vmm::DiskFormat::Raw,
-            read_only: disk.read_only,
-        });
-    }
-    let shared_dir = copies
-        .get(mount_tags::SHARED)
-        .cloned()
-        .ok_or_else(|| invalid("no restored copy of the box's shared tree"))?;
-    let storage = RestoredStorage {
-        disks,
-        shared_dir,
-        container_image_config: manifest.boot.container_image_config.clone(),
-    };
-    Ok((storage, copies))
-}
-
 /// What an import created, removed again unless the box is published.
 struct Attempt {
     runtime: SharedRuntimeImpl,
@@ -374,6 +490,7 @@ struct Attempt {
     handler: Option<Box<dyn VmmHandler>>,
     lock: Option<LockId>,
     armed: bool,
+    lease: Option<std::sync::Arc<dyn crate::CheckpointLease>>,
 }
 
 impl Attempt {
@@ -393,22 +510,21 @@ impl Drop for Attempt {
         }
         // The shim goes first: until it is gone it may still write the
         // restored tree.
-        if let Some(mut handler) = self.handler.take() {
+        if let Some(handler) = self.handler.take() {
             let pid = handler.pid();
-            if let Err(e) = handler.stop() {
-                tracing::warn!(pid, error = %e, "Failed to stop the import's shim");
-            }
-            let deadline = Instant::now() + SHIM_EXIT_TIMEOUT;
-            while crate::util::is_process_alive(pid) {
-                if Instant::now() >= deadline {
-                    tracing::error!(
-                        pid,
-                        home = %self.layout.root().display(),
-                        "The failed import's shim is still alive; leaving its files in place"
-                    );
-                    return;
+            let id = BoxID::parse(self.layout.root().file_name().unwrap().to_str().unwrap())
+                .expect("attempt has a minted box ID");
+            if let Err(error) = crate::litebox::checkpoint::capture::stop_and_join_sync(
+                &crate::util::PidFileReader::at(self.layout.pid_file_path()),
+                pid,
+                id,
+            ) {
+                tracing::error!(pid, %error, home = %self.layout.root().display(),
+                    "Failed import writer could not be joined; retaining attempt resources");
+                if let Some(lease) = self.lease.take() {
+                    std::mem::forget(lease);
                 }
-                std::thread::sleep(Duration::from_millis(20));
+                return;
             }
         }
         if let Some(lock) = self.lock.take()
@@ -416,12 +532,21 @@ impl Drop for Attempt {
         {
             tracing::warn!(error = %e, "Failed to free the import's lock");
         }
+        if let Some(id) = self.layout.root().file_name().and_then(|id| id.to_str()) {
+            if let Ok(mut leases) = self.runtime.checkpoint_leases.lock() {
+                leases.retain(|box_id, _| box_id.as_str() != id);
+            }
+            if let Err(error) = self
+                .runtime
+                .base_disk_mgr
+                .store()
+                .remove_all_refs_for_box(id)
+            {
+                tracing::warn!(%error,"Failed to release failed import boot pin");
+            }
+        }
         if let Err(e) = self.layout.cleanup() {
             tracing::warn!(error = %e, "Failed to remove the failed import's box home");
         }
     }
 }
-
-#[cfg(test)]
-#[path = "checkpoint_import_tests.rs"]
-mod tests;

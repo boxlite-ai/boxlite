@@ -57,6 +57,10 @@ impl std::fmt::Display for VmRunState {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "op")]
 pub enum ControlRequest {
+    /// Switch to generation-2 descriptor frames on this dedicated connection.
+    Session {
+        operation: [u8; 16],
+    },
     /// Read the owner's state. Never waits for a mutation in progress.
     State,
     /// Stop the vCPUs and devices at a consistent cut.
@@ -85,6 +89,7 @@ pub enum ControlRequest {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Operation {
+    Capture,
     Pause,
     Resume,
     ExportRaw,
@@ -93,11 +98,44 @@ pub enum Operation {
 impl std::fmt::Display for Operation {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
+            Self::Capture => "capture",
             Self::Pause => "pause",
             Self::Resume => "resume",
             Self::ExportRaw => "export",
         })
     }
+}
+
+/// Generation-2 requests carry descriptors separately from bounded JSON.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "op")]
+pub enum DescriptorRequest {
+    Capabilities,
+    Begin {
+        disk_only: bool,
+    },
+    Prepare {
+        token: u64,
+    },
+    Export {
+        token: u64,
+        metadata: serde_json::Value,
+    },
+    End {
+        token: u64,
+        cancel: bool,
+    },
+    Import {
+        bindings: serde_json::Value,
+    },
+    Inspect,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DescriptorReply {
+    pub state: VmRunState,
+    pub error: Option<ControlFailure>,
+    pub metadata: serde_json::Value,
 }
 
 /// Why a request did not succeed. `ControlReply::state` tells where the VM

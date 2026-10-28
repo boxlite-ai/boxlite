@@ -16,6 +16,7 @@
 //!   resume.
 
 pub mod client;
+pub(crate) mod descriptors;
 pub mod krun_abi;
 pub mod launch;
 pub mod protocol;

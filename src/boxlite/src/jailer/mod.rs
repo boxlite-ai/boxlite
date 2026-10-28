@@ -111,6 +111,21 @@ pub(crate) fn reap_box(_box_id: &crate::runtime::id::BoxID) -> bool {
     false
 }
 
+/// Confirm sandbox descendants have exited before deleting their storage.
+pub(crate) fn box_has_processes(
+    box_id: &crate::runtime::id::BoxID,
+) -> std::io::Result<Option<bool>> {
+    #[cfg(target_os = "linux")]
+    {
+        cgroup::has_processes(box_id)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = box_id;
+        Ok(Some(false))
+    }
+}
+
 // Volume specification (convenience re-export)
 pub use crate::runtime::options::VolumeSpec;
 use crate::runtime::options::{MountSpec, MountType};
@@ -193,7 +208,6 @@ use std::path::PathBuf;
 /// ├── shared/                     [RW]  # guest-visible virtio-fs share root
 /// ├── sockets/                    [RW]  # libkrun vsock/unix sockets
 /// ├── tmp/                        [RW]  # shim/libkrun transient temp files
-/// ├── checkpoint/                 [RW]  # raw VM exports (checkpoint-enabled boxes)
 /// ├── restored/                   [RW]  # an imported box's restored disks and shares
 /// ├── logs/                       [RW]  # shim logging + VM console output
 /// │   ├── boxlite-shim.log                # tracing_appender daily log
@@ -223,12 +237,7 @@ fn build_path_access(
 
     // Writable directories (shim creates files inside these at runtime)
     // Note: mounts_dir not included — host writes before spawn, shim accesses via shared_dir
-    for dir in [
-        layout.tmp_dir(),
-        layout.logs_dir(),
-        layout.checkpoint_dir(),
-        layout.restored_dir(),
-    ] {
+    for dir in [layout.tmp_dir(), layout.logs_dir(), layout.restored_dir()] {
         if dir.exists() {
             paths.push(PathAccess {
                 path: dir,

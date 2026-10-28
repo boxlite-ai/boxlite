@@ -28,10 +28,12 @@ impl LocalSnapshotBackend {
         name: &str,
         _opts: SnapshotOptions,
     ) -> BoxliteResult<SnapshotInfo> {
-        self.inner.refuse_for_checkpoint("a disk snapshot")?;
         validate_snapshot_name(name)?;
         let t0 = Instant::now();
-        let _lock = self.inner.disk_ops.lock().await;
+        let _lock = self
+            .inner
+            .reserve(super::operation::Action::DiskCapture)
+            .await?;
 
         let box_id = self.inner.id().as_str();
         let snap_mgr = &self.inner.runtime.snapshot_mgr;
@@ -44,30 +46,9 @@ impl LocalSnapshotBackend {
             )));
         }
 
-        // Write crash-recovery marker before moving disks (point of no return).
         let box_home = &self.inner.config.box_home;
-        let disks_dir = box_home.join("disks");
-        let container_disk = disks_dir.join(disk_filenames::CONTAINER_DISK);
-        let pending_marker = box_home.join(".snapshot_pending");
-        let snapshot_dir = box_home.join("snapshots").join(name);
-        let marker_data = serde_json::json!({
-            "snapshot_dir": snapshot_dir.to_string_lossy(),
-            "container_disk": container_disk.to_string_lossy(),
-        });
-        std::fs::write(&pending_marker, marker_data.to_string()).map_err(|e| {
-            BoxliteError::Storage(format!("Failed to write snapshot marker: {}", e))
-        })?;
-
-        // Quiesce VM for point-in-time snapshot consistency.
-        let result = self
-            .inner
-            .with_quiesce_async(async { snap_mgr.create(box_home, name, box_id) })
-            .await;
-
-        // Remove marker on success.
-        let _ = std::fs::remove_file(&pending_marker);
-
-        let info = result?;
+        let captured = self.inner.capture_disk(&_lock).await?;
+        let info = snap_mgr.create(box_home, name, box_id, &captured.path)?;
 
         tracing::info!(
             box_id = %self.inner.id(),
@@ -93,7 +74,10 @@ impl LocalSnapshotBackend {
 
     async fn snapshot_remove(&self, name: &str) -> BoxliteResult<()> {
         validate_snapshot_name(name)?;
-        let _lock = self.inner.disk_ops.lock().await;
+        let _lock = self
+            .inner
+            .reserve(super::operation::Action::SnapshotRemove)
+            .await?;
 
         let box_id = self.inner.id().as_str();
         let container_disk = self
@@ -119,22 +103,12 @@ impl LocalSnapshotBackend {
     }
 
     async fn snapshot_restore(&self, name: &str) -> BoxliteResult<()> {
-        self.inner
-            .refuse_for_checkpoint("restoring a disk snapshot")?;
         validate_snapshot_name(name)?;
 
-        // Refuse restore while the box is active — disk replacement under a running
-        // VM would corrupt state and potentially lose data.
-        {
-            let state = self.inner.state.read();
-            if state.status.is_active() {
-                return Err(BoxliteError::InvalidState(
-                    "Cannot restore snapshot while box is running. Stop the box first.".into(),
-                ));
-            }
-        }
-
-        let _lock = self.inner.disk_ops.lock().await;
+        let _lock = self
+            .inner
+            .reserve(super::operation::Action::DiskRestore)
+            .await?;
 
         let box_id = self.inner.id().as_str();
         let disks_dir = self.inner.config.box_home.join("disks");

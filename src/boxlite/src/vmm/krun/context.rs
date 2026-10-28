@@ -17,7 +17,7 @@ use libkrun_sys::{
     krun_set_env, krun_set_exec, krun_set_gpu_options, krun_set_kernel, krun_set_nested_virt,
     krun_set_port_map, krun_set_rlimits, krun_set_root, krun_set_root_disk_remount,
     krun_set_vm_config, krun_set_workdir, krun_setgid, krun_setuid, krun_snapshot_enable,
-    krun_snapshot_import, krun_split_irqchip, krun_start_enter,
+    krun_split_irqchip, krun_start_enter,
 };
 
 /// Thin wrapper that owns a libkrun context.
@@ -615,35 +615,6 @@ impl KrunContext {
     pub unsafe fn snapshot_enable(&self) -> BoxliteResult<()> {
         check_status("krun_snapshot_enable", unsafe {
             krun_snapshot_enable(self.ctx_id, 0)
-        })
-    }
-
-    /// Restore `image` paused at `start_enter` instead of booting. Each
-    /// directory is given exactly when the image has disks / shares; both
-    /// must not exist yet.
-    pub unsafe fn snapshot_import(
-        &self,
-        image: &std::path::Path,
-        disk_dir: Option<&std::path::Path>,
-        fs_dir: Option<&std::path::Path>,
-    ) -> BoxliteResult<()> {
-        fn c_path(path: &std::path::Path) -> BoxliteResult<CString> {
-            path.to_str()
-                .and_then(|path| CString::new(path).ok())
-                .ok_or_else(|| {
-                    BoxliteError::Engine(format!("invalid checkpoint path: {}", path.display()))
-                })
-        }
-        let image = c_path(image)?;
-        let disk_dir = disk_dir.map(c_path).transpose()?;
-        let fs_dir = fs_dir.map(c_path).transpose()?;
-        check_status("krun_snapshot_import", unsafe {
-            krun_snapshot_import(
-                self.ctx_id,
-                image.as_ptr(),
-                disk_dir.as_ref().map_or(ptr::null(), |dir| dir.as_ptr()),
-                fs_dir.as_ref().map_or(ptr::null(), |dir| dir.as_ptr()),
-            )
         })
     }
 

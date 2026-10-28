@@ -286,13 +286,6 @@ impl BoxOptions {
             ));
         }
 
-        if self.advanced.checkpoint_enabled {
-            return Err(BoxliteError::Unsupported(
-                "checkpoints (advanced.checkpoint_enabled) are only supported by the local runtime"
-                    .to_string(),
-            ));
-        }
-
         // Mounts. `BoxOptions::sanitize` is local-only, so
         // `VolumeSpec::validate` — the "exactly one origin" invariant that C and
         // Go callers can violate by setting the fields directly — has no other
@@ -632,6 +625,7 @@ mod tests {
             &runtime,
             std::path::Path::new("/tmp/ignored.ckpt"),
             Default::default(),
+            &crate::LocalCheckpointProvider::default(),
         )
         .await;
         assert!(
@@ -1211,26 +1205,6 @@ mod tests {
 
         assert!(matches!(error, BoxliteError::Unsupported(_)));
         assert!(error.to_string().contains("local runtime"));
-    }
-
-    #[tokio::test]
-    async fn create_rejects_checkpoint_enabled_in_rest_mode() {
-        let options = BoxliteRestOptions::new("http://localhost:1");
-        let runtime = RestRuntime::new(&options).expect("failed to create REST runtime");
-        let mut advanced = crate::runtime::advanced_options::AdvancedBoxOptions::default();
-        advanced.checkpoint_enabled = true;
-        let box_options = BoxOptions {
-            advanced,
-            ..Default::default()
-        };
-
-        let error = RuntimeBackend::create(&runtime, box_options, None)
-            .await
-            .err()
-            .expect("REST checkpoints must be rejected before network I/O");
-
-        assert!(matches!(error, BoxliteError::Unsupported(_)));
-        assert!(error.to_string().contains("checkpoint_enabled"));
     }
 
     #[tokio::test]

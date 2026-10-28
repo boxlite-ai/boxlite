@@ -555,17 +555,6 @@ export class SimpleBox {
 
     assertNetworkSpecShape(legacyOptions.network);
 
-    // Checkpoints exist only in the Rust API and the boxlite CLI. Refuse the
-    // option instead of dropping it below and creating an ordinary box.
-    if (
-      (options.advanced as { checkpointEnabled?: unknown } | undefined)
-        ?.checkpointEnabled === true
-    ) {
-      throw new TypeError(
-        "SimpleBoxOptions.advanced.checkpointEnabled is not supported by the Node.js SDK: checkpoints are available only in the Rust API and the boxlite CLI.",
-      );
-    }
-
     // Use provided runtime or get global default
     if (options.runtime) {
       this._runtime = options.runtime;

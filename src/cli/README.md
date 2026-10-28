@@ -405,7 +405,6 @@ silently restarting it, because restarting would run the command a second time.
 | `--auto-delete DURATION` | | Delete the box this long after it stops; `0` disables |
 | `--no-auto-resume` | | Ask a REST server to refuse implicit resume after a box has run; first boot is unaffected, and the embedded runtime records but does not enforce it |
 | `--security <enable\|disable>` | | Embedded-runtime sandbox security (default `enable`; env `BOXLITE_SECURITY`); REST servers own this policy |
-| `--enable-checkpoint` | | Allow `pause` and `checkpoint export`; embedded runtime on Linux x86_64 with KVM only (see [`boxlite pause`](#boxlite-pause)) |
 
 `-p` is explicit local publication. Remote REST profiles reject it and direct
 the caller to `boxlite network tunnel`.
@@ -465,7 +464,6 @@ default, and `exec` still starts it on demand.
 | `--auto-delete DURATION` | | Delete the box this long after it stops; `0` disables; requires a REST server |
 | `--no-auto-resume` | | Ask a REST server to refuse implicit resume after a box has run; first boot is unaffected, and the embedded runtime records but does not enforce it |
 | `--security <enable\|disable>` | | Embedded-runtime sandbox security (default `enable`; env `BOXLITE_SECURITY`); REST servers own this policy |
-| `--enable-checkpoint` | | Allow `pause` and `checkpoint export`; embedded runtime on Linux x86_64 with KVM only (see [`boxlite pause`](#boxlite-pause)) |
 
 `-p` is explicit local publication. Remote REST profiles reject it and direct
 the caller to `boxlite network tunnel`.
@@ -536,7 +534,7 @@ Restart one or more boxes.
 
 ### `boxlite pause`
 
-Pause a box created with `--enable-checkpoint`: every vCPU and device stops at one consistent
+Pause a supported box in automatically selected checkpoint owner mode: every vCPU and device stops at one consistent
 cut. While paused it refuses `exec`, `cp`, attach, metrics and network changes. Embedded runtime
 only (Linux x86_64 with KVM); `--url` and `--profile` are rejected.
 
@@ -552,29 +550,23 @@ Let a paused box run again; it is checked to be the guest that was paused, or st
 
 **Usage:** `boxlite resume BOX`
 
-### `boxlite checkpoint export` / `boxlite checkpoint import`
+### `boxlite checkpoint`
 
-`export` writes a paused box to one new file (it must not exist); the box stays paused. `import`
-creates a new, paused box from that file, on this or another host, without the source box or its
-image; `resume` it to continue the same guest processes. Prints the file path or the new box ID.
+Export a Paused owner to a new directory containing exactly `snapshot.mem` and
+`snapshot.qcow2`. Shared files and the exact readonly boot disk remain external
+resources. Explicit binding JSON is input, not a third artifact.
 
-**Usage:**
+- `boxlite checkpoint export BOX DIRECTORY --bindings CONFIG.json`
+- `boxlite checkpoint inspect DIRECTORY`
+- `boxlite checkpoint import [--name NAME] DIRECTORY --bindings CONFIG.json`
 
-- `boxlite checkpoint export BOX FILE`
-- `boxlite checkpoint import [--name NAME] FILE`
+Inspection opens no shares and creates no runtime. Import verifies dependencies
+and publishes a new Paused box; `boxlite resume BOX` continues execution. Older full
+checkpoint formats are refused. Default supported configurations need no creation
+flag; ordinary disk-only `.boxlite` compatibility is unchanged.
 
-**Example:**
-
-```bash
-boxlite create --enable-checkpoint --name web alpine:latest sh -c 'while :; do sleep 1; done'
-boxlite start web
-boxlite pause web
-boxlite checkpoint export web web.boxckpt
-boxlite checkpoint import --name web2 web.boxckpt
-boxlite resume web2
-```
-
-Requirements, refused options and failure behavior: [Checkpoints guide](../../docs/guides/checkpoints.md).
+See the [checkpoints guide](../../docs/guides/checkpoints.md) for binding configuration,
+retention responsibilities, state matrix and failure behavior.
 
 ### `boxlite rm`
 

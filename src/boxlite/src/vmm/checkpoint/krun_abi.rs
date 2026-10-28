@@ -45,6 +45,15 @@ pub fn call_result(op: &str, status: i32, after: VmRunState) -> Result<(), Owner
         return Ok(());
     }
     let (kind, why) = match -status {
+        libc::EBUSY => (
+            FailureKind::Busy,
+            "another capture or mutation is in progress",
+        ),
+        libc::ESTALE => (FailureKind::Rejected, "the capture token is stale"),
+        libc::ENOTSUP => (
+            FailureKind::Rejected,
+            "unsupported checkpoint version or protocol; restart required",
+        ),
         libc::EINVAL => (FailureKind::Rejected, "not valid now"),
         libc::EAGAIN => (FailureKind::Rejected, "the VM has not started yet"),
         libc::ESRCH => (FailureKind::Rejected, "the VM already ended"),

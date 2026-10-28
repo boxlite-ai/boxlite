@@ -17,9 +17,7 @@ use serde::{Deserialize, Serialize};
 /// ```text
 /// create()  → Configured (persisted to DB, no VM)
 /// start()   → Running (VM initialized)
-/// SIGSTOP   → Paused (VM frozen, used during export/snapshot)
-/// SIGCONT   → Running (VM resumed)
-/// pause()   → Paused (checkpoint-enabled boxes, held until resume/stop)
+/// pause()   → Paused (owner-mode boxes, held until resume/stop)
 /// resume()  → Running
 /// stop()    → Stopped (VM terminated, can restart)
 /// init err  → Failed (record preserved with error_reason)
@@ -44,11 +42,9 @@ pub enum BoxStatus {
     /// Rootfs is preserved, box can be restarted.
     Stopped,
 
-    /// Box VM is frozen. Ordinary boxes pass through it briefly via SIGSTOP
-    /// during a disk export/snapshot (equivalent to Docker's cgroup freezer
-    /// pause). A checkpoint-enabled box enters it through `pause()`: its
-    /// snapshot owner stopped every vCPU and device, the shim stays alive,
-    /// and it stays paused until `resume()` or `stop()`.
+    /// The owner stopped every vCPU and device after explicit `pause()`.
+    /// Disk captures use an internal cut and keep publishing logical Running.
+    /// Explicit `resume()` or `stop()` ends this state.
     Paused,
 
     /// Init pipeline failed (e.g., guest_connect timeout, vmm_spawn error).
@@ -280,6 +276,8 @@ pub struct BoxState {
     /// it over; a cold start clears it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) checkpoint_guest: Option<super::checkpoint::GuestIdentity>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) start_mode: Option<crate::vmm::checkpoint::support::StartMode>,
     /// The storage an imported box runs from instead of an image. Set once,
     /// by the import, and kept for the box's life.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -387,6 +385,7 @@ impl BoxState {
             started_at: None,
             resolved_image: None,
             checkpoint_guest: None,
+            start_mode: None,
             restored_storage: None,
         }
     }
