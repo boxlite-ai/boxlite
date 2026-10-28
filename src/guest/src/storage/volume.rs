@@ -65,7 +65,12 @@ pub fn mount_volume(vol: &Volume) -> BoxliteResult<()> {
         Some(volume::Source::Virtiofs(virtiofs)) => {
             let mount_point =
                 resolve_mount_point(&virtiofs.tag, &vol.mount_point, &vol.container_id);
-            VirtiofsMount::mount(&virtiofs.tag, &mount_point, virtiofs.read_only)
+            VirtiofsMount::mount(
+                &virtiofs.tag,
+                &mount_point,
+                virtiofs.read_only,
+                virtiofs.dax,
+            )
         }
         Some(volume::Source::BlockDevice(block)) => {
             let mount_point = Path::new(&vol.mount_point);

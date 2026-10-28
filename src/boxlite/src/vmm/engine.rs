@@ -1,8 +1,10 @@
 //! Vmm trait for engine-specific Box implementations.
 
 use super::InstanceSpec;
+use super::checkpoint::CheckpointOwner;
 use crate::runtime::constants::vm_defaults::{DEFAULT_CPUS, DEFAULT_MEMORY_MIB};
 use boxlite_shared::errors::BoxliteResult;
+use std::sync::Arc;
 
 /// Configuration options for creating VMM engines.
 ///
@@ -49,8 +51,15 @@ impl VmmConfig {
 
 /// Internal trait for engine-specific VMM instance implementations.
 pub(crate) trait VmmInstanceImpl {
-    /// Transfer control to the Box and run until it exits.
-    fn enter(self: Box<Self>) -> BoxliteResult<()>;
+    /// Transfer control to the Box and run until it exits. Returns the
+    /// guest's exit code when the engine reports it instead of exiting the
+    /// process itself.
+    fn enter(self: Box<Self>) -> BoxliteResult<Option<i32>>;
+
+    /// The checkpoint owner, for an instance created with checkpoint settings.
+    fn checkpoint_owner(&self) -> Option<Arc<dyn CheckpointOwner>> {
+        None
+    }
 }
 
 /// A configured VMM instance ready to be executed.
@@ -76,10 +85,17 @@ impl VmmInstance {
     /// and transform it into the Box process.
     ///
     /// # Returns
-    /// * `Ok(())` - Box exited successfully (if process takeover allows return)
+    /// * `Ok(Some(code))` - the guest exited with `code`; the caller exits with it
+    /// * `Ok(None)` - Box ended without a guest exit code to report
     /// * `Err(...)` - Box failed to start or encountered an error
-    pub fn enter(self) -> BoxliteResult<()> {
+    pub fn enter(self) -> BoxliteResult<Option<i32>> {
         self.inner.enter()
+    }
+
+    /// Control handle for a checkpoint-enabled instance. Obtain it before
+    /// [`Self::enter`]; it keeps working while the VM runs.
+    pub fn checkpoint_owner(&self) -> Option<Arc<dyn CheckpointOwner>> {
+        self.inner.checkpoint_owner()
     }
 }
 

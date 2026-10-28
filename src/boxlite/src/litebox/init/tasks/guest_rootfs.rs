@@ -22,14 +22,24 @@ impl PipelineTask<InitCtx> for GuestRootfsTask {
         let task_name = self.name();
         let box_id = task_start(&ctx, task_name).await;
 
-        let (runtime, layout, reuse_rootfs) = {
+        let (runtime, layout, reuse_rootfs, restored) = {
             let ctx = ctx.lock().await;
             let layout = ctx
                 .layout
                 .clone()
                 .ok_or_else(|| BoxliteError::Internal("filesystem task must run first".into()))?;
-            (ctx.runtime.clone(), layout, ctx.reuse_rootfs)
+            (
+                ctx.runtime.clone(),
+                layout,
+                ctx.reuse_rootfs,
+                ctx.restored.is_some(),
+            )
         };
+        // An imported box boots its own restored copy of the guest rootfs
+        // (vmm_spawn attaches it), never the runtime's cached one.
+        if restored {
+            return Ok(());
+        }
 
         let disk = run_guest_rootfs(&runtime, &layout, reuse_rootfs)
             .await

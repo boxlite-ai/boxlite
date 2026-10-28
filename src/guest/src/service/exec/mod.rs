@@ -1071,4 +1071,74 @@ mod container_id_path_tests {
         assert!(stdout.data.is_empty());
         assert_eq!(stdout.total_bytes, Some(0));
     }
+
+    /// The running-state query reports every execution the registry holds and
+    /// changes none: retained output still replays in full afterwards, and
+    /// the boot ID stays the agent's own.
+    #[tokio::test]
+    async fn running_state_reports_executions_without_consuming_them() {
+        use boxlite_shared::{ExecutionPhase, Guest as _, RunningStateRequest};
+        use tonic::Request;
+        let server = GuestServer::new(GuestLayout::new());
+
+        let (_stdin_peer, stdin) = pipe().unwrap();
+        let (stdout, stdout_peer) = pipe().unwrap();
+        let (stderr, stderr_peer) = pipe().unwrap();
+        write(&stdout_peer, b"kept").unwrap();
+        drop(stdout_peer);
+        drop(stderr_peer);
+        let handle = ExecHandle::new(Pid::from_raw(13_005), stdin, stdout, Some(stderr))
+            .expect("test pipes must register with Tokio");
+        let state =
+            ExecutionState::new_for_test(handle, ExitSlot::settled_for_test(ExitStatus::Code(0)));
+        let snapshot = state.wait_terminal_snapshot("retained").await;
+        server.registry.register("retained".into(), state).await;
+        assert!(
+            server
+                .registry
+                .retain("retained", snapshot.clone(), 4)
+                .await
+        );
+        server
+            .registry
+            .store_tombstone("tombstone".into(), snapshot)
+            .await;
+
+        let query = || async {
+            server
+                .running_state(Request::new(RunningStateRequest {}))
+                .await
+                .unwrap()
+                .into_inner()
+        };
+        let first = query().await;
+        let second = query().await;
+        assert!(!first.boot_id.is_empty());
+        assert_eq!(first.boot_id, second.boot_id);
+        assert_eq!(first.boot_id, server.boot_id);
+        assert!(!first.initialized);
+        assert!(first.containers.is_empty());
+        let mut executions: Vec<_> = second
+            .executions
+            .iter()
+            .map(|e| (e.execution_id.as_str(), e.phase, e.pid))
+            .collect();
+        executions.sort();
+        assert_eq!(
+            executions,
+            [
+                ("retained", ExecutionPhase::Retained as i32, 0),
+                ("tombstone", ExecutionPhase::Tombstone as i32, 0),
+            ]
+        );
+
+        let mut output = server.attach_execution("retained").await.unwrap();
+        while let Some(event) = output.recv().await {
+            if let Some(exec_output::Event::Stdout(stdout)) = event.unwrap().event {
+                assert_eq!(stdout.data, b"kept", "the query consumed no output");
+                return;
+            }
+        }
+        panic!("retained attach must replay stdout");
+    }
 }

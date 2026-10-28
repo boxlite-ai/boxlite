@@ -99,6 +99,12 @@ before the workload exhausts it; host memory limits can also terminate the VMM.
 
 ## Online growth
 
+Online growth also applies to checkpoint-owner boxes. A checkpoint preserves the
+actual allocation and provisioned ceilings, including virtio-mem state and mapped
+RAM; an imported box can grow again after resume. Resize shares the lifecycle and
+capture reservation and refuses Paused boxes. See [checkpoints](checkpoints.md#failure-and-compatibility)
+for the saved-state contract and focused KVM functional validation.
+
 A running Linux/KVM box can grow CPUs and memory without restarting its workload.
 Targets are absolute. Omitting a resource retains its allocation; omitting both
 queries the allocation and the ceilings established for that boot.

@@ -70,7 +70,7 @@ use crate::disk::constants::filenames as disk_filenames;
 /// Manages the lifecycle of clone base disks.
 ///
 /// All base disks are flat files under `bases_dir/` named by `BaseDiskID`.
-/// Clone operations use `create_base_disk()` for the rename-and-COW operation.
+/// Clone operations install one frozen copy before creating independent COW children.
 ///
 /// Cleanup uses DB-based ref tracking: `try_gc_base()` queries the
 /// `base_disk_ref` table to check for dependents before deleting.
@@ -114,7 +114,7 @@ impl BaseDiskManager {
     /// - The **full** chain, not just the immediate backing file, since clone
     ///   bases nest (see `find_parent_base` and `try_gc_base`'s parent cascade).
     /// - Chains rooted at the **bases themselves**, not only at box overlays. A
-    ///   clone base points at its parent (`test_create_base_disk_tracks_ancestry`
+    ///   existing clone base points at its parent (`test_referenced_paths_include_base_ancestry`
     ///   builds exactly that), so a parent whose row went missing would otherwise
     ///   be deleted out from under a child that still has one.
     ///
@@ -288,45 +288,31 @@ impl BaseDiskManager {
         Ok(removed)
     }
 
-    /// Core operation: create a base disk from a box's live container disk.
-    ///
-    /// 1. Move container disk → `bases/{base_disk_id}.qcow2` (makes it immutable)
-    /// 2. Create COW child at original path (so the source box keeps running)
-    /// 3. Insert DB record (with JSON blob)
-    ///
-    /// Used by clone operations. Snapshots use `SnapshotManager` instead.
-    pub(crate) fn create_base_disk(
+    /// Install a single already captured base after the source resumed.
+    pub(crate) fn install_capture(
         &self,
-        source_disks_dir: &Path,
-        kind: BaseDiskKind,
-        name: Option<&str>,
+        captured: &Path,
         source_box_id: &str,
     ) -> BoxliteResult<BaseDisk> {
-        let base_disk_id = BaseDiskIDMint::mint();
-
-        let container = source_disks_dir.join(disk_filenames::CONTAINER_DISK);
-
-        // Fork: move container → bases/{id}.qcow2, create COW child at original path
-        let base_file = self.bases_dir.join(format!("{}.qcow2", base_disk_id));
-        let forked = super::fork_qcow2(&container, &base_file)?;
-        let disk_info = super::DiskInfo::from(&forked);
-        // forked is persistent (won't be deleted on drop)
-
-        // Insert DB record
-        let now = chrono::Utc::now().timestamp();
+        let id = BaseDiskIDMint::mint();
+        let destination = self.bases_dir.join(format!("{id}.qcow2"));
+        let bytes = super::Qcow2Helper::qcow2_virtual_size(captured)?;
+        crate::litebox::archive::move_file(captured, &destination)?;
         let disk = BaseDisk {
-            id: base_disk_id,
-            source_box_id: source_box_id.to_string(),
-            name: name.map(|s| s.to_string()),
-            kind,
-            disk_info,
-            created_at: now,
+            id,
+            source_box_id: source_box_id.into(),
+            name: None,
+            kind: BaseDiskKind::CloneBase,
+            created_at: chrono::Utc::now().timestamp(),
+            disk_info: super::DiskInfo {
+                base_path: destination.to_string_lossy().into_owned(),
+                container_disk_bytes: bytes,
+                size_bytes: fs::metadata(&destination)
+                    .map_err(|e| boxlite_shared::errors::BoxliteError::Storage(e.to_string()))?
+                    .len(),
+            },
         };
         self.store.insert(&disk)?;
-
-        // Track the source box's dependency on this base disk.
-        self.store.add_ref(&disk.id, source_box_id)?;
-
         Ok(disk)
     }
 
@@ -458,111 +444,6 @@ mod tests {
 
         let mut file = std::fs::File::create(path).unwrap();
         file.write_all(&buf).unwrap();
-    }
-
-    #[test]
-    fn test_create_base_disk_moves_disk() {
-        let (dir, mgr) = setup();
-
-        let box_disks = dir.path().join("boxes").join("box-1").join("disks");
-        std::fs::create_dir_all(&box_disks).unwrap();
-        write_qcow2_with_backing(&box_disks.join(disk_filenames::CONTAINER_DISK), None);
-
-        let disk = mgr
-            .create_base_disk(&box_disks, BaseDiskKind::Snapshot, Some("snap-1"), "box-1")
-            .unwrap();
-
-        // Source disk should be replaced with a COW child
-        assert!(box_disks.join(disk_filenames::CONTAINER_DISK).exists());
-
-        // Base file should exist as flat file in bases/
-        let base_file = disk.disk_info.to_path_buf();
-        assert!(base_file.exists());
-        assert!(base_file.extension().is_some_and(|ext| ext == "qcow2"));
-        assert_eq!(base_file.parent().unwrap(), mgr.bases_dir());
-
-        // base_path should end with {id}.qcow2
-        assert!(
-            disk.disk_info
-                .base_path
-                .ends_with(&format!("{}.qcow2", disk.id))
-        );
-
-        // Record should be in DB
-        let found = mgr.store().find_by_id(&disk.id).unwrap().unwrap();
-        assert_eq!(found.kind(), BaseDiskKind::Snapshot);
-        assert_eq!(found.name(), Some("snap-1"));
-    }
-
-    #[test]
-    fn test_create_base_disk_adds_ref() {
-        let (dir, mgr) = setup();
-
-        let box_disks = dir.path().join("boxes").join("box-1").join("disks");
-        std::fs::create_dir_all(&box_disks).unwrap();
-        write_qcow2_with_backing(&box_disks.join(disk_filenames::CONTAINER_DISK), None);
-
-        let disk = mgr
-            .create_base_disk(&box_disks, BaseDiskKind::CloneBase, None, "box-1")
-            .unwrap();
-
-        // create_base_disk should have added a ref for the source box
-        assert!(mgr.store().has_dependents(&disk.id).unwrap());
-        let deps = mgr.store().dependent_boxes(&disk.id).unwrap();
-        assert_eq!(deps, vec!["box-1"]);
-    }
-
-    #[test]
-    fn test_create_base_disk_uses_base_disk_id() {
-        let (dir, mgr) = setup();
-
-        let box_disks = dir.path().join("boxes").join("box-1").join("disks");
-        std::fs::create_dir_all(&box_disks).unwrap();
-        write_qcow2_with_backing(&box_disks.join(disk_filenames::CONTAINER_DISK), None);
-
-        let disk = mgr
-            .create_base_disk(&box_disks, BaseDiskKind::Snapshot, Some("snap-1"), "box-1")
-            .unwrap();
-
-        // ID should be 8 characters (BaseDiskID length)
-        assert_eq!(disk.id.as_str().len(), BaseDiskID::FULL_LENGTH);
-
-        // base_path should end with {id}.qcow2
-        assert!(
-            disk.disk_info
-                .base_path
-                .ends_with(&format!("{}.qcow2", disk.id))
-        );
-    }
-
-    #[test]
-    fn test_create_base_disk_tracks_ancestry() {
-        let (dir, mgr) = setup();
-
-        let box_disks = dir.path().join("boxes").join("box-1").join("disks");
-        std::fs::create_dir_all(&box_disks).unwrap();
-        write_qcow2_with_backing(&box_disks.join(disk_filenames::CONTAINER_DISK), None);
-
-        let bd1 = mgr
-            .create_base_disk(&box_disks, BaseDiskKind::CloneBase, None, "box-1")
-            .unwrap();
-
-        let bd2 = mgr
-            .create_base_disk(&box_disks, BaseDiskKind::CloneBase, None, "box-1")
-            .unwrap();
-
-        // Verify ancestry via filesystem: bd2's backing chain includes bd1
-        let bd2_file = bd2.disk_info.to_path_buf();
-        let parent = mgr.find_parent_base(&bd2_file);
-        assert_eq!(
-            parent.as_ref().map(|p| p.to_string_lossy().to_string()),
-            Some(bd1.disk_info.base_path.clone()),
-            "bd2 should have bd1 as parent in its backing chain"
-        );
-
-        // Both records should exist in DB
-        assert!(mgr.store().find_by_id(&bd1.id).unwrap().is_some());
-        assert!(mgr.store().find_by_id(&bd2.id).unwrap().is_some());
     }
 
     #[test]
@@ -916,7 +797,7 @@ mod tests {
     }
 
     /// A base's parent may be reachable only through the child, never through a
-    /// box overlay — `create_base_disk` chains bases directly.
+    /// box overlay — older clone bases may chain directly.
     ///
     /// If the parent's row is the one that went missing, scanning only box
     /// overlays would delete it out from under a child that is still tracked.

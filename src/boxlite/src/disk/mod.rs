@@ -5,11 +5,9 @@
 //! - `DiskFormat` - Disk format types (Ext4, Qcow2)
 //! - `create_ext4_from_dir` - Create ext4 filesystem from directory
 //! - `Qcow2Helper` - QCOW2 copy-on-write disk creation
-//! - `fork_qcow2` - Atomic fork: rename + COW child creation
 
 use std::path::{Path, PathBuf};
 
-use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use serde::{Deserialize, Serialize};
 
 /// Disk image format.
@@ -192,64 +190,4 @@ impl From<&Disk> for DiskInfo {
             size_bytes: disk.on_disk_size(),
         }
     }
-}
-
-/// Fork a qcow2 disk: move original to a new location, create COW child at the original path.
-///
-/// This is the atomic "make immutable base + keep running" operation:
-/// 1. Read qcow2 virtual size from `source`
-/// 2. Rename `source` → `dest` (makes it immutable)
-/// 3. Create COW child at `source` path (so the original path stays usable)
-/// 4. Measure on-disk size of the file at `dest`
-///
-/// Returns a persistent `Disk` at `dest` carrying size metadata.
-pub(crate) fn fork_qcow2(source: &Path, dest: &Path) -> BoxliteResult<Disk> {
-    // Read virtual size BEFORE moving (file won't exist at old path after rename)
-    let virtual_size = Qcow2Helper::qcow2_virtual_size(source)?;
-
-    // Move disk → destination (makes it immutable). Fall back to copy+remove
-    // on EXDEV: the box home and the base store can sit on different
-    // filesystems (e.g. a /tmp tmpfs home vs the on-disk data dir), where a
-    // plain rename() fails with "Invalid cross-device link".
-    if let Err(e) = std::fs::rename(source, dest) {
-        if e.raw_os_error() == Some(libc::EXDEV) {
-            std::fs::copy(source, dest).map_err(|e| {
-                BoxliteError::Storage(format!(
-                    "Failed to copy disk {} to {}: {}",
-                    source.display(),
-                    dest.display(),
-                    e
-                ))
-            })?;
-            std::fs::remove_file(source).map_err(|e| {
-                BoxliteError::Storage(format!(
-                    "Failed to remove source disk after cross-fs copy {}: {}",
-                    source.display(),
-                    e
-                ))
-            })?;
-        } else {
-            return Err(BoxliteError::Storage(format!(
-                "Failed to move disk {} to {}: {}",
-                source.display(),
-                dest.display(),
-                e
-            )));
-        }
-    }
-
-    // Create COW child at original path (keeps the original path usable).
-    // leak() prevents the Disk RAII guard from deleting the file on drop.
-    Qcow2Helper::create_cow_child_disk(dest, BackingFormat::Qcow2, source, virtual_size)?.leak();
-
-    // Measure on-disk size of the base file
-    let on_disk_size = std::fs::metadata(dest).map(|m| m.len()).unwrap_or(0);
-
-    Ok(Disk::with_sizes(
-        dest.to_path_buf(),
-        DiskFormat::Qcow2,
-        true,
-        virtual_size,
-        on_disk_size,
-    ))
 }

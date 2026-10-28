@@ -103,6 +103,8 @@ let runtime = BoxliteRuntime::default_runtime();
 | `metrics` | `async fn metrics(&self) -> RuntimeMetrics` | Get runtime-wide metrics |
 | `remove` | `async fn remove(&self, id_or_name: &str, force: bool) -> BoxliteResult<()>` | Remove box completely |
 | `images` | `fn images(&self) -> BoxliteResult<ImageHandle>` | The images this runtime can boot from; never fails |
+| `import_checkpoint` | `async fn import_checkpoint(&self, dir: impl AsRef<Path>, options: CheckpointImportOptions) -> BoxliteResult<LiteBox>` | Create a new, `Paused` box from a verified checkpoint pair using prepared target mounts and an exact boot dependency; `CheckpointImportOptions { name: Option<String> }`. With REST, uploads the caller-local pair and creates the remote box; server capability required. See [checkpoints](../../guides/checkpoints.md) |
+| `inspect_checkpoint` | `fn inspect_checkpoint(dir: impl AsRef<Path>) -> BoxliteResult<CheckpointDependencies>` | Associated function; read memory checksums, pair digest and saved local dependency paths without creating a runtime or box |
 
 #### Example
 
@@ -392,6 +394,12 @@ HTTP contract, reconfiguration, disable, and generation semantics.
 | `run` | `async fn run(&self, command: BoxCommand) -> BoxliteResult<Execution>` | Run command |
 | `metrics` | `async fn metrics(&self) -> BoxliteResult<BoxMetrics>` | Get box metrics |
 | `stop` | `async fn stop(&self) -> BoxliteResult<()>` | Stop the box |
+| `pause` | `async fn pause(&self, options: PauseOptions) -> BoxliteResult<()>` | Pause a supported owner-mode box at one consistent cut. `PauseOptions { host_writers_stopped: bool }` must be `true` when the box has volumes (else `InvalidArgument`) |
+| `resume` | `async fn resume(&self) -> BoxliteResult<()>` | Resume a paused box; a guest that is not the paused one is stopped and `Engine` is returned |
+| `export_checkpoint` | `async fn export_checkpoint(&self, dir: impl AsRef<Path>) -> BoxliteResult<()>` | Write a paused box to a new two-file directory; prepare saved mounts and exact boot contents on the target; with REST, downloads into the caller-local directory; the box stays paused |
+
+Supported local configurations automatically select the checkpoint owner; other configurations
+report their restriction. Existing older shims require explicit restart for the new protocol; the [checkpoints guide](../../guides/checkpoints.md) has the full contract.
 
 #### Lifecycle
 
@@ -517,6 +525,13 @@ pub enum BoxStatus {
 
     /// Not running, can be restarted
     Stopped,
+
+    /// VM frozen: briefly during a disk export/snapshot, or by `pause()`
+    /// on a box in checkpoint owner mode until `resume()` or `stop()`
+    Paused,
+
+    /// Init pipeline failed; record and rootfs kept
+    Failed,
 }
 ```
 

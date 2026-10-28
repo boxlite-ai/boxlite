@@ -176,10 +176,13 @@ pub struct SecurityOptions {
     pub network_enabled: bool,
 }
 
+pub(crate) const DEFAULT_MAX_OPEN_FILES: u64 = 1024;
+
 /// Resource limits for the jailed process.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ResourceLimits {
-    /// Maximum number of open file descriptors (RLIMIT_NOFILE).
+    /// Maximum open descriptors (RLIMIT_NOFILE). For an enabled jailer,
+    /// None selects the mode-derived default; Some(n) is an exact caller cap.
     #[serde(default)]
     pub max_open_files: Option<u64>,
 
@@ -231,7 +234,7 @@ impl Default for SecurityOptions {
             sanitize_env: true,
             env_allowlist: vec!["RUST_LOG".to_string()],
             resource_limits: ResourceLimits {
-                max_open_files: Some(1024),
+                max_open_files: None, // Resolve after the VM's mode is selected.
                 max_file_size: Some(1024 * 1024 * 1024), // 1GB
                 // Per-box cgroup `pids.max` — the fork-bomb cap for the box's
                 // host-side process tree (bwrap + shim + libkrun/gvproxy

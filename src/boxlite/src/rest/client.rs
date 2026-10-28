@@ -76,6 +76,7 @@ pub(crate) type WsHandshakeResponse = tokio_tungstenite::tungstenite::handshake:
 #[derive(Clone)]
 pub(crate) struct ApiClient {
     http: Client,
+    checkpoint_http: Client,
     tunnel_connector: TunnelConnector,
     base_url: String,
     /// Routing-slot value substituted into the `{prefix}` URL segment
@@ -101,6 +102,15 @@ impl ApiClient {
             .connect_timeout(std::time::Duration::from_secs(300))
             .build()
             .map_err(|e| BoxliteError::Config(format!("failed to create HTTP client: {}", e)))?;
+        let checkpoint_http = Client::builder()
+            .timeout(std::time::Duration::from_secs(30 * 60))
+            .connect_timeout(std::time::Duration::from_secs(300))
+            .retry(reqwest::retry::never())
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .map_err(|error| {
+                BoxliteError::Config(format!("failed to create checkpoint HTTP client: {error}"))
+            })?;
         let tunnel_connector = hyper_rustls::HttpsConnectorBuilder::new()
             .with_native_roots()
             .map_err(|e| BoxliteError::Config(format!("failed to load TLS roots: {e}")))?
@@ -113,6 +123,7 @@ impl ApiClient {
 
         Ok(Self {
             http,
+            checkpoint_http,
             tunnel_connector,
             base_url,
             path_prefix,
@@ -286,6 +297,10 @@ impl ApiClient {
     pub async fn put_no_content<B: Serialize>(&self, path: &str, body: &B) -> BoxliteResult<()> {
         self.send_no_content(self.http.put(self.url(path)).json(body))
             .await
+    }
+
+    pub async fn post_empty_no_content(&self, path: &str) -> BoxliteResult<()> {
+        self.send_no_content(self.empty_post_request(path)).await
     }
 
     pub async fn post_empty<T: DeserializeOwned>(&self, path: &str) -> BoxliteResult<T> {
@@ -550,6 +565,87 @@ impl ApiClient {
             "create_from_snapshot",
             capabilities.create_from_snapshot_enabled,
         )
+    }
+
+    pub async fn require_checkpoints_enabled(&self) -> BoxliteResult<()> {
+        let config = match self.get_config().await {
+            Err(BoxliteError::NotFound(_)) => {
+                return Err(BoxliteError::Unsupported(
+                    "Remote server did not advertise checkpoints capability".into(),
+                ));
+            }
+            result => result?,
+        };
+        ensure_capability(
+            "checkpoints",
+            config
+                .capabilities
+                .and_then(|caps| caps.checkpoints_enabled),
+        )
+    }
+
+    /// A single streaming request: import is never retried after response loss.
+    pub async fn post_checkpoint<T: DeserializeOwned>(
+        &self,
+        file: std::fs::File,
+        name: Option<&str>,
+    ) -> BoxliteResult<T> {
+        let length = file
+            .metadata()
+            .map_err(crate::litebox::checkpoint::pair::invalid)?
+            .len();
+        let mut file = tokio::fs::File::from_std(file);
+        let stream: std::pin::Pin<
+            Box<dyn futures::Stream<Item = std::io::Result<bytes::Bytes>> + Send>,
+        > = Box::pin(async_stream::try_stream! {
+            use tokio::io::AsyncReadExt;
+            let mut buffer = vec![0; 64 * 1024];
+            loop {
+                let count = file.read(&mut buffer).await?;
+                if count == 0 { break; }
+                yield bytes::Bytes::copy_from_slice(&buffer[..count]);
+            }
+        });
+        let query: Vec<_> = name.map(|name| vec![("name", name)]).unwrap_or_default();
+        let builder = self
+            .checkpoint_http
+            .post(self.url("/boxes/checkpoint/import"))
+            .header("Content-Type", "application/zstd")
+            .header(CONTENT_LENGTH, length)
+            .query(&query)
+            .body(reqwest::Body::wrap_stream(stream));
+        self.send_json(builder).await
+    }
+
+    pub async fn download_checkpoint(&self, path: &str) -> BoxliteResult<std::fs::File> {
+        use futures::StreamExt;
+        use tokio::io::AsyncWriteExt;
+        let builder = self
+            .authorize(
+                self.checkpoint_http
+                    .post(self.url(path))
+                    .header(CONTENT_LENGTH, 0),
+            )
+            .await?;
+        let response = builder.send().await.map_err(transport_error)?;
+        if !response.status().is_success() {
+            return self.handle_error(response.status(), response).await;
+        }
+        let mut output = tokio::fs::File::from_std(
+            tempfile::tempfile().map_err(crate::litebox::checkpoint::pair::invalid)?,
+        );
+        let mut stream = response.bytes_stream();
+        while let Some(chunk) = stream.next().await {
+            output
+                .write_all(&chunk.map_err(transport_error)?)
+                .await
+                .map_err(crate::litebox::checkpoint::pair::invalid)?;
+        }
+        output
+            .flush()
+            .await
+            .map_err(crate::litebox::checkpoint::pair::invalid)?;
+        Ok(output.into_std().await)
     }
 
     pub async fn require_linux_capabilities_enabled(&self) -> BoxliteResult<()> {

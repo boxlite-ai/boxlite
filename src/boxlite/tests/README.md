@@ -24,6 +24,7 @@ This directory contains integration tests for the BoxLite runtime. Tests run con
 | `jailer.rs` | Yes | Jailer default behavior and macOS seatbelt deny lifecycle tests |
 | `clone_export_import.rs` | Yes | Clone, export, and import operations |
 | `sigstop_quiesce.rs` | Yes | SIGSTOP-based quiesce for snapshot operations |
+| `checkpoint_acceptance.rs` | KVM | Pause, export, destroy, import and resume the same guest process; `#[ignore]`d, Linux x86_64 only, run by `make test:checkpoint:acceptance` |
 | `rest_integration.rs` | Yes | REST API integration tests |
 | `timing_profile.rs` | Yes | Boot latency profiling |
 | `network.rs` | No | Network configuration tests |

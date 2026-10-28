@@ -40,6 +40,10 @@ impl ProcessInstance {
         }
     }
 
+    pub(super) fn pid(&self) -> Pid {
+        self.pid
+    }
+
     pub(super) fn is_current(&self) -> bool {
         Self::start_time_for(self.pid) == Some(self.start_time)
     }

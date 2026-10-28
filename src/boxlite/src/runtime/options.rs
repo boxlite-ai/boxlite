@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 
 use crate::disk::constants::qcow2::{DEFAULT_DISK_SIZE_GB, FSIZE_DISK_MULTIPLIER};
 use crate::runtime::advanced_options::AdvancedBoxOptions;
+use crate::runtime::constants::vm_defaults::DEFAULT_MEMORY_MIB;
 use crate::runtime::types::Bytes;
 use std::fmt;
 
@@ -767,16 +768,59 @@ impl BoxOptions {
         // runaway-write backstop, not a capacity policy. Capacity is the qcow2
         // virtual size, where a guest that fills its disk gets a clean `ENOSPC`
         // inside the box rather than a host-side `SIGXFSZ` that kills the VM.
-        self.advanced.security.resource_limits.max_file_size = Some(
-            Bytes::from_gib(
-                self.disk_size_gb
-                    .unwrap_or(DEFAULT_DISK_SIZE_GB)
-                    .saturating_mul(FSIZE_DISK_MULTIPLIER),
+        self.advanced.security.resource_limits.max_file_size = Some(self.shim_file_size_limit());
+        if self.advanced.security.jailer_enabled
+            && self
+                .advanced
+                .security
+                .resource_limits
+                .max_open_files
+                .is_none()
+        {
+            let owner = crate::vmm::checkpoint::support::select(
+                self,
+                crate::vmm::checkpoint::support::Host::current(),
             )
-            .as_bytes(),
-        );
+            .owns_vm();
+            // Export overlaps live FS roles, captured object pins and the
+            // prepared transfer set. Import overlaps received roles, C ABI
+            // duplicates and restoration copies. Each set is bounded by
+            // MAX_FDS; control/batch/disk descriptors use separate headroom.
+            let limit = if owner {
+                3 * crate::vmm::checkpoint::descriptors::MAX_FDS as u64 + 256
+            } else {
+                super::advanced_options::DEFAULT_MAX_OPEN_FILES
+            };
+            self.advanced.security.resource_limits.max_open_files = Some(limit);
+        }
 
         Ok(())
+    }
+
+    /// The jailed shim's `RLIMIT_FSIZE` for this box (see [`Self::sanitize`]).
+    pub(crate) fn shim_file_size_limit(&self) -> u64 {
+        let disks = Bytes::from_gib(
+            self.disk_size_gb
+                .unwrap_or(DEFAULT_DISK_SIZE_GB)
+                .saturating_mul(FSIZE_DISK_MULTIPLIER),
+        )
+        .as_bytes();
+        if !crate::vmm::checkpoint::support::select(
+            self,
+            crate::vmm::checkpoint::support::Host::current(),
+        )
+        .owns_vm()
+        {
+            return disks;
+        }
+        // The shim writes RAM, init and anonymous DAX pages to snapshot.mem.
+        // Shared file contents and the readonly boot disk stay external. Keep
+        // the ordinary disk-growth allowance plus bounded memory-image space.
+        let memory = u64::from(self.memory_mib.unwrap_or(DEFAULT_MEMORY_MIB)) << 20;
+        disks
+            .saturating_add(memory)
+            .saturating_add(7 * (crate::vmm::checkpoint::DAX_WINDOW_BYTES + (64 << 20)))
+            .saturating_add((16 << 20) + 160)
     }
 }
 
@@ -1408,6 +1452,14 @@ pub(crate) fn normalize_legacy_ports(ports: &mut Vec<PortSpec>) -> usize {
 pub(crate) enum ArchiveImportPolicy {
     Trusted,
     UntrustedRemote,
+}
+
+/// Options for [`BoxliteRuntime::import_checkpoint`](crate::BoxliteRuntime::import_checkpoint).
+#[derive(Debug, Clone, Default)]
+pub struct CheckpointImportOptions {
+    /// Name of the new box; `None` leaves it unnamed. The source box's name
+    /// is never reused.
+    pub name: Option<String>,
 }
 
 /// A portable box archive (`.boxlite` file).

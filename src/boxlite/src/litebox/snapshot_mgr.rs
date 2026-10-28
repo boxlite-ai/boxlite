@@ -146,21 +146,16 @@ impl SnapshotManager {
         self.store.find(box_id, name)
     }
 
-    /// Create a snapshot from a box's live container disk.
-    ///
-    /// 1. Create `box_home/snapshots/{name}/` directory
-    /// 2. Read virtual size from container disk
-    /// 3. Rename container disk → `snapshots/{name}/disk.qcow2`
-    /// 4. Create COW child at original path (box keeps running)
-    /// 5. Insert DB record via `SnapshotStore`
+    /// Install one frozen standalone copy after its source resumed, then
+    /// persist snapshot metadata. The live source is never renamed or replaced.
     pub(crate) fn create(
         &self,
         box_home: &Path,
         name: &str,
         box_id: &str,
+        captured: &Path,
     ) -> BoxliteResult<SnapshotInfo> {
-        let disks_dir = box_home.join("disks");
-        let container_disk = disks_dir.join(disk_filenames::CONTAINER_DISK);
+        let container_disk = captured;
 
         if !container_disk.exists() {
             return Err(BoxliteError::Storage(format!(
@@ -179,11 +174,15 @@ impl SnapshotManager {
             ))
         })?;
 
-        // 2-4. Fork: move container → snapshot dir, create COW child at original path
+        // Install the frozen copy only after its source resumed.
         let snap_disk = snapshot_dir.join(disk_filenames::CONTAINER_DISK);
-        let forked = crate::disk::fork_qcow2(&container_disk, &snap_disk)?;
-        let disk_info = crate::disk::DiskInfo::from(&forked);
-        // forked is persistent (won't be deleted on drop)
+        let virtual_size = Qcow2Helper::qcow2_virtual_size(container_disk)?;
+        crate::litebox::archive::move_file(container_disk, &snap_disk)?;
+        let disk_info = crate::disk::DiskInfo {
+            base_path: snap_disk.to_string_lossy().into_owned(),
+            container_disk_bytes: virtual_size,
+            size_bytes: std::fs::metadata(&snap_disk)?.len(),
+        };
 
         // 5. Insert DB record
         let snapshot_id = nanoid::nanoid!(8);

@@ -26,7 +26,18 @@ impl ServeChild {
     /// "k"]`; pass the same key as `api_key` when it authenticates clients.
     pub fn start_with(extra: &[&str], api_key: Option<&str>) -> Self {
         let home = boxlite_test_utils::home::PerTestBoxHome::new();
+        Self::start_in(home, extra, api_key)
+    }
 
+    pub fn home_path(&self) -> &std::path::Path {
+        &self._home.path
+    }
+
+    pub fn start_in(
+        home: boxlite_test_utils::home::PerTestBoxHome,
+        extra: &[&str],
+        api_key: Option<&str>,
+    ) -> Self {
         // Ask the OS for a free port, then release it — a small race with
         // whatever binds next, but the standard trick and good enough here.
         let port = std::net::TcpListener::bind("127.0.0.1:0")
@@ -44,6 +55,14 @@ impl ServeChild {
             .args(extra)
             .stdout(Stdio::null())
             .stderr(Stdio::null());
+        if let Some(logs) = std::env::var_os("BOXLITE_CHECKPOINT_LOGS") {
+            std::fs::create_dir_all(&logs).expect("checkpoint logs directory");
+            let log = std::fs::File::create(
+                std::path::Path::new(&logs).join(format!("serve-{port}.log")),
+            )
+            .expect("serve log");
+            cmd.stderr(Stdio::from(log));
+        }
 
         let child = cmd.spawn().expect("spawn boxlite serve");
         let serve = Self {

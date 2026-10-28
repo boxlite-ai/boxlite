@@ -67,6 +67,17 @@ pub(crate) trait RuntimeBackend: Send + Sync {
         ))
     }
 
+    /// Import a caller-local checkpoint pair as a new, paused box.
+    async fn import_checkpoint(
+        &self,
+        _path: &Path,
+        _options: crate::runtime::options::CheckpointImportOptions,
+    ) -> BoxliteResult<LiteBox> {
+        Err(BoxliteError::Unsupported(
+            "this backend does not support checkpoint import".to_string(),
+        ))
+    }
+
     /// Synchronous shutdown for atexit/Drop contexts.
     /// Default no-op (REST backend doesn't manage local processes).
     fn shutdown_sync(&self) {}
@@ -135,6 +146,24 @@ pub(crate) trait BoxBackend: Send + Sync + Any {
     async fn metrics(&self) -> BoxliteResult<BoxMetrics>;
 
     async fn stop(&self) -> BoxliteResult<()>;
+
+    async fn pause(&self, _options: crate::PauseOptions) -> BoxliteResult<()> {
+        Err(BoxliteError::Unsupported(
+            "this backend does not support checkpoints".into(),
+        ))
+    }
+
+    async fn resume(&self) -> BoxliteResult<()> {
+        Err(BoxliteError::Unsupported(
+            "this backend does not support checkpoints".into(),
+        ))
+    }
+
+    async fn export_checkpoint(&self, _path: &Path) -> BoxliteResult<()> {
+        Err(BoxliteError::Unsupported(
+            "this backend does not support checkpoints".into(),
+        ))
+    }
 
     async fn copy_into(
         &self,

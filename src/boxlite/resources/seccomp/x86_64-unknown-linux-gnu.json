@@ -135,6 +135,71 @@
         "comment": "Used for snapshotting"
       },
       {
+        "syscall": "fallocate",
+        "comment": "virtio-fs passes the guest's fallocate mode through; a stock guest kernel sends only these five, so collapse, insert and unshare still trap",
+        "args": [
+          {
+            "index": 1,
+            "type": "dword",
+            "op": "eq",
+            "val": 0,
+            "comment": "FALLOC_FL_ALLOCATE_RANGE (guest posix_fallocate)"
+          }
+        ]
+      },
+      {
+        "syscall": "fallocate",
+        "comment": "virtio-fs passes the guest's fallocate mode through; a stock guest kernel sends only these five, so collapse, insert and unshare still trap",
+        "args": [
+          {
+            "index": 1,
+            "type": "dword",
+            "op": "eq",
+            "val": 1,
+            "comment": "FALLOC_FL_KEEP_SIZE"
+          }
+        ]
+      },
+      {
+        "syscall": "fallocate",
+        "comment": "virtio-fs passes the guest's fallocate mode through; a stock guest kernel sends only these five, so collapse, insert and unshare still trap",
+        "args": [
+          {
+            "index": 1,
+            "type": "dword",
+            "op": "eq",
+            "val": 3,
+            "comment": "FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE (also virtio-blk discard and write-zeroes)"
+          }
+        ]
+      },
+      {
+        "syscall": "fallocate",
+        "comment": "virtio-fs passes the guest's fallocate mode through; a stock guest kernel sends only these five, so collapse, insert and unshare still trap",
+        "args": [
+          {
+            "index": 1,
+            "type": "dword",
+            "op": "eq",
+            "val": 16,
+            "comment": "FALLOC_FL_ZERO_RANGE"
+          }
+        ]
+      },
+      {
+        "syscall": "fallocate",
+        "comment": "virtio-fs passes the guest's fallocate mode through; a stock guest kernel sends only these five, so collapse, insert and unshare still trap",
+        "args": [
+          {
+            "index": 1,
+            "type": "dword",
+            "op": "eq",
+            "val": 17,
+            "comment": "FALLOC_FL_ZERO_RANGE | FALLOC_FL_KEEP_SIZE"
+          }
+        ]
+      },
+      {
         "syscall": "lseek",
         "comment": "Used by the block device"
       },
@@ -584,6 +649,10 @@
         "comment": "libkrun: get socket address for tonic gRPC vsock server. Required at steady-state."
       },
       {
+        "syscall": "getpeername",
+        "comment": "gvproxy: Go's net dial reads the peer address after connect"
+      },
+      {
         "syscall": "setsockopt",
         "comment": "libkrun: set socket options for tonic gRPC vsock server. Required at steady-state."
       },
@@ -714,6 +783,38 @@
       {
         "syscall": "fchmod",
         "comment": "libkrun: change file permissions. TODO(seccomp): likely setup-only, may be removable after audit."
+      },
+      {
+        "syscall": "fchownat",
+        "comment": "libkrun virtio-fs snapshot import: restore owners (passthrough/archive/host.rs chown)"
+      },
+      {
+        "syscall": "fchmodat",
+        "comment": "libkrun virtio-fs snapshot import: restore modes (passthrough/archive/host.rs chmod)"
+      },
+      {
+        "syscall": "utimensat",
+        "comment": "libkrun virtio-fs snapshot import: restore atime/mtime (passthrough/archive/host.rs set_times)"
+      },
+      {
+        "syscall": "symlinkat",
+        "comment": "libkrun virtio-fs snapshot import: recreate symlinks (passthrough/archive/host.rs symlink_at)"
+      },
+      {
+        "syscall": "mknodat",
+        "comment": "libkrun virtio-fs snapshot import: recreate overlay whiteouts, char 0:0 (passthrough/archive/host.rs whiteout_at)"
+      },
+      {
+        "syscall": "linkat",
+        "comment": "libkrun virtio-fs snapshot import: recreate hard links (passthrough/archive/host.rs link_to)"
+      },
+      {
+        "syscall": "fdatasync",
+        "comment": "libkrun virtio-fs snapshot pause: sync writable handles at the cut (passthrough/snapshot.rs sync_for_snapshot)"
+      },
+      {
+        "syscall": "getegid",
+        "comment": "libkrun virtio-fs guest-visible snapshot archive: the effective group ID it records and an import must match (passthrough/archive/host.rs effective_ids)"
       },
       {
         "syscall": "flock",

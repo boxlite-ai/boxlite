@@ -327,6 +327,26 @@ impl BoxOptions {
 
 #[async_trait::async_trait]
 impl RuntimeBackend for RestRuntime {
+    async fn import_checkpoint(
+        &self,
+        path: &std::path::Path,
+        options: crate::CheckpointImportOptions,
+    ) -> BoxliteResult<LiteBox> {
+        self.client.require_checkpoints_enabled().await?;
+        let path = path.to_path_buf();
+        let file = tokio::task::spawn_blocking(move || crate::checkpoint_transport::pack(&path))
+            .await
+            .map_err(|error| BoxliteError::Internal(error.to_string()))??;
+        let response: BoxResponse = self
+            .client
+            .post_checkpoint(file, options.name.as_deref())
+            .await?;
+        Ok(litebox_from_rest(Arc::new(RestBox::new(
+            self.client.clone(),
+            response.to_box_info()?,
+        ))))
+    }
+
     async fn create(&self, options: BoxOptions, name: Option<String>) -> BoxliteResult<LiteBox> {
         self.validate_create_options(&options).await?;
 

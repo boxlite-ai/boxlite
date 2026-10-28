@@ -17,6 +17,7 @@ use libkrun_sys::{
     krun_set_console_output, krun_set_env, krun_set_exec, krun_set_gpu_options, krun_set_kernel,
     krun_set_nested_virt, krun_set_port_map, krun_set_rlimits, krun_set_root,
     krun_set_root_disk_remount, krun_set_vm_config, krun_set_workdir, krun_setgid, krun_setuid,
+    krun_snapshot_enable,
     krun_split_irqchip, krun_start_enter,
 };
 
@@ -471,13 +472,21 @@ impl KrunContext {
     /// * `host_path` - Path to directory on host to share
     /// * `mount_tag` - Tag used by guest to mount this share (e.g., "layer0", "upper")
     /// * `read_only` - If true, the filesystem is exposed as read-only at the hypervisor level
+    /// * `dax_window` - Size of the share's DAX window in bytes; 0 for none
     pub unsafe fn add_virtiofs(
         &self,
         mount_tag: &str,
         host_path: &str,
         read_only: bool,
+        dax_window: u64,
     ) -> BoxliteResult<()> {
-        tracing::debug!(host_path, mount_tag, read_only, "Adding virtiofs mount");
+        tracing::debug!(
+            host_path,
+            mount_tag,
+            read_only,
+            dax_window,
+            "Adding virtiofs mount"
+        );
 
         let host_path_c = CString::new(host_path)
             .map_err(|e| BoxliteError::Engine(format!("invalid host path: {e}")))?;
@@ -489,7 +498,7 @@ impl KrunContext {
                 self.ctx_id,
                 mount_tag_c.as_ptr(),
                 host_path_c.as_ptr(),
-                0,
+                dax_window,
                 read_only,
             )
         })
@@ -607,6 +616,14 @@ impl KrunContext {
             .map_err(|e| BoxliteError::Engine(format!("invalid console output path: {e}")))?;
         check_status("krun_set_console_output", unsafe {
             krun_set_console_output(self.ctx_id, filepath_c.as_ptr())
+        })
+    }
+
+    /// Switch this context to checkpointing mode. Must precede every network
+    /// device call.
+    pub unsafe fn snapshot_enable(&self) -> BoxliteResult<()> {
+        check_status("krun_snapshot_enable", unsafe {
+            krun_snapshot_enable(self.ctx_id, 0)
         })
     }
 
