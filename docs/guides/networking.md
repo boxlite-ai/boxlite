@@ -79,6 +79,15 @@ boxlite inspect mybox
 | Clone/export | Copies inherit the latest persisted outbound policy. |
 | Inbound timing | Cloud proxy cache expiry governs new connections; existing connections stay open. |
 
+REST creation and outbound replacement share the same combination check:
+`{"mode":"disabled","allow_net":["example.com"]}` returns HTTP 400.
+Creation rejects it before allocating a box, including the deprecated flat
+network shape. Disabled mode accepts an omitted allowlist or `[]`; rules are
+never silently discarded. Internal creation also checks the effective mode
+after applying the organization's default. Runner create, recovery and update
+requests enforce the same rule. Recovery rejects contradictory old policy
+before destroying the existing box; it does not rewrite stored rules.
+
 An update returns after application and persistence. On persistence failure,
 BoxLite attempts to restore the previous policy. A timeout, lost response, or
 failed rollback can leave live and stored state different: retry the complete

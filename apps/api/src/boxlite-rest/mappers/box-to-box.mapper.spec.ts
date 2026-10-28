@@ -36,7 +36,8 @@ describe('BoxLite lifecycle policy mapper', () => {
   it.each([
     ['enabled', [' api.openai.com ', '', '10.0.0.0/8'], true, ['api.openai.com', '10.0.0.0/8']],
     ['enabled', [], true, undefined],
-    ['disabled', ['api.openai.com'], false, undefined],
+    ['disabled', [], false, undefined],
+    ['disabled', ['api.openai.com'], false, ['api.openai.com']],
   ] as const)(
     'maps outbound %s with allow_net %j to enabled %s and entries %j',
     (mode, allowNet, expectedEnabled, expected) => {

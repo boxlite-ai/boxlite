@@ -24,9 +24,15 @@ import {
   ValidateNested,
   ValidatorConstraint,
   ValidatorConstraintInterface,
+  ValidationArguments,
 } from 'class-validator'
 import { MAX_CPU_PER_BOX } from '../../box/services/per-box-limits'
-import { isValidNetworkAllowEntry, MAX_NETWORK_ALLOW_LIST_ENTRIES } from '../../box/utils/network-validation.util'
+import {
+  DISABLED_OUTBOUND_RULES_ERROR,
+  hasDisabledOutboundRules,
+  isValidNetworkAllowEntry,
+  MAX_NETWORK_ALLOW_LIST_ENTRIES,
+} from '../../box/utils/network-validation.util'
 
 const logger = new Logger('CreateBoxDto')
 
@@ -41,6 +47,17 @@ class IsNetworkAllowEntryConstraint implements ValidatorConstraintInterface {
   }
 }
 
+@ValidatorConstraint({ name: 'isOutboundPolicyCombination', async: false })
+class IsOutboundPolicyCombinationConstraint implements ValidatorConstraintInterface {
+  validate(allowNet: unknown, args: ValidationArguments): boolean {
+    return !hasDisabledOutboundRules((args.object as OutboundNetworkSpecDto).mode, allowNet)
+  }
+
+  defaultMessage(): string {
+    return DISABLED_OUTBOUND_RULES_ERROR
+  }
+}
+
 export class OutboundNetworkSpecDto {
   @IsIn(['enabled', 'disabled'])
   mode: 'enabled' | 'disabled'
@@ -50,6 +67,7 @@ export class OutboundNetworkSpecDto {
   @ArrayMaxSize(MAX_NETWORK_ALLOW_LIST_ENTRIES)
   @IsString({ each: true })
   @Validate(IsNetworkAllowEntryConstraint, { each: true })
+  @Validate(IsOutboundPolicyCombinationConstraint)
   allow_net?: string[]
 }
 

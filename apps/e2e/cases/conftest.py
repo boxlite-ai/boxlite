@@ -27,6 +27,7 @@ import boxlite
 sys.path.insert(0, str(Path(__file__).parent.parent / "lib"))
 from e2e_auth import auth_context, credentials_path, load_profile
 from images import default_image
+from http_frames import UnexpectedTunnelEOF
 from path_verification import runner_journal_seek, runner_hits_for_box
 
 DEFAULT_IMAGE = default_image()
@@ -45,6 +46,7 @@ STAGE_IS_REMOTE = _STAGE_HOST not in ("localhost", "127.0.0.1", "::1")
 TUNNEL_READ_TO_EOF_XFAIL = pytest.mark.xfail(
     condition=STAGE_IS_REMOTE,
     strict=True,
+    raises=UnexpectedTunnelEOF,
     reason="a tunnel read that waits for EOF fails with a TLS unexpected-EOF error on a cloud stage (#1950)",
 )
 

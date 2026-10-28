@@ -88,10 +88,14 @@ func networkSpec(boxDto dto.CreateBoxDTO) (boxlite.NetworkSpec, error) {
 	if boxDto.OutboundEnabled == nil {
 		return boxlite.NetworkSpec{}, errMissingOutboundPolicy
 	}
+	policy := dto.OutboundNetworkPolicy{Mode: boxlite.NetworkModeEnabled, AllowNet: boxDto.OutboundAllowNet}
 	if !*boxDto.OutboundEnabled {
-		return boxlite.NetworkSpec{Mode: boxlite.NetworkModeDisabled}, nil
+		policy.Mode = boxlite.NetworkModeDisabled
 	}
-	return boxlite.NetworkSpec{Mode: boxlite.NetworkModeEnabled, AllowNet: allowNetEntries(boxDto.OutboundAllowNet)}, nil
+	if err := policy.Validate(); err != nil {
+		return boxlite.NetworkSpec{}, err
+	}
+	return boxlite.NetworkSpec{Mode: policy.Mode, AllowNet: allowNetEntries(policy.AllowNet)}, nil
 }
 
 // allowNetEntries trims entries and drops blanks; nil when nothing is left.

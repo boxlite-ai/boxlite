@@ -78,7 +78,7 @@ export function createBoxToCreateBox(dto: RestCreateBoxDto, target?: string): Cr
   if (dto.network) {
     const allowNet = dto.network.outbound?.allow_net?.map((entry) => entry.trim()).filter(Boolean)
     createDto.outboundEnabled = dto.network.outbound?.mode !== 'disabled'
-    createDto.outboundAllowNet = dto.network.outbound?.mode === 'enabled' && allowNet?.length ? allowNet : undefined
+    createDto.outboundAllowNet = allowNet?.length ? allowNet : undefined
   }
   return createDto
 }

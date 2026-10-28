@@ -12,6 +12,7 @@ import boxlite
 import pytest
 
 from conftest import TUNNEL_READ_TO_EOF_XFAIL, drain
+from http_frames import HalfCloseResponseLost, UnexpectedTunnelEOF, response_size
 
 SERVICES = ((18080, b"python-sdk-tunnel-e2e-a"), (18082, b"python-sdk-tunnel-e2e-b"))
 FIXTURE = Path(__file__).parents[1] / "fixtures" / "service_in_box_server.py"
@@ -20,8 +21,7 @@ FIXTURE = Path(__file__).parents[1] / "fixtures" / "service_in_box_server.py"
 def tunnelable_box(image: str, **options) -> boxlite.BoxOptions:
     """Options for a box a tunnel can actually be opened on.
 
-    An unspecified inbound mode means private, and the API refuses a tunnel on
-    a private box, so a caller opening a tunnel asks for inbound access.
+    Inbound is the box-wide switch; public/private is chosen per tunnel.
     """
     return boxlite.BoxOptions(
         image=image,
@@ -32,22 +32,7 @@ def tunnelable_box(image: str, **options) -> boxlite.BoxOptions:
 
 async def _get_over_tunnel(box: boxlite.Box, port: int, marker: bytes) -> bytes:
     tunnel = await box.network.tunnel(("127.0.0.1", port))
-    connection = await tunnel.connect()
-    response = bytearray()
-    try:
-        await connection.write(
-            b"GET /marker.txt HTTP/1.0\r\nHost: tunnel.test\r\n\r\n",
-        )
-        while len(response) < 64 * 1024:
-            chunk = await asyncio.wait_for(connection.read(8192), timeout=5)
-            if not chunk:
-                break
-            response.extend(chunk)
-            if marker in response:
-                break
-        return bytes(response)
-    finally:
-        await connection.close()
+    return await _request(tunnel, b"GET /marker.txt HTTP/1.0\r\nHost: tunnel.test\r\n\r\n")
 
 
 async def _start_service(box, port: int, marker: bytes) -> str:
@@ -74,7 +59,7 @@ async def _stop_service(box, pid: str) -> None:
     assert rc.exit_code == 0, err
 
 
-async def _request(tunnel, request: bytes, *, read_delay: float = 0) -> bytes:
+async def _request(tunnel, request: bytes, *, read_delay: float = 0, read_eof=False) -> bytes:
     connection = await tunnel.connect()
     try:
         await connection.write(request)
@@ -86,15 +71,26 @@ async def _request(tunnel, request: bytes, *, read_delay: float = 0) -> bytes:
                 connection.read(64 * 1024), timeout=10
             )
             if not chunk:
-                return bytes(response)
+                raise AssertionError("tunnel closed before the complete HTTP response")
             response.extend(chunk)
+            size = response_size(response)
+            if size is not None and len(response) >= size:
+                assert len(response) == size, "unexpected bytes after the HTTP response"
+                if read_eof:
+                    try:
+                        assert not await asyncio.wait_for(connection.read(1), timeout=5)
+                    except RuntimeError as error:
+                        if "without sending TLS close_notify" in str(error):
+                            raise UnexpectedTunnelEOF("complete response followed by missing TLS close_notify") from None
+                        raise
+                return bytes(response)
     finally:
         await connection.close()
 
 
 async def _websocket_echo(tunnel, marker: bytes) -> bytes:
     connection = await tunnel.connect()
-    key = base64.b64encode(b"boxlite-sdk-e2e").decode()
+    key = base64.b64encode(b"boxlite-e2e-key!!").decode()
     try:
         await connection.write(
             (
@@ -105,10 +101,14 @@ async def _websocket_echo(tunnel, marker: bytes) -> bytes:
         )
         headers = bytearray()
         while b"\r\n\r\n" not in headers:
-            headers.extend(
-                await asyncio.wait_for(connection.read(4096), timeout=5)
-            )
+            chunk = await asyncio.wait_for(connection.read(4096), timeout=5)
+            assert chunk, "WebSocket closed before upgrade"
+            headers.extend(chunk)
+            assert len(headers) <= 65536, "WebSocket headers exceed probe limit"
         assert headers.startswith(b"HTTP/1.1 101")
+        accept = base64.b64encode(hashlib.sha1((key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode()).digest())
+        fields = dict(line.split(b":", 1) for line in bytes(headers).split(b"\r\n")[1:] if b":" in line)
+        assert next(value.strip() for name, value in fields.items() if name.lower() == b"sec-websocket-accept") == accept
         payload = b"python-ws"
         mask = b"\x01\x02\x03\x04"
         frame = (
@@ -129,6 +129,7 @@ async def _websocket_echo(tunnel, marker: bytes) -> bytes:
             return bytes(data)
 
         frame_header = await recv_exact(2)
+        assert frame_header[0] == 0x81 and frame_header[1] < 126, "unexpected WebSocket echo frame"
         echoed = await recv_exact(frame_header[1] & 0x7F)
         assert echoed == marker + b":" + payload
         return echoed
@@ -153,7 +154,6 @@ async def _wait_for_http(box: boxlite.Box, port: int, marker: bytes) -> bytes:
     )
 
 
-@TUNNEL_READ_TO_EOF_XFAIL
 @pytest.mark.asyncio
 async def test_python_sdk_tunnel_proxies_http_from_rest_box(rt, image):
     """Cloud tunnels isolate ports, serve concurrent clients, and die with the box."""
@@ -236,12 +236,15 @@ async def test_python_sdk_tunnel_rejects_stopped_box(rt, image):
         # stop(), not remove(): this test is about tunnelling into a box
         # that's merely stopped, not one that's gone.
         await box.stop()
-        await asyncio.sleep(1)
+        deadline = asyncio.get_running_loop().time() + 30
+        while await _box_status(rt, box.id) != "stopped":
+            assert asyncio.get_running_loop().time() < deadline, "box never stopped"
+            await asyncio.sleep(0.2)
 
         # A stopped, non-auto-resumable box must reject the tunnel request
         # up front (POL-214) rather than handing back a URI that CONNECTs
         # successfully and then silently drops the stream.
-        with pytest.raises(RuntimeError):
+        with pytest.raises(boxlite.InvalidStateError, match="not running"):
             await asyncio.wait_for(box.network.tunnel(("127.0.0.1", SERVICES[0][0])), timeout=10)
     finally:
         await rt.remove(box.id, force=True)
@@ -296,6 +299,7 @@ async def test_python_sdk_tunnel_connect_wakes_stopped_box(rt, image):
 
 @pytest.mark.xfail(
     strict=True,
+    raises=HalfCloseResponseLost,
     reason="TCP half-close currently drops the guest response",
 )
 @pytest.mark.asyncio
@@ -310,12 +314,22 @@ async def test_python_sdk_tunnel_preserves_tcp_half_close(rt, image):
         )
         await connection.shutdown_write()
         response = bytearray()
-        while chunk := await asyncio.wait_for(
-            connection.read(8192), timeout=5
-        ):
-            response.extend(chunk)
-        await connection.close()
-        assert SERVICES[0][1] in response
+        try:
+            try:
+                while chunk := await asyncio.wait_for(connection.read(8192), timeout=5):
+                    response.extend(chunk)
+                    length = response_size(response)
+                    if length is not None and len(response) >= length:
+                        break
+            except RuntimeError as error:
+                if "without sending TLS close_notify" not in str(error):
+                    raise
+            length = response_size(response)
+            if length is None or len(response) < length:
+                raise HalfCloseResponseLost("working tunnel lost its response after half-close")
+            assert response.split(b"\r\n\r\n", 1)[1] == SERVICES[0][1], "half-close reached the wrong guest"
+        finally:
+            await connection.close()
     finally:
         await rt.remove(box.id, force=True)
 
@@ -354,3 +368,16 @@ async def test_python_sdk_tunnel_keeps_boxes_isolated(rt, image):
                 await rt.remove(box.id, force=True)
             except Exception:
                 pass
+
+
+@TUNNEL_READ_TO_EOF_XFAIL
+@pytest.mark.asyncio
+async def test_python_sdk_tunnel_tls_shutdown(rt, image):
+    box = await rt.create(tunnelable_box(image))
+    try:
+        await _start_service(box, *SERVICES[0])
+        await _wait_for_http(box, *SERVICES[0])
+        tunnel = await box.network.tunnel(("127.0.0.1", SERVICES[0][0]))
+        await _request(tunnel, b"GET / HTTP/1.0\r\nHost: tunnel.test\r\n\r\n", read_eof=True)
+    finally:
+        await rt.remove(box.id, force=True)

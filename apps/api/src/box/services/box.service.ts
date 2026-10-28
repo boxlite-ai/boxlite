@@ -44,7 +44,11 @@ import { TypedConfigService } from '../../config/typed-config.service'
 import { WarmPool } from '../entities/warm-pool.entity'
 import { BoxDto, BoxDtoReads, BoxVolume } from '../dto/box.dto'
 import { RunnerAdapterFactory } from '../runner-adapter/runnerAdapter'
-import { validateNetworkAllowList } from '../utils/network-validation.util'
+import {
+  DISABLED_OUTBOUND_RULES_ERROR,
+  hasDisabledOutboundRules,
+  validateNetworkAllowList,
+} from '../utils/network-validation.util'
 import { NetworkMode } from '../enums/network-mode.enum'
 import { networkMode } from '../utils/network-policy.util'
 import { VolumeService } from './volume.service'
@@ -226,6 +230,10 @@ export class BoxService {
     ctx: Context,
     options: BoxCreationOptions = {},
   ): Promise<BoxDto> {
+    const outboundEnabled = createBoxDto.outboundEnabled ?? !organization.boxLimitedNetworkEgress
+    if (hasDisabledOutboundRules(outboundEnabled ? 'enabled' : 'disabled', createBoxDto.outboundAllowNet)) {
+      throw new BadRequestError(DISABLED_OUTBOUND_RULES_ERROR)
+    }
     const region = await this.getValidatedOrDefaultRegion(organization, createBoxDto.target)
 
     try {
@@ -333,7 +341,7 @@ export class BoxService {
 
       // An explicit request wins; otherwise the organization's limited-egress
       // default decides.
-      box.outboundEnabled = createBoxDto.outboundEnabled ?? !organization.boxLimitedNetworkEgress
+      box.outboundEnabled = outboundEnabled
 
       if (createBoxDto.outboundAllowNet !== undefined) {
         box.outboundAllowNet = this.resolveOutboundAllowNet(createBoxDto.outboundAllowNet)
@@ -1341,8 +1349,8 @@ export class BoxService {
   }
 
   async setOutboundNetwork(boxIdOrName: string, policy: OutboundPolicy, organizationId: string): Promise<Box> {
-    if (policy.mode === 'disabled' && policy.allow_net.length) {
-      throw new BadRequestError('disabled outbound cannot include allow_net')
+    if (hasDisabledOutboundRules(policy.mode, policy.allow_net)) {
+      throw new BadRequestError(DISABLED_OUTBOUND_RULES_ERROR)
     }
     const allowNet = this.resolveOutboundAllowNet(policy.allow_net) ?? []
     const box = await this.findOneByIdOrName(boxIdOrName, organizationId)

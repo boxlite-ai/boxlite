@@ -18,9 +18,10 @@ func TestNetworkSpecReadsOutboundPolicy(t *testing.T) {
 	enabled, disabled := true, false
 
 	tests := []struct {
-		name string
-		dto  dto.CreateBoxDTO
-		want boxlite.NetworkSpec
+		name    string
+		dto     dto.CreateBoxDTO
+		want    boxlite.NetworkSpec
+		invalid bool
 	}{
 		{
 			name: "outbound enabled with an allowlist",
@@ -33,8 +34,18 @@ func TestNetworkSpecReadsOutboundPolicy(t *testing.T) {
 			want: boxlite.NetworkSpec{Mode: boxlite.NetworkModeEnabled},
 		},
 		{
-			name: "outbound disabled ignores the allowlist",
-			dto:  dto.CreateBoxDTO{OutboundEnabled: &disabled, OutboundAllowNet: []string{"api.openai.com"}},
+			name:    "outbound disabled rejects the allowlist",
+			dto:     dto.CreateBoxDTO{OutboundEnabled: &disabled, OutboundAllowNet: []string{"api.openai.com"}},
+			invalid: true,
+		},
+		{
+			name:    "outbound disabled rejects blank rules before trimming",
+			dto:     dto.CreateBoxDTO{OutboundEnabled: &disabled, OutboundAllowNet: []string{" "}},
+			invalid: true,
+		},
+		{
+			name: "outbound disabled without rules",
+			dto:  dto.CreateBoxDTO{OutboundEnabled: &disabled},
 			want: boxlite.NetworkSpec{Mode: boxlite.NetworkModeDisabled},
 		},
 	}
@@ -42,11 +53,54 @@ func TestNetworkSpecReadsOutboundPolicy(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			got, err := networkSpec(test.dto)
+			if test.invalid {
+				if !errdefs.IsInvalidArgument(err) {
+					t.Fatalf("networkSpec() error = %v, want invalid argument", err)
+				}
+				return
+			}
 			if err != nil {
 				t.Fatalf("networkSpec() error = %v", err)
 			}
 			if !reflect.DeepEqual(got, test.want) {
 				t.Fatalf("networkSpec() = %+v, want %+v", got, test.want)
+			}
+		})
+	}
+}
+
+func TestOutboundPolicyRejectsDisabledRulesBeforeSideEffects(t *testing.T) {
+	disabled := false
+	client := &Client{logger: slog.Default()}
+	for _, entry := range []struct {
+		name string
+		call func() error
+	}{
+		{"create", func() error {
+			_, _, err := client.Create(t.Context(), dto.CreateBoxDTO{
+				Id: "box-1", Image: "base", OutboundEnabled: &disabled, OutboundAllowNet: []string{"example.com"},
+			})
+			return err
+		}},
+		{"recover", func() error {
+			return client.RecoverBox(t.Context(), "box-1", dto.RecoverBoxDTO{
+				OsUser: "root", OutboundEnabled: &disabled, OutboundAllowNet: []string{"example.com"},
+			})
+		}},
+		{"update", func() error {
+			return client.SetOutboundNetwork(t.Context(), "box-1", boxlite.OutboundNetworkSpec{
+				Mode: boxlite.NetworkModeDisabled, AllowNet: []string{"example.com"},
+			})
+		}},
+	} {
+		t.Run(entry.name, func(t *testing.T) {
+			defer func() {
+				if failure := recover(); failure != nil {
+					t.Errorf("invalid policy reached runtime side effects: %v", failure)
+				}
+			}()
+			if err := entry.call(); !errdefs.IsInvalidArgument(err) {
+				t.Fatalf("error = %v, want invalid argument before accessing runtime", err)
 			}
 		})
 	}

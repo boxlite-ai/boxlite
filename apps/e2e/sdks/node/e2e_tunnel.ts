@@ -1,304 +1,253 @@
-import { SocketAddress } from "node:net";
-// REST E2E driver for the Node SDK's public box.network.tunnel(new SocketAddress({ port })) API.
-
-import { createHash, randomBytes } from 'node:crypto'
+// POL-1221: independent REST-backed transport and lifecycle scenarios.
+import assert from 'node:assert/strict'
+import { createHash, randomUUID } from 'node:crypto'
 import { readFileSync } from 'node:fs'
+import { SocketAddress } from 'node:net'
 import { resolve } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { ApiKeyCredential, BoxliteRestOptions, JsBoxlite, SimpleBox } from '../../../../sdks/node'
 import { DEFAULT_BOX_IMAGE } from '../../../../scripts/test/image.js'
+import { read, readHttp, websocketEcho } from './tunnel-probes.mjs'
 
 const SERVICES = [
   { port: 18081, marker: 'node-sdk-tunnel-e2e-a' },
   { port: 18083, marker: 'node-sdk-tunnel-e2e-b' },
 ] as const
 const SERVER = readFileSync(resolve(__dirname, '../../fixtures/service_in_box_server.py')).toString('base64')
+const EGRESS = readFileSync(resolve(__dirname, '../../fixtures/egress_probe.py'), 'utf8')
+const GET = Buffer.from('GET / HTTP/1.0\r\nHost: tunnel.test\r\n\r\n')
 
 function env(name: string, fallback: string): string {
-  const value = process.env[name]
-  return value && value.length ? value : fallback
+  return process.env[name] || fallback
 }
 
-async function requestOverTunnel(
-  box: SimpleBox,
-  port: number,
-  request: Buffer | string,
-  marker?: string,
-  readDelay = 0,
-): Promise<Buffer> {
+async function request(box: SimpleBox, port: number, bytes: Buffer = GET, readDelay = 0): Promise<Buffer> {
   const tunnel = await box.network.tunnel(new SocketAddress({ port }))
-  const uri = tunnel.uri()
-  if (uri === null) {
-    throw new Error('expected a public tunnel URL for the cloud box')
-  }
+  assert(tunnel.uri(), 'REST prepare must return a URI')
   const socket = await tunnel.connect()
-  const chunks: Buffer[] = []
   try {
-    await socket.write(Buffer.isBuffer(request) ? request : Buffer.from(request))
+    await socket.write(bytes)
     if (readDelay) await delay(readDelay)
-    while (true) {
-      const chunk = await Promise.race([
-        socket.read(64 * 1024),
-        delay(5_000).then(() => {
-          throw new Error('HTTP response timed out')
-        }),
-      ])
-      if (!chunk.length) break
-      chunks.push(chunk)
-      if (marker && Buffer.concat(chunks).includes(marker)) break
-    }
-    return Buffer.concat(chunks)
+    return await readHttp(socket)
   } finally {
     await socket.close()
   }
-}
-
-async function getOverTunnel(box: SimpleBox, port: number, marker: string): Promise<string> {
-  return (await requestOverTunnel(box, port, 'GET / HTTP/1.0\r\nHost: tunnel.test\r\n\r\n', marker)).toString()
 }
 
 async function startService(box: SimpleBox, port: number, marker: string): Promise<string> {
-  const command =
+  const result = await box.exec('sh', [
+    '-lc',
     `python3 -u -c "import base64;exec(base64.b64decode('${SERVER}'))" ${port} ${marker} ` +
-    `>/tmp/tunnel-${port}.log 2>&1 & echo $!`
-  const result = await box.exec('sh', ['-lc', command])
-  if (result.exitCode !== 0) throw new Error(`failed to start service: ${result.stderr}`)
+      `>/tmp/tunnel-${port}.log 2>&1 & echo $!`,
+  ])
+  assert.equal(result.exitCode, 0, 'guest server launch failed')
+  assert.match(result.stdout.trim(), /^\d+$/)
+  const deadline = Date.now() + 15_000
+  for (;;) {
+    const probe = await box.exec('python3', [
+      '-c',
+      `import socket; socket.create_connection(('127.0.0.1', ${port}), 1).close()`,
+    ])
+    if (probe.exitCode === 0) break
+    assert(Date.now() < deadline, 'guest service did not bind its port')
+    await delay(100)
+  }
   return result.stdout.trim()
 }
 
-async function websocketEcho(box: SimpleBox, port: number, marker: string): Promise<void> {
-  const socket = await (await box.network.tunnel(new SocketAddress({ port }))).connect()
-  const key = randomBytes(16).toString('base64')
-  let response = Buffer.alloc(0)
-  try {
-    await socket.write(
-      Buffer.from(
-        `GET /ws HTTP/1.1\r\nHost: tunnel.test\r\nUpgrade: websocket\r\n` +
-          `Connection: Upgrade\r\nSec-WebSocket-Key: ${key}\r\nSec-WebSocket-Version: 13\r\n\r\n`,
-      ),
-    )
-    const payload = Buffer.from('node-ws')
-    const mask = Buffer.from([1, 2, 3, 4])
-    const masked = Buffer.from(payload.map((value, index) => value ^ mask[index % 4]))
-    await socket.write(Buffer.concat([Buffer.from([0x81, 0x80 | payload.length]), mask, masked]))
-    const deadline = Date.now() + 5_000
-    while (Date.now() < deadline) {
-      response = Buffer.concat([response, await socket.read(4096)])
-      if (response.includes('\r\n\r\n') && response.includes(`${marker}:node-ws`)) break
-    }
-  } finally {
-    await socket.close()
-  }
-  if (!response.toString().startsWith('HTTP/1.1 101')) {
-    throw new Error('WebSocket upgrade did not return 101')
-  }
-}
-
-async function waitForHttp(box: SimpleBox, port: number, marker: string): Promise<string> {
+async function ready(box: SimpleBox, port: number, marker: string): Promise<Buffer> {
   const deadline = Date.now() + 30_000
-  let lastError: unknown
-  while (Date.now() < deadline) {
+  for (;;) {
     try {
-      const response = await getOverTunnel(box, port, marker)
-      if (response.includes(marker)) return response
-      lastError = new Error(`unexpected HTTP response: ${response}`)
+      const response = await request(box, port)
+      assert(response.includes(marker), 'wrong guest response')
+      return response
     } catch (error) {
-      lastError = error
+      if (Date.now() >= deadline) throw error
+      await delay(250)
     }
-    await delay(250)
   }
-  throw new Error(`guest HTTP service was not reachable through tunnel: ${String(lastError)}`)
 }
 
 async function main(): Promise<void> {
+  const scenario = env('BOXLITE_E2E_TUNNEL_CASE', 'transport')
+  assert(['transport', 'stopped', 'half-close', 'tls-shutdown', 'private', 'network'].includes(scenario))
   const runtime = JsBoxlite.rest(
     new BoxliteRestOptions({
-      url: env('BOXLITE_E2E_URL', 'http://localhost:3000/api'),
+      url: env('BOXLITE_E2E_URL', 'http://localhost:3001/api'),
       credential: new ApiKeyCredential(env('BOXLITE_E2E_API_KEY', 'devkey')),
       pathPrefix: env('BOXLITE_E2E_PREFIX', ''),
     }),
   )
-  // An unspecified inbound mode means private, and the API refuses a tunnel on
-  // a private box, so every box in this driver asks for inbound access.
-  // Every other Node driver removes its box; this one only stopped its four,
-  // and a stopped box is never reclaimed: `autoRemove` never reaches the wire
-  // over REST, the server's auto_delete default is 0, and apps/e2e/sweep.py
-  // only touches `e2e-`-named boxes. Each run therefore used to leave four
-  // boxes holding disk against the org quota — the exhaustion this suite's
-  // lifetime bound exists to prevent. SimpleBox has no remove of its own, so
-  // the removal goes through the runtime, by id.
-  const discard = async (target: SimpleBox): Promise<void> => {
-    try {
-      await runtime.remove(target.id, true)
-    } catch {
-      /* best-effort: the run is finishing either way */
-    }
-  }
-
-  const box = new SimpleBox({
-    image: env('BOXLITE_E2E_IMAGE', DEFAULT_BOX_IMAGE),
-    autoRemove: true,
-    network: { inbound: { mode: 'enabled' } },
-    runtime,
+  // SimpleBox does not expose REST lifetime/autoResume options. Set them at
+  // its runtime boundary so stopped tests cannot silently wake their box.
+  const bounded = (options: Parameters<typeof runtime.create>[0]) => ({
+    ...options,
+    autoResume: false,
+    autoStop: 300,
+    autoDelete: 600,
   })
-
+  const trackedRuntime = {
+    create: (options: Parameters<typeof runtime.create>[0], name?: string | null) =>
+      runtime.create(bounded(options), name ?? `e2e-node-${randomUUID()}`),
+    getOrCreate: (options: Parameters<typeof runtime.create>[0], name?: string | null) =>
+      runtime.getOrCreate(bounded(options), name ?? `e2e-node-${randomUUID()}`),
+  }
+  const create = () =>
+    new SimpleBox({
+      image: env('BOXLITE_E2E_IMAGE', DEFAULT_BOX_IMAGE),
+      autoRemove: false,
+      network: { inbound: { mode: 'enabled' } },
+      runtime: trackedRuntime,
+    })
+  const boxes: SimpleBox[] = []
+  const box = create()
+  boxes.push(box)
   try {
-    const failures: string[] = []
     await box.exec('true')
-    const pids = await Promise.all(SERVICES.map(({ port, marker }) => startService(box, port, marker)))
-    await waitForHttp(box, SERVICES[0].port, SERVICES[0].marker)
-    const preparedTunnel = await box.network.tunnel(new SocketAddress({ port: SERVICES[0].port }))
-
-    const requests = SERVICES.flatMap((service) =>
-      Array.from({ length: 3 }, () => waitForHttp(box, service.port, service.marker)),
-    )
-    const responses = await Promise.all(requests)
-    for (const [index, response] of responses.entries()) {
-      const service = SERVICES[Math.floor(index / 3)]
-      if (!response.startsWith('HTTP/1.0 200') && !response.startsWith('HTTP/1.1 200')) {
-        throw new Error(`unexpected HTTP status: ${response.slice(0, 80)}`)
-      }
-      if (SERVICES.some(({ marker }) => marker !== service.marker && response.includes(marker))) {
-        throw new Error(`cross-port response leaked into port ${service.port}`)
-      }
-    }
-
-    const preparedSocket = await preparedTunnel.connect()
-    await preparedSocket.write(Buffer.from('GET / HTTP/1.0\r\nHost: tunnel.test\r\n\r\n'))
-    let prepared = ''
-    while (!prepared.includes(SERVICES[0].marker)) {
-      prepared += (await preparedSocket.read(8192)).toString()
-    }
-    await preparedSocket.close()
-    if (!prepared.includes(SERVICES[0].marker)) {
-      throw new Error('prepared tunnel did not reach the running service')
-    }
-
-    const postBody = Buffer.alloc(256 * 1024, 'n')
-    const post = await requestOverTunnel(
-      box,
-      SERVICES[0].port,
-      Buffer.concat([
-        Buffer.from(`POST / HTTP/1.0\r\nHost: tunnel.test\r\nContent-Length: ${postBody.length}\r\n\r\n`),
-        postBody,
-      ]),
-    )
-    const digest = createHash('sha256').update(postBody).digest('hex')
-    if (!post.includes(digest)) throw new Error('POST body digest mismatch')
-
-    const large = await requestOverTunnel(box, SERVICES[0].port, 'GET /large HTTP/1.0\r\nHost: tunnel.test\r\n\r\n')
-    if (large.length <= 2 * 1024 * 1024) throw new Error('large response was truncated')
-    await websocketEcho(box, SERVICES[0].port, SERVICES[0].marker)
-
-    const slow = await requestOverTunnel(
-      box,
-      SERVICES[0].port,
-      'GET /slow HTTP/1.0\r\nHost: tunnel.test\r\n\r\n',
-      undefined,
-      1_000,
-    )
-    if (slow.length <= 2 * 1024 * 1024) throw new Error('slow response was truncated')
-
-    const cancelled = await (await box.network.tunnel(new SocketAddress({ port: SERVICES[0].port }))).connect()
-    await cancelled.close()
-    await waitForHttp(box, SERVICES[0].port, SERVICES[0].marker)
-    await Promise.all(
-      Array.from({ length: 16 }, (_, index) => {
-        const service = SERVICES[index % SERVICES.length]
-        return waitForHttp(box, service.port, service.marker)
-      }),
-    )
-
-    await box.exec('kill', [pids[0]])
-    pids[0] = await startService(box, SERVICES[0].port, SERVICES[0].marker)
-    await waitForHttp(box, SERVICES[0].port, SERVICES[0].marker)
-    const restartTunnel = await box.network.tunnel(new SocketAddress({ port: SERVICES[0].port }))
-    const restartSocket = await restartTunnel.connect()
-    await restartSocket.write(Buffer.from('GET / HTTP/1.0\r\nHost: tunnel.test\r\n\r\n'))
-    let restarted = ''
-    while (!restarted.includes(SERVICES[0].marker)) {
-      restarted += (await restartSocket.read(8192)).toString()
-    }
-    await restartSocket.close()
-    if (!restarted.includes(SERVICES[0].marker)) {
-      throw new Error('new tunnel did not reach the restarted service')
-    }
-
-    if (process.env.BOXLITE_E2E_SKIP_STOPPED_BOX !== '1') {
-      await box.stop()
-      let stoppedTunnelRejected = false
+    const { port, marker } = SERVICES[0]
+    const pid = await startService(box, port, marker)
+    const address = new SocketAddress({ port })
+    if (scenario === 'private') {
+      const tunnel = await box.network.tunnel(address, { isPublic: false })
+      assert.equal(tunnel.isPublic(), false)
+      assert(tunnel.token(), 'private prepare must return a token')
+      const unopened = await box.network.tunnel(address, { isPublic: false })
+      const socket = await tunnel.connect()
       try {
-        const stoppedResponse = await getOverTunnel(box, SERVICES[0].port, SERVICES[0].marker)
-        stoppedTunnelRejected = !stoppedResponse.includes(SERVICES[0].marker)
-      } catch {
-        stoppedTunnelRejected = true
-      }
-      if (!stoppedTunnelRejected) {
-        failures.push('guest service remained reachable after box.stop()')
-      }
-    }
-
-    const isolatedBoxes = ['node-box-a', 'node-box-b'].map(
-      () =>
-        new SimpleBox({
-          image: env('BOXLITE_E2E_IMAGE', DEFAULT_BOX_IMAGE),
-          autoRemove: true,
-          network: { inbound: { mode: 'enabled' } },
-          runtime,
-        }),
-    )
-    try {
-      await Promise.all(isolatedBoxes.map((isolatedBox) => isolatedBox.exec('true')))
-      await Promise.all(
-        isolatedBoxes.map((isolatedBox, index) => startService(isolatedBox, SERVICES[0].port, `node-box-${index}`)),
-      )
-      const isolated = await Promise.all(
-        isolatedBoxes.map((isolatedBox, index) => waitForHttp(isolatedBox, SERVICES[0].port, `node-box-${index}`)),
-      )
-      if (isolated[0].includes('node-box-1') || isolated[1].includes('node-box-0')) {
-        throw new Error('cross-box tunnel routing leaked')
-      }
-    } finally {
-      await Promise.all(isolatedBoxes.map((isolatedBox) => discard(isolatedBox)))
-    }
-
-    if (process.env.BOXLITE_E2E_SKIP_HALF_CLOSE !== '1') {
-      const halfCloseBox = new SimpleBox({
-        image: env('BOXLITE_E2E_IMAGE', DEFAULT_BOX_IMAGE),
-        autoRemove: true,
-        network: { inbound: { mode: 'enabled' } },
-        runtime,
-      })
-      try {
-        await halfCloseBox.exec('true')
-        await startService(halfCloseBox, SERVICES[0].port, SERVICES[0].marker)
-        await waitForHttp(halfCloseBox, SERVICES[0].port, SERVICES[0].marker)
-        const halfCloseSocket = await (await halfCloseBox.network.tunnel(new SocketAddress({ port: SERVICES[0].port }))).connect()
-        await halfCloseSocket.write(Buffer.from('GET / HTTP/1.0\r\nHost: tunnel.test\r\n\r\n'))
-        await halfCloseSocket.shutdownWrite()
-        let halfCloseResponse = ''
-        while (true) {
-          const chunk = await halfCloseSocket.read(8192)
-          if (!chunk.length) break
-          halfCloseResponse += chunk.toString()
-        }
-        await halfCloseSocket.close()
-        if (!halfCloseResponse.includes(SERVICES[0].marker)) {
-          failures.push('half-closed tunnel dropped the guest response')
-        }
+        await socket.write(GET)
+        assert((await readHttp(socket)).includes(marker))
       } finally {
-        await discard(halfCloseBox)
+        await socket.close()
+      }
+      await box.network.revokeTunnel(port)
+      // Reuse the descriptor: preparing here would undo the revoke.
+      await assert.rejects(() => unopened.connect(), /404|not found/i)
+    } else {
+      await ready(box, port, marker)
+      const tunnel = await box.network.tunnel(address)
+      if (scenario === 'network') {
+        const allowed = env('BOXLITE_E2E_EGRESS_ALLOWED_URL', 'https://httpbingo.org/')
+        const denied = env('BOXLITE_E2E_EGRESS_UNLISTED_URL', 'https://example.com/')
+        assert.notEqual(new URL(allowed).hostname, new URL(denied).hostname)
+        const reaches = async (url: string) => {
+          const result = await box.exec('python3', ['-c', EGRESS, url])
+          assert.equal(result.exitCode, 0, 'Node egress probe process failed')
+          const record = JSON.parse(result.stdout)
+          assert.equal(record.probe, 'boxlite-egress-v1')
+          assert.equal(typeof record.reachable, 'boolean')
+          return record.reachable
+        }
+        assert((await reaches(allowed)) && (await reaches(denied)), 'Node egress control failed')
+        await box.network.updateOutbound({ mode: 'enabled', allowNet: [new URL(allowed).hostname] })
+        assert.deepEqual((await box.info()).network?.outbound, {
+          mode: 'enabled',
+          allowNet: [new URL(allowed).hostname],
+        })
+        assert(await reaches(allowed))
+        assert.equal(await reaches(denied), false)
+        await box.network.updateOutbound({ mode: 'enabled' })
+        assert(await reaches(denied))
+      } else if (scenario === 'stopped') {
+        assert.equal((await box.info()).autoResume, false)
+        await box.stop()
+        const deadline = Date.now() + 30_000
+        while ((await runtime.getInfo(box.id))?.state.status !== 'stopped') {
+          assert(Date.now() < deadline, 'box never stopped')
+          await delay(200)
+        }
+        await assert.rejects(() => box.network.tunnel(address), /not running/i)
+        await assert.rejects(() => tunnel.connect(), /box is stopped and auto-resume is disabled/i)
+        assert.equal((await runtime.getInfo(box.id))?.state.status, 'stopped')
+      } else if (scenario === 'tls-shutdown' || scenario === 'half-close') {
+        const socket = await tunnel.connect()
+        try {
+          await socket.write(GET)
+          if (scenario === 'half-close') await socket.shutdownWrite()
+          let response: Buffer
+          try {
+            response = await readHttp(socket)
+          } catch (error) {
+            if (
+              scenario === 'half-close' &&
+              /closed before the complete HTTP response|without sending TLS close_notify/.test(String(error))
+            ) {
+              throw new Error('KNOWN_HALF_CLOSE_RESPONSE_LOST')
+            }
+            throw error
+          }
+          assert(response.includes(marker), 'guest response missing')
+          if (scenario === 'tls-shutdown') {
+            try {
+              assert.equal((await read(socket, 1)).length, 0)
+            } catch (error) {
+              if (/without sending TLS close_notify/.test(String(error))) throw new Error('KNOWN_TLS_SHUTDOWN_EOF')
+              throw error
+            }
+          }
+        } finally {
+          await socket.close()
+        }
+      } else {
+        await startService(box, SERVICES[1].port, SERVICES[1].marker)
+        const responses = await Promise.all(
+          SERVICES.flatMap((service) => Array.from({ length: 3 }, () => ready(box, service.port, service.marker))),
+        )
+        responses.forEach((response, index) => {
+          assert(!response.includes(SERVICES[1 - Math.floor(index / 3)].marker), 'cross-port routing leak')
+        })
+        const socket = await tunnel.connect()
+        try {
+          await websocketEcho(socket, marker)
+        } finally {
+          await socket.close()
+        }
+        const body = Buffer.alloc(256 * 1024, 'n')
+        const post = await request(
+          box,
+          port,
+          Buffer.concat([
+            Buffer.from(`POST / HTTP/1.0\r\nHost: tunnel.test\r\nContent-Length: ${body.length}\r\n\r\n`),
+            body,
+          ]),
+        )
+        assert(post.includes(createHash('sha256').update(body).digest('hex')), 'POST digest mismatch')
+        for (const path of ['large', 'slow']) {
+          const response = await request(
+            box,
+            port,
+            Buffer.from(`GET /${path} HTTP/1.0\r\nHost: tunnel.test\r\n\r\n`),
+            path === 'slow' ? 1000 : 0,
+          )
+          assert(response.length > 2 * 1024 * 1024, 'large response was truncated')
+        }
+        const cancelled = await (await box.network.tunnel(address)).connect()
+        await cancelled.close()
+        await Promise.all(Array.from({ length: 16 }, () => ready(box, port, marker)))
+        assert.equal((await box.exec('kill', [pid])).exitCode, 0)
+        await startService(box, port, marker)
+        await ready(box, port, marker)
+        const other = create()
+        boxes.push(other)
+        await other.exec('true')
+        await startService(other, port, 'node-other-box')
+        assert(!(await ready(other, port, 'node-other-box')).includes(marker), 'cross-box routing leak')
+        assert(!(await ready(box, port, marker)).includes('node-other-box'), 'cross-box routing leak')
       }
     }
-    console.log(
-      'TUNNEL_HTTP=ok TUNNEL_WS=ok TUNNEL_MULTIPORT=ok TUNNEL_CONCURRENT=ok ' +
-        'TUNNEL_LARGE=ok TUNNEL_RESTART=ok TUNNEL_BOX_ISOLATION=ok',
-    )
-    console.log(failures.length ? `TUNNEL_FAILURES=${failures.join('; ')}` : 'TUNNEL_LIFECYCLE=ok')
-    if (failures.length) throw new Error(failures.join('; '))
+    console.log(`TUNNEL_CASE=${scenario}:ok`)
   } finally {
-    await discard(box)
-    runtime.close()
+    try {
+      // All removals run even if one fails; a cleanup error still fails the case.
+      const results = await Promise.allSettled(
+        boxes.map(async (created) => {
+          if (created.id) await runtime.remove(created.id, true)
+        }),
+      )
+      for (const result of results) if (result.status === 'rejected') throw result.reason
+    } finally {
+      runtime.close()
+    }
   }
 }
 

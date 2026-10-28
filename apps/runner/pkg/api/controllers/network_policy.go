@@ -6,16 +6,14 @@ import (
 	"net/http"
 
 	boxlite "github.com/boxlite-ai/boxlite/sdks/go"
+	"github.com/boxlite-ai/runner/pkg/api/dto"
 	"github.com/boxlite-ai/runner/pkg/runner"
 	"github.com/gin-gonic/gin"
 )
 
 // BoxliteSetOutboundNetwork handles a complete replacement, never a patch.
 func BoxliteSetOutboundNetwork(ctx *gin.Context) {
-	var policy struct {
-		Mode     boxlite.NetworkMode `json:"mode"`
-		AllowNet []string            `json:"allow_net"`
-	}
+	var policy dto.OutboundNetworkPolicy
 	decoder := json.NewDecoder(http.MaxBytesReader(ctx.Writer, ctx.Request.Body, 64<<10))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&policy); err != nil {
@@ -26,9 +24,8 @@ func BoxliteSetOutboundNetwork(ctx *gin.Context) {
 		respondError(ctx, 400, "expected one outbound policy", "InvalidArgumentError", "invalid_argument")
 		return
 	}
-	if (policy.Mode != boxlite.NetworkModeEnabled && policy.Mode != boxlite.NetworkModeDisabled) ||
-		(policy.Mode == boxlite.NetworkModeDisabled && len(policy.AllowNet) != 0) {
-		respondError(ctx, 400, "invalid outbound mode or allow_net combination", "InvalidArgumentError", "invalid_argument")
+	if err := policy.Validate(); err != nil {
+		respondError(ctx, http.StatusBadRequest, err.Error(), "InvalidArgumentError", "invalid_argument")
 		return
 	}
 	r, err := runner.GetInstance(nil)

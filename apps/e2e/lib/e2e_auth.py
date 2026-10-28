@@ -6,7 +6,7 @@ bearer tokens. Python SDK bindings still expose the generic bearer slot as
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import lru_cache
 import json
 import os
@@ -51,7 +51,7 @@ class E2EAuthContext:
     auth: str
     profile_name: str
     url: str
-    token: str
+    token: str = field(repr=False)
     path_prefix: str
 
     def auth_headers(self, *, content_type: bool = False) -> dict[str, str]:

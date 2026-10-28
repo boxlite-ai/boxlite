@@ -6,6 +6,12 @@
 import { isIPv4 } from 'net'
 
 export const MAX_NETWORK_ALLOW_LIST_ENTRIES = 10
+export const DISABLED_OUTBOUND_RULES_ERROR = 'disabled outbound cannot include allow_net'
+
+// Field validators handle types and rule syntax; this checks their combination.
+export function hasDisabledOutboundRules(mode: unknown, allowNet: unknown): boolean {
+  return mode === 'disabled' && Array.isArray(allowNet) && allowNet.length > 0
+}
 
 const IPV4_LIKE_PATTERN = /^(\d{1,3}\.){3}\d{1,3}$/
 const HOSTNAME_LABEL_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$/

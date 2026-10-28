@@ -25,9 +25,9 @@ CLI matrix and both authentication modes, is in
 
 ## What the suite verifies
 
-Every test in `cases/` uses the REST-mode runtime built by `conftest.py::rt`.
-There is no path to local FFI from this directory — tests would fail import if
-they tried.
+Product acceptance cases use the REST-mode runtime built by `conftest.py::rt`.
+`test_network_harness.py` separately checks probe failures and framing without
+creating a box; those checks are not counted as product E2E evidence.
 
 `cases/test_path_verification.py` is the meta-test: it spawns one box, runs
 one exec, and asserts that **both** `:3000` (API) and `:8080` (runner)
@@ -205,17 +205,18 @@ Two limits worth knowing before reading a green dev run as proof:
 
 ### Known-broken on a cloud stage
 
-Three tunnel cases are `xfail(strict=True)` on a remote stage only:
-`test_python_sdk_tunnel_proxies_http_from_rest_box` and the Node driver's HTTP
-and stopped-box cases. On a cloud stage, a tunnel read that waits for the guest
-service to close the connection fails with "peer closed connection without
-sending TLS close_notify", while reads that stop at the expected bytes succeed
-(#1950). Which hop drops the TLS shutdown is not established, and no local run
-has shown it, so the mark is `TUNNEL_READ_TO_EOF_XFAIL` in `cases/conftest.py`,
-conditional on `STAGE_IS_REMOTE`. Strict means CI fails the day the stage stops
-failing, which is when the marks should come off; it cannot tell that cause
-from a later break in the same case. The half-close cases keep their own
-unconditional mark.
+Tunnel HTTP exchanges read the complete Content-Length response. Only the
+separate Python/Node TLS-shutdown cases carry the remote-only strict xfail
+for #1950, and only a missing TLS close_notify **after a complete response**
+qualifies. Setup, status, payload and WebSocket failures stay failures.
+The independent half-close cases accept only the specific lost-response
+failure after a healthy tunnel has been demonstrated. Their strict marks
+must be removed when the underlying defect is fixed.
+
+The preview, private-session, revocation and dynamic-policy matrix, including
+infra-local and browser setup, is in [network-coverage.md](network-coverage.md).
+A stage running an older server can fail this matrix; validate against the
+current infra-local source and record the deployed revision separately.
 
 `test_cli_run_foreground_streams_command_output` is marked the same conditional
 way for a different reason. `boxlite run
@@ -264,9 +265,10 @@ Two things keep that from recurring:
   `pol599-repro` and four siblings — someone's investigation, idle for a day,
   indistinguishable from a stranded box by age alone.
 
-  What that leaves uncovered, deliberately: the polyglot drivers
-  (`apps/e2e/sdks/`) and the CLI cases create boxes with neither the prefix
-  nor a lifetime, so no sweep that CI runs can reclaim one. The ones the
+  Some older polyglot drivers (`apps/e2e/sdks/`) and CLI cases still create
+  boxes without the prefix or lifetime, so the CI sweep cannot reclaim them.
+  The Node tunnel driver now supplies both and disables auto-resume for its
+  stopped-box scenario. The ones the
   cloud legs run — Node and the CLI — remove their box in a `finally`, so
   there this only bites when a run is killed mid-driver; the Go and C drivers
   exit past their own cleanup, and both legs `--ignore` those cases.

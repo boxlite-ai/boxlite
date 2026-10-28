@@ -711,6 +711,23 @@ describe('BoxService inbound defaults', () => {
   })
 
   it.each([
+    [{ outboundEnabled: false }, { boxLimitedNetworkEgress: false }],
+    [{}, { boxLimitedNetworkEgress: true }],
+  ])('rejects disabled outbound rules before creating a box: %j / %j', async (request, org) => {
+    const { service, boxRepository, warmPoolService } = makeCreateService()
+    await expect(
+      service.create(
+        { name: 'invalid-network', image: 'base', outboundAllowNet: ['example.com'], ...request } as any,
+        { id: 'org-1', ...org } as any,
+        Context.user(),
+      ),
+    ).rejects.toThrow('disabled outbound cannot include allow_net')
+    expect(boxRepository.insert).not.toHaveBeenCalled()
+    expect(warmPoolService.fetchWarmPoolBox).not.toHaveBeenCalled()
+    expect((service as any).imageAdmissionService.assert).not.toHaveBeenCalled()
+  })
+
+  it.each([
     [{ outboundEnabled: false }, { boxLimitedNetworkEgress: false }, { outboundEnabled: false }],
     [{ outboundAllowNet: ['10.0.0.0/8'] }, { boxLimitedNetworkEgress: false }, { outboundAllowNet: ['10.0.0.0/8'] }],
     [{ outboundEnabled: true }, { boxLimitedNetworkEgress: true }, { outboundEnabled: true }],
@@ -738,7 +755,11 @@ describe('BoxService inbound defaults', () => {
   ])('persists inbound access %s as %s on a fresh box', async (requested, expected) => {
     const { service, boxRepository } = makeCreateService()
 
-    await service.create({ name: 'fresh-box', inboundEnabled: requested } as any, { id: 'org-1' } as any, Context.user())
+    await service.create(
+      { name: 'fresh-box', inboundEnabled: requested } as any,
+      { id: 'org-1' } as any,
+      Context.user(),
+    )
 
     expect(boxRepository.insert).toHaveBeenCalledWith(
       expect.objectContaining({ inboundEnabled: expected, outboundEnabled: true }),

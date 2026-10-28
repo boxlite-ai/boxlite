@@ -185,6 +185,7 @@ describe('BoxLite REST routing', () => {
     { mode: 'off' },
     { mode: 'enabled', allow_net: [''] },
     { mode: 'enabled', allow_net: ['a.com,b.com'] },
+    { mode: 'disabled', allow_net: ['example.com'] },
     { mode: 'enabled', unknown: true },
   ])('rejects invalid outbound request %j', async (body) => {
     await startRoutingTestApp()

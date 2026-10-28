@@ -11,7 +11,7 @@ import { plainToInstance } from 'class-transformer'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { parse } from 'yaml'
-import { CreateBoxDto } from './create-box.dto'
+import { CreateBoxDto, OutboundNetworkSpecDto } from './create-box.dto'
 import { createBoxToCreateBox } from '../mappers/box-to-box.mapper'
 
 // A box with 0 vCPUs can never boot (libkrun set_vm_config(0, ...) -> EINVAL),
@@ -105,6 +105,29 @@ describe('CreateBoxDto lifecycle policy', () => {
 })
 
 describe('CreateBoxDto network validation', () => {
+  function outboundDto(boundary: string, policy: object) {
+    return boundary === 'update'
+      ? plainToInstance(OutboundNetworkSpecDto, policy)
+      : plainToInstance(CreateBoxDto, { network: boundary === 'legacy create' ? policy : { outbound: policy } })
+  }
+
+  it.each(['nested create', 'legacy create', 'update'])(
+    'rejects disabled outbound rules at the %s boundary',
+    async (boundary) => {
+      const errors = await validate(outboundDto(boundary, { mode: 'disabled', allow_net: ['example.com'] }))
+      expect(JSON.stringify(errors)).toContain('disabled outbound cannot include allow_net')
+    },
+  )
+
+  it.each(['nested create', 'legacy create', 'update'])(
+    'accepts disabled outbound without rules at the %s boundary',
+    async (boundary) => {
+      for (const policy of [{ mode: 'disabled' }, { mode: 'disabled', allow_net: [] }]) {
+        expect(await validate(outboundDto(boundary, policy))).toHaveLength(0)
+      }
+    },
+  )
+
   it('accepts supported allow_net entry types', async () => {
     const errors = await validate(
       plainToInstance(CreateBoxDto, {
