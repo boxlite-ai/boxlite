@@ -64,6 +64,8 @@ pub enum BoxliteErrorCode {
     /// Interactive execution session was reaped server-side after disconnect.
     /// Reattach is no longer possible — start a new exec.
     SessionReaped = 21,
+    /// Default runtime has already been initialized.
+    AlreadyInitialized = 22,
 }
 
 /// Extended error information for C API.
@@ -92,6 +94,7 @@ pub fn error_to_code(err: &BoxliteError) -> BoxliteErrorCode {
     match err {
         BoxliteError::Internal(_) => BoxliteErrorCode::Internal,
         BoxliteError::NotFound(_) => BoxliteErrorCode::NotFound,
+        BoxliteError::AlreadyInitialized => BoxliteErrorCode::AlreadyInitialized,
         BoxliteError::AlreadyExists(_) => BoxliteErrorCode::AlreadyExists,
         BoxliteError::InvalidState(_) => BoxliteErrorCode::InvalidState,
         BoxliteError::InvalidArgument(_) => BoxliteErrorCode::InvalidArgument,
