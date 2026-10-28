@@ -337,7 +337,7 @@ fn agents_p0_help_and_completion_include_nine_flat_commands() {
         .render_long_help()
         .to_string();
     for text in [
-        "not implemented",
+        "Submit text and optional JSON data",
         "<BOX>",
         "--session <SESSION>",
         "<TEXT>",

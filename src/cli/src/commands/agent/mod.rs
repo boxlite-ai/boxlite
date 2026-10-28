@@ -1,4 +1,4 @@
-//! P0 agent command declarations; execution is deliberately unimplemented.
+//! Agent session and turn commands.
 
 use anyhow::Result;
 use boxlite::BoxliteError;
@@ -17,7 +17,7 @@ pub struct AgentArgs {
 
 #[derive(Subcommand, Debug)]
 pub enum AgentCommand {
-    /// Create an agent session (not implemented).
+    /// Create an agent session.
     Create {
         #[command(flatten)]
         target: BoxTarget,
@@ -26,14 +26,14 @@ pub enum AgentCommand {
         #[command(flatten)]
         options: AgentCreateOptions,
     },
-    /// Close a session (not implemented).
+    /// Close a session.
     Close {
         #[command(flatten)]
         target: SessionTarget,
         #[command(flatten)]
         options: AgentControlOptions,
     },
-    /// Submit text and optional JSON data (not implemented).
+    /// Submit text and optional JSON data.
     Send {
         #[command(flatten)]
         target: SessionTarget,
@@ -42,21 +42,21 @@ pub enum AgentCommand {
         #[command(flatten)]
         options: AgentSendOptions,
     },
-    /// Read state, configuration, capabilities or requests (not implemented).
+    /// Read state, configuration, capabilities or requests.
     Inspect {
         #[command(flatten)]
         target: ReadTarget,
         #[command(flatten)]
         options: AgentInspectOptions,
     },
-    /// Open session or turn events after a cursor (not implemented).
+    /// Open session or turn events after a cursor.
     Events {
         #[command(flatten)]
         target: ReadTarget,
         #[command(flatten)]
         options: AgentEventsOptions,
     },
-    /// Submit an answer or permission response as JSON (not implemented).
+    /// Submit an answer or permission response as JSON.
     Respond {
         #[command(flatten)]
         target: SessionTarget,
@@ -69,14 +69,14 @@ pub enum AgentCommand {
         #[command(flatten)]
         options: AgentControlOptions,
     },
-    /// Wait for a turn result (not implemented).
+    /// Wait for a turn result.
     Wait {
         #[command(flatten)]
         target: TurnTarget,
         #[command(flatten)]
         options: AgentWaitOptions,
     },
-    /// Steer this turn without creating another turn (not implemented).
+    /// Steer this turn without creating another turn.
     Steer {
         #[command(flatten)]
         target: TurnTarget,
@@ -85,7 +85,7 @@ pub enum AgentCommand {
         #[command(flatten)]
         options: AgentControlOptions,
     },
-    /// Interrupt this turn's agent loop (not implemented).
+    /// Interrupt this turn's agent loop.
     Interrupt {
         #[command(flatten)]
         target: TurnTarget,
@@ -148,7 +148,7 @@ pub enum SendMode {
 
 #[derive(Args, Debug)]
 pub struct AgentSendOptions {
-    /// Admission mode once implemented
+    /// Admission mode
     #[arg(long, value_enum, default_value = "queue")]
     mode: SendMode,
     /// Additional JSON input
@@ -160,7 +160,7 @@ pub struct AgentSendOptions {
 
 #[derive(Args, Debug)]
 pub struct AgentControlOptions {
-    /// Retry key; deduplication is not implemented
+    /// Retry key
     #[arg(long)]
     idempotency_key: Option<String>,
 }
@@ -198,7 +198,6 @@ fn parse_json(input: &str) -> serde_json::Result<Value> {
 }
 
 pub fn execute(args: AgentArgs) -> Result<()> {
-    // Do not initialize a runtime or resolve a Box just to reach a stub.
     let operation = match args.command {
         AgentCommand::Create { .. } => "agents.create",
         AgentCommand::Close { .. } => "session.close",

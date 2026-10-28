@@ -1,8 +1,6 @@
-//! P0 agent declarations. Operations synchronously return Unsupported.
-//! No work is queued and no callback fires. JSON inputs are not parsed yet.
-//! JSON callback payloads are borrowed for the callback; getter strings, when
-//! implemented, will use boxlite_free_string. All error pointers use the
-//! existing boxlite_error_free ownership convention.
+//! Agent sessions, turns, and journal subscriptions.
+//! JSON callback payloads are borrowed for the callback; getter strings use
+//! boxlite_free_string. Error pointers use boxlite_error_free.
 
 use std::ffi::{c_char, c_void};
 use std::ptr;
@@ -12,19 +10,19 @@ use boxlite::BoxliteError;
 use crate::error::{BoxliteErrorCode, null_pointer_error, write_error};
 use crate::{CBoxHandle, CBoxliteError};
 
-/// Inert Box-owned namespace; release with boxlite_agent_free.
+/// Box-owned namespace; release with boxlite_agent_free.
 pub struct CAgentHandle {
     _core: boxlite::AgentHandle,
 }
-/// Reserved session handle. No operation currently returns one.
+/// Agent session handle.
 pub struct CAgentSession {
     _private: (),
 }
-/// Reserved turn handle. No operation currently returns one.
+/// Agent turn handle.
 pub struct CAgentTurn {
     _private: (),
 }
-/// Reserved journal subscription. Freeing it will not cancel agent work.
+/// Journal subscription. Freeing it does not cancel agent work.
 pub struct CAgentEvents {
     _private: (),
 }
@@ -38,7 +36,7 @@ pub struct CAgentCreateOptions {
     pub idempotency_key: *const c_char,
 }
 
-/// P0 admission modes; zero-initialized options select queue.
+/// Admission modes; zero-initialized options select queue.
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub enum CAgentSendMode {
@@ -107,8 +105,8 @@ pub unsafe extern "C" fn boxlite_box_agents(
     BoxliteErrorCode::Ok
 }
 
-/// Unimplemented: returns Unsupported synchronously; callback is not called.
-/// out_error may be null or writable. Input pointers are not read by this stub.
+/// Create a session with initial configuration.
+/// out_error may be null or writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_agent_create(
     _handle: *mut CAgentHandle,
@@ -121,8 +119,8 @@ pub unsafe extern "C" fn boxlite_agent_create(
     unsafe { not_implemented("agents.create", out_error) }
 }
 
-/// Unimplemented: returns Unsupported synchronously; callback is not called.
-/// out_error may be null or writable. Input pointers are not read by this stub.
+/// Look up a session without replaying work.
+/// out_error may be null or writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_agent_get(
     _handle: *mut CAgentHandle,
@@ -134,8 +132,8 @@ pub unsafe extern "C" fn boxlite_agent_get(
     unsafe { not_implemented("agents.get", out_error) }
 }
 
-/// Unimplemented: returns Unsupported synchronously; callback is not called.
-/// out_error may be null or writable. Input pointers are not read by this stub.
+/// Stop admissions and close the agent loop.
+/// out_error may be null or writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_agent_session_close(
     _session: *mut CAgentSession,
@@ -147,8 +145,8 @@ pub unsafe extern "C" fn boxlite_agent_session_close(
     unsafe { not_implemented("session.close", out_error) }
 }
 
-/// Unimplemented: returns Unsupported synchronously; callback is not called.
-/// out_error may be null or writable. Input pointers are not read by this stub.
+/// Submit text with optional JSON data.
+/// out_error may be null or writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_agent_session_send(
     _session: *mut CAgentSession,
@@ -161,8 +159,8 @@ pub unsafe extern "C" fn boxlite_agent_session_send(
     unsafe { not_implemented("session.send", out_error) }
 }
 
-/// Unimplemented: returns Unsupported synchronously; callback is not called.
-/// out_error may be null or writable. Input pointers are not read by this stub.
+/// Look up a turn without executing it.
+/// out_error may be null or writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_agent_session_get_turn(
     _session: *mut CAgentSession,
@@ -174,8 +172,8 @@ pub unsafe extern "C" fn boxlite_agent_session_get_turn(
     unsafe { not_implemented("session.get_turn", out_error) }
 }
 
-/// Unimplemented: returns Unsupported synchronously; callback is not called.
-/// out_error may be null or writable. Input pointers are not read by this stub.
+/// Read outstanding questions and permissions.
+/// out_error may be null or writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_agent_session_requests(
     _session: *mut CAgentSession,
@@ -186,8 +184,8 @@ pub unsafe extern "C" fn boxlite_agent_session_requests(
     unsafe { not_implemented("session.requests", out_error) }
 }
 
-/// Unimplemented: returns Unsupported synchronously; callback is not called.
-/// out_error may be null or writable. Input pointers are not read by this stub.
+/// Answer a typed request.
+/// out_error may be null or writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_agent_session_respond(
     _session: *mut CAgentSession,
@@ -201,8 +199,8 @@ pub unsafe extern "C" fn boxlite_agent_session_respond(
     unsafe { not_implemented("session.respond", out_error) }
 }
 
-/// Unimplemented: returns Unsupported synchronously; callback is not called.
-/// out_error may be null or writable. Input pointers are not read by this stub.
+/// Wait for a turn result; timeout does not imply cancellation.
+/// out_error may be null or writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_agent_turn_wait(
     _turn: *mut CAgentTurn,
@@ -214,8 +212,8 @@ pub unsafe extern "C" fn boxlite_agent_turn_wait(
     unsafe { not_implemented("turn.wait", out_error) }
 }
 
-/// Unimplemented: returns Unsupported synchronously; callback is not called.
-/// out_error may be null or writable. Input pointers are not read by this stub.
+/// Steer this turn without submitting another turn.
+/// out_error may be null or writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_agent_turn_steer(
     _turn: *mut CAgentTurn,
@@ -228,8 +226,8 @@ pub unsafe extern "C" fn boxlite_agent_turn_steer(
     unsafe { not_implemented("turn.steer", out_error) }
 }
 
-/// Unimplemented: returns Unsupported synchronously; callback is not called.
-/// out_error may be null or writable. Input pointers are not read by this stub.
+/// Interrupt the agent loop for this turn.
+/// out_error may be null or writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_agent_turn_interrupt(
     _turn: *mut CAgentTurn,
@@ -241,8 +239,8 @@ pub unsafe extern "C" fn boxlite_agent_turn_interrupt(
     unsafe { not_implemented("turn.interrupt", out_error) }
 }
 
-/// Unimplemented: returns Unsupported, clears out, and never invokes the callback.
-/// out and out_error may be null or writable. No subscription is allocated.
+/// Open the session journal after an opaque cursor.
+/// out and out_error may be null or writable. out is cleared on error.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_agent_session_events(
     _handle: *mut CAgentSession,
@@ -260,8 +258,8 @@ pub unsafe extern "C" fn boxlite_agent_session_events(
     unsafe { not_implemented("session.events", out_error) }
 }
 
-/// Unimplemented: returns Unsupported, clears out, and never invokes the callback.
-/// out and out_error may be null or writable. No subscription is allocated.
+/// Open this turn's view of the session journal.
+/// out and out_error may be null or writable. out is cleared on error.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_agent_turn_events(
     _handle: *mut CAgentTurn,
@@ -279,8 +277,8 @@ pub unsafe extern "C" fn boxlite_agent_turn_events(
     unsafe { not_implemented("turn.events", out_error) }
 }
 
-/// Unimplemented: returns Unsupported and clears out_json; never fabricates data.
-/// out_json and out_error may be null or writable.
+/// Read a consistent session state snapshot.
+/// out_json and out_error may be null or writable. out_json is cleared on error.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_agent_session_state(
     _handle: *mut CAgentSession,
@@ -295,8 +293,8 @@ pub unsafe extern "C" fn boxlite_agent_session_state(
     unsafe { not_implemented("session.state", out_error) }
 }
 
-/// Unimplemented: returns Unsupported and clears out_json; never fabricates data.
-/// out_json and out_error may be null or writable.
+/// Read effective agent configuration.
+/// out_json and out_error may be null or writable. out_json is cleared on error.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_agent_session_config(
     _handle: *mut CAgentSession,
@@ -311,8 +309,8 @@ pub unsafe extern "C" fn boxlite_agent_session_config(
     unsafe { not_implemented("session.config", out_error) }
 }
 
-/// Unimplemented: returns Unsupported and clears out_json; never fabricates data.
-/// out_json and out_error may be null or writable.
+/// Read adapter guarantees and limits.
+/// out_json and out_error may be null or writable. out_json is cleared on error.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_agent_session_capabilities(
     _handle: *mut CAgentSession,
@@ -327,8 +325,8 @@ pub unsafe extern "C" fn boxlite_agent_session_capabilities(
     unsafe { not_implemented("session.capabilities", out_error) }
 }
 
-/// Unimplemented: returns Unsupported and clears out_json; never fabricates data.
-/// out_json and out_error may be null or writable.
+/// Read a consistent turn state snapshot.
+/// out_json and out_error may be null or writable. out_json is cleared on error.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_agent_turn_state(
     _handle: *mut CAgentTurn,

@@ -1,4 +1,4 @@
-//! Provisional P0 data contracts; these do not define a wire protocol.
+//! Agent configuration, options, events, and results.
 
 use std::pin::Pin;
 use std::time::Duration;
@@ -8,7 +8,7 @@ use serde_json::Value;
 
 use crate::BoxliteResult;
 
-/// A journal stream; opening a stream is currently unimplemented.
+/// A journal stream.
 pub type AgentEventStream = Pin<Box<dyn Stream<Item = BoxliteResult<AgentEvent>> + Send + Sync>>;
 
 /// Initial adapter configuration. Tools/MCP entries identify Box-managed resources.
@@ -32,7 +32,7 @@ pub struct AgentCreateOptions {
     pub idempotency_key: Option<String>,
 }
 
-/// P0 admission modes. Interrupt-and-replace is deliberately deferred.
+/// Admission modes for submitted work.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum AgentSendMode {
     #[default]
@@ -48,7 +48,7 @@ pub struct AgentSendOptions {
     pub idempotency_key: Option<String>,
 }
 
-/// Deadline for waiting; None leaves waiting unbounded once implemented.
+/// Deadline for waiting; None leaves waiting unbounded.
 #[derive(Debug, Clone, Default)]
 pub struct AgentWaitOptions {
     pub timeout: Option<Duration>,

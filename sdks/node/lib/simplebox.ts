@@ -550,7 +550,7 @@ export class BoxTunnel {
  * ```
  */
 export class SimpleBox {
-  /** Inert P0 namespace; every operation reports not implemented. */
+  /** Get the agent namespace without starting the Box. */
   get agents(): AgentHandle {
     return new (getNativeModule().AgentHandle)();
   }

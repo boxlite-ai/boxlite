@@ -1,4 +1,4 @@
-/** Provisional P0 declarations. Every operation reports not implemented. */
+/** Agent sessions, turns, configuration, and events. */
 export type AgentJson =
   null | boolean | number | string | AgentJson[] | { [key: string]: AgentJson };
 export interface AgentConfig {

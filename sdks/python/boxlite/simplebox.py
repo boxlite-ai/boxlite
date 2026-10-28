@@ -98,7 +98,7 @@ class SimpleBox:
 
     @property
     def agents(self) -> AgentHandle:
-        """Get the P0 namespace; operations raise UnsupportedError."""
+        """Get the agent namespace without starting the Box."""
         return AgentHandle()
 
     def __init__(

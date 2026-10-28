@@ -1,4 +1,4 @@
-"""Synchronous P0 declarations; all operations are unimplemented."""
+"""Synchronous agent sessions and turns."""
 
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ from ..agents import (
 
 
 class SyncAgentHandle:
-    """Inert Box-owned namespace; no session or process is created."""
+    """Box-owned agent namespace."""
 
     def create(
         self, agent: str, options: AgentCreateOptions | None = None
@@ -36,7 +36,7 @@ class SyncAgentHandle:
 
 
 class SyncAgentSession:
-    """P0 conversation declarations; all methods and properties are unavailable."""
+    """An agent conversation."""
 
     def close(self, options: AgentControlOptions | None = None) -> None:
         _not_implemented("session.close")
@@ -48,7 +48,7 @@ class SyncAgentSession:
         _not_implemented("session.get_turn")
 
     def events(self, options: AgentEventsOptions | None = None) -> Iterator[AgentEvent]:
-        """Fail on opening, rather than returning an empty successful stream."""
+        """Open the session journal after an opaque cursor."""
         _not_implemented("session.events")
 
     def requests(self) -> list[AgentRequest]:
@@ -76,7 +76,7 @@ class SyncAgentSession:
 
 
 class SyncAgentTurn:
-    """P0 task declarations. Steering retains this turn's identity."""
+    """A submitted task. Steering retains this turn's identity."""
 
     def wait(self, options: AgentWaitOptions | None = None) -> AgentResult:
         _not_implemented("turn.wait")

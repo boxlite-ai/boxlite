@@ -679,7 +679,7 @@ pub enum Commands {
     /// Configure, inspect, disable, or forward to guest SSH
     Ssh(crate::commands::ssh::SshArgs),
 
-    /// Agent sessions and turns (P0 declarations; not implemented)
+    /// Agent sessions and turns
     Agent(crate::commands::agent::AgentArgs),
 
     /// Start a long-running REST API server

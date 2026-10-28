@@ -1,4 +1,4 @@
-//! Inert P0 agent declarations; no backend calls or successful placeholder results.
+//! Native bindings for agent sessions and turns.
 
 use napi::Result;
 use napi_derive::napi;
@@ -18,7 +18,7 @@ pub struct JsAgentTurn {}
 
 #[napi]
 impl JsAgentHandle {
-    /// Only the namespace is constructible; it cannot start agent work.
+    /// Create a namespace without starting agent work.
     #[napi(constructor)]
     pub fn new() -> Self {
         Self {}

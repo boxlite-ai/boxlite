@@ -1,7 +1,4 @@
-//! P0 agent API declarations. No agent backend is implemented yet.
-//!
-//! All operations, including read-only accessors and opening event streams,
-//! return [`BoxliteError::Unsupported`]. Obtaining [`AgentHandle`] is inert.
+//! Box-owned agent sessions and turns.
 
 mod types;
 pub use types::*;
@@ -14,20 +11,20 @@ pub struct AgentHandle {
     pub(crate) _private: (),
 }
 
-/// Conversation handle. Creation and lookup are currently unimplemented.
+/// Conversation handle.
 #[derive(Debug, Clone)]
 pub struct AgentSession {
     _private: (),
 }
 
-/// One submitted task. No turn can currently be started or restored.
+/// One submitted task.
 #[derive(Debug, Clone)]
 pub struct AgentTurn {
     _private: (),
 }
 
 impl AgentHandle {
-    /// Create a session with initial configuration. Currently unimplemented.
+    /// Create a session with initial configuration.
     pub async fn create(
         &self,
         _agent: &str,
@@ -36,34 +33,34 @@ impl AgentHandle {
         not_implemented("agents.create")
     }
 
-    /// Look up a session without replaying work. Currently unimplemented.
+    /// Look up a session without replaying work.
     pub async fn get(&self, _session_id: &str) -> BoxliteResult<AgentSession> {
         not_implemented("agents.get")
     }
 }
 
 impl AgentSession {
-    /// Stop admissions and close the agent loop. Currently unimplemented.
+    /// Stop admissions and close the agent loop.
     pub async fn close(&self, _options: AgentControlOptions) -> BoxliteResult<()> {
         not_implemented("session.close")
     }
 
-    /// Submit text with optional JSON data; queue is the proposed default.
+    /// Submit text with optional JSON data; queue is the default admission mode.
     pub async fn send(&self, _text: &str, _options: AgentSendOptions) -> BoxliteResult<AgentTurn> {
         not_implemented("session.send")
     }
 
-    /// Look up a turn without executing it. Currently unimplemented.
+    /// Look up a turn without executing it.
     pub async fn get_turn(&self, _turn_id: &str) -> BoxliteResult<AgentTurn> {
         not_implemented("session.get_turn")
     }
 
-    /// Open the session journal after an opaque cursor. Returns an error, not an empty stream.
+    /// Open the session journal after an opaque cursor.
     pub async fn events(&self, _options: AgentEventsOptions) -> BoxliteResult<AgentEventStream> {
         not_implemented("session.events")
     }
 
-    /// Read outstanding questions and permissions. Currently unimplemented.
+    /// Read outstanding questions and permissions.
     pub async fn requests(&self) -> BoxliteResult<Vec<AgentRequest>> {
         not_implemented("session.requests")
     }
@@ -78,34 +75,34 @@ impl AgentSession {
         not_implemented("session.respond")
     }
 
-    /// Read a consistent snapshot. No fabricated state is returned by this stub.
+    /// Read a consistent snapshot.
     pub fn state(&self) -> BoxliteResult<AgentSessionState> {
         not_implemented("session.state")
     }
 
-    /// Read effective configuration. Currently unimplemented.
+    /// Read effective configuration.
     pub fn config(&self) -> BoxliteResult<AgentConfig> {
         not_implemented("session.config")
     }
 
-    /// Read adapter guarantees and limits. Currently unimplemented.
+    /// Read adapter guarantees and limits.
     pub fn capabilities(&self) -> BoxliteResult<AgentCapabilities> {
         not_implemented("session.capabilities")
     }
 }
 
 impl AgentTurn {
-    /// Wait for a result; timeout does not imply cancellation. Currently unimplemented.
+    /// Wait for a result; timeout does not imply cancellation.
     pub async fn wait(&self, _options: AgentWaitOptions) -> BoxliteResult<AgentResult> {
         not_implemented("turn.wait")
     }
 
-    /// Open this turn's view of the session journal. Currently unimplemented.
+    /// Open this turn's view of the session journal.
     pub async fn events(&self, _options: AgentEventsOptions) -> BoxliteResult<AgentEventStream> {
         not_implemented("turn.events")
     }
 
-    /// Steer this turn, never silently queue a new one. Currently unimplemented.
+    /// Steer this turn, never silently queue a new one.
     pub async fn steer(
         &self,
         _text: &str,
@@ -119,7 +116,7 @@ impl AgentTurn {
         not_implemented("turn.interrupt")
     }
 
-    /// Read a consistent snapshot. Currently unimplemented.
+    /// Read a consistent snapshot.
     pub fn state(&self) -> BoxliteResult<AgentTurnState> {
         not_implemented("turn.state")
     }

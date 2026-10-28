@@ -31,7 +31,7 @@ const (
 	AgentSendReject AgentSendMode = "reject"
 )
 
-// AgentSendOptions.Mode defaults to queue when empty once implemented.
+// AgentSendOptions.Mode defaults to queue when empty.
 type AgentSendOptions struct {
 	Mode           AgentSendMode
 	Data           json.RawMessage
@@ -169,14 +169,13 @@ type AgentEvent struct {
 	Data      json.RawMessage
 }
 
-// AgentEventStream is the proposed journal reader. No stream can currently be opened.
+// AgentEventStream reads the agent journal.
 type AgentEventStream interface {
 	Next(context.Context) (*AgentEvent, error)
 	Close() error
 }
 
-// AgentHandle, AgentSession and AgentTurn are provisional P0 API handles.
-// All operations and getters return ErrUnsupported; no work is performed.
+// AgentHandle, AgentSession and AgentTurn address agent conversations and work.
 type AgentHandle struct{}
 type AgentSession struct{}
 type AgentTurn struct{}

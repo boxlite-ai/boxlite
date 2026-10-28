@@ -108,7 +108,7 @@ fn agents_p0_binary_help_works_and_malformed_input_is_a_usage_error() {
         .args(["agent", "steer", "--help"])
         .assert()
         .success()
-        .stdout(contains("not implemented"));
+        .stdout(contains("Steer this turn without creating another turn"));
     Command::new(assert_cmd::cargo::cargo_bin!("boxlite"))
         .env_clear()
         .args([

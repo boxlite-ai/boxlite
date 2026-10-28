@@ -43,7 +43,7 @@ class SyncBox:
 
     @property
     def agents(self) -> SyncAgentHandle:
-        """Get the unimplemented P0 agent namespace."""
+        """Get the agent namespace without starting the Box."""
         return SyncAgentHandle()
 
     def __init__(

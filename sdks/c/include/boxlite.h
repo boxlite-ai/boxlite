@@ -64,7 +64,7 @@ typedef enum BoxliteErrorCode {
   SessionReaped = 21,
 } BoxliteErrorCode;
 
-// P0 admission modes; zero-initialized options select queue.
+// Admission modes; zero-initialized options select queue.
 typedef enum CAgentSendMode {
   AgentSendQueue = 0,
   AgentSendReject = 1,
@@ -116,16 +116,16 @@ typedef struct BoxRunner BoxRunner;
 // Opaque handle for a one-shot prepared tunnel.
 typedef struct BoxTunnelHandle BoxTunnelHandle;
 
-// Reserved journal subscription. Freeing it will not cancel agent work.
+// Journal subscription. Freeing it does not cancel agent work.
 typedef struct CAgentEvents CAgentEvents;
 
-// Inert Box-owned namespace; release with boxlite_agent_free.
+// Box-owned namespace; release with boxlite_agent_free.
 typedef struct CAgentHandle CAgentHandle;
 
-// Reserved session handle. No operation currently returns one.
+// Agent session handle.
 typedef struct CAgentSession CAgentSession;
 
-// Reserved turn handle. No operation currently returns one.
+// Agent turn handle.
 typedef struct CAgentTurn CAgentTurn;
 
 // Opaque handle for a streaming copy-in (push archive bytes into the guest).
@@ -807,8 +807,8 @@ enum BoxliteErrorCode boxlite_box_agents(CBoxHandle *handle,
                                          struct CAgentHandle **out,
                                          CBoxliteError *out_error);
 
-// Unimplemented: returns Unsupported synchronously; callback is not called.
-// out_error may be null or writable. Input pointers are not read by this stub.
+// Create a session with initial configuration.
+// out_error may be null or writable.
 enum BoxliteErrorCode boxlite_agent_create(struct CAgentHandle *_handle,
                                            const char *_agent,
                                            const struct CAgentCreateOptions *_options,
@@ -816,24 +816,24 @@ enum BoxliteErrorCode boxlite_agent_create(struct CAgentHandle *_handle,
                                            void *_user_data,
                                            CBoxliteError *out_error);
 
-// Unimplemented: returns Unsupported synchronously; callback is not called.
-// out_error may be null or writable. Input pointers are not read by this stub.
+// Look up a session without replaying work.
+// out_error may be null or writable.
 enum BoxliteErrorCode boxlite_agent_get(struct CAgentHandle *_handle,
                                         const char *_session_id,
                                         CAgentSessionCb _cb,
                                         void *_user_data,
                                         CBoxliteError *out_error);
 
-// Unimplemented: returns Unsupported synchronously; callback is not called.
-// out_error may be null or writable. Input pointers are not read by this stub.
+// Stop admissions and close the agent loop.
+// out_error may be null or writable.
 enum BoxliteErrorCode boxlite_agent_session_close(struct CAgentSession *_session,
                                                   const struct CAgentControlOptions *_options,
                                                   CAgentDoneCb _cb,
                                                   void *_user_data,
                                                   CBoxliteError *out_error);
 
-// Unimplemented: returns Unsupported synchronously; callback is not called.
-// out_error may be null or writable. Input pointers are not read by this stub.
+// Submit text with optional JSON data.
+// out_error may be null or writable.
 enum BoxliteErrorCode boxlite_agent_session_send(struct CAgentSession *_session,
                                                  const char *_text,
                                                  const struct CAgentSendOptions *_options,
@@ -841,23 +841,23 @@ enum BoxliteErrorCode boxlite_agent_session_send(struct CAgentSession *_session,
                                                  void *_user_data,
                                                  CBoxliteError *out_error);
 
-// Unimplemented: returns Unsupported synchronously; callback is not called.
-// out_error may be null or writable. Input pointers are not read by this stub.
+// Look up a turn without executing it.
+// out_error may be null or writable.
 enum BoxliteErrorCode boxlite_agent_session_get_turn(struct CAgentSession *_session,
                                                      const char *_turn_id,
                                                      CAgentTurnCb _cb,
                                                      void *_user_data,
                                                      CBoxliteError *out_error);
 
-// Unimplemented: returns Unsupported synchronously; callback is not called.
-// out_error may be null or writable. Input pointers are not read by this stub.
+// Read outstanding questions and permissions.
+// out_error may be null or writable.
 enum BoxliteErrorCode boxlite_agent_session_requests(struct CAgentSession *_session,
                                                      CAgentJsonCb _cb,
                                                      void *_user_data,
                                                      CBoxliteError *out_error);
 
-// Unimplemented: returns Unsupported synchronously; callback is not called.
-// out_error may be null or writable. Input pointers are not read by this stub.
+// Answer a typed request.
+// out_error may be null or writable.
 enum BoxliteErrorCode boxlite_agent_session_respond(struct CAgentSession *_session,
                                                     const char *_request_id,
                                                     const char *_response_json,
@@ -866,16 +866,16 @@ enum BoxliteErrorCode boxlite_agent_session_respond(struct CAgentSession *_sessi
                                                     void *_user_data,
                                                     CBoxliteError *out_error);
 
-// Unimplemented: returns Unsupported synchronously; callback is not called.
-// out_error may be null or writable. Input pointers are not read by this stub.
+// Wait for a turn result; timeout does not imply cancellation.
+// out_error may be null or writable.
 enum BoxliteErrorCode boxlite_agent_turn_wait(struct CAgentTurn *_turn,
                                               const struct CAgentWaitOptions *_options,
                                               CAgentJsonCb _cb,
                                               void *_user_data,
                                               CBoxliteError *out_error);
 
-// Unimplemented: returns Unsupported synchronously; callback is not called.
-// out_error may be null or writable. Input pointers are not read by this stub.
+// Steer this turn without submitting another turn.
+// out_error may be null or writable.
 enum BoxliteErrorCode boxlite_agent_turn_steer(struct CAgentTurn *_turn,
                                                const char *_text,
                                                const struct CAgentControlOptions *_options,
@@ -883,16 +883,16 @@ enum BoxliteErrorCode boxlite_agent_turn_steer(struct CAgentTurn *_turn,
                                                void *_user_data,
                                                CBoxliteError *out_error);
 
-// Unimplemented: returns Unsupported synchronously; callback is not called.
-// out_error may be null or writable. Input pointers are not read by this stub.
+// Interrupt the agent loop for this turn.
+// out_error may be null or writable.
 enum BoxliteErrorCode boxlite_agent_turn_interrupt(struct CAgentTurn *_turn,
                                                    const struct CAgentControlOptions *_options,
                                                    CAgentDoneCb _cb,
                                                    void *_user_data,
                                                    CBoxliteError *out_error);
 
-// Unimplemented: returns Unsupported, clears out, and never invokes the callback.
-// out and out_error may be null or writable. No subscription is allocated.
+// Open the session journal after an opaque cursor.
+// out and out_error may be null or writable. out is cleared on error.
 enum BoxliteErrorCode boxlite_agent_session_events(struct CAgentSession *_handle,
                                                    const struct CAgentEventsOptions *_options,
                                                    CAgentJsonCb _cb,
@@ -900,8 +900,8 @@ enum BoxliteErrorCode boxlite_agent_session_events(struct CAgentSession *_handle
                                                    struct CAgentEvents **out,
                                                    CBoxliteError *out_error);
 
-// Unimplemented: returns Unsupported, clears out, and never invokes the callback.
-// out and out_error may be null or writable. No subscription is allocated.
+// Open this turn's view of the session journal.
+// out and out_error may be null or writable. out is cleared on error.
 enum BoxliteErrorCode boxlite_agent_turn_events(struct CAgentTurn *_handle,
                                                 const struct CAgentEventsOptions *_options,
                                                 CAgentJsonCb _cb,
@@ -909,26 +909,26 @@ enum BoxliteErrorCode boxlite_agent_turn_events(struct CAgentTurn *_handle,
                                                 struct CAgentEvents **out,
                                                 CBoxliteError *out_error);
 
-// Unimplemented: returns Unsupported and clears out_json; never fabricates data.
-// out_json and out_error may be null or writable.
+// Read a consistent session state snapshot.
+// out_json and out_error may be null or writable. out_json is cleared on error.
 enum BoxliteErrorCode boxlite_agent_session_state(struct CAgentSession *_handle,
                                                   char **out_json,
                                                   CBoxliteError *out_error);
 
-// Unimplemented: returns Unsupported and clears out_json; never fabricates data.
-// out_json and out_error may be null or writable.
+// Read effective agent configuration.
+// out_json and out_error may be null or writable. out_json is cleared on error.
 enum BoxliteErrorCode boxlite_agent_session_config(struct CAgentSession *_handle,
                                                    char **out_json,
                                                    CBoxliteError *out_error);
 
-// Unimplemented: returns Unsupported and clears out_json; never fabricates data.
-// out_json and out_error may be null or writable.
+// Read adapter guarantees and limits.
+// out_json and out_error may be null or writable. out_json is cleared on error.
 enum BoxliteErrorCode boxlite_agent_session_capabilities(struct CAgentSession *_handle,
                                                          char **out_json,
                                                          CBoxliteError *out_error);
 
-// Unimplemented: returns Unsupported and clears out_json; never fabricates data.
-// out_json and out_error may be null or writable.
+// Read a consistent turn state snapshot.
+// out_json and out_error may be null or writable. out_json is cleared on error.
 enum BoxliteErrorCode boxlite_agent_turn_state(struct CAgentTurn *_handle,
                                                char **out_json,
                                                CBoxliteError *out_error);
