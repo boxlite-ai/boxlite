@@ -41,6 +41,7 @@ import { RunnerService } from '../box/services/runner.service'
 import { AUTO_RESUMABLE_STATES, BoxAutoResumeService } from '../box/services/box-auto-resume.service'
 import { BoxState } from '../box/enums/box-state.enum'
 import { BoxDesiredState } from '../box/enums/box-desired-state.enum'
+import { reportedBoxState } from '../box/utils/box-state.util'
 import { Box } from '../box/entities/box.entity'
 import { TunnelService } from '../box/services/tunnel.service'
 import { PrepareTunnelDto } from '../box/dto/tunnel.dto'
@@ -54,17 +55,18 @@ const OBSERVATION_ONLY: ProxyActivityPolicy = { activity: false, autoResume: fal
 // started first, as the SDKs require (openapi `configureSsh`). Joining a start
 // already in flight is fine; submitting one is not.
 function refuseImplicitSshStart(box: Box, boxId: string): void {
-  if (box.state === BoxState.STARTED && box.desiredState === BoxDesiredState.STARTED) {
+  const state = reportedBoxState(box)
+  if (state === BoxState.STARTED && box.desiredState === BoxDesiredState.STARTED) {
     return
   }
   if (!box.autoResume) {
     throw new ConflictException(`Box ${boxId} is not running and auto-resume is disabled; start it first`)
   }
-  if (box.state !== BoxState.STARTED && !AUTO_RESUMABLE_STATES.includes(box.state)) {
-    throw new ConflictException(`Box ${boxId} is not running (state: ${box.state})`)
+  if (state !== BoxState.STARTED && !AUTO_RESUMABLE_STATES.includes(state)) {
+    throw new ConflictException(`Box ${boxId} is not running (state: ${state})`)
   }
   const submitsStart =
-    box.state === BoxState.STOPPED || box.state === BoxState.STOPPING || box.desiredState === BoxDesiredState.STOPPED
+    state === BoxState.STOPPED || state === BoxState.STOPPING || box.desiredState === BoxDesiredState.STOPPED
   if (submitsStart && (box.cmd?.length || box.entrypoint?.length)) {
     throw new ConflictException(`Box ${boxId} has an explicit cmd or entrypoint; start it before configuring SSH`)
   }

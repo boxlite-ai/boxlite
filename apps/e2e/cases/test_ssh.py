@@ -133,10 +133,18 @@ async def test_ssh_status_on_a_stopped_box_reports_disabled(rt, image):
     try:
         await box.start()
         await box.stop()
+
+        # Cloud stop acknowledges the request before the runner reports stopped.
+        async def wait_until_stopped():
+            while (await rt.get_info(box.id)).state.status != "stopped":
+                await asyncio.sleep(0.1)
+
+        await asyncio.wait_for(wait_until_stopped(), STEP_TIMEOUT)
         status = await box.ssh.status()
         assert (status.enabled, status.generation, status.listen_address) == (False, 0, "")
         assert (status.host_public_key, status.host_key_fingerprint) == ("", "")
         disabled = await box.ssh.disable()
         assert disabled.generation == 0
+        assert (await rt.get_info(box.id)).state.status == "stopped"
     finally:
         await rt.remove(box.id, force=True)

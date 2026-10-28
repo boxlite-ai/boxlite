@@ -79,6 +79,55 @@ describe('BoxliteProxyController SSH routes', () => {
       expect(proxyHandler).toHaveBeenCalledTimes(1)
     })
 
+    describe.each(['stopped', 'unknown'])('with a stored %s state and desired started', (state) => {
+      it.each(['cmd', 'entrypoint'])('waits for the submitted start with an explicit %s', async (command) => {
+        const { call, boxService, autoResume, proxyHandler } = makeHarness({
+          state,
+          desiredState: 'started',
+          pending: false,
+          [command]: ['/init'],
+        })
+        const conditionalStartForProxy = jest.fn()
+        Object.assign(boxService, {
+          organizationService: { assertOrganizationIsNotSuspended: jest.fn() },
+          boxRepository: { conditionalStartForProxy },
+          eventEmitter: { emit: jest.fn() },
+          ensureStartedForProxy: BoxService.prototype.ensureStartedForProxy.bind(boxService),
+        })
+        let finishStart!: () => void
+        const started = new Promise<void>((resolve) => (finishStart = resolve))
+        let observeWait!: () => void
+        const waiting = new Promise<void>((resolve) => (observeWait = resolve))
+        const waitForStarted = jest.fn(() => {
+          observeWait()
+          return started
+        })
+        const lock = { lock: jest.fn().mockResolvedValue(true), unlock: jest.fn().mockResolvedValue(undefined) }
+        const resume = new BoxAutoResumeService(boxService as never, { waitForStarted } as never, lock as never)
+        autoResume.ensureReady.mockImplementation(resume.ensureReady.bind(resume))
+
+        const request = call('configureSsh')
+        try {
+          await Promise.race([waiting, request])
+          await new Promise<void>((resolve) => setImmediate(resolve))
+          expect(waitForStarted).toHaveBeenCalledWith('box-uuid', 'org-1', 30)
+          expect(waitForStarted).toHaveBeenCalledTimes(1)
+          expect(boxService.findOneByIdOrName).toHaveBeenCalledTimes(2)
+          expect(createProxyMiddleware).not.toHaveBeenCalled()
+          expect(proxyHandler).not.toHaveBeenCalled()
+          expect(conditionalStartForProxy).not.toHaveBeenCalled()
+        } finally {
+          finishStart()
+          await request
+        }
+
+        expect(createProxyMiddleware).toHaveBeenCalledTimes(1)
+        expect(proxyHandler).toHaveBeenCalledTimes(1)
+        expect(conditionalStartForProxy).not.toHaveBeenCalled()
+        expect(lock.unlock).toHaveBeenCalledTimes(1)
+      })
+    })
+
     it('refuses a custom-command box that stops before the resume lock is acquired', async () => {
       const { call, boxService, autoResume, proxyHandler } = makeHarness(running)
       const initial = { id: 'box-uuid', runnerId: 'runner-1', autoResume: true, cmd: ['sleep'], ...running }
@@ -117,8 +166,23 @@ describe('BoxliteProxyController SSH routes', () => {
         'auto-resume is disabled',
       ],
       [
+        'auto-resume is off during a submitted start',
+        { state: 'stopped', desiredState: 'started', autoResume: false, cmd: ['sleep'] },
+        'auto-resume is disabled',
+      ],
+      [
+        'auto-resume is off during creation',
+        { state: 'unknown', desiredState: 'started', autoResume: false, entrypoint: ['/init'] },
+        'auto-resume is disabled',
+      ],
+      [
         'a stopped box has an explicit cmd',
         { state: 'stopped', desiredState: 'stopped', cmd: ['sleep'] },
+        'explicit cmd',
+      ],
+      [
+        'a stopped box has an explicit entrypoint',
+        { state: 'stopped', desiredState: 'stopped', entrypoint: ['/init'] },
         'explicit cmd',
       ],
       [
