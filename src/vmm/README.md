@@ -113,6 +113,11 @@ the file fits, so `load_image` refuses an `image_size` that overflows its
 address or extends outside RAM with `InvalidInput`. A file without the
 `ARM\x64` magic fails with `InvalidData`.
 
+The loader reads that size from guest RAM through linux-loader's exported
+`arm64_image_header` and vm-memory's typed read, before any vCPU runs. This
+keeps the header layout in the format library while BoxLite owns placement
+and the full memory-extent check.
+
 ## Boot parameters
 
 On Linux x86_64, `boot::params::write_boot_params(ram, cmdline, ranges,
@@ -194,6 +199,13 @@ Firecracker's nodes and the PL011 in place of its `ns16550a`:
 | `timer` | the architected timer on PPIs 13, 14, 11 and 10, level high, `always-on` |
 | `apb-pclk` | a 24 MHz fixed clock |
 | `pl011@40002000` | the PL011 on SPI 0 (INTID 32), the clock as both `uartclk` and `apb_pclk` |
+
+Arm64 tests use the independent `fdt` parser to inspect the writer's output
+and the blob `prepare` copies into guest RAM. They check named properties:
+for example, `/chosen/linux,initrd-end` must equal the archive's exclusive
+end, rather than merely occur somewhere in the bytes. This replaces a local
+FDT decoder with an arm64 dev-dependency; it adds no production dependency.
+The parser is used on test-produced blobs, not to validate untrusted input.
 
 ## Initramfs
 

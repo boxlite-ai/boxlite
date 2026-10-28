@@ -4,16 +4,12 @@
 //! Loads an arm64 `Image` through linux-loader at its text offset above the
 //! 2 MiB-aligned RAM base (`Documentation/arch/arm64/booting.rst`).
 
-use std::io::{self, Read, Seek, SeekFrom};
+use std::io::{self, Read, Seek};
 
 use linux_loader::loader::{Error as LoaderError, KernelLoader, PE, pe};
-use vm_memory::{GuestAddress, GuestMemoryBackend, ReadVolatile};
+use vm_memory::{Bytes, GuestAddress, GuestMemoryBackend, ReadVolatile};
 
 use crate::memory::RAM_START;
-
-/// Where the header keeps `image_size`: the bytes from the load address the
-/// kernel uses, BSS included, or 0 before Linux 3.17.
-const IMAGE_SIZE_OFFSET: u64 = 16;
 
 /// Where the `Image` runs, and the first byte past what it claims.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -39,13 +35,12 @@ where
             }
             error => io::Error::other(error),
         })?;
-    let mut image_size = [0; 8];
-    image.seek(SeekFrom::Start(IMAGE_SIZE_OFFSET))?;
-    image.read_exact(&mut image_size)?;
+    let header: pe::arm64_image_header =
+        ram.read_obj(loaded.kernel_load).map_err(io::Error::other)?;
     let claimed = loaded
         .kernel_load
         .0
-        .checked_add(u64::from_le_bytes(image_size))
+        .checked_add(u64::from_le(header.image_size))
         .ok_or_else(|| {
             io::Error::new(
                 io::ErrorKind::InvalidInput,

@@ -10,6 +10,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use fdt::Fdt;
 use vm_memory::{Bytes, GuestAddress};
 
 use super::prepare;
@@ -71,13 +72,6 @@ fn read(ram: &GuestRam, address: u64, len: usize) -> Vec<u8> {
     bytes
 }
 
-/// Whether `haystack` holds `needle` anywhere.
-fn holds(haystack: &[u8], needle: &[u8]) -> bool {
-    haystack
-        .windows(needle.len())
-        .any(|window| window == needle)
-}
-
 #[test]
 fn enters_the_image_with_x0_at_the_device_tree_in_the_last_2_mib() {
     let kernel = TempFile::new("Image", &image(MIB));
@@ -91,10 +85,13 @@ fn enters_the_image_with_x0_at_the_device_tree_in_the_last_2_mib() {
     assert_eq!(setup.boot_regs.x0, dtb);
     assert_eq!(setup.boot_regs.pstate, PSTATE_EL1H_DAIF);
     assert_eq!(read(&ram, RAM_START + 56, 4), b"ARM\x64");
-    let header = read(&ram, dtb, 8);
-    assert_eq!(header[..4], 0xd00d_feed_u32.to_be_bytes(), "FDT magic");
-    let size = u32::from_be_bytes(header[4..8].try_into().unwrap()) as usize;
-    assert!(holds(&read(&ram, dtb, size), b"console=ttyAMA0 panic=-1"));
+    let blob = read(&ram, dtb, 2 * MIB as usize);
+    let tree = Fdt::new(&blob).unwrap();
+    let chosen = tree.find_node("/chosen").unwrap();
+    assert_eq!(
+        chosen.property("bootargs").unwrap().value,
+        b"console=ttyAMA0 panic=-1\0"
+    );
 }
 
 #[test]
@@ -111,12 +108,16 @@ fn places_the_initramfs_below_the_device_tree_and_names_it() {
     let dtb = setup.boot_regs.x0;
     let start = dtb - 0x2000;
     assert_eq!(read(&ram, start, archive.len()), archive);
-    let size = u32::from_be_bytes(read(&ram, dtb + 4, 4).try_into().unwrap()) as usize;
-    let tree = read(&ram, dtb, size);
-    assert!(holds(&tree, &start.to_be_bytes()), "linux,initrd-start");
-    assert!(
-        holds(&tree, &(start + 5000).to_be_bytes()),
-        "linux,initrd-end"
+    let blob = read(&ram, dtb, 2 * MIB as usize);
+    let tree = Fdt::new(&blob).unwrap();
+    let chosen = tree.find_node("/chosen").unwrap();
+    assert_eq!(
+        chosen.property("linux,initrd-start").unwrap().value,
+        start.to_be_bytes()
+    );
+    assert_eq!(
+        chosen.property("linux,initrd-end").unwrap().value,
+        (start + 5000).to_be_bytes()
     );
 }
 

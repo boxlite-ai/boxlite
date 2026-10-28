@@ -789,6 +789,7 @@ name = "boxlite-vmm"
 version = "0.10.8"
 dependencies = [
  "boxlite-hypervisor",
+ "fdt",
  "linux-loader",
  "mio 1.2.0",
  "tracing",
@@ -1865,6 +1866,12 @@ name = "fastrand"
 version = "2.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9f1f227452a390804cdb637b74a86990f2a7d7ba4b7d5693aac9b4dd6defd8d6"
+
+[[package]]
+name = "fdt"
+version = "0.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "784a4df722dc6267a04af36895398f59d21d07dce47232adf31ec0ff2fa45e67"
 
 [[package]]
 name = "ff"
