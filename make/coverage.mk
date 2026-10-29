@@ -107,6 +107,13 @@ coverage\:python: _ensure-python-deps
 coverage\:node: _ensure-node-deps
 	@cd sdks/node && npm test -- --coverage $(VITEST_FILTER)
 
+coverage\:infra: _ensure-infra-deps
+	@apps/infra/node_modules/.bin/c8 --all --include='apps/infra/**/*.{ts,js,mjs}' \
+		--exclude='**/{test,tests,node_modules,dist,.sst}/**' \
+		--exclude='**/*.test.*' --exclude='**/*.d.ts' \
+		--reporter=lcov --reporter=text-summary --reports-dir=target/coverage/infra \
+		$(MAKE) test:apps:infra
+
 coverage\:python\:integration: dev\:python
 	@mkdir -p target/coverage/python
 	@. .venv/bin/activate && cd sdks/python && \

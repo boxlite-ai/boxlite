@@ -3,7 +3,7 @@
 
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { copyFileSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -63,7 +63,7 @@ for (const [path, expected] of [
   ['src/cli/src/main.rs', ['rust']],
   ['src/vmm/src/vm.rs', ['rust', 'vmm']],
   ['src/vmm/boot/kernel.lock', ['rust', 'vmm']],
-  ['make/coverage.mk', ['rust', 'vmm', 'python', 'node', 'go']],
+  ['make/coverage.mk', ['rust', 'vmm', 'python', 'node', 'go', 'infra']],
   ['make/quality.mk', ['go']],
   ['.github/workflows/lint.yml', ['go', 'infra']],
   ['openapi/box.openapi.yaml', ['rust', 'api']],
@@ -187,7 +187,7 @@ for (const result of ['skipped', 'success', 'failure', 'cancelled']) {
 }
 
 const coverageWorkflow: any = loadYaml(readFileSync(join(REPO_ROOT, '.github/workflows/test.yml'), 'utf8'))
-const coverageSuites = ['rust', 'python', 'node', 'go', 'api', 'dashboard', 'plugins']
+const coverageSuites = ['rust', 'python', 'node', 'go', 'api', 'dashboard', 'plugins', 'infra']
 
 for (const path of ['scripts/plugins/boxlite.py', 'scripts/plugins/.coveragerc',
   'tests/plugins/test_boxlite_package.py', 'plugins/boxlite/skills/boxlite-setup/SKILL.md',
@@ -202,39 +202,46 @@ test('repository marketplace-only pushes reach plugin coverage workflow', () => 
   assert.equal(acceptsFiles('test.yml', 'push', ['.agents/plugins/marketplace.json']), true)
 })
 
-test('plugin coverage runs on drafts and propagates report/upload failures', () => {
+function checkCoverageJob(suite: string, command: string, report: string) {
   const jobs = coverageWorkflow.jobs
-  const job = jobs.plugins
-  assert.ok(job, 'plugin source changes need a real coverage job')
+  const job = jobs[suite]
+  assert.ok(job, `${suite} source changes need a real coverage job`)
   const evaluate = (expression: string, context: any) => runInNewContext(
     expression.replace(/^\$\{\{\s*|\s*\}\}$/g, ''), context, { timeout: 1000 })
   for (const event of ['pull_request', 'push', 'merge_group', 'schedule', 'workflow_dispatch']) {
     for (const selected of ['true', 'false']) {
       const github = { event_name: event, event: { pull_request: { draft: true } } }
-      const output = String(evaluate(jobs.changes.outputs.plugins, { github, steps: { filter: { outputs: { plugins: selected } } } }))
-      assert.equal(evaluate(job.if, { github, needs: { changes: { outputs: { plugins: output } } } }),
+      const output = String(evaluate(jobs.changes.outputs[suite], { github, steps: { filter: { outputs: { [suite]: selected } } } }))
+      assert.equal(evaluate(job.if, { github, needs: { changes: { outputs: { [suite]: output } } } }),
         selected === 'true' || event === 'schedule' || event === 'workflow_dispatch')
     }
   }
-  assert.ok(job.steps.some((step: any) => step.run === 'make plugin:boxlite:coverage'))
+  assert.ok(job.steps.some((step: any) => step.run === command))
   const upload = job.steps.find((step: any) => step.uses?.startsWith('codecov/codecov-action@'))
-  assert.equal(upload?.with?.files, 'target/coverage/plugins/coverage.xml')
-  assert.equal(upload.with.flags, 'plugins')
+  assert.equal(upload?.with?.files, report)
+  assert.equal(upload.with.flags, suite)
   assert.equal(upload.with.use_oidc, true)
   assert.equal(upload.with.disable_search, true)
   assert.equal(upload.with.fail_ci_if_error, true)
   assert.equal(upload.with.force, undefined)
   assert.equal(job.permissions['id-token'], 'write')
   const conclusion = jobs['test-conclusion']
-  assert.ok(conclusion.needs.includes('plugins'))
+  assert.ok(conclusion.needs.includes(suite))
   for (const result of ['success', 'skipped', 'failure', 'cancelled']) {
-    const needs = Object.fromEntries(conclusion.needs.map((name: string) => [name, { result: name === 'plugins' ? result : 'success' }]))
+    const needs = Object.fromEntries(conclusion.needs.map((name: string) => [name, { result: name === suite ? result : 'success' }]))
     const script = conclusion.steps[0].run.replaceAll('${{ toJSON(needs) }}', JSON.stringify(needs))
     const run = spawnSync('bash', ['-eo', 'pipefail', '-c', script], { encoding: 'utf8', timeout: 10_000 })
     assert.equal(run.error, undefined)
     assert.equal(run.status === 0, result === 'success' || result === 'skipped', run.stderr)
   }
-})
+}
+
+for (const [suite, command, report] of [
+  ['plugins', 'make plugin:boxlite:coverage', 'target/coverage/plugins/coverage.xml'],
+  ['infra', 'make coverage:infra', 'target/coverage/infra/lcov.info'],
+]) {
+  test(`${suite} coverage runs on drafts and propagates report/upload failures`, () => checkCoverageJob(suite, command, report))
+}
 
 function selectsEmptyCoverage(outputs: Record<string, string>, result = 'success', event = 'pull_request') {
   const job = coverageWorkflow.jobs['coverage-empty']
@@ -656,9 +663,11 @@ test('the wheel smoke check rejects a package with a missing native extension', 
   assert.ok(command, 'cibuildwheel must verify the installed wheel')
   const directory = mkdtempSync(join(tmpdir(), 'boxlite-wheel-check-'))
   try {
-    mkdirSync(join(directory, 'boxlite'))
-    // Exercise the real package initializer, but omit the compiled extension.
-    copyFileSync(join(REPO_ROOT, 'sdks/python/boxlite/__init__.py'), join(directory, 'boxlite/__init__.py'))
+    // Keep Python imports intact while omitting native extensions and caches.
+    cpSync(join(REPO_ROOT, 'sdks/python/boxlite'), join(directory, 'boxlite'), {
+      recursive: true,
+      filter: (source) => lstatSync(source).isDirectory() || source.endsWith('.py'),
+    })
     const result = spawnSync('bash', ['-c', command.replace(/^python /, 'python3 ')], {
       cwd: directory,
       env: { ...process.env, PYTHONPATH: directory },

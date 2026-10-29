@@ -104,6 +104,7 @@ help:
 	@echo "    make coverage:go           - Collect Go SDK, bridge, runner, image-service coverage"
 	@echo "    make coverage:python       - Collect Python SDK coverage"
 	@echo "    make coverage:node         - Collect Node.js SDK coverage"
+	@echo "    make coverage:infra        - Test infrastructure tooling and collect LCOV coverage"
 	@echo "    make coverage:python:integration - Collect Python unit and VM integration coverage"
 	@echo "    make coverage:node:integration   - Collect Node.js unit and VM integration coverage"
 	@echo "    make coverage:api          - Collect cloud API coverage (Postgres/Redis required)"

@@ -49,6 +49,7 @@
     "@pulumi/pulumi": "^3.261.0",
     "@types/js-yaml": "^4.0.9",
     "@types/node": "^22.13.4",
+    "c8": "12.0.0",
     "google-auth-library": "^11.0.2",
     "js-yaml": "^4.1.0",
     "mbuild": "file:mbuild",

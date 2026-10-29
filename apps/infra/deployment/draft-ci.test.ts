@@ -80,12 +80,12 @@ test('workflow and infrastructure changes run hosted regressions even on drafts'
   assert.ok(infra, 'lightweight CI needs the infrastructure regression suite')
   assert.equal(evaluate(infra.if, context('pull_request', true)), true)
   assert.equal(evaluate(infra.if, context('pull_request', true, false)), false)
-  assert.ok(infra.steps.some((step: any) => step.run === 'make test:apps:infra'))
+  assert.ok(infra.steps.some((step: any) => step.run === 'make coverage:infra'))
   assert.ok(!infra.steps.some((step: any) => step.uses === './.github/actions/setup-infra'),
     'regressions need no Pulumi CLI, stage configuration, or deployment setup')
   const filter = spec.jobs.changes.steps.find((step: any) => step.uses?.startsWith('dorny/paths-filter'))
   const matches = picomatch((loadYaml(filter.with.filters) as any).infra)
-  for (const path of ['apps/infra/deployment/draft-ci.test.ts', '.github/workflows/test.yml', '.github/actions/setup-go/action.yml', '.github/ci-config.json', 'Makefile', 'make/test.mk', 'make/changes.mk']) {
+  for (const path of ['apps/infra/deployment/draft-ci.test.ts', '.github/workflows/test.yml', '.github/actions/setup-go/action.yml', '.github/ci-config.json', 'Makefile', 'make/test.mk', 'make/coverage.mk', 'make/changes.mk']) {
     assert.equal(matches(path), true, path)
   }
   for (const path of ['docs/README.md', '.github/workflows/README.md', 'sdks/go/options.go']) {

@@ -41,9 +41,15 @@ Run from the repository root:
 
 ```bash
 make test:apps:infra
+make coverage:infra
 make test:apps:infra-config
 ```
 
-The first target typechecks tooling and runs the infrastructure suites. The second installs SST's
-platform and typechecks the full configuration. For documentation-only edits, check local links,
+`test:apps:infra` typechecks tooling and runs the infrastructure suites. `coverage:infra` runs those same
+checks with c8 and writes repository-relative LCOV to `target/coverage/infra/lcov.info`, including
+unloaded production modules at zero coverage. CI uploads this report under the `infra` flag;
+infrastructure changes cannot use the empty-upload path. The wheel smoke fixture copies Python
+sources while omitting native extensions, so unrelated missing modules cannot mask a broken wheel.
+`test:apps:infra-config` installs SST's platform and typechecks the full configuration.
+For documentation-only edits, check local links,
 anchors, Mermaid rendering and existing documentation contracts; a cloud apply is not validation.

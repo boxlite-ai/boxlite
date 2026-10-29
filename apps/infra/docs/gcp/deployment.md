@@ -10,7 +10,7 @@ Declare the GCP project, bootstrap its prerequisites, load application values, t
 
 | Provide | Requirement |
 | --- | --- |
-| Project | Billing enabled and bootstrap permissions |
+| Project | A separate project for each stage, with billing enabled and bootstrap permissions |
 | Region and zone | GKE, Cloud SQL, Redis and nested-KVM capacity; a supported N4 zone |
 | Local tools | Node.js 22+, Git, gh, gcloud and Pulumi CLI |
 | Build tools | Docker/buildx when publishing locally |

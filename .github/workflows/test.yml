@@ -307,6 +307,7 @@ jobs:
               - '.github/**/!(*.md)'
               - 'Makefile'
               - 'make/test.mk'
+              - 'make/coverage.mk'
               - 'make/changes.mk'
               # tests/scripts and the scripts it drives.
               - 'tests/scripts/**'
@@ -324,6 +325,7 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v4
@@ -331,8 +333,16 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: apps/infra/package-lock.json
-      - name: Type-check and test infrastructure scripts and workflows
-        run: make test:apps:infra
+      - name: Type-check and test infrastructure scripts and workflows with coverage
+        run: make coverage:infra
+      - name: Upload infrastructure coverage to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          files: target/coverage/infra/lcov.info
+          flags: infra
+          use_oidc: true
+          disable_search: true
+          fail_ci_if_error: true
       - name: Test CI and coverage scripts against fake tools
         run: make test:unit:scripts
 
@@ -881,7 +891,8 @@ jobs:
           needs.changes.outputs.go == 'false' &&
           needs.changes.outputs.api == 'false' &&
           needs.changes.outputs.dashboard == 'false' &&
-          needs.changes.outputs.plugins == 'false' }}
+          needs.changes.outputs.plugins == 'false' &&
+          needs.changes.outputs.infra == 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:

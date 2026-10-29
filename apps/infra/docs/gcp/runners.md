@@ -12,6 +12,10 @@ Development binaries live in the stage's GCS artifact bucket.
 
 ## Rollout behavior
 
+Each stage requires its own GCP project. Runner labels intentionally identify logical runners
+without a stage suffix; OS Config selects them within the configured project and zone.
+Sharing a project between stages is unsupported because matching labels can select another stage's hosts.
+
 mdeploy splits the fleet into two disjoint OS Config assignments:
 
 | Assignment | Hosts | Rollout |
