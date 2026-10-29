@@ -24,7 +24,7 @@ control answer `404` or reject with `Unsupported`; there is no capability
 negotiation. See the [SDK API references](../reference/README.md#sdk-api-references)
 for language-specific control APIs.
 
-SSH does not publish a host port; forward one with [`boxlite ssh configure-and-forward` or
+SSH does not publish a host port; forward one with [`boxlite ssh run` or
 `boxlite ssh forward`](#cli) or other network forwarding. For component diagrams and implementation details, see
 [Guest SSH architecture](../../src/guest/src/service/ssh/README.md).
 
@@ -72,13 +72,16 @@ requires `start()` before `configure()`.
 ```bash
 boxlite ssh configure dev --ssh-config ssh-config.json   # complete SshConfig; prints SshStatus
 boxlite ssh forward dev                                  # forwards 127.0.0.1:<random> to guest SSH
-boxlite ssh configure-and-forward dev --host-key host_key --login alice --authorized-key alice.pub
+boxlite ssh run dev --host-key host_key --login alice --authorized-key alice.pub
 boxlite ssh disable dev
 ```
 
-- `configure` and `configure-and-forward` replace the whole configuration once, which disconnects
+`boxlite ssh run` combines one configuration with forwarding until Ctrl-C.
+Use `configure` and `forward` separately to configure now and forward later.
+
+- `configure` and `run` replace the whole configuration once, which disconnects
   every SSH client, including those connected through another tunnel.
-- `forward` and `configure-and-forward` target the port in the returned status, so a guest
+- `forward` and `run` target the port in the returned status, so a guest
   listener on port `0` works. Ctrl-C ends only local forwarding; guest SSH stays enabled.
 - SSH lives in guest memory. A local CLI exit stops boxes that are not detached
   (plain `boxlite run`, SDK boxes with `detach=false`); a box such a command started
@@ -155,7 +158,7 @@ differences:
 
 SSH lives in guest memory, so every stop, restart, or auto-stop disables it.
 Reconfigure after the box runs again, then reconnect: `boxlite ssh forward` fails
-on a disabled listener, and `configure-and-forward` does both. Forwarding uses the
+on a disabled listener, and `run` does both. Forwarding uses the
 box's [public tunnel](#cli), which needs inbound access enabled on the box. Ending
 the local `boxlite ssh forward` leaves that tunnel open; revoke it with `boxlite
 network tunnel BOX PORT --revoke`.

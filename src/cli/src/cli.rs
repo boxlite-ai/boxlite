@@ -237,7 +237,7 @@ const SSH_SCOPES: &[CommandScope] = &[
         children: &[],
     },
     CommandScope {
-        name: "configure-and-forward",
+        name: "run",
         globals: BOX_GLOBALS,
         children: &[],
     },

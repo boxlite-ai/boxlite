@@ -4,7 +4,7 @@ Date: 2026-10-27. Design: [#2122](https://github.com/boxlite-ai/boxlite/issues/2
 
 ## TL;DR
 
-`boxlite ssh configure|status|disable|configure-and-forward|forward` adapts
+`boxlite ssh configure|status|disable|run|forward` adapts
 `LiteBox::ssh()` and the existing `network tunnel` forwarder. It adds no SDK, server, or
 key-management code.
 
@@ -16,7 +16,7 @@ compatibility limit; adding that capability is outside this change.
 
 | Question | Decision | Evidence |
 | --- | --- | --- |
-| Command names | `configure-and-forward` and `forward` name each effect; `network tunnel` stays the generic forwarder | Only `configure-and-forward` replaces the configuration and disconnects clients |
+| Command names | `run` combines configuration and forwarding; `configure` and `forward` remain independent; `network tunnel` stays the generic forwarder | `run` configures once, disconnecting existing clients, then forwards until Ctrl-C; `forward` leaves configuration unchanged |
 | Start boxes? | Never from the CLI; `configure()` keeps the SDK's implicit-start rules | `src/boxlite/src/litebox/ssh.rs` (`SshHandle` docs) |
 | Retry configure? | No: each accepted call restarts the listener and drops clients | [SSH guide](../../guides/ssh.md#http-control-with-boxlite-serve) |
 | Guest port | From returned status, so a `:0` listener works; reject non-wildcard, non-`GUEST_IP` listeners | REST tunnels accept only `GUEST_IP` targets |
@@ -33,13 +33,20 @@ compatibility limit; adding that capability is outside this change.
 - No in-repo server has both SSH control and tunnels, so real REST forwarding is
   unproven; `boxlite serve` checks the controls and the partial-success path.
 
-## Verification
+## Command naming update (2026-10-29)
 
-macOS arm64 host, real VMs.
+The combined command is `boxlite ssh run`, with no compatibility alias for its
+previous name. Only the CLI spelling and Rust command/argument names change;
+options, configure-once behavior, forwarding, and Ctrl-C cleanup stay the same.
+
+## Verification before the naming update
+
+macOS arm64 host, real VMs. These results describe the original implementation;
+the combined operation is listed below with its current name, `run`.
 
 | Check | Result |
 | --- | --- |
 | `make test:unit:cli` | 315 passed: subcommand names, clap relations, key files, multi-account/CA JSON, redaction, REST request counts, actual port, disabled/unreachable/port-0 refusal, partial success |
-| `make test:integration:cli FILTER=ssh` | 30 passed, including local login through `forward` twice and `configure-and-forward` with guest `:0`, Ctrl-C exit 0 with port released, disable blocking login, and `boxlite serve` controls plus partial `configure-and-forward` |
+| `make test:integration:cli FILTER=ssh` | 30 passed, including local login through `forward` twice and `run` with guest `:0`, Ctrl-C exit 0 with port released, disable blocking login, and `boxlite serve` controls plus partial `run` |
 | `make test:integration:cli FILTER=command_help` / `FILTER=completion` | 1 / 14 passed |
 | `make fmt:check:rust`, `make lint:rust` | Exit 0 |

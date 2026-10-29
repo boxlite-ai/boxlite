@@ -4,7 +4,7 @@
 //! repeated `forward` runs, the guest listener keeps its generation, Ctrl-C frees the
 //! local port and leaves SSH enabled, and disable stops new logins. Against
 //! `boxlite serve`, which has SSH control but no tunnel route, the controls
-//! round-trip and `configure-and-forward` reports partial success without undoing SSH.
+//! round-trip and `run` reports partial success without undoing SSH.
 //!
 //! Argument relations, credential redaction, and request counts are covered
 //! without a VM in `src/cli/src/commands/ssh/tests/`.
@@ -236,7 +236,7 @@ fn assert_port_released(address: SocketAddr) {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn ssh_local_configure_forward_configure_and_forward_and_disable() {
+async fn ssh_local_configure_forward_run_and_disable() {
     let ctx = common::boxlite();
     let keys = Keys::new();
     let run = ctx
@@ -293,22 +293,21 @@ async fn ssh_local_configure_forward_configure_and_forward_and_disable() {
         assert_eq!(status("status after forward"), configured);
     }
 
-    // `configure-and-forward` configures exactly once and forwards to the port the guest chose.
-    let mut configure_and_forward =
-        ssh(&["configure-and-forward", &id, "--guest-listen", "0.0.0.0:0"]);
-    configure_and_forward.args(keys.flags("alice"));
-    let mut forwarder = Forwarder::spawn(configure_and_forward);
+    // `run` configures exactly once and forwards to the port the guest chose.
+    let mut run = ssh(&["run", &id, "--guest-listen", "0.0.0.0:0"]);
+    run.args(keys.flags("alice"));
+    let mut forwarder = Forwarder::spawn(run);
     let address = forwarder.address;
     let output = ssh_exec(
         address,
         &configured.host_key_fingerprint,
         &keys.user,
         "alice",
-        "echo configure-and-forward-ok",
+        "echo run-ok",
     )
     .await
-    .expect("SSH through configure-and-forward");
-    assert_eq!(output.trim(), "configure-and-forward-ok");
+    .expect("SSH through run");
+    assert_eq!(output.trim(), "run-ok");
     let (exit, stderr) = forwarder.interrupt();
     assert!(exit.success(), "{exit:?} {stderr}");
     assert!(
@@ -319,13 +318,10 @@ async fn ssh_local_configure_forward_configure_and_forward_and_disable() {
         "{stderr}"
     );
     assert_port_released(address);
-    let after_configure_and_forward = status("status after configure-and-forward");
-    assert!(after_configure_and_forward.enabled);
-    assert_eq!(
-        after_configure_and_forward.generation,
-        configured.generation + 1
-    );
-    let guest_port: u16 = after_configure_and_forward
+    let after_run = status("status after run");
+    assert!(after_run.enabled);
+    assert_eq!(after_run.generation, configured.generation + 1);
+    let guest_port: u16 = after_run
         .listen_address
         .rsplit(':')
         .next()
@@ -381,7 +377,7 @@ impl Drop for ServeBoxes<'_> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn ssh_serve_controls_and_partial_configure_and_forward() {
+async fn ssh_serve_controls_and_partial_run() {
     let serve = ServeChild::start();
     let mut boxes = ServeBoxes {
         serve: &serve,
@@ -424,23 +420,19 @@ async fn ssh_serve_controls_and_partial_configure_and_forward() {
     assert!(configured.enabled);
     assert_eq!(status("status"), configured);
 
-    // serve has no tunnel route: `configure-and-forward` configures once, then reports the
+    // serve has no tunnel route: `run` configures once, then reports the
     // forwarding failure as partial success and leaves SSH enabled.
-    let configure_and_forward =
-        serve.client(&["ssh", "configure-and-forward", &id, "--ssh-config", config]);
-    assert!(!configure_and_forward.status.success());
-    let stderr = String::from_utf8_lossy(&configure_and_forward.stderr);
+    let run = serve.client(&["ssh", "run", &id, "--ssh-config", config]);
+    assert!(!run.status.success());
+    let stderr = String::from_utf8_lossy(&run.stderr);
     let expected = format!(
         "SSH configuration succeeded (generation {}) and was not rolled back",
         configured.generation + 1
     );
     assert!(stderr.contains(&expected), "{stderr}");
-    let after_configure_and_forward = status("status after configure-and-forward");
-    assert!(after_configure_and_forward.enabled);
-    assert_eq!(
-        after_configure_and_forward.generation,
-        configured.generation + 1
-    );
+    let after_run = status("status after run");
+    assert!(after_run.enabled);
+    assert_eq!(after_run.generation, configured.generation + 1);
 
     assert!(!output_status(&serve.client(&["ssh", "disable", &id]), "disable").enabled);
     assert!(!status("status after disable").enabled);

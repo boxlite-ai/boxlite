@@ -97,6 +97,23 @@ fn completion_contains_subcommands(#[case] shell: &str) {
     }
 }
 
+#[rstest]
+#[case("bash", "boxlite__subcmd__ssh__subcmd__run)")]
+#[case("zsh", "_boxlite__subcmd__ssh__subcmd__run_commands()")]
+#[case(
+    "fish",
+    "__fish_boxlite_using_subcommand ssh; and __fish_seen_subcommand_from run\""
+)]
+fn completion_contains_ssh_run(#[case] shell: &str, #[case] marker: &str) {
+    let assert = boxlite_cmd().args(["completion", shell]).assert().success();
+    let stdout = std::str::from_utf8(&assert.get_output().stdout).unwrap();
+    assert!(stdout.contains(marker), "{shell}: missing {marker}");
+    assert!(
+        !stdout.contains("configure-and-forward"),
+        "{shell}: completion still advertises the removed command"
+    );
+}
+
 #[test]
 fn completion_invalid_shell_fails() {
     boxlite_cmd()

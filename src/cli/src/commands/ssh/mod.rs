@@ -32,7 +32,7 @@ pub enum SshCommand {
     /// Disable guest SSH without starting the box; prints status JSON.
     Disable(BoxArgs),
     /// Configure guest SSH once, then forward a local listener to it until Ctrl-C.
-    ConfigureAndForward(ConfigureAndForwardArgs),
+    Run(RunArgs),
     /// Forward a local listener to already enabled guest SSH until Ctrl-C.
     Forward(ForwardArgs),
 }
@@ -55,7 +55,7 @@ pub struct ConfigureArgs {
 }
 
 #[derive(Args, Debug)]
-pub struct ConfigureAndForwardArgs {
+pub struct RunArgs {
     /// Box ID or name
     #[arg(value_name = "BOX")]
     pub target: String,
@@ -176,7 +176,7 @@ pub async fn execute(args: SshArgs, global: &GlobalFlags) -> Result<()> {
             let (_runtime, sandbox) = find_box(global, &args.target).await?;
             print_status(&sandbox.ssh().disable().await?)
         }
-        SshCommand::ConfigureAndForward(args) => {
+        SshCommand::Run(args) => {
             let config = args.source.load()?;
             tunnel_target(&config.listen_address)?;
             let login = match config.accounts.as_slice() {
@@ -248,7 +248,7 @@ async fn forward(
     if !status.enabled {
         bail!(
             "guest SSH is disabled or the box is not running; enable it with \
-             `boxlite ssh configure-and-forward` or `boxlite ssh configure`"
+             `boxlite ssh run` or `boxlite ssh configure`"
         );
     }
     let tunnel = sandbox
