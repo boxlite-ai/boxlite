@@ -11,7 +11,7 @@ import { RoutePath } from '@/enums/RoutePath'
 import { useCreateBoxMutation } from '@/hooks/mutations/useCreateBoxMutation'
 import { useConfig } from '@/hooks/useConfig'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
-import { useApi } from '@/hooks/useApi'
+import { useOrganizationBoxLimitsQuery } from '@/hooks/queries/useOrganizationBoxLimitsQuery'
 import { getBoxRouteId } from '@/lib/box-identity'
 import { boxHourlyPrice, formatPriceCents, type BoxSpec } from '@/lib/box-price'
 import { handleApiError } from '@/lib/error-handling'
@@ -170,6 +170,11 @@ function ResourceField({
         {label} <span className="text-muted-foreground">({unit})</span>
       </div>
       <Stepper value={value} onChange={onChange} max={max} onExceed={onExceed} />
+      {max != null && (
+        <span className="font-mono text-meta text-muted-foreground">
+          Max {max} {unit}
+        </span>
+      )}
     </div>
   )
 }
@@ -588,37 +593,20 @@ export const CreateBoxDialog = ({
   const setOpen = onOpenChange ?? setInternalOpen
 
   const { selectedOrganization } = useSelectedOrganization()
-  const { organizationsApi } = useApi()
-  const [limitsRefresh, setLimitsRefresh] = useState<{
-    organization: typeof selectedOrganization
-    limits?: OrgPerBoxLimits
-  }>()
-  const currentRefresh = limitsRefresh?.organization === selectedOrganization ? limitsRefresh : undefined
-  const refreshingLimits = Boolean(selectedOrganization && !currentRefresh)
+  const {
+    data: confirmedLimits,
+    isError: limitsError,
+    refetch: refreshLimits,
+  } = useOrganizationBoxLimitsQuery(selectedOrganization, { enabled: open, poll: open })
   useEffect(() => {
-    setLimitsRefresh(undefined)
-    if (!open || !selectedOrganization) return
-    let cancelled = false
-    void organizationsApi
-      .getOrganization(selectedOrganization.id)
-      .then(({ data }) => {
-        if (!cancelled) setLimitsRefresh({ organization: selectedOrganization, limits: data })
-      })
-      .catch((error) => {
-        if (cancelled) return
-        handleApiError(error, 'Failed to refresh organization limits')
-        setLimitsRefresh({ organization: selectedOrganization })
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [open, organizationsApi, selectedOrganization])
+    if (open && selectedOrganization?.id) void refreshLimits({ cancelRefetch: false })
+  }, [open, selectedOrganization?.id, refreshLimits])
   const createBoxMutation = useCreateBoxMutation()
   const { data: availableVolumes = [] } = useVolumesQuery()
   const { data: catalogImages = [] } = useImagesQuery()
 
-  // Per-box ceilings for the current org (backend rejects a create above these).
-  const limits = resolvePerBoxLimits(currentRefresh?.limits ?? selectedOrganization)
+  // Only confirmed effective limits constrain input; the server validates unknown limits on creation.
+  const limits = resolvePerBoxLimits(confirmedLimits)
 
   // A DEFAULT value can exceed a stricter per-org cap (e.g. DEFAULTS.disk=10
   // vs an org's maxDiskPerBox=3), which would otherwise send an over-limit
@@ -674,23 +662,28 @@ export const CreateBoxDialog = ({
   }, [open, initialCpu, initialMemory, initialDisk, prefillVolume, prefillImage])
 
   useEffect(() => {
-    // Stored list quotas must not truncate an existing selection while detail loads.
-    if (!open || refreshingLimits) return
+    if (!open || !confirmedLimits) return
 
-    const nextCpu = limits.cpu == null ? cpu : Math.min(cpu, limits.cpu)
-    const nextMemory = limits.memory == null ? memory : Math.min(memory, limits.memory)
-    const nextDisk = limits.disk == null ? disk : Math.min(disk, limits.disk)
+    // Preserve preset intent when a higher grant arrives; Custom retains entered values.
+    const preset = SIZE_PRESETS.find((p) => p.id === sizePreset)
+    const requestedCpu = preset?.cpu ?? cpu
+    const requestedMemory = preset?.memory ?? memory
+    const requestedDisk = preset?.disk ?? disk
+    const nextCpu = limits.cpu == null ? requestedCpu : Math.min(requestedCpu, limits.cpu)
+    const nextMemory = limits.memory == null ? requestedMemory : Math.min(requestedMemory, limits.memory)
+    const nextDisk = limits.disk == null ? requestedDisk : Math.min(requestedDisk, limits.disk)
 
     if (nextCpu !== cpu) setCpu(nextCpu)
     if (nextMemory !== memory) setMemory(nextMemory)
     if (nextDisk !== disk) setDisk(nextDisk)
 
     setCapped((current) => ({
-      cpu: limits.cpu != null && (nextCpu !== cpu || (current.cpu && nextCpu >= limits.cpu)),
-      memory: limits.memory != null && (nextMemory !== memory || (current.memory && nextMemory >= limits.memory)),
-      disk: limits.disk != null && (nextDisk !== disk || (current.disk && nextDisk >= limits.disk)),
+      cpu: limits.cpu != null && (nextCpu !== requestedCpu || (current.cpu && nextCpu >= limits.cpu)),
+      memory:
+        limits.memory != null && (nextMemory !== requestedMemory || (current.memory && nextMemory >= limits.memory)),
+      disk: limits.disk != null && (nextDisk !== requestedDisk || (current.disk && nextDisk >= limits.disk)),
     }))
-  }, [open, refreshingLimits, cpu, memory, disk, limits.cpu, limits.memory, limits.disk])
+  }, [open, confirmedLimits, sizePreset, cpu, memory, disk, limits.cpu, limits.memory, limits.disk])
 
   // What the catalog already holds, as references that can be typed back in.
   // A curated image goes in under its short name — that is what the API
@@ -736,7 +729,6 @@ export const CreateBoxDialog = ({
   }
 
   const handleCreate = async () => {
-    if (refreshingLimits) return
     if (!selectedOrganization?.id) {
       toast.error('Select an organization to create a box.')
       return
@@ -870,12 +862,7 @@ export const CreateBoxDialog = ({
               content was ever these three numbers. What a box can do and what
               it costs is not an advanced concern; it gets the same visibility
               as Lifecycle and Volumes below. */}
-          <fieldset
-            disabled={refreshingLimits}
-            aria-busy={refreshingLimits}
-            aria-label="Box resources"
-            className="flex min-w-0 flex-col gap-[13px] border-t border-border pt-5"
-          >
+          <fieldset aria-label="Box resources" className="flex min-w-0 flex-col gap-[13px] border-t border-border pt-5">
             {/* Matches the sibling `▸ Lifecycle` / `▸ Volumes` treatment rather
                 than `ascii.SectionTitle`: inside this dialog the established
                 label scale is 10px/1.2px (Name, Image), and SectionTitle's
@@ -885,9 +872,13 @@ export const CreateBoxDialog = ({
               <span style={{ color: BRAND }}>▸</span> Size
             </div>
 
-            {refreshingLimits && (
+            {(limitsError || !confirmedLimits) && (
               <p role="status" className="font-mono text-meta text-muted-foreground">
-                Refreshing limits…
+                {limitsError
+                  ? confirmedLimits
+                    ? 'Could not refresh limits. Showing last known limits.'
+                    : 'Could not load limits. Limits are checked when you create.'
+                  : 'Limits are checked when you create.'}
               </p>
             )}
             <div role="group" aria-label="Size" className="grid grid-cols-2 gap-[6px] sm:grid-cols-4">
@@ -897,7 +888,7 @@ export const CreateBoxDialog = ({
                   selected={sizePreset === p.id}
                   aria-pressed={sizePreset === p.id}
                   onClick={() => applySizePreset(p.id)}
-                  className="px-2 py-[7px] text-[12px] disabled:cursor-wait disabled:opacity-50"
+                  className="px-2 py-[7px] text-[12px]"
                 >
                   {p.label}
                 </AsciiChip>
@@ -1110,12 +1101,7 @@ export const CreateBoxDialog = ({
             type="button"
             onClick={handleCreate}
             disabled={
-              refreshingLimits ||
-              submitting ||
-              !selectedOrganization?.id ||
-              !nameValid ||
-              Boolean(lifecycleError) ||
-              Boolean(mountError)
+              submitting || !selectedOrganization?.id || !nameValid || Boolean(lifecycleError) || Boolean(mountError)
             }
             className="bg-primary px-5 py-[11px] text-[13px] font-semibold text-primary-foreground transition-opacity hover:opacity-85 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/35 disabled:cursor-not-allowed disabled:opacity-50 sm:py-[10px]"
           >
