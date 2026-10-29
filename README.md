@@ -110,7 +110,7 @@ No code needed — one install, then run any OCI image from your terminal.
 
 ```console
 curl -fsSL https://sh.boxlite.ai | sh
-boxlite run python:slim python -c "print('Hello from BoxLite!')"
+boxlite run python:slim python -c 'print("Hello from BoxLite!")'
 ```
 
 Installs to `$HOME/.local/bin/boxlite`, runtime embedded — no extra setup. Alternatives (`cargo install boxlite-cli`, version pinning, verification) → [CLI reference](./docs/reference/cli/README.md#installation--verification).

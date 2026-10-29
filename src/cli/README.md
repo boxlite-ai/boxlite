@@ -91,7 +91,7 @@ cargo build --release -p boxlite-cli
 ### Run a one-off command
 
 ```bash
-boxlite run python:slim python -c "print('Hello from BoxLite!')"
+boxlite run python:slim python -c 'print("Hello from BoxLite!")'
 ```
 
 ### Run interactively with a TTY
