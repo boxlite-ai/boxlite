@@ -138,6 +138,8 @@ pub(crate) struct BoxImpl {
     pub(super) network_updates: tokio::sync::Mutex<()>,
     /// Serializes online configuration with shutdown on this handle.
     pub(super) configuration_updates: tokio::sync::Mutex<()>,
+    /// Serializes explicit and implicit boot admission on this handle.
+    boot_updates: tokio::sync::Mutex<()>,
 
     /// Event listeners (from runtime options).
     pub(crate) event_listeners: Vec<Arc<dyn EventListener>>,
@@ -201,6 +203,7 @@ impl BoxImpl {
             shutdown_token,
             network_updates: tokio::sync::Mutex::new(()),
             configuration_updates: tokio::sync::Mutex::new(()),
+            boot_updates: tokio::sync::Mutex::new(()),
             event_listeners: Vec::new(), // populated from runtime options
             live: OnceCell::new(),
             imported_shim: std::sync::Mutex::new(None),
@@ -305,6 +308,9 @@ impl BoxImpl {
     ///
     /// This is idempotent - calling start() on a Running box is a no-op.
     pub(crate) async fn start(&self) -> BoxliteResult<()> {
+        // Coalesce callers on this handle before taking the cross-process lock.
+        // Concurrent explicit/implicit starts still share container_start.
+        let _boot = self.boot_updates.lock().await;
         let persisted = self.runtime.box_manager.update_box(self.id())?;
         if matches!(persisted.status, BoxStatus::Configured | BoxStatus::Stopped) {
             super::operation::Reservation::provision(&self.runtime.layout, self.id())?;
@@ -1180,6 +1186,7 @@ impl BoxImpl {
     /// booting it is the restart. Only an *initialized* cell on a box that is no
     /// longer Running means the VM behind it is dead.
     pub(super) async fn ensure_booted(&self) -> BoxliteResult<&LiveState> {
+        let _boot = self.boot_updates.lock().await;
         let _reservation = self.reserve(super::operation::Action::Lifecycle).await?;
         self.ensure_booted_reserved().await
     }
@@ -1889,6 +1896,7 @@ mod tests {
         let (guest_session, server) = start_stub_guest(gate).await;
 
         let id = BoxIDMint::mint();
+        crate::litebox::operation::Reservation::provision(&runtime.layout, &id).unwrap();
         let config = BoxConfig {
             id: id.clone(),
             name: None,
@@ -2139,6 +2147,7 @@ mod tests {
         let pid = child.0.id();
 
         let id = BoxIDMint::mint();
+        crate::litebox::operation::Reservation::provision(&runtime.layout, &id).unwrap();
         let box_home = runtime.layout.boxes_dir().join(id.as_str());
         let config = BoxConfig {
             id: id.clone(),
@@ -2218,6 +2227,7 @@ mod tests {
         let pid = child.0.id();
 
         let id = BoxIDMint::mint();
+        crate::litebox::operation::Reservation::provision(&runtime.layout, &id).unwrap();
         let box_home = runtime.layout.boxes_dir().join(id.as_str());
         let config = BoxConfig {
             id: id.clone(),

@@ -19,7 +19,6 @@ async fn resize_rejects_invalid_bodies_missing_boxes_and_nonrunning_boxes() {
         boxes: RwLock::new(HashMap::new()),
         executions: RwLock::new(HashMap::new()),
         api_key: None,
-        host_paths: Default::default(),
         lifecycle: RwLock::new(HashMap::new()),
         last_activity: RwLock::new(HashMap::new()),
     });

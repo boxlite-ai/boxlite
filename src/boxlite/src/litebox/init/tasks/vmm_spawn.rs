@@ -109,7 +109,8 @@ impl PipelineTask<InitCtx> for VmmSpawnTask {
             build_config(&box_id, &inputs)
                 .await
                 .inspect_err(|e| log_task_error(&box_id, task_name, e))?;
-        let ceiling = cpu_quota_supported(&inputs.options).then(ResourceCeiling::detect);
+        let ceiling = cpu_quota_supported(&inputs.options)
+            .then(|| ResourceCeiling::detect().for_options(&inputs.options));
         let resources = boot_resources(&inputs.options, inputs.resources, ceiling);
         instance_spec.cpus = Some(resources.cpus);
         instance_spec.max_cpus = Some(resources.max_cpus);
@@ -916,21 +917,24 @@ mod tests {
             }
             other => panic!("unexpected guest rootfs {other:?}"),
         }
-        let checkpoint = spec.checkpoint.as_ref().unwrap();
-        assert!(matches!(checkpoint.start, CheckpointStart::Cold));
+        let owner = cfg!(all(target_os = "linux", target_arch = "x86_64"));
+        assert_eq!(spec.checkpoint.is_some(), owner);
+        if let Some(checkpoint) = &spec.checkpoint {
+            assert!(matches!(checkpoint.start, CheckpointStart::Cold));
+        }
 
         // A box in checkpoint owner mode mounts every share through a DAX window.
-        assert!(
-            spec.fs_shares
-                .shares()
-                .iter()
-                .all(|share| share.dax_window == crate::vmm::checkpoint::DAX_WINDOW_BYTES)
-        );
+        assert!(spec.fs_shares.shares().iter().all(|share| share.dax_window
+            == if owner {
+                crate::vmm::checkpoint::DAX_WINDOW_BYTES
+            } else {
+                0
+            }));
         let mounts = volume_mgr.build_guest_mounts();
         assert!(!mounts.is_empty());
         for mount in mounts {
             if let crate::portal::interfaces::VolumeConfig::Virtiofs { tag, dax, .. } = mount {
-                assert!(dax, "{tag} mounts without DAX");
+                assert_eq!(dax, owner, "{tag} DAX must match checkpoint owner mode");
             }
         }
     }

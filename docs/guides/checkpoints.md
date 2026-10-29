@@ -266,16 +266,16 @@ BOXLITE_CHECKPOINT_LOGS=/tmp/checkpoint-rest-logs \
   FILTER=checkpoint_rest_preserves_process_across_independent_homes
 ```
 
-The case uses independent runtime homes, prepares target volumes and exact boot
-bytes, removes source dependencies, and transfers the pair over HTTP. It checks
+The case uses independent runtime homes, prepares exact boot bytes, removes the
+source boot dependency, and transfers the pair over HTTP. It checks
 Paused import, explicit resume, original PID/marker/execution ID, guest file access,
 repeated export/import, cold start, bwrap and the VMM seccomp filter on every shim
 thread. The log directory also retains both `serve` processes’ stderr.
 
 ### Self-hosted server mount policy
 
-Checkpoint imports through `boxlite serve` apply the same `--host-path-root`
-policy as box creation: host volumes are disabled unless roots are configured,
-and each restored volume must be a direct child of an allowed root. HTTP
+Checkpoint imports through `boxlite serve` reject saved volume mounts before
+submitting restoration, matching the server's box-creation volume restriction.
+Keep guest data inside the container disk for REST transfers. HTTP
 transfers require current v2 path metadata; re-export older checkpoints before
 uploading them. Local imports retain their existing compatibility.

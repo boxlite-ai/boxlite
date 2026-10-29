@@ -42,7 +42,8 @@ mod default_runtime_dir;
 pub use agents::{Agent, AgentTurn, Agents};
 pub use litebox::{
     BoxConnection, BoxReader, BoxTunnel, BoxWriter, CheckpointDependencies, LiteBox,
-    ObjectDependency, ObjectReference, ShareDependency, SocketAddress, TunnelForwarder, TunnelOptions,
+    ObjectDependency, ObjectReference, ShareDependency, SocketAddress, TunnelForwarder,
+    TunnelOptions,
 };
 pub use portal::GuestSession;
 pub use runtime::{AuthHandle, BoxliteRuntime, ImageHandle, Principal};

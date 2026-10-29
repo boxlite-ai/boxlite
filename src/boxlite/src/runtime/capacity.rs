@@ -4,7 +4,8 @@
 //! [`ResourceCeiling`] is the smallest of the limits a [`HostProbe`] reports,
 //! following Kata's `default_maxvcpus` / `default_maxmemory` rule.
 
-use crate::runtime::constants::vm_defaults::GUEST_KERNEL_MAX_VCPUS;
+use crate::runtime::constants::vm_defaults::MAX_CPUS;
+use crate::runtime::options::BoxOptions;
 use boxlite_shared::{BoxliteError, BoxliteResult};
 
 /// Host limits that bound a box's resources.
@@ -31,7 +32,7 @@ impl ResourceCeiling {
     }
 
     pub(crate) fn from_probe(probe: &dyn HostProbe) -> Self {
-        let mut cpus = probe.cpus().min(u32::from(GUEST_KERNEL_MAX_VCPUS));
+        let mut cpus = probe.cpus();
         if let Some(hypervisor) = probe.hypervisor_max_vcpus() {
             cpus = cpus.min(hypervisor);
         }
@@ -39,6 +40,14 @@ impl ResourceCeiling {
             max_cpus: cpus.clamp(1, u32::from(u8::MAX)) as u8,
             max_memory_mib: probe.memory_mib().min(u64::from(u32::MAX)) as u32,
         }
+    }
+
+    /// Apply the bundled kernel's limit without restricting custom kernels.
+    pub(crate) fn for_options(mut self, options: &BoxOptions) -> Self {
+        if options.advanced.kernel.is_none() {
+            self.max_cpus = self.max_cpus.min(MAX_CPUS);
+        }
+        self
     }
 
     /// Reject a requested size that is zero or above the ceiling.
@@ -160,10 +169,27 @@ mod tests {
     }
 
     #[test]
+    fn custom_kernel_can_use_cpus_above_bundled_limit() {
+        let mut options = crate::BoxOptions {
+            cpus: Some(24),
+            ..Default::default()
+        };
+        options.advanced.kernel = Some(crate::experimental::custom_kernel::KernelOptions::new(
+            "/custom/vmlinux",
+        ));
+        options.validate_cpus().unwrap();
+        ceiling(64, 8192, Some(1024)).check(24, 1024).expect(
+            "a capable host must not impose the bundled kernel's CPU limit on a custom kernel",
+        );
+    }
+
+    #[test]
     fn guest_kernel_limit_bounds_large_hosts() {
         assert_eq!(
-            ceiling(128, 8192, Some(1024)).max_cpus,
-            GUEST_KERNEL_MAX_VCPUS
+            ceiling(128, 8192, Some(1024))
+                .for_options(&BoxOptions::default())
+                .max_cpus,
+            MAX_CPUS
         );
     }
 

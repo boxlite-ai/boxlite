@@ -183,7 +183,7 @@ describeIfDatabase('RaiseDefaultBoxLimits1793088000000 (integration, real Postgr
     expect(insert).toHaveBeenCalledWith(expect.objectContaining({ cpu: 16, mem: 32, disk: 100 }), undefined)
 
     for (const [overrides, error] of [
-      [{ cpus: 17 }, 'cpu 17 exceeds the per-box limit of 16'],
+      [{ cpus: 17 }, 'cpu 17 exceeds the guest kernel limit of 16'],
       [{ memory_mib: 33792 }, 'memory 33GB exceeds the per-box limit of 32GB'],
       [{ disk_size_gb: 101 }, 'disk 101GB exceeds the per-box limit of 100GB'],
     ] as const) {

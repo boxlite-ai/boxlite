@@ -483,6 +483,13 @@ impl RuntimeImpl {
         // Only a new box is held to the vCPU ceiling: reuse above ignores
         // general options, so a box persisted with more vCPUs stays reachable.
         options.validate_cpus()?;
+        let cpus = options.cpus.unwrap_or(DEFAULT_CPUS);
+        let memory_mib = options.memory_mib.unwrap_or(DEFAULT_MEMORY_MIB);
+        tokio::task::spawn_blocking(move || ResourceCeiling::detect().check(cpus, memory_mib))
+            .await
+            .map_err(|error| {
+                BoxliteError::Internal(format!("failed to join host capacity validation: {error}"))
+            })??;
 
         // Initialize box variables with defaults
         let (config, mut state) = self.init_box_variables(&options, name.clone());
@@ -1861,10 +1868,6 @@ async fn sanitize_local_options(
     tokio::task::spawn_blocking(move || {
         let mut options = options;
         options.sanitize()?;
-        ResourceCeiling::detect().check(
-            options.cpus.unwrap_or(DEFAULT_CPUS),
-            options.memory_mib.unwrap_or(DEFAULT_MEMORY_MIB),
-        )?;
         Ok(options)
     })
     .await
@@ -2179,7 +2182,10 @@ mod tests {
             );
         }
 
-        for cpus in [None, Some(1), Some(16)] {
+        let max_cpus = ResourceCeiling::detect()
+            .for_options(&BoxOptions::default())
+            .max_cpus;
+        for cpus in [None, Some(1), Some(max_cpus)] {
             let options = BoxOptions {
                 cpus,
                 ..Default::default()
@@ -2225,13 +2231,14 @@ mod tests {
         );
     }
 
-    /// A custom kernel may be built with a larger `CONFIG_NR_CPUS`, so the
-    /// bundled kernel's ceiling must not apply to it.
+    /// Custom kernels can use the host ceiling, even when it exceeds the
+    /// bundled kernel's limit. A fake large host covers that case in capacity tests.
     #[tokio::test]
-    async fn custom_kernel_is_not_bound_by_bundled_kernel_cpu_limit() {
+    async fn custom_kernel_can_use_the_host_cpu_ceiling() {
         let (runtime, _dir) = create_test_runtime();
+        let max_cpus = ResourceCeiling::detect().max_cpus;
         let mut options = BoxOptions {
-            cpus: Some(24),
+            cpus: Some(max_cpus),
             ..Default::default()
         };
         options.advanced.kernel = Some(KernelOptions::new("/custom/vmlinux"));
@@ -2239,7 +2246,7 @@ mod tests {
         runtime
             .create(options, None)
             .await
-            .expect("a custom kernel sets its own vCPU ceiling");
+            .expect("a custom kernel can use the host CPU ceiling");
     }
 
     /// Until the local runtime shares typed mounts, create refuses them rather
@@ -2366,8 +2373,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn local_option_validation_rejects_sizes_above_the_host_ceiling() {
-        let features = ExperimentalFeatures::default();
+    async fn local_create_rejects_sizes_above_the_host_ceiling() {
+        let (runtime, _dir) = create_test_runtime();
+        let local = LocalRuntime(Arc::clone(&runtime));
         for options in [
             BoxOptions {
                 cpus: Some(u8::MAX),
@@ -2378,12 +2386,13 @@ mod tests {
                 ..Default::default()
             },
         ] {
-            let error = sanitize_local_options(&features, options)
+            let error = RuntimeBackend::create(&local, options, None)
                 .await
-                .expect_err("a box larger than the host must be rejected");
+                .err()
+                .expect("a box larger than the host must be rejected");
             assert!(matches!(error, BoxliteError::InvalidArgument(_)), "{error}");
         }
-        sanitize_local_options(&features, BoxOptions::default())
+        RuntimeBackend::create(&local, BoxOptions::default(), None)
             .await
             .unwrap();
     }

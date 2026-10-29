@@ -46,7 +46,8 @@ Legacy boxes above 16 vCPUs still boot with a warning when using the bundled ker
 - Multiple boxes can exceed host CPU count
 
 **Spare vCPUs (Linux):** so a running box can later gain CPUs, a box boots
-with vCPUs up to the host ceiling but only `cpus` online (`maxcpus=` on the
+with vCPUs up to the host ceiling (at most 16 with the bundled kernel) but only
+`cpus` online (`maxcpus=` on the
 guest kernel command line). `nproc` and `/proc/cpuinfo` show the online CPUs;
 `/sys/devices/system/cpu/present` shows the ceiling.
 

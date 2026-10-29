@@ -413,7 +413,6 @@ const COMMAND_SCOPES: &[CommandScope] = &[
         children: CHECKPOINT_SCOPES,
     },
     CommandScope {
-
         name: "pull",
         globals: LOCAL_IMAGE_GLOBALS,
         children: &[],

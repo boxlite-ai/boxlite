@@ -1,7 +1,6 @@
 //! One explicit real-KVM check of the independent serve/client checkpoint path.
 #![cfg(all(target_os = "linux", target_arch = "x86_64"))]
 mod common;
-use boxlite::runtime::options::VolumeSpec;
 use boxlite::{
     AttachOptions, BoxCommand, BoxOptions, BoxStatus, BoxliteOptions, BoxliteRestOptions,
     BoxliteRuntime, CheckpointImportOptions, ExecStdout, LiteBox, PauseOptions,
@@ -136,9 +135,6 @@ async fn checkpoint_rest_preserves_process_across_independent_homes() {
     let target_home = boxlite_test_utils::home::PerTestBoxHome::isolated();
     assert_ne!(source_home.path, target_home.path);
     let storage = tempfile::tempdir().unwrap();
-    let volume = storage.path().join("volume");
-    std::fs::create_dir(&volume).unwrap();
-    std::fs::write(volume.join("normal"), "prepared-data").unwrap();
     let source_local = BoxliteRuntime::new(BoxliteOptions {
         home_dir: source_home.path.clone(),
         image_registries: boxlite_test_utils::test_registries(),
@@ -147,9 +143,8 @@ async fn checkpoint_rest_preserves_process_across_independent_homes() {
     .unwrap();
     let source = source_local.create(BoxOptions {
         memory_mib: Some(256), auto_delete: Some(0),
-        volumes: vec![VolumeSpec::bind_mount(volume.to_str().unwrap(), "/data")],
         entrypoint: Some(vec!["/bin/sh".into()]),
-        cmd: Some(vec!["-c".into(), "marker=$(cat /proc/sys/kernel/random/uuid); n=0; while :; do n=$((n+1)); echo $n > /data/counter; echo \"$$ $marker $n\"; sleep 0.1; done".into()]),
+        cmd: Some(vec!["-c".into(), "mkdir -p /data; echo prepared-data > /data/normal; marker=$(cat /proc/sys/kernel/random/uuid); n=0; while :; do n=$((n+1)); echo $n > /data/counter; echo \"$$ $marker $n\"; sleep 0.1; done".into()]),
         ..Default::default()
     }, Some("source".into())).await.unwrap();
     let source_id = source.id().clone();
@@ -192,11 +187,7 @@ async fn checkpoint_rest_preserves_process_across_independent_homes() {
     drop(seed);
     drop(target_local);
     let source_server = ServeChild::start_in(source_home, &[], None);
-    let target_server = ServeChild::start_in(
-        target_home,
-        &["--host-path-root", storage.path().to_str().unwrap()],
-        None,
-    );
+    let target_server = ServeChild::start_in(target_home, &[], None);
     let source_rt = BoxliteRuntime::rest(BoxliteRestOptions::new(source_server.url())).unwrap();
     let target_rt = BoxliteRuntime::rest(BoxliteRestOptions::new(target_server.url())).unwrap();
     let source = source_rt.get(source_id.as_str()).await.unwrap().unwrap();
@@ -214,16 +205,12 @@ async fn checkpoint_rest_preserves_process_across_independent_homes() {
         &source,
         source.info().await.unwrap().pid.unwrap(),
     );
+    let cut: u64 = run(&source, "cat /data/counter").await.parse().unwrap();
     source
         .pause(PauseOptions {
             host_writers_stopped: true,
         })
         .await
-        .unwrap();
-    let cut: u64 = std::fs::read_to_string(volume.join("counter"))
-        .unwrap()
-        .trim()
-        .parse()
         .unwrap();
     let checkpoint = storage.path().join("download");
     source.export_checkpoint(&checkpoint).await.unwrap();
@@ -243,22 +230,6 @@ async fn checkpoint_rest_preserves_process_across_independent_homes() {
     let source_boot = dependencies.boot_disk_path.unwrap();
     std::fs::copy(&source_boot, &target_boot).unwrap();
     std::fs::remove_file(source_boot).unwrap();
-    std::fs::rename(&volume, storage.path().join("old-volume")).unwrap();
-    std::fs::create_dir(&volume).unwrap();
-    for name in ["normal", "counter"] {
-        std::fs::copy(
-            storage.path().join("old-volume").join(name),
-            volume.join(name),
-        )
-        .unwrap();
-    }
-    use std::os::unix::fs::MetadataExt;
-    assert_ne!(
-        std::fs::metadata(&volume).unwrap().ino(),
-        std::fs::metadata(storage.path().join("old-volume"))
-            .unwrap()
-            .ino()
-    );
 
     let restored = target_rt
         .import_checkpoint(

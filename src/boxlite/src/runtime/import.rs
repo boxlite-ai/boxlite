@@ -570,12 +570,11 @@ mod tests {
             options_from_manifest(&v3_manifest(options), ArchiveImportPolicy::UntrustedRemote)
                 .unwrap();
 
-        // Everything but the file-size ceiling is the server default; that one
-        // is derived from the box's own disk (#1152), so it is the default's
-        // stale 1 GiB that must NOT come back.
-        let mut expected = SecurityOptions::default();
-        expected.resource_limits.max_file_size = Some(Bytes::from_gib(20).as_bytes());
-        assert_eq!(resolved.advanced.security, expected);
+        // Server defaults also resolve the disk-derived file-size ceiling and
+        // the descriptor budget required by the selected checkpoint backend.
+        let mut expected = BoxOptions::default();
+        expected.sanitize().unwrap();
+        assert_eq!(resolved.advanced.security, expected.advanced.security);
     }
 
     /// The server-default reset must not put the 1 GiB ceiling back: an

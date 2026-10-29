@@ -184,7 +184,8 @@ async fn fixture_with_container(started: bool) -> Fixture {
     };
     let mut state = BoxState::new();
     state.status = BoxStatus::Running;
-    state.pid = Some(std::process::id());
+    crate::litebox::operation::Reservation::provision(&runtime.layout, &config.id).unwrap();
+    runtime.box_manager.add_box(&config, &state).unwrap();
     let backend = Arc::new(BoxImpl::new(
         config,
         state,
@@ -549,6 +550,11 @@ async fn ssh_configure_shutdown_cancels_container_start() {
 async fn ssh_spent_and_cancelled_handles_send_nothing() {
     let f = fixture().await;
     f.backend.state.write().status = BoxStatus::Stopped;
+    f.backend
+        .runtime
+        .box_manager
+        .save_box(f.backend.id(), &f.backend.state.read())
+        .unwrap();
     for operation in 0..3 {
         assert!(matches!(
             operate(f.ssh.clone(), operation).await,
@@ -556,6 +562,11 @@ async fn ssh_spent_and_cancelled_handles_send_nothing() {
         ));
     }
     f.backend.state.write().status = BoxStatus::Running;
+    f.backend
+        .runtime
+        .box_manager
+        .save_box(f.backend.id(), &f.backend.state.read())
+        .unwrap();
     f.backend.shutdown_token.cancel();
     for operation in 0..3 {
         let error = operate(f.ssh.clone(), operation).await.unwrap_err();

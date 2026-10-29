@@ -92,6 +92,7 @@ pub(crate) async fn import_checkpoint(
     let resources = application.resources;
     pair::validate_resources(resources, &pair.dependencies)?;
     crate::runtime::capacity::ResourceCeiling::detect()
+        .for_options(&box_options)
         .check(resources.max_cpus, resources.max_memory_mib)?;
     let container_id = ContainerID::parse(&application.guest.container_id)
         .ok_or_else(|| invalid("invalid saved container ID"))?;

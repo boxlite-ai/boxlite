@@ -70,10 +70,6 @@ pub mod vm_defaults {
     /// Default memory in MiB allocated to a Box
     pub const DEFAULT_MEMORY_MIB: u32 = 1024;
 
-    /// `CONFIG_NR_CPUS` of the bundled libkrunfw guest kernel; keep in sync
-    /// with `config-libkrunfw_{x86_64,aarch64}` when bumping libkrunfw.
-    pub const GUEST_KERNEL_MAX_VCPUS: u8 = 16;
-
     /// Default disk size in GB for the container rootfs (sparse, grows as needed)
     pub const DEFAULT_DISK_SIZE_GB: u64 = 10;
 }

@@ -567,12 +567,24 @@ mod tests {
         let server = tokio::spawn(async move {
             let mut requests = Vec::new();
             for (status, body) in replies {
-                let (mut socket, _) = listener.accept().await.unwrap();
-                let mut headers = Vec::new();
-                while !headers.ends_with(b"\r\n\r\n") {
-                    headers.push(socket.read_u8().await.unwrap());
-                }
-                let request = String::from_utf8(headers).unwrap();
+                let (mut socket, request) = loop {
+                    let (mut socket, _) = listener.accept().await.unwrap();
+                    let mut headers = Vec::new();
+                    while !headers.ends_with(b"\r\n\r\n") {
+                        headers.push(socket.read_u8().await.unwrap());
+                    }
+                    let request = String::from_utf8(headers).unwrap();
+                    // Exec starts an independent attach pump. Its WebSocket
+                    // request must not consume the next REST config response.
+                    if request.to_ascii_lowercase().contains("upgrade: websocket") {
+                        socket
+                            .write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                            .await
+                            .unwrap();
+                        continue;
+                    }
+                    break (socket, request);
+                };
                 let length = request
                     .lines()
                     .find_map(|line| {

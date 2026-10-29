@@ -323,18 +323,35 @@ impl BoxImpl {
     /// leave a submitted memory target progressing beyond its persisted size.
     pub(super) async fn checkpoint_resources(&self) -> BoxliteResult<crate::BoxResources> {
         #[cfg_attr(not(target_os = "linux"), allow(unused_mut))]
-        let mut resources = self.runtime.box_manager.update_box(self.id())?.resources
-            .ok_or_else(|| BoxliteError::Unsupported("restart this box before checkpointing its allocation".into()))?;
+        let mut resources = self
+            .runtime
+            .box_manager
+            .update_box(self.id())?
+            .resources
+            .ok_or_else(|| {
+                BoxliteError::Unsupported(
+                    "restart this box before checkpointing its allocation".into(),
+                )
+            })?;
         #[cfg(target_os = "linux")]
         if self.layout.sockets().memory_sock().exists() {
-            let status = crate::vmm::memory_control::request(&self.layout.sockets().memory_sock(), 0).await?;
-            if status.request_error != 0 || status.mapped_mib < resources.memory_mib
-                || status.mapped_mib > status.max_mib || status.plugged_mib > status.mapped_mib {
-                return Err(BoxliteError::Engine("checkpoint memory allocation is inconsistent".into()));
+            let status =
+                crate::vmm::memory_control::request(&self.layout.sockets().memory_sock(), 0)
+                    .await?;
+            if status.request_error != 0
+                || status.mapped_mib < resources.memory_mib
+                || status.mapped_mib > status.max_mib
+                || status.plugged_mib > status.mapped_mib
+            {
+                return Err(BoxliteError::Engine(
+                    "checkpoint memory allocation is inconsistent".into(),
+                ));
             }
             resources.memory_mib = status.mapped_mib;
             resources.max_memory_mib = status.max_mib;
-            self.runtime.box_manager.save_resources(self.id(), &resources)?;
+            self.runtime
+                .box_manager
+                .save_resources(self.id(), &resources)?;
             self.state.write().resources = Some(resources);
         }
         Ok(resources)
@@ -696,6 +713,12 @@ mod tests {
             };
             let mut state = BoxState::new();
             state.status = status;
+            state.resources = Some(crate::BoxResources {
+                cpus: 1,
+                max_cpus: 1,
+                memory_mib: 1024,
+                max_memory_mib: 1024,
+            });
             state.start_mode =
                 Some(crate::vmm::checkpoint::support::StartMode::Owner { protocol: 2 });
             crate::litebox::operation::Reservation::provision(&runtime.layout, &id).unwrap();
