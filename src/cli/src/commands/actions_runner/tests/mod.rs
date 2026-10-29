@@ -12,6 +12,7 @@ use super::{
 };
 use crate::cli::{Commands, try_parse_from};
 
+/// Helper function to parse actions-runner CLI arguments into commands.
 fn parse(args: &[&str]) -> Result<ActionsRunnerCommand, clap::Error> {
     let cli = try_parse_from(["boxlite", "actions-runner"].iter().chain(args))?;
     let Commands::ActionsRunner(runner_args) = cli.command else {
@@ -20,6 +21,7 @@ fn parse(args: &[&str]) -> Result<ActionsRunnerCommand, clap::Error> {
     Ok(runner_args.command)
 }
 
+/// Tests that `start` parses minimal required arguments with expected default settings.
 #[test]
 fn start_runner_parses_minimal_arguments_with_defaults() {
     let cmd = parse(&[
@@ -43,6 +45,7 @@ fn start_runner_parses_minimal_arguments_with_defaults() {
     assert_eq!(start_args.labels, vec!["boxlite", "self-hosted", "linux"]);
 }
 
+/// Tests that `start` correctly accepts user-provided flag overrides.
 #[test]
 fn start_runner_accepts_overrides() {
     let cmd = parse(&[
@@ -72,12 +75,14 @@ fn start_runner_accepts_overrides() {
     assert_eq!(start_args.idle_timeout, 120);
 }
 
+/// Tests that `start` returns an error when the required URL argument is missing.
 #[test]
 fn start_runner_requires_url() {
     let error = parse(&["start", "--token", "tok"]).unwrap_err();
     assert_eq!(error.kind(), ErrorKind::MissingRequiredArgument);
 }
 
+/// Tests that `start` returns an error when the required registration token is missing.
 #[test]
 fn start_runner_requires_token() {
     // Ensure ambient env doesn't satisfy token for this test
@@ -86,6 +91,7 @@ fn start_runner_requires_token() {
     assert_eq!(error.kind(), ErrorKind::MissingRequiredArgument);
 }
 
+/// Tests that `RunnerSession` validates empty URL or token inputs and returns an error.
 #[test]
 fn runner_session_validates_empty_inputs() {
     let args = StartRunnerArgs {
@@ -113,6 +119,7 @@ fn runner_session_validates_empty_inputs() {
     assert!(RunnerSession::new(&args_empty_token).is_err());
 }
 
+/// Tests the complete lifecycle of a runner session in the warm pool, including idle transitions and timeout expiration.
 #[test]
 fn runner_session_warm_pool_lifecycle() {
     let args = StartRunnerArgs {
@@ -160,6 +167,7 @@ fn runner_session_warm_pool_lifecycle() {
     assert_eq!(session.state, RunnerLifecycleState::Expired);
 }
 
+/// Tests that the generated bootstrap script contains all required runner setup commands, exports, and directives in proper order.
 #[test]
 fn bootstrap_script_contains_required_directives() {
     let args = StartRunnerArgs {
@@ -198,6 +206,7 @@ fn bootstrap_script_contains_required_directives() {
     assert!(!script[config_pos..run_pos].contains("||"));
 }
 
+/// Tests runner sizing tiers and their corresponding vCPU and memory hardware specifications.
 #[test]
 fn runner_size_parsing_and_hardware_specifications() {
     assert_eq!(RunnerSize::parse("small"), Some(RunnerSize::Small));
@@ -228,6 +237,7 @@ fn runner_size_parsing_and_hardware_specifications() {
     assert_eq!(RunnerSize::parse("unknown-tier"), None);
 }
 
+/// Tests parsing runner label specifications with slash options (sizing, from image, debug mode).
 #[test]
 fn runner_label_spec_parsing_with_slash_options() {
     // 1. Standard default size
@@ -255,6 +265,7 @@ fn runner_label_spec_parsing_with_slash_options() {
     ));
 }
 
+/// Tests normalizing different Git remote URL formats into clean GitHub repository URLs.
 #[test]
 fn normalize_github_repo_url_variations() {
     assert_eq!(
@@ -276,6 +287,7 @@ fn normalize_github_repo_url_variations() {
     assert_eq!(normalize_github_repo_url("not-a-github-url"), None);
 }
 
+/// Tests argument parsing for the `connect` subcommand.
 #[test]
 fn connect_command_parses_arguments() {
     let cmd = parse(&[
@@ -306,6 +318,7 @@ fn connect_command_parses_arguments() {
     assert!(connect_args.debug_on_failure);
 }
 
+/// Tests argument parsing for the `run` subcommand.
 #[test]
 fn run_command_parses_arguments() {
     let cmd = parse(&[
