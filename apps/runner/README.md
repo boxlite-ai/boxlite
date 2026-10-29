@@ -25,9 +25,13 @@ saved boot configuration. See [cloud kernel operations](../infra/docs/runners.md
 ## Nested virtualization
 
 Set `BOXLITE_EXPERIMENTAL=nested-virtualization` on the **Runner process** to
-enable nesting for newly created boxes. The Runner passes both the runtime
-authorization and the per-box option through the Go/C SDK; setting a guest's
-environment does not enable this capability. Empty or unset disables it.
+authorize nesting. New boxes default to **disabled**, even with this environment
+variable set. A REST create request opts in with
+`"advanced":{"nested_virtualization":true}`; the control plane persists the
+choice and sends `nestedVirtualization` in the Runner create payload.
+The Runner passes runtime authorization and the requested per-box option through
+the Go/C SDK. An unauthorized enabled request fails before mounting volumes or
+acquiring caches. Setting a guest's environment grants no authorization.
 Comma-separated features are validated at startup and compose with
 `BOXLITE_KERNEL_PATH` without enabling privileged mode.
 
@@ -36,6 +40,26 @@ against a box created without nesting fails when nesting is requested; create
 a new box to test it. The host and guest kernel must support nested virtualization.
 Cloud stages can deliver the setting through
 [`BOXLITE_RUNNER_ENV`](../infra/mdeploy/README.md#runner-process-environment).
+
+Upgrade every Runner before activating the new API: older Runners ignore the
+per-box field and apply their environment-derived setting instead. Existing
+owned boxes retain their saved configuration. Legacy unassigned warm-pool boxes
+have an unknown setting; the API excludes them from claims and retires them
+through its minute-based pool cleanup. They occupy pool capacity until deletion
+finishes, then default-off replacements can be created. A failed deletion delays
+replenishment and is reported by the normal lifecycle machinery.
+
+`nested_virtualization_enabled` in `/v1/config` advertises request support, not
+availability on every host. Runtime authorization and hardware/kernel support
+are still required. Native REST `get_or_create` refuses an enabled request when
+the name already exists because the response cannot verify saved advanced
+options; use a fresh name. Guest `privileged` is a separate option, needed when
+the workload requires writable guest kernel mounts such as cgroups.
+
+Enabling the capability and running an additional VM are different costs.
+Nested workloads can incur extra virtualization and I/O overhead, depending on
+hardware and workload; see [GCP's performance discussion](https://docs.cloud.google.com/compute/docs/instances/nested-virtualization/overview).
+BoxLite has no measured overhead guarantee for this switch alone.
 
 For the system-wide context (CDN, load balancers, where the runner fits in
 the request path), see [`apps/README.md`](../README.md).

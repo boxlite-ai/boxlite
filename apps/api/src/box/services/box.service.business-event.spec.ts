@@ -10,6 +10,7 @@ import { RunnerState } from '../enums/runner-state.enum'
 import { recordBusinessEvent } from '../../common/utils/business-event.util'
 import { Context } from '../../common/context/context'
 import { PlatformReason } from '../../common/context/platform-reason.enum'
+import { BOX_WARM_POOL_UNASSIGNED_ORGANIZATION } from '../constants/box.constants'
 
 jest.mock('../../common/utils/business-event.util', () => ({ recordBusinessEvent: jest.fn() }))
 
@@ -64,6 +65,15 @@ const requested = (name: string) =>
 describe('BoxService business event actor', () => {
   beforeEach(() => jest.mocked(recordBusinessEvent).mockClear())
 
+  it.each([undefined, false, true])('persists nested virtualization choice %s before dispatch', async (choice) => {
+    const service = makeCreateService()
+
+    await service.create({ image: 'base', nestedVirtualization: choice } as any, { id: 'org-1' } as any, Context.user())
+
+    const persisted = (service as any).boxRepository.insert.mock.calls[0][0]
+    expect(persisted.nestedVirtualization).toBe(choice ?? false)
+  })
+
   it('records the caller context on box.create', async () => {
     const service = makeCreateService()
 
@@ -96,9 +106,13 @@ describe('BoxService business event actor', () => {
     })
     const destroy = jest.spyOn(service, 'destroy').mockResolvedValue(startedBox as any)
 
-    await (service as any).handleUnschedulableRunners()
+    await (service as any).retireUnusableWarmPoolBoxes()
 
-    expect(destroy).toHaveBeenCalledWith('box-1', undefined, Context.platform(PlatformReason.WARM_POOL))
+    expect(destroy).toHaveBeenCalledWith(
+      'box-1',
+      BOX_WARM_POOL_UNASSIGNED_ORGANIZATION,
+      Context.platform(PlatformReason.WARM_POOL),
+    )
   })
 
   it('stops a suspended organization box as the platform, for the suspension', async () => {

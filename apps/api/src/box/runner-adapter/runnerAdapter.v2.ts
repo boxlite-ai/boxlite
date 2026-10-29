@@ -146,6 +146,7 @@ export class RunnerAdapterV2 implements RunnerAdapter {
       env: box.env,
       runAsUser: box.runAsUser,
       privileged: box.privileged,
+      nestedVirtualization: box.nestedVirtualization ?? false,
       workingDir: box.workingDir,
       entrypoint: box.entrypoint,
       cmd: box.cmd,

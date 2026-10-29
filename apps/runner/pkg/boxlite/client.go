@@ -37,14 +37,14 @@ type PulledImage struct {
 // Client wraps the BoxLite Go SDK to provide the same interface as the Docker client.
 // It manages VMs instead of containers, providing hardware-level isolation.
 type Client struct {
-	runtime              *boxlite.Runtime
-	logger               *slog.Logger
-	homeDir              string
-	kernelPath           string
-	nestedVirtualization bool
-	cacheMu              sync.Mutex
-	mu                   sync.RWMutex
-	boxes                map[string]*boxlite.Box
+	runtime                     *boxlite.Runtime
+	logger                      *slog.Logger
+	homeDir                     string
+	kernelPath                  string
+	nestedVirtualizationAllowed bool
+	cacheMu                     sync.Mutex
+	mu                          sync.RWMutex
+	boxes                       map[string]*boxlite.Box
 	// What each freshly created box's image resolved to, until it has been
 	// reported once. Held in memory only: an entry lost to a runner restart is
 	// simply gone, and the control plane re-resolves on the next create.
@@ -357,19 +357,19 @@ func NewClient(ctx context.Context, config ClientConfig) (*Client, error) {
 	}
 
 	return &Client{
-		runtime:              rt,
-		logger:               logger,
-		homeDir:              homeDir,
-		kernelPath:           config.KernelPath,
-		nestedVirtualization: slices.Contains(features, "nested-virtualization"),
-		boxes:                make(map[string]*boxlite.Box),
-		pendingImageReports:  make(map[string]PulledImage),
-		awsRegion:            config.AWSRegion,
-		awsEndpointUrl:       config.AWSEndpointUrl,
-		awsAccessKeyId:       config.AWSAccessKeyId,
-		awsSecretAccessKey:   config.AWSSecretAccessKey,
-		volumeBackend:        config.VolumeStorageBackend,
-		volumeMutexes:        make(map[string]*sync.Mutex),
+		runtime:                     rt,
+		logger:                      logger,
+		homeDir:                     homeDir,
+		kernelPath:                  config.KernelPath,
+		nestedVirtualizationAllowed: slices.Contains(features, "nested-virtualization"),
+		boxes:                       make(map[string]*boxlite.Box),
+		pendingImageReports:         make(map[string]PulledImage),
+		awsRegion:                   config.AWSRegion,
+		awsEndpointUrl:              config.AWSEndpointUrl,
+		awsAccessKeyId:              config.AWSAccessKeyId,
+		awsSecretAccessKey:          config.AWSSecretAccessKey,
+		volumeBackend:               config.VolumeStorageBackend,
+		volumeMutexes:               make(map[string]*sync.Mutex),
 		volumeCleanup: volumeCleanupConfig{
 			interval:        config.VolumeCleanupInterval,
 			dryRun:          config.VolumeCleanupDryRun,
@@ -431,6 +431,9 @@ func (c *Client) Close() error {
 // Create creates a new box (VM) from the given image and configuration.
 // Returns the box ID and runtime version.
 func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, string, error) {
+	if boxDto.NestedVirtualization && !c.nestedVirtualizationAllowed {
+		return "", "", fmt.Errorf("nested virtualization requires BOXLITE_EXPERIMENTAL=nested-virtualization on the Runner")
+	}
 	// Before any side effect: a request without a policy must not leave
 	// volume mounts or a box behind.
 	network, err := networkSpec(boxDto)
@@ -488,13 +491,13 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 		opts = append(opts, boxlite.WithUser(boxDto.RunAsUser))
 	}
 
-	if boxDto.Privileged || c.kernelPath != "" || c.nestedVirtualization {
+	if boxDto.Privileged || c.kernelPath != "" || boxDto.NestedVirtualization {
 		advanced, advancedErr := boxlite.NewAdvancedBoxOptions()
 		if advancedErr != nil {
 			return "", "", advancedErr
 		}
 		defer advanced.Close()
-		if advancedErr = advanced.SetNestedVirtualization(c.nestedVirtualization); advancedErr != nil {
+		if advancedErr = advanced.SetNestedVirtualization(boxDto.NestedVirtualization); advancedErr != nil {
 			return "", "", fmt.Errorf("set nested virtualization: %w", advancedErr)
 		}
 		if advancedErr = advanced.SetPrivileged(boxDto.Privileged); advancedErr != nil {

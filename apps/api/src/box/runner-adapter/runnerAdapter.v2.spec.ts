@@ -10,6 +10,23 @@ import { BoxSnapshot } from '../entities/box-snapshot.entity'
 import { BoxSnapshotState } from '../enums/box-snapshot-state.enum'
 
 describe('RunnerAdapterV2 createBox', () => {
+  it.each([undefined, null, false, true])('forwards the nested virtualization choice %s', async (choice) => {
+    const jobs = { createJob: jest.fn().mockResolvedValue(undefined) }
+    const adapter = new RunnerAdapterV2({} as any, {} as any, jobs as any)
+    await adapter.init({ id: 'runner-1' } as any)
+
+    await adapter.createBox({ id: 'box-1', nestedVirtualization: choice } as any, 'base')
+
+    expect(jobs.createJob).toHaveBeenCalledWith(
+      null,
+      JobType.CREATE_BOX,
+      'runner-1',
+      ResourceType.BOX,
+      'box-1',
+      expect.objectContaining({ nestedVirtualization: choice ?? false }),
+    )
+  })
+
   it('resolves a child box archive from a ready snapshot in its organization', async () => {
     const findOneByOrFail = jest.fn().mockResolvedValue({ archiveUri: 'gs://snapshots/org-1/snap-1.tar.zst' })
     const jobs = { createJob: jest.fn() }
