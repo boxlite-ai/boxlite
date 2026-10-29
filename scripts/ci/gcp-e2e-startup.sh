@@ -46,7 +46,7 @@ fi
 if [ -f .runner ]; then
     ./svc.sh stop || true
     ./svc.sh uninstall || true
-    rm -f .runner .credentials .credentials_rsaparams
+    rm -f .runner .runner_migrated .credentials .credentials_rsaparams
 fi
 
 RUNNER_ALLOW_RUNASROOT=1 ./config.sh \
