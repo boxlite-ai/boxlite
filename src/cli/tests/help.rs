@@ -33,15 +33,23 @@ fn declares_option(help: &str, option: &str) -> bool {
 }
 
 #[test]
-fn command_help_ssh_advertises_run() {
+fn command_help_ssh_only_advertises_separate_operations() {
     for flag in ["--help", "-h"] {
         let help = help_for(&["ssh"], flag);
         assert!(
-            help.lines()
+            !help
+                .lines()
                 .any(|line| line.split_whitespace().next() == Some("run")),
             "{help}"
         );
         assert!(!help.contains("configure-and-forward"), "{help}");
+        for name in ["configure", "status", "disable", "forward"] {
+            assert!(
+                help.lines()
+                    .any(|line| line.split_whitespace().next() == Some(name)),
+                "{help}"
+            );
+        }
     }
 }
 
@@ -232,17 +240,6 @@ fn command_help_only_advertises_meaningful_global_options() {
         ),
         (
             &["ssh", "disable"],
-            &[
-                "--debug",
-                "--home",
-                "--config",
-                "--url",
-                "--profile",
-                "--path-prefix",
-            ],
-        ),
-        (
-            &["ssh", "run"],
             &[
                 "--debug",
                 "--home",

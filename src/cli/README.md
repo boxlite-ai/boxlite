@@ -208,16 +208,17 @@ for runtime support, connection lifetime and persistence.
 
 ```bash
 boxlite run -d --name dev alpine:latest tail -f /dev/null
-boxlite ssh run dev --host-key ./host_key --login alice \
+boxlite ssh configure dev --host-key ./host_key --login alice \
   --authorized-key ~/.ssh/id_ed25519.pub
+boxlite ssh forward dev
 # stdout: tcp://127.0.0.1:52811   stderr: host key, fingerprint, connect hint
 ssh -p 52811 -l alice 127.0.0.1
 ```
 
-`boxlite ssh run` configures SSH once and forwards until Ctrl-C. `configure` and
-`forward` remain independent: `configure` replaces the configuration and prints
-`SshStatus` JSON; `forward` forwards to SSH that is already enabled. `status` and
-`disable` also print `SshStatus` JSON. The CLI never generates keys.
+`boxlite ssh configure` replaces the configuration and prints `SshStatus` JSON.
+Then `forward` opens a local listener until Ctrl-C, leaving the configuration and
+generation unchanged. `status` and `disable` also print `SshStatus` JSON.
+The CLI never generates keys.
 See [`boxlite ssh`](../../docs/reference/cli/README.md#boxlite-ssh) for flags and the
 [SSH guide](../../docs/guides/ssh.md#cli) for lifecycle rules.
 

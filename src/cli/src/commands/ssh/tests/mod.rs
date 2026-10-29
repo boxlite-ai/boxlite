@@ -34,7 +34,6 @@ fn write(dir: &Path, name: &str, contents: &str) -> String {
 fn load(args: &[&str]) -> anyhow::Result<boxlite::SshConfig> {
     match parse(args).expect("parse") {
         SshCommand::Configure(configure) => configure.source.load(),
-        SshCommand::Run(command) => command.source.load(),
         other => panic!("no configuration source in {other:?}"),
     }
 }
@@ -44,10 +43,9 @@ fn load(args: &[&str]) -> anyhow::Result<boxlite::SshConfig> {
 // ============================================================================
 
 #[test]
-fn run_accepts_existing_configuration_and_listener_options() {
+fn configure_accepts_configuration_options() {
     for options in [
         vec!["--ssh-config", "c.json"],
-        vec!["--ssh-config", "c.json", "--listen", "unix:/tmp/s"],
         vec![
             "--host-key",
             "h",
@@ -59,39 +57,28 @@ fn run_accepts_existing_configuration_and_listener_options() {
             "b.pub",
             "--guest-listen",
             "0.0.0.0:0",
-            "--listen",
-            "127.0.0.1:2222",
         ],
     ] {
-        let args = [vec!["run", "box"], options].concat();
+        let args = [vec!["configure", "box"], options].concat();
         let parsed = parse(&args);
         assert!(parsed.is_ok(), "{args:?}: {parsed:?}");
     }
 }
 
 #[test]
-fn run_preserves_configuration_and_listener_constraints() {
-    for (options, kind) in [
-        (vec![], ErrorKind::MissingRequiredArgument),
-        (
-            vec!["--ssh-config", "c.json", "--login", "alice"],
-            ErrorKind::ArgumentConflict,
-        ),
-        (
-            vec!["--ssh-config", "c.json", "--listen", "unix:relative"],
-            ErrorKind::ValueValidation,
-        ),
-    ] {
-        let args = [vec!["run", "box"], options].concat();
-        assert_eq!(parse(&args).unwrap_err().kind(), kind, "{args:?}");
+fn removed_combined_command_is_not_an_alias() {
+    for name in ["configure-and-forward", "run"] {
+        let parsed = parse(&[name, "box", "--ssh-config", "c.json"]);
+        assert!(parsed.is_err(), "removed command was accepted: {parsed:?}");
+        assert_eq!(parsed.unwrap_err().kind(), ErrorKind::InvalidSubcommand);
     }
 }
 
 #[test]
-fn removed_combined_command_is_not_an_alias() {
-    let parsed = parse(&["configure-and-forward", "box", "--ssh-config", "c.json"]);
-    assert!(parsed.is_err(), "removed command was accepted: {parsed:?}");
-    assert_eq!(parsed.unwrap_err().kind(), ErrorKind::InvalidSubcommand);
+fn top_level_run_still_accepts_a_box_command() {
+    let cli = try_parse_from(["boxlite", "run", "-d", "alpine:latest", "sleep", "600"])
+        .expect("top-level run remains available");
+    assert!(matches!(cli.command, Commands::Run(_)));
 }
 
 #[test]
@@ -100,7 +87,7 @@ fn configuration_sources_are_required_and_exclusive() {
     assert_eq!(missing.kind(), ErrorKind::MissingRequiredArgument);
 
     let mixed = parse(&[
-        "run",
+        "configure",
         "box",
         "--ssh-config",
         "c.json",
@@ -134,11 +121,7 @@ fn subcommands_are_named_for_their_effect() {
         .get_subcommands()
         .map(|command| command.get_name().to_string())
         .collect();
-    assert_eq!(names, ["configure", "status", "disable", "run", "forward"]);
-    assert!(matches!(
-        parse(&["run", "box", "--ssh-config", "c.json"]),
-        Ok(SshCommand::Run(_))
-    ));
+    assert_eq!(names, ["configure", "status", "disable", "forward"]);
     assert!(matches!(
         parse(&["forward", "box"]),
         Ok(SshCommand::Forward(_))
@@ -146,24 +129,20 @@ fn subcommands_are_named_for_their_effect() {
 }
 
 #[test]
-fn forwarding_commands_default_to_an_ephemeral_loopback_listener() {
+fn forward_accepts_listeners_and_defaults_to_ephemeral_loopback() {
     let SshCommand::Forward(forward) = parse(&["forward", "box"]).unwrap() else {
         panic!("expected forward");
     };
     assert_eq!(forward.listen.to_string(), "tcp://127.0.0.1:0");
 
-    let SshCommand::Run(run) = parse(&[
-        "run",
-        "box",
-        "--ssh-config",
-        "c.json",
-        "--listen",
-        "unix:/tmp/s",
-    ])
-    .unwrap() else {
-        panic!("expected run");
-    };
-    assert_eq!(run.listen.to_string(), "unix:/tmp/s");
+    for listen in ["unix:/tmp/s", "127.0.0.1:2222"] {
+        let SshCommand::Forward(forward) = parse(&["forward", "box", "--listen", listen]).unwrap()
+        else {
+            panic!("expected forward");
+        };
+        let address = forward.listen.to_string();
+        assert_eq!(address.strip_prefix("tcp://").unwrap_or(&address), listen);
+    }
 
     let relative = parse(&["forward", "box", "--listen", "unix:relative"]).unwrap_err();
     assert_eq!(relative.kind(), ErrorKind::ValueValidation);
@@ -246,7 +225,7 @@ fn json_mode_loads_several_accounts_and_cas() {
         .to_string(),
     );
 
-    let config = load(&["run", "box", "--ssh-config", &path]).unwrap();
+    let config = load(&["configure", "box", "--ssh-config", &path]).unwrap();
 
     assert_eq!(config.listen_address, "0.0.0.0:0");
     assert_eq!(config.accounts.len(), 2);
@@ -513,72 +492,4 @@ async fn forward_refuses_disabled_or_unreachable_ssh_before_tunneling() {
 
         assert_eq!(server.requests(), [("GET".into(), ssh_path())]);
     }
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn run_rejects_an_unreachable_guest_address_before_configuring() {
-    let dir = tempfile::tempdir().unwrap();
-    let host = write(dir.path(), "host", "k");
-    let key = write(dir.path(), "a.pub", "ssh-ed25519 A");
-    let server = Server::start(Vec::new()).await;
-
-    let error = server
-        .run(&[
-            "run",
-            "box-1",
-            "--host-key",
-            &host,
-            "--login",
-            "a",
-            "--authorized-key",
-            &key,
-            "--guest-listen",
-            "127.0.0.1:2222",
-        ])
-        .await
-        .unwrap_err();
-
-    assert!(error.to_string().contains("0.0.0.0"), "{error:#}");
-    assert!(server.requests().is_empty(), "{:?}", server.requests());
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn run_reports_partial_success_without_rolling_back() {
-    let dir = tempfile::tempdir().unwrap();
-    let host = write(dir.path(), "host", "k");
-    let key = write(dir.path(), "a.pub", "ssh-ed25519 A");
-    let server = Server::start(vec![(200, status(true, "0.0.0.0:40000", 7))]).await;
-
-    let error = server
-        .run(&[
-            "run",
-            "box-1",
-            "--host-key",
-            &host,
-            "--login",
-            "a",
-            "--authorized-key",
-            &key,
-            "--guest-listen",
-            "0.0.0.0:0",
-        ])
-        .await
-        .unwrap_err();
-
-    let message = format!("{error:#}");
-    assert!(
-        message.contains("SSH configuration succeeded (generation 7) and was not rolled back"),
-        "{message}"
-    );
-    assert_eq!(
-        server.requests(),
-        [
-            ("POST".into(), ssh_path()),
-            (
-                "POST".into(),
-                "/v1/boxes/box-1/network/tunnel?port=40000".into()
-            ),
-        ],
-        "one configure, no disable or revoke"
-    );
 }

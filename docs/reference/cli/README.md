@@ -740,7 +740,6 @@ boxlite network tunnel mybox 3000 --revoke
 boxlite ssh configure BOX CONFIG
 boxlite ssh status BOX
 boxlite ssh disable BOX
-boxlite ssh run BOX CONFIG [--listen ADDRESS]
 boxlite ssh forward BOX [--listen ADDRESS]
 
 CONFIG := --ssh-config FILE
@@ -750,27 +749,31 @@ CONFIG := --ssh-config FILE
 Control the guest SSH server of a local box or a REST box (`--url`/`--profile`).
 The CLI reads keys from files and never generates or stores them.
 
-These five CLI subcommands reuse existing SDK and HTTP operations; they add no
+These four CLI subcommands reuse existing SDK and HTTP operations; they add no
 server routes. Backend requirements differ:
 
 | Commands | Local backend | REST backend |
 |----------|---------------|--------------|
 | `configure`, `status`, `disable` | Existing SSH SDK operations | Requires SSH control; supported by `boxlite serve` |
-| `run`, `forward` | Existing local tunnel implementation | Requires both SSH control and tunnel support; unavailable through `boxlite serve` |
+| `forward` | Existing local tunnel implementation | Requires both SSH control and tunnel support; unavailable through `boxlite serve` |
 
 | Subcommand | Effect | stdout |
 |------------|--------|--------|
 | `configure` | Replace the complete configuration once; disconnects existing SSH clients | `SshStatus` JSON |
 | `status` | Read state; never starts the box | `SshStatus` JSON |
 | `disable` | Stop SSH; never starts the box | `SshStatus` JSON |
-| `run` | `configure` once, then `forward` | Bound address |
 | `forward` | Read status; fail if disabled; forward to the port SSH actually bound | Bound address |
 
-Use `boxlite ssh run` to configure SSH once and forward until Ctrl-C. Every
-invocation replaces the SSH configuration and disconnects existing SSH clients.
-`configure` and `forward` remain independent commands. Use
-`forward` to reopen forwarding after SSH is configured; it leaves the configuration and
-generation unchanged.
+Configure SSH, then open forwarding until Ctrl-C:
+
+```bash
+boxlite ssh configure dev --ssh-config ssh.json
+boxlite ssh forward dev
+```
+
+Every `configure` replaces the SSH configuration and disconnects existing clients.
+`forward` leaves the configuration and generation unchanged, so it can reopen
+forwarding without reconfiguring SSH.
 
 | Flag | Description |
 |------|-------------|
@@ -779,14 +782,15 @@ generation unchanged.
 | `--login NAME` | The single login accepted for `--authorized-key`. |
 | `--authorized-key FILE` | One OpenSSH public key per file; repeatable. |
 | `--guest-listen ADDRESS` | Guest listener for flag mode; default `0.0.0.0:2222`; port `0` lets the guest choose. |
-| `--listen ADDRESS` | Local listener, same syntax as [`network tunnel`](#boxlite-network-tunnel); default `127.0.0.1:0`. |
+| `--listen ADDRESS` | `forward` only: local listener, same syntax as [`network tunnel`](#boxlite-network-tunnel); default `127.0.0.1:0`. |
 
-`--ssh-config` conflicts with the flag-mode options. Configuration errors name the
+Configuration flags apply only to `configure`; `--ssh-config` conflicts with the
+flag-mode options. Configuration errors name the
 file and position but never print its contents. `configure` follows the SDK's
 startup rules: it may start a Configured or Stopped box that uses its image's default
-command. `run` and `configure` are never retried.
+command. `configure` is never retried.
 
-`run` and `forward` print the canonical bound address to stdout, then
+`forward` prints the canonical bound address to stdout, then
 the host public key, its fingerprint, and a connect hint to stderr:
 
 ```bash
@@ -797,10 +801,9 @@ SSH host key fingerprint: SHA256:...
 Connect: ssh -p 52811 -l LOGIN 127.0.0.1
 ```
 
-The guest must listen on `0.0.0.0` or the guest IP; `run` checks this
-before configuring. Ctrl-C closes the listener and its connections, then exits 0; guest
-SSH stays configured. If forwarding fails after `run` configured SSH,
-the error says so; the configuration is not rolled back.
+`forward` requires the guest to listen on `0.0.0.0` or the guest IP.
+Ctrl-C closes the listener and its connections, then exits 0; guest SSH stays
+configured. A forwarding failure leaves the preceding configuration unchanged.
 
 - **Local boxes:** the foreground command holds the runtime home, so other local
   commands on that home fail until Ctrl-C. Exiting the CLI stops running boxes that
@@ -808,7 +811,7 @@ the error says so; the configuration is not rolled back.
 - **REST boxes:** forwarding uses the box's public tunnel URL for the SSH port and
   leaves it open on exit, so anyone reaching the URL can attempt SSH logins. Withdraw it
   with `boxlite network tunnel BOX PORT --revoke`. `boxlite serve` has no tunnel
-  route, so there `run` and `forward` fail after the SSH step.
+  route, so there `forward` fails after reading SSH status.
 
 ---
 

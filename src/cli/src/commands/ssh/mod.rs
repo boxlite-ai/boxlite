@@ -31,8 +31,6 @@ pub enum SshCommand {
     Status(BoxArgs),
     /// Disable guest SSH without starting the box; prints status JSON.
     Disable(BoxArgs),
-    /// Configure guest SSH once, then forward a local listener to it until Ctrl-C.
-    Run(RunArgs),
     /// Forward a local listener to already enabled guest SSH until Ctrl-C.
     Forward(ForwardArgs),
 }
@@ -52,20 +50,6 @@ pub struct ConfigureArgs {
 
     #[command(flatten)]
     pub source: ConfigSource,
-}
-
-#[derive(Args, Debug)]
-pub struct RunArgs {
-    /// Box ID or name
-    #[arg(value_name = "BOX")]
-    pub target: String,
-
-    #[command(flatten)]
-    pub source: ConfigSource,
-
-    /// Bind a local TCP port/address or unix:/absolute/path socket
-    #[arg(long, value_name = "ADDRESS", value_parser = parse_socket_address, default_value = "127.0.0.1:0")]
-    pub listen: SocketAddress,
 }
 
 #[derive(Args, Debug)]
@@ -176,31 +160,10 @@ pub async fn execute(args: SshArgs, global: &GlobalFlags) -> Result<()> {
             let (_runtime, sandbox) = find_box(global, &args.target).await?;
             print_status(&sandbox.ssh().disable().await?)
         }
-        SshCommand::Run(args) => {
-            let config = args.source.load()?;
-            tunnel_target(&config.listen_address)?;
-            let login = match config.accounts.as_slice() {
-                [account] => account.login.clone(),
-                _ => "LOGIN".to_string(),
-            };
-            let (_runtime, sandbox) = find_box(global, &args.target).await?;
-            // Configure exactly once: every accepted call disconnects clients.
-            let status = sandbox.ssh().configure(config).await?;
-            forward(&sandbox, &status, args.listen, &login)
-                .await
-                .with_context(|| {
-                    format!(
-                        "SSH configuration succeeded (generation {}) and was not rolled \
-                         back, but forwarding failed; retry with `boxlite ssh forward {}` or \
-                         stop SSH with `boxlite ssh disable {}`",
-                        status.generation, args.target, args.target
-                    )
-                })
-        }
         SshCommand::Forward(args) => {
             let (_runtime, sandbox) = find_box(global, &args.target).await?;
             let status = sandbox.ssh().status().await?;
-            forward(&sandbox, &status, args.listen, "LOGIN").await
+            forward(&sandbox, &status, args.listen).await
         }
     }
 }
@@ -239,16 +202,11 @@ fn tunnel_target(listen_address: &str) -> Result<SocketAddr> {
 
 /// Forward to the port SSH actually bound, which differs from the
 /// configuration when it asked for port 0.
-async fn forward(
-    sandbox: &LiteBox,
-    status: &SshStatus,
-    listen: SocketAddress,
-    login: &str,
-) -> Result<()> {
+async fn forward(sandbox: &LiteBox, status: &SshStatus, listen: SocketAddress) -> Result<()> {
     if !status.enabled {
         bail!(
             "guest SSH is disabled or the box is not running; enable it with \
-             `boxlite ssh run` or `boxlite ssh configure`"
+             `boxlite ssh configure`"
         );
     }
     let tunnel = sandbox
@@ -261,21 +219,20 @@ async fn forward(
     forward_until_interrupted(tunnel, listen, |address| {
         eprintln!("SSH host key: {}", status.host_public_key);
         eprintln!("SSH host key fingerprint: {}", status.host_key_fingerprint);
-        eprintln!("Connect: {}", connect_hint(address, login));
+        eprintln!("Connect: {}", connect_hint(address));
     })
     .await
 }
 
-/// `-l` keeps a login that starts with `-` from parsing as an ssh option.
 /// Unix sockets get a description: quoting a path into ProxyCommand would
 /// need two shell layers of escaping.
-fn connect_hint(address: &SocketAddress, login: &str) -> String {
+fn connect_hint(address: &SocketAddress) -> String {
     match address {
         SocketAddress::Tcp(address) => {
-            format!("ssh -p {} -l {login} {}", address.port(), address.ip())
+            format!("ssh -p {} -l LOGIN {}", address.port(), address.ip())
         }
         SocketAddress::Unix(path) => format!(
-            "point an SSH client's transport at Unix socket {} and log in as {login}",
+            "point an SSH client's transport at Unix socket {} and log in as LOGIN",
             path.display()
         ),
     }
