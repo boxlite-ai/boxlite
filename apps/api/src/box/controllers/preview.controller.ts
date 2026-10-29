@@ -133,10 +133,14 @@ export class PreviewController {
   @UseGuards(CombinedAuthGuard, ProxyGuard)
   async resolveDomain(@Param('hostname') hostname: string): Promise<{ boxId: string; port: number }> {
     const target = await this.domainService.resolve(hostname)
-    if (!target || !(await this.tunnelService.isPublicAccessAllowed(target.boxId, target.port))) {
+    if (
+      !target ||
+      target.type !== 'box' ||
+      !(await this.tunnelService.isPublicAccessAllowed(target.box, target.port))
+    ) {
       throw new NotFoundException('Domain not found')
     }
-    return target
+    return { boxId: target.box, port: target.port }
   }
 
   // The preview proxy calls this when the runner refuses a guest-port dial

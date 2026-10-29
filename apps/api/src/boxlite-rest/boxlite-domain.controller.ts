@@ -4,6 +4,7 @@
  */
 
 import {
+  BadRequestException,
   Body,
   Controller,
   Delete,
@@ -13,6 +14,8 @@ import {
   Param,
   Put,
   UseGuards,
+  UsePipes,
+  ValidationPipe,
 } from '@nestjs/common'
 import { ApiExcludeController } from '@nestjs/swagger'
 import { CombinedAuthGuard } from '../auth/combined-auth.guard'
@@ -25,15 +28,7 @@ import { BoxService } from '../box/services/box.service'
 import { HeldDomain, DomainService } from '../box/services/domain.service'
 import { DomainTargetDto } from './dto/domain-target.dto'
 
-type RestDomainTarget = { type: 'box'; box: string; port: number }
-
-type RestDomain = {
-  name: string
-  hostname: string
-  url: string
-  /** Where the name routes; null while the name is held but unbound. */
-  target: RestDomainTarget | null
-}
+type RestDomain = HeldDomain
 
 type RestDomainList = {
   domains: RestDomain[]
@@ -43,25 +38,16 @@ type RestDomainList = {
   min_length: number
 }
 
-function toRestDomain(domain: HeldDomain): RestDomain {
-  return {
-    name: domain.name,
-    hostname: domain.hostname,
-    url: domain.url,
-    target:
-      domain.boxId === null || domain.port === null ? null : { type: 'box', box: domain.boxId, port: domain.port },
-  }
-}
-
 /**
  * Domains are the organization's, not a box's: they are listed and bound
- * here, by name, and a box is only what a name routes to. `{domain}` is a
- * platform name (`demo`) or a full hostname (`demo.apps.example`).
+ * here. Bind accepts a platform label (`demo`) or full hostname
+ * (`demo.apps.example`); list and unbind identify domains by full hostname.
  */
 // Spec-first surface (openapi/box.openapi.yaml), like the other REST controllers.
 @Controller(['v1/domains', 'v1/:prefix/domains'])
 @ApiExcludeController()
 @UseGuards(CombinedAuthGuard, OrganizationResourceActionGuard)
+@UsePipes(new ValidationPipe({ transform: true, whitelist: true, forbidNonWhitelisted: true }))
 export class BoxliteDomainController {
   constructor(
     private readonly domainService: DomainService,
@@ -78,7 +64,7 @@ export class BoxliteDomainController {
   async list(@AuthContext() authContext: OrganizationAuthContext): Promise<RestDomainList> {
     const held = await this.domainService.listHeld(authContext.organizationId)
     return {
-      domains: held.domains.map(toRestDomain),
+      domains: held.domains,
       limit: held.limit,
       used: held.used,
       remaining: held.remaining,
@@ -100,13 +86,22 @@ export class BoxliteDomainController {
     @Param('domain') domain: string,
     @Body() target: DomainTargetDto,
   ): Promise<RestDomain> {
+    if (target.type === 'app') {
+      throw new BadRequestException({
+        code: 'app_target_not_supported',
+        message: 'App targets are reserved; App binding is not supported yet.',
+      })
+    }
+    if (target.app !== undefined) {
+      throw new BadRequestException('A Box target must not include an App reference')
+    }
     // findOneByIdOrName already 404s for a missing/destroyed box.
-    const box = await this.boxService.findOneByIdOrName(target.box, authContext.organizationId)
-    return toRestDomain(await this.domainService.bind(box, target.port, domain))
+    const box = await this.boxService.findOneByIdOrName(target.box!, authContext.organizationId)
+    return this.domainService.bind(box, target.port!, domain)
   }
 
   /**
-   * Stop routing a domain and keep it for the organization. By name, not by
+   * Stop routing a full hostname and keep it for the organization. By hostname, not by
    * port: the name is the organization's, and the port it was bound to may be
    * gone. The port's public declaration is untouched.
    */

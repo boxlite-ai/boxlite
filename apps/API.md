@@ -484,9 +484,9 @@ organization membership.
 | `GET`    | `/api/v1[/{prefix}]/boxes/{boxId}/metrics`                    | Returns metrics for one box without marking it active.  |
 | `POST`   | `/api/v1[/{prefix}]/boxes/{boxId}/network/tunnel?port={port}` | Prepares a tunnel with optional `isPublic` (default true); returns `uri`, `isPublic`, `token`. Private tokens are complete once, then masked. |
 | `DELETE` | `/api/v1[/{prefix}]/boxes/{boxId}/network/tunnel?port={port}` | Revokes either access mode; `204`, idempotent. |
-| `GET`    | `/api/v1[/{prefix}]/domains`                                  | Lists the domains the organization holds, what each routes to, and its allowance. |
+| `GET`    | `/api/v1[/{prefix}]/domains`                                  | Lists full hostnames, URLs, typed targets and the organization's allowance; no short `name` field. |
 | `PUT`    | `/api/v1[/{prefix}]/domains/{domain}/target`                  | Routes a domain (name or full hostname) to a `{"type":"box","box","port"}` target, claiming or moving it; does not declare the port public. |
-| `DELETE` | `/api/v1[/{prefix}]/domains/{domain}/target`                  | Stops routing a domain, keeping it for the organization; `204`, idempotent. |
+| `DELETE` | `/api/v1[/{prefix}]/domains/{domain}/target`                  | Requires the full held hostname; stops routing it and keeps ownership; `204`, idempotent. |
 | `PUT`    | `/api/v1[/{prefix}]/boxes/{boxId}/network/inbound`            | Enables or disables a box's inbound access.             |
 | `POST`   | `/api/v1[/{prefix}]/boxes/{boxId}/ssh`                        | Replaces guest SSH configuration once; counts as activity and may auto-resume a box. |
 | `GET`    | `/api/v1[/{prefix}]/boxes/{boxId}/ssh`                        | Reads guest SSH status without resuming the box or counting as activity. |

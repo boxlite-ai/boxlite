@@ -19,7 +19,6 @@ pytestmark = pytest.mark.skipif(
 )
 
 BOUND = {
-    "name": "demo1",
     "hostname": "demo1.app.test",
     "url": "https://demo1.app.test",
     "target": {"type": "box", "box": "AbCdEf123456", "port": 3000},
@@ -100,11 +99,30 @@ async def test_bind_puts_the_target_and_reads_the_bound_domain(server):
 
     [(_, _, body)] = requests
     assert json.loads(body) == {"type": "box", "box": "web-a", "port": 3000}
-    assert (bound.name, bound.url) == ("demo1", "https://demo1.app.test")
+    assert (bound.hostname, bound.url) == ("demo1.app.test", "https://demo1.app.test")
     assert (bound.target.type, bound.target.box, bound.target.port) == (
         "box",
         "AbCdEf123456",
         3000,
+    )
+    replies[("PUT", "/v1/domains/shop1/target")] = (
+        200,
+        {
+            **BOUND,
+            "hostname": "shop1.app.test",
+            "url": "https://shop1.app.test",
+            "target": {"type": "app", "app": "shop"},
+        },
+    )
+    app = await domains_on(url).bind(
+        "shop1", boxlite.DomainTarget(type="app", app="shop")
+    )
+    assert json.loads(requests[-1][2]) == {"type": "app", "app": "shop"}
+    assert (app.target.type, app.target.app, app.target.box, app.target.port) == (
+        "app",
+        "shop",
+        None,
+        None,
     )
 
 
@@ -114,9 +132,23 @@ async def test_list_reads_unbound_domains_and_the_allowance(server):
     replies[("GET", "/v1/domains")] = (
         200,
         {
-            "domains": [BOUND, {**BOUND, "name": "spare", "target": None}],
-            "limit": 2,
-            "used": 2,
+            "domains": [
+                BOUND,
+                {
+                    **BOUND,
+                    "hostname": "spare.app.test",
+                    "url": "https://spare.app.test",
+                    "target": None,
+                },
+                {
+                    **BOUND,
+                    "hostname": "shop.app.test",
+                    "url": "https://shop.app.test",
+                    "target": {"type": "app", "app": "shop"},
+                },
+            ],
+            "limit": 3,
+            "used": 3,
             "remaining": 0,
             "min_length": 5,
         },
@@ -124,18 +156,27 @@ async def test_list_reads_unbound_domains_and_the_allowance(server):
 
     held = await domains_on(url).list()
 
-    assert [domain.name for domain in held.domains] == ["demo1", "spare"]
+    assert [domain.hostname for domain in held.domains] == [
+        "demo1.app.test",
+        "spare.app.test",
+        "shop.app.test",
+    ]
+    assert all(not hasattr(domain, "name") for domain in held.domains)
+    assert (held.domains[2].target.type, held.domains[2].target.app) == ("app", "shop")
     assert held.domains[1].target is None
-    assert (held.limit, held.used, held.remaining, held.min_length) == (2, 2, 0, 5)
+    assert (held.limit, held.used, held.remaining, held.min_length) == (3, 3, 0, 5)
 
 
 @pytest.mark.asyncio
 async def test_unbind_deletes_the_target(server):
     url, replies, requests = server
-    replies[("DELETE", "/v1/domains/demo1/target")] = (204, None)
+    replies[("DELETE", "/v1/domains/demo1.app.test/target")] = (204, None)
 
-    await domains_on(url).unbind("demo1")
+    with pytest.raises(boxlite.InvalidArgumentError):
+        await domains_on(url).unbind("demo1")
+    assert requests == []
+    await domains_on(url).unbind("demo1.app.test")
 
     assert [(method, path) for method, path, _ in requests] == [
-        ("DELETE", "/v1/domains/demo1/target")
+        ("DELETE", "/v1/domains/demo1.app.test/target")
     ]

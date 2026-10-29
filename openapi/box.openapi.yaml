@@ -1327,10 +1327,10 @@ paths:
         in: path
         required: true
         description: |
-          A platform name (`demo`) or its full hostname
-          (`demo.apps.example`). Case and a trailing dot are not
-          significant. A hostname outside the platform domain is refused
-          until custom domains are supported.
+          PUT accepts a platform name (`demo`) or its full hostname
+          (`demo.apps.example`). DELETE requires the full held hostname.
+          Case and a trailing dot are not significant. Binding outside the
+          configured platform domain is refused until custom domains are supported.
         schema:
           type: string
           minLength: 1
@@ -1357,6 +1357,7 @@ paths:
         Error codes: `platform_domain_not_configured`, `subdomain_too_short`,
         `domain_count_limit_reached` and `region_not_supported` (400);
         `subdomain_taken` (409) when another organization holds the name.
+        App targets are reserved; binding one returns `app_target_not_supported` (400).
       tags: [Domains]
       requestBody:
         required: true
@@ -1380,8 +1381,20 @@ paths:
     delete:
       operationId: unbindDomain
       summary: Stop routing a domain
+      parameters:
+        - name: domain
+          in: path
+          required: true
+          description: The exact full hostname returned by list; bare labels and URLs are rejected.
+          schema:
+            type: string
+            minLength: 3
+            maxLength: 254
+            pattern: '^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)+\.?$'
+          example: demo-app.apps.example
       description: |
-        Stops routing the domain to whatever box port it is bound to.
+        Stops routing the exact hostname to its current target, independently
+        of the configured platform suffix. Short names are refused.
         Requests that start after this returns get `404` on it; connections
         already open run until they close. The organization keeps the name,
         it still counts against the allowance, and `bindDomain` can bind it
@@ -3041,10 +3054,21 @@ components:
           description: Null for public tunnels; complete on private creation, masked on subsequent calls.
 
     DomainTarget:
+      description: A Box port or a reserved App reference. App binding currently returns 400 app_target_not_supported.
+      oneOf:
+        - $ref: "#/components/schemas/BoxDomainTarget"
+        - $ref: "#/components/schemas/AppDomainTarget"
+      discriminator:
+        propertyName: type
+        mapping:
+          box: "#/components/schemas/BoxDomainTarget"
+          app: "#/components/schemas/AppDomainTarget"
+
+    BoxDomainTarget:
       type: object
+      additionalProperties: false
       description: |
-        What a domain routes to. `type` decides which fields apply; `box` is
-        the only kind today.
+        A Box port. `box` selects the resource and `port` the guest service.
       required: [type, box, port]
       properties:
         type:
@@ -3061,15 +3085,28 @@ components:
           maximum: 65535
           example: 3000
 
+    AppDomainTarget:
+      type: object
+      additionalProperties: false
+      description: Reserved App identity; App binding is unavailable until the App resource exists.
+      required: [type, app]
+      properties:
+        type:
+          type: string
+          enum: [app]
+        app:
+          type: string
+          minLength: 1
+          maxLength: 255
+          pattern: '\S'
+          description: An opaque App reference.
+          example: shop
+
     Domain:
       type: object
       description: A domain the organization holds and what it currently routes to.
-      required: [name, hostname, url, target]
+      required: [hostname, url, target]
       properties:
-        name:
-          type: string
-          description: What the domain is bound by — the label of a platform name.
-          example: demo-app
         hostname:
           type: string
           example: demo-app.app.example.test

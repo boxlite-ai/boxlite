@@ -1020,10 +1020,11 @@ supported". See [Domains](../../concepts/networking.md#domains).
 | Subcommand | Synopsis | Notes |
 |---|---|---|
 | `bind` | `boxlite domain bind DOMAIN --box BOX --port PORT` | Prints the target and the URL; `--box` takes an id or name |
-| `ls` (`list`) | `boxlite domain ls [-q \| --format FORMAT]` | Every held domain and its target (`-` while unbound), then the allowance; quiet prints names |
-| `unbind` | `boxlite domain unbind DOMAIN` | No alias: the name stays with the organization |
+| `ls` (`list`) | `boxlite domain ls [-q \| --format FORMAT]` | Every full hostname and its target (`-` while unbound), then the allowance; quiet prints full hostnames |
+| `unbind` | `boxlite domain unbind HOSTNAME` | Full hostname required; it stays with the organization |
 
-`DOMAIN` is the name (`demo`) or its full hostname. `bind` claims a new name
+For `bind`, `DOMAIN` is the name (`demo`) or its full hostname. `unbind` accepts
+only a full hostname returned by `ls`; bare labels are rejected. `bind` claims a new name
 against the organization's allowance and moves a held name from another box
 port at once; other names on the target port stay. It does not make the port
 public: the name answers once `boxlite network tunnel` has declared the port
@@ -1034,10 +1035,10 @@ the allowance until the platform raises it. Binding it again, to any box
 port, does not count it twice.
 
 ```bash
-boxlite domain bind demo --box web-a --port 3000   # demo → web-a:3000
+boxlite domain bind demo --box web-a --port 3000   # demo.apps.example → web-a:3000
 boxlite domain bind demo --box web-b --port 3000   # move it, same URL
 boxlite domain ls
-boxlite domain unbind demo
+boxlite domain unbind demo.apps.example
 ```
 
 ---

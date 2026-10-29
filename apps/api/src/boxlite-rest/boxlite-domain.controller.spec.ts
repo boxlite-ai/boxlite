@@ -20,13 +20,11 @@ function makeHarness() {
     listHeld: jest.fn().mockResolvedValue({
       domains: [
         {
-          name: 'demo1',
           hostname: 'demo1.app.test',
           url: 'https://demo1.app.test',
-          boxId: 'AbCdEf123456',
-          port: 3000,
+          target: { type: 'box', box: 'AbCdEf123456', port: 3000 },
         },
-        { name: 'spare', hostname: 'spare.app.test', url: 'https://spare.app.test', boxId: null, port: null },
+        { hostname: 'spare.app.test', url: 'https://spare.app.test', target: null },
       ],
       limit: 2,
       used: 2,
@@ -34,11 +32,9 @@ function makeHarness() {
       minLength: 5,
     }),
     bind: jest.fn().mockResolvedValue({
-      name: 'demo1',
       hostname: 'demo1.app.test',
       url: 'https://demo1.app.test',
-      boxId: 'box-uuid',
-      port: 3000,
+      target: { type: 'box', box: 'box-uuid', port: 3000 },
     }),
     unbind: jest.fn().mockResolvedValue(undefined),
   }
@@ -54,6 +50,25 @@ function validateTarget(body: unknown) {
 }
 
 describe('BoxliteDomainController', () => {
+  it('hostname contract: list omits short names from the public response', async () => {
+    const { controller } = makeHarness()
+    const result = await controller.list(auth as never)
+    for (const domain of result.domains) {
+      expect(domain).not.toHaveProperty('name')
+      expect(domain.hostname).toContain('.')
+    }
+  })
+
+  it('typed target contract: App binding is explicitly unsupported before Box lookup', async () => {
+    const { controller, boxService, domainService } = makeHarness()
+    await expect(controller.bind(auth as never, 'demo1', { type: 'app', app: 'shop' } as never)).rejects.toMatchObject({
+      status: 400,
+      response: { code: 'app_target_not_supported' },
+    })
+    expect(boxService.findOneByIdOrName).not.toHaveBeenCalled()
+    expect(domainService.bind).not.toHaveBeenCalled()
+  })
+
   it('mounts under the organization, not a box, at canonical and legacy prefixes', () => {
     expect(Reflect.getMetadata(PATH_METADATA, BoxliteDomainController)).toEqual(['v1/domains', 'v1/:prefix/domains'])
   })
@@ -84,12 +99,11 @@ describe('BoxliteDomainController', () => {
     await expect(controller.list(auth as never)).resolves.toEqual({
       domains: [
         {
-          name: 'demo1',
           hostname: 'demo1.app.test',
           url: 'https://demo1.app.test',
           target: { type: 'box', box: 'AbCdEf123456', port: 3000 },
         },
-        { name: 'spare', hostname: 'spare.app.test', url: 'https://spare.app.test', target: null },
+        { hostname: 'spare.app.test', url: 'https://spare.app.test', target: null },
       ],
       limit: 2,
       used: 2,
@@ -112,7 +126,6 @@ describe('BoxliteDomainController', () => {
     expect(boxService.findOneByIdOrName).toHaveBeenCalledWith('web-a', 'org-1')
     expect(domainService.bind).toHaveBeenCalledWith(expect.objectContaining({ id: 'box-uuid' }), 3000, 'demo1')
     expect(result).toEqual({
-      name: 'demo1',
       hostname: 'demo1.app.test',
       url: 'https://demo1.app.test',
       target: { type: 'box', box: 'box-uuid', port: 3000 },
@@ -133,7 +146,7 @@ describe('BoxliteDomainController', () => {
   it('accepts a box target and rejects a target whose type and fields disagree', async () => {
     await expect(validateTarget({ type: 'box', box: 'web-a', port: 3000 })).resolves.toBeInstanceOf(DomainTargetDto)
     for (const body of [
-      { type: 'app', app: 'shop' },
+      { type: 'unknown', app: 'shop' },
       { type: 'box', box: 'web-a' },
       { type: 'box', port: 3000 },
       { box: 'web-a', port: 3000 },

@@ -133,11 +133,16 @@ describe('Box API JSON Schema nullability', () => {
     const domains = {
       listHeld: jest.fn().mockResolvedValue({
         domains: [
-          { name: 'demo1', hostname: 'demo1.app.test', url: 'https://demo1.app.test', boxId: 'box-1', port: 3000 },
-          { name: 'spare', hostname: 'spare.app.test', url: 'https://spare.app.test', boxId: null, port: null },
+          {
+            hostname: 'demo1.app.test',
+            url: 'https://demo1.app.test',
+            target: { type: 'box', box: 'box-1', port: 3000 },
+          },
+          { hostname: 'spare.app.test', url: 'https://spare.app.test', target: null },
+          { hostname: 'shop.app.test', url: 'https://shop.app.test', target: { type: 'app', app: 'shop' } },
         ],
-        limit: 2,
-        used: 2,
+        limit: 3,
+        used: 3,
         remaining: 0,
         minLength: 5,
       }),

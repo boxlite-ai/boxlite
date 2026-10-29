@@ -13,8 +13,8 @@ use crate::{BoxliteError, BoxliteResult};
 
 /// What a domain routes to. `type` on the wire names the variant.
 ///
-/// Non-exhaustive: an `App` target joins `Box` once apps exist, without
-/// changing [`DomainHandle::bind`].
+/// App references are reserved; current servers reject binding them until
+/// the App resource and its authorization are available.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "lowercase")]
 #[non_exhaustive]
@@ -26,13 +26,15 @@ pub enum DomainTarget {
         box_ref: String,
         port: u16,
     },
+    App {
+        #[serde(rename = "app")]
+        app_ref: String,
+    },
 }
 
 /// One domain the organization holds and what it currently routes to.
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 pub struct Domain {
-    /// What the domain is bound by: the label of a platform name, e.g. `demo`.
-    pub name: String,
     /// The full hostname, such as `demo.apps.example`.
     pub hostname: String,
     pub url: String,
@@ -69,8 +71,8 @@ pub(crate) trait DomainBackend: Send + Sync {
 /// Runtime-scoped handle for the organization's domains.
 ///
 /// Obtained from [`BoxliteRuntime::domains`](crate::BoxliteRuntime::domains).
-/// A `domain` argument is a platform name (`demo`) or a full hostname
-/// (`demo.apps.example`); the server applies the naming rules.
+/// Bind accepts a platform name (`demo`) or a full hostname. Unbind requires
+/// the full hostname returned by list (`demo.apps.example`).
 #[derive(Clone)]
 pub struct DomainHandle {
     backend: Arc<dyn DomainBackend>,
@@ -109,14 +111,42 @@ impl DomainHandle {
                     ));
                 }
             }
+            DomainTarget::App { app_ref } => {
+                if app_ref.trim().is_empty() || app_ref.chars().count() > 255 {
+                    return Err(BoxliteError::InvalidArgument(
+                        "domain target app must contain 1–255 characters".into(),
+                    ));
+                }
+            }
         }
         self.backend.bind_domain(domain, target).await
     }
 
-    /// Stop routing `domain`, keeping it for the organization. Safe to repeat
+    /// Stop routing a full hostname, keeping it for the organization. Safe to repeat
     /// on a held domain; one the organization does not hold is `NotFound`.
     pub async fn unbind(&self, domain: &str) -> BoxliteResult<()> {
-        self.backend.unbind_domain(path_segment(domain)?).await
+        let hostname = path_segment(domain)?
+            .trim_end_matches('.')
+            .to_ascii_lowercase();
+        if !hostname.contains('.')
+            || hostname.len() > 253
+            || hostname.split('.').any(|label| {
+                label.len() > 63
+                    || !label
+                        .as_bytes()
+                        .first()
+                        .is_some_and(u8::is_ascii_alphanumeric)
+                    || !label
+                        .as_bytes()
+                        .last()
+                        .is_some_and(u8::is_ascii_alphanumeric)
+            })
+        {
+            return Err(BoxliteError::InvalidArgument(
+                "unbind requires a full hostname, such as demo.apps.example".into(),
+            ));
+        }
+        self.backend.unbind_domain(&hostname).await
     }
 }
 
@@ -143,6 +173,46 @@ fn path_segment(domain: &str) -> BoxliteResult<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct RecordingBackend(std::sync::Mutex<Vec<String>>);
+
+    #[async_trait]
+    impl DomainBackend for RecordingBackend {
+        async fn list_domains(&self) -> BoxliteResult<DomainList> {
+            unreachable!()
+        }
+        async fn bind_domain(&self, _: &str, _: &DomainTarget) -> BoxliteResult<Domain> {
+            unreachable!()
+        }
+        async fn unbind_domain(&self, domain: &str) -> BoxliteResult<()> {
+            self.0.lock().unwrap().push(domain.into());
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn unbind_requires_a_full_hostname_before_calling_the_backend() {
+        let backend = Arc::new(RecordingBackend(std::sync::Mutex::new(Vec::new())));
+        let handle = DomainHandle::new(backend.clone());
+        for invalid in [
+            "demo",
+            "demo.",
+            "https://demo.apps.example",
+            "demo.apps.example:8080",
+            "-demo.apps.example",
+        ] {
+            assert!(
+                matches!(
+                    handle.unbind(invalid).await,
+                    Err(BoxliteError::InvalidArgument(_))
+                ),
+                "{invalid} accepted"
+            );
+        }
+        assert!(backend.0.lock().unwrap().is_empty());
+        handle.unbind(" DEMO.Apps.Example. ").await.unwrap();
+        assert_eq!(*backend.0.lock().unwrap(), ["demo.apps.example"]);
+    }
 
     #[test]
     fn a_box_target_serializes_with_its_type_tag() {

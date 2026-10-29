@@ -10,7 +10,6 @@ import {
 } from "../lib/index.js";
 
 const BOUND = {
-  name: "demo1",
   hostname: "demo1.app.test",
   url: "https://demo1.app.test",
   target: { type: "box", box: "AbCdEf123456", port: 3000 },
@@ -96,15 +95,44 @@ describe("domains on a REST runtime", () => {
       port: 3000,
     });
     expect(bound).toEqual(BOUND);
+    replies.set("PUT /v1/domains/shop1/target", {
+      status: 200,
+      body: {
+        ...BOUND,
+        hostname: "shop1.app.test",
+        url: "https://shop1.app.test",
+        target: { type: "app", app: "shop" },
+      },
+    });
+    const app = await runtime.domains.bind("shop1", {
+      type: "app",
+      app: "shop",
+    });
+    expect(JSON.parse(requests[1].body)).toEqual({ type: "app", app: "shop" });
+    expect(app.target).toEqual({ type: "app", app: "shop" });
   });
 
   test("list reads unbound domains and the allowance", async () => {
     replies.set("GET /v1/domains", {
       status: 200,
       body: {
-        domains: [BOUND, { ...BOUND, name: "spare", target: null }],
-        limit: 2,
-        used: 2,
+        domains: [
+          BOUND,
+          {
+            ...BOUND,
+            hostname: "spare.app.test",
+            url: "https://spare.app.test",
+            target: null,
+          },
+          {
+            ...BOUND,
+            hostname: "shop.app.test",
+            url: "https://shop.app.test",
+            target: { type: "app", app: "shop" },
+          },
+        ],
+        limit: 3,
+        used: 3,
         remaining: 0,
         min_length: 5,
       },
@@ -112,21 +140,28 @@ describe("domains on a REST runtime", () => {
 
     const held = await runtime.domains.list();
 
-    expect(held.domains.map((domain) => domain.name)).toEqual([
-      "demo1",
-      "spare",
+    expect(held.domains.map((domain) => domain.hostname)).toEqual([
+      "demo1.app.test",
+      "spare.app.test",
+      "shop.app.test",
     ]);
     expect(held.domains[1].target ?? null).toBeNull();
     expect(held.minLength).toBe(5);
+    expect(held.domains[0]).not.toHaveProperty("name");
+    expect(held.domains[2].target).toEqual({ type: "app", app: "shop" });
   });
 
   test("unbind deletes the target", async () => {
-    replies.set("DELETE /v1/domains/demo1/target", { status: 204 });
+    replies.set("DELETE /v1/domains/demo1.app.test/target", { status: 204 });
 
-    await runtime.domains.unbind("demo1");
+    await expect(runtime.domains.unbind("demo1")).rejects.toThrow(
+      "full hostname",
+    );
+    expect(requests).toEqual([]);
+    await runtime.domains.unbind("demo1.app.test");
 
     expect(requests.map((request) => request.route)).toEqual([
-      "DELETE /v1/domains/demo1/target",
+      "DELETE /v1/domains/demo1.app.test/target",
     ]);
   });
 });

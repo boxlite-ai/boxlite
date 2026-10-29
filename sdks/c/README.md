@@ -680,8 +680,13 @@ void boxlite_free_domain_list(CDomainList* list);
 ```
 
 A target is `{ .type = BoxliteDomainTargetBox, .box = "web-a", .port = 3000 }`;
-`box` takes an id or name. In a returned `CDomain`, `target.box` is the box id,
-or NULL while the domain is unbound. A local runtime answers `Unsupported`.
+`box` takes an id or name. In a returned `CDomain`, `hostname` is the full hostname
+and there is no short `name`. Box targets have `target.box` and `target.port`;
+reserved `BoxliteDomainTargetApp` targets have `target.app`. Inactive reference
+pointers are NULL; both are NULL while unbound. Initialize unused input fields
+to zero. App binding currently returns `app_target_not_supported`.
+`boxlite_domain_unbind()` requires the full hostname. A local runtime answers
+`Unsupported`. The changed domain structures require rebuilding C consumers.
 
 Release the management handle with `boxlite_free_domain_handle()`, the result
 of `boxlite_domain_bind()` with `boxlite_free_domain()`, and the result of

@@ -270,10 +270,14 @@ On a hosted runtime the organization can route a name of its own
 - `domains.Bind(ctx, "demo", boxlite.DomainTarget{Type: boxlite.DomainTargetBox, Box: "web-a", Port: 3000}) (*Domain, error)`
   claims the name if new, or moves it from another box port. `Box` takes an
   id or name.
-- `domains.List(ctx) (*DomainList, error)` returns every held domain
+- `domains.List(ctx) (*DomainList, error)` returns every held full `Hostname`
   (`Target` nil while unbound) and the allowance.
-- `domains.Unbind(ctx, "demo") error` stops routing it; the organization
+- `domains.Unbind(ctx, "demo.apps.example") error` requires the full hostname and stops routing it; the organization
   keeps the name.
+
+`Domain` has `Hostname`, `URL` and `Target`; there is no short `Name`.
+`DomainTargetApp` with `App` reserves an App reference; servers currently reject
+App binding with `app_target_not_supported`.
 
 Each call is one blocking request, like `Network.Tunnel`: `ctx` is checked
 before the request is sent, not while it is in flight.

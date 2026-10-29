@@ -18,25 +18,36 @@ import {
 import { Box } from './box.entity'
 
 export type DomainKind = 'platform' | 'custom'
+export type DomainTargetType = 'box' | 'app'
+export type DomainTarget = { type: 'box'; box: string; port: number } | { type: 'app'; app: string }
 
 /**
- * A hostname an organization holds, and the box port it currently routes to.
+ * A hostname an organization holds, and its typed target.
  *
- * The name belongs to the organization for as long as the row exists; the
- * binding is the box port in `box_id` and `port`, and `box_id` alone says
- * whether there is one. It names the port, not its tunnel: a name may be bound
- * before the port is declared public, and several names may route to one port.
- * Unbinding clears both and keeps the name, so the same organization can bind
- * it again while no other can claim it. Deleting the box row clears `box_id`
- * only, which is all a foreign key's SET NULL reaches; the port left beside it
- * is ignored. There is no foreign key to the organization, like `box`.
+ * The hostname belongs to the organization for as long as the row exists.
+ * `target_type` selects `box_id` or `app_id`; a null selected reference means
+ * the hostname is held but unbound. App references are reserved for future use.
+ * A Box binding names its port independently of the tunnel's public declaration.
+ * Unbinding clears both references and the port, retaining ownership. Deleting
+ * a Box clears only `box_id` through SET NULL; readers ignore the remaining port.
+ * There is no foreign key to the organization, like `box`.
  */
 @Entity('domain')
 @Unique('domain_hostname_unique', ['hostname'])
 @Index('domain_organization_id_index', ['organizationId'])
 @Index('domain_target_index', ['boxId', 'port'])
+@Index('domain_app_target_index', ['appId'])
 @Check('domain_kind', `"kind" IN ('platform', 'custom')`)
-@Check('domain_target', `("box_id" IS NULL OR "port" IS NOT NULL) AND "port" BETWEEN 1 AND 65535`)
+@Check(
+  'domain_target',
+  `
+  ("target_type" = 'box' AND "app_id" IS NULL
+    AND ("box_id" IS NULL OR "port" IS NOT NULL)
+    AND ("port" IS NULL OR "port" BETWEEN 1 AND 65535))
+  OR ("target_type" = 'app' AND "box_id" IS NULL AND "port" IS NULL
+    AND ("app_id" IS NULL OR "app_id" ~ '[^[:space:]]'))
+`,
+)
 export class Domain {
   @PrimaryGeneratedColumn('uuid', { primaryKeyConstraintName: 'domain_id_pk' })
   id: string
@@ -51,7 +62,14 @@ export class Domain {
   @Column({ name: 'organization_id', type: 'uuid' })
   organizationId: string
 
-  /** The box this name routes to; null while the name is held but unbound. */
+  @Column({ name: 'target_type', type: 'character varying', default: 'box' })
+  targetType: DomainTargetType
+
+  /** Reserved App identity; App binding remains disabled until its resource exists. */
+  @Column({ name: 'app_id', type: 'character varying', length: 255, nullable: true })
+  appId: string | null
+
+  /** The Box reference; null for App targets or an unbound Box target. */
   @Column({ name: 'box_id', type: 'character varying', length: 12, nullable: true })
   boxId: string | null
 

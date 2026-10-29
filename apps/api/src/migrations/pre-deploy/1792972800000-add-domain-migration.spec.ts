@@ -16,7 +16,7 @@ describe('AddDomain1792972800000', () => {
     expect(runner.query).toHaveBeenCalledWith(expect.stringContaining('REFERENCES "box"("id") ON DELETE SET NULL'))
 
     await migration.down(runner)
-    expect(runner.query).toHaveBeenNthCalledWith(5, 'DROP TABLE "domain"')
+    expect(runner.query).toHaveBeenNthCalledWith(6, 'DROP TABLE "domain"')
     expect(runner.query).toHaveBeenLastCalledWith('ALTER TABLE "organization" DROP COLUMN "domain_count_limit"')
   })
 })

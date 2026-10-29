@@ -34,27 +34,28 @@ pub struct DomainHandle {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BoxliteDomainTargetType {
     BoxliteDomainTargetBox = 0,
+    BoxliteDomainTargetApp = 1,
 }
 
 /// What a domain routes to. For `BoxliteDomainTargetBox`, `box` is a box id or
 /// name and `port` a guest port. Passed in, the strings are borrowed for the
 /// call; inside a `CDomain`, they belong to it.
 ///
-/// cbindgen:field-names=[type, box, port]
+/// App targets use `app` with a null `box` and zero `port`; binding is reserved.
+/// cbindgen:field-names=[type, box, port, app]
 #[repr(C)]
 pub struct CDomainTarget {
     pub kind: i32,
     pub box_ref: *const c_char,
     pub port: u16,
+    pub app_ref: *const c_char,
 }
 
 /// A domain the organization holds. Strings are heap-owned and non-null,
-/// except `target.box`, which is null while the domain is unbound. Released
+/// except inactive target references. Both references are null while unbound. Released
 /// with `boxlite_free_domain`; list entries belong to their list.
 #[repr(C)]
 pub struct CDomain {
-    /// What the domain is bound by: the label of a platform name.
-    pub name: *mut c_char,
     pub hostname: *mut c_char,
     pub url: *mut c_char,
     pub target: CDomainTarget,
@@ -82,26 +83,41 @@ fn owned(value: &str, field: &str) -> Result<CString, BoxliteError> {
 impl CDomain {
     fn from_domain(domain: Domain) -> Result<Self, BoxliteError> {
         // Keep ownership until every field is valid, so a failure cannot leak.
-        let name = owned(&domain.name, "name")?;
         let hostname = owned(&domain.hostname, "hostname")?;
         let url = owned(&domain.url, "url")?;
-        let (box_ref, port) = match domain.target {
-            Some(DomainTarget::Box { box_ref, port }) => (Some(owned(&box_ref, "box")?), port),
+        let (kind, box_ref, port, app_ref) = match domain.target {
+            Some(DomainTarget::Box { box_ref, port }) => (
+                BoxliteDomainTargetType::BoxliteDomainTargetBox,
+                Some(owned(&box_ref, "box")?),
+                port,
+                None,
+            ),
+            Some(DomainTarget::App { app_ref }) => (
+                BoxliteDomainTargetType::BoxliteDomainTargetApp,
+                None,
+                0,
+                Some(owned(&app_ref, "app")?),
+            ),
             Some(other) => {
                 return Err(BoxliteError::Unsupported(format!(
                     "domain target {other:?} is newer than this SDK"
                 )));
             }
-            None => (None, 0),
+            None => (
+                BoxliteDomainTargetType::BoxliteDomainTargetBox,
+                None,
+                0,
+                None,
+            ),
         };
         Ok(Self {
-            name: name.into_raw(),
             hostname: hostname.into_raw(),
             url: url.into_raw(),
             target: CDomainTarget {
-                kind: BoxliteDomainTargetType::BoxliteDomainTargetBox as i32,
+                kind: kind as i32,
                 box_ref: box_ref.map_or(ptr::null(), |value| value.into_raw().cast_const()),
                 port,
+                app_ref: app_ref.map_or(ptr::null(), |value| value.into_raw().cast_const()),
             },
         })
     }
@@ -118,10 +134,10 @@ unsafe fn free_str(value: *mut c_char) {
 impl Drop for CDomain {
     fn drop(&mut self) {
         unsafe {
-            free_str(self.name);
             free_str(self.hostname);
             free_str(self.url);
             free_str(self.target.box_ref.cast_mut());
+            free_str(self.target.app_ref.cast_mut());
         }
     }
 }
@@ -160,16 +176,27 @@ unsafe fn copy_target(target: *const CDomainTarget) -> Result<DomainTarget, Boxl
         return Err(null_pointer_error("target"));
     }
     let target = unsafe { &*target };
-    if target.kind != BoxliteDomainTargetType::BoxliteDomainTargetBox as i32 {
-        return Err(BoxliteError::InvalidArgument(format!(
-            "unsupported domain target type {}",
-            target.kind
-        )));
+    match target.kind {
+        kind if kind == BoxliteDomainTargetType::BoxliteDomainTargetBox as i32
+            && target.app_ref.is_null() =>
+        {
+            Ok(DomainTarget::Box {
+                box_ref: unsafe { copy_str(target.box_ref, "target.box") }?,
+                port: target.port,
+            })
+        }
+        kind if kind == BoxliteDomainTargetType::BoxliteDomainTargetApp as i32
+            && target.box_ref.is_null()
+            && target.port == 0 =>
+        {
+            Ok(DomainTarget::App {
+                app_ref: unsafe { copy_str(target.app_ref, "target.app") }?,
+            })
+        }
+        _ => Err(BoxliteError::InvalidArgument(
+            "domain target type and fields disagree".into(),
+        )),
     }
-    Ok(DomainTarget::Box {
-        box_ref: unsafe { copy_str(target.box_ref, "target.box") }?,
-        port: target.port,
-    })
 }
 
 /// Run `operation` on the handle's runtime, writing any error out. `out` is
@@ -276,7 +303,7 @@ pub unsafe extern "C" fn boxlite_domain_list(
 ///
 /// # Safety
 ///
-/// `handle`, `domain`, `target`, `target->box` and `out_domain` must be
+/// `handle`, `domain`, `target`, the selected target reference and `out_domain` must be
 /// non-null and the strings UTF-8; they only need to stay valid for this
 /// call. `out_error` may be null.
 #[unsafe(no_mangle)]
@@ -310,7 +337,7 @@ pub unsafe extern "C" fn boxlite_domain_bind(
     }
 }
 
-/// Stop routing `domain`, keeping it for the organization. Safe to repeat; a
+/// Stop routing a full hostname, keeping it for the organization. Safe to repeat; a
 /// domain the organization does not hold is `NotFound`.
 ///
 /// # Safety
@@ -382,7 +409,6 @@ mod tests {
     #[test]
     fn an_unbound_domain_has_a_null_target_box_and_frees_cleanly() {
         let domain = CDomain::from_domain(Domain {
-            name: "spare".into(),
             hostname: "spare.app.test".into(),
             url: "https://spare.app.test".into(),
             target: None,
@@ -400,6 +426,7 @@ mod tests {
             kind: 7,
             box_ref: box_ref.as_ptr(),
             port: 3000,
+            app_ref: ptr::null(),
         };
         assert!(matches!(
             unsafe { copy_target(&target) },

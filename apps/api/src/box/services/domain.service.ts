@@ -13,7 +13,7 @@ import { BadRequestError } from '../../exceptions/bad-request.exception'
 import { RegionService } from '../../region/services/region.service'
 import { BoxEvents } from '../constants/box-events.constants'
 import { Box } from '../entities/box.entity'
-import { Domain, DomainKind } from '../entities/domain.entity'
+import { Domain, DomainTarget } from '../entities/domain.entity'
 import { BoxDestroyedEvent } from '../events/box-destroyed.event'
 import {
   DomainCountLimitReachedError,
@@ -56,16 +56,14 @@ export const RESERVED_PLATFORM_SUBDOMAINS: ReadonlySet<string> = new Set([
 const SUBDOMAIN_PATTERN = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/
 const LEGACY_PORT_PREFIX = /^\d+-/
 
-/** A name the organization holds and the box port it routes to, if any. */
+/** A hostname the organization holds and its target, if any. */
 export type HeldDomain = {
-  /** What the caller binds by: the label for a platform name. */
-  name: string
   hostname: string
   url: string
-  /** The bound box, or null while the name is held but unbound. */
-  boxId: string | null
-  port: number | null
+  target: DomainTarget | null
 }
+
+type StoredTarget = Pick<Domain, 'targetType' | 'boxId' | 'appId' | 'port'>
 
 export type HeldDomains = {
   domains: HeldDomain[]
@@ -77,13 +75,13 @@ export type HeldDomains = {
 }
 
 /**
- * Organization-owned platform subdomains and their box-port targets.
+ * Organization-owned hostnames and their typed targets; binding supports Box ports.
  *
  * A name and a tunnel are separate resources. Binding records which box port
  * a name routes to, under the organization row lock that also holds the count
  * of names against `domainCountLimit`; it neither declares the port public nor
  * needs it to be, and several names may route to one port. Unbinding is by
- * name and keeps it held; destroying the box releases its bindings the same
+ * full hostname and keeps it held; destroying the box releases its bindings the same
  * way; revoking the tunnel does not touch them. Resolution returns the stored
  * target; the preview controller applies the port's public access policy.
  */
@@ -156,7 +154,7 @@ export class DomainService {
       throw new PlatformDomainNotConfiguredError()
     }
     const hostname = this.hostnameFor(rawDomain, platform.appHost)
-    const subdomain = this.nameOf(hostname, 'platform')
+    const subdomain = hostname.slice(0, hostname.indexOf('.'))
     await this.assertReachableFromPlatformProxy(box)
 
     await this.dataSource.transaction(async (manager) => {
@@ -185,7 +183,7 @@ export class DomainService {
         `INSERT INTO "domain" ("hostname", "kind", "organization_id", "box_id", "port")
          VALUES ($1, 'platform', $2, $3, $4)
          ON CONFLICT ("hostname") DO UPDATE
-         SET "box_id" = EXCLUDED."box_id", "port" = EXCLUDED."port", "updated_at" = now()
+         SET "box_id" = EXCLUDED."box_id", "port" = EXCLUDED."port", "target_type" = 'box', "app_id" = NULL, "updated_at" = now()
          WHERE "domain"."organization_id" = EXCLUDED."organization_id"
          RETURNING "id"`,
         [hostname, box.organizationId, box.id, port],
@@ -194,24 +192,27 @@ export class DomainService {
         throw new SubdomainTakenError(hostname)
       }
     })
-    return { name: subdomain, hostname, url: this.urlFor(hostname), boxId: box.id, port }
+    return { hostname, url: this.urlFor(hostname), target: { type: 'box', box: box.id, port } }
   }
 
   /**
-   * Release a platform name from whatever port it routes to, keeping the name
+   * Release an exact hostname from its target, keeping the name
    * for the organization. A name the organization does not hold is a 404; one
    * already released is left as it is. The port's own declaration is untouched.
    */
   async unbind(organizationId: string, rawDomain: string): Promise<void> {
-    const platform = this.appDomain()
-    if (!platform) {
-      throw new PlatformDomainNotConfiguredError()
+    const hostname = rawDomain.trim().toLowerCase().replace(/\.$/, '')
+    if (
+      !hostname.includes('.') ||
+      hostname.length > 253 ||
+      hostname.split('.').some((label) => label.length > DNS_LABEL_MAX_LENGTH || !SUBDOMAIN_PATTERN.test(label))
+    ) {
+      throw new BadRequestError('Unbind requires a full hostname, such as demo.apps.example')
     }
-    const hostname = this.hostnameFor(rawDomain, platform.appHost)
     // TypeORM answers an UPDATE with [rows, rowCount]; the count says whether
     // the organization holds the name, bound or not.
     const [, released]: [unknown[], number] = await this.dataSource.query(
-      `UPDATE "domain" SET "box_id" = NULL, "port" = NULL, "updated_at" = now()
+      `UPDATE "domain" SET "box_id" = NULL, "app_id" = NULL, "port" = NULL, "updated_at" = now()
        WHERE "hostname" = $1 AND "organization_id" = $2`,
       [hostname, organizationId],
     )
@@ -221,20 +222,21 @@ export class DomainService {
   }
 
   /**
-   * The stored box-port target, or null for an unknown or unbound name.
+   * The stored typed target, or null for an unknown or unbound name.
    * Lookup is uncached and independent of the target's publication or access
    * policy. Callers admitting traffic must authorize the returned target.
    */
-  async resolve(rawHostname: string): Promise<{ boxId: string; port: number } | null> {
+  async resolve(rawHostname: string): Promise<DomainTarget | null> {
     const hostname = rawHostname.trim().toLowerCase()
-    const rows: { boxId: string; port: number }[] = await this.dataSource.query(
-      `SELECT "box_id" AS "boxId", "port" FROM "domain" WHERE "hostname" = $1 AND "box_id" IS NOT NULL`,
+    const rows: StoredTarget[] = await this.dataSource.query(
+      `SELECT "target_type" AS "targetType", "box_id" AS "boxId", "app_id" AS "appId", "port"
+       FROM "domain" WHERE "hostname" = $1`,
       [hostname],
     )
     if (rows.length === 0) {
       return null
     }
-    return { boxId: rows[0].boxId, port: Number(rows[0].port) }
+    return this.targetOf(rows[0])
   }
 
   /** Every name the organization holds, bound or not, with its allowance. */
@@ -246,21 +248,17 @@ export class DomainService {
     if (!organization) {
       throw new NotFoundException(`Organization ${organizationId} not found`)
     }
-    const rows: { hostname: string; kind: DomainKind; boxId: string | null; port: number | null }[] =
-      await this.dataSource.query(
-        `SELECT "hostname", "kind", "box_id" AS "boxId", "port" FROM "domain"
+    const rows: (StoredTarget & { hostname: string })[] = await this.dataSource.query(
+      `SELECT "hostname", "target_type" AS "targetType", "box_id" AS "boxId", "app_id" AS "appId", "port" FROM "domain"
          WHERE "organization_id" = $1 ORDER BY "hostname"`,
-        [organizationId],
-      )
+      [organizationId],
+    )
     const limit = Number(organization.limit)
     return {
       domains: rows.map((row) => ({
-        name: this.nameOf(row.hostname, row.kind),
         hostname: row.hostname,
         url: this.urlFor(row.hostname),
-        boxId: row.boxId,
-        // A box deleted outright clears box_id only; its port is not a target.
-        port: row.boxId === null ? null : Number(row.port),
+        target: this.targetOf(row),
       })),
       limit,
       used: rows.length,
@@ -287,9 +285,12 @@ export class DomainService {
     }
   }
 
-  /** What a caller binds a stored hostname by: the label of a platform name, a custom hostname whole. */
-  private nameOf(hostname: string, kind: DomainKind): string {
-    return kind === 'platform' ? hostname.slice(0, hostname.indexOf('.')) : hostname
+  private targetOf(row: StoredTarget): DomainTarget | null {
+    if (row.targetType === 'app') {
+      return row.appId === null ? null : { type: 'app', app: row.appId }
+    }
+    // Hard deletion clears only the Box FK; any remaining port is ignored.
+    return row.boxId === null ? null : { type: 'box', box: row.boxId, port: Number(row.port) }
   }
 
   /** The URL a stored hostname serves at: the app domain's port, if any, rejoins it here. */
