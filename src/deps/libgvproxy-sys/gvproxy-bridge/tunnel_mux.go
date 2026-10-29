@@ -6,6 +6,8 @@ import (
 	"net"
 	"net/http"
 	"strconv"
+
+	"github.com/boxlite-ai/tcprelay"
 )
 
 // controlMux is what the control socket serves: gvproxy's ServicesMux with
@@ -68,31 +70,11 @@ func dialFirstTunnel(dial func(ctx context.Context, addr string) (net.Conn, erro
 }
 
 func relayTunnel(ctx context.Context, client, guest net.Conn, clientReader io.Reader) {
-	closeBoth := func() {
-		client.Close()
-		guest.Close()
-	}
-	stop := context.AfterFunc(ctx, closeBoth)
-	defer stop()
+	_ = tcprelay.Relay(ctx, &bufferedConn{Conn: client, reader: clientReader}, guest)
+}
 
-	done := make(chan struct{}, 2)
-	copyStream := func(dst net.Conn, src io.Reader) {
-		_, err := io.Copy(dst, src)
-		if err == nil {
-			if writer, ok := dst.(interface{ CloseWrite() error }); ok {
-				err = writer.CloseWrite()
-			} else {
-				err = dst.Close()
-			}
-		}
-		if err != nil {
-			closeBoth()
-		}
-		done <- struct{}{}
-	}
-	go copyStream(guest, clientReader)
-	go copyStream(client, guest)
-	// A clean EOF closes only that direction; the peer can still reply.
-	<-done
-	<-done
+// serveControl makes instance cancellation reach hijacked tunnel handlers too.
+func serveControl(ctx context.Context, listener net.Listener, handler http.Handler) error {
+	server := &http.Server{Handler: handler, BaseContext: func(net.Listener) context.Context { return ctx }}
+	return server.Serve(listener)
 }

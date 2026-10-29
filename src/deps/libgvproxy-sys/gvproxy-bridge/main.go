@@ -494,7 +494,7 @@ func gvproxy_create(configJSON *C.char, errOut **C.char) C.longlong {
 					mux := http.NewServeMux()
 					mux.Handle("/", controlMux(vn.ServicesMux(), vn.DialContextTCP))
 					mux.Handle("/network/outbound", policy)
-					if sErr := http.Serve(l, mux); sErr != nil && ctx.Err() == nil {
+					if sErr := serveControl(ctx, l, mux); sErr != nil && ctx.Err() == nil {
 						logrus.WithError(sErr).Error("gvproxy services HTTP server exited")
 					}
 				}()

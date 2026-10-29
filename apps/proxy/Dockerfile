@@ -23,6 +23,7 @@ COPY apps/nx.json ./
 COPY apps/go.work apps/go.work.sum ./
 COPY apps/proxy/go.mod apps/proxy/go.sum proxy/
 COPY apps/libs/common-go/go.mod apps/libs/common-go/go.sum libs/common-go/
+COPY apps/libs/tcprelay/go.mod libs/tcprelay/
 COPY apps/libs/api-client-go/go.mod apps/libs/api-client-go/go.sum libs/api-client-go/
 RUN head -1 go.work > go.work.tmp && printf '\nuse (\n\t./proxy\n\t./libs/common-go\n\t./libs/api-client-go\n)\n' >> go.work.tmp && mv go.work.tmp go.work
 
@@ -34,6 +35,7 @@ RUN go -C proxy mod download && go -C libs/common-go mod download && go -C libs/
 # Go source
 COPY apps/proxy/ proxy/
 COPY apps/libs/common-go/ libs/common-go/
+COPY apps/libs/tcprelay/ libs/tcprelay/
 COPY apps/libs/api-client-go/ libs/api-client-go/
 
 ARG VERSION=0.0.1

@@ -323,3 +323,10 @@ type bufferedConn struct {
 func (c *bufferedConn) Read(p []byte) (int, error) {
 	return c.reader.Read(p)
 }
+
+func (c *bufferedConn) CloseWrite() error {
+	if writer, ok := c.Conn.(interface{ CloseWrite() error }); ok {
+		return writer.CloseWrite()
+	}
+	return c.Conn.Close()
+}

@@ -43,7 +43,7 @@ type guestDialer func(dstIP string, port uint16) (net.Conn, error)
 
 // startGuestStack attaches a second gVisor stack to the tap as the guest, so
 // tests get a real net.Conn instead of hand-built frames.
-func startGuestStack(t *testing.T, tap *guestTap, cfg GvproxyConfig) guestDialer {
+func startGuestStack(t *testing.T, tap *guestTap, cfg GvproxyConfig, setup ...func(*stack.Stack)) guestDialer {
 	t.Helper()
 
 	guestMAC, err := net.ParseMAC(cfg.GuestMac)
@@ -110,6 +110,10 @@ func startGuestStack(t *testing.T, tap *guestTap, cfg GvproxyConfig) guestDialer
 			}
 		}
 	}()
+
+	for _, configure := range setup {
+		configure(s)
+	}
 
 	return func(dstIP string, port uint16) (net.Conn, error) {
 		dialCtx, dialCancel := context.WithTimeout(context.Background(), 5*time.Second)

@@ -601,6 +601,9 @@ test\:apps\:runner: dev\:go
 	@echo "🧪 Running runner Go tests..."
 	@cd apps/runner && go test -tags boxlite_dev ./... $(GOTEST_FILTER)
 
+test\:apps\:common-go:
+	@cd apps/libs/common-go && go test ./... $(GOTEST_FILTER)
+
 test\:apps\:proxy:
 	@cd apps/proxy && go test ./... $(GOTEST_FILTER)
 

@@ -23,6 +23,7 @@ COPY apps/nx.json ./
 COPY apps/go.work apps/go.work.sum apps/
 COPY apps/runner/go.mod apps/runner/go.sum apps/runner/
 COPY apps/libs/common-go/go.mod apps/libs/common-go/go.sum apps/libs/common-go/
+COPY apps/libs/tcprelay/go.mod apps/libs/tcprelay/
 COPY apps/libs/api-client-go/go.mod apps/libs/api-client-go/go.sum apps/libs/api-client-go/
 COPY sdks/go/go.mod sdks/go/
 
@@ -46,6 +47,7 @@ COPY ${LIBBOXLITE_PATH} sdks/go/libboxlite.a
 # Go source
 COPY apps/runner/ apps/runner/
 COPY apps/libs/common-go/ apps/libs/common-go/
+COPY apps/libs/tcprelay/ apps/libs/tcprelay/
 COPY apps/libs/api-client-go/ apps/libs/api-client-go/
 
 ARG VERSION=0.0.1

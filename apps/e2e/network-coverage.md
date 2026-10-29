@@ -155,6 +155,8 @@ Closing the client's write side sends EOF to the guest while keeping the
 reply direction open. For example, a service can read a request through EOF,
 then send its response. Python and Node exercise this contract through the
 API, preview proxy, Runner and real guest; neither half-close case is xfailed.
+The dedicated `/after-eof` fixture waits for request EOF before replying, with
+a bounded wait, so receiving a response proves that FIN reached the guest.
 Both failed with a lost response on infra-local before the repair and passed
 after rebuilding the runtime, Runner and Proxy. The nine adjacent Python/Node
 tunnel cases also passed, including HTTP, TLS shutdown, wake and revocation.
@@ -171,6 +173,18 @@ Two server boundaries previously discarded the reply:
   Cancellation or a copy/shutdown error closes both sockets and joins the
   workers. Its HTTP handoff also preserves buffered bytes without continuing
   through the HTTP reader.
+
+All TCP relays now use the shared [tcprelay contract](../libs/tcprelay/README.md):
+after the first EOF, ten minutes without forwarded payload closes both peers.
+Each successful write renews that window; fully open connections have no new
+idle deadline. Control-server request contexts also inherit instance cancellation,
+so stopping an instance releases hijacked tunnels immediately.
+
+The same behavior covers unrestricted egress, IP/CIDR egress, inspected hostname
+passthrough, TCP port mappings and UNIX-to-TCP mappings through a
+[pinned local gvproxy dependency](../../src/deps/libgvproxy-sys/vendor/gvisor-tap-vsock/README.boxlite.md).
+SSH and named-pipe adapters retain their existing behavior; their Close semantics
+do not provide the TCP cleanup guarantee.
 
 Socket regressions cover a reply sent only after EOF, either peer closing
 first, buffered bytes followed by raw bytes, and cancellation. Rebuild the

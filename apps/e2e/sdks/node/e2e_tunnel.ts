@@ -162,7 +162,9 @@ async function main(): Promise<void> {
       } else if (scenario === 'tls-shutdown' || scenario === 'half-close') {
         const socket = await tunnel.connect()
         try {
-          await socket.write(GET)
+          await socket.write(scenario === 'half-close'
+            ? Buffer.from('GET /after-eof HTTP/1.0\r\nHost: tunnel.test\r\n\r\n')
+            : GET)
           if (scenario === 'half-close') await socket.shutdownWrite()
           let response: Buffer
           try {

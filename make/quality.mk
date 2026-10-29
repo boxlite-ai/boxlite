@@ -203,6 +203,7 @@ fmt\:go:
 	@cd src/deps/libgvproxy-sys/gvproxy-bridge && gofmt -w .
 	@cd apps/image-service && go fmt ./...
 	@cd apps/runner && gofmt -w .
+	@gofmt -w apps/libs/tcprelay apps/libs/common-go/pkg/proxy src/deps/libgvproxy-sys/vendor/gvisor-tap-vsock/pkg/tcpproxy src/deps/libgvproxy-sys/vendor/gvisor-tap-vsock/pkg/services/forwarder/ports.go
 
 fmt\:check\:go:
 	@echo "🔍 Checking Go formatting..."

@@ -305,7 +305,7 @@ async def test_python_sdk_tunnel_preserves_tcp_half_close(rt, image):
         await _wait_for_http(box, *SERVICES[0])
         connection = await (await box.network.tunnel(("127.0.0.1", SERVICES[0][0]))).connect()
         await connection.write(
-            b"GET / HTTP/1.0\r\nHost: tunnel.test\r\nConnection: close\r\n\r\n",
+            b"GET /after-eof HTTP/1.0\r\nHost: tunnel.test\r\nConnection: close\r\n\r\n",
         )
         await connection.shutdown_write()
         response = bytearray()
