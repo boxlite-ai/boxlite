@@ -43,6 +43,8 @@ pub enum Error {
     EventLoop(io::Error),
     /// Starting the thread that writes the guest console failed.
     SpawnConsole(io::Error),
+    /// Starting the thread that raises the CMOS RTC alarm failed.
+    SpawnRtcAlarm(io::Error),
     /// Starting the thread of vCPU `vcpu` failed.
     SpawnVcpu { vcpu: u32, source: io::Error },
     /// vCPU `vcpu` exited in a way this host should never report, such as
@@ -90,6 +92,7 @@ impl fmt::Display for Error {
             }
             Self::EventLoop(_) => f.write_str("the VM event loop failed"),
             Self::SpawnConsole(_) => f.write_str("failed to start the console thread"),
+            Self::SpawnRtcAlarm(_) => f.write_str("failed to start the RTC alarm thread"),
             Self::SpawnVcpu { vcpu, .. } => write!(f, "failed to start vCPU {vcpu}"),
             Self::UnexpectedExit { vcpu, exit } => {
                 write!(f, "vCPU {vcpu} exited unexpectedly: {exit}")
@@ -117,7 +120,8 @@ impl error::Error for Error {
             | Self::WriteBootData { source, .. }
             | Self::SpawnVcpu { source, .. }
             | Self::EventLoop(source)
-            | Self::SpawnConsole(source) => Some(source),
+            | Self::SpawnConsole(source)
+            | Self::SpawnRtcAlarm(source) => Some(source),
             Self::Hypervisor(source) => Some(source),
         }
     }

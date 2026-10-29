@@ -36,7 +36,7 @@ boxlite-vmm
 | `chipset` | `ChipsetBuilder`, the one registry of ranges and interrupt lines, and `Chipset`, the read-only machine it builds |
 | `bus` | `Bus`, `BusRange` and `BusDevice`, and `Buses::dispatch`, which serves the MMIO and port exits of a vCPU |
 | `irq` | `IrqChip`, the host interrupt controller as devices see it, and `IrqLine`, one device line; HVF and KVM provide the controller, WHP (M10) only local APICs |
-| `devices` | The console queue, and on x86_64 the 8250 UART at COM1 and the i8042 reset, with `add_legacy_devices`, which adds them to the chipset |
+| `devices` | The console queue, and on x86_64 the 8250 UART at COM1, the CMOS RTC and the i8042 reset, with `add_legacy_devices`, which adds them to the chipset |
 | `events` | `Event`, which ends the VM, `EventSender`, which also latches the stop, and `EventLoop`, the poller that waits for the first event |
 
 The x86_64 KVM boot and lifecycle are in place; the M1 devices, arm64 and HVF
@@ -182,8 +182,8 @@ make test:integration:vmm:linux
 ```
 
 Each builds a KVM `Vm` with `prepare` for 256 MiB of RAM on the
-[legacy devices](#legacy-devices-and-the-console) and runs it with
-`Vm::run`. The host VM is KVM behind a test wrapper that counts the edges
+[legacy devices](#legacy-devices-and-the-console), with the CMOS RTC running
+from 2026-01-02T03:04:05Z, and runs it with `Vm::run`. The host VM is KVM behind a test wrapper that counts the edges
 devices raise on GSI 4 and can drop every interrupt. A watchdog stops a boot
 at its timeout, 30 seconds unless stated, so a failed boot reports the serial
 log so far.
@@ -205,9 +205,17 @@ log so far.
   then reports CPU i, the log must show `exitcode=0x00000f00`.
 - With `console=ttyS0 panic=-1 reboot=k`, one vCPU and an `/init` that
   prints a line, waits for the tty to send it and restarts the machine, the
-  log must show the 16550A on IRQ 4, that line and
-  `reboot: Restarting system`, in that order, and GSI 4 must have been
-  raised.
+  log must show the 16550A on IRQ 4, `rtc_cmos rtc_cmos: registered as
+  rtc0`, that line and `reboot: Restarting system`, in that order, and must
+  not show `setting system clock`: kvm-clock keeps the boot time. GSI 4 must
+  have been raised, no MMIO access may go unclaimed, and the only unclaimed port access must
+  be one read: Linux's probe of port `0x87`.
+- With `console=ttyS0 panic=-1 reboot=k`, one vCPU and an `/init` that
+  mounts devtmpfs, turns on update interrupts on `/dev/rtc0` with
+  `RTC_UIE_ON`, as `hwclock` does, and waits up to 2 s for one, the log must
+  show `rtc0` registered, the line `/init` prints once one arrives, and
+  `reboot: Restarting system`, with no panic. Linux serves update
+  interrupts with the CMOS alarm, so the line proves the alarm raised IRQ 8.
 - The same boot with a console sink that takes nothing until the run has
   ended, and a 4 KiB queue, must still end with `GuestReset`. The queue drops
   the oldest bytes and counts them; the sink then gets the batch the worker
@@ -375,6 +383,7 @@ windows, then adds the legacy devices:
 | Ports | Device | Behavior |
 | --- | --- | --- |
 | `0x3F8`–`0x3FF` | `com1`, vm-superio's 16550A | Output goes to the console queue; a pending, enabled THRE or RDA raises an edge on GSI 4; no input yet |
+| `0x70`–`0x71` | `cmos` | See [CMOS RTC](#cmos-rtc) |
 | `0x60`, `0x64` | `i8042`, vm-superio's controller | Reads 0; the first `0xFE` at `0x64` sends `GuestReset` |
 
 - vm-superio must be 0.8.2 or later. It raises THRE on every IER write, so
@@ -393,6 +402,49 @@ windows, then adds the legacy devices:
   worker holds included, as dropped.
 - A failed interrupt sends `DeviceFailed`, once.
 - The guest kernel has no i8042 driver, so the reset is all the device does.
+
+## CMOS RTC
+
+On x86_64, `devices::cmos::CmosRtc` is the PC's real-time clock. The guest
+writes a register number to port `0x70`, then reads or writes that register
+at `0x71`. Linux registers it as `rtc0`, but takes its boot time from
+kvm-clock: `boot/kernel.config` leaves `RTC_HCTOSYS` off, so the CMOS, which
+reports whole seconds, never overrides it.
+
+- The time is an injected `Clock` plus an offset that keeps any time the
+  guest sets. `cmos::host_clock` reads the host wall clock; the tests inject
+  a fixed or a running time.
+- As in QEMU, the time registers hold still while register B's SET bit or a
+  divider reset in register A stops the clock.
+- On any release the written time resumes half a second into its second,
+  because Linux writes half a second early (`set_offset_nsec` in
+  `rtc-cmos.c`). QEMU adds the half second only when the divider restarts
+  and otherwise keeps the old phase, which would put a Linux write on AMD,
+  where only SET is used, up to half a second off.
+- A write while the clock runs takes effect at once.
+- Time registers read in BCD unless register B selects binary. Only 24-hour
+  mode is modelled, so register B always reads with that bit set.
+- Register A starts at `0x26` and never reports an update in progress;
+  register D reads `0x80`. The remaining bytes are NVRAM.
+- Linux writes the century byte only through ACPI, so a two-digit year
+  00–69 means 20xx and 70–99 means 19xx unless the guest writes it.
+- The alarm matches the seconds, minutes and hours registers `0x01`, `0x03`
+  and `0x05`; a byte `0xC0`–`0xFF` matches any value, as Linux writes `0xff`
+  for a field it does not care about. With AIE in register B set and the
+  clock running, a worker thread sleeps until the next matching guest second,
+  sets IRQF and AF in register C, raises an edge on GSI 8 and re-arms.
+  Reading register C returns and clears them. Any write to a time, alarm or
+  status register recomputes the deadline; clearing AIE or stopping the
+  clock disarms it.
+- x86 Linux registers `rtc_cmos` with IRQ 8, so it trusts the alarm and
+  serves update interrupts with it; `hwclock` waits up to 10 s for one on
+  every read. Periodic and update-ended interrupts, and day and month
+  alarms, are not modelled.
+- The worker holds the alarm state and the line, never the device.
+  Dropping the `CmosRtc`, which the `Chipset` owns and drops before the host
+  VM, stops and joins it; a failed edge ends the VM with `DeviceFailed`.
+- `boot/kernel.config` enables `RTC_INTF_DEV`, so the guest has
+  `/dev/rtc0`.
 
 ## Build
 
@@ -424,9 +476,9 @@ port bus at its register offset, and an `IrqLine` sets GSI 4 and 5 through
 `KVM_IRQ_LINE`, skipping a repeated level. Another flat guest reads a claimed
 and an unclaimed port of a built chipset, and the device's line, armed by the
 build, reaches KVM. A third runs on the [legacy devices](#legacy-devices-and-the-console):
-it prints `OK` on COM1, reads an unclaimed port and unmapped MMIO as all
-ones, and runs no instruction after its i8042 reset. CI runs the same tests
-through `make coverage:vmm:kvm`. When a change matches its `vmm` path filter,
+it prints `OK` on COM1, reads the CMOS seconds from a fixed clock, reads an
+unclaimed port and unmapped MMIO as all ones, and runs no instruction after
+its i8042 reset. CI runs the same tests through `make coverage:vmm:kvm`. When a change matches its `vmm` path filter,
 and weekly, it also runs the [boot tests](#boot-tests) on the kernel it builds
 with `make vmm:boot:host`, through `make coverage:vmm:boot`, which needs
 `VMM_KERNEL` like `make test:integration:vmm:linux`.

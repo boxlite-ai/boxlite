@@ -181,6 +181,9 @@ const LINUX_CMDLINE: &str = "earlycon=uart8250,io,0x3f8 keep_bootcon panic=-1 re
 const CONSOLE_CMDLINE: &str = "console=ttyS0 panic=-1 reboot=k";
 /// How long a real-kernel boot may take before the watchdog ends it.
 const BOOT_TIMEOUT: Duration = Duration::from_secs(30);
+/// The time the CMOS RTC starts at, 2026-01-02T03:04:05Z, in nanoseconds. It
+/// then runs, so an alarm Linux sets for an update interrupt comes due.
+const CMOS_TIME: i64 = 1_767_323_045_000_000_000;
 
 /// `vcpu_count` vCPUs and 256 MiB of RAM for `kernel` and `initramfs`,
 /// booted with `cmdline`.
@@ -326,7 +329,8 @@ struct LinuxVm {
 }
 
 /// Builds a KVM VM for `config` with the legacy devices, COM1 writing to
-/// `console`. With `deliver_irqs` off, every device interrupt is dropped.
+/// `console` and the CMOS RTC running from `CMOS_TIME`. With `deliver_irqs`
+/// off, every device interrupt is dropped.
 fn linux_vm(config: &VmConfig, deliver_irqs: bool, console: Console) -> LinuxVm {
     let (writer, console) = ConsoleWorker::spawn(console.sink, console.capacity).unwrap();
     let gsi_4_edges = Arc::new(AtomicUsize::new(0));
@@ -346,7 +350,14 @@ fn linux_vm(config: &VmConfig, deliver_irqs: bool, console: Console) -> LinuxVm 
             zero_page = Some(ram.memory().read_obj(address).unwrap());
             Ok(setup.boot_regs)
         },
-        |chipset| add_legacy_devices(chipset, writer),
+        |chipset| {
+            let started = Instant::now();
+            let clock = move || {
+                let elapsed = i64::try_from(started.elapsed().as_nanos()).unwrap_or(i64::MAX);
+                CMOS_TIME.saturating_add(elapsed)
+            };
+            add_legacy_devices(chipset, writer, Box::new(clock))
+        },
     )
     .expect("create the KVM VM");
     LinuxVm {
@@ -370,6 +381,9 @@ struct LinuxRun {
     console: ConsoleWorker,
     /// How long the guest ran.
     elapsed: Duration,
+    /// The port and the MMIO reads and writes no device claimed.
+    unclaimed_ports: (u64, u64),
+    unclaimed_mmio: (u64, u64),
 }
 
 /// Boots `config` through `Vm::run` on the legacy devices, with the serial
@@ -387,12 +401,15 @@ fn run_linux(
         gsi_4_edges,
     } = linux_vm(config, deliver_irqs, console);
     let (exit, elapsed) = run_with_watchdog(&mut vm, timeout);
+    let buses = vm.chipset().buses();
     LinuxRun {
         zero_page,
         exit,
         gsi_4_edges: gsi_4_edges.load(Ordering::Relaxed),
         console,
         elapsed,
+        unclaimed_ports: buses.pio.unclaimed(),
+        unclaimed_mmio: buses.mmio.unclaimed(),
     }
 }
 
@@ -430,9 +447,11 @@ fn assert_reset(run: &LinuxRun, log: &str) {
         run.elapsed
     );
     eprintln!(
-        "boot: {:?}, {} GSI 4 edges, {} console bytes dropped",
+        "boot: {:?}, {} GSI 4 edges, unclaimed ports {:?} and MMIO {:?}, {} console bytes dropped",
         run.elapsed,
         run.gsi_4_edges,
+        run.unclaimed_ports,
+        run.unclaimed_mmio,
         run.console.dropped_bytes()
     );
 }
@@ -520,20 +539,20 @@ fn exit_program(code: u8) -> Vec<u8> {
     static_program(&[0xbf, code, 0, 0, 0, 0xb8, 231, 0, 0, 0, 0x0f, 0x05])
 }
 
-/// A static executable that writes `line` and a newline to its stdout, waits
-/// until the tty has sent them, and restarts the machine; `exit_group(1)`
-/// follows in case the restart returns.
-fn print_and_restart(line: &str) -> Vec<u8> {
-    const CODE_LEN: u64 = 81;
-    let message = format!("{line}\n");
-    let message_addr = u32::try_from(PROGRAM_BASE + PROGRAM_HEADERS + CODE_LEN).unwrap();
-    let message_len = u32::try_from(message.len()).unwrap();
+/// The bytes [`restart_code`] emits, and the offset of its `exit_group(1)`.
+const RESTART_LEN: usize = 81;
+const RESTART_EXIT: usize = 69;
+
+/// The end of every restarting `/init`: writes the `len` bytes at `message`
+/// to stdout, waits until the tty has sent them, and restarts the machine;
+/// `exit_group(1)` follows in case the restart returns.
+fn restart_code(message: u32, len: u32) -> Vec<u8> {
     let mut text = Vec::new();
     // mov eax, 1 (write); mov edi, 1; mov esi, message; mov edx, length; syscall
     text.extend_from_slice(&[0xb8, 1, 0, 0, 0, 0xbf, 1, 0, 0, 0, 0xbe]);
-    text.extend_from_slice(&message_addr.to_le_bytes());
+    text.extend_from_slice(&message.to_le_bytes());
     text.push(0xba);
-    text.extend_from_slice(&message_len.to_le_bytes());
+    text.extend_from_slice(&len.to_le_bytes());
     text.extend_from_slice(&[0x0f, 0x05]);
     // mov eax, 16 (ioctl); mov edi, 1; mov esi, 0x5409 (TCSBRK); mov edx, 1
     // (drain, no break); syscall
@@ -546,9 +565,81 @@ fn print_and_restart(line: &str) -> Vec<u8> {
         0xb8, 169, 0, 0, 0, 0xbf, 0xad, 0xde, 0xe1, 0xfe, 0xbe, 0x69, 0x19, 0x12, 0x28, 0xba, 0x67,
         0x45, 0x23, 0x01, 0x45, 0x31, 0xd2, 0x0f, 0x05,
     ]);
+    assert_eq!(text.len(), RESTART_EXIT);
     // mov edi, 1; mov eax, 231 (exit_group); syscall
     text.extend_from_slice(&[0xbf, 1, 0, 0, 0, 0xb8, 231, 0, 0, 0, 0x0f, 0x05]);
-    assert_eq!(text.len() as u64, CODE_LEN);
+    assert_eq!(text.len(), RESTART_LEN);
+    text
+}
+
+/// A static executable that writes `line` and a newline to its stdout, waits
+/// until the tty has sent them, and restarts the machine; `exit_group(1)`
+/// follows in case the restart returns.
+fn print_and_restart(line: &str) -> Vec<u8> {
+    let message = format!("{line}\n");
+    let message_addr = u32::try_from(PROGRAM_BASE + PROGRAM_HEADERS + RESTART_LEN as u64).unwrap();
+    let mut text = restart_code(message_addr, u32::try_from(message.len()).unwrap());
+    text.extend_from_slice(message.as_bytes());
+    static_program(&text)
+}
+
+/// A static executable that mounts devtmpfs on `/dev`, turns on update
+/// interrupts on `/dev/rtc0`, and waits up to 2 s for one. When one arrives
+/// it prints `line` and restarts like [`print_and_restart`]; otherwise it
+/// exits, so the kernel panics without printing `line`.
+fn read_rtc_update_and_restart(line: &str) -> Vec<u8> {
+    const SETUP_LEN: usize = 119;
+    const STRINGS: &[u8] = b"devtmpfs\0/dev\0/dev/rtc0\0";
+    let data = PROGRAM_BASE + PROGRAM_HEADERS + (SETUP_LEN + RESTART_LEN) as u64;
+    let at = |offset: u64| u32::try_from(data + offset).unwrap().to_le_bytes();
+    let (devtmpfs, dev, rtc0) = (at(0), at(9), at(14));
+    // A `jne` ending at `end` that lands on the restart code's exit_group(1).
+    let to_exit = |end: usize| u8::try_from(SETUP_LEN + RESTART_EXIT - end).unwrap();
+    let mut text = Vec::new();
+    // mount("devtmpfs", "/dev", "devtmpfs", 0, NULL): mov eax, 165; mov edi,
+    // source; mov esi, target; mov edx, type; xor r10d, r10d; xor r8d, r8d;
+    // syscall
+    text.extend_from_slice(&[0xb8, 165, 0, 0, 0, 0xbf]);
+    text.extend_from_slice(&devtmpfs);
+    text.push(0xbe);
+    text.extend_from_slice(&dev);
+    text.push(0xba);
+    text.extend_from_slice(&devtmpfs);
+    text.extend_from_slice(&[0x45, 0x31, 0xd2, 0x45, 0x31, 0xc0, 0x0f, 0x05]);
+    // ebx = open("/dev/rtc0", O_RDONLY): mov eax, 2; mov edi, path; xor esi,
+    // esi; syscall; mov ebx, eax
+    text.extend_from_slice(&[0xb8, 2, 0, 0, 0, 0xbf]);
+    text.extend_from_slice(&rtc0);
+    text.extend_from_slice(&[0x31, 0xf6, 0x0f, 0x05, 0x89, 0xc3]);
+    // ioctl(ebx, RTC_UIE_ON, 0): mov eax, 16; mov edi, ebx; mov esi, 0x7003;
+    // xor edx, edx; syscall
+    text.extend_from_slice(&[
+        0xb8, 16, 0, 0, 0, 0x89, 0xdf, 0xbe, 0x03, 0x70, 0, 0, 0x31, 0xd2, 0x0f, 0x05,
+    ]);
+    // A pollfd {ebx, POLLIN} on the stack, then poll(rsp, 1, 2000) and exit
+    // unless the fd is ready: sub rsp, 8; mov [rsp], ebx; mov dword
+    // [rsp+4], 1; mov eax, 7; mov rdi, rsp; mov esi, 1; mov edx, 2000;
+    // syscall; cmp eax, 1; jne exit
+    text.extend_from_slice(&[
+        0x48, 0x83, 0xec, 0x08, 0x89, 0x1c, 0x24, 0xc7, 0x44, 0x24, 0x04, 1, 0, 0, 0, 0xb8, 7, 0,
+        0, 0, 0x48, 0x89, 0xe7, 0xbe, 1, 0, 0, 0, 0xba, 0xd0, 0x07, 0, 0, 0x0f, 0x05, 0x83, 0xf8,
+        1, 0x75,
+    ]);
+    text.push(to_exit(text.len() + 1));
+    // read(ebx, rsp, 8), and exit unless it returned 8 bytes: xor eax, eax;
+    // mov edi, ebx; mov rsi, rsp; mov edx, 8; syscall; cmp eax, 8; jne exit
+    text.extend_from_slice(&[
+        0x31, 0xc0, 0x89, 0xdf, 0x48, 0x89, 0xe6, 0xba, 8, 0, 0, 0, 0x0f, 0x05, 0x83, 0xf8, 8, 0x75,
+    ]);
+    text.push(to_exit(text.len() + 1));
+    assert_eq!(text.len(), SETUP_LEN);
+    let message = format!("{line}\n");
+    let message_addr = u32::try_from(data + STRINGS.len() as u64).unwrap();
+    text.extend(restart_code(
+        message_addr,
+        u32::try_from(message.len()).unwrap(),
+    ));
+    text.extend_from_slice(STRINGS);
     text.extend_from_slice(message.as_bytes());
     static_program(&text)
 }
@@ -688,8 +779,11 @@ const INIT_MARKER: &str = "INIT-MARKER-0123456789ABCDEF";
 
 /// Boots the kernel named by `VMM_KERNEL` with its console on the 8250 driver
 /// and an `/init` that prints `INIT_MARKER` and restarts the machine. Linux
-/// must find a 16550A on IRQ 4, `/init`'s line must leave through the tty,
-/// and the restart must end the run with the i8042 reset.
+/// must find a 16550A on IRQ 4 and register the CMOS RTC as rtc0 without
+/// setting its clock from it, `/init`'s line must leave through the tty, and
+/// the restart must end the run with the i8042 reset. The only access no
+/// device claims is one port read, Linux's probe of the ISA DMA page register
+/// at 0x87.
 #[test]
 #[ignore = "requires Linux x86_64 with access to /dev/kvm and VMM_KERNEL naming an x86_64 vmlinux"]
 fn boots_linux_on_the_legacy_devices_until_init_restarts() {
@@ -711,13 +805,53 @@ fn boots_linux_on_the_legacy_devices_until_init_restarts() {
         &log,
         &[
             &serial_probe_line(),
+            "rtc_cmos rtc_cmos: registered as rtc0",
             INIT_MARKER,
             "reboot: Restarting system",
         ],
     );
+    // The boot time comes from kvm-clock; the CMOS must not override it.
+    assert!(!log.contains("setting system clock"), "{log}");
     assert!(!log.contains("Kernel panic"), "{log}");
     assert!(run.gsi_4_edges > 0);
     assert_eq!(run.console.dropped_bytes(), 0);
+    assert_eq!(run.unclaimed_ports, (1, 0), "{log}");
+    assert_eq!(run.unclaimed_mmio, (0, 0));
+}
+
+/// The line the UIE test's `/init` prints once an update interrupt arrived.
+const RTC_UPDATE_MARKER: &str = "RTC-UPDATE-IRQ-0123456789ABCDEF";
+
+/// Boots the kernel named by `VMM_KERNEL` with an `/init` that turns on
+/// update interrupts on `/dev/rtc0`, as `hwclock` does, and waits up to 2 s
+/// for one. Linux serves them with the CMOS alarm, so the marker shows that
+/// the alarm raised IRQ 8 and register C reported it.
+#[test]
+#[ignore = "requires Linux x86_64 with access to /dev/kvm and VMM_KERNEL naming an x86_64 vmlinux"]
+fn an_rtc_update_interrupt_reaches_init_through_the_cmos_alarm() {
+    let archive = newc_archive("init", &read_rtc_update_and_restart(RTC_UPDATE_MARKER));
+    let initramfs = TempFile::new("rtc-update.cpio", &archive);
+
+    let log = SerialLog::default();
+    let mut run = run_linux(
+        &linux_config(1, CONSOLE_CMDLINE, Some(initramfs.0.clone())),
+        true,
+        BOOT_TIMEOUT,
+        Console::to(&log),
+    );
+
+    run.console.finish();
+    let log = log.text();
+    assert_reset(&run, &log);
+    assert_in_order(
+        &log,
+        &[
+            "rtc_cmos rtc_cmos: registered as rtc0",
+            RTC_UPDATE_MARKER,
+            "reboot: Restarting system",
+        ],
+    );
+    assert!(!log.contains("Kernel panic"), "{log}");
 }
 
 /// The line the M1 smoke test's `/init` prints.
