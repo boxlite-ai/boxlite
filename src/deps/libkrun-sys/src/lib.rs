@@ -33,12 +33,49 @@ pub const KRUN_KERNEL_FORMAT_IMAGE_BZ2: u32 = 3;
 pub const KRUN_KERNEL_FORMAT_IMAGE_GZ: u32 = 4;
 pub const KRUN_KERNEL_FORMAT_IMAGE_ZSTD: u32 = 5;
 
+// Checkpointing constants from libkrun.h (Linux x86_64 KVM only; elsewhere
+// every krun_snapshot_* call returns -ENOTSUP).
+pub const KRUN_SNAPSHOT_PAUSE_HOST_WRITERS_STOPPED: u32 = 1 << 0;
+pub const KRUN_SNAPSHOT_CAP_MEMORY_V9: u64 = 1 << 0;
+pub const KRUN_SNAPSHOT_CAP_CAPTURE_RESERVATION: u64 = 1 << 1;
+pub const KRUN_SNAPSHOT_CAP_EXTERNAL_FDS: u64 = 1 << 2;
+pub const KRUN_SNAPSHOT_CAPTURE_CHECKPOINT: u32 = 0;
+pub const KRUN_SNAPSHOT_CAPTURE_DISK: u32 = 1;
+pub const KRUN_SNAPSHOT_CAPTURE_COMPLETE: u32 = 0;
+pub const KRUN_SNAPSHOT_CAPTURE_CANCEL: u32 = 1;
+
+pub const KRUN_SNAPSHOT_STATE_CONFIGURED: u32 = 0;
+pub const KRUN_SNAPSHOT_STATE_STARTING: u32 = 1;
+pub const KRUN_SNAPSHOT_STATE_RUNNING: u32 = 2;
+pub const KRUN_SNAPSHOT_STATE_PAUSED: u32 = 3;
+pub const KRUN_SNAPSHOT_STATE_EXITED: u32 = 4;
+pub const KRUN_SNAPSHOT_STATE_FAILED: u32 = 5;
+pub const KRUN_SNAPSHOT_STATE_STOPPED: u32 = 6;
+
+#[repr(C)]
+#[derive(Default)]
+pub struct KrunMemoryStatus {
+    pub max_mib: u32,
+    pub requested_mib: u32,
+    pub plugged_mib: u32,
+    pub mapped_mib: u32,
+    pub error: i32,
+    pub active: u32,
+}
+
 extern "C" {
+    #[cfg(target_os = "linux")]
+    pub fn krun_set_memory_hotplug(ctx_id: u32, max_mib: u32) -> i32;
+    #[cfg(target_os = "linux")]
+    pub fn krun_request_memory(ctx_id: u32, total_mib: u32) -> i32;
+    #[cfg(target_os = "linux")]
+    pub fn krun_get_memory_status(ctx_id: u32, output: *mut KrunMemoryStatus) -> i32;
     pub fn krun_init_log(target: i32, level: u32, style: u32, flags: u32) -> i32;
     pub fn krun_set_log_level(level: u32) -> i32;
     pub fn krun_create_ctx() -> i32;
     pub fn krun_free_ctx(ctx_id: u32) -> i32;
     pub fn krun_set_vm_config(ctx_id: u32, num_vcpus: u8, ram_mib: u32) -> i32;
+    pub fn krun_add_kernel_cmdline(ctx_id: u32, param: *const c_char) -> i32;
     pub fn krun_set_root(ctx_id: u32, root_path: *const c_char) -> i32;
     pub fn krun_add_virtiofs(
         ctx_id: u32,
@@ -140,5 +177,77 @@ extern "C" {
         device: *const c_char,
         fstype: *const c_char,
         options: *const c_char,
+    ) -> i32;
+
+    /// Version-9 memory, owner reservation and external-descriptor capability bits.
+    pub fn krun_snapshot_capabilities() -> u64;
+    pub fn krun_snapshot_inspect_fd(memory_fd: i32, json: *mut u8, length: *mut usize) -> i32;
+    pub fn krun_snapshot_begin_capture(
+        ctx_id: u32,
+        kind: u32,
+        session_fd: i32,
+        token: *mut u64,
+    ) -> i32;
+    pub fn krun_snapshot_end_capture(ctx_id: u32, token: u64, outcome: u32) -> i32;
+    pub fn krun_snapshot_prepare_capture(
+        ctx_id: u32,
+        token: u64,
+        json: *mut u8,
+        length: *mut usize,
+        fds: *mut i32,
+        fd_count: *mut usize,
+    ) -> i32;
+    pub fn krun_snapshot_export_fd(
+        ctx_id: u32,
+        token: u64,
+        memory_fd: i32,
+        qcow2_fd: i32,
+        json: *const u8,
+        length: usize,
+    ) -> i32;
+    pub fn krun_snapshot_import_fd(
+        ctx_id: u32,
+        memory_fd: i32,
+        json: *const u8,
+        length: usize,
+        fds: *const i32,
+        fd_count: usize,
+    ) -> i32;
+
+    /// Put the context in checkpointing mode. Must precede every
+    /// `krun_add_net_*` call; `flags` must be 0.
+    pub fn krun_snapshot_enable(ctx_id: u32, flags: u32) -> i32;
+
+    /// Legacy path/archive integration: returns -ENOTSUP; use import_fd.
+    pub fn krun_snapshot_import(
+        ctx_id: u32,
+        image_path: *const c_char,
+        disk_dir: *const c_char,
+        fs_dir: *const c_char,
+    ) -> i32;
+
+    /// RUNNING -> PAUSED. Blocks until the owner finished.
+    pub fn krun_snapshot_pause(ctx_id: u32, flags: u32) -> i32;
+
+    /// PAUSED -> RUNNING. Blocks until the owner finished.
+    pub fn krun_snapshot_resume(ctx_id: u32) -> i32;
+
+    /// Legacy path/archive integration: returns -ENOTSUP; use export_fd.
+    pub fn krun_snapshot_export(ctx_id: u32, path: *const c_char) -> i32;
+
+    /// End execution; invalidates an in-flight reservation and aborts copying.
+    pub fn krun_snapshot_stop(ctx_id: u32) -> i32;
+
+    /// Non-blocking read of the last published state; `exit_code` is valid
+    /// when the state is `KRUN_SNAPSHOT_STATE_EXITED`. Either pointer may be NULL.
+    pub fn krun_snapshot_get_state(ctx_id: u32, state: *mut u32, exit_code: *mut i32) -> i32;
+
+    /// Externally bound root of restored share `tag`, NUL-terminated into `path`.
+    /// Returns the length without NUL, `-ERANGE` if `path_len` is too small.
+    pub fn krun_snapshot_get_restored_share(
+        ctx_id: u32,
+        tag: *const c_char,
+        path: *mut c_char,
+        path_len: usize,
     ) -> i32;
 }

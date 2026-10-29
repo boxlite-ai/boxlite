@@ -618,7 +618,9 @@ impl GuestRootfsManager {
             let version_key = record.name().unwrap_or("");
 
             // Keep entries referenced by existing boxes
-            if referenced.contains(&base_path) {
+            if referenced.contains(&base_path)
+                || self.base_disk_mgr.store().has_dependents(record.id())?
+            {
                 preserved_referenced += 1;
                 continue;
             }
@@ -1249,5 +1251,31 @@ mod tests {
             panic!("minimal rootfs must be disk-based");
         };
         assert_eq!(disk_path, disk_path2);
+    }
+    #[test]
+    fn checkpoint_boot_pin_survives_gc_until_the_import_is_removed() {
+        let home = tempfile::tempdir().unwrap();
+        let bases = home.path().join("bases");
+        let boxes = home.path().join("boxes");
+        std::fs::create_dir_all(&bases).unwrap();
+        std::fs::create_dir_all(&boxes).unwrap();
+        let boot = bases.join("bootpin1.ext4");
+        std::fs::write(&boot, b"exact-retained-boot").unwrap();
+        let store = test_store();
+        insert_rootfs_record(&store, "bootpin1", "old-artifacts", boot.to_str().unwrap());
+        store.add_ref(&id("bootpin1"), "imported-box").unwrap();
+        let mgr = GuestRootfsManager::new(
+            BaseDiskManager::new(bases, store.clone()),
+            home.path().into(),
+        );
+        assert_eq!(
+            mgr.gc_inner(&boxes, None).unwrap(),
+            0,
+            "GC removed a boot dependency with a persistent import pin"
+        );
+        assert_eq!(std::fs::read(&boot).unwrap(), b"exact-retained-boot");
+        store.remove_all_refs_for_box("imported-box").unwrap();
+        assert_eq!(mgr.gc_inner(&boxes, None).unwrap(), 1);
+        assert!(!boot.exists());
     }
 }

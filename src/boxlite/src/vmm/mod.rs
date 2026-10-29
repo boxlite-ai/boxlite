@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::str::FromStr;
 
+pub mod checkpoint;
 pub mod controller;
 pub mod engine;
 pub mod exit_info;
@@ -14,6 +15,8 @@ pub mod guest_binary;
 pub mod guest_check;
 #[cfg(feature = "krun")]
 pub mod krun;
+#[cfg(target_os = "linux")]
+pub(crate) mod memory_control;
 pub mod registry;
 
 use crate::experimental::custom_kernel::{KernelFormat, KernelOptions};
@@ -103,6 +106,9 @@ pub struct FsShare {
     pub host_path: PathBuf,
     /// Whether the share is read-only
     pub read_only: bool,
+    /// Size of the share's DAX window in bytes; 0 for none.
+    #[serde(default)]
+    pub dax_window: u64,
 }
 
 /// Collection of filesystem shares from host to guest.
@@ -117,10 +123,22 @@ impl FsShares {
     }
 
     pub fn add(&mut self, tag: impl Into<String>, path: PathBuf, read_only: bool) {
+        self.add_with_dax(tag, path, read_only, 0);
+    }
+
+    /// Add a share with a DAX window of `dax_window` bytes (0 for none).
+    pub fn add_with_dax(
+        &mut self,
+        tag: impl Into<String>,
+        path: PathBuf,
+        read_only: bool,
+        dax_window: u64,
+    ) {
         self.shares.push(FsShare {
             tag: tag.into(),
             host_path: path,
             read_only,
+            dax_window,
         });
     }
 
@@ -206,8 +224,15 @@ pub struct InstanceSpec {
     #[doc(hidden)]
     #[serde(default)]
     pub nested_virtualization: bool,
+    /// vCPUs online at boot.
     pub cpus: Option<u8>,
+    /// vCPUs created at boot; those above `cpus` stay offline until the guest
+    /// brings them online. `None` creates exactly `cpus`.
+    #[serde(default)]
+    pub max_cpus: Option<u8>,
     pub memory_mib: Option<u32>,
+    #[serde(default)]
+    pub max_memory_mib: Option<u32>,
     /// Optional direct Linux boot configuration prepared inside the box before
     /// this specification is assembled.
     #[serde(default)]
@@ -245,6 +270,9 @@ pub struct InstanceSpec {
     /// Whether the box should continue running when the parent process exits.
     /// When false, the shim detects parent death via watchdog pipe POLLHUP.
     pub detach: bool,
+    /// Checkpoint settings; `None` runs the ordinary libkrun VMM.
+    #[serde(default)]
+    pub checkpoint: Option<checkpoint::CheckpointLaunch>,
 }
 
 /// Entrypoint configuration that the guest should run.

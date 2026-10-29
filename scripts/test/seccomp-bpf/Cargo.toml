@@ -1,0 +1,13 @@
+[package]
+name = "boxlite-seccomp-bpf"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "Compile one thread's BoxLite seccomp filter to raw BPF for tests"
+
+# Standalone test helper, not a member of the BoxLite workspace.
+[workspace]
+
+[dependencies]
+# The version and feature src/boxlite/build.rs compiles the filters with.
+seccompiler = { version = "=0.4.0", features = ["json"] }

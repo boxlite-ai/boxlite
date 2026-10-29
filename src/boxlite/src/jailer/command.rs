@@ -200,8 +200,9 @@ mod tests {
         assert_eq!(*captured_network.lock().unwrap(), Some(false));
     }
 
-    /// When jailer_enabled=true, command() must pre-create logs_dir, exit file,
-    /// and console.log before the sandbox is activated.
+    /// When jailer_enabled=true, command() must pre-create logs_dir and the exit
+    /// file before the sandbox is activated, and leave console.log to libkrun: a
+    /// checkpoint import creates it exclusively and refuses an existing one.
     #[test]
     fn test_command_precreates_logs_dir_and_files() {
         use tempfile::tempdir;
@@ -238,8 +239,8 @@ mod tests {
             "exit file should be pre-created"
         );
         assert!(
-            layout.console_output_path().exists() && layout.console_output_path().is_file(),
-            "console.log should be pre-created"
+            !layout.console_output_path().exists(),
+            "console.log must be left for libkrun to create"
         );
     }
 

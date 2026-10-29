@@ -532,6 +532,55 @@ Restart one or more boxes.
 
 **Usage:** `boxlite restart BOX [BOX ...]`
 
+### `boxlite pause`
+
+Pause a supported box in automatically selected checkpoint owner mode: every vCPU and device stops at one consistent
+cut. While paused it refuses `exec`, `cp`, attach, metrics and network changes. Uses the
+normal local/REST runtime selector; the owner runtime requires Linux x86_64 with KVM.
+
+**Usage:** `boxlite pause [--host-writers-stopped] BOX`
+
+| Option | Description |
+|--------|-------------|
+| `--host-writers-stopped` | Assert you stopped every host process that writes the box's volumes (`-v`); required when it has any. Keep them stopped until `resume` or `stop` |
+
+### `boxlite resume`
+
+Let a paused box run again; it is checked to be the guest that was paused, or stopped.
+
+**Usage:** `boxlite resume BOX`
+
+### `boxlite checkpoint`
+
+Export a Paused owner to a new directory containing exactly `snapshot.mem` and
+`snapshot.qcow2`. Shared files and the exact readonly boot disk remain external
+resources prepared on the target according to saved mount options; no binding file is needed.
+V2 rebuilds internal shared directories and permits different target inodes.
+
+- `boxlite checkpoint export BOX DIRECTORY`
+- `boxlite checkpoint inspect DIRECTORY`
+- `boxlite checkpoint import [--name NAME] DIRECTORY`
+
+Export downloads to a caller-local directory when using REST; import uploads from it.
+Inspection stays local, opens no shares and creates no runtime. Import verifies dependencies
+and publishes a new Paused box; `boxlite resume BOX` continues execution. Older full
+checkpoint formats are refused. Default supported configurations need no creation
+flag; ordinary disk-only `.boxlite` compatibility is unchanged.
+
+See the [checkpoints guide](../../docs/guides/checkpoints.md) for saved-path dependencies,
+writer coordination, state matrix and failure behavior.
+
+### `boxlite resize`
+
+Grow a running Linux/KVM box without restarting it. CPU and memory targets are
+absolute; memory increases must be multiples of 128 MiB. Shrinking is rejected.
+
+**Usage:** `boxlite resize BOX [--cpus N] [--memory MiB]`
+
+With no resource flags, print the current allocation and boot ceilings as JSON.
+Applied allocations survive a restart. See [resource limits](../../docs/guides/resource-limits.md#online-growth)
+for prerequisites and partial-completion behavior.
+
 ### `boxlite rm`
 
 Remove one or more boxes.

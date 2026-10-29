@@ -15,18 +15,22 @@ impl PipelineTask<InitCtx> for FilesystemTask {
         let task_name = self.name();
         let box_id = task_start(&ctx, task_name).await;
 
-        let (runtime, isolate_mounts) = {
+        let (runtime, isolate_mounts, restored_shared) = {
             let ctx = ctx.lock().await;
             (
                 ctx.runtime.clone(),
                 ctx.config.options.advanced.isolate_mounts,
+                ctx.restored
+                    .as_ref()
+                    .map(|restored| restored.shared_dir.clone()),
             )
         };
 
         let layout = runtime
             .layout
             .box_layout(box_id.as_str(), isolate_mounts)
-            .inspect_err(|e| log_task_error(&box_id, task_name, e))?;
+            .inspect_err(|e| log_task_error(&box_id, task_name, e))?
+            .with_restored_shared(restored_shared);
 
         layout
             .prepare()

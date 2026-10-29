@@ -49,6 +49,8 @@ pub(crate) struct BuiltBox {
     /// Present when this build made a new disk from a registry image; see
     /// [`crate::litebox::state::BoxState::resolved_image`].
     pub(crate) resolved_image: Option<crate::images::ResolvedImage>,
+    /// What the box runs with; see [`crate::litebox::state::BoxState::resources`].
+    pub(crate) resources: Option<crate::litebox::BoxResources>,
 }
 
 use crate::litebox::BoxStatus;
@@ -68,7 +70,9 @@ use tasks::{
     BootAssetsTask, ContainerRootfsTask, FilesystemTask, GuestConnectTask, GuestInitTask,
     GuestRootfsTask, InitCtx, VmmAttachTask, VmmSpawnTask,
 };
+pub(crate) use tasks::{checkpoint_import_spec, read_tail, restart_image_config, spawn_vm};
 use types::InitPipelineContext;
+pub(crate) use types::resolve_user_volumes;
 
 // ============================================================================
 // EXECUTION PLAN
@@ -242,6 +246,9 @@ impl BoxBuilder {
             state.resolved_image.clone(),
         );
         ctx.outbound_policy = state.outbound_policy.clone();
+        ctx.restored = state.restored_storage.clone();
+
+        ctx.resources = state.resources;
         let ctx = Arc::new(Mutex::new(ctx));
         let ctx_for_cleanup = Arc::clone(&ctx);
 
@@ -329,6 +336,7 @@ impl BoxBuilder {
                 live: live_state,
                 guard,
                 resolved_image: ctx.resolved_image.take(),
+                resources: ctx.resources.take(),
             })
         };
 

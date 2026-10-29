@@ -618,6 +618,11 @@ unsafe fn dispatch_event(event: RuntimeEvent) {
                 user_data,
                 result,
             } => dispatch_unit_event(result, user_data, cb),
+            RuntimeEvent::ResizeBox {
+                cb,
+                user_data,
+                result,
+            } => dispatch_value_event::<crate::CBoxResources>(result, user_data, cb),
             RuntimeEvent::StopBox {
                 cb,
                 user_data,

@@ -11,13 +11,14 @@ use std::{ffi::CString, ptr};
 use crate::vmm::krun::check_status;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use libkrun_sys::{
-    krun_add_disk2, krun_add_net_unixgram, krun_add_net_unixstream, krun_add_virtiofs3,
-    krun_add_vsock, krun_add_vsock_port2, krun_check_nested_virt, krun_create_ctx,
-    krun_disable_implicit_vsock, krun_free_ctx, krun_init_log, krun_set_console_output,
-    krun_set_env, krun_set_exec, krun_set_gpu_options, krun_set_kernel, krun_set_nested_virt,
-    krun_set_port_map, krun_set_rlimits, krun_set_root, krun_set_root_disk_remount,
-    krun_set_vm_config, krun_set_workdir, krun_setgid, krun_setuid, krun_split_irqchip,
-    krun_start_enter,
+    krun_add_disk2, krun_add_kernel_cmdline, krun_add_net_unixgram, krun_add_net_unixstream,
+    krun_add_virtiofs3, krun_add_vsock, krun_add_vsock_port2, krun_check_nested_virt,
+    krun_create_ctx, krun_disable_implicit_vsock, krun_free_ctx, krun_init_log,
+    krun_set_console_output, krun_set_env, krun_set_exec, krun_set_gpu_options, krun_set_kernel,
+    krun_set_nested_virt, krun_set_port_map, krun_set_rlimits, krun_set_root,
+    krun_set_root_disk_remount, krun_set_vm_config, krun_set_workdir, krun_setgid, krun_setuid,
+    krun_snapshot_enable,
+    krun_split_irqchip, krun_start_enter,
 };
 
 /// Thin wrapper that owns a libkrun context.
@@ -104,6 +105,14 @@ impl KrunContext {
     pub unsafe fn set_vm_config(&self, cpus: u8, memory_mib: u32) -> BoxliteResult<()> {
         check_status("krun_set_vm_config", unsafe {
             krun_set_vm_config(self.ctx_id, cpus, memory_mib)
+        })
+    }
+
+    pub unsafe fn add_kernel_cmdline(&self, param: &str) -> BoxliteResult<()> {
+        let param = CString::new(param)
+            .map_err(|e| BoxliteError::Engine(format!("invalid kernel parameter: {e}")))?;
+        check_status("krun_add_kernel_cmdline", unsafe {
+            krun_add_kernel_cmdline(self.ctx_id, param.as_ptr())
         })
     }
 
@@ -463,13 +472,21 @@ impl KrunContext {
     /// * `host_path` - Path to directory on host to share
     /// * `mount_tag` - Tag used by guest to mount this share (e.g., "layer0", "upper")
     /// * `read_only` - If true, the filesystem is exposed as read-only at the hypervisor level
+    /// * `dax_window` - Size of the share's DAX window in bytes; 0 for none
     pub unsafe fn add_virtiofs(
         &self,
         mount_tag: &str,
         host_path: &str,
         read_only: bool,
+        dax_window: u64,
     ) -> BoxliteResult<()> {
-        tracing::debug!(host_path, mount_tag, read_only, "Adding virtiofs mount");
+        tracing::debug!(
+            host_path,
+            mount_tag,
+            read_only,
+            dax_window,
+            "Adding virtiofs mount"
+        );
 
         let host_path_c = CString::new(host_path)
             .map_err(|e| BoxliteError::Engine(format!("invalid host path: {e}")))?;
@@ -481,7 +498,7 @@ impl KrunContext {
                 self.ctx_id,
                 mount_tag_c.as_ptr(),
                 host_path_c.as_ptr(),
-                0,
+                dax_window,
                 read_only,
             )
         })
@@ -599,6 +616,14 @@ impl KrunContext {
             .map_err(|e| BoxliteError::Engine(format!("invalid console output path: {e}")))?;
         check_status("krun_set_console_output", unsafe {
             krun_set_console_output(self.ctx_id, filepath_c.as_ptr())
+        })
+    }
+
+    /// Switch this context to checkpointing mode. Must precede every network
+    /// device call.
+    pub unsafe fn snapshot_enable(&self) -> BoxliteResult<()> {
+        check_status("krun_snapshot_enable", unsafe {
+            krun_snapshot_enable(self.ctx_id, 0)
         })
     }
 

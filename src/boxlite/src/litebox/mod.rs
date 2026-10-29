@@ -5,15 +5,17 @@
 pub(crate) mod archive;
 mod attach;
 pub(crate) mod box_impl;
+pub(crate) mod checkpoint;
 mod clone_export;
 pub(crate) mod config;
 pub mod copy;
 mod crash_report;
 mod exec;
-mod init;
+pub(crate) mod init;
 pub(crate) mod local_snapshot;
 mod manager;
 mod network;
+pub(crate) mod operation;
 pub(crate) mod ports;
 mod snapshot;
 pub(crate) mod snapshot_mgr;
@@ -22,6 +24,10 @@ mod state;
 mod watcher;
 
 pub use attach::AttachOptions;
+pub use checkpoint::PauseOptions;
+pub use checkpoint::pair::{
+    CheckpointDependencies, ObjectDependency, ObjectReference, ShareDependency,
+};
 pub use copy::{CopyOptions, CopySourceKind};
 pub(crate) use crash_report::CrashReport;
 pub use exec::{BoxCommand, ExecResult, ExecStderr, ExecStdin, ExecStdout, Execution, ExecutionId};
@@ -31,7 +37,9 @@ pub use network::{
 };
 pub use snapshot::SnapshotHandle;
 pub use ssh::{SshAccount, SshCaConfig, SshConfig, SshHandle, SshStatus};
-pub use state::{BoxState, BoxStatus, HealthState, HealthStatus};
+pub use state::{BoxResources, BoxState, BoxStatus, HealthState, HealthStatus};
+mod resize;
+pub use resize::ResizeOptions;
 
 pub(crate) use box_impl::SharedBoxImpl;
 pub(crate) use init::BoxBuilder;
@@ -95,6 +103,19 @@ impl LiteBox {
     /// Get metadata for this box.
     pub async fn info(&self) -> BoxliteResult<BoxInfo> {
         self.box_backend.info().await
+    }
+
+    /// Grow a running box without restarting it. Omitted resources retain
+    /// their current allocation; omitting both queries the allocation and ceilings.
+    /// Requires Linux/KVM. Memory grows in increments of 128 MiB, and includes
+    /// the kernel mapping. Shrinking and exceeding the boot ceiling fail.
+    /// Once started, an update completes even if the caller drops its future;
+    /// inspect the box or retry the same target after a transport interruption.
+    pub async fn resize(&self, options: ResizeOptions) -> BoxliteResult<BoxResources> {
+        let backend = self.box_backend.clone();
+        tokio::spawn(async move { backend.resize(options).await })
+            .await
+            .map_err(|error| BoxliteError::Internal(format!("resize task failed: {error}")))?
     }
 
     /// Start the box (initialize VM).
@@ -222,6 +243,36 @@ impl LiteBox {
             })?;
             backend.copy_out_stream(src, opts).await
         })
+    }
+
+    /// Pause a checkpoint-enabled box: its vCPUs and devices stop at one
+    /// consistent cut (no SIGSTOP, no guest filesystem freeze). While paused
+    /// the box refuses exec, attach, copies, metrics, SSH and network changes;
+    /// [`Self::resume`] or [`Self::stop`] end the pause.
+    pub async fn pause(&self, options: PauseOptions) -> BoxliteResult<()> {
+        self.box_backend.pause(options).await
+    }
+
+    /// Let a paused checkpoint-enabled box run again.
+    pub async fn resume(&self) -> BoxliteResult<()> {
+        self.box_backend.resume().await
+    }
+
+    /// Write a paused checkpoint-enabled box to a new two-file checkpoint directory
+    /// at `path`, which must not exist yet. The box stays paused whether the
+    /// export succeeds or fails. With REST, `path` is caller-local and the
+    /// captured pair is downloaded from the server.
+    pub async fn export_checkpoint(&self, path: impl AsRef<std::path::Path>) -> BoxliteResult<()> {
+        self.box_backend.export_checkpoint(path.as_ref()).await
+    }
+
+    #[cfg(test)]
+    pub(crate) fn local_backend(&self, op: &str) -> BoxliteResult<Arc<box_impl::BoxImpl>> {
+        self.box_backend
+            .clone()
+            .as_any_arc()
+            .downcast::<box_impl::BoxImpl>()
+            .map_err(|_| BoxliteError::Unsupported(format!("{op} requires the local runtime")))
     }
 
     /// Get a network handle for raw tunnel operations.

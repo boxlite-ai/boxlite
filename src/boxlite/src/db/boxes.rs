@@ -16,6 +16,41 @@ use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
 use super::{Database, db_err};
 
+// Legacy creation flags are decoded only at the persistence boundary. They
+// identify an existing live owner, never select the mode of a new start.
+fn decode_state(json: &str, config: &str) -> BoxliteResult<BoxState> {
+    let error = |e| BoxliteError::Database(format!("Failed to decode persisted box: {e}"));
+    let mut state: BoxState = serde_json::from_str(json).map_err(error)?;
+    if state.start_mode.is_none() && state.status.is_active() {
+        #[derive(serde::Deserialize, Default)]
+        struct LegacyAdvanced {
+            #[serde(default)]
+            checkpoint_enabled: bool,
+        }
+        #[derive(serde::Deserialize, Default)]
+        struct LegacyOptions {
+            #[serde(default)]
+            advanced: LegacyAdvanced,
+        }
+        #[derive(serde::Deserialize)]
+        struct LegacyConfig {
+            #[serde(default)]
+            options: LegacyOptions,
+        }
+        let legacy: LegacyConfig = serde_json::from_str(config).map_err(error)?;
+        use crate::vmm::checkpoint::support::StartMode;
+        state.start_mode = Some(if legacy.options.advanced.checkpoint_enabled {
+            StartMode::LegacyOwner
+        } else {
+            StartMode::Ordinary {
+                checkpoint_restriction: "legacy shim requires explicit restart for checkpoints"
+                    .into(),
+            }
+        });
+    }
+    Ok(state)
+}
+
 /// Box storage wrapping Database.
 ///
 /// Manages BoxConfig (immutable) and BoxState (mutable) tables.
@@ -82,24 +117,12 @@ impl BoxStore {
     pub fn load_state(&self, box_id: &str) -> BoxliteResult<Option<BoxState>> {
         let conn = self.db.conn();
 
-        let json: Option<String> = db_err!(
-            conn.query_row(
-                "SELECT json FROM box_state WHERE id = ?1",
-                params![box_id],
-                |row| row.get(0),
-            )
-            .optional()
-        )?;
-
-        match json {
-            Some(j) => {
-                let state: BoxState = serde_json::from_str(&j).map_err(|e| {
-                    BoxliteError::Database(format!("Failed to deserialize state: {}", e))
-                })?;
-                Ok(Some(state))
-            }
-            None => Ok(None),
-        }
+        let row: Option<(String, String)> = db_err!(conn.query_row(
+            "SELECT s.json, c.json FROM box_state s JOIN box_config c ON c.id=s.id WHERE s.id=?1",
+            params![box_id], |row| Ok((row.get(0)?,row.get(1)?)),
+        ).optional())?;
+        row.map(|(state, config)| decode_state(&state, &config))
+            .transpose()
     }
 
     /// Update box state.
@@ -114,7 +137,8 @@ impl BoxStore {
 
         let rows_affected = db_err!(conn.execute(
             "UPDATE box_state SET status = ?1, pid = ?2, \
-             json = json_set(?3, '$.outbound_policy', json_extract(json, '$.outbound_policy')) \
+             json = json_set(?3, '$.outbound_policy', json_extract(json, '$.outbound_policy'), \
+             '$.resources', json_extract(json, '$.resources')) \
              WHERE id = ?4",
             params![state.status.as_str(), state.pid, json, box_id],
         ))?;
@@ -137,6 +161,24 @@ impl BoxStore {
             .map_err(|error| BoxliteError::Database(error.to_string()))?;
         let changed = db_err!(self.db.conn().execute(
             "UPDATE box_state SET json = json_set(json, '$.outbound_policy', json(?1)) WHERE id = ?2",
+            params![body, box_id],
+        ))?;
+        if changed == 0 {
+            return Err(BoxliteError::NotFound(box_id.into()));
+        }
+        Ok(())
+    }
+
+    /// Resource changes must survive lifecycle writes from older handles.
+    pub fn update_resources(
+        &self,
+        box_id: &str,
+        resources: &crate::litebox::BoxResources,
+    ) -> BoxliteResult<()> {
+        let body = serde_json::to_string(resources)
+            .map_err(|error| BoxliteError::Database(error.to_string()))?;
+        let changed = db_err!(self.db.conn().execute(
+            "UPDATE box_state SET json = json_set(json, '$.resources', json(?1)) WHERE id = ?2",
             params![body, box_id],
         ))?;
         if changed == 0 {
@@ -227,9 +269,7 @@ impl BoxStore {
             let config: BoxConfig = serde_json::from_str(&config_json).map_err(|e| {
                 BoxliteError::Database(format!("Failed to deserialize config: {}", e))
             })?;
-            let state: BoxState = serde_json::from_str(&state_json).map_err(|e| {
-                BoxliteError::Database(format!("Failed to deserialize state: {}", e))
-            })?;
+            let state = decode_state(&state_json, &config_json)?;
             result.push((config, state));
         }
 
@@ -262,9 +302,7 @@ impl BoxStore {
             let config: BoxConfig = serde_json::from_str(&config_json).map_err(|e| {
                 BoxliteError::Database(format!("Failed to deserialize config: {}", e))
             })?;
-            let state: BoxState = serde_json::from_str(&state_json).map_err(|e| {
-                BoxliteError::Database(format!("Failed to deserialize state: {}", e))
-            })?;
+            let state = decode_state(&state_json, &config_json)?;
             result.push((config, state));
         }
 
@@ -427,6 +465,27 @@ mod tests {
         assert!(
             matches!(config.options.network, crate::NetworkSpec::Enabled { allow_net } if allow_net.is_empty())
         );
+    }
+
+    #[test]
+    fn resources_survive_stale_lifecycle_writes_and_drive_box_info() {
+        let (store, _dir) = create_test_db();
+        let config = create_test_config(TEST_ID_1);
+        let mut stale = BoxState::new();
+        store.save(&config, &stale).unwrap();
+        let resources = crate::litebox::BoxResources {
+            cpus: 3,
+            memory_mib: 1536,
+            max_cpus: 8,
+            max_memory_mib: 1536,
+        };
+        store.update_resources(TEST_ID_1, &resources).unwrap();
+        stale.status = BoxStatus::Stopped;
+        store.update_state(TEST_ID_1, &stale).unwrap();
+        let (config, state) = store.load(TEST_ID_1).unwrap().unwrap();
+        assert_eq!(state.resources, Some(resources));
+        let info = crate::BoxInfo::new(&config, &state);
+        assert_eq!((info.cpus, info.memory_mib), (3, 1536));
     }
 
     #[test]

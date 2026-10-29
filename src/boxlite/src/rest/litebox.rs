@@ -155,6 +155,37 @@ impl<'a> SshConfigRequest<'a> {
 
 #[async_trait]
 impl BoxBackend for RestBox {
+    async fn pause(&self, options: crate::PauseOptions) -> BoxliteResult<()> {
+        self.client.require_checkpoints_enabled().await?;
+        self.client
+            .post_no_content(
+                &format!("/boxes/{}/pause", self.box_id_str()),
+                &serde_json::json!({"host_writers_stopped": options.host_writers_stopped}),
+            )
+            .await
+    }
+
+    async fn resume(&self) -> BoxliteResult<()> {
+        self.client.require_checkpoints_enabled().await?;
+        self.client
+            .post_empty_no_content(&format!("/boxes/{}/resume", self.box_id_str()))
+            .await
+    }
+
+    async fn export_checkpoint(&self, path: &Path) -> BoxliteResult<()> {
+        self.client.require_checkpoints_enabled().await?;
+        let input = self
+            .client
+            .download_checkpoint(&format!("/boxes/{}/checkpoint/export", self.box_id_str()))
+            .await?;
+        let destination = path.to_path_buf();
+        tokio::task::spawn_blocking(move || {
+            crate::checkpoint_transport::unpack(input, &destination)
+        })
+        .await
+        .map_err(|error| BoxliteError::Internal(error.to_string()))?
+    }
+
     fn id(&self) -> &BoxID {
         &self.id
     }
@@ -181,6 +212,12 @@ impl BoxBackend for RestBox {
         let resp: BoxResponse = self.client.post_empty(&path).await?;
         self.validate_info(resp.to_box_info()?)?;
         Ok(())
+    }
+
+    async fn resize(&self, options: crate::ResizeOptions) -> BoxliteResult<crate::BoxResources> {
+        self.client
+            .post(&format!("/boxes/{}/resize", self.id), &options)
+            .await
     }
 
     async fn exec(&self, command: BoxCommand) -> BoxliteResult<Execution> {

@@ -321,8 +321,10 @@ impl FilesystemLayout {
 /// ~/.boxlite/boxes/{box_id}/
 /// ├── sockets/
 /// │   ├── box.sock        # gRPC communication
-/// │   └── ready.sock      # Ready notification
+/// │   ├── ready.sock      # Ready notification
+/// │   └── ctl.sock        # Checkpoint control (checkpoint-enabled boxes)
 /// ├── tmp/                # Per-box temp files for shim/libkrun
+/// ├── restored/           # Imported box's restored disks/ and fs/ (0700)
 /// ├── boot/               # Custom direct-boot assets (when configured)
 /// │   ├── current.json        # Atomically published active generation
 /// │   └── generations/
@@ -355,6 +357,8 @@ pub struct BoxFilesystemLayout {
     /// Whether to use bind mount isolation for the mounts directory.
     /// Only effective when bind mounts are supported on the system.
     isolate_mounts: bool,
+    /// An imported box's restored copy of `shared/` (see [`Self::shared_dir`]).
+    restored_shared: Option<PathBuf>,
 }
 
 impl BoxFilesystemLayout {
@@ -365,7 +369,16 @@ impl BoxFilesystemLayout {
             shared_layout,
             config,
             isolate_mounts,
+            restored_shared: None,
         }
+    }
+
+    /// Serve `restored` as the box's shared tree: an imported box keeps
+    /// running from the copy libkrun restored, so the guest's files (the
+    /// container exit record among them) are read there.
+    pub fn with_restored_shared(mut self, restored: Option<PathBuf>) -> Self {
+        self.restored_shared = restored;
+        self
     }
 
     /// Root directory for this box: ~/.boxlite/boxes/{box_id}
@@ -397,6 +410,11 @@ impl BoxFilesystemLayout {
             .unwrap_or_default()
             .to_string_lossy();
         BoxSockets::new(box_id, self.sockets_dir())
+    }
+
+    /// Checkpoint control socket binding path (see [`BoxSockets::control_sock`]).
+    pub fn control_socket_path(&self) -> PathBuf {
+        self.sockets().control_sock()
     }
 
     /// gRPC control socket binding path (see [`BoxSockets::box_sock`]).
@@ -455,7 +473,10 @@ impl BoxFilesystemLayout {
     ///
     /// This directory is exposed to the guest via virtio-fs with tag "shared".
     pub fn shared_dir(&self) -> PathBuf {
-        self.box_dir.join(shared_dirs::SHARED)
+        match &self.restored_shared {
+            Some(restored) => restored.clone(),
+            None => self.box_dir.join(shared_dirs::SHARED),
+        }
     }
 
     /// The container's exit file: shared/containers/{cid}/exit.json.
@@ -513,6 +534,32 @@ impl BoxFilesystemLayout {
     /// built-in seatbelt profile.
     pub fn tmp_dir(&self) -> PathBuf {
         self.box_dir.join("tmp")
+    }
+
+    /// Restored storage of an imported box: ~/.boxlite/boxes/{box_id}/restored
+    ///
+    /// Owner-only deterministic boot-root recipes. The container QCOW2 stays
+    /// under `disks/`; external shares remain at their explicit bound roots.
+    pub fn restored_dir(&self) -> PathBuf {
+        self.box_dir.join("restored")
+    }
+
+    /// Create [`Self::restored_dir`] with owner-only permissions.
+    pub fn prepare_restored_dir(&self) -> BoxliteResult<PathBuf> {
+        self.prepare_private_dir(self.restored_dir())
+    }
+
+    fn prepare_private_dir(&self, dir: PathBuf) -> BoxliteResult<PathBuf> {
+        use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+        std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(&dir)
+            .and_then(|()| std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)))
+            .map_err(|e| {
+                BoxliteError::Storage(format!("failed to prepare {}: {e}", dir.display()))
+            })?;
+        Ok(dir)
     }
 
     // ========================================================================

@@ -255,7 +255,7 @@ async fn wait_for_guest_ready(
 /// Returns the trailing bytes, with a leading `…` marker if the file was
 /// longer than `max_bytes`. Used only for human diagnostic strings — not for
 /// machine parsing — so silently returns `None` on any IO error.
-fn read_tail(path: &Path, max_bytes: u64) -> Option<String> {
+pub(crate) fn read_tail(path: &Path, max_bytes: u64) -> Option<String> {
     use std::io::{Read, Seek, SeekFrom};
     let mut file = std::fs::File::open(path).ok()?;
     let len = file.metadata().ok()?.len();

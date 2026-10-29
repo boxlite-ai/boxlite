@@ -1,6 +1,7 @@
 pub mod advanced_options;
 pub mod auth;
 pub(crate) mod backend;
+pub(crate) mod capacity;
 pub mod constants;
 pub mod id;
 pub mod images;
@@ -13,6 +14,7 @@ pub mod snapshots;
 pub mod types;
 pub mod volumes;
 
+pub(crate) mod checkpoint_import;
 mod core;
 #[cfg(feature = "embedded-runtime")]
 pub(crate) mod embedded;

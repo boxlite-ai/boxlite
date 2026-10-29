@@ -58,10 +58,13 @@ fn log_task_error(box_id: &BoxID, task_name: &str, err: &BoxliteError) {
 
 pub use boot_assets::BootAssetsTask;
 pub use container_rootfs::ContainerRootfsTask;
+pub(crate) use container_rootfs::restart_image_config;
 pub use filesystem::FilesystemTask;
 pub use guest_connect::GuestConnectTask;
+pub(crate) use guest_connect::read_tail;
 pub use guest_init::GuestInitTask;
 pub use guest_rootfs::GuestRootfsTask;
 pub use port_publish::PortPublishTask;
 pub use vmm_attach::VmmAttachTask;
 pub use vmm_spawn::VmmSpawnTask;
+pub(crate) use vmm_spawn::{checkpoint_import_spec, spawn_vm};

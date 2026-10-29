@@ -98,6 +98,7 @@ pub(crate) struct ServerCapabilities {
     pub clone_enabled: Option<bool>,
     pub export_enabled: Option<bool>,
     pub import_enabled: Option<bool>,
+    pub checkpoints_enabled: Option<bool>,
 }
 
 // ============================================================================

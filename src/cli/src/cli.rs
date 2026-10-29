@@ -242,6 +242,23 @@ const VOLUME_SCOPES: &[CommandScope] = &[
         children: &[],
     },
 ];
+const CHECKPOINT_SCOPES: &[CommandScope] = &[
+    CommandScope {
+        name: "inspect",
+        globals: LOCAL_GLOBALS,
+        children: &[],
+    },
+    CommandScope {
+        name: "export",
+        globals: BOX_GLOBALS,
+        children: &[],
+    },
+    CommandScope {
+        name: "import",
+        globals: BOX_GLOBALS,
+        children: &[],
+    },
+];
 const SNAPSHOT_SCOPES: &[CommandScope] = &[
     CommandScope {
         name: "create",
@@ -311,6 +328,27 @@ const COMMAND_SCOPES: &[CommandScope] = &[
         children: &[],
     },
     CommandScope {
+        name: "pause",
+        globals: BOX_GLOBALS,
+        children: &[],
+    },
+    CommandScope {
+        name: "resize",
+        globals: BOX_GLOBALS,
+        children: &[],
+    },
+    CommandScope {
+        name: "resume",
+        globals: BOX_GLOBALS,
+        children: &[],
+    },
+    CommandScope {
+        name: "checkpoint",
+        globals: BOX_GLOBALS,
+        children: CHECKPOINT_SCOPES,
+    },
+    CommandScope {
+
         name: "pull",
         globals: LOCAL_IMAGE_GLOBALS,
         children: &[],
@@ -631,6 +669,18 @@ pub enum Commands {
 
     /// Restart one or more boxes
     Restart(crate::commands::restart::RestartArgs),
+
+    /// Pause a checkpoint-enabled box
+    Pause(crate::commands::checkpoint::PauseArgs),
+
+    /// Resume a paused box
+    Resume(crate::commands::checkpoint::ResumeArgs),
+
+    /// Export or import a paused box as a two-file checkpoint directory
+    Checkpoint(crate::commands::checkpoint::CheckpointArgs),
+
+    /// Grow a running box, or show its allocation and boot ceilings
+    Resize(crate::commands::resize::ResizeArgs),
 
     /// Pull an image from a registry
     Pull(crate::commands::pull::PullArgs),
@@ -1587,6 +1637,34 @@ mod tests {
     }
 
     #[test]
+    fn resize_accepts_absolute_targets_and_remote_options() {
+        let cli = parse_projected(&[
+            "boxlite",
+            "resize",
+            "mybox",
+            "--cpus",
+            "2",
+            "--memory",
+            "512",
+            "--url",
+            "https://example.test",
+        ]);
+        assert_eq!(cli.global.url.as_deref(), Some("https://example.test"));
+        let Commands::Resize(args) = cli.command else {
+            panic!("expected resize")
+        };
+        assert_eq!(args.target, "mybox");
+        assert_eq!(args.cpus, Some(2));
+        assert_eq!(args.memory, Some(512));
+        let query = parse_projected(&["boxlite", "resize", "mybox"]);
+        let Commands::Resize(args) = query.command else {
+            panic!("expected resize")
+        };
+        assert!(args.cpus.is_none() && args.memory.is_none());
+        assert!(try_parse_from(["boxlite", "resize", "mybox", "--cpus", "256"]).is_err());
+    }
+
+    #[test]
     fn command_tree_owns_after_command_scope_rejection() {
         for args in [
             &["boxlite", "serve", "--url", "https://irrelevant.test"][..],
@@ -1738,6 +1816,18 @@ mod tests {
         (&["boxlite", "images"], 1, LOCAL_WITHOUT_REGISTRY),
         (&["boxlite", "info"], 1, LOCAL_WITHOUT_REGISTRY),
         (&["boxlite", "logs", "box"], 1, LOCAL_WITHOUT_REGISTRY),
+        (&["boxlite", "pause", "box"], 1, REGISTRY),
+        (&["boxlite", "resume", "box"], 1, REGISTRY),
+        (
+            &["boxlite", "checkpoint", "export", "box", "checkpoint-dir"],
+            2,
+            REGISTRY,
+        ),
+        (
+            &["boxlite", "checkpoint", "import", "checkpoint-dir"],
+            2,
+            REGISTRY,
+        ),
         (&["boxlite", "pull", "alpine"], 1, LOCAL_WITH_REGISTRY),
         (&["boxlite", "serve"], 1, LOCAL_WITH_REGISTRY),
         (&["boxlite", "auth", "login"], 2, AUTH_WITH_URL),

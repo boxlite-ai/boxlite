@@ -20,6 +20,7 @@ extern void goBoxliteOnGetOrCreateBox(CBoxHandle *box, bool created, CBoxliteErr
 extern void goBoxliteOnGetBox(CBoxHandle *box, CBoxliteError *err, void *ud);
 extern void goBoxliteOnStartBox(CBoxliteError *err, void *ud);
 extern void goBoxliteOnStopBox(CBoxliteError *err, void *ud);
+extern void goBoxliteOnResizeBox(CBoxResources *resources, CBoxliteError *err, void *ud);
 extern void goBoxliteOnRemoveBox(CBoxliteError *err, void *ud);
 extern void goBoxliteOnCopy(CBoxliteError *err, void *ud);
 
@@ -70,6 +71,7 @@ CBoxGetOrCreateBoxCb cbGetOrCreateBox(void) { return (CBoxGetOrCreateBoxCb)goBox
 CBoxGetBoxCb cbGetBox(void) { return (CBoxGetBoxCb)goBoxliteOnGetBox; }
 CBoxStartBoxCb cbStartBox(void) { return (CBoxStartBoxCb)goBoxliteOnStartBox; }
 CBoxStopBoxCb cbStopBox(void) { return (CBoxStopBoxCb)goBoxliteOnStopBox; }
+CBoxResizeCb cbResizeBox(void) { return (CBoxResizeCb)goBoxliteOnResizeBox; }
 CBoxRemoveBoxCb cbRemoveBox(void) { return (CBoxRemoveBoxCb)goBoxliteOnRemoveBox; }
 CBoxCopyCb cbCopy(void) { return (CBoxCopyCb)goBoxliteOnCopy; }
 

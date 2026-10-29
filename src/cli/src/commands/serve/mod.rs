@@ -1804,8 +1804,8 @@ async fn get_or_attach_main_session(
 
 fn build_router(state: Arc<AppState>) -> Router {
     use handlers::{
-        advanced, boxes, config, executions, files, images, me, metrics, network, snapshots, ssh,
-        volumes,
+        advanced, boxes, checkpoints, config, executions, files, images, me, metrics, network,
+        snapshots, ssh, volumes,
     };
 
     Router::new()
@@ -1837,6 +1837,10 @@ fn build_router(state: Arc<AppState>) -> Router {
         )
         // Box CRUD (import first — static path before param path)
         .route("/v1/boxes/import", post(advanced::import_box))
+        .route("/v1/boxes/checkpoint/import", post(checkpoints::import))
+        .route("/v1/boxes/{box_id}/pause", post(checkpoints::pause))
+        .route("/v1/boxes/{box_id}/resume", post(checkpoints::resume))
+        .route("/v1/boxes/{box_id}/checkpoint/export", post(checkpoints::export))
         .route(
             "/v1/boxes",
             post(boxes::create_box).get(boxes::list_boxes),
@@ -1850,6 +1854,7 @@ fn build_router(state: Arc<AppState>) -> Router {
         // Box lifecycle
         .route("/v1/boxes/{box_id}/network/inbound", put(network::set_inbound))
         .route("/v1/boxes/{box_id}/network/outbound", put(network::set_outbound))
+        .route("/v1/boxes/{box_id}/resize", post(boxes::resize_box))
         .route(
             "/v1/boxes/{box_id}/start",
             post(boxes::start_box),
@@ -2012,6 +2017,7 @@ mod tests {
     use std::time::Duration;
 
     mod host_paths;
+    mod resize;
     mod ssh;
 
     // --- API-key auth decision (pure; no runtime/network needed) ---
@@ -3533,6 +3539,63 @@ mod tests {
             let _ = axum::serve(listener, build_router(state)).await;
         });
         (format!("http://127.0.0.1:{port}"), handle)
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn checkpoint_routes_discover_capability_and_reject_before_restore() {
+        let home = tempfile::tempdir().unwrap();
+        let runtime = BoxliteRuntime::new_for_test(boxlite::BoxliteOptions {
+            home_dir: home.path().join("runtime"),
+            ..Default::default()
+        })
+        .unwrap();
+        let mut state = lifecycle_state();
+        state.runtime = runtime.clone();
+        state.api_key = Some("checkpoint-key".into());
+        let (url, server) = serve_router(Arc::new(state)).await;
+        let client = reqwest::Client::new();
+        let config: serde_json::Value = client
+            .get(format!("{url}/v1/config"))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(
+            config["capabilities"]["checkpoints_enabled"],
+            cfg!(all(target_os = "linux", target_arch = "x86_64"))
+        );
+        for operation in ["pause", "resume", "checkpoint/export"] {
+            let path = format!("{url}/v1/boxes/missing/{operation}");
+            let refused = client
+                .post(&path)
+                .json(&serde_json::json!({"host_writers_stopped":true}))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(refused.status().as_u16(), 401);
+            let response = client
+                .post(path)
+                .bearer_auth("checkpoint-key")
+                .json(&serde_json::json!({"host_writers_stopped":true}))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(response.status().as_u16(), 404, "{operation}");
+        }
+        let response = client
+            .post(format!(
+                "{url}/v1/boxes/checkpoint/import?name=must-not-exist"
+            ))
+            .bearer_auth("checkpoint-key")
+            .body("incomplete archive")
+            .send()
+            .await
+            .unwrap();
+        assert!(!response.status().is_success());
+        assert!(runtime.list_info().await.unwrap().is_empty());
+        server.abort();
     }
 
     /// `rt.images()` on a REST runtime pointed at `serve` reaches the cache of

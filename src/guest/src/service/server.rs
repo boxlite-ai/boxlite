@@ -33,6 +33,10 @@ pub(crate) struct GuestServer {
     /// Guest initialization state (set by Guest.Init)
     pub init_state: Arc<Mutex<GuestInitState>>,
 
+    /// Random per agent start, reported by Guest.RunningState: it tells a
+    /// restored guest apart from a fresh boot of the same container.
+    pub boot_id: String,
+
     /// Container registry: container_id -> Container
     pub containers: Arc<Mutex<HashMap<String, Arc<Mutex<Container>>>>>,
 
@@ -44,6 +48,9 @@ pub(crate) struct GuestServer {
 
     /// Mount points frozen by Quiesce RPC, thawed by Thaw RPC.
     pub frozen_mounts: Mutex<Vec<PathBuf>>,
+
+    /// Held by the blocking sysfs operation even if its RPC is cancelled.
+    pub cpu_updates: Arc<Mutex<()>>,
 
     /// Set when a host-driven Shutdown RPC is in progress. The reaper's
     /// init-exit action checks this to avoid powering the VM off underneath a
@@ -71,10 +78,12 @@ impl GuestServer {
         Self {
             layout,
             init_state: Arc::new(Mutex::new(GuestInitState::default())),
+            boot_id: uuid::Uuid::new_v4().to_string(),
             containers: Arc::new(Mutex::new(HashMap::new())),
             registry: ExecutionRegistry::new(),
             ssh_manager: crate::service::ssh::SshManager::default(),
             frozen_mounts: Mutex::new(Vec::new()),
+            cpu_updates: Arc::new(Mutex::new(())),
             shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             init_exits: Arc::new(Mutex::new(HashMap::new())),
         }
