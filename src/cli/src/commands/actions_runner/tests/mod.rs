@@ -176,6 +176,7 @@ fn bootstrap_script_contains_required_directives() {
     let session = RunnerSession::new(&args).unwrap();
     let script = session.generate_bootstrap_script("secret_runner_token");
 
+    assert!(script.contains("set -euo pipefail"));
     assert!(script.contains("https://github.com/boxlite-ai/boxlite"));
     assert!(script.contains("secret_runner_token"));
     assert!(script.contains("--name \"ci-runner-1\""));
@@ -183,13 +184,18 @@ fn bootstrap_script_contains_required_directives() {
     assert!(script.contains("--ephemeral"));
     assert!(script.contains("./run.sh"));
 
+    let export_pos = script
+        .find("export RUNNER_ALLOW_RUNASROOT=1")
+        .expect("bootstrap script should export RUNNER_ALLOW_RUNASROOT");
     let config_pos = script
-        .find("RUNNER_ALLOW_RUNASROOT=1 ./config.sh")
+        .find("./config.sh \\\n    --url")
         .expect("bootstrap script should invoke config.sh");
     let run_pos = script
         .find("exec ./run.sh")
         .expect("bootstrap script should exec run.sh");
+    assert!(export_pos < config_pos, "export must precede config.sh");
     assert!(config_pos < run_pos, "config.sh must run before run.sh");
+    assert!(!script[config_pos..run_pos].contains("||"));
 }
 
 #[test]

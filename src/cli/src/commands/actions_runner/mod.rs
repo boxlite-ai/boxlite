@@ -273,9 +273,10 @@ if [ ! -x ./config.sh ]; then
     rm -f runner.tgz
 fi
 
-RUNNER_ALLOW_RUNASROOT=1 ./config.sh \
+export RUNNER_ALLOW_RUNASROOT=1
+./config.sh \
     --url "{url}" \
-    --token "{token}" \
+    --token "${{ACTIONS_RUNNER_TOKEN:-{token}}}" \
     --name "{name}" \
     --labels "{labels}" \
     --unattended \
@@ -475,6 +476,9 @@ pub async fn execute(args: ActionsRunnerArgs, global: &GlobalFlags) -> Result<()
             let label_str = start_args.labels.join(",");
             let spec = RunnerLabelSpec::parse(&label_str);
             spec.apply_to_box_options(&mut box_options);
+            box_options
+                .env
+                .push(("ACTIONS_RUNNER_TOKEN".to_string(), start_args.token.clone()));
 
             let litebox = rt.create(box_options, Some(session.name.clone())).await?;
             litebox.start().await?;
@@ -564,6 +568,9 @@ pub async fn execute(args: ActionsRunnerArgs, global: &GlobalFlags) -> Result<()
 
             box_options.cpus = Some(size.cpus());
             box_options.memory_mib = Some(size.memory_mib());
+            box_options
+                .env
+                .push(("ACTIONS_RUNNER_TOKEN".to_string(), start_args.token.clone()));
 
             let litebox = rt.create(box_options, Some(session.name.clone())).await?;
             litebox.start().await?;
