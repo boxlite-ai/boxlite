@@ -9,13 +9,10 @@ import {
   CreateDateColumn,
   Entity,
   Index,
-  JoinColumn,
-  ManyToOne,
   PrimaryGeneratedColumn,
   Unique,
   UpdateDateColumn,
 } from 'typeorm'
-import { Box } from './box.entity'
 
 export type DomainKind = 'platform' | 'custom'
 export type DomainTargetType = 'box' | 'app'
@@ -28,9 +25,9 @@ export type DomainTarget = { type: 'box'; box: string; port: number } | { type: 
  * `target_type` selects `box_id` or `app_id`; a null selected reference means
  * the hostname is held but unbound. App references are reserved for future use.
  * A Box binding names its port independently of the tunnel's public declaration.
- * Unbinding clears both references and the port, retaining ownership. Deleting
- * a Box clears only `box_id` through SET NULL; readers ignore the remaining port.
- * There is no foreign key to the organization, like `box`.
+ * Unbinding clears both references and the port, retaining ownership. Box deletion
+ * preserves the stored target. Target and organization references have no foreign
+ * keys; binding validates the live target, and preview checks whether it is reachable.
  */
 @Entity('domain')
 @Unique('domain_hostname_unique', ['hostname'])
@@ -69,7 +66,7 @@ export class Domain {
   @Column({ name: 'app_id', type: 'character varying', length: 255, nullable: true })
   appId: string | null
 
-  /** The Box reference; null for App targets or an unbound Box target. */
+  /** Retained after Box deletion; null for App targets or an unbound Box target. */
   @Column({ name: 'box_id', type: 'character varying', length: 12, nullable: true })
   boxId: string | null
 
@@ -82,8 +79,4 @@ export class Domain {
 
   @UpdateDateColumn({ name: 'updated_at', type: 'timestamp with time zone', default: () => 'now()' })
   updatedAt: Date
-
-  @ManyToOne(() => Box, { onDelete: 'SET NULL' })
-  @JoinColumn({ name: 'box_id', foreignKeyConstraintName: 'domain_box_id_fk' })
-  box?: Box | null
 }

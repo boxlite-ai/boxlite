@@ -5,14 +5,19 @@
 
 import { randomUUID } from 'node:crypto'
 import { NotFoundException } from '@nestjs/common'
+import { EventEmitter2, EventEmitterModule } from '@nestjs/event-emitter'
+import { Test } from '@nestjs/testing'
 import { DataSource, Repository } from 'typeorm'
 import { CustomNamingStrategy } from '../../common/utils/naming-strategy.util'
+import { BoxEvents } from '../constants/box-events.constants'
 import { Box } from '../entities/box.entity'
 import { BoxLastActivity } from '../entities/box-last-activity.entity'
 import { BoxMigration } from '../entities/box-migration.entity'
 import { Tunnel } from '../entities/tunnel.entity'
 import { Domain } from '../entities/domain.entity'
+import { BoxState } from '../enums/box-state.enum'
 import { DOMAIN_COUNT_LIMIT_CODE, SUBDOMAIN_TAKEN_CODE, SUBDOMAIN_TOO_SHORT_CODE } from '../errors/domain.error'
+import { BoxDestroyedEvent } from '../events/box-destroyed.event'
 import { AddDomain1792972800000 } from '../../migrations/pre-deploy/1792972800000-add-domain-migration'
 import { DomainService } from './domain.service'
 import { TunnelService } from './tunnel.service'
@@ -209,7 +214,7 @@ describeIfDatabase('DomainService (integration, real Postgres)', () => {
     )
     await expect(preview.resolveDomain('shop1.app.boxlite.test')).rejects.toBeInstanceOf(NotFoundException)
     await boxes.delete(box.id)
-    await expect(service.resolve(`demo1.${APP_DOMAIN}`)).resolves.toBeNull()
+    await expect(service.resolve(`demo1.${APP_DOMAIN}`)).resolves.toEqual({ type: 'box', box: box.id, port: 3000 })
     await expect(service.resolve('shop1.app.boxlite.test')).resolves.toEqual({ type: 'app', app: box.id })
     await service.unbind(ORG, 'shop1.app.boxlite.test')
     await expect(service.resolve('shop1.app.boxlite.test')).resolves.toBeNull()
@@ -437,31 +442,76 @@ describeIfDatabase('DomainService (integration, real Postgres)', () => {
     await expect(preview.resolveDomain(`demo1.${APP_DOMAIN}`)).resolves.toEqual({ boxId: box.id, port: 3000 })
   })
 
-  it('releases every binding of a destroyed box and keeps the names', async () => {
+  it('domain retention: a destroy event keeps every target until explicit unbind', async () => {
     await setLimit(ORG, 2)
     const box = await makeBox()
+    await tunnels.prepare(box.id, 3000)
     await service.bind(box, 3000, 'name-one')
     await service.bind(box, 8080, 'name-two')
 
-    await service.releaseBoxBindings({ box })
+    const moduleRef = await Test.createTestingModule({
+      imports: [EventEmitterModule.forRoot()],
+      providers: [{ provide: DomainService, useValue: service }],
+    }).compile()
+    try {
+      await moduleRef.init()
+      await boxes.update(box.id, Box.getSoftDeleteUpdate(box))
+      const destroyedBox = await boxes.findOneByOrFail({ id: box.id })
+      await moduleRef.get(EventEmitter2).emitAsync(BoxEvents.DESTROYED, new BoxDestroyedEvent(destroyedBox))
+    } finally {
+      await moduleRef.close()
+    }
 
     expect(await heldNames(ORG)).toEqual([
-      { hostname: `name-one.${APP_DOMAIN}`, box_id: null, port: null },
-      { hostname: `name-two.${APP_DOMAIN}`, box_id: null, port: null },
+      { hostname: `name-one.${APP_DOMAIN}`, box_id: box.id, port: 3000 },
+      { hostname: `name-two.${APP_DOMAIN}`, box_id: box.id, port: 8080 },
     ])
+    expect((await service.listHeld(ORG)).domains.map((domain) => domain.target)).toEqual([
+      { type: 'box', box: box.id, port: 3000 },
+      { type: 'box', box: box.id, port: 8080 },
+    ])
+
+    // The destroy event requests deletion; access checks use the actual state.
+    // No access verdict has been cached before this state transition.
+    await boxes.update(box.id, { state: BoxState.DESTROYED })
+    await expect(service.resolve(`name-one.${APP_DOMAIN}`)).resolves.toEqual({ type: 'box', box: box.id, port: 3000 })
+    await expect(preview.resolveDomain(`name-one.${APP_DOMAIN}`)).rejects.toBeInstanceOf(NotFoundException)
+
+    await service.unbind(ORG, `name-one.${APP_DOMAIN}`)
+    expect(await heldNames(ORG)).toEqual([
+      { hostname: `name-one.${APP_DOMAIN}`, box_id: null, port: null },
+      { hostname: `name-two.${APP_DOMAIN}`, box_id: box.id, port: 8080 },
+    ])
+    expect(await service.listHeld(ORG)).toMatchObject({ used: 2, remaining: 0 })
   })
 
-  it('unbinds and keeps the name when the box row is deleted outright', async () => {
+  it('domain retention: deleting the Box row keeps its target until explicit rebind', async () => {
     const box = await makeBox()
+    await tunnels.prepare(box.id, 3000)
     await service.bind(box, 3000, 'demo1')
 
     await dataSource.query(`DELETE FROM "${schemaName}"."box" WHERE "id" = $1`, [box.id])
 
-    expect(await heldNames(ORG)).toEqual([{ hostname: `demo1.${APP_DOMAIN}`, box_id: null, port: 3000 }])
-    expect((await service.listHeld(ORG)).domains).toEqual([
-      { hostname: `demo1.${APP_DOMAIN}`, url: `https://demo1.${APP_DOMAIN}`, target: null },
-    ])
-    await expect(service.resolve(`demo1.${APP_DOMAIN}`)).resolves.toBeNull()
+    expect(await heldNames(ORG)).toEqual([{ hostname: `demo1.${APP_DOMAIN}`, box_id: box.id, port: 3000 }])
+    expect(await service.listHeld(ORG)).toMatchObject({
+      used: 1,
+      remaining: 0,
+      domains: [
+        {
+          hostname: `demo1.${APP_DOMAIN}`,
+          url: `https://demo1.${APP_DOMAIN}`,
+          target: { type: 'box', box: box.id, port: 3000 },
+        },
+      ],
+    })
+    await expect(service.resolve(`demo1.${APP_DOMAIN}`)).resolves.toEqual({ type: 'box', box: box.id, port: 3000 })
+    await expect(preview.resolveDomain(`demo1.${APP_DOMAIN}`)).rejects.toBeInstanceOf(NotFoundException)
+
+    const replacement = await makeBox()
+    await expect(service.bind(replacement, 8080, `demo1.${APP_DOMAIN}`)).resolves.toMatchObject({
+      target: { type: 'box', box: replacement.id, port: 8080 },
+    })
+    expect(await service.listHeld(ORG)).toMatchObject({ used: 1, remaining: 0 })
   })
 
   it('keeps the target but refuses preview when its box disables inbound access', async () => {

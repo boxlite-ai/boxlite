@@ -12,9 +12,9 @@ export class AddDomain1792972800000 implements MigrationInterface {
     //
     // A Box target is the port itself, not its tunnel: a name may be bound
     // before the port is declared public, and several names may share a port.
-    // For target_type = 'box', box_id says whether the name is bound. Deleting the box clears box_id
-    // alone — PostgreSQL's SET NULL reaches only foreign key columns — and a
-    // port left beside a null box_id means nothing. App targets instead use
+    // Target references have no foreign keys: Box cleanup must retain the
+    // binding until explicit unbind or rebind. The API validates live Box
+    // targets when binding and checks access when routing. App targets use
     // app_id; the API refuses App binding until that resource exists.
     await queryRunner.query(`
       CREATE TABLE "domain" (
@@ -37,8 +37,7 @@ export class AddDomain1792972800000 implements MigrationInterface {
             AND ("port" IS NULL OR "port" BETWEEN 1 AND 65535))
           OR ("target_type" = 'app' AND "box_id" IS NULL AND "port" IS NULL
             AND ("app_id" IS NULL OR "app_id" ~ '[^[:space:]]'))
-        ),
-        CONSTRAINT "domain_box_id_fk" FOREIGN KEY ("box_id") REFERENCES "box"("id") ON DELETE SET NULL
+        )
       )
     `)
     await queryRunner.query(`CREATE INDEX "domain_organization_id_index" ON "domain" ("organization_id")`)

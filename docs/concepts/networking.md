@@ -111,8 +111,12 @@ A port can have several names: binding a new one leaves the others in place.
 generated URL stays public until the tunnel is revoked. An unbound name is
 still the organization's — nobody else can claim it, it still counts against
 the organization's domain allowance, and the same organization can bind it
-again to any of its box ports. Destroying the box unbinds its names the same
-way. Revoking the tunnel does not: the name stays bound, answers `404` while
+again to any of its box ports. Destroying the box, including later cleanup of its
+database row, preserves the binding: `domain ls` still shows the original Box ID
+and port until explicit unbind or rebind. A destroy request first changes the
+desired Box state; routing follows the actual-state checks and existing three-second
+access cache. Once those checks observe a destroyed or missing Box, the name answers
+`404`. Revoking the tunnel also preserves the binding: the name answers `404` while
 the port is revoked, and serves again once the port is prepared as public again.
 
 `domain ls` lists every full hostname the organization holds with what it routes to,
