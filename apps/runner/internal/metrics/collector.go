@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"sync"
 	"time"
 
@@ -30,6 +31,7 @@ type CollectorConfig struct {
 	WindowSize                         int
 	CPUUsageSnapshotInterval           time.Duration
 	AllocatedResourcesSnapshotInterval time.Duration
+	ObserveCPU                         func(time.Time, float64)
 }
 
 type Collector struct {
@@ -50,6 +52,7 @@ type Collector struct {
 
 	cpuUsageSnapshotInterval           time.Duration
 	allocatedResourcesSnapshotInterval time.Duration
+	observeCPU                         func(time.Time, float64)
 }
 
 type CPUSnapshot struct {
@@ -80,6 +83,7 @@ func NewCollector(cfg CollectorConfig) *Collector {
 		cpuRing:                            ring.New(cfg.WindowSize),
 		cpuUsageSnapshotInterval:           cfg.CPUUsageSnapshotInterval,
 		allocatedResourcesSnapshotInterval: cfg.AllocatedResourcesSnapshotInterval,
+		observeCPU:                         cfg.ObserveCPU,
 	}
 }
 
@@ -87,6 +91,7 @@ func (c *Collector) Start(ctx context.Context) {
 	go c.snapshotCPUUsage(ctx)
 	go c.snapshotAllocatedResources(ctx)
 	go c.snapshotRuntimeMetrics(ctx)
+	go c.logResourceUsage(ctx)
 }
 
 func (c *Collector) Collect(ctx context.Context) (*Metrics, error) {
@@ -175,9 +180,15 @@ func (c *Collector) snapshotCPUUsage(ctx context.Context) {
 			return
 		case <-ticker.C:
 			cpuPercent, err := cpu.PercentWithContext(ctx, 0, false)
-			if err != nil {
+			if err != nil || len(cpuPercent) != 1 {
 				c.log.WarnContext(ctx, "Failed to collect next CPU usage ring", "error", err)
+				if c.observeCPU != nil {
+					c.observeCPU(time.Now(), math.NaN())
+				}
 				continue
+			}
+			if c.observeCPU != nil {
+				c.observeCPU(time.Now(), cpuPercent[0])
 			}
 
 			c.cpuMutex.Lock()
@@ -192,6 +203,10 @@ func (c *Collector) snapshotCPUUsage(ctx context.Context) {
 }
 
 func (c *Collector) collectCPUUsageAverage() (float64, error) {
+	return c.collectCPUUsageSince(time.Time{})
+}
+
+func (c *Collector) collectCPUUsageSince(since time.Time) (float64, error) {
 	var total float64
 	var count int
 
@@ -201,7 +216,7 @@ func (c *Collector) collectCPUUsageAverage() (float64, error) {
 	c.cpuRing.Do(func(x interface{}) {
 		if x != nil {
 			snapshot, ok := x.(CPUSnapshot)
-			if !ok {
+			if !ok || snapshot.timestamp.Before(since) {
 				return
 			}
 
@@ -215,6 +230,38 @@ func (c *Collector) collectCPUUsageAverage() (float64, error) {
 	}
 
 	return total / float64(count), nil
+}
+
+func (c *Collector) logResourceUsage(ctx context.Context) {
+	ticker := time.NewTicker(time.Minute)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			c.logResourceSnapshot(ctx, time.Now())
+		}
+	}
+}
+
+func (c *Collector) logResourceSnapshot(ctx context.Context, now time.Time) {
+	bounded, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	m, err := c.collect(bounded)
+	if err != nil {
+		c.log.WarnContext(ctx, "Failed to collect runner resource log", "error", err)
+		return
+	}
+	cpuPercent, err := c.collectCPUUsageSince(now.Add(-time.Minute))
+	if err != nil {
+		c.log.WarnContext(ctx, "Failed to collect recent CPU usage for resource log", "error", err)
+		return
+	}
+	c.log.InfoContext(ctx, "Runner resource usage", "event", "runner.resource.usage",
+		"cpuPercent", cpuPercent, "memoryPercent", m.MemoryUsagePercentage,
+		"diskPercent", m.DiskUsagePercentage, "diskUsedGiB", m.AllocatedDiskGiB,
+		"diskTotalGiB", m.TotalDiskGiB)
 }
 
 func (c *Collector) snapshotAllocatedResources(ctx context.Context) {

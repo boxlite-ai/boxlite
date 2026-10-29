@@ -502,8 +502,8 @@ runner does not push state for boxes the API isn't tracking.
 
 ### Metrics collector
 
-[`internal/metrics/collector.go`](internal/metrics/collector.go). Two
-independent loops:
+[`internal/metrics/collector.go`](internal/metrics/collector.go) runs independent
+sampling and logging loops:
 
 - **CPU usage snapshot** every `CPUUsageSnapshotInterval` — keeps a
   ring buffer of the last `WindowSize` samples so `/info` can return a
@@ -511,6 +511,10 @@ independent loops:
 - **Allocated resources snapshot** every
   `AllocatedResourcesSnapshotInterval` — queries `Boxlite.ListInfo()`
   and sums the CPU/RAM allocations across running boxes.
+- **Resource log** every minute — emits `event=runner.resource.usage` with
+  `cpuPercent` (available samples from the last minute), current `memoryPercent`,
+  `diskPercent`, `diskUsedGiB` and `diskTotalGiB`. Failed collection emits a warning.
+- **Runtime counters** every 15 seconds — refreshes aggregate runtime metrics.
 
 `Collect(ctx)` reads the current values with a short timeout and is
 called from both `/info` and the v2 healthcheck. Disk numbers come from
@@ -520,6 +524,46 @@ which is where boxes, images and bases live: `TotalDiskGiB` is its size,
 used space (`df`'s Used) — not a sum of the boxes' requested sizes. A
 filesystem reporting zero capacity is an error, so the API never
 receives a `diskGiB` of 0.
+
+### Sustained CPU incidents
+
+[`internal/cpumonitor`](internal/cpumonitor/) observes the same raw host CPU samples.
+Strictly more than 95% for ten continuous minutes starts two-minute capture
+windows. Each window emits `event=runner.cpu.high` with a fresh event ID,
+threshold, latest host percentage and high-load start. While observations remain
+high, the next window starts immediately after the previous one finishes: minutes
+10–12, 12–14, 14–16, and so on. Capture work can extend a window slightly; windows
+never overlap and missed windows are not replayed.
+
+A reading at or below 95%, an invalid sample, or a gap of twice the configured
+sampling interval resets continuity. The active capture finishes, but another
+window requires a fresh ten-minute high-load interval. A worker rechecks sample
+freshness before each window, so stopped host sampling cannot keep captures
+running. The healthcheck's smoothed average does not trigger incidents.
+
+A separate worker samples running boxes every five seconds for the next two
+minutes, even after host CPU recovers. Linux uses each box's cgroup v2
+`cpu.stat/usage_usec` to include the VM beneath the sandbox launcher. The cgroup
+must match the local runtime ID. macOS uses process user+system time. No guest
+exec is needed. Linux without a readable matching cgroup reports incomplete
+attribution instead of measuring only the launcher.
+
+The largest cumulative CPU consumer is retained, using its business box ID
+(`ListInfo.Name`); ties choose the lexically first ID. For example, 240 CPU-seconds
+in a 120-second window means two cores on average (200% on the one-core scale).
+Counter replacement, restarts, exits and failed reads mark `samplingComplete=false`;
+observed totals are then lower bounds. No positive consumption produces `boxId=null`.
+The winning box's `ListInfo.Image` string is included in the same report. The
+window retains the last successful sample's image even if the box exits; no
+winner produces `image=null`, and an empty image string stays empty. Reading the
+image needs no additional API query, registry lookup or guest command.
+
+The runner posts to the [internal ingestion route](../API.md#runner-cpu-incidents)
+when `BOXLITE_API_URL` and `BOXLITE_RUNNER_TOKEN` are configured. Up to 32 completed
+reports wait in memory. Network errors, 429 and 5xx retry every 30 seconds with a
+ten-second timeout; other failures and queue overflow are logged and dropped.
+Restart loses pending captures/reports. Deploy the migration and API before runners.
+This feature records evidence only; it does not stop boxes or change scheduling.
 
 ### v2 job poller + executor
 

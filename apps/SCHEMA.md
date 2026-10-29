@@ -23,7 +23,7 @@ The model is implementation-grounded:
 `apps/api` is the only application that owns a database. The Go services —
 [`runner`](./runner/) and [`proxy`](./proxy/) — hold no persistence: neither
 imports an ORM, `database/sql`, or an embedded store. Runner state reaches the
-control plane only through `runner` telemetry columns and `job` results.
+control plane through `runner` telemetry columns, `job` results and CPU incident reports.
 
 ## Overview
 
@@ -484,6 +484,33 @@ a derived availability score.
 
 **Unique:** `(region, name)`. **Index:**
 `(state, unschedulable, region)` — the placement query.
+
+### `runner_cpu_incident`
+
+Immutable evidence from each two-minute capture after a runner's ten-minute CPU
+saturation trigger. Captures repeat while high CPU observations continue. Created by the additive
+`1793232000000-add-runner-cpu-incidents` pre-deploy migration.
+
+| Column | Type | Notes |
+| ------ | ---- | ----- |
+| `id` | `bigint identity` | primary key; exposed as a decimal string |
+| `runnerId` / `eventId` | `uuid` | unique pair; runner identity comes from authentication |
+| `highCpuSince` | `timestamptz` | start of the continuously observed high-load interval |
+| `windowStartedAt` / `windowEndedAt` | `timestamptz` | actual attribution window; at least two minutes |
+| `runnerCpuPercent` | `double precision` | host-wide percent at trigger, greater than 95 and at most 100 |
+| `boxId` | `varchar(128)` | business box ID of largest observed consumer; nullable |
+| `image` | `text` | winner's exact `BoxInfo.Image` string from its last successful sample; null for no winner or older reports; empty string is preserved |
+| `cpuSeconds` | `double precision` | cumulative measured CPU time, all cores; zero iff box ID is null |
+| `samplingComplete` | `boolean` | false for missing samples, lifecycle changes or counter resets |
+| `receivedAt` | `timestamptz` | server receipt time |
+
+Indexes on `(runnerId,id)` and `windowEndedAt` support runner and capture-completion
+time-range filters. No foreign-key cascade or automatic retention job: evidence
+survives resource deletion. A single insert ignores duplicate `(runnerId,eventId)`
+reports through the unique constraint. [Admin queries](API.md#runner-cpu-incidents)
+return at most `limit` visible rows ordered by ID, without pagination or a commit-order guarantee.
+Each window has a distinct event ID. Image is recorded in the same insert and
+cannot change on retry; no box-table lookup or organization field is involved.
 
 ### `region`
 

@@ -7,6 +7,7 @@ package main
 import (
 	"context"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -18,6 +19,7 @@ import (
 	"github.com/boxlite-ai/common-go/pkg/telemetry"
 	"github.com/boxlite-ai/runner/cmd/runner/config"
 	"github.com/boxlite-ai/runner/internal"
+	"github.com/boxlite-ai/runner/internal/cpumonitor"
 	"github.com/boxlite-ai/runner/internal/metrics"
 	"github.com/boxlite-ai/runner/pkg/api"
 	"github.com/boxlite-ai/runner/pkg/backend"
@@ -142,6 +144,35 @@ func run() int {
 	})
 	boxSyncService.StartSyncProcess(ctx)
 
+	var observeCPU func(time.Time, float64)
+	if cfg.BoxliteApiUrl != "" && cfg.ApiToken != "" {
+		report, err := cpumonitor.NewReporter(cfg.BoxliteApiUrl, cfg.ApiToken, &http.Client{
+			Timeout:       10 * time.Second,
+			CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse },
+		})
+		if err != nil {
+			logger.Error("Failed to initialize CPU incident reporter", "error", err)
+			return 2
+		}
+		monitor := cpumonitor.New(logger, cfg.CPUUsageSnapshotInterval, func(ctx context.Context) ([]cpumonitor.Box, error) {
+			boxes, err := boxliteClient.ListInfo(ctx)
+			if err != nil {
+				return nil, err
+			}
+			result := make([]cpumonitor.Box, 0, len(boxes))
+			for _, box := range boxes {
+				if box.Running {
+					result = append(result, cpumonitor.Box{ID: box.Name, RuntimeID: box.ID, Image: box.Image, PID: box.PID, StartedAt: box.StartedAt})
+				}
+			}
+			return result, nil
+		}, report)
+		observeCPU = monitor.Observe
+		monitorDone := make(chan struct{})
+		go func() { defer close(monitorDone); monitor.Run(ctx) }()
+		defer func() { cancel(); <-monitorDone }()
+	}
+
 	metricsCollector := metrics.NewCollector(metrics.CollectorConfig{
 		Logger:                             logger,
 		Boxlite:                            boxliteClient,
@@ -149,6 +180,7 @@ func run() int {
 		WindowSize:                         cfg.CollectorWindowSize,
 		CPUUsageSnapshotInterval:           cfg.CPUUsageSnapshotInterval,
 		AllocatedResourcesSnapshotInterval: cfg.AllocatedResourcesSnapshotInterval,
+		ObserveCPU:                         observeCPU,
 	})
 	metricsCollector.Start(ctx)
 

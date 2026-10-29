@@ -57,9 +57,11 @@ import { BoxMigrationJobReceiver } from './services/box-migration-job-receiver.s
 import { Tunnel } from './entities/tunnel.entity'
 import { TunnelService } from './services/tunnel.service'
 import { AttachTicketService } from './services/attach-ticket.service'
+import { CpuIncidentModule } from './cpu-incidents/cpu-incident.module'
 
 @Module({
   imports: [
+    CpuIncidentModule,
     UserModule,
     OrganizationModule,
     RegionModule,
