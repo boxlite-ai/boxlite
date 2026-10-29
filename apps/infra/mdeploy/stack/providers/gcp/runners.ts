@@ -554,8 +554,7 @@ udevadm trigger --name-match=kvm || true`,
      * it replaces needed OS Login — a POSIX identity granted per person, which
      * an account outside the instance's organization cannot be given at all.
      *
-     * One five-minute canary avoids paying the wait per host and timing out.
-     * The fleet depends on its synchronous rollout before updating in parallel.
+     * Observe one canary before the parallel fleet; allow time for convergence.
      */
     // Both addresses are Outputs, so the rendered pair is one too — and each
     // field has to be unwrapped on its own before it can be handed to a script
@@ -636,7 +635,10 @@ udevadm trigger --name-match=kvm || true`,
           rollout: batch.rollout,
           skipAwaitRollout: false,
         },
-        { dependsOn: [...instances, ...dependsOn, ...(previousBatch ? [previousBatch] : [])] },
+        {
+          dependsOn: [...instances, ...dependsOn, ...(previousBatch ? [previousBatch] : [])],
+          customTimeouts: { create: '40m', update: '40m' },
+        },
       )
     }
 
