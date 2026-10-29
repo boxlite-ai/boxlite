@@ -32,6 +32,24 @@ for the intended cloud and deployment path.
 - [`image-service/README.md`](./image-service/README.md) — the registry proxy: how a runner pulls
   an image whose registry credentials only the platform holds.
 
+## Testing
+
+Run `make test:apps` from the repository root with PostgreSQL and Redis available.
+Use disposable services: integration tests create database objects and may clear
+Redis data. Set `DB_HOST`, `DB_PORT`, `DB_USERNAME`, `DB_PASSWORD`, `DB_DATABASE`,
+`REDIS_HOST`, and `REDIS_PORT` to select those services.
+
+The matrix builds the Go SDK dependency and runs infrastructure checks, then runs
+API suites serially through `make test:apps:api`. These suites share PostgreSQL;
+a concurrent index build can wait on another suite's transaction even when the
+suites use different schemas. The remaining Nx projects run in parallel after
+the API suites finish.
+
+By default, an API failure still allows the remaining projects to run, and either
+group's failure makes the matrix fail. Use `FAIL_FAST=true` to stop after an API
+failure, or `FILTER=<pattern>` to select test names with each runner's existing
+filter behavior.
+
 ## API catalog
 
 See [`API.md`](./API.md) for the categorized inventory of every application
