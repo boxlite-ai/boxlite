@@ -47,7 +47,8 @@ make test:apps:infra-config
 
 `test:apps:infra` typechecks tooling and runs the infrastructure suites. `coverage:infra` runs those same
 checks with c8 and writes repository-relative LCOV to `target/coverage/infra/lcov.info`, including
-unloaded production modules at zero coverage. CI uploads this report under the `infra` flag;
+unloaded production modules at zero coverage. Setup reinstalls dependencies if the c8 executable is
+missing, including older installs that already have `node_modules`. CI uploads this report under the `infra` flag;
 infrastructure changes cannot use the empty-upload path. The wheel smoke fixture copies Python
 sources while omitting native extensions, so unrelated missing modules cannot mask a broken wheel.
 `test:apps:infra-config` installs SST's platform and typechecks the full configuration.

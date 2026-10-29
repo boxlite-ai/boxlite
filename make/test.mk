@@ -574,7 +574,7 @@ test\:all\:go:
 # downloaded sdks/go/{libboxlite.a,include} bundle (absent on dev checkouts)
 # and fails #579. Same pattern as test:unit:go above.
 _ensure-infra-deps:
-	@if [ ! -d apps/infra/node_modules ]; then \
+	@if [ ! -x apps/infra/node_modules/.bin/c8 ]; then \
 		echo "📦 Installing SST deployment dependencies..."; \
 		cd apps/infra && npm ci --no-audit --no-fund; \
 	fi
