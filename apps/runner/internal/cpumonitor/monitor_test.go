@@ -19,21 +19,25 @@ func testMonitor() *Monitor {
 func TestCPUIncidentThresholdAndRearm(t *testing.T) {
 	m := testMonitor()
 	start := time.Unix(1700000000, 0)
-	for second := 0; second < 600; second += 5 {
-		m.Observe(start.Add(time.Duration(second)*time.Second), 96)
+	for second := 0; second < 300; second += 5 {
+		m.Observe(start.Add(time.Duration(second)*time.Second), 80.1)
 	}
 	if len(m.triggers) != 0 {
-		t.Fatal("triggered before ten minutes")
+		t.Fatal("triggered before five minutes")
 	}
-	m.Observe(start.Add(600*time.Second), 96)
+	m.Observe(start.Add(300*time.Second), 80.1)
 	if len(m.triggers) != 1 {
-		t.Fatal("did not trigger after ten minutes")
+		t.Fatal("did not trigger after five minutes above 80 percent")
 	}
 	<-m.triggers
-	m.Observe(start.Add(1805*time.Second), 95)
-	for second := 1810; second <= 2410; second += 5 {
-		m.Observe(start.Add(time.Duration(second)*time.Second), 99)
+	m.Observe(start.Add(305*time.Second), 80)
+	for second := 310; second < 610; second += 5 {
+		m.Observe(start.Add(time.Duration(second)*time.Second), 80.1)
 	}
+	if len(m.triggers) != 0 {
+		t.Fatal("rearmed before a fresh five minutes")
+	}
+	m.Observe(start.Add(610*time.Second), 80.1)
 	if len(m.triggers) != 1 {
 		t.Fatal("did not rearm after equality boundary")
 	}
@@ -45,25 +49,25 @@ func TestCPUIncidentContinuity(t *testing.T) {
 		percent float64
 		skip    bool
 	}{
-		{"threshold", 95, false}, {"nan", math.NaN(), false}, {"infinity", math.Inf(1), false},
-		{"out of range", 101, false}, {"negative", -1, false}, {"one missing sample", 96, true},
+		{"threshold", 80, false}, {"nan", math.NaN(), false}, {"infinity", math.Inf(1), false},
+		{"out of range", 101, false}, {"negative", -1, false}, {"one missing sample", 80.1, true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			m := testMonitor()
 			start := time.Unix(1700000000, 0)
-			for second := 0; second <= 595; second += 5 {
-				m.Observe(start.Add(time.Duration(second)*time.Second), 96)
+			for second := 0; second <= 295; second += 5 {
+				m.Observe(start.Add(time.Duration(second)*time.Second), 80.1)
 			}
 			if !test.skip {
-				m.Observe(start.Add(600*time.Second), test.percent)
+				m.Observe(start.Add(300*time.Second), test.percent)
 			}
-			for second := 605; second < 1205; second += 5 {
-				m.Observe(start.Add(time.Duration(second)*time.Second), 96)
+			for second := 305; second < 605; second += 5 {
+				m.Observe(start.Add(time.Duration(second)*time.Second), 80.1)
 			}
 			if len(m.triggers) != 0 {
 				t.Fatal("bridged discontinuity")
 			}
-			m.Observe(start.Add(1205*time.Second), 96)
+			m.Observe(start.Add(605*time.Second), 80.1)
 			if len(m.triggers) != 1 {
 				t.Fatal("failed to restart pending timer")
 			}
@@ -84,7 +88,7 @@ func TestCPUIncidentCaptureUsesNextTwoMinutes(t *testing.T) {
 		reported := make(chan Incident, 1)
 		m.report = func(_ context.Context, event Incident) (bool, error) { reported <- event; return false, nil }
 		go m.Run(ctx)
-		for second := -600; second <= 0; second += 5 {
+		for second := -300; second <= 0; second += 5 {
 			m.Observe(start.Add(time.Duration(second)*time.Second), 99)
 		}
 		synctest.Wait()
@@ -176,7 +180,7 @@ func TestCPUIncidentCaptureCancellation(t *testing.T) {
 			return false, nil
 		}
 		start := time.Now()
-		for second := -600; second <= 0; second += 5 {
+		for second := -300; second <= 0; second += 5 {
 			m.Observe(start.Add(time.Duration(second)*time.Second), 99)
 		}
 		done := make(chan struct{})

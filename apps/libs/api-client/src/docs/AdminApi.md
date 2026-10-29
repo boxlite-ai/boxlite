@@ -682,7 +682,7 @@ const apiInstance = new AdminApi(configuration);
 
 let from: Date; //Inclusive capture completion time, with timezone.
 let to: Date; //Exclusive capture completion time, with timezone; must follow from.
-let limit: object; //Maximum rows, ordered by ID ascending. (optional) (default to undefined)
+let limit: number; //Maximum rows, ordered by ID ascending. (optional) (default to 50)
 let runnerId: string; // (optional) (default to undefined)
 
 const { status, data } = await apiInstance.adminListRunnerCpuIncidents(
@@ -699,7 +699,7 @@ const { status, data } = await apiInstance.adminListRunnerCpuIncidents(
 |------------- | ------------- | ------------- | -------------|
 | **from** | [**Date**] | Inclusive capture completion time, with timezone. | |
 | **to** | [**Date**] | Exclusive capture completion time, with timezone; must follow from. | |
-| **limit** | **object** | Maximum rows, ordered by ID ascending. | (optional) defaults to undefined|
+| **limit** | [**number**] | Maximum rows, ordered by ID ascending. | (optional) defaults to 50|
 | **runnerId** | [**string**] |  | (optional) defaults to undefined|
 
 

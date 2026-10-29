@@ -33,9 +33,9 @@ export class RunnerCpuIncidentDto {
   @IsISO8601({ strict: true })
   windowEndedAt: string
 
-  @ApiProperty({ description: 'Host-wide CPU percent at trigger, strictly above 95.' })
+  @ApiProperty({ description: 'Host-wide CPU percent at trigger, strictly above 80.' })
   @IsNumber()
-  @Min(95)
+  @Min(80)
   @Max(100)
   runnerCpuPercent: number
 
@@ -83,7 +83,13 @@ export class ListCpuIncidentsDto {
   @Matches(timestampWithTimezone)
   to: string
 
-  @ApiPropertyOptional({ minimum: 1, maximum: 200, default: 50, description: 'Maximum rows, ordered by ID ascending.' })
+  @ApiPropertyOptional({
+    type: 'integer',
+    minimum: 1,
+    maximum: 200,
+    default: 50,
+    description: 'Maximum rows, ordered by ID ascending.',
+  })
   @Type(() => Number)
   @IsInt()
   @Min(1)

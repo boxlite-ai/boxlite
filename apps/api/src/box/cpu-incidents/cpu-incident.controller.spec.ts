@@ -11,9 +11,9 @@ const range = { from: '2026-10-29T00:00:00Z', to: '2026-10-30T00:00:00Z' }
 const report = {
   eventId: '22222222-2222-4222-8222-222222222222',
   highCpuSince: '2026-10-29T00:00:00Z',
-  windowStartedAt: '2026-10-29T00:10:00Z',
-  windowEndedAt: '2026-10-29T00:12:00Z',
-  runnerCpuPercent: 98,
+  windowStartedAt: '2026-10-29T00:05:00Z',
+  windowEndedAt: '2026-10-29T00:07:00Z',
+  runnerCpuPercent: 80.1,
   boxId: 'business-box',
   cpuSeconds: 240,
   samplingComplete: true,
@@ -78,6 +78,7 @@ describe('CPU incident HTTP contract', () => {
     { cpuSeconds: -1 },
     { cpuSeconds: '2' },
     { runnerCpuPercent: 101 },
+    { runnerCpuPercent: 79.9 },
     { highCpuSince: 'bad' },
     { boxId: '../other' },
     { boxId: undefined },
@@ -132,6 +133,15 @@ describe('CPU incident HTTP contract', () => {
       expect(list).not.toHaveBeenCalled()
     },
   )
+
+  it('documents CPU incident limit as a bounded integer', () => {
+    const document = SwaggerModule.createDocument(app, new DocumentBuilder().addBearerAuth().build())
+    const operation = document.paths['/api/admin/runner-cpu-incidents'].get
+    expect(operation.parameters.find((parameter) => 'name' in parameter && parameter.name === 'limit')).toMatchObject({
+      required: false,
+      schema: { type: 'integer', minimum: 1, maximum: 200, default: 50 },
+    })
+  })
 
   it('documents admin responses and keeps ingestion out of customer OpenAPI', () => {
     const document = SwaggerModule.createDocument(app, new DocumentBuilder().addBearerAuth().build())

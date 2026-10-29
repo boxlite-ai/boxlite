@@ -16,10 +16,10 @@ export class CpuIncidentService {
     if (
       !Number.isFinite(pendingMs) ||
       !Number.isFinite(captureMs) ||
-      pendingMs < 600_000 ||
+      pendingMs < 300_000 ||
       captureMs < 120_000 ||
       captureMs > 300_000 ||
-      report.runnerCpuPercent <= 95 ||
+      report.runnerCpuPercent <= 80 ||
       (report.boxId === null && report.image != null) ||
       (report.boxId === null ? report.cpuSeconds !== 0 : report.cpuSeconds <= 0)
     )

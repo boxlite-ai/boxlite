@@ -650,9 +650,9 @@ curl --get "$BOXLITE_API_URL/api/admin/runner-cpu-incidents" \
     "id": "42", "runnerId": "11111111-1111-4111-8111-111111111111",
     "eventId": "22222222-2222-4222-8222-222222222222",
     "highCpuSince": "2026-10-29T00:00:00.000Z",
-    "windowStartedAt": "2026-10-29T00:10:00.000Z",
-    "windowEndedAt": "2026-10-29T00:12:00.000Z",
-    "runnerCpuPercent": 98, "boxId": "example-box", "image": "ubuntu:24.04",
+    "windowStartedAt": "2026-10-29T00:05:00.000Z",
+    "windowEndedAt": "2026-10-29T00:07:00.000Z",
+    "runnerCpuPercent": 85, "boxId": "example-box", "image": "ubuntu:24.04",
     "cpuSeconds": 240, "samplingComplete": true,
     "receivedAt": "2026-10-29T00:12:01.000Z"
   }]
@@ -680,7 +680,8 @@ There is no acknowledgement or automatic box operation.
 Runner ingestion is `POST /api/runners/me/cpu-incidents`, authenticated by the
 runner's existing token. Its body is the example row without `id`, `runnerId`
 and `receivedAt`. Valid first uploads and retries return 204. The API derives
-`runnerId` from credentials, validates the window and counters, and ignores
+`runnerId` from credentials, requires more than 80% CPU and at least five minutes
+between `highCpuSince` and `windowStartedAt`, validates the capture and counters, and ignores
 duplicate event IDs from the same runner. Malformed bodies/queries return 400.
 The optional `image` accepts a string or null; it must be absent/null when `boxId`
 is null. It travels in this same report without another runner API query.

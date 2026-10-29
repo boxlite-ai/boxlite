@@ -13,9 +13,9 @@ const range = { from: '2026-10-29T00:00:00Z', to: '2026-10-30T00:00:00Z' }
 const report = (): RunnerCpuIncidentDto => ({
   eventId: randomUUID(),
   highCpuSince: '2026-10-29T00:00:00Z',
-  windowStartedAt: '2026-10-29T00:10:00Z',
-  windowEndedAt: '2026-10-29T00:12:00Z',
-  runnerCpuPercent: 98,
+  windowStartedAt: '2026-10-29T00:05:00Z',
+  windowEndedAt: '2026-10-29T00:07:00Z',
+  runnerCpuPercent: 80.1,
   boxId: 'business-box',
   cpuSeconds: 240,
   samplingComplete: true,
@@ -91,23 +91,23 @@ describeWithDatabase('CPU incident PostgreSQL persistence', () => {
   })
 
   it('filters capture completion in [from,to) and returns the first N rows by ID', async () => {
-    const completed = ['2026-10-29T00:12:00Z', '2026-10-29T00:12:01Z', '2026-10-29T00:12:02Z']
+    const completed = ['2026-10-29T00:07:00Z', '2026-10-29T00:07:01Z', '2026-10-29T00:07:02Z']
     for (const windowEndedAt of completed) await service.record(runnerId, { ...report(), windowEndedAt })
     await service.record(otherRunner, { ...report(), windowEndedAt: completed[1] })
     const query = { from: completed[0], to: completed[2], limit: 1, runnerId }
     const first = await service.list(query)
-    expect(first.items.map((item) => item.windowEndedAt.toISOString())).toEqual(['2026-10-29T00:12:00.000Z'])
+    expect(first.items.map((item) => item.windowEndedAt.toISOString())).toEqual(['2026-10-29T00:07:00.000Z'])
     const two = await service.list({ ...query, limit: 2 })
     expect(two.items.map((item) => item.windowEndedAt.toISOString())).toEqual([
-      '2026-10-29T00:12:00.000Z',
-      '2026-10-29T00:12:01.000Z',
+      '2026-10-29T00:07:00.000Z',
+      '2026-10-29T00:07:01.000Z',
     ])
     expect(await service.list(query)).toEqual(first)
     expect((await service.list({ ...query, from: completed[1], limit: 50 })).items).toHaveLength(1)
-    const withOffset = await service.list({ ...query, from: '2026-10-29T08:12:00+08:00', limit: 50 })
+    const withOffset = await service.list({ ...query, from: '2026-10-29T08:07:00+08:00', limit: 50 })
     expect(withOffset.items).toHaveLength(2)
     expect((await service.list({ ...query, runnerId: undefined, limit: 50 })).items).toHaveLength(3)
-    expect((await service.list({ ...query, from: completed[2], to: '2026-10-29T00:13:00Z' })).items).toHaveLength(1)
+    expect((await service.list({ ...query, from: completed[2], to: '2026-10-29T00:08:00Z' })).items).toHaveLength(1)
   })
 
   it.each([range.from, '2026-10-28T00:00:00Z', 'invalid'])('rejects invalid range ending %s', async (to) => {
@@ -115,9 +115,9 @@ describeWithDatabase('CPU incident PostgreSQL persistence', () => {
   })
 
   it.each([
-    { windowStartedAt: '2026-10-29T00:09:59Z' },
-    { windowEndedAt: '2026-10-29T00:11:59Z' },
-    { runnerCpuPercent: 95 },
+    { windowStartedAt: '2026-10-29T00:04:59Z' },
+    { windowEndedAt: '2026-10-29T00:06:59Z' },
+    { runnerCpuPercent: 80 },
     { boxId: null, cpuSeconds: 2 },
     { boxId: null, cpuSeconds: 0, image: 'unattributed:latest' },
     { cpuSeconds: 0 },
@@ -125,6 +125,23 @@ describeWithDatabase('CPU incident PostgreSQL persistence', () => {
   ])('rejects incoherent report %j', async (extra) => {
     await expect(service.record(runnerId, { ...report(), ...extra })).rejects.toThrow('Invalid CPU incident')
     expect((await service.list({ ...range, limit: 50 })).items).toHaveLength(0)
+  })
+
+  it('enforces the five-minute and strict 80 percent boundaries in PostgreSQL', async () => {
+    const insert = (extra: Partial<RunnerCpuIncidentDto>) => {
+      const incident = { ...report(), ...extra }
+      return db.getRepository(RunnerCpuIncident).insert({
+        ...incident,
+        runnerId,
+        highCpuSince: new Date(incident.highCpuSince),
+        windowStartedAt: new Date(incident.windowStartedAt),
+        windowEndedAt: new Date(incident.windowEndedAt),
+      })
+    }
+    await expect(insert({ runnerCpuPercent: 80 })).rejects.toMatchObject({ code: '23514' })
+    await expect(insert({ windowStartedAt: '2026-10-29T00:04:59Z' })).rejects.toMatchObject({ code: '23514' })
+    await insert({})
+    expect(await db.getRepository(RunnerCpuIncident).count()).toBe(1)
   })
 
   it('preserves row ID precision beyond JavaScript safe integers', async () => {

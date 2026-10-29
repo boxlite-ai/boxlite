@@ -528,16 +528,16 @@ receives a `diskGiB` of 0.
 ### Sustained CPU incidents
 
 [`internal/cpumonitor`](internal/cpumonitor/) observes the same raw host CPU samples.
-Strictly more than 95% for ten continuous minutes starts two-minute capture
+Strictly more than 80% for five continuous minutes starts two-minute capture
 windows. Each window emits `event=runner.cpu.high` with a fresh event ID,
 threshold, latest host percentage and high-load start. While observations remain
 high, the next window starts immediately after the previous one finishes: minutes
-10–12, 12–14, 14–16, and so on. Capture work can extend a window slightly; windows
+5–7, 7–9, 9–11, and so on. Capture work can extend a window slightly; windows
 never overlap and missed windows are not replayed.
 
-A reading at or below 95%, an invalid sample, or a gap of twice the configured
+A reading at or below 80%, an invalid sample, or a gap of twice the configured
 sampling interval resets continuity. The active capture finishes, but another
-window requires a fresh ten-minute high-load interval. A worker rechecks sample
+window requires a fresh five-minute high-load interval. A worker rechecks sample
 freshness before each window, so stopped host sampling cannot keep captures
 running. The healthcheck's smoothed average does not trigger incidents.
 

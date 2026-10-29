@@ -15,8 +15,8 @@ import (
 )
 
 const (
-	threshold       = 95.0
-	sustained       = 10 * time.Minute
+	threshold       = 80.0
+	sustained       = 5 * time.Minute
 	captureDuration = 2 * time.Minute
 	sampleInterval  = 5 * time.Second
 )

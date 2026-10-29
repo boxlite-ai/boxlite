@@ -1595,7 +1595,7 @@ type AdminAPIAdminListRunnerCpuIncidentsRequest struct {
 	ApiService AdminAPI
 	from *time.Time
 	to *time.Time
-	limit *map[string]interface{}
+	limit *int32
 	runnerId *string
 }
 
@@ -1612,7 +1612,7 @@ func (r AdminAPIAdminListRunnerCpuIncidentsRequest) To(to time.Time) AdminAPIAdm
 }
 
 // Maximum rows, ordered by ID ascending.
-func (r AdminAPIAdminListRunnerCpuIncidentsRequest) Limit(limit map[string]interface{}) AdminAPIAdminListRunnerCpuIncidentsRequest {
+func (r AdminAPIAdminListRunnerCpuIncidentsRequest) Limit(limit int32) AdminAPIAdminListRunnerCpuIncidentsRequest {
 	r.limit = &limit
 	return r
 }
@@ -1671,7 +1671,7 @@ func (a *AdminAPIService) AdminListRunnerCpuIncidentsExecute(r AdminAPIAdminList
 	if r.limit != nil {
 		parameterAddToHeaderOrQuery(localVarQueryParams, "limit", r.limit, "form", "")
 	} else {
-		var defaultValue map[string]interface{} = 50
+		var defaultValue int32 = 50
 		parameterAddToHeaderOrQuery(localVarQueryParams, "limit", defaultValue, "form", "")
 		r.limit = &defaultValue
 	}

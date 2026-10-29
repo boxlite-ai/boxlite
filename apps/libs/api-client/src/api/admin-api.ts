@@ -608,12 +608,12 @@ export const AdminApiAxiosParamCreator = function (configuration?: Configuration
          * @summary Query sustained runner CPU incidents by capture completion time range
          * @param {Date} from Inclusive capture completion time, with timezone.
          * @param {Date} to Exclusive capture completion time, with timezone; must follow from.
-         * @param {object} [limit] Maximum rows, ordered by ID ascending.
+         * @param {number} [limit] Maximum rows, ordered by ID ascending.
          * @param {string} [runnerId] 
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        adminListRunnerCpuIncidents: async (from: Date, to: Date, limit?: object, runnerId?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+        adminListRunnerCpuIncidents: async (from: Date, to: Date, limit?: number, runnerId?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
             // verify required parameter 'from' is not null or undefined
             assertParamExists('adminListRunnerCpuIncidents', 'from', from)
             // verify required parameter 'to' is not null or undefined
@@ -647,9 +647,7 @@ export const AdminApiAxiosParamCreator = function (configuration?: Configuration
             }
 
             if (limit !== undefined) {
-                for (const [key, value] of Object.entries(limit)) {
-                    localVarQueryParameter[key] = value;
-                }
+                localVarQueryParameter['limit'] = limit;
             }
 
             if (runnerId !== undefined) {
@@ -1063,12 +1061,12 @@ export const AdminApiFp = function(configuration?: Configuration) {
          * @summary Query sustained runner CPU incidents by capture completion time range
          * @param {Date} from Inclusive capture completion time, with timezone.
          * @param {Date} to Exclusive capture completion time, with timezone; must follow from.
-         * @param {object} [limit] Maximum rows, ordered by ID ascending.
+         * @param {number} [limit] Maximum rows, ordered by ID ascending.
          * @param {string} [runnerId] 
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        async adminListRunnerCpuIncidents(from: Date, to: Date, limit?: object, runnerId?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<CpuIncidentListDto>> {
+        async adminListRunnerCpuIncidents(from: Date, to: Date, limit?: number, runnerId?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<CpuIncidentListDto>> {
             const localVarAxiosArgs = await localVarAxiosParamCreator.adminListRunnerCpuIncidents(from, to, limit, runnerId, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['AdminApi.adminListRunnerCpuIncidents']?.[localVarOperationServerIndex]?.url;
@@ -1282,12 +1280,12 @@ export const AdminApiFactory = function (configuration?: Configuration, basePath
          * @summary Query sustained runner CPU incidents by capture completion time range
          * @param {Date} from Inclusive capture completion time, with timezone.
          * @param {Date} to Exclusive capture completion time, with timezone; must follow from.
-         * @param {object} [limit] Maximum rows, ordered by ID ascending.
+         * @param {number} [limit] Maximum rows, ordered by ID ascending.
          * @param {string} [runnerId] 
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        adminListRunnerCpuIncidents(from: Date, to: Date, limit?: object, runnerId?: string, options?: RawAxiosRequestConfig): AxiosPromise<CpuIncidentListDto> {
+        adminListRunnerCpuIncidents(from: Date, to: Date, limit?: number, runnerId?: string, options?: RawAxiosRequestConfig): AxiosPromise<CpuIncidentListDto> {
             return localVarFp.adminListRunnerCpuIncidents(from, to, limit, runnerId, options).then((request) => request(axios, basePath));
         },
         /**
@@ -1496,12 +1494,12 @@ export class AdminApi extends BaseAPI {
      * @summary Query sustained runner CPU incidents by capture completion time range
      * @param {Date} from Inclusive capture completion time, with timezone.
      * @param {Date} to Exclusive capture completion time, with timezone; must follow from.
-     * @param {object} [limit] Maximum rows, ordered by ID ascending.
+     * @param {number} [limit] Maximum rows, ordered by ID ascending.
      * @param {string} [runnerId] 
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
      */
-    public adminListRunnerCpuIncidents(from: Date, to: Date, limit?: object, runnerId?: string, options?: RawAxiosRequestConfig) {
+    public adminListRunnerCpuIncidents(from: Date, to: Date, limit?: number, runnerId?: string, options?: RawAxiosRequestConfig) {
         return AdminApiFp(this.configuration).adminListRunnerCpuIncidents(from, to, limit, runnerId, options).then((request) => request(this.axios, this.basePath));
     }
 

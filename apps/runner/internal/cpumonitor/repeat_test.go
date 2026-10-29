@@ -11,7 +11,7 @@ import (
 func observeHighFor(m *Monitor, duration time.Duration) {
 	for elapsed := time.Duration(0); elapsed < duration; elapsed += 5 * time.Second {
 		time.Sleep(5 * time.Second)
-		m.Observe(time.Now(), 99)
+		m.Observe(time.Now(), 80.1)
 		synctest.Wait()
 	}
 }
@@ -34,8 +34,8 @@ func TestCPUIncidentRepeatsConsecutiveWindows(t *testing.T) {
 		reports, stop := runRepeatingMonitor(m)
 		defer stop()
 		start := time.Now()
-		m.Observe(start, 99)
-		observeHighFor(m, 12*time.Minute)
+		m.Observe(start, 80.1)
+		observeHighFor(m, 7*time.Minute)
 		if len(reports) != 1 {
 			t.Fatalf("expected first two-minute report, got %d", len(reports))
 		}
@@ -49,7 +49,7 @@ func TestCPUIncidentRepeatsConsecutiveWindows(t *testing.T) {
 			t.Fatal("windows must have distinct event IDs")
 		}
 		for index, event := range []Incident{first, second} {
-			wantStart := start.Add(time.Duration(10+2*index) * time.Minute)
+			wantStart := start.Add(time.Duration(5+2*index) * time.Minute)
 			if !event.HighCPUSince.Equal(start) || !event.WindowStartedAt.Equal(wantStart) || !event.WindowEndedAt.Equal(wantStart.Add(2*time.Minute)) {
 				t.Fatalf("wrong window %d: %+v", index, event)
 			}
@@ -65,14 +65,14 @@ func TestCPUIncidentRepeatStopsAndRequalifies(t *testing.T) {
 		name  string
 		value float64
 		skip  bool
-	}{{"recovery", 95, false}, {"invalid", math.NaN(), false}, {"missing", 0, true}} {
+	}{{"recovery", 80, false}, {"invalid", math.NaN(), false}, {"missing", 0, true}} {
 		t.Run(test.name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				m := testMonitor()
 				reports, stop := runRepeatingMonitor(m)
 				defer stop()
-				m.Observe(time.Now(), 99)
-				observeHighFor(m, 10*time.Minute+15*time.Second)
+				m.Observe(time.Now(), 80.1)
+				observeHighFor(m, 5*time.Minute+15*time.Second)
 				time.Sleep(5 * time.Second)
 				if !test.skip {
 					m.Observe(time.Now(), test.value)
@@ -89,12 +89,12 @@ func TestCPUIncidentRepeatStopsAndRequalifies(t *testing.T) {
 					t.Fatal("continued capture after interruption")
 				}
 				newStart := time.Now()
-				m.Observe(newStart, 99)
-				observeHighFor(m, 12*time.Minute)
+				m.Observe(newStart, 80.1)
+				observeHighFor(m, 7*time.Minute)
 				if len(reports) != 1 {
-					t.Fatalf("did not requalify after a fresh ten minutes: %d", len(reports))
+					t.Fatalf("did not requalify after a fresh five minutes: %d", len(reports))
 				}
-				if event := <-reports; !event.HighCPUSince.Equal(newStart) || !event.WindowStartedAt.Equal(newStart.Add(10*time.Minute)) {
+				if event := <-reports; !event.HighCPUSince.Equal(newStart) || !event.WindowStartedAt.Equal(newStart.Add(5*time.Minute)) {
 					t.Fatalf("reused interrupted episode: %+v", event)
 				}
 			})
@@ -107,12 +107,12 @@ func TestCPUIncidentRejectsStaleQueuedTrigger(t *testing.T) {
 		synctest.Test(t, func(t *testing.T) {
 			m := testMonitor()
 			start := time.Now()
-			for second := -600; second <= 0; second += 5 {
+			for second := -300; second <= 0; second += 5 {
 				m.Observe(start.Add(time.Duration(second)*time.Second), 99)
 			}
 			time.Sleep(15 * time.Second)
 			if recover {
-				m.Observe(time.Now(), 95)
+				m.Observe(time.Now(), 80)
 			}
 			reports, stop := runRepeatingMonitor(m)
 			defer stop()

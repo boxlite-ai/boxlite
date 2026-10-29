@@ -487,7 +487,7 @@ a derived availability score.
 
 ### `runner_cpu_incident`
 
-Immutable evidence from each two-minute capture after a runner's ten-minute CPU
+Immutable evidence from each two-minute capture after a runner's five-minute CPU
 saturation trigger. Captures repeat while high CPU observations continue. Created by the additive
 `1793232000000-add-runner-cpu-incidents` pre-deploy migration.
 
@@ -497,7 +497,7 @@ saturation trigger. Captures repeat while high CPU observations continue. Create
 | `runnerId` / `eventId` | `uuid` | unique pair; runner identity comes from authentication |
 | `highCpuSince` | `timestamptz` | start of the continuously observed high-load interval |
 | `windowStartedAt` / `windowEndedAt` | `timestamptz` | actual attribution window; at least two minutes |
-| `runnerCpuPercent` | `double precision` | host-wide percent at trigger, greater than 95 and at most 100 |
+| `runnerCpuPercent` | `double precision` | host-wide percent at trigger, greater than 80 and at most 100 |
 | `boxId` | `varchar(128)` | business box ID of largest observed consumer; nullable |
 | `image` | `text` | winner's exact `BoxInfo.Image` string from its last successful sample; null for no winner or older reports; empty string is preserved |
 | `cpuSeconds` | `double precision` | cumulative measured CPU time, all cores; zero iff box ID is null |

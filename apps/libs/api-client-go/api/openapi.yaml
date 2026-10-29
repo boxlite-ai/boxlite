@@ -3020,11 +3020,10 @@ paths:
         name: limit
         required: false
         schema:
-          allOf:
-          - $ref: "#/components/schemas/Object"
           default: 50
           maximum: 200
           minimum: 1
+          type: integer
         style: form
       - explode: true
         in: query
@@ -7339,9 +7338,6 @@ components:
           type: string
       required:
       - status
-      type: object
-    Object:
-      properties: {}
       type: object
     RunnerCpuIncident:
       example:
