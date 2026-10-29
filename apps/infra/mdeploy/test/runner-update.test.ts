@@ -10,6 +10,7 @@
 
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { RunnerUpdateError, compareHostsIn, updateRunners, type Host } from '../src/runner-update.ts'
 import type { CommandResult, RunCommand } from '../src/upgrade-runners.ts'
@@ -42,13 +43,44 @@ const awsFleet = (calls: string[][] = []): RunCommand => {
 const gcpFleet = (calls: string[][] = []): RunCommand => {
   return (file, args) => {
     calls.push([file, ...args])
-    if (args[1] === 'instances') return ok('boxlite-app-dev2-runner\nboxlite-app-dev2-runner-2')
-    // Both hosts report compliant on the first poll, which is what lets the
-    // roll finish without the test spending its deadline.
+    if (args[1] === 'instances') {
+      return ok(
+        JSON.stringify(
+          ['default', 'runner-2'].map((label, index) => ({
+            name: `boxlite-app-dev2-runner${index ? '-2' : ''}`,
+            labels: { 'boxlite-runner': label },
+          })),
+        ),
+      )
+    }
+    if (args[2] === 'os-policy-assignments') {
+      const assignment = args[4]!
+      const fleet = assignment.endsWith('-fleet')
+      return ok(
+        JSON.stringify({
+          name: `projects/p/locations/z/osPolicyAssignments/${assignment}`,
+          revisionId: args[3] === 'update' ? 'new-revision' : 'old-revision',
+          instanceFilter: { inclusionLabels: [{ labels: { 'boxlite-runner': fleet ? 'runner-2' : 'default' } }] },
+          rollout: {
+            disruptionBudget: fleet ? { percent: 100 } : { fixed: 1 },
+            minWaitDuration: fleet ? '0s' : '300s',
+          },
+          osPolicies: [
+            { id: 'runner-binary', mode: 'ENFORCEMENT' },
+            { id: 'runner-unit-env', mode: 'ENFORCEMENT' },
+          ],
+        }),
+      )
+    }
     if (args[2] === 'os-policy-assignment-reports') {
       return ok(
-        'projects/p/locations/z/instances/boxlite-app-dev2-runner/report\tCOMPLIANT\n' +
-          'projects/p/locations/z/instances/boxlite-app-dev2-runner-2/report\tCOMPLIANT',
+        JSON.stringify({
+          osPolicyAssignment: `projects/p/locations/z/osPolicyAssignments/${args[4]}@new-revision`,
+          osPolicyCompliances: [
+            { osPolicyId: 'runner-binary', complianceState: 'COMPLIANT' },
+            { osPolicyId: 'runner-unit-env', complianceState: 'COMPLIANT' },
+          ],
+        }),
       )
     }
     return ok('new identity: 0.10.0')
@@ -128,7 +160,9 @@ test('the downgrade force reaches the payload only when it is asked for', async 
   // The whole reason this tool exists: the deploy path cannot set this, so a
   // stage cannot be left in a state where downgrades are quietly permitted.
   const decode = (calls: string[][]): string => {
-    const parameters = calls.find((call) => call[2] === 'send-command')?.find((argument) => argument.startsWith('commands='))
+    const parameters = calls
+      .find((call) => call[2] === 'send-command')
+      ?.find((argument) => argument.startsWith('commands='))
     const encoded = parameters?.match(/echo ([A-Za-z0-9+/=]+) \|/)?.[1] as string
     return Buffer.from(encoded, 'base64').toString('utf8')
   }
@@ -181,29 +215,81 @@ test('an empty fleet is a refusal, not a silent success', async () => {
   await assert.rejects(() => drive(['--stage', 'dev'], empty), /no running runner in boxlite-app\/dev/)
 })
 
-test('on GCP the roll rewrites the fleet’s policy and waits for the agents', async () => {
-  /*
-   * No ssh at all on this cloud: the hosts are declared by one OS policy
-   * assignment, so a hand roll edits that assignment and waits for every host
-   * to report compliant. A second assignment would be a second enforcer, and
-   * the two would take turns undoing each other.
-   */
+test('on GCP the canary is verified before the remaining fleet is updated', async () => {
   const calls: string[][] = []
   assert.equal(await drive(['--stage', 'dev2'], gcpFleet(calls), 'gcp'), 0)
 
   const listed = calls.find((call) => call[2] === 'instances')
   assert.ok(listed?.some((argument) => argument.startsWith('--filter=name~^boxlite-app-dev2-runner')))
 
-  const written = calls.find((call) => call[3] === 'os-policy-assignments' && call[4] === 'update')
-  assert.ok(written, 'the roll never rewrote the assignment')
-  assert.ok(written?.includes('boxlite-app-dev2-runner-binary'), 'it rewrote some other assignment')
-  assert.ok(written?.some((argument) => argument.startsWith('--file=')), 'the policy has to arrive as a file')
+  const updates = calls.filter((call) => call[3] === 'os-policy-assignments' && call[4] === 'update')
+  assert.deepEqual(
+    updates.map((call) => call[5]),
+    ['boxlite-app-dev2-runner-binary', 'boxlite-app-dev2-runner-binary-fleet'],
+  )
+  const report = calls.findIndex((call) => call[3] === 'os-policy-assignment-reports')
+  assert.ok(report > calls.indexOf(updates[0]!) && report < calls.indexOf(updates[1]!))
+  for (const update of updates) {
+    assert.ok(!update.includes('--async'))
+    const policy = JSON.parse(readFileSync(update.find((arg) => arg.startsWith('--file='))!.slice(7), 'utf8'))
+    assert.deepEqual(
+      policy.osPolicies.map((item: any) => item.id),
+      ['runner-binary', 'runner-unit-env'],
+    )
+  }
 
   assert.ok(
     calls.some((call) => call[3] === 'os-policy-assignment-reports'),
     'the roll never waited for the agents to converge',
   )
   assert.equal(calls.filter((call) => call[2] === 'ssh').length, 0, 'the tunnel is gone from this path')
+})
+
+test('GCP refuses the legacy fleet-wide canary before writing either batch', async () => {
+  const calls: string[][] = []
+  const base = gcpFleet(calls)
+  const run: RunCommand = (file, args) => {
+    const result = base(file, args)
+    if (args[2] === 'os-policy-assignments' && args[3] === 'describe' && !args[4]!.endsWith('-fleet')) {
+      const policy = JSON.parse(result.stdout)
+      policy.instanceFilter.inclusionLabels.push({ labels: { 'boxlite-runner': 'runner-2' } })
+      return ok(JSON.stringify(policy))
+    }
+    return result
+  }
+  await assert.rejects(() => drive(['--stage', 'dev2'], run, 'gcp'), /mdeploy/)
+  assert.equal(calls.filter((call) => call[4] === 'update').length, 0)
+})
+
+test('GCP never advances past a stale or non-compliant canary report', async () => {
+  for (const stale of [true, false]) {
+    const calls: string[][] = []
+    const base = gcpFleet(calls)
+    const run: RunCommand = (file, args) => {
+      const result = base(file, args)
+      if (args[2] === 'os-policy-assignment-reports' && args[3] === 'describe') {
+        const report = JSON.parse(result.stdout)
+        if (stale) report.osPolicyAssignment = report.osPolicyAssignment.replace('@new-revision', '@old-revision')
+        else report.osPolicyCompliances[0].complianceState = 'NON_COMPLIANT'
+        return ok(JSON.stringify(report))
+      }
+      return result
+    }
+    await assert.rejects(() => drive(['--stage', 'dev2'], run, 'gcp'), /did not report compliant/)
+    assert.equal(calls.filter((call) => call[4] === 'update').length, 1)
+  }
+})
+
+test('GCP refuses to promote another runner when the canary is stopped', async () => {
+  const calls: string[][] = []
+  const base = gcpFleet(calls)
+  const run: RunCommand = (file, args) => {
+    const result = base(file, args)
+    if (args[1] !== 'instances') return result
+    return ok(JSON.stringify(JSON.parse(result.stdout).slice(1)))
+  }
+  await assert.rejects(() => drive(['--stage', 'dev2'], run, 'gcp'), /canary.*must be running/)
+  assert.equal(calls.filter((call) => call[4] === 'update').length, 0)
 })
 
 test('--host is refused on GCP, because the policy is the whole fleet', async () => {
