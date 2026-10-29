@@ -648,11 +648,16 @@ test('the GCP policy resolves the endpoint rather than casting it', () => {
   const policy = gcp.slice(gcp.indexOf('const unitEnvPolicy'), gcp.indexOf('const scripts'))
   assert.match(
     policy,
-    /\$resolve\(\[request\.apiUrl, request\.otlpUrl, request\.registryProxyHost \?\? ''\]\)/,
-    'every address must be resolved together',
+    /\$resolve\(\[\s*request\.apiUrl,\s*request\.otlpUrl,\s*request\.registryProxyHost \?\? '',\s*request\.environment\.BOXLITE_RUNNER_ENV \?\? '',?\s*\]\)/,
+    'every address and the Runner environment must be resolved together',
   )
   assert.match(policy, /otlpUrl: otlpUrl as string/, 'and the resolved one is what reaches the renderer')
   assert.match(policy, /registryProxyHost: \(proxyHost as string\) \|\| null/, 'and so does the resolved proxy host')
+  assert.match(policy, /runnerEnv: runnerEnv as string/, 'the map must reach existing GCP hosts')
+  const aws = readFileSync(fileURLToPath(new URL('../stack/providers/aws/runners.ts', import.meta.url)), 'utf8')
+  const payload = aws.slice(aws.indexOf('const payload'), aws.indexOf('previousUpgrade ='))
+  assert.match(payload, /request\.environment\.BOXLITE_RUNNER_ENV/)
+  assert.match(payload, /runnerEnv: runnerEnv as string/, 'the map must reach existing AWS hosts')
 })
 
 test('a caller with no control-plane address converges binary and kernel without rewriting API settings', () => {

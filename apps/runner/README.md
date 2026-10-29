@@ -22,6 +22,21 @@ path keeps the bundled default. Cloud deployment downloads and verifies the
 file; the Runner itself performs no download. Existing Boxes retain their
 saved boot configuration. See [cloud kernel operations](../infra/docs/runners.md#cloud-kernel).
 
+## Nested virtualization
+
+Set `BOXLITE_EXPERIMENTAL=nested-virtualization` on the **Runner process** to
+enable nesting for newly created boxes. The Runner passes both the runtime
+authorization and the per-box option through the Go/C SDK; setting a guest's
+environment does not enable this capability. Empty or unset disables it.
+Comma-separated features are validated at startup and compose with
+`BOXLITE_KERNEL_PATH` without enabling privileged mode.
+
+Existing boxes and archive imports retain their saved options. Replaying create
+against a box created without nesting fails when nesting is requested; create
+a new box to test it. The host and guest kernel must support nested virtualization.
+Cloud stages can deliver the setting through
+[`BOXLITE_RUNNER_ENV`](../infra/mdeploy/README.md#runner-process-environment).
+
 For the system-wide context (CDN, load balancers, where the runner fits in
 the request path), see [`apps/README.md`](../README.md).
 

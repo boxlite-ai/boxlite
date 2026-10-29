@@ -201,3 +201,30 @@ test('both engines read this one function rather than each reading the environme
     assert.doesNotMatch(source, /process\.env\.STACK_DOMAIN/)
   }
 })
+
+test('runner JSON cannot shadow direct values, secrets, or generated secret addresses', () => {
+  const declared = {
+    ...declaration,
+    groups: { ...declaration.groups, runner: ['BOXLITE_RUNNER_ENV', 'DIRECT', 'GHCR_TOKEN'], secret: ['GHCR_TOKEN'] },
+  }
+  for (const key of ['DIRECT', 'GHCR_TOKEN', 'GHCR_TOKEN_ARN']) {
+    assert.throws(
+      () =>
+        readStackEnvironment({
+          environment: {
+            ...complete,
+            DIRECT: 'direct',
+            GHCR_TOKEN: JSON.stringify({ address: 'arn:aws:secretsmanager:us-east-1:123456789012:secret:ghcr-abcdef' }),
+            BOXLITE_RUNNER_ENV: JSON.stringify({ [key]: 'override' }),
+          },
+          declaration: declared,
+          app: 'boxlite-app',
+          stage: 'dev',
+          region: 'us-east-1',
+          home: 'aws',
+        }),
+      /BOXLITE_RUNNER_ENV/,
+      key,
+    )
+  }
+})

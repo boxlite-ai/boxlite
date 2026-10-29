@@ -580,14 +580,19 @@ udevadm trigger --name-match=kvm || true`,
     // slot. Resolved together and not cast, for the reason the boot script above
     // records: an unresolved Output renders as Pulumi's `[toString]` refusal
     // text, and this one would converge the whole fleet onto it.
-    const unitEnvPolicy = $resolve([request.apiUrl, request.otlpUrl, request.registryProxyHost ?? '']).apply(
-      ([apiUrl, otlpUrl, proxyHost]) =>
-        renderUnitEnvironmentPolicyScripts({
-          apiUrl: apiUrl as string,
-          otlpUrl: otlpUrl as string,
-          volumeBackend: VOLUME_BACKEND,
-          registryProxyHost: (proxyHost as string) || null,
-        }),
+    const unitEnvPolicy = $resolve([
+      request.apiUrl,
+      request.otlpUrl,
+      request.registryProxyHost ?? '',
+      request.environment.BOXLITE_RUNNER_ENV ?? '',
+    ]).apply(([apiUrl, otlpUrl, proxyHost, runnerEnv]) =>
+      renderUnitEnvironmentPolicyScripts({
+        apiUrl: apiUrl as string,
+        otlpUrl: otlpUrl as string,
+        volumeBackend: VOLUME_BACKEND,
+        registryProxyHost: (proxyHost as string) || null,
+        runnerEnv: runnerEnv as string,
+      }),
     )
     const unitEnvScripts = {
       validate: unitEnvPolicy.apply((rendered: { validate: string }) => rendered.validate),

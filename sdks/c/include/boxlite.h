@@ -827,6 +827,15 @@ typedef void (*CBoxVolumeRemoveCb)(CBoxliteError*, void*);
 extern "C" {
 #endif // __cplusplus
 
+// Require nested virtualization for this box (RC): nonzero enables, zero disables.
+// The local runtime must explicitly enable nested-virtualization, including on
+// restart. Host support is checked at boot. Null returns InvalidArgument.
+//
+// # Safety
+// `opts` must be null or a live, exclusively accessible advanced-options handle.
+enum BoxliteErrorCode boxlite_advanced_options_set_nested_virtualization(CAdvancedBoxOptions *opts,
+                                                                         int enabled);
+
 // Set an absolute host kernel path (RC). The runtime must enable custom-kernel.
 // Copies the path; invalid input leaves the previous option unchanged.
 enum BoxliteErrorCode boxlite_advanced_options_set_kernel_path(CAdvancedBoxOptions *opts,
