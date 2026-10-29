@@ -1,6 +1,7 @@
 mod cli;
 mod commands;
 mod config;
+mod contexts;
 mod credentials;
 mod defaults;
 mod formatter;
@@ -54,7 +55,11 @@ fn main() {
     process::exit(code);
 }
 
-async fn run_cli(cli: Cli) -> i32 {
+async fn run_cli(mut cli: Cli) -> i32 {
+    if let Err(error) = contexts::initialize(&mut cli) {
+        eprintln!("Error: {error:#}");
+        return 1;
+    }
     // Per-layer filters: stderr stays peer-CLI quiet (warn), the optional file
     // layer carries richer info-level data for triage. Precedence (docker
     // convention): `--debug` flag > `RUST_LOG` env > per-layer default.
@@ -124,6 +129,7 @@ async fn run_cli(cli: Cli) -> i32 {
         cli::Commands::Agent(args) => commands::agent::execute(args).map(|_| 0),
         cli::Commands::Serve(args) => commands::serve::execute(args, &global).await.map(|_| 0),
         cli::Commands::Auth(args) => commands::auth::run(args, &global).await.map(|_| 0),
+        cli::Commands::Context(args) => contexts::execute(args, &global).map(|_| 0),
         cli::Commands::Volume(args) => commands::volume::execute(args, &global).await.map(|_| 0),
         // Handled in main() before tokio; never reaches run_cli
         cli::Commands::Completion(_) => {

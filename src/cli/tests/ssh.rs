@@ -428,6 +428,11 @@ async fn ssh_serve_controls_and_forward_failure() {
     // serve has no tunnel route; forwarding fails without changing configuration.
     let forward = serve.client(&["ssh", "forward", &id]);
     assert!(!forward.status.success());
+    // The missing tunnel route returns a bare 404, unlike SSH handler errors.
+    assert_eq!(
+        String::from_utf8_lossy(&forward.stderr).trim(),
+        "Error: not found:"
+    );
     assert_eq!(status("status after failed forward"), configured);
 
     assert!(!output_status(&serve.client(&["ssh", "disable", &id]), "disable").enabled);

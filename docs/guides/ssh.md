@@ -158,9 +158,10 @@ differences:
   reason; SDKs read them, like the runner's `409 invalid_state`, as `InvalidState`.
 
 SSH lives in guest memory, so every stop, restart, or auto-stop disables it.
-Reconfigure after the box runs again, then reconnect: `boxlite ssh forward` fails
-on a disabled listener, and `run` does both. Forwarding uses the
-box's [public tunnel](#cli), which needs inbound access enabled on the box. Ending
+After the box runs again, run `boxlite ssh configure` to restore its configuration,
+then `boxlite ssh forward` to reconnect; forwarding fails on a disabled listener.
+
+Forwarding uses the box's [public tunnel](#cli), which needs inbound access enabled on the box. Ending
 the local `boxlite ssh forward` leaves that tunnel open; revoke it with `boxlite
 network tunnel BOX PORT --revoke`.
 

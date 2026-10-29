@@ -34,7 +34,7 @@ pub enum AuthCommand {
 }
 
 pub async fn run(args: AuthArgs, global: &GlobalFlags) -> anyhow::Result<()> {
-    let profile = global.resolved_profile();
+    let profile = global.resolved_context();
     let store = global.credential_store();
     match args.command {
         AuthCommand::Login(a) => login::run(a, &profile, &store).await,

@@ -168,6 +168,8 @@ fn agents_fish_completion_uses_command_paths_not_message_words() {
     std::fs::write(&script, &completion.get_output().stdout).unwrap();
     for (input, expected, forbidden) in [
         ("boxlite agent ", "steer", "exec"),
+        ("boxlite --context send agent ", "steer", "exec"),
+        ("boxlite agent --context wait ", "steer", "exec"),
         ("boxlite --profile send agent ", "steer", "exec"),
         ("boxlite agent --profile wait ", "steer", "exec"),
         ("boxlite agent create box --", "--agent", "--name"),

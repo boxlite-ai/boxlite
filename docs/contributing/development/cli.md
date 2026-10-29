@@ -70,6 +70,23 @@ once before dispatching to API-key, browser, or device login; each flow receives
 that resolved URL. The `auth` integration target validates authentication and
 credential storage against loopback HTTP services with isolated credential stores.
 
+The `contexts` integration target also runs without a VM. It exercises the real
+CLI with temporary homes and loopback servers: persistent selection, Docker's
+context/URL precedence, legacy aliases, credentials and tenant routing, logout,
+and private atomic preference writes. Run it with the auth and help checks:
+
+```bash
+BOXLITE_DEPS_STUB=1 make test:integration:cli SETUP_DONE=1 \
+  NEXTEST_FILTER_EXPR='binary(contexts) | binary(auth) | binary(help) | binary(completion)'
+```
+
+`contexts::initialize` snapshots a workload's context and credentials before
+dispatch. A unit test changes both files between backend detection and runtime
+creation, then verifies the actual HTTP endpoint, bearer, and tenant path remain
+unchanged. Auth commands resolve the name once but retain their credential
+read/write and OIDC refresh behavior. Local-only commands and completion skip
+context initialization. These stubbed checks do not exercise a guest VM.
+
 VM integration tests pull images, create boxes, and run real commands. They require a working VM environment (KVM on Linux or Hypervisor.framework on macOS). Tests use a shared test home (`/tmp/bl`), a global lock to avoid concurrent use, and pre-pulled images (`alpine:latest`, `python:alpine`) to reduce rate limits.
 
 ### CLI test layout
@@ -112,7 +129,10 @@ The nine agent commands use two subcommand levels (`agent wait`).
 match command names anywhere in the input. `generate_fish_completion` replaces
 those agent conditions with exact command-path checks so IDs, messages and option
 values cannot hide verbs or enable unrelated flags. The interpreter tests cover these cases;
-revisit the condition replacement when upgrading `clap_complete`.
+revisit the condition replacement when upgrading `clap_complete`. The generated
+global option specification also needs the legacy `--profile` alias added because
+the generator only enumerates canonical names there. Tests exercise both selector
+spellings through Fish's interpreter.
 
 ## Command reference
 

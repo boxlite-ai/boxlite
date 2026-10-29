@@ -28,7 +28,7 @@ const URL_ENV: &str = "BOXLITE_REST_URL";
 
 #[derive(Args, Debug, Clone)]
 pub struct LoginArgs {
-    /// Server URL. Defaults to `BOXLITE_REST_URL`, the selected profile's URL,
+    /// Server URL. Defaults to `BOXLITE_REST_URL`, the selected context's URL,
     /// then `https://api.boxlite.ai`.
     #[arg(
         long,
@@ -270,7 +270,7 @@ fn prompt_method() -> Result<Method> {
     })
 }
 
-/// Resolve the server URL from the flag, environment, selected profile,
+/// Resolve the server URL from the flag, environment, selected context,
 /// then the default REST API endpoint.
 fn resolve_target(args: &LoginArgs, stored_url: Option<&str>) -> Result<String> {
     if let Some(url) = args.url.as_deref() {

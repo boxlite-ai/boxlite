@@ -27,11 +27,17 @@ struct Identity {
 }
 
 pub fn run(global: &GlobalFlags, store: &CredentialStore) -> Result<()> {
-    let profile_name = global.resolved_profile();
+    let profile_name = global.resolved_context();
+    if let Some(selected) = &global.selected_context {
+        println!(
+            "Context:         {} (from {})",
+            selected.name, selected.source
+        );
+    }
     let identity = match resolve_identity(global, store)? {
         Some(id) => id,
         None => {
-            println!("Not logged in (profile `{}`).", profile_name);
+            println!("Not logged in (context `{}`).", profile_name);
             return Ok(());
         }
     };
@@ -61,7 +67,7 @@ pub fn run(global: &GlobalFlags, store: &CredentialStore) -> Result<()> {
 /// endpoint for this auth probe; ordinary box commands still default to the
 /// embedded runtime until a REST URL is configured.
 fn resolve_identity(global: &GlobalFlags, store: &CredentialStore) -> Result<Option<Identity>> {
-    let profile_name = global.resolved_profile();
+    let profile_name = global.resolved_context();
     // Both `auth whoami` and the runtime in `cli.rs` skip the env path when
     // `BOXLITE_API_KEY` is set-but-empty (`!key.is_empty()`). `auth status`
     // used to short-circuit on a bare `is_ok()` check, so an empty value

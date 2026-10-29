@@ -21,13 +21,13 @@ pub async fn run(args: LogoutArgs, profile_name: &str, store: &CredentialStore) 
         .context("loading stored credentials")?
         .is_some();
     if !exists {
-        println!("Not logged in (profile `{}`).", profile_name);
+        println!("Not logged in (context `{}`).", profile_name);
         return Ok(());
     }
 
     if !args.yes {
         print!(
-            "Remove stored credentials for profile `{}` at {}? [y/N]: ",
+            "Remove stored credentials for context `{}` at {}? [y/N]: ",
             profile_name,
             path.display()
         );
@@ -45,9 +45,9 @@ pub async fn run(args: LogoutArgs, profile_name: &str, store: &CredentialStore) 
 
     let removed = store.delete_named(profile_name)?;
     if removed {
-        println!("Logged out (profile `{}`)", profile_name);
+        println!("Logged out (context `{}`)", profile_name);
     } else {
-        println!("Not logged in (profile `{}`)", profile_name);
+        println!("Not logged in (context `{}`)", profile_name);
     }
     Ok(())
 }

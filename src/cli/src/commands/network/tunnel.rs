@@ -92,7 +92,7 @@ pub async fn execute(args: TunnelArgs, global: &GlobalFlags) -> Result<()> {
     }
     let Some(listen) = args.listen else {
         let url = tunnel.uri().ok_or_else(|| {
-            anyhow!("local boxes have no public URL; point boxlite at a remote service with --url or --profile")
+            anyhow!("local boxes have no public URL; point boxlite at a remote service with --url or --context")
         })?;
         if !args.private {
             println!("{url}");
