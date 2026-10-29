@@ -177,4 +177,12 @@ fn bootstrap_script_contains_required_directives() {
     assert!(script.contains("--labels \"boxlite,warm-pool\""));
     assert!(script.contains("--ephemeral"));
     assert!(script.contains("./run.sh"));
+
+    let config_pos = script
+        .find("RUNNER_ALLOW_RUNASROOT=1 ./config.sh")
+        .expect("bootstrap script should invoke config.sh");
+    let run_pos = script
+        .find("exec ./run.sh")
+        .expect("bootstrap script should exec run.sh");
+    assert!(config_pos < run_pos, "config.sh must run before run.sh");
 }

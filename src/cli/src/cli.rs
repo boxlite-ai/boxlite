@@ -304,19 +304,19 @@ const VOLUME_SCOPES: &[CommandScope] = &[
 const ACTIONS_RUNNER_SCOPES: &[CommandScope] = &[
     CommandScope {
         name: "start",
-        globals: ALL_GLOBALS,
+        globals: LOCAL_IMAGE_GLOBALS,
         children: &[],
     },
     CommandScope {
         name: "status",
-        globals: BOX_GLOBALS,
+        globals: LOCAL_GLOBALS,
         children: &[],
     },
 ];
 const COMMAND_SCOPES: &[CommandScope] = &[
     CommandScope {
         name: "actions-runner",
-        globals: ALL_GLOBALS,
+        globals: LOCAL_IMAGE_GLOBALS,
         children: ACTIONS_RUNNER_SCOPES,
     },
     box_command_scope("agent", AGENT_SCOPES),

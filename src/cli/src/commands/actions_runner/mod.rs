@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use anyhow::{Result, bail};
+use boxlite::{BoxOptions, RootfsSpec};
 use clap::{Args, Subcommand};
 use serde::{Deserialize, Serialize};
 
@@ -33,7 +34,7 @@ pub enum ActionsRunnerCommand {
 #[derive(Args, Debug, Clone)]
 pub struct StartRunnerArgs {
     /// GitHub repository or organization URL (e.g. https://github.com/org/repo)
-    #[arg(long, value_name = "URL")]
+    #[arg(long = "repo", alias = "url", value_name = "URL")]
     pub url: String,
 
     /// Runner registration token from GitHub
@@ -224,35 +225,50 @@ exec ./run.sh
 pub async fn execute(args: ActionsRunnerArgs, global: &GlobalFlags) -> Result<()> {
     match args.command {
         ActionsRunnerCommand::Start(start_args) => {
+            let _runtime_options = global.resolve_runtime_options()?;
             let session = RunnerSession::new(&start_args)?;
+            let script = session.generate_bootstrap_script(&start_args.token);
+            let rt = global.create_runtime()?;
+
+            let box_options = BoxOptions {
+                rootfs: RootfsSpec::Image(session.image.clone()),
+                entrypoint: Some(vec!["/bin/bash".into(), "-c".into(), script]),
+                auto_delete: if session.ephemeral { Some(1) } else { None },
+                ..Default::default()
+            };
+
+            let litebox = rt.create(box_options, Some(session.name.clone())).await?;
+            litebox.start().await?;
+
             tracing::info!(
                 name = %session.name,
+                box_id = %litebox.id(),
                 url = %session.url,
                 labels = ?session.labels,
                 idle_timeout_secs = session.idle_timeout_secs,
-                "Initialized GitHub Actions runner session with warm VM window"
+                "Initialized and launched GitHub Actions runner in micro-VM"
             );
 
             if global.debug {
                 eprintln!(
-                    "Registered runner '{}' for {} (idle warm timeout: {}s)",
-                    session.name, session.url, session.idle_timeout_secs
+                    "Registered and launched runner '{}' (id: {}) for {} (idle warm timeout: {}s)",
+                    session.name,
+                    litebox.id(),
+                    session.url,
+                    session.idle_timeout_secs
                 );
             } else {
                 println!(
-                    "Runner '{}' initialized. Waiting for jobs (warm idle window: {}s)...",
-                    session.name, session.idle_timeout_secs
+                    "Runner '{}' (id: {}) launched. Waiting for jobs (warm idle window: {}s)...",
+                    session.name,
+                    litebox.id(),
+                    session.idle_timeout_secs
                 );
             }
             Ok(())
         }
-        ActionsRunnerCommand::Status(status_args) => {
-            if let Some(name) = status_args.name {
-                println!("Status query for runner '{name}': active");
-            } else {
-                println!("No active GitHub Actions runner sessions");
-            }
-            Ok(())
+        ActionsRunnerCommand::Status(_) => {
+            bail!("actions-runner status is not implemented: runner state is not stored");
         }
     }
 }
