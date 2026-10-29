@@ -48,6 +48,12 @@ Organization access caches organization records as JSON for 10 seconds. On cache
 `suspendedUntil` is restored to a `Date` so temporary suspensions are enforced until their
 deadline on both cached and database reads. A null deadline keeps a suspension indefinite.
 
+## Authenticated rate limits
+
+Shared organization quotas and custom limits use the validated organization or the
+organization bound to a verified API key. JWT requests before organization authorization
+use a user quota. Organization headers alone cannot select a new counter or custom limits.
+
 ## Admin organization metadata
 
 System administrators read registration fields on the existing organization routes.
