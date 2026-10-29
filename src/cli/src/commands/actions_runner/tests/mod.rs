@@ -4,7 +4,12 @@ use std::time::{Duration, Instant};
 
 use clap::error::ErrorKind;
 
-use super::{ActionsRunnerCommand, RunnerLifecycleState, RunnerSession, StartRunnerArgs};
+use boxlite::{BoxOptions, RootfsSpec};
+
+use super::{
+    ActionsRunnerCommand, RunnerLabelSpec, RunnerLifecycleState, RunnerSession, RunnerSize,
+    StartRunnerArgs, normalize_github_repo_url,
+};
 use crate::cli::{Commands, try_parse_from};
 
 fn parse(args: &[&str]) -> Result<ActionsRunnerCommand, clap::Error> {
@@ -185,4 +190,139 @@ fn bootstrap_script_contains_required_directives() {
         .find("exec ./run.sh")
         .expect("bootstrap script should exec run.sh");
     assert!(config_pos < run_pos, "config.sh must run before run.sh");
+}
+
+#[test]
+fn runner_size_parsing_and_hardware_specifications() {
+    assert_eq!(RunnerSize::parse("small"), Some(RunnerSize::Small));
+    assert_eq!(RunnerSize::parse("boat-small"), Some(RunnerSize::Small));
+    assert_eq!(RunnerSize::parse("boxlite-small"), Some(RunnerSize::Small));
+    assert_eq!(RunnerSize::Small.cpus(), 2);
+    assert_eq!(RunnerSize::Small.memory_mib(), 4096);
+
+    assert_eq!(RunnerSize::parse("default"), Some(RunnerSize::Default));
+    assert_eq!(RunnerSize::parse("boxlite"), Some(RunnerSize::Default));
+    assert_eq!(RunnerSize::Default.cpus(), 4);
+    assert_eq!(RunnerSize::Default.memory_mib(), 8192);
+
+    assert_eq!(RunnerSize::parse("large"), Some(RunnerSize::Large));
+    assert_eq!(RunnerSize::parse("boat-large"), Some(RunnerSize::Large));
+    assert_eq!(RunnerSize::parse("boxlite-large"), Some(RunnerSize::Large));
+    assert_eq!(RunnerSize::Large.cpus(), 8);
+    assert_eq!(RunnerSize::Large.memory_mib(), 16384);
+
+    assert_eq!(RunnerSize::parse("xlarge"), Some(RunnerSize::XLarge));
+    assert_eq!(
+        RunnerSize::parse("boxlite-xlarge"),
+        Some(RunnerSize::XLarge)
+    );
+    assert_eq!(RunnerSize::XLarge.cpus(), 16);
+    assert_eq!(RunnerSize::XLarge.memory_mib(), 32768);
+
+    assert_eq!(RunnerSize::parse("unknown-tier"), None);
+}
+
+#[test]
+fn runner_label_spec_parsing_with_slash_options() {
+    // 1. Standard default size
+    let spec1 = RunnerLabelSpec::parse("boxlite,self-hosted,linux");
+    assert_eq!(spec1.size, RunnerSize::Default);
+    assert_eq!(spec1.from_image, None);
+    assert!(!spec1.debug);
+    assert!(spec1.kvm);
+
+    // 2. Large size with custom image and debug enabled (Boat syntax)
+    let spec2 = RunnerLabelSpec::parse("boxlite-large/from=custom-ci:v2/debug");
+    assert_eq!(spec2.size, RunnerSize::Large);
+    assert_eq!(spec2.from_image, Some("custom-ci:v2".to_string()));
+    assert!(spec2.debug);
+    assert!(spec2.kvm);
+
+    // 3. Applying to BoxOptions
+    let mut options = BoxOptions::default();
+    spec2.apply_to_box_options(&mut options);
+    assert_eq!(options.cpus, Some(8));
+    assert_eq!(options.memory_mib, Some(16384));
+    assert!(matches!(
+        options.rootfs,
+        RootfsSpec::Image(ref img) if img == "custom-ci:v2"
+    ));
+}
+
+#[test]
+fn normalize_github_repo_url_variations() {
+    assert_eq!(
+        normalize_github_repo_url("git@github.com:boxlite-ai/boxlite.git"),
+        Some("https://github.com/boxlite-ai/boxlite".to_string())
+    );
+    assert_eq!(
+        normalize_github_repo_url("ssh://git@github.com/acme/project.git"),
+        Some("https://github.com/acme/project".to_string())
+    );
+    assert_eq!(
+        normalize_github_repo_url("https://github.com/acme/project.git"),
+        Some("https://github.com/acme/project".to_string())
+    );
+    assert_eq!(
+        normalize_github_repo_url("https://github.com/acme/project"),
+        Some("https://github.com/acme/project".to_string())
+    );
+    assert_eq!(normalize_github_repo_url("not-a-github-url"), None);
+}
+
+#[test]
+fn connect_command_parses_arguments() {
+    let cmd = parse(&[
+        "connect",
+        "--repo",
+        "https://github.com/boxlite-ai/boxlite",
+        "--token",
+        "gh_token_test",
+        "--size",
+        "large",
+        "--idle-timeout",
+        "600",
+        "--debug-on-failure",
+    ])
+    .expect("parse connect");
+
+    let ActionsRunnerCommand::Connect(connect_args) = cmd else {
+        panic!("expected Connect command");
+    };
+
+    assert_eq!(
+        connect_args.repo.as_deref(),
+        Some("https://github.com/boxlite-ai/boxlite")
+    );
+    assert_eq!(connect_args.token.as_deref(), Some("gh_token_test"));
+    assert_eq!(connect_args.size, "large");
+    assert_eq!(connect_args.idle_timeout, 600);
+    assert!(connect_args.debug_on_failure);
+}
+
+#[test]
+fn run_command_parses_arguments() {
+    let cmd = parse(&[
+        "run",
+        "--push",
+        ".",
+        "--size",
+        "xlarge",
+        "--timeout",
+        "1200",
+        "--",
+        "cargo",
+        "test",
+        "--all",
+    ])
+    .expect("parse run");
+
+    let ActionsRunnerCommand::Run(run_args) = cmd else {
+        panic!("expected Run command");
+    };
+
+    assert_eq!(run_args.command, vec!["cargo", "test", "--all"]);
+    assert_eq!(run_args.push, std::path::PathBuf::from("."));
+    assert_eq!(run_args.size, "xlarge");
+    assert_eq!(run_args.timeout, 1200);
 }

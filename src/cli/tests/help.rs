@@ -333,6 +333,14 @@ fn command_help_only_advertises_meaningful_global_options() {
             &["--debug", "--home", "--registry", "--config"],
         ),
         (
+            &["actions-runner", "connect"],
+            &["--debug", "--home", "--registry", "--config"],
+        ),
+        (
+            &["actions-runner", "run"],
+            &["--debug", "--home", "--registry", "--config"],
+        ),
+        (
             &["actions-runner", "status"],
             &["--debug", "--home", "--config"],
         ),

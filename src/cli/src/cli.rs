@@ -308,6 +308,16 @@ const ACTIONS_RUNNER_SCOPES: &[CommandScope] = &[
         children: &[],
     },
     CommandScope {
+        name: "connect",
+        globals: LOCAL_IMAGE_GLOBALS,
+        children: &[],
+    },
+    CommandScope {
+        name: "run",
+        globals: LOCAL_IMAGE_GLOBALS,
+        children: &[],
+    },
+    CommandScope {
         name: "status",
         globals: LOCAL_GLOBALS,
         children: &[],

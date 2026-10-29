@@ -19,6 +19,56 @@ The `boxlite actions-runner` (aliased as `boxlite runner`) integration solves th
 3. **Clean teardown**: If no job arrives before the idle timeout expires, the
    runner cleanly terminates and reaps the micro-VM.
 
+## Quickstart: Connect in 2 Steps
+
+### 1. Connect runner to local repository
+
+Run inside your git repository:
+
+```bash
+boxlite actions-runner connect
+```
+
+This auto-discovers your repository remote, fetches a runner token via `gh`, and boots a warm micro-VM.
+
+### 2. Update your workflow
+
+In `.github/workflows/ci.yml`:
+
+```yaml
+jobs:
+  test:
+    runs-on: boxlite
+    steps:
+      - uses: actions/checkout@v4
+      - run: npm test
+```
+
+## Runner Sizing and Slash Options
+
+BoxLite supports sizing tiers and slash-delimited options in `runs-on`:
+
+```yaml
+runs-on: boxlite-large/from=custom-ci:latest/debug
+```
+
+| Option | Effect |
+| :--- | :--- |
+| `boxlite-small` | 2 vCPU, 4 GB RAM |
+| `boxlite` *(default)* | 4 vCPU, 8 GB RAM |
+| `boxlite-large` | 8 vCPU, 16 GB RAM |
+| `boxlite-xlarge` | 16 vCPU, 32 GB RAM |
+| `/from=<image>` | Boot from a pre-hydrated container image or snapshot |
+| `/debug` | Keep micro-VM alive for 30 minutes on job failure for post-mortem inspection |
+
+## Standalone Local Test Execution
+
+You can run test commands directly inside an isolated micro-VM without committing or pushing:
+
+```bash
+boxlite actions-runner run --push . -- cargo test --all
+```
+
 ## CLI Usage
 
 ### Start an ephemeral runner with warm reuse
