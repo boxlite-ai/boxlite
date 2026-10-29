@@ -98,6 +98,11 @@ export const handlers = [
   // backend and no login (see MockAuthProvider for the fake session).
   http.get(`${API_URL}/config`, () => HttpResponse.json(buildMockConfig(BILLING_API_URL))),
   http.get(`${API_URL}/organizations`, () => HttpResponse.json([MOCK_ORGANIZATION])),
+  http.get(`${API_URL}/organizations/:organizationId`, ({ params }) =>
+    params.organizationId === MOCK_ORGANIZATION.id
+      ? HttpResponse.json(MOCK_ORGANIZATION)
+      : new HttpResponse(null, { status: 404 }),
+  ),
   http.get(`${API_URL}/organizations/:organizationId/concurrency`, ({ request }) => {
     const url = new URL(request.url)
     const to = new Date(url.searchParams.get('to') ?? Date.now())

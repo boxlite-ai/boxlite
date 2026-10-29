@@ -5,10 +5,13 @@
  */
 
 import { act, type ReactNode } from 'react'
+import { focusManager, keepPreviousData, QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { queryKeys } from '@/hooks/queries/queryKeys'
+import { SelectedOrganizationProvider } from '@/providers/SelectedOrganizationProvider'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { CreateBoxDialog, resolvePerBoxLimits } from './CreateBoxDialog'
-import { validateMountPath, validateMounts } from '@/lib/cloudBox'
+import { toBoxApiCreateRequest, validateMountPath, validateMounts } from '@/lib/cloudBox'
 
 // Mutable org returned by the mocked hook; each test sets `state.org`.
 const state = vi.hoisted(() => ({
@@ -34,6 +37,19 @@ const LIVE_PRICES = {
 
 const mutationMocks = vi.hoisted(() => ({
   createBox: vi.fn(),
+  refreshOrganizations: vi.fn().mockResolvedValue(undefined),
+}))
+
+const organizationsApi = vi.hoisted(() => ({ getOrganization: vi.fn(), listOrganizationMembers: vi.fn() }))
+vi.mock('react-oidc-context', () => ({ useAuth: () => ({ user: { profile: { sub: 'owner' } } }) }))
+vi.mock('posthog-js/react', () => ({ usePostHog: () => null }))
+vi.mock('@/hooks/useApi', () => ({ useApi: () => ({ organizationsApi }) }))
+
+vi.mock('@/hooks/useOrganizations', () => ({
+  useOrganizations: () => ({
+    organizations: state.org ? [state.org] : [],
+    refreshOrganizations: mutationMocks.refreshOrganizations,
+  }),
 }))
 
 vi.mock('@/hooks/useSelectedOrganization', () => ({
@@ -72,8 +88,26 @@ function typeInto(el: HTMLInputElement, value: string) {
 async function flush() {
   await act(async () => {
     await Promise.resolve()
-    await new Promise((r) => setTimeout(r, 0))
+    if (vi.isFakeTimers()) await vi.advanceTimersByTimeAsync(1)
+    else await new Promise((r) => setTimeout(r, 0))
   })
+}
+
+let queryClient: QueryClient
+beforeEach(() => {
+  queryClient = new QueryClient({
+    defaultOptions: { queries: { staleTime: 300_000, placeholderData: keepPreviousData, retry: false } },
+  })
+  organizationsApi.getOrganization.mockReset().mockImplementation(async () => ({ data: state.org }))
+  organizationsApi.listOrganizationMembers.mockResolvedValue({ data: [] })
+})
+afterEach(() => {
+  queryClient.clear()
+  focusManager.setFocused(undefined)
+  vi.useRealTimers()
+})
+function withQueries(children: ReactNode) {
+  return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
 }
 
 describe('resolvePerBoxLimits', () => {
@@ -102,6 +136,9 @@ describe('CreateBoxDialog per-org resource cap', () => {
     state.config = { billingApiUrl: 'http://billing.test' }
     state.pricesQuery = { data: LIVE_PRICES, isLoading: false }
     state.catalogImages = []
+    mutationMocks.refreshOrganizations.mockReset().mockResolvedValue(undefined)
+    organizationsApi.getOrganization.mockReset().mockImplementation(async () => ({ data: state.org }))
+    mutationMocks.createBox.mockReset().mockResolvedValue({ id: 'created-box' })
   })
 
   afterEach(() => {
@@ -144,7 +181,7 @@ describe('CreateBoxDialog per-org resource cap', () => {
   ) {
     await act(async () => {
       root ??= createRoot(host)
-      root.render(<CreateBoxDialog open onOpenChange={() => {}} />)
+      root.render(withQueries(<CreateBoxDialog open onOpenChange={() => {}} />))
     })
     await flush()
   }
@@ -154,7 +191,7 @@ describe('CreateBoxDialog per-org resource cap', () => {
     document.body.appendChild(host)
     await act(async () => {
       root ??= createRoot(host)
-      root.render(<CreateBoxDialog open onOpenChange={() => {}} {...props} />)
+      root.render(withQueries(<CreateBoxDialog open onOpenChange={() => {}} {...props} />))
     })
     await flush()
   }
@@ -346,6 +383,263 @@ describe('CreateBoxDialog per-org resource cap', () => {
     await act(async () => createButton?.click())
     await flush()
   }
+
+  describe('subscribed Cloud resource limits', () => {
+    beforeEach(() => {
+      state.org = makeOrg({ maxCpuPerBox: 16, maxMemoryPerBox: 32, maxDiskPerBox: 100 })
+      mutationMocks.createBox.mockReset()
+      mutationMocks.createBox.mockResolvedValue({ id: 'created-box' })
+    })
+
+    it.each([
+      ['Small', 1, 1024, 10],
+      ['Medium', 2, 4096, 20],
+      ['Large', 4, 8192, 50],
+    ])('submits the %s preset through the REST resource mapper', async (label, cpus, memory_mib, disk_size_gb) => {
+      await renderOpen()
+      const button = [...document.querySelectorAll<HTMLButtonElement>('[aria-label="Size"] button')].find((button) =>
+        button.textContent?.startsWith(String(label)),
+      )
+      expect(button).toBeTruthy()
+      await act(async () => button?.click())
+      await submit()
+
+      expect(mutationMocks.createBox).toHaveBeenCalledTimes(1)
+      expect(toBoxApiCreateRequest(mutationMocks.createBox.mock.calls[0][0])).toMatchObject({
+        cpus,
+        memory_mib,
+        disk_size_gb,
+      })
+    })
+
+    it('submits the exact Custom maximum in MiB without a cap warning', async () => {
+      await renderOpen()
+      const inputs = document.querySelectorAll<HTMLInputElement>('input[aria-label="value"]')
+      for (const [index, value] of ['16', '32', '100'].entries()) {
+        await act(async () => typeInto(inputs[index], value))
+        await act(async () => inputs[index].dispatchEvent(new FocusEvent('focusout', { bubbles: true })))
+      }
+      await submit()
+
+      expect(document.body.textContent).not.toContain('support@boxlite.ai')
+      expect(mutationMocks.createBox).toHaveBeenCalledTimes(1)
+      expect(toBoxApiCreateRequest(mutationMocks.createBox.mock.calls[0][0])).toMatchObject({
+        cpus: 16,
+        memory_mib: 32768,
+        disk_size_gb: 100,
+      })
+    })
+
+    it.each([
+      [0, '17', '16', /CPU\s*16\s*vCPU/],
+      [1, '33', '32', /Memory\s*32\s*GiB/],
+      [2, '101', '100', /Disk\s*100\s*GiB/],
+    ])(
+      'clamps resource %s to the returned organization limit and explains the cap',
+      async (index, value, max, hint) => {
+        await renderOpen()
+        const input = document.querySelectorAll<HTMLInputElement>('input[aria-label="value"]')[index]
+        await act(async () => typeInto(input, value))
+        await flush()
+
+        expect(input.value).toBe(max)
+        expect(document.body.textContent).toMatch(hint)
+        expect(document.querySelector('a[href^="mailto:support@boxlite.ai"]')).toBeTruthy()
+      },
+    )
+  })
+
+  it('bounds the selected organization request and makes it cancelable', async () => {
+    await renderOpen()
+    expect(organizationsApi.getOrganization).toHaveBeenCalledExactlyOnceWith('org-1', {
+      timeout: 10_000,
+      signal: expect.any(AbortSignal),
+    })
+    expect(mutationMocks.refreshOrganizations).not.toHaveBeenCalled()
+  })
+
+  function button(label: string) {
+    const found = [...document.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent === label)
+    if (!found) throw new Error(`Missing button: ${label}`)
+    return found
+  }
+
+  function deferRefresh() {
+    let resolve!: (response: { data: unknown }) => void
+    let reject!: (error: Error) => void
+    const promise = new Promise<{ data: unknown }>((yes, no) => {
+      resolve = yes
+      reject = no
+    })
+    organizationsApi.getOrganization.mockReturnValueOnce(promise)
+    return { resolve: (data = state.org) => resolve({ data }), reject }
+  }
+
+  it.each([
+    ['Medium', 20],
+    ['Large', 50],
+  ])('submits %s unchanged while the first limits request hangs', async (label, diskSize) => {
+    deferRefresh()
+    await rerenderOpen()
+    expect(button(String(label)).matches(':disabled')).toBe(false)
+    expect(button('Create Box').disabled).toBe(false)
+    await act(async () => button(String(label)).click())
+    await submit()
+    expect(toBoxApiCreateRequest(mutationMocks.createBox.mock.calls[0][0]).disk_size_gb).toBe(diskSize)
+    expect(document.body.textContent).toContain('Limits are checked when you create.')
+  })
+
+  it('submits Custom inputs without applying stored defaults before limits arrive', async () => {
+    deferRefresh()
+    await renderOpen()
+    const inputs = document.querySelectorAll<HTMLInputElement>('input[aria-label="value"]')
+    expect([...inputs].every((input) => !input.matches(':disabled'))).toBe(true)
+    for (const [index, value] of ['16', '32', '100'].entries()) {
+      await act(async () => typeInto(inputs[index], value))
+      await act(async () => inputs[index].dispatchEvent(new FocusEvent('focusout', { bubbles: true })))
+    }
+    await submit()
+    expect(toBoxApiCreateRequest(mutationMocks.createBox.mock.calls[0][0])).toMatchObject({
+      cpus: 16,
+      memory_mib: 32768,
+      disk_size_gb: 100,
+    })
+  })
+
+  it('allows server-validated resources if the first limit refresh fails', async () => {
+    const refresh = deferRefresh()
+    await rerenderOpen()
+    await act(async () => refresh.reject(new Error('network unavailable')))
+    await flush()
+    expect(document.body.textContent).toContain('Could not load limits. Limits are checked when you create.')
+    await act(async () => button('Large').click())
+    await submit()
+    expect(toBoxApiCreateRequest(mutationMocks.createBox.mock.calls[0][0]).disk_size_gb).toBe(50)
+  })
+
+  it('restores the selected preset when background refresh raises the limits', async () => {
+    vi.useFakeTimers()
+    await rerenderOpen()
+    await act(async () => button('Medium').click())
+    const name = nameInput()
+    if (!name) throw new Error('expected name input to be rendered')
+    await act(async () => typeInto(name, 'kept-name'))
+    expect(document.body.textContent).toMatch(/2 vCPU.*4 GiB.*10 GiB/)
+    const refresh = deferRefresh()
+    await act(async () => vi.advanceTimersByTimeAsync(10_000))
+    expect(button('Create Box').disabled).toBe(false)
+    await act(async () => refresh.resolve(makeOrg({ maxCpuPerBox: 16, maxMemoryPerBox: 32, maxDiskPerBox: 100 })))
+    await flush()
+    expect(document.body.textContent).toMatch(/2 vCPU.*4 GiB.*20 GiB/)
+    expect(document.body.textContent).not.toContain('support@boxlite.ai')
+    expect(nameInput()?.value).toBe('kept-name')
+    await submit()
+    expect(toBoxApiCreateRequest(mutationMocks.createBox.mock.calls[0][0]).disk_size_gb).toBe(20)
+  })
+
+  it('updates Custom maxima without changing inputs, retaining known limits after refresh failure', async () => {
+    await renderOpen()
+    await act(async () => typeInto(cpuInput(), '3'))
+    await act(async () => cpuInput().dispatchEvent(new FocusEvent('focusout', { bubbles: true })))
+    const refresh = deferRefresh()
+    await act(async () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.organization.detail('org-1') })
+    })
+    expect(cpuInput().value).toBe('3')
+    expect(document.body.textContent).toContain('Max 4 vCPU')
+    await act(async () => refresh.resolve(makeOrg({ maxCpuPerBox: 16, maxMemoryPerBox: 32, maxDiskPerBox: 100 })))
+    await flush()
+    expect(cpuInput().value).toBe('3')
+    expect(document.body.textContent).toContain('Max 16 vCPU')
+    expect(document.body.textContent).toContain('Max 32 GiB')
+    expect(document.body.textContent).toContain('Max 100 GiB')
+    const failed = deferRefresh()
+    await act(async () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.organization.detail('org-1') })
+    })
+    await act(async () => failed.reject(new Error('network unavailable')))
+    await flush()
+    expect(document.body.textContent).toContain('Could not refresh limits. Showing last known limits.')
+    expect(document.body.textContent).toContain('Max 16 vCPU')
+    expect(button('Create Box').disabled).toBe(false)
+  })
+
+  it('isolates organizations while requests are pending and ignores obsolete results', async () => {
+    await renderOpen()
+    const earlier = deferRefresh()
+    await act(async () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.organization.detail('org-1') })
+    })
+    const refresh = deferRefresh()
+    state.org = makeOrg({ id: 'org-2', maxCpuPerBox: 2, maxMemoryPerBox: 4, maxDiskPerBox: 5 })
+    await rerenderOpen()
+    expect(document.body.textContent).not.toContain('Max 4 vCPU')
+    expect(cpuInput().matches(':disabled')).toBe(false)
+    await act(async () => earlier.resolve(makeOrg({ maxCpuPerBox: 16, maxMemoryPerBox: 32, maxDiskPerBox: 100 })))
+    await flush()
+    expect(document.body.textContent).not.toContain('Max 16 vCPU')
+    await act(async () => refresh.resolve())
+    await flush()
+    await act(async () => button('Large').click())
+    await submit()
+    expect(toBoxApiCreateRequest(mutationMocks.createBox.mock.calls[0][0])).toMatchObject({
+      cpus: 2,
+      memory_mib: 4096,
+      disk_size_gb: 5,
+    })
+  })
+
+  it('reuses its own cached limits when reopening while a fresh request is pending', async () => {
+    await renderOpen()
+    await act(async () => root?.render(withQueries(<CreateBoxDialog open={false} onOpenChange={() => {}} />)))
+    deferRefresh()
+    await renderOpen()
+    expect(organizationsApi.getOrganization).toHaveBeenCalledTimes(2)
+    expect(document.body.textContent).toContain('Max 4 vCPU')
+    expect(button('Create Box').disabled).toBe(false)
+  })
+
+  it('preloads before opening and shares the in-flight read with the dialog', async () => {
+    const refresh = deferRefresh()
+    const host = document.body.appendChild(document.createElement('div'))
+    root = createRoot(host)
+    const tree = (open: boolean) =>
+      withQueries(
+        <SelectedOrganizationProvider>
+          <CreateBoxDialog open={open} onOpenChange={() => {}} />
+        </SelectedOrganizationProvider>,
+      )
+    await act(async () => root?.render(tree(false)))
+    expect(organizationsApi.getOrganization).toHaveBeenCalledTimes(1)
+    await act(async () => root?.render(tree(true)))
+    expect(organizationsApi.getOrganization).toHaveBeenCalledTimes(1)
+    await act(async () => refresh.resolve())
+    await flush()
+    expect(button('Create Box').disabled).toBe(false)
+  })
+
+  it('polls only while open and foreground, and refreshes on returning to the page', async () => {
+    vi.useFakeTimers()
+    await rerenderOpen()
+    await act(async () => vi.advanceTimersByTimeAsync(10_000))
+    expect(organizationsApi.getOrganization).toHaveBeenCalledTimes(2)
+    await act(async () => focusManager.setFocused(false))
+    await act(async () => vi.advanceTimersByTimeAsync(20_000))
+    expect(organizationsApi.getOrganization).toHaveBeenCalledTimes(2)
+    await act(async () => focusManager.setFocused(true))
+    await flush()
+    expect(organizationsApi.getOrganization).toHaveBeenCalledTimes(3)
+    await act(async () => root?.render(withQueries(<CreateBoxDialog open={false} onOpenChange={() => {}} />)))
+    await act(async () => vi.advanceTimersByTimeAsync(30_000))
+    expect(organizationsApi.getOrganization).toHaveBeenCalledTimes(3)
+  })
+
+  it('does not request limits or allow creation without a selected organization', async () => {
+    state.org = null
+    await rerenderOpen()
+    expect(organizationsApi.getOrganization).not.toHaveBeenCalled()
+    expect(button('Create Box').disabled).toBe(true)
+  })
 
   describe('the image field', () => {
     function imageInput() {
@@ -703,7 +997,7 @@ describe('CreateBoxDialog hourly price', () => {
     document.body.appendChild(host)
     await act(async () => {
       root ??= createRoot(host)
-      root.render(<CreateBoxDialog open onOpenChange={() => {}} />)
+      root.render(withQueries(<CreateBoxDialog open onOpenChange={() => {}} />))
     })
     await flush()
   }
@@ -823,7 +1117,7 @@ describe('CreateBoxDialog trigger slot', () => {
     document.body.appendChild(host)
     await act(async () => {
       root ??= createRoot(host)
-      root.render(<CreateBoxDialog>{children}</CreateBoxDialog>)
+      root.render(withQueries(<CreateBoxDialog>{children}</CreateBoxDialog>))
     })
     await flush()
   }

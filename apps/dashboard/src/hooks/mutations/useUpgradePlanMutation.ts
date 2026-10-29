@@ -21,6 +21,7 @@ export const useUpgradePlanMutation = () => {
   return useMutation({
     mutationFn: ({ organizationId, planId }: UpgradePlanParams) => billingApi.upgradePlan(organizationId, planId),
     onSuccess: async (_data, { organizationId }) => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.organization.detail(organizationId) })
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: queryKeys.organization.plan(organizationId) }),
         // The upgrade path reconciles subscription credit and invalidates the

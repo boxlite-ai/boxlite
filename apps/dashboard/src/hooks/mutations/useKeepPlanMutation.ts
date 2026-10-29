@@ -37,6 +37,7 @@ export const useKeepPlanMutation = () => {
       return billingApi.upgradePlan(organizationId, planId)
     },
     onSuccess: async (_data, { organizationId }) => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.organization.detail(organizationId) })
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: queryKeys.organization.plan(organizationId) }),
         queryClient.invalidateQueries({ queryKey: queryKeys.organization.usage.overview(organizationId) }),

@@ -5,6 +5,7 @@
  */
 
 import { act, StrictMode, Suspense } from 'react'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { createRoot, type Root } from 'react-dom/client'
 import { MemoryRouter, Route, Routes, useLocation, useNavigationType } from 'react-router-dom'
 import { toast } from 'sonner'
@@ -32,6 +33,7 @@ const mocks = vi.hoisted(() => {
         listOrganizationInvitationsForAuthenticatedUser: vi.fn(),
         acceptOrganizationInvitation: vi.fn(),
         listOrganizations: vi.fn(),
+        getOrganization: vi.fn(),
         listOrganizationMembers: vi.fn(),
       },
     },
@@ -53,7 +55,7 @@ vi.mock('@/components/PageLayout', () => ({
 
 function SelectedOrganization() {
   const { selectedOrganization } = useSelectedOrganization()
-  return <output>{selectedOrganization?.id}</output>
+  return <output data-default={selectedOrganization?.isDefaultForAuthenticatedUser}>{selectedOrganization?.id}</output>
 }
 
 function CurrentLocation() {
@@ -64,6 +66,7 @@ function CurrentLocation() {
 
 describe('review regressions: UserOrganizationInvitations', () => {
   let root: Root | null = null
+  let queryClient: QueryClient
   const { organizationsApi } = mocks.api
   const member = { userId: 'invitee', role: 'owner', assignedRoles: [] }
 
@@ -75,6 +78,7 @@ describe('review regressions: UserOrganizationInvitations', () => {
   })
 
   beforeEach(() => {
+    queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
     clear()
     vi.resetAllMocks()
     localStorage.clear()
@@ -82,6 +86,9 @@ describe('review regressions: UserOrganizationInvitations', () => {
     const own = { id: 'org-1', name: 'Personal', isDefaultForAuthenticatedUser: true }
     const joined = { id: 'org-2', name: 'Acme', isDefaultForAuthenticatedUser: false }
     organizationsApi.listOrganizations.mockResolvedValueOnce({ data: [own] }).mockResolvedValue({ data: [own, joined] })
+    organizationsApi.getOrganization.mockImplementation(async (id: string) => ({
+      data: { id, isDefaultForAuthenticatedUser: false },
+    }))
     organizationsApi.listOrganizationMembers.mockResolvedValue({ data: [member] })
     organizationsApi.listOrganizationInvitationsForAuthenticatedUser
       .mockResolvedValueOnce({ data: [mocks.invitation] })
@@ -92,6 +99,7 @@ describe('review regressions: UserOrganizationInvitations', () => {
   afterEach(() => {
     act(() => root?.unmount())
     root = null
+    queryClient.clear()
     document.body.innerHTML = ''
   })
 
@@ -116,9 +124,25 @@ describe('review regressions: UserOrganizationInvitations', () => {
           </Suspense>
         </MemoryRouter>
       )
-      root.render(strict ? <StrictMode>{page}</StrictMode> : page)
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          {strict ? <StrictMode>{page}</StrictMode> : page}
+        </QueryClientProvider>,
+      )
     })
   }
+
+  it('preloads only the selected organization without replacing membership metadata', async () => {
+    organizationsApi.listOrganizations.mockReset().mockResolvedValue({
+      data: [
+        { id: 'org-1', name: 'Personal', isDefaultForAuthenticatedUser: true },
+        { id: 'org-2', name: 'Team', isDefaultForAuthenticatedUser: false },
+      ],
+    })
+    await renderInvitations()
+    expect(organizationsApi.getOrganization).toHaveBeenCalledExactlyOnceWith('org-1', expect.any(Object))
+    expect(document.querySelector('output')?.getAttribute('data-default')).toBe('true')
+  })
 
   it('accepts an email link once without confirmation, including StrictMode replay', async () => {
     await renderInvitations('/dashboard/user/invitations?id=inv-1', true)

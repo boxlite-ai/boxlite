@@ -2,6 +2,56 @@
 
 Configure and optimize box resource usage.
 
+## Cloud sandbox sizes
+
+For organizations using the default quotas, an effective subscription unlocks
+16 vCPU / 32 GiB memory / 100 GiB disk per Box. Without a subscription, the
+limits remain 4 vCPU / 8 GiB / 10 GiB. All subscription plans qualify, including
+managed plans. Administrator-defined quota exceptions remain in effect.
+
+| Dashboard size | vCPU | Memory | Disk with subscription | Disk without subscription |
+| --- | --- | --- | --- | --- |
+| Small | 1 | 1 GiB | 10 GiB | 10 GiB |
+| Medium | 2 | 4 GiB | 20 GiB | 10 GiB |
+| Large | 4 | 8 GiB | 50 GiB | 10 GiB |
+| Custom maximum | 16 subscribed / 4 otherwise | 32 GiB subscribed / 8 GiB otherwise | 100 GiB | 10 GiB |
+
+The organization list (`GET /organizations`) returns stored quotas and membership
+metadata without looking up subscription grants. For effective creation limits,
+use the individual organization endpoint (`GET /organizations/{organizationId}`).
+
+The Dashboard preloads effective limits for the selected organization. Opening
+the creation dialog reuses that result and refreshes it in the background;
+while open and in the foreground, it checks again every 10 seconds. Returning
+to the page or changing a subscription also triggers a refresh. Other
+organizations and the membership list are not refreshed by these lookups.
+
+Size controls and Create remain usable throughout. Confirmed limits appear
+beside Custom fields. Presets adapt when limits change: Medium restricted to
+10 GiB becomes 20 GiB when the subscription grant arrives. Custom retains entered
+values unless a confirmed limit requires reducing them; other form input stays
+intact. A failed refresh keeps last known limits and shows an inline notice.
+Before any result is available, the dialog submits the selected resources
+without applying stored membership quotas and leaves validation to the server.
+Quota reads have a 10-second timeout and do not show loading or error toasts.
+REST and SDK creation requests are independently
+checked by the server; over-limit requests return HTTP 400.
+The REST maximum is `cpus=16`, `memory_mib=32768`, `disk_size_gb=100`.
+Memory and disk use binary units (GiB), including the historical `disk_size_gb` name.
+
+Canceling renewal retains the higher limits until the paid period ends. Payment
+grace also retains them; suspended subscription entitlements or expiry restore
+the default creation limits. Effective limits are cached for 30 seconds across
+API instances; reads do not extend this lifetime. Subscription upgrades and
+withdrawals can therefore take about 30 seconds to reach the API. An open
+dialog can add up to one 10-second polling interval plus network latency before
+showing the result; failures or a backgrounded page can delay it further.
+Reopening the dialog or reloading the browser does not bypass the server cache. Concurrent lookups for one organization share a
+request within each API process. If no valid cache entry exists and the billing
+service cannot verify a grant, the default limits apply. Existing Boxes keep
+their resources and may be restarted.
+Available runner capacity still determines whether an allowed request can run.
+
 ## CPU configuration
 
 **Set CPU Count:**
