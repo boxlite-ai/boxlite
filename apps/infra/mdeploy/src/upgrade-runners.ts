@@ -260,7 +260,7 @@ const upgradeOverSsm = ({
 /**
  * The policy channel: the fleet's declared state, rewritten and waited on.
  *
- * Not a per-host command. The assignment a deploy created *is* the desired
+ * Not a per-host command. Each assignment a deploy created *is* the desired
  * state, so a hand roll edits that one rather than standing a second enforcer
  * beside it — two assignments over one fleet would each see the other's work as
  * drift and take turns undoing it.
@@ -270,8 +270,8 @@ const upgradeOverSsm = ({
  * ssh channel a hand-install survived, because the payload refused to replace
  * something newer; a declarative channel has no such asymmetry.
  *
- * Waiting is the report API, not an exit status: the agents converge on their
- * own cycle, so "done" is every targeted host reporting compliant.
+ * The update waits for the rollout, including its observation window. Reports
+ * then confirm every targeted host is compliant with that revision.
  */
 export const upgradeFleetOverPolicy = ({
   targets,
@@ -280,6 +280,7 @@ export const upgradeFleetOverPolicy = ({
   project,
   zone,
   assignment,
+  existingPolicies,
   deadlineSeconds = 900,
   run,
   sleep,
@@ -294,6 +295,7 @@ export const upgradeFleetOverPolicy = ({
   zone: string
   /** The assignment the deploy owns, by name. */
   assignment: string
+  existingPolicies: { id: string; [key: string]: unknown }[]
   deadlineSeconds?: number
   run: RunCommand
   sleep: (seconds: number) => void
@@ -319,6 +321,7 @@ export const upgradeFleetOverPolicy = ({
           },
         ],
       },
+      ...existingPolicies.filter((policy) => policy.id !== 'runner-binary'),
     ],
   }
   const file = writeFile(JSON.stringify(policy, null, 2))
@@ -333,41 +336,45 @@ export const upgradeFleetOverPolicy = ({
     `--location=${zone}`,
     `--file=${file}`,
     '--quiet',
+    '--format=json',
   ])
   if (!written.ok) {
     throw new Error(`could not rewrite ${assignment}: ${written.stderr || written.stdout || '(no output)'}`)
   }
+  const revision = JSON.parse(written.stdout).revisionId
+  if (typeof revision !== 'string' || !revision) throw new Error(`${assignment}: update returned no revisionId`)
 
   /*
    * Compliance per host, polled to a deadline.
    *
    * `UNKNOWN` is the normal first answer — the agent has not evaluated the new
-   * revision yet — so only `NON_COMPLIANT` after the deadline is a failure, and
-   * the deadline is generous because a swap includes a restart and a health
-   * probe.
+   * revision yet. Missing, stale or non-compliant reports must not allow the
+   * next batch to start; give reports time to catch up before failing.
    */
   const remaining = new Set(targets)
   for (let waited = 0; waited < deadlineSeconds; waited += 30) {
-    const reported = run('gcloud', [
-      'compute',
-      'os-config',
-      'os-policy-assignment-reports',
-      'list',
-      `--project=${project}`,
-      `--location=${zone}`,
-      `--assignment=${assignment}`,
-      '--format=value(instance,osPolicyCompliances[0].complianceState)',
-    ])
-    if (reported.ok) {
-      for (const line of reported.stdout.split('\n').filter(Boolean)) {
-        const [instance, state] = line.trim().split(/\s+/)
-        // The report names the instance by resource path, and which segment
-        // holds the name differs by surface — `…/instances/<name>` and
-        // `…/instances/<name>/report` are both seen. Matching a whole segment
-        // is what keeps `runner` from also matching `runner-2`.
-        const segments = instance?.split('/') ?? []
-        const host = [...remaining].find((name) => segments.includes(name))
-        if (host && state === 'COMPLIANT') {
+    for (const host of remaining) {
+      const reported = run('gcloud', [
+        'compute',
+        'os-config',
+        'os-policy-assignment-reports',
+        'describe',
+        assignment,
+        `--project=${project}`,
+        `--location=${zone}`,
+        `--instance=${host}`,
+        '--format=json',
+      ])
+      if (reported.ok) {
+        const report = JSON.parse(reported.stdout)
+        if (
+          report.osPolicyAssignment?.endsWith(`/${assignment}@${revision}`) &&
+          policy.osPolicies.every((expected) =>
+            report.osPolicyCompliances?.some(
+              (item: any) => item.osPolicyId === expected.id && item.complianceState === 'COMPLIANT',
+            ),
+          )
+        ) {
           log(`    ${host}: compliant`)
           remaining.delete(host)
         }

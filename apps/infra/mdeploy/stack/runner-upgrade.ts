@@ -16,10 +16,9 @@
  * provider builds the command resource and supplies the transport, because
  * constructing resources is a provider's job.
  *
- * One host at a time, and structurally rather than in a script: each provider
- * creates one command per host and chains them with `dependsOn`, so the
- * dependency graph is what keeps two hosts from restarting at once, and a
- * failure stops the chain with the unvisited hosts still serving the old binary.
+ * AWS chains one command per host. GCP observes the first host for five minutes
+ * before applying the same policies to the remaining hosts in parallel.
+ * The providers own that sequencing; this module renders one host's payload.
  *
  * The host is *not* drained first: boxes on the host being upgraded take the
  * restart. Cordoning through the admin API needs a control-plane runner id, an

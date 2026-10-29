@@ -5,8 +5,8 @@
  * move it *backwards*.
  *
  * A deploy already rolls the fleet forward: `stack/runner-upgrade.ts` renders
- * the payload and each provider chains one command per host. What a deploy
- * deliberately cannot do is downgrade. The payload refuses to replace a host
+ * the payload, AWS chains hosts and GCP observes a canary before a parallel batch.
+ * A deploy deliberately cannot downgrade. The payload refuses to replace a host
  * serving something newer than the target, because a host ahead of the declared
  * version is usually a deliberate hand-install and silently reverting it during
  * an unrelated deploy is a nasty surprise. That refusal exits 0, so a rollback
@@ -20,8 +20,8 @@
  *
  * Everything else is shared with the deploy rather than reimplemented: the same
  * `renderUpgradePayload` converge/verify/swap/rollback script, the same
- * transports in `upgrade-runners.ts`, the same host-at-a-time sequencing that
- * stops on the first failure. This file only answers the two questions a deploy
+ * transports in `upgrade-runners.ts`, and the cloud's rollout sequencing that
+ * stops on a failed batch. This file only answers the two questions a deploy
  * answers structurally — which hosts, and in what order.
  *
  * Release targets only. A build-mode binary is addressed by a commit and staged
@@ -47,7 +47,7 @@ import {
   type UpgradeOneRequest,
 } from './upgrade-runners.ts'
 import { encodeUpgradePayload, renderPolicyScripts } from '../stack/runner-upgrade.ts'
-import { RUNNER_PORT, runnerNamePrefix, runnerPolicyName } from '../stack/runners.ts'
+import { RUNNER_PORT, runnerNamePrefix, runnerPolicyBatches } from '../stack/runners.ts'
 import { resolveRunnerBinary } from '../stack/runner-binary.ts'
 import { zoneIn } from '../stack/providers/gcp/index.ts'
 
@@ -89,7 +89,7 @@ const OWN_OPTIONS = { flags: ['allow-downgrade'], values: ['host'] }
 // the stack names a host with — one definition, so discovery cannot drift from
 // creation, and a roll in one stage never sees another stage's hosts.
 
-export type Host = { target: string; label: string }
+export type Host = { target: string; label: string; policyLabel?: string }
 
 /**
  * The order the fleet was created in, which is the order to visit it in.
@@ -166,15 +166,11 @@ const gcpHosts = ({
     `--project=${project}`,
     `--zones=${zone}`,
     `--filter=name~^${prefix} AND status=RUNNING`,
-    '--format=value(name)',
+    '--format=json(name,labels)',
   ])
   if (!listed.ok) throw new RunnerUpdateError(`could not list the fleet: ${listed.stderr || '(no stderr)'}`)
-  return listed.stdout
-    .split('\n')
-    .map((name) => name.trim())
-    .filter(Boolean)
-    // The name *is* the target on this cloud: `gcloud compute ssh` takes it.
-    .map((name) => ({ target: name, label: name }))
+  return (JSON.parse(listed.stdout) as { name: string; labels?: Record<string, string> }[])
+    .map(({ name, labels }) => ({ target: name, label: name, policyLabel: labels?.['boxlite-runner'] }))
     .sort(compareHostsIn(prefix))
 }
 
@@ -311,9 +307,9 @@ export const updateRunners = async ({
   /*
    * On GCP the fleet is declared, not commanded.
    *
-   * A deploy owns one OS policy assignment over these hosts, so a hand roll
-   * rewrites that assignment rather than reaching into each machine — there is
-   * no ssh here that an account outside the instance's organization could open
+   * A deploy owns disjoint canary and fleet assignments, so a hand roll
+   * rewrites those assignments in order rather than reaching into each machine.
+   * There is no ssh here that an account outside the instance's organization could open
    * anyway. The consequences are the two lines printed below: the roll covers
    * the whole fleet, and it lasts until the next deploy re-asserts the identity
    * the checkout declares.
@@ -326,24 +322,70 @@ export const updateRunners = async ({
       )
     }
     const zone = zoneIn(scope.region as string, scope.zone ?? null)
-    log('==> this rewrites the deployed policy; the next mdeploy restores the checkout’s identity')
-    upgradeFleetOverPolicy({
-      targets: hosts.map((host) => host.target),
-      identity: binary.identity,
-      scripts: renderPolicyScripts({
-        identity: binary.identity,
-        binary,
-        port: RUNNER_PORT,
-        allowDowngrade,
-      }),
-      project: scope.project as string,
-      zone,
-      assignment: runnerPolicyName({ app: config.app, stage: scope.stage as string }),
-      run,
-      sleep,
-      log,
-      writeFile: writePolicyFile,
+    if (hosts[0]!.target !== prefix)
+      throw new RunnerUpdateError(`the canary ${prefix} must be running before rolling the fleet`)
+    const labels = hosts.map((host) => host.policyLabel)
+    if (labels.some((label) => !label) || new Set(labels).size !== labels.length) {
+      throw new RunnerUpdateError('GCP runner labels must be present and unique; reconcile the fleet through mdeploy')
+    }
+    const batches = runnerPolicyBatches({ app: config.app, stage: scope.stage as string }, hosts)
+    // Preflight every batch before the first write, including migration from
+    // the original assignment that selected the entire fleet.
+    const deployed = batches.map((batch) => {
+      const result = run('gcloud', [
+        'compute',
+        'os-config',
+        'os-policy-assignments',
+        'describe',
+        batch.name,
+        `--project=${scope.project}`,
+        `--location=${zone}`,
+        '--format=json',
+      ])
+      if (!result.ok) throw new RunnerUpdateError(`could not read ${batch.name}; run mdeploy before runner:update`)
+      const policy = JSON.parse(result.stdout)
+      const expected = batch.hosts.map((host) => host.policyLabel).sort()
+      const actual = policy.instanceFilter?.inclusionLabels
+        ?.map((entry: any) => entry.labels?.['boxlite-runner'])
+        .sort()
+      if (
+        JSON.stringify(actual) !== JSON.stringify(expected) ||
+        policy.instanceFilter?.all ||
+        policy.instanceFilter?.inclusionLabels?.some((entry: any) => Object.keys(entry.labels ?? {}).length !== 1) ||
+        policy.instanceFilter?.exclusionLabels?.length ||
+        policy.instanceFilter?.inventories?.length ||
+        policy.rollout?.minWaitDuration !== batch.rollout.minWaitDuration ||
+        policy.rollout?.disruptionBudget?.fixed !== batch.rollout.disruptionBudget.fixed ||
+        policy.rollout?.disruptionBudget?.percent !== batch.rollout.disruptionBudget.percent
+      ) {
+        throw new RunnerUpdateError(`${batch.name} does not match the canary rollout; run mdeploy before runner:update`)
+      }
+      if (!Array.isArray(policy.osPolicies) || !policy.osPolicies.some((item: any) => item.id === 'runner-binary')) {
+        throw new RunnerUpdateError(`${batch.name} has no runner-binary policy; run mdeploy before runner:update`)
+      }
+      return policy.osPolicies
     })
+    log('==> this rewrites the deployed policy; the next mdeploy restores the checkout’s identity')
+    for (const [index, batch] of batches.entries()) {
+      upgradeFleetOverPolicy({
+        targets: batch.hosts.map((host) => host.target),
+        identity: binary.identity,
+        scripts: renderPolicyScripts({
+          identity: binary.identity,
+          binary,
+          port: RUNNER_PORT,
+          allowDowngrade,
+        }),
+        project: scope.project as string,
+        zone,
+        assignment: batch.name,
+        existingPolicies: deployed[index],
+        run,
+        sleep,
+        log,
+        writeFile: writePolicyFile,
+      })
+    }
     log(`==> done (${hosts.length} host(s))`)
     return 0
   }

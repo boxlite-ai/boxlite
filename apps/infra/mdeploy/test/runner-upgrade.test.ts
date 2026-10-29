@@ -389,32 +389,8 @@ test('a cloud with no channel here is named rather than guessed at', () => {
   )
 })
 
-/*
- * The fleet is upgraded one host at a time, on both clouds.
- *
- * Read out of the two providers' own source, which is what
- * `gcp-pitfalls.test.ts` already does and for the same reason: these functions
- * build Pulumi resources, so nothing here can instantiate one and ask what it
- * depends on. The sequencing is not a property of the payload — the payload
- * above is what one host runs — it is a property of how the graph is wired, and
- * the wiring is two lines in each file.
- *
- * Worth pinning because losing it is silent and expensive. Without the previous
- * host in `dependsOn`, every `UpgradeRunnerBinary*` becomes independent, the
- * engine runs them concurrently, and a stage restarts its whole fleet at once —
- * every box in flight killed, and no failure anywhere to say why. With it, a
- * host that refuses stops the chain and the hosts not yet visited keep serving
- * the binary they have.
- *
- * Both files are read together so one cloud cannot quietly become the exception.
- */
-test('each host waits on the host before it, so a fleet is never restarted at once', () => {
-  /*
-   * One guarantee, stated to two executors. AWS chains a command per host and
-   * the dependency graph sequences them; GCP hands the fleet to the OS Config
-   * agents, where the same "one at a time" is a rollout budget — there is no
-   * chain to write, and asserting one would demand the shape it replaced.
-   */
+// AWS retains its host-by-host dependency chain. GCP batches are tested in runner-scale-out.test.ts.
+test('AWS upgrades each host after the previous host completes', () => {
   const aws = readFileSync(fileURLToPath(new URL('../stack/providers/aws/runners.ts', import.meta.url)), 'utf8')
   const upgrades = aws.slice(aws.indexOf('let previousUpgrade'))
   assert.notEqual(upgrades, '', 'aws does not chain its upgrades at all')
@@ -430,11 +406,6 @@ test('each host waits on the host before it, so a fleet is never restarted at on
   )
   // Its own instance too: a host that does not exist has nothing to upgrade.
   assert.match(upgrades, /dependsOn: \[instance,/, 'aws does not make an upgrade wait on its own host')
-
-  const gcp = readFileSync(fileURLToPath(new URL('../stack/providers/gcp/runners.ts', import.meta.url)), 'utf8')
-  assert.match(gcp, /disruptionBudget: \{ fixed: 1 \}/, 'gcp lets the agents take the whole fleet down together')
-  assert.match(gcp, /minWaitDuration: '\d+s'/, 'gcp counts a host out of the budget the moment it reports')
-  assert.equal(/previousUpgrade/.test(gcp), false, 'gcp still chains commands it no longer creates')
 })
 
 test('the policy scripts answer in the exit codes the agent grades them by', () => {

@@ -165,14 +165,26 @@ export const runnerNamePrefix = ({ app, stage }: { app: string; stage: string })
   instanceFor({ app, stage, artifact: 'runner' })
 
 /**
- * The OS policy assignment that carries the fleet's binary, by name.
+ * The OS policy assignments used by both mdeploy and runner:update.
  *
- * Two writers spell it: the deploy creates it, and `runner:update` rewrites the
- * same one — standing a second assignment beside the first would leave two
- * enforcers taking turns undoing each other's work.
+ * Keep the original name for the first host; the remaining hosts have a
+ * separate assignment so only the canary pays the observation window.
  */
-export const runnerPolicyName = ({ app, stage }: { app: string; stage: string }): string =>
-  instanceFor({ app, stage, artifact: 'runner-binary' })
+export const runnerPolicyBatches = <T>({ app, stage }: { app: string; stage: string }, hosts: readonly T[]) =>
+  [
+    {
+      resourceName: 'RunnerBinary',
+      name: instanceFor({ app, stage, artifact: 'runner-binary' }),
+      hosts: hosts.slice(0, 1),
+      rollout: { disruptionBudget: { fixed: 1 }, minWaitDuration: '300s' },
+    },
+    {
+      resourceName: 'RunnerBinaryFleet',
+      name: instanceFor({ app, stage, artifact: 'runner-binary-fleet' }),
+      hosts: hosts.slice(1),
+      rollout: { disruptionBudget: { percent: 100 }, minWaitDuration: '0s' },
+    },
+  ].filter((batch) => batch.hosts.length > 0)
 
 export const runnerNameFor = ({ app, stage, index }: { app: string; stage: string; index: number }): string =>
   index === 1 ? runnerNamePrefix({ app, stage }) : `${runnerNamePrefix({ app, stage })}-${index}`

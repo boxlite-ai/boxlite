@@ -33,7 +33,7 @@
 
 import type { Placement } from '../../network.ts'
 import type { RunnerProvider, RunnerRequest, Runners } from '../../runners.ts'
-import { RUNNER_PORT, RUNNER_TOKEN_VARIABLE, runnerDataDiskNameFor, runnerPolicyName } from '../../runners.ts'
+import { RUNNER_PORT, RUNNER_TOKEN_VARIABLE, runnerDataDiskNameFor, runnerPolicyBatches } from '../../runners.ts'
 import { RUNNER_HOME, renderRunnerBoot, type BootPlatform } from '../../runner-boot.ts'
 import {
   REGISTER_RUNNERS_COMMAND,
@@ -223,7 +223,12 @@ export const gcpRunnerProvider =
     dependsOn: any[]
   }): RunnerProvider =>
   (request: RunnerRequest): Runners => {
-
+    const labels = request.fleet.map(({ slot }) => runnerLabelValue(slot.controlPlaneRunnerName))
+    if (new Set(labels).size !== labels.length) {
+      throw new Error(
+        'GCP runner labels must be unique; DEFAULT_RUNNER_NAME overlaps another runner after normalization',
+      )
+    }
     const platform: BootPlatform = {
       // Google's metadata server. `Metadata-Flavor` is what distinguishes a
       // real request from a browser that wandered onto the address.
@@ -549,15 +554,8 @@ udevadm trigger --name-match=kvm || true`,
      * it replaces needed OS Login — a POSIX identity granted per person, which
      * an account outside the instance's organization cannot be given at all.
      *
-     * `disruptionBudget` takes over from the chained commands: one host at a
-     * time, and `minWaitDuration` keeps a host counted against the budget while
-     * its boxes are still reconnecting.
-     *
-     * The cost is written down rather than smoothed over: an apply no longer
-     * waits for the fleet. The assignment exists when Pulumi returns and the
-     * agents converge within their own cycle, so "deployed" and "serving the
-     * new binary" are two moments now. The report API is what closes that gap —
-     * see `apps/infra/mdeploy/README.md`.
+     * One five-minute canary avoids paying the wait per host and timing out.
+     * The fleet depends on its synchronous rollout before updating in parallel.
      */
     // Both addresses are Outputs, so the rendered pair is one too — and each
     // field has to be unwrapped on its own before it can be handed to a script
@@ -582,74 +580,65 @@ udevadm trigger --name-match=kvm || true`,
       binary: request.binary,
       port: RUNNER_PORT,
     })
-    new gcp.osconfig.OsPolicyAssignment(
-      'RunnerBinary',
-      {
-        name: runnerPolicyName({ app: $app.name, stage: $app.stage }),
-        project,
-        // Zonal, like the hosts it selects.
-        location: zone,
-        description: `BoxLite runner binary ${request.binary.identity}`,
-        instanceFilter: {
-          /*
-           * One label set per host, which the API ORs together.
-           *
-           * There is no wildcard on a label value, and a fleet-wide label would
-           * be a change to instances this module deliberately never updates. The
-           * per-host label is already there — `RUNNER_LABEL` above is the one
-           * spelling both sides use.
-           */
-          inclusionLabels: assignments.map(({ slot }) => ({
-            labels: { [RUNNER_LABEL]: runnerLabelValue(slot.controlPlaneRunnerName) },
-          })),
+    let previousBatch: any
+    for (const batch of runnerPolicyBatches({ app: $app.name, stage: $app.stage }, assignments)) {
+      previousBatch = new gcp.osconfig.OsPolicyAssignment(
+        batch.resourceName,
+        {
+          name: batch.name,
+          project,
+          // Zonal, like the hosts it selects.
+          location: zone,
+          description: `BoxLite runner binary ${request.binary.identity}`,
+          instanceFilter: {
+            // OR the existing per-host labels; no instance relabeling is needed.
+            inclusionLabels: batch.hosts.map(({ slot }) => ({
+              labels: { [RUNNER_LABEL]: runnerLabelValue(slot.controlPlaneRunnerName) },
+            })),
+          },
+          osPolicies: [
+            {
+              id: 'runner-binary',
+              mode: 'ENFORCEMENT',
+              resourceGroups: [
+                {
+                  resources: [
+                    {
+                      id: 'swap-binary',
+                      exec: {
+                        validate: { interpreter: 'NONE', script: scripts.validate },
+                        enforce: { interpreter: 'NONE', script: scripts.enforce },
+                      },
+                    },
+                  ],
+                },
+              ],
+            },
+            // Keep both policies in the same assignment: each can restart its host.
+            {
+              id: 'runner-unit-env',
+              mode: 'ENFORCEMENT',
+              resourceGroups: [
+                {
+                  resources: [
+                    {
+                      id: 'converge-unit-environment',
+                      exec: {
+                        validate: { interpreter: 'NONE', script: unitEnvScripts.validate },
+                        enforce: { interpreter: 'NONE', script: unitEnvScripts.enforce },
+                      },
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+          rollout: batch.rollout,
+          skipAwaitRollout: false,
         },
-        osPolicies: [
-          {
-            id: 'runner-binary',
-            mode: 'ENFORCEMENT',
-            resourceGroups: [
-              {
-                resources: [
-                  {
-                    id: 'swap-binary',
-                    exec: {
-                      validate: { interpreter: 'NONE', script: scripts.validate },
-                      enforce: { interpreter: 'NONE', script: scripts.enforce },
-                    },
-                  },
-                ],
-              },
-            ],
-          },
-          /*
-           * The other thing a host cannot be told after first boot.
-           *
-           * In this assignment rather than its own so the two share one
-           * `disruptionBudget`: both end in `systemctl restart`, and two
-           * assignments would let a host be restarted by each at once.
-           */
-          {
-            id: 'runner-unit-env',
-            mode: 'ENFORCEMENT',
-            resourceGroups: [
-              {
-                resources: [
-                  {
-                    id: 'converge-unit-environment',
-                    exec: {
-                      validate: { interpreter: 'NONE', script: unitEnvScripts.validate },
-                      enforce: { interpreter: 'NONE', script: unitEnvScripts.enforce },
-                    },
-                  },
-                ],
-              },
-            ],
-          },
-        ],
-        rollout: { disruptionBudget: { fixed: 1 }, minWaitDuration: '300s' },
-      },
-      { dependsOn: [...instances, ...dependsOn] },
-    )
+        { dependsOn: [...instances, ...dependsOn, ...(previousBatch ? [previousBatch] : [])] },
+      )
+    }
 
     /*
      * The rows the API will not seed.
