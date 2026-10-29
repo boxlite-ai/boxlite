@@ -135,7 +135,7 @@ that no longer resolves.
 | `box_last_activity`                      | `boxId`                      | `box.id`                       | foreign key | `CASCADE` |
 | `box_migration`                          | `boxId`                      | `box.id`                       | foreign key | `CASCADE` |
 | `tunnel`                                 | `box_id`                     | `box.id`                       | foreign key | `CASCADE` |
-| `domain`                                | `box_id`                     | `box.id`                       | foreign key | `SET NULL` |
+| `domain`                                | `box_id`                     | `box.id`                       | application | retained |
 | `image_version`                          | `imageId`                    | `image.id`                     | foreign key | `CASCADE` |
 | `image_tag`                              | `imageId`                    | `image.id`                     | foreign key | `CASCADE` |
 | `image_tag`                              | `versionId`                  | `image_version.id`             | foreign key | `RESTRICT` |
@@ -751,7 +751,7 @@ name the port independently of its tunnel, and several hostnames can share a por
 | `organization_id` | `uuid` | holder; no FK, like `box.organization_id` |
 | `target_type` | `character varying` | `box` (default) or `app`; selects which reference is meaningful |
 | `app_id` | `character varying(255)` | reserved App reference; nullable, nonblank when set; no App table/FK exists yet |
-| `box_id` | `character varying(12)` | FK → `box.id`, `SET NULL` on hard deletion; null for App targets or unbound Box targets |
+| `box_id` | `character varying(12)` | Box reference without FK; retained after Box deletion; null for App targets or unbound Box targets |
 | `port` | `integer` | the target port, 1–65535; required when `box_id` is set, ignored when it is null |
 | `created_at` / `updated_at` | `timestamptz` | |
 
@@ -766,24 +766,29 @@ does not touch `tunnel`. Binding a name held for another of the organization's
 ports sets the Box type/reference/port, clears `app_id`, and leaves other names on
 that port alone. Unbinding (by full hostname, `DELETE /api/v1/domains/{hostname}/target`)
 clears both target references and port, retaining the target type and the row.
-Destroying a Box clears its Box bindings only; deleting the box row
-outright clears `box_id` through the foreign key. Revoking the tunnel changes
-nothing here: the name answers 404 until the port is declared again. A released name still counts against the limit
-and can be bound again only by the organization that holds it.
+Destroying a Box and later deleting its database row preserve `box_id` and `port`.
+Lists and target resolution continue to return that stored target until explicit
+unbind or rebind. The REST binding endpoint validates the live Box and its
+organization; no foreign key ties the domain's lifetime to Box cleanup.
+Revoking the tunnel also preserves the target: the name answers 404 until the port
+is declared again. Held names, including unbound names and bindings to deleted
+Boxes, still count against the limit and can be rebound only by their organization.
 
 `DomainService.resolve` reads the stored target independently of port publication.
 `PreviewController.resolveDomain` accepts only Box targets and then applies
 `TunnelService.isPublicAccessAllowed` before returning a routable target to the proxy. This keeps domain ownership and
 binding separate from tunnel policy while preserving the same public-access,
 inbound and box-state checks. A stored target may therefore resolve internally
-while its preview endpoint returns 404.
+while its preview endpoint returns 404. Destroy requests first update the desired
+Box state; preview refusal follows the actual-state check and its existing
+three-second access cache. Destroyed or missing Boxes fail that check even when
+the domain retains their ID and port.
 
 App storage and the tagged REST/SDK representation are reserved for future App
 resources. App binding returns `400 app_target_not_supported` before any Box lookup
 or write. Persisted App references can be listed and unbound, but cannot forward
 traffic. App integration must add existence/organization checks, routing and the
-App deletion policy before enabling writes. See the
-[design addendum](../docs/contributing/investigations/2026-10-28-domain-hostname-targets.md).
+App deletion policy before enabling writes.
 
 ### `box_last_activity`
 

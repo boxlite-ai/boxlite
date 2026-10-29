@@ -3,18 +3,15 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { Injectable, Logger, NotFoundException } from '@nestjs/common'
-import { OnEvent } from '@nestjs/event-emitter'
+import { Injectable, NotFoundException } from '@nestjs/common'
 import { InjectDataSource } from '@nestjs/typeorm'
 import { DataSource, EntityManager } from 'typeorm'
 import { TypedConfigService } from '../../config/typed-config.service'
 import { DNS_LABEL_MAX_LENGTH } from '../../config/configuration'
 import { BadRequestError } from '../../exceptions/bad-request.exception'
 import { RegionService } from '../../region/services/region.service'
-import { BoxEvents } from '../constants/box-events.constants'
 import { Box } from '../entities/box.entity'
 import { Domain, DomainTarget } from '../entities/domain.entity'
-import { BoxDestroyedEvent } from '../events/box-destroyed.event'
 import {
   DomainCountLimitReachedError,
   PlatformDomainNotConfiguredError,
@@ -81,14 +78,12 @@ export type HeldDomains = {
  * a name routes to, under the organization row lock that also holds the count
  * of names against `domainCountLimit`; it neither declares the port public nor
  * needs it to be, and several names may route to one port. Unbinding is by
- * full hostname and keeps it held; destroying the box releases its bindings the same
- * way; revoking the tunnel does not touch them. Resolution returns the stored
- * target; the preview controller applies the port's public access policy.
+ * full hostname and keeps it held. Box destruction and tunnel revocation preserve
+ * bindings; only explicit unbind or rebind changes the stored target. Resolution
+ * returns that target; the preview controller applies the port's public access policy.
  */
 @Injectable()
 export class DomainService {
-  private readonly logger = new Logger(DomainService.name)
-
   constructor(
     @InjectDataSource() private readonly dataSource: DataSource,
     private readonly regionService: RegionService,
@@ -267,29 +262,10 @@ export class DomainService {
     }
   }
 
-  /**
-   * A destroyed box is soft-deleted: its row stays, so the names bound to it
-   * are released here and kept for the organization. The access check already
-   * refuses the box by state; this frees the names for rebinding. A box row
-   * deleted outright clears them through the foreign key instead.
-   */
-  @OnEvent(BoxEvents.DESTROYED)
-  async releaseBoxBindings(event: BoxDestroyedEvent): Promise<void> {
-    try {
-      await this.dataSource.query(
-        `UPDATE "domain" SET "box_id" = NULL, "port" = NULL, "updated_at" = now() WHERE "box_id" = $1`,
-        [event.box.id],
-      )
-    } catch (error) {
-      this.logger.error(`Failed to release the platform domains of destroyed box ${event.box.id}`, error)
-    }
-  }
-
   private targetOf(row: StoredTarget): DomainTarget | null {
     if (row.targetType === 'app') {
       return row.appId === null ? null : { type: 'app', app: row.appId }
     }
-    // Hard deletion clears only the Box FK; any remaining port is ignored.
     return row.boxId === null ? null : { type: 'box', box: row.boxId, port: Number(row.port) }
   }
 

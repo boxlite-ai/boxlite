@@ -13,7 +13,8 @@ describe('AddDomain1792972800000', () => {
     expect(runner.query).toHaveBeenCalledWith(expect.stringContaining('UNIQUE ("hostname")'))
     // Several names may share a port, so the target is indexed, not unique.
     expect(runner.query).not.toHaveBeenCalledWith(expect.stringContaining('UNIQUE ("box_id"'))
-    expect(runner.query).toHaveBeenCalledWith(expect.stringContaining('REFERENCES "box"("id") ON DELETE SET NULL'))
+    // Target references survive physical Box cleanup; explicit unbind clears them.
+    expect(runner.query).not.toHaveBeenCalledWith(expect.stringContaining('REFERENCES "box"'))
 
     await migration.down(runner)
     expect(runner.query).toHaveBeenNthCalledWith(6, 'DROP TABLE "domain"')
