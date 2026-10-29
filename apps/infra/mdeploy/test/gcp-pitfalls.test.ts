@@ -982,7 +982,7 @@ test('a host that cannot be told the new control-plane name is converged to it',
    * which is how one host gets restarted by each of them at the same time.
    */
   assert.equal(source.match(/new gcp\.osconfig\.OsPolicyAssignment\(/g)?.length, 1)
-  assert.match(source, /disruptionBudget: \{ fixed: 1 \}/)
+  // Batch membership and ordering are exercised by runner-scale-out.test.ts.
 })
 
 test('the proxy Pods are denied by default, and the engine that enforces it is on', () => {

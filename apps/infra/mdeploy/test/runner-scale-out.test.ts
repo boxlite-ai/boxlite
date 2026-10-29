@@ -42,11 +42,11 @@ test('runner sizing is supplied at creation and ignored for existing hosts', asy
   // Capture production resource declarations; Pulumi state reconciliation is not mocked here.
   const unwrap = (value: any): any => value?.value ?? value
   const output = (value: any): any => ({ value, apply: (fn: (value: any) => any) => output(fn(value)) })
-  const resources = new Map<string, { args: any; options: any }>()
+  const resources = new Map<string, { args: any; options: any; resource: any }>()
   class Resource {
     [key: string]: any
     constructor(name: string, args: any, options: any = {}) {
-      resources.set(name, { args, options })
+      resources.set(name, { args, options, resource: this })
       Object.assign(this, args, { id: output(name), name: output(name), arn: output(`${name}-arn`) })
     }
   }
@@ -97,6 +97,55 @@ test('runner sizing is supplied at creation and ignored for existing hosts', asy
     regionId: 'region',
     dependsOn: [],
   }
+
+  await t.test('GCP observes one runner for five minutes before rolling the remainder in parallel', () => {
+    const provider = gcpRunnerProvider({
+      ...common,
+      project: 'project',
+      zone: 'us-east5-a',
+      volumePrefix: 'boxlite-volume',
+      placement: { cloud: 'gcp', subnetwork: output('subnet'), serviceAccount: output('runner@example.test') } as any,
+    })
+    for (const count of [4, 1, 12]) {
+      resources.clear()
+      provider(requestFor(count, 'small', 100))
+      const canary = resources.get('RunnerBinary')!
+      assert.deepEqual(canary.args.instanceFilter.inclusionLabels, [{ labels: { 'boxlite-runner': 'default' } }])
+      assert.equal(canary.args.name, 'boxlite-app-dev-runner-binary')
+      assert.deepEqual(canary.args.rollout, { disruptionBudget: { fixed: 1 }, minWaitDuration: '300s' })
+      assert.equal(canary.args.skipAwaitRollout, false)
+      const fleet = resources.get('RunnerBinaryFleet')
+      if (count === 1) {
+        assert.equal(fleet, undefined)
+        continue
+      }
+      assert.ok(fleet)
+      assert.equal(fleet.args.name, 'boxlite-app-dev-runner-binary-fleet')
+      assert.equal(fleet.args.instanceFilter.inclusionLabels.length, count - 1)
+      assert.ok(
+        fleet.args.instanceFilter.inclusionLabels.every((entry: any) => entry.labels['boxlite-runner'] !== 'default'),
+      )
+      assert.deepEqual(fleet.args.rollout, { disruptionBudget: { percent: 100 }, minWaitDuration: '0s' })
+      assert.equal(fleet.args.skipAwaitRollout, false)
+      assert.ok(fleet.options.dependsOn.includes(canary.resource))
+      assert.deepEqual(fleet.args.osPolicies, canary.args.osPolicies)
+    }
+  })
+
+  await t.test('GCP refuses normalized runner labels that would overlap the two rollout batches', () => {
+    const provider = gcpRunnerProvider({
+      ...common,
+      project: 'project',
+      zone: 'us-east5-a',
+      volumePrefix: 'boxlite-volume',
+      placement: { cloud: 'gcp', subnetwork: output('subnet'), serviceAccount: output('runner@example.test') } as any,
+    })
+    const request = requestFor(4, 'small', 100)
+    request.fleet[0]!.slot.controlPlaneRunnerName = 'RUNNER.2'
+    resources.clear()
+    assert.throws(() => provider(request), /runner labels.*unique/)
+    assert.equal(resources.size, 0)
+  })
 
   await t.test('GCP freezes machine type and both disks while accepting new creation defaults', () => {
     resources.clear()
