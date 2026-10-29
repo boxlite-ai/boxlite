@@ -1011,6 +1011,28 @@ volume after its id, which stays mountable.
 
 ---
 
+### `boxlite actions-runner`
+
+**Synopsis:** `boxlite actions-runner <start|status> [OPTIONS]` *(alias: `boxlite runner`)*
+
+Start and manage GitHub Actions self-hosted runners inside hardware-isolated micro-VMs with warm instance reuse.
+
+**Subcommands:**
+* `start`: Register and run a GitHub Actions runner in an isolated micro-VM.
+* `status`: Query configuration and status of runner instances.
+
+**Examples:**
+
+```bash
+# Start an ephemeral runner with a 5-minute warm reuse window
+boxlite actions-runner start --url https://github.com/my-org/my-repo --token "$GITHUB_RUNNER_TOKEN"
+
+# Custom labels and 2-minute warm timeout
+boxlite runner start --url https://github.com/my-org/my-repo --token "$TOKEN" --labels gpu,linux --idle-timeout 120
+```
+
+---
+
 ### `boxlite completion`
 
 **Synopsis:** `boxlite completion <SHELL>`

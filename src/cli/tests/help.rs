@@ -324,6 +324,19 @@ fn command_help_only_advertises_meaningful_global_options() {
             &["volume", "delete"],
             &["--debug", "--home", "--url", "--context", "--path-prefix"],
         ),
+        (&["actions-runner"], GLOBAL_OPTIONS),
+        (&["actions-runner", "start"], GLOBAL_OPTIONS),
+        (
+            &["actions-runner", "status"],
+            &[
+                "--debug",
+                "--home",
+                "--config",
+                "--url",
+                "--context",
+                "--path-prefix",
+            ],
+        ),
         (&["completion"], &[]),
     ];
 
