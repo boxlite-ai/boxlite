@@ -47,6 +47,7 @@ and private tunnels as enabled; clients check that before every private prepare.
 | ------------------------------------------------------------------------- | ---------------------------- | ------------------------------------------------------------------------------------ | ------------------------ |
 | [Control-plane API](#control-plane-api)                                   | `apps/api`                   | `/api`                                                                               | `3000`                   |
 | [Hosted BoxLite-compatible API](#hosted-boxlite-compatible-api)           | `apps/api`                   | `/api/v1`                                                                            | `3000`                   |
+| [MCP endpoint](#mcp-endpoint)                                             | `apps/api`                   | `/api/mcp`                                                                           | `3000`                   |
 | [Runner API](#runner-api)                                                 | `apps/runner`                | `/`                                                                                  | `3003`                   |
 | [Preview proxy API](#preview-proxy-api)                                   | `apps/proxy`                 | `proxy.<domain>`, `<port>-<box>.proxy.<domain>`                                      | `4000`                   |
 | [Registry proxy API](#registry-proxy-api)                                 | `apps/image-service`         | `/v2`                                                                                | `4100`                   |
@@ -606,8 +607,99 @@ Invitees accept through the JWT-only Console endpoint
 invited email and does not require member scopes or prior membership. Email links
 resolve `/dashboard/user/invitations` against `DASHBOARD_URL` and accept after
 sign-in. See [invitation link lifetime](./infra/docs/configuration.md#invitation-link-lifetime).
-
 </details>
+
+## MCP endpoint
+
+**Service:** `apps/api` · **Path:** `/api/mcp` · **Port:** `3000` in deployments.
+Design: [#2143](https://github.com/boxlite-ai/boxlite/issues/2143).
+
+The hosted adapter accepts MCP `2025-11-25` (stateless initialize/Streamable HTTP)
+and `2026-07-28` (per-request metadata and mirrored headers). It creates a server
+per request, with no sticky session. Modern replies are JSON; legacy replies may
+use finite SSE. GET/DELETE return 405. `subscriptions/listen` returns HTTP 400 /
+JSON-RPC -32601. Browser Origin headers are rejected on this machine-facing route.
+
+Use a **user-owned organization API key** as `Authorization: Bearer <key>`.
+The credential fixes the organization; arguments/headers cannot override it.
+Machine/admin keys are rejected. Calls and queued dispatch recheck live credentials,
+membership and permissions. OAuth requires a separate consent grant, dedicated MCP
+audience and explicit rollout flag; dashboard tokens alone do not qualify.
+
+| Tool | Arguments | Permission |
+| --- | --- | --- |
+| `list_boxes` | `page?`, `page_size?` (default 10, maximum 100) | read |
+| `get_box` | `box_id` | read |
+| `create_box` | `image`, `name?`, `cpus?`, `memory_mib?`, `disk_size_gb?`, `request_id`, `wait_seconds?` | write |
+| `exec_box` | `box_id`, `command`, `args?`, `working_dir?`, `timeout_seconds?`, `request_id`, `wait_seconds?` | write |
+| `get_operation` | `operation_id` | creator + write |
+| `get_execution` | `operation_id`, `cursor?` | creator + write |
+| `cancel_execution` | `operation_id` | creator + write |
+| `stop_box` / `delete_box` | `box_id` | write / delete |
+
+Discovery filters tools by permission. Schemas reject unknown fields, including
+environment, volume, network and organization overrides. Box IDs are explicit;
+names do not select a Box. Commands use argument arrays; invoke a shell explicitly
+when needed. For example, call `exec_box` with `command: "python"`,
+`args: ["-c", "print(1 + 1)"]`, a Box ID and a fresh UUID `request_id`.
+Poll `get_execution` with the returned `operation_id` to retrieve `2` and exit 0.
+Treat all command output as untrusted data.
+
+Create/exec return durable operation IDs. Reuse a request ID for identical retries;
+changed inputs conflict. A lost dispatch response produces `outcome_unknown` and
+is never automatically replayed. Do not resubmit uncertain work under a new ID
+without checking its effects. A leased background worker owns the runner attach
+connection and Box activity; HTTP disconnect stops waiting, not execution.
+Each lease attempt occupies its own local worker slot, including overlapping
+attempts during recovery. Shutdown aborts and drains every attempt, waits for
+pending claims, and returns undispatched claims to the queue without losing their
+encrypted payload or capacity reservation.
+
+Wait is limited to five seconds; command runtime defaults to 60 seconds and caps
+at 900. Four execs per organization and `MCP_MAX_ACTIVE_OPERATIONS` (default 64)
+bound admission. `MCP_ADMISSIONS_ENABLED=false` disables new create/exec admissions
+while collectors, results, cancellation and lifecycle cleanup remain available.
+Creation reuses Cloud image/resource/commerce admission, and tool mutations use
+Cloud auditing and organization rate-limit buckets.
+
+Unknown dispatch outcomes keep their capacity reservation until termination is
+confirmed or an operator reconciles the remote effect. The reservation retains
+only organization ID, operation ID and tool, even after the 24-hour public result
+expires. A client timeout does not prove the runner stopped starting work. Known
+execution IDs remain eligible for cancellation after the operation deadline.
+Credential expiry/revocation blocks new calls and dispatch, while collection and
+previously authorized cancellation of an existing execution can finish.
+
+Results include state, separate process/collection state, nullable exit code,
+IDs and expiry. Deleting a Box leaves its retained creation result readable with
+`box: null`. Nonzero exit is a result. Tool failures use `isError` and stable
+codes; protocol failures retain JSON-RPC errors. Structured data and JSON text
+share a 16 KiB reply cap; `result_too_large` asks for a smaller list page.
+
+Output keeps at most 512 KiB and 1,024 chunks per execution in Redis, with cursors,
+truncation and UTF-8 replacement flags. Retention is one hour after completion;
+operation metadata lasts 24 hours. Queued payloads are encrypted and erased after
+dispatch. Organization deletion purges metadata and fences/removes Redis output.
+The runner exposes no durable byte offsets: initial loss cannot be ruled out,
+reattachment may duplicate/miss output, and `output_complete` remains null unless
+known loss makes it false. Missing storage is reported as unavailable/expired,
+not as empty successful output.
+
+OAuth discovery is `/.well-known/oauth-protected-resource/api/mcp` outside `/api`.
+It is published only with `MCP_OAUTH_ENABLED=true` and a canonical HTTPS
+`MCP_RESOURCE_URL`. The dashboard uses `/mcp/consent` and `/mcp/access`; API consent
+routes are under `/api/mcp-consent` and require the dashboard JWT and fixed browser
+origin. See [Auth0 setup and rollout](./infra/docs/identity-and-mail.md#hosted-mcp-authorization).
+No live client or staging validation is implied by these local tests.
+
+MCP request logs omit headers and query strings; MCP HTTP spans are disabled.
+Redis output commands omit their arguments from traces. Configure ingress access
+logs to omit consent query strings and credentials as well.
+
+Focused checks use `make test:apps:api TEST_FILES=src/mcp`. To include storage
+integration tests, supply disposable `MCP_TEST_DATABASE_URL` (Postgres) and
+`MCP_TEST_REDIS_URL` endpoints. The suite creates isolated schema/key prefixes.
+Use `make test:apps:dashboard TEST_FILES=src/pages/McpAccess.test.tsx` for consent UI.
 
 ## Runner API
 

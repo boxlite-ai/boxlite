@@ -20,8 +20,9 @@ import { CLICKHOUSE_STAGE_CONFIG_KEYS } from './clickhouse.js'
  * nothing is hydrated unless the deploy demonstrably reads it.
  *
  * Derived from the source that reads them — every *direct* `envOr` / `requireEnv` / `process.env.X`
- * under stack/, deployment/, artifacts/, runner/ and shared/, minus the keys isLocalOnlyDeploymentKey
- * refuses. The test beside this file re-derives that set and fails when the two disagree, so adding a
+ * under stack/, deployment/, artifacts/, runner/, shared/ and mdeploy's shared ClickHouse retention
+ * helper, minus the keys isLocalOnlyDeploymentKey refuses. The test beside this file re-derives that
+ * set and fails when the two disagree, so adding a
  * config key to the stack fails until it is added here. That failure is the point: it makes widening
  * what a store can inject a decision someone makes, not something that happens.
  *
@@ -72,6 +73,12 @@ export const STORABLE_STAGE_CONFIG_KEYS: readonly string[] = [
   'INCIDENT_IO_HEARTBEAT_ID',
   'INSTANCE_IDS',
   'MAIL_DOMAIN',
+  'MCP_ADMISSIONS_ENABLED',
+  'MCP_CONSENT_URL',
+  'MCP_MAX_ACTIVE_OPERATIONS',
+  'MCP_OAUTH_CLIENT_IDS',
+  'MCP_OAUTH_ENABLED',
+  'MCP_RESOURCE_URL',
   'OIDC_AUDIENCE',
   'OIDC_END_SESSION_ENDPOINT',
   'OIDC_ISSUER_BASE_URL',
@@ -240,6 +247,7 @@ const STORE_EXCLUDED_KEYS = new Set([
 export const APP_SECRET_NAMES = [
   'INCIDENT_IO_TOKEN',
   'OIDC_ACCOUNT_LINK_SECRET',
+  'MCP_CONSENT_SECRET',
   'OIDC_CLIENT_ID',
   'OIDC_MANAGEMENT_API_CLIENT_ID',
   'OIDC_MANAGEMENT_API_CLIENT_SECRET',

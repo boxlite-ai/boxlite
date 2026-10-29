@@ -91,6 +91,9 @@ const Keys: React.FC = () => {
         isLoadingKey={isLoadingKey}
         onRevoke={handleRevoke}
       />
+      <a href="/mcp/access" className="mt-4 text-sm text-muted-foreground underline">
+        Manage MCP app access
+      </a>
     </div>
   )
 }

@@ -586,6 +586,12 @@ test('the control plane’s own host is called without the prefix the container 
   assert.deepEqual(new Set(apiPrefixRouteRules('backend-1').map((rule) => rule.service)), new Set(['backend-1']))
 })
 
+test('MCP resource discovery reaches its root route without an API prefix rewrite', () => {
+  const metadataPath = '/.well-known/oauth-protected-resource/api/mcp'
+  assert.equal(throughBalancer(metadataPath), metadataPath)
+  assert.equal(throughBalancer(`${metadataPath}/extra`), `/api${metadataPath}/extra`)
+})
+
 test('no certificate carries two names a stage can move independently', () => {
   /*
    * A managed certificate is issued only once *every* domain on it validates,

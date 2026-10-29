@@ -738,7 +738,11 @@ describe('BoxService inbound defaults', () => {
   ])('persists inbound access %s as %s on a fresh box', async (requested, expected) => {
     const { service, boxRepository } = makeCreateService()
 
-    await service.create({ name: 'fresh-box', inboundEnabled: requested } as any, { id: 'org-1' } as any, Context.user())
+    await service.create(
+      { name: 'fresh-box', inboundEnabled: requested } as any,
+      { id: 'org-1' } as any,
+      Context.user(),
+    )
 
     expect(boxRepository.insert).toHaveBeenCalledWith(
       expect.objectContaining({ inboundEnabled: expected, outboundEnabled: true }),

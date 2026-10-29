@@ -120,7 +120,8 @@ const oidcFrom = (environment: Environment, hosts: PublicHosts): Record<string, 
   if (management && !audience) {
     throw new ApiEnvironmentError('OIDC_MANAGEMENT_API_AUDIENCE is required when OIDC_MANAGEMENT_API_ENABLED=true')
   }
-  const passthrough = (key: string) => (optional(environment, key) ? { [key]: optional(environment, key) as string } : {})
+  const passthrough = (key: string) =>
+    optional(environment, key) ? { [key]: optional(environment, key) as string } : {}
   return {
     OIDC_ISSUER_BASE_URL: issuer,
     OIDC_AUDIENCE: optional(environment, 'OIDC_AUDIENCE') ?? 'boxlite',
@@ -315,10 +316,26 @@ export const apiEnvironmentFrom = ({
       ...billingFrom(environment, delivered),
       ...statusSyncFrom(environment, delivered, stage),
       ...systemImagesFrom(environment),
-      ...(optional(environment, 'POSTHOG_HOST') ? { POSTHOG_HOST: optional(environment, 'POSTHOG_HOST') as string } : {}),
+      ...(optional(environment, 'POSTHOG_HOST')
+        ? { POSTHOG_HOST: optional(environment, 'POSTHOG_HOST') as string }
+        : {}),
       ...(optional(environment, 'SVIX_SERVER_URL')
         ? { SVIX_SERVER_URL: optional(environment, 'SVIX_SERVER_URL') as string }
         : {}),
+      // OAuth and new admissions are independently opt-in; the consent secret
+      // travels through the API's secret group, never the deploy config.
+      ...Object.fromEntries(
+        [
+          'MCP_RESOURCE_URL',
+          'MCP_OAUTH_ENABLED',
+          'MCP_OAUTH_CLIENT_IDS',
+          'MCP_CONSENT_URL',
+          'MCP_ADMISSIONS_ENABLED',
+          'MCP_MAX_ACTIVE_OPERATIONS',
+        ]
+          .filter((key) => optional(environment, key))
+          .map((key) => [key, optional(environment, key) as string]),
+      ),
       ...(optional(environment, 'BOX_MIGRATION_ARCHIVE_PREFIX')
         ? { BOX_MIGRATION_ARCHIVE_PREFIX: optional(environment, 'BOX_MIGRATION_ARCHIVE_PREFIX') as string }
         : {}),

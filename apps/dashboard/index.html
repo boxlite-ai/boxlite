@@ -2,6 +2,30 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
+    <script>
+      // Strip the short-lived consent challenge before analytics or external assets load.
+      if (window.location.pathname === '/mcp/consent') {
+        var policy = document.createElement('meta')
+        policy.name = 'referrer'
+        policy.content = 'no-referrer'
+        document.head.appendChild(policy)
+        try {
+          var consentParams = new URLSearchParams(window.location.search)
+          if (consentParams.has('challenge') && consentParams.has('state')) {
+            sessionStorage.setItem(
+              'boxlite-mcp-consent',
+              JSON.stringify({
+                challenge: consentParams.get('challenge'),
+                state: consentParams.get('state'),
+                received: Date.now(),
+              }),
+            )
+          }
+        } finally {
+          window.history.replaceState({}, '', '/mcp/consent')
+        }
+      }
+    </script>
     <link rel="icon" type="image/svg+xml" href="/icon.svg" />
     <link rel="icon" href="/favicon.ico" sizes="16x16 32x32 48x48" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />

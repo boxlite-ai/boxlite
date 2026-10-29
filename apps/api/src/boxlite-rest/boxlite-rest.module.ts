@@ -38,6 +38,6 @@ import { CommerceBoxLimitService } from './commerce-box-limit.service'
     BoxliteInvitationController,
   ],
   providers: [BoxliteWsProxyService, CommerceBoxLimitService],
-  exports: [BoxliteWsProxyService],
+  exports: [BoxliteWsProxyService, CommerceBoxLimitService],
 })
 export class BoxliteRestModule {}

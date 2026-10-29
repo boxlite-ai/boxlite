@@ -47,6 +47,8 @@ import { AdminModule } from './admin/admin.module'
 import { ClickHouseModule } from './clickhouse/clickhouse.module'
 import { BoxTelemetryModule } from './box-telemetry/box-telemetry.module'
 import { BoxliteRestModule } from './boxlite-rest/boxlite-rest.module'
+import { McpModule } from './mcp/mcp.module'
+import { mcpHttpSerializers } from './common/utils/mcp-telemetry.util'
 
 @Module({
   imports: [
@@ -62,6 +64,7 @@ import { BoxliteRestModule } from './boxlite-rest/boxlite-rest.module'
               logMethod: swapMessageAndObject,
             },
             quietReqLogger: true,
+            serializers: mcpHttpSerializers,
             transport: getPinoTransport(isProduction, logConfig),
           },
         }
@@ -206,6 +209,7 @@ import { BoxliteRestModule } from './boxlite-rest/boxlite-rest.module'
     ClickHouseModule,
     BoxTelemetryModule,
     BoxliteRestModule,
+    McpModule,
     OpenFeatureModule.forRoot({
       contextFactory: (request: ExecutionContext) => {
         const req = request.switchToHttp().getRequest()

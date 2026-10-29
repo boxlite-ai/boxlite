@@ -186,8 +186,8 @@ export function BoxNetworkPanel({
                 untouched. An earlier "Make this box public?" read as handing
                 over the whole box. */}
             <AlertDialogDescription>
-              Anyone with the URL of a <strong>port opened as a public tunnel</strong> reaches it without signing in. The
-              URL is not a secret — it ends up in browser history, proxy logs and Referer headers. A private tunnel
+              Anyone with the URL of a <strong>port opened as a public tunnel</strong> reaches it without signing in.
+              The URL is not a secret — it ends up in browser history, proxy logs and Referer headers. A private tunnel
               also needs its access token or a sign-in to your organization.
               <br />
               <br />

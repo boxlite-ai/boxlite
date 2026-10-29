@@ -131,8 +131,10 @@ test('loads the schema after SST relocates the module under .sst/platform', asyn
   const bundledModule = join(platformDirectory, 'clickhouse-host.ts')
   mkdirSync(platformDirectory, { recursive: true })
   copyFileSync(new URL('../mdeploy/stack/clickhouse-host.ts', import.meta.url), bundledModule)
-  mkdirSync(join(directory, 'shared'))
-  copyFileSync(new URL('../shared/clickhouse-retention.ts', import.meta.url), join(directory, 'shared/clickhouse-retention.ts'))
+  copyFileSync(
+    new URL('../mdeploy/stack/clickhouse-retention.ts', import.meta.url),
+    join(platformDirectory, 'clickhouse-retention.ts'),
+  )
 
   const relocated = await import(pathToFileURL(bundledModule).href)
 

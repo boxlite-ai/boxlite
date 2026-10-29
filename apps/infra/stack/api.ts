@@ -31,6 +31,7 @@ export interface ApiInputs {
   oidcMgmtClientId: sst.Secret
   oidcMgmtClientSecret: sst.Secret
   accountLinkSecret: sst.Secret
+  mcpConsentSecret: sst.Secret
   posthogApiKey: sst.Secret
   svixAuthToken: sst.Secret
   usageExportToken: sst.Secret
@@ -67,6 +68,7 @@ export function buildApi(input: ApiInputs) {
     oidcMgmtClientId,
     oidcMgmtClientSecret,
     accountLinkSecret,
+    mcpConsentSecret,
     posthogApiKey,
     svixAuthToken,
     usageExportToken,
@@ -244,6 +246,13 @@ export function buildApi(input: ApiInputs) {
         // status requests with; the link merges a person's logins into one
         // account. Empty leaves both endpoints off.
         OIDC_ACCOUNT_LINK_SECRET: accountLinkSecret.value,
+        MCP_CONSENT_SECRET: mcpConsentSecret.value,
+        MCP_RESOURCE_URL: envOr('MCP_RESOURCE_URL', ''),
+        MCP_OAUTH_ENABLED: envOr('MCP_OAUTH_ENABLED', 'false'),
+        MCP_OAUTH_CLIENT_IDS: envOr('MCP_OAUTH_CLIENT_IDS', ''),
+        MCP_CONSENT_URL: envOr('MCP_CONSENT_URL', ''),
+        MCP_ADMISSIONS_ENABLED: envOr('MCP_ADMISSIONS_ENABLED', 'false'),
+        MCP_MAX_ACTIVE_OPERATIONS: envOr('MCP_MAX_ACTIVE_OPERATIONS', '64'),
         // RP-initiated logout fallback. Safe to set unconditionally: the API
         // probes the IdP's discovery doc at startup and only exposes this URL
         // to the dashboard when the IdP itself lacks end_session_endpoint

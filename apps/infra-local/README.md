@@ -62,6 +62,13 @@ source of truth — `python -m compose --help`):
 | caddy (unified entry) | `http://127.0.0.1:28080/` | reverse-proxies all of the above |
 | Dashboard / API | `http://localhost:3000` / `:3001/api` | login via Dex |
 
+The MCP endpoint (`:3001/api/mcp`) accepts a user-owned organization API key
+in the Bearer header. Machine/admin keys and organization overrides are rejected.
+Set `MCP_ADMISSIONS_ENABLED=true` in `api.env` to enable create/exec locally;
+reads, results and cleanup remain available when admissions are disabled.
+Dex dashboard tokens do not grant MCP access. Hosted OAuth requires the Auth0
+consent setup in [the identity runbook](../infra/docs/identity-and-mail.md#hosted-mcp-authorization).
+
 Inside a box, reach the host via `host.boxlite.internal:<port>` (gvproxy DNS —
 only resolvable in a box). `InfraConfig` in `compose/config.py` is the source of
 truth; `BOXLITE_*` env vars override credentials/paths only — **host ports are

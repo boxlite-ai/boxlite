@@ -40,6 +40,7 @@ import { BoxSessionProvider } from './providers/BoxSessionProvider'
 // /boxes paint no longer ships Admin/Billing/Settings/Keys/box-details and their
 // recharts/terminal deps. Boxes + the Dashboard shell stay eager (first paint).
 const Keys = React.lazy(() => import('./pages/Keys'))
+const McpAccess = React.lazy(() => import('./pages/McpAccess'))
 // Billing pulls in the plan/wallet/usage sections (and recharts) behind this one chunk.
 const Billing = React.lazy(() => import('./pages/Billing'))
 const BillingPlanChange = React.lazy(() => import('./pages/BillingPlanChange'))
@@ -149,6 +150,22 @@ function App() {
       <Route path={RoutePath.LANDING} element={<LandingPage />} />
       <Route path="/lander" element={<Navigate to={RoutePath.LANDING} replace />} />
       <Route path={RoutePath.LOGOUT} element={<Logout />} />
+      <Route
+        path="/mcp/consent"
+        element={
+          <Suspense fallback={<LoadingFallback />}>
+            <McpAccess consent />
+          </Suspense>
+        }
+      />
+      <Route
+        path="/mcp/access"
+        element={
+          <Suspense fallback={<LoadingFallback />}>
+            <McpAccess />
+          </Suspense>
+        }
+      />
       <Route path={RoutePath.DOCS} element={<DocsRedirect />} />
       <Route path={RoutePath.SLACK} element={<SlackRedirect />} />
       <Route

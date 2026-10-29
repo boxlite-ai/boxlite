@@ -3,7 +3,7 @@
 
 import { existsSync, readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
-import { DEFAULT_CLICKHOUSE_RETENTION_HOURS } from '../../shared/clickhouse-retention.ts'
+import { DEFAULT_CLICKHOUSE_RETENTION_HOURS } from './clickhouse-retention.ts'
 
 export const CLICKHOUSE_IMAGE =
   'clickhouse/clickhouse-server@sha256:c67cd26ea87301f3115e5fa7822905bcbb89cbd81e52bdd1ab7a938d1d5b77d8'

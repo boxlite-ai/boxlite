@@ -28,6 +28,7 @@ import { PinoInstrumentation } from '@opentelemetry/instrumentation-pino'
 import { RuntimeNodeInstrumentation } from '@opentelemetry/instrumentation-runtime-node'
 import { BatchLogRecordProcessor } from '@opentelemetry/sdk-logs'
 import { OTLPLogExporter } from '@opentelemetry/exporter-logs-otlp-http'
+import { mcpRequestPath, mcpRedisStatement } from './common/utils/mcp-telemetry.util'
 
 // Enable OpenTelemetry diagnostics
 diag.setLogger(new DiagConsoleLogger(), DiagLogLevel.WARN)
@@ -48,10 +49,13 @@ const otelSdk = new NodeSDK({
   }),
   instrumentations: [
     new PinoInstrumentation(),
-    new HttpInstrumentation({ requireParentforOutgoingSpans: true }),
+    new HttpInstrumentation({
+      requireParentforOutgoingSpans: true,
+      ignoreIncomingRequestHook: (request) => Boolean(mcpRequestPath(request.url)),
+    }),
     new ExpressInstrumentation(),
     new NestInstrumentation(),
-    new IORedisInstrumentation({ requireParentSpan: true }),
+    new IORedisInstrumentation({ requireParentSpan: true, dbStatementSerializer: mcpRedisStatement }),
     new PgInstrumentation({ requireParentSpan: true }),
     new KafkaJsInstrumentation(),
     new RuntimeNodeInstrumentation(),

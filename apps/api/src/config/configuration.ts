@@ -439,6 +439,18 @@ const configuration = {
   organizationInvitation: {
     ttlSeconds: organizationInvitationTtlSeconds(),
   },
+  mcp: {
+    resourceUrl: process.env.MCP_RESOURCE_URL,
+    oauthEnabled: process.env.MCP_OAUTH_ENABLED === 'true',
+    oauthClientIds: (process.env.MCP_OAUTH_CLIENT_IDS || '')
+      .split(',')
+      .map((id) => id.trim())
+      .filter(Boolean),
+    consentSecret: process.env.MCP_CONSENT_SECRET,
+    consentUrl: process.env.MCP_CONSENT_URL,
+    admissionsEnabled: process.env.MCP_ADMISSIONS_ENABLED === 'true',
+    maxActiveOperations: Number(process.env.MCP_MAX_ACTIVE_OPERATIONS || '64'),
+  },
   smtp: {
     host: process.env.SMTP_HOST,
     port: parseInt(process.env.SMTP_PORT || '587', 10),

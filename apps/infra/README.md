@@ -18,6 +18,11 @@ Each cloud has its own architecture and operational procedures; the shared tools
 
 ## Shared references
 
+Shared deployment policy lives in mdeploy and is exposed through its package subpaths.
+For example, both deployment paths use `mdeploy/clickhouse-retention` for the same retention
+default and validation. Keep mdeploy independent of the parent infrastructure project to avoid
+circular imports in bootstrap and stack code.
+
 - [Configuration and secrets](docs/configuration.md), [deployment commands](docs/deployment.md) and [runner artifact commands](docs/runners.md).
 - [mstage](mstage/README.md): identity, stage values, CI declarations and state recovery.
 - [mbuild](mbuild/README.md): container publication, verification and promotion.

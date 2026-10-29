@@ -355,3 +355,73 @@ same copy. The checked-in-copy test in `auth0/universal-login.test.ts` pins both
 The copy renders on the stage's Auth0 domain (`auth.dev.boxlite.ai` for dev), not the dashboard
 origin, and only to a visitor without an Auth0 session. After `apply`, run `preview` again: it reads
 the tenant back and reports `already up to date` once every write has landed.
+
+
+## Hosted MCP authorization
+
+Hosted MCP uses a separate Auth0 audience and revocable BoxLite grants. Keep
+`MCP_OAUTH_ENABLED=false` until tenant and client checks below succeed. API-key
+preview works independently; enable create/exec with `MCP_ADMISSIONS_ENABLED=true`.
+
+1. Register an Auth0 API whose identifier exactly matches the public HTTPS
+   `MCP_RESOURCE_URL`, for example `https://api.example.com/api/mcp`. Enable Auth0's
+   MCP resource compatibility profile and scopes `boxes:read`, `boxes:write`,
+   `boxes:delete`. Use RS256 and an access-token lifetime no longer than one hour.
+2. Register each public client with exact callback URLs and authorization code /
+   S256 PKCE. Configure no client-credentials, password, implicit or offline refresh
+   grants for this resource. Open dynamic client registration is not supported.
+3. Install [the MCP Post-Login Action](../bootstrap/auth0/mcp-consent.js) as a
+   **separate Action**, preserving existing login/account-link bindings. Configure
+   its secrets `MCP_RESOURCE_URL`, `MCP_CONSENT_URL` (fixed dashboard `/mcp/consent`),
+   `MCP_OAUTH_CLIENT_IDS` (comma-separated IDs), and a random `MCP_CONSENT_SECRET`
+   of at least 32 bytes. Supply identical values to the API. Store the shared
+   secret in the API secret group, never the deploy configuration or source.
+4. The Action signs a five-minute challenge and redirects to the fixed dashboard.
+   The same signed-in subject chooses an organization/scopes. Postgres consumes
+   the nonce once and persists a one-hour grant. The API signs a two-minute
+   continuation bound to Auth0 state; the browser POSTs it to the issuer's fixed
+   `/continue`. Auth0 validates signature, expiry and state; the Action validates
+   subject/client/resource and writes namespaced organization/grant claims.
+5. Validate in staging, then enable `MCP_OAUTH_ENABLED=true`. The API checks the
+   dedicated audience, token expiry, client allowlist, live grant and membership,
+   intersecting all scopes even for owners. API Keys → Manage MCP app access lets
+   users revoke grants. The next call/dispatch is denied; already-running commands
+   retain their runtime limits. Expiration requires browser reauthorization.
+
+Deployment carries `MCP_RESOURCE_URL`, `MCP_OAUTH_ENABLED`, `MCP_OAUTH_CLIENT_IDS`,
+`MCP_CONSENT_URL`, `MCP_ADMISSIONS_ENABLED`, and `MCP_MAX_ACTIVE_OPERATIONS` through
+the deploy group; `MCP_CONSENT_SECRET` uses the API secret group. Both mdeploy and
+the legacy SST API assembly expose these settings. No existing stage is enabled
+by default. Apply pre-deploy migrations before admitting work.
+
+Release checks: both MCP revisions in real clients; resource/audience mapping;
+PKCE and silent/refresh denial; consent replay/state/subject mismatch; grant/key
+revocation; cross-organization IDs; command survival across client disconnect;
+worker crash/reattach; Redis loss; cancellation; auto-stop activity; ingress body
+and response limits. Measure queue occupancy, uncertain dispatch, incomplete
+output, and query/Redis load at the configured cap. Unit fixtures do not prove
+Auth0 tenant settings, ingress or real-client compatibility.
+
+MCP API logs omit headers/query strings, HTTP tracing excludes MCP routes, and
+Redis tracing omits command-output arguments. The ingress must also omit the
+query string on `/mcp/consent`, along with authorization/cookie headers. Browser
+URL cleanup cannot remove the initial server request from an ingress log.
+
+Capacity fails closed on ambiguous dispatch. `mcp_capacity_reservation` keeps
+only organization ID, operation ID and tool until a confirmed result releases it;
+it deliberately has no foreign key to expiring public operation metadata. If
+capacity remains occupied, correlate the operation with runner/Box lifecycle
+evidence, terminate any surviving work, and remove only the reconciled reservation
+under the normal production database change procedure. Never clear reservations
+because a request or retention timer expired: the Go SDK can ignore cancellation
+while starting a process. Organization deletion cascades these reservations.
+
+Rollback: disable admissions, keep collectors/results/cancellation available,
+and retain the schema through the retention window. Disable OAuth separately if
+needed. Do not replay uncertain dispatches. Organization deletion fails closed
+if output cannot be purged; a rolled-back deletion may leave a Redis tombstone
+until its 25-hour expiry, requiring operator investigation before re-enabling work.
+
+References: [Auth0 redirect/state contract](https://auth0.com/docs/customize/actions/explore-triggers/signup-and-login-triggers/login-trigger/redirect-with-actions),
+[Auth0 MCP resource compatibility](https://support.auth0.com/center/s/article/mcp-audience-error-with-auth0),
+[design #2143](https://github.com/boxlite-ai/boxlite/issues/2143).

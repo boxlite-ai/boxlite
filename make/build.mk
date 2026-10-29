@@ -45,7 +45,7 @@ cli\:release: runtime
 # build runs tsc, so this is the compile gate for apps/ changes.
 build\:apps: _ensure-apps-deps
 	@echo "🔨 Building apps workspace..."
-	@cd apps && yarn build
+	@cd apps && $(if $(PROJECTS),yarn nx run-many --target=build --projects='$(PROJECTS)',yarn build) $(if $(CONFIGURATION),--configuration='$(CONFIGURATION)',)
 	@echo "✅ apps workspace built → dist/apps"
 
 # Build SkillBox container image (all-in-one AI CLI with noVNC)

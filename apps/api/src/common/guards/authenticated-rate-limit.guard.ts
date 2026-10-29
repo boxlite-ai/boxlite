@@ -92,10 +92,7 @@ export class AuthenticatedRateLimitGuard extends ThrottlerGuard {
         if (!isDefaultThrottler) {
           // Box throttlers (box-create, box-lifecycle) are opt-in only
           // Check if this route declares this throttler scope via @ThrottlerScope() decorator
-          const scopes = this.reflector.getAllAndOverride<string[]>(THROTTLER_SCOPE_KEY, [
-            context.getHandler(),
-            context.getClass(),
-          ])
+          const scopes = this.getThrottlerScopes(context)
 
           // If the route hasn't declared this throttler in its scope, skip it
           if (!scopes || !scopes.includes(throttler.name)) {
@@ -154,6 +151,10 @@ export class AuthenticatedRateLimitGuard extends ThrottlerGuard {
     // JWT organizationId comes from a request header until organization access succeeds.
     if (user && 'organization' in user) return user.organization.id
     return user && 'apiKey' in user ? user.apiKey?.organizationId : undefined
+  }
+
+  protected getThrottlerScopes(context: ExecutionContext): string[] | undefined {
+    return this.reflector.getAllAndOverride<string[]>(THROTTLER_SCOPE_KEY, [context.getHandler(), context.getClass()])
   }
 
   private isValidAuthContext(user: RateLimitAuthContext | undefined): boolean {

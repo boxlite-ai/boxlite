@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 BoxLite AI
 
-import { clickHouseRetentionHours } from '../shared/clickhouse-retention.ts'
+import { clickHouseRetentionHours } from 'mdeploy/clickhouse-retention'
 
 type ClickHouseMode = 'self-hosted' | 'managed' | 'disabled'
 

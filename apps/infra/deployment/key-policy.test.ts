@@ -23,7 +23,7 @@ import { liveText } from '../shared/live-source.js'
 const INFRA_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 // Where a deploy resolves configuration. Test files are excluded: they set synthetic values, they do
 // not define what a deploy reads.
-const SCANNED = ['stack', 'deployment', 'artifacts', 'runner', 'shared']
+const SCANNED = ['stack', 'deployment', 'artifacts', 'runner', 'shared', 'mdeploy/stack/clickhouse-retention.ts']
 /*
  * Direct reads only. A name handed to a helper that reads it — `runnerEndpoint('DEFAULT_RUNNER_DOMAIN',
  * …)`, which forwards to envOr — is deliberately not matched.
@@ -41,6 +41,7 @@ const ENV_READ =
 
 function sourceFiles(directory: string): string[] {
   const root = join(INFRA_ROOT, directory)
+  if (statSync(root).isFile()) return [root]
   const found: string[] = []
   for (const entry of readdirSync(root)) {
     const path = join(root, entry)

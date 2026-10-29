@@ -2,6 +2,7 @@ PHONY_TARGETS += test test\:unit\:cli test\:unit\:vmm test\:unit\:guest test\:gu
 PHONY_TARGETS += test\:integration\:vmm\:kvm test\:integration\:vmm\:elf test\:integration\:vmm\:linux _ensure-kvm _ensure-vmm-kernel test\:vmm\:boot
 PHONY_TARGETS += test\:apps\:runner
 PHONY_TARGETS += test\:apps\:proxy
+PHONY_TARGETS += test\:apps\:dashboard
 
 # Mirrors GitHub Actions strategy.fail-fast. Default false: aggregator
 # targets run every sub-suite even if an earlier one fails, then exit
@@ -583,7 +584,10 @@ test\:apps\:infra-config: _ensure-apps-deps _ensure-infra-deps
 
 test\:apps\:api: _ensure-apps-deps
 	@echo "🧪 Running API unit tests..."
-	@cd apps && yarn nx run api:test --runInBand $(if $(FILTER),--testNamePattern '$(FILTER)',)
+	@cd apps && yarn nx run api:test --runInBand $(if $(FILTER),--testNamePattern '$(FILTER)',) $(if $(TEST_FILES),--testPathPatterns '$(TEST_FILES)',)
+
+test\:apps\:dashboard: _ensure-apps-deps
+	@cd apps && yarn nx run dashboard:test --run $(if $(TEST_FILES),$(TEST_FILES),) $(if $(FILTER),-t '$(FILTER)',)
 
 test\:apps\:runner: dev\:go
 	@echo "🧪 Running runner Go tests..."

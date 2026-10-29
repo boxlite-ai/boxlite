@@ -10,7 +10,8 @@
   "exports": {
     "./hosts": "./stack/hosts.ts",
     "./runner-binary": "./stack/runner-binary.ts",
-    "./clickhouse-host": "./stack/clickhouse-host.ts"
+    "./clickhouse-host": "./stack/clickhouse-host.ts",
+    "./clickhouse-retention": "./stack/clickhouse-retention.ts"
   },
   "engines": {
     "node": ">=22"

@@ -61,7 +61,7 @@ const CLOUD_SQL_VOLUME = 'cloudsql'
 /**
  * The two rules that let `api.<domain>` be called with and without `/api`.
  *
- * The container mounts every route under `/api` — `apps/api` sets that prefix
+ * The container mounts API routes under `/api` — `apps/api` sets that prefix
  * globally, which is what lets one image serve the dashboard at `/` and the
  * control plane beside it. On `api.<domain>`, which serves nothing else, that
  * prefix carries no information and is repeated in every SDK profile and every
@@ -74,6 +74,8 @@ const CLOUD_SQL_VOLUME = 'cloudsql'
  * introduces the short form would break all of them at once. It also has to be
  * the *first* rule, because `/api/boxes` matches the catch-all as well — and
  * rewritten there it would ask the container for `/api/api/boxes`.
+ * MCP resource discovery is the exception to the global prefix: RFC 9728
+ * metadata stays at its root path, so it also bypasses the catch-all rewrite.
  *
  * `prefixMatch: '/'` rather than a `/*` path rule: a path rule's wildcard is
  * documented only after a non-empty prefix, and a rewrite replaces exactly the
@@ -81,7 +83,15 @@ const CLOUD_SQL_VOLUME = 'cloudsql'
  * `/api/boxes`.
  */
 export const apiPrefixRouteRules = (service: $util.Input<string>) => [
-  { priority: 1, matchRules: [{ fullPathMatch: '/api' }, { prefixMatch: '/api/' }], service },
+  {
+    priority: 1,
+    matchRules: [
+      { fullPathMatch: '/api' },
+      { prefixMatch: '/api/' },
+      { fullPathMatch: '/.well-known/oauth-protected-resource/api/mcp' },
+    ],
+    service,
+  },
   {
     priority: 2,
     matchRules: [{ prefixMatch: '/' }],

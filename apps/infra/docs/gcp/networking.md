@@ -29,6 +29,13 @@ Their VPC egress mode is `PRIVATE_RANGES_ONLY`: public internet traffic does not
 Cloud NAT. There is no Serverless VPC Access connector in this resource graph.
 The API's built-in Cloud SQL connection uses its mounted Unix socket; Redis uses TLS and a mounted CA.
 
+Both API load balancers accept `/api/...` unchanged and add `/api` to short paths
+such as `/boxes`. The exact MCP discovery path
+`/.well-known/oauth-protected-resource/api/mcp` also passes through unchanged:
+[RFC 9728](https://www.rfc-editor.org/rfc/rfc9728.html#section-3) places resource
+metadata outside the API prefix. Deploy this routing rule with the MCP API before
+enabling OAuth discovery; a healthy `/api/health` alone does not test that path.
+
 ## Address spaces
 
 | Range | Purpose |
