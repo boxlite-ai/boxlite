@@ -3,8 +3,11 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { ConflictException, NotFoundException } from '@nestjs/common'
+import { ConflictException, ExecutionContext, NotFoundException } from '@nestjs/common'
+import { OrganizationAuthContext } from '../../common/interfaces/auth-context.interface'
+import { SystemRole } from '../../user/enums/system-role.enum'
 import { Organization } from '../entities/organization.entity'
+import { OrganizationAccessGuard } from '../guards/organization-access.guard'
 import { OrganizationService } from './organization.service'
 
 const organization = (overrides: Partial<Organization> = {}): Organization =>
@@ -153,16 +156,42 @@ describe('OrganizationService.assertOrganizationIsNotSuspended', () => {
 
   // suspensionReason is free text an admin or support agent wrote and may describe a case
   // (e.g. a fraud investigation) in more detail than "you are suspended" should disclose.
-  it('does not leak the stored suspension reason to the suspended organization itself', () => {
-    const { service } = makeService(organization())
-    const suspended = organization({ suspended: true, suspensionReason: 'flagged for suspected abuse by support' })
+  it.each(['temporary', 'indefinite'])(
+    'rejects a %s suspension without leaking its reason on cache hits',
+    async (kind) => {
+      const suspendedUntil = kind === 'temporary' ? new Date(Date.now() + 60_000) : null
+      const { service, organizationRepository } = makeService(
+        organization({ suspended: true, suspendedUntil, suspensionReason: 'flagged for suspected abuse by support' }),
+      )
+      const guard = new OrganizationAccessGuard(service, {
+        findOne: jest.fn().mockResolvedValue({ organizationId: 'org-1', userId: 'user-1' }),
+      } as any)
+      const cache = new Map<string, string>()
+      ;(guard as any).redis = {
+        get: async (key: string) => cache.get(key) ?? null,
+        set: async (key: string, value: string) => cache.set(key, value),
+      }
 
-    expect(() => service.assertOrganizationIsNotSuspended(suspended)).toThrow(
-      expect.objectContaining({
-        message: expect.not.stringContaining('flagged for suspected abuse by support'),
-      }),
-    )
-  })
+      for (let read = 0; read < 2; read++) {
+        const request = {
+          params: { organizationId: 'org-1' },
+          user: { userId: 'user-1', role: SystemRole.USER },
+        }
+        const context = { switchToHttp: () => ({ getRequest: () => request }) } as ExecutionContext
+        await expect(guard.canActivate(context)).resolves.toBe(true)
+        const found = (request.user as OrganizationAuthContext).organization
+
+        expect(() => service.assertOrganizationIsNotSuspended(found)).toThrow(
+          expect.objectContaining({
+            status: 403,
+            message: expect.not.stringContaining('flagged for suspected abuse by support'),
+          }),
+        )
+        expect(found.suspendedUntil).toEqual(suspendedUntil)
+      }
+      expect(organizationRepository.findOne).toHaveBeenCalledTimes(1)
+    },
+  )
 
   it('does not throw once a temporary suspension has expired', () => {
     const { service } = makeService(organization())
