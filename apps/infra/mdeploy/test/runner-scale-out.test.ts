@@ -110,6 +110,7 @@ test('runner sizing is supplied at creation and ignored for existing hosts', asy
       resources.clear()
       provider(requestFor(count, 'small', 100))
       const canary = resources.get('RunnerBinary')!
+      assert.deepEqual(canary.options.customTimeouts, { create: '40m', update: '40m' })
       assert.deepEqual(canary.args.instanceFilter.inclusionLabels, [{ labels: { 'boxlite-runner': 'default' } }])
       assert.equal(canary.args.name, 'boxlite-app-dev-runner-binary')
       assert.deepEqual(canary.args.rollout, { disruptionBudget: { fixed: 1 }, minWaitDuration: '300s' })
@@ -120,6 +121,7 @@ test('runner sizing is supplied at creation and ignored for existing hosts', asy
         continue
       }
       assert.ok(fleet)
+      assert.deepEqual(fleet.options.customTimeouts, { create: '40m', update: '40m' })
       assert.equal(fleet.args.name, 'boxlite-app-dev-runner-binary-fleet')
       assert.equal(fleet.args.instanceFilter.inclusionLabels.length, count - 1)
       assert.ok(

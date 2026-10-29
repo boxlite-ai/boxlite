@@ -657,7 +657,10 @@ udevadm trigger --name-match=kvm || true`,
           rollout: batch.rollout,
           skipAwaitRollout: false,
         },
-        { dependsOn: [...instances, ...dependsOn, ...(previousBatch ? [previousBatch] : [])] },
+        {
+          dependsOn: [...instances, ...dependsOn, ...(previousBatch ? [previousBatch] : [])],
+          customTimeouts: { create: '40m', update: '40m' },
+        },
       )
     }
 
