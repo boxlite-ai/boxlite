@@ -51,6 +51,8 @@ export interface CreateBoxDTO {
     'runAsUser'?: string;
     /** Run a privileged container inside the guest, preserving the host sandbox. */
     'privileged'?: boolean;
+    /** Request nested virtualization, subject to Runner authorization. */
+    'nestedVirtualization'?: boolean;
     'secrets'?: Array<DtoSecretDTO>;
     'skipStart'?: boolean;
     'storageQuota'?: number;

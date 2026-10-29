@@ -11,6 +11,7 @@ pub(in crate::commands::serve) async fn get_config() -> Json<ServerConfig> {
             checkpoints_enabled: cfg!(all(target_os = "linux", target_arch = "x86_64")),
             linux_capabilities_enabled: true,
             privileged_enabled: true,
+            nested_virtualization_enabled: true,
             snapshots_enabled: true,
             clone_enabled: true,
             export_enabled: true,

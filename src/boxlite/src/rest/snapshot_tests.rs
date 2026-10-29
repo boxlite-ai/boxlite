@@ -227,6 +227,7 @@ fn snapshot_admission_options(capability: &str) -> BoxOptions {
     let mut options = BoxOptions::default();
     match capability {
         "privileged_enabled" => options.advanced.set_privileged(true),
+        "nested_virtualization_enabled" => options.advanced.nested_virtualization = true,
         "cache_volumes_enabled" => {
             options
                 .volumes
@@ -241,7 +242,11 @@ fn snapshot_admission_options(capability: &str) -> BoxOptions {
 
 #[tokio::test]
 async fn snapshot_creation_preserves_target_branch_capability_gates() {
-    for capability in ["privileged_enabled", "cache_volumes_enabled"] {
+    for capability in [
+        "privileged_enabled",
+        "cache_volumes_enabled",
+        "nested_virtualization_enabled",
+    ] {
         for advertised in [None, Some(false)] {
             let mut config = capabilities();
             if let Some(enabled) = advertised {
@@ -264,7 +269,11 @@ async fn snapshot_creation_preserves_target_branch_capability_gates() {
 
 #[tokio::test]
 async fn snapshot_creation_preserves_advertised_target_branch_options() {
-    for capability in ["privileged_enabled", "cache_volumes_enabled"] {
+    for capability in [
+        "privileged_enabled",
+        "cache_volumes_enabled",
+        "nested_virtualization_enabled",
+    ] {
         let mut config = capabilities();
         config["capabilities"][capability] = json!(true);
         // Security/mount admission refreshes config independently of the
@@ -286,6 +295,8 @@ async fn snapshot_creation_preserves_advertised_target_branch_options() {
             serde_json::from_str(requests[2].split_once("\r\n\r\n").unwrap().1).unwrap();
         if capability == "privileged_enabled" {
             assert_eq!(body["options"]["advanced"]["privileged"], true);
+        } else if capability == "nested_virtualization_enabled" {
+            assert_eq!(body["options"]["advanced"]["nested_virtualization"], true);
         } else {
             assert_eq!(
                 body["options"]["volumes"],
@@ -295,4 +306,32 @@ async fn snapshot_creation_preserves_advertised_target_branch_options() {
             );
         }
     }
+}
+
+#[tokio::test]
+async fn snapshot_nested_virtualization_defaults_preserve_the_request() {
+    let mut requests = Vec::new();
+    for choice in [None, Some(false)] {
+        let (runtime, task) = server(vec![(200, capabilities()), (201, bx("running"))]).await;
+        let mut options = BoxOptions::default();
+        if let Some(enabled) = choice {
+            options.advanced.nested_virtualization = enabled;
+        }
+        runtime
+            .create_from_snapshot("saved", options, None)
+            .await
+            .unwrap();
+        let received = task.await.unwrap();
+        assert!(received[1].starts_with("POST /v1/acme/snapshots/saved/boxes HTTP/1.1\r\n"));
+        assert!(
+            received[1]
+                .to_ascii_lowercase()
+                .contains("content-type: application/json\r\n")
+        );
+        let body: Value =
+            serde_json::from_str(received[1].split_once("\r\n\r\n").unwrap().1).unwrap();
+        assert!(body["options"].get("advanced").is_none());
+        requests.push(body);
+    }
+    assert_eq!(requests[0], requests[1]);
 }

@@ -726,6 +726,16 @@ impl ApiClient {
         )
     }
 
+    pub async fn require_nested_virtualization_enabled(&self) -> BoxliteResult<()> {
+        let config = self.fetch_config().await?;
+        ensure_capability(
+            "nested virtualization",
+            config
+                .capabilities
+                .and_then(|caps| caps.nested_virtualization_enabled),
+        )
+    }
+
     pub async fn require_clone_enabled(&self) -> BoxliteResult<()> {
         let config = self.get_config().await?;
         let capabilities = config.capabilities.ok_or_else(|| {

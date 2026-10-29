@@ -38,6 +38,10 @@ import {
 const logger = new Logger('CreateBoxDto')
 
 export class AdvancedBoxOptionsDto {
+  @ValidateIf((_, value) => value !== undefined)
+  @IsBoolean()
+  nested_virtualization?: boolean
+
   @IsOptional()
   @IsBoolean()
   privileged?: boolean

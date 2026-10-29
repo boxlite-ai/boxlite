@@ -37,6 +37,7 @@ export function requiresFreshBox(
     | 'cmd'
     | 'secrets'
     | 'privileged'
+    | 'nestedVirtualization'
   >,
   organization: { boxLimitedNetworkEgress?: boolean },
   resolvedImage: Pick<ResolvedImage, 'isOrgOwned'>,
@@ -70,5 +71,11 @@ export function requiresFreshBox(
   // silently drop them.
   const overridesSecrets = (createBoxDto.secrets?.length ?? 0) > 0
 
-  return overridesNetworkPolicy || overridesContainerProcess || overridesSecrets || createBoxDto.privileged === true
+  return (
+    overridesNetworkPolicy ||
+    overridesContainerProcess ||
+    overridesSecrets ||
+    createBoxDto.privileged === true ||
+    createBoxDto.nestedVirtualization === true
+  )
 }

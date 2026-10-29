@@ -42,6 +42,7 @@ func TestNestedVirtualizationRunnerCreateAndReplay(t *testing.T) {
 			}
 			defer client.Close()
 			request := dto.CreateBoxDTO{Id: "plain", Image: "alpine:latest", SkipStart: boolPtr(true), OutboundEnabled: boolPtr(false)}
+			request.NestedVirtualization = true
 			if _, _, err := client.Create(t.Context(), request); err == nil || !strings.Contains(err.Error(), "created without nested virtualization") {
 				t.Fatalf("plain-box replay must reject the nested requirement: %v", err)
 			}

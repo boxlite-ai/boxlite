@@ -50,6 +50,8 @@ definitions:
         additionalProperties:
           type: string
         type: object
+      nestedVirtualization:
+        type: boolean
       organizationId:
         description: Nullable for backward compatibility
         type: string

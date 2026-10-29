@@ -90,6 +90,7 @@ pub(crate) struct ServerConfig {
 #[derive(Debug, Deserialize, Clone, Default)]
 pub(crate) struct ServerCapabilities {
     pub privileged_enabled: Option<bool>,
+    pub nested_virtualization_enabled: Option<bool>,
     #[serde(default)]
     pub cache_volumes_enabled: bool,
     pub linux_capabilities_enabled: Option<bool>,
@@ -228,11 +229,14 @@ impl CreateBoxRequest {
             // an explicitly empty policy is still explicit, and collapsing it
             // into the same shape as "never touched" would leave the server
             // unable to tell the two apart.
-            advanced: (options.advanced.privileged || options.advanced.capabilities().is_some())
-                .then(|| CreateBoxAdvancedOptions {
-                    privileged: options.advanced.privileged,
-                    capabilities: options.advanced.capabilities().cloned(),
-                }),
+            advanced: (options.advanced.privileged
+                || options.advanced.nested_virtualization
+                || options.advanced.capabilities().is_some())
+            .then(|| CreateBoxAdvancedOptions {
+                privileged: options.advanced.privileged,
+                nested_virtualization: options.advanced.nested_virtualization,
+                capabilities: options.advanced.capabilities().cloned(),
+            }),
             // The deprecated remove-on-stop flag was never applied by the cloud
             // control-plane mapper. Keep remote defaults unchanged and only send
             // the modern lifecycle fields when callers explicitly configure them.
@@ -247,6 +251,8 @@ impl CreateBoxRequest {
 pub(crate) struct CreateBoxAdvancedOptions {
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub privileged: bool,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub nested_virtualization: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub capabilities: Option<ContainerCapabilities>,
 }

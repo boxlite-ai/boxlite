@@ -688,6 +688,9 @@ const docTemplate = `{
                         "type": "string"
                     }
                 },
+                "nestedVirtualization": {
+                    "type": "boolean"
+                },
                 "organizationId": {
                     "description": "Nullable for backward compatibility",
                     "type": "string"

@@ -10,23 +10,24 @@ package dto
 // RunAsUser is the OCI process.user override (docker `-u`), empty when the
 // caller did not ask for one so the image's own USER directive stands.
 type CreateBoxDTO struct {
-	Id           string            `json:"id" validate:"required"`
-	FromVolumeId string            `json:"fromVolumeId,omitempty"`
-	Image        string            `json:"image" validate:"required"`
-	OsUser       string            `json:"osUser" validate:"required"`
-	CpuQuota     int64             `json:"cpuQuota" validate:"min=1"`
-	GpuQuota     int64             `json:"gpuQuota" validate:"min=0"`
-	MemoryQuota  int64             `json:"memoryQuota" validate:"min=1"`
-	StorageQuota int64             `json:"storageQuota" validate:"min=1"`
-	Env          map[string]string `json:"env,omitempty"`
-	Registry     *RegistryDTO      `json:"registry,omitempty"`
-	Entrypoint   []string          `json:"entrypoint,omitempty"`
-	Cmd          []string          `json:"cmd,omitempty"`
-	WorkingDir   string            `json:"workingDir,omitempty"`
-	RunAsUser    string            `json:"runAsUser,omitempty"`
-	Privileged   bool              `json:"privileged,omitempty"`
-	Volumes      []VolumeDTO       `json:"volumes,omitempty"`
-	Secrets      []SecretDTO       `json:"secrets,omitempty" validate:"dive"`
+	Id                   string            `json:"id" validate:"required"`
+	FromVolumeId         string            `json:"fromVolumeId,omitempty"`
+	Image                string            `json:"image" validate:"required"`
+	OsUser               string            `json:"osUser" validate:"required"`
+	CpuQuota             int64             `json:"cpuQuota" validate:"min=1"`
+	GpuQuota             int64             `json:"gpuQuota" validate:"min=0"`
+	MemoryQuota          int64             `json:"memoryQuota" validate:"min=1"`
+	StorageQuota         int64             `json:"storageQuota" validate:"min=1"`
+	Env                  map[string]string `json:"env,omitempty"`
+	Registry             *RegistryDTO      `json:"registry,omitempty"`
+	Entrypoint           []string          `json:"entrypoint,omitempty"`
+	Cmd                  []string          `json:"cmd,omitempty"`
+	WorkingDir           string            `json:"workingDir,omitempty"`
+	RunAsUser            string            `json:"runAsUser,omitempty"`
+	Privileged           bool              `json:"privileged,omitempty"`
+	NestedVirtualization bool              `json:"nestedVirtualization,omitempty"`
+	Volumes              []VolumeDTO       `json:"volumes,omitempty"`
+	Secrets              []SecretDTO       `json:"secrets,omitempty" validate:"dive"`
 	// Outbound network policy. outboundEnabled is required: a request without
 	// it is rejected rather than started with a guessed policy.
 	OutboundEnabled  *bool             `json:"outboundEnabled" validate:"required"`

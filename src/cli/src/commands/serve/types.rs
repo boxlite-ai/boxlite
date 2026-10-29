@@ -89,6 +89,7 @@ pub(super) struct SecretSpecRequest {
 #[serde(default, deny_unknown_fields)]
 pub(super) struct CreateBoxAdvancedOptions {
     pub privileged: bool,
+    pub nested_virtualization: bool,
     /// `None` when the wire omits `capabilities` (or sends `null`) — distinct
     /// from `Some` of an empty policy, the same distinction the core
     /// `AdvancedBoxOptions.capabilities` makes and for the same reason: an
@@ -355,6 +356,7 @@ pub(super) struct ServerCapabilities {
     pub checkpoints_enabled: bool,
     pub linux_capabilities_enabled: bool,
     pub privileged_enabled: bool,
+    pub nested_virtualization_enabled: bool,
     pub snapshots_enabled: bool,
     pub clone_enabled: bool,
     pub export_enabled: bool,

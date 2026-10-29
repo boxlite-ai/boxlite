@@ -2293,6 +2293,10 @@ components:
               type: boolean
               description: Whether privileged containers inside the guest are supported; host sandbox policy is unchanged
               example: true
+            nested_virtualization_enabled:
+              type: boolean
+              description: Whether per-box nesting requests are honored. The selected runtime and host must also permit nested virtualization.
+              example: true
             max_cpus:
               type: integer
               description: Maximum allowed vCPUs per box
@@ -2858,13 +2862,17 @@ components:
 
     CreateBoxAdvancedOptions:
       type: object
-      description: Expert-only container options.
+      description: Expert-only guest and virtualization options.
       additionalProperties: false
       properties:
         privileged:
           type: boolean
           default: false
           description: Full guest capabilities and writable guest kernel mounts. Does not relax the host sandbox. Conflicts with explicit capabilities; requires privileged_enabled.
+        nested_virtualization:
+          type: boolean
+          default: false
+          description: Enable nested virtualization for this new box. Requires nested_virtualization_enabled and operator runtime authorization; does not enable privileged mode. Existing boxes retain their saved options.
         capabilities:
           $ref: "#/components/schemas/CreateContainerCapabilities"
 

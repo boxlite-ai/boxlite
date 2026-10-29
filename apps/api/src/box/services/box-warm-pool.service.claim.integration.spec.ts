@@ -17,6 +17,8 @@ import { BoxState } from '../enums/box-state.enum'
 import { RunnerState } from '../enums/runner-state.enum'
 import { BoxRepository } from '../repositories/box.repository'
 import { BoxWarmPoolService } from './box-warm-pool.service'
+import { BoxService } from './box.service'
+import { Context } from '../../common/context/context'
 
 const describeIfDatabase = process.env.DB_HOST ? describe : describe.skip
 const schemaName = `warm_pool_claim_${process.pid}_${randomUUID().replaceAll('-', '')}`
@@ -44,6 +46,7 @@ describeIfDatabase('BoxWarmPoolService.fetchWarmPoolBox (integration, real Postg
   let warmPools: Repository<WarmPool>
   let runners: Repository<Runner>
   let service: BoxWarmPoolService
+  let repository: BoxRepository
   let ownsSchema = false
   let runnerId: string
 
@@ -71,16 +74,17 @@ describeIfDatabase('BoxWarmPoolService.fetchWarmPoolBox (integration, real Postg
     warmPools = dataSource.getRepository(WarmPool)
     runners = dataSource.getRepository(Runner)
 
+    repository = new BoxRepository(
+      dataSource,
+      { emit: jest.fn() } as never,
+      {
+        invalidate: jest.fn(),
+        invalidateOrgId: jest.fn(),
+      } as never,
+    )
     service = new BoxWarmPoolService(
       warmPools,
-      new BoxRepository(
-        dataSource,
-        { emit: jest.fn() } as never,
-        {
-          invalidate: jest.fn(),
-          invalidateOrgId: jest.fn(),
-        } as never,
-      ),
+      repository,
       runners,
       { lock: jest.fn().mockResolvedValue(true), unlock: jest.fn() } as never,
       {
@@ -167,5 +171,65 @@ describeIfDatabase('BoxWarmPoolService.fetchWarmPoolBox (integration, real Postg
     const claimed = await fetchFor(0)
 
     expect(claimed?.id).toBe(cpuBoxId)
+  })
+
+  it('nested virtualization excludes legacy pool boxes from claims', async () => {
+    await insertPool(0)
+    const id = await insertWarmBox(0)
+    await dataSource.query(`UPDATE "${schemaName}"."box" SET "nestedVirtualization" = NULL WHERE id = $1`, [id])
+
+    await expect(fetchFor(0)).resolves.toBeNull()
+  })
+
+  it('nested virtualization retains retiring legacy capacity until destruction completes', async () => {
+    const id = await insertWarmBox(0)
+    await dataSource.query(`UPDATE "${schemaName}"."box" SET "nestedVirtualization" = NULL WHERE id = $1`, [id])
+    await boxes.update(id, { desiredState: BoxDesiredState.DESTROYED, pending: true })
+    const spec = { ...SHARED_SPEC, target: REGION, gpu: 0 }
+
+    expect(await (service as any).countPoolBoxes(spec)).toBe(1)
+    await boxes.update(id, { state: BoxState.DESTROYED, pending: false })
+    expect(await (service as any).countPoolBoxes(spec)).toBe(0)
+  })
+
+  function retirementService(): BoxService {
+    return Object.assign(Object.create(BoxService.prototype), {
+      boxRepository: repository,
+      runnerRepository: runners,
+      eventEmitter: { emit: jest.fn() },
+      logger: { error: jest.fn() },
+    })
+  }
+
+  it.each([BoxState.STARTED, BoxState.STOPPED, BoxState.ERROR])(
+    'nested virtualization retires legacy unassigned boxes in state %s',
+    async (state) => {
+      const id = await insertWarmBox(0)
+      await boxes.update(id, { state })
+      await dataSource.query(`UPDATE "${schemaName}"."box" SET "nestedVirtualization" = NULL WHERE id = $1`, [id])
+      const retirement = retirementService() as any
+      await retirement.retireUnusableWarmPoolBoxes()
+
+      expect((await boxes.findOneByOrFail({ id })).desiredState).toBe(BoxDesiredState.DESTROYED)
+    },
+  )
+
+  it('nested virtualization retirement protects a concurrent ownership claim', async () => {
+    const id = await insertWarmBox(0)
+    const retirement = retirementService()
+    const update = repository.updateWhere.bind(repository)
+    const claimedOrg = randomUUID()
+    const spy = jest.spyOn(repository, 'updateWhere').mockImplementationOnce(async (boxId, params) => {
+      await boxes.update(boxId, { organizationId: claimedOrg })
+      return update(boxId, params)
+    })
+    try {
+      await expect(retirement.destroy(id, BOX_WARM_POOL_UNASSIGNED_ORGANIZATION, Context.admin())).rejects.toThrow()
+      const box = await boxes.findOneByOrFail({ id })
+      expect(box.organizationId).toBe(claimedOrg)
+      expect(box.desiredState).toBe(BoxDesiredState.STARTED)
+    } finally {
+      spy.mockRestore()
+    }
   })
 })
