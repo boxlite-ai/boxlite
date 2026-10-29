@@ -78,6 +78,7 @@ docs/BoxState.md
 docs/BoxVolume.md
 docs/BoxliteConfiguration.md
 docs/ConfigApi.md
+docs/CpuIncidentListDto.md
 docs/CreateApiKey.md
 docs/CreateAttachTicket.md
 docs/CreateImageAlias.md
@@ -143,6 +144,7 @@ docs/RegistriesApi.md
 docs/RegistryCredential.md
 docs/RegistryCredentialKind.md
 docs/Runner.md
+docs/RunnerCpuIncident.md
 docs/RunnerFull.md
 docs/RunnerHealthMetrics.md
 docs/RunnerHealthcheck.md
@@ -226,6 +228,7 @@ models/box-state.ts
 models/box-volume.ts
 models/box.ts
 models/boxlite-configuration.ts
+models/cpu-incident-list-dto.ts
 models/create-api-key.ts
 models/create-attach-ticket.ts
 models/create-image-alias.ts
@@ -283,6 +286,7 @@ models/region-type.ts
 models/region.ts
 models/registry-credential-kind.ts
 models/registry-credential.ts
+models/runner-cpu-incident.ts
 models/runner-full.ts
 models/runner-health-metrics.ts
 models/runner-healthcheck.ts

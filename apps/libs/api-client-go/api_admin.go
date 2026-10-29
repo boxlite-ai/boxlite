@@ -18,6 +18,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 )
 
 
@@ -171,6 +172,18 @@ type AdminAPI interface {
 	// AdminListRegionsExecute executes the request
 	//  @return AdminRegionOverviewPage
 	AdminListRegionsExecute(r AdminAPIAdminListRegionsRequest) (*AdminRegionOverviewPage, *http.Response, error)
+
+	/*
+	AdminListRunnerCpuIncidents Query sustained runner CPU incidents by capture completion time range
+
+	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
+	@return AdminAPIAdminListRunnerCpuIncidentsRequest
+	*/
+	AdminListRunnerCpuIncidents(ctx context.Context) AdminAPIAdminListRunnerCpuIncidentsRequest
+
+	// AdminListRunnerCpuIncidentsExecute executes the request
+	//  @return CpuIncidentListDto
+	AdminListRunnerCpuIncidentsExecute(r AdminAPIAdminListRunnerCpuIncidentsRequest) (*CpuIncidentListDto, *http.Response, error)
 
 	/*
 	AdminListRunners List all runners
@@ -1522,6 +1535,148 @@ func (a *AdminAPIService) AdminListRegionsExecute(r AdminAPIAdminListRegionsRequ
 	}
 	if r.limit != nil {
 		parameterAddToHeaderOrQuery(localVarQueryParams, "limit", r.limit, "form", "")
+	}
+	// to determine the Content-Type header
+	localVarHTTPContentTypes := []string{}
+
+	// set Content-Type header
+	localVarHTTPContentType := selectHeaderContentType(localVarHTTPContentTypes)
+	if localVarHTTPContentType != "" {
+		localVarHeaderParams["Content-Type"] = localVarHTTPContentType
+	}
+
+	// to determine the Accept header
+	localVarHTTPHeaderAccepts := []string{"application/json"}
+
+	// set Accept header
+	localVarHTTPHeaderAccept := selectHeaderAccept(localVarHTTPHeaderAccepts)
+	if localVarHTTPHeaderAccept != "" {
+		localVarHeaderParams["Accept"] = localVarHTTPHeaderAccept
+	}
+	req, err := a.client.prepareRequest(r.ctx, localVarPath, localVarHTTPMethod, localVarPostBody, localVarHeaderParams, localVarQueryParams, localVarFormParams, formFiles)
+	if err != nil {
+		return localVarReturnValue, nil, err
+	}
+
+	localVarHTTPResponse, err := a.client.callAPI(req)
+	if err != nil || localVarHTTPResponse == nil {
+		return localVarReturnValue, localVarHTTPResponse, err
+	}
+
+	localVarBody, err := io.ReadAll(localVarHTTPResponse.Body)
+	localVarHTTPResponse.Body.Close()
+	localVarHTTPResponse.Body = io.NopCloser(bytes.NewBuffer(localVarBody))
+	if err != nil {
+		return localVarReturnValue, localVarHTTPResponse, err
+	}
+
+	if localVarHTTPResponse.StatusCode >= 300 {
+		newErr := &GenericOpenAPIError{
+			body:  localVarBody,
+			error: localVarHTTPResponse.Status,
+		}
+		return localVarReturnValue, localVarHTTPResponse, newErr
+	}
+
+	err = a.client.decode(&localVarReturnValue, localVarBody, localVarHTTPResponse.Header.Get("Content-Type"))
+	if err != nil {
+		newErr := &GenericOpenAPIError{
+			body:  localVarBody,
+			error: err.Error(),
+		}
+		return localVarReturnValue, localVarHTTPResponse, newErr
+	}
+
+	return localVarReturnValue, localVarHTTPResponse, nil
+}
+
+type AdminAPIAdminListRunnerCpuIncidentsRequest struct {
+	ctx context.Context
+	ApiService AdminAPI
+	from *time.Time
+	to *time.Time
+	limit *map[string]interface{}
+	runnerId *string
+}
+
+// Inclusive capture completion time, with timezone.
+func (r AdminAPIAdminListRunnerCpuIncidentsRequest) From(from time.Time) AdminAPIAdminListRunnerCpuIncidentsRequest {
+	r.from = &from
+	return r
+}
+
+// Exclusive capture completion time, with timezone; must follow from.
+func (r AdminAPIAdminListRunnerCpuIncidentsRequest) To(to time.Time) AdminAPIAdminListRunnerCpuIncidentsRequest {
+	r.to = &to
+	return r
+}
+
+// Maximum rows, ordered by ID ascending.
+func (r AdminAPIAdminListRunnerCpuIncidentsRequest) Limit(limit map[string]interface{}) AdminAPIAdminListRunnerCpuIncidentsRequest {
+	r.limit = &limit
+	return r
+}
+
+func (r AdminAPIAdminListRunnerCpuIncidentsRequest) RunnerId(runnerId string) AdminAPIAdminListRunnerCpuIncidentsRequest {
+	r.runnerId = &runnerId
+	return r
+}
+
+func (r AdminAPIAdminListRunnerCpuIncidentsRequest) Execute() (*CpuIncidentListDto, *http.Response, error) {
+	return r.ApiService.AdminListRunnerCpuIncidentsExecute(r)
+}
+
+/*
+AdminListRunnerCpuIncidents Query sustained runner CPU incidents by capture completion time range
+
+ @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
+ @return AdminAPIAdminListRunnerCpuIncidentsRequest
+*/
+func (a *AdminAPIService) AdminListRunnerCpuIncidents(ctx context.Context) AdminAPIAdminListRunnerCpuIncidentsRequest {
+	return AdminAPIAdminListRunnerCpuIncidentsRequest{
+		ApiService: a,
+		ctx: ctx,
+	}
+}
+
+// Execute executes the request
+//  @return CpuIncidentListDto
+func (a *AdminAPIService) AdminListRunnerCpuIncidentsExecute(r AdminAPIAdminListRunnerCpuIncidentsRequest) (*CpuIncidentListDto, *http.Response, error) {
+	var (
+		localVarHTTPMethod   = http.MethodGet
+		localVarPostBody     interface{}
+		formFiles            []formFile
+		localVarReturnValue  *CpuIncidentListDto
+	)
+
+	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "AdminAPIService.AdminListRunnerCpuIncidents")
+	if err != nil {
+		return localVarReturnValue, nil, &GenericOpenAPIError{error: err.Error()}
+	}
+
+	localVarPath := localBasePath + "/admin/runner-cpu-incidents"
+
+	localVarHeaderParams := make(map[string]string)
+	localVarQueryParams := url.Values{}
+	localVarFormParams := url.Values{}
+	if r.from == nil {
+		return localVarReturnValue, nil, reportError("from is required and must be specified")
+	}
+	if r.to == nil {
+		return localVarReturnValue, nil, reportError("to is required and must be specified")
+	}
+
+	parameterAddToHeaderOrQuery(localVarQueryParams, "from", r.from, "form", "")
+	parameterAddToHeaderOrQuery(localVarQueryParams, "to", r.to, "form", "")
+	if r.limit != nil {
+		parameterAddToHeaderOrQuery(localVarQueryParams, "limit", r.limit, "form", "")
+	} else {
+		var defaultValue map[string]interface{} = 50
+		parameterAddToHeaderOrQuery(localVarQueryParams, "limit", defaultValue, "form", "")
+		r.limit = &defaultValue
+	}
+	if r.runnerId != nil {
+		parameterAddToHeaderOrQuery(localVarQueryParams, "runnerId", r.runnerId, "form", "")
 	}
 	// to determine the Content-Type header
 	localVarHTTPContentTypes := []string{}

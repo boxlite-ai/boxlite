@@ -2991,6 +2991,61 @@ paths:
       summary: Update job status
       tags:
       - jobs
+  /admin/runner-cpu-incidents:
+    get:
+      operationId: adminListRunnerCpuIncidents
+      parameters:
+      - description: "Inclusive capture completion time, with timezone."
+        explode: true
+        in: query
+        name: from
+        required: true
+        schema:
+          format: date-time
+          type: string
+        style: form
+      - description: "Exclusive capture completion time, with timezone; must follow\
+          \ from."
+        explode: true
+        in: query
+        name: to
+        required: true
+        schema:
+          format: date-time
+          type: string
+        style: form
+      - description: "Maximum rows, ordered by ID ascending."
+        explode: true
+        in: query
+        name: limit
+        required: false
+        schema:
+          allOf:
+          - $ref: "#/components/schemas/Object"
+          default: 50
+          maximum: 200
+          minimum: 1
+        style: form
+      - explode: true
+        in: query
+        name: runnerId
+        required: false
+        schema:
+          format: uuid
+          type: string
+        style: form
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CpuIncidentListDto"
+          description: ""
+      security:
+      - bearer: []
+      summary: Query sustained runner CPU incidents by capture completion time range
+      tags:
+      - admin
   /images/registries:
     get:
       operationId: listRegistryCredentials
@@ -7284,6 +7339,109 @@ components:
           type: string
       required:
       - status
+      type: object
+    Object:
+      properties: {}
+      type: object
+    RunnerCpuIncident:
+      example:
+        id: id
+        runnerId: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+        eventId: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+        highCpuSince: 2000-01-23T04:56:07.000+00:00
+        windowStartedAt: 2000-01-23T04:56:07.000+00:00
+        windowEndedAt: 2000-01-23T04:56:07.000+00:00
+        runnerCpuPercent: 0.8008281904610115
+        boxId: boxId
+        image: image
+        cpuSeconds: 6.027456183070403
+        samplingComplete: true
+        receivedAt: 2000-01-23T04:56:07.000+00:00
+      properties:
+        id:
+          description: Bigint row ID; keep as a string.
+          type: string
+        runnerId:
+          format: uuid
+          type: string
+        eventId:
+          format: uuid
+          type: string
+        highCpuSince:
+          format: date-time
+          type: string
+        windowStartedAt:
+          format: date-time
+          type: string
+        windowEndedAt:
+          format: date-time
+          type: string
+        runnerCpuPercent:
+          description: Host-wide percent at trigger.
+          type: number
+        boxId:
+          nullable: true
+          type: string
+        image:
+          description: Winning box Image string at capture time.
+          nullable: true
+          type: string
+        cpuSeconds:
+          description: Measured cumulative CPU-seconds across all cores.
+          type: number
+        samplingComplete:
+          type: boolean
+        receivedAt:
+          format: date-time
+          type: string
+      required:
+      - boxId
+      - cpuSeconds
+      - eventId
+      - highCpuSince
+      - id
+      - image
+      - receivedAt
+      - runnerCpuPercent
+      - runnerId
+      - samplingComplete
+      - windowEndedAt
+      - windowStartedAt
+      type: object
+    CpuIncidentListDto:
+      example:
+        items:
+        - id: id
+          runnerId: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+          eventId: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+          highCpuSince: 2000-01-23T04:56:07.000+00:00
+          windowStartedAt: 2000-01-23T04:56:07.000+00:00
+          windowEndedAt: 2000-01-23T04:56:07.000+00:00
+          runnerCpuPercent: 0.8008281904610115
+          boxId: boxId
+          image: image
+          cpuSeconds: 6.027456183070403
+          samplingComplete: true
+          receivedAt: 2000-01-23T04:56:07.000+00:00
+        - id: id
+          runnerId: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+          eventId: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+          highCpuSince: 2000-01-23T04:56:07.000+00:00
+          windowStartedAt: 2000-01-23T04:56:07.000+00:00
+          windowEndedAt: 2000-01-23T04:56:07.000+00:00
+          runnerCpuPercent: 0.8008281904610115
+          boxId: boxId
+          image: image
+          cpuSeconds: 6.027456183070403
+          samplingComplete: true
+          receivedAt: 2000-01-23T04:56:07.000+00:00
+      properties:
+        items:
+          items:
+            $ref: "#/components/schemas/RunnerCpuIncident"
+          type: array
+      required:
+      - items
       type: object
     RegistryCredentialKind:
       enum:

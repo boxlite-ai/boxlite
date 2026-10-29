@@ -16,6 +16,7 @@ All URIs are relative to *http://localhost:3000*
 |[**adminListJobsOverview**](#adminlistjobsoverview) | **GET** /admin/jobs | List jobs with sanitized failure categories|
 |[**adminListOrganizationsOverview**](#adminlistorganizationsoverview) | **GET** /admin/organizations | List organization operational summaries|
 |[**adminListRegions**](#adminlistregions) | **GET** /admin/regions | List regions with capacity and health|
+|[**adminListRunnerCpuIncidents**](#adminlistrunnercpuincidents) | **GET** /admin/runner-cpu-incidents | Query sustained runner CPU incidents by capture completion time range|
 |[**adminListRunners**](#adminlistrunners) | **GET** /admin/runners | List all runners|
 |[**adminQueryUsage**](#adminqueryusage) | **GET** /admin/usage | Query recorded resource usage with fixed snapshot pagination|
 |[**adminRecoverBox**](#adminrecoverbox) | **POST** /admin/box/{boxId}/recover | Recover box from error state as an admin|
@@ -661,6 +662,65 @@ const { status, data } = await apiInstance.adminListRegions(
 |-------------|-------------|------------------|
 |**200** |  |  -  |
 |**400** | Invalid cursor or limit |  -  |
+
+[[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
+
+# **adminListRunnerCpuIncidents**
+> CpuIncidentListDto adminListRunnerCpuIncidents()
+
+
+### Example
+
+```typescript
+import {
+    AdminApi,
+    Configuration
+} from './api';
+
+const configuration = new Configuration();
+const apiInstance = new AdminApi(configuration);
+
+let from: Date; //Inclusive capture completion time, with timezone.
+let to: Date; //Exclusive capture completion time, with timezone; must follow from.
+let limit: object; //Maximum rows, ordered by ID ascending. (optional) (default to undefined)
+let runnerId: string; // (optional) (default to undefined)
+
+const { status, data } = await apiInstance.adminListRunnerCpuIncidents(
+    from,
+    to,
+    limit,
+    runnerId
+);
+```
+
+### Parameters
+
+|Name | Type | Description  | Notes|
+|------------- | ------------- | ------------- | -------------|
+| **from** | [**Date**] | Inclusive capture completion time, with timezone. | |
+| **to** | [**Date**] | Exclusive capture completion time, with timezone; must follow from. | |
+| **limit** | **object** | Maximum rows, ordered by ID ascending. | (optional) defaults to undefined|
+| **runnerId** | [**string**] |  | (optional) defaults to undefined|
+
+
+### Return type
+
+**CpuIncidentListDto**
+
+### Authorization
+
+[bearer](../README.md#bearer)
+
+### HTTP request headers
+
+ - **Content-Type**: Not defined
+ - **Accept**: application/json
+
+
+### HTTP response details
+| Status code | Description | Response headers |
+|-------------|-------------|------------------|
+|**200** |  |  -  |
 
 [[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
 

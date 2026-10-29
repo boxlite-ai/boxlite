@@ -50,6 +50,8 @@ import type { AdminUsagePage } from '../models';
 // @ts-ignore
 import type { Box } from '../models';
 // @ts-ignore
+import type { CpuIncidentListDto } from '../models';
+// @ts-ignore
 import type { CreateRunnerResponse } from '../models';
 /**
  * AdminApi - axios parameter creator
@@ -603,6 +605,70 @@ export const AdminApiAxiosParamCreator = function (configuration?: Configuration
         },
         /**
          * 
+         * @summary Query sustained runner CPU incidents by capture completion time range
+         * @param {Date} from Inclusive capture completion time, with timezone.
+         * @param {Date} to Exclusive capture completion time, with timezone; must follow from.
+         * @param {object} [limit] Maximum rows, ordered by ID ascending.
+         * @param {string} [runnerId] 
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        adminListRunnerCpuIncidents: async (from: Date, to: Date, limit?: object, runnerId?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'from' is not null or undefined
+            assertParamExists('adminListRunnerCpuIncidents', 'from', from)
+            // verify required parameter 'to' is not null or undefined
+            assertParamExists('adminListRunnerCpuIncidents', 'to', to)
+            const localVarPath = `/admin/runner-cpu-incidents`;
+            // use dummy base URL string because the URL constructor only accepts absolute URLs.
+            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
+            let baseOptions;
+            if (configuration) {
+                baseOptions = configuration.baseOptions;
+            }
+
+            const localVarRequestOptions = { method: 'GET', ...baseOptions, ...options};
+            const localVarHeaderParameter = {} as any;
+            const localVarQueryParameter = {} as any;
+
+            // authentication bearer required
+            // http bearer authentication required
+            await setBearerAuthToObject(localVarHeaderParameter, configuration)
+
+            if (from !== undefined) {
+                localVarQueryParameter['from'] = (from as any instanceof Date) ?
+                    (from as any).toISOString() :
+                    from;
+            }
+
+            if (to !== undefined) {
+                localVarQueryParameter['to'] = (to as any instanceof Date) ?
+                    (to as any).toISOString() :
+                    to;
+            }
+
+            if (limit !== undefined) {
+                for (const [key, value] of Object.entries(limit)) {
+                    localVarQueryParameter[key] = value;
+                }
+            }
+
+            if (runnerId !== undefined) {
+                localVarQueryParameter['runnerId'] = runnerId;
+            }
+
+            localVarHeaderParameter['Accept'] = 'application/json';
+
+            setSearchParams(localVarUrlObj, localVarQueryParameter);
+            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
+            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+
+            return {
+                url: toPathString(localVarUrlObj),
+                options: localVarRequestOptions,
+            };
+        },
+        /**
+         * 
          * @summary List all runners
          * @param {string} [regionId] Filter runners by region ID
          * @param {*} [options] Override http request option.
@@ -994,6 +1060,22 @@ export const AdminApiFp = function(configuration?: Configuration) {
         },
         /**
          * 
+         * @summary Query sustained runner CPU incidents by capture completion time range
+         * @param {Date} from Inclusive capture completion time, with timezone.
+         * @param {Date} to Exclusive capture completion time, with timezone; must follow from.
+         * @param {object} [limit] Maximum rows, ordered by ID ascending.
+         * @param {string} [runnerId] 
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        async adminListRunnerCpuIncidents(from: Date, to: Date, limit?: object, runnerId?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<CpuIncidentListDto>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.adminListRunnerCpuIncidents(from, to, limit, runnerId, options);
+            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
+            const localVarOperationServerBasePath = operationServerMap['AdminApi.adminListRunnerCpuIncidents']?.[localVarOperationServerIndex]?.url;
+            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
+        },
+        /**
+         * 
          * @summary List all runners
          * @param {string} [regionId] Filter runners by region ID
          * @param {*} [options] Override http request option.
@@ -1197,6 +1279,19 @@ export const AdminApiFactory = function (configuration?: Configuration, basePath
         },
         /**
          * 
+         * @summary Query sustained runner CPU incidents by capture completion time range
+         * @param {Date} from Inclusive capture completion time, with timezone.
+         * @param {Date} to Exclusive capture completion time, with timezone; must follow from.
+         * @param {object} [limit] Maximum rows, ordered by ID ascending.
+         * @param {string} [runnerId] 
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        adminListRunnerCpuIncidents(from: Date, to: Date, limit?: object, runnerId?: string, options?: RawAxiosRequestConfig): AxiosPromise<CpuIncidentListDto> {
+            return localVarFp.adminListRunnerCpuIncidents(from, to, limit, runnerId, options).then((request) => request(axios, basePath));
+        },
+        /**
+         * 
          * @summary List all runners
          * @param {string} [regionId] Filter runners by region ID
          * @param {*} [options] Override http request option.
@@ -1394,6 +1489,20 @@ export class AdminApi extends BaseAPI {
      */
     public adminListRegions(cursor?: string, limit?: number, options?: RawAxiosRequestConfig) {
         return AdminApiFp(this.configuration).adminListRegions(cursor, limit, options).then((request) => request(this.axios, this.basePath));
+    }
+
+    /**
+     * 
+     * @summary Query sustained runner CPU incidents by capture completion time range
+     * @param {Date} from Inclusive capture completion time, with timezone.
+     * @param {Date} to Exclusive capture completion time, with timezone; must follow from.
+     * @param {object} [limit] Maximum rows, ordered by ID ascending.
+     * @param {string} [runnerId] 
+     * @param {*} [options] Override http request option.
+     * @throws {RequiredError}
+     */
+    public adminListRunnerCpuIncidents(from: Date, to: Date, limit?: object, runnerId?: string, options?: RawAxiosRequestConfig) {
+        return AdminApiFp(this.configuration).adminListRunnerCpuIncidents(from, to, limit, runnerId, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
