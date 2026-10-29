@@ -22,6 +22,11 @@ mdeploy splits the fleet into two disjoint OS Config assignments:
 Pulumi waits for the first assignment's rollout before starting the second, and waits for both to finish.
 A single-runner stage has only the first assignment. For four runners, the configured observation time
 falls from four five-minute windows to one; agent execution and reporting still take additional time.
+
+Each assignment has a 40-minute create/update timeout, covering convergence and observation, including
+the initial migration from a whole-fleet assignment. This is an upper bound, not an added wait:
+completed operations proceed immediately. Deletion keeps the provider's default timeout.
+
 Each assignment carries both binary and unit-environment policies, so an update also converges the API
 address, volume backend and registry proxy host. Existing hosts retain their disks, image caches and
 local box state; boot-image/startup changes do not replace them.
@@ -71,6 +76,8 @@ gcloud compute os-config os-policy-assignment-reports describe <assignment-name>
 
 Then perform the shared [registration, identity and box checks](../runners.md#verify-and-recover).
 If convergence fails, inspect the host's OS Config result and service logs before retrying.
+After a deployment timeout, check the assignment's current rollout state and reports: the cloud
+operation may complete after Pulumi stops waiting, while the dependent fleet update remains pending.
 A compliant policy alone does not prove box creation or tunnel health.
 
 Source: [GCP runner provider](../../mdeploy/stack/providers/gcp/runners.ts),
