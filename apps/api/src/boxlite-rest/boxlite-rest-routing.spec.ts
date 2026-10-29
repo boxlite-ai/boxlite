@@ -5,6 +5,8 @@
  */
 
 import { PATH_METADATA } from '@nestjs/common/constants'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { Reflector } from '@nestjs/core'
 import { Test } from '@nestjs/testing'
 import { ValidationPipe, type INestApplication } from '@nestjs/common'
@@ -15,6 +17,8 @@ import { OrganizationResourceActionGuard } from '../organization/guards/organiza
 import { BoxService } from '../box/services/box.service'
 import { BoxStateWaiterService } from '../box/services/box-state-waiter.service'
 import { BoxliteBoxController } from './boxlite-box.controller'
+import { BoxliteDomainController } from './boxlite-domain.controller'
+import { DomainService } from '../box/services/domain.service'
 import { BoxliteConfigController } from './boxlite-config.controller'
 import { BoxliteProxyController } from './boxlite-proxy.controller'
 import { BoxliteWsProxyService } from './boxlite-ws-proxy.service'
@@ -119,6 +123,38 @@ describe('BoxLite REST routing', () => {
 
   afterEach(async () => {
     await app?.close()
+  })
+
+  it('hostname contract: actual controller order rejects reserved bare-label unbind without deleting a Box', async () => {
+    const moduleSource = readFileSync(join(__dirname, 'boxlite-rest.module.ts'), 'utf8')
+    const registered = moduleSource.match(/controllers:\s*\[([^\]]+)\]/)![1]
+    const controllers = [BoxliteBoxController, BoxliteDomainController].sort(
+      (left, right) => registered.indexOf(left.name) - registered.indexOf(right.name),
+    )
+    const destroy = jest.fn().mockResolvedValue(undefined)
+    const query = jest.fn().mockResolvedValue([[], 1])
+    const service = new DomainService(
+      { query } as never,
+      {} as never,
+      {
+        get: () => 'app.boxlite.test',
+      } as never,
+    )
+    await startApp(controllers, [
+      { provide: BoxService, useValue: { destroy } },
+      { provide: DomainService, useValue: service },
+    ])
+    const address = app.getHttpServer().address() as AddressInfo
+    for (const prefix of ['', '/default']) {
+      for (const label of ['boxes', 'images', 'volumes', 'domains', 'demo1']) {
+        const response = await fetch(`http://127.0.0.1:${address.port}/api/v1${prefix}/domains/${label}/target`, {
+          method: 'DELETE',
+        })
+        expect(response.status).toBe(400)
+      }
+    }
+    expect(destroy).not.toHaveBeenCalled()
+    expect(query).not.toHaveBeenCalled()
   })
 
   it('mounts box controllers at canonical and legacy default-prefix routes', () => {

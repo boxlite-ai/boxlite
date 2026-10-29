@@ -53,7 +53,7 @@ pub struct BindArgs {
 
 #[derive(Args, Debug)]
 pub struct LsArgs {
-    /// Only print domain names.
+    /// Only print full hostnames.
     #[arg(short, long, conflicts_with = "format")]
     pub quiet: bool,
 
@@ -64,16 +64,16 @@ pub struct LsArgs {
 
 #[derive(Args, Debug)]
 pub struct UnbindArgs {
-    /// A platform name (`demo`) or its full hostname
+    /// The full hostname returned by domain ls (demo.apps.example)
     #[arg(value_name = "DOMAIN")]
     pub domain: String,
 }
 
 #[derive(Tabled, Serialize)]
 pub struct DomainPresenter {
-    #[tabled(rename = "NAME")]
-    #[serde(rename = "Name")]
-    pub name: String,
+    #[tabled(rename = "HOSTNAME")]
+    #[serde(rename = "Hostname")]
+    pub hostname: String,
     #[tabled(rename = "URL")]
     #[serde(rename = "URL")]
     pub url: String,
@@ -85,6 +85,7 @@ pub struct DomainPresenter {
 fn describe(target: Option<&DomainTarget>) -> String {
     match target {
         Some(DomainTarget::Box { box_ref, port }) => format!("box {box_ref}:{port}"),
+        Some(DomainTarget::App { app_ref }) => format!("app {app_ref}"),
         // A target kind newer than this CLI (the enum is non-exhaustive).
         Some(other) => format!("{other:?}"),
         None => "-".to_string(),
@@ -94,7 +95,7 @@ fn describe(target: Option<&DomainTarget>) -> String {
 impl From<&Domain> for DomainPresenter {
     fn from(domain: &Domain) -> Self {
         Self {
-            name: domain.name.clone(),
+            hostname: domain.hostname.clone(),
             url: domain.url.clone(),
             target: describe(domain.target.as_ref()),
         }
@@ -116,7 +117,7 @@ async fn bind(args: BindArgs, global: &GlobalFlags) -> Result<()> {
         port: args.port,
     };
     let domain = runtime.domains()?.bind(&args.domain, &target).await?;
-    println!("{} → {}:{}", domain.name, args.box_ref, args.port);
+    println!("{} → {}:{}", domain.hostname, args.box_ref, args.port);
     println!("{}", domain.url);
     Ok(())
 }
@@ -127,7 +128,7 @@ async fn ls(args: LsArgs, global: &GlobalFlags) -> Result<()> {
 
     if args.quiet {
         for domain in &held.domains {
-            println!("{}", domain.name);
+            println!("{}", domain.hostname);
         }
         return Ok(());
     }
@@ -156,7 +157,7 @@ async fn unbind(args: UnbindArgs, global: &GlobalFlags) -> Result<()> {
     let runtime = global.create_runtime()?;
     runtime.domains()?.unbind(&args.domain).await?;
     println!(
-        "Released {}; the name stays with your organization",
+        "Released {}; the hostname stays with your organization",
         args.domain
     );
     Ok(())
@@ -211,23 +212,23 @@ mod tests {
 
     #[test]
     fn unbind_takes_the_domain_and_has_no_alias() {
-        let args = domain_args(&["unbind", "demo"]).unwrap();
+        let args = domain_args(&["unbind", "demo.apps.example"]).unwrap();
         let DomainCommand::Unbind(unbind) = args.command else {
             panic!("expected unbind");
         };
-        assert_eq!(unbind.domain, "demo");
+        assert_eq!(unbind.domain, "demo.apps.example");
         assert!(domain_args(&["rm", "demo"]).is_err());
     }
 
     #[test]
     fn an_unbound_domain_shows_no_target() {
         let presenter = DomainPresenter::from(&Domain {
-            name: "spare".into(),
             hostname: "spare.app.test".into(),
             url: "https://spare.app.test".into(),
             target: None,
         });
         assert_eq!(presenter.target, "-");
+        assert_eq!(presenter.hostname, "spare.app.test");
         let bound = describe(Some(&DomainTarget::Box {
             box_ref: "AbCdEf123456".into(),
             port: 3000,

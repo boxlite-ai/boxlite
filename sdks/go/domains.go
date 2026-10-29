@@ -13,12 +13,14 @@ import (
 	"unsafe"
 )
 
-// DomainTargetType names the kind of target a domain routes to. Only
-// DomainTargetBox exists today; an app kind joins it without changing Bind.
+// DomainTargetType names the kind of target a domain routes to.
 type DomainTargetType string
 
 // DomainTargetBox routes a domain to a guest port of a box.
 const DomainTargetBox DomainTargetType = "box"
+
+// DomainTargetApp reserves an App reference; current servers reject App binding.
+const DomainTargetApp DomainTargetType = "app"
 
 // DomainTarget is what a domain routes to. For DomainTargetBox, Box is a box
 // id or name when binding, and the box id when read back.
@@ -26,12 +28,11 @@ type DomainTarget struct {
 	Type DomainTargetType
 	Box  string
 	Port uint16
+	App  string
 }
 
 // Domain is a domain the organization holds and what it routes to.
 type Domain struct {
-	// Name is what the domain is bound by: the label of a platform name.
-	Name     string
 	Hostname string
 	URL      string
 	// Target is nil while the domain is held but unbound.
@@ -48,8 +49,8 @@ type DomainList struct {
 	MinLength uint32
 }
 
-// Domains is a runtime-scoped handle for the organization's domains. A domain
-// argument is a platform name ("demo") or a full hostname.
+// Domains is a runtime-scoped handle for the organization's domains. Bind accepts
+// a platform name or full hostname; Unbind requires a full hostname.
 //
 // Each call is one blocking REST request, like Network.Tunnel: ctx is checked
 // before the request is sent, not while it is in flight.
@@ -106,7 +107,16 @@ func (d *Domains) List(ctx context.Context) (*DomainList, error) {
 // in the organization moves; other domains on the target port stay. The port
 // is not made public: the domain answers once Tunnel has declared it.
 func (d *Domains) Bind(ctx context.Context, domain string, target DomainTarget) (*Domain, error) {
-	if target.Type != DomainTargetBox {
+	switch target.Type {
+	case DomainTargetBox:
+		if target.App != "" {
+			return nil, fmt.Errorf("Box target must not include App")
+		}
+	case DomainTargetApp:
+		if target.Box != "" || target.Port != 0 {
+			return nil, fmt.Errorf("App target must not include Box or Port")
+		}
+	default:
 		return nil, fmt.Errorf("unsupported domain target type %q", target.Type)
 	}
 	if err := d.begin(ctx); err != nil {
@@ -116,13 +126,17 @@ func (d *Domains) Bind(ctx context.Context, domain string, target DomainTarget) 
 
 	cDomain := toCString(domain)
 	defer C.free(unsafe.Pointer(cDomain))
-	cBox := toCString(target.Box)
-	defer C.free(unsafe.Pointer(cBox))
-	cTarget := C.CDomainTarget{
-		_type: C.int32_t(C.BoxliteDomainTargetBox),
-		box:   cBox,
-		port:  C.uint16_t(target.Port),
+	var cTarget C.CDomainTarget
+	if target.Type == DomainTargetBox {
+		cTarget._type = C.int32_t(C.BoxliteDomainTargetBox)
+		cTarget.box = toCString(target.Box)
+		cTarget.port = C.uint16_t(target.Port)
+	} else {
+		cTarget._type = C.int32_t(C.BoxliteDomainTargetApp)
+		cTarget.app = toCString(target.App)
 	}
+	defer C.free(unsafe.Pointer(cTarget.box))
+	defer C.free(unsafe.Pointer(cTarget.app))
 
 	var bound *C.CDomain
 	var cerr C.CBoxliteError
@@ -134,7 +148,7 @@ func (d *Domains) Bind(ctx context.Context, domain string, target DomainTarget) 
 	return &result, nil
 }
 
-// Unbind stops routing domain, keeping it for the organization. It is safe
+// Unbind stops routing a full hostname, keeping it for the organization. It is safe
 // to repeat; a domain the organization does not hold is ErrNotFound.
 func (d *Domains) Unbind(ctx context.Context, domain string) error {
 	if err := d.begin(ctx); err != nil {
@@ -184,11 +198,12 @@ func (d *Domains) begin(ctx context.Context) error {
 // cDomainToGo copies a CDomain; the caller still owns and frees it.
 func cDomainToGo(domain *C.CDomain) Domain {
 	result := Domain{
-		Name:     cString(domain.name),
 		Hostname: cString(domain.hostname),
 		URL:      cString(domain.url),
 	}
-	if domain.target.box != nil {
+	if domain.target._type == C.int32_t(C.BoxliteDomainTargetApp) && domain.target.app != nil {
+		result.Target = &DomainTarget{Type: DomainTargetApp, App: cString(domain.target.app)}
+	} else if domain.target.box != nil {
 		result.Target = &DomainTarget{
 			Type: DomainTargetBox,
 			Box:  cString(domain.target.box),

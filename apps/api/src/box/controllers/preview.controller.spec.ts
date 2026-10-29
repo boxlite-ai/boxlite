@@ -80,7 +80,7 @@ describe('PreviewController public tunnel check', () => {
   it('keeps the domain lookup proxy-only and answers 404 for a name it will not forward', async () => {
     expect(Reflect.getMetadata('swagger/apiExcludeEndpoint', controller.resolveDomain)).toEqual({ disable: true })
     expect(Reflect.getMetadata('__guards__', controller.resolveDomain)).toEqual([CombinedAuthGuard, ProxyGuard])
-    resolve.mockResolvedValueOnce(null).mockResolvedValueOnce({ boxId: 'box-1', port: 3000 })
+    resolve.mockResolvedValueOnce(null).mockResolvedValueOnce({ type: 'box', box: 'box-1', port: 3000 })
     access.mockResolvedValue(true)
 
     await expect(controller.resolveDomain('demo.app.test')).rejects.toBeInstanceOf(NotFoundException)
@@ -97,7 +97,7 @@ describe('PreviewController public tunnel check', () => {
   })
 
   it('refuses a bound domain when its target fails public access', async () => {
-    resolve.mockResolvedValue({ boxId: 'box-1', port: 3000 })
+    resolve.mockResolvedValue({ type: 'box', box: 'box-1', port: 3000 })
     access.mockResolvedValue(false)
 
     await expect(controller.resolveDomain('demo.app.test')).rejects.toBeInstanceOf(NotFoundException)
@@ -110,7 +110,7 @@ describe('PreviewController public tunnel check', () => {
     await expect(controller.resolveDomain('demo.app.test')).rejects.toBe(failure)
     expect(access).not.toHaveBeenCalled()
 
-    resolve.mockResolvedValue({ boxId: 'box-1', port: 3000 })
+    resolve.mockResolvedValue({ type: 'box', box: 'box-1', port: 3000 })
     access.mockRejectedValue(failure)
     await expect(controller.resolveDomain('demo.app.test')).rejects.toBe(failure)
   })

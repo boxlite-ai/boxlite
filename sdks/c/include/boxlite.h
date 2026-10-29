@@ -102,6 +102,7 @@ typedef enum BoxliteCopySourceKind {
 // `type` is an `int32_t` there because a C caller can pass any value.
 typedef enum BoxliteDomainTargetType {
   BoxliteDomainTargetBox = 0,
+  BoxliteDomainTargetApp = 1,
 } BoxliteDomainTargetType;
 
 // Opaque handle wrapping an `AdvancedBoxOptions`. Allocated via
@@ -295,18 +296,18 @@ typedef struct DomainHandle CBoxliteDomainHandle;
 // name and `port` a guest port. Passed in, the strings are borrowed for the
 // call; inside a `CDomain`, they belong to it.
 //
+// App targets use `app` with a null `box` and zero `port`; binding is reserved.
 typedef struct CDomainTarget {
   int32_t type;
   const char *box;
   uint16_t port;
+  const char *app;
 } CDomainTarget;
 
 // A domain the organization holds. Strings are heap-owned and non-null,
-// except `target.box`, which is null while the domain is unbound. Released
+// except inactive target references. Both references are null while unbound. Released
 // with `boxlite_free_domain`; list entries belong to their list.
 typedef struct CDomain {
-  // What the domain is bound by: the label of a platform name.
-  char *name;
   char *hostname;
   char *url;
   struct CDomainTarget target;
@@ -1197,7 +1198,7 @@ enum BoxliteErrorCode boxlite_domain_list(CBoxliteDomainHandle *handle,
 //
 // # Safety
 //
-// `handle`, `domain`, `target`, `target->box` and `out_domain` must be
+// `handle`, `domain`, `target`, the selected target reference and `out_domain` must be
 // non-null and the strings UTF-8; they only need to stay valid for this
 // call. `out_error` may be null.
 enum BoxliteErrorCode boxlite_domain_bind(CBoxliteDomainHandle *handle,
@@ -1206,7 +1207,7 @@ enum BoxliteErrorCode boxlite_domain_bind(CBoxliteDomainHandle *handle,
                                           struct CDomain **out_domain,
                                           CBoxliteError *out_error);
 
-// Stop routing `domain`, keeping it for the organization. Safe to repeat; a
+// Stop routing a full hostname, keeping it for the organization. Safe to repeat; a
 // domain the organization does not hold is `NotFound`.
 //
 // # Safety

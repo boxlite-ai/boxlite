@@ -76,14 +76,15 @@ to:
 ```bash
 boxlite domain bind demo --box web-a --port 3000   # PUT /v1/domains/demo/target
 boxlite domain ls                                  # GET /v1/domains
-boxlite domain unbind demo                         # DELETE /v1/domains/demo/target
+boxlite domain unbind demo.apps.example            # DELETE /v1/domains/demo.apps.example/target
 ```
 
 The SDKs expose the same three calls as `runtime.domains`: `list()`,
 `bind(domain, target)` and `unbind(domain)`. A target is
 `{"type": "box", "box": <id or name>, "port": 3000}`; `type` leaves room for
-other kinds of target without changing the call. A domain is written as the
-name (`demo`) or its full hostname, `demo.<user domain>`. Each stage serves
+other kinds of target without changing the call. Bind accepts a name (`demo`)
+or its full hostname, `demo.<user domain>`. List returns full hostnames and
+unbind requires one; it rejects short labels and URLs. Each stage serves
 named apps under its own user domain, a registrable domain separate from the
 platform's (see [Deployment](../../apps/infra/docs/deployment.md#cloudflare-api-token));
 `apps.example` stands in for it here.
@@ -114,7 +115,7 @@ again to any of its box ports. Destroying the box unbinds its names the same
 way. Revoking the tunnel does not: the name stays bound, answers `404` while
 the port is revoked, and serves again once the port is prepared as public again.
 
-`domain ls` lists every name the organization holds with what it routes to,
+`domain ls` lists every full hostname the organization holds with what it routes to,
 its allowance (`limit`, `used`, `remaining`) and `min_length`, the shortest
 new name allowed. A new name must be lowercase letters, digits and hyphens,
 not start or end with a hyphen, not look like `<digits>-…`, and not be one of
@@ -123,6 +124,20 @@ the platform's own names or the API's collection names (`boxes`, `images`,
 A box in a region served by its own proxy cannot take a platform name
 (`region_not_supported`): the app domain's wildcard record points at the
 default proxy only.
+
+Domain responses expose `hostname`, `url` and `target`; there is no short `name`
+field. CLI lists use `HOSTNAME`, including full-hostname output with `ls -q`.
+Unbind selects the exact held hostname within the organization, independently of
+the configured platform suffix. For example, `demo.apps.example` cannot be confused
+with `demo.other.example`; case and a single trailing root dot are normalized.
+
+The target contract also reserves `{"type":"app","app":"<app reference>"}`.
+REST and SDKs can represent it, but binding an App currently returns
+`400 app_target_not_supported`: the App resource, ownership validation and routing
+are not implemented. Existing Box bindings and tunnel authorization are unchanged.
+See the [target storage contract](../../apps/SCHEMA.md#domain). Removing `name` and
+extending the C target structure changes the unmerged domain API/ABI; rebuild
+C consumers and update SDK callers together.
 
 The proxy accepts HTTP/WebSocket previews, including token URLs, and raw CONNECT
 only when the box has inbound access enabled and the port has an active

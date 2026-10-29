@@ -6,8 +6,7 @@ use napi_derive::napi;
 
 use crate::util::map_err;
 
-/// What a domain routes to. `type` decides which fields apply; `"box"` is the
-/// only kind today, with `box` (a box id or name) and `port`.
+/// A Box port or a reserved App reference. App binding is not yet supported.
 #[napi(object)]
 #[derive(Clone, Debug)]
 pub struct JsDomainTarget {
@@ -15,33 +14,36 @@ pub struct JsDomainTarget {
     pub kind: String,
     /// The box id or name when binding; the box id when read back.
     #[napi(js_name = "box")]
-    pub box_ref: String,
-    pub port: u16,
+    pub box_ref: Option<String>,
+    pub port: Option<u16>,
+    pub app: Option<String>,
 }
 
 impl JsDomainTarget {
     fn into_core(self) -> Result<DomainTarget> {
-        if self.kind != "box" {
-            return Err(Error::new(
+        match (self.kind.as_str(), self.box_ref, self.port, self.app) {
+            ("box", Some(box_ref), Some(port), None) => Ok(DomainTarget::Box { box_ref, port }),
+            ("app", None, None, Some(app_ref)) => Ok(DomainTarget::App { app_ref }),
+            _ => Err(Error::new(
                 Status::InvalidArg,
-                format!(
-                    "unsupported domain target type {:?}; expected \"box\"",
-                    self.kind
-                ),
-            ));
+                "domain target type and fields disagree",
+            )),
         }
-        Ok(DomainTarget::Box {
-            box_ref: self.box_ref,
-            port: self.port,
-        })
     }
 
     fn from_core(target: DomainTarget) -> Result<Self> {
         match target {
             DomainTarget::Box { box_ref, port } => Ok(Self {
                 kind: "box".into(),
-                box_ref,
-                port,
+                box_ref: Some(box_ref),
+                port: Some(port),
+                app: None,
+            }),
+            DomainTarget::App { app_ref } => Ok(Self {
+                kind: "app".into(),
+                box_ref: None,
+                port: None,
+                app: Some(app_ref),
             }),
             other => Err(Error::from_reason(format!(
                 "domain target {other:?} is newer than this SDK"
@@ -54,8 +56,6 @@ impl JsDomainTarget {
 #[napi(object)]
 #[derive(Clone, Debug)]
 pub struct JsDomain {
-    /// What the domain is bound by: the label of a platform name.
-    pub name: String,
     pub hostname: String,
     pub url: String,
     /// Null while the domain is held but unbound.
@@ -65,7 +65,6 @@ pub struct JsDomain {
 impl JsDomain {
     fn from_core(domain: Domain) -> Result<Self> {
         Ok(Self {
-            name: domain.name,
             hostname: domain.hostname,
             url: domain.url,
             target: domain.target.map(JsDomainTarget::from_core).transpose()?,
@@ -102,8 +101,7 @@ impl JsDomainList {
     }
 }
 
-/// Runtime-scoped handle for the organization's domains. A `domain` argument
-/// is a platform name (`"demo"`) or a full hostname.
+/// Bind accepts a platform name or full hostname; unbind requires a full hostname.
 #[napi]
 pub struct JsDomainHandle {
     pub(crate) handle: Arc<DomainHandle>,
@@ -127,7 +125,7 @@ impl JsDomainHandle {
         JsDomain::from_core(bound)
     }
 
-    /// Stop routing `domain`, keeping it for the organization.
+    /// Stop routing a full hostname, keeping it for the organization.
     #[napi]
     pub async fn unbind(&self, domain: String) -> Result<()> {
         self.handle.unbind(&domain).await.map_err(map_err)

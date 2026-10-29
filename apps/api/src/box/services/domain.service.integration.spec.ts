@@ -156,10 +156,80 @@ describeIfDatabase('DomainService (integration, real Postgres)', () => {
     )
   }
 
+  it('hostname contract: unbind selects the exact held hostname independently of the configured suffix', async () => {
+    const box = await makeBox()
+    await service.bind(box, 3000, 'demo1')
+    await dataSource.query(
+      `INSERT INTO "domain" ("hostname", "kind", "organization_id", "box_id", "port") VALUES ($1, 'platform', $2, $3, 3000)`,
+      ['demo1.other.example', ORG, box.id],
+    )
+    await expect(service.unbind(OTHER_ORG, 'demo1.other.example')).rejects.toMatchObject({ status: 404 })
+    await expect(service.unbind(ORG, 'DEMO1.Other.Example.')).resolves.toBeUndefined()
+    expect(await heldNames(ORG)).toEqual([
+      { hostname: `demo1.${APP_DOMAIN}`, box_id: box.id, port: 3000 },
+      { hostname: 'demo1.other.example', box_id: null, port: null },
+    ])
+  })
+
+  it('typed target contract: migration stores App targets, rejects mixed shapes and preserves target lifecycles', async () => {
+    const columns: { column_name: string }[] = await dataSource.query(
+      `SELECT column_name FROM information_schema.columns WHERE table_schema = $1 AND table_name = 'domain'`,
+      [schemaName],
+    )
+    expect(columns.map((column) => column.column_name)).toEqual(expect.arrayContaining(['target_type', 'app_id']))
+    const box = await makeBox()
+    await service.bind(box, 3000, 'demo1')
+    const insertApp = (type: string, app: string, boxId: string | null = null, port: number | null = null) =>
+      dataSource.query(
+        `INSERT INTO "domain" ("hostname", "kind", "organization_id", "target_type", "app_id", "box_id", "port")
+         VALUES ('shop1.app.boxlite.test', 'platform', $1, $2, $3, $4, $5)`,
+        [ORG, type, app, boxId, port],
+      )
+    for (const [type, app, boxId, port] of [
+      ['unknown', 'shop', null, null],
+      ['app', '', null, null],
+      ['app', '   ', null, null],
+      ['app', '\t\n', null, null],
+      ['app', 'shop', box.id, 3000],
+      ['app', 'shop', null, 3000],
+      ['box', 'shop', box.id, 3000],
+    ] as const) {
+      await expect(insertApp(type, app, boxId, port)).rejects.toMatchObject({ code: '23514' })
+    }
+    await insertApp('app', box.id)
+    await expect(service.resolve('shop1.app.boxlite.test')).resolves.toEqual({ type: 'app', app: box.id })
+    expect((await service.listHeld(ORG)).domains).toEqual(
+      expect.arrayContaining([
+        {
+          hostname: 'shop1.app.boxlite.test',
+          url: 'https://shop1.app.boxlite.test',
+          target: { type: 'app', app: box.id },
+        },
+      ]),
+    )
+    await expect(preview.resolveDomain('shop1.app.boxlite.test')).rejects.toBeInstanceOf(NotFoundException)
+    await boxes.delete(box.id)
+    await expect(service.resolve(`demo1.${APP_DOMAIN}`)).resolves.toBeNull()
+    await expect(service.resolve('shop1.app.boxlite.test')).resolves.toEqual({ type: 'app', app: box.id })
+    await service.unbind(ORG, 'shop1.app.boxlite.test')
+    await expect(service.resolve('shop1.app.boxlite.test')).resolves.toBeNull()
+    const replacement = await makeBox()
+    await service.bind(replacement, 8080, 'shop1')
+    await expect(service.resolve('shop1.app.boxlite.test')).resolves.toEqual({
+      type: 'box',
+      box: replacement.id,
+      port: 8080,
+    })
+    const [stored] = await dataSource.query(
+      `SELECT target_type, app_id FROM "domain" WHERE hostname = 'shop1.app.boxlite.test'`,
+    )
+    expect(stored).toEqual({ target_type: 'box', app_id: null })
+  })
+
   it('resolves the stored target independently of tunnel publication', async () => {
     const box = await makeBox()
     await service.bind(box, 3000, 'demo1')
-    const target = { boxId: box.id, port: 3000 }
+    const target = { type: 'box', box: box.id, port: 3000 }
 
     await expect(service.resolve(`demo1.${APP_DOMAIN}`)).resolves.toEqual(target)
 
@@ -221,7 +291,11 @@ describeIfDatabase('DomainService (integration, real Postgres)', () => {
     const held = await service.listHeld(ORG)
     expect(held).toMatchObject({ used: 1, limit: 1, remaining: 0, minLength: 5 })
     expect(held.domains).toEqual([
-      { name: 'demo1', hostname: `demo1.${APP_DOMAIN}`, url: `https://demo1.${APP_DOMAIN}`, boxId: box.id, port: 3000 },
+      {
+        hostname: `demo1.${APP_DOMAIN}`,
+        url: `https://demo1.${APP_DOMAIN}`,
+        target: { type: 'box', box: box.id, port: 3000 },
+      },
     ])
   })
 
@@ -230,8 +304,8 @@ describeIfDatabase('DomainService (integration, real Postgres)', () => {
     await tunnels.prepare(box.id, 3000)
     await service.bind(box, 3000, 'demo1')
 
-    await service.unbind(ORG, 'demo1')
-    await service.unbind(ORG, 'Demo1')
+    await service.unbind(ORG, `demo1.${APP_DOMAIN}`)
+    await service.unbind(ORG, `Demo1.${APP_DOMAIN}`)
 
     await expect(service.resolve(`demo1.${APP_DOMAIN}`)).resolves.toBeNull()
     await expect(tunnels.isPublicAccessAllowed(box.id, 3000)).resolves.toBe(true)
@@ -244,9 +318,9 @@ describeIfDatabase('DomainService (integration, real Postgres)', () => {
     await tunnels.prepare(mine.id, 3000)
     await service.bind(mine, 3000, 'demo1')
 
-    await expect(service.unbind(OTHER_ORG, 'demo1')).rejects.toMatchObject({ status: 404 })
-    await expect(service.unbind(ORG, 'nobody')).rejects.toMatchObject({ status: 404 })
-    await expect(service.resolve(`demo1.${APP_DOMAIN}`)).resolves.toEqual({ boxId: mine.id, port: 3000 })
+    await expect(service.unbind(OTHER_ORG, `demo1.${APP_DOMAIN}`)).rejects.toMatchObject({ status: 404 })
+    await expect(service.unbind(ORG, `nobody.${APP_DOMAIN}`)).rejects.toMatchObject({ status: 404 })
+    await expect(service.resolve(`demo1.${APP_DOMAIN}`)).resolves.toEqual({ type: 'box', box: mine.id, port: 3000 })
   })
 
   it('lets the same organization rebind a released name to another box port, at full allowance', async () => {
@@ -254,11 +328,11 @@ describeIfDatabase('DomainService (integration, real Postgres)', () => {
     const second = await makeBox()
     await tunnels.prepare(second.id, 8080)
     await service.bind(first, 3000, 'demo1')
-    await service.unbind(ORG, 'demo1')
+    await service.unbind(ORG, `demo1.${APP_DOMAIN}`)
 
     await expect(service.bind(second, 8080, 'demo1')).resolves.toMatchObject({ url: `https://demo1.${APP_DOMAIN}` })
 
-    await expect(service.resolve(`demo1.${APP_DOMAIN}`)).resolves.toEqual({ boxId: second.id, port: 8080 })
+    await expect(service.resolve(`demo1.${APP_DOMAIN}`)).resolves.toEqual({ type: 'box', box: second.id, port: 8080 })
     expect((await service.listHeld(ORG)).used).toBe(1)
   })
 
@@ -268,9 +342,8 @@ describeIfDatabase('DomainService (integration, real Postgres)', () => {
     await service.bind(first, 3000, 'demo1')
 
     await expect(service.bind(second, 8080, `Demo1.${APP_DOMAIN}.`)).resolves.toMatchObject({
-      name: 'demo1',
-      boxId: second.id,
-      port: 8080,
+      hostname: `demo1.${APP_DOMAIN}`,
+      target: { type: 'box', box: second.id, port: 8080 },
     })
 
     expect(await heldNames(ORG)).toEqual([{ hostname: `demo1.${APP_DOMAIN}`, box_id: second.id, port: 8080 }])
@@ -285,7 +358,7 @@ describeIfDatabase('DomainService (integration, real Postgres)', () => {
       status: 409,
       response: { code: SUBDOMAIN_TAKEN_CODE },
     })
-    await service.unbind(ORG, 'demo1')
+    await service.unbind(ORG, `demo1.${APP_DOMAIN}`)
     await expect(service.bind(theirs, 3000, 'demo1')).rejects.toMatchObject({ status: 409 })
 
     expect(await heldNames(OTHER_ORG)).toEqual([])
@@ -306,7 +379,7 @@ describeIfDatabase('DomainService (integration, real Postgres)', () => {
     const box = await makeBox()
     minLength = 2
     await service.bind(box, 3000, 'ab')
-    await service.unbind(ORG, 'ab')
+    await service.unbind(ORG, `ab.${APP_DOMAIN}`)
     minLength = 5
 
     await expect(service.bind(box, 3000, 'ab')).resolves.toMatchObject({ url: `https://ab.${APP_DOMAIN}` })
@@ -386,7 +459,7 @@ describeIfDatabase('DomainService (integration, real Postgres)', () => {
 
     expect(await heldNames(ORG)).toEqual([{ hostname: `demo1.${APP_DOMAIN}`, box_id: null, port: 3000 }])
     expect((await service.listHeld(ORG)).domains).toEqual([
-      { name: 'demo1', hostname: `demo1.${APP_DOMAIN}`, url: `https://demo1.${APP_DOMAIN}`, boxId: null, port: null },
+      { hostname: `demo1.${APP_DOMAIN}`, url: `https://demo1.${APP_DOMAIN}`, target: null },
     ])
     await expect(service.resolve(`demo1.${APP_DOMAIN}`)).resolves.toBeNull()
   })
@@ -400,7 +473,7 @@ describeIfDatabase('DomainService (integration, real Postgres)', () => {
     // The access verdict is cached for 3 seconds by design; a fresh service
     // shares the database but not that cache.
     const fresh = createPreview(new TunnelService(dataSource.getRepository(Tunnel), memoryRedis() as never))
-    await expect(service.resolve(`demo1.${APP_DOMAIN}`)).resolves.toEqual({ boxId: box.id, port: 3000 })
+    await expect(service.resolve(`demo1.${APP_DOMAIN}`)).resolves.toEqual({ type: 'box', box: box.id, port: 3000 })
     await expect(fresh.resolveDomain(`demo1.${APP_DOMAIN}`)).rejects.toBeInstanceOf(NotFoundException)
   })
 })

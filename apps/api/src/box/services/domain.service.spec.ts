@@ -118,6 +118,13 @@ describe('DomainService.hostnameFor', () => {
 })
 
 describe('DomainService.bind', () => {
+  it('hostname contract: unbind rejects a bare label before any write', async () => {
+    const { service, query } = makeService()
+    query.mockResolvedValue([[], 1])
+    await expect(service.unbind(ORG, 'demo1')).rejects.toMatchObject({ status: 400 })
+    expect(query).not.toHaveBeenCalled()
+  })
+
   it('refuses every name where the deployment has no app domain', async () => {
     const { service, query } = makeService({ appDomain: undefined })
 
@@ -151,11 +158,9 @@ describe('DomainService.bind', () => {
     const box = makeBox()
 
     await expect(service.bind(box, 3000, 'Demo1')).resolves.toEqual({
-      name: 'demo1',
       hostname: 'demo1.app.boxlite.test',
       url: 'https://demo1.app.boxlite.test',
-      boxId: box.id,
-      port: 3000,
+      target: { type: 'box', box: box.id, port: 3000 },
     })
 
     const statements = query.mock.calls.map(([sql]) => sql as string)
@@ -205,7 +210,7 @@ describe('DomainService.bind', () => {
   it("moves a held name to the new target and leaves the port's other names alone", async () => {
     const { service, query } = makeService({ held: { organizationId: ORG } })
 
-    await expect(service.bind(makeBox(), 3000, 'demo1')).resolves.toMatchObject({ port: 3000 })
+    await expect(service.bind(makeBox(), 3000, 'demo1')).resolves.toMatchObject({ target: { port: 3000 } })
 
     const statements = query.mock.calls.map(([sql]) => sql as string)
     const upsert = statements.find((sql) => sql.includes('INSERT INTO "domain"'))
@@ -223,9 +228,13 @@ describe('DomainService.bind', () => {
 describe('DomainService.resolve', () => {
   it('returns the stored target with a numeric port and a normalized hostname', async () => {
     const { service, query } = makeService()
-    query.mockResolvedValue([{ boxId: 'AbCdEf123456', port: '3000' }])
+    query.mockResolvedValue([{ targetType: 'box', boxId: 'AbCdEf123456', appId: null, port: '3000' }])
 
-    await expect(service.resolve('Demo1.App.BoxLite.test')).resolves.toEqual({ boxId: 'AbCdEf123456', port: 3000 })
+    await expect(service.resolve('Demo1.App.BoxLite.test')).resolves.toEqual({
+      type: 'box',
+      box: 'AbCdEf123456',
+      port: 3000,
+    })
     expect(query).toHaveBeenCalledWith(expect.any(String), ['demo1.app.boxlite.test'])
   })
 

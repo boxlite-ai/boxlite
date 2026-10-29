@@ -1666,7 +1666,7 @@ mod tests {
     /// unbound on the domain's `target`.
     #[tokio::test]
     async fn domains_use_the_organization_routes() {
-        const DOMAIN: &str = r#"{"name":"demo1","hostname":"demo1.app.test","url":"https://demo1.app.test","target":{"type":"box","box":"box-id","port":3000}}"#;
+        const DOMAIN: &str = r#"{"hostname":"demo1.app.test","url":"https://demo1.app.test","target":{"type":"box","box":"box-id","port":3000}}"#;
         let (port, server) = http_server(vec![
             (
                 200,
@@ -1685,7 +1685,7 @@ mod tests {
 
         assert_eq!(runtime.list_domains().await.unwrap().remaining, 1);
         let bound = runtime.bind_domain("demo1", &target).await.unwrap();
-        runtime.unbind_domain("demo1").await.unwrap();
+        runtime.unbind_domain("demo1.app.test").await.unwrap();
 
         assert_eq!(bound.hostname, "demo1.app.test");
         assert_eq!(
@@ -1693,8 +1693,27 @@ mod tests {
             [
                 "GET /v1/domains HTTP/1.1",
                 "PUT /v1/domains/demo1/target HTTP/1.1",
-                "DELETE /v1/domains/demo1/target HTTP/1.1",
+                "DELETE /v1/domains/demo1.app.test/target HTTP/1.1",
             ]
         );
+    }
+
+    #[tokio::test]
+    async fn domains_list_full_hostnames_and_typed_app_targets() {
+        let (port, server) = http_server(vec![(200, r#"{
+            "domains": [
+              {"hostname":"demo.apps.example","url":"https://demo.apps.example","target":null},
+              {"hostname":"shop.apps.example","url":"https://shop.apps.example","target":{"type":"app","app":"shop-id"}}
+            ], "limit":2,"used":2,"remaining":0,"min_length":5
+        }"#)]).await;
+        let runtime =
+            RestRuntime::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}"))).unwrap();
+        let held = runtime.list_domains().await.unwrap();
+        assert_eq!(held.domains[0].hostname, "demo.apps.example");
+        assert_eq!(
+            serde_json::to_value(held.domains[1].target.as_ref().unwrap()).unwrap(),
+            serde_json::json!({"type":"app", "app":"shop-id"})
+        );
+        assert_eq!(server.await.unwrap(), ["GET /v1/domains HTTP/1.1"]);
     }
 }

@@ -6,61 +6,82 @@ use pyo3::prelude::*;
 
 use crate::util::map_err;
 
-/// What a domain routes to. `type` decides which fields apply; `"box"` is the
-/// only kind today, with `box` (a box id or name) and `port`.
+/// A Box port or a reserved App reference. App binding is not yet supported.
 #[pyclass(name = "DomainTarget")]
 #[derive(Clone)]
 pub(crate) struct PyDomainTarget {
-    #[pyo3(get, name = "type")]
-    pub(crate) kind: String,
-    /// The box id or name when binding; the box id when read back.
-    #[pyo3(get, name = "box")]
-    pub(crate) box_ref: String,
-    #[pyo3(get)]
-    pub(crate) port: u16,
+    target: DomainTarget,
 }
 
 #[pymethods]
 impl PyDomainTarget {
     /// Keyword-only, so a later target kind can take other fields.
     #[new]
-    #[pyo3(signature = (*, r#type, r#box, port))]
-    fn new(r#type: String, r#box: String, port: u16) -> PyResult<Self> {
-        if r#type != "box" {
-            return Err(PyValueError::new_err(format!(
-                "unsupported domain target type {type:?}; expected \"box\""
-            )));
+    #[pyo3(signature = (*, r#type, r#box=None, port=None, app=None))]
+    fn new(
+        r#type: String,
+        r#box: Option<String>,
+        port: Option<u16>,
+        app: Option<String>,
+    ) -> PyResult<Self> {
+        let target = match (r#type.as_str(), r#box, port, app) {
+            ("box", Some(box_ref), Some(port), None) => DomainTarget::Box { box_ref, port },
+            ("app", None, None, Some(app_ref)) => DomainTarget::App { app_ref },
+            _ => {
+                return Err(PyValueError::new_err(format!(
+                    "domain target {type:?} and its fields disagree"
+                )));
+            }
+        };
+        Ok(Self { target })
+    }
+
+    #[getter]
+    fn r#type(&self) -> &str {
+        match self.target {
+            DomainTarget::Box { .. } => "box",
+            DomainTarget::App { .. } => "app",
+            _ => "unknown",
         }
-        Ok(Self {
-            kind: r#type,
-            box_ref: r#box,
-            port,
-        })
+    }
+
+    #[getter]
+    fn r#box(&self) -> Option<&str> {
+        match &self.target {
+            DomainTarget::Box { box_ref, .. } => Some(box_ref),
+            _ => None,
+        }
+    }
+
+    #[getter]
+    fn port(&self) -> Option<u16> {
+        match self.target {
+            DomainTarget::Box { port, .. } => Some(port),
+            _ => None,
+        }
+    }
+
+    #[getter]
+    fn app(&self) -> Option<&str> {
+        match &self.target {
+            DomainTarget::App { app_ref } => Some(app_ref),
+            _ => None,
+        }
     }
 
     fn __repr__(&self) -> String {
-        format!(
-            "DomainTarget(type={:?}, box={:?}, port={})",
-            self.kind, self.box_ref, self.port
-        )
+        format!("DomainTarget({:?})", self.target)
     }
 }
 
 impl PyDomainTarget {
     fn to_core(&self) -> DomainTarget {
-        DomainTarget::Box {
-            box_ref: self.box_ref.clone(),
-            port: self.port,
-        }
+        self.target.clone()
     }
 
     fn from_core(target: DomainTarget) -> PyResult<Self> {
         match target {
-            DomainTarget::Box { box_ref, port } => Ok(Self {
-                kind: "box".into(),
-                box_ref,
-                port,
-            }),
+            target @ (DomainTarget::Box { .. } | DomainTarget::App { .. }) => Ok(Self { target }),
             other => Err(PyValueError::new_err(format!(
                 "domain target {other:?} is newer than this SDK"
             ))),
@@ -72,9 +93,6 @@ impl PyDomainTarget {
 #[pyclass(name = "Domain")]
 #[derive(Clone)]
 pub(crate) struct PyDomain {
-    /// What the domain is bound by: the label of a platform name.
-    #[pyo3(get)]
-    pub(crate) name: String,
     #[pyo3(get)]
     pub(crate) hostname: String,
     #[pyo3(get)]
@@ -88,8 +106,8 @@ pub(crate) struct PyDomain {
 impl PyDomain {
     fn __repr__(&self) -> String {
         format!(
-            "Domain(name={:?}, url={:?}, target={})",
-            self.name,
+            "Domain(hostname={:?}, url={:?}, target={})",
+            self.hostname,
             self.url,
             self.target
                 .as_ref()
@@ -101,7 +119,6 @@ impl PyDomain {
 impl PyDomain {
     fn from_core(domain: Domain) -> PyResult<Self> {
         Ok(Self {
-            name: domain.name,
             hostname: domain.hostname,
             url: domain.url,
             target: domain.target.map(PyDomainTarget::from_core).transpose()?,
@@ -156,8 +173,8 @@ impl PyDomainList {
     }
 }
 
-/// Runtime-scoped handle for the organization's domains. A `domain` argument
-/// is a platform name (`"demo"`) or a full hostname.
+/// Runtime-scoped handle for the organization's domains. Bind accepts a platform
+/// name or full hostname; unbind requires a full hostname.
 #[pyclass(name = "DomainHandle")]
 pub(crate) struct PyDomainHandle {
     pub(crate) handle: Arc<DomainHandle>,
@@ -193,7 +210,7 @@ impl PyDomainHandle {
         })
     }
 
-    /// Stop routing `domain`, keeping it for the organization. Returns an
+    /// Stop routing a full hostname, keeping it for the organization. Returns an
     /// awaitable that resolves to None; a domain the organization does not
     /// hold raises.
     fn unbind<'py>(&self, py: Python<'py>, domain: String) -> PyResult<Bound<'py, PyAny>> {

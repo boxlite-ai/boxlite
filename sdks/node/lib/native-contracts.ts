@@ -604,15 +604,14 @@ export interface JsNetworkHandle {
 }
 
 /**
- * What a domain routes to. `type` decides which fields apply; `"box"` is the
- * only kind today. `box` is a box id or name when binding, the id when read.
+ * A Box port or a reserved App reference. App binding is not yet supported.
+ * `box` is a box id or name when binding, the id when read.
  */
-export type DomainTarget = { type: "box"; box: string; port: number };
+export type DomainTarget =
+  { type: "box"; box: string; port: number } | { type: "app"; app: string };
 
 /** One domain the organization holds and what it routes to. */
 export interface Domain {
-  /** What the domain is bound by: the label of a platform name. */
-  name: string;
   hostname: string;
   url: string;
   /** Null while the domain is held but unbound. */
@@ -630,8 +629,7 @@ export interface DomainList {
 }
 
 /**
- * Runtime-scoped handle for the organization's domains. A `domain` argument
- * is a platform name (`"demo"`) or a full hostname.
+ * Bind accepts a platform name or full hostname; unbind requires a full hostname.
  */
 export interface DomainHandle {
   /** Every held domain, unbound ones included, with the allowance. */
@@ -643,7 +641,7 @@ export interface DomainHandle {
    */
   bind(domain: string, target: DomainTarget): Promise<Domain>;
   /**
-   * Stop routing `domain`, keeping it for the organization. Safe to repeat.
+   * Stop routing a full hostname, keeping it for the organization. Safe to repeat.
    *
    * @throws A native BoxLite `notFound` error for a domain the organization does not hold.
    */

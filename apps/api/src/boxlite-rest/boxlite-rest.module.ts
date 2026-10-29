@@ -28,6 +28,8 @@ import { CommerceBoxLimitService } from './commerce-box-limit.service'
 @Module({
   imports: [BoxModule, AuthModule, ApiKeyModule, OrganizationModule, UserModule, ImageModule, RegistryModule],
   controllers: [
+    // Canonical domain paths must precede legacy /v1/:prefix resource routes.
+    BoxliteDomainController,
     BoxliteMeController,
     BoxliteConfigController,
     BoxliteBoxController,
@@ -37,7 +39,6 @@ import { CommerceBoxLimitService } from './commerce-box-limit.service'
     BoxliteImageController,
     BoxliteMemberController,
     BoxliteInvitationController,
-    BoxliteDomainController,
   ],
   providers: [BoxliteWsProxyService, CommerceBoxLimitService],
   exports: [BoxliteWsProxyService],
