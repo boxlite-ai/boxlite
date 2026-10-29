@@ -22,7 +22,7 @@ import (
 func TestEgressPreservesHalfClose(t *testing.T) {
 	for _, reverse := range []bool{false, true} {
 		t.Run(fmt.Sprintf("upstream_first=%v", reverse), func(t *testing.T) {
-			for _, route := range []string{"unrestricted_upstream", "allow_ip_standard", "allow_hostname_inspected"} {
+			for _, route := range []string{"unrestricted", "allow_ip_standard", "allow_hostname_inspected"} {
 				t.Run(route, func(t *testing.T) {
 					listener, err := net.ListenTCP("tcp", &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1)})
 					if err != nil {
@@ -166,7 +166,14 @@ func TestPortMappingPreservesHalfClose(t *testing.T) {
 					if err != nil {
 						t.Fatal(err)
 					}
-					handler := controlMux(vn.ServicesMux(), vn.DialContextTCP)
+					ctx, cancel := context.WithCancel(context.Background())
+					defer cancel()
+					ports, err := newPortForwarder(ctx, vn)
+					if err != nil {
+						t.Fatal(err)
+					}
+					handler := http.NewServeMux()
+					handler.Handle("/services/forwarder/", http.StripPrefix("/services/forwarder", ports))
 					recorder := httptest.NewRecorder()
 					handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/services/forwarder/expose", bytes.NewReader(body)))
 					if recorder.Code != http.StatusOK {
@@ -176,6 +183,7 @@ func TestPortMappingPreservesHalfClose(t *testing.T) {
 					const request = "request"
 					const reply = "response after EOF"
 					targetDone := make(chan error, 1)
+					accepted := make(chan struct{})
 					go func() {
 						peer, err := target.Accept()
 						if err != nil {
@@ -183,6 +191,7 @@ func TestPortMappingPreservesHalfClose(t *testing.T) {
 							return
 						}
 						defer peer.Close()
+						close(accepted)
 						peer.SetDeadline(time.Now().Add(5 * time.Second))
 						var got []byte
 						if reverse {
@@ -212,6 +221,21 @@ func TestPortMappingPreservesHalfClose(t *testing.T) {
 						t.Fatal(err)
 					}
 					defer client.Close()
+					select {
+					case <-accepted:
+					case <-time.After(5 * time.Second):
+						t.Fatal("mapped guest connection was not accepted")
+					}
+					// Removing the listener must not terminate an accepted stream.
+					removed := httptest.NewRecorder()
+					handler.ServeHTTP(removed, httptest.NewRequest(http.MethodPost, "/services/forwarder/unexpose", bytes.NewReader(body)))
+					if removed.Code != http.StatusOK {
+						t.Fatal(removed.Body.String())
+					}
+					if extra, err := net.DialTimeout(protocol, local, time.Second); err == nil {
+						extra.Close()
+						t.Fatal("removed mapping still accepts connections")
+					}
 					client.SetDeadline(time.Now().Add(5 * time.Second))
 					if _, err := io.WriteString(client, request); err != nil {
 						t.Fatal(err)

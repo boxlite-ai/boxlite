@@ -33,5 +33,3 @@ require (
 )
 
 replace github.com/boxlite-ai/tcprelay => ../../../../apps/libs/tcprelay
-
-replace github.com/containers/gvisor-tap-vsock => ../vendor/gvisor-tap-vsock

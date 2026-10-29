@@ -9,7 +9,7 @@ repository = "https://github.com/boxlite-ai/boxlite"
 
 # This tells Cargo that this crate links with libgvproxy
 links = "gvproxy"
-exclude = ["gvproxy-bridge", "vendor/gvisor-tap-vsock"]
+exclude = ["gvproxy-bridge"]
 
 [build-dependencies]
 # No dependencies needed - we use Make to build

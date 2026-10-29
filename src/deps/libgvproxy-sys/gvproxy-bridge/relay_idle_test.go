@@ -9,8 +9,6 @@ import (
 	"testing"
 	"testing/synctest"
 	"time"
-
-	"github.com/containers/gvisor-tap-vsock/pkg/tcpproxy"
 )
 
 // io.Pipe preserves independent EOFs and lets synctest advance the real relay's
@@ -51,13 +49,13 @@ type blockedShutdownConn struct{ *idleTestConn }
 func (c *blockedShutdownConn) CloseWrite() error { <-c.closed; return net.ErrClosed }
 
 func TestRelayHalfCloseIdle(t *testing.T) {
-	for _, relayName := range []string{"control", "dial_proxy"} {
+	for _, relayName := range []string{"control", "target"} {
 		t.Run(relayName, func(t *testing.T) {
 			relay := func(ctx context.Context, left, right net.Conn) error {
 				if relayName == "control" {
 					relayTunnel(ctx, left, right, left)
 				} else {
-					(&tcpproxy.DialProxy{DialContext: func(context.Context, string, string) (net.Conn, error) { return right, nil }}).HandleConn(left)
+					(&relayTarget{ctx: ctx, dial: func(context.Context, string) (net.Conn, error) { return right, nil }}).HandleConn(left)
 				}
 				return nil
 			}

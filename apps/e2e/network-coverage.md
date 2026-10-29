@@ -174,17 +174,23 @@ Two server boundaries previously discarded the reply:
   workers. Its HTTP handoff also preserves buffered bytes without continuing
   through the HTTP reader.
 
-All TCP relays now use the shared [tcprelay contract](../libs/tcprelay/README.md):
+BoxLite's TCP relays use the shared [tcprelay contract](../libs/tcprelay/README.md):
 after the first EOF, ten minutes without forwarded payload closes both peers.
 Each successful write renews that window; fully open connections have no new
 idle deadline. Control-server request contexts also inherit instance cancellation,
 so stopping an instance releases hijacked tunnels immediately.
 
 The same behavior covers unrestricted egress, IP/CIDR egress, inspected hostname
-passthrough, TCP port mappings and UNIX-to-TCP mappings through a
-[pinned local gvproxy dependency](../../src/deps/libgvproxy-sys/vendor/gvisor-tap-vsock/README.boxlite.md).
-SSH and named-pipe adapters retain their existing behavior; their Close semantics
-do not provide the TCP cleanup guarantee.
+passthrough, TCP port mappings and UNIX-to-TCP mappings. The bridge installs
+its own TCP handler for every outbound policy and supplies a relay target to
+the official upstream listener/router. The
+[port mapping handler](../../src/deps/libgvproxy-sys/gvproxy-bridge/port_forwarder.go)
+owns the existing expose/unexpose/list contract; the upstream module remains
+unmodified. Removing a TCP mapping stops new accepts while existing streams
+continue; instance cancellation also terminates those streams.
+UDP, SSH and Windows named-pipe mappings delegate to the official library.
+The latter two retain their previous half-close behavior and are not covered
+by the TCP idle guarantee or by the TCP regression results.
 
 Socket regressions cover a reply sent only after EOF, either peer closing
 first, buffered bytes followed by raw bytes, and cancellation. Rebuild the

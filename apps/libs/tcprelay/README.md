@@ -30,3 +30,17 @@ half-close connections; real TCP/UNIX and gVisor tests verify FIN propagation.
 This module uses only the standard library. App main modules use sibling Go
 replacements; gvproxy references it from its own module. Keep Docker dependency
 and source copies in sync with these paths when moving the module.
+
+The bridge uses the official `gvisor-tap-vsock v0.8.7` module without a fork or
+module-cache edits. Its own TCP handlers invoke this relay directly. Port
+mappings reuse upstream `tcpproxy.Proxy` for listeners and routing, with a
+BoxLite `Target` that supplies this relay instead of `DialProxy`. The bridge
+installs its TCP handler even when outbound traffic is unrestricted.
+
+BoxLite owns the control socket's `/services/forwarder/{expose,unexpose,all}`
+registry. TCP and UNIX-to-TCP mappings use this relay. Unexpose closes the
+listener while accepted TCP streams continue; instance cancellation closes
+listeners and cancels those streams, including pending guest dials. UDP, SSH
+tunnels and Windows named pipes delegate to the official port forwarder.
+SSH and named pipes do not receive this module's half-close idle policy;
+their channel/flush cleanup has not been validated by TCP tests.

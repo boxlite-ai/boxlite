@@ -52,11 +52,7 @@ fn build_gvproxy(source_dir: &Path, output_path: &Path) {
 fn main() {
     // Cargo recursively scans these directories for modifications, including
     // the local replacements shared by native builds and direct Go tests.
-    for input in [
-        "gvproxy-bridge",
-        "vendor/gvisor-tap-vsock",
-        "../../../apps/libs/tcprelay",
-    ] {
+    for input in ["gvproxy-bridge", "../../../apps/libs/tcprelay"] {
         println!("cargo:rerun-if-changed={input}");
     }
     println!("cargo:rerun-if-env-changed=BOXLITE_DEPS_STUB");

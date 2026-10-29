@@ -488,10 +488,17 @@ func gvproxy_create(configJSON *C.char, errOut **C.char) C.longlong {
 				initErr <- fmt.Errorf("failed to bind gvproxy services socket %q: %w", config.ControlSocketPath, lErr)
 				return
 			} else {
+				ports, err := newPortForwarder(ctx, vn)
+				if err != nil {
+					l.Close()
+					initErr <- fmt.Errorf("initialize port forwarder: %w", err)
+					return
+				}
 				controlListener = l
 				logrus.WithField("path", config.ControlSocketPath).Info("Serving gvproxy ServicesMux")
 				go func() {
 					mux := http.NewServeMux()
+					mux.Handle("/services/forwarder/", http.StripPrefix("/services/forwarder", ports))
 					mux.Handle("/", controlMux(vn.ServicesMux(), vn.DialContextTCP))
 					mux.Handle("/network/outbound", policy)
 					if sErr := serveControl(ctx, l, mux); sErr != nil && ctx.Err() == nil {
