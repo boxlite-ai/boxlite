@@ -47,3 +47,13 @@ make test:apps:infra-config
 The first target typechecks tooling and runs the infrastructure suites. The second installs SST's
 platform and typechecks the full configuration. For documentation-only edits, check local links,
 anchors, Mermaid rendering and existing documentation contracts; a cloud apply is not validation.
+
+The tooling tests require Node.js 22+, Bash, Make, jq and standard Unix utilities
+on the host PATH. Isolated shell fixtures resolve the utilities they need from that PATH
+and expose only those utilities alongside their fake commands. They do not assume
+`/usr/bin` or `/bin` contains the tools, so the suite also runs on NixOS.
+Keep these allowlists explicit: inheriting the whole host PATH can accidentally
+run an installed sccache, nextest or system tool instead of exercising the fixture.
+Fixture Bash entry points disable startup files so shell configuration cannot
+replace the isolated PATH. Container executable paths in production scripts remain
+unchanged.

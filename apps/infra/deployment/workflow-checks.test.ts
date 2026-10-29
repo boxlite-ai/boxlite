@@ -12,6 +12,7 @@ import test from 'node:test'
 import { runInNewContext } from 'node:vm'
 import { load as loadYaml } from 'js-yaml'
 import { parse as parseToml } from 'smol-toml'
+import { hostExecutable, toolPath } from './test/tools.ts'
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../../..')
 // Use the glob engine used by paths-filter, including its extglob behavior.
@@ -402,9 +403,9 @@ exit "$CARGO_STATUS"
       writeFileSync(join(directory, 'cargo-nextest'), '#!/bin/sh\nexit 0\n', { mode: 0o755 })
     }
     // Isolate tool discovery so an installed nextest cannot hide the fallback.
-    const result = spawnSync('/usr/bin/make', ['-f', join(REPO_ROOT, 'make/test.mk'), 'test:unit:cli', 'NEXTEST_PROFILE=ci'], {
+    const result = spawnSync(hostExecutable('make'), ['-f', join(REPO_ROOT, 'make/test.mk'), 'test:unit:cli', 'NEXTEST_PROFILE=ci'], {
       cwd: REPO_ROOT,
-      env: { ...process.env, PATH: directory, MAKEFLAGS: '', CARGO_LOG: log, CARGO_STATUS: String(exitCode) },
+      env: { ...process.env, PATH: `${directory}:${toolPath(directory, ['sh'])}`, MAKEFLAGS: '', CARGO_LOG: log, CARGO_STATUS: String(exitCode) },
       encoding: 'utf8',
       timeout: 10_000,
     })
@@ -595,9 +596,9 @@ exec "$@"
 printf 'make %s\\nwrapper=%s\\ncache=%s\\n' "$*" "\${RUSTC_WRAPPER:-}" "\${SCCACHE_DIR:-}" >> "$TRACE"
 if [ "$1" = runtime ]; then
   if [ -n "\${RUSTC_WRAPPER:-}" ]; then
-    "$RUSTC_WRAPPER" /bin/echo compiler-invoked >> "$TRACE"
+    "$RUSTC_WRAPPER" "$COMPILER" compiler-invoked >> "$TRACE"
   else
-    /bin/echo compiler-invoked >> "$TRACE"
+    "$COMPILER" compiler-invoked >> "$TRACE"
   fi
 fi
 `, { mode: 0o755 })
@@ -609,12 +610,13 @@ fi
           .replaceAll('/host', host)
         const env = {
           ...Object.fromEntries(Object.entries<string>(config.linux.environment).map(([name, value]) => [name, relocate(value)])),
-          PATH: `${bin}:${pythonBin}:${dirname(wrapper)}:/usr/bin:/bin`, HOME: join(directory, 'home'),
+          PATH: `${bin}:${pythonBin}:${dirname(wrapper)}:${toolPath(directory, ['cat', 'chmod', 'install', 'ln'])}`, HOME: join(directory, 'home'),
+          COMPILER: hostExecutable('echo'),
           TRACE: trace, PYTHON_BIN: pythonBin, INSTALL_SUCCEEDS: String(source === 'pip'),
           BOXLITE_HOST_SCCACHE_DIR: sharedCache ? '/runner cache/sccache' : '',
           BOXLITE_HOST_SCCACHE_BIN: source === 'host' ? '/runner tools/sccache' : '',
         }
-        const result = spawnSync('bash', ['-e', '-c', relocate(config['before-all'].join('\n'))], {
+        const result = spawnSync(hostExecutable('bash'), ['--noprofile', '--norc', '-e', '-c', relocate(config['before-all'].join('\n'))], {
           cwd: directory, env, encoding: 'utf8', timeout: 10_000,
         })
         assert.equal(result.status, 0, result.stderr)
@@ -622,8 +624,8 @@ fi
         assert.ok(calls.includes(`wrapper=${wrapper}\n`), 'runtime must use the stable wrapper from the wheel environment')
         assert.ok(calls.includes(`cache=${cache}\n`), 'runtime must use the configured disk cache')
         assert.match(calls, /compiler-invoked\n/, 'both installed and fallback wrappers must invoke the compiler')
-        assert.equal(calls.includes('installed-wrapper /bin/echo'), source === 'pip', 'standalone wheels must install a published package')
-        assert.equal(calls.includes('host-wrapper /bin/echo'), source === 'host', 'CI wheels must execute the verified host binary')
+        assert.equal(calls.includes(`installed-wrapper ${env.COMPILER}`), source === 'pip', 'standalone wheels must install a published package')
+        assert.equal(calls.includes(`host-wrapper ${env.COMPILER}`), source === 'host', 'CI wheels must execute the verified host binary')
         assert.equal(lstatSync(wrapper).isSymbolicLink(), source === 'pip')
         if (source === 'host') {
           assert.ok(!calls.includes('pip '), 'the verified host binary needs no second installation')
@@ -638,7 +640,7 @@ fi
             'a local build must not create a host link, including a dangling one')
         }
         if (!installSucceeds) assert.match(result.stdout, /WARNING: sccache not available/)
-        const stop = spawnSync('bash', ['-e', '-c', relocate(config.linux['before-test'] ?? '')], {
+        const stop = spawnSync(hostExecutable('bash'), ['--noprofile', '--norc', '-e', '-c', relocate(config.linux['before-test'] ?? '')], {
           cwd: directory, env, encoding: 'utf8', timeout: 10_000,
         })
         assert.equal(stop.status, 0, 'the pass-through fallback must tolerate server shutdown')

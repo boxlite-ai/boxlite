@@ -37,7 +37,7 @@ fi
       ...process.env, PATH: `${directory}:${process.env.PATH}`, STATE_FILE: join(directory, 'state'),
       SQL_FILE: join(directory, 'sql'), QUERY_FILE: join(directory, 'query'),
     }
-    const run = (script: string, extra = {}) => spawnSync('bash', ['-c', script], { env: { ...environment, ...extra }, encoding: 'utf8' })
+    const run = (script: string, extra = {}) => spawnSync('bash', ['--noprofile', '--norc', '-c', script], { env: { ...environment, ...extra }, encoding: 'utf8' })
     for (const script of Object.values(scripts)) assert.equal(spawnSync('bash', ['-n'], { input: script }).status, 0)
     writeFileSync(environment.STATE_FILE, '7')
     assert.equal(run(scripts.validate).status, 100)

@@ -29,6 +29,7 @@ import {
 import { renderRunnerBoot } from '../stack/runner-boot.ts'
 import { renderDataDiskMount } from '../stack/providers/gcp/runners.ts'
 import { verifyAgainstManifest } from '../stack/runner-binary.ts'
+import { hostExecutable, toolPath } from '../../deployment/test/tools.ts'
 
 const TARBALL = 'boxlite-runner-v0.10.0-linux-amd64.tar.gz'
 
@@ -351,10 +352,10 @@ const converge = ({
     volumeBackend: 'gcs',
     registryProxyHost,
   })
-  const result = spawnSync('bash', ['-c', enforce], {
+  const result = spawnSync(hostExecutable('bash'), ['--noprofile', '--norc', '-c', enforce], {
     encoding: 'utf8',
     env: {
-      PATH: `${binDir}:/usr/bin:/bin`,
+      PATH: `${binDir}:${toolPath(work, ['bash', 'grep', 'cp', 'awk', 'cat', 'rm', 'mv'])}`,
       BOXLITE_RUNNER_ENV_FILE: envFile,
       RESTARTS: restarts,
     },
@@ -435,9 +436,9 @@ const mountDataDisk = ({ work, probe, device = join(work, 'disk') }: { work: str
   const fstab = join(work, 'fstab')
   const home = join(work, 'home')
   const calls = join(work, 'calls')
-  const result = spawnSync('bash', ['-c', `set -euo pipefail\n${renderDataDiskMount({ device, mountPoint: home, fstab })}`], {
+  const result = spawnSync(hostExecutable('bash'), ['--noprofile', '--norc', '-c', `set -euo pipefail\n${renderDataDiskMount({ device, mountPoint: home, fstab })}`], {
     encoding: 'utf8',
-    env: { PATH: `${bin}:/usr/bin:/bin`, PROBE: String(probe), CALLS: calls, MOUNTED: join(work, 'mounted') },
+    env: { PATH: `${bin}:${toolPath(work, ['ls', 'cmp', 'awk', 'mkdir', 'touch'])}`, PROBE: String(probe), CALLS: calls, MOUNTED: join(work, 'mounted') },
   })
   return {
     code: result.status,
