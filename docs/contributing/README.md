@@ -32,7 +32,6 @@ How to build, test, and change the code.
 
 Dated root-cause analyses and design studies, newest first.
 
-- 2026-10-30 · [GCP runner creation sizing](investigations/2026-10-30-runner-creation-sizing.md): preserve existing machine types and configure new data-disk capacity.
 - 2026-10-28 · [Agent REST API design](investigations/2026-10-28-agent-rest-api-design.md): nine HTTP operations for agents, turns and interaction, with snapshot, retry and event-recovery contracts.
 - 2026-10-28 · [Agent CLI simplification](investigations/2026-10-28-agent-cli-simplification.md): compares command hierarchies and named runtime targets for agent instances and turns.
 - 2026-10-27 · [CLI guest SSH commands](investigations/cli-ssh-commands.md)
