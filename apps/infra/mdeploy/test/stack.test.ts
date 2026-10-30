@@ -278,6 +278,17 @@ test('the runner is placed directly, because it is a machine rather than a task'
   assert.ok(seen.runners.input.network, 'it takes its placement from the network instead')
 })
 
+test('the parsed runner data disk size reaches the provider', () => {
+  const { providers, seen } = bundle()
+  const settings = Object.fromEntries(Object.entries(config).filter(([key]) => key !== 'path' && key !== 'root'))
+  const sizedConfig = parseDeployConfig(config.path, JSON.stringify({
+    ...settings,
+    runners: { ...config.runners, dataDiskGb: 2048 },
+  }))
+  deployStack({ providers, config: sizedConfig, inputs: inputs() })
+  assert.equal(seen.runners.request.dataDiskGb, 2048)
+})
+
 test('the stack’s own names win over a stale copy in the store', () => {
   const { providers, seen } = bundle()
   deployStack({

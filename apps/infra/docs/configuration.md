@@ -43,6 +43,33 @@ Do not store passwords or API keys in this declaration: CI carries it as a varia
 AWS account identity comes from resolved credentials. GCP project identity is declared explicitly.
 `promoteFrom` does not copy configuration or promote artifacts during an ordinary deploy.
 
+## Runner sizing
+
+`deploy.runners` in the stage declaration requires `size` (`small`, `medium` or `large`) and
+`rootDiskGb`. GCP also accepts optional `dataDiskGb` for a new runner's separate data disk:
+
+```json
+{
+  "size": "large",
+  "rootDiskGb": 100,
+  "dataDiskGb": 2048
+}
+```
+
+Disk values are whole GiB from 20 through 4000. Omitting `dataDiskGb` keeps the 200 GiB default;
+the IOPS and throughput presets still come from `size`. AWS keeps box state on the root disk and
+rejects `dataDiskGb`; configure `rootDiskGb` there.
+
+On GCP, sizing applies at creation. Existing hosts retain their recorded machine types and disk sizes,
+so a fleet can keep smaller hosts while new runners use `large` and a 2 TiB data disk. Updating these
+settings does not resize existing GCP hosts. `RUNNERS` in the encrypted stage store controls the fleet
+count; see [scale out](runners.md#scale-out).
+
+Keep the stage declaration and its GitHub Environment copy synchronized with `mstage config put`.
+After out-of-band resizing, refresh deployment state before previewing or applying: Pulumi's
+[`ignoreChanges`](https://www.pulumi.com/docs/iac/concepts/resources/options/ignorechanges/#how-ignorechanges-works)
+uses recorded state, not an automatic live read.
+
 ## Set application values
 
 Run commands from `apps/infra` after [bootstrap](deployment.md#bootstrap-a-stage).

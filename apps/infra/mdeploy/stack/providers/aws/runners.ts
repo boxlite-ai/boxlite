@@ -118,6 +118,9 @@ export const awsRunnerProvider =
     dependsOn: any[]
   }): RunnerProvider =>
   (request: RunnerRequest): Runners => {
+    if (request.dataDiskGb !== undefined) {
+      throw new Error('AWS runners do not support dataDiskGb; configure rootDiskGb instead')
+    }
     if (placement.exposure !== 'egress-only-public') {
       throw new Error(
         `The runner was placed as ${placement.exposure}; it pulls box images constantly and must ` +

@@ -73,11 +73,12 @@ export const DISK_TYPE = 'hyperdisk-balanced'
  * The disk each host keeps box state on, by size, so the boot disk holds only
  * the OS and the runner.
  *
- * Twice the space of the 100 GB boot disk that held it before, at the
+ * The default capacity is twice the 100 GB boot disk that held it before, at the
  * performance GCP's defaults gave that disk (6 IOPS per GiB over 3,000; 1.5 MiB/s
  * per GiB over 140). Throughput is held to what an n4-*-4 can draw from all its
  * Hyperdisk: more is billed and never reached. Stated rather than defaulted,
  * because a default is computed once at create and a disk grown later keeps it.
+ * Overriding capacity does not change these performance presets.
  */
 export const DATA_DISK = {
   small: { sizeGb: 200, iops: 3_600, throughputMiBps: 240 },
@@ -444,7 +445,7 @@ udevadm trigger --name-match=kvm || true`,
           project,
           zone,
           type: DISK_TYPE,
-          size: DATA_DISK[request.size].sizeGb,
+          size: request.dataDiskGb ?? DATA_DISK[request.size].sizeGb,
           provisionedIops: DATA_DISK[request.size].iops,
           provisionedThroughput: DATA_DISK[request.size].throughputMiBps,
         },
@@ -530,7 +531,8 @@ udevadm trigger --name-match=kvm || true`,
           // fixed at create too, because the provider applies any edit to an
           // attachment by detaching the disk from the running host. A host created
           // before it existed never gets it until it is destroyed and recreated.
-          ignoreChanges: ['bootDisk', 'metadataStartupScript', 'attachedDisks'],
+          // Machine sizing applies at creation; existing hosts retain their CPU and memory.
+          ignoreChanges: ['machineType', 'bootDisk', 'metadataStartupScript', 'attachedDisks'],
           protect: true,
           // The read grant among them: a host whose boot script fetches the
           // staged object before the binding exists downloads nothing, and
