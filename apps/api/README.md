@@ -3,6 +3,23 @@
 The NestJS control-plane service. See the [apps hub](../README.md) for how it fits with the
 other services and [`API.md`](../API.md) for its interfaces.
 
+## Migration result regression tests
+
+With a disposable PostgreSQL database, set `DB_HOST`, `DB_PORT`, `DB_USERNAME`,
+`DB_PASSWORD`, and `DB_DATABASE`, then run from the repository root:
+
+```sh
+make test:apps:api FILTER='Migration completion atomicity'
+```
+
+The suite creates and removes its own schema. It waits for a migration-row lock
+before canceling the blocked application query, then reads committed state through
+a separate connection. Cancellation must preserve the original Job, Box, and
+migration records; retry must apply the result. Duplicate reports must preserve
+the accepted metadata and avoid repeating cache invalidation or lock release.
+An unresponsive Redis unlock must not delay the committed completion response.
+These tests exercise control-plane persistence, without running a VM migration.
+
 ## Business events
 
 `recordBusinessEvent` (`src/common/utils/business-event.util.ts`) writes one structured log record
