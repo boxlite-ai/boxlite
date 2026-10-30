@@ -147,6 +147,7 @@ func (a *ApiServer) Start(ctx context.Context) error {
 	// BoxLite REST API — exec, files, metrics
 	boxliteApi := protected.Group("/v1/boxes")
 	{
+		boxliteApi.GET("/:boxId/resources", controllers.BoxliteResources)
 		boxliteApi.POST("/:boxId/exec", controllers.BoxliteExec)
 		boxliteApi.GET("/:boxId/executions", controllers.BoxliteListExecutions)
 		boxliteApi.GET("/:boxId/executions/:execId", controllers.BoxliteGetExecution)

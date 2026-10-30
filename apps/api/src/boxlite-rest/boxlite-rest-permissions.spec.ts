@@ -33,6 +33,7 @@ const reflector = new Reflector()
 const EXPECTED: Record<string, OrganizationResourcePermission[] | null> = {
   // box controller
   createBox: [WRITE_BOXES],
+  resizeBox: [WRITE_BOXES],
   listBoxes: null,
   getBox: null,
   headBox: null,

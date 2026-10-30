@@ -28,6 +28,9 @@ export interface JobTypeMap {
   [JobType.IMPORT_CHECKPOINT]: {
     resourceType: [ResourceType.BOX]
   }
+  [JobType.RESIZE_BOX]: {
+    resourceType: [ResourceType.BOX]
+  }
   [JobType.CREATE_BOX]: {
     resourceType: [ResourceType.BOX]
   }

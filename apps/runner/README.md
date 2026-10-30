@@ -894,6 +894,16 @@ the Swagger UI (development only).
 | `POST` | `/v1/boxes/:boxId/ssh/enable` | Enable saved guest SSH configuration on a running box; otherwise `409`; never boots |
 | `GET` | `/v1/boxes/:boxId/ssh` | Guest SSH status; never boots |
 | `DELETE` | `/v1/boxes/:boxId/ssh` | Disable guest SSH on a running box; otherwise `409`; never boots |
+| `GET` | `/v1/boxes/:boxId/resources` | Authenticated allocation/boot-ceiling query and resize-job capability |
+
+Resource resize runs through `RESIZE_BOX` jobs, not a direct mutation route.
+The executor confirms its lease before touching the VM and sends the claim token
+with every heartbeat/result. It always applies the explicit CPU/RAM target,
+even if a query already matches: mapped RAM can precede completed Guest hotplug.
+Heartbeat loss cancels the local wait; the API reclaims the persisted target.
+Startup skips old in-progress resize claims and waits for a fresh token. Guest
+exit causes a retry until that same Box is restarted; resize itself does not
+restart it. See [API rollout and recovery](../api/README.md#cloud-resize).
 
 ---
 

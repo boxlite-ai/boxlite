@@ -38,6 +38,7 @@ import { ImageModule } from '../image/image.module'
 import { Region } from '../region/entities/region.entity'
 import { JobController } from './controllers/job.controller'
 import { JobService } from './services/job.service'
+import { ResizeJobService } from './services/resize-job.service'
 import { JobStateHandlerService } from './services/job-state-handler.service'
 import { Job } from './entities/job.entity'
 import { BoxLookupCacheInvalidationService } from './services/box-lookup-cache-invalidation.service'
@@ -137,6 +138,7 @@ import { GcpDiskClient } from './services/gcp-disk-client'
     BoxStopAction,
     BoxDestroyAction,
     JobService,
+    ResizeJobService,
     JobStateHandlerService,
     BoxActivityService,
     BoxExitCodeService,
@@ -175,6 +177,8 @@ import { GcpDiskClient } from './services/gcp-disk-client'
   exports: [
     CheckpointService,
     CheckpointRecoverService,
+    BoxLookupCacheInvalidationService,
+    JobService,
     BoxService,
     TunnelService,
     DomainService,

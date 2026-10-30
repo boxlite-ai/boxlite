@@ -106,6 +106,10 @@ func (e *Executor) Execute(ctx context.Context, job *apiclient.Job) {
 		// job owns its files and BOX slot until native work actually returns.
 		ctx = context.WithoutCancel(ctx)
 	}
+	if job.GetType() == apiclient.JOBTYPE_RESIZE_BOX {
+		e.executeResize(ctx, job)
+		return
+	}
 	// Extract trace context from job to continue distributed trace
 	ctx = e.extractTraceContext(ctx, job)
 
