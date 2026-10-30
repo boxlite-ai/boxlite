@@ -1,12 +1,12 @@
 ## TL;DR
 
-Publish content-hashed Auth0 branding assets with the dashboard before applying the reviewed tenant branding.
+Publish content-hashed Auth0 branding assets with the dashboard before updating application, tenant, or login-theme settings.
 
-# Auth0 Universal Login assets
+# Auth0 branding assets
 
 [Infrastructure index](../../README.md) · [Identity operations](../../docs/identity-and-mail.md)
 
-The browser loads Universal Login branding from the selected stage's dashboard
+The browser loads Auth0 branding from the selected stage's dashboard
 origin. Source files live in `apps/dashboard/public/auth0/`; Vite copies them
 into the dashboard build and Nest serves them through the stack domain.
 
@@ -14,6 +14,7 @@ into the dashboard build and Nest serves them through the stack domain.
 | -------------------------------------- | ----------------------------------------------------------------------- | ------------------------------------------------------------------ |
 | `boxlite-light-e912d3c8.png`           | `apps/dashboard/src/assets/boxlite-light.png`                           | `e912d3c8c795ff341e94906af378b395f3c4bfd35e8e0259732374c8cff47100` |
 | `boxlite-black-3f7875da.png`           | `apps/dashboard/src/assets/boxlite-black.png`                           | `3f7875daa9a48723b208f68ac5bc59ed3d98c8d018443207ba16784ad5ccb656` |
+| `boxlite-icon-290464ed.png`            | `apps/dashboard/src/assets/boxlite-icon-black.png`                      | `290464edf96527cc652aaf897d9a10a6e60ec66d344392d1f65aafe406531183` |
 | `ibm-plex-mono-400-ba204497.woff2`     | `@ibm/plex-mono@2.5.0` `fonts/complete/woff2/IBMPlexMono-Regular.woff2` | `ba204497f16b6d334cee9d1e963a831b73e3a56e1d6300a8489d18df7214b350` |
 | `IBM-Plex-OFL-d741e57d.txt`            | `@ibm/plex-mono@2.5.0` `LICENSE.txt` (normalized text)                  | `d741e57d5f865e294df801f96b7b5161a88b211df65887e4358d271c9fc5fb4f` |
 | `github-invertocat-white-ccd84c89.svg` | `brand.github.com` `GitHub_Logos.zip` `SVG/GitHub_Invertocat_White.svg` | `ccd84c89b1056345608fc3489357f8acc7397e49a3cdc2d418b6c8016911d47b` |
@@ -35,6 +36,27 @@ is dark and takes the light wordmark through `branding/theme.json`
 (`widget.logo_url`). Auth0's own tenant-branded surfaces — consent, MFA, and
 the email templates — are light and take the black wordmark through
 `branding/tenant.json` (`picture_url`, `PATCH tenants/settings`).
+
+## Application logo
+
+`boxlite-icon-290464ed.png` is the existing 201×201 transparent dashboard icon,
+served separately for Auth0 applications. Deploy the dashboard for the selected
+stage before configuring the URL:
+
+| Stage | Application Logo URL                                     |
+| ----- | -------------------------------------------------------- |
+| dev   | `https://dev.boxlite.ai/auth0/boxlite-icon-290464ed.png` |
+| prod  | `https://app.boxlite.ai/auth0/boxlite-icon-290464ed.png` |
+
+Verify the selected URL returns `image/png` and the SHA-256 above; an HTTP 200
+HTML response is not a valid image. In Auth0, select the corresponding tenant and
+application, then set **Settings → Application Properties → Application Logo**
+(`logo_uri`) to that URL and save.
+
+Application logos appear in application lists and consent prompts. They are
+separate from the tenant's `picture_url` and the login theme's `widget.logo_url`.
+The Universal Login command does not manage client `logo_uri`; configure it
+per application. See [Auth0 application settings](https://auth0.com/docs/get-started/applications/application-settings#application-properties).
 
 ## Runtime contract
 
@@ -59,8 +81,10 @@ X-Content-Type-Options: nosniff
 ```
 
 When an asset changes, compute its full SHA-256, put the first eight characters
-in the filename, update this table and whichever of `branding/theme.json` or
-`branding/tenant.json` points at it, deploy the dashboard, then run
+in the filename and update this table. Deploy the dashboard before updating
+Auth0 references. For an application logo, update each consuming client's
+`logo_uri`. For a login or tenant logo, update `branding/theme.json` or
+`branding/tenant.json`, then run
 `npm run auth0:universal-login -- preview --stage <name>`.
 
 The account link Form copies the theme's font and logo URLs when it is
