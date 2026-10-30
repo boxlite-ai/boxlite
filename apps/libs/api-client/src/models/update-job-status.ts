@@ -19,6 +19,10 @@ import type { JobStatus } from './job-status';
 
 export interface UpdateJobStatus {
     /**
+     * Token returned by the resize job claim
+     */
+    'claimToken'?: string;
+    /**
      * The new status of the job
      */
     'status': JobStatus;

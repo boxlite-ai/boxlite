@@ -669,7 +669,7 @@ A unit of work handed to exactly one runner. Optimistic-locked through
 | ------ | ---- | ----- |
 | `id` | `uuid` | primary key |
 | `version` | `integer` | TypeORM `@VersionColumn` |
-| `type` | `character varying` | 11 values; see below |
+| `type` | `character varying` | 12 values; see below |
 | `status` | `enum` | `PENDING` \| `IN_PROGRESS` \| `COMPLETED` \| `FAILED` |
 | `runnerId` | `character varying` | |
 | `resourceType` | `enum` | `BOX` \| `ARTIFACT` \| `BACKUP` |
@@ -680,11 +680,16 @@ A unit of work handed to exactly one runner. Optimistic-locked through
 | `errorMessage` | `text` | nullable |
 | `startedAt` | `timestamptz` | nullable |
 | `completedAt` | `timestamptz` | nullable |
+| `resizePhase` | `varchar` | nullable; resize-only `BILLING_PENDING` or `APPLY` |
+| `nextAttemptAt` | `timestamptz` | nullable; due time for billing/application retry |
+| `attempt` | `integer` | claim count, default 0 |
+| `claimToken` | `uuid` | nullable; renewed for every resize claim |
+| `leaseExpiresAt` | `timestamptz` | nullable; database-clock lease deadline |
 | `createdAt` / `updatedAt` | `timestamptz` | |
 
 Job types: `CREATE_BOX`, `START_BOX`, `STOP_BOX`, `DESTROY_BOX`, `EXPORT_BOX`,
 `IMPORT_BOX`, `ROLLBACK_EXPORT_BOX`, `ROLLBACK_IMPORT_BOX`,
-`DISCARD_EXPORTED_BOX`, `CREATE_SNAPSHOT`, `RESTORE_SNAPSHOT`. The two snapshot
+`DISCARD_EXPORTED_BOX`, `CREATE_SNAPSHOT`, `RESTORE_SNAPSHOT`, `RESIZE_BOX`. The two snapshot
 jobs, like a migration's, take the `BACKUP` slot keyed by the box, so a box's
 `DESTROY_BOX` can run beside them.
 
@@ -693,6 +698,16 @@ how a long snapshot job stays clear of the ten-minute stale-job sweep. A
 snapshot job still `PENDING` ten minutes after it was queued has no runner
 coming for it: the snapshot reconcile fails it, which settles its snapshot or
 restore and returns the box to `stopped`.
+
+Resize payload version 1 holds the immutable absolute target and prior allocation.
+`BILLING_PENDING` cannot be claimed. The billing transaction closes the old period,
+opens the target period, and changes the phase to `APPLY`. Failed apply attempts
+return to `PENDING` with a future due time and keep `completedAt` null. Claims
+carry a 120-second lease, renewed every 30 seconds; stale claim tokens cannot
+extend, fail or complete a newer claim. Completion must match both targets.
+`box.resizeJobId` is a nullable UUID application reference to the job. It preserves
+`pending=true` while Box state remains `started`, and clears atomically with job
+completion. The partial `job_resize_due_idx` indexes due APPLY jobs by Runner.
 
 **Partial unique:** `(resourceType, resourceId, runnerId)` where
 `completedAt IS NULL` — history accumulates freely, but at most one job per

@@ -38,6 +38,7 @@ import { ImageModule } from '../image/image.module'
 import { Region } from '../region/entities/region.entity'
 import { JobController } from './controllers/job.controller'
 import { JobService } from './services/job.service'
+import { ResizeJobService } from './services/resize-job.service'
 import { JobStateHandlerService } from './services/job-state-handler.service'
 import { Job } from './entities/job.entity'
 import { BoxLookupCacheInvalidationService } from './services/box-lookup-cache-invalidation.service'
@@ -101,6 +102,7 @@ import { TypedConfigService } from '../config/typed-config.service'
     BoxStopAction,
     BoxDestroyAction,
     JobService,
+    ResizeJobService,
     JobStateHandlerService,
     BoxActivityService,
     BoxExitCodeService,
@@ -134,6 +136,8 @@ import { TypedConfigService } from '../config/typed-config.service'
     },
   ],
   exports: [
+    BoxLookupCacheInvalidationService,
+    JobService,
     BoxService,
     TunnelService,
     AttachTicketService,

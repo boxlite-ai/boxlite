@@ -457,7 +457,7 @@ organization membership.
 </details>
 
 <details>
-<summary><b>Box lifecycle</b> · 7 routes</summary>
+<summary><b>Box lifecycle</b> · 8 routes</summary>
 
 | Method   | Path                                     | What it does                                |
 | -------- | ---------------------------------------- | ------------------------------------------- |
@@ -468,6 +468,15 @@ organization membership.
 | `DELETE` | `/api/v1[/{prefix}]/boxes/{boxId}`       | Destroys a box.                             |
 | `POST`   | `/api/v1[/{prefix}]/boxes/{boxId}/start` | Starts a box and waits until it is running. |
 | `POST`   | `/api/v1[/{prefix}]/boxes/{boxId}/stop`  | Stops a box.                                |
+| `POST`   | `/api/v1[/{prefix}]/boxes/{boxId}/resize` | Grows CPU/RAM through a durable job; `{}` queries actual allocation. |
+
+Resize requires `write:boxes` and a running Linux Box on a compatible Runner.
+Memory is rounded up to whole GiB. Acceptance saves desired resources before
+switching usage periods; the job becomes claimable only after that switch
+commits. `200` returns `BoxResources`. After 30 seconds, `504` with code
+`resize_in_progress` leaves the job running; repeating the same target joins it,
+while a different target returns `409`. The normal Box response reports desired
+resources, so use the empty resize request to inspect actual allocation.
 
 </details>
 
