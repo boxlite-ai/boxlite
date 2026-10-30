@@ -28,6 +28,7 @@ COPY sdks/ sdks/
 COPY apps/go.work apps/go.work.sum apps/
 COPY apps/runner/ apps/runner/
 COPY apps/libs/common-go/ apps/libs/common-go/
+COPY apps/libs/tcprelay/ apps/libs/tcprelay/
 COPY apps/libs/api-client-go/ apps/libs/api-client-go/
 
 # Docker intentionally excludes the host's .git metadata. setup:build only needs a repository to

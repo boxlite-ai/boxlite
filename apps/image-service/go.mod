@@ -5,6 +5,7 @@ go 1.25.4
 require (
 	github.com/boxlite-ai/boxlite/libs/api-client-go v0.152.1
 	github.com/boxlite-ai/common-go v0.0.0
+	github.com/boxlite-ai/tcprelay v0.0.0 // indirect
 	github.com/gin-gonic/gin v1.10.1
 	github.com/go-playground/validator/v10 v10.27.0
 	github.com/kelseyhightower/envconfig v1.4.0
@@ -70,3 +71,5 @@ require (
 replace github.com/boxlite-ai/common-go => ../libs/common-go
 
 replace github.com/boxlite-ai/boxlite/libs/api-client-go => ../libs/api-client-go
+
+replace github.com/boxlite-ai/tcprelay => ../libs/tcprelay

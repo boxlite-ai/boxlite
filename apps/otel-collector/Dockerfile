@@ -24,6 +24,7 @@ COPY apps/go.work apps/go.work.sum ./
 COPY apps/otel-collector/exporter/go.mod apps/otel-collector/exporter/go.sum otel-collector/exporter/
 COPY apps/libs/api-client-go/go.mod apps/libs/api-client-go/go.sum libs/api-client-go/
 COPY apps/libs/common-go/go.mod apps/libs/common-go/go.sum libs/common-go/
+COPY apps/libs/tcprelay/go.mod libs/tcprelay/
 RUN head -1 go.work > go.work.tmp && printf '\nuse (\n\t./otel-collector/exporter\n\t./libs/api-client-go\n\t./libs/common-go\n)\n' >> go.work.tmp && mv go.work.tmp go.work
 
 ENV NX_DAEMON=false
@@ -37,6 +38,7 @@ RUN go -C otel-collector/exporter mod download && \
 COPY apps/otel-collector/ otel-collector/
 COPY apps/libs/api-client-go/ libs/api-client-go/
 COPY apps/libs/common-go/ libs/common-go/
+COPY apps/libs/tcprelay/ libs/tcprelay/
 RUN mkdir -p dist/apps/otel-collector
 
 RUN yarn nx build otel-collector --configuration=production --nxBail=true

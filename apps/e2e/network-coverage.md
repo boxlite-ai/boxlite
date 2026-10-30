@@ -18,7 +18,7 @@ CONNECT does not stand in for the direct proxy path.
 | Chromium | `test_preview_browser.py` | Accept optional preview warning; real HTTPS cookie storage and attributes; HttpOnly; page/subresource/fetch/same-origin WS; reload without token; no platform credentials in guest echo |
 | Outbound | `test_network_egress.py`, `test_network_updates.py` | Healthy controls; runtime disable/re-enable; full allowlist replacement; process identity preserved; API get/list and SDK handle readback; restart persistence; no-NIC/stopped rejection; invalid create/update input; HTTP Host, wildcard TLS, IPv4 and CIDR |
 | SDK and CLI | `test_sdk_tunnel.py`, `test_node_tunnel.py`, `test_cli_network.py` | Framed HTTP, exact WS echo, concurrent/large transfers and lifecycle; private access/revoke; Node and CLI live policy update/readback; CLI private descriptors consumed through all three proxy entrances; CLI forwarding cannot undo revoke |
-| Harness only | `test_network_harness.py` | Missing/failed probes fail; HTTP does not wait for TLS EOF; complete wrong responses cannot match half-close xfail; Node rejects missing/wrong WS echo; redirects do not change the probe destination; rule probes reject mismatched IPv4/TLS targets |
+| Harness only | `test_network_harness.py` | Missing/failed probes fail; HTTP does not wait for TLS EOF; complete wrong responses fail payload checks; Node rejects missing/wrong WS echo; redirects do not change the probe destination; rule probes reject mismatched IPv4/TLS targets |
 
 Each guest gets a unique marker and cleanup is registered before preparing
 tunnels. Reachability polls after revocation use the existing URI. They never
@@ -130,8 +130,8 @@ The tracking issue remains open for these matrix entries:
 
 Do not replace these entries with mocked successes or infer them from a green
 HTTP/token run. `skip`, `xfail`, and unrun cases are not accepted coverage.
-The known half-close failures stay isolated; TLS-shutdown xfails apply only
-to the precise post-response EOF signal on a remote stage.
+Half-close cases require a full response after write shutdown. TLS-shutdown
+xfails apply only to the precise post-response EOF signal on a remote stage.
 
 ## Outbound combination regression
 
@@ -149,29 +149,53 @@ it built `http://tcp://host:port` and contacted the wrong host. Both CLI network
 cases pass on infra-local with the original guest-response, revoke and
 no-reprepare assertions intact.
 
-## Half-close diagnosis on infra-local
+## Half-close regression on infra-local
 
-Python and Node still lose the response after closing only their write side.
-Running both cases with `PYTEST_ADDOPTS=--runxfail` exposes the failures.
-A plain TCP CONNECT to the real guest also returns zero response bytes,
-bypassing both the SDK stream wrappers and the temporary TLS ingress.
+Closing the client's write side sends EOF to the guest while keeping the
+reply direction open. For example, a service can read a request through EOF,
+then send its response. Python and Node exercise this contract through the
+API, preview proxy, Runner and real guest; neither half-close case is xfailed.
+The dedicated `/after-eof` fixture waits for request EOF before replying, with
+a bounded wait, so receiving a response proves that FIN reached the guest.
+Both failed with a lost response on infra-local before the repair and passed
+after rebuilding the runtime, Runner and Proxy. The nine adjacent Python/Node
+tunnel cases also passed, including HTTP, TLS shutdown, wake and revocation.
 
-Two server boundaries independently discard the reply:
+Two server boundaries previously discarded the reply:
 
-- [AcceptConnect](../libs/common-go/pkg/proxy/connect.go) retains the HTTP
-  server's buffered reader. Reading EOF through it cancels the request context;
-  [ProxyBidirectionalStream](../libs/common-go/pkg/proxy/proxy.go) then closes
-  both directions. Proxy and Runner both use this combination. A real TCP
-  reproduction loses the response with the request context; a diagnostic
-  control detaching that context receives it. This control is evidence, not
-  a production fix that discards cancellation requirements.
-- The [guest tunnel adapter](../../src/deps/libgvproxy-sys/gvproxy-bridge/tunnel_mux.go)
-  delegates to `gvisor-tap-vsock v0.8.7`'s `tcpproxy.DialProxy.HandleConn`.
-  It returns after either copy direction ends and closes both sockets. An
-  independent test through `dialFirstTunnel` confirms that a guest reply sent
-  after request EOF never reaches the client.
+- [AcceptConnect](../libs/common-go/pkg/proxy/connect.go) retained the HTTP
+  reader, whose EOF handling canceled the request context. The shared
+  [buffered connection](../libs/common-go/pkg/proxy/proxy.go) now drains only
+  the already-buffered bytes before reading the raw connection. Proxy and
+  Runner retain explicit context cancellation without treating a FIN as one.
+- The [guest adapter](../../src/deps/libgvproxy-sys/gvproxy-bridge/tunnel_mux.go)
+  now half-closes each destination after a clean EOF and waits for both copies.
+  Cancellation or a copy/shutdown error closes both sockets and joins the
+  workers. Its HTTP handoff also preserves buffered bytes without continuing
+  through the HTTP reader.
 
-Enabling `allowHalfOpen` on the temporary local TLS relay alone does not fix
-these failures. That diagnostic configuration was restored. No SDK or server
-code changed during this investigation; both strict half-close xfails remain
-open. The diagnosis does not establish the cause on an older cloud deployment.
+BoxLite's TCP relays use the shared [tcprelay contract](../libs/tcprelay/README.md):
+after the first EOF, ten minutes without forwarded payload closes both peers.
+Each successful write renews that window; fully open connections have no new
+idle deadline. Control-server request contexts also inherit instance cancellation,
+so stopping an instance releases hijacked tunnels immediately.
+
+The same behavior covers unrestricted egress, IP/CIDR egress, inspected hostname
+passthrough, TCP port mappings and UNIX-to-TCP mappings. The bridge installs
+its own TCP handler for every outbound policy and supplies a relay target to
+the official upstream listener/router. The
+[port mapping handler](../../src/deps/libgvproxy-sys/gvproxy-bridge/port_forwarder.go)
+owns the existing expose/unexpose/list contract; the upstream module remains
+unmodified. Removing a TCP mapping stops new accepts while existing streams
+continue; instance cancellation also terminates those streams.
+UDP, SSH and Windows named-pipe mappings delegate to the official library.
+The latter two retain their previous half-close behavior and are not covered
+by the TCP idle guarantee or by the TCP regression results.
+
+Socket regressions cover a reply sent only after EOF, either peer closing
+first, buffered bytes followed by raw bytes, and cancellation. Rebuild the
+runtime with `make dev:go`, then rebuild/restart infra-local's Runner and Proxy
+with `make -C apps/infra-local restart COMPONENTS='runner proxy'` before E2E.
+Run `make test:rest:e2e FILTER=preserves_tcp_half_close` with the local settings
+above. If using a Node TLS ingress, set `allowHalfOpen: true` on both its TLS
+server and upstream TCP socket; otherwise the ingress itself drops replies.

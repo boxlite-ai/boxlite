@@ -69,7 +69,7 @@ def _run_node_tunnel(env, scenario):
 def _assert_node_tunnel_passes(result, scenario):
     if result.returncode and scenario == "tls-shutdown" and "Error: KNOWN_TLS_SHUTDOWN_EOF" in result.stderr:
         raise UnexpectedTunnelEOF("complete Node response followed by missing TLS close_notify")
-    if result.returncode and scenario == "half-close" and "Error: KNOWN_HALF_CLOSE_RESPONSE_LOST" in result.stderr:
+    if result.returncode and scenario == "half-close" and "Error: HALF_CLOSE_RESPONSE_LOST" in result.stderr:
         raise HalfCloseResponseLost("working Node tunnel lost response after half-close")
     assert result.returncode == 0, (
         f"exit={result.returncode}\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
@@ -85,11 +85,6 @@ def test_node_sdk_tunnel_rejects_stopped_box(node_tunnel_env):
     _assert_node_tunnel_passes(_run_node_tunnel(node_tunnel_env, "stopped"), "stopped")
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=HalfCloseResponseLost,
-    reason="TCP half-close currently drops the guest response",
-)
 def test_node_sdk_tunnel_preserves_tcp_half_close(node_tunnel_env):
     _assert_node_tunnel_passes(_run_node_tunnel(node_tunnel_env, "half-close"), "half-close")
 

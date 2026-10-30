@@ -23,7 +23,6 @@ import (
 	"net"
 	"sync"
 
-	"github.com/containers/gvisor-tap-vsock/pkg/tcpproxy"
 	logrus "github.com/sirupsen/logrus"
 	"gvisor.dev/gvisor/pkg/tcpip"
 	"gvisor.dev/gvisor/pkg/tcpip/adapters/gonet"
@@ -203,12 +202,7 @@ func standardForward(r *tcp.ForwarderRequest, destAddr string) {
 		return
 	}
 
-	remote := tcpproxy.DialProxy{
-		DialContext: func(_ context.Context, _, _ string) (net.Conn, error) {
-			return outbound, nil
-		},
-	}
-	remote.HandleConn(gonet.NewTCPConn(&wq, ep))
+	relayTCP(context.Background(), gonet.NewTCPConn(&wq, ep), outbound)
 }
 
 // inspectAndForward: Accept → Peek SNI/Host → decide → Dial → relay.
@@ -294,15 +288,8 @@ func inspectAndForward(r *tcp.ForwarderRequest, destAddr string, destIP net.IP, 
 		return
 	}
 
-	// Step 5: Relay using tcpproxy.DialProxy (same as standardForward). The
-	// bufio.Reader wrapper replays the peeked bytes as DialProxy copies
-	// guest→server.
-	remote := tcpproxy.DialProxy{
-		DialContext: func(_ context.Context, _, _ string) (net.Conn, error) {
-			return outbound, nil
-		},
-	}
-	remote.HandleConn(bufferedGuest)
+	// Step 5: Preserve inspected bytes and propagate independent EOFs.
+	relayTCP(context.Background(), bufferedGuest, outbound)
 }
 
 func egressName(e tcpEgress) string {
@@ -322,4 +309,11 @@ type bufferedConn struct {
 
 func (c *bufferedConn) Read(p []byte) (int, error) {
 	return c.reader.Read(p)
+}
+
+func (c *bufferedConn) CloseWrite() error {
+	if writer, ok := c.Conn.(interface{ CloseWrite() error }); ok {
+		return writer.CloseWrite()
+	}
+	return c.Conn.Close()
 }
