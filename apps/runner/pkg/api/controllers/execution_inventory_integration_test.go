@@ -27,7 +27,7 @@ func TestExecutionInventoryRecoveryHTTP(t *testing.T) {
 	}
 	defer runtime.Close()
 	box, err := runtime.Create(ctx, "docker.m.daocloud.io/library/alpine:latest",
-		sdk.WithAutoRemove(false), sdk.WithCmd("sh", "-c", "while true; do echo recovered-main; sleep 0.1; done"))
+		sdk.WithName("e2e-api-box"), sdk.WithAutoRemove(false), sdk.WithCmd("sh", "-c", "while true; do echo recovered-main; sleep 0.1; done"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,7 +46,7 @@ func TestExecutionInventoryRecoveryHTTP(t *testing.T) {
 	defer manager.Stop()
 	previous := getExecutionBox
 	getExecutionBox = func(_ *gin.Context, id string) (*sdk.Box, error) {
-		if id != box.ID() {
+		if id != box.Name() {
 			return nil, &sdk.Error{Code: sdk.ErrNotFound, Message: "box not found"}
 		}
 		return box, nil
@@ -60,7 +60,7 @@ func TestExecutionInventoryRecoveryHTTP(t *testing.T) {
 	router.DELETE("/v1/boxes/:boxId/executions/:execId", BoxliteExecKill)
 	server := httptest.NewServer(router)
 	defer server.Close()
-	base := "/v1/boxes/" + box.ID() + "/executions"
+	base := "/v1/boxes/" + box.Name() + "/executions"
 	request := func(method, path string) *httptest.ResponseRecorder {
 		t.Helper()
 		response := httptest.NewRecorder()

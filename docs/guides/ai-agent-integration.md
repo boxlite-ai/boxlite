@@ -249,6 +249,11 @@ await execution.kill()
 From the CLI, the same three steps are `boxlite top BOX`,
 `boxlite attach BOX EXECUTION_ID` and `boxlite kill BOX EXECUTION_ID`.
 
+REST execution routes use the API's `box_id` together with the listed
+`execution_id`. The runner maps that box ID to a local runtime handle whose
+ID differs; its execution ownership cache keeps the API box ID consistently
+for start, recovery, attach, and later control requests.
+
 What the list contains, and what it does not:
 
 - **Live sessions only.** A finished execution disappears immediately; the

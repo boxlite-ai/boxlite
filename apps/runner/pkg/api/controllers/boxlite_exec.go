@@ -33,9 +33,9 @@ func resolveManagedExecution(ctx *gin.Context, boxID, execID string, attach bool
 		return nil, fmt.Errorf("box not found: %w", err)
 	}
 	if attach {
-		return execManager.Attach(ctx.Request.Context(), bx, execID, bx.ID())
+		return execManager.Attach(ctx.Request.Context(), bx, execID, boxID)
 	}
-	return execManager.Resolve(ctx.Request.Context(), bx, execID, bx.ID())
+	return execManager.Resolve(ctx.Request.Context(), bx, execID, boxID)
 }
 
 func BoxliteListExecutions(ctx *gin.Context) {
@@ -96,7 +96,7 @@ func BoxliteExec(ctx *gin.Context) {
 		return
 	}
 
-	execId, err := execManager.Start(ctx.Request.Context(), bx, bx.ID(), startOptionsFrom(req))
+	execId, err := execManager.Start(ctx.Request.Context(), bx, boxId, startOptionsFrom(req))
 	if err != nil {
 		ctx.JSON(execStartStatus(err), gin.H{"error": fmt.Sprintf("exec failed: %s", err)})
 		return
