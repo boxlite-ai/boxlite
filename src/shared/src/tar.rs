@@ -2295,7 +2295,8 @@ mod tests {
     #[tokio::test]
     async fn rooted_archives_land_their_contents() {
         use tar::EntryType::{Directory, Link, Regular, XGlobalHeader};
-        let cases: [(&[(&str, tar::EntryType, &str)], &[&str]); 2] = [
+        type ArchiveCase<'a> = (&'a [(&'a str, tar::EntryType, &'a str)], &'a [&'a str]);
+        let cases: [ArchiveCase<'_>; 2] = [
             (
                 &[
                     ("pax_global_header", XGlobalHeader, ""),
