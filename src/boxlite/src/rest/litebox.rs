@@ -440,8 +440,8 @@ impl BoxBackend for RestBox {
         };
         // The header carries the *source* shape; the destination's own
         // signals — an existing directory, or a trailing slash naming one —
-        // must still win for a single file, matching the legacy
-        // `detect_extraction_mode` and Unix cp semantics.
+        // must still win for a single file, matching the file-based `unpack`
+        // and Unix cp semantics.
         let dest_wants_dir = host_dst.as_os_str().to_string_lossy().ends_with('/');
         let force_directory = source_is_dir || host_dst.is_dir() || dest_wants_dir;
 
@@ -1842,7 +1842,7 @@ mod tests {
     /// Streaming copy_out must fold the destination's directory-ness back into
     /// the archive shape: a single-file source whose destination is an existing
     /// directory lands *inside* it (Unix cp semantics), not at the directory
-    /// path — mirroring `detect_extraction_mode` in the legacy path.
+    /// path — as the file-based `unpack` lands it.
     #[tokio::test]
     async fn copy_out_places_single_file_inside_existing_directory() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -1903,6 +1903,54 @@ mod tests {
         server.await.unwrap();
     }
 
+    /// POL-593 on a hosted box: a directory copied out to a missing
+    /// destination becomes it, as `docker cp` lands it, rather than nesting
+    /// under its own name.
+    #[tokio::test]
+    async fn copy_out_lands_a_directory_as_a_missing_destination() {
+        let tmp = tempfile::tempdir().unwrap();
+        let tree = tmp.path().join("tree");
+        std::fs::create_dir(&tree).unwrap();
+        std::fs::write(tree.join("a.txt"), "a").unwrap();
+        // The archive a guest sends for `/root/tree`.
+        let pack = boxlite_shared::tar::PackContext {
+            follow_symlinks: false,
+            include_parent: true,
+        };
+        let (_, tar) = boxlite_shared::tar::pack_stream(tree, pack).await.unwrap();
+        let tar_bytes: Vec<u8> = tar.map(Result::unwrap).concat().await;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut head = Vec::new();
+            while !head.ends_with(b"\r\n\r\n") {
+                head.push(socket.read_u8().await.unwrap());
+            }
+            let response = format!(
+                "HTTP/1.1 200 OK\r\n\
+                 Content-Type: application/x-tar\r\n\
+                 X-Boxlite-Source-Is-Dir: true\r\n\
+                 Content-Length: {}\r\n\
+                 Connection: close\r\n\r\n",
+                tar_bytes.len()
+            );
+            socket.write_all(response.as_bytes()).await.unwrap();
+            socket.write_all(&tar_bytes).await.unwrap();
+        });
+
+        let dest = tmp.path().join("out");
+        rest_box_for(port, "box1")
+            .copy_out("/root/tree", &dest, CopyOptions::default())
+            .await
+            .expect("copy_out to a missing destination");
+
+        assert_eq!(std::fs::read_to_string(dest.join("a.txt")).unwrap(), "a");
+        assert!(!dest.join("tree").exists(), "the directory must not nest");
+        server.await.unwrap();
+    }
+
     /// A copy-out of `SRC/.` — docker's spelling for "the contents, not the
     /// directory" — has to reach the server *as* `SRC/.`: the server's portal
     /// reads the trailing dot off the raw path, so a client that normalized it
@@ -1948,7 +1996,7 @@ mod tests {
 
     /// A destination with a trailing slash names a directory even when it
     /// does not exist yet: a single-file source must land *inside* it (the
-    /// legacy `detect_extraction_mode` trailing-slash rule), not fail to
+    /// file-based `unpack` trailing-slash rule), not fail to
     /// unpack at the directory-designated path.
     #[tokio::test]
     async fn copy_out_trailing_slash_forces_directory_mode() {

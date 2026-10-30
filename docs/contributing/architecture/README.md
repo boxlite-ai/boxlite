@@ -324,6 +324,29 @@ host runtime, the shim, and the guest agent.
 - `BoxliteError`: Centralized error type.
 - `Constants`: Shared constants (e.g. socket paths, default ports).
 - `Transport`: gRPC transport utilities.
+- `tar`: Packs and unpacks the archives that copies carry between host and guest. Extraction
+  decides where each entry lands and writes it there with tar-rs's `Entry::unpack`, or creates the
+  hard link itself. tar-rs's `unpack_in` would take the place from the entry's own name, so
+  extraction repeats its checks: missing parents are created only inside the destination, a parent
+  that resolves outside it is refused, and a hard link's target is looked up in the destination.
+  The archive's first entry decides where a copy lands, as `docker cp` lands it, so no side channel
+  has to say whether the source was a directory:
+
+  | Destination | First entry | Lands |
+  | --- | --- | --- |
+  | An existing directory | anything | every entry inside it, under its own name |
+  | Missing, with or without a trailing `/` | directory `X/` | `X` as the destination: `X/a` lands as `a` (`./` roots nothing) |
+  | An existing non-directory | directory | nothing: the copy is refused |
+  | Missing, or an existing directory, with a trailing `/` | file or symlink | inside it, under its own name |
+  | Missing, or an existing non-directory, without a trailing `/` | file or symlink with a one-part name | that entry as the destination |
+  | Missing | file with a nested name (`app/main.py`) | every entry inside it, under its own name |
+
+  An existing non-directory destination fails the copy when the path ends in `/` or the
+  archive's leading file has a nested name. Records about other entries (PAX headers, GNU
+  long names) never decide. Entries are written as
+  they are read, so an entry the first one rules out fails the copy as the caller's error, keeping
+  what was written: one outside `X/`, anything after a file that became the destination, or a hard
+  link leading the archive. An empty archive lands nothing.
 
 ## Concurrency model
 
