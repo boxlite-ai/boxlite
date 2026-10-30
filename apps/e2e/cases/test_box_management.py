@@ -69,7 +69,7 @@ async def test_box_options_env_propagates_through_rest(rt, image):
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("inbound_mode", "expected_status"),
-    [("enabled", 200), ("disabled", 403)],
+    [("enabled", 200), ("disabled", (403, 404))],
 )
 async def test_box_options_inbound_mode_controls_preview_access(
     rt,

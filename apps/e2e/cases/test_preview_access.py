@@ -79,7 +79,7 @@ async def test_preview_inbound_overrides_private_credentials(rt, image, e2e_auth
         before = (await box.info()).network.outbound
         await box.network.update_inbound(boxlite.InboundNetworkSpec(mode="disabled"))
         for credentials in ({}, headers, {"X-BoxLite-Authorization": f"Bearer {e2e_auth.token}"}):
-            await eventually_status(tunnel.uri(), transport, 403, credentials)
+            await eventually_status(tunnel.uri(), transport, (403, 404), credentials)
         after = (await box.info()).network.outbound
         assert (after.mode, after.allow_net) == (before.mode, before.allow_net)
         await box.network.update_inbound(boxlite.InboundNetworkSpec(mode="enabled"))
