@@ -132,6 +132,10 @@ Runs inside the Box, receives commands from host via gRPC.
 - `Guest`: Environment initialization (mounts, rootfs, network)
 - `Container`: OCI container lifecycle management (via libcontainer)
 - `Execution`: Command execution with streaming I/O
+- `Files`: Copies in and out as tar streams. An upload streams straight into extraction, landed
+  by the archive's first entry (see `tar` under [Shared library](#shared-library)); an entry
+  that would land under a container mount is refused before it is written, and the entries
+  before it stay.
 
 **Guest-side modules:**
 

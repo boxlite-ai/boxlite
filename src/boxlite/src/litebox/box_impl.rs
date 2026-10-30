@@ -993,8 +993,9 @@ impl BoxImpl {
     /// Stream opaque transfer bytes into the guest at `container_dst`.
     ///
     /// `source` is the archive shape; [`CopySourceKind::Unknown`] when the
-    /// caller cannot tell — the guest then peeks the archive to decide. This is
-    /// the streaming counterpart to [`Self::copy_into`] — no temp archive file.
+    /// caller cannot tell. The guest lands the archive by its first entry
+    /// whatever it says. This is the streaming counterpart to
+    /// [`Self::copy_into`] — no temp archive file.
     pub(crate) async fn copy_in_stream<S>(
         self: std::sync::Arc<Self>,
         stream: S,

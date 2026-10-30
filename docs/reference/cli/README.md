@@ -580,7 +580,9 @@ than the one the box has.
 A directory that merely *contains* a mount is treated differently per direction. Copying
 one **out** is refused (`boxlite cp box:/etc ./etc`), since the archive would carry the
 image's files rather than the mounted ones. Copying **in** is allowed, and refused only
-if a file being written would land on a mount — so `boxlite cp ./x box:/etc` works.
+if a file being written would land on a mount — so `boxlite cp ./x box:/etc` works. The
+copy streams into the box, so that file is refused before it is written, and the files
+written before it stay.
 
 Copy a path outside the mount, or pipe a tar through `boxlite exec`. Files copied in are
 owned by the box's exec user.

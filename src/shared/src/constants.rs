@@ -68,8 +68,8 @@ pub mod files {
     /// Upper bound for the size-capped *fallback* path used when a peer is too
     /// old to stream end-to-end. Transfers that must be buffered to disk/memory
     /// (because the peer omits the `source_is_dir` shape hint) are rejected past
-    /// this size instead of buffering unboundedly. Matches the guest's legacy
-    /// `MAX_UPLOAD_BYTES`.
+    /// this size instead of buffering unboundedly. Matches the cap older
+    /// guests put on uploads that arrive without the hint.
     pub const FALLBACK_CAP_BYTES: u64 = 512 * 1024 * 1024;
 
     /// In-flight chunk count for the bounded channel that bridges blocking

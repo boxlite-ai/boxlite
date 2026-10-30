@@ -210,8 +210,8 @@ type CopySourceKind int
 
 const (
 	// CopySourceUnknown means no archive-shape hint is available. For copy-in,
-	// the guest peeks the archive to decide; for copy-out, the metadata callback
-	// is not called.
+	// the guest lands the archive by its first entry regardless; for copy-out,
+	// the metadata callback is not called.
 	CopySourceUnknown CopySourceKind = iota
 	// CopySourceFile is a single regular file archive.
 	CopySourceFile
@@ -231,8 +231,8 @@ func normalizeCopySourceKind(kind CopySourceKind) CopySourceKind {
 // CopyInStream streams r (raw tar) into guestDst without staging to disk.
 //
 // sourceKind is the archive shape (directory tree vs single file); use
-// CopySourceUnknown when the caller cannot tell — the guest then peeks the
-// tar to decide.
+// CopySourceUnknown when the caller cannot tell. The guest lands the tar by
+// its first entry whatever the kind says.
 //
 // An archive led by one directory becomes a guestDst that does not exist, as
 // docker cp lands a directory. Every later entry must then lie under that

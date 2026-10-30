@@ -177,9 +177,9 @@ async fn copy_in_hands_files_to_the_box_user() {
     let _ = runtime.shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT)).await;
 }
 
-/// The streaming (hinted) copy-in arm must hand created files to the box
-/// user exactly like the staged arm does — the extraction recording is the
-/// list that decides what changes owner.
+/// A streamed copy-in must hand created files to the box user exactly like
+/// the path-based copy does — the extraction recording is the list that
+/// decides what changes owner.
 #[tokio::test(flavor = "multi_thread")]
 async fn streaming_copy_in_hands_files_to_the_box_user() {
     let home = boxlite_test_utils::home::PerTestBoxHome::new();
@@ -239,8 +239,8 @@ async fn streaming_copy_in_hands_files_to_the_box_user() {
         "streamed file must belong to the box user"
     );
 
-    // mkdir_parents conjured /srv/probe — the staged arm hands it over, and
-    // the streamed arm must match, or the workload cannot replace its file.
+    // mkdir_parents conjured /srv/probe — it must be handed over too, or the
+    // workload cannot replace its file.
     let dir_owner = exec_stdout(
         &bx,
         BoxCommand::new("stat").args(["-c", "%u:%g", "/srv/probe"]),

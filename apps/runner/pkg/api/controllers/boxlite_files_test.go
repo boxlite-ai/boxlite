@@ -225,7 +225,7 @@ func TestFilesRoutesAnswerInTheDeclaredEnvelope(t *testing.T) {
 }
 
 // Absent or malformed values mean the client predates the hint → Unknown,
-// which relays the body with the guest peeking the archive to decide.
+// which relays the body for the guest to land by its first entry.
 func TestParseSourceIsDir(t *testing.T) {
 	cases := []struct {
 		raw  string

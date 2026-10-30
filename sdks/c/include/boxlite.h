@@ -82,9 +82,9 @@ typedef enum BoxliteRegistryTransport {
 } BoxliteRegistryTransport;
 
 // Streaming-copy source shape. For copy-in, `BoxliteCopySourceKindUnknown`
-// means the caller cannot tell and the guest peeks at the archive. For
-// copy-out, it means the peer omitted the hint. The C-ABI mirror of the core
-// `CopySourceKind`.
+// means the caller cannot tell; the guest lands every upload by the
+// archive's first entry regardless. For copy-out, it means the peer omitted
+// the hint. The C-ABI mirror of the core `CopySourceKind`.
 typedef enum BoxliteCopySourceKind {
   BoxliteCopySourceKindUnknown = 0,
   BoxliteCopySourceKindFile = 1,
@@ -692,8 +692,8 @@ void boxlite_copy_out_free(struct CBoxCopyOutStream *stream);
 //
 // `source_kind` describes the archive shape: `BoxliteCopySourceKind`'s
 // discriminant (`...Unknown`=0, `...File`=1, `...Dir`=2), or 0 when the
-// caller cannot tell (older clients) — the guest then peeks the archive to
-// decide.
+// caller cannot tell (older clients). The guest lands the archive by its
+// first entry whatever the kind says.
 // Taken as an integer because C callers can pass any value, and
 // out-of-range discriminants must behave as Unknown rather than as an
 // invalid Rust enum.
