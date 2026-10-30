@@ -75,6 +75,10 @@ func NewExecutor(cfg *ExecutorConfig) (*Executor, error) {
 
 // Execute processes a job and updates its status
 func (e *Executor) Execute(ctx context.Context, job *apiclient.Job) {
+	if job.GetType() == apiclient.JOBTYPE_RESIZE_BOX {
+		e.executeResize(ctx, job)
+		return
+	}
 	// Extract trace context from job to continue distributed trace
 	ctx = e.extractTraceContext(ctx, job)
 

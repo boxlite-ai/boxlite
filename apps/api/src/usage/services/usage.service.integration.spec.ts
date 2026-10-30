@@ -26,6 +26,7 @@ import { ReplaceBoxNetworkFlags1791000000000 } from '../../migrations/pre-deploy
 import { DropBoxNetworkFlags1791000000000 } from '../../migrations/post-deploy/1791000000000-drop-box-network-flags-migration'
 import { AddBoxSnapshotStates1791200000000 } from '../../migrations/pre-deploy/1791200000000-add-box-snapshot-states-migration'
 import { AddGuestPrivileged1792540800000 } from '../../migrations/pre-deploy/1792540800000-add-guest-privileged-migration'
+import { AddCloudResizeJobs1793232000000 } from '../../migrations/pre-deploy/1793232000000-add-cloud-resize-jobs-migration'
 import { AddBoxInitialSnapshot1792972800000 } from '../../migrations/pre-deploy/1792972800000-add-box-initial-snapshot-migration'
 import { BoxUsagePeriod } from '../entities/box-usage-period.entity'
 import { BoxUsagePeriodArchive } from '../entities/box-usage-period-archive.entity'
@@ -283,6 +284,7 @@ describeIfDatabase('UsageService (integration, real Postgres + Redis)', () => {
       // Adds `box.privileged`, which the entity declares.
       await new AddGuestPrivileged1792540800000().up(queryRunner)
       await new AddBoxInitialSnapshot1792972800000().up(queryRunner)
+      await new AddCloudResizeJobs1793232000000().up(queryRunner)
     } finally {
       await queryRunner.release()
     }

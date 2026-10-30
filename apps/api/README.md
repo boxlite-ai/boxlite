@@ -3,6 +3,45 @@
 The NestJS control-plane service. See the [apps hub](../README.md) for how it fits with the
 other services and [`API.md`](../API.md) for its interfaces.
 
+## Cloud resize
+
+`BoxResizeService` accepts the existing SDK/CLI resize request. Under a usage
+lease and Box row lock, it stores target CPU/GiB and a `RESIZE_BOX` job in
+`BILLING_PENDING`. `UsageService` closes the old interval and opens the target
+interval in the same transaction that moves the job to `APPLY`. Billing errors
+leave the target intact and retry at startup and every 15 seconds. Daily rollover
+excludes billing-pending jobs before its batch limit; APPLY jobs continue normal
+daily billing. State events recheck the current Box so delayed events cannot
+replace the resize's billing snapshot.
+
+`ResizeJobService` uses database time, row locks and claim tokens. It requeues
+expired leases every 15 seconds and failed attempts with jittered 1–60 second
+backoff. Other jobs keep their existing failure policy. Conflicting lifecycle
+work is blocked by `resizeJobId`/`pending`. Same-target requests reuse the job;
+the HTTP wait expires after 30 seconds without cancelling it.
+
+Rollout order: install the additive migration, upgrade every API instance and
+Runner, then set `CLOUD_RESIZE_ENABLED=true` (default false). Old API claim/status
+writers cannot safely coexist with active resize jobs; older Runner clients also
+reject the new `RESIZE_BOX` response enum. Disable admission before
+rollback and drain all resize jobs before restoring old API binaries or schema.
+Disabling admission still permits queries and joining an existing target.
+
+If the Guest stops, the job retains its target and retries after the same Box
+restarts. Resize never creates a replacement VM or automatically restarts a
+workload. Operators can restore the existing Box through its owning Runner's
+authenticated `POST /boxes/:boxId/start` with the existing metadata. A permanently
+lost Runner/Box needs operational recovery; indefinite retries do not reconstruct
+its data, and target billing continues until the operation is resolved.
+
+Validation: `make test:apps:api` includes PostgreSQL/Redis tests when `DB_*` and
+`REDIS_*` are configured. On the isolated local stack, build with
+`make dev:runner-ci`, `make dev:node`, and `make cli`; start it with
+`CLOUD_RESIZE_ENABLED=true make test:runner-ci:infra`, then run
+`make test:runner-ci:resize`. This opt-in test kills and restarts only the isolated
+API/Runner/proxy processes, retains failures for inspection, and removes its Box
+after success. It requires KVM and the built SDKs.
+
 ## Business events
 
 `recordBusinessEvent` (`src/common/utils/business-event.util.ts`) writes one structured log record

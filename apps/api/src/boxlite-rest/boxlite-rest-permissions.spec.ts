@@ -34,6 +34,7 @@ const EXPECTED: Record<string, OrganizationResourcePermission[] | null> = {
   removeCache: [OrganizationResourcePermission.DELETE_VOLUMES],
   // box controller
   createBox: [WRITE_BOXES],
+  resizeBox: [WRITE_BOXES],
   listBoxes: null,
   getBox: null,
   headBox: null,

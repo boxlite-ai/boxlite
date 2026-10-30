@@ -439,6 +439,7 @@ export function boxMigrationConfig(env: NodeJS.ProcessEnv = process.env) {
 }
 
 const configuration = {
+  cloudResizeEnabled: process.env.CLOUD_RESIZE_ENABLED === 'true',
   production: process.env.NODE_ENV === 'production',
   version: process.env.VERSION || '0.0.0-dev',
   environment: process.env.ENVIRONMENT,

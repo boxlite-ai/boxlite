@@ -99,6 +99,7 @@ help:
 	@echo "    make kernel:dind           - Prepare DinD firmware (Linux x86_64 / macOS arm64)"
 	@echo "    make kernel:swarm          - Build Linux x86_64 DinD firmware with IPVS/VXLAN"
 	@echo "    make test:runner-ci:infra  - Start and verify isolated local API/runner infrastructure"
+	@echo "    make test:runner-ci:resize - Verify cloud resize, billing and crash recovery through SDK/CLI"
 	@echo "    make test:runner-ci:dind   - Verify guest Docker and Compose through SDK/API/runner"
 	@echo "    make test:runner-ci:swarm-stop - Preserve the last Swarm scene and stop its guests"
 	@echo "    make test:runner-ci:dind-diagnose - Inspect a retained Docker guest after failure"

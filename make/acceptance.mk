@@ -2,6 +2,10 @@ PHONY_TARGETS += dev\:runner-ci test\:runner-ci\:infra test\:runner-ci\:dind
 PHONY_TARGETS += fmt\:runner-ci
 PHONY_TARGETS += test\:runner-ci\:cache
 PHONY_TARGETS += test\:runner-ci\:cache-diagnose
+PHONY_TARGETS += test\:runner-ci\:resize
+
+test\:runner-ci\:resize:
+	@CLOUD_RESIZE_ENABLED=true PYTHONUNBUFFERED=1 PYTHONPATH=apps/infra-local .venv/bin/python -m compose.resize_acceptance
 ACTION ?= up
 
 PHONY_TARGETS += kernel\:dind

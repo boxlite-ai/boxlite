@@ -7124,6 +7124,7 @@ components:
     JobType:
       description: The type of the job
       enum:
+      - RESIZE_BOX
       - CREATE_BOX
       - START_BOX
       - STOP_BOX
@@ -7138,6 +7139,7 @@ components:
       type: string
     Job:
       example:
+        claimToken: claimToken
         id: job123
         type: CREATE_BOX
         status: PENDING
@@ -7150,6 +7152,9 @@ components:
         createdAt: 2024-10-01T12:00:00Z
         updatedAt: 2024-10-01T12:00:00Z
       properties:
+        claimToken:
+          description: Lease token required for resize job heartbeats and results
+          type: string
         id:
           description: The ID of the job
           example: job123
@@ -7209,7 +7214,8 @@ components:
     PaginatedJobs:
       example:
         items:
-        - id: job123
+        - claimToken: claimToken
+          id: job123
           type: CREATE_BOX
           status: PENDING
           resourceType: BOX
@@ -7220,7 +7226,8 @@ components:
           errorMessage: Failed to create box
           createdAt: 2024-10-01T12:00:00Z
           updatedAt: 2024-10-01T12:00:00Z
-        - id: job123
+        - claimToken: claimToken
+          id: job123
           type: CREATE_BOX
           status: PENDING
           resourceType: BOX
@@ -7254,7 +7261,8 @@ components:
     PollJobsResponse:
       example:
         jobs:
-        - id: job123
+        - claimToken: claimToken
+          id: job123
           type: CREATE_BOX
           status: PENDING
           resourceType: BOX
@@ -7265,7 +7273,8 @@ components:
           errorMessage: Failed to create box
           createdAt: 2024-10-01T12:00:00Z
           updatedAt: 2024-10-01T12:00:00Z
-        - id: job123
+        - claimToken: claimToken
+          id: job123
           type: CREATE_BOX
           status: PENDING
           resourceType: BOX
@@ -7287,10 +7296,14 @@ components:
       type: object
     UpdateJobStatus:
       example:
+        claimToken: claimToken
         status: IN_PROGRESS
         errorMessage: Failed to create box
         resultMetadata: resultMetadata
       properties:
+        claimToken:
+          description: Token returned by the resize job claim
+          type: string
         status:
           allOf:
           - $ref: "#/components/schemas/JobStatus"

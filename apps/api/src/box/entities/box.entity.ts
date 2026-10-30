@@ -42,6 +42,10 @@ import { SNAPSHOT_OPERATION_STATES } from '../constants/box.constants'
 @Index('box_labels_gin_full_idx', { synchronize: false })
 @Index('idx_box_volumes_gin', { synchronize: false })
 export class Box {
+  /** The owning job keeps a running box fenced until its target is applied. */
+  @Column({ type: 'uuid', nullable: true })
+  resizeJobId: string | null = null
+
   @PrimaryColumn({ type: 'character varying', length: BOX_ID_LENGTH })
   id: string
 
@@ -339,6 +343,7 @@ export class Box {
     if (this.state === BoxState.ERROR && this.desiredState !== BoxDesiredState.DESTROYED) {
       changes.pending = false
     }
+    if (this.resizeJobId) changes.pending = true
 
     if (this.state === BoxState.DESTROYED || this.state === BoxState.ARCHIVED) {
       changes.runnerId = null

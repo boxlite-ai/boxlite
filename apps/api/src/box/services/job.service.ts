@@ -4,10 +4,11 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common'
+import { ConflictException, Injectable, Logger, NotFoundException, Optional } from '@nestjs/common'
 import { JobConflictError } from '../errors/job-conflict.error'
 import { InjectRepository } from '@nestjs/typeorm'
-import { Repository, LessThan, In, EntityManager } from 'typeorm'
+import { Repository, LessThan, In, Not, EntityManager } from 'typeorm'
+import { ResizeJobService } from './resize-job.service'
 import { Job } from '../entities/job.entity'
 import { JobDto, JobStatus, JobType, ResourceType } from '../dto/job.dto'
 import { ResourceTypeForJobType } from '../dto/job-type-map.dto'
@@ -32,6 +33,7 @@ export class JobService {
     private readonly jobRepository: Repository<Job>,
     @InjectRedis() private readonly redis: Redis,
     private readonly jobStateHandlerService: JobStateHandlerService,
+    @Optional() private readonly resizeJobs?: ResizeJobService,
   ) {}
 
   /**
@@ -93,7 +95,7 @@ export class JobService {
     }
   }
 
-  private async notifyRunner(runnerId: string, jobId: string): Promise<void> {
+  async notifyRunner(runnerId: string, jobId: string): Promise<void> {
     try {
       await this.redis.lpush(this.getRunnerQueueKey(runnerId), jobId)
       this.logger.debug(`Notified runner ${runnerId} about job ${jobId} via Redis`)
@@ -234,6 +236,10 @@ export class JobService {
       })
       if (!job) {
         throw new NotFoundException(`Job with ID ${jobId} not found`)
+      }
+
+      if (job.type === JobType.RESIZE_BOX) {
+        throw new ConflictException('Resize reports require the leased status handler')
       }
 
       if (!this.isValidStatusTransition(job.status, status)) {
@@ -406,7 +412,7 @@ export class JobService {
       const staleJobs = await this.jobRepository.find({
         where: {
           status: JobStatus.IN_PROGRESS,
-          type: In(Object.values(JobType)),
+          type: In(Object.values(JobType).filter((type) => type !== JobType.RESIZE_BOX)),
           updatedAt: LessThan(threshold),
         },
         take: 500,
@@ -445,20 +451,23 @@ export class JobService {
    * This prevents duplicate processing of the same job
    */
   private async claimPendingJobs(runnerId: string, limit: number): Promise<JobDto[]> {
+    const resizeClaims = (await this.resizeJobs?.claim(runnerId, limit)) ?? []
+    if (resizeClaims.length === limit) return resizeClaims
     // Find pending jobs
     const jobs = await this.jobRepository.find({
       where: {
         runnerId,
         status: JobStatus.PENDING,
+        type: Not(JobType.RESIZE_BOX),
       },
       order: {
         createdAt: 'ASC',
       },
-      take: limit,
+      take: limit - resizeClaims.length,
     })
 
     if (jobs.length === 0) {
-      return []
+      return resizeClaims
     }
 
     const now = new Date()
@@ -496,6 +505,6 @@ export class JobService {
       this.logger.debug(`Claimed ${claimedJobs.length} existing pending jobs for runner ${runnerId}`)
     }
 
-    return claimedJobs
+    return [...resizeClaims, ...claimedJobs]
   }
 }
