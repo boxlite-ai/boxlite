@@ -930,14 +930,13 @@ Callbacks are invoked on the **calling thread**. Do not block in callbacks.
   land a directory as `docker cp` does: it becomes a destination that does not
   exist, and lands under its own name in one that does. End the source path
   with `/.` to copy only the contents either way, as before.
-- `boxlite_copy_in_start` takes a `BoxliteCopySourceKind source_kind` as its
-  third argument instead of `bool source_is_dir`. Use
-  `BoxliteCopySourceKindDir` for a directory tree,
-  `BoxliteCopySourceKindFile` for a single file, or
-  `BoxliteCopySourceKindUnknown` when the caller cannot tell (older
-  clients). The guest lands every upload by the archive's first entry, so
-  the kind does not change where it lands; `...Dir` makes a non-recursive
-  copy fail before anything is sent.
+- `boxlite_copy_in_start` no longer takes a source shape (`bool
+  source_is_dir`, later `BoxliteCopySourceKind source_kind`), and
+  `boxlite_copy_out_start` no longer reports one through `out_source_kind`;
+  `BoxliteCopySourceKind` is gone. The archive's first entry says whether it
+  holds a file or a directory, and the receiver lands it by that, as
+  `docker cp` does. A guest from before this change, sent no shape, spools
+  the upload and caps it at 512 MiB.
 
 Before:
 ```c
@@ -982,17 +981,15 @@ while (!request_done) {
 
 Before:
 ```c
-boxlite_copy_in_start(handle, "/dst", true, copy_cb, user_data, &error);
+boxlite_copy_in_start(handle, "/dst", BoxliteCopySourceKindDir, copy_cb, user_data, &error);
+int32_t kind;
+CBoxCopyOutStream *out = boxlite_copy_out_start(handle, "/src", &kind, &error);
 ```
 
 After:
 ```c
-/* dir tree */
-boxlite_copy_in_start(handle, "/dst", BoxliteCopySourceKindDir, copy_cb, user_data, &error);
-/* one file */
-boxlite_copy_in_start(handle, "/dst", BoxliteCopySourceKindFile, copy_cb, user_data, &error);
-/* old client, shape unknown */
-boxlite_copy_in_start(handle, "/dst", BoxliteCopySourceKindUnknown, copy_cb, user_data, &error);
+boxlite_copy_in_start(handle, "/dst", copy_cb, user_data, &error);
+CBoxCopyOutStream *out = boxlite_copy_out_start(handle, "/src", &error);
 ```
 
 ### From 0.1.x to 0.2.0

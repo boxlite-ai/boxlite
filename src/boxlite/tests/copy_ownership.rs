@@ -14,7 +14,7 @@
 mod common;
 
 use boxlite::runtime::options::{BoxOptions, RootfsSpec};
-use boxlite::{BoxCommand, CopyOptions, CopySourceKind};
+use boxlite::{BoxCommand, CopyOptions};
 use tempfile::TempDir;
 use tokio_stream::StreamExt;
 
@@ -208,7 +208,7 @@ async fn streaming_copy_in_hands_files_to_the_box_user() {
     }
     std::fs::set_permissions(&src, perms).unwrap();
 
-    let (source_is_dir, tar) = boxlite_shared::tar::pack_stream(
+    let tar = boxlite_shared::tar::pack_stream(
         src.clone(),
         boxlite_shared::tar::PackContext {
             follow_symlinks: false,
@@ -217,16 +217,10 @@ async fn streaming_copy_in_hands_files_to_the_box_user() {
     )
     .await
     .expect("pack_stream");
-    assert!(!source_is_dir);
 
-    bx.copy_in_stream(
-        tar,
-        "/srv/probe/stream-payload.txt",
-        CopySourceKind::from_wire(Some(source_is_dir)),
-        CopyOptions::default(),
-    )
-    .await
-    .expect("streaming copy_in failed");
+    bx.copy_in_stream(tar, "/srv/probe/stream-payload.txt", CopyOptions::default())
+        .await
+        .expect("streaming copy_in failed");
 
     let file_owner = exec_stdout(
         &bx,

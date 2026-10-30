@@ -81,16 +81,6 @@ typedef enum BoxliteRegistryTransport {
   BoxliteRegistryTransportHttp = 1,
 } BoxliteRegistryTransport;
 
-// Streaming-copy source shape. For copy-in, `BoxliteCopySourceKindUnknown`
-// means the caller cannot tell; the guest lands every upload by the
-// archive's first entry regardless. For copy-out, it means the peer omitted
-// the hint. The C-ABI mirror of the core `CopySourceKind`.
-typedef enum BoxliteCopySourceKind {
-  BoxliteCopySourceKindUnknown = 0,
-  BoxliteCopySourceKindFile = 1,
-  BoxliteCopySourceKindDir = 2,
-} BoxliteCopySourceKind;
-
 // Opaque handle wrapping an `AdvancedBoxOptions`. Allocated via
 // `boxlite_advanced_options_new`, freed via `boxlite_advanced_options_free`.
 typedef struct AdvancedBoxOptionsHandle AdvancedBoxOptionsHandle;
@@ -660,14 +650,11 @@ enum BoxliteErrorCode boxlite_copy_out(CBoxHandle *handle,
 
 // Begin downloading `guest_src` as a pull-based raw archive stream.
 //
-// This call blocks until the stream and its optional source-shape hint are
-// ready. On success the returned handle must be released with
-// [`boxlite_copy_out_free`]. A non-null `out_source_kind` is initialized to
-// `BoxliteCopySourceKindUnknown` and updated to the `...File` or `...Dir`
-// variant when the peer supplies the hint.
+// This call blocks until the stream is ready. On success the returned handle
+// must be released with [`boxlite_copy_out_free`]. The archive's first entry
+// tells the receiver how it lands.
 struct CBoxCopyOutStream *boxlite_copy_out_start(CBoxHandle *handle,
                                                  const char *guest_src,
-                                                 int32_t *out_source_kind,
                                                  CBoxliteError *out_error);
 
 // Read the next raw archive bytes from a copy-out stream.
@@ -688,18 +675,10 @@ enum BoxliteErrorCode boxlite_copy_out_read(struct CBoxCopyOutStream *stream,
 // a read with this function.
 void boxlite_copy_out_free(struct CBoxCopyOutStream *stream);
 
-// Begin a streaming copy-in, returning an opaque transfer handle.
-//
-// `source_kind` describes the archive shape: `BoxliteCopySourceKind`'s
-// discriminant (`...Unknown`=0, `...File`=1, `...Dir`=2), or 0 when the
-// caller cannot tell (older clients). The guest lands the archive by its
-// first entry whatever the kind says.
-// Taken as an integer because C callers can pass any value, and
-// out-of-range discriminants must behave as Unknown rather than as an
-// invalid Rust enum.
+// Begin a streaming copy-in, returning an opaque transfer handle. The
+// guest lands the archive by its first entry.
 struct CBoxCopyInStream *boxlite_copy_in_start(CBoxHandle *handle,
                                                const char *guest_dst,
-                                               int32_t source_kind,
                                                CBoxCopyCb copy_cb,
                                                void *user_data,
                                                CBoxliteError *out_error);

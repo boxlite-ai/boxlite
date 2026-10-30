@@ -25,7 +25,7 @@ use crate::event_listener::EventListener;
 #[cfg(target_os = "linux")]
 use crate::fs::BindMountHandle;
 use crate::litebox::BoxTunnel;
-use crate::litebox::copy::{CopyOptions, CopySourceKind};
+use crate::litebox::copy::CopyOptions;
 use crate::lock::LockGuard;
 use crate::metrics::{BoxMetrics, BoxMetricsStorage};
 use crate::net::NetworkBackend;
@@ -990,17 +990,14 @@ impl BoxImpl {
         Ok(())
     }
 
-    /// Stream opaque transfer bytes into the guest at `container_dst`.
-    ///
-    /// `source` is the archive shape; [`CopySourceKind::Unknown`] when the
-    /// caller cannot tell. The guest lands the archive by its first entry
-    /// whatever it says. This is the streaming counterpart to
-    /// [`Self::copy_into`] — no temp archive file.
+    /// Stream tar bytes into the guest at `container_dst`, landed by the
+    /// archive's first entry. This is the streaming counterpart to
+    /// [`Self::copy_into`] — no temp archive file. The bytes are the
+    /// caller's, so `opts.recursive` is not checked against them.
     pub(crate) async fn copy_in_stream<S>(
         self: std::sync::Arc<Self>,
         stream: S,
         container_dst: String,
-        source: CopySourceKind,
         opts: CopyOptions,
     ) -> BoxliteResult<()>
     where
@@ -1017,11 +1014,6 @@ impl BoxImpl {
                 "destination path cannot be empty".into(),
             ));
         }
-        // Match the path-based copy_into contract: a directory tree with
-        // recursive=false is rejected before anything is streamed.
-        if source.is_dir() {
-            opts.validate_for_dir()?;
-        }
         // Materialise borrowed strings before the first await so the future
         // never holds `&BoxImpl` across an await point (avoids an HRTB `Send`
         // bound that trips tokio::spawn).
@@ -1029,24 +1021,17 @@ impl BoxImpl {
         let live = self.live_state().await?;
         let mut files_iface = live.guest_session.files().await?;
         files_iface
-            .upload_stream(
-                stream,
-                &container_dst,
-                Some(&cid),
-                true,
-                opts.overwrite,
-                source,
-            )
+            .upload_stream(stream, &container_dst, Some(&cid), true, opts.overwrite)
             .await
     }
 
-    /// Download `container_src` as a byte stream plus its source shape. This is
-    /// the streaming counterpart to [`Self::copy_out`] — no temp archive file.
+    /// Download `container_src` as a tar byte stream. This is the streaming
+    /// counterpart to [`Self::copy_out`] — no temp archive file.
     pub(crate) async fn copy_out_stream(
         self: std::sync::Arc<Self>,
         container_src: String,
         opts: CopyOptions,
-    ) -> BoxliteResult<(boxlite_shared::BoxByteStream, CopySourceKind)> {
+    ) -> BoxliteResult<boxlite_shared::BoxByteStream> {
         if self.shutdown_token.is_cancelled() {
             return Err(BoxliteError::Stopped(
                 "Handle invalidated after stop(). Use runtime.get() to get a new handle.".into(),

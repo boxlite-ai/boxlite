@@ -166,11 +166,10 @@ impl Drop for PipeWriter {
 
 /// Stream `src` into a tar byte stream.
 ///
-/// Returns the source shape (`source_is_dir = src.is_dir()`) alongside the
-/// stream. The pack runs on a `spawn_blocking` thread; a pack failure surfaces
-/// as a terminal `Err` item on the stream.
-pub async fn pack_stream(src: PathBuf, opts: PackContext) -> BoxliteResult<(bool, BoxByteStream)> {
-    let source_is_dir = src.is_dir();
+/// The archive's first entry carries its shape (see [`Landing`]). The pack
+/// runs on a `spawn_blocking` thread; a pack failure surfaces as a terminal
+/// `Err` item on the stream.
+pub async fn pack_stream(src: PathBuf, opts: PackContext) -> BoxliteResult<BoxByteStream> {
     if !src.exists() {
         return Err(BoxliteError::NotFound(format!(
             "source path {} does not exist",
@@ -191,7 +190,7 @@ pub async fn pack_stream(src: PathBuf, opts: PackContext) -> BoxliteResult<(bool
             let _ = task_tx.blocking_send(Err(io::Error::other(e)));
         }
     });
-    Ok((source_is_dir, Box::pin(ReceiverStream::new(rx))))
+    Ok(Box::pin(ReceiverStream::new(rx)))
 }
 
 /// Body of the pack task: runs [`pack_blocking`] under `catch_unwind` so a
@@ -1815,22 +1814,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn stream_pack_reports_source_is_dir() {
-        let tmp = TempDir::new().unwrap();
-
-        let file = tmp.path().join("f.txt");
-        std::fs::write(&file, b"x").unwrap();
-        let (is_dir, _stream) = pack_stream(file, default_pack()).await.unwrap();
-        assert!(!is_dir);
-
-        let dir = tmp.path().join("d");
-        std::fs::create_dir(&dir).unwrap();
-        std::fs::write(dir.join("f.txt"), b"x").unwrap();
-        let (is_dir, _stream) = pack_stream(dir, default_pack()).await.unwrap();
-        assert!(is_dir);
-    }
-
-    #[tokio::test]
     async fn stream_pack_nonexistent_source_errors() {
         let tmp = TempDir::new().unwrap();
         let result = pack_stream(tmp.path().join("does-not-exist"), default_pack()).await;
@@ -1843,7 +1826,7 @@ mod tests {
         let src = tmp.path().join("hello.txt");
         std::fs::write(&src, b"streaming hello").unwrap();
 
-        let (source_is_dir, stream) = pack_stream(
+        let stream = pack_stream(
             src,
             PackContext {
                 follow_symlinks: true,
@@ -1852,7 +1835,6 @@ mod tests {
         )
         .await
         .unwrap();
-        assert!(!source_is_dir);
 
         let dest = tmp.path().join("dest.txt");
         let report = unpack_stream(stream, dest.clone(), uc(true, true, false))
@@ -1876,7 +1858,7 @@ mod tests {
         std::fs::write(src_dir.join("a.txt"), "aaa").unwrap();
         std::fs::write(src_dir.join("sub").join("b.txt"), "bbb").unwrap();
 
-        let (source_is_dir, stream) = pack_stream(
+        let stream = pack_stream(
             src_dir,
             PackContext {
                 follow_symlinks: true,
@@ -1885,7 +1867,6 @@ mod tests {
         )
         .await
         .unwrap();
-        assert!(source_is_dir);
 
         let dest = tmp.path().join("out");
         let report = unpack_stream(stream, dest.clone(), uc(true, true, true))
@@ -2069,7 +2050,7 @@ mod tests {
             follow_symlinks: false,
             include_parent: !contents,
         };
-        let (_, stream) = pack_stream(src.to_path_buf(), opts).await?;
+        let stream = pack_stream(src.to_path_buf(), opts).await?;
         unpack_stream(stream, dest.to_path_buf(), uc(true, true, true)).await
     }
 
@@ -2123,7 +2104,7 @@ mod tests {
     async fn a_missing_dest_needs_no_overwrite() {
         let tmp = TempDir::new().unwrap();
         let src = source_tree(tmp.path());
-        let (_, stream) = pack_stream(src.clone(), default_pack()).await.unwrap();
+        let stream = pack_stream(src.clone(), default_pack()).await.unwrap();
         unpack_stream(stream, tmp.path().join("streamed"), uc(false, true, true))
             .await
             .unwrap();
