@@ -19,7 +19,7 @@ from images import default_image
 
 REPO = Path(__file__).resolve().parents[3]
 HDR = REPO / "sdks/c/include"
-LIB_DIR = REPO / "target/release"
+LIB_DIR = Path(os.environ.get("BOXLITE_E2E_NATIVE_LIB_DIR", REPO / "target/release"))
 DRIVERS = REPO / "apps/e2e/sdks/c"
 IMAGE = default_image()
 
@@ -31,10 +31,10 @@ def _has_libboxlite() -> bool:
     return False
 
 
-def _build_c(src_name: str) -> Path:
+def _build_c(src_name: str, build_dir: Path) -> Path:
     src = DRIVERS / src_name
     assert src.exists(), f"{src} missing"
-    bin_path = Path(f"/tmp/boxlite_e2e_c_{src_name.replace('.c', '')}")
+    bin_path = build_dir / Path(src_name).stem
     subprocess.run(
         [
             "gcc", str(src),
@@ -45,6 +45,11 @@ def _build_c(src_name: str) -> Path:
         check=True, capture_output=True, text=True, timeout=120,
     )
     return bin_path
+
+@pytest.fixture(scope="module")
+def c_build_dir(tmp_path_factory):
+    return tmp_path_factory.mktemp("e2e-c-coverage")
+
 
 
 @pytest.fixture(scope="module")
@@ -65,20 +70,20 @@ def c_env():
     }
 
 
-def _run_c(c_env, src_name: str) -> subprocess.CompletedProcess:
+def _run_c(c_env, build_dir: Path, src_name: str) -> subprocess.CompletedProcess:
     try:
-        bin_path = _build_c(src_name)
+        bin_path = _build_c(src_name, build_dir)
     except subprocess.CalledProcessError as e:
-        pytest.skip(f"gcc build {src_name} failed: {e.stderr[:400]}")
+        pytest.fail(f"gcc build {src_name} failed:\n{e.stderr}")
     return subprocess.run(
         [str(bin_path)], env=c_env, timeout=180,
         capture_output=True, text=True,
     )
 
 
-def test_c_exec(c_env):
+def test_c_exec(c_env, c_build_dir):
     """Exec echo with stdout capture via callback."""
-    r = _run_c(c_env, "e2e_exec.c")
+    r = _run_c(c_env, c_build_dir, "e2e_exec.c")
     assert r.returncode == 0, (
         f"exit={r.returncode}\nstdout:\n{r.stdout}\nstderr:\n{r.stderr}"
     )
@@ -86,9 +91,9 @@ def test_c_exec(c_env):
     assert "EXIT_CODE=0" in r.stdout
 
 
-def test_c_errors(c_env):
+def test_c_errors(c_env, c_build_dir):
     """Error typing: bogus image create should not leak Internal(1)."""
-    r = _run_c(c_env, "e2e_errors.c")
+    r = _run_c(c_env, c_build_dir, "e2e_errors.c")
     assert r.returncode == 0, (
         f"exit={r.returncode}\nstdout:\n{r.stdout}\nstderr:\n{r.stderr}"
     )

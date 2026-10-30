@@ -31,8 +31,9 @@
         packages = with pkgs; [
           rustup gcc gnumake git curl wget file pkg-config patchelf
           openssl gperf
-          python3 python3Packages.pip python3Packages.pyelftools
+          (python3.withPackages (ps: [ ps.pip ps.pyelftools ps.pytest ]))
           go
+          nodejs_22 corepack postgresql_17 redis mountpoint-s3
           llvm libclang
           flex bison bc elfutils
           meson ninja libcap
@@ -43,6 +44,8 @@
         LIBRARY_PATH = "${pkgs.glibc.static}/lib";
         BOXLITE_LIBRESOLV_DIR = "${resolvDir}";
         shellHook = ''
+          # Python extension modules (greenlet, PyO3) link libstdc++ dynamically.
+          export LD_LIBRARY_PATH="${pkgs.stdenv.cc.cc.lib}/lib''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
           # musl only via PATH aliases; as a package it would leak into host gcc links.
           export PATH="''${CARGO_HOME:-$HOME/.cargo}/bin:${muslAlias}/bin:$PATH"
         '';

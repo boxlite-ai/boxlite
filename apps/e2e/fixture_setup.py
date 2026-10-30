@@ -1,58 +1,22 @@
 #!/usr/bin/env python3
-"""Set up the e2e suite's data fixture against a running stack.
-
-Idempotent. Safe to re-run after bootstrap.sh.
-
-Configures:
-  1. Required snapshots active (alpine:3.23, ubuntu:22.04)
-  2. Admin org has non-zero per-box quotas
-  3. `[profiles.p1]` in ~/.boxlite/credentials.toml points at the local API
-"""
+"""Configure the authenticated E2E organization and isolated client profiles."""
 from __future__ import annotations
 
 import json
 import os
 import sys
-import time
+import subprocess
+import uuid
 import urllib.request
 import urllib.error
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent / "lib"))
-from images import default_image
 
 API_URL = os.environ.get("BOXLITE_E2E_API_URL", "http://localhost:3000/api")
 
 
-def _read_admin_key_from_secrets() -> str | None:
-    """Bootstrap.sh writes the (random, persistent) admin API key to
-    /etc/boxlite-secrets.env. Read it from there so fixture_setup
-    automatically picks up whatever bootstrap minted, instead of the
-    user pasting it from terminal output."""
-    secrets = Path("/etc/boxlite-secrets.env")
-    if not secrets.exists():
-        return None
-    try:
-        for ln in secrets.read_text().splitlines():
-            if ln.startswith("ADMIN_API_KEY="):
-                return ln.split("=", 1)[1].strip()
-    except PermissionError:
-        return None
-    return None
-
-
-ADMIN_KEY = (
-    os.environ.get("BOXLITE_E2E_ADMIN_KEY")
-    or _read_admin_key_from_secrets()
-    or "devkey"   # only used when bootstrap hasn't run yet
-)
-SNAPSHOTS_TO_REGISTER = [default_image(), "ubuntu:22.04", "ubuntu:24.04"]
-SNAPSHOT_WAIT_SECONDS = 180
-CRED_PATH = (
-    Path(os.environ["BOXLITE_HOME"]) / "credentials.toml"
-    if os.environ.get("BOXLITE_HOME")
-    else Path.home() / ".boxlite" / "credentials.toml"
-)
+ADMIN_KEY = os.environ.get("BOXLITE_E2E_ADMIN_KEY", "")
+CRED_PATH = Path(os.environ["BOXLITE_HOME"]) / "credentials.toml" if os.environ.get("BOXLITE_HOME") else None
 
 
 def http(method: str, path: str, body=None):
@@ -79,84 +43,34 @@ def me() -> dict:
     return body
 
 
-def _snapshot_state(name: str) -> tuple[str | None, str | None]:
-    """Read snapshot state directly from Postgres — the API's snapshot GET
-    routes are scoped behind a different controller surface, but the
-    fixture lives next to the DB anyway, so use the canonical source."""
-    import subprocess
-    sql = f"SELECT state, \"errorReason\" FROM snapshot WHERE name = '{name}' LIMIT 1;"
-    r = subprocess.run(
-        ["psql", "-h", "localhost", "-U", "boxlite", "-d", "boxlite_dev",
-         "-tAF", "|", "-c", sql],
-        env={**os.environ, "PGPASSWORD": "boxlite"},
-        capture_output=True, text=True,
-    )
-    line = r.stdout.strip()
-    if not line:
-        return None, None
-    parts = line.split("|", 1)
-    return parts[0], (parts[1] if len(parts) > 1 else None)
-
-
-def register_snapshot(name: str):
-    """POST /snapshots if missing; waits (polling DB) until state == active."""
-    state, _ = _snapshot_state(name)
-    if state is None:
-        status, body = http("POST", "/snapshots", {
-            "name": name, "imageName": name,
-            "cpu": 1, "memory": 1, "disk": 2,
-        })
-        if status not in (200, 201):
-            sys.exit(f"  POST /snapshots → {status} {body}")
-        print(f"  created {name} — waiting for runner pull")
-    elif state == "error":
-        # Wipe + recreate so the runner retries (e.g. registry was down before).
-        import subprocess
-        subprocess.run(
-            ["psql", "-h", "localhost", "-U", "boxlite", "-d", "boxlite_dev",
-             "-c", f"DELETE FROM snapshot WHERE name = '{name}';"],
-            env={**os.environ, "PGPASSWORD": "boxlite"}, check=True,
-        )
-        return register_snapshot(name)
-    else:
-        print(f"  {name}: state = {state} (existing)")
-
-    deadline = time.time() + SNAPSHOT_WAIT_SECONDS
-    while time.time() < deadline:
-        st, err = _snapshot_state(name)
-        if st == "active":
-            print(f"  {name}: active ✓")
-            return
-        if st == "error":
-            sys.exit(f"  {name}: {err}")
-        time.sleep(3)
-    sys.exit(f"  {name} did not reach active within {SNAPSHOT_WAIT_SECONDS}s")
-
-
-def patch_admin_box_limits():
-    """Raise the admin organization's per-box resource limits for E2E boxes."""
-    import subprocess
+def patch_admin_box_limits(prefix: str):
+    """Patch only the UUID returned by the authenticated /v1/me request."""
+    org_id = str(uuid.UUID(prefix))
+    required = ("PGHOST", "PGPORT", "PGUSER", "PGDATABASE", "PGPASSWORD")
+    missing = [key for key in required if not os.environ.get(key)]
+    if missing:
+        sys.exit(f"quota patch requires: {', '.join(missing)}")
     sql = """
 UPDATE organization SET
     max_cpu_per_box = 4,
     max_memory_per_box = 8,
     max_disk_per_box = 20
-WHERE personal = true;
+WHERE id = :'org_id'::uuid
+RETURNING id;
 """
-    r = subprocess.run(
-        ["psql", "-h", "localhost", "-U", "boxlite", "-d", "boxlite_dev",
-         "-tAc", sql],
-        env={**os.environ, "PGPASSWORD": "boxlite"},
-        capture_output=True, text=True,
+    result = subprocess.run(
+        ["psql", "-X", "-v", "ON_ERROR_STOP=1", "-v", f"org_id={org_id}", "-qAt"],
+        input=sql, env=os.environ, capture_output=True, text=True,
     )
-    if r.returncode != 0:
-        sys.exit(f"quota patch failed: {r.stderr}")
-    print("  admin per-box limits: ok")
+    if result.returncode != 0:
+        sys.exit(f"quota patch failed: {result.stderr}")
+    if result.stdout.split() != [org_id]:
+        sys.exit(f"quota patch did not return exactly organization {org_id}: {result.stdout!r}")
+    print(f"  organization {org_id} per-box limits: ok")
 
 
 def ensure_p1_profile(prefix: str):
-    """Write [profiles.p1] into ~/.boxlite/credentials.toml. Preserves
-    other profiles."""
+    """Update API-key profiles while preserving other existing profiles."""
     CRED_PATH.parent.mkdir(parents=True, exist_ok=True)
 
     # Read existing (if any). Don't depend on tomllib being able to
@@ -183,35 +97,37 @@ def ensure_p1_profile(prefix: str):
 
     out = []
     for prof_name, prof in profiles.items():
-        out.append(f"[profiles.{prof_name}]")
+        out.append(f"[profiles.{json.dumps(prof_name, ensure_ascii=False)}]")
         for k, v in prof.items():
             if isinstance(v, str):
-                out.append(f'{k} = "{v}"')
+                out.append(f'{json.dumps(k, ensure_ascii=False)} = {json.dumps(v, ensure_ascii=False)}')
             elif isinstance(v, bool):
-                out.append(f'{k} = {str(v).lower()}')
+                out.append(f'{json.dumps(k)} = {str(v).lower()}')
             else:
-                out.append(f'{k} = {v}')
+                out.append(f'{json.dumps(k)} = {v}')
         out.append("")
-    CRED_PATH.write_text("\n".join(out))
-    print(f"  ~/.boxlite/credentials.toml: profile p1 → {API_URL} (prefix {prefix})")
+    fd = os.open(CRED_PATH, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as credentials:
+        os.fchmod(credentials.fileno(), 0o600)
+        credentials.write("\n".join(out))
+    print(f"  {CRED_PATH}: API-key profiles p1/default → {API_URL} (prefix {prefix})")
 
 
 def main():
+    if not ADMIN_KEY:
+        sys.exit("BOXLITE_E2E_ADMIN_KEY is required")
+    if CRED_PATH is None:
+        sys.exit("BOXLITE_HOME is required for isolated E2E profiles")
     print(f"API_URL={API_URL}")
-    print()
-    print("1. Raising admin per-box limits...")
-    patch_admin_box_limits()
-    print()
-    print("2. Querying /v1/me for prefix...")
+    print("1. Querying /v1/me for organization...")
     info = me()
-    prefix = info["path_prefix"]
-    print(f"  prefix = {prefix}")
-    print()
-    print("3. Registering snapshots...")
-    for snap in SNAPSHOTS_TO_REGISTER:
-        register_snapshot(snap)
-    print()
-    print("4. Writing ~/.boxlite/credentials.toml profile p1...")
+    try:
+        prefix = str(uuid.UUID(info["path_prefix"]))
+    except (KeyError, ValueError, TypeError, AttributeError):
+        sys.exit("GET /v1/me returned no valid UUID path_prefix")
+    print("2. Raising authenticated organization per-box limits...")
+    patch_admin_box_limits(prefix)
+    print("3. Writing isolated API-key profiles...")
     ensure_p1_profile(prefix)
     print()
     print("fixture_setup: done.")

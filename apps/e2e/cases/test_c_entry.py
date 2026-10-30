@@ -25,11 +25,11 @@ from path_verification import runner_journal_seek, runner_hits_for_box
 REPO = Path(__file__).resolve().parents[3]
 SRC = REPO / "apps/e2e/sdks/c/e2e_basic.c"
 HDR = REPO / "sdks/c/include"
-LIB_DIR = REPO / "target/release"
+LIB_DIR = Path(os.environ.get("BOXLITE_E2E_NATIVE_LIB_DIR", REPO / "target/release"))
 BOX_ID_RE = re.compile(r"[A-Za-z0-9]{12}")
 
 @pytest.fixture(scope="module")
-def c_binary():
+def c_binary(tmp_path_factory):
     if auth_context().auth != "api-key":
         pytest.skip("C SDK REST E2E only supports API-key credentials today")
     if not shutil.which("gcc"):
@@ -43,7 +43,7 @@ def c_binary():
             f"`cargo build --release -p boxlite-c` first"
         )
 
-    bin_path = Path("/tmp/boxlite_e2e_c")
+    bin_path = tmp_path_factory.mktemp("e2e-c") / "basic"
     cmd = [
         "gcc", str(SRC),
         f"-I{HDR}",
@@ -54,7 +54,7 @@ def c_binary():
     try:
         subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=120)
     except subprocess.CalledProcessError as e:
-        pytest.skip(f"gcc build failed: {e.stderr[:600]}")
+        pytest.fail(f"gcc build failed:\n{e.stderr}")
     return bin_path
 
 

@@ -19,6 +19,10 @@ scripts/test/rest/run_cli_matrix.sh api-key smoke
 scripts/test/rest/run_cli_matrix.sh oidc full
 ```
 
+For the managed local stack, use `manage.py exec -- make test:rest:cli` to inherit
+its URL, current CLI and isolated credentials. See the
+[local commands](../../../apps/e2e/README.md#running-against-local-stack).
+
 ## Required Inputs
 
 | Input | API key | OIDC | Notes |
@@ -42,7 +46,7 @@ when the profile is missing or expired.
 | Discovery | `ls --format json` | `list`, `ls`, `ps` | list boxes | `ps` is an alias filtered to active boxes. |
 | Create/lifecycle | `create`, `start`, `stop`, `rm` | plus `restart`, `inspect` | create/get/start/stop/remove | Cleanup is attempted in a trap. |
 | Execution | `exec BOX -- sh -lc ...` | same plus `run --rm` | HTTP exec plus WebSocket attach | This is the OIDC attach regression path. |
-| Files | no | `cp` host-to-box and box-to-host | REST file upload/download | Uses temporary files. |
+| Files | no | `cp` host-to-box and box-to-host | REST file upload/download | Host files are temporary; the guest destination is `/workspace`, outside its separate `/tmp` mount. |
 | Metrics | no | `stats --format json` | REST metrics proxy | Runs while the box is started. |
 | Images | skipped | skipped | none | REST runtime currently does not support `pull`/`images`. |
 | Logs | skipped | skipped | none | CLI `logs` currently reads local runtime console logs, not REST. |
@@ -57,5 +61,7 @@ Each run writes:
 - `target/rest-test-report/cli-matrix-<auth>-<scope>.skips`
 - `target/rest-test-report/cli-matrix-<auth>-<scope>.md`
 
-Skip entries are explicit and are not treated as failures unless a command is
-listed as covered by the selected scope.
+The table describes the planned sequence. The result lists only commands that
+returned successfully and identifies the command where a failed run stopped.
+Commands after that point are unexercised. Skip entries are explicit; a failed
+covered command keeps its original nonzero exit even when cleanup succeeds.

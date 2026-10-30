@@ -39,6 +39,8 @@ RUN_BOX_NAME="rest-cli-run-$AUTH-$RUN_ID"
 TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/boxlite-rest-cli.XXXXXX")"
 CREATED_BOX=0
 CREATED_RUN_BOX=0
+PASSED_COMMANDS=()
+CURRENT_COMMAND=""
 
 BASE_CMD=("$CLI_BIN")
 if [ -n "${BOXLITE_HOME:-}" ]; then
@@ -82,21 +84,24 @@ quote_cmd() {
 run_cmd() {
   local label="$1"
   shift
+  CURRENT_COMMAND="$label"
   echo
   echo "### $label"
   echo "+ $(quote_cmd "$@")"
   "$@"
+  PASSED_COMMANDS+=("$label")
 }
 
 run_capture() {
   local label="$1"
   local out_file="$2"
   shift 2
+  CURRENT_COMMAND="$label"
   echo
   echo "### $label"
   echo "+ $(quote_cmd "$@")"
   "$@" 2>&1 | tee "$out_file"
-  return "${PIPESTATUS[0]}"
+  PASSED_COMMANDS+=("$label")
 }
 
 skip_cmd() {
@@ -134,18 +139,15 @@ write_summary() {
     echo "- log: \`$LOG_FILE\`"
     echo "- skips: \`$SKIP_FILE\`"
     echo
-    echo "## Covered"
+    echo "## Completed commands"
     echo
-    echo "- auth status/whoami"
-    echo "- list/ls"
-    echo "- create/start/exec/stop/rm"
-    if [ "$SCOPE" = "full" ]; then
-      echo "- list aliases: list/ls/ps"
-      echo "- inspect"
-      echo "- restart"
-      echo "- cp upload/download"
-      echo "- stats"
-      echo "- run --rm"
+    local label
+    for label in "${PASSED_COMMANDS[@]}"; do
+      printf -- '- %s\n' "$label"
+    done
+    if [ "$rc" -ne 0 ] && [ -n "$CURRENT_COMMAND" ]; then
+      echo
+      printf 'Stopped at: %s\n' "$CURRENT_COMMAND"
     fi
     if [ -s "$SKIP_FILE" ]; then
       echo
@@ -162,6 +164,7 @@ assert_contains() {
   local file="$1"
   local pattern="$2"
   if ! grep -q "$pattern" "$file"; then
+    CURRENT_COMMAND="assert_contains: $pattern"
     echo "Expected output to contain: $pattern" >&2
     echo "Output file: $file" >&2
     exit 1
@@ -211,8 +214,8 @@ if [ "$SCOPE" = "full" ]; then
   UPLOAD="$TMP_DIR/upload.txt"
   DOWNLOAD="$TMP_DIR/download.txt"
   printf 'hello-from-cp-%s\n' "$AUTH" >"$UPLOAD"
-  run_cmd "cp host to box" "${BASE_CMD[@]}" cp "$UPLOAD" "$BOX_NAME:/tmp/boxlite-rest-cli-upload.txt"
-  run_cmd "cp box to host" "${BASE_CMD[@]}" cp "$BOX_NAME:/tmp/boxlite-rest-cli-upload.txt" "$DOWNLOAD"
+  run_cmd "cp host to box" "${BASE_CMD[@]}" cp "$UPLOAD" "$BOX_NAME:/workspace/boxlite-rest-cli-upload.txt"
+  run_cmd "cp box to host" "${BASE_CMD[@]}" cp "$BOX_NAME:/workspace/boxlite-rest-cli-upload.txt" "$DOWNLOAD"
   assert_contains "$DOWNLOAD" "hello-from-cp-$AUTH"
 
   run_cmd "restart box" "${BASE_CMD[@]}" restart "$BOX_NAME"
@@ -221,9 +224,9 @@ if [ "$SCOPE" = "full" ]; then
   assert_contains "$RESTART_OUT" "hi-after-restart-$AUTH"
 
   RUN_OUT="$TMP_DIR/run.out"
+  CREATED_RUN_BOX=1
   run_capture "run one-shot box" "$RUN_OUT" "${BASE_CMD[@]}" run --rm --name "$RUN_BOX_NAME" "$SMOKE_IMAGE" sh -lc "echo hi-from-run-$AUTH"
   assert_contains "$RUN_OUT" "hi-from-run-$AUTH"
-  CREATED_RUN_BOX=1
 fi
 
 run_cmd "stop box" "${BASE_CMD[@]}" stop "$BOX_NAME"

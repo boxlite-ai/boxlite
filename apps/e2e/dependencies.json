@@ -1,0 +1,21 @@
+{
+  "uv": "0.13.4",
+  "images": {
+    "postgres": "docker.io/library/postgres@sha256:266d3c257594e195b309ae9d1805e54c788f1d7b375f56bf6c367aac6c917e7b",
+    "redis": "docker.io/library/redis@sha256:6ba19c50b56777f5c11c58eff8ddb69d0d5f27ba131cffb63f180ccfd43c66af",
+    "registry": "docker.io/library/registry@sha256:a3d8aaa63ed8681a604f1dea0aa03f100d5895b6a58ace528858a7b332415373",
+    "dex": "ghcr.io/dexidp/dex@sha256:bc7cfce7c17f52864e2bb2a4dc1d2f86a41e3019f6d42e81d92a301fad0c8a1d"
+  },
+  "guest": {
+    "version": "0.1.0",
+    "image": "ghcr.io/boxlite-ai/boxlite-agent-base@sha256:ee6a25c6428c2935bfb84522bb4ede5870ca2debb655f812e3e1db4ac1166aed"
+  },
+  "minio": {
+    "release": "RELEASE.2025-09-07T16-13-09Z",
+    "sha256": {
+      "amd64": "7c5bd8512c6e966455b1d198209358b2d191c77a83ab377c4073281065fb855f",
+      "arm64": "5c83cd2cf151717ba0243f73e1c7802ff36e272b67144bdd7f1f7d684fd6f03d"
+    },
+    "license_sha256": "0d96a4ff68ad6d4b6f1f30f713b18d5184912ba8dd389f86aa7710db079abcb0"
+  }
+}

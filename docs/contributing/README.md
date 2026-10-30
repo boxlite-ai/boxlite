@@ -26,12 +26,14 @@ How to build, test, and change the code.
 - [Rust style guide](development/rust-style.md): conventions for Rust code.
 - [CLI development](development/cli.md): building, testing, and extending the `boxlite` CLI.
 - [E2E local CI runbook](development/e2e-local.md): the self-hosted runner behind `e2e-local.yml`.
+- [Local E2E workflow](../../apps/e2e/README.md): source preparation, environment lifecycle, test selection and adding one-file cases.
 - [macOS sandbox debugging](development/macos-sandbox-debugging.md): find and fix Seatbelt denials.
 
 ## Investigations
 
 Dated root-cause analyses and design studies, newest first.
 
+- 2026-10-29 · [E2E standardization](investigations/2026-10-29-e2e-standardization.md): local environment, execution evidence, timing and upstream comparisons.
 - 2026-10-28 · [Agent REST API design](investigations/2026-10-28-agent-rest-api-design.md): nine HTTP operations for agents, turns and interaction, with snapshot, retry and event-recovery contracts.
 - 2026-10-28 · [Agent CLI simplification](investigations/2026-10-28-agent-cli-simplification.md): compares command hierarchies and named runtime targets for agent instances and turns.
 - 2026-10-27 · [CLI guest SSH commands](investigations/cli-ssh-commands.md)

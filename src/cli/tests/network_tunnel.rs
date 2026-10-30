@@ -148,8 +148,9 @@ async fn private_tunnel_cli_prints_token_before_listening_or_bind_failure() {
                 );
             }
             assert!(
-                Command::new("/bin/kill")
-                    .args(["-INT", &child.id().unwrap().to_string()])
+                // NixOS has no /bin/kill; use the shell's builtin through sh.
+                Command::new("sh")
+                    .args(["-c", &format!("kill -INT {}", child.id().unwrap())])
                     .status()
                     .await
                     .unwrap()

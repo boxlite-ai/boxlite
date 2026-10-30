@@ -78,10 +78,10 @@ build_shim_binary() {
         local target="${arch}-unknown-linux-gnu"
         export RUSTFLAGS="-C target-feature=+crt-static -C relocation-model=static -C link-arg=-Wl,-z,stack-size=2097152 -C link-arg=-Wl,--allow-multiple-definition"
         echo "🎯 Static glibc binary (crt-static + relocation-model=static)"
-        cargo build $build_flag -p boxlite-shim --target "$target"
+        cargo build ${BOXLITE_CARGO_LOCKED:+--locked} $build_flag -p boxlite-shim --target "$target"
         cp "$PROJECT_ROOT/target/$target/$PROFILE/boxlite-shim" "$SHIM_BINARY_PATH"
     else
-        cargo build $build_flag -p boxlite-shim
+        cargo build ${BOXLITE_CARGO_LOCKED:+--locked} $build_flag -p boxlite-shim
     fi
 }
 

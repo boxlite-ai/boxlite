@@ -14,14 +14,14 @@ from conftest import TUNNEL_READ_TO_EOF_XFAIL
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "lib"))
 from e2e_auth import auth_context
-from images import default_image
 from http_frames import HalfCloseResponseLost, UnexpectedTunnelEOF
+from images import default_image
+from node_tsx import driver_argv
 
 
 REPO = Path(__file__).resolve().parents[3]
 NODE_SDK = REPO / "sdks/node"
 DRIVER = REPO / "apps/e2e/sdks/node/e2e_tunnel.ts"
-TSX = REPO / "apps/node_modules/tsx/dist/cli.mjs"
 
 
 class NodeEnvironment(dict):
@@ -40,7 +40,7 @@ def _has_node_napi_build() -> bool:
 def node_tunnel_env():
     if auth_context().auth != "api-key":
         pytest.skip("Node SDK E2E only supports API-key credentials today")
-    if not shutil.which("node") or (not TSX.exists() and not shutil.which("npx")):
+    if not shutil.which("node") or driver_argv(REPO, DRIVER) is None:
         pytest.skip("Node/tsx not installed")
     if not _has_node_napi_build():
         pytest.skip("Node SDK napi binding not built")
@@ -53,11 +53,10 @@ def node_tunnel_env():
 
 
 def _run_node_tunnel(env, scenario):
-    # infra-local already installs tsx in apps. Cloud CI only installs the SDK,
-    # so retain its existing npx fallback without adding a second dependency.
-    command = ["node", str(TSX)] if TSX.exists() else ["npx", "--yes", "tsx"]
+    command = driver_argv(REPO, DRIVER)
+    assert command is not None
     return subprocess.run(
-        [*command, str(DRIVER)],
+        command,
         env={**env, "BOXLITE_E2E_TUNNEL_CASE": scenario},
         timeout=180,
         capture_output=True,
