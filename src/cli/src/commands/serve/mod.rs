@@ -20,6 +20,7 @@ use axum::routing::{get, post, put};
 use axum::{Json, Router};
 use clap::Args;
 use futures::StreamExt;
+use tokio::sync::OnceCell;
 use tokio::sync::RwLock;
 use tower_http::catch_panic::CatchPanicLayer;
 use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer};
@@ -113,6 +114,33 @@ struct AppState {
     /// measured against `BoxInfo.last_updated`, which tracks state transitions
     /// and would report a long-running busy box as idle since boot.
     last_activity: RwLock<HashMap<String, Instant>>,
+    /// Terminal status of recovered executions, keyed by the box id clients
+    /// address the box with and the execution id.
+    ///
+    /// A recovered control handle only answers while the guest still lists the
+    /// session: exit retires it from the live inventory, and `GET
+    /// /executions/{id}` would then 404 a session that ended with a real exit
+    /// code. The runner never has this gap — it caches the status when
+    /// `watchRecovered` observes the exit — so serve records it here the moment
+    /// recovery's `wait` resolves. Keyed by box because guest exec ids are
+    /// per-box counters and may repeat across boxes. An unset slot means the
+    /// watcher is still waiting.
+    recovered_terminals: RwLock<HashMap<TerminalKey, TerminalSlot>>,
+}
+
+/// Scope of a terminal record: the box a client addresses plus the execution.
+type TerminalKey = (String, String);
+
+/// One recovered session's terminal status, shared between its watcher and the
+/// status handler. Unset means the watcher is still waiting.
+type TerminalSlot = Arc<OnceCell<RecoveredTerminal>>;
+
+/// How a recovered execution ended, recorded by its watcher.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(in crate::commands::serve) struct RecoveredTerminal {
+    /// `completed` or `killed`, the wire vocabulary status pollers match on.
+    pub(in crate::commands::serve) status: &'static str,
+    pub(in crate::commands::serve) exit_code: Option<i32>,
 }
 
 /// The deadlines `serve` enforces for one box. `0` disables either.
@@ -129,6 +157,66 @@ impl LifecyclePolicy {
 }
 
 impl AppState {
+    /// Watch a recovered execution until it exits and remember how.
+    ///
+    /// Call this the first time a request recovers control of a session. From
+    /// then on the session stops being listed once it exits, and the cached
+    /// control handle has nothing left to ask, so this watcher is where the
+    /// exit status is kept — the same division of labour as the runner's
+    /// `watchRecovered`. Idempotent: the entry is created once per session and
+    /// later callers leave the existing watcher alone.
+    pub(in crate::commands::serve) async fn watch_recovered(
+        &self,
+        box_id: &str,
+        exec_id: &str,
+        execution: boxlite::Execution,
+    ) {
+        let key = (box_id.to_string(), exec_id.to_string());
+        let slot = {
+            let mut terminals = self.recovered_terminals.write().await;
+            match terminals.get(&key) {
+                Some(existing) => Arc::clone(existing),
+                None => {
+                    let slot = Arc::new(OnceCell::new());
+                    terminals.insert(key, Arc::clone(&slot));
+                    slot
+                }
+            }
+        };
+        if slot.get().is_some() {
+            return;
+        }
+        tokio::spawn(async move {
+            let terminal = match execution.wait().await {
+                Ok(result) => RecoveredTerminal {
+                    status: "completed",
+                    exit_code: Some(result.code()),
+                },
+                // The handle could not report an exit; the session is gone
+                // either way. Report it as killed rather than leaving pollers
+                // on "running" forever — that is what a vanished session looks
+                // like from the wire.
+                Err(_) => RecoveredTerminal {
+                    status: "killed",
+                    exit_code: None,
+                },
+            };
+            let _ = slot.set(terminal);
+        });
+    }
+
+    /// The terminal status of a previously recovered execution, if it ended.
+    pub(in crate::commands::serve) async fn recovered_terminal(
+        &self,
+        box_id: &str,
+        exec_id: &str,
+    ) -> Option<RecoveredTerminal> {
+        let terminals = self.recovered_terminals.read().await;
+        terminals
+            .get(&(box_id.to_string(), exec_id.to_string()))
+            .and_then(|slot| slot.get().cloned())
+    }
+
     /// Remember a box's deadlines. A policy with neither set is not stored.
     pub(in crate::commands::serve) async fn set_lifecycle(
         &self,
@@ -1976,6 +2064,7 @@ pub async fn execute(args: ServeArgs, global: &GlobalFlags) -> anyhow::Result<()
         api_key: args.api_key.clone(),
         lifecycle: RwLock::new(HashMap::new()),
         last_activity: RwLock::new(HashMap::new()),
+        recovered_terminals: RwLock::new(HashMap::new()),
     });
 
     // Phase 5.7: spawn the orphan reaper. Same escalation policy as the
@@ -2326,6 +2415,7 @@ mod tests {
             api_key: None,
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
+            recovered_terminals: RwLock::new(HashMap::new()),
         }
     }
 
@@ -3106,6 +3196,7 @@ mod tests {
             api_key: None,
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
+            recovered_terminals: RwLock::new(HashMap::new()),
         });
         let (control_status, control_error) =
             upload_v3_archive(state.clone(), serde_json::json!({})).await;
@@ -3507,6 +3598,7 @@ mod tests {
             api_key: None,
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
+            recovered_terminals: RwLock::new(HashMap::new()),
         });
         let (url, server) = serve_router(state).await;
         let remote =
@@ -3574,6 +3666,7 @@ mod tests {
             api_key: None,
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
+            recovered_terminals: RwLock::new(HashMap::new()),
         });
         state
             .set_lifecycle(
@@ -3639,6 +3732,7 @@ mod tests {
             api_key: None,
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
+            recovered_terminals: RwLock::new(HashMap::new()),
         });
         state
             .set_lifecycle(
@@ -3696,6 +3790,7 @@ mod tests {
             api_key: None,
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
+            recovered_terminals: RwLock::new(HashMap::new()),
         };
         state
             .set_lifecycle(
@@ -3740,6 +3835,7 @@ mod tests {
             api_key: None,
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
+            recovered_terminals: RwLock::new(HashMap::new()),
         });
         let (base, server) = serve_router(Arc::clone(&state)).await;
 
@@ -3793,6 +3889,7 @@ mod tests {
             api_key: None,
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
+            recovered_terminals: RwLock::new(HashMap::new()),
         });
         let (base, server) = serve_router(Arc::clone(&state)).await;
 
@@ -3855,6 +3952,7 @@ mod tests {
             api_key: None,
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
+            recovered_terminals: RwLock::new(HashMap::new()),
         });
         let (base, server) = serve_router(Arc::clone(&state)).await;
         let client = reqwest::Client::new();
@@ -3965,6 +4063,7 @@ mod tests {
             api_key: None,
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
+            recovered_terminals: RwLock::new(HashMap::new()),
         });
         let (base, server) = serve_router(Arc::clone(&state)).await;
 
@@ -4010,6 +4109,7 @@ mod tests {
             api_key: None,
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
+            recovered_terminals: RwLock::new(HashMap::new()),
         };
         state
             .set_lifecycle(
@@ -4052,6 +4152,7 @@ mod tests {
             api_key: None,
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
+            recovered_terminals: RwLock::new(HashMap::new()),
         };
         state
             .set_lifecycle(
@@ -4094,6 +4195,7 @@ mod tests {
             api_key: None,
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
+            recovered_terminals: RwLock::new(HashMap::new()),
         };
         // The canned box's `last_updated` is a fixed date in the past, so its
         // time at rest grows as the calendar does. A century-long window
@@ -4144,6 +4246,7 @@ mod tests {
             api_key: None,
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
+            recovered_terminals: RwLock::new(HashMap::new()),
         });
         state
             .set_lifecycle(
@@ -4202,6 +4305,7 @@ mod tests {
             api_key: Some("expected-key".to_string()),
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
+            recovered_terminals: RwLock::new(HashMap::new()),
         });
 
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -4249,6 +4353,7 @@ mod tests {
             api_key: None,
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
+            recovered_terminals: RwLock::new(HashMap::new()),
         });
 
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -4533,6 +4638,7 @@ mod tests {
             api_key: None,
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
+            recovered_terminals: RwLock::new(HashMap::new()),
         };
 
         // The box's main command, and an ordinary exec running beside it.

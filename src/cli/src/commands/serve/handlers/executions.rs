@@ -13,9 +13,9 @@ use futures::StreamExt;
 
 use super::super::types::{ExecRequest, ExecResponse, ResizeRequest, SignalRequest};
 use super::super::{
-    ActiveExecution, AppState, MAIN_SESSION_ID_HEADER, SessionKind, build_box_command,
-    error_from_boxlite, error_response, get_or_attach_main_session, get_or_fetch_box,
-    get_or_resume_box,
+    ActiveExecution, AppState, MAIN_SESSION_ID_HEADER, RecoveredTerminal, SessionKind,
+    build_box_command, error_from_boxlite, error_response, get_or_attach_main_session,
+    get_or_fetch_box, get_or_resume_box,
 };
 
 pub(in crate::commands::serve) async fn start_execution(
@@ -148,11 +148,19 @@ async fn execution_control(
             .map(ExecutionControl::Registered);
     }
     drop(registry);
-    litebox
-        .get_execution(exec_id)
-        .await
-        .map(ExecutionControl::Recovered)
-        .map_err(|error| error_from_boxlite(&error))
+    // Recovered sessions leave the guest's live inventory the moment they
+    // exit, and a control handle has nothing left to ask then. Watch the exit
+    // now so `GET /executions/{id}` keeps answering with the real code after —
+    // the runner's `watchRecovered` in serve form.
+    match litebox.get_execution(exec_id).await {
+        Ok(execution) => {
+            state
+                .watch_recovered(box_id, exec_id, execution.clone())
+                .await;
+            Ok(ExecutionControl::Recovered(execution))
+        }
+        Err(error) => Err(error_from_boxlite(&error)),
+    }
 }
 
 /// Only attachment claims an output reader and adds it to the replay registry.
@@ -204,6 +212,14 @@ pub(in crate::commands::serve) async fn get_execution(
     State(state): State<Arc<AppState>>,
     Path((box_id, exec_id)): Path<(String, String)>,
 ) -> Response {
+    // A recovered session keeps answering after it exits. The control handle
+    // and the live inventory both stop covering it the moment the exit lands,
+    // so the watcher's record is the only place left with the real code —
+    // otherwise a poller sees 404 where the runner reports `completed`.
+    if let Some(terminal) = state.recovered_terminal(&box_id, &exec_id).await {
+        return terminal_body(exec_id, &terminal);
+    }
+
     let control = match execution_control(&state, &box_id, &exec_id).await {
         Ok(control) => control,
         Err(response) => return response,
@@ -220,6 +236,18 @@ pub(in crate::commands::serve) async fn get_execution(
         "status": status,
     });
     if let Some(code) = exit_code {
+        body["exit_code"] = serde_json::json!(code);
+    }
+    Json(body).into_response()
+}
+
+/// Render a recovered session's recorded terminal status.
+fn terminal_body(exec_id: String, terminal: &RecoveredTerminal) -> Response {
+    let mut body = serde_json::json!({
+        "execution_id": exec_id,
+        "status": terminal.status,
+    });
+    if let Some(code) = terminal.exit_code {
         body["exit_code"] = serde_json::json!(code);
     }
     Json(body).into_response()
@@ -917,7 +945,7 @@ mod tests {
     use tokio::sync::RwLock;
 
     use super::super::super::{ActiveExecution, AppState, SessionKind};
-    use super::{frame_is_activity, run_attach_session};
+    use super::{frame_is_activity, get_execution, run_attach_session};
 
     /// An interactive attach is the one path the request clock cannot see: the
     /// upgrade is stamped once and a Main session is excluded from the sweep's
@@ -957,6 +985,7 @@ mod tests {
             api_key: None,
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
+            recovered_terminals: RwLock::new(HashMap::new()),
         });
 
         // The stub's channels must stay alive for the length of the test.
@@ -1042,6 +1071,7 @@ mod tests {
             api_key: None,
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
+            recovered_terminals: RwLock::new(HashMap::new()),
         });
 
         let (exec, stdout_tx, stderr_tx, stdin_rx, result_tx) =
@@ -1258,6 +1288,204 @@ mod tests {
             freed.is_ok(),
             "the attach slot stayed claimed after the peer answered the close, \
              so the execution is unattachable and unreapable"
+        );
+    }
+
+    /// The handler must answer from the record even when the box no longer
+    /// yields a handle for the session.
+    ///
+    /// This is the consumer contract: the REST client's status probe treats
+    /// `completed`/`killed`/`timed_out` as terminal and reads `exit_code` from
+    /// the body. Any other answer — a 404 once the guest retires the session, or
+    /// a transport error because the box is gone — turns a real exit status into
+    /// a synthesized failure.
+    #[tokio::test]
+    async fn get_execution_answers_a_recorded_exit_after_the_session_is_gone() {
+        let state = Arc::new(AppState {
+            runtime: BoxliteRuntime::rest(boxlite::BoxliteRestOptions::new(
+                "http://127.0.0.1:1".to_string(),
+            ))
+            .expect("rest runtime"),
+            boxes: RwLock::new(HashMap::new()),
+            executions: RwLock::new(HashMap::new()),
+            api_key: None,
+            lifecycle: RwLock::new(HashMap::new()),
+            last_activity: RwLock::new(HashMap::new()),
+            recovered_terminals: RwLock::new(HashMap::new()),
+        });
+
+        let (execution, _stdout_tx, _stderr_tx, _stdin_rx, result_tx) =
+            boxlite::Execution::stub("exec-1");
+        state.watch_recovered("box-1", "exec-1", execution).await;
+        let _ = result_tx.send(boxlite::ExecResult {
+            exit_code: 42,
+            error_message: None,
+        });
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            while state.recovered_terminal("box-1", "exec-1").await.is_none() {
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("the watcher never recorded the exit");
+
+        // The box is unreachable: the answer must come from the record, not a
+        // lookup that would fail now that the session has left the live list.
+        let response = get_execution(
+            axum::extract::State(Arc::clone(&state)),
+            axum::extract::Path(("box-1".to_string(), "exec-1".to_string())),
+        )
+        .await;
+        assert_eq!(
+            response.status(),
+            axum::http::StatusCode::OK,
+            "an exited recovered session must not answer with an error"
+        );
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(parsed["status"], "completed");
+        assert_eq!(parsed["exit_code"], 42);
+    }
+
+    /// A recovered session must keep answering after it exits.
+    ///
+    /// The guest retires a session from its live inventory the moment the exit
+    /// lands, and the recovered control handle then has nothing to ask. Without
+    /// the watcher's record, `GET /executions/{id}` answers 404 where the
+    /// runner answers `completed` with the real code — so the REST client's
+    /// `wait()` would resolve to a synthesized failure instead of the exit
+    /// status the session actually had.
+    #[tokio::test]
+    async fn a_recovered_session_reports_its_exit_after_leaving_the_live_list() {
+        let state = Arc::new(AppState {
+            runtime: BoxliteRuntime::rest(boxlite::BoxliteRestOptions::new(
+                "http://127.0.0.1:1".to_string(),
+            ))
+            .expect("rest runtime"),
+            boxes: RwLock::new(HashMap::new()),
+            executions: RwLock::new(HashMap::new()),
+            api_key: None,
+            lifecycle: RwLock::new(HashMap::new()),
+            last_activity: RwLock::new(HashMap::new()),
+            recovered_terminals: RwLock::new(HashMap::new()),
+        });
+
+        // Before any recovery there is nothing to report, and the handler must
+        // not invent a terminal status.
+        assert!(
+            state.recovered_terminal("box-1", "exec-1").await.is_none(),
+            "a session that was never recovered must not report an exit"
+        );
+
+        // Recover control, then let the session exit with a real code.
+        let (execution, _stdout_tx, _stderr_tx, _stdin_rx, result_tx) =
+            boxlite::Execution::stub("exec-1");
+        state.watch_recovered("box-1", "exec-1", execution).await;
+        let _ = result_tx.send(boxlite::ExecResult {
+            exit_code: 42,
+            error_message: None,
+        });
+
+        let terminal = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            loop {
+                if let Some(terminal) = state.recovered_terminal("box-1", "exec-1").await {
+                    return terminal;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("the watcher never recorded the exit");
+
+        assert_eq!(terminal.status, "completed");
+        assert_eq!(terminal.exit_code, Some(42));
+    }
+
+    /// Recovery is idempotent: a second request for the same session must not
+    /// replace the record of the exit the first watcher already observed.
+    #[tokio::test]
+    async fn recovering_twice_keeps_the_first_recorded_exit() {
+        let state = Arc::new(AppState {
+            runtime: BoxliteRuntime::rest(boxlite::BoxliteRestOptions::new(
+                "http://127.0.0.1:1".to_string(),
+            ))
+            .expect("rest runtime"),
+            boxes: RwLock::new(HashMap::new()),
+            executions: RwLock::new(HashMap::new()),
+            api_key: None,
+            lifecycle: RwLock::new(HashMap::new()),
+            last_activity: RwLock::new(HashMap::new()),
+            recovered_terminals: RwLock::new(HashMap::new()),
+        });
+
+        let (execution, _stdout_tx, _stderr_tx, _stdin_rx, result_tx) =
+            boxlite::Execution::stub("exec-1");
+        state.watch_recovered("box-1", "exec-1", execution).await;
+        let _ = result_tx.send(boxlite::ExecResult {
+            exit_code: 3,
+            error_message: None,
+        });
+
+        let first = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            loop {
+                if let Some(terminal) = state.recovered_terminal("box-1", "exec-1").await {
+                    return terminal;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("the watcher never recorded the exit");
+        assert_eq!(first.exit_code, Some(3));
+
+        // A later recovery of the same id must leave that record alone.
+        let (second, _out2, _err2, _in2, _result2) = boxlite::Execution::stub("exec-1");
+        state.watch_recovered("box-1", "exec-1", second).await;
+        let after = state.recovered_terminal("box-1", "exec-1").await;
+        assert_eq!(
+            after.expect("the recorded exit must survive").exit_code,
+            Some(3)
+        );
+    }
+
+    /// The record is scoped to its box: guest exec ids are per-box counters, so
+    /// the same id in another box must not answer with this box's exit.
+    #[tokio::test]
+    async fn a_recorded_exit_does_not_leak_across_boxes() {
+        let state = Arc::new(AppState {
+            runtime: BoxliteRuntime::rest(boxlite::BoxliteRestOptions::new(
+                "http://127.0.0.1:1".to_string(),
+            ))
+            .expect("rest runtime"),
+            boxes: RwLock::new(HashMap::new()),
+            executions: RwLock::new(HashMap::new()),
+            api_key: None,
+            lifecycle: RwLock::new(HashMap::new()),
+            last_activity: RwLock::new(HashMap::new()),
+            recovered_terminals: RwLock::new(HashMap::new()),
+        });
+
+        let (execution, _stdout_tx, _stderr_tx, _stdin_rx, result_tx) =
+            boxlite::Execution::stub("exec-1");
+        state.watch_recovered("box-1", "exec-1", execution).await;
+        let _ = result_tx.send(boxlite::ExecResult {
+            exit_code: 9,
+            error_message: None,
+        });
+
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            while state.recovered_terminal("box-1", "exec-1").await.is_none() {
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("the watcher never recorded the exit");
+
+        assert!(
+            state.recovered_terminal("box-2", "exec-1").await.is_none(),
+            "box-2 shares the execution id but never ran this session"
         );
     }
 }

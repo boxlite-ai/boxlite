@@ -97,8 +97,8 @@ info:
     Finished sessions disappear from the live list as soon as the guest sees
     exit. Wait status and output may remain available in the guest's bounded
     retention window, but this API does not promise durable execution history.
-    Listing does not start or restart a box; a non-running box returns its
-    normal not-running error.
+    Listing does not start or restart a box; a box that is not running has no
+    live sessions, so it answers `{"executions": []}` rather than an error.
 
     Out-of-band control endpoints exist for clients that prefer a
     request/response style: `GET /executions/{exec_id}` (status),
