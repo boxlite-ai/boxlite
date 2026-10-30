@@ -8,7 +8,17 @@
 //! The VMM owns the guest machine and delegates host operations to
 //! `boxlite-hypervisor`. BoxLite runtime integration belongs in its engine adapter.
 
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[cfg(any(
+    target_arch = "aarch64",
+    all(target_os = "linux", target_arch = "x86_64")
+))]
+#[cfg_attr(
+    all(not(test), target_arch = "aarch64"),
+    expect(
+        dead_code,
+        reason = "Only the Linux x86_64 Vm::new boots a kernel yet."
+    )
+)]
 mod boot;
 #[cfg_attr(
     not(test),
@@ -40,11 +50,8 @@ mod cpu_features;
 mod devices;
 mod error;
 #[cfg_attr(
-    not(all(target_arch = "x86_64", any(test, target_os = "linux"))),
-    expect(
-        dead_code,
-        reason = "Only x86_64 runs vCPUs, and only Linux builds a VM yet."
-    )
+    not(any(test, all(target_os = "linux", target_arch = "x86_64"))),
+    expect(dead_code, reason = "Only the Linux x86_64 Vm::new builds a VM yet.")
 )]
 mod events;
 #[cfg_attr(
@@ -60,14 +67,10 @@ mod irq;
     expect(dead_code, reason = "Only the Linux x86_64 Vm::new builds a VM yet.")
 )]
 mod memory;
-#[cfg(target_arch = "x86_64")]
 mod vcpu;
 #[cfg_attr(
-    not(all(target_arch = "x86_64", any(test, target_os = "linux"))),
-    expect(
-        dead_code,
-        reason = "Only x86_64 runs a VM, and only Linux builds one yet."
-    )
+    not(any(test, all(target_os = "linux", target_arch = "x86_64"))),
+    expect(dead_code, reason = "Only the Linux x86_64 Vm::new builds a VM yet.")
 )]
 mod vm;
 
@@ -81,10 +84,6 @@ pub use vm::{StopHandle, Vm, VmExit};
 /// compiling them as integration tests, and the `tests` directory keeps them
 /// out of the counted sources and the coverage denominator.
 #[cfg(test)]
-#[cfg_attr(
-    not(target_arch = "x86_64"),
-    expect(dead_code, reason = "Only x86_64 runs scripted vCPUs yet.")
-)]
 #[path = "../tests/mock_vm/mod.rs"]
 mod mock_vm;
 

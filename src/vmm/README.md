@@ -21,26 +21,28 @@ boxlite-vmm
 ├── mio (the event loop's poller)
 ├── vm-memory
 ├── vm-superio (x86_64: the 8250 UART and the i8042, 0.8.2 or later)
-└── linux-loader (Linux x86_64 ELF loading and boot parameters)
+├── vm-fdt (arm64: the device tree)
+└── linux-loader (Linux x86_64: ELF loading and boot parameters; arm64: the `Image`)
 ```
 
 | Module | Responsibility |
 | --- | --- |
 | `vm` | `Vm<H>`: validate the configuration, allocate and register RAM on host backend `H`, own the devices in a `Chipset`, load the boot data, and run the vCPUs until the first event; `StopHandle` and `VmExit` |
-| `boot` | Linux x86_64 boot: `prepare` loads the pinned ELF kernel through linux-loader, places an optional initramfs at the top of RAM, writes the zero page, E820 map, command line and MP table, and sets up the 64-bit entry state (GDT, identity page tables, registers) |
+| `boot` | Linux boot. x86_64: `prepare` loads the pinned ELF kernel through linux-loader, places an optional initramfs at the top of RAM, writes the zero page, E820 map, command line and MP table, and sets up the 64-bit entry state (GDT, identity page tables, registers). arm64: `prepare` loads the `Image` through linux-loader, writes the [device tree](#device-tree) in the last 2 MiB of RAM with an optional initramfs below it, and points vCPU 0 at the kernel |
 | `config` | `VmConfig { vcpu_count, memory_mib, kernel, cmdline, initramfs }` and its bounds: 1..=64 vCPUs, 1..=3072 MiB, a printable-ASCII command line under 2048 bytes |
 | `error` | VMM errors that keep the hypervisor's cause chain |
 | `memory` | `GuestRam`: owned guest RAM, the RAM layout, and the registration lifetime rules |
 | `cpu_features` | x86_64 guest CPUID for each vCPU and the boot MSRs |
-| `vcpu` | x86_64 vCPU workers: create and configure each vCPU, hold them at a start gate, run the guest and dispatch its exits until the VM ends |
+| `vcpu` | vCPU workers: create and configure each vCPU, hold them at a start gate, run the guest and dispatch its exits until the VM ends; on arm64, give each vCPU its MPIDR and start the others on PSCI `CPU_ON` |
 | `chipset` | `ChipsetBuilder`, the one registry of ranges and interrupt lines, and `Chipset`, the read-only machine it builds |
 | `bus` | `Bus`, `BusRange` and `BusDevice`, and `Buses::dispatch`, which serves the MMIO and port exits of a vCPU |
 | `irq` | `IrqChip`, the host interrupt controller as devices see it, and `IrqLine`, one device line; HVF and KVM provide the controller, WHP (M10) only local APICs |
-| `devices` | The console queue, and on x86_64 the 8250 UART at COM1 and the i8042 reset, with `add_legacy_devices`, which adds them to the chipset |
+| `devices` | The console queue; on x86_64 the 8250 UART at COM1 and the i8042 reset, with `add_legacy_devices`, which adds them to the chipset; on arm64 the PL011, with `add_platform_devices`, which also reserves the GIC windows |
 | `events` | `Event`, which ends the VM, `EventSender`, which also latches the stop, and `EventLoop`, the poller that waits for the first event |
 
-The x86_64 KVM boot and lifecycle are in place; the M1 devices, arm64 and HVF
-follow in M1. Virtio devices, the BoxLite
+The x86_64 KVM boot and lifecycle are in place. On arm64 the lifecycle, the
+boot data and the PL011 are in place; `Vm::new` on HVF and the first arm64
+boot follow in M1. Virtio devices, the BoxLite
 engine adapter, engine selection, and `native` feature wiring follow in M2.
 Neither new crate depends on `boxlite-shared`, and both are unpublished while
 their interfaces are being established.
@@ -102,6 +104,20 @@ fresh RAM, then runs a vCPU checksum over the loaded span. Missing hardware
 or kernel input fails qualification. This proves loading and guest visibility;
 the [boot tests](#boot-tests) run Linux itself.
 
+On arm64, `boot::image::load_image(ram, kernel)` loads an `Image` through
+linux-loader's `pe` feature at its header's `text_offset` above the RAM base
+(`Documentation/arch/arm64/booting.rst`). It returns the entry, which is the
+load address, and the end of what the kernel claims: the larger of the file
+and the header's `image_size`, which counts BSS. linux-loader checks only that
+the file fits, so `load_image` refuses an `image_size` that overflows its
+address or extends outside RAM with `InvalidInput`. A file without the
+`ARM\x64` magic fails with `InvalidData`.
+
+The loader reads that size from guest RAM through linux-loader's exported
+`arm64_image_header` and vm-memory's typed read, before any vCPU runs. This
+keeps the header layout in the format library while BoxLite owns placement
+and the full memory-extent check.
+
 ## Boot parameters
 
 On Linux x86_64, `boot::params::write_boot_params(ram, cmdline, ranges,
@@ -152,19 +168,62 @@ instead of the PIC. The other vCPUs then start when Linux sends them INIT and
 SIPI; on KVM each waiting vCPU's `run` returns `Interrupted` once, for the
 `EAGAIN` that wake-up produces.
 
+## Device tree
+
+On arm64, `boot::prepare(ram, config)` loads the `Image`, places the device
+tree at the start of the last 2 MiB of RAM, the most a device tree may take,
+as Firecracker does, and an optional initramfs in the highest page below it:
+
+```text
+RAM base + text_offset                       RAM end - 2 MiB     RAM end
+|                                            |                   |
+[ Image: image_size bytes ]  ...  [initramfs][ device tree       ]
+^ PC = entry                                 ^ X0
+```
+
+vCPU 0 starts at the entry with X0 at the device tree and PSTATE EL1h with D,
+A, I and F masked (`booting.rst`). `prepare` refuses with `InvalidInput` an
+`Image` that reaches the device tree (`WriteBootData`), an initramfs that
+reaches into the `Image` (`LoadInitramfs`) and a tree over 2 MiB.
+`boot::fdt::device_tree(config, initramfs)` builds the tree with vm-fdt, with
+Firecracker's nodes and the PL011 in place of its `ns16550a`:
+
+| Node | Contents |
+| --- | --- |
+| `/` | `linux,dummy-virt`, 2-cell addresses and sizes, the GIC as interrupt parent |
+| `cpus/cpu@N` | one per vCPU, `reg` its MPIDR: Aff0 `id % 16`, Aff1 `id / 16`, as KVM and QEMU lay them out; enable method `psci` |
+| `psci` | PSCI 0.2 over `hvc` |
+| `memory@80000000` | the RAM |
+| `chosen` | `bootargs`, `stdout-path` at the PL011, and the initramfs as `linux,initrd-start` and an exclusive `linux,initrd-end` |
+| `intc@3fff0000` | GICv3: the distributor, then one 128 KiB redistributor per vCPU from `0x3DFF_0000` |
+| `timer` | the architected timer on PPIs 13, 14, 11 and 10, level high, `always-on` |
+| `apb-pclk` | a 24 MHz fixed clock |
+| `pl011@40002000` | the PL011 on SPI 0 (INTID 32), the clock as both `uartclk` and `apb_pclk` |
+
+Arm64 tests use the independent `fdt` parser to inspect the writer's output
+and the blob `prepare` copies into guest RAM. They check named properties:
+for example, `/chosen/linux,initrd-end` must equal the archive's exclusive
+end, rather than merely occur somewhere in the bytes. This replaces a local
+FDT decoder with an arm64 dev-dependency; it adds no production dependency.
+The parser is used on test-produced blobs, not to validate untrusted input.
+
 ## Initramfs
 
-`boot::initramfs::load_initramfs(ram, image, size)` reads the archive into the
-highest 4 KiB-aligned slot of the RAM region at 0, as Firecracker and
-cloud-hypervisor do, and returns its start. An empty archive, or one larger
-than that region, fails with `InvalidInput` before anything is written.
+`boot::initramfs::load_initramfs(ram, image, size, end)` reads the archive
+into the highest 4 KiB-aligned slot below `end`, within the RAM region that
+holds the byte before `end`, and returns its start. `end` is the end of RAM on
+x86_64, as Firecracker and cloud-hypervisor do, and the device tree on arm64,
+as Firecracker does. An empty archive, or one that does not fit in that region
+below `end`, fails with `InvalidInput` before anything is written.
 
-Like those VMMs, it does not check that the slot stays clear of the kernel.
-Only tests boot an initramfs; production boots from a disk. Their inputs are
-fixed, and the KVM boot test below fails if the archive overwrites the kernel.
-Accepting an initramfs from production configuration would need that check.
+Like those VMMs, it does not check that the slot stays clear of the kernel;
+on arm64, `prepare` refuses an initramfs that reaches into the `Image`. On
+x86_64 only tests boot an initramfs; production boots from a disk. Their
+inputs are fixed, and the KVM boot test below fails if the archive overwrites
+the kernel. Accepting an initramfs from production configuration would need
+that check.
 
-Linux ignores `initrd_addr_max`, so
+On x86_64, Linux ignores `initrd_addr_max`, so
 the archive may sit anywhere in RAM; it must be uncompressed newc, since the
 pinned kernel has no decompressors. With 256 MiB of RAM, a 372-byte archive
 starts at `0x0FFF_F000` and Linux prints `RAMDISK: [mem 0x0ffff000-0x0fffffff]`.
@@ -230,15 +289,18 @@ reboot=k` turns a panic, and the restart, into the i8042 reset.
 
 ## Lifecycle
 
-`Vm::run` runs on x86_64, against any backend that implements
-`boxlite_hypervisor::X86Vm`; unit tests drive it on the mock backend. Before
+`Vm::run` runs against any x86_64 backend that implements
+`boxlite_hypervisor::X86Vm` and any arm64 backend whose vCPUs implement
+`Arm64Vcpu`; unit tests drive it on the mock backend, and
+`make test:integration:vmm:hvf` on HVF. Before
 it registers any RAM, `Vm::with_backend` builds the `Chipset` from the
 devices it is given, so a conflict fails with `ChipsetConflicts` and leaves
 nothing mapped.
 
 1. It starts one scoped thread per vCPU, named `vcpuN`. Each creates its vCPU,
-   sets its CPUID from `vcpu_cpuid` and the boot MSRs, and on vCPU 0 the entry
-   registers, then waits at a start gate until every vCPU is configured. A
+   sets its CPUID from `vcpu_cpuid` and the boot MSRs on x86_64, or its MPIDR
+   on arm64, and on vCPU 0 the entry registers, then waits at a start gate
+   until every vCPU is configured. A
    vCPU that fails setup sends `VcpuFailed` before it arrives, so the latch
    keeps every vCPU out of the guest, and a thread that fails to start aborts
    the gate, so no worker waits forever.
@@ -258,6 +320,21 @@ nothing mapped.
 4. Once every vCPU has joined, `run` finishes the console worker `Vm::new`
    started, so the guest's last output reaches the sink, or is counted as
    dropped and logged, before `run` returns.
+
+On arm64 only vCPU 0 starts at the kernel. Each other worker waits outside
+the guest, powered off, until the guest names its MPIDR in a PSCI `CPU_ON`.
+`vcpu::PowerStates` answers each call, and the caller's next entry hands the
+answer to the guest:
+
+| Target | Answer | Effect |
+| --- | --- | --- |
+| a powered-off vCPU | `SUCCESS` | it enters the guest at the call's entry, with the context ID in X0 and D, A, I and F masked |
+| a running or starting vCPU, vCPU 0 included | `ALREADY_ON` | none |
+| an MPIDR no vCPU has | `INVALID_PARAMETERS` | none |
+| an entry that is not four-byte aligned | `INVALID_PARAMETERS` | none |
+
+The stop also wakes the workers still waiting, which end without entering the
+guest.
 
 `Vm::stop_handle` returns a `StopHandle` that sends `StopRequested` from any
 thread, even before `run` starts. A VM runs once: a second `run` fails with
@@ -394,6 +471,31 @@ windows, then adds the legacy devices:
 - A failed interrupt sends `DeviceFailed`, once.
 - The guest kernel has no i8042 driver, so the reset is all the device does.
 
+## arm64 platform devices
+
+On arm64, `devices::arm64::add_platform_devices` reserves the windows the
+host's in-kernel GICv3 serves, then adds the PL011:
+
+| Guest addresses | Device | Behavior |
+| --- | --- | --- |
+| `0x3DFF_0000`–`0x3FFF_0000` | GIC redistributors, reserved | HVF sizes the region for every vCPU it supports, 32 MiB on macOS 27, whatever the vCPU count; `HvfVm::new` refuses one that overlaps the distributor |
+| `0x3FFF_0000`, 64 KiB | GIC distributor, reserved | Served by the host |
+| `0x4000_2000`, 4 KiB | `pl011` | Output to the console queue; the transmit interrupt on SPI INTID 32; no input yet |
+
+The PL011 follows the Arm PrimeCell UART TRM (DDI0183), output only:
+
+- A data register write goes to the
+  [console queue](#legacy-devices-and-the-console) at once, so FR always
+  reads both FIFOs empty and the transmit interrupt is always raw-pending. The
+  line holds the level of MIS, which follows the guest's IMSC; ICR clears
+  nothing.
+- The registers Linux programs keep their values; CR resets to `0x300` (TXE
+  and RXE) and IFLS to `0x12`. The ID registers identify an Arm PL011 to
+  32-bit reads, so the AMBA bus binds Linux's driver.
+- Accesses of 1, 2 or 4 bytes reach the registers, as Linux and earlycon make
+  them; other widths read all ones and their writes are dropped.
+- A failed interrupt sends `DeviceFailed`, once.
+
 ## Build
 
 `make vmm:boot` builds the pinned x86_64 ELF kernel (`vmlinux`) inside a pinned
@@ -430,6 +532,11 @@ through `make coverage:vmm:kvm`. When a change matches its `vmm` path filter,
 and weekly, it also runs the [boot tests](#boot-tests) on the kernel it builds
 with `make vmm:boot:host`, through `make coverage:vmm:boot`, which needs
 `VMM_KERNEL` like `make test:integration:vmm:linux`.
+
+On macOS arm64 with Hypervisor.framework, `make test:integration:vmm:hvf`
+runs the hypervisor crate's HVF tests, then this crate's: two vCPUs through
+`Vm::run`, where vCPU 0 starts vCPU 1 with PSCI `CPU_ON` and waits in WFI, and
+vCPU 1 powers the VM off.
 
 With the corresponding Rust targets installed, the crate can also be compiled
 for each host with a backend module without booting a VM:

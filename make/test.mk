@@ -316,9 +316,13 @@ _ensure-hvf:
 
 # Run the ignored HVF hardware tests one at a time, since a process holds one HVF VM; the
 # runner signs each test binary with the hypervisor entitlement and bounds a stalled guest.
+# Both crates run even when one fails, so one report shows every result.
 test\:integration\:vmm\:hvf: export CARGO_TARGET_AARCH64_APPLE_DARWIN_RUNNER := $(SCRIPT_DIR)/test/hvf-runner.sh
 test\:integration\:vmm\:hvf: _ensure-hvf
-	@cargo test -p boxlite-hypervisor --lib hvf::tests:: -- --ignored --test-threads=1
+	@status=0; \
+	cargo test -p boxlite-hypervisor --lib hvf::tests:: -- --ignored --test-threads=1 || status=1; \
+	cargo test -p boxlite-vmm --lib vm::tests:: -- --ignored --test-threads=1 || status=1; \
+	exit $$status
 
 # Guest crate unit tests. Linux-only (the crate does not build elsewhere) and
 # excluded from test:unit:rust because the zygote suite forks real processes.
