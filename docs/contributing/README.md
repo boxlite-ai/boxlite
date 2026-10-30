@@ -32,6 +32,8 @@ How to build, test, and change the code.
 
 Dated root-cause analyses and design studies, newest first.
 
+- 2026-10-29 · [Real I/O concurrency in Firecracker and libkrun](investigations/2026-10-29-vmm-real-io-concurrency.md): measures device interference and concurrent-read scaling without injected delays, with Async and native controls.
+- 2026-10-28 · [Virtio device trait design](investigations/2026-10-28-virtio-device-trait-design.md): defines control and event handling on one device object, with transport/worker dispatch, asynchronous I/O, and reset/snapshot completion.
 - 2026-10-28 · [Agent REST API design](investigations/2026-10-28-agent-rest-api-design.md): nine HTTP operations for agents, turns and interaction, with snapshot, retry and event-recovery contracts.
 - 2026-10-28 · [Agent CLI simplification](investigations/2026-10-28-agent-cli-simplification.md): compares command hierarchies and named runtime targets for agent instances and turns.
 - 2026-10-27 · [CLI guest SSH commands](investigations/cli-ssh-commands.md)
