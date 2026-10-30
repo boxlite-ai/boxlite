@@ -53,3 +53,11 @@ export const publicHostsFor = ({
   }
   return { dashboard, api }
 }
+
+/**
+ * The parent of every platform tunnel subdomain — `demo.<domain>` routes to one
+ * box port — and the Cloudflare zone that holds it. A registrable domain of its
+ * own (`STACK_USER_DOMAIN`), never a name under the stage's: see
+ * `src/stack-env.ts`'s `userDomainFrom` for why.
+ */
+export type UserDomain = { domain: string; dnsZoneId: string }

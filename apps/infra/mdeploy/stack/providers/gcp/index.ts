@@ -206,6 +206,9 @@ export const gcpStackProviders = ({
         zoneId,
         dependsOn,
       }),
+    // Served here: the edge above writes the wildcard record and issues its
+    // certificate beside the box domain's.
+    servesUserDomain: () => true,
     registryProxy: ({ network, dependsOn, registryCredentials }) =>
       gcpRegistryProxyProvider({
         project,

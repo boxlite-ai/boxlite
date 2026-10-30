@@ -95,6 +95,8 @@ export const awsStackProviders = ({
     api: ({ dependencies }) => awsApiProvider({ dependencies, dns, domain, dashboardDomain }),
     edge: ({ host: where, network, dependsOn }) =>
       awsEdgeProvider({ host: host(where), placement: placement(network.placementFor('proxy')), dns, dependsOn }),
+    // No wildcard record or certificate for it on this cloud.
+    servesUserDomain: () => false,
     /*
      * Not deployed on this cloud, and said so rather than thrown.
      *

@@ -40,6 +40,7 @@ For a quick start, see [`src/cli/README.md`](../../../src/cli/README.md).
   - [`boxlite agent`](#boxlite-agent)
   - [`boxlite serve`](#boxlite-serve)
   - [`boxlite volume`](#boxlite-volume)
+  - [`boxlite domain`](#boxlite-domain)
   - [`boxlite completion`](#boxlite-completion)
 - [Shared Flag Groups](#shared-flag-groups)
 - [Volume Mount Syntax](#volume-mount-syntax)
@@ -1011,6 +1012,41 @@ volume after its id, which stays mountable.
 
 ---
 
+### `boxlite domain`
+
+**Synopsis:** `boxlite domain <bind|ls|unbind>`
+
+The domains your organization holds: names under the platform domain
+(`demo.apps.example`) routed to a box port. A domain is the organization's,
+not a box's. Hosted runtimes only; the embedded runtime answers "not
+supported". See [Domains](../../concepts/networking.md#domains).
+
+| Subcommand | Synopsis | Notes |
+|---|---|---|
+| `bind` | `boxlite domain bind DOMAIN --box BOX --port PORT` | Prints the target and the URL; `--box` takes an id or name |
+| `ls` (`list`) | `boxlite domain ls [-q \| --format FORMAT]` | Every full hostname and its target (`-` while unbound), then the allowance; quiet prints full hostnames |
+| `unbind` | `boxlite domain unbind HOSTNAME` | Full hostname required; it stays with the organization |
+
+For `bind`, `DOMAIN` is the name (`demo`) or its full hostname. `unbind` accepts
+only a full hostname returned by `ls`; bare labels are rejected. `bind` claims a new name
+against the organization's allowance and moves a held name from another box
+port at once; other names on the target port stay. It does not make the port
+public: the name answers once `boxlite network tunnel` has declared the port
+and the box has inbound access enabled, in either order. `unbind` stops
+routing the name;
+requests that start afterwards get `404`, and the name still counts against
+the allowance until the platform raises it. Binding it again, to any box
+port, does not count it twice.
+
+```bash
+boxlite domain bind demo --box web-a --port 3000   # demo.apps.example → web-a:3000
+boxlite domain bind demo --box web-b --port 3000   # move it, same URL
+boxlite domain ls
+boxlite domain unbind demo.apps.example
+```
+
+---
+
 ### `boxlite completion`
 
 **Synopsis:** `boxlite completion <SHELL>`
@@ -1218,19 +1254,19 @@ Image `EXPOSE` declarations remain metadata and do not open host listeners.
 ## Output formats
 
 The `--format` flag is shared across `list`, `images`, `inspect`, `stats`,
-`info`, `volume ls`, and `volume get`. Valid values come from
+`info`, `volume ls`, `volume get`, and `domain ls`. Valid values come from
 `OutputFormat::from_str` at `src/cli/src/formatter.rs:26`:
 
 | Format | Available on | Description |
 |--------|--------------|-------------|
-| `table` | `list`, `images`, `stats`, `volume ls`, `volume get` | Human-readable columnar layout |
-| `json` | `list`, `images`, `stats`, `inspect`, `info`, `volume ls`, `volume get` | Pretty-printed JSON (`serde_json::to_string_pretty`) |
-| `yaml` | `list`, `images`, `stats`, `inspect`, `info`, `volume ls`, `volume get` | YAML (`serde_yaml::to_string`) |
+| `table` | `list`, `images`, `stats`, `volume ls`, `volume get`, `domain ls` | Human-readable columnar layout |
+| `json` | `list`, `images`, `stats`, `inspect`, `info`, `volume ls`, `volume get`, `domain ls` | Pretty-printed JSON (`serde_json::to_string_pretty`) |
+| `yaml` | `list`, `images`, `stats`, `inspect`, `info`, `volume ls`, `volume get`, `domain ls` | YAML (`serde_yaml::to_string`) |
 | Go template | `inspect` only | Any `gtmpl` template, e.g. `'{{.State.Status}}'`; `{{json .Field}}` serializes a nested value |
 
 Defaults:
 
-- `list`, `images`, `stats`, `volume ls`, `volume get`: `table`
+- `list`, `images`, `stats`, `volume ls`, `volume get`, `domain ls`: `table`
 - `inspect`: `json`
 - `info`: `yaml`
 

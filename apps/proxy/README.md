@@ -67,6 +67,27 @@ The first label of the host is `<port>-<id>`, where `<id>` takes one of two form
 A host without a `<port>-` label serves only the utility routes listed in
 [`apps/API.md`](../API.md#preview-proxy-api).
 
+### Platform subdomains
+
+With `PROXY_APP_DOMAIN` set (the deploy passes the stage's `STACK_USER_DOMAIN`), a Host one label
+under it — `demo.apps.example` — is a platform subdomain bound to one box port through
+`PUT /api/v1/domains/{domain}/target`. The proxy classifies the Host by
+suffix *before* the `<port>-<id>` parse, since `3000-abc.apps.example` is a valid name of that
+shape, lowercases it and drops any port, then asks `GET /api/preview/domains/{hostname}` on every
+request. The API's domain service resolves the stored box-port target; its preview controller
+then checks the target's public tunnel, inbound and box state before returning `{boxId, port}`.
+Private tunnels and other refusals return `404`, and an
+API failure is `502` — the proxy never falls back to a stale answer or to the legacy parse. The
+lookup is not cached, so a released name stops forwarding at once; the port's access verdict keeps
+its 3-second cache. There is no sign-in on these hosts: a box with inbound disabled is a `404`, not
+a redirect. `/health`, `/login`, and `/callback` under a platform subdomain belong to the user's service, and
+the browser warning applies as on any box host. The app domain's apex itself is not a box host.
+
+Domain ownership and bindings survive tunnel revocation. Binding a name does not
+publish its port, and unbinding does not revoke it. Domain lookup itself carries no
+access verdict; the preview controller combines lookup and authorization in this
+single API request so HTTP, WebSocket and CONNECT retain the same access policy.
+
 ## Request paths
 
 | Request                          | Upstream                                                      | Access rule                              |
@@ -80,6 +101,7 @@ The HTTP path in code:
   StartProxy (— · apps/proxy/pkg/proxy/proxy.go:78) — registers the catch-all route for preview hosts
     └─ NewProxyRequestHandler (— · apps/libs/common-go/pkg/proxy/proxy.go:116) — reverse proxy for one request
       ├─ GetProxyTarget (Proxy · apps/proxy/pkg/proxy/get_box_target.go:49) — choose the upstream
+        ├─ appDomainHost / resolveAppDomain (Proxy · apps/proxy/pkg/proxy/app_domain.go) — a platform subdomain: the API names the port and applies every check
         ├─ parseHost (Proxy · apps/proxy/pkg/proxy/get_box_target.go:311) — canonical port plus box ID
         ├─ getBoxInboundEnabled (Proxy · apps/proxy/pkg/proxy/get_box_target.go:224) — ask the API for the inbound mode, cached 3 s
         ├─ authorizeTunnel (Proxy · apps/proxy/pkg/proxy/tunnel_auth.go:140) — check active declaration, credentials and cookie scope before any guest dial
@@ -280,6 +302,7 @@ working directory override it, but loading stops at the first file that is missi
 | `PROXY_PORT`                                                                     | Listen port (required)                                                                  |
 | `PROXY_PROTOCOL`                                                                 | `http` or `https`, for redirects and `X-Forwarded-Proto` (required)                     |
 | `PROXY_API_KEY`                                                                  | Bearer key for API calls; fallback input to purpose-separated session signing (required)                          |
+| `PROXY_APP_DOMAIN`                                                               | Parent of platform subdomains (the stage's `STACK_USER_DOMAIN`); unset disables it      |
 | `BOXLITE_API_URL`                                                                | Control-plane API base URL, ending in `/api` (required)                                 |
 | `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`, `OIDC_DOMAIN`, `OIDC_PUBLIC_DOMAIN`, `OIDC_AUDIENCE` | Login for private tunnels; an unset client ID, domain, or audience comes from the API's `/config` at startup |
 | `TUNNEL_COOKIE_KEY` | Optional independent cookie-signing secret, shared by all proxy replicas; rotating it invalidates browser sessions |

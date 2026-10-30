@@ -210,6 +210,7 @@ organization boundaries.
 | `POST` | `/api/preview/{boxId}/tunnels/{port}/access`                            | Proxy-only active tunnel policy, token verification and browser-user revalidation; returns no token verifier. |
 | `GET`  | `/api/preview/{boxId}/tunnels/{port}/session`                            | Checks a user JWT and returns the tunnel grant and user ID for browser login. |
 | `POST` | `/api/preview/tunnel-handoff`                                          | Proxy-only issue or single-use consumption of a 30-second browser login handoff. |
+| `GET`  | `/api/preview/domains/{hostname}`                                       | Resolves a platform hostname to `{boxId, port}` for the proxy; `404` unless it may be forwarded now. |
 | `POST` | `/api/preview/{boxId}/ensure-ready`                                     | Wakes a stopped box for the proxy, by auto-resume rules. |
 | `GET`  | `/api/preview/{boxId}/access`                                           | Checks whether the caller may preview a box.          |
 
@@ -485,6 +486,9 @@ organization membership.
 | `GET`    | `/api/v1[/{prefix}]/boxes/{boxId}/metrics`                    | Returns metrics for one box without marking it active.  |
 | `POST`   | `/api/v1[/{prefix}]/boxes/{boxId}/network/tunnel?port={port}` | Prepares a tunnel with optional `isPublic` (default true); returns `uri`, `isPublic`, `token`. Private tokens are complete once, then masked. |
 | `DELETE` | `/api/v1[/{prefix}]/boxes/{boxId}/network/tunnel?port={port}` | Revokes either access mode; `204`, idempotent. |
+| `GET`    | `/api/v1[/{prefix}]/domains`                                  | Lists full hostnames, URLs, typed targets and the organization's allowance; no short `name` field. |
+| `PUT`    | `/api/v1[/{prefix}]/domains/{domain}/target`                  | Routes a domain (name or full hostname) to a `{"type":"box","box","port"}` target, claiming or moving it; does not declare the port public. |
+| `DELETE` | `/api/v1[/{prefix}]/domains/{domain}/target`                  | Requires the full held hostname; stops routing it and keeps ownership; `204`, idempotent. |
 | `PUT`    | `/api/v1[/{prefix}]/boxes/{boxId}/network/inbound`            | Enables or disables a box's inbound access.             |
 | `POST`   | `/api/v1[/{prefix}]/boxes/{boxId}/ssh`                        | Replaces guest SSH configuration once; counts as activity and may auto-resume a box. |
 | `GET`    | `/api/v1[/{prefix}]/boxes/{boxId}/ssh`                        | Reads guest SSH status without resuming the box or counting as activity. |

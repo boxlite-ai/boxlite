@@ -644,6 +644,57 @@ the runtime's API key or JWT; it never recreates a revoked tunnel.
 This differs from `boxlite_options_add_port()`, which creates a persistent,
 local-only host listener that accepts repeated connections.
 
+#### Domains
+
+On a hosted runtime the organization can route a name of its own
+(`demo.apps.example`) to a box port; see
+[Domains](../../docs/concepts/networking.md#domains). These calls block until
+the server answers.
+
+```c
+BoxliteErrorCode boxlite_runtime_domains(
+    CBoxliteRuntime* runtime,
+    CBoxliteDomainHandle** out_handle,
+    CBoxliteError* out_error
+);
+BoxliteErrorCode boxlite_domain_list(
+    CBoxliteDomainHandle* handle,
+    CDomainList** out_list,
+    CBoxliteError* out_error
+);
+BoxliteErrorCode boxlite_domain_bind(
+    CBoxliteDomainHandle* handle,
+    const char* domain,
+    const CDomainTarget* target,
+    CDomain** out_domain,
+    CBoxliteError* out_error
+);
+BoxliteErrorCode boxlite_domain_unbind(
+    CBoxliteDomainHandle* handle,
+    const char* domain,
+    CBoxliteError* out_error
+);
+void boxlite_free_domain_handle(CBoxliteDomainHandle* handle);
+void boxlite_free_domain(CDomain* domain);
+void boxlite_free_domain_list(CDomainList* list);
+```
+
+A target is `{ .type = BoxliteDomainTargetBox, .box = "web-a", .port = 3000 }`;
+`box` takes an id or name. In a returned `CDomain`, `hostname` is the full hostname
+and there is no short `name`. Box targets have `target.box` and `target.port`;
+reserved `BoxliteDomainTargetApp` targets have `target.app`. Inactive reference
+pointers are NULL; both are NULL while unbound. Initialize unused input fields
+to zero. App binding currently returns `app_target_not_supported`.
+`boxlite_domain_unbind()` requires the full hostname. A local runtime answers
+`Unsupported`. The changed domain structures require rebuilding C consumers.
+
+Release the management handle with `boxlite_free_domain_handle()`, the result
+of `boxlite_domain_bind()` with `boxlite_free_domain()`, and the result of
+`boxlite_domain_list()` with `boxlite_free_domain_list()`. The list owns its
+entries; do not free them individually. These functions release local SDK
+resources and leave domain bindings intact. Use `boxlite_domain_unbind()` to
+stop routing a domain.
+
 #### Discovery & Introspection
 
 ```c
