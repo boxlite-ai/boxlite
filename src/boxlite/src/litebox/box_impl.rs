@@ -308,14 +308,10 @@ impl BoxImpl {
     ///
     /// This is idempotent - calling start() on a Running box is a no-op.
     pub(crate) async fn start(&self) -> BoxliteResult<()> {
-        // Coalesce callers on this handle before taking the cross-process lock.
-        // Concurrent explicit/implicit starts still share container_start.
+        // Coalesce explicit and implicit starts on this handle.
         let _boot = self.boot_updates.lock().await;
-        let persisted = self.runtime.box_manager.update_box(self.id())?;
-        if matches!(persisted.status, BoxStatus::Configured | BoxStatus::Stopped) {
-            super::operation::Reservation::provision(&self.runtime.layout, self.id())?;
-        }
-        let _reservation = self.reserve(super::operation::Action::Lifecycle).await?;
+        self.check_operation(super::operation::Action::Lifecycle)
+            .await?;
         let t0 = Instant::now();
 
         // Check if already shutdown (via stop() or runtime shutdown)
@@ -723,11 +719,7 @@ impl BoxImpl {
     }
 
     pub(crate) async fn stop(&self) -> BoxliteResult<()> {
-        let _reservation = self.reserve(super::operation::Action::Stop).await?;
-        self.stop_reserved().await
-    }
-
-    pub(super) async fn stop_reserved(&self) -> BoxliteResult<()> {
+        self.check_operation(super::operation::Action::Stop).await?;
         let _network_update = self.network_updates.lock().await;
         let _update = self.configuration_updates.lock().await;
         let t0 = Instant::now();
@@ -770,7 +762,7 @@ impl BoxImpl {
             // guest RPC unless it runs, and no reattach pipeline.
             self.stop_checkpoint_vm().await?;
         } else if status == BoxStatus::Running
-            && let Ok(live) = self.ensure_booted_reserved().await
+            && let Ok(live) = self.ensure_booted().await
         {
             // Recovered boxes lazy-attach here via vmm_attach (now
             // ProcessIdentity-gated). Live boxes hit the cached LiveState.
@@ -1187,7 +1179,8 @@ impl BoxImpl {
     /// longer Running means the VM behind it is dead.
     pub(super) async fn ensure_booted(&self) -> BoxliteResult<&LiveState> {
         let _boot = self.boot_updates.lock().await;
-        let _reservation = self.reserve(super::operation::Action::Lifecycle).await?;
+        self.check_operation(super::operation::Action::Lifecycle)
+            .await?;
         self.ensure_booted_reserved().await
     }
 
@@ -1451,7 +1444,7 @@ impl BoxImpl {
                         .expect("guest is fetched only when a health check is configured"),
                     state.health_status,
                 );
-                if self.uses_checkpoint_owner() {
+                if state.start_mode.as_ref().is_some_and(|mode| mode.owns_vm()) {
                     probe.with_checkpoint_control(self.checkpoint_control())
                 } else {
                     probe
@@ -1896,7 +1889,6 @@ mod tests {
         let (guest_session, server) = start_stub_guest(gate).await;
 
         let id = BoxIDMint::mint();
-        crate::litebox::operation::Reservation::provision(&runtime.layout, &id).unwrap();
         let config = BoxConfig {
             id: id.clone(),
             name: None,
@@ -2147,7 +2139,6 @@ mod tests {
         let pid = child.0.id();
 
         let id = BoxIDMint::mint();
-        crate::litebox::operation::Reservation::provision(&runtime.layout, &id).unwrap();
         let box_home = runtime.layout.boxes_dir().join(id.as_str());
         let config = BoxConfig {
             id: id.clone(),
@@ -2227,7 +2218,6 @@ mod tests {
         let pid = child.0.id();
 
         let id = BoxIDMint::mint();
-        crate::litebox::operation::Reservation::provision(&runtime.layout, &id).unwrap();
         let box_home = runtime.layout.boxes_dir().join(id.as_str());
         let config = BoxConfig {
             id: id.clone(),

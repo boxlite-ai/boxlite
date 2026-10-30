@@ -1,11 +1,7 @@
-//! Whole-operation ownership across handles and host processes.
+//! Refresh and validate operation state against the persisted record and VM owner.
 use super::box_impl::BoxImpl;
-use crate::runtime::{id::BoxID, layout::FilesystemLayout, types::BoxStatus};
+use crate::runtime::types::BoxStatus;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
-use std::fs::{File, OpenOptions};
-use std::os::fd::AsRawFd;
-use std::os::unix::fs::OpenOptionsExt;
-use std::path::{Path, PathBuf};
 
 #[derive(Clone, Copy)]
 pub(crate) enum Action {
@@ -16,76 +12,15 @@ pub(crate) enum Action {
     DiskRestore,
     ArchiveRestore,
     SnapshotRemove,
+    #[cfg_attr(
+        all(not(target_os = "linux"), not(test)),
+        expect(dead_code, reason = "online resize requires Linux/KVM")
+    )]
     Resize,
 }
 
-/// Independent of VM-lifetime locks; never unlink or recycle its inode.
-pub(crate) struct Reservation {
-    _file: File,
-}
-
-fn lock_path(layout: &FilesystemLayout, id: &BoxID) -> PathBuf {
-    layout.home_dir().join("operations").join(id.as_str())
-}
-
-impl Reservation {
-    pub(crate) fn duplicate(&self) -> BoxliteResult<Self> {
-        Ok(Self {
-            _file: self
-                ._file
-                .try_clone()
-                .map_err(|e| BoxliteError::Storage(e.to_string()))?,
-        })
-    }
-    pub(crate) fn provision(layout: &FilesystemLayout, id: &BoxID) -> BoxliteResult<()> {
-        let path = lock_path(layout, id);
-        std::fs::create_dir_all(path.parent().expect("operation lock has a parent"))
-            .map_err(|e| BoxliteError::Storage(format!("operation lock directory: {e}")))?;
-        OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .mode(0o600)
-            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
-            .open(&path)
-            .map_err(|e| {
-                BoxliteError::Storage(format!("provision operation lock {}: {e}", path.display()))
-            })?;
-        Ok(())
-    }
-
-    pub(crate) fn acquire(layout: &FilesystemLayout, id: &BoxID) -> BoxliteResult<Self> {
-        Self::open(&lock_path(layout, id))
-    }
-
-    fn open(path: &Path) -> BoxliteResult<Self> {
-        let file = OpenOptions::new().read(true).write(true)
-            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC).open(path)
-            .map_err(|e| BoxliteError::InvalidState(format!(
-                "operation lock {} unavailable: {e}; stop and explicitly restart this legacy box", path.display())))?;
-        if !file
-            .metadata()
-            .map_err(|e| BoxliteError::Storage(e.to_string()))?
-            .is_file()
-        {
-            return Err(BoxliteError::InvalidState(
-                "operation lock is not a regular file".into(),
-            ));
-        }
-        // SAFETY: a separate live open description; closing releases the lock.
-        if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
-            return Err(BoxliteError::InvalidState(format!(
-                "Busy: another box operation owns the reservation ({})",
-                std::io::Error::last_os_error()
-            )));
-        }
-        Ok(Self { _file: file })
-    }
-}
-
 impl BoxImpl {
-    pub(crate) async fn reserve(&self, action: Action) -> BoxliteResult<Reservation> {
-        let guard = Reservation::acquire(&self.runtime.layout, self.id())?;
+    pub(crate) async fn check_operation(&self, action: Action) -> BoxliteResult<()> {
         let mut state = self.runtime.box_manager.update_box(self.id())?;
         let initializing_archive =
             matches!(action, Action::ArchiveRestore) && state.status == BoxStatus::Configured;
@@ -151,7 +86,7 @@ impl BoxImpl {
             )));
         }
         *self.state.write() = state;
-        Ok(guard)
+        Ok(())
     }
 }
 

@@ -32,12 +32,32 @@ memory-image file-size allowances; RAM, init bytes and anonymous DAX pages do.
 A never-started (`Configured`) box also accepts disk archive restore, which leaves
 it Stopped; this exception does not permit snapshot restore or disk capture.
 
-Each lifecycle/storage operation takes a nonblocking reservation across processes.
-Conflicts return `Busy`. A Running disk capture drains and copies the frozen view
-without replacing the live disk. Batch clones share one copied base; children and
-export compression are created after the source resumes.
-Snapshot removal also refuses an active owner capture, even if its initiating
-process no longer holds the host-side reservation.
+Operations refresh persisted state and, for an active checkpoint owner, query the
+shim's authoritative state. The shim rejects conflicting mutations with `Busy`
+while a capture session is active; Stop can terminate that session. Snapshot
+removal also refuses an active owner capture. Runtime/entity locks remain, but
+there is no separate host operation-file reservation or universal serialization
+of lifecycle/storage calls across processes.
+
+Serialize lifecycle and storage calls for each source box. Concurrent stopped-disk
+capture/install, restore, removal and duplicate-name creation are not protected by
+a shim session. Running capture also quiesces before Begin admits the session;
+concurrent capture/pause requests can interfere with the shared freeze/thaw state.
+These concurrency gaps remain unresolved; see the [follow-up scope](https://github.com/boxlite-ai/boxlite/issues/2219).
+
+A Running disk snapshot, clone or disk export first flushes and freezes guest
+filesystems, then pauses execution and drains block queues. It copies the frozen
+view into a standalone disk without replacing the live disk, then resumes and
+thaws the source. Batch clones share one copied base; children and export
+compression are created after the source resumes. Failure/cancellation cleanup
+thaws the guest or stops the shim and confirms captured writers have exited
+before releasing their storage. A Stopped disk capture needs no guest execution.
+
+Disk captures save filesystem contents, not RAM, process identity or device state.
+Snapshot creation installs an independent copy; restoring a snapshot while Stopped
+creates a COW child backed by that snapshot. Removal refuses snapshots that still
+back a live disk or another disk chain. A checkpoint instead preserves memory and
+devices alongside its paired disk and imports as Paused.
 
 ## Export, inspect and import
 
@@ -159,9 +179,8 @@ session and does not recover old orphan handles.
 Live CPU and memory growth remain available on checkpoint-owner boxes. For
 example, a box created with 1 CPU / 256 MiB can grow to 2 CPUs / 512 MiB,
 pause and export, then import, resume and grow to 3 CPUs / 640 MiB within its
-saved ceilings. Resize requires Running and shares the cross-process operation
-reservation with pause, resume, checkpoint export and disk capture; a competing
-operation receives Busy. The native memory mailbox rejects growth while paused.
+saved ceilings. Resize requires Running and refuses an active shim capture
+session with `Busy`. The native memory mailbox rejects growth while paused.
 
 The current version-9 schema saves every provisioned vCPU, the actual CPU/RAM
 allocation, virtio-mem queues/configuration, plugged blocks, reserved capacity and
@@ -222,7 +241,7 @@ The Rust signatures above are identical for `BoxliteRuntime::rest(...)`.
 new **caller-local** directory. `import_checkpoint(directory, options)` uploads a
 caller-local pair and creates a **remote Paused** box. Only its name can be overridden;
 the remaining options come from the checkpoint. `checkpoint inspect` stays local.
-The CLI uses its normal `--url`, environment and profile selection:
+The CLI uses its normal `--url`, environment and context selection:
 
 ```sh
 boxlite --url http://127.0.0.1:8080 pause --host-writers-stopped web

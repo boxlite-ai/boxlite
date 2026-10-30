@@ -17,8 +17,7 @@ use libkrun_sys::{
     krun_set_console_output, krun_set_env, krun_set_exec, krun_set_gpu_options, krun_set_kernel,
     krun_set_nested_virt, krun_set_port_map, krun_set_rlimits, krun_set_root,
     krun_set_root_disk_remount, krun_set_vm_config, krun_set_workdir, krun_setgid, krun_setuid,
-    krun_snapshot_enable,
-    krun_split_irqchip, krun_start_enter,
+    krun_snapshot_enable, krun_split_irqchip, krun_start_enter,
 };
 
 /// Thin wrapper that owns a libkrun context.

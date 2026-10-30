@@ -1,8 +1,11 @@
 //! Online resize: spare vCPUs stay offline and capped until a resize.
 
+#[cfg(target_os = "linux")]
 mod common;
 
+#[cfg(target_os = "linux")]
 use boxlite::BoxOptions;
+#[cfg(target_os = "linux")]
 use common::box_test::BoxTestBase;
 
 #[cfg(target_os = "linux")]

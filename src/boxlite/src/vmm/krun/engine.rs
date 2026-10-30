@@ -406,7 +406,6 @@ impl Vmm for Krun {
             // Import descriptors arrive through the sandboxed control socket
             // after endpoints are configured and before start_enter.
 
-
             let cpus = config.cpus.unwrap_or(DEFAULT_CPUS);
             let max_cpus = config.max_cpus.unwrap_or(cpus).max(cpus);
             tracing::debug!(
@@ -417,9 +416,10 @@ impl Vmm for Krun {
             );
             ctx.set_vm_config(max_cpus, config.memory_mib.unwrap_or(DEFAULT_MEMORY_MIB))?;
             #[cfg(target_os = "linux")]
-            if import.is_none() && let Some(max) = config
-                .max_memory_mib
-                .filter(|&max| max > config.memory_mib.unwrap_or(DEFAULT_MEMORY_MIB))
+            if import.is_none()
+                && let Some(max) = config
+                    .max_memory_mib
+                    .filter(|&max| max > config.memory_mib.unwrap_or(DEFAULT_MEMORY_MIB))
             {
                 super::check_status(
                     "krun_set_memory_hotplug",

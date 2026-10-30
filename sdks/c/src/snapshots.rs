@@ -252,11 +252,13 @@ pub unsafe extern "C" fn boxlite_snapshot_create(
     let queue = handle.queue.clone();
     let user_data = user_data as usize;
     handle.tokio_rt.spawn(async move {
-        let result = bx
-            .snapshots()
-            .create(SnapshotOptions::default(), &name)
-            .await
-            .map(|info| Some(OwnedFfiPtr::new_with(Box::new(info.into()), free_info)));
+        let snapshots = bx.snapshots();
+        let result = if name.trim().is_empty() {
+            snapshots.create_unnamed(SnapshotOptions::default()).await
+        } else {
+            snapshots.create(SnapshotOptions::default(), &name).await
+        }
+        .map(|info| Some(OwnedFfiPtr::new_with(Box::new(info.into()), free_info)));
         push_event(
             &queue,
             RuntimeEvent::SnapshotInfo {

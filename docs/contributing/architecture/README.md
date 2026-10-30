@@ -197,9 +197,13 @@ Imported resource descriptors bind after the shim installs its sandbox and
 before `start_enter`; capture uses a separate silent stream whose loss stops
 the owner. Generation-1 state and stop remain available to diagnose older shims.
 
-Box operations reserve a separate, stable file under `operations/` with a
-nonblocking flock before refreshing state. Provisioning creates the inode;
-operation refusal never creates it, and box deletion never recycles it.
+Box operations refresh persisted state and, where required, query the shim owner
+before admission. Shim capture sessions reject conflicting mutations; Stop can
+terminate an active session. Runtime and entity locks retain their own scopes,
+but there is no separate host operation-file reservation. Callers must coordinate
+overlapping lifecycle/storage calls; see the [checkpoint lifecycle](../../guides/checkpoints.md#support-and-lifecycle)
+for state restrictions and known concurrency limits.
+
 Frozen QCOW2 copies accept a cancellation predicate checked before destination
 mutation and between cluster/range writes. Their caller joins the writer before
 removing a partial destination.

@@ -145,9 +145,15 @@ pub(crate) fn shares(metadata: &serde_json::Value) -> BoxliteResult<Vec<ShareDep
 /// Validate sparse slot accounting before provisioning any imported resources.
 fn hotplug_bytes(metadata: &serde_json::Value, boot_bytes: u64) -> BoxliteResult<u64> {
     let memory = &metadata["memory"];
-    if memory.is_null() { return Ok(0); }
+    if memory.is_null() {
+        return Ok(0);
+    }
     let state = &memory["state"];
-    let number = |value: &serde_json::Value| value.as_u64().ok_or_else(|| invalid("invalid memory allocation"));
+    let number = |value: &serde_json::Value| {
+        value
+            .as_u64()
+            .ok_or_else(|| invalid("invalid memory allocation"))
+    };
     let initial = number(&state["initial_mib"])?;
     let size = number(&state["size"])?;
     let addr = number(&state["addr"])?;
@@ -159,25 +165,42 @@ fn hotplug_bytes(metadata: &serde_json::Value, boot_bytes: u64) -> BoxliteResult
     let plugged = number(&state["status"]["plugged_mib"])?;
     let active = number(&state["status"]["active"])?;
     let error = number(&state["status"]["error"])?;
-    let blocks = state["plugged"].as_array().ok_or_else(|| invalid("missing memory blocks"))?;
-    if active > 1 || error > i32::MAX as u64
+    let blocks = state["plugged"]
+        .as_array()
+        .ok_or_else(|| invalid("missing memory blocks"))?;
+    if active > 1
+        || error > i32::MAX as u64
         || memory["slot"]["device"]["activated"].as_bool() != Some(active == 1)
-        || initial == 0 || initial > u64::from(u32::MAX) || max > u64::from(u32::MAX)
-        || initial * (1 << 20) != boot_bytes || size == 0 || size % (128 << 20) != 0
-        || addr < (1 << 32) || addr % (128 << 20) != 0
+        || initial == 0
+        || initial > u64::from(u32::MAX)
+        || max > u64::from(u32::MAX)
+        || initial * (1 << 20) != boot_bytes
+        || size == 0
+        || size % (128 << 20) != 0
+        || addr < (1 << 32)
+        || addr % (128 << 20) != 0
         || addr.checked_add(size).is_none_or(|end| end > (1 << 52))
         || initial + size / (1 << 20) != max
-        || requested < initial || requested > max || (requested - initial) % 128 != 0
-        || requested_size > (requested - initial) * (1 << 20) || requested_size % (128 << 20) != 0
-        || usable > size || usable % (2 << 20) != 0 || (usable < requested_size && usable != 0)
+        || requested < initial
+        || requested > max
+        || (requested - initial) % 128 != 0
+        || requested_size > (requested - initial) * (1 << 20)
+        || requested_size % (128 << 20) != 0
+        || usable > size
+        || usable % (2 << 20) != 0
+        || (usable < requested_size && usable != 0)
         || blocks.len() as u64 != size / (2 << 20)
-    { return Err(invalid("inconsistent memory reservation/target")); }
+    {
+        return Err(invalid("inconsistent memory reservation/target"));
+    }
     let mut plugged_blocks = 0u64;
     let mut mapped_slots = 0u64;
     for (slot, chunk) in blocks.chunks(64).enumerate() {
         let mut occupied = false;
         for (block, value) in chunk.iter().enumerate() {
-            let plugged = value.as_bool().ok_or_else(|| invalid("invalid memory block bit"))?;
+            let plugged = value
+                .as_bool()
+                .ok_or_else(|| invalid("invalid memory block bit"))?;
             if plugged {
                 if ((slot * 64 + block + 1) as u64) * (2 << 20) > usable {
                     return Err(invalid("plugged block outside usable memory"));
@@ -188,25 +211,40 @@ fn hotplug_bytes(metadata: &serde_json::Value, boot_bytes: u64) -> BoxliteResult
         }
         mapped_slots += u64::from(occupied);
     }
-    if plugged != initial + plugged_blocks * 2 || plugged_blocks * (2 << 20) > requested_size
-        || mapped != initial + mapped_slots * 128 {
+    if plugged != initial + plugged_blocks * 2
+        || plugged_blocks * (2 << 20) > requested_size
+        || mapped != initial + mapped_slots * 128
+    {
         return Err(invalid("mapped/plugged memory accounting mismatch"));
     }
-    for region in metadata["regions"].as_array().expect("validated RAM regions") {
+    for region in metadata["regions"]
+        .as_array()
+        .expect("validated RAM regions")
+    {
         let start = number(&region["gpa"])?;
         let len = number(&region["len"])?;
-        if addr < start + len && start < addr + size { return Err(invalid("hotplug overlaps boot RAM")); }
+        if addr < start + len && start < addr + size {
+            return Err(invalid("hotplug overlaps boot RAM"));
+        }
     }
     Ok(mapped_slots * (128 << 20))
 }
 
-pub(crate) fn validate_resources(resources: crate::BoxResources, dependencies: &CheckpointDependencies) -> BoxliteResult<()> {
-    if resources.cpus == 0 || resources.cpus > resources.max_cpus
-        || u16::from(resources.max_cpus) != dependencies.cpus || resources.memory_mib == 0
+pub(crate) fn validate_resources(
+    resources: crate::BoxResources,
+    dependencies: &CheckpointDependencies,
+) -> BoxliteResult<()> {
+    if resources.cpus == 0
+        || resources.cpus > resources.max_cpus
+        || u16::from(resources.max_cpus) != dependencies.cpus
+        || resources.memory_mib == 0
         || resources.memory_mib > resources.max_memory_mib
         || resources.max_memory_mib != dependencies.max_memory_mib
-        || u64::from(resources.memory_mib) << 20 != dependencies.memory_bytes {
-        return Err(invalid("saved allocation differs from native CPU/RAM layout"));
+        || u64::from(resources.memory_mib) << 20 != dependencies.memory_bytes
+    {
+        return Err(invalid(
+            "saved allocation differs from native CPU/RAM layout",
+        ));
     }
     Ok(())
 }
@@ -276,7 +314,8 @@ fn validate_extents(metadata: &serde_json::Value, payload: u64) -> BoxliteResult
             .checked_add(length)
             .ok_or_else(|| invalid("RAM payload overflow"))?;
     }
-    bytes = bytes.checked_add(hotplug_bytes(metadata, bytes)?)
+    bytes = bytes
+        .checked_add(hotplug_bytes(metadata, bytes)?)
         .ok_or_else(|| invalid("hotplug payload overflow"))?;
     let ram_bytes = bytes;
     if let Some(fs) = metadata["fs"].as_object() {
@@ -380,11 +419,22 @@ pub(crate) fn inspect_memory(mut memory: &File) -> BoxliteResult<CheckpointDepen
         return Err(invalid("unsupported application schema"));
     }
     let memory_bytes = validate_extents(&metadata, payload_bytes)?;
-    let boot_bytes = metadata["regions"].as_array().expect("validated regions").iter()
-        .map(|r| r["len"].as_u64().expect("validated region length")).sum::<u64>();
+    let boot_bytes = metadata["regions"]
+        .as_array()
+        .expect("validated regions")
+        .iter()
+        .map(|r| r["len"].as_u64().expect("validated region length"))
+        .sum::<u64>();
     let boot_memory_mib = u32::try_from(boot_bytes >> 20).map_err(invalid)?;
-    let max_memory_mib = if metadata["memory"].is_null() { boot_memory_mib } else {
-        u32::try_from(metadata["memory"]["state"]["status"]["max_mib"].as_u64().expect("validated memory maximum")).map_err(invalid)?
+    let max_memory_mib = if metadata["memory"].is_null() {
+        boot_memory_mib
+    } else {
+        u32::try_from(
+            metadata["memory"]["state"]["status"]["max_mib"]
+                .as_u64()
+                .expect("validated memory maximum"),
+        )
+        .map_err(invalid)?
     };
     let boot = &metadata["disk_dependencies"][1]["external_readonly_boot"];
     let boot_hash: [u8; 32] = serde_json::from_value(boot["sha256"].clone()).map_err(invalid)?;

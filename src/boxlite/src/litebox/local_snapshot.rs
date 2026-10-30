@@ -1,6 +1,6 @@
 //! Local `BoxImpl` implementation for snapshot operations.
 //!
-//! Thin VM-aware wrapper that handles quiescing, locking, and state checks,
+//! Thin VM-aware wrapper that handles capture sessions and state checks,
 //! then delegates disk + DB operations to `SnapshotManager`.
 
 use std::path::{Path, PathBuf};
@@ -30,9 +30,8 @@ impl LocalSnapshotBackend {
     ) -> BoxliteResult<SnapshotInfo> {
         validate_snapshot_name(name)?;
         let t0 = Instant::now();
-        let _lock = self
-            .inner
-            .reserve(super::operation::Action::DiskCapture)
+        self.inner
+            .check_operation(super::operation::Action::DiskCapture)
             .await?;
 
         let box_id = self.inner.id().as_str();
@@ -47,7 +46,7 @@ impl LocalSnapshotBackend {
         }
 
         let box_home = &self.inner.config.box_home;
-        let captured = self.inner.capture_disk(&_lock).await?;
+        let captured = self.inner.capture_disk().await?;
         let info = snap_mgr.create(box_home, name, box_id, &captured.path)?;
 
         tracing::info!(
@@ -74,9 +73,8 @@ impl LocalSnapshotBackend {
 
     async fn snapshot_remove(&self, name: &str) -> BoxliteResult<()> {
         validate_snapshot_name(name)?;
-        let _lock = self
-            .inner
-            .reserve(super::operation::Action::SnapshotRemove)
+        self.inner
+            .check_operation(super::operation::Action::SnapshotRemove)
             .await?;
 
         let box_id = self.inner.id().as_str();
@@ -105,9 +103,8 @@ impl LocalSnapshotBackend {
     async fn snapshot_restore(&self, name: &str) -> BoxliteResult<()> {
         validate_snapshot_name(name)?;
 
-        let _lock = self
-            .inner
-            .reserve(super::operation::Action::DiskRestore)
+        self.inner
+            .check_operation(super::operation::Action::DiskRestore)
             .await?;
 
         let box_id = self.inner.id().as_str();

@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use boxlite_shared::errors::BoxliteResult;
 
-use crate::litebox::snapshot_mgr::SnapshotInfo;
+use crate::litebox::snapshot_mgr::{SnapshotInfo, validate_snapshot_name};
 use crate::runtime::backend::SnapshotBackend;
 use crate::runtime::options::SnapshotOptions;
 
@@ -28,6 +28,7 @@ impl SnapshotHandle {
         options: SnapshotOptions,
         name: &str,
     ) -> BoxliteResult<SnapshotInfo> {
+        validate_snapshot_name(name)?;
         self.snapshot_backend.create(options, name).await
     }
 

@@ -11,6 +11,15 @@ const GLOBAL_OPTIONS: &[&str] = &[
     "--path-prefix",
 ];
 
+const REMOTE_BOX_OPTIONS: &[&str] = &[
+    "--debug",
+    "--home",
+    "--config",
+    "--url",
+    "--context",
+    "--path-prefix",
+];
+
 fn help_for(path: &[&str], help_flag: &str) -> String {
     let output = Command::new(assert_cmd::cargo::cargo_bin!("boxlite"))
         .args(path)
@@ -151,17 +160,15 @@ fn command_help_only_advertises_meaningful_global_options() {
         ),
         (&["info"], &["--debug", "--home", "--config"]),
         (&["logs"], &["--debug", "--home", "--config"]),
-        (&["pause"], &["--debug", "--home", "--config"]),
-        (&["resume"], &["--debug", "--home", "--config"]),
-        (&["checkpoint"], &["--debug", "--home", "--config"]),
+        (&["pause"], REMOTE_BOX_OPTIONS),
+        (&["resume"], REMOTE_BOX_OPTIONS),
+        (&["checkpoint"], REMOTE_BOX_OPTIONS),
         (
-            &["checkpoint", "export"],
+            &["checkpoint", "inspect"],
             &["--debug", "--home", "--config"],
         ),
-        (
-            &["checkpoint", "import"],
-            &["--debug", "--home", "--config"],
-        ),
+        (&["checkpoint", "export"], REMOTE_BOX_OPTIONS),
+        (&["checkpoint", "import"], REMOTE_BOX_OPTIONS),
         (
             &["stats"],
             &[
@@ -447,4 +454,28 @@ fn auth_login_rejects_a_non_utf8_url_environment_value() {
         .stderr(predicates::str::contains(
             "BOXLITE_REST_URL must contain valid UTF-8",
         ));
+}
+
+#[cfg(unix)]
+#[test]
+fn checkpoint_inspect_ignores_remote_environment_values() {
+    use std::ffi::OsString;
+    use std::os::unix::ffi::OsStringExt;
+
+    let home = tempfile::tempdir().unwrap();
+    let missing = home.path().join("missing-checkpoint");
+    for variable in [
+        "BOXLITE_REST_URL",
+        "BOXLITE_CONTEXT",
+        "BOXLITE_PROFILE",
+        "BOXLITE_REST_PATH_PREFIX",
+    ] {
+        Command::new(assert_cmd::cargo::cargo_bin!("boxlite"))
+            .env(variable, OsString::from_vec(vec![0xff]))
+            .args(["checkpoint", "inspect"])
+            .arg(&missing)
+            .assert()
+            .failure()
+            .stderr(predicates::str::contains("invalid checkpoint"));
+    }
 }

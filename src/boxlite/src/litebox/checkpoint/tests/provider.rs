@@ -285,7 +285,7 @@ fn checkpoint_local_paths_preserve_deleted_suffix_and_reject_path_escape() {
         boot_disk: root.join("boot.ext4"),
     };
     let refs = LocalCheckpointProvider::prepare(
-        &[share.clone()],
+        std::slice::from_ref(&share),
         vec![
             path_object(root, Path::new("."), object_flags()).unwrap(),
             path_object(root, Path::new("name (deleted)"), object_flags()).unwrap(),
