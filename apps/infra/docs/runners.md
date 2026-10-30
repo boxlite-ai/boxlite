@@ -69,7 +69,8 @@ npm run mstage env set -- RUNNERS=2 --stage dev --digest
 Review that the diff creates the additional host without replacing existing hosts. Then apply and
 check registration, target version, capacity and a test box on the new host. Extra runners have
 individual registration tokens. Machine size and root disk size come from `deploy.runners` in the stage declaration;
-a GCP host's data disk is sized by its machine size.
+optional `dataDiskGb` selects a new GCP host's data disk capacity. Existing GCP hosts retain their machine types
+and disk sizes. See [runner sizing](configuration.md#runner-sizing) for defaults and configuration ownership.
 
 Scale-in is a separate retirement operation: reducing a count attempts to delete a protected host,
 and on GCP its protected data disk.

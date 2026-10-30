@@ -26,6 +26,23 @@ const valid = {
 const parse = (overrides: Record<string, unknown> = {}) =>
   parseDeployConfig('/repo/apps/infra/mdeploy.config.json', JSON.stringify({ ...valid, ...overrides }))
 
+test('runner configuration accepts an optional data disk while preserving required fields and bounds', () => {
+  assert.deepEqual(parse().runners, valid.runners)
+  for (const dataDiskGb of [20, 2048, 4000]) {
+    const runners = { ...valid.runners, dataDiskGb }
+    assert.deepEqual(parse({ runners }).runners, runners)
+  }
+  for (const dataDiskGb of [19, 4001, 20.5, '2048', null]) {
+    assert.throws(() => parse({ runners: { ...valid.runners, dataDiskGb } }), /dataDiskGb must be a whole number/)
+  }
+  for (const required of ['size', 'rootDiskGb']) {
+    const runners: Record<string, unknown> = { ...valid.runners, dataDiskGb: 2048 }
+    delete runners[required]
+    assert.throws(() => parse({ runners }), new RegExp(`must set ${required}`))
+  }
+  assert.throws(() => parse({ runners: { ...valid.runners, dataDiskSize: 2048 } }), /does not take dataDiskSize/)
+})
+
 test('the defaults have to be complete, because nothing else supplies them', () => {
   // A stage says only what differs, so a gap there is the point. A gap in the
   // defaults is a value nothing supplies, and the resource would be created
