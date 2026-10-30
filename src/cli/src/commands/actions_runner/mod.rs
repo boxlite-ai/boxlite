@@ -276,7 +276,7 @@ fi
 export RUNNER_ALLOW_RUNASROOT=1
 ./config.sh \
     --url "{url}" \
-    --token "${{ACTIONS_RUNNER_TOKEN:-{token}}}" \
+    --token "{token}" \
     --name "{name}" \
     --labels "{labels}" \
     --unattended \
@@ -476,9 +476,6 @@ pub async fn execute(args: ActionsRunnerArgs, global: &GlobalFlags) -> Result<()
             let label_str = start_args.labels.join(",");
             let spec = RunnerLabelSpec::parse(&label_str);
             spec.apply_to_box_options(&mut box_options);
-            box_options
-                .env
-                .push(("ACTIONS_RUNNER_TOKEN".to_string(), start_args.token.clone()));
 
             let litebox = rt.create(box_options, Some(session.name.clone())).await?;
             litebox.start().await?;
@@ -514,7 +511,7 @@ pub async fn execute(args: ActionsRunnerArgs, global: &GlobalFlags) -> Result<()
         ActionsRunnerCommand::Connect(connect_args) => {
             let _runtime_options = global.resolve_runtime_options()?;
             let repo_url = match connect_args.repo {
-                Some(url) => url,
+                Some(url) => normalize_github_repo_url(&url).unwrap_or(url),
                 None => discover_local_github_repo().ok_or_else(|| {
                     anyhow::anyhow!(
                         "Could not auto-detect GitHub repository from local git remote. Please specify --repo <URL>."
@@ -568,9 +565,6 @@ pub async fn execute(args: ActionsRunnerArgs, global: &GlobalFlags) -> Result<()
 
             box_options.cpus = Some(size.cpus());
             box_options.memory_mib = Some(size.memory_mib());
-            box_options
-                .env
-                .push(("ACTIONS_RUNNER_TOKEN".to_string(), start_args.token.clone()));
 
             let litebox = rt.create(box_options, Some(session.name.clone())).await?;
             litebox.start().await?;
