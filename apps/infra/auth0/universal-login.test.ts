@@ -357,6 +357,7 @@ test('the dashboard ships only the documented content-addressed Auth0 assets', (
   const expectedHashes = {
     'IBM-Plex-OFL-d741e57d.txt': 'd741e57d5f865e294df801f96b7b5161a88b211df65887e4358d271c9fc5fb4f',
     'boxlite-black-3f7875da.png': '3f7875daa9a48723b208f68ac5bc59ed3d98c8d018443207ba16784ad5ccb656',
+    'boxlite-icon-290464ed.png': '290464edf96527cc652aaf897d9a10a6e60ec66d344392d1f65aafe406531183',
     'boxlite-light-e912d3c8.png': 'e912d3c8c795ff341e94906af378b395f3c4bfd35e8e0259732374c8cff47100',
     'github-invertocat-white-ccd84c89.svg': 'ccd84c89b1056345608fc3489357f8acc7397e49a3cdc2d418b6c8016911d47b',
     'ibm-plex-mono-400-ba204497.woff2': 'ba204497f16b6d334cee9d1e963a831b73e3a56e1d6300a8489d18df7214b350',
