@@ -16,6 +16,7 @@ struct SystemInfo {
     arch: String,
     boxes_total: u32,
     boxes_running: u32,
+    boxes_paused: u32,
     boxes_stopped: u32,
     boxes_configured: u32,
     images_count: u32,
@@ -50,7 +51,14 @@ pub async fn execute(args: InfoArgs, global: &GlobalFlags) -> anyhow::Result<()>
 
     let boxes_list = rt.list_info().await?;
     let boxes_total = boxes_list.len() as u32;
-    let boxes_running = boxes_list.iter().filter(|b| b.status.is_active()).count() as u32;
+    let boxes_running = boxes_list
+        .iter()
+        .filter(|b| b.status == BoxStatus::Running)
+        .count() as u32;
+    let boxes_paused = boxes_list
+        .iter()
+        .filter(|b| b.status == BoxStatus::Paused)
+        .count() as u32;
     let boxes_stopped = boxes_list
         .iter()
         .filter(|b| b.status == BoxStatus::Stopped)
@@ -70,6 +78,7 @@ pub async fn execute(args: InfoArgs, global: &GlobalFlags) -> anyhow::Result<()>
         arch,
         boxes_total,
         boxes_running,
+        boxes_paused,
         boxes_stopped,
         boxes_configured,
         images_count,

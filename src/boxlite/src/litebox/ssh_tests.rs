@@ -184,7 +184,6 @@ async fn fixture_with_container(started: bool) -> Fixture {
     };
     let mut state = BoxState::new();
     state.status = BoxStatus::Running;
-    crate::litebox::operation::Reservation::provision(&runtime.layout, &config.id).unwrap();
     runtime.box_manager.add_box(&config, &state).unwrap();
     let backend = Arc::new(BoxImpl::new(
         config,

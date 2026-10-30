@@ -19,7 +19,7 @@ Image Layers          Rootfs Builder              Box Rootfs
 
 - Layer extraction and overlay mounting
 - DNS configuration injection
-- Copy-on-write snapshot creation
+- Standalone disk snapshot capture; copy-on-write disk restoration
 
 ## Volume management
 
@@ -52,7 +52,24 @@ EOF. Flatten preserves that guest-visible zero tail; truncated metadata and data
 clusters whose starting offset lies outside the file are rejected.
 These semantics follow the [QCOW2 header and cluster mapping specification](https://qemu.readthedocs.io/en/master/interop/qcow2.html).
 
+## Disk capture and restoration
+
+Local disk snapshots, clones and disk exports capture a standalone copy of the
+source's filesystem contents. Running capture flushes/freezes the guest before
+pausing, copies the frozen disk view, then resumes/thaws the source. The live disk
+is not renamed or replaced. Stopped sources need no guest RPC; Paused sources
+refuse disk capture. Large captures keep execution paused while the copy runs.
+
+Creating a snapshot does not make the live disk depend on it. Restoring one while
+Stopped replaces the live disk with a COW child backed by that snapshot, so the
+snapshot cannot be deleted until its backing dependencies are removed. Batch
+clones share a copied base independent of their source. Memory and device state
+require a [checkpoint](../guides/checkpoints.md#support-and-lifecycle).
+Serialize lifecycle/storage calls per source; the guide describes the unresolved
+concurrency windows.
+
 ## Home directory
+
 
 BoxLite keeps boxes, images, and its database under `~/.boxlite` by default. The directory's
 layout is in [File formats](../reference/file-formats.md#home-directory).

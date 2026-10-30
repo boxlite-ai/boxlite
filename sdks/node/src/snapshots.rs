@@ -61,11 +61,12 @@ impl JsSnapshotHandle {
     ) -> Result<JsSnapshotInfo> {
         let handle = Arc::clone(&self.handle);
         let options: SnapshotOptions = options.map(Into::into).unwrap_or_default();
-        let info = handle
-            .snapshots()
-            .create(options, name.as_deref().unwrap_or(""))
-            .await
-            .map_err(map_err)?;
+        let snapshots = handle.snapshots();
+        let info = match name {
+            Some(name) => snapshots.create(options, &name).await,
+            None => snapshots.create_unnamed(options).await,
+        }
+        .map_err(map_err)?;
         Ok(JsSnapshotInfo::from(info))
     }
 

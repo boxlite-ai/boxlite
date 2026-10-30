@@ -266,13 +266,14 @@ impl BoxImpl {
     /// Stop the guest's vCPUs and devices at one consistent cut.
     ///
     /// Not SIGSTOP and no guest filesystem freeze. Concurrent pause/resume
-    /// calls are serialized; another host process's in-flight operation makes
+    /// calls are serialized by the shim; an active capture session makes
     /// this one fail without effect.
     pub(crate) async fn pause(
         &self,
         options: super::checkpoint::PauseOptions,
     ) -> BoxliteResult<()> {
-        let _reservation = self.reserve(super::operation::Action::Lifecycle).await?;
+        self.check_operation(super::operation::Action::Lifecycle)
+            .await?;
         self.require_checkpoint("pause")?;
         if self.has_external_shares() && !options.host_writers_stopped {
             return Err(BoxliteError::InvalidArgument(format!(
@@ -361,7 +362,8 @@ impl BoxImpl {
     /// the guest the pause cut before anything uses it. A guest that is not
     /// is stopped.
     pub(crate) async fn resume(&self) -> BoxliteResult<()> {
-        let reservation = self.reserve(super::operation::Action::Lifecycle).await?;
+        self.check_operation(super::operation::Action::Lifecycle)
+            .await?;
         self.require_checkpoint("resume")?;
         let outcome = {
             let _network = self.network_updates.lock().await;
@@ -369,11 +371,10 @@ impl BoxImpl {
         };
         self.settle("resume", outcome).await?;
         let reconnected = async {
-            let live = self.ensure_booted_reserved().await?;
+            let live = self.ensure_booted().await?;
             self.check_guest_identity(live.guest_session()).await
         };
         if let Err(error) = reconnected.await {
-            drop(reservation);
             tracing::error!(box_id = %self.config.id, %error, "Resumed guest failed its identity check; stopping it");
             let stopped = self.stop().await;
             return Err(BoxliteError::Engine(format!(
@@ -461,7 +462,7 @@ impl BoxImpl {
                     error = %message,
                     "Checkpoint control outcome unknown; stopping the VM"
                 );
-                let stopped = self.stop_reserved().await;
+                let stopped = self.stop().await;
                 Err(BoxliteError::Engine(format!(
                     "{op}: outcome unknown ({message}); {}",
                     match stopped {
@@ -600,9 +601,11 @@ impl BoxImpl {
     /// follows with SIGKILL.
     pub(crate) async fn stop_checkpoint_vm(&self) -> BoxliteResult<()> {
         let running = running_since(&self.checkpoint_control()).await.is_some();
-        if running && let Some(live) = self.live_state_if_booted() {
+        if running {
+            // Recovered handles need the same ordered guest shutdown as booted ones.
+            let session = GuestSession::new(self.config.transport());
             let guest_shutdown = async {
-                if let Ok(mut guest) = live.guest_session().guest().await {
+                if let Ok(mut guest) = session.guest().await {
                     let _ = guest.shutdown().await;
                 }
             };
@@ -721,7 +724,6 @@ mod tests {
             });
             state.start_mode =
                 Some(crate::vmm::checkpoint::support::StartMode::Owner { protocol: 2 });
-            crate::litebox::operation::Reservation::provision(&runtime.layout, &id).unwrap();
             state.pid = Some(pid);
             state.set_lock_id(runtime.lock_manager.allocate().expect("lock"));
             configure(&mut state);
@@ -956,6 +958,30 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    async fn checkpoint_stop_of_unattached_running_box_shuts_down_guest() {
+        let owner = FakeOwner::new(VmRunState::Running);
+        let fx = Fixture::new(BoxStatus::Running, BoxOptions::default(), Some(owner));
+        let litebox = fx.litebox().await;
+        assert!(
+            litebox
+                .local_backend("test")
+                .unwrap()
+                .live_state_if_booted()
+                .is_none(),
+            "recovered handle must not need a booted LiveState to stop"
+        );
+
+        litebox.stop().await.unwrap();
+
+        assert!(
+            fx.guest.calls().iter().any(|call| call == "Guest.Shutdown"),
+            "running guest shutdown must precede shim termination"
+        );
+        assert!(!is_process_alive(fx.pid));
+        assert_eq!(fx.persisted(), BoxStatus::Stopped);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
     async fn checkpoint_stop_while_paused_ends_the_shim_without_a_guest_rpc() {
         let owner = FakeOwner::new(VmRunState::Paused);
         let fx = Fixture::new(BoxStatus::Paused, BoxOptions::default(), Some(owner));
@@ -968,6 +994,10 @@ mod tests {
             started.elapsed() < Duration::from_secs(8),
             "{:?}",
             started.elapsed()
+        );
+        assert!(
+            !fx.guest.calls().iter().any(|call| call == "Guest.Shutdown"),
+            "paused stop must not contact the guest"
         );
         assert!(!is_process_alive(fx.pid), "the shim must be gone");
         assert_eq!(fx.persisted(), BoxStatus::Stopped);
@@ -1167,7 +1197,6 @@ mod tests {
                 });
             },
         );
-        crate::litebox::operation::Reservation::provision(&fx.runtime.layout, &fx.id).unwrap();
         std::fs::create_dir_all(fx.layout.disks_dir()).unwrap();
         let base = fx._home.path().join("base.ext4");
         std::fs::write(&base, vec![23; 8 << 20]).unwrap();

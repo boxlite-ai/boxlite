@@ -333,8 +333,8 @@ fn serve_descriptors(
     let (request, files) = descriptors::receive::<DescriptorRequest>(stream, operation)?;
     let begin = matches!(request, DescriptorRequest::Begin { .. });
     let end = matches!(request, DescriptorRequest::End { .. });
-    // Libkrun owns whole-capture exclusion, including clients that lost their
-    // host lock. This lock also orders publication of query bookkeeping.
+    // Libkrun owns whole-capture exclusion across independent clients.
+    // This lock also orders publication of query bookkeeping.
     let held = shared.mutation.try_lock();
     let result = if held.is_err() {
         Err(OwnerError::new(

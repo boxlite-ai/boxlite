@@ -10,8 +10,9 @@ use boxlite_shared::{
 use boxlite_shared::{
     Container, ContainerInitRequest, ContainerInitResponse, ContainerRunningState, ContainerServer,
     ContainerStartRequest, ContainerStartResponse, Guest, GuestInitRequest, GuestInitResponse,
-    GuestServer, OnlineCpusRequest, OnlineCpusResponse, PingRequest, PingResponse, QuiesceRequest, QuiesceResponse, RunningStateRequest,
-    RunningStateResponse, ShutdownRequest, ShutdownResponse, ThawRequest, ThawResponse,
+    GuestServer, OnlineCpusRequest, OnlineCpusResponse, PingRequest, PingResponse, QuiesceRequest,
+    QuiesceResponse, RunningStateRequest, RunningStateResponse, ShutdownRequest, ShutdownResponse,
+    ThawRequest, ThawResponse,
 };
 use std::path::Path;
 use std::sync::{Arc, Mutex};

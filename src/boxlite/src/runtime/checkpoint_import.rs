@@ -170,7 +170,6 @@ pub(crate) async fn import_checkpoint(
     let task = tokio::spawn(async move {
         let runtime = worker_runtime;
         let box_id = BoxIDMint::mint();
-        crate::litebox::operation::Reservation::provision(&runtime.layout, &box_id)?;
         let layout = runtime.layout.box_layout(box_id.as_str(), false)?;
         std::fs::create_dir(layout.root()).map_err(invalid)?;
         let mut attempt = Attempt {
@@ -532,15 +531,14 @@ impl Drop for Attempt {
         {
             tracing::warn!(error = %e, "Failed to free the import's lock");
         }
-        if let Some(id) = self.layout.root().file_name().and_then(|id| id.to_str()) {
-            if let Err(error) = self
+        if let Some(id) = self.layout.root().file_name().and_then(|id| id.to_str())
+            && let Err(error) = self
                 .runtime
                 .base_disk_mgr
                 .store()
                 .remove_all_refs_for_box(id)
-            {
-                tracing::warn!(%error,"Failed to release failed import boot pin");
-            }
+        {
+            tracing::warn!(%error,"Failed to release failed import boot pin");
         }
         if let Err(e) = self.layout.cleanup() {
             tracing::warn!(error = %e, "Failed to remove the failed import's box home");

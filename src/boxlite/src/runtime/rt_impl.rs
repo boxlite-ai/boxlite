@@ -493,7 +493,6 @@ impl RuntimeImpl {
 
         // Initialize box variables with defaults
         let (config, mut state) = self.init_box_variables(&options, name.clone());
-        crate::litebox::operation::Reservation::provision(&self.layout, &config.id)?;
 
         // Allocate lock for this box
         let lock_id = self.lock_manager.allocate()?;
@@ -1014,8 +1013,8 @@ impl RuntimeImpl {
 
     /// Remove a box from the runtime (internal implementation).
     ///
-    /// This is the internal implementation called by both `BoxliteRuntime::remove()`
-    /// and `LiteBox::stop()` when its removal policy is enabled.
+    /// Called by `BoxliteRuntime::remove()` and by `LiteBox::stop()` when its
+    /// removal policy is enabled.
     ///
     /// Handles both persisted boxes (in database) and in-memory-only boxes
     /// (created but not yet started).
@@ -1028,7 +1027,6 @@ impl RuntimeImpl {
     /// - Box not found
     /// - Box is active and force=false
     pub(crate) fn remove_box(&self, id: &BoxID, force: bool) -> BoxliteResult<()> {
-        let _reservation = crate::litebox::operation::Reservation::acquire(&self.layout, id)?;
         tracing::debug!(box_id = %id, force = force, "RuntimeInnerImpl::remove_box called");
 
         // Try to get box from database first
@@ -1283,8 +1281,6 @@ impl RuntimeImpl {
         let box_id = BoxIDMint::mint();
         let container_id = ContainerID::new();
         let now = Utc::now();
-
-        crate::litebox::operation::Reservation::provision(&self.layout, &box_id)?;
 
         // Move staging dir to canonical path (cross-fs safe: staging may be on
         // a different filesystem than the boxes dir).
@@ -2510,7 +2506,6 @@ mod tests {
     fn test_box_config_in_layout(detach: bool, runtime: &RuntimeImpl) -> BoxConfig {
         let id = BoxIDMint::mint();
         let box_home = runtime.layout.boxes_dir().join(id.as_str());
-        crate::litebox::operation::Reservation::provision(&runtime.layout, &id).unwrap();
         BoxConfig {
             id,
             name: None,

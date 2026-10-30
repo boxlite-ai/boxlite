@@ -380,9 +380,9 @@ impl VmmController for ShimController {
             let boot = spawn_options.memory_mib.unwrap_or(DEFAULT_MEMORY_MIB);
             let capacity = config.max_memory_mib.or(config.memory_mib).unwrap_or(boot);
             let limits = &mut spawn_options.advanced.security.resource_limits;
-            limits.max_file_size = limits.max_file_size.map(|limit| {
-                limit.saturating_add(u64::from(capacity.saturating_sub(boot)) << 20)
-            });
+            limits.max_file_size = limits
+                .max_file_size
+                .map(|limit| limit.saturating_add(u64::from(capacity.saturating_sub(boot)) << 20));
         }
         let spawner = ShimSpawner::new(
             &self.binary_path,

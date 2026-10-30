@@ -66,7 +66,8 @@ impl BoxImpl {
         count: usize,
         names: Vec<String>,
     ) -> BoxliteResult<Vec<crate::LiteBox>> {
-        let _lock = self.reserve(super::operation::Action::DiskCapture).await?;
+        self.check_operation(super::operation::Action::DiskCapture)
+            .await?;
         if count == 0 {
             return Ok(Vec::new());
         }
@@ -94,7 +95,7 @@ impl BoxImpl {
         // Phase A: Create shared base layer inside quiesce bracket (VM paused).
         // Snapshot creation uses the same captured standalone disk.
         let source_box_id = self.id().to_string();
-        let captured = self.capture_disk(&_lock).await?;
+        let captured = self.capture_disk().await?;
         let layer = rt
             .base_disk_mgr
             .install_capture(&captured.path, &source_box_id)?;
@@ -181,9 +182,10 @@ impl BoxImpl {
         dest: &std::path::Path,
     ) -> BoxliteResult<crate::runtime::options::BoxArchive> {
         let t0 = Instant::now();
-        let _lock = self.reserve(super::operation::Action::DiskCapture).await?;
+        self.check_operation(super::operation::Action::DiskCapture)
+            .await?;
 
-        let captured = self.capture_disk(&_lock).await?;
+        let captured = self.capture_disk().await?;
         let flatten_result = FlattenResult {
             temp_dir: captured.directory,
             flat_container: captured.path,
@@ -224,15 +226,13 @@ impl BoxImpl {
     /// Replace this box's container disk with the one an archive carries.
     ///
     /// A stopped or never-started box qualifies. Installing the disk moves a
-    /// configured box to Stopped so its first start reuses that disk. The disk
-    /// reservation excludes start, export and snapshots while it is replaced.
+    /// configured box to Stopped so its first start reuses that disk.
     pub(crate) async fn restore_from_archive(
         &self,
         archive: crate::runtime::options::BoxArchive,
     ) -> BoxliteResult<()> {
         let t0 = Instant::now();
-        let reservation = self
-            .reserve(super::operation::Action::ArchiveRestore)
+        self.check_operation(super::operation::Action::ArchiveRestore)
             .await?;
 
         let status = self.state.read().status;
@@ -247,9 +247,7 @@ impl BoxImpl {
         let archive_path = archive.path().to_path_buf();
         let layout = self.runtime.layout.clone();
         let disks_dir = self.config.box_home.join("disks");
-        let writer_reservation = reservation.duplicate()?;
         tokio::task::spawn_blocking(move || {
-            let _reservation = writer_reservation;
             crate::runtime::import::replace_container_disk(&archive_path, &layout, &disks_dir)
         })
         .await
@@ -408,7 +406,6 @@ mod archive_restore_tests {
             let mut state = BoxState::new();
             state.status = status;
             runtime.box_manager.add_box(&config, &state).unwrap();
-            crate::litebox::operation::Reservation::provision(&runtime.layout, &id).unwrap();
             let box_impl = BoxImpl::new(
                 config,
                 state,

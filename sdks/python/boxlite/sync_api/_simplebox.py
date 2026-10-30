@@ -129,9 +129,9 @@ class SyncSimpleBox:
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
         """Exit context - stops the box, then stops runtime if owned."""
-        # Stop the box (SyncBox.stop() is already sync)
+        # Use the same context cleanup as the async wrapper.
         if self._box is not None:
-            self._box.stop()
+            self._box.__exit__(exc_type, exc_val, exc_tb)
 
         # Stop runtime if we own it
         if self._owns_runtime:

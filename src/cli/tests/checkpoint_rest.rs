@@ -34,10 +34,9 @@ async fn tick(stdout: &mut ExecStdout, previous: u64) -> (u32, String, u64) {
                 let fields: Vec<_> = line.split_whitespace().collect();
                 if fields.len() == 3
                     && let (Ok(pid), Ok(counter)) = (fields[0].parse(), fields[2].parse::<u64>())
+                    && counter > previous
                 {
-                    if counter > previous {
-                        return (pid, fields[1].to_owned(), counter);
-                    }
+                    return (pid, fields[1].to_owned(), counter);
                 }
             }
         }
