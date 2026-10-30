@@ -24,12 +24,25 @@ import { BoxliteMemberController } from './boxlite-member.controller'
 import { BoxliteInvitationController } from './boxlite-invitation.controller'
 import { BoxliteDomainController } from './boxlite-domain.controller'
 import { CommerceBoxLimitService } from './commerce-box-limit.service'
+import { BoxResizeService } from './box-resize.service'
+import { BoxliteResizeController } from './boxlite-resize.controller'
+import { UsageModule } from '../usage/usage.module'
 
 @Module({
-  imports: [BoxModule, AuthModule, ApiKeyModule, OrganizationModule, UserModule, ImageModule, RegistryModule],
+  imports: [
+    UsageModule,
+    BoxModule,
+    AuthModule,
+    ApiKeyModule,
+    OrganizationModule,
+    UserModule,
+    ImageModule,
+    RegistryModule,
+  ],
   controllers: [
     // Canonical domain paths must precede legacy /v1/:prefix resource routes.
     BoxliteDomainController,
+    BoxliteResizeController,
     BoxliteMeController,
     BoxliteConfigController,
     BoxliteBoxController,
@@ -40,7 +53,7 @@ import { CommerceBoxLimitService } from './commerce-box-limit.service'
     BoxliteMemberController,
     BoxliteInvitationController,
   ],
-  providers: [BoxliteWsProxyService, CommerceBoxLimitService],
+  providers: [BoxliteWsProxyService, CommerceBoxLimitService, BoxResizeService],
   exports: [BoxliteWsProxyService],
 })
 export class BoxliteRestModule {}

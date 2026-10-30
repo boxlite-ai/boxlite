@@ -5,6 +5,7 @@
 
 Name | Type | Description | Notes
 ------------ | ------------- | ------------- | -------------
+**claimToken** | **string** | Lease token required for resize job heartbeats and results | [optional] [default to undefined]
 **id** | **string** | The ID of the job | [default to undefined]
 **type** | [**JobType**](JobType.md) | The type of the job | [default to undefined]
 **status** | [**JobStatus**](JobStatus.md) | The status of the job | [default to undefined]
@@ -22,6 +23,7 @@ Name | Type | Description | Notes
 import { Job } from './api';
 
 const instance: Job = {
+    claimToken,
     id,
     type,
     status,

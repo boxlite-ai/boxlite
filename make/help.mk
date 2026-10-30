@@ -93,6 +93,7 @@ help:
 	@echo "    make test:apps:mdeploy      - Type-check and test deployment scripts"
 	@echo "    make test:e2e:drivers       - Test acceptance-client argument handling"
 	@echo "    make fmt:apps:proxy         - Format the proxy Go service"
+	@echo "    make test:runner-ci:resize - Verify cloud resize, billing and crash recovery through SDK/CLI"
 	@echo "    make test:skill:boxlite-diagrams - Run diagram skill validator tests"
 	@echo "    make test:e2e:setup         - Bootstrap local stack (PG/Redis/Registry/API/Runner) + fixture data; idempotent"
 	@echo "    make test:e2e               - Run E2E suite (SDK→API→Runner→VM); see apps/e2e/README.md"

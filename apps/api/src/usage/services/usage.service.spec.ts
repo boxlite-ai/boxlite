@@ -43,7 +43,7 @@ const satisfies = (actual: unknown, condition: unknown): boolean => {
   return actual === condition
 }
 
-const makeService = (stored: BoxUsagePeriod[] = []) => {
+const makeService = (stored: BoxUsagePeriod[] = [], state = BoxState.STARTED) => {
   const lease = {
     signal: new AbortController().signal,
     release: jest.fn().mockResolvedValue(undefined),
@@ -51,10 +51,14 @@ const makeService = (stored: BoxUsagePeriod[] = []) => {
   const transactionalEntityManager = {
     find: jest.fn().mockResolvedValue([]),
     findOne: jest.fn(
-      async (_entity, { where }: any): Promise<any> =>
-        stored.find((period) =>
-          Object.entries(where).every(([column, condition]) => satisfies((period as any)[column], condition)),
-        ),
+      async (entity, { where }: any): Promise<any> =>
+        entity === Box
+          ? where.id === box.id
+            ? { ...box, state }
+            : null
+          : stored.find((period) =>
+              Object.entries(where).every(([column, condition]) => satisfies((period as any)[column], condition)),
+            ),
     ),
     delete: jest.fn().mockResolvedValue(undefined),
     save: jest.fn().mockImplementation(async (value) => usagePeriodRepository.save(value)),
@@ -176,7 +180,6 @@ describe('UsageService.handleBoxStateUpdate', () => {
   it('switches stopped billing to started billing atomically at one timestamp', async () => {
     const stopped = openPeriod(0)
     const { service, usagePeriodRepository, transactionalEntityManager } = makeService([stopped])
-    transactionalEntityManager.findOne.mockResolvedValue(stopped)
 
     await service.handleBoxStateUpdate(new BoxStateUpdatedEvent(box, BoxState.STOPPED, BoxState.STARTED))
 
@@ -199,7 +202,7 @@ describe('UsageService.handleBoxStateUpdate', () => {
 
   it('ignores a still-billing period owned by another box when this box lands in STOPPED', async () => {
     const otherBoxPeriod = openPeriod(box.cpu, OTHER_BOX_ID)
-    const { service, usagePeriodRepository } = makeService([otherBoxPeriod])
+    const { service, usagePeriodRepository } = makeService([otherBoxPeriod], BoxState.STOPPED)
 
     await service.handleBoxStateUpdate(event(BoxState.STOPPED))
 
@@ -210,7 +213,7 @@ describe('UsageService.handleBoxStateUpdate', () => {
   it('does not re-close an already closed period when the box is destroyed', async () => {
     const alreadyClosed = closedPeriod()
     const closedAt = alreadyClosed.endAt
-    const { service, usagePeriodRepository } = makeService([alreadyClosed])
+    const { service, usagePeriodRepository } = makeService([alreadyClosed], BoxState.DESTROYED)
 
     await service.handleBoxStateUpdate(event(BoxState.DESTROYED))
 
@@ -220,7 +223,7 @@ describe('UsageService.handleBoxStateUpdate', () => {
 
   it('closes the open period and reopens it disk-only when the box stops', async () => {
     const open = openPeriod()
-    const { service, usagePeriodRepository } = makeService([open])
+    const { service, usagePeriodRepository } = makeService([open], BoxState.STOPPING)
 
     await service.handleBoxStateUpdate(event(BoxState.STOPPING))
 
@@ -233,7 +236,7 @@ describe('UsageService.handleBoxStateUpdate', () => {
 
   it('closes the open period without reopening when the box is destroyed', async () => {
     const open = openPeriod()
-    const { service, usagePeriodRepository } = makeService([open])
+    const { service, usagePeriodRepository } = makeService([open], BoxState.DESTROYED)
 
     await service.handleBoxStateUpdate(event(BoxState.DESTROYED))
 
@@ -244,7 +247,7 @@ describe('UsageService.handleBoxStateUpdate', () => {
 
   it('closes a still-billing period when the box lands in STOPPED without passing through STOPPING', async () => {
     const open = openPeriod()
-    const { service, usagePeriodRepository } = makeService([open])
+    const { service, usagePeriodRepository } = makeService([open], BoxState.STOPPED)
 
     await service.handleBoxStateUpdate(event(BoxState.STOPPED))
 
@@ -257,7 +260,7 @@ describe('UsageService.handleBoxStateUpdate', () => {
   it('leaves an already disk-only period alone when the box lands in STOPPED', async () => {
     // the box passed through STOPPING normally, so its open period already
     // charges no compute — reopening it would only add a spurious row
-    const { service, usagePeriodRepository } = makeService([openPeriod(0)])
+    const { service, usagePeriodRepository } = makeService([openPeriod(0)], BoxState.STOPPED)
 
     await service.handleBoxStateUpdate(event(BoxState.STOPPED))
 
@@ -266,7 +269,7 @@ describe('UsageService.handleBoxStateUpdate', () => {
 
   it('ignores a compute period that is already closed when the box lands in STOPPED', async () => {
     // only open periods are still accruing; a closed one must not be reopened
-    const { service, usagePeriodRepository } = makeService([closedPeriod()])
+    const { service, usagePeriodRepository } = makeService([closedPeriod()], BoxState.STOPPED)
 
     await service.handleBoxStateUpdate(event(BoxState.STOPPED))
 
@@ -275,7 +278,7 @@ describe('UsageService.handleBoxStateUpdate', () => {
 
   it('closes the period when the box is destroyed but has not reached DESTROYED yet', async () => {
     const open = openPeriod()
-    const { service, usagePeriodRepository } = makeService([open])
+    const { service, usagePeriodRepository } = makeService([open], BoxState.DESTROYING)
 
     await service.handleBoxStateUpdate(event(BoxState.DESTROYING))
 
@@ -290,7 +293,7 @@ describe('UsageService.handleBoxStateUpdate', () => {
     ['DESTROYING', BoxState.DESTROYING],
   ])('stops billing when the box reaches %s', async (_label, state) => {
     const open = openPeriod()
-    const { service, usagePeriodRepository } = makeService([open])
+    const { service, usagePeriodRepository } = makeService([open], state)
 
     await service.handleBoxStateUpdate(event(state))
 
