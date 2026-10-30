@@ -359,16 +359,18 @@ struct Landed {
 /// entry decides; records about other entries (PAX headers, GNU long names)
 /// never do.
 ///
-/// - A destination that is a directory, or that the caller spelled with a
-///   trailing `/`, takes every entry under its own name.
-/// - Otherwise a leading directory `X/` becomes a missing destination: `X/a`
-///   lands as `a`, and a later entry outside `X/` fails the copy. A leading
-///   `./` (`SRC/.`) roots nothing. A destination that exists but is not a
-///   directory fails the copy.
-/// - Otherwise a leading file or symlink with a one-component name lands as
-///   the destination itself, and any entry after it fails the copy. A nested
-///   name (`app/main.py`, as leaves-only archives carry) lands under its own
-///   name.
+/// - A leading directory `X/` becomes a missing destination, trailing `/` or
+///   not: `X/a` lands as `a`, and a later entry outside `X/` fails the copy.
+///   An existing directory takes it under its own name, and an existing
+///   non-directory fails the copy. A leading `./` (`SRC/.`) roots nothing.
+/// - A leading file or symlink lands under its own name in an existing
+///   directory or in a missing destination the caller spelled with a
+///   trailing `/`. Otherwise one with a one-component name lands as the
+///   destination itself, and any entry after it fails the copy; a nested
+///   name (`app/main.py`, as leaves-only archives carry) lands under its
+///   own name when the destination is missing or a directory, and the
+///   copy fails when it is an existing non-directory. A trailing `/` that
+///   names an existing non-directory fails the copy.
 ///
 /// Entries are written as they are read, so a failed copy keeps what it wrote.
 struct Landing {
