@@ -134,9 +134,24 @@ REST clients use `POST /v1/boxes/{box_id}/resize` with
 `{"cpus":2,"memory_mib":2048}`. The response contains `cpus`, `memory_mib`,
 `max_cpus`, and `max_memory_mib`.
 
+Cloud uses the same SDK and CLI calls, rounding memory targets up to whole GiB:
+`await box.resize(memory_mib=1537)` requests 2048 MiB. The control plane saves
+the target, closes the previous usage period and opens a period billed at the
+target resources, then dispatches a durable resize job. Failures keep the target
+and retry. A 30-second wait can return `504 resize_in_progress`; retrying the
+same target joins that job. A different target conflicts until completion.
+Box info shows the accepted target; `resize()` with no options queries the
+Runner's allocation. Stop, delete and other conflicting lifecycle operations
+are rejected until resize completes; retry them afterward. If the Guest exits, resize waits for the same Box
+to restart before retrying; it does not restart the Guest itself. A restart can
+use old or partially applied resources, so reconciliation is still necessary.
+
+Cloud admission must be enabled by the operator after upgrading the control
+plane and Runner; see the [rollout sequence](../../apps/api/README.md#cloud-resize).
+
 - Both targets are validated before applying either. Shrinking, exceeding a
   ceiling, and resizing a stopped box are rejected.
-- Memory grows in increments of 128 MiB relative to the current allocation.
+- Local memory grows in increments of 128 MiB relative to the current allocation.
   Its ceiling is limited by host/cgroup memory, KVM slots, and guest address space.
 - Unallocated hotplug slots have no KVM mapping and are protected with
   `PROT_NONE`. The reservation adds no guest-usable RAM and commits no host RAM.

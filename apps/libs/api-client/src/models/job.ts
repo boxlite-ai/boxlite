@@ -22,6 +22,10 @@ import type { JobType } from './job-type';
 
 export interface Job {
     /**
+     * Lease token required for resize job heartbeats and results
+     */
+    'claimToken'?: string;
+    /**
      * The ID of the job
      */
     'id': string;

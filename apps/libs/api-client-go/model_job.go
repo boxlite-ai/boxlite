@@ -21,6 +21,8 @@ var _ MappedNullable = &Job{}
 
 // Job struct for Job
 type Job struct {
+	// Lease token required for resize job heartbeats and results
+	ClaimToken *string `json:"claimToken,omitempty"`
 	// The ID of the job
 	Id string `json:"id"`
 	// The type of the job
@@ -67,6 +69,38 @@ func NewJob(id string, type_ JobType, status JobStatus, resourceType string, res
 func NewJobWithDefaults() *Job {
 	this := Job{}
 	return &this
+}
+
+// GetClaimToken returns the ClaimToken field value if set, zero value otherwise.
+func (o *Job) GetClaimToken() string {
+	if o == nil || IsNil(o.ClaimToken) {
+		var ret string
+		return ret
+	}
+	return *o.ClaimToken
+}
+
+// GetClaimTokenOk returns a tuple with the ClaimToken field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+func (o *Job) GetClaimTokenOk() (*string, bool) {
+	if o == nil || IsNil(o.ClaimToken) {
+		return nil, false
+	}
+	return o.ClaimToken, true
+}
+
+// HasClaimToken returns a boolean if a field has been set.
+func (o *Job) HasClaimToken() bool {
+	if o != nil && !IsNil(o.ClaimToken) {
+		return true
+	}
+
+	return false
+}
+
+// SetClaimToken gets a reference to the given string and assigns it to the ClaimToken field.
+func (o *Job) SetClaimToken(v string) {
+	o.ClaimToken = &v
 }
 
 // GetId returns the Id field value
@@ -351,6 +385,9 @@ func (o Job) MarshalJSON() ([]byte, error) {
 
 func (o Job) ToMap() (map[string]interface{}, error) {
 	toSerialize := map[string]interface{}{}
+	if !IsNil(o.ClaimToken) {
+		toSerialize["claimToken"] = o.ClaimToken
+	}
 	toSerialize["id"] = o.Id
 	toSerialize["type"] = o.Type
 	toSerialize["status"] = o.Status
@@ -417,6 +454,7 @@ func (o *Job) UnmarshalJSON(data []byte) (err error) {
 	additionalProperties := make(map[string]interface{})
 
 	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "claimToken")
 		delete(additionalProperties, "id")
 		delete(additionalProperties, "type")
 		delete(additionalProperties, "status")

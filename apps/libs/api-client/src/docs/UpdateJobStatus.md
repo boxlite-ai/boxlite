@@ -5,6 +5,7 @@
 
 Name | Type | Description | Notes
 ------------ | ------------- | ------------- | -------------
+**claimToken** | **string** | Token returned by the resize job claim | [optional] [default to undefined]
 **status** | [**JobStatus**](JobStatus.md) | The new status of the job | [default to undefined]
 **errorMessage** | **string** | Error message if the job failed | [optional] [default to undefined]
 **resultMetadata** | **string** | Result metadata for the job | [optional] [default to undefined]
@@ -15,6 +16,7 @@ Name | Type | Description | Notes
 import { UpdateJobStatus } from './api';
 
 const instance: UpdateJobStatus = {
+    claimToken,
     status,
     errorMessage,
     resultMetadata,

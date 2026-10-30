@@ -441,11 +441,17 @@ paths:
         Absolute targets, never deltas. Omitted fields retain their current
         allocation; an empty object reads allocations and boot ceilings.
         Shrinking or exceeding a boot ceiling is rejected before changes.
-        Memory growth must be a multiple of 128 MiB. The allocation includes
-        all guest RAM, including the kernel mapping.
+        Local memory growth must be a multiple of 128 MiB. Cloud rounds a
+        supplied memory target up to whole GiB before checking ceilings.
+        The allocation includes all guest RAM, including the kernel mapping.
         Requires a running Linux/KVM box. An interrupted or failed request
         may have partially completed; inspect the box or retry the same target.
         Successfully allocated resources survive restart.
+        Cloud persists the target, switches billing intervals, then applies it
+        through a durable Runner job. Accepted targets are not rolled back on
+        failure. A 504 resize_in_progress means work continues in the background;
+        retry the same target or send an empty query. Box info shows the target,
+        while this endpoint reports the runtime allocation.
       tags: [Boxes]
       requestBody:
         required: true
@@ -468,6 +474,18 @@ paths:
           $ref: "#/components/responses/ConflictError"
         "500":
           description: Resize failed; query the allocation before retrying a possibly partial change
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "503":
+          description: Cloud admission disabled or a resize-capable Runner is unavailable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "504":
+          description: Cloud target accepted; resize_in_progress continues after the synchronous wait expires
           content:
             application/json:
               schema:

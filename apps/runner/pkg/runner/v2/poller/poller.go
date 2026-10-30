@@ -58,6 +58,10 @@ func (s *Service) Start(ctx context.Context) {
 		if inProgressJobs != nil && len(inProgressJobs.Items) > 0 {
 			s.log.InfoContext(ctx, "Found IN_PROGRESS jobs", "count", len(inProgressJobs.Items))
 			for _, job := range inProgressJobs.Items {
+				// Resize must obtain a fresh token after lease expiry, never resume an old claim.
+				if job.GetType() == apiclient.JOBTYPE_RESIZE_BOX {
+					continue
+				}
 				go s.executor.Execute(ctx, &job)
 			}
 		} else {
