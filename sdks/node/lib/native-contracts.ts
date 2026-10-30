@@ -509,6 +509,17 @@ export interface JsExecStdin {
   close(): Promise<void>;
 }
 
+/** Live guest execution metadata. IDs are canonical guest IDs. */
+export interface ExecutionInfo {
+  executionId: string;
+  argv: string[];
+  pid: number;
+  /** Start time in Unix milliseconds. */
+  startedAt: number;
+  tty: boolean;
+  isMain: boolean;
+}
+
 export interface JsExecution {
   id(): Promise<string>;
   stdin(): Promise<JsExecStdin>;
@@ -644,6 +655,9 @@ export interface JsBox {
   readonly id: string;
   readonly name: string | null;
   info(): Promise<JsBoxInfo>;
+  listExecutions(): Promise<ExecutionInfo[]>;
+  getExecution(executionId: string): Promise<JsExecution>;
+  attach(executionId: string, stdin?: boolean): Promise<JsExecution>;
   exec(
     command: string,
     args?: string[] | null,

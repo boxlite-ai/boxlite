@@ -111,6 +111,10 @@ async fn run_cli(mut cli: Cli) -> i32 {
     let result: anyhow::Result<i32> = match cli.command {
         cli::Commands::Run(args) => commands::run::execute(args, &global).await,
         cli::Commands::Exec(args) => commands::exec::execute(args, &global).await,
+        cli::Commands::Top(args) => commands::executions::top(args, &global).await.map(|_| 0),
+        cli::Commands::Attach(args) => commands::executions::attach(args, &global).await,
+        cli::Commands::Kill(args) => commands::executions::kill(args, &global).await.map(|_| 0),
+        cli::Commands::Signal(args) => commands::executions::signal(args, &global).await.map(|_| 0),
         cli::Commands::Create(args) => commands::create::execute(args, &global).await.map(|_| 0),
         cli::Commands::List(args) => commands::list::execute(args, &global).await.map(|_| 0),
         cli::Commands::Rm(args) => commands::rm::execute(args, &global).await.map(|_| 0),

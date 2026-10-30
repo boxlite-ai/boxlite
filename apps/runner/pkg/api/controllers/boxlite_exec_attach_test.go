@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/boxlite-ai/runner/pkg/boxlite"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 )
@@ -187,11 +188,11 @@ func (s *stubAttachExec) MarkDisconnected() {
 func withStubExec(t *testing.T, execId string, target attachExec) func() {
 	t.Helper()
 	prev := resolveAttachExec
-	resolveAttachExec = func(id, _ string) (attachExec, bool) {
+	resolveAttachExec = func(ctx *gin.Context, id, boxID string) (attachExec, error) {
 		if id == execId {
-			return target, true
+			return target, nil
 		}
-		return prev(id, "")
+		return prev(ctx, id, boxID)
 	}
 	return func() { resolveAttachExec = prev }
 }
@@ -648,10 +649,10 @@ func tryReceive(ch <-chan error) error {
 	}
 }
 
-// Sanity guard: handler returns 404 if exec id is unknown (resolver returns false).
+// Sanity guard: handler returns 404 if the guest execution is unknown.
 func TestBoxliteExecAttach_NotFound(t *testing.T) {
 	prev := resolveAttachExec
-	resolveAttachExec = func(id, _ string) (attachExec, bool) { return nil, false }
+	resolveAttachExec = func(_ *gin.Context, _, _ string) (attachExec, error) { return nil, boxlite.ErrExecNotFound }
 	defer func() { resolveAttachExec = prev }()
 
 	srv := newAttachServer(t)

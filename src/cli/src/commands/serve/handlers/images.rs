@@ -196,6 +196,7 @@ mod tests {
             api_key: None,
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
+            recovered_terminals: RwLock::new(HashMap::new()),
         }))
     }
 

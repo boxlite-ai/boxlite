@@ -101,6 +101,11 @@ pub(crate) type ExitAction = Box<dyn FnOnce(ExitStatus) + Send>;
 pub(crate) struct ExitSlot(watch::Receiver<Option<ExitStatus>>);
 
 impl ExitSlot {
+    /// Nonblocking observation for live inventory; never waits for a process.
+    pub(crate) fn has_exited(&self) -> bool {
+        self.0.borrow().is_some()
+    }
+
     /// The pid's exit status, awaiting it if it has not exited yet.
     pub(crate) async fn get(&self) -> ExitStatus {
         let mut rx = self.0.clone();

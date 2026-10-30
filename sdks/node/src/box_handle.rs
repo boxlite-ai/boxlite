@@ -5,7 +5,7 @@ use napi::bindgen_prelude::*;
 use napi_derive::napi;
 
 use crate::copy::{JsCopyOptions, into_copy_options};
-use crate::exec::JsExecution;
+use crate::exec::{JsExecution, JsExecutionInfo};
 use crate::info::JsBoxInfo;
 use crate::metrics::JsBoxMetrics;
 use crate::network::JsNetworkHandle;
@@ -48,6 +48,39 @@ impl JsBox {
     pub async fn info(&self) -> Result<JsBoxInfo> {
         let info = self.handle.info().await.map_err(map_err)?;
         Ok(JsBoxInfo::from(info))
+    }
+
+    /// List live guest executions without starting a stopped box.
+    #[napi]
+    pub async fn list_executions(&self) -> Result<Vec<JsExecutionInfo>> {
+        let executions = self.handle.list_executions().await.map_err(map_err)?;
+        Ok(executions.into_iter().map(JsExecutionInfo::from).collect())
+    }
+
+    /// Recover control without claiming the session's output reader.
+    #[napi]
+    pub async fn get_execution(&self, execution_id: String) -> Result<JsExecution> {
+        let execution = self
+            .handle
+            .get_execution(&execution_id)
+            .await
+            .map_err(map_err)?;
+        Ok(JsExecution {
+            execution: Arc::new(tokio::sync::Mutex::new(execution)),
+        })
+    }
+
+    /// Attach to a discovered live execution without starting the box.
+    #[napi]
+    pub async fn attach(&self, execution_id: String, stdin: Option<bool>) -> Result<JsExecution> {
+        let mut options = boxlite::AttachOptions::execution(execution_id);
+        if stdin == Some(false) {
+            options = options.read_only();
+        }
+        let execution = self.handle.attach(options).await.map_err(map_err)?;
+        Ok(JsExecution {
+            execution: Arc::new(tokio::sync::Mutex::new(execution)),
+        })
     }
 
     /// Execute a command inside the box.

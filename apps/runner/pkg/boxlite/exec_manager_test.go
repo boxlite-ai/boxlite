@@ -94,6 +94,22 @@ func newQuietManager(t *testing.T) *ExecManager {
 	return m
 }
 
+func TestInventoryRecoveryDoesNotReapAnExistingSession(t *testing.T) {
+	manager := newQuietManager(t)
+	handle := &stubExecHandle{}
+	execution := registerStub(t, manager, "discovered-init", handle)
+	execution.recovered = true
+	execution.created = time.Now().Add(-48 * time.Hour)
+	execution.LastDisconnectAt = execution.created
+	manager.runCleanupOnce(time.Now())
+	if signals, killed := handle.snapshot(); len(signals) != 0 || killed != 0 {
+		t.Fatalf("discovering an existing session applied orphan policy: signals=%v kills=%d", signals, killed)
+	}
+	if _, present := manager.Get(execution.ID); !present {
+		t.Fatal("discovered live session was evicted")
+	}
+}
+
 func TestCleanupLoopEscalatesOnOrphanedExec(t *testing.T) {
 	m := newQuietManager(t)
 

@@ -3,6 +3,7 @@ pub mod auth;
 pub mod cp;
 pub mod create;
 pub mod exec;
+pub mod executions;
 pub mod images;
 pub mod info;
 pub mod inspect;

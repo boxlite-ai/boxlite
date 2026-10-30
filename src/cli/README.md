@@ -21,6 +21,8 @@ The BoxLite CLI (`boxlite`) lets you create, run, and manage BoxLite boxes from 
 - **Inspect** — Show detailed box info (JSON, YAML, or Go template)
 - **Exec** — Run commands in a running or safely resumable box
 - **Images** — Pull and list OCI images
+
+- **Executions** — List live guest processes with `boxlite top BOX`; reattach with `boxlite attach BOX EXECUTION_ID`, or recover control with `boxlite kill BOX EXECUTION_ID` / `boxlite signal BOX EXECUTION_ID SIGNAL`.
 - **Copy** — Copy files between host and box (`boxlite cp`)
 - **Output formats** — Table, JSON, or YAML for list/images
 - **Shell completion** — Bash, Zsh, Fish

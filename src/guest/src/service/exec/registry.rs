@@ -200,6 +200,23 @@ impl ExecutionRegistry {
         }
     }
 
+    /// A readonly live snapshot. No per-session lock or await is taken while
+    /// holding the registry lock, including the exit-to-retention race window.
+    pub(crate) async fn list_executions(&self) -> Vec<boxlite_shared::ExecutionInfo> {
+        let inner = self.inner.lock().await;
+        let mut executions: Vec<_> = inner
+            .entries
+            .values()
+            .filter_map(|entry| match entry {
+                ExecutionEntry::Live(state) => state.live_metadata(),
+                _ => None,
+            })
+            .collect();
+        executions
+            .sort_by(|a, b| (a.started_at, &a.execution_id).cmp(&(b.started_at, &b.execution_id)));
+        executions
+    }
+
     /// Check if execution exists.
     pub async fn exists(&self, exec_id: &str) -> bool {
         self.inner.lock().await.entries.contains_key(exec_id)
@@ -706,6 +723,94 @@ mod release_tests {
             .expect("test pipe must register with Tokio");
         let exit = ExitSlot::settled_for_test(ExitStatus::Code(7));
         ExecutionState::new(handle, exit, None)
+    }
+
+    #[tokio::test]
+    async fn inventory_is_live_only_and_keeps_spawn_metadata() {
+        let registry = ExecutionRegistry::new();
+        let _reservation = registry.reserve("not-spawned".into()).await.unwrap();
+        let mut exits = Vec::new();
+        for (index, id, tty, is_main) in [
+            (0, "container-init", false, true),
+            (1, "sleep-one", false, false),
+            (2, "sleep-two", true, false),
+        ] {
+            let (_stdin_peer, stdin) = pipe().unwrap();
+            let (stdout, _stdout_peer) = pipe().unwrap();
+            let (stderr, _stderr_peer) = pipe().unwrap();
+            let handle =
+                ExecHandle::new(Pid::from_raw(20_000 + index), stdin, stdout, Some(stderr))
+                    .unwrap();
+            let (exit, tx) = ExitSlot::pending_for_test();
+            let state = ExecutionState::new_for_test(handle, exit).with_metadata(
+                boxlite_shared::ExecutionInfo {
+                    execution_id: id.into(),
+                    argv: vec!["sleep".into(), "3600".into()],
+                    pid: (20_000 + index) as u32,
+                    started_at: 1000 + index as u64,
+                    tty,
+                    is_main,
+                },
+            );
+            assert!(registry.register(id.into(), state).await);
+            exits.push(tx);
+        }
+        let live = tokio::time::timeout(
+            std::time::Duration::from_millis(100),
+            registry.list_executions(),
+        )
+        .await
+        .expect("listing must not await any process exit");
+        assert_eq!(
+            live.iter()
+                .map(|info| info.execution_id.as_str())
+                .collect::<Vec<_>>(),
+            ["container-init", "sleep-one", "sleep-two"]
+        );
+        assert!(live[0].is_main);
+        assert!(live[2].tty);
+        assert_eq!(live[1].argv, ["sleep", "3600"]);
+        assert_eq!(live[1].pid, 20_001);
+        assert_eq!(live[1].started_at, 1001);
+
+        // Deliberately leave the entry in Live: the lifecycle observer has
+        // not yet transitioned it to retention when the reaper reports exit.
+        exits[1].send(Some(ExitStatus::Code(137))).unwrap();
+        let after_exit = registry.list_executions().await;
+        assert_eq!(after_exit.len(), 2);
+        assert!(!after_exit
+            .iter()
+            .any(|info| info.execution_id == "sleep-one"));
+
+        let snapshot = TerminalSnapshot {
+            exit: ExecutionExit {
+                exit_code: 0,
+                signal: 0,
+                error_message: String::new(),
+            },
+            output: OutputTerminalSummary {
+                stdout: OutputStreamSummary {
+                    enabled: true,
+                    total_bytes: 0,
+                },
+                stderr: OutputStreamSummary {
+                    enabled: true,
+                    total_bytes: 0,
+                },
+                reader_failure: None,
+            },
+        };
+        assert!(registry.retain("sleep-one", snapshot.clone(), 0).await);
+        registry.store_tombstone("finished".into(), snapshot).await;
+        assert_eq!(registry.list_executions().await.len(), 2);
+        assert!(matches!(
+            registry.lookup("sleep-one").await,
+            Some(ExecutionLookup::Retained { .. })
+        ));
+        assert!(matches!(
+            registry.lookup("finished").await,
+            Some(ExecutionLookup::Tombstone(_))
+        ));
     }
 
     #[tokio::test]

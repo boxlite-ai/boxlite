@@ -11,7 +11,7 @@
 //! channel inside `ExecStdin::write` and never block on a Tokio worker.
 
 use futures::StreamExt;
-use std::os::raw::{c_int, c_void};
+use std::os::raw::{c_char, c_int, c_void};
 use std::ptr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -47,6 +47,9 @@ use crate::{CBoxHandle, CBoxliteError, CExecutionHandle};
 pub struct ExecutionHandle {
     /// The underlying `Execution`. `None` once `_free` has consumed it.
     execution: Arc<Mutex<Option<Execution>>>,
+    /// Only handles created by exec own process teardown; recovered controls
+    /// must be releasable without killing the guest process.
+    owns_process: bool,
     /// Stdin stream (taken at exec creation; held until `_free` drops it).
     stdin: Option<ExecStdin>,
     /// Streams pending pump-task spawn. Each is moved out on first cb register.
@@ -92,6 +95,125 @@ pub struct ExecutionHandle {
     /// claimer pushes Exit. Both `execution_free` and `exit_pump`
     /// race for it; the loser silently no-ops.
     exit_dispatched: Arc<AtomicBool>,
+}
+
+impl ExecutionHandle {
+    fn new(mut execution: Execution, handle: &BoxHandle, owns_process: bool) -> Self {
+        let stdin = execution.stdin();
+        let pending_stdout = execution.stdout();
+        let pending_stderr = execution.stderr();
+        Self {
+            execution: Arc::new(Mutex::new(Some(execution))),
+            owns_process,
+            stdin,
+            pending_stdout,
+            pending_stderr,
+            pumps: Mutex::new(Vec::new()),
+            exit_pump_handle: Mutex::new(None),
+            stream_done_rx: Mutex::new(Vec::new()),
+            exit_dispatch: Mutex::new(None),
+            queue: handle.queue.clone(),
+            tokio_rt: handle.tokio_rt.clone(),
+            process_completed: Arc::new(AtomicBool::new(false)),
+            exit_dispatched: Arc::new(AtomicBool::new(false)),
+        }
+    }
+}
+
+/// Recover control of a live execution without claiming its output reader.
+/// Freeing this handle releases control only; it never kills the process.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_box_get_execution(
+    handle: *mut CBoxHandle,
+    execution_id: *const c_char,
+    out_execution: *mut *mut CExecutionHandle,
+    out_error: *mut CBoxliteError,
+) -> BoxliteErrorCode {
+    unsafe { recover_execution(handle, execution_id, out_execution, out_error, false) }
+}
+
+/// Attach live streams to an existing guest execution. A current reader causes
+/// an immediate conflict error rather than stealing output. This never boots
+/// the box; freeing the attached handle does not kill the guest process.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_box_attach_execution(
+    handle: *mut CBoxHandle,
+    execution_id: *const c_char,
+    out_execution: *mut *mut CExecutionHandle,
+    out_error: *mut CBoxliteError,
+) -> BoxliteErrorCode {
+    unsafe { recover_execution(handle, execution_id, out_execution, out_error, true) }
+}
+
+unsafe fn recover_execution(
+    handle: *mut CBoxHandle,
+    execution_id: *const c_char,
+    out_execution: *mut *mut CExecutionHandle,
+    out_error: *mut CBoxliteError,
+    attach: bool,
+) -> BoxliteErrorCode {
+    unsafe {
+        if out_execution.is_null() {
+            write_error(out_error, null_pointer_error("out_execution"));
+            return BoxliteErrorCode::InvalidArgument;
+        }
+        *out_execution = ptr::null_mut();
+        if handle.is_null() || execution_id.is_null() {
+            let name = if handle.is_null() {
+                "handle"
+            } else {
+                "execution_id"
+            };
+            write_error(out_error, null_pointer_error(name));
+            return BoxliteErrorCode::InvalidArgument;
+        }
+        let Some(id) = crate::util::parse_c_str(execution_id) else {
+            write_error(
+                out_error,
+                BoxliteError::InvalidArgument("execution_id must be UTF-8".into()),
+            );
+            return BoxliteErrorCode::InvalidArgument;
+        };
+        let handle = &*handle;
+        let result = handle.tokio_rt.block_on(async {
+            if attach {
+                handle
+                    .handle
+                    .attach(boxlite::AttachOptions::execution(id))
+                    .await
+            } else {
+                handle.handle.get_execution(id).await
+            }
+        });
+        match result {
+            Ok(execution) => {
+                *out_execution =
+                    Box::into_raw(Box::new(ExecutionHandle::new(execution, handle, false)));
+                BoxliteErrorCode::Ok
+            }
+            Err(error) => {
+                let code = error_to_code(&error);
+                write_error(out_error, error);
+                code
+            }
+        }
+    }
+}
+
+/// Return an owned copy of the canonical guest execution ID. Null means an
+/// invalid handle; release a non-null result with `boxlite_free_string`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_execution_id(execution: *mut CExecutionHandle) -> *mut c_char {
+    unsafe {
+        if execution.is_null() {
+            return ptr::null_mut();
+        }
+        let guard = (*execution).execution.lock().unwrap();
+        guard
+            .as_ref()
+            .map(|execution| crate::util::alloc_c_string(execution.id()))
+            .unwrap_or(ptr::null_mut())
+    }
 }
 
 #[unsafe(no_mangle)]
@@ -248,26 +370,9 @@ unsafe fn box_exec(
         let result = handle_ref.tokio_rt.block_on(lite.exec(command));
 
         match result {
-            Ok(mut execution) => {
-                let stdin = execution.stdin();
-                let stdout = execution.stdout();
-                let stderr = execution.stderr();
-
-                let exec_handle = ExecutionHandle {
-                    execution: Arc::new(Mutex::new(Some(execution))),
-                    stdin,
-                    pending_stdout: stdout,
-                    pending_stderr: stderr,
-                    pumps: Mutex::new(Vec::new()),
-                    exit_pump_handle: Mutex::new(None),
-                    stream_done_rx: Mutex::new(Vec::new()),
-                    exit_dispatch: Mutex::new(None),
-                    queue: handle_ref.queue.clone(),
-                    tokio_rt: handle_ref.tokio_rt.clone(),
-                    process_completed: Arc::new(AtomicBool::new(false)),
-                    exit_dispatched: Arc::new(AtomicBool::new(false)),
-                };
-                *out_execution = Box::into_raw(Box::new(exec_handle));
+            Ok(execution) => {
+                *out_execution =
+                    Box::into_raw(Box::new(ExecutionHandle::new(execution, handle_ref, true)));
                 BoxliteErrorCode::Ok
             }
             Err(e) => {
@@ -645,7 +750,7 @@ unsafe fn execution_free(execution: *mut ExecutionHandle) {
         // If the process never observed completion, kill + wait inside a
         // best-effort block_on so we don't leak the guest-side process.
         let process_completed = exec_box.process_completed.load(Ordering::Acquire);
-        if !process_completed {
+        if exec_box.owns_process && !process_completed {
             let exec_arc = exec_box.execution.clone();
             let _ = exec_box.tokio_rt.block_on(async move {
                 let _ = kill_on_clone(&exec_arc).await;
@@ -862,6 +967,7 @@ mod tests {
         let runtime = crate::runtime::create_tokio_runtime().expect("runtime");
         ExecutionHandle {
             execution: Arc::new(Mutex::new(None)),
+            owns_process: false,
             stdin: None,
             pending_stdout: None,
             pending_stderr: None,
@@ -1431,6 +1537,44 @@ mod tests {
 
         unsafe {
             crate::boxlite_error_free(&mut error as *mut _);
+        }
+    }
+
+    #[test]
+    fn recovery_rejects_null_box_and_clears_output_handle() {
+        let id = CString::new("guest-execution-id").unwrap();
+        for attach in [false, true] {
+            let mut execution = std::ptr::dangling_mut::<ExecutionHandle>();
+            let mut error = FFIError::default();
+            let code = unsafe {
+                if attach {
+                    boxlite_box_attach_execution(
+                        ptr::null_mut(),
+                        id.as_ptr(),
+                        &mut execution,
+                        &mut error,
+                    )
+                } else {
+                    boxlite_box_get_execution(
+                        ptr::null_mut(),
+                        id.as_ptr(),
+                        &mut execution,
+                        &mut error,
+                    )
+                }
+            };
+            assert_eq!(code, BoxliteErrorCode::InvalidArgument);
+            assert!(execution.is_null());
+            unsafe { crate::boxlite_error_free(&mut error) };
+        }
+    }
+
+    #[test]
+    fn execution_id_rejects_null_and_empty_handles() {
+        let mut handle = empty_handle();
+        unsafe {
+            assert!(boxlite_execution_id(ptr::null_mut()).is_null());
+            assert!(boxlite_execution_id(&mut handle).is_null());
         }
     }
 

@@ -314,6 +314,26 @@ const COMMAND_SCOPES: &[CommandScope] = &[
         children: &[],
     },
     CommandScope {
+        name: "top",
+        globals: BOX_GLOBALS,
+        children: &[],
+    },
+    CommandScope {
+        name: "attach",
+        globals: BOX_GLOBALS,
+        children: &[],
+    },
+    CommandScope {
+        name: "kill",
+        globals: BOX_GLOBALS,
+        children: &[],
+    },
+    CommandScope {
+        name: "signal",
+        globals: BOX_GLOBALS,
+        children: &[],
+    },
+    CommandScope {
         name: "create",
         globals: ALL_GLOBALS,
         children: &[],
@@ -704,6 +724,14 @@ pub enum Commands {
     Run(crate::commands::run::RunArgs),
     /// Execute a command in a running box
     Exec(crate::commands::exec::ExecArgs),
+    /// Show live guest executions in a box
+    Top(crate::commands::executions::TopArgs),
+    /// Reattach to a guest execution by ID
+    Attach(crate::commands::executions::AttachArgs),
+    /// Kill a guest execution by ID
+    Kill(crate::commands::executions::KillArgs),
+    /// Send a signal to a guest execution by ID
+    Signal(crate::commands::executions::SignalArgs),
     /// Create a new box
     Create(crate::commands::create::CreateArgs),
 

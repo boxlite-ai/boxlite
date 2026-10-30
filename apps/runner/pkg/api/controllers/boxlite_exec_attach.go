@@ -126,13 +126,14 @@ type attachExec interface {
 	MarkDisconnected()
 }
 
-// resolveAttachExec is the production lookup; tests override.
-var resolveAttachExec = func(execId, boxId string) (attachExec, bool) {
-	me, err := execManager.GetForBox(execId, boxId)
+// resolveAttachExec verifies the requested box, adopts live guest sessions,
+// and claims the SDK's sole output reader without stealing an existing one.
+var resolveAttachExec = func(ctx *gin.Context, execId, boxId string) (attachExec, error) {
+	exec, err := resolveManagedExecution(ctx, boxId, execId, true)
 	if err != nil {
-		return nil, false
+		return nil, err
 	}
-	return managedExecAttach{me: me}, true
+	return managedExecAttach{me: exec}, nil
 }
 
 // allowedSignals is the in-band signal whitelist mirrored from Phase 2.3
@@ -180,9 +181,9 @@ func BoxliteExecAttach(ctx *gin.Context) {
 	boxId := ctx.Param("boxId")
 	execId := ctx.Param("execId")
 
-	target, ok := resolveAttachExec(execId, boxId)
-	if !ok {
-		ctx.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("execution %s not found", execId)})
+	target, err := resolveAttachExec(ctx, execId, boxId)
+	if err != nil {
+		ctx.JSON(classifyExecError(err), gin.H{"error": err.Error()})
 		return
 	}
 

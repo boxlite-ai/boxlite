@@ -283,6 +283,24 @@ class SyncSimpleBox:
         """Stop the box (preserves state for restart)."""
         self._box.stop()
 
+    def list_executions(self):
+        """List live guest executions without starting a stopped box."""
+        if self._box is None:
+            return []
+        return self._box.list_executions()
+
+    def get_execution(self, execution_id: str):
+        """Recover control without claiming the session's output reader."""
+        if self._box is None:
+            raise RuntimeError("Box not started. Use 'with SyncSimpleBox(...)' first.")
+        return self._box.get_execution(execution_id)
+
+    def attach(self, execution_id: str, *, stdin: bool = True):
+        """Attach to a listed live session without starting the box."""
+        if self._box is None:
+            raise RuntimeError("Box not started. Use 'with SyncSimpleBox(...)' first.")
+        return self._box.attach(execution_id, stdin=stdin)
+
     def metrics(self):
         """Get box metrics (CPU, memory usage)."""
         return self._box.metrics()

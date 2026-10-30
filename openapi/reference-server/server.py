@@ -933,6 +933,29 @@ async def start_execution(
     )
 
 
+@app.get("/v1/{prefix}/boxes/{box_id}/executions")
+async def list_executions(
+    prefix: str,
+    box_id: str,
+    _auth: dict = Depends(require_auth),
+):
+    box_handle = await get_box_or_404(box_id)
+    executions = await box_handle.list_executions()
+    return {
+        "executions": [
+            {
+                "execution_id": info.execution_id,
+                "argv": info.argv,
+                "pid": info.pid,
+                "started_at": info.started_at,
+                "tty": info.tty,
+                "is_main": info.is_main,
+            }
+            for info in executions
+        ]
+    }
+
+
 @app.get("/v1/{prefix}/boxes/{box_id}/executions/{exec_id}")
 async def get_execution(
     prefix: str,

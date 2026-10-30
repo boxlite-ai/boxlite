@@ -27,7 +27,9 @@ mod volumes;
 pub use advanced_options::{JsAdvancedBoxOptions, JsContainerCapabilities, JsSecurityOptions};
 pub use box_handle::JsBox;
 pub use copy::JsCopyOptions;
-pub use exec::{JsExecResult, JsExecStderr, JsExecStdin, JsExecStdout, JsExecution};
+pub use exec::{
+    JsExecResult, JsExecStderr, JsExecStdin, JsExecStdout, JsExecution, JsExecutionInfo,
+};
 pub use images::{
     JsImageDetail, JsImageHandle, JsImageInfo, JsImagePullResult, JsImageUsage, JsImageVersion,
 };

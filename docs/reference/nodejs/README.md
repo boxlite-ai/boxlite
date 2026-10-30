@@ -310,6 +310,9 @@ Handle to a running or stopped box.
 |--------|-----------|-------------|
 | `info()` | `() => Promise<JsBoxInfo>` | Get box metadata |
 | `exec()` | `(cmd, args?, env?, tty?) => Promise<JsExecution>` | Execute command |
+| `listExecutions()` | `() => Promise<ExecutionInfo[]>` | List live sessions, including the main command; never starts a box |
+| `getExecution(id)` | `(executionId: string) => Promise<JsExecution>` | Recover control without taking the output reader |
+| `attach(id, stdin?)` | `(executionId: string, stdin?: boolean) => Promise<JsExecution>` | Recover streams for a listed live session |
 | `stop()` | `() => Promise<void>` | Stop the box |
 | `metrics()` | `() => Promise<JsBoxMetrics>` | Get resource metrics |
 
@@ -1053,6 +1056,27 @@ console.log(`Boot time: ${metrics.guestBootDurationMs}ms`);
 ---
 
 ## Type definitions
+
+### `ExecutionInfo`
+
+Returned by `JsBox.listExecutions()` and `SimpleBox.listExecutions()`.
+
+```typescript
+interface ExecutionInfo {
+  executionId: string;
+  argv: string[];
+  pid: number;       // Guest-agent namespace
+  startedAt: number; // Unix epoch milliseconds
+  tty: boolean;
+  isMain: boolean;
+}
+```
+
+The list excludes completed sessions. A created or stopped box returns `[]`
+without starting. Use `getExecution(executionId)` for independent control, or
+`attach(executionId)` for streams; an existing output reader is a conflict.
+See the [recovery guide](../../guides/ai-agent-integration.md#recovering-control-after-losing-the-handle)
+for retention semantics.
 
 ### `ExecResult` (wrapper)
 

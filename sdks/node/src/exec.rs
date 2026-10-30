@@ -12,6 +12,31 @@ const ERR_STDIN_UNAVAILABLE: &str = "stdin stream not available";
 const ERR_STDOUT_UNAVAILABLE: &str = "stdout stream not available";
 const ERR_STDERR_UNAVAILABLE: &str = "stderr stream not available";
 
+/// Metadata for a live execution in the guest, including its main process.
+#[napi(object)]
+pub struct JsExecutionInfo {
+    pub execution_id: String,
+    pub argv: Vec<String>,
+    pub pid: u32,
+    /// Start time in Unix milliseconds.
+    pub started_at: f64,
+    pub tty: bool,
+    pub is_main: bool,
+}
+
+impl From<boxlite::litebox::ExecutionInfo> for JsExecutionInfo {
+    fn from(info: boxlite::litebox::ExecutionInfo) -> Self {
+        Self {
+            execution_id: info.execution_id,
+            argv: info.argv,
+            pid: info.pid,
+            started_at: info.started_at as f64,
+            tty: info.tty,
+            is_main: info.is_main,
+        }
+    }
+}
+
 /// Execution result containing the exit code.
 #[napi(object)]
 #[derive(Clone, Debug)]

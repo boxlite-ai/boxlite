@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::exec::PyExecution;
+use crate::exec::{PyExecution, PyExecutionInfo};
 use crate::info::PyBoxInfo;
 use crate::metrics::PyBoxMetrics;
 use crate::network::PyNetworkHandle;
@@ -39,6 +39,33 @@ impl PyBox {
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let info = handle.info().await.map_err(map_err)?;
             Ok(PyBoxInfo::from(info))
+        })
+    }
+
+    /// List live guest executions without starting a stopped box.
+    fn list_executions<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let handle = Arc::clone(&self.handle);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let executions = handle.list_executions().await.map_err(map_err)?;
+            Ok(executions
+                .into_iter()
+                .map(PyExecutionInfo::from)
+                .collect::<Vec<_>>())
+        })
+    }
+
+    /// Recover control without claiming the session's output reader.
+    fn get_execution<'py>(
+        &self,
+        py: Python<'py>,
+        execution_id: String,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let handle = Arc::clone(&self.handle);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let execution = handle.get_execution(&execution_id).await.map_err(map_err)?;
+            Ok(PyExecution {
+                execution: Arc::new(execution),
+            })
         })
     }
 

@@ -21,6 +21,10 @@ For a quick start, see [`src/cli/README.md`](../../../src/cli/README.md).
   - [`boxlite auth whoami`](#boxlite-auth-whoami)
   - [`boxlite run`](#boxlite-run)
   - [`boxlite exec`](#boxlite-exec)
+  - [`boxlite top`](#boxlite-top)
+  - [`boxlite attach`](#boxlite-attach)
+  - [`boxlite kill`](#boxlite-kill)
+  - [`boxlite signal`](#boxlite-signal)
   - [`boxlite create`](#boxlite-create)
   - [`boxlite list`](#boxlite-list)
   - [`boxlite rm`](#boxlite-rm)
@@ -443,6 +447,57 @@ boxlite exec mybox -- echo "hello"
 boxlite exec -it mybox -- /bin/sh
 boxlite exec -e DEBUG=1 -w /app mybox -- pytest tests/
 ```
+
+---
+
+### `boxlite top`
+
+**Synopsis:** `boxlite top [OPTIONS] BOX`
+
+List live guest executions, including the box's init process. The list is read
+from the guest and does not start a configured or stopped box. Execution IDs
+are canonical guest IDs and can be used by `attach`, `kill`, and `signal`,
+including from a different CLI process.
+
+| Flag | Short | Default | Description |
+|------|-------|---------|-------------|
+| `--quiet` | `-q` | `false` | Print only execution IDs; conflicts with `--format` |
+| `--format FMT` | — | `table` | Output format: `table`, `json`, or `yaml` |
+
+**Examples:**
+
+```bash
+boxlite top mybox
+boxlite top mybox --format json
+boxlite top mybox -q
+```
+
+---
+
+### `boxlite attach`
+
+**Synopsis:** `boxlite attach [--no-stdin] BOX EXECUTION_ID`
+
+Attach to an existing guest execution, replaying available output. This does
+not start the box. `--no-stdin` keeps the attach read-only.
+
+---
+
+### `boxlite kill`
+
+**Synopsis:** `boxlite kill BOX EXECUTION_ID`
+
+Send SIGKILL to a listed guest execution. This is independent of any existing
+output reader or CLI process.
+
+---
+
+### `boxlite signal`
+
+**Synopsis:** `boxlite signal BOX EXECUTION_ID SIGNAL`
+
+Send a supported cooperative Unix signal to a listed guest execution. Use
+`boxlite kill` for SIGKILL.
 
 ---
 

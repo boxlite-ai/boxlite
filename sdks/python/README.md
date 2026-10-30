@@ -406,6 +406,31 @@ print(f"Box {info.id}: {info.state.status}")
 await box.stop()
 ```
 
+### Live Execution Inventory
+
+`await box.list_executions()` returns `list[boxlite.ExecutionInfo]` from the
+guest's live process inventory, including the main command (`is_main=True`).
+Each record has `execution_id` (canonical guest ID), `argv`, `pid`, `started_at`
+(Unix milliseconds), `tty`, and `is_main`. Completed commands are not history
+entries and disappear from this list. Listing never starts a box: a stopped
+or not-yet-started native box returns an empty list.
+
+`SimpleBox.list_executions()` exposes the same async operation without creating
+a box. `SyncBox.list_executions()` and `SyncSimpleBox.list_executions()` return
+the same metadata synchronously. Uncreated convenience wrappers also return an
+empty list. No inventory call attaches streams or consumes command output.
+
+Use `await box.get_execution(id)` for a control-only handle when another client
+still owns output. Use `await box.attach(id, stdin=False)` to recover streams
+after the old reader disconnects. Both are available on native and convenience
+boxes, with synchronous counterparts; neither starts a stopped box. Attaching
+while a reader is active is a conflict, not an implicit takeover.
+
+```python
+for execution in await box.list_executions():
+    print(execution.execution_id, execution.pid, execution.argv, execution.is_main)
+```
+
 ### Command Execution
 
 #### `boxlite.Execution`

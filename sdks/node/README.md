@@ -328,6 +328,28 @@ await runtime.images.registries.remove(login.id); // refused while a box pulls t
 
 See [the Node.js reference](../../docs/reference/nodejs/README.md#registryhandle).
 
+### Live Execution Inventory
+
+`await box.listExecutions()` is available on native `JsBox` and `SimpleBox`.
+It returns `ExecutionInfo[]` from the guest's live inventory, including the
+main process: `executionId` (canonical guest ID), `argv`, `pid`, `startedAt`
+(Unix milliseconds), `tty`, and `isMain`. Completed processes disappear; this
+is not execution history. Listing does not attach or consume output, and never
+boots a stopped box. A stopped/unstarted native box returns an empty list;
+an uncreated `SimpleBox` also returns an empty list without creating its box.
+
+Use `await box.getExecution(executionId)` for control-only access while another
+client owns output, or `await box.attach(executionId, false)` to recover streams
+without stdin. Both are available on native `JsBox` and `SimpleBox`, never start
+the box, and return a `JsExecution` supporting `kill()`, `signal()`, and `wait()`.
+Only one output reader is permitted.
+
+```typescript
+for (const execution of await box.listExecutions()) {
+  console.log(execution.executionId, execution.pid, execution.argv, execution.isMain);
+}
+```
+
 ### CodeBox
 
 Python code execution sandbox.

@@ -78,6 +78,8 @@ pub(crate) struct ExecutionState {
     /// Classified once: the container-death diagnosis drains init's pipes, so a
     /// second reader would get a different answer.
     terminal_exit: Arc<OnceCell<ExecutionExit>>,
+    /// Immutable spawn metadata; independent of the asynchronously drained handle.
+    metadata: Option<Arc<boxlite_shared::ExecutionInfo>>,
 }
 
 impl ExecutionState {
@@ -105,7 +107,20 @@ impl ExecutionState {
             shutdown_managed,
             consumer_lease,
             terminal_exit: Arc::new(OnceCell::new()),
+            metadata: None,
         }
+    }
+
+    pub(crate) fn with_metadata(mut self, metadata: boxlite_shared::ExecutionInfo) -> Self {
+        self.metadata = Some(Arc::new(metadata));
+        self
+    }
+
+    pub(crate) fn live_metadata(&self) -> Option<boxlite_shared::ExecutionInfo> {
+        if self.exit.has_exited() {
+            return None;
+        }
+        self.metadata.as_deref().cloned()
     }
 
     /// Whether a reader is currently streaming this execution's output.
@@ -416,7 +431,11 @@ impl ExecutionState {
         let (tx, rx) = mpsc::channel(100);
         let execution_id = exec_id.to_owned();
         let task = tokio::spawn(async move {
-            while let Some(message) = output.next().await {
+            while let Some(message) = tokio::select! {
+                biased;
+                _ = tx.closed() => None,
+                message = output.next() => message,
+            } {
                 if tx.send(message).await.is_err() {
                     break;
                 }
@@ -1034,5 +1053,45 @@ mod release_tests {
         drop(second);
 
         assert_eq!(state.output_task_count().await, 1);
+    }
+}
+
+#[cfg(test)]
+mod idle_reader_regression {
+    use super::{ExecutionState, OutputAttachMode};
+    use crate::reaper::ExitSlot;
+    use crate::service::exec::exec_handle::ExecHandle;
+    use nix::unistd::{pipe, Pid};
+    use std::time::Duration;
+
+    #[tokio::test]
+    async fn dropping_idle_output_receiver_releases_reader() {
+        let (_stdin_peer, stdin) = pipe().unwrap();
+        let (stdout, _stdout_peer) = pipe().unwrap();
+        let (stderr, _stderr_peer) = pipe().unwrap();
+        let handle = ExecHandle::new(Pid::from_raw(30_001), stdin, stdout, Some(stderr)).unwrap();
+        let (exit, _exit_sender) = ExitSlot::pending_for_test();
+        let state = ExecutionState::new_for_test(handle, exit);
+        let reader = state
+            .attach_output("idle-reader", OutputAttachMode::Live)
+            .await
+            .unwrap();
+        drop(reader);
+        let next = tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                match state
+                    .attach_output("idle-reader", OutputAttachMode::Live)
+                    .await
+                {
+                    Ok(reader) => break reader,
+                    Err(super::ExecutionError::AlreadyAttached) => tokio::task::yield_now().await,
+                    Err(error) => panic!("reattach failed: {error}"),
+                }
+            }
+        })
+        .await
+        .expect("a silent process must not retain a disconnected reader");
+        drop(next);
+        state.release_resources().await;
     }
 }

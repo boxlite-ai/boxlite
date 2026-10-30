@@ -176,6 +176,22 @@ struct WaitState {
     rx: tokio::sync::Mutex<mpsc::UnboundedReceiver<ExecResult>>,
 }
 
+/// Immutable metadata for a currently live guest session.
+///
+/// Discovery is not history: completed sessions disappear even when their
+/// wait status or output remains in the guest's bounded retention cache.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct ExecutionInfo {
+    pub execution_id: String,
+    pub argv: Vec<String>,
+    /// PID in the guest agent's namespace, not the host or container namespace.
+    pub pid: u32,
+    /// Spawn time as Unix epoch milliseconds.
+    pub started_at: u64,
+    pub tty: bool,
+    pub is_main: bool,
+}
+
 /// Unique identifier for an execution.
 pub type ExecutionId = String;
 

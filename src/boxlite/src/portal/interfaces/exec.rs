@@ -38,6 +38,44 @@ impl ExecutionInterface {
         }
     }
 
+    pub async fn list_executions(&mut self) -> BoxliteResult<Vec<crate::ExecutionInfo>> {
+        let response = self
+            .client
+            .list_executions(boxlite_shared::ListExecutionsRequest {})
+            .await?
+            .into_inner();
+        Ok(response
+            .executions
+            .into_iter()
+            .map(|info| crate::ExecutionInfo {
+                execution_id: info.execution_id,
+                argv: info.argv,
+                pid: info.pid,
+                started_at: info.started_at,
+                tty: info.tty,
+                is_main: info.is_main,
+            })
+            .collect())
+    }
+
+    /// Controls and wait do not acquire the session's output reader lease.
+    pub fn control_existing(
+        &self,
+        execution_id: &str,
+        shutdown: CancellationToken,
+    ) -> crate::Execution {
+        let (tx, rx) = mpsc::unbounded_channel();
+        ExecProtocol::spawn_wait(self.client.clone(), execution_id.to_owned(), tx, shutdown);
+        crate::Execution::new(
+            execution_id.to_owned(),
+            Box::new(self.clone()),
+            rx,
+            None,
+            None,
+            None,
+        )
+    }
+
     /// Execute a command and return execution components.
     ///
     /// # Arguments
@@ -84,6 +122,7 @@ impl ExecutionInterface {
             stdout_tx,
             stderr_tx,
             shutdown_token.clone(),
+            None,
         );
 
         // Spawn wait task for terminal status (cancellable)
@@ -123,6 +162,20 @@ impl ExecutionInterface {
 
         let execution_id = execution_id.to_string();
         tracing::debug!(execution_id = %execution_id, wire_stdin, "attaching to existing session");
+        // Claim the reader before exposing a handle or opening stdin. Otherwise
+        // an active-reader rejection would be hidden in background stderr.
+        let stream = self
+            .client
+            .attach(AttachRequest {
+                execution_id: execution_id.clone(),
+            })
+            .await
+            .map_err(|status| match status.code() {
+                tonic::Code::AlreadyExists => BoxliteError::AlreadyExists(status.message().into()),
+                tonic::Code::NotFound => BoxliteError::SessionReaped(status.message().into()),
+                _ => status.into(),
+            })?
+            .into_inner();
 
         let stdin_tx = if wire_stdin {
             let (stdin_tx, stdin_rx) = mpsc::unbounded_channel::<Vec<u8>>();
@@ -143,6 +196,7 @@ impl ExecutionInterface {
             stdout_tx,
             stderr_tx,
             shutdown_token.clone(),
+            Some(stream),
         );
         ExecProtocol::spawn_wait(
             self.client.clone(),
@@ -317,6 +371,7 @@ impl ExecProtocol {
         stdout_tx: mpsc::UnboundedSender<String>,
         stderr_tx: mpsc::UnboundedSender<String>,
         shutdown_token: CancellationToken,
+        connected: Option<tonic::Streaming<ExecOutput>>,
     ) {
         tokio::spawn(async move {
             let request = AttachRequest {
@@ -324,13 +379,16 @@ impl ExecProtocol {
             };
 
             // Use select! to handle cancellation during initial attach
-            let response = tokio::select! {
-                biased;
-                _ = shutdown_token.cancelled() => {
-                    tracing::debug!(execution_id = %execution_id, "attach cancelled during connect");
-                    return;
-                }
-                result = client.attach(request) => result,
+            let response = match connected {
+                Some(stream) => Ok(tonic::Response::new(stream)),
+                None => tokio::select! {
+                    biased;
+                    _ = shutdown_token.cancelled() => {
+                        tracing::debug!(execution_id = %execution_id, "attach cancelled during connect");
+                        return;
+                    }
+                    result = client.attach(request) => result,
+                },
             };
 
             match response {
@@ -346,6 +404,8 @@ impl ExecProtocol {
                     // cut, doubling visible columns and desyncing TUI cursor
                     // math (see https://github.com/.../issues/...). Holding
                     // the trailing partial across chunks fixes this.
+                    let stdout_closed = stdout_tx.clone();
+                    let stderr_closed = stderr_tx.clone();
                     let mut stdout = OutputTracker::new(stdout_tx);
                     let mut stderr = OutputTracker::new(stderr_tx);
 
@@ -361,6 +421,15 @@ impl ExecProtocol {
                                 );
                                 stdout.flush();
                                 stderr.flush();
+                                break;
+                            }
+                            _ = async {
+                                stdout_closed.closed().await;
+                                stderr_closed.closed().await;
+                            } => {
+                                // Every output receiver was dropped. Stop reading so
+                                // a later client can acquire the guest reader lease;
+                                // the process and its independent wait remain alive.
                                 break;
                             }
                             msg = stream.message() => msg,

@@ -70,6 +70,50 @@ fn command_help_only_advertises_meaningful_global_options() {
         ),
         (&["create"], GLOBAL_OPTIONS),
         (
+            &["top"],
+            &[
+                "--debug",
+                "--home",
+                "--config",
+                "--url",
+                "--profile",
+                "--path-prefix",
+            ],
+        ),
+        (
+            &["attach"],
+            &[
+                "--debug",
+                "--home",
+                "--config",
+                "--url",
+                "--profile",
+                "--path-prefix",
+            ],
+        ),
+        (
+            &["kill"],
+            &[
+                "--debug",
+                "--home",
+                "--config",
+                "--url",
+                "--profile",
+                "--path-prefix",
+            ],
+        ),
+        (
+            &["signal"],
+            &[
+                "--debug",
+                "--home",
+                "--config",
+                "--url",
+                "--profile",
+                "--path-prefix",
+            ],
+        ),
+        (
             &["list"],
             &[
                 "--debug",

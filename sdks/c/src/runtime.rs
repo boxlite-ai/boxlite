@@ -678,6 +678,11 @@ unsafe fn dispatch_event(event: RuntimeEvent) {
                 user_data,
                 result,
             } => dispatch_handle_event::<crate::CBoxInfoList>(result, user_data, cb),
+            RuntimeEvent::ExecutionInfoList {
+                cb,
+                user_data,
+                result,
+            } => dispatch_handle_event::<crate::CExecutionInfoList>(result, user_data, cb),
             RuntimeEvent::Metrics {
                 cb,
                 user_data,
