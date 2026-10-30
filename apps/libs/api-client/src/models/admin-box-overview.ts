@@ -17,6 +17,10 @@
 export interface AdminBoxOverview {
     'id': string;
     'name': string;
+    /**
+     * Stored Box image reference, when available.
+     */
+    'image'?: string | null;
     'organizationId': string;
     'runnerId'?: string | null;
     'regionId': string;

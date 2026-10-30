@@ -45,6 +45,46 @@ const serviceWith = () => {
 }
 
 describe('AdminPlatformOverviewService', () => {
+  it.each(['registry.test/team/python:3.13', null, undefined])(
+    'returns the stored box image %s from existing list and detail queries',
+    async (image) => {
+      const { service, boxes } = serviceWith()
+      const box = {
+        id: 'box-image',
+        name: 'worker',
+        image,
+        organizationId: 'org-1',
+        runnerId: null,
+        region: 'sgp-a',
+        desiredState: BoxDesiredState.STARTED,
+        state: BoxState.STARTED,
+        cpu: 2,
+        mem: 4,
+        disk: 10,
+        updatedAt: new Date('2026-08-30T01:00:00Z'),
+        env: { SECRET: 'must-not-be-returned' },
+      }
+      boxes.find.mockResolvedValue([box])
+      boxes.findOne.mockResolvedValue(box)
+
+      const page = await service.boxes({ limit: 50 })
+      const detail = await service.box('box-image', { jobLimit: 50 })
+
+      expect(page.items[0]).toMatchObject({ id: 'box-image', image: image ?? null })
+      expect(detail).toMatchObject({ id: 'box-image', image: image ?? null })
+      expect(page.items[0]).not.toHaveProperty('env')
+      expect(detail).not.toHaveProperty('env')
+      expect(boxes.find).toHaveBeenCalledTimes(1)
+      expect(boxes.findOne).toHaveBeenCalledTimes(1)
+      expect(boxes.find).toHaveBeenCalledWith(
+        expect.objectContaining({ select: expect.objectContaining({ image: true }) }),
+      )
+      expect(boxes.findOne).toHaveBeenCalledWith(
+        expect.objectContaining({ select: expect.objectContaining({ image: true }) }),
+      )
+    },
+  )
+
   it('derives region health from runner and box failures', async () => {
     const { service, regions, runners, boxes, jobs } = serviceWith()
     regions.find.mockResolvedValue([

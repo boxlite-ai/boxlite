@@ -8506,6 +8506,7 @@ components:
       example:
         id: id
         name: name
+        image: image
         organizationId: organizationId
         runnerId: runnerId
         regionId: regionId
@@ -8521,6 +8522,10 @@ components:
         id:
           type: string
         name:
+          type: string
+        image:
+          description: "Stored Box image reference, when available."
+          nullable: true
           type: string
         organizationId:
           type: string
@@ -8574,6 +8579,7 @@ components:
         items:
         - id: id
           name: name
+          image: image
           organizationId: organizationId
           runnerId: runnerId
           regionId: regionId
@@ -8587,6 +8593,7 @@ components:
           observedAt: 2000-01-23T04:56:07.000+00:00
         - id: id
           name: name
+          image: image
           organizationId: organizationId
           runnerId: runnerId
           regionId: regionId
@@ -8658,6 +8665,7 @@ components:
       example:
         id: id
         name: name
+        image: image
         organizationId: organizationId
         runnerId: runnerId
         regionId: regionId
@@ -8681,6 +8689,10 @@ components:
         id:
           type: string
         name:
+          type: string
+        image:
+          description: "Stored Box image reference, when available."
+          nullable: true
           type: string
         organizationId:
           type: string

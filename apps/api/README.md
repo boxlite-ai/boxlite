@@ -3,6 +3,15 @@
 The NestJS control-plane service. See the [apps hub](../README.md) for how it fits with the
 other services and [`API.md`](../API.md) for its interfaces.
 
+## Admin Box image
+
+`GET /api/admin/boxes` and `GET /api/admin/boxes/{id}` include `image`, the stored
+Box image reference, or null when none is recorded. Both select the existing
+column in their current queries and use the same response projection; no extra
+lookup or migration is required. For example, a Box created from `python:3.13`
+returns `"image": "python:3.13"` in both responses. Upgrade strict consumers to
+accept this field before rolling out the added response property.
+
 ## Business events
 
 `recordBusinessEvent` (`src/common/utils/business-event.util.ts`) writes one structured log record
