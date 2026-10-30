@@ -7,7 +7,7 @@ Name | Type | Description | Notes
 ------------ | ------------- | ------------- | -------------
 **id** | **string** |  | [default to undefined]
 **name** | **string** |  | [default to undefined]
-**image** | **string** | Stored Box image reference, when available. | [optional] [default to undefined]
+**image** | **string** | Stored Box image reference, when available. Null when no image is stored. | [optional] [default to undefined]
 **organizationId** | **string** |  | [default to undefined]
 **runnerId** | **string** |  | [optional] [default to undefined]
 **regionId** | **string** |  | [default to undefined]

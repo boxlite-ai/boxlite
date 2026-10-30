@@ -21,7 +21,7 @@ export interface AdminBoxDetail {
     'id': string;
     'name': string;
     /**
-     * Stored Box image reference, when available.
+     * Stored Box image reference, when available. Null when no image is stored.
      */
     'image'?: string | null;
     'organizationId': string;

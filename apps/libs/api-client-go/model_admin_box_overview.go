@@ -24,7 +24,7 @@ var _ MappedNullable = &AdminBoxOverview{}
 type AdminBoxOverview struct {
 	Id string `json:"id"`
 	Name string `json:"name"`
-	// Stored Box image reference, when available.
+	// Stored Box image reference, when available. Null when no image is stored.
 	Image NullableString `json:"image,omitempty"`
 	OrganizationId string `json:"organizationId"`
 	RunnerId NullableString `json:"runnerId,omitempty"`

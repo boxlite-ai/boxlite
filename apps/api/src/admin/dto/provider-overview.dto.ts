@@ -59,7 +59,11 @@ export class AdminBoxOverviewDto {
   @ApiProperty()
   name: string
 
-  @ApiPropertyOptional({ type: String, nullable: true, description: 'Stored Box image reference, when available.' })
+  @ApiPropertyOptional({
+    type: String,
+    nullable: true,
+    description: 'Stored Box image reference, when available. Null when no image is stored.',
+  })
   image: string | null
 
   @ApiProperty()

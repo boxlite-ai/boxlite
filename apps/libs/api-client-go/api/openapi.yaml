@@ -8524,7 +8524,8 @@ components:
         name:
           type: string
         image:
-          description: "Stored Box image reference, when available."
+          description: "Stored Box image reference, when available. Null when no image\
+            \ is stored."
           nullable: true
           type: string
         organizationId:
@@ -8691,7 +8692,8 @@ components:
         name:
           type: string
         image:
-          description: "Stored Box image reference, when available."
+          description: "Stored Box image reference, when available. Null when no image\
+            \ is stored."
           nullable: true
           type: string
         organizationId:
