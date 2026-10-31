@@ -51,6 +51,12 @@ await this.stop(event.boxId, undefined, Context.platform(PlatformReason.ORG_SUSP
 - Job outcome events carry no context: the runner reports after the request has ended.
 - Add caller-decided fields to `Context`, not new service parameters.
 
+## Organization suspension
+
+Organization access caches organization records as JSON for 10 seconds. On cache reads,
+`suspendedUntil` is restored to a `Date` so temporary suspensions are enforced until their
+deadline on both cached and database reads. A null deadline keeps a suspension indefinite.
+
 ## Admin organization metadata
 
 System administrators read registration fields on the existing organization routes.
