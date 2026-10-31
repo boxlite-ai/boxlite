@@ -35,8 +35,8 @@ boxlite-vmm
 | `vcpu` | x86_64 vCPU workers: create and configure each vCPU, hold them at a start gate, run the guest and dispatch its exits until the VM ends |
 | `chipset` | `ChipsetBuilder`, the one registry of ranges and interrupt lines, and `Chipset`, the read-only machine it builds |
 | `bus` | `Bus`, `BusRange` and `BusDevice`, `Buses::dispatch`, which serves the MMIO and port exits of a vCPU, and the deferred-access types the next slice advances |
-| `io` | Deferred completion primitives: `Completion<T>`, its single-use `Completer<T>`, `Waker`, and self-owned `ConfigBytes` |
-| `virtio` | The virtio device contract: `VirtioDevice`, `DeviceSpec`, `DeviceOp`, `DeviceEvent`, event registration and budget contexts, and `PendingControl` |
+| `io` | Deferred completion primitives: `Completion<T>`, its single-use `Completer<T>` (dropping it cancels the completion), `Waker`, and self-owned `ConfigBytes` |
+| `virtio` | The virtio device contract: `VirtioDevice`, `DeviceSpec`, `DeviceOp`, `DeviceEvent`, event registration and budget contexts, `PendingControl`, and the run thread's `ControlQueue` |
 | `irq` | `IrqChip`, the host interrupt controller as devices see it, and `IrqLine`, one device line; HVF and KVM provide the controller, WHP (M10) only local APICs |
 | `devices` | The console queue, and on x86_64 the 8250 UART at COM1 and the i8042 reset, with `add_legacy_devices`, which adds them to the chipset |
 | `events` | `Event`, which ends the VM, `EventSender`, which also latches the stop, and `EventLoop`, the poller that waits for the first event |
@@ -249,14 +249,19 @@ nothing mapped.
    `Chipset::dispatch`. `Shutdown` sends `GuestShutdown` and `Reset` sends
    `GuestReset`; a run error, any other exit, such as `Halted`, which KVM never
    returns with its in-kernel irqchip, or a panic caught around the worker
-   sends `VcpuFailed`. A worker that sees the latch completes the pending
-   access and returns without sending.
+   sends `VcpuFailed`. An access the chipset defers queues on the control
+   handle and the worker waits for the run thread to complete or cancel it; a
+   completed read fills the exit's buffer before the worker re-enters the
+   guest. A worker that sees the latch, or whose deferred access the run
+   thread cancels, completes the pending access and returns without sending.
 3. `EventSender::send` sets the stop latch before it queues, so the vCPU
    that sends, such as the one whose `0xFE` reached the i8042, never enters
-   the guest again. `run` takes the first event from the `EventLoop`, kicks
-   every vCPU, and joins them all before it returns: `StopRequested`,
-   `GuestShutdown` and `GuestReset` become `VmExit`, and `VcpuFailed` or
-   `DeviceFailed` its error. Later events are dropped.
+   the guest again. Between waits, `run` advances the deferred accesses the
+   control queue holds. Once it takes the first terminal event it closes the
+   control queue, cancelling every deferred access, kicks every vCPU, and
+   joins them all before it returns: `StopRequested`, `GuestShutdown` and
+   `GuestReset` become `VmExit`, and `VcpuFailed`, `DeviceFailed` or
+   `DevicePanicked` its error. Later events are dropped.
 
 4. Once every vCPU has joined, `run` finishes the console worker `Vm::new`
    started, so the guest's last output reaches the sink, or is counted as
@@ -327,9 +332,25 @@ are built from. `Vm` owns the chipset they form.
   `BusIo::Complete(value)`, or with `BusIo::Deferred(readiness)` when it must
   finish later. The bus wraps a deferred access in a `ReadIo` or `WriteIo`,
   and `Chipset::dispatch` returns `Dispatch::DeferredRead` or
-  `Dispatch::DeferredWrite` with the device's readiness completion.
-  `BusDevice::progress` advances one. Until the run thread pumps these in the
-  next slice, no device may defer: the vCPU reports one as a VMM bug.
+  `Dispatch::DeferredWrite` with the device's readiness completion. The vCPU
+  hands the access to the run thread through a `ControlHandle` and waits on
+  its `Completion`; the run thread drains the `ControlQueue`, calls
+  `BusDevice::progress`, and completes the access or parks it with the fresh
+  readiness the device just handed back, until the device completes it. A
+  deferred read that completes without bytes reads as zeros. A write copies
+  its data when the device defers.
+- **Stopping with a deferred access.** The run thread closes the control
+  queue before it kicks the vCPUs: queued accesses are cancelled, and an
+  access that a vCPU defers after the close is cancelled at once, so no
+  waiter is left. The vCPU then zero-fills a read's buffer, releases the
+  exit, and calls `Vcpu::complete_pending_io` before its thread ends, which
+  is the [exit contract](../../docs/contributing/architecture/vmm/README.md)
+  every host backend requires. A `Completer` dropped without an answer
+  cancels its completion for the same reason.
+- **Poisoned deferred targets.** The run thread treats a device lock an
+  earlier panic poisoned as an access that can never finish and cancels it
+  instead of panicking itself; any other panic while the run thread advances
+  an access ends the VM with `Error::DevicePanicked`.
 - **Lines.** `irq::IrqLine` drives one line through `IrqChip::set_line`,
   which every host VM implements with `Vm::set_irq_line`; the distinct name
   keeps the two traits from colliding where both are in scope. It is not
@@ -341,10 +362,13 @@ are built from. `Vm` owns the chipset they form.
   `Event::DeviceFailed` through an `EventSender`, which never blocks or
   panics, latches the stop for every vCPU, and wakes the `EventLoop`'s `mio`
   poller. vCPU workers and `StopHandle` send the other events. An event sent
-  after the loop is gone is logged at debug level and discarded. `EventLoop::wait` returns
-  the oldest event, or `None` at its timeout, and rechecks the queue every
-  second in case a wake-up was lost. Every event ends the VM; the VMM never
-  restarts a guest.
+  after the loop is gone is logged at debug level and discarded.
+  `EventLoop::wait` returns `LoopEvent::Terminal(event)` for the oldest
+  event, `LoopEvent::Control` when the poller woke with no queued event (the
+  control queue signals through the same waker), or `None` at its timeout,
+  and rechecks the queue every second in case a wake-up was lost. Every
+  terminal event ends the VM; the VMM never restarts a guest, and a control
+  wake does not end it.
 
 ## Chipset
 

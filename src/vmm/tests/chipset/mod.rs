@@ -20,7 +20,7 @@ use crate::bus::UNCLAIMED_READ;
 use crate::{
     bus::{BusDevice, BusIo, Dispatch},
     error::Error,
-    events::{Event, EventLoop, EventSender},
+    events::{Event, EventLoop, EventSender, LoopEvent},
     io::ConfigBytes,
     irq::IrqLine,
     memory::GuestMemoryMmap,
@@ -450,7 +450,10 @@ fn a_device_ends_the_vm_through_the_builders_event_loop() {
     });
 
     let event = events.wait(Some(Duration::ZERO)).unwrap();
-    assert!(matches!(event, Some(Event::GuestReset)), "{event:?}");
+    assert!(
+        matches!(event, Some(LoopEvent::Terminal(Event::GuestReset))),
+        "{event:?}"
+    );
 }
 
 #[test]

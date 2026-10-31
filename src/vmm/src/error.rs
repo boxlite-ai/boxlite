@@ -50,6 +50,8 @@ pub enum Error {
     UnexpectedExit { vcpu: u32, exit: String },
     /// The thread of vCPU `vcpu` panicked; the VMM caught it and stopped the VM.
     VcpuPanicked { vcpu: u32 },
+    /// A device panicked while the run thread advanced one of its accesses.
+    DevicePanicked,
     /// `Vm::run` was called again; a VM runs once.
     AlreadyRan,
 }
@@ -95,6 +97,7 @@ impl fmt::Display for Error {
                 write!(f, "vCPU {vcpu} exited unexpectedly: {exit}")
             }
             Self::VcpuPanicked { vcpu } => write!(f, "vCPU {vcpu} panicked"),
+            Self::DevicePanicked => f.write_str("a device panicked while advancing an access"),
             Self::AlreadyRan => f.write_str("the VM has already run"),
         }
     }
@@ -110,6 +113,7 @@ impl error::Error for Error {
             | Self::LineNotArmed(_)
             | Self::UnexpectedExit { .. }
             | Self::VcpuPanicked { .. }
+            | Self::DevicePanicked
             | Self::AlreadyRan => None,
             Self::AllocateMemory { source, .. }
             | Self::LoadKernel { source, .. }

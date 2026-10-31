@@ -19,7 +19,7 @@ use crate::{
     chipset::{Chipset, ChipsetBuilder, Conflict},
     devices::console::{ConsoleWorker, DEFAULT_QUEUE_BYTES},
     error::Error,
-    events::{Event, EventLoop},
+    events::{Event, EventLoop, LoopEvent},
     memory::GuestMemoryMmap,
     mock_vm::{Call, MockVm},
 };
@@ -98,7 +98,10 @@ impl Machine {
     }
 
     fn next_event(&mut self) -> Option<Event> {
-        self.events.wait(Some(Duration::ZERO)).unwrap()
+        match self.events.wait(Some(Duration::ZERO)).unwrap() {
+            Some(LoopEvent::Terminal(event)) => Some(event),
+            _ => None,
+        }
     }
 }
 

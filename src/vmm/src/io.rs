@@ -214,6 +214,26 @@ impl<T> fmt::Debug for Completer<T> {
     }
 }
 
+impl<T> Drop for Completer<T> {
+    /// A producer dropped without completing cancels the completion, so a
+    /// waiter never blocks on a result that can no longer arrive.
+    fn drop(&mut self) {
+        let waker = {
+            let mut state = self.lock();
+            let waker = match &mut *state {
+                State::Pending(waker) => waker.take(),
+                State::Done(_) | State::Cancelled => return,
+            };
+            *state = State::Cancelled;
+            waker
+        };
+        self.inner.ready.notify_all();
+        if let Some(waker) = waker {
+            waker();
+        }
+    }
+}
+
 /// The completion was cancelled before it delivered a value.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Cancelled;

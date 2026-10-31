@@ -338,13 +338,24 @@ today.
 - **Deferred access.** A device that cannot answer under its lock, such as a
   virtio transport whose device is busy, returns the access as deferred with
   a readiness completion. The bus carries it as `Dispatch::DeferredRead` or
-  `Dispatch::DeferredWrite`, and `BusDevice::progress` advances it. A later
-  slice lets the thread that calls `run` pump these, so the device lock is
-  never held across a wait; no device defers before then.
+  `Dispatch::DeferredWrite`; the vCPU waits while the thread that calls `run`
+  advances it with `BusDevice::progress`. A device that is still busy hands
+  back a fresh readiness completion, which replaces the previous one, so the
+  run thread never re-arms a finished completion. The device lock is never
+  held across a wait and a vCPU never blocks a worker. The run thread learns
+  of new work through its poller's waker, separate from the terminal event
+  channel.
+- **Stopping.** The run thread closes the control queue before it kicks the
+  vCPUs, which cancels every queued access and every access deferred after
+  the close. A cancelled read fills its buffer with zeros, and the vCPU
+  releases the borrowed exit and calls `complete_pending_io`, which every
+  backend requires before a vCPU stops.
 - **Locking.** A vCPU thread holds a device's lock for one register access and
   hands anything that can block to the device's worker. A lock that an
   earlier panic poisoned stops the next access too, as Firecracker and
-  cloud-hypervisor do: the panic was a VMM bug, never guest input.
+  cloud-hypervisor do: the panic was a VMM bug, never guest input. The run
+  thread cancels a deferred access whose device lock a panic poisoned
+  instead of panicking itself.
 
 ### Interrupts
 

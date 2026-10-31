@@ -58,7 +58,10 @@ pub(crate) trait BusDevice: Send {
     fn read(&mut self, offset: u64, len: usize) -> BusIo<ConfigBytes>;
     /// Writes `data` at `offset`.
     fn write(&mut self, offset: u64, data: &[u8]) -> BusIo<()>;
-    /// Advances a deferred access. The default completes it at once.
+    /// Advances a deferred access. The default completes it at once. A
+    /// device that cannot finish hands back a fresh readiness completion,
+    /// which replaces the previous one and must be completed, not dropped
+    /// or cancelled, when the access may make progress.
     fn progress(&mut self, _request: &mut PendingIo) -> BusIo<()> {
         BusIo::Complete(())
     }
@@ -82,6 +85,12 @@ pub(crate) struct WriteIo {
     readiness: Completion<()>,
     completion: Completion<()>,
     completer: Completer<()>,
+}
+
+/// A deferred access of either kind, as the control queue stores it.
+pub(crate) enum DeferredIo {
+    Read(ReadIo),
+    Write(WriteIo),
 }
 
 impl ReadIo {
@@ -148,6 +157,57 @@ impl WriteIo {
     /// Completes the write.
     pub(crate) fn complete(self, request: PendingIo) -> bool {
         matches!(request, PendingIo::Write { .. }) && self.completer.complete(())
+    }
+}
+
+impl DeferredIo {
+    /// The device's readiness completion.
+    pub(crate) fn readiness(&self) -> Completion<()> {
+        match self {
+            Self::Read(io) => io.readiness(),
+            Self::Write(io) => io.readiness(),
+        }
+    }
+
+    /// Replaces the readiness the next wait arms.
+    pub(crate) fn set_readiness(&mut self, readiness: Completion<()>) {
+        match self {
+            Self::Read(io) => io.readiness = readiness,
+            Self::Write(io) => io.readiness = readiness,
+        }
+    }
+
+    /// The request the run thread passes to [`BusDevice::progress`].
+    pub(crate) fn request(&self) -> PendingIo {
+        match self {
+            Self::Read(io) => io.request(),
+            Self::Write(io) => io.request(),
+        }
+    }
+
+    /// Locks the device for one progress call; `None` if the device panicked
+    /// while another access held it.
+    pub(crate) fn lock_target(&self) -> Option<MutexGuard<'_, dyn BusDevice + 'static>> {
+        match self {
+            Self::Read(io) => io.lock_target(),
+            Self::Write(io) => io.lock_target(),
+        }
+    }
+
+    /// Delivers the result.
+    pub(crate) fn complete(self, request: PendingIo) -> bool {
+        match self {
+            Self::Read(io) => io.complete(request),
+            Self::Write(io) => io.complete(request),
+        }
+    }
+
+    /// Cancels the access and wakes its waiter.
+    pub(crate) fn cancel(self) -> bool {
+        match self {
+            Self::Read(io) => io.completer.cancel(),
+            Self::Write(io) => io.completer.cancel(),
+        }
     }
 }
 
