@@ -25,6 +25,7 @@ This directory contains integration tests for the BoxLite runtime. Tests run con
 | `clone_export_import.rs` | Yes | Clone, export, and import operations |
 | `sigstop_quiesce.rs` | Yes | SIGSTOP-based quiesce for snapshot operations |
 | `rest_integration.rs` | Yes | REST API integration tests |
+| `agents_opencode.rs` | Yes | OpenCode 2.2 agent adapter; ignored by default, run with `make test:integration:agents` and `BOXLITE_TEST_OPENCODE_BINARY` (see the file header) |
 | `timing_profile.rs` | Yes | Boot latency profiling |
 | `network.rs` | No | Network configuration tests |
 | `runtime.rs` | No | Runtime initialization and configuration tests |

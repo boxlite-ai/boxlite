@@ -1,64 +1,146 @@
 //! Box-owned agents and turns.
+//!
+//! BoxLite forwards each operation to a coding agent's native interface inside
+//! the Box. The agent owns its conversation, execution and recovery; BoxLite
+//! owns the Box and the transport, and starts the agent's own service when
+//! none runs. OpenCode 2.2 on a local runtime is the only implementation;
+//! unsupported operations and options fail with `Unsupported` before reaching
+//! the agent.
 
+mod opencode;
 mod types;
 pub use types::*;
 
+use std::sync::Arc;
+
+use crate::litebox::box_impl::BoxImpl;
+use crate::runtime::backend::{BoxBackend, BoxNetworkBackend};
 use crate::{BoxliteError, BoxliteResult};
 
 /// Box-owned agent namespace, obtained from [`crate::LiteBox::agents`].
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Agents {
-    pub(crate) _private: (),
+    box_backend: Arc<dyn BoxBackend>,
+    network_backend: Arc<dyn BoxNetworkBackend>,
+}
+
+impl std::fmt::Debug for Agents {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("Agents")
+            .field("box_id", self.box_backend.id())
+            .finish_non_exhaustive()
+    }
 }
 
 /// Box-owned agent instance with its conversation.
 #[derive(Debug, Clone)]
 pub struct Agent {
-    _private: (),
+    session: Arc<opencode::Session>,
 }
 
 /// One submitted task.
 #[derive(Debug, Clone)]
 pub struct AgentTurn {
-    _private: (),
+    state: AgentTurnState,
 }
 
 impl Agents {
+    pub(crate) fn new(
+        box_backend: Arc<dyn BoxBackend>,
+        network_backend: Arc<dyn BoxNetworkBackend>,
+    ) -> Self {
+        Self {
+            box_backend,
+            network_backend,
+        }
+    }
+
     /// Create an agent with initial configuration.
-    pub async fn create(&self, _agent: &str, _options: AgentCreateOptions) -> BoxliteResult<Agent> {
-        not_implemented("agents.create")
+    ///
+    /// `agent` selects the implementation: only `"opencode"`, with OpenCode
+    /// 2.2.2 already installed in the Box. Starts the Box and OpenCode's
+    /// managed service on first use.
+    pub async fn create(&self, agent: &str, options: AgentCreateOptions) -> BoxliteResult<Agent> {
+        if agent != opencode::IMPLEMENTATION {
+            return Err(BoxliteError::Unsupported(format!(
+                "agent implementation {agent:?} is not supported; supported: {}",
+                opencode::IMPLEMENTATION
+            )));
+        }
+        self.require_local_runtime()?;
+        let request = opencode::SessionRequest::new(&options)?;
+        let server = self.opencode_server().await?;
+        Ok(Agent::new(server.create_session(request).await?))
     }
 
     /// Look up an agent without replaying work.
-    pub async fn get(&self, _agent_id: &str) -> BoxliteResult<Agent> {
-        not_implemented("agents.get")
+    pub async fn get(&self, agent_id: &str) -> BoxliteResult<Agent> {
+        self.require_local_runtime()?;
+        if !opencode::is_session_id(agent_id) {
+            return Err(BoxliteError::NotFound(format!(
+                "agent {agent_id} not found"
+            )));
+        }
+        let server = self.opencode_server().await?;
+        Ok(Agent::new(server.get_session(agent_id).await?))
+    }
+
+    /// Checked before any validation, so remote runtimes always see `Unsupported`.
+    /// A cloud tunnel can publish the agent's server; a local one stays on this host.
+    fn require_local_runtime(&self) -> BoxliteResult<()> {
+        let is_local = Arc::clone(&self.box_backend)
+            .as_any_arc()
+            .downcast::<BoxImpl>()
+            .is_ok();
+        if is_local {
+            return Ok(());
+        }
+        Err(BoxliteError::Unsupported(
+            "agents require a local runtime".into(),
+        ))
+    }
+
+    async fn opencode_server(&self) -> BoxliteResult<Arc<opencode::Server>> {
+        opencode::Server::attach(
+            Arc::clone(&self.box_backend),
+            Arc::clone(&self.network_backend),
+        )
+        .await
     }
 }
 
 impl Agent {
-    /// Stop admissions and close the agent loop.
-    pub async fn close(&self, _options: AgentControlOptions) -> BoxliteResult<()> {
-        not_implemented("agent.close")
+    fn new(session: opencode::Session) -> Self {
+        Self {
+            session: Arc::new(session),
+        }
     }
 
-    /// Submit text with optional JSON data; queue is the default admission mode.
-    pub async fn send(&self, _text: &str, _options: AgentSendOptions) -> BoxliteResult<AgentTurn> {
-        not_implemented("agent.send")
+    /// Stop admissions and close the agent loop.
+    pub async fn close(&self, _options: AgentControlOptions) -> BoxliteResult<()> {
+        unsupported("agent.close")
+    }
+
+    /// Submit text. The default `queue` mode waits until the agent is idle.
+    pub async fn send(&self, text: &str, options: AgentSendOptions) -> BoxliteResult<AgentTurn> {
+        let state = self.session.send(text, &options).await?;
+        Ok(self.turn(state))
     }
 
     /// Look up a turn without executing it.
     pub async fn get_turn(&self, _turn_id: &str) -> BoxliteResult<AgentTurn> {
-        not_implemented("agent.get_turn")
+        unsupported("agent.get_turn")
     }
 
     /// Open the agent's events, after an opaque cursor where the adapter supports it.
     pub async fn events(&self, _options: AgentEventsOptions) -> BoxliteResult<AgentEventStream> {
-        not_implemented("agent.events")
+        unsupported("agent.events")
     }
 
     /// Read outstanding questions and permissions.
     pub async fn requests(&self) -> BoxliteResult<Vec<AgentRequest>> {
-        not_implemented("agent.requests")
+        unsupported("agent.requests")
     }
 
     /// Answer a typed request; a terminal question may create an answering turn.
@@ -68,34 +150,38 @@ impl Agent {
         _response: AgentResponse,
         _options: AgentControlOptions,
     ) -> BoxliteResult<AgentTurn> {
-        not_implemented("agent.respond")
+        unsupported("agent.respond")
     }
 
     /// Read a consistent snapshot.
     pub fn state(&self) -> BoxliteResult<AgentState> {
-        not_implemented("agent.state")
+        unsupported("agent.state")
     }
 
-    /// Read effective configuration.
+    /// Read the configuration the agent reported when this handle was obtained.
     pub fn config(&self) -> BoxliteResult<AgentConfig> {
-        not_implemented("agent.config")
+        Ok(self.session.config().clone())
     }
 
     /// Read adapter guarantees and limits.
     pub fn capabilities(&self) -> BoxliteResult<AgentCapabilities> {
-        not_implemented("agent.capabilities")
+        Ok(opencode::capabilities())
+    }
+
+    fn turn(&self, state: AgentTurnState) -> AgentTurn {
+        AgentTurn { state }
     }
 }
 
 impl AgentTurn {
     /// Wait for a result; timeout does not imply cancellation.
     pub async fn wait(&self, _options: AgentWaitOptions) -> BoxliteResult<AgentResult> {
-        not_implemented("turn.wait")
+        unsupported("turn.wait")
     }
 
     /// Open this turn's view of the agent's events.
     pub async fn events(&self, _options: AgentEventsOptions) -> BoxliteResult<AgentEventStream> {
-        not_implemented("turn.events")
+        unsupported("turn.events")
     }
 
     /// Steer this turn, never silently queue a new one.
@@ -104,23 +190,24 @@ impl AgentTurn {
         _text: &str,
         _options: AgentControlOptions,
     ) -> BoxliteResult<AgentSteeringReceipt> {
-        not_implemented("turn.steer")
+        unsupported("turn.steer")
     }
 
     /// Confirm interruption of this agent loop, not background processes in the Box.
     pub async fn interrupt(&self, _options: AgentControlOptions) -> BoxliteResult<()> {
-        not_implemented("turn.interrupt")
+        unsupported("turn.interrupt")
     }
 
-    /// Read a consistent snapshot.
+    /// Read the snapshot taken when this handle was obtained.
     pub fn state(&self) -> BoxliteResult<AgentTurnState> {
-        not_implemented("turn.state")
+        Ok(self.state.clone())
     }
 }
 
-fn not_implemented<T>(operation: &str) -> BoxliteResult<T> {
+fn unsupported<T>(operation: &str) -> BoxliteResult<T> {
     Err(BoxliteError::Unsupported(format!(
-        "{operation} is not implemented"
+        "{operation} is not supported by {}",
+        opencode::ADAPTER
     )))
 }
 

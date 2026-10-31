@@ -30,13 +30,15 @@ and `SimpleBox`. Each SDK retains its error conventions.
 
 ### Failure contract
 
-Agent operations return an unsupported error before agent execution. Namespace
-access and data construction work; execution, queues, event delivery, configuration
+Rust on a local runtime runs the operations listed in
+[OpenCode on a local runtime](#opencode-on-a-local-runtime). Everywhere else, agent
+operations return an unsupported error before agent execution: namespace access and
+data construction work, but execution, queues, event delivery, configuration
 validation, retry deduplication and timeout handling are unavailable.
 
 | SDK | Error behavior |
 |---|---|
-| Rust | `Err(BoxliteError::Unsupported("… is not implemented"))`; no panic |
+| Rust | `Err(BoxliteError::Unsupported(…))` naming the operation or option; no panic |
 | Python | `UnsupportedError` on awaiting operations or reading a property |
 | Node.js | Rejected operation promises; synchronous getter/event errors |
 | Go | `*Error` with `Code: ErrUnsupported` and no result |
@@ -51,16 +53,67 @@ No agent or turn is returned by `create`, `get`, `send` or `respond`.
 C getters clear output pointers; callbacks are not invoked and no agent, turn,
 subscription or JSON result object is allocated.
 
+### OpenCode on a local runtime
+
+Rust on a local runtime forwards agents to OpenCode 2.2 inside the Box
+([design #2227](https://github.com/boxlite-ai/boxlite/issues/2227)). BoxLite installs
+nothing: the Box must already provide `opencode` 2.2.2 and `sh`, plus the provider
+configuration and keys OpenCode reads, such as `ANTHROPIC_API_KEY` in the Box
+environment. Another OpenCode version fails with `Unsupported` once its service
+answers, or with `Execution` when it lacks the `opencode service` commands. Remote
+runtimes and the other SDKs return `Unsupported`.
+
+```text
+agents.create("opencode") ──exec───► check OpenCode's service registration; set the
+                                     service address to 0.0.0.0:47096 when different;
+                                     read the service password
+                          ──tunnel─► GET /api/info                  (exactly 2.2.2)
+                          ──exec───► opencode service start         (only when none runs)
+                          ──tunnel─► POST /api/session              → Agent (ses_…)
+agent.send(text)          ──tunnel─► POST …/prompt, delivery queue  → AgentTurn (msg_…)
+```
+
+| Operation | Behavior |
+|---|---|
+| `agents.create` | Starts OpenCode's managed service on first use and creates a session. Only `cwd` and `config.model` (`provider/model`) are accepted |
+| `agents.get` | Reads a session by its `ses_…` ID, starting the service again after a Box restart |
+| `agent.send` | Admits the text with `queue` delivery under a BoxLite-chosen `msg_…` ID. A lost response is retried once with that ID; a second failure is a `Network` error naming that ID, because sending again may run the text twice |
+| `turn.state` | The snapshot taken when the handle was obtained: `queued` after `agent.send` |
+| `agent.config`, `agent.capabilities` | The session model; the operations above, with unknown limits as `None` |
+
+BoxLite runs OpenCode's own managed service, the `opencode serve --service`
+process that `opencode service start` launches, so OpenCode's recovery applies:
+
+- **Address and password.** The service listens on `0.0.0.0:47096` so the Box
+  tunnel reaches it. OpenCode keeps that address and the service password in its
+  service configuration (mode 0600) under the Box user's home. Processes in the Box
+  running as the same user, including the agent's own tools, can read the password.
+- **Refusals.** `agents.create` and `agents.get` return `InvalidState` when OpenCode
+  remote access is on, when a service started outside BoxLite runs at another
+  address, when the service at port 47096 does not answer, or when another server
+  holds that port. BoxLite never stops or signals a process.
+- **Stale registrations.** OpenCode's service registration outlives an unclean
+  exit, and its pid can later belong to another process, which `opencode service set`
+  would signal. BoxLite deletes a registration whose pid no longer runs
+  `opencode serve --service` before it changes any setting.
+
+Sessions deny reading `.env` and `.env.*` files (`.env.example` stays readable)
+and OpenCode's `question` tool. OpenCode's defaults would ask first, nobody can
+answer through BoxLite yet, and a pending ask holds every later input; denied, the
+tool call fails and the turn continues. Answering requests through BoxLite is not
+available yet; every other operation and option returns `Unsupported` before
+reaching OpenCode.
+
 ### Record migration (breaking change)
 
 Agent records from v0.11.0 represent values an adapter cannot know:
 
 | Field | v0.11.0 | Now |
 |---|---|---|
-| `AgentState.cursor`, `AgentTurnState.cursor`, `AgentEvent.cursor` | Required string | Optional; absent when the adapter cannot resume after it (Go: empty string) |
-| `AgentCapabilities` queue, steering and retention limits | Required numbers | Optional; absent means unknown or unsupported, never zero (Go: `nil`) |
+| `AgentState.cursor`, `AgentTurnState.cursor`, `AgentEvent.cursor` | Required string | Optional; missing when the adapter cannot resume after it: `None` in Rust and Python, absent in TypeScript, `null` in C JSON, empty in Go |
+| `AgentCapabilities` queue, steering and retention limits | Required numbers | Optional; missing means unknown or unsupported, never zero (Go: `nil`) |
 
-No operation returned these records before, so only code that reads the fields changes.
+No operation returned these records before, so only code that reads or builds these fields changes.
 
 ### Namespace ownership
 

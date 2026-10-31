@@ -422,6 +422,15 @@ test\:integration\:rust: $(if $(SETUP_DONE),,runtime\:debug test\:warm-cache\:ru
 			$(CARGOTEST_FILTER); \
 	fi
 
+# OpenCode agent adapter tests (requires VM environment). Ignored by the suite above:
+# each Box needs the OpenCode 2.2.2 release binary named by BOXLITE_TEST_OPENCODE_BINARY.
+test\:integration\:agents: $(if $(SETUP_DONE),,runtime\:debug)
+	@test -n "$$BOXLITE_TEST_OPENCODE_BINARY" || { \
+		echo "❌ Set BOXLITE_TEST_OPENCODE_BINARY to the OpenCode 2.2.2 glibc Linux binary"; exit 1; }
+	@echo "🧪 Running OpenCode agent tests (requires VM)..."
+	@cargo nextest run -p boxlite --features krun,gvproxy --test agents_opencode --run-ignored only \
+		--no-fail-fast --profile vm $(NEXTEST_FILTER)
+
 # Manual release-mode benchmark. Kept out of every aggregate and CI suite.
 test\:perf\:import-export: runtime
 	@echo "📊 Running manual 1 GiB import/export benchmark (release, serial)..."
