@@ -428,8 +428,13 @@ test\:integration\:agents: $(if $(SETUP_DONE),,runtime\:debug)
 	@test -n "$$BOXLITE_TEST_OPENCODE_BINARY" || { \
 		echo "❌ Set BOXLITE_TEST_OPENCODE_BINARY to the OpenCode 2.2.2 glibc Linux binary"; exit 1; }
 	@echo "🧪 Running OpenCode agent tests (requires VM)..."
-	@cargo nextest run -p boxlite --features krun,gvproxy --test agents_opencode --run-ignored only \
-		--no-fail-fast --profile vm $(NEXTEST_FILTER)
+	@if command -v cargo-nextest >/dev/null 2>&1; then \
+		cargo nextest run -p boxlite --features krun,gvproxy --test agents_opencode --run-ignored only \
+			--no-fail-fast --profile vm $(NEXTEST_FILTER); \
+	else \
+		cargo test -p boxlite --features krun,gvproxy --test agents_opencode --no-fail-fast -- \
+			--ignored --test-threads=1 --nocapture $(CARGOTEST_FILTER); \
+	fi
 
 # Manual release-mode benchmark. Kept out of every aggregate and CI suite.
 test\:perf\:import-export: runtime

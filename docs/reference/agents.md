@@ -4,7 +4,7 @@ The agent API groups Box-owned agents, submitted turns, and interaction across R
 
 ## Details
 
-`Agents` is the Box-owned collection. `agents.create("coder", options)`
+`Agents` is the Box-owned collection. `agents.create("opencode", options)`
 selects an implementation and returns an `Agent` instance; `agents.get(agent_id)`
 looks up that instance. Each agent owns its conversation and configuration;
 turns represent submitted work. The create argument selects an implementation,
@@ -71,14 +71,16 @@ agents.create("opencode") ──exec───► check OpenCode's service regist
                           ──exec───► opencode service start         (only when none runs)
                           ──tunnel─► POST /api/session              → Agent (ses_…)
 agent.send(text)          ──tunnel─► POST …/prompt, delivery queue  → AgentTurn (msg_…)
+turn.wait()               ──tunnel─► inbox, history, pending requests
 ```
 
 | Operation | Behavior |
 |---|---|
 | `agents.create` | Starts OpenCode's managed service on first use and creates a session. Only `cwd` and `config.model` (`provider/model`) are accepted |
 | `agents.get` | Reads a session by its `ses_…` ID, starting the service again after a Box restart |
-| `agent.send` | Admits the text with `queue` delivery under a BoxLite-chosen `msg_…` ID. A lost response is retried once with that ID; a second failure is a `Network` error naming that ID, because sending again may run the text twice |
-| `turn.state` | The snapshot taken when the handle was obtained: `queued` after `agent.send` |
+| `agent.send` | Admits the text with `queue` delivery under a BoxLite-chosen `msg_…` ID. A lost response is retried once with that ID; a second failure is a `Network` error naming the ID to read with `get_turn` |
+| `agent.get_turn`, `turn.state` | `get_turn` reads the turn now, among the newest 1,000 messages of the session (older turns are `NotFound`); `turn.state` returns the snapshot taken when the handle was obtained. A turn is `queued` in the inbox; `running` or `waiting_input` until its run records an outcome; `completed`, `failed` or `cancelled` from that outcome; `unknown` when its execution was cut off and a later run took the next input |
+| `turn.wait` | Polls every 500 ms. A timeout, or an `unknown` turn, returns `InvalidState` and never interrupts |
 | `agent.config`, `agent.capabilities` | The session model; the operations above, with unknown limits as `None` |
 
 BoxLite runs OpenCode's own managed service, the `opencode serve --service`
@@ -96,13 +98,18 @@ process that `opencode service start` launches, so OpenCode's recovery applies:
   exit, and its pid can later belong to another process, which `opencode service set`
   would signal. BoxLite deletes a registration whose pid no longer runs
   `opencode serve --service` before it changes any setting.
+- **Recovery.** After a Box restart, the next `agents.get` starts the service again.
+  It resumes an interrupted turn, then delivers queued inputs, at least once: a
+  tool call may run twice. Background shells end cancelled. A clone of a Box with a
+  turn in flight resumes its own copy of that turn.
 
 Sessions deny reading `.env` and `.env.*` files (`.env.example` stays readable)
 and OpenCode's `question` tool. OpenCode's defaults would ask first, nobody can
 answer through BoxLite yet, and a pending ask holds every later input; denied, the
-tool call fails and the turn continues. Answering requests through BoxLite is not
-available yet; every other operation and option returns `Unsupported` before
-reaching OpenCode.
+tool call fails and the turn continues. A turn waiting on another permission, such
+as one asked in a subagent, lists it in its snapshot. Answering requests through
+BoxLite is not available yet; every other operation and option returns
+`Unsupported` before reaching OpenCode.
 
 ### Record migration (breaking change)
 

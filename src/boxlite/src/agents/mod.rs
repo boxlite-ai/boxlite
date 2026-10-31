@@ -12,10 +12,14 @@ mod types;
 pub use types::*;
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use crate::litebox::box_impl::BoxImpl;
 use crate::runtime::backend::{BoxBackend, BoxNetworkBackend};
 use crate::{BoxliteError, BoxliteResult};
+
+/// How often `turn.wait` re-reads native turn state.
+const TURN_POLL_INTERVAL: Duration = Duration::from_millis(500);
 
 /// Box-owned agent namespace, obtained from [`crate::LiteBox::agents`].
 #[derive(Clone)]
@@ -42,6 +46,7 @@ pub struct Agent {
 /// One submitted task.
 #[derive(Debug, Clone)]
 pub struct AgentTurn {
+    session: Arc<opencode::Session>,
     state: AgentTurnState,
 }
 
@@ -129,8 +134,9 @@ impl Agent {
     }
 
     /// Look up a turn without executing it.
-    pub async fn get_turn(&self, _turn_id: &str) -> BoxliteResult<AgentTurn> {
-        unsupported("agent.get_turn")
+    pub async fn get_turn(&self, turn_id: &str) -> BoxliteResult<AgentTurn> {
+        let state = self.session.turn(turn_id).await?;
+        Ok(self.turn(state))
     }
 
     /// Open the agent's events, after an opaque cursor where the adapter supports it.
@@ -169,14 +175,45 @@ impl Agent {
     }
 
     fn turn(&self, state: AgentTurnState) -> AgentTurn {
-        AgentTurn { state }
+        AgentTurn {
+            session: Arc::clone(&self.session),
+            state,
+        }
     }
 }
 
 impl AgentTurn {
-    /// Wait for a result; timeout does not imply cancellation.
-    pub async fn wait(&self, _options: AgentWaitOptions) -> BoxliteResult<AgentResult> {
-        unsupported("turn.wait")
+    /// Wait for a terminal result. An expired timeout returns `InvalidState`
+    /// and leaves the turn running. A turn whose execution ended without a
+    /// recorded outcome, such as one cut off and never resumed, also returns
+    /// `InvalidState`: whether its work took effect is unknown.
+    pub async fn wait(&self, options: AgentWaitOptions) -> BoxliteResult<AgentResult> {
+        let observe = async {
+            loop {
+                let state = self.session.turn(&self.state.id).await?;
+                if let Some(result) = state.result {
+                    return Ok(result);
+                }
+                if state.status == AgentTurnStatus::Unknown {
+                    return Err(BoxliteError::InvalidState(format!(
+                        "turn {} ended without a recorded outcome",
+                        self.state.id
+                    )));
+                }
+                tokio::time::sleep(TURN_POLL_INTERVAL).await;
+            }
+        };
+        let Some(timeout) = options.timeout else {
+            return observe.await;
+        };
+        tokio::time::timeout(timeout, observe)
+            .await
+            .unwrap_or_else(|_| {
+                Err(BoxliteError::InvalidState(format!(
+                    "turn {} did not finish within {timeout:?}; it keeps running",
+                    self.state.id
+                )))
+            })
     }
 
     /// Open this turn's view of the agent's events.

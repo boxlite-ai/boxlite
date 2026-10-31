@@ -133,14 +133,6 @@ async fn unsupported_operations_fail_before_reaching_the_box() {
         assert!(message.starts_with("agent.send option"), "{message}");
     }
     assert_eq!(
-        unsupported_message(agent.get_turn("msg_test").await),
-        expected("agent.get_turn")
-    );
-    assert_eq!(
-        unsupported_message(turn.wait(AgentWaitOptions::default()).await),
-        expected("turn.wait")
-    );
-    assert_eq!(
         unsupported_message(agent.events(AgentEventsOptions::default()).await),
         expected("agent.events")
     );

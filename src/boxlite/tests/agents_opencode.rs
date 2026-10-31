@@ -13,7 +13,9 @@
 
 mod common;
 
-use boxlite::agents::{AgentCreateOptions, AgentSendOptions, AgentTurnStatus};
+use boxlite::agents::{
+    Agent, AgentCreateOptions, AgentSendOptions, AgentTurnStatus, AgentWaitOptions,
+};
 use boxlite::runtime::options::{BoxOptions, RootfsSpec};
 use boxlite::{BoxCommand, BoxliteError, BoxliteOptions, BoxliteRuntime, CopyOptions, LiteBox};
 use futures::StreamExt;
@@ -25,12 +27,16 @@ use tokio::net::{TcpListener, TcpStream};
 
 const BINARY_ENV: &str = "BOXLITE_TEST_OPENCODE_BINARY";
 const RECORD: &str = "/root/.local/state/opencode/service.json";
+const WAIT: AgentWaitOptions = AgentWaitOptions {
+    timeout: Some(Duration::from_secs(120)),
+};
 
 /// What the fake model saw, in order: each prompt as `user: <text>` and each
 /// tool result as `tool: <message JSON>`.
 type ModelLog = Arc<Mutex<Vec<String>>>;
 
-/// Answer chat completions, keyed on the last user text: READ <file> calls the `read` tool on that
+/// Answer chat completions, keyed on the last user text: SLOW streams one
+/// chunk per second for a minute, READ <file> calls the `read` tool on that
 /// file, ASK calls the `question` tool, and anything else answers
 /// `pong: <text>`. After a tool result it answers `after tool`, naming a
 /// `SECRET` the result contained.
@@ -109,6 +115,10 @@ async fn answer_completion(mut stream: TcpStream, log: ModelLog) {
         let question = json!({ "questions": [{ "question": "Pick one", "header": "Choice",
             "options": [{ "label": "A", "description": "first" }, { "label": "B", "description": "second" }] }] });
         (tool_call("question", question), Duration::ZERO)
+    } else if prompt.contains("SLOW") {
+        let mut ticks: Vec<Value> = (0..60).map(|tick| text(&format!("tick {tick} "))).collect();
+        ticks.push(stop);
+        (ticks, Duration::from_secs(1))
     } else {
         (vec![text(&format!("pong: {prompt}")), stop], Duration::ZERO)
     };
@@ -269,9 +279,27 @@ fn fake_model_options() -> AgentCreateOptions {
     options
 }
 
+async fn wait_for_status(agent: &Agent, turn_id: &str, status: AgentTurnStatus) {
+    for _ in 0..120 {
+        if agent
+            .get_turn(turn_id)
+            .await
+            .unwrap()
+            .state()
+            .unwrap()
+            .status
+            == status
+        {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    panic!("turn {turn_id} never reached {status:?}");
+}
+
 #[tokio::test]
 #[ignore = "needs a VM, network and BOXLITE_TEST_OPENCODE_BINARY; see the module docs"]
-async fn opencode_agents_share_one_service_and_send() {
+async fn opencode_agent_creates_sends_and_waits() {
     let home = common::home::PerTestBoxHome::new();
     let (runtime, sandbox, _) = opencode_box(&home).await;
 
@@ -301,17 +329,93 @@ async fn opencode_agents_share_one_service_and_send() {
     let turn = agent
         .send("hello", AgentSendOptions::default())
         .await
+        .unwrap();
+    let result = turn.wait(WAIT).await.unwrap();
+    assert_eq!(
+        (result.status, result.text.as_deref()),
+        (AgentTurnStatus::Completed, Some("pong: hello"))
+    );
+
+    let turn_id = turn.state().unwrap().id;
+    // A second handle, as another process would obtain it, reuses the service.
+    let agent_id = turn.state().unwrap().agent_id;
+    let reattached = sandbox.agents().get(&agent_id).await.unwrap();
+    let finished = reattached.get_turn(&turn_id).await.unwrap();
+    assert_eq!(finished.state().unwrap().status, AgentTurnStatus::Completed);
+
+    runtime
+        .shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT))
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+#[ignore = "needs a VM, network and BOXLITE_TEST_OPENCODE_BINARY; see the module docs"]
+async fn an_old_turn_is_read_beyond_the_first_history_page() {
+    let home = common::home::PerTestBoxHome::new();
+    let (runtime, sandbox, _) = opencode_box(&home).await;
+    let agent = sandbox
+        .agents()
+        .create("opencode", fake_model_options())
+        .await
+        .unwrap();
+    // Each turn adds an input and a reply, so 30 turns outgrow one 50-message page.
+    let mut turns = Vec::new();
+    for index in 0..30 {
+        let turn = agent
+            .send(&format!("turn {index}"), AgentSendOptions::default())
+            .await
+            .unwrap();
+        turns.push(turn.state().unwrap().id);
+    }
+    let last = agent.get_turn(turns.last().unwrap()).await.unwrap();
+    last.wait(WAIT).await.unwrap();
+
+    let first = agent.get_turn(&turns[0]).await.unwrap();
+
+    assert_eq!(first.state().unwrap().status, AgentTurnStatus::Completed);
+    runtime
+        .shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT))
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+#[ignore = "needs a VM, network and BOXLITE_TEST_OPENCODE_BINARY; see the module docs"]
+async fn a_box_restart_resumes_the_running_turn_and_delivers_the_queued_one() {
+    let home = common::home::PerTestBoxHome::new();
+    let (runtime, sandbox, _) = opencode_box(&home).await;
+    let agent = sandbox
+        .agents()
+        .create("opencode", fake_model_options())
+        .await
+        .unwrap();
+    let running = agent
+        .send("SLOW please", AgentSendOptions::default())
+        .await
         .unwrap()
         .state()
         .unwrap();
-    assert_eq!(turn.status, AgentTurnStatus::Queued);
+    wait_for_status(&agent, &running.id, AgentTurnStatus::Running).await;
+    let queued = agent
+        .send("after the restart", AgentSendOptions::default())
+        .await
+        .unwrap()
+        .state()
+        .unwrap();
+    wait_for_status(&agent, &queued.id, AgentTurnStatus::Queued).await;
 
-    // A second handle, as another process would obtain it, reuses the service.
-    let reattached = sandbox.agents().get(&turn.agent_id).await.unwrap();
-    assert_eq!(
-        reattached.config().unwrap().model.as_deref(),
-        Some("fake/fake-model")
-    );
+    sandbox.stop().await.unwrap();
+    // stop() invalidates the handle; a restarted Box comes from the runtime.
+    let sandbox = runtime.get(sandbox.id().as_ref()).await.unwrap().unwrap();
+    sandbox.start().await.unwrap();
+    let reattached = sandbox.agents().get(&running.agent_id).await.unwrap();
+
+    for turn_id in [&running.id, &queued.id] {
+        let turn = reattached.get_turn(turn_id).await.unwrap();
+        let result = turn.wait(WAIT).await.unwrap();
+        assert_eq!(result.status, AgentTurnStatus::Completed, "{turn_id}");
+    }
 
     runtime
         .shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT))
@@ -430,11 +534,18 @@ async fn a_stale_registration_is_dropped_without_signalling_its_pid() {
     )
     .await;
 
-    sandbox
+    let agent = sandbox
         .agents()
         .create("opencode", fake_model_options())
         .await
         .unwrap();
+    let turn = agent
+        .send("hello", AgentSendOptions::default())
+        .await
+        .unwrap();
+    let result = turn.wait(WAIT).await.unwrap();
+
+    assert_eq!(result.text.as_deref(), Some("pong: hello"));
     let state = output(
         &sandbox,
         &format!("sed -n 's/^State:[[:space:]]*//p' /proc/{holder}/status"),
@@ -457,7 +568,7 @@ async fn sessions_deny_env_reads_and_questions_and_keep_running() {
     let (runtime, sandbox, model) = opencode_box(&home).await;
     run(
         &sandbox,
-        "mkdir -p /root/work && cd /root/work && echo SECRET=1 > .env.local && echo SECRET=1 > .env.example",
+        "mkdir -p /root/work && cd /root/work && for f in .env .env.local .env.example; do echo SECRET=1 > $f; done",
     )
     .await;
     let mut options = fake_model_options();
@@ -475,11 +586,13 @@ async fn sessions_deny_env_reads_and_questions_and_keep_running() {
     let allowed = model_next(&model, skip, tool_result).await;
     assert!(allowed.contains("SECRET"), "{allowed}");
 
-    // OpenCode's defaults would ask before this read and the question, and a
-    // pending ask would hold every later input.
-    let skip = send("READ .env.local").await;
-    let denied = model_next(&model, skip, tool_result).await;
-    assert!(!denied.contains("SECRET"), "{denied}");
+    // OpenCode's defaults would ask before these reads and the question, and
+    // a pending ask would hold every later input.
+    for file in [".env", ".env.local"] {
+        let skip = send(&format!("READ {file}")).await;
+        let denied = model_next(&model, skip, tool_result).await;
+        assert!(!denied.contains("SECRET"), "{file}: {denied}");
+    }
     let skip = send("ASK please").await;
     model_next(&model, skip, tool_result).await;
     let skip = send("and then").await;
