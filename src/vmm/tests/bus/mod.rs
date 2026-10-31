@@ -11,14 +11,16 @@ use std::{
 
 use boxlite_hypervisor::VcpuExit;
 
-use super::{Bus, BusDevice, BusRange, Buses, UNCLAIMED_READ};
+use super::{
+    Bus, BusDevice, BusIo, BusRange, BusRead, BusWrite, Buses, Dispatch, PendingIo, UNCLAIMED_READ,
+};
+use crate::io::{Completer, Completion, ConfigBytes};
 
 /// One access a device saw: whether it was a write, its offset and its bytes.
 type Access = (bool, u64, Vec<u8>);
 
 /// Records every access and answers a read by setting only its first byte to
-/// `reply`, so a test can see the rest of the buffer arrive zeroed. A write of
-/// `PANIC` panics while the device lock is held.
+/// `reply`. A write of `PANIC` panics while the device lock is held.
 #[derive(Default)]
 struct Recorder {
     accesses: Vec<Access>,
@@ -28,16 +30,21 @@ struct Recorder {
 const PANIC: u8 = 0xEE;
 
 impl BusDevice for Recorder {
-    fn read(&mut self, offset: u64, data: &mut [u8]) {
-        self.accesses.push((false, offset, data.to_vec()));
-        if let Some(first) = data.first_mut() {
+    fn read(&mut self, offset: u64, len: usize) -> BusIo<ConfigBytes> {
+        // The hypervisor hands the device an empty buffer; a read that fills
+        // only the first byte leaves the rest zeroed.
+        self.accesses.push((false, offset, vec![0; len]));
+        let mut bytes = vec![0; len];
+        if let Some(first) = bytes.first_mut() {
             *first = self.reply;
         }
+        BusIo::Complete(ConfigBytes::from_slice(&bytes))
     }
 
-    fn write(&mut self, offset: u64, data: &[u8]) {
+    fn write(&mut self, offset: u64, data: &[u8]) -> BusIo<()> {
         self.accesses.push((true, offset, data.to_vec()));
         assert_ne!(data, [PANIC], "the device panics as asked");
+        BusIo::Complete(())
     }
 }
 
@@ -65,6 +72,22 @@ fn insert(
 
 fn accesses(device: &Arc<Mutex<Recorder>>) -> Vec<Access> {
     device.lock().unwrap().accesses.clone()
+}
+
+/// Reads through a bus whose device answers at once.
+fn read(bus: &Bus, addr: u64, len: usize) -> ConfigBytes {
+    match bus.read(addr, len) {
+        BusRead::Complete(bytes) => bytes,
+        BusRead::Deferred(_) => panic!("the recorder answers at once"),
+    }
+}
+
+/// Writes through a bus whose device answers at once.
+fn write(bus: &Bus, addr: u64, data: &[u8]) {
+    assert!(
+        matches!(bus.write(addr, data), BusWrite::Complete),
+        "the recorder answers at once"
+    );
 }
 
 #[test]
@@ -117,14 +140,16 @@ fn accesses_reach_the_device_at_their_offset_with_reads_zeroed() {
     let device = recorder(0x60);
     insert(&mut bus, 0x3f8, 8, "com1", &device).unwrap();
 
-    bus.write(0x3fb, &[0x80]);
-    let mut lsr = [0xAA];
-    bus.read(0x3fd, &mut lsr);
-    let mut wide = [0xAA; 4];
-    bus.read(0x3f8, &mut wide);
+    write(&bus, 0x3fb, &[0x80]);
+    let lsr = read(&bus, 0x3fd, 1);
+    let wide = read(&bus, 0x3f8, 4);
 
-    assert_eq!(lsr, [0x60]);
-    assert_eq!(wide, [0x60, 0, 0, 0], "bytes the device leaves are zero");
+    assert_eq!(lsr.as_slice(), [0x60]);
+    assert_eq!(
+        wide.as_slice(),
+        [0x60, 0, 0, 0],
+        "bytes the device leaves are zero"
+    );
     assert_eq!(
         accesses(&device),
         [
@@ -152,16 +177,15 @@ fn a_range_can_start_at_a_register_offset() {
     bus.insert(BusRange::new(0x64, 1).unwrap(), "i8042", Some((shared, 4)))
         .unwrap();
 
-    bus.write(0x60, &[1]);
-    bus.write(0x64, &[0xFE]);
-    let mut data = [0];
-    bus.read(0x61, &mut data);
+    write(&bus, 0x60, &[1]);
+    write(&bus, 0x64, &[0xFE]);
+    let data = read(&bus, 0x61, 1);
 
     assert_eq!(
         accesses(&device),
         [(true, 0, vec![1]), (true, 4, vec![0xFE])]
     );
-    assert_eq!(data, [UNCLAIMED_READ], "0x61 is nobody's");
+    assert_eq!(data.as_slice(), [UNCLAIMED_READ], "0x61 is nobody's");
 }
 
 #[test]
@@ -178,10 +202,13 @@ fn unclaimed_and_partial_accesses_read_all_ones_skip_the_device_and_count() {
         (0x3f8, 0), // empty
     ];
     for (addr, len) in cases {
-        let mut data = vec![0x5A; len];
-        bus.read(addr, &mut data);
-        assert_eq!(data, vec![UNCLAIMED_READ; len], "read {addr:#x}+{len}");
-        bus.write(addr, &data);
+        let data = read(&bus, addr, len);
+        assert_eq!(
+            data.as_slice(),
+            &vec![UNCLAIMED_READ; len][..],
+            "read {addr:#x}+{len}"
+        );
+        write(&bus, addr, data.as_slice());
     }
     assert!(accesses(&device).is_empty());
     assert_eq!(bus.unclaimed(), (cases.len() as u64, cases.len() as u64));
@@ -200,9 +227,8 @@ fn a_reserved_window_takes_no_device_and_is_unclaimed() {
         insert(&mut bus, 0x42, 1, "intruder", &device),
         Err("in-kernel PIT")
     );
-    let mut data = [0];
-    bus.read(0x40, &mut data);
-    assert_eq!(data, [UNCLAIMED_READ]);
+    let data = read(&bus, 0x40, 1);
+    assert_eq!(data.as_slice(), [UNCLAIMED_READ]);
     assert_eq!(bus.unclaimed(), (1, 0));
 }
 
@@ -215,11 +241,111 @@ fn an_access_after_a_device_panicked_stops_too() {
     insert(&mut bus, 0x60, 1, "i8042", &device).unwrap();
 
     let first = panic::catch_unwind(AssertUnwindSafe(|| bus.write(0x60, &[PANIC])));
-    let second = panic::catch_unwind(AssertUnwindSafe(|| bus.read(0x60, &mut [0])));
+    let second = panic::catch_unwind(AssertUnwindSafe(|| bus.read(0x60, 1)));
 
     assert!(first.is_err());
     assert!(device.is_poisoned());
     assert!(second.is_err(), "a poisoned device must not answer");
+}
+
+/// A device that answers later hands the bus a readiness completion; the
+/// default progress completes the access without bytes, which reads as zeros.
+struct Defers {
+    readiness: Option<Completer<()>>,
+}
+
+impl BusDevice for Defers {
+    fn read(&mut self, _offset: u64, _len: usize) -> BusIo<ConfigBytes> {
+        let (completion, completer) = Completion::new();
+        self.readiness = Some(completer);
+        BusIo::Deferred(completion)
+    }
+
+    fn write(&mut self, _offset: u64, _data: &[u8]) -> BusIo<()> {
+        let (completion, completer) = Completion::new();
+        self.readiness = Some(completer);
+        BusIo::Deferred(completion)
+    }
+}
+
+#[test]
+fn a_deferred_read_keeps_its_completion_and_completes_through_progress() {
+    let mut buses = Buses::default();
+    let device = Arc::new(Mutex::new(Defers { readiness: None }));
+    let shared: Arc<Mutex<dyn BusDevice>> = device;
+    buses
+        .mmio
+        .insert(
+            BusRange::new(0x1000, 0x10).unwrap(),
+            "virtio",
+            Some((shared, 0)),
+        )
+        .unwrap();
+
+    let mut data = [0; 4];
+    let Dispatch::DeferredRead {
+        mut exit,
+        completion,
+        io,
+    } = buses.dispatch(VcpuExit::MmioRead {
+        guest_addr: 0x1000,
+        bytes: &mut data,
+    })
+    else {
+        panic!("the device defers its read");
+    };
+    assert!(!completion.is_done());
+    assert!(
+        !io.readiness().is_done(),
+        "the device has not reported readiness"
+    );
+    match &mut exit {
+        VcpuExit::MmioRead { guest_addr, .. } => assert_eq!(*guest_addr, 0x1000),
+        _ => panic!("a deferred read carries a read exit"),
+    }
+    let mut request = io.request();
+    assert!(matches!(&request, PendingIo::Read { len: 4, .. }));
+    {
+        let mut target = io.lock_target().expect("the device is not poisoned");
+        assert!(matches!(target.progress(&mut request), BusIo::Complete(())));
+    }
+    assert!(io.complete(request));
+    assert_eq!(completion.wait().unwrap().as_slice(), [0; 4]);
+}
+
+#[test]
+fn a_deferred_write_hands_back_the_data_it_deferred() {
+    let mut buses = Buses::default();
+    let device = Arc::new(Mutex::new(Defers { readiness: None }));
+    let shared: Arc<Mutex<dyn BusDevice>> = device;
+    buses
+        .mmio
+        .insert(
+            BusRange::new(0x1000, 0x10).unwrap(),
+            "virtio",
+            Some((shared, 0)),
+        )
+        .unwrap();
+
+    let Dispatch::DeferredWrite { completion, io } = buses.dispatch(VcpuExit::MmioWrite {
+        guest_addr: 0x1004,
+        bytes: &[9, 8],
+    }) else {
+        panic!("the device defers its write");
+    };
+    assert!(!io.readiness().is_done());
+    let mut request = io.request();
+    let PendingIo::Write { offset, data } = &request else {
+        panic!("the device defers its write");
+    };
+    assert_eq!(*offset, 4);
+    assert_eq!(data.as_slice(), [9, 8].as_slice());
+    {
+        let mut target = io.lock_target().expect("the device is not poisoned");
+        target.progress(&mut request);
+    }
+    assert!(io.complete(request));
+    assert_eq!(completion.wait(), Ok(()));
 }
 
 #[test]
@@ -228,24 +354,22 @@ fn dispatch_serves_io_exits_and_returns_the_rest() {
     let mmio = recorder(0x11);
     insert(&mut buses.mmio, 0x1000, 0x10, "virtio", &mmio).unwrap();
 
-    let mut read = [0; 4];
-    assert!(
-        buses
-            .dispatch(VcpuExit::MmioRead {
-                guest_addr: 0x1004,
-                bytes: &mut read,
-            })
-            .is_none()
-    );
-    assert!(
-        buses
-            .dispatch(VcpuExit::MmioWrite {
-                guest_addr: 0x1008,
-                bytes: &[7, 8],
-            })
-            .is_none()
-    );
-    assert_eq!(read, [0x11, 0, 0, 0]);
+    let mut read_data = [0; 4];
+    assert!(matches!(
+        buses.dispatch(VcpuExit::MmioRead {
+            guest_addr: 0x1004,
+            bytes: &mut read_data,
+        }),
+        Dispatch::Handled
+    ));
+    assert!(matches!(
+        buses.dispatch(VcpuExit::MmioWrite {
+            guest_addr: 0x1008,
+            bytes: &[7, 8],
+        }),
+        Dispatch::Handled
+    ));
+    assert_eq!(read_data, [0x11, 0, 0, 0]);
     assert_eq!(
         accesses(&mmio),
         [(false, 4, vec![0; 4]), (true, 8, vec![7, 8])]
@@ -253,19 +377,19 @@ fn dispatch_serves_io_exits_and_returns_the_rest() {
 
     assert!(matches!(
         buses.dispatch(VcpuExit::Interrupted),
-        Some(VcpuExit::Interrupted)
+        Dispatch::Passthrough(VcpuExit::Interrupted)
     ));
     assert!(matches!(
         buses.dispatch(VcpuExit::Halted),
-        Some(VcpuExit::Halted)
+        Dispatch::Passthrough(VcpuExit::Halted)
     ));
     assert!(matches!(
         buses.dispatch(VcpuExit::Shutdown),
-        Some(VcpuExit::Shutdown)
+        Dispatch::Passthrough(VcpuExit::Shutdown)
     ));
     assert!(matches!(
         buses.dispatch(VcpuExit::Reset),
-        Some(VcpuExit::Reset)
+        Dispatch::Passthrough(VcpuExit::Reset)
     ));
 }
 
@@ -281,22 +405,20 @@ fn ports_and_mmio_are_separate_address_spaces() {
     insert(&mut buses.pio, 0x60, 1, "pio", &pio).unwrap();
 
     let mut port = [0];
-    assert!(
-        buses
-            .dispatch(VcpuExit::IoIn {
-                port: 0x60,
-                bytes: &mut port,
-            })
-            .is_none()
-    );
-    assert!(
-        buses
-            .dispatch(VcpuExit::IoOut {
-                port: 0x60,
-                bytes: &[0xFE],
-            })
-            .is_none()
-    );
+    assert!(matches!(
+        buses.dispatch(VcpuExit::IoIn {
+            port: 0x60,
+            bytes: &mut port,
+        }),
+        Dispatch::Handled
+    ));
+    assert!(matches!(
+        buses.dispatch(VcpuExit::IoOut {
+            port: 0x60,
+            bytes: &[0xFE],
+        }),
+        Dispatch::Handled
+    ));
 
     assert_eq!(port, [0x22]);
     assert_eq!(accesses(&pio), [(false, 0, vec![0]), (true, 0, vec![0xFE])]);

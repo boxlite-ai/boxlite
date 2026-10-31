@@ -129,9 +129,13 @@ fn a_chipset_conflict_fails_before_any_ram_is_registered() {
     struct Idle;
 
     impl crate::bus::BusDevice for Idle {
-        fn read(&mut self, _offset: u64, _data: &mut [u8]) {}
+        fn read(&mut self, _offset: u64, len: usize) -> crate::bus::BusIo<crate::io::ConfigBytes> {
+            crate::bus::BusIo::Complete(crate::io::ConfigBytes::new(len))
+        }
 
-        fn write(&mut self, _offset: u64, _data: &[u8]) {}
+        fn write(&mut self, _offset: u64, _data: &[u8]) -> crate::bus::BusIo<()> {
+            crate::bus::BusIo::Complete(())
+        }
     }
 
     let backend = MockVm::new();
@@ -386,7 +390,12 @@ mod lifecycle {
     use std::{sync::mpsc, thread, time::Duration};
 
     use super::{config, *};
-    use crate::{VmExit, bus::BusDevice, mock_vm::Step};
+    use crate::{
+        VmExit,
+        bus::{BusDevice, BusIo},
+        io::ConfigBytes,
+        mock_vm::Step,
+    };
 
     /// Runs `vm` on another thread and fails the test instead of hanging when
     /// the run never returns.
@@ -518,9 +527,11 @@ mod lifecycle {
     struct Panics;
 
     impl BusDevice for Panics {
-        fn read(&mut self, _offset: u64, _data: &mut [u8]) {}
+        fn read(&mut self, _offset: u64, len: usize) -> BusIo<ConfigBytes> {
+            BusIo::Complete(ConfigBytes::new(len))
+        }
 
-        fn write(&mut self, _offset: u64, _data: &[u8]) {
+        fn write(&mut self, _offset: u64, _data: &[u8]) -> BusIo<()> {
             panic!("a device bug");
         }
     }
@@ -574,10 +585,13 @@ mod lifecycle {
     struct ConsolePort(crate::devices::console::ConsoleWriter);
 
     impl BusDevice for ConsolePort {
-        fn read(&mut self, _offset: u64, _data: &mut [u8]) {}
+        fn read(&mut self, _offset: u64, len: usize) -> BusIo<ConfigBytes> {
+            BusIo::Complete(ConfigBytes::new(len))
+        }
 
-        fn write(&mut self, _offset: u64, data: &[u8]) {
+        fn write(&mut self, _offset: u64, data: &[u8]) -> BusIo<()> {
             std::io::Write::write_all(&mut self.0, data).unwrap();
+            BusIo::Complete(())
         }
     }
 
@@ -733,20 +747,24 @@ fn new_names_a_kernel_it_cannot_load() {
 fn a_kvm_vm_runs_until_its_guest_resets() {
     use crate::{
         VmExit,
-        bus::BusDevice,
+        bus::{BusDevice, BusIo},
         events::{Event, EventSender},
         flat_guest,
+        io::ConfigBytes,
     };
 
     struct Reset(EventSender);
 
     impl BusDevice for Reset {
-        fn read(&mut self, _offset: u64, _data: &mut [u8]) {}
+        fn read(&mut self, _offset: u64, len: usize) -> BusIo<ConfigBytes> {
+            BusIo::Complete(ConfigBytes::new(len))
+        }
 
-        fn write(&mut self, _offset: u64, data: &[u8]) {
+        fn write(&mut self, _offset: u64, data: &[u8]) -> BusIo<()> {
             if data == [0xfe] {
                 self.0.send(Event::GuestReset);
             }
+            BusIo::Complete(())
         }
     }
 
