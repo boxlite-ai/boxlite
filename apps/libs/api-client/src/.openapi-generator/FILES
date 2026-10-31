@@ -120,7 +120,6 @@ docs/OnboardingDto.md
 docs/Organization.md
 docs/OrganizationBoxDefaultLimitedNetworkEgress.md
 docs/OrganizationInvitation.md
-docs/OrganizationReferralCode.md
 docs/OrganizationRole.md
 docs/OrganizationSuspension.md
 docs/OrganizationUnsuspension.md
@@ -272,7 +271,6 @@ models/oidc-config.ts
 models/onboarding-dto.ts
 models/organization-box-default-limited-network-egress.ts
 models/organization-invitation.ts
-models/organization-referral-code.ts
 models/organization-role.ts
 models/organization-suspension.ts
 models/organization-unsuspension.ts
