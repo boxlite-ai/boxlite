@@ -402,6 +402,7 @@ takes the command's exit code; `boxlite ps` shows it stopped and
 **Exit behavior:**
 
 - Default (foreground): streams stdout/stderr to the terminal, exits with the box command's exit code. If the command was killed by signal *N*, exits with `128 + N` (Unix convention, see [Exit Codes](#exit-codes)).
+- If the box's init command is missing or non-executable, startup fails: the CLI prints `Error: ...` to stderr and exits `1`. The `exec` startup-refusal statuses below do not apply to `run`.
 - `-d`/`--detach`: prints the box ID to stdout and exits `0` immediately; remove-on-stop is force-disabled in this mode so the box outlives the CLI process.
 - `--tty` with non-TTY stdin: fails with `the input device is not a TTY.`
 
@@ -435,6 +436,13 @@ separator is required (`src/cli/src/commands/exec.rs:22`, `last = true`).
 | `--detach` | `-d` | Start the command and return immediately without streaming |
 
 **Exit behavior:** Same as `boxlite run` (foreground streams + propagates exit code; detach exits `0`). After a foreground exec finishes the CLI calls `runtime.shutdown(None)` to release the box handle gracefully.
+
+For `exec`, a command the guest refuses to launch is still a completed execution:
+`127` when the executable is not found, `126` when it exists but is not
+executable. Foreground exec propagates that status. The guest's diagnostic goes
+to stderr without a TTY, or to merged stdout with `--tty`. `boxlite serve`
+returns the same execution statuses and streams over REST. Rejection of the
+box's init command during `run` remains a CLI error with exit code `1`.
 
 **Examples:**
 
@@ -1273,7 +1281,7 @@ For a richer treatment of the registry config (auth flows, fallbacks, mirrors), 
 | `0` | success | Command (or box command) finished successfully |
 | `1` | runtime | Any anyhow error from a CLI command — `main.rs:71` prints `Error: ...` to stderr and exits `1` |
 | `2` | clap | Invalid CLI usage (unknown flag, missing required arg, bad value) |
-| `N` (1-127) | box command | `run`/`exec` propagate the box command's exit status |
+| `N` (1-127) | box command | `run`/`exec` propagate the exit status of a command that started. Only `exec` also reports startup refusal as `126` (not executable) or `127` (not found); `run` init rejection exits `1` |
 | `128 + N` | signal | `run`/`exec` exited because the box command was killed by signal *N* (e.g. `137` for `SIGKILL`, `143` for `SIGTERM`) |
 
 `boxlite rm`, `start`, `stop`, `restart` aggregate per-target errors and exit `1` if any target failed, after attempting all targets.

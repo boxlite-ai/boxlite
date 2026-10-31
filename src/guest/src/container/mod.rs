@@ -90,3 +90,45 @@ pub use lifecycle::Container;
 pub(crate) use mount_override::validate_mount_override;
 #[cfg(target_os = "linux")]
 pub use spec::{ContainerDevices, MountOverride, UserMount};
+#[cfg(target_os = "linux")]
+pub(crate) use zygote::CommandRejection;
+
+use boxlite_shared::errors::BoxliteError;
+
+/// Why a spawn produced no process.
+///
+/// The split is the whole point: [`Rejected`](Self::Rejected) is a POSIX
+/// outcome for an exec (the command cannot run — 126/127), while
+/// [`Failed`](Self::Failed) is a fault the caller should see as an error.
+#[derive(Debug)]
+pub(crate) enum SpawnFailure {
+    Rejected(CommandRejection),
+    Failed(BoxliteError),
+}
+
+impl From<BoxliteError> for SpawnFailure {
+    fn from(error: BoxliteError) -> Self {
+        Self::Failed(error)
+    }
+}
+
+impl std::fmt::Display for SpawnFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Rejected(rejection) => f.write_str(&rejection.message),
+            Self::Failed(error) => std::fmt::Display::fmt(error, f),
+        }
+    }
+}
+
+impl SpawnFailure {
+    /// Collapse onto the error channel, for callers that have no POSIX
+    /// outcome to report (an internal SSH workload that cannot start is a
+    /// fault, not an exit status).
+    pub(crate) fn into_error(self) -> BoxliteError {
+        match self {
+            Self::Rejected(rejection) => BoxliteError::Execution(rejection.message),
+            Self::Failed(error) => error,
+        }
+    }
+}

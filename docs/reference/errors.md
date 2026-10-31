@@ -190,26 +190,43 @@ ps aux | grep boxlite-shim
 Command execution error.
 
 **Cause:**
-- Command not found in image
 - Command crashed or killed
 - Execution timeout
 - Streaming I/O error
 
+For `exec`, a missing or non-executable command is *not* an `Execution` error:
+the guest reports a finished execution, so `wait()` returns `exit_code == 127`
+(not found) or `126` (found, not executable). The diagnostic arrives on stderr
+without a TTY, or on merged stdout with a TTY. Rejection of the box's init
+command during `start()` remains an `InvalidArgument` error; `boxlite run`
+prints an error and exits `1`.
+
+**Maintenance contract:** The guest classifier recognizes youki's init-error
+marker and the fixed verdict suffix: `not found in $PATH` maps to `127`, and
+`does not have correct permissions` maps to `126`. Match the suffix, never
+substrings in the command name or path; those may contain either verdict.
+The guest executor (`BOXLITE_EXECUTOR=guest`) classifies `Command::spawn`
+directly: `NotFound` is `127` and `PermissionDenied` is `126`, with the same
+wording. A configured working directory is judged first, so its failures
+remain errors. Other startup failures remain errors.
+
 **Example:**
 ```text
-Error: Execution error: command not found: python3
+Error: Execution error: execution timed out after 30s
 ```
 
 **Solution:**
-- Verify command exists in image:
-  ```python
-  result = await box.exec("which", "python3")
-  ```
 - Check exit code and stderr:
   ```python
   result = await box.exec("command")
   if result.exit_code != 0:
       print(f"Failed: {result.stderr}")
+  ```
+- Treat `127` as "probe another tool" rather than a platform fault:
+  ```python
+  result = await box.exec("python3", "--version")
+  if result.exit_code == 127:
+      result = await box.exec("python", "--version")
   ```
 
 ### `Internal(String)`

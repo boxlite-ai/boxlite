@@ -228,10 +228,11 @@ mod tests {
         let exit_file = server.layout.shared().container("c1").exit_file();
         std::fs::create_dir_all(exit_file.parent().expect("container root"))
             .expect("container dir");
-        server.init_exits.lock().await.insert(
-            "c1".to_string(),
-            ExitSlot::settled_for_test(ExitStatus::Code(7)),
-        );
+        server
+            .init_exits
+            .lock()
+            .await
+            .insert("c1".to_string(), ExitSlot::settled(ExitStatus::Code(7)));
 
         let _cleanup = server.ssh_manager.pending_cleanup_for_test().await;
         let status = server

@@ -124,6 +124,19 @@ impl OutputManager {
         manager
     }
 
+    /// Buffer a diagnostic for a process that could not be launched.
+    pub(crate) async fn completed_with_diagnostic(mut diagnostic: String, tty: bool) -> Self {
+        diagnostic.push('\n');
+        let manager = Self::new(None, None);
+        let source = if tty {
+            OutputSource::Stdout
+        } else {
+            OutputSource::Stderr
+        };
+        manager.push(source, diagnostic.into_bytes()).await;
+        manager
+    }
+
     pub(crate) async fn shutdown_drains(&self) {
         let tasks = std::mem::take(
             &mut *self

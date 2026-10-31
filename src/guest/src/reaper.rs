@@ -122,8 +122,7 @@ impl ExitSlot {
         }
     }
 
-    #[cfg(test)]
-    pub(crate) fn settled_for_test(status: ExitStatus) -> Self {
+    pub(crate) fn settled(status: ExitStatus) -> Self {
         let (_tx, rx) = watch::channel(Some(status));
         Self(rx)
     }

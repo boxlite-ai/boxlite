@@ -263,19 +263,14 @@ async def test_exec_cwd_with_spaces(box):
 
 
 @pytest.mark.asyncio
-async def test_nonexistent_command_returns_error(box):
-    """Running a binary that doesn't exist should fail — either a non-zero
-    exit code or a spawn_failed exception from the runner."""
-    try:
-        ex = await box.exec("this_binary_does_not_exist_xyz", [])
-        await drain(ex)
-        rc = await asyncio.wait_for(ex.wait(), timeout=30)
-        assert rc.exit_code != 0, "nonexistent command should fail"
-    except Exception as e:
-        # spawn_failed / "not found in $PATH" is correct behaviour
-        assert "not found" in str(e).lower() or "spawn_failed" in str(e), (
-            f"unexpected error for missing binary: {e}"
-        )
+async def test_nonexistent_command_returns_exit_127(box):
+    """A missing executable is a completed execution, not an API error."""
+    ex = await box.exec("this_binary_does_not_exist_xyz", [])
+    _, stderr = await drain(ex)
+    rc = await asyncio.wait_for(ex.wait(), timeout=30)
+    assert rc.exit_code == 127
+    assert "this_binary_does_not_exist_xyz" in stderr
+
 
 
 # ── streaming output timing ───────────────────────────────────────

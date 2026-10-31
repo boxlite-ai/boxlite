@@ -12,6 +12,7 @@
 //! See `docs/contributing/investigations/concurrent-exec-deadlock.md` for full analysis.
 
 use super::capabilities::CapabilitySet;
+use super::SpawnFailure;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use libcontainer::container::builder::ContainerBuilder;
 use libcontainer::syscall::syscall::SyscallType;
@@ -88,10 +89,25 @@ pub(crate) enum BuildResult {
         error: String,
     },
     /// The container's command cannot run in the image: the caller's input,
-    /// in youki's own words (see `command_rejection`).
+    /// in youki's own words (see `command_rejection`), with the POSIX status
+    /// a shell reports for it.
     Rejected {
         message: String,
+        exit_code: i32,
     },
+}
+
+/// A command the image cannot run, already classified.
+///
+/// `exit_code` is the shell convention every OCI runtime follows: `127` when
+/// the executable is not on `$PATH`, `126` when it exists but cannot be
+/// executed. Both are *results*, not faults — an exec that names them has to
+/// surface exactly like a process that ran and exited with that status.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct CommandRejection {
+    /// youki's own verdict, unchanged — it already names the command.
+    pub message: String,
+    pub exit_code: i32,
 }
 
 /// Recognize the command check youki runs in init (`DefaultExecutor::validate`)
@@ -102,12 +118,24 @@ pub(crate) enum BuildResult {
 /// (`wait_for_init_ready`). `build()` then wraps it in a `CreateContainerError`
 /// whose fields are private, so text is all there is to match; the marker keeps
 /// the wording match to what init reported.
-fn command_rejection(error: &libcontainer::error::LibcontainerError) -> Option<String> {
+///
+/// The two verdicts `validate` produces map 1:1 onto the POSIX statuses a
+/// shell reports: missing from `$PATH` is 127, present but not executable is
+/// 126 (`docker/cli` `toStatusError` classifies the same way).
+fn command_rejection(error: &libcontainer::error::LibcontainerError) -> Option<CommandRejection> {
     let text = error.to_string();
     let (_, reported_by_init) = text.split_once("error in executing process : ")?;
-    (reported_by_init.contains("not found in $PATH")
-        || reported_by_init.contains("does not have correct permissions"))
-    .then(|| reported_by_init.to_string())
+    let exit_code = if reported_by_init.ends_with("' not found in $PATH") {
+        127
+    } else if reported_by_init.ends_with("' does not have correct permissions") {
+        126
+    } else {
+        return None;
+    };
+    Some(CommandRejection {
+        message: reported_by_init.to_string(),
+        exit_code,
+    })
 }
 
 /// Tagged IPC request from parent to zygote.
@@ -177,18 +205,28 @@ impl Zygote {
     /// Wraps BuildSpec in ZygoteRequest::Build and expects ZygoteResponse::Build back.
     /// SCM_RIGHTS fd passing is unchanged — fds are only attached for Build requests.
     /// Blocks until the build completes (use from `spawn_blocking`).
-    pub fn build(&self, spec: BuildSpec, fds: Option<[RawFd; 3]>) -> BoxliteResult<Pid> {
+    ///
+    /// A command the image cannot run is [`SpawnFailure::Rejected`]: the exec
+    /// it belongs to ends with the POSIX status instead of failing the call.
+    pub fn build(&self, spec: BuildSpec, fds: Option<[RawFd; 3]>) -> Result<Pid, SpawnFailure> {
         let sock = self.sock.lock().unwrap();
         let fd = sock.as_raw_fd();
         send_request(fd, &ZygoteRequest::Build(spec), fds)?;
         match recv_response(fd)? {
             ZygoteResponse::Build(BuildResult::Spawned { pid }) => Ok(Pid::from_raw(pid)),
             ZygoteResponse::Build(BuildResult::Failed { error }) => {
-                Err(BoxliteError::Internal(error))
+                Err(BoxliteError::Internal(error).into())
+            }
+            ZygoteResponse::Build(BuildResult::Rejected { message, exit_code }) => {
+                Err(SpawnFailure::Rejected(CommandRejection {
+                    message,
+                    exit_code,
+                }))
             }
             other => Err(BoxliteError::Internal(format!(
                 "zygote protocol violation: Build answered with {other:?}"
-            ))),
+            ))
+            .into()),
         }
     }
 
@@ -209,7 +247,7 @@ impl Zygote {
             ZygoteResponse::BuildInit(BuildResult::Failed { error }) => {
                 Err(BoxliteError::Internal(error))
             }
-            ZygoteResponse::BuildInit(BuildResult::Rejected { message }) => {
+            ZygoteResponse::BuildInit(BuildResult::Rejected { message, .. }) => {
                 Err(BoxliteError::InvalidArgument(message))
             }
             other => Err(BoxliteError::Internal(format!(
@@ -300,6 +338,7 @@ fn sanitize_ambient_runtime_environment() {
 /// This is the same ContainerBuilder chain that was in `command.rs build_and_spawn()`,
 /// moved here to run in the zygote's single-threaded context where clone3() is safe.
 fn do_build(spec: BuildSpec, fds: Option<[RawFd; 3]>) -> BuildResult {
+    let mut rejection = None;
     let build_fn = || -> Result<Pid, String> {
         // Own the received fds before any fallible step: they arrived via
         // SCM_RIGHTS and this process must close them on every path, or each
@@ -367,10 +406,12 @@ fn do_build(spec: BuildSpec, fds: Option<[RawFd; 3]>) -> BuildResult {
                 .as_sibling(true) // reparent to guest main; see the non-TTY arm
                 .with_detach(true)
                 .with_process(Some(process_path.clone()))
-                .build()
-                .map_err(|e| format!("build failed: {e}"));
+                .build();
+            if let Err(error) = &result {
+                rejection = command_rejection(error);
+            }
             let _ = std::fs::remove_file(&process_path);
-            result?
+            result.map_err(|e| format!("build failed: {e}"))?
         } else {
             // Non-TTY exec: stdio via the passed pipe fds, no console socket,
             // terminal=false, non-detached.
@@ -388,13 +429,22 @@ fn do_build(spec: BuildSpec, fds: Option<[RawFd; 3]>) -> BuildResult {
                 .with_user(Some(spec.uid))
                 .with_group(Some(spec.gid))
                 .build()
-                .map_err(|e| format!("build failed: {e}"))?
+                .map_err(|e| {
+                    rejection = command_rejection(&e);
+                    format!("build failed: {e}")
+                })?
         };
 
         Ok(pid)
     };
 
-    build_with_default_sigpipe(build_fn)
+    match (build_with_default_sigpipe(build_fn), rejection) {
+        (BuildResult::Failed { .. }, Some(rejection)) => BuildResult::Rejected {
+            message: rejection.message,
+            exit_code: rejection.exit_code,
+        },
+        (result, _) => result,
+    }
 }
 
 /// Execute a container init build. Called inside the zygote (single-threaded).
@@ -469,7 +519,10 @@ fn do_build_init(spec: InitBuildSpec, fds: Option<[RawFd; 3]>) -> BuildResult {
     };
 
     let result = match (build_with_default_sigpipe(build_fn), rejection) {
-        (BuildResult::Failed { .. }, Some(message)) => BuildResult::Rejected { message },
+        (BuildResult::Failed { .. }, Some(rejection)) => BuildResult::Rejected {
+            message: rejection.message,
+            exit_code: rejection.exit_code,
+        },
         (result, _) => result,
     };
 
@@ -480,7 +533,7 @@ fn do_build_init(spec: InitBuildSpec, fds: Option<[RawFd; 3]>) -> BuildResult {
             "[zygote] init build: container_id={} pid={}",
             spec.container_id, pid
         ),
-        BuildResult::Failed { error } | BuildResult::Rejected { message: error } => eprintln!(
+        BuildResult::Failed { error } | BuildResult::Rejected { message: error, .. } => eprintln!(
             "[zygote] init build failed: container_id={} error={}",
             spec.container_id, error
         ),
@@ -1614,8 +1667,10 @@ mod tests {
         let empty = tempfile::tempdir().unwrap();
         let error = relayed_command_check("httpd", empty.path().to_str().unwrap());
 
-        let message = command_rejection(&error).expect("a missing command is rejected");
-        assert_eq!(message, "executable 'httpd' not found in $PATH");
+        let rejection = command_rejection(&error).expect("a missing command is rejected");
+        assert_eq!(rejection.message, "executable 'httpd' not found in $PATH");
+        // POSIX: a command the shell cannot find exits 127.
+        assert_eq!(rejection.exit_code, 127);
     }
 
     #[test]
@@ -1624,9 +1679,48 @@ mod tests {
         std::fs::write(dir.path().join("httpd"), "#!/bin/sh\n").unwrap();
         let error = relayed_command_check("httpd", dir.path().to_str().unwrap());
 
-        let message = command_rejection(&error).expect("a non-executable command is rejected");
-        assert!(message.starts_with("executable 'httpd'"), "{message}");
-        assert!(message.ends_with("does not have correct permissions"));
+        let rejection = command_rejection(&error).expect("a non-executable command is rejected");
+        assert!(
+            rejection.message.starts_with("executable 'httpd'"),
+            "{}",
+            rejection.message
+        );
+        assert!(
+            rejection
+                .message
+                .ends_with("does not have correct permissions"),
+            "{}",
+            rejection.message
+        );
+        // POSIX: present but not executable exits 126.
+        assert_eq!(rejection.exit_code, 126);
+    }
+
+    #[test]
+    fn command_verdict_is_not_taken_from_the_executable_path() {
+        let dir = tempfile::tempdir().unwrap();
+        for name in ["not found in $PATH", "does not have correct permissions"] {
+            let parent = dir.path().join(name);
+            std::fs::create_dir(&parent).unwrap();
+            let command = parent.join(name);
+            std::fs::write(&command, "#!/bin/sh\n").unwrap();
+            let error = relayed_command_check(command.to_str().unwrap(), "/usr/bin:/bin");
+
+            let rejection = command_rejection(&error).expect("the file is not executable");
+            assert_eq!(rejection.exit_code, 126, "{}", rejection.message);
+        }
+    }
+
+    #[test]
+    fn a_missing_command_named_after_a_permission_verdict_still_returns_127() {
+        let dir = tempfile::tempdir().unwrap();
+        let error = relayed_command_check(
+            "does not have correct permissions",
+            dir.path().to_str().unwrap(),
+        );
+
+        let rejection = command_rejection(&error).expect("the command does not exist");
+        assert_eq!(rejection.exit_code, 127, "{}", rejection.message);
     }
 
     #[test]

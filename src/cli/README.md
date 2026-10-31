@@ -398,6 +398,10 @@ takes its exit code — `boxlite inspect -f '{{.State.ExitCode}}' NAME` reads it
 back. `exec` against a box whose command has finished is refused rather than
 silently restarting it, because restarting would run the command a second time.
 
+If the init command is missing or non-executable, startup fails: the CLI prints
+`Error: ...` to stderr and exits `1`. Only `exec` reports these startup refusals
+as completed executions with status `126` or `127`.
+
 **Usage:**
 
 - `boxlite run [OPTIONS] IMAGE [COMMAND]...`
@@ -527,6 +531,13 @@ refused, so start that box deliberately with `boxlite start` first.
 ```bash
 boxlite exec -it mybox -- /bin/sh
 ```
+
+For `exec`, a command the guest refuses to start is a completed execution:
+foreground `boxlite exec` exits `127` when the executable is not found and
+`126` when it exists but is not executable. The guest's diagnostic goes to
+stderr without a TTY, or to merged stdout with `--tty`. The same execution
+statuses and streams come back through `boxlite serve` over REST. Rejection of
+the box's init command during `run` remains a CLI error with exit code `1`.
 
 ### `boxlite list` (alias: `ls`, `ps`)
 
