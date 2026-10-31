@@ -115,7 +115,11 @@ describe('JwtStrategy.validate — auto-created user', () => {
 
     await strategy.validate(request, { sub: 'user-1', email: 'new@boxlite.dev', email_verified: true })
 
-    expect(userService.create).toHaveBeenCalledWith(expect.objectContaining({ id: 'user-1' }), Context.user(), ' abcd2345ef ')
+    expect(userService.create).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'user-1' }),
+      Context.user(),
+      ' abcd2345ef ',
+    )
   })
 
   it('does not read the referral header for an existing account', async () => {
