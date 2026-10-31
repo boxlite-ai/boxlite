@@ -18,8 +18,18 @@ import { UserDeletedEvent } from './events/user-deleted.event'
 import { UserEmailVerifiedEvent } from './events/user-email-verified.event'
 import { recordOutcomes } from '../common/utils/business-event.util'
 import { Context } from '../common/context/context'
+import { CommerceInternalClient } from '../commerce/commerce-internal.client'
+import { CommerceUnavailableError } from '../commerce/commerce.errors'
+import { ReferralRegistrationException } from '../exceptions/referral-registration.exception'
 
 const PG_UNIQUE_VIOLATION = '23505'
+
+function registrationExceptionType(error: unknown): string {
+  if (error instanceof ReferralRegistrationException) {
+    return error.code
+  }
+  return (error as { code?: unknown })?.code === PG_UNIQUE_VIOLATION ? 'user_conflict' : 'internal'
+}
 
 @Injectable()
 export class UserService {
@@ -28,17 +38,22 @@ export class UserService {
     private readonly userRepository: Repository<User>,
     private readonly eventEmitter: EventEmitter2,
     private readonly dataSource: DataSource,
+    private readonly commerce: CommerceInternalClient,
   ) {}
 
-  /** Records the user.registration events of the new user, started by ctx. */
-  async create(createUserDto: CreateUserDto, ctx: Context): Promise<User> {
+  /**
+   * @param ctx the actor and reason recorded on registration business events.
+   * @param referralCode the raw referral code sent with the request creating the account.
+   * It is ignored when blank or when Commerce is not configured; otherwise it must
+   * resolve to the inviting organization, or no user is created.
+   * @throws ReferralRegistrationException when a referral code cannot be resolved.
+   */
+  async create(createUserDto: CreateUserDto, ctx: Context, referralCode?: string): Promise<User> {
     const defaultOrganizationDefaultRegionId =
       createUserDto.defaultOrganizationDefaultRegionId ?? createUserDto.personalOrganizationDefaultRegionId
     let user = new User()
     user.id = createUserDto.id
     user.name = createUserDto.name
-    const keyPair = await this.generatePrivateKey()
-    user.keyPair = keyPair
     user.publicKeys = []
     user.emailVerified = createUserDto.emailVerified
 
@@ -52,18 +67,43 @@ export class UserService {
 
     await recordOutcomes(
       { name: 'user.registration', correlationId: createUserDto.id, ctx },
-      () =>
-        this.dataSource.transaction(async (em) => {
+      async () => {
+        // Resolve before the costly key generation: a refused referral leaves the
+        // identity new, and its next request tries again.
+        user.referredByOrganizationId = await this.resolveReferral(referralCode)
+        user.keyPair = await this.generatePrivateKey()
+        await this.dataSource.transaction(async (em) => {
           user = await em.save(user)
           await this.eventEmitter.emitAsync(
             UserEvents.CREATED,
             new UserCreatedEvent(em, user, defaultOrganizationDefaultRegionId),
           )
-        }),
-      (error) => ((error as { code?: string })?.code === PG_UNIQUE_VIOLATION ? 'user_conflict' : 'internal'),
+        })
+      },
+      registrationExceptionType,
     )
 
     return user
+  }
+
+  private async resolveReferral(referralCode: string | undefined): Promise<string | null> {
+    if (!referralCode?.trim() || !this.commerce.isConfigured()) {
+      return null
+    }
+
+    let organizationId: string | null
+    try {
+      organizationId = await this.commerce.resolveReferralCode(referralCode)
+    } catch (error) {
+      if (error instanceof CommerceUnavailableError) {
+        throw new ReferralRegistrationException('referral_unavailable')
+      }
+      throw error
+    }
+    if (!organizationId) {
+      throw new ReferralRegistrationException('invalid_referral_code')
+    }
+    return organizationId
   }
 
   async findAll(): Promise<User[]> {
