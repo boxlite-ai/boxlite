@@ -18,7 +18,7 @@ use crate::{
     bus::Dispatch,
     chipset::ChipsetBuilder,
     devices::console::ConsoleWorker,
-    events::{Event, EventLoop},
+    events::{Event, EventLoop, LoopEvent},
     flat_guest::FlatGuest,
     memory::GuestMemoryMmap,
 };
@@ -86,7 +86,10 @@ fn a_flat_guest_drives_the_legacy_platform_until_its_reset() {
     });
     console.finish();
 
-    assert!(matches!(end, Some(Event::GuestReset)), "{end:?}");
+    assert!(
+        matches!(end, Some(LoopEvent::Terminal(Event::GuestReset))),
+        "{end:?}"
+    );
     assert_eq!(*output.0.lock().unwrap(), b"OK");
     let mut results = [0u8; 0x10];
     guest.read(RESULTS, &mut results);

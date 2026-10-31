@@ -38,6 +38,22 @@ pub(crate) enum Call {
     SetBootRegisters {
         id: u32,
     },
+    /// A one-byte MMIO read exit the guest received, and the byte the device
+    /// had put in its buffer by the next entry.
+    GuestRead {
+        id: u32,
+        byte: u8,
+    },
+    /// The vCPU finished the hypervisor's pending access before it stopped.
+    CompletePendingIo {
+        id: u32,
+    },
+    /// The buffer of a read exit the vCPU cancelled, observed as it finished
+    /// the pending access.
+    CancelledReadBuffer {
+        id: u32,
+        byte: u8,
+    },
     DropVcpu {
         id: u32,
     },
@@ -51,6 +67,11 @@ pub(crate) enum Step {
     Write {
         addr: u64,
         byte: u8,
+    },
+    /// A one-byte MMIO read at `addr`; the next entry records what the device
+    /// answered.
+    Read {
+        addr: u64,
     },
     Shutdown,
     Reset,
@@ -164,7 +185,12 @@ impl MockVm {
                 source,
             },
             Call::SetIrqLine { line, .. } => Error::SetIrqLine { line, source },
-            Call::SetCpuFeatures { .. } | Call::SetBootRegisters { .. } | Call::DropVcpu { .. } => {
+            Call::SetCpuFeatures { .. }
+            | Call::SetBootRegisters { .. }
+            | Call::GuestRead { .. }
+            | Call::CompletePendingIo { .. }
+            | Call::CancelledReadBuffer { .. }
+            | Call::DropVcpu { .. } => {
                 unreachable!("only memory and interrupt calls fail by index")
             }
         })
@@ -192,6 +218,7 @@ impl Vm for MockVm {
             entries: Arc::clone(&self.entries),
             kick: Arc::default(),
             data: [0],
+            pending_read: false,
         })
     }
 
@@ -208,6 +235,8 @@ pub(crate) struct MockVcpu {
     entries: Arc<Mutex<Vec<u32>>>,
     kick: Arc<Kick>,
     data: [u8; 1],
+    /// Whether the last exit was a read whose buffer the next entry records.
+    pending_read: bool,
 }
 
 impl MockVcpu {
@@ -246,12 +275,28 @@ impl Vcpu for MockVcpu {
     fn run(&mut self) -> Result<VcpuExit<'_>> {
         let id = self.id;
         self.entries.lock().unwrap().push(id);
+        if std::mem::take(&mut self.pending_read) {
+            self.record(Call::GuestRead {
+                id,
+                byte: self.data[0],
+            });
+        }
         Ok(match self.steps.pop_front() {
             Some(Step::Write { addr, byte }) => {
                 self.data = [byte];
                 VcpuExit::MmioWrite {
                     guest_addr: addr,
                     bytes: &self.data,
+                }
+            }
+            Some(Step::Read { addr }) => {
+                // A sentinel no real answer carries, so a test can tell a
+                // cancelled read's zero fill from the initial buffer.
+                self.data = [0xff];
+                self.pending_read = true;
+                VcpuExit::MmioRead {
+                    guest_addr: addr,
+                    bytes: &mut self.data,
                 }
             }
             Some(Step::Shutdown) => VcpuExit::Shutdown,
@@ -275,6 +320,13 @@ impl Vcpu for MockVcpu {
     }
 
     fn complete_pending_io(&mut self) -> Result<()> {
+        if std::mem::take(&mut self.pending_read) {
+            self.record(Call::CancelledReadBuffer {
+                id: self.id,
+                byte: self.data[0],
+            });
+        }
+        self.record(Call::CompletePendingIo { id: self.id });
         Ok(())
     }
 

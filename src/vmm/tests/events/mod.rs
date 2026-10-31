@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! The event loop: order, a wake from another thread, timeouts, a send after
-//! the loop is gone, and a lost wake-up.
+//! the loop is gone, a lost wake-up, and a control wake from the deferred
+//! queue.
 
 use std::{
     sync::mpsc,
@@ -10,7 +11,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use super::{Event, EventLoop};
+use super::{Event, EventLoop, LoopEvent};
 use crate::error::Error;
 
 #[test]
@@ -24,11 +25,16 @@ fn returns_queued_events_in_order() {
     let first = events.wait(Some(Duration::MAX)).unwrap();
     let second = events.wait(None).unwrap();
 
-    assert!(matches!(first, Some(Event::GuestReset)), "{first:?}");
+    assert!(
+        matches!(first, Some(LoopEvent::Terminal(Event::GuestReset))),
+        "{first:?}"
+    );
     assert!(
         matches!(
             second,
-            Some(Event::DeviceFailed(Error::InvalidVcpuCount(0)))
+            Some(LoopEvent::Terminal(Event::DeviceFailed(
+                Error::InvalidVcpuCount(0)
+            )))
         ),
         "{second:?}"
     );
@@ -54,7 +60,10 @@ fn a_send_from_another_thread_ends_the_wait() {
         "{:?}",
         started.elapsed()
     );
-    assert!(matches!(event, Some(Event::GuestReset)), "{event:?}");
+    assert!(
+        matches!(event, Some(LoopEvent::Terminal(Event::GuestReset))),
+        "{event:?}"
+    );
     sending.join().unwrap();
 }
 
@@ -99,7 +108,39 @@ fn a_wait_finds_an_event_whose_wake_up_was_lost() {
     let event = wait_returned
         .recv_timeout(TIMEOUT)
         .expect("the wait slept through an event whose wake-up was lost");
-    assert!(matches!(event, Ok(Some(Event::GuestReset))), "{event:?}");
+    assert!(
+        matches!(event, Ok(Some(LoopEvent::Terminal(Event::GuestReset)))),
+        "{event:?}"
+    );
+}
+
+/// A control wake tells the run thread that the queue has deferred work,
+/// without ending the VM.
+#[test]
+fn a_control_wake_ends_the_wait_without_an_event() {
+    const TIMEOUT: Duration = Duration::from_secs(10);
+    let mut events = EventLoop::new().unwrap();
+    let control = events.control_handle();
+    let started = Instant::now();
+    let waking = thread::spawn(move || {
+        thread::sleep(Duration::from_millis(50));
+        let waker = control.waker();
+        waker();
+    });
+
+    let event = events.wait(Some(TIMEOUT)).unwrap();
+
+    assert!(
+        started.elapsed() < Duration::from_millis(500),
+        "{:?}",
+        started.elapsed()
+    );
+    assert!(matches!(event, Some(LoopEvent::Control)), "{event:?}");
+    assert!(
+        !events.sender().is_stopping(),
+        "a control wake is not a stop"
+    );
+    waking.join().unwrap();
 }
 
 /// A send latches the stop for every sender before it returns, so the vCPU
