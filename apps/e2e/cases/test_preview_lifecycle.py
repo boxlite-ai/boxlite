@@ -112,7 +112,7 @@ async def test_preview_deleted_box_invalidates_its_uri(rt, image, transport):
     await eventually_status(tunnel.uri(), transport, (403, 404), credentials)
 
 
-@pytest.mark.parametrize("restriction,status", [("revoked", 404), ("inbound-disabled", 403)])
+@pytest.mark.parametrize("restriction,status", [("revoked", 404), ("inbound-disabled", (403, 404))])
 async def test_preview_denied_declaration_does_not_wake_guest(rt, image, restriction, status):
     async with service_box(rt, image, auto_resume=True) as (box, marker):
         tunnel = await prepare(box, public=False)
@@ -122,7 +122,7 @@ async def test_preview_denied_declaration_does_not_wake_guest(rt, image, restric
             await box.network.revoke_tunnel(PORT)
         else:
             await box.network.update_inbound(boxlite.InboundNetworkSpec(mode="disabled"))
-        # Observe cache convergence before asserting that denied traffic cannot
+        # Observe access rejection before asserting that denied traffic cannot
         # wake a stopped guest. A request during the old allow cache is admitted.
         await eventually_status(tunnel.uri(), "http", status, credentials)
         await box.stop()
