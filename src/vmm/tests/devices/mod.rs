@@ -11,13 +11,16 @@ use std::{
     time::Duration,
 };
 
+use vm_memory::GuestAddress;
+
 use super::{COM1, I8042_COMMAND, I8042_DATA, add_legacy_devices};
 use crate::{
-    bus::UNCLAIMED_READ,
+    bus::{BusRead, BusWrite, UNCLAIMED_READ},
     chipset::{Chipset, ChipsetBuilder, Conflict},
     devices::console::{ConsoleWorker, DEFAULT_QUEUE_BYTES},
     error::Error,
-    events::{Event, EventLoop},
+    events::{Event, EventLoop, LoopEvent},
+    memory::GuestMemoryMmap,
     mock_vm::{Call, MockVm},
 };
 
@@ -69,7 +72,8 @@ impl Machine {
         let events = EventLoop::new().unwrap();
         let (writer, console) =
             ConsoleWorker::spawn(Box::new(output), DEFAULT_QUEUE_BYTES).unwrap();
-        let mut builder = ChipsetBuilder::new(vm.clone(), events.sender());
+        let memory = Arc::new(GuestMemoryMmap::from_ranges(&[(GuestAddress(0), 0x1000)]).unwrap());
+        let mut builder = ChipsetBuilder::new(vm.clone(), events.sender(), memory);
         add_legacy_devices(&mut builder, writer).unwrap();
         Self {
             chipset: builder.build().unwrap(),
@@ -80,17 +84,24 @@ impl Machine {
     }
 
     fn outb(&self, port: u64, value: u8) {
-        self.chipset.buses().pio.write(port, &[value]);
+        assert!(matches!(
+            self.chipset.buses().pio.write(port, &[value]),
+            BusWrite::Complete
+        ));
     }
 
     fn inb(&self, port: u64) -> u8 {
-        let mut value = [0];
-        self.chipset.buses().pio.read(port, &mut value);
-        value[0]
+        match self.chipset.buses().pio.read(port, 1) {
+            BusRead::Complete(bytes) => bytes.as_slice()[0],
+            BusRead::Deferred(_) => panic!("the legacy devices answer at once"),
+        }
     }
 
     fn next_event(&mut self) -> Option<Event> {
-        self.events.wait(Some(Duration::ZERO)).unwrap()
+        match self.events.wait(Some(Duration::ZERO)).unwrap() {
+            Some(LoopEvent::Terminal(event)) => Some(event),
+            _ => None,
+        }
     }
 }
 
@@ -168,17 +179,22 @@ fn the_legacy_ports_and_the_in_kernel_windows_are_the_only_claims() {
     // The transmitter is idle.
     assert_eq!(machine.inb(LSR), 0x60);
     // The UART registers take byte accesses only.
-    let mut wide = [0; 2];
-    machine.chipset.buses().pio.read(COM1, &mut wide);
-    machine.chipset.buses().pio.write(COM1, b"ab");
-    assert_eq!(wide, [UNCLAIMED_READ; 2]);
+    let BusRead::Complete(wide) = machine.chipset.buses().pio.read(COM1, 2) else {
+        panic!("the UART answers at once");
+    };
+    assert!(matches!(
+        machine.chipset.buses().pio.write(COM1, b"ab"),
+        BusWrite::Complete
+    ));
+    assert_eq!(wide.as_slice(), [UNCLAIMED_READ; 2]);
 }
 
 #[test]
 fn a_second_platform_conflicts_with_every_legacy_claim() {
     let vm = Arc::new(MockVm::new());
     let events = EventLoop::new().unwrap();
-    let mut builder = ChipsetBuilder::new(vm, events.sender());
+    let memory = Arc::new(GuestMemoryMmap::from_ranges(&[(GuestAddress(0), 0x1000)]).unwrap());
+    let mut builder = ChipsetBuilder::new(vm, events.sender(), memory);
     let (writer, _console) = ConsoleWorker::spawn(Box::new(Output::default()), 16).unwrap();
     let (second, _second_console) = ConsoleWorker::spawn(Box::new(Output::default()), 16).unwrap();
     add_legacy_devices(&mut builder, writer).unwrap();

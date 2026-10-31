@@ -4,8 +4,12 @@
 //! A chipset built over a real KVM VM: a flat guest reads a claimed and an
 //! unclaimed port, and the device's line, armed by the build, reaches KVM.
 
+use std::sync::Arc;
+
+use vm_memory::GuestAddress;
+
 use super::{Access, ChipsetBuilder, recorder};
-use crate::{events::EventLoop, flat_guest::FlatGuest};
+use crate::{bus::Dispatch, events::EventLoop, flat_guest::FlatGuest, memory::GuestMemoryMmap};
 
 /// Where the guest stores what it read.
 const RESULTS: u64 = 0x2000;
@@ -29,7 +33,8 @@ const PROGRAM: &[u8] = &[
 fn a_flat_guest_reads_a_built_chipset() {
     let mut guest = FlatGuest::new(PROGRAM);
     let events = EventLoop::new().unwrap();
-    let mut builder = ChipsetBuilder::new(guest.vm().clone(), events.sender());
+    let memory = Arc::new(GuestMemoryMmap::from_ranges(&[(GuestAddress(0), 0x1000)]).unwrap());
+    let mut builder = ChipsetBuilder::new(guest.vm().clone(), events.sender(), memory);
     let (device, accesses) = recorder(0x42, None);
     let mut device = Some(device);
     builder
@@ -43,7 +48,7 @@ fn a_flat_guest_reads_a_built_chipset() {
     let chipset = builder.build().unwrap();
 
     let exits = guest.run(|exit| {
-        if let Some(exit) = chipset.dispatch(exit) {
+        if let Dispatch::Passthrough(exit) = chipset.dispatch(exit) {
             panic!("{exit:?} is not an I/O exit");
         }
         accesses.lock().unwrap().len() < 2

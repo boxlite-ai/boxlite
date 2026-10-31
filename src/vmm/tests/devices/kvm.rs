@@ -11,12 +11,16 @@ use std::{
     time::Duration,
 };
 
+use vm_memory::GuestAddress;
+
 use super::add_legacy_devices;
 use crate::{
+    bus::Dispatch,
     chipset::ChipsetBuilder,
     devices::console::ConsoleWorker,
-    events::{Event, EventLoop},
+    events::{Event, EventLoop, LoopEvent},
     flat_guest::FlatGuest,
+    memory::GuestMemoryMmap,
 };
 
 /// Where the guest stores what it read, and the byte it must never reach.
@@ -65,7 +69,8 @@ fn a_flat_guest_drives_the_legacy_platform_until_its_reset() {
     let output = Output::default();
     let (writer, mut console) = ConsoleWorker::spawn(Box::new(output.clone()), 1024).unwrap();
     let mut events = EventLoop::new().unwrap();
-    let mut builder = ChipsetBuilder::new(guest.vm().clone(), events.sender());
+    let memory = Arc::new(GuestMemoryMmap::from_ranges(&[(GuestAddress(0), 0x1000)]).unwrap());
+    let mut builder = ChipsetBuilder::new(guest.vm().clone(), events.sender(), memory);
     add_legacy_devices(&mut builder, writer).unwrap();
     let chipset = builder.build().unwrap();
 
@@ -73,7 +78,7 @@ fn a_flat_guest_drives_the_legacy_platform_until_its_reset() {
     // after the exit that sent it.
     let mut end = None;
     let exits = guest.run(|exit| {
-        if let Some(exit) = chipset.dispatch(exit) {
+        if let Dispatch::Passthrough(exit) = chipset.dispatch(exit) {
             panic!("{exit:?} is not an I/O exit");
         }
         end = events.wait(Some(Duration::ZERO)).unwrap();
@@ -81,7 +86,10 @@ fn a_flat_guest_drives_the_legacy_platform_until_its_reset() {
     });
     console.finish();
 
-    assert!(matches!(end, Some(Event::GuestReset)), "{end:?}");
+    assert!(
+        matches!(end, Some(LoopEvent::Terminal(Event::GuestReset))),
+        "{end:?}"
+    );
     assert_eq!(*output.0.lock().unwrap(), b"OK");
     let mut results = [0u8; 0x10];
     guest.read(RESULTS, &mut results);

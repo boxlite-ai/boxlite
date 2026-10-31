@@ -4,7 +4,10 @@
 //! The VM facade: configuration, host VM creation, RAM registration, boot
 //! loading, and running the vCPUs until the VM ends.
 
-use std::sync::{Arc, Mutex};
+use std::{
+    panic::{self, AssertUnwindSafe},
+    sync::{Arc, Mutex},
+};
 
 use boxlite_hypervisor::Vm as HostVm;
 
@@ -13,8 +16,9 @@ use crate::{
     config::VmConfig,
     devices::console::ConsoleWorker,
     error::{Error, Result},
-    events::{Event, EventLoop, EventSender},
+    events::{Event, EventLoop, EventSender, LoopEvent},
     memory::{GuestRam, ram_ranges},
+    virtio::control::ControlHandle,
 };
 
 /// The registers the boot vCPU starts with.
@@ -70,6 +74,9 @@ pub struct Vm<H: HostVm> {
     console: Mutex<Option<ConsoleWorker>>,
     events: Mutex<EventLoop>,
     sender: EventSender,
+    /// The vCPUs defer bus accesses the device cannot finish at once through
+    /// this handle; [`run`](Self::run) pumps the queue.
+    control: ControlHandle,
     boot_regs: BootRegisters,
     vcpu_count: u8,
     state: VmState,
@@ -128,11 +135,13 @@ impl<H: HostVm> Vm<H> {
         config.validate()?;
         let events = EventLoop::new().map_err(Error::EventLoop)?;
         let sender = events.sender();
+        let control = events.control_handle();
         // Allocating first keeps the drop order safe on every early return:
         // locals drop in reverse order, so the host VM goes before the RAM.
         let mut ram = GuestRam::new(&ram_ranges(config.memory_mib))?;
         let host_vm = Arc::new(host_vm()?);
-        let mut chipset = ChipsetBuilder::new(host_vm.clone(), sender.clone());
+        let mut chipset =
+            ChipsetBuilder::new(host_vm.clone(), sender.clone(), Arc::clone(ram.memory()));
         devices(&mut chipset)?;
         let chipset = chipset.build()?;
         ram.map(&*host_vm)?;
@@ -142,6 +151,7 @@ impl<H: HostVm> Vm<H> {
             console: Mutex::new(None),
             events: Mutex::new(events),
             sender,
+            control,
             boot_regs: BootRegisters::default(),
             vcpu_count: config.vcpu_count,
             state: VmState::Created,
@@ -183,9 +193,11 @@ impl<H: boxlite_hypervisor::X86Vm> Vm<H> {
             boot_regs: &self.boot_regs,
             chipset: &self.chipset,
             sender: &self.sender,
+            control: &self.control,
             kicks: &kicks,
             gate: &gate,
         };
+        let waker = self.control.waker();
         let events = self
             .events
             .get_mut()
@@ -205,14 +217,35 @@ impl<H: boxlite_hypervisor::X86Vm> Vm<H> {
                     break;
                 }
             }
-            let event = events.wait(None);
+            let event = loop {
+                match events.wait(None) {
+                    Ok(Some(LoopEvent::Terminal(event))) => break Ok(event),
+                    // A panicking device must end the VM like any other
+                    // failure, not unwind the thread that joins the vCPUs;
+                    // the accesses it held cancel as they drop.
+                    Ok(Some(LoopEvent::Control)) => {
+                        let pumped =
+                            panic::catch_unwind(AssertUnwindSafe(|| events.control().pump(&waker)));
+                        if pumped.is_err() {
+                            tracing::error!("a device panicked while advancing a deferred access");
+                            workers
+                                .sender
+                                .send(Event::DeviceFailed(Error::DevicePanicked));
+                        }
+                    }
+                    Ok(None) => {}
+                    Err(error) => break Err(error),
+                }
+            };
             if event.is_err() {
                 // Without an event the stop latch is still open; close it so
                 // the vCPUs stop and the scope can join them.
                 workers.sender.send(Event::StopRequested);
             }
-            // Wake every vCPU still in the guest; a vCPU still being
-            // configured sees the latch before its first entry.
+            // Cancel the deferred accesses first so their vCPUs wake, zero
+            // the answers they owe, and finish the hypervisor's pending I/O
+            // before joining; then wake every vCPU still in the guest.
+            events.control().cancel_all();
             for kick in kicks.lock().unwrap_or_else(PoisonError::into_inner).iter() {
                 if let Err(error) = kick.kick() {
                     tracing::warn!(%error, "failed to kick a vCPU");
@@ -232,11 +265,10 @@ impl<H: boxlite_hypervisor::X86Vm> Vm<H> {
             }
         }
         match event.map_err(Error::EventLoop)? {
-            Some(Event::StopRequested) => Ok(VmExit::StopRequested),
-            Some(Event::GuestShutdown) => Ok(VmExit::GuestShutdown),
-            Some(Event::GuestReset) => Ok(VmExit::GuestReset),
-            Some(Event::VcpuFailed(error) | Event::DeviceFailed(error)) => Err(error),
-            None => unreachable!("a wait without a timeout returns an event"),
+            Event::StopRequested => Ok(VmExit::StopRequested),
+            Event::GuestShutdown => Ok(VmExit::GuestShutdown),
+            Event::GuestReset => Ok(VmExit::GuestReset),
+            Event::VcpuFailed(error) | Event::DeviceFailed(error) => Err(error),
         }
     }
 }

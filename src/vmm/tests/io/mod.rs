@@ -32,6 +32,30 @@ fn a_cancelled_completion_wakes_its_waiter() {
     assert_eq!(handle.join().unwrap(), Err(Cancelled));
 }
 
+/// A producer that disappears without answering wakes its waiter instead of
+/// leaving it blocked on a result that can never arrive.
+#[test]
+fn a_dropped_producer_cancels_the_completion() {
+    let (completion, completer) = Completion::<()>::new();
+    let waiter = completion.clone();
+    let handle = thread::spawn(move || waiter.wait());
+
+    drop(completer);
+
+    assert_eq!(handle.join().unwrap(), Err(Cancelled));
+    assert!(completion.is_done());
+}
+
+/// Dropping a producer that already completed leaves the value for its
+/// waiter.
+#[test]
+fn a_dropped_producer_keeps_a_delivered_value() {
+    let (completion, completer) = Completion::new();
+    assert!(completer.complete(7_u8));
+
+    assert_eq!(completion.wait(), Ok(7));
+}
+
 #[test]
 fn arming_before_the_value_wakes_the_control_thread() {
     let (completion, completer) = Completion::new();

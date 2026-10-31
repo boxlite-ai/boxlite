@@ -129,9 +129,13 @@ fn a_chipset_conflict_fails_before_any_ram_is_registered() {
     struct Idle;
 
     impl crate::bus::BusDevice for Idle {
-        fn read(&mut self, _offset: u64, _data: &mut [u8]) {}
+        fn read(&mut self, _offset: u64, len: usize) -> crate::bus::BusIo<crate::io::ConfigBytes> {
+            crate::bus::BusIo::Complete(crate::io::ConfigBytes::new(len))
+        }
 
-        fn write(&mut self, _offset: u64, _data: &[u8]) {}
+        fn write(&mut self, _offset: u64, _data: &[u8]) -> crate::bus::BusIo<()> {
+            crate::bus::BusIo::Complete(())
+        }
     }
 
     let backend = MockVm::new();
@@ -386,7 +390,12 @@ mod lifecycle {
     use std::{sync::mpsc, thread, time::Duration};
 
     use super::{config, *};
-    use crate::{VmExit, bus::BusDevice, mock_vm::Step};
+    use crate::{
+        VmExit,
+        bus::{BusDevice, BusIo, PendingIo},
+        io::{Completer, Completion, ConfigBytes},
+        mock_vm::Step,
+    };
 
     /// Runs `vm` on another thread and fails the test instead of hanging when
     /// the run never returns.
@@ -518,9 +527,11 @@ mod lifecycle {
     struct Panics;
 
     impl BusDevice for Panics {
-        fn read(&mut self, _offset: u64, _data: &mut [u8]) {}
+        fn read(&mut self, _offset: u64, len: usize) -> BusIo<ConfigBytes> {
+            BusIo::Complete(ConfigBytes::new(len))
+        }
 
-        fn write(&mut self, _offset: u64, _data: &[u8]) {
+        fn write(&mut self, _offset: u64, _data: &[u8]) -> BusIo<()> {
             panic!("a device bug");
         }
     }
@@ -553,6 +564,221 @@ mod lifecycle {
         );
     }
 
+    /// A device that answers only when the run thread advances the access,
+    /// which it does at once.
+    struct Later {
+        reply: u8,
+        readiness: Option<(Completion<()>, Completer<()>)>,
+    }
+
+    impl Later {
+        fn defer(&mut self) -> Completion<()> {
+            let (completion, completer) = Completion::new();
+            self.readiness = Some((completion.clone(), completer));
+            completion
+        }
+    }
+
+    impl BusDevice for Later {
+        fn read(&mut self, _offset: u64, _len: usize) -> BusIo<ConfigBytes> {
+            BusIo::Deferred(self.defer())
+        }
+
+        fn write(&mut self, _offset: u64, _data: &[u8]) -> BusIo<()> {
+            BusIo::Deferred(self.defer())
+        }
+
+        fn progress(&mut self, request: &mut PendingIo) -> BusIo<()> {
+            if let PendingIo::Read { bytes, .. } = request {
+                *bytes = Some(ConfigBytes::from_slice(&[self.reply]));
+            }
+            BusIo::Complete(())
+        }
+    }
+
+    const DEVICE: u64 = 0xd000_0000;
+
+    #[test]
+    fn a_deferred_read_reaches_the_guest_through_the_run_thread() {
+        let backend = MockVm::with_scripts(vec![vec![Step::Read { addr: DEVICE }, Step::Shutdown]]);
+        let vm = Vm::with_backend(
+            config(1, 16),
+            || Ok(backend),
+            |_, _| Ok(BootRegisters::default()),
+            |chipset| {
+                chipset.add("later", |resources| {
+                    resources.mmio(DEVICE, 1);
+                    Ok(Later {
+                        reply: 0x7b,
+                        readiness: None,
+                    })
+                })
+            },
+        )
+        .unwrap();
+
+        let (exit, vm) = run(vm);
+
+        assert_eq!(exit.unwrap(), VmExit::GuestShutdown);
+        let calls = vm.host_vm.calls();
+        assert!(
+            calls
+                .iter()
+                .any(|call| matches!(call, Call::GuestRead { id: 0, byte: 0x7b })),
+            "{calls:?}"
+        );
+    }
+
+    #[test]
+    fn a_deferred_write_finishes_before_the_guest_continues() {
+        let backend = MockVm::with_scripts(vec![vec![
+            Step::Write {
+                addr: DEVICE,
+                byte: 3,
+            },
+            Step::Shutdown,
+        ]]);
+        let vm = Vm::with_backend(
+            config(1, 16),
+            || Ok(backend),
+            |_, _| Ok(BootRegisters::default()),
+            |chipset| {
+                chipset.add("later", |resources| {
+                    resources.mmio(DEVICE, 1);
+                    Ok(Later {
+                        reply: 0,
+                        readiness: None,
+                    })
+                })
+            },
+        )
+        .unwrap();
+
+        let (exit, _) = run(vm);
+
+        assert_eq!(exit.unwrap(), VmExit::GuestShutdown);
+    }
+
+    /// A device whose access never finishes on its own.
+    struct Stalls {
+        entered: mpsc::Sender<()>,
+        readiness: Option<(Completion<()>, Completer<()>)>,
+    }
+
+    impl BusDevice for Stalls {
+        fn read(&mut self, _offset: u64, _len: usize) -> BusIo<ConfigBytes> {
+            let (completion, completer) = Completion::new();
+            self.readiness = Some((completion.clone(), completer));
+            let _ = self.entered.send(());
+            BusIo::Deferred(completion)
+        }
+
+        fn write(&mut self, _offset: u64, _data: &[u8]) -> BusIo<()> {
+            BusIo::Complete(())
+        }
+
+        fn progress(&mut self, _request: &mut PendingIo) -> BusIo<()> {
+            let (completion, _) = self.readiness.get_or_insert_with(Completion::new);
+            BusIo::Deferred(completion.clone())
+        }
+    }
+
+    #[test]
+    fn a_stop_cancels_a_deferred_read_and_finishes_the_pending_io() {
+        let (entered, read) = mpsc::channel();
+        let backend = MockVm::with_scripts(vec![vec![Step::Read { addr: DEVICE }]]);
+        let vm = Vm::with_backend(
+            config(1, 16),
+            || Ok(backend),
+            |_, _| Ok(BootRegisters::default()),
+            |chipset| {
+                chipset.add("stalls", |resources| {
+                    resources.mmio(DEVICE, 1);
+                    Ok(Stalls {
+                        entered,
+                        readiness: None,
+                    })
+                })
+            },
+        )
+        .unwrap();
+        let stop = vm.stop_handle();
+        let stopping = thread::spawn(move || {
+            read.recv_timeout(Duration::from_secs(10))
+                .expect("the guest reached the device");
+            stop.stop();
+        });
+
+        let (exit, vm) = run(vm);
+
+        assert_eq!(exit.unwrap(), VmExit::StopRequested);
+        stopping.join().unwrap();
+        let calls = vm.host_vm.calls();
+        assert!(
+            calls
+                .iter()
+                .any(|call| matches!(call, Call::CompletePendingIo { id: 0 })),
+            "{calls:?}"
+        );
+        assert!(
+            calls
+                .iter()
+                .any(|call| matches!(call, Call::CancelledReadBuffer { id: 0, byte: 0 })),
+            "the cancelled read's buffer is zero-filled: {calls:?}"
+        );
+        assert!(
+            !calls
+                .iter()
+                .any(|call| matches!(call, Call::GuestRead { .. })),
+            "the cancelled read never reached the guest"
+        );
+    }
+
+    /// A device whose deferred access panics when the run thread advances it.
+    struct PanicsOnProgress {
+        readiness: Option<(Completion<()>, Completer<()>)>,
+    }
+
+    impl BusDevice for PanicsOnProgress {
+        fn read(&mut self, _offset: u64, _len: usize) -> BusIo<ConfigBytes> {
+            let (completion, completer) = Completion::new();
+            self.readiness = Some((completion.clone(), completer));
+            BusIo::Deferred(completion)
+        }
+
+        fn write(&mut self, _offset: u64, _data: &[u8]) -> BusIo<()> {
+            BusIo::Complete(())
+        }
+
+        fn progress(&mut self, _request: &mut PendingIo) -> BusIo<()> {
+            panic!("a device bug while advancing an access");
+        }
+    }
+
+    /// The panic ends the VM like any other failure instead of unwinding the
+    /// thread that joins the vCPUs, and the waiting vCPU wakes through the
+    /// cancelled completion.
+    #[test]
+    fn a_device_that_panics_while_advancing_an_access_ends_the_vm() {
+        let backend = MockVm::with_scripts(vec![vec![Step::Read { addr: DEVICE }]]);
+        let vm = Vm::with_backend(
+            config(1, 16),
+            || Ok(backend),
+            |_, _| Ok(BootRegisters::default()),
+            |chipset| {
+                chipset.add("panics", |resources| {
+                    resources.mmio(DEVICE, 1);
+                    Ok(PanicsOnProgress { readiness: None })
+                })
+            },
+        )
+        .unwrap();
+
+        let (exit, _) = run(vm);
+
+        assert!(matches!(exit, Err(Error::DevicePanicked)), "{exit:?}");
+    }
+
     /// A console sink that takes each write only after a delay, like a slow
     /// log reader.
     #[derive(Clone, Default)]
@@ -574,10 +800,13 @@ mod lifecycle {
     struct ConsolePort(crate::devices::console::ConsoleWriter);
 
     impl BusDevice for ConsolePort {
-        fn read(&mut self, _offset: u64, _data: &mut [u8]) {}
+        fn read(&mut self, _offset: u64, len: usize) -> BusIo<ConfigBytes> {
+            BusIo::Complete(ConfigBytes::new(len))
+        }
 
-        fn write(&mut self, _offset: u64, data: &[u8]) {
+        fn write(&mut self, _offset: u64, data: &[u8]) -> BusIo<()> {
             std::io::Write::write_all(&mut self.0, data).unwrap();
+            BusIo::Complete(())
         }
     }
 
@@ -692,6 +921,10 @@ fn lifecycle_errors_describe_themselves() {
             "vCPU 1 exited unexpectedly: Halted",
         ),
         (Error::VcpuPanicked { vcpu: 2 }, "vCPU 2 panicked"),
+        (
+            Error::DevicePanicked,
+            "a device panicked while advancing an access",
+        ),
         (Error::AlreadyRan, "the VM has already run"),
     ];
     for (error, message) in cases {
@@ -733,20 +966,24 @@ fn new_names_a_kernel_it_cannot_load() {
 fn a_kvm_vm_runs_until_its_guest_resets() {
     use crate::{
         VmExit,
-        bus::BusDevice,
+        bus::{BusDevice, BusIo},
         events::{Event, EventSender},
         flat_guest,
+        io::ConfigBytes,
     };
 
     struct Reset(EventSender);
 
     impl BusDevice for Reset {
-        fn read(&mut self, _offset: u64, _data: &mut [u8]) {}
+        fn read(&mut self, _offset: u64, len: usize) -> BusIo<ConfigBytes> {
+            BusIo::Complete(ConfigBytes::new(len))
+        }
 
-        fn write(&mut self, _offset: u64, data: &[u8]) {
+        fn write(&mut self, _offset: u64, data: &[u8]) -> BusIo<()> {
             if data == [0xfe] {
                 self.0.send(Event::GuestReset);
             }
+            BusIo::Complete(())
         }
     }
 

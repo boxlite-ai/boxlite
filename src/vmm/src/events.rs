@@ -27,7 +27,10 @@ use std::{
 
 use mio::{Events, Poll, Token, Waker};
 
-use crate::error::Error;
+use crate::{
+    error::Error,
+    virtio::control::{ControlHandle, ControlQueue},
+};
 
 /// Something that ends the VM.
 #[derive(Debug)]
@@ -42,6 +45,16 @@ pub(crate) enum Event {
     VcpuFailed(Error),
     /// A device can no longer serve the guest.
     DeviceFailed(Error),
+}
+
+/// What the run thread's poller woke for.
+#[derive(Debug)]
+pub(crate) enum LoopEvent {
+    /// A terminal event from any sender.
+    Terminal(Event),
+    /// The poller woke with no queued terminal event: deferred work may
+    /// wait for the run thread.
+    Control,
 }
 
 /// The poller token of the waker.
@@ -80,23 +93,26 @@ impl EventSender {
     }
 }
 
-/// The poller the thread that owns the VM waits on.
+/// The poller the thread that owns the VM waits on, and the control queue
+/// that thread pumps while it waits.
 pub(crate) struct EventLoop {
     poll: Poll,
     readiness: Events,
     events: mpsc::Receiver<Event>,
     sender: EventSender,
+    control: ControlQueue,
 }
 
 impl EventLoop {
     pub(crate) fn new() -> io::Result<Self> {
         let poll = Poll::new()?;
         let waker = Arc::new(Waker::new(poll.registry(), WAKE)?);
+        let control = ControlQueue::new(Arc::clone(&waker));
         let (tx, rx) = mpsc::channel();
         Ok(Self {
             poll,
-            // Only the waker is registered; the events themselves queue in
-            // the channel.
+            // Only the waker is registered; the terminal events queue in the
+            // channel, and the control queue signals through the same waker.
             readiness: Events::with_capacity(1),
             events: rx,
             sender: EventSender {
@@ -104,6 +120,7 @@ impl EventLoop {
                 waker,
                 stopping: Arc::new(AtomicBool::new(false)),
             },
+            control,
         })
     }
 
@@ -111,16 +128,26 @@ impl EventLoop {
         self.sender.clone()
     }
 
-    /// The oldest queued event, waiting up to `timeout`, or forever with
-    /// `None`. Returns `Ok(None)` once the timeout passes; a zero timeout
-    /// never enters the poller. The poller is re-entered every [`RECHECK`],
-    /// so an event whose wake-up failed is still found.
-    pub(crate) fn wait(&mut self, timeout: Option<Duration>) -> io::Result<Option<Event>> {
+    /// A handle that defers bus accesses to this loop's run thread.
+    pub(crate) fn control_handle(&self) -> ControlHandle {
+        self.control.handle()
+    }
+
+    /// The queue of deferred accesses the run thread pumps.
+    pub(crate) fn control(&self) -> &ControlQueue {
+        &self.control
+    }
+
+    /// The oldest queued terminal event or a control wake, waiting up to
+    /// `timeout`, or forever with `None`. Returns `Ok(None)` once the timeout
+    /// passes; a zero timeout never enters the poller. The poller is re-entered
+    /// every [`RECHECK`], so an event whose wake-up failed is still found.
+    pub(crate) fn wait(&mut self, timeout: Option<Duration>) -> io::Result<Option<LoopEvent>> {
         // A timeout too long to add counts as forever.
         let deadline = timeout.and_then(|timeout| Instant::now().checked_add(timeout));
         loop {
             if let Ok(event) = self.events.try_recv() {
-                return Ok(Some(event));
+                return Ok(Some(LoopEvent::Terminal(event)));
             }
             let slice = match deadline {
                 Some(deadline) => match deadline.checked_duration_since(Instant::now()) {
@@ -130,7 +157,16 @@ impl EventLoop {
                 None => RECHECK,
             };
             match self.poll.poll(&mut self.readiness, Some(slice)) {
-                Ok(()) => {}
+                Ok(()) => {
+                    // A wake answers with the terminal event it queued, or
+                    // with control work when the channel is still empty.
+                    if self.readiness.iter().any(|event| event.token() == WAKE) {
+                        if let Ok(event) = self.events.try_recv() {
+                            return Ok(Some(LoopEvent::Terminal(event)));
+                        }
+                        return Ok(Some(LoopEvent::Control));
+                    }
+                }
                 Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
                 Err(error) => return Err(error),
             }

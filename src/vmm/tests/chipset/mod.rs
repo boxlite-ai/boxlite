@@ -12,15 +12,18 @@ use std::{
 };
 
 use boxlite_hypervisor::VcpuExit;
+use vm_memory::GuestAddress;
 
 use super::{BusKind, ChipsetBuilder, Conflict};
 #[cfg(target_arch = "x86_64")]
 use crate::bus::UNCLAIMED_READ;
 use crate::{
-    bus::BusDevice,
+    bus::{BusDevice, BusIo, Dispatch},
     error::Error,
-    events::{Event, EventLoop, EventSender},
+    events::{Event, EventLoop, EventSender, LoopEvent},
+    io::ConfigBytes,
     irq::IrqLine,
+    memory::GuestMemoryMmap,
     mock_vm::{Call, MockVm},
 };
 
@@ -43,15 +46,15 @@ struct Recorder {
 }
 
 impl BusDevice for Recorder {
-    fn read(&mut self, offset: u64, data: &mut [u8]) {
+    fn read(&mut self, offset: u64, len: usize) -> BusIo<ConfigBytes> {
         self.accesses.lock().unwrap().push(Access::Read {
             offset,
-            bytes: data.to_vec(),
+            bytes: vec![0; len],
         });
-        data.fill(self.reply);
+        BusIo::Complete(ConfigBytes::fill(self.reply, len))
     }
 
-    fn write(&mut self, offset: u64, data: &[u8]) {
+    fn write(&mut self, offset: u64, data: &[u8]) -> BusIo<()> {
         self.accesses.lock().unwrap().push(Access::Write {
             offset,
             bytes: data.to_vec(),
@@ -59,6 +62,7 @@ impl BusDevice for Recorder {
         if let Some(line) = &self.line {
             line.pulse().unwrap();
         }
+        BusIo::Complete(())
     }
 }
 
@@ -74,9 +78,17 @@ fn recorder(reply: u8, line: Option<IrqLine>) -> (Recorder, Accesses) {
     )
 }
 
+/// The guest memory a chipset hands to its devices; these devices use none.
+fn memory() -> Arc<GuestMemoryMmap> {
+    Arc::new(GuestMemoryMmap::from_ranges(&[(GuestAddress(0), 0x1000)]).unwrap())
+}
+
 fn builder(vm: &Arc<MockVm>) -> (ChipsetBuilder, EventLoop) {
     let events = EventLoop::new().unwrap();
-    (ChipsetBuilder::new(vm.clone(), events.sender()), events)
+    (
+        ChipsetBuilder::new(vm.clone(), events.sender(), memory()),
+        events,
+    )
 }
 
 #[cfg(target_arch = "x86_64")]
@@ -184,34 +196,31 @@ fn a_built_chipset_dispatches_to_each_device_at_its_register_offset() {
     let chipset = builder.build().unwrap();
 
     let mut line_status = [0];
-    assert!(
-        chipset
-            .dispatch(VcpuExit::IoIn {
-                port: 0x3fd,
-                bytes: &mut line_status,
-            })
-            .is_none()
-    );
-    assert!(
-        chipset
-            .dispatch(VcpuExit::IoOut {
-                port: 0x64,
-                bytes: &[0xfe],
-            })
-            .is_none()
-    );
+    assert!(matches!(
+        chipset.dispatch(VcpuExit::IoIn {
+            port: 0x3fd,
+            bytes: &mut line_status,
+        }),
+        Dispatch::Handled
+    ));
+    assert!(matches!(
+        chipset.dispatch(VcpuExit::IoOut {
+            port: 0x64,
+            bytes: &[0xfe],
+        }),
+        Dispatch::Handled
+    ));
     let mut between_i8042_ports = [0];
-    assert!(
-        chipset
-            .dispatch(VcpuExit::IoIn {
-                port: 0x61,
-                bytes: &mut between_i8042_ports,
-            })
-            .is_none()
-    );
+    assert!(matches!(
+        chipset.dispatch(VcpuExit::IoIn {
+            port: 0x61,
+            bytes: &mut between_i8042_ports,
+        }),
+        Dispatch::Handled
+    ));
     assert!(matches!(
         chipset.dispatch(VcpuExit::Halted),
-        Some(VcpuExit::Halted)
+        Dispatch::Passthrough(VcpuExit::Halted)
     ));
 
     assert_eq!(line_status, [0x60]);
@@ -389,11 +398,37 @@ fn lines_reach_the_host_once_the_build_succeeds() {
 struct Resetter(EventSender);
 
 impl BusDevice for Resetter {
-    fn read(&mut self, _offset: u64, _data: &mut [u8]) {}
-
-    fn write(&mut self, _offset: u64, _data: &[u8]) {
-        self.0.send(Event::GuestReset);
+    fn read(&mut self, _offset: u64, len: usize) -> BusIo<ConfigBytes> {
+        BusIo::Complete(ConfigBytes::new(len))
     }
+
+    fn write(&mut self, _offset: u64, _data: &[u8]) -> BusIo<()> {
+        self.0.send(Event::GuestReset);
+        BusIo::Complete(())
+    }
+}
+
+#[test]
+fn devices_share_the_builders_guest_memory() {
+    let vm = Arc::new(MockVm::new());
+    let events = EventLoop::new().unwrap();
+    let memory = memory();
+    let mut builder = ChipsetBuilder::new(vm, events.sender(), Arc::clone(&memory));
+    let seen = Arc::new(Mutex::new(None));
+    let seen_from_device = Arc::clone(&seen);
+    builder
+        .add("memory", |r| {
+            *seen_from_device.lock().unwrap() = Some(r.memory());
+            Ok(recorder(0, None).0)
+        })
+        .unwrap();
+    let _chipset = builder.build().unwrap();
+
+    let from_device = seen.lock().unwrap().clone().expect("the constructor ran");
+    assert!(
+        Arc::ptr_eq(&memory, &from_device),
+        "a device must see the memory the builder was given"
+    );
 }
 
 #[test]
@@ -415,7 +450,10 @@ fn a_device_ends_the_vm_through_the_builders_event_loop() {
     });
 
     let event = events.wait(Some(Duration::ZERO)).unwrap();
-    assert!(matches!(event, Some(Event::GuestReset)), "{event:?}");
+    assert!(
+        matches!(event, Some(LoopEvent::Terminal(Event::GuestReset))),
+        "{event:?}"
+    );
 }
 
 #[test]
@@ -467,14 +505,13 @@ fn one_chipset_serves_every_vcpu_thread_and_devices_keep_their_lines() {
             thread::spawn(move || {
                 for round in 0..250u64 {
                     let mut data = [0; 4];
-                    assert!(
-                        chipset
-                            .dispatch(VcpuExit::MmioRead {
-                                guest_addr: 0xd000_0000 + round % 0x1000,
-                                bytes: &mut data,
-                            })
-                            .is_none()
-                    );
+                    assert!(matches!(
+                        chipset.dispatch(VcpuExit::MmioRead {
+                            guest_addr: 0xd000_0000 + round % 0x1000,
+                            bytes: &mut data,
+                        }),
+                        Dispatch::Handled
+                    ));
                     assert_eq!(data, [0x5a; 4]);
                     chipset.dispatch(VcpuExit::MmioWrite {
                         guest_addr: 0xd000_1050,

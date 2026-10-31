@@ -14,10 +14,13 @@ use std::{
 use boxlite_hypervisor::{Vcpu, VcpuExit, X86BootRegisters, X86Vcpu, X86Vm};
 
 use crate::{
+    bus::{DeferredIo, Dispatch},
     chipset::Chipset,
     cpu_features::{BOOT_MSRS, vcpu_cpuid},
     error::{Error, Result},
     events::{Event, EventSender},
+    io::{Cancelled, Completion, ConfigBytes},
+    virtio::control::ControlHandle,
 };
 
 /// Holds the workers until every vCPU is configured, so no vCPU runs before
@@ -55,6 +58,7 @@ pub(crate) struct Workers<'a, H: X86Vm> {
     pub(crate) boot_regs: &'a X86BootRegisters,
     pub(crate) chipset: &'a Chipset,
     pub(crate) sender: &'a EventSender,
+    pub(crate) control: &'a ControlHandle,
     /// The kick handle of every configured vCPU, for the thread that stops them.
     pub(crate) kicks: &'a Mutex<Vec<<H::Vcpu as Vcpu>::Handle>>,
     pub(crate) gate: &'a StartGate,
@@ -112,18 +116,77 @@ impl<H: X86Vm> Workers<'_, H> {
                 vcpu.complete_pending_io()?;
                 return Ok(None);
             }
-            match self.chipset.dispatch(vcpu.run()?) {
-                None | Some(VcpuExit::Interrupted) => {}
-                Some(VcpuExit::Shutdown) => return Ok(Some(Event::GuestShutdown)),
-                Some(VcpuExit::Reset) => return Ok(Some(Event::GuestReset)),
-                Some(exit) => {
+            let outcome = match self.chipset.dispatch(vcpu.run()?) {
+                Dispatch::Handled | Dispatch::Passthrough(VcpuExit::Interrupted) => None,
+                Dispatch::Passthrough(VcpuExit::Shutdown) => {
+                    return Ok(Some(Event::GuestShutdown));
+                }
+                Dispatch::Passthrough(VcpuExit::Reset) => return Ok(Some(Event::GuestReset)),
+                Dispatch::Passthrough(exit) => {
                     return Err(Error::UnexpectedExit {
                         vcpu: id.into(),
                         exit: format!("{exit:?}"),
                     });
                 }
+                Dispatch::DeferredRead {
+                    exit,
+                    completion,
+                    io,
+                } => {
+                    self.control.defer(DeferredIo::Read(io));
+                    Some(wait_read(exit, completion))
+                }
+                Dispatch::DeferredWrite { completion, io } => {
+                    self.control.defer(DeferredIo::Write(io));
+                    Some(wait_write(completion))
+                }
+            };
+            if outcome == Some(DeferredOutcome::Cancelled) {
+                // The VM is stopping, so this thread never re-enters the
+                // guest; release the access the hypervisor still holds.
+                vcpu.complete_pending_io()?;
+                return Ok(None);
             }
         }
+    }
+}
+
+/// What a deferred access did while its vCPU waited.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum DeferredOutcome {
+    /// The device delivered the result.
+    Completed,
+    /// The run thread closed its queue and cancelled the access.
+    Cancelled,
+}
+
+/// Waits for a deferred read and fills the exit's buffer; a cancelled read
+/// leaves zeros, since the VM is stopping and never re-enters the guest.
+fn wait_read(mut exit: VcpuExit<'_>, completion: Completion<ConfigBytes>) -> DeferredOutcome {
+    let result = completion.wait();
+    let buffer = match &mut exit {
+        VcpuExit::MmioRead { bytes, .. } => &mut **bytes,
+        #[cfg(target_arch = "x86_64")]
+        VcpuExit::IoIn { bytes, .. } => &mut **bytes,
+        _ => unreachable!("a deferred read carries a read exit"),
+    };
+    match result {
+        Ok(bytes) => {
+            buffer.copy_from_slice(bytes.as_slice());
+            DeferredOutcome::Completed
+        }
+        Err(Cancelled) => {
+            buffer.fill(0);
+            DeferredOutcome::Cancelled
+        }
+    }
+}
+
+/// Waits for a deferred write; the data was copied when the device deferred.
+fn wait_write(completion: Completion<()>) -> DeferredOutcome {
+    match completion.wait() {
+        Ok(()) => DeferredOutcome::Completed,
+        Err(Cancelled) => DeferredOutcome::Cancelled,
     }
 }
 

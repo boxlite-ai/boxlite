@@ -15,6 +15,9 @@ use std::fmt;
 
 use crate::io::{Completer, Completion, ConfigBytes, Waker};
 
+pub(crate) mod cell;
+pub(crate) mod control;
+
 /// The largest number of queues a device may declare.
 pub(crate) const MAX_QUEUES: usize = 16;
 /// The largest configuration space a device may declare.
