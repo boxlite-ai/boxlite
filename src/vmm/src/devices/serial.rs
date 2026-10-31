@@ -11,9 +11,10 @@ use vm_superio::{
 
 use super::console::ConsoleWriter;
 use crate::{
-    bus::{BusDevice, UNCLAIMED_READ},
+    bus::{BusDevice, BusIo, UNCLAIMED_READ},
     error::Error,
     events::{Event, EventSender},
+    io::ConfigBytes,
     irq::IrqLine,
 };
 
@@ -49,16 +50,18 @@ impl Serial8250 {
 
 // The port range spans the eight UART registers, so every offset fits a `u8`.
 impl BusDevice for Serial8250 {
-    fn read(&mut self, offset: u64, data: &mut [u8]) {
-        match data {
-            [value] => *value = self.uart.read(offset as u8),
+    fn read(&mut self, offset: u64, len: usize) -> BusIo<ConfigBytes> {
+        BusIo::Complete(match len {
+            1 => ConfigBytes::from_slice(&[self.uart.read(offset as u8)]),
             // The registers take byte accesses only.
-            data => data.fill(UNCLAIMED_READ),
-        }
+            _ => ConfigBytes::fill(UNCLAIMED_READ, len),
+        })
     }
 
-    fn write(&mut self, offset: u64, data: &[u8]) {
-        let [value] = data else { return };
+    fn write(&mut self, offset: u64, data: &[u8]) -> BusIo<()> {
+        let [value] = data else {
+            return BusIo::Complete(());
+        };
         match self.uart.write(offset as u8, *value) {
             // The console queue never fails, and only input fills the FIFO.
             Ok(()) | Err(UartError::FullFifo | UartError::IOError(_)) => {}
@@ -68,5 +71,6 @@ impl BusDevice for Serial8250 {
                 }
             }
         }
+        BusIo::Complete(())
     }
 }

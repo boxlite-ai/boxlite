@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 
 use boxlite_hypervisor::KvmVm;
 
-use super::{BusDevice, BusRange, Buses, accesses, recorder};
+use super::{BusDevice, BusRange, Buses, Dispatch, accesses, recorder};
 use crate::{
     flat_guest::FlatGuest,
     irq::{IrqChip, IrqLine},
@@ -46,7 +46,7 @@ fn a_flat_guest_reaches_a_port_device_at_its_register_offset() {
         .unwrap();
 
     let exits = guest.run(|exit| {
-        if let Some(exit) = buses.dispatch(exit) {
+        if let Dispatch::Passthrough(exit) = buses.dispatch(exit) {
             panic!("{exit:?} is not an I/O exit");
         }
         !accesses(&device)

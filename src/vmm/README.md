@@ -34,7 +34,7 @@ boxlite-vmm
 | `cpu_features` | x86_64 guest CPUID for each vCPU and the boot MSRs |
 | `vcpu` | x86_64 vCPU workers: create and configure each vCPU, hold them at a start gate, run the guest and dispatch its exits until the VM ends |
 | `chipset` | `ChipsetBuilder`, the one registry of ranges and interrupt lines, and `Chipset`, the read-only machine it builds |
-| `bus` | `Bus`, `BusRange` and `BusDevice`, and `Buses::dispatch`, which serves the MMIO and port exits of a vCPU |
+| `bus` | `Bus`, `BusRange` and `BusDevice`, `Buses::dispatch`, which serves the MMIO and port exits of a vCPU, and the deferred-access types the next slice advances |
 | `io` | Deferred completion primitives: `Completion<T>`, its single-use `Completer<T>`, `Waker`, and self-owned `ConfigBytes` |
 | `virtio` | The virtio device contract: `VirtioDevice`, `DeviceSpec`, `DeviceOp`, `DeviceEvent`, event registration and budget contexts, and `PendingControl` |
 | `irq` | `IrqChip`, the host interrupt controller as devices see it, and `IrqLine`, one device line; HVF and KVM provide the controller, WHP (M10) only local APICs |
@@ -317,12 +317,19 @@ are built from. `Vm` owns the chipset they form.
   the kernel. The bus holds the devices' strong references and never changes
   once built, so lookups take no lock.
 - **Dispatch.** `Buses::dispatch` serves `MmioRead`, `MmioWrite`, `IoIn` and
-  `IoOut` and returns every other exit. An access must lie entirely inside one
-  range. An access no device holds, or one that crosses a range end, reads
-  `0xFF`, drops its write and is counted by `Bus::unclaimed`; Linux probes
-  port `0x87` once at boot and takes `0xFF` as no ISA DMA controller. Reads
-  reach a device zero-filled. A device whose lock an earlier panic poisoned
-  stops the next access too.
+  `IoOut` and returns every other exit as `Dispatch::Passthrough`. An access
+  must lie entirely inside one range. An access no device holds, or one that
+  crosses a range end, reads `0xFF`, drops its write and is counted by
+  `Bus::unclaimed`; Linux probes port `0x87` once at boot and takes `0xFF` as
+  no ISA DMA controller. A device whose lock an earlier panic poisoned stops
+  the next access too.
+- **Deferred access.** A device answers an access with
+  `BusIo::Complete(value)`, or with `BusIo::Deferred(readiness)` when it must
+  finish later. The bus wraps a deferred access in a `ReadIo` or `WriteIo`,
+  and `Chipset::dispatch` returns `Dispatch::DeferredRead` or
+  `Dispatch::DeferredWrite` with the device's readiness completion.
+  `BusDevice::progress` advances one. Until the run thread pumps these in the
+  next slice, no device may defer: the vCPU reports one as a VMM bug.
 - **Lines.** `irq::IrqLine` drives one line through `IrqChip::set_line`,
   which every host VM implements with `Vm::set_irq_line`; the distinct name
   keeps the two traits from colliding where both are in scope. It is not
@@ -358,6 +365,9 @@ devices:
   leaves the range or line with its first owner, so every later conflict
   names that owner. `pio_with_offset` sets the device offset a range's first
   port reaches, for a controller whose ports are split across several ranges.
+  `Resources::memory()` returns the `Arc<GuestMemoryMmap>` a device shares
+  with every other device and with the `Vm`; `ChipsetBuilder::new` takes it
+  from the RAM it has just allocated.
 - **Constructors.** A constructor only claims resources and builds state; a
   device that needs a thread starts it after `build`. A line from
   `Resources::line` is not armed until `build` succeeds: using it earlier

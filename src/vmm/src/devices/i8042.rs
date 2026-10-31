@@ -9,8 +9,9 @@ use std::{cell::Cell, convert::Infallible};
 use vm_superio::{I8042Device, Trigger};
 
 use crate::{
-    bus::BusDevice,
+    bus::{BusDevice, BusIo},
     events::{Event, EventSender},
+    io::ConfigBytes,
 };
 
 /// Turns the controller's CPU reset into [`Event::GuestReset`], once: the
@@ -50,14 +51,15 @@ impl I8042 {
 
 // Each port is one byte wide, so the bus passes one-byte accesses only.
 impl BusDevice for I8042 {
-    fn read(&mut self, offset: u64, data: &mut [u8]) {
+    fn read(&mut self, offset: u64, len: usize) -> BusIo<ConfigBytes> {
         // Reads 0, no byte waiting and room for a command: all Linux checks.
-        data.fill(self.controller.read(offset as u8));
+        BusIo::Complete(ConfigBytes::fill(self.controller.read(offset as u8), len))
     }
 
-    fn write(&mut self, offset: u64, data: &[u8]) {
+    fn write(&mut self, offset: u64, data: &[u8]) -> BusIo<()> {
         if let [value] = data {
             let Ok(()) = self.controller.write(offset as u8, *value);
         }
+        BusIo::Complete(())
     }
 }

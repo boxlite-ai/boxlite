@@ -132,7 +132,8 @@ impl<H: HostVm> Vm<H> {
         // locals drop in reverse order, so the host VM goes before the RAM.
         let mut ram = GuestRam::new(&ram_ranges(config.memory_mib))?;
         let host_vm = Arc::new(host_vm()?);
-        let mut chipset = ChipsetBuilder::new(host_vm.clone(), sender.clone());
+        let mut chipset =
+            ChipsetBuilder::new(host_vm.clone(), sender.clone(), Arc::clone(ram.memory()));
         devices(&mut chipset)?;
         let chipset = chipset.build()?;
         ram.map(&*host_vm)?;

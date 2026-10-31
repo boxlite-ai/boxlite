@@ -318,10 +318,11 @@ today.
 
 - **Which buses.** Every host has an MMIO bus; x86_64 adds a port I/O bus.
 - **Device API.** Devices implement `BusDevice` and see offsets from their base:
-  `read(&mut self, offset: u64, data: &mut [u8])` and
-  `write(&mut self, offset: u64, data: &[u8])`. These are the most common
-  shapes among seven surveyed VMMs: `Bus` in six, `BusDevice` in four, and
-  offset-based access in all seven.
+  `read(&mut self, offset: u64, len: usize)` and
+  `write(&mut self, offset: u64, data: &[u8])`. Each returns a `BusIo`: the
+  answer at once, or a readiness completion for an access the device must
+  finish later. These are the most common shapes among seven surveyed VMMs:
+  `Bus` in six, `BusDevice` in four, and offset-based access in all seven.
 - **Registration.** Devices register through `chipset::ChipsetBuilder`, the
   one registry of port ranges, MMIO ranges and interrupt lines, as in
   OpenVMM's chipset builder. Platform code reserves the windows the host
@@ -332,8 +333,14 @@ today.
 - **Dispatch.** `Chipset::dispatch` serves MMIO and port exits through the buses and returns every
   other exit to the vCPU loop. An access must lie entirely inside one range,
   as in Firecracker's bus. Any other access reads `0xFF`, drops its write and
-  is counted, as on a PC bus with nothing driving it. A claimed read reaches
-  the device zero-filled, so stale `kvm_run` bytes never leak to the guest.
+  is counted, as on a PC bus with nothing driving it. An unclaimed address
+  never reaches a device, so no stale buffer contents leak to the guest.
+- **Deferred access.** A device that cannot answer under its lock, such as a
+  virtio transport whose device is busy, returns the access as deferred with
+  a readiness completion. The bus carries it as `Dispatch::DeferredRead` or
+  `Dispatch::DeferredWrite`, and `BusDevice::progress` advances it. A later
+  slice lets the thread that calls `run` pump these, so the device lock is
+  never held across a wait; no device defers before then.
 - **Locking.** A vCPU thread holds a device's lock for one register access and
   hands anything that can block to the device's worker. A lock that an
   earlier panic poisoned stops the next access too, as Firecracker and

@@ -14,6 +14,7 @@ use std::{
 use boxlite_hypervisor::{Vcpu, VcpuExit, X86BootRegisters, X86Vcpu, X86Vm};
 
 use crate::{
+    bus::Dispatch,
     chipset::Chipset,
     cpu_features::{BOOT_MSRS, vcpu_cpuid},
     error::{Error, Result},
@@ -113,14 +114,21 @@ impl<H: X86Vm> Workers<'_, H> {
                 return Ok(None);
             }
             match self.chipset.dispatch(vcpu.run()?) {
-                None | Some(VcpuExit::Interrupted) => {}
-                Some(VcpuExit::Shutdown) => return Ok(Some(Event::GuestShutdown)),
-                Some(VcpuExit::Reset) => return Ok(Some(Event::GuestReset)),
-                Some(exit) => {
+                Dispatch::Handled | Dispatch::Passthrough(VcpuExit::Interrupted) => {}
+                Dispatch::Passthrough(VcpuExit::Shutdown) => {
+                    return Ok(Some(Event::GuestShutdown));
+                }
+                Dispatch::Passthrough(VcpuExit::Reset) => return Ok(Some(Event::GuestReset)),
+                Dispatch::Passthrough(exit) => {
                     return Err(Error::UnexpectedExit {
                         vcpu: id.into(),
                         exit: format!("{exit:?}"),
                     });
+                }
+                // No device defers an access until the run thread pumps the
+                // control queue in the next slice.
+                Dispatch::DeferredRead { .. } | Dispatch::DeferredWrite { .. } => {
+                    unreachable!("a device deferred an access before the run thread can advance it")
                 }
             }
         }

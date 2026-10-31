@@ -23,10 +23,11 @@ use std::{
 use boxlite_hypervisor::VcpuExit;
 
 use crate::{
-    bus::{BusDevice, BusRange, Buses, Target},
+    bus::{BusDevice, BusRange, Buses, Dispatch, Target},
     error::{Error, Result},
     events::EventSender,
     irq::{IrqChip, IrqLine},
+    memory::GuestMemoryMmap,
 };
 
 /// Which address space a range lives in.
@@ -141,11 +142,17 @@ struct RangeClaim {
 pub(crate) struct Resources {
     irq_chip: Arc<ArmableIrqChip>,
     event_sender: EventSender,
+    memory: Arc<GuestMemoryMmap>,
     range_claims: Vec<RangeClaim>,
     line_claims: Vec<u32>,
 }
 
 impl Resources {
+    /// The guest memory every device shares.
+    pub(crate) fn memory(&self) -> Arc<GuestMemoryMmap> {
+        Arc::clone(&self.memory)
+    }
+
     /// Claims `len` ports from `base`; port `base` reaches the device at
     /// offset 0.
     #[cfg(target_arch = "x86_64")]
@@ -196,6 +203,7 @@ impl Resources {
 pub(crate) struct ChipsetBuilder {
     irq_chip: Arc<ArmableIrqChip>,
     event_sender: EventSender,
+    memory: Arc<GuestMemoryMmap>,
     buses: Buses,
     line_owners: BTreeMap<u32, &'static str>,
     devices: Vec<Arc<Mutex<dyn BusDevice>>>,
@@ -203,15 +211,20 @@ pub(crate) struct ChipsetBuilder {
 }
 
 impl ChipsetBuilder {
-    /// A builder whose devices raise interrupts on `irq_chip` and end the VM
-    /// through `event_sender`.
-    pub(crate) fn new(irq_chip: Arc<dyn IrqChip>, event_sender: EventSender) -> Self {
+    /// A builder whose devices raise interrupts on `irq_chip`, end the VM
+    /// through `event_sender`, and share `memory`.
+    pub(crate) fn new(
+        irq_chip: Arc<dyn IrqChip>,
+        event_sender: EventSender,
+        memory: Arc<GuestMemoryMmap>,
+    ) -> Self {
         Self {
             irq_chip: Arc::new(ArmableIrqChip {
                 host: irq_chip,
                 armed: AtomicBool::new(false),
             }),
             event_sender,
+            memory,
             buses: Buses::default(),
             line_owners: BTreeMap::new(),
             devices: Vec::new(),
@@ -247,6 +260,7 @@ impl ChipsetBuilder {
         let mut resources = Resources {
             irq_chip: self.irq_chip.clone(),
             event_sender: self.event_sender.clone(),
+            memory: Arc::clone(&self.memory),
             range_claims: Vec::new(),
             line_claims: Vec::new(),
         };
@@ -324,9 +338,8 @@ pub(crate) struct Chipset {
 }
 
 impl Chipset {
-    /// Serves an MMIO or port access and returns `None`; returns every other
-    /// exit to the caller unchanged.
-    pub(crate) fn dispatch<'a>(&self, exit: VcpuExit<'a>) -> Option<VcpuExit<'a>> {
+    /// Serves an MMIO or port access, or returns the exit unchanged.
+    pub(crate) fn dispatch<'a>(&self, exit: VcpuExit<'a>) -> Dispatch<'a> {
         self.buses.dispatch(exit)
     }
 
