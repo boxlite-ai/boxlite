@@ -51,6 +51,17 @@ No agent or turn is returned by `create`, `get`, `send` or `respond`.
 C getters clear output pointers; callbacks are not invoked and no agent, turn,
 subscription or JSON result object is allocated.
 
+### Record migration (breaking change)
+
+Agent records from v0.11.0 represent values an adapter cannot know:
+
+| Field | v0.11.0 | Now |
+|---|---|---|
+| `AgentState.cursor`, `AgentTurnState.cursor`, `AgentEvent.cursor` | Required string | Optional; absent when the adapter cannot resume after it (Go: empty string) |
+| `AgentCapabilities` queue, steering and retention limits | Required numbers | Optional; absent means unknown or unsupported, never zero (Go: `nil`) |
+
+No operation returned these records before, so only code that reads the fields changes.
+
 ### Namespace ownership
 
 Accessing a Box's agent namespace does not start or resume the Box. Python's
@@ -89,7 +100,7 @@ TypeScript types are exported from the package; Go types use the `Agent` prefix.
 - Close, respond, steer and interrupt accept a retry key. Wait accepts an optional timeout.
 - Config includes model, reasoning, instructions, tools/MCP references, permissions, limits and output schema.
 - Requests retain their originating turn and distinguish a question from a permission request. Responses distinguish an answer from explicit permission approval/denial.
-- Agent/turn snapshots include an opaque cursor, requests and steering receipts. Results retain the turn ID, status, outcome, output, artifacts, usage and errors.
+- Agent/turn snapshots include an optional opaque cursor, requests and steering receipts; the cursor is absent when the adapter cannot resume events after it. Capability limits are optional: absent means unknown or unsupported, never zero. Results retain the turn ID, status, outcome, output, artifacts, usage and errors.
 - Unknown execution and steering states are representable. Accepted and applied steering are distinct; a question outcome is distinct from a final answer.
 
 These records define SDK data types. The
@@ -161,11 +172,11 @@ The C JSON fields use the following shapes. A question's
 | Request | `id`, `turn_id`, `kind`: either `{"type":"question","text":"…","schema":null}` or `{"type":"permission","tool":"…","arguments":{}}` |
 | Response | `{"type":"answer","text":"yes"}` with optional `data`, or `{"type":"permission","approved":false}` |
 | Steering receipt | `id`, `turn_id`, `status`: `accepted`, `applied`, `unused` or `unknown` |
-| Agent snapshot | `id`, `status`, `cursor`, nullable `active_turn_id`, `queued_turn_ids`, `requests`, `steering` |
-| Turn snapshot | `id`, `agent_id`, `status`, `cursor`, nullable `result`, `requests`, `steering` |
-| Event | `cursor`, `agent_id`, nullable `turn_id`, `kind` string, JSON `data` |
+| Agent snapshot | `id`, `status`, nullable `cursor`, nullable `active_turn_id`, `queued_turn_ids`, `requests`, `steering` |
+| Turn snapshot | `id`, `agent_id`, `status`, nullable `cursor`, nullable `result`, `requests`, `steering` |
+| Event | nullable `cursor`, `agent_id`, nullable `turn_id`, `kind` string, JSON `data` |
 | Result | `turn_id`, `status`, nullable `outcome` (`answer` or `question`), nullable `text`, JSON `data`, `artifacts` string array, nullable JSON `usage`, nullable `error` string |
-| Capabilities | `operations`, `input_kinds` string arrays; integer `max_queued_turns`, `max_pending_steering`; `idempotency_retention_seconds` number |
+| Capabilities | `operations`, `input_kinds` string arrays; nullable integer `max_queued_turns`, `max_pending_steering`; nullable `idempotency_retention_seconds` number |
 
 Agent status is `ready`, `busy`, `closing`, `closed` or `unknown`.
 Turn status is `queued`, `running`, `waiting_input`, `interrupting`,

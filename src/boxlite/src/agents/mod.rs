@@ -51,7 +51,7 @@ impl Agent {
         not_implemented("agent.get_turn")
     }
 
-    /// Open the agent journal after an opaque cursor.
+    /// Open the agent's events, after an opaque cursor where the adapter supports it.
     pub async fn events(&self, _options: AgentEventsOptions) -> BoxliteResult<AgentEventStream> {
         not_implemented("agent.events")
     }
@@ -93,7 +93,7 @@ impl AgentTurn {
         not_implemented("turn.wait")
     }
 
-    /// Open this turn's view of the agent journal.
+    /// Open this turn's view of the agent's events.
     pub async fn events(&self, _options: AgentEventsOptions) -> BoxliteResult<AgentEventStream> {
         not_implemented("turn.events")
     }

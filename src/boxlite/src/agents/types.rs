@@ -8,7 +8,7 @@ use serde_json::Value;
 
 use crate::BoxliteResult;
 
-/// A journal stream.
+/// A stream of agent events.
 pub type AgentEventStream = Pin<Box<dyn Stream<Item = BoxliteResult<AgentEvent>> + Send + Sync>>;
 
 /// Initial adapter configuration. Tools/MCP entries identify Box-managed resources.
@@ -54,7 +54,7 @@ pub struct AgentWaitOptions {
     pub timeout: Option<Duration>,
 }
 
-/// Resume a journal view after an opaque cursor.
+/// Resume events after an opaque cursor, where the adapter supports it.
 #[derive(Debug, Clone, Default)]
 pub struct AgentEventsOptions {
     pub after: Option<String>,
@@ -88,11 +88,12 @@ pub enum AgentTurnStatus {
 }
 
 /// Snapshot cursor and pending interaction state are retained together.
+/// `cursor` is `None` when the adapter cannot resume events after this snapshot.
 #[derive(Debug, Clone)]
 pub struct AgentState {
     pub id: String,
     pub status: AgentStatus,
-    pub cursor: String,
+    pub cursor: Option<String>,
     pub active_turn_id: Option<String>,
     pub queued_turn_ids: Vec<String>,
     pub requests: Vec<AgentRequest>,
@@ -104,20 +105,21 @@ pub struct AgentTurnState {
     pub id: String,
     pub agent_id: String,
     pub status: AgentTurnStatus,
-    pub cursor: String,
+    pub cursor: Option<String>,
     pub result: Option<AgentResult>,
     pub requests: Vec<AgentRequest>,
     pub steering: Vec<AgentSteeringReceipt>,
 }
 
 /// Advertised operations and bounds, never assumed from an adapter's name.
+/// A `None` bound is unknown or unsupported; it never means zero.
 #[derive(Debug, Clone)]
 pub struct AgentCapabilities {
     pub operations: Vec<String>,
     pub input_kinds: Vec<String>,
-    pub max_queued_turns: usize,
-    pub max_pending_steering: usize,
-    pub idempotency_retention: Duration,
+    pub max_queued_turns: Option<usize>,
+    pub max_pending_steering: Option<usize>,
+    pub idempotency_retention: Option<Duration>,
 }
 
 /// Agent-owned request with the turn that produced it.
@@ -176,10 +178,11 @@ pub struct AgentResult {
     pub error: Option<String>,
 }
 
-/// One journal entry. Cursor and IDs are opaque; data is adapter-reported JSON.
+/// One event. Cursor and IDs are opaque; data is adapter-reported JSON.
+/// `cursor` is `None` for live-only events that cannot be resumed after.
 #[derive(Debug, Clone)]
 pub struct AgentEvent {
-    pub cursor: String,
+    pub cursor: Option<String>,
     pub agent_id: String,
     pub turn_id: Option<String>,
     pub kind: String,

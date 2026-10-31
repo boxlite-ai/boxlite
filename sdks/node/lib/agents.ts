@@ -67,7 +67,7 @@ export interface AgentResult {
 export interface AgentState {
   id: string;
   status: AgentStatus;
-  cursor: string;
+  cursor?: string;
   activeTurnId?: string;
   queuedTurnIds: string[];
   requests: AgentRequest[];
@@ -77,7 +77,7 @@ export interface AgentTurnState {
   id: string;
   agentId: string;
   status: AgentTurnStatus;
-  cursor: string;
+  cursor?: string;
   result?: AgentResult;
   requests: AgentRequest[];
   steering: AgentSteeringReceipt[];
@@ -85,12 +85,12 @@ export interface AgentTurnState {
 export interface AgentCapabilities {
   operations: string[];
   inputKinds: string[];
-  maxQueuedTurns: number;
-  maxPendingSteering: number;
-  idempotencyRetentionSeconds: number;
+  maxQueuedTurns?: number;
+  maxPendingSteering?: number;
+  idempotencyRetentionSeconds?: number;
 }
 export interface AgentEvent {
-  cursor: string;
+  cursor?: string;
   agentId: string;
   turnId?: string;
   kind: string;
@@ -104,7 +104,7 @@ export interface Agent {
   close(options?: AgentControlOptions): Promise<void>;
   send(text: string, options?: AgentSendOptions): Promise<AgentTurn>;
   getTurn(turnId: string): Promise<AgentTurn>;
-  /** Open the agent journal after an opaque cursor. */
+  /** Open the agent's events, after an opaque cursor where the adapter supports it. */
   events(options?: AgentEventsOptions): AsyncIterable<AgentEvent>;
   requests(): Promise<AgentRequest[]>;
   respond(

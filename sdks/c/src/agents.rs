@@ -1,4 +1,4 @@
-//! Agents, turns, and journal subscriptions.
+//! Agents, turns, and event subscriptions.
 
 use std::ffi::{c_char, c_void};
 use std::ptr;
@@ -23,7 +23,7 @@ pub struct CAgent {
 pub struct CAgentTurn {
     _private: (),
 }
-/// Journal subscription. Freeing it does not cancel agent work.
+/// Event subscription. Freeing it does not cancel agent work.
 #[derive(Debug)]
 pub struct CAgentEvents {
     _private: (),
@@ -252,7 +252,7 @@ pub unsafe extern "C" fn boxlite_agent_turn_interrupt(
     unsafe { not_implemented("turn.interrupt", out_error) }
 }
 
-/// Open the agent journal after an opaque cursor.
+/// Open the agent's events, after an opaque cursor where the adapter supports it.
 /// out and out_error may be null or writable. out is cleared on error.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_agent_events(
@@ -271,7 +271,7 @@ pub unsafe extern "C" fn boxlite_agent_events(
     unsafe { not_implemented("agent.events", out_error) }
 }
 
-/// Open this turn's view of the agent journal.
+/// Open this turn's view of the agent's events.
 /// out and out_error may be null or writable. out is cleared on error.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_agent_turn_events(

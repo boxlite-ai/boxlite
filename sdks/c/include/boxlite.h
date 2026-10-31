@@ -120,7 +120,7 @@ typedef struct BoxTunnelHandle BoxTunnelHandle;
 // Agent instance handle.
 typedef struct CAgent CAgent;
 
-// Journal subscription. Freeing it does not cancel agent work.
+// Event subscription. Freeing it does not cancel agent work.
 typedef struct CAgentEvents CAgentEvents;
 
 // Agent turn handle.
@@ -905,7 +905,7 @@ enum BoxliteErrorCode boxlite_agent_turn_interrupt(struct CAgentTurn *_turn,
                                                    void *_user_data,
                                                    CBoxliteError *out_error);
 
-// Open the agent journal after an opaque cursor.
+// Open the agent's events, after an opaque cursor where the adapter supports it.
 // out and out_error may be null or writable. out is cleared on error.
 enum BoxliteErrorCode boxlite_agent_events(struct CAgent *_handle,
                                            const struct CAgentEventsOptions *_options,
@@ -914,7 +914,7 @@ enum BoxliteErrorCode boxlite_agent_events(struct CAgent *_handle,
                                            struct CAgentEvents **out,
                                            CBoxliteError *out_error);
 
-// Open this turn's view of the agent journal.
+// Open this turn's view of the agent's events.
 // out and out_error may be null or writable. out is cleared on error.
 enum BoxliteErrorCode boxlite_agent_turn_events(struct CAgentTurn *_handle,
                                                 const struct CAgentEventsOptions *_options,
