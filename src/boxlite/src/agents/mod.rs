@@ -139,9 +139,9 @@ impl Agent {
         Ok(self.turn(state))
     }
 
-    /// Open the agent's events, after an opaque cursor where the adapter supports it.
-    pub async fn events(&self, _options: AgentEventsOptions) -> BoxliteResult<AgentEventStream> {
-        unsupported("agent.events")
+    /// Open the agent's live events; events emitted before opening are not replayed.
+    pub async fn events(&self, options: AgentEventsOptions) -> BoxliteResult<AgentEventStream> {
+        self.session.events(&options).await
     }
 
     /// Read outstanding questions and permissions.

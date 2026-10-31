@@ -1,7 +1,8 @@
-//! HTTP/1.1 JSON client for the Box's OpenCode server.
+//! HTTP/1.1 JSON and SSE client for the Box's OpenCode server.
 //!
 //! Every request opens its own Box tunnel connection, so no connection state
-//! outlives a call.
+//! outlives a call. The event stream keeps one connection until its reader
+//! drops it or the server ends it.
 
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
@@ -14,6 +15,8 @@ use hyper::body::Incoming;
 use hyper::{Method, Request, Response, StatusCode, header};
 use hyper_util::rt::TokioIo;
 use serde_json::Value;
+use tokio::sync::mpsc;
+use tokio_stream::wrappers::ReceiverStream;
 
 use crate::litebox::{BoxConnection, NetworkHandle, TunnelOptions};
 use crate::runtime::backend::BoxNetworkBackend;
@@ -21,8 +24,13 @@ use crate::{BoxliteError, BoxliteResult};
 
 /// Largest JSON response read; a larger body fails instead of growing memory.
 const MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
+/// Largest single SSE event; a larger one fails the stream instead of growing memory.
+const MAX_EVENT_BYTES: usize = 1024 * 1024;
 /// Bound on one JSON exchange; agent work itself runs asynchronously in the server.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+/// Events held for a slow reader. Beyond this the connection stops reading,
+/// and OpenCode fails an overflowing subscriber, which the reader then sees.
+const EVENT_BUFFER: usize = 64;
 
 pub(super) struct Client {
     network: Arc<dyn BoxNetworkBackend>,
@@ -63,6 +71,33 @@ impl Client {
             Err(BoxliteError::Network(_)) => self.json(Method::POST, path, Some(body)).await,
             outcome => outcome,
         }
+    }
+
+    /// Subscribe to the server's live events. `keep` maps each native event,
+    /// in order, to an item, to an error that ends the stream, or to nothing,
+    /// and may track state across events. The stream also ends with one error
+    /// item when the server closes or fails it or sends an invalid or oversized
+    /// event, because later events are lost.
+    pub(super) async fn events<T, F>(
+        &self,
+        path: &str,
+        keep: F,
+    ) -> BoxliteResult<ReceiverStream<BoxliteResult<T>>>
+    where
+        T: Send + 'static,
+        F: FnMut(Value) -> Option<BoxliteResult<T>> + Send + 'static,
+    {
+        let response = tokio::time::timeout(REQUEST_TIMEOUT, self.send(Method::GET, path, None))
+            .await
+            .map_err(|_| timed_out(&Method::GET, path))??;
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = read_body(&Method::GET, path, response).await?;
+            return Err(native_error(&Method::GET, path, status, &body));
+        }
+        let (sender, receiver) = mpsc::channel(EVENT_BUFFER);
+        tokio::spawn(forward_events(response.into_body(), sender, keep));
+        Ok(ReceiverStream::new(receiver))
     }
 
     async fn json(&self, method: Method, path: &str, body: Option<&Value>) -> BoxliteResult<Value> {
@@ -132,6 +167,114 @@ impl Client {
             .connect()
             .await
     }
+}
+
+/// Copy parsed events into `sender` until the reader leaves or the stream stops.
+async fn forward_events<T, F>(
+    mut body: Incoming,
+    sender: mpsc::Sender<BoxliteResult<T>>,
+    mut keep: F,
+) where
+    F: FnMut(Value) -> Option<BoxliteResult<T>>,
+{
+    let mut parser = EventParser::default();
+    loop {
+        let frame = tokio::select! {
+            _ = sender.closed() => return,
+            frame = body.frame() => frame,
+        };
+        let chunk = match frame {
+            None => {
+                let ended = BoxliteError::Network(
+                    "OpenCode event stream ended; later events are not delivered".into(),
+                );
+                let _ = sender.send(Err(ended)).await;
+                return;
+            }
+            Some(Err(error)) => {
+                let failed =
+                    BoxliteError::Network(format!("OpenCode event stream failed: {error}"));
+                let _ = sender.send(Err(failed)).await;
+                return;
+            }
+            Some(Ok(frame)) => match frame.into_data() {
+                Ok(chunk) => chunk,
+                Err(_) => continue,
+            },
+        };
+        let events = match parser.push(&chunk) {
+            Ok(events) => events,
+            Err(error) => {
+                let _ = sender.send(Err(error)).await;
+                return;
+            }
+        };
+        for item in events.into_iter().filter_map(&mut keep) {
+            let ends = item.is_err();
+            if sender.send(item).await.is_err() || ends {
+                return;
+            }
+        }
+    }
+}
+
+/// Splits a `text/event-stream` body into the JSON carried by each event's
+/// `data` lines. Comments such as heartbeats and other fields are ignored.
+#[derive(Default)]
+pub(super) struct EventParser {
+    /// Received bytes after the last line end.
+    pending: Vec<u8>,
+    /// Length of the `pending` prefix already searched for a line end.
+    searched: usize,
+    data: String,
+}
+
+impl EventParser {
+    /// Each byte is searched for a line end once, however the body is split
+    /// into chunks, and complete lines are read in place and dropped together,
+    /// so parsing costs linear time in the bytes received.
+    pub(super) fn push(&mut self, chunk: &[u8]) -> BoxliteResult<Vec<Value>> {
+        self.pending.extend_from_slice(chunk);
+        let mut events = Vec::new();
+        let mut start = 0;
+        while let Some(offset) = self.pending[self.searched..]
+            .iter()
+            .position(|byte| *byte == b'\n')
+        {
+            let end = self.searched + offset;
+            let line = std::str::from_utf8(&self.pending[start..end])
+                .map_err(|_| BoxliteError::Internal("OpenCode sent a non-UTF-8 event line".into()))?
+                .trim_end_matches('\r');
+            start = end + 1;
+            self.searched = start;
+            if line.is_empty() {
+                if !self.data.is_empty() {
+                    let data = std::mem::take(&mut self.data);
+                    events.push(serde_json::from_str(&data).map_err(|error| {
+                        BoxliteError::Internal(format!("OpenCode sent an invalid event: {error}"))
+                    })?);
+                }
+            } else if let Some(value) = line.strip_prefix("data:") {
+                if !self.data.is_empty() {
+                    self.data.push('\n');
+                }
+                self.data.push_str(value.strip_prefix(' ').unwrap_or(value));
+                if self.data.len() > MAX_EVENT_BYTES {
+                    return Err(oversized_event());
+                }
+            }
+        }
+        self.pending.drain(..start);
+        self.searched = self.pending.len();
+        if self.pending.len() + self.data.len() > MAX_EVENT_BYTES {
+            return Err(oversized_event());
+        }
+        Ok(events)
+    }
+}
+
+fn oversized_event() -> BoxliteError {
+    BoxliteError::ResourceExhausted(format!("OpenCode event exceeds {MAX_EVENT_BYTES} bytes"))
 }
 
 async fn read_body(

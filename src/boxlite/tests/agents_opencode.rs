@@ -14,7 +14,8 @@
 mod common;
 
 use boxlite::agents::{
-    Agent, AgentCreateOptions, AgentSendOptions, AgentTurnStatus, AgentWaitOptions,
+    Agent, AgentCreateOptions, AgentEventsOptions, AgentSendOptions, AgentTurnStatus,
+    AgentWaitOptions,
 };
 use boxlite::runtime::options::{BoxOptions, RootfsSpec};
 use boxlite::{BoxCommand, BoxliteError, BoxliteOptions, BoxliteRuntime, CopyOptions, LiteBox};
@@ -299,7 +300,7 @@ async fn wait_for_status(agent: &Agent, turn_id: &str, status: AgentTurnStatus) 
 
 #[tokio::test]
 #[ignore = "needs a VM, network and BOXLITE_TEST_OPENCODE_BINARY; see the module docs"]
-async fn opencode_agent_creates_sends_and_waits() {
+async fn opencode_agent_creates_sends_streams_and_waits() {
     let home = common::home::PerTestBoxHome::new();
     let (runtime, sandbox, _) = opencode_box(&home).await;
 
@@ -326,6 +327,7 @@ async fn opencode_agent_creates_sends_and_waits() {
         Some("fake/fake-model")
     );
 
+    let mut events = agent.events(AgentEventsOptions::default()).await.unwrap();
     let turn = agent
         .send("hello", AgentSendOptions::default())
         .await
@@ -337,9 +339,21 @@ async fn opencode_agent_creates_sends_and_waits() {
     );
 
     let turn_id = turn.state().unwrap().id;
+    let enqueued = tokio::time::timeout(Duration::from_secs(30), async {
+        while let Some(event) = events.next().await {
+            let event = event.unwrap();
+            if event.kind == "session.inbox.enqueued" {
+                return event;
+            }
+        }
+        panic!("event stream ended before the turn was enqueued");
+    })
+    .await
+    .unwrap();
+    assert_eq!(enqueued.turn_id.as_deref(), Some(turn_id.as_str()));
+
     // A second handle, as another process would obtain it, reuses the service.
-    let agent_id = turn.state().unwrap().agent_id;
-    let reattached = sandbox.agents().get(&agent_id).await.unwrap();
+    let reattached = sandbox.agents().get(&enqueued.agent_id).await.unwrap();
     let finished = reattached.get_turn(&turn_id).await.unwrap();
     assert_eq!(finished.state().unwrap().status, AgentTurnStatus::Completed);
 

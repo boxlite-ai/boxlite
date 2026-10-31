@@ -1,6 +1,7 @@
 //! Adapter tests against a scripted OpenCode server on in-memory connections.
 //! Response shapes follow what OpenCode 2.2.2 returned to the same requests.
 
+use super::http::EventParser;
 use super::*;
 use crate::agents::{Agent, AgentWaitOptions};
 use crate::litebox::{BoxConnection, BoxTunnel, TunnelOptions};
@@ -113,6 +114,15 @@ fn respond(status: &str, body: Value) -> String {
         "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{body}",
         body.len()
     )
+}
+
+/// An SSE response whose body ends when the scripted server closes the connection.
+fn event_response(events: &[Value]) -> String {
+    let mut body = String::from(": heartbeat\n\n");
+    for event in events {
+        body.push_str(&format!("data: {event}\n\n"));
+    }
+    format!("HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\n\r\n{body}")
 }
 
 fn empty() -> String {
@@ -464,6 +474,153 @@ async fn malformed_native_session_ids_never_reach_a_request_path() {
 }
 
 #[tokio::test]
+async fn events_follow_the_session_and_its_new_subagents_then_report_the_end() {
+    let events = [
+        json!({ "id": "evt_0", "type": "server.connected", "data": {} }),
+        json!({ "id": "evt_1", "type": "session.inbox.enqueued", "data": { "sessionID": "ses_other", "inboxID": "msg_9" } }),
+        json!({ "id": "evt_2", "type": "session.inbox.enqueued", "data": { "sessionID": "ses_test", "inboxID": "msg_1" } }),
+        json!({ "id": "evt_3", "type": "session.created", "data": { "sessionID": "ses_child", "parentID": "ses_test" } }),
+        json!({ "id": "evt_4", "type": "permission.asked", "data": { "id": "per_1", "sessionID": "ses_child" } }),
+        json!({ "id": "evt_5", "type": "form.created", "data": { "form": { "id": "frm_1", "sessionID": "ses_test" } } }),
+        json!({ "id": "evt_6", "type": "session.inbox.enqueued", "data": { "sessionID": "ses_child", "inboxID": "msg_c1" } }),
+    ];
+    let (session, requests) = scripted_session(vec![event_response(&events)]);
+
+    let stream = session
+        .events(&AgentEventsOptions::default())
+        .await
+        .unwrap();
+    let items: Vec<_> = stream.collect().await;
+
+    let kinds: Vec<&str> = items
+        .iter()
+        .filter_map(|item| item.as_ref().ok())
+        .map(|event| event.kind.as_str())
+        .collect();
+    assert_eq!(
+        kinds,
+        [
+            "session.inbox.enqueued",
+            "session.created",
+            "permission.asked",
+            "form.created",
+            "session.inbox.enqueued"
+        ]
+    );
+    let enqueued = items[0].as_ref().unwrap();
+    assert_eq!(
+        (enqueued.turn_id.as_deref(), enqueued.cursor.as_deref()),
+        (Some("msg_1"), None)
+    );
+    assert_eq!(enqueued.data["id"], "evt_2");
+    // A subagent's own input is not a turn of this agent.
+    let child = items[4].as_ref().unwrap();
+    assert_eq!(
+        (child.agent_id.as_str(), child.turn_id.as_deref()),
+        ("ses_test", None)
+    );
+    assert!(
+        matches!(items.last(), Some(Err(BoxliteError::Network(message))) if message.contains("ended"))
+    );
+    assert_eq!(request_lines(&requests), ["GET /api/event HTTP/1.1"]);
+}
+
+#[tokio::test]
+async fn events_end_at_a_subagent_with_a_malformed_session_id() {
+    // An ID of any length would otherwise be held for as long as the stream is read.
+    let child = format!("ses_{}", "a".repeat(64 * 1024));
+    let events = [
+        json!({ "type": "session.created", "data": { "sessionID": child, "parentID": "ses_test" } }),
+        json!({ "type": "permission.asked", "data": { "id": "per_1", "sessionID": child } }),
+    ];
+    let (session, _) = scripted_session(vec![event_response(&events)]);
+
+    let stream = session
+        .events(&AgentEventsOptions::default())
+        .await
+        .unwrap();
+    let items: Vec<_> = stream.collect().await;
+
+    assert!(
+        matches!(items.as_slice(), [Err(BoxliteError::Internal(_))]),
+        "{:?}",
+        items.iter().map(Result::is_ok).collect::<Vec<_>>()
+    );
+}
+
+#[tokio::test]
+async fn events_end_once_more_subagents_are_created_than_one_stream_follows() {
+    let events: Vec<Value> = (0..=MAX_FOLLOWED_SUBAGENTS)
+        .map(|n| json!({ "type": "session.created", "data": { "sessionID": format!("ses_child{n}"), "parentID": "ses_test" } }))
+        .collect();
+    let (session, _) = scripted_session(vec![event_response(&events)]);
+
+    let stream = session
+        .events(&AgentEventsOptions::default())
+        .await
+        .unwrap();
+    let items: Vec<_> = stream.collect().await;
+
+    let followed = items.iter().take_while(|item| item.is_ok()).count();
+    assert_eq!(followed, MAX_FOLLOWED_SUBAGENTS);
+    assert!(
+        matches!(
+            &items[followed..],
+            [Err(BoxliteError::ResourceExhausted(_))]
+        ),
+        "{:?}",
+        &items[followed..]
+    );
+}
+
+#[tokio::test]
+async fn events_end_with_an_internal_error_at_an_event_that_is_not_json() {
+    let enqueued = json!({ "type": "session.inbox.enqueued", "data": { "sessionID": "ses_test", "inboxID": "msg_1" } });
+    let response = format!(
+        "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\n\r\ndata: {{oops\n\ndata: {enqueued}\n\n"
+    );
+    let (session, _) = scripted_session(vec![response]);
+
+    let stream = session
+        .events(&AgentEventsOptions::default())
+        .await
+        .unwrap();
+    let items: Vec<_> = stream.collect().await;
+
+    assert!(
+        matches!(items.as_slice(), [Err(BoxliteError::Internal(_))]),
+        "{items:?}"
+    );
+}
+
+#[tokio::test]
+async fn events_end_with_a_network_error_when_the_body_fails() {
+    // The second chunk announces 0x100 bytes, but the server closes after three.
+    let enqueued = json!({ "type": "session.inbox.enqueued", "data": { "sessionID": "ses_test", "inboxID": "msg_1" } });
+    let chunk = format!("data: {enqueued}\n\n");
+    let response = format!(
+        "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ntransfer-encoding: chunked\r\n\r\n{:x}\r\n{chunk}\r\n100\r\ncut",
+        chunk.len()
+    );
+    let (session, _) = scripted_session(vec![response]);
+
+    let stream = session
+        .events(&AgentEventsOptions::default())
+        .await
+        .unwrap();
+    let items: Vec<_> = stream.collect().await;
+
+    assert!(
+        matches!(
+            items.as_slice(),
+            [Ok(event), Err(BoxliteError::Network(message))]
+                if event.turn_id.as_deref() == Some("msg_1") && message.contains("failed")
+        ),
+        "{items:?}"
+    );
+}
+
+#[tokio::test]
 async fn wait_deadline_returns_without_interrupting() {
     let page = history(vec![assistant("msg_2", "tick", None), user("msg_1", 10.0)]);
     let (session, requests) = scripted_session(vec![empty(), page, empty(), empty()]);
@@ -775,6 +932,88 @@ fn native_ids_are_checked_before_use_in_paths() {
     assert!(is_session_id(&mint_id("ses_")));
     assert!(!is_session_id("ses_../../api"));
     assert!(!is_session_id("ses_"));
+    assert!(!is_session_id(&format!("ses_{}", "a".repeat(61))));
     assert!(is_message_id("msg_18c3376e3001FnH4vAmSQF6xi5"));
     assert!(!is_message_id("ses_e73cc8962ffej6cXCLaMIrn4mr"));
+}
+
+#[test]
+fn event_parser_joins_split_chunks_and_bounds_events() {
+    let mut parser = EventParser::default();
+    assert!(parser.push(b"data: {\"type\":\"a\"").unwrap().is_empty());
+    assert!(parser.push(b"}\n: heartbeat\n").unwrap().is_empty());
+    assert_eq!(parser.push(b"\n").unwrap(), vec![json!({ "type": "a" })]);
+    assert_eq!(
+        parser.push(b"data: [1,\ndata: 2]\r\n\r\n").unwrap(),
+        vec![json!([1, 2])]
+    );
+
+    let oversized = format!("data: \"{}", "x".repeat(1024 * 1024));
+    assert!(matches!(
+        parser.push(oversized.as_bytes()),
+        Err(BoxliteError::ResourceExhausted(_))
+    ));
+}
+
+#[test]
+fn an_oversized_event_fails_even_when_it_completes_in_one_chunk() {
+    let complete = format!("data: \"{}\"\n\n", "x".repeat(1024 * 1024));
+
+    let result = EventParser::default().push(complete.as_bytes());
+
+    assert!(
+        matches!(result, Err(BoxliteError::ResourceExhausted(_))),
+        "{:?}",
+        result.map(|events| events.len())
+    );
+}
+
+#[test]
+fn event_parsing_stays_linear_in_the_number_of_lines() {
+    // A hostile server can send a whole read buffer of blank lines; the parser
+    // must not rescan or shift the buffer once per line.
+    let blank_lines = vec![b'\n'; 1024 * 1024];
+    let started = std::time::Instant::now();
+
+    let events = EventParser::default().push(&blank_lines).unwrap();
+
+    assert!(events.is_empty());
+    assert!(
+        started.elapsed() < Duration::from_secs(1),
+        "{:?}",
+        started.elapsed()
+    );
+}
+
+#[test]
+fn event_parsing_stays_linear_when_a_line_arrives_byte_by_byte() {
+    // A line split across many reads must not be searched again from its
+    // start on every read.
+    let line = format!("data: \"{}\"\n\n", "x".repeat(128 * 1024));
+    let mut parser = EventParser::default();
+    let mut events = Vec::new();
+    let started = std::time::Instant::now();
+
+    for byte in line.as_bytes() {
+        events.extend(parser.push(std::slice::from_ref(byte)).unwrap());
+    }
+
+    assert_eq!(events.len(), 1);
+    assert!(
+        started.elapsed() < Duration::from_secs(1),
+        "{:?}",
+        started.elapsed()
+    );
+}
+
+#[test]
+fn event_parser_fails_on_an_event_that_is_not_utf8_json() {
+    for body in [&b"data: {oops\n\n"[..], b"data: \xff\n\n"] {
+        let result = EventParser::default().push(body);
+
+        assert!(
+            matches!(result, Err(BoxliteError::Internal(_))),
+            "{result:?}"
+        );
+    }
 }

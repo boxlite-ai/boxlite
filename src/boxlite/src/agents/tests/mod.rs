@@ -132,9 +132,12 @@ async fn unsupported_operations_fail_before_reaching_the_box() {
         let message = unsupported_message(agent.send("task", options).await);
         assert!(message.starts_with("agent.send option"), "{message}");
     }
+    let after = AgentEventsOptions {
+        after: Some("cursor".into()),
+    };
     assert_eq!(
-        unsupported_message(agent.events(AgentEventsOptions::default()).await),
-        expected("agent.events")
+        unsupported_message(agent.events(after).await),
+        "agent.events after a cursor is not supported by OpenCode 2.2"
     );
 }
 

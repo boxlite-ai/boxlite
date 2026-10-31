@@ -72,6 +72,7 @@ agents.create("opencode") ──exec───► check OpenCode's service regist
                           ──tunnel─► POST /api/session              → Agent (ses_…)
 agent.send(text)          ──tunnel─► POST …/prompt, delivery queue  → AgentTurn (msg_…)
 turn.wait()               ──tunnel─► inbox, history, pending requests
+agent.events()            ──tunnel─► GET /api/event, live only
 ```
 
 | Operation | Behavior |
@@ -81,6 +82,7 @@ turn.wait()               ──tunnel─► inbox, history, pending requests
 | `agent.send` | Admits the text with `queue` delivery under a BoxLite-chosen `msg_…` ID. A lost response is retried once with that ID; a second failure is a `Network` error naming the ID to read with `get_turn` |
 | `agent.get_turn`, `turn.state` | `get_turn` reads the turn now, among the newest 1,000 messages of the session (older turns are `NotFound`); `turn.state` returns the snapshot taken when the handle was obtained. A turn is `queued` in the inbox; `running` or `waiting_input` until its run records an outcome; `completed`, `failed` or `cancelled` from that outcome; `unknown` when its execution was cut off and a later run took the next input |
 | `turn.wait` | Polls every 500 ms. A timeout, or an `unknown` turn, returns `InvalidState` and never interrupts |
+| `agent.events` | Live events of the session and of subagent sessions created while the stream is open; `cursor` is `None` and `after` is rejected. Events of the session itself that name an input in OpenCode's `inboxID` carry it as `turn_id`; subagent events have none. The stream ends with one error: `Network` when the native stream ends or fails, `Internal` for an event that is not UTF-8 JSON or a subagent session ID that OpenCode would not mint, `ResourceExhausted` for an event over 1 MiB or a 1,001st subagent session |
 | `agent.config`, `agent.capabilities` | The session model; the operations above, with unknown limits as `None` |
 
 BoxLite runs OpenCode's own managed service, the `opencode serve --service`
@@ -110,6 +112,9 @@ tool call fails and the turn continues. A turn waiting on another permission, su
 as one asked in a subagent, lists it in its snapshot. Answering requests through
 BoxLite is not available yet; every other operation and option returns
 `Unsupported` before reaching OpenCode.
+
+Run [`agent_opencode.rs`](../../src/boxlite/examples/agent_opencode.rs) for a
+complete example.
 
 ### Record migration (breaking change)
 

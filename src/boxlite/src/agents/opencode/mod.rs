@@ -10,6 +10,7 @@
 //! Session::send  ──tunnel► POST /api/session/{id}/prompt   {id, delivery: "queue"}
 //! Session::turn  ──tunnel► GET  inbox, history newest-first,
 //!                          then pending requests while the turn runs
+//! Session::events ─tunnel► GET  /api/event (SSE: all sessions, live only)
 //! ```
 //!
 //! OpenCode owns sessions, history, execution and recovery: its managed service
@@ -22,7 +23,7 @@ mod http;
 #[cfg(test)]
 mod tests;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, LazyLock, PoisonError, Weak};
 use std::time::Duration;
 
@@ -30,9 +31,9 @@ use futures::StreamExt;
 use serde_json::{Map, Value, json};
 
 use super::{
-    AgentCapabilities, AgentConfig, AgentCreateOptions, AgentOutcome, AgentRequest,
-    AgentRequestKind, AgentResult, AgentSendMode, AgentSendOptions, AgentTurnState,
-    AgentTurnStatus,
+    AgentCapabilities, AgentConfig, AgentCreateOptions, AgentEvent, AgentEventStream,
+    AgentEventsOptions, AgentOutcome, AgentRequest, AgentRequestKind, AgentResult, AgentSendMode,
+    AgentSendOptions, AgentTurnState, AgentTurnStatus,
 };
 use crate::litebox::BoxCommand;
 use crate::runtime::backend::{BoxBackend, BoxNetworkBackend};
@@ -62,6 +63,11 @@ const HISTORY_PAGE: usize = 50;
 const HISTORY_MAX_PAGES: usize = 20;
 /// Deepest subagent nesting searched for a pending request's owner.
 const MAX_SUBAGENT_DEPTH: usize = 8;
+/// Subagent sessions one event stream follows. The server in the Box chooses
+/// their IDs, so the followed set stays bounded.
+const MAX_FOLLOWED_SUBAGENTS: usize = 1000;
+/// Longest native ID accepted; OpenCode mints 30-byte IDs.
+const MAX_NATIVE_ID_BYTES: usize = 64;
 
 /// One setup at a time per Box. The runtime lock admits one host process per
 /// BoxLite home, so these locks order every setup a Box sees.
@@ -290,6 +296,27 @@ impl Session {
             }
             status => Ok(self.turn_state(turn_id, status, observed.result)),
         }
+    }
+
+    /// Open this session's live events, including subagent sessions created
+    /// while the stream is open. OpenCode cannot replay, so `after` is
+    /// rejected and every event's cursor is `None`.
+    pub(super) async fn events(
+        &self,
+        options: &AgentEventsOptions,
+    ) -> BoxliteResult<AgentEventStream> {
+        if options.after.is_some() {
+            return Err(BoxliteError::Unsupported(format!(
+                "agent.events after a cursor is not supported by {ADAPTER}"
+            )));
+        }
+        let mut filter = EventFilter::new(&self.id);
+        let events = self
+            .server
+            .client
+            .events("/api/event", move |event| filter.keep(event))
+            .await?;
+        Ok(Box::pin(events))
     }
 
     /// The turn's input message and the history after it, oldest first. Pages
@@ -683,6 +710,80 @@ fn error_text(error: &Value) -> Option<String> {
     }
 }
 
+/// Keeps the events of one agent session and of subagent sessions created
+/// under it while the stream is open. Most events name their session in
+/// `data.sessionID`; `form.created` nests it in the form. The agent's own
+/// inbox events name one of its inputs in `inboxID`, which becomes the turn ID;
+/// subagent events never carry one. A malformed subagent ID, or more than
+/// `MAX_FOLLOWED_SUBAGENTS` subagents, ends the stream with an error.
+struct EventFilter {
+    agent_id: String,
+    sessions: HashSet<String>,
+}
+
+impl EventFilter {
+    fn new(agent_id: &str) -> Self {
+        Self {
+            agent_id: agent_id.to_owned(),
+            sessions: HashSet::from([agent_id.to_owned()]),
+        }
+    }
+
+    fn keep(&mut self, event: Value) -> Option<BoxliteResult<AgentEvent>> {
+        let data = &event["data"];
+        let kind = event["type"].as_str()?.to_owned();
+        if kind == "session.created" {
+            let parent = data["parentID"]
+                .as_str()
+                .filter(|parent| self.sessions.contains(*parent));
+            if let (Some(_), Some(child)) = (parent, data["sessionID"].as_str())
+                && let Err(error) = self.follow(child)
+            {
+                return Some(Err(error));
+            }
+        }
+        let owner = data["sessionID"]
+            .as_str()
+            .or(data["form"]["sessionID"].as_str())?;
+        if !self.sessions.contains(owner) {
+            return None;
+        }
+        let turn_id = if owner == self.agent_id {
+            data["inboxID"].as_str().map(str::to_owned)
+        } else {
+            None
+        };
+        Some(Ok(AgentEvent {
+            cursor: None,
+            agent_id: self.agent_id.clone(),
+            turn_id,
+            kind,
+            data: event,
+        }))
+    }
+
+    fn follow(&mut self, session_id: &str) -> BoxliteResult<()> {
+        if !is_session_id(session_id) {
+            return Err(BoxliteError::Internal(format!(
+                "OpenCode created a subagent of agent {} with a malformed session ID",
+                self.agent_id
+            )));
+        }
+        if self.sessions.contains(session_id) {
+            return Ok(());
+        }
+        // The set also holds the agent's own session.
+        if self.sessions.len() > MAX_FOLLOWED_SUBAGENTS {
+            return Err(BoxliteError::ResourceExhausted(format!(
+                "agent {} created more than {MAX_FOLLOWED_SUBAGENTS} subagent sessions while its events were read",
+                self.agent_id
+            )));
+        }
+        self.sessions.insert(session_id.to_owned());
+        Ok(())
+    }
+}
+
 /// Operations this adapter performs; everything else returns `Unsupported`.
 pub(super) fn capabilities() -> AgentCapabilities {
     AgentCapabilities {
@@ -691,6 +792,7 @@ pub(super) fn capabilities() -> AgentCapabilities {
             "agents.get",
             "agent.send",
             "agent.get_turn",
+            "agent.events",
             "agent.config",
             "agent.capabilities",
             "turn.wait",
@@ -717,6 +819,7 @@ fn is_message_id(id: &str) -> bool {
 
 fn has_native_shape(id: &str, prefix: &str) -> bool {
     id.len() > prefix.len()
+        && id.len() <= MAX_NATIVE_ID_BYTES
         && id.starts_with(prefix)
         && id
             .bytes()
