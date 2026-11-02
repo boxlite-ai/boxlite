@@ -33,7 +33,7 @@
           openssl gperf
           (python3.withPackages (ps: [ ps.pip ps.pyelftools ps.pytest ]))
           go
-          nodejs_22 corepack postgresql_17 redis mountpoint-s3
+          nodejs_22 corepack postgresql_17 redis mountpoint-s3 docker-compose
           llvm libclang
           flex bison bc elfutils
           meson ninja libcap

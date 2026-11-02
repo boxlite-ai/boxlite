@@ -37,7 +37,7 @@ case in this suite is using the same fixtures and the same path.
 
 ## Managed local E2E (preferred)
 
-`make test:e2e:setup` owns an isolated stack: dependency containers, current-source clients, API/Runner/proxies, fixtures and a real guest smoke. State lives in `target/e2e/`; no sudo or system services are used.
+`make test:e2e:setup` starts the dependency services with Docker Compose and runs the current-source API/Runner/proxies as host processes; fixtures and a real guest smoke follow. State lives in `target/e2e/`; no sudo or system services are used.
 
 Initialize submodules once (`git submodule update --init --recursive`, or `make setup`), then:
 
@@ -48,7 +48,7 @@ make test:e2e FILTER=exec_working_dir
 make test:e2e:down
 ```
 
-Nix is optional: install the same tools with the distro and run the same commands. Host prerequisites remain `/dev/kvm`, a Docker-compatible CLI, and (for volumes) `/dev/fuse`, `mount-s3` and `user_allow_other` in `/etc/fuse.conf`. The bootstrap instructions below are the legacy Ubuntu system-service path and are no longer used by `make test:e2e:setup`.
+Nix is optional: install the same tools with the distro and run the same commands. Host prerequisites remain Docker with Compose v2, `/dev/kvm`, and (for volumes) `/dev/fuse`, `mount-s3` and `user_allow_other` in `/etc/fuse.conf`. The devshell includes `docker-compose`; Ubuntu can use `docker-compose-v2`. The bootstrap instructions below are the legacy Ubuntu system-service path and are no longer used by `make test:e2e:setup`.
 
 ## Prereqs
 

@@ -649,22 +649,22 @@ E2E_PYTHON ?= $(PROJECT_ROOT)/.venv-e2e/bin/python
 E2E_UV_VERSION = $(shell python3 -c 'import json; print(json.load(open("apps/e2e/dependencies.json"))["uv"])')
 
 test\:e2e\:setup:
-	@python3 apps/e2e/manage.py setup
+	@python3 apps/e2e/local.py setup
 
 test\:e2e\:up:
-	@python3 apps/e2e/manage.py up
+	@python3 apps/e2e/local.py up
 
 test\:e2e\:down:
-	@python3 apps/e2e/manage.py down
+	@python3 apps/e2e/local.py down
 
 test\:e2e\:doctor:
-	@python3 apps/e2e/manage.py doctor
+	@python3 apps/e2e/local.py doctor
 
 test\:e2e\:status:
-	@python3 apps/e2e/manage.py status
+	@python3 apps/e2e/local.py status
 
 test\:e2e:
-	@python3 apps/e2e/manage.py run
+	@python3 apps/e2e/local.py run
 
 test\:e2e\:deps:
 	@python3 -c 'import pathlib, sys; root = pathlib.Path(sys.argv[1]).absolute().parent.parent; sys.exit(0 if not root.exists() or (root / "pyvenv.cfg").exists() else "E2E_PYTHON must point into a virtual environment (set E2E_PYTHON=<venv>/bin/python)")' "$(E2E_PYTHON)"

@@ -1,0 +1,61 @@
+name: ${COMPOSE_PROJECT_NAME:-boxlite-e2e}
+
+services:
+  postgres:
+    image: ${POSTGRES_IMAGE:?}
+    environment:
+      POSTGRES_USER: boxlite
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?}
+      POSTGRES_DB: boxlite_e2e
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-35432}:5432"
+    volumes:
+      - postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U boxlite -d boxlite_e2e"]
+      interval: 2s
+      timeout: 3s
+      retries: 60
+
+  redis:
+    image: ${REDIS_IMAGE:?}
+    ports:
+      - "127.0.0.1:${REDIS_PORT:-36379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 60
+
+  registry:
+    image: ${REGISTRY_IMAGE:?}
+    ports:
+      - "127.0.0.1:${REGISTRY_PORT:-35000}:5000"
+    volumes:
+      - registry:/var/lib/registry
+
+  dex:
+    image: ${DEX_IMAGE:?}
+    command: ["dex", "serve", "/etc/dex/config.yaml"]
+    ports:
+      - "127.0.0.1:${DEX_PORT:-35556}:5556"
+    volumes:
+      - ${DEX_CONFIG:?}:/etc/dex/config.yaml:ro
+      - dex:/var/dex
+
+  minio:
+    image: ${MINIO_IMAGE:?}
+    command: ["server", "/data"]
+    environment:
+      MINIO_ROOT_USER: e2eadmin
+      MINIO_ROOT_PASSWORD: ${MINIO_PASSWORD:?}
+    ports:
+      - "127.0.0.1:${MINIO_PORT:-39000}:9000"
+    volumes:
+      - minio:/data
+
+volumes:
+  postgres:
+  registry:
+  dex:
+  minio:
