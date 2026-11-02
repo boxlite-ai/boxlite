@@ -794,8 +794,10 @@ name = "boxlite-vmm"
 version = "0.10.8"
 dependencies = [
  "boxlite-hypervisor",
+ "imago",
  "linux-loader",
  "mio 1.2.0",
+ "tempfile",
  "tracing",
  "virtio-queue",
  "vm-memory 0.18.0",
@@ -2703,6 +2705,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "imago"
+version = "0.2.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "806cbce8c1481e696ef9edf13e8cb41fea77557607146f60f9ceba809ba36238"
+dependencies = [
+ "cfg-if",
+ "libc",
+ "maybe-async",
+ "miniz_oxide 0.8.9",
+ "nix 0.30.1",
+ "page_size",
+ "parking_lot",
+ "rustc_version",
+ "tracing",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "indexmap"
 version = "1.9.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3225,6 +3245,17 @@ name = "matchit"
 version = "0.8.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "47e1ffaa40ddd1f3ed91f717a33c8c0ee23fff369e3aa8772b9605cc1d22f4c3"
+
+[[package]]
+name = "maybe-async"
+version = "0.2.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "746873a384ad60adc5db74471dfaba74bd278afbdcfd81db93fafcdfc8b5ca0c"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
+]
 
 [[package]]
 name = "md5"
@@ -3960,6 +3991,16 @@ dependencies = [
  "primefield",
  "primeorder 0.14.0",
  "sha2 0.11.0",
+]
+
+[[package]]
+name = "page_size"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "30d5b2194ed13191c1999ae0704b7839fb18384fa22e49b57eeaa97d79ce40da"
+dependencies = [
+ "libc",
+ "winapi",
 ]
 
 [[package]]

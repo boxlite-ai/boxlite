@@ -35,14 +35,17 @@ boxlite-vmm
 | `vcpu` | x86_64 vCPU workers: create and configure each vCPU, hold them at a start gate, run the guest and dispatch its exits until the VM ends |
 | `chipset` | `ChipsetBuilder`, the one registry of ranges and interrupt lines, and `Chipset`, the read-only machine it builds |
 | `bus` | `Bus`, `BusRange` and `BusDevice`, and `Buses::dispatch`, which serves the MMIO and port exits of a vCPU |
-| `virtio` | The virtio device contract: `VirtioDevice`, `DeviceSpec`, `DeviceEvent`, the activation context, event registration and wake handles, the split-virtqueue adapter (validation, EVENT_IDX, state restore and notification drain), and the default snapshot methods |
+| `virtio` | The virtio device contract: `VirtioDevice`, `DeviceSpec`, `DeviceEvent`, the activation context, event registration and wake handles, the split-virtqueue adapter (validation, EVENT_IDX, state restore and notification drain), the default snapshot methods, and the first `virtio-blk` device (raw image backend over imago, read/write/flush/discard/write-zeroes; unit-tested without a transport yet) |
 | `irq` | `IrqChip`, the host interrupt controller as devices see it, and `IrqLine`, one device line; HVF and KVM provide the controller, WHP (M10) only local APICs |
 | `devices` | The console queue, and on x86_64 the 8250 UART at COM1 and the i8042 reset, with `add_legacy_devices`, which adds them to the chipset |
 | `events` | `Event`, which ends the VM, `EventSender`, which also latches the stop, and `EventLoop`, the poller that waits for the first event |
 
 The x86_64 KVM boot and lifecycle are in place; the M1 devices, arm64 and HVF
 follow in M1. The virtio common infrastructure (`virtio`) is landing for M2;
-the BoxLite engine adapter, engine selection, and `native` feature wiring
+`virtio::blk` is its first consumer: a raw image backend over imago serving
+read, write, flush, discard and write-zeroes through the shared queue adapter,
+validated by unit tests until the MMIO transport and worker are wired.
+The BoxLite engine adapter, engine selection, and `native` feature wiring
 follow in M2.
 Neither new crate depends on `boxlite-shared`, and both are unpublished while
 their interfaces are being established.

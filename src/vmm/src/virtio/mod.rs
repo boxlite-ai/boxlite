@@ -20,6 +20,7 @@ use virtio_queue::Queue;
 
 use crate::{events::EventSender, memory::GuestMemoryMmap};
 
+pub(crate) mod blk;
 pub(crate) mod queue;
 
 /// The largest number of queues a device may declare.
