@@ -66,7 +66,7 @@ def test_detached_box_survives_cli_exit_and_is_reusable(cli):
     subsequent `exec` proves it's still usable. Add a per-box info
     command and we'll extend the contract."""
     # 1) detach run in one CLI process
-    r_run = run(cli, "run", "-d", IMAGE, "--", "sleep", "300", timeout=120)
+    r_run = run(cli, "run", "-d", IMAGE, "sleep", "300", timeout=120)
     m = BOX_ID_RE.search(r_run.stdout)
     assert m, f"`boxlite run -d` did not print a uuid: {r_run.stdout!r}"
     box_id = m.group(0)
@@ -107,7 +107,7 @@ def test_detached_box_exec_propagates_exit_code_on_fresh_cli(cli):
     """A non-zero exit from a command exec'd into a detached box must
     still propagate when the exec is launched from a fresh CLI process
     (i.e. no in-memory SDK state to lean on)."""
-    r_run = run(cli, "run", "-d", IMAGE, "--", "sleep", "300", timeout=120)
+    r_run = run(cli, "run", "-d", IMAGE, "sleep", "300", timeout=120)
     m = BOX_ID_RE.search(r_run.stdout)
     assert m
     box_id = m.group(0)

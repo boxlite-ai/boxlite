@@ -29,7 +29,7 @@ def _go_bin():
 
 
 @pytest.fixture(scope="module")
-def go_binary():
+def go_binary(tmp_path_factory):
     if auth_context().auth != "api-key":
         pytest.skip("Go SDK REST E2E only supports API-key credentials today")
     if not _go_bin():
@@ -37,15 +37,16 @@ def go_binary():
     if not SRC.exists():
         pytest.skip(f"{SRC} missing")
 
-    bin_path = Path("/tmp/boxlite_e2e_go")
+    bin_path = tmp_path_factory.mktemp("e2e-go") / "basic"
+    build_flags = ["-a"] if os.environ.get("BOXLITE_E2E_FORCE_GO_REBUILD") == "1" else []
     try:
         subprocess.run(
-            ["go", "build", "-o", str(bin_path), str(SHARED), str(SRC)],
+            ["go", "build", "-tags", "boxlite_dev", *build_flags, "-o", str(bin_path), str(SHARED), str(SRC)],
             cwd=str(REPO / "sdks/go"),
             check=True, capture_output=True, text=True, timeout=180,
         )
     except subprocess.CalledProcessError as e:
-        pytest.skip(f"go build failed: {e.stderr[:600]}")
+        pytest.fail(f"go build failed:\n{e.stderr}")
     return bin_path
 
 
@@ -57,9 +58,6 @@ def test_go_sdk_create_exec_remove(go_binary):
         **os.environ,
         **ctx.api_key_sdk_env(),
         "BOXLITE_E2E_IMAGE": default_image(),
-        # CGO dev tag — uses libboxlite.so from the workspace target/release,
-        # not a vendored prebuilt one.
-        "LD_LIBRARY_PATH": str(REPO / "target/release"),
     }
     r = subprocess.run(
         [str(go_binary)], env=env, timeout=180,

@@ -16,14 +16,22 @@ they may be passing because they're talking to something other than the
 production exec path.
 """
 from __future__ import annotations
+import asyncio
 
 import json
+import os
+from pathlib import Path
 import urllib.error
+import urllib.parse
 import urllib.request
 
 import pytest
 
 from conftest import drain, with_bounded_lifetime
+from path_verification import (
+    API_LOG, RUNNER_LOG, api_log_seek, api_hits_for_box,
+    runner_journal_seek, runner_hits_for_box,
+)
 
 
 @pytest.mark.asyncio
@@ -54,6 +62,8 @@ async def test_exec_roundtrip_proves_api_to_runner_chain(rt, image):
     from e2e_auth import auth_context, request_json
 
     ctx = auth_context()
+    api_before = api_log_seek()
+    runner_before = runner_journal_seek()
 
     # Raw HTTP create to inspect response headers
     req = urllib.request.Request(
@@ -64,7 +74,8 @@ async def test_exec_roundtrip_proves_api_to_runner_chain(rt, image):
         })).encode(),
         headers=ctx.auth_headers(content_type=True),
     )
-    with urllib.request.urlopen(req, timeout=30) as resp:
+    # A fresh Runner downloads and builds the image before create responds.
+    with urllib.request.urlopen(req, timeout=120) as resp:
         # `resp.headers` looks up case-insensitively; `dict()` of it does not.
         # A cloud stage behind an HTTP/2 load balancer sends header names
         # lowercased, so the `dict()` form failed against api.dev.boxlite.ai
@@ -95,6 +106,30 @@ async def test_exec_roundtrip_proves_api_to_runner_chain(rt, image):
             f"exec stdout missing expected marker — runner may not have "
             f"executed the command. stdout={out!r}"
         )
+
+        local_api = urllib.parse.urlparse(ctx.url).hostname in ("127.0.0.1", "localhost")
+        if os.environ.get("BOXLITE_E2E_API_LOG") or (local_api and API_LOG.exists()):
+            status, _ = request_json("GET", ctx.v1(f"boxes/{bid}"))
+            assert status == 200, f"GET box {bid} failed: {status}"
+            # The development Pino transport writes from a worker thread.
+            deadline = asyncio.get_running_loop().time() + 5
+            while api_hits_for_box(api_before, bid) < 1 and asyncio.get_running_loop().time() < deadline:
+                await asyncio.sleep(0.05)
+            assert api_hits_for_box(api_before, bid) >= 1, (
+                f"API log has no request for box {bid} since create"
+            )
+        if RUNNER_LOG:
+            assert runner_hits_for_box(runner_before, bid) >= 1, (
+                f"Runner log has no event for box {bid} since create"
+            )
+            with Path(RUNNER_LOG).open("rb") as runner_log:
+                runner_log.seek(int(runner_before))
+                lines = runner_log.read().decode("utf-8", errors="replace").splitlines()
+            assert any(
+                bid in line and "CREATE_BOX" in line
+                and "Job completed successfully" in line
+                for line in lines
+            ), f"Runner log has no successful CREATE_BOX event for box {bid}"
     finally:
         try:
             req = urllib.request.Request(

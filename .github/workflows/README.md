@@ -98,6 +98,15 @@ dispatch; not weekly, because `flake.lock` pins its inputs. It is not yet in
 becomes required once it has proven stable. It compiles through sccache but
 does not cache `/nix/store`. Ubuntu still has `/usr/lib`, so it misses
 regressions that break only on NixOS.
+The `e2e-harness` job runs when the managed E2E code, its tests, or the
+dependency lock contract changes (`apps/e2e`, `tests/scripts`,
+`make/test.mk`, the workflow and the setup-python action itself): it syncs
+the managed E2E lockfile on a clean Python and runs the offline harness
+suite, so lock drift or a harness regression fails in CI before the next
+local run. It is required through `Test (conclusion)`. The full managed
+E2E stack stays local on purpose: the same pytest cases already run against
+a stage in `e2e-cloud`, and the self-hosted KVM runner is owned by
+`e2e-local`.
 Marking a PR **Ready for review** triggers the SDK matrix and both Go analyzers
 without requiring another commit. When a user returns it to draft, the new run
 cancels the prior Test run and runs the lightweight selection. The author-review bot uses `GITHUB_TOKEN`;

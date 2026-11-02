@@ -19,6 +19,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent / "lib"))
 from e2e_auth import auth_context
 from images import default_image
+from node_tsx import driver_argv
 from path_verification import runner_journal_seek, runner_hits_for_box
 
 REPO = Path(__file__).resolve().parents[3]
@@ -41,8 +42,8 @@ def node_runner():
         pytest.skip("Node SDK REST E2E only supports API-key credentials today")
     if not shutil.which("node"):
         pytest.skip("node not installed")
-    if not shutil.which("npx"):
-        pytest.skip("npx not installed")
+    if driver_argv(REPO, SRC) is None:
+        pytest.skip("Node/tsx not installed")
     if not SRC.exists():
         pytest.skip(f"{SRC} missing")
     if not _has_node_napi_build():
@@ -62,10 +63,11 @@ def test_node_sdk_create_exec_remove(node_runner):
         **ctx.api_key_sdk_env(),
         "BOXLITE_E2E_IMAGE": default_image(),
     }
-    # Use npx tsx to run the .ts directly without a separate compile step.
-    # tsx is bundled with the apps workspace.
+    # Run through the managed tsx or the unmanaged npx fallback.
+    command = driver_argv(REPO, node_runner)
+    assert command is not None
     r = subprocess.run(
-        ["npx", "--yes", "tsx", str(node_runner)],
+        command,
         env=env, timeout=180, capture_output=True, text=True,
         cwd=str(NODE_SDK),
     )

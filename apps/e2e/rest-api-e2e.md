@@ -185,11 +185,12 @@ Skips must be explicit in artifacts. Current intentional skips:
 
 ## Artifacts
 
-All reusable artifacts are written to:
-
-```text
-target/rest-test-report/
-```
+The aggregate report, contract inventory and standalone CLI matrix use
+`target/rest-test-report/`. Managed E2E runs keep their original logs, JUnit,
+collection and phase results in `target/e2e/runs/<id>/` (or the chosen
+`BOXLITE_E2E_STATE_DIR`). `make test:e2e:report` regenerates each run summary and
+links it from the aggregate report; complete evidence can still contain failed
+tests. See the [E2E runbook](README.md#running-against-local-stack) for commands.
 
 Key files:
 

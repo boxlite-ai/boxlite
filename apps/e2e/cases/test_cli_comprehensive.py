@@ -20,6 +20,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+import uuid
 
 import pytest
 
@@ -54,7 +55,7 @@ def run(cli, *args, timeout: int = 60, check: bool = True) -> subprocess.Complet
 @pytest.fixture(scope="module")
 def detached_box(cli):
     """Create a long-lived detached box for multi-test reuse."""
-    r = run(cli, "run", "-d", IMAGE, "--", "sleep", "600", timeout=120)
+    r = run(cli, "run", "-d", IMAGE, "sleep", "600", timeout=120)
     m = BOX_ID_RE.search(r.stdout)
     assert m, f"run -d did not print box id: {r.stdout!r}"
     box_id = m.group(0)
@@ -171,11 +172,10 @@ def test_cli_ls_shows_box(cli, detached_box):
 
 def test_cli_run_with_name(cli):
     """Create a box with --name and verify it appears in ls."""
-    name = "cli-e2e-named-box"
-    r = run(cli, "run", "-d", "--name", name, IMAGE, "--",
+    name = f"cli-e2e-named-{uuid.uuid4().hex[:10]}"
+    r = run(cli, "run", "-d", "--name", name, IMAGE,
             "sleep", "300", timeout=120, check=False)
-    if r.returncode != 0:
-        pytest.skip(f"--name not supported or failed: {r.stderr}")
+    assert r.returncode == 0, f"run -d --name failed: {r.stderr}"
     m = BOX_ID_RE.search(r.stdout)
     assert m, f"run -d --name did not print id: {r.stdout!r}"
     box_id = m.group(0)

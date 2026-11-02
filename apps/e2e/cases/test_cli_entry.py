@@ -90,12 +90,12 @@ def test_cli_ls_returns_table(cli):
 
 
 def test_cli_run_exec_chain(cli):
-    """End-to-end CLI flow: `boxlite run -d <image> -- sleep 300`
+    """End-to-end CLI flow: `boxlite run -d <image> sleep 300`
     (detach mode), then `boxlite exec <id> -- echo HELLO`, then
     `boxlite rm -f <id>`. Asserts the exec captured stdout and the
     cleanup removed the box."""
     # 1. detach run prints the box id on stdout
-    r_run = run(cli, "run", "-d", IMAGE, "--", "sleep", "300", timeout=120)
+    r_run = run(cli, "run", "-d", IMAGE, "sleep", "300", timeout=120)
     m = BOX_ID_RE.search(r_run.stdout)
     assert m, f"`boxlite run -d` did not print a uuid: {r_run.stdout!r}"
     box_id = m.group(0)
@@ -189,7 +189,7 @@ def test_cli_exec_exit_code_propagates(cli):
     """A non-zero exit inside the box must propagate back through the
     CLI's own exit code. This is the CLI behaviour layer, not just the
     SDK — argv parsing + exit-code mapping is CLI-specific."""
-    r_run = run(cli, "run", "-d", IMAGE, "--", "sleep", "300", timeout=120)
+    r_run = run(cli, "run", "-d", IMAGE, "sleep", "300", timeout=120)
     m = BOX_ID_RE.search(r_run.stdout)
     assert m
     box_id = m.group(0)

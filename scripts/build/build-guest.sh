@@ -193,7 +193,7 @@ build_guest_binary() {
     source "$SCRIPT_BUILD_DIR/build-libseccomp.sh"
     ensure_libseccomp_for_target "$GUEST_TARGET"
 
-    cargo build $build_flag --target "$GUEST_TARGET" -p boxlite-guest
+    cargo build ${BOXLITE_CARGO_LOCKED:+--locked} $build_flag --target "$GUEST_TARGET" -p boxlite-guest
 
     local guest_binary="$PROJECT_ROOT/target/$GUEST_TARGET/$PROFILE/boxlite-guest"
     normalize_guest_binary_mode "$guest_binary"

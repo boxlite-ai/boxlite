@@ -23,18 +23,24 @@ DRIVERS = REPO / "apps/e2e/sdks/go"
 IMAGE = default_image()
 
 
-def _build_go(src_name: str) -> Path:
+def _build_go(src_name: str, build_dir: Path) -> Path:
     src = DRIVERS / src_name
     assert src.exists(), f"{src} missing"
-    bin_path = Path(f"/tmp/boxlite_e2e_go_{src_name.replace('.go', '')}")
+    bin_path = build_dir / Path(src_name).stem
+    build_flags = ["-a"] if os.environ.get("BOXLITE_E2E_FORCE_GO_REBUILD") == "1" else []
     subprocess.run(
         # Each driver is its own `package main`, so the shared image constant has
         # to be named on the build line rather than picked up from the directory.
-        ["go", "build", "-o", str(bin_path), str(DRIVERS / "e2e_image.go"), str(src)],
+        ["go", "build", "-tags", "boxlite_dev", *build_flags, "-o", str(bin_path), str(DRIVERS / "e2e_image.go"), str(src)],
         cwd=str(GO_SDK),
         check=True, capture_output=True, text=True, timeout=180,
     )
     return bin_path
+
+@pytest.fixture(scope="module")
+def go_build_dir(tmp_path_factory):
+    return tmp_path_factory.mktemp("e2e-go-coverage")
+
 
 
 @pytest.fixture(scope="module")
@@ -48,25 +54,23 @@ def go_env():
         **os.environ,
         **ctx.api_key_sdk_env(),
         "BOXLITE_E2E_IMAGE": IMAGE,
-        "LD_LIBRARY_PATH": str(REPO / "target/release"),
-        "DYLD_LIBRARY_PATH": str(REPO / "target/release"),
     }
 
 
-def _run_go(go_env, src_name: str) -> subprocess.CompletedProcess:
+def _run_go(go_env, build_dir: Path, src_name: str) -> subprocess.CompletedProcess:
     try:
-        bin_path = _build_go(src_name)
+        bin_path = _build_go(src_name, build_dir)
     except subprocess.CalledProcessError as e:
-        pytest.skip(f"go build {src_name} failed: {e.stderr[:400]}")
+        pytest.fail(f"go build {src_name} failed:\n{e.stderr}")
     return subprocess.run(
         [str(bin_path)], env=go_env, timeout=180,
         capture_output=True, text=True,
     )
 
 
-def test_go_exec_options(go_env):
+def test_go_exec_options(go_env, go_build_dir):
     """Exec with working dir + env vars."""
-    r = _run_go(go_env, "e2e_exec_options.go")
+    r = _run_go(go_env, go_build_dir, "e2e_exec_options.go")
     assert r.returncode == 0, (
         f"exit={r.returncode}\nstdout:\n{r.stdout}\nstderr:\n{r.stderr}"
     )
@@ -74,18 +78,18 @@ def test_go_exec_options(go_env):
     assert "ENV_VALUE=MY_VALUE" in r.stdout
 
 
-def test_go_copy(go_env):
+def test_go_copy(go_env, go_build_dir):
     """Copy in/out round-trip."""
-    r = _run_go(go_env, "e2e_copy.go")
+    r = _run_go(go_env, go_build_dir, "e2e_copy.go")
     assert r.returncode == 0, (
         f"exit={r.returncode}\nstdout:\n{r.stdout}\nstderr:\n{r.stderr}"
     )
     assert "COPY_ROUNDTRIP=ok" in r.stdout
 
 
-def test_go_errors(go_env):
+def test_go_errors(go_env, go_build_dir):
     """Error typing: bogus image + nonexistent box."""
-    r = _run_go(go_env, "e2e_errors.go")
+    r = _run_go(go_env, go_build_dir, "e2e_errors.go")
     assert r.returncode == 0, (
         f"exit={r.returncode}\nstdout:\n{r.stdout}\nstderr:\n{r.stderr}"
     )

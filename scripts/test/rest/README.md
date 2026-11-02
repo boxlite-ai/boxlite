@@ -38,7 +38,7 @@ mode:
 
 ```bash
 make test:rest:e2e AUTH=api-key
-make test:rest:e2e AUTH=oidc
+BOXLITE_E2E_PROFILE=oidc make test:rest:e2e AUTH=oidc
 ```
 
 `AUTH=oidc` uses `BOXLITE_E2E_OIDC_TOKEN` or a stored OIDC profile
@@ -46,11 +46,19 @@ make test:rest:e2e AUTH=oidc
 whoami` before the Python SDK runtime is built. Both modes discover
 `path_prefix` from `/v1/me` unless `BOXLITE_E2E_PREFIX` is set.
 
+Local preparation, Dex login and CLI matrix commands using the same isolated
+environment are in [the E2E runbook](../../../apps/e2e/README.md#running-against-local-stack).
+
 ## Aggregate report
 
 ```bash
 make test:rest:report
 ```
 
-This writes `target/rest-test-report/rest-report.md` from the inventory and
-CLI matrix artifacts that already exist.
+This writes `target/rest-test-report/rest-report.md` from existing inventory,
+CLI matrix and `target/e2e/runs/<id>/` artifacts. Each recorded E2E run gets a
+`summary.md` reconciling pytest phase events with JUnit. Failures, skips, xfails,
+unexpected passes and incomplete evidence remain separate; offline harness
+guards do not count as VM coverage. A complete report can describe failed tests.
+Missing or damaged evidence is marked incomplete, and later success never
+rewrites an earlier run's verdict. `BOXLITE_E2E_STATE_DIR` selects another state.

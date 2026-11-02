@@ -117,6 +117,7 @@ jobs:
       # Not weekly: flake.lock and rust-toolchain.toml pin every input, so an
       # unchanged tree only repeats the last build.
       nix: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.nix == 'true' }}
+      e2e-harness: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || steps.filter.outputs.e2e-harness == 'true' }}
     steps:
       - uses: actions/checkout@v5
       - name: Validate Makefile syntax
@@ -316,6 +317,21 @@ jobs:
               # The infra suite asserts Codecov's ignore list covers every test
               # source, so a change to it has to run that suite.
               - 'codecov.yml'
+            # The offline E2E harness suite: the managed startup/reporting code,
+            # its tests, and the dependency lock contract it enforces.
+            e2e-harness:
+              - 'apps/e2e/**/!(*.md)'
+              - 'apps/box-images/VERSION'
+              - 'tests/scripts/test_e2e_*.py'
+              - 'tests/scripts/e2e_reporting_test.py'
+              - 'scripts/test/rest/**/!(*.md)'
+              - 'Makefile'
+              - 'make/vars.mk'
+              - 'make/test.mk'
+              - '.github/actions/setup-python/**/!(*.md)'
+              - '.github/ci-config.json'
+              - '.github/actions/ci-config/**/!(*.md)'
+              - '.github/workflows/test.yml'
 
   infra:
     name: Workflow and infrastructure checks
@@ -742,6 +758,34 @@ jobs:
         timeout-minutes: 10
         run: ./target/debug/boxlite run --rm alpine:latest echo ok
 
+  # The managed E2E harness owns startup, reporting and the dependency lock
+  # contract, so CI runs its offline suite on a clean interpreter; syncing
+  # uv.lock here is also the standing proof that the lock resolves outside
+  # the Nix shell. The full managed stack stays local on purpose: its cases
+  # already run against a stage in e2e-cloud, and the self-hosted KVM
+  # runner belongs to e2e-local.
+  e2e-harness:
+    name: E2E harness checks
+    needs: changes
+    if: needs.changes.outputs.e2e-harness == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - uses: ./.github/actions/setup-python
+
+      - name: Sync the locked E2E tooling
+        run: make test:e2e:deps
+
+      - name: Run offline harness checks
+        run: make test:e2e:check
+
   # API tests need real Redis and Postgres services for integration coverage.
   api:
     name: API Tests
@@ -914,7 +958,7 @@ jobs:
   # NOTE: keep `needs` in sync with the jobs above when adding/removing jobs.
   test-conclusion:
     name: Test (conclusion)
-    needs: [changes, infra, rust, python, node, go, setup, api, dashboard, plugins, guest_artifacts, coverage-empty]
+    needs: [changes, infra, rust, python, node, go, setup, api, dashboard, plugins, guest_artifacts, coverage-empty, e2e-harness]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     permissions: {}

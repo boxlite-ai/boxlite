@@ -29,61 +29,171 @@ Product acceptance cases use the REST-mode runtime built by `conftest.py::rt`.
 `test_network_harness.py` separately checks probe failures and framing without
 creating a box; those checks are not counted as product E2E evidence.
 
-`cases/test_path_verification.py` is the meta-test: it spawns one box, runs
-one exec, and asserts that **both** `:3000` (API) and `:8080` (runner)
-received the corresponding HTTP requests by tailing `/var/log/boxlite-api.log`
-and `journalctl -u boxlite-runner`. If that meta-test passes, every other
-case in this suite is using the same fixtures and the same path.
+`cases/test_path_verification.py` creates a real box and checks the API version
+header, guest stdout and the local API/Runner file logs. The Runner must record
+a successful CREATE_BOX for that same box ID. File offsets isolate the current
+operation; remote runs retain the header and guest checks when logs are unavailable.
+
+## What the managed workflow changes
+
+The managed workflow runs the existing REST E2E suite through `manage.py`.
+The SDK → API → Runner → VM path, pytest discovery and `rt`/`box`/`drain`
+fixtures already existed. This change standardizes preparation, source builds,
+resource ownership and execution evidence around that suite.
+
+| Concern | Previous local workflow | Managed local workflow |
+| --- | --- | --- |
+| Entry | `test:e2e:setup` ran bootstrap and fixture scripts; `test:e2e` assumed a prepared stack; `run.sh` could bootstrap separately | Make and `run.sh` share `manage.py`; `run` prepares or recovers before testing |
+| Environment | Ubuntu installer used sudo, apt, host PostgreSQL/Redis, systemd units and `/etc` configuration | Five dependency containers; native API/Runner/proxies; repository state and isolated profiles; daily commands need no sudo |
+| Source clients | `run.sh` could install published Python SDK; C/Go wrappers could use release/prebuilt artifacts | Build current-checkout SDKs and services; C/Go use the debug archive; compilation failures remain failures |
+| Repeated runs | API systemd activity could skip bootstrap without checking current source identity | Check build inputs and artifact hashes; reuse healthy owned services; case-only edits skip native builds |
+| Fixtures | Snapshot registration and quota SQL referenced retired API/schema | Configure only the authenticated test organization and prove current create/exec/remove behavior |
+| Selection | `test:e2e` lacked FILTER forwarding; REST and direct pytest had separate selection paths | `FILTER` and exact nodeids through `E2E_ARGS` use the same runner |
+| New cases | Pytest already discovered `cases/test_*.py` and supplied shared fixtures | Same mechanism, now documented with a verified example; no registry or generator added |
+| Results | Pytest/CI logs and JUnit existed; preparation and attempts lacked a common evidence directory | Each operation records stage times and original exit; test runs reconcile phase events with JUnit, separating offline checks and incomplete evidence |
+| Stop/recovery | Explicit system-service maintenance scripts | Verified owned processes/containers; state lock; `down` retains data and caches; `up` recovers failed services |
+
+Use [the local commands](#running-against-local-stack) for this REST stack.
+`make test:integration` remains the local runtime/FFI suite; `apps/`'s
+`npm run e2e:local` remains the Dashboard/Dex environment. The existing
+`e2e-local.yml` runs the former integration suite, while `e2e-cloud.yml` still
+runs pytest against a deployed API. Those CI workflows have not been migrated
+to the managed local lifecycle; shared case changes also affect their runs.
+
+Most changes are E2E scripts/cases, Make targets, development tools and docs.
+SDK public interfaces are unchanged. Rootless volume mounts additionally need
+the companion Runner change that selects `systemd-run --user --scope` for
+non-root processes; this branch does not change product code. Host KVM/FUSE
+prerequisites still apply.
+
+This workflow does not freeze every dependency or establish production-deployment
+parity: the API runs from source through ts-node, and the standard environment
+does not start Dashboard or external billing/telemetry services. Full test
+failures and volume-write limitations remain visible. See the
+[dependency reproducibility boundary](../../docs/contributing/investigations/2026-10-29-e2e-standardization.md#dependency-reproducibility-boundary)
+and [measured acceptance](../../docs/contributing/investigations/2026-10-29-e2e-standardization.md#final-acceptance-evidence).
+
 
 ## Prereqs
 
-`BOXLITE_E2E_CATALOG_IMAGE` accepts tagged, digest-pinned, and untagged
-references, including registry ports such as `registry.local:5000/acme/app`.
-The catalog tests retain the port when deriving the repository name and the
-deliberately unpullable test image.
-
-Set up via the bootstrap script (one-time per machine):
+Linux with readable/writable `/dev/kvm`, a Docker-compatible container CLI
+(tested with rootless Podman), Python 3.11+, Node 22.12+, Corepack, Go, Rust and
+native build tools. The repository's Nix shell supplies the toolchain:
 
 ```bash
-apps/e2e/bootstrap.sh
+nix develop -c make test:e2e:doctor
+nix develop -c make test:e2e:setup
+nix develop -c make test:e2e FILTER=exec_working_dir
 ```
 
-This installs / starts:
+The complete managed stack has been exercised on x86_64 NixOS with rootless
+Podman. Ubuntu uses the same Linux entry, but has not yet had an end-to-end
+acceptance run. `make setup` supplies build tools; Docker access, Corepack/Yarn,
+the `psql` client and volume prerequisites must also be available. Ubuntu 24.04
+may need the [documented user-namespace setup](../../docs/guides/troubleshooting.md#ubuntu-2404-timeout-waiting-for-guest-ready--box-only-starts-with-sudo).
+The Nix shell supplies tool packages, while KVM/FUSE permissions and container
+runtime access remain host requirements.
 
-- Postgres + Redis (apt)
-- Node.js 22 + yarn (corepack)
-- Docker registry on `:5000`
-- Rust toolchain (rustup) + Go toolchain (release tarball)
-- `boxlite-runner.service` on `:8080` — **built from the working tree**, not from a release pin. The runner CGOs into `libboxlite.a` so any change under `sdks/c/`, `src/boxlite/`, or `apps/runner/` shows up after the next `make test:e2e:setup`. Release-pinned binaries would test stale code instead of the PR.
-- `boxlite-api.service` on `:3000` (ts-node, reads `/etc/boxlite-api.env`)
+`setup` builds the current runtime and SDKs, starts isolated PostgreSQL, Redis,
+Registry, Dex and MinIO containers plus native API/Runner/proxies, configures the
+test organization, and proves a real guest exec. `make test:e2e` also prepares a
+missing environment; unchanged healthy environments reuse their services and
+build outputs. The first run records the actual dependency/build/pull costs.
 
-First run is slow (~5–10 min, mostly the Rust release build). Subsequent runs are incremental.
+Container startup overlaps source preparation. MinIO bucket creation waits for
+the application's Node dependencies and MinIO readiness; the first guest create
+allows up to 120 seconds for image download/rootfs construction. This is startup
+preparation time, recorded separately from cached single-case execution.
 
-Tear down with `apps/e2e/teardown.sh` (basic), `--wipe-data`
-(also drops the DB and `/var/lib/boxlite`), or `--full` (also drops
-the persistent secrets file so the next bootstrap mints fresh keys).
-Postgres + Redis + Node are kept around — they're cheap to leave and
-likely shared with other things on the host.
+| Command | Behavior |
+| --- | --- |
+| `make test:e2e:doctor` | Check tools, KVM/FUSE access, ports and volume prerequisites |
+| `make test:e2e:setup` | Prepare source clients, services, fixtures and guest smoke |
+| `make test:e2e:up` | Start or recover the environment without repeating the guest smoke |
+| `make test:e2e [FILTER=expression]` | Run all cases or pytest's `-k` selection |
+| `make test:e2e E2E_ARGS='cases/test_exec_user.py::test_exec_user_runs_as_requested_ids'` | Run one exact nodeid |
+| `make test:e2e:status` | Inspect the owned environment |
+| `make test:e2e:down` | Stop owned services; preserve data, keys and caches |
+| `make test:e2e:report` | Aggregate recorded results and timings |
+| `make test:e2e:check` | Run the harness checks without services, using `.venv-e2e` when synced and the devshell Python otherwise |
 
-Bootstrap stores the random `ADMIN_API_KEY`, `ENCRYPTION_KEY`, and
-runner / proxy tokens in `/etc/boxlite-secrets.env`
-(mode 600, owned by the bootstrap user). It's read back on every
-re-run, so the API env file can be regenerated whenever a PR adds a
-new variable without losing access to data encrypted under the old
-keys. If you ever need to rotate, run `teardown.sh --full`.
+Run from the repository root, inside `nix develop` or another complete development
+environment. `apps/e2e/run.sh` enters the same manager and accepts pytest arguments.
+Only one operation runs against a state directory at a time; a busy environment
+fails visibly rather than racing its catalog and organization state.
 
-Then run the fixture setup (idempotent — re-running is safe):
+Default state is `target/e2e/`, including isolated CLI profiles, secrets, process
+ownership, logs and `runs/<id>/` evidence. `BOXLITE_E2E_STATE_DIR` chooses another
+state directory. The Runner has a short separate home under `/tmp/ble2e-*` to
+avoid Unix socket path limits. Nothing rewrites the user's normal CLI profile or
+installs system services. The old `bootstrap.sh`/`teardown.sh` remain explicit
+Ubuntu system-service maintenance scripts; they are not an alternative entry
+point for the managed commands and are not covered by their checks.
 
-```bash
-python3 apps/e2e/fixture_setup.py
-```
+Default ports are API 3300, Runner 38080, Preview Proxy 34000, Registry Proxy
+34100, PostgreSQL 35432, Redis 36379, Registry 35000, Dex 35556 and MinIO 39000.
+Override with `BOXLITE_E2E_<SERVICE>_PORT`; service names are `API`, `RUNNER`,
+`PROXY`, `REGISTRY_PROXY`, `POSTGRES`, `REDIS`, `REGISTRY`, `DEX`, `MINIO`.
+An occupied port is an error; the manager never kills the listener.
+Containers publish loopback ports; native servers retain their existing bind
+behavior. Use a trusted development host.
 
-This:
+Managed volumes need `mount-s3`, `/dev/fuse` and `user_allow_other` in
+`/etc/fuse.conf`. NixOS hosts should set `programs.fuse.userAllowOther = true;`
+once in their system configuration. Daily E2E commands never escalate privileges.
+Missing volume prerequisites remain visible and must not be counted as coverage.
 
-- Registers `alpine:3.23` snapshot via the API admin endpoint
-- Waits for the snapshot to reach `active` state (runner pulls + pushes to local registry)
-- Sets reasonable per-box quotas on the admin org
-- Adds a `[profiles.p1]` entry in `~/.boxlite/credentials.toml` pointing at the local API
+With the companion Runner scope change, the recorded rootless MinIO run reaches
+the guest mount but still fails writes with permission/I/O errors. The startup
+smoke proves guest exec and API/Runner logs; it does not assert volume
+persistence. See the
+[measured results and remaining failures](../../docs/contributing/investigations/2026-10-29-e2e-standardization.md#execution-observations)
+before treating local startup as full-suite success.
+
+`BOXLITE_E2E_IMAGE` overrides the locked curated image associated with
+`apps/box-images/VERSION`. The manager exports the selected ref as both
+`BOXLITE_E2E_IMAGE` and `BOXLITE_SYSTEM_BASE_IMAGE`, because API image admission
+matches curated refs by exact string: a digest-pinned ref is otherwise treated
+as an unregistered `ghcr.io` image and rejected with HTTP 400. Catalog references
+retain their explicit tag/digest contracts through `BOXLITE_E2E_CATALOG_IMAGE`.
+
+## Locked dependencies
+
+The [portable dependency design](https://github.com/boxlite-ai/boxlite/issues/2207)
+locks the managed E2E path without changing Ubuntu's apt packages, system Python,
+native compiler installations or the public SDK compatibility ranges.
+
+| Layer | Managed E2E contract |
+| --- | --- |
+| Python tools | `apps/e2e/pyproject.toml` and universal `uv.lock`; pinned uv, `sync --locked --inexact` into the dedicated `.venv-e2e`; Python 3.11+ stays host-provided |
+| Apps | Checked-in `apps/yarn.lock`; Corepack selects the declared Yarn version and installs with `--immutable` |
+| Node SDK | Checked-in `sdks/node/package-lock.json`; `npm ci` refuses manifest drift |
+| Service and guest images | `dependencies.json` pins multiarchitecture indexes for PostgreSQL, Redis, Registry, Dex and the curated guest; each supports Linux amd64 and arm64 |
+| MinIO | Same historical release, official per-architecture binary SHA-256 plus license checksum, built into the local scratch image by `Minio.Dockerfile`; no dependency on the retired image registry |
+| Rust / Go | Managed builds use the existing Cargo lock with `--locked` and Go read-only module resolution. Native compiler versions remain recorded host inputs; nested vendor builds and sum files are not a hermetic toolchain |
+
+The manager fingerprints manifests, locks, interpreter identity, build recipes,
+build flags and tool versions. Dependency changes refresh installs and affected
+clients/API readiness; unchanged runs reuse them. Python synchronization uses
+`.venv-e2e`, so the SDK `.venv` and unrelated developer tools are untouched.
+A Python older than 3.11 is rejected. Normal `make dev:*` dependency policies
+remain available.
+
+Use `make test:e2e:deps` to install the locked Python environment, or
+`make test:e2e:deps E2E_PYTHON=/absolute/venv/bin/python` to validate a separate
+environment. After deliberately changing Python requirements, run
+`make test:e2e:lock` and review both manifest and lock. For Node changes, regenerate
+the existing lock with its package manager before running E2E. Image updates must
+verify both supported architectures; a changed guest VERSION requires updating
+its locked version and digest together.
+
+`make test:e2e:build:minio` builds only the checksum-verified historical MinIO
+release for this host. Downloads are cached by their locked SHA-256 and
+re-verified on reuse, so a Dockerfile change rebuilds the image without fetching
+the binary again. Existing owned containers reconcile their image, port,
+credentials and Dex configuration; a changed PostgreSQL password recreates its
+named volume because initdb reads it only once. This does not establish guest
+volume-write correctness or a maintained production storage recommendation.
 
 ## Running against a remote API (dev / staging)
 
@@ -314,52 +424,91 @@ Two things keep that from recurring:
 ## Running against local stack
 
 ```bash
-# Everything (after bootstrap + fixture_setup):
-apps/e2e/run.sh
-
-# Or via pytest directly:
-pytest apps/e2e/cases/
-
-# Just one case:
-pytest apps/e2e/cases/test_p0_6_exec_stdout_race.py -v
-
-# Two-sided (proves the suite detects the bug and the PR fixes it):
-PR_REF=<branch>  apps/e2e/two_sided.sh
+make test:e2e                              # complete available suite
+make test:e2e FILTER=exec_user              # selected behavior
+make test:e2e E2E_ARGS='-m smoke'           # existing safe smoke selection
+make test:e2e:down
+make test:e2e:up                            # reuse data and build outputs
+make test:e2e:report
 ```
 
-The reusable REST auth matrix entry is:
+REST authentication uses the same entry:
 
 ```bash
 make test:rest:e2e AUTH=api-key
-make test:rest:e2e AUTH=oidc
+BOXLITE_E2E_PROFILE=oidc make test:rest:e2e AUTH=oidc
 ```
 
-`AUTH=api-key` reads `BOXLITE_E2E_API_KEY` or profile `api_key`.
-`AUTH=oidc` reads `BOXLITE_E2E_OIDC_TOKEN` or profile `access_token`.
-Both modes call `/v1/me` to refresh the route `path_prefix`; set
-`BOXLITE_E2E_PREFIX` only when you need to override that discovery.
+API-key runs use the environment's isolated `p1` profile. Log in to local Dex
+once through the same environment and save an isolated `oidc` profile:
 
-The C, Go, and Node SDK entry-point cases currently skip under `AUTH=oidc`
-because those SDK smoke drivers still expose only API-key credential types.
-The Python SDK REST path does run under both auth modes because its
-`ApiKeyCredential` is the generic bearer-token slot on the wire.
+```bash
+nix develop -c python3 apps/e2e/manage.py exec -- \
+  target/debug/boxlite --profile oidc auth login \
+  --url http://127.0.0.1:3300/api --method device
+```
+
+Open the printed URL and use the development account from `apps/dex/config.yaml`
+(`admin@boxlite.dev` / `password`). The command sets the isolated home and removes
+ambient `BOXLITE_API_KEY`. Set the URL to your API port if overridden.
+`BOXLITE_E2E_OIDC_TOKEN` can supply an existing token; otherwise the helper
+refreshes the selected CLI profile. Both modes discover `path_prefix` through
+`/v1/me`. C, Go and Node drivers currently support only API keys and explicitly
+skip under OIDC.
+
+Run the independent CLI matrix with the same isolated credentials and services:
+
+```bash
+BOXLITE_REST_SMOKE_IMAGE=ghcr.io/boxlite-ai/boxlite-agent-base:v0.1.0 \
+  nix develop -c python3 apps/e2e/manage.py exec -- \
+  make test:rest:cli AUTH=api-key SCOPE=full
+BOXLITE_E2E_AUTH=oidc BOXLITE_E2E_PROFILE=oidc \
+  BOXLITE_REST_SMOKE_IMAGE=ghcr.io/boxlite-ai/boxlite-agent-base:v0.1.0 \
+  nix develop -c python3 apps/e2e/manage.py exec -- \
+  make test:rest:cli AUTH=oidc SCOPE=full
+```
+
+Every operation records its original exit and phase times under
+`target/e2e/runs/<id>/`. Test runs also write `pytest.log`, `junit.xml` and
+`cases.jsonl` with collection and setup/call/teardown results. Reports separate
+test failures, errors, skips, xfails, unexpected passes and incomplete evidence;
+`make test:e2e:report` exits nonzero when any recorded run is incomplete, and
+`make test:e2e:report REPORT_ARGS=--allow-incomplete` reports without failing.
+Offline harness guards are separate from VM coverage. A failed initial attempt
+stays recorded after a passing diagnostic rerun.
+
+Ctrl-C records manager exit 130 and incomplete evidence; the next command can
+reuse healthy services. An empty selector records pytest exit 5. Make reports its
+own nonzero exit for either case, so read `run.json` for the underlying code.
+If a service dies, `make test:e2e:status` identifies it and `make test:e2e:up`
+recovers it before repeating guest/log readiness. Do not rebuild other targets
+against the same Cargo output directory while measuring warm E2E performance.
+
+The [dated investigation](../../docs/contributing/investigations/2026-10-29-e2e-standardization.md)
+contains raw run IDs, startup/rerun measurements, original failures and source
+comparisons. The standard workflow uses existing pytest fixtures and serial case
+discovery; changing a case does not invalidate service or SDK builds.
+
+For regression proof, use separate worktrees with the same candidate test and
+compare the original assertion failure against the fix, preserving both results.
 
 ## Layout
 
 ```
 apps/e2e/
 ├── README.md
-├── bootstrap.sh             # Install services (local stack only)
-├── fixture_setup.py         # Register snapshots / quota / profile (local stack only)
-├── run.sh                   # bootstrap + fixture_setup + pytest
+├── manage.py                # Source preparation, owned environment and run facade
+├── bootstrap.sh             # Explicit legacy Ubuntu system-service installer
+├── fixture_setup.py         # Authenticated organization quotas + isolated profiles
+├── run.sh                   # Thin direct entry to manage.py run
 ├── sweep.py                 # Reclaim boxes earlier runs stranded (cloud)
-├── two_sided.sh             # Validates that test catches bug + PR fixes it
 ├── pytest.ini
 ├── lib/
 │   ├── catalog_boxes.py     # Boxes against the catalog: pull budget, report window
 │   ├── e2e_auth.py          # Auth context: API-key / OIDC, env vars / profile
 │   ├── images.py            # Curated ref derived from apps/box-images/VERSION
-│   └── path_verification.py # Helpers that prove SDK→API→Runner was the route
+│   ├── path_verification.py # Helpers that prove SDK→API→Runner was the route
+│   └── reporting.py         # Flushed collection and phase result evidence
 ├── sdks/
 │   ├── node/                # TypeScript drivers (fallback: scripts/test/image.js)
 │   ├── go/                  # Go drivers + e2e_image.go fallback for direct runs
@@ -390,7 +539,37 @@ apps/e2e/
 
 ## Adding a case
 
-1. Drop a `test_*.py` into `cases/`
-2. Take fixtures from `conftest.py` — at minimum `rt` (already REST-bound)
-3. Reference the issue / PR in the docstring so it survives the regression
-4. Run `pytest cases/test_yours.py -v` locally first
+Add one `cases/test_<behavior>.py`; no registry, generator or CI change is needed.
+Use `box` for a per-case guest, or `rt`/`image` when lifecycle itself is under test.
+The runtime is REST-only. Existing fixtures own cleanup and default lifetimes;
+raw HTTP creation must use `with_bounded_lifetime`.
+
+```python
+import asyncio
+import pytest
+from conftest import drain
+
+@pytest.mark.asyncio
+async def test_command_streams_and_exit(box):
+    async def execute():
+        execution = await box.exec(
+            "sh", ["-c", "printf e2e-out; printf e2e-err >&2; exit 42"], None
+        )
+        out, err = await drain(execution)
+        result = await execution.wait()
+        return out, err, result.exit_code
+
+    assert await asyncio.wait_for(execute(), timeout=30) == (
+        "e2e-out", "e2e-err", 42
+    )
+```
+
+Run `make test:e2e FILTER=command_streams_and_exit` or pass its exact nodeid in
+`E2E_ARGS`. Bound the entire exec/drain/wait sequence: a deadline only around
+`wait()` cannot stop a stream that hangs earlier. Assert real guest output and
+exit status; negative stream assertions also need a positive sentinel. Register
+cleanup immediately for additional boxes, volumes or credentials.
+
+Cases default to serial execution because image aliases, catalog state and
+organization quotas are shared. Add `@pytest.mark.smoke` only when the case is
+safe against a paying stage: one box at a time and no quota/error storms.
