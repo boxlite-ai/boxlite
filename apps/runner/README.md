@@ -14,6 +14,14 @@ Cloud deployment runs on Compute Engine or EC2 with nested KVM, listening on `:3
 behind the control-plane API. See [infrastructure architecture](../infra/docs/architecture.md)
 and [runner operations](../infra/docs/runners.md).
 
+`BOXLITE_KERNEL_PATH` selects an operator-installed kernel for newly created
+Boxes. It must be an absolute readable regular file; invalid settings fail
+startup. The Runner enables the local `custom-kernel` RC capability through
+the Go/C SDK and preserves the guest privilege policy separately. An unset
+path keeps the bundled default. Cloud deployment downloads and verifies the
+file; the Runner itself performs no download. Existing Boxes retain their
+saved boot configuration. See [cloud kernel operations](../infra/docs/runners.md#cloud-kernel).
+
 For the system-wide context (CDN, load balancers, where the runner fits in
 the request path), see [`apps/README.md`](../README.md).
 

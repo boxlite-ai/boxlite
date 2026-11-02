@@ -45,6 +45,57 @@ To select a staged runner in a local deployment, set `RUNNER_ARTIFACT_SOURCE=bui
 `RUNNER_ARTIFACT_REF=<full-sha>` alongside a valid `BOXLITE_IMAGE_TAG`, then preview with mdeploy.
 The [one-dispatch workflow](deployment.md#deploy-through-github-actions) prepares these values for you.
 
+## Cloud kernel
+
+Cloud deployment installs the standalone
+[`v5.4.0` DinD x86_64 kernel](https://github.com/boxlite-ai/libkrunfw/releases/tag/v5.4.0)
+independently of the runner package. Its URL and expected SHA256 are declared in
+[`mdeploy/stack/runner-kernel.ts`](../mdeploy/stack/runner-kernel.ts). Package builds
+retain their ordinary firmware.
+
+The host downloads and verifies the kernel before selecting it through
+`BOXLITE_KERNEL_PATH` in `/etc/boxlite/kernel.env`. A systemd drop-in loads this file.
+AWS updates and GCP policy enforcement also compare the kernel pin, so changing only
+the kernel triggers convergence even when the runner identity is unchanged.
+
+An unchanged healthy installation does not restart the runner. After a restart,
+activation waits for the runner's loopback HTTP health endpoint to return its version.
+The listening process must match the systemd unit's main process, so another service
+on the same port cannot satisfy readiness. Boot installs `iproute2` for this check.
+Convergence checks the complete environment file and the main process's startup
+`BOXLITE_KERNEL_PATH`. Conflicting assignments or a process still using an older
+path trigger a restart, even when the files already select the intended kernel.
+The configured health port must be an integer from 1 to 65535; invalid ports fail
+before script generation.
+
+An installed runner remains eligible for convergence when it is active but disabled
+for automatic startup. Kernel installation and convergence share a host lock;
+an overlapping kernel operation fails without changing kernel configuration and
+can be retried after the current operation finishes.
+
+Kernel downloads retry transient failures up to five times, with a two-second retry
+delay and a 120-second deadline across the complete download. Exhausted retries
+leave configuration untouched. Failed activation attempts both
+configuration restores, a systemd reload and a restart, even if an earlier recovery
+step fails. Incomplete recovery retains the backups and reports their location;
+activation failure always reports failure to the rollout.
+Refusing a runner binary downgrade still allows environment and kernel convergence.
+
+Runner environment convergence retains the target stage settings once their rewrite
+is verified. A restart failure reports failure and requires service-log diagnosis;
+it does not restore previous endpoints that may no longer serve the stage.
+
+New Boxes inherit this kernel, including ordinary unprivileged Boxes. Docker still
+requires the separate guest privilege option. Each Box retains its prepared kernel
+across stop/start; changing the runner setting affects subsequently created Boxes.
+Runtime construction validates that the configured kernel is an absolute readable file.
+
+For a self-hosted runner, set `BOXLITE_KERNEL_PATH` to an installed compatible kernel
+before starting the service. Leaving it unset keeps the bundled firmware default.
+Custom-kernel selection is a local runtime capability; REST clients cannot supply
+host kernel paths. See the [custom-kernel guide](../../../docs/guides/custom-kernel.md)
+for SDK opt-in and kernel persistence.
+
 ## Upgrade or roll back a release
 
 ```bash

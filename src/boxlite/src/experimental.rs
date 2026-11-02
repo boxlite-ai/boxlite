@@ -59,13 +59,13 @@ impl ExperimentalFeatures {
                 "custom-kernel" => ExperimentalFeature::CustomKernel,
                 "nested-virtualization" => ExperimentalFeature::NestedVirtualization,
                 "" => {
-                    return Err(BoxliteError::Config(format!(
-                        "{EXPERIMENTAL_FEATURES_ENV} contains an empty feature name"
-                    )));
+                    return Err(BoxliteError::Config(
+                        "experimental feature list contains an empty feature name".into(),
+                    ));
                 }
                 unknown => {
                     return Err(BoxliteError::Config(format!(
-                        "unknown feature '{unknown}' in {EXPERIMENTAL_FEATURES_ENV}; supported values: custom-kernel, nested-virtualization"
+                        "unknown feature '{unknown}' in experimental feature list; supported values: custom-kernel, nested-virtualization"
                     )));
                 }
             };
@@ -137,6 +137,12 @@ impl RuntimeBuilder {
     /// Construct the local runtime with the selected capabilities.
     pub fn build(self) -> BoxliteResult<BoxliteRuntime> {
         BoxliteRuntime::new_with_experimental_features(self.options, self.features)
+    }
+
+    /// Construct without host validation for tests that never start a VM.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn build_for_test(self) -> BoxliteResult<BoxliteRuntime> {
+        BoxliteRuntime::new_for_test_with_features(self.options, self.features)
     }
 }
 
