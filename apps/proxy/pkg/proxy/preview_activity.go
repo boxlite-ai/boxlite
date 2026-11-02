@@ -5,6 +5,7 @@ package proxy
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -18,24 +19,24 @@ import (
 // This cooldown is independent of heartbeat polling and is set before delivery, even on failure.
 func (p *Proxy) recordPreviewOpen(parent context.Context, boxID string) {
 	p.previewOpenOnce.Do(func() { p.previewOpenCache = common_cache.NewMapCache[bool](context.Background()) })
-	_, err, _ := p.previewOpenGroup.Do(boxID, func() (any, error) {
+	stage, err, _ := p.previewOpenGroup.Do(boxID, func() (any, error) {
 		ctx, cancel := context.WithTimeout(parent, 2*time.Second)
 		defer cancel()
 		seen, err := p.previewOpenCache.Has(ctx, boxID)
 		if err != nil || seen {
-			return nil, err
+			return "cooldown_read", err
 		}
 		if err := p.previewOpenCache.Set(ctx, boxID, true, time.Minute); err != nil {
-			return nil, err
+			return "cooldown_write", err
 		}
 		configuration := p.apiclient.GetConfig()
 		endpoint, err := url.JoinPath(configuration.Servers[0].URL, "box", boxID, "last-activity")
 		if err != nil {
-			return nil, err
+			return "endpoint", err
 		}
 		request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, nil)
 		if err != nil {
-			return nil, err
+			return "request", err
 		}
 		request.Header.Set("Authorization", configuration.DefaultHeader["Authorization"])
 		request.Header.Set("X-BoxLite-Preview-Open", "1")
@@ -45,15 +46,24 @@ func (p *Proxy) recordPreviewOpen(parent context.Context, boxID string) {
 		}
 		response, err := client.Do(request)
 		if err != nil {
-			return nil, err
+			return "deliver", err
 		}
 		defer response.Body.Close()
 		if response.StatusCode != http.StatusCreated {
-			return nil, fmt.Errorf("preview observation returned %d", response.StatusCode)
+			return fmt.Sprintf("http_status_%d", response.StatusCode), fmt.Errorf("preview observation returned %d", response.StatusCode)
 		}
 		return nil, nil
 	})
 	if err != nil {
-		slog.WarnContext(parent, "preview activity observation failed", "box", boxID)
+		kind := "internal"
+		if errors.Is(err, context.DeadlineExceeded) {
+			kind = "timeout"
+		} else if errors.Is(err, context.Canceled) {
+			kind = "cancelled"
+		} else if stage == "deliver" {
+			kind = "transport"
+		}
+		// Raw transport/URL/cache errors can contain credentials; keep only a fixed stage/category.
+		slog.WarnContext(parent, "preview activity observation failed", "box", boxID, "operation", stage, "error", kind)
 	}
 }

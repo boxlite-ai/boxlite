@@ -84,15 +84,25 @@ func TestPreviewActivityNavigation(t *testing.T) {
 }
 
 func TestPreviewActivityExcludesAssetsAndDeniedNavigations(t *testing.T) {
-	for _, dest := range []string{"image", "iframe", "empty", "document"} {
-		t.Run(dest, func(t *testing.T) {
+	for _, test := range []struct {
+		name, method, mode, dest string
+		denied                   bool
+	}{
+		{"image", http.MethodGet, "navigate", "image", false},
+		{"iframe", http.MethodGet, "navigate", "iframe", false},
+		{"empty", http.MethodGet, "navigate", "empty", false},
+		{"denied", http.MethodGet, "navigate", "document", true},
+		{"non_get", http.MethodPost, "navigate", "document", false},
+		{"non_navigation", http.MethodGet, "cors", "document", false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
 			proxy := newTunnelProxy(t, http.StatusOK)
 			calls := make(chan struct{}, 1)
 			api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.Header.Get("X-BoxLite-Preview-Open") != "" {
 					calls <- struct{}{}
 				}
-				if dest == "document" {
+				if test.denied {
 					w.WriteHeader(http.StatusNotFound)
 				} else if r.URL.Path == "/api/preview/AbCdEf123456/tunnels/3000/access" {
 					_ = json.NewEncoder(w).Encode(tunnelGrant{ID: "tunnel-1", BoxID: "AbCdEf123456", Port: 3000, IsPublic: true, Generation: 1})
@@ -103,12 +113,12 @@ func TestPreviewActivityExcludesAssetsAndDeniedNavigations(t *testing.T) {
 			defer api.Close()
 			proxy.apiclient.GetConfig().Servers[0].URL = api.URL + "/api"
 			ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
-			ctx.Request = httptest.NewRequest(http.MethodGet, "http://3000-AbCdEf123456.proxy.test/", nil)
-			ctx.Request.Header.Set("Sec-Fetch-Mode", "navigate")
-			ctx.Request.Header.Set("Sec-Fetch-Dest", dest)
+			ctx.Request = httptest.NewRequest(test.method, "http://3000-AbCdEf123456.proxy.test/", nil)
+			ctx.Request.Header.Set("Sec-Fetch-Mode", test.mode)
+			ctx.Request.Header.Set("Sec-Fetch-Dest", test.dest)
 			target, err := proxy.GetProxyTarget(ctx)
 			stopActivityPoll(ctx)
-			if dest == "document" {
+			if test.denied {
 				if err == nil || target != nil {
 					t.Fatal("denied navigation reached a proxy target")
 				}
