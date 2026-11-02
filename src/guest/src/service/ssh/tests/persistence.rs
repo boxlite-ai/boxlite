@@ -35,7 +35,14 @@ fn state_is_private_and_replaced_completely() {
     let config = boxlite_shared::SshConfig {
         listen_address: "127.0.0.1:1234".into(),
         host_private_key: "private marker".into(),
-        ..Default::default()
+        accounts: vec![boxlite_shared::SshAccount {
+            login: "alice".into(),
+            authorized_keys: vec!["authorized key marker".into()],
+            ca: Some(boxlite_shared::SshCaConfig {
+                public_key: "CA key marker".into(),
+                principal: "alice".into(),
+            }),
+        }],
     };
     let first = DesiredState {
         enable: true,

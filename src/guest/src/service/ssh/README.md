@@ -225,6 +225,25 @@ session's forwarding permission; normal shell/exec sessions need none of them.
 leaves cleanup tracked for a later control call. SSH restart leaves the container's
 main process and non-SSH executions running.
 
+## Tests
+
+Lifecycle and Control RPC tests live in [tests.rs](tests.rs). Storage tests in
+[tests/persistence.rs](tests/persistence.rs) exercise production `save`/`load`
+with a complete configuration, including accounts, authorized keys, and CA
+credentials, while checking ownership, permissions, and whole-state replacement.
+Shared wire compatibility, field presence, credential redaction, and Git
+provenance tests remain inline in [the shared crate](../../../../shared/src/lib.rs).
+
+On Linux, run `make test:unit:guest FILTER=ssh` with nextest 0.9.116 or newer.
+The scoped [runner](tests/runner.sh) isolates `service::ssh::tests::*` and
+`service::ssh::persistence::tests::*` in private mount namespaces, mapping the
+current user to root when needed. Missing namespace support is a test error.
+This target skips execution on macOS; `make clippy` cross-compiles guest tests
+there but does not run them.
+
+Run `BOXLITE_DEPS_STUB=1 make test:unit:rust FILTER=ssh` for host and shared
+SSH tests, and use `FILTER=commit_is_stamped` for the shared provenance test.
+
 ## Source map
 
 Use this table when you know which part you want to change.
