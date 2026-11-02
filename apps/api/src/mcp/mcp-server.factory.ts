@@ -5,11 +5,11 @@
 
 import { Injectable } from '@nestjs/common'
 import { McpServer, type CallToolResult, type McpRequestContext } from '@modelcontextprotocol/server'
-import * as z from 'zod'
 import { BoxService } from '../box/services/box.service'
 import { OrganizationUserService } from '../organization/services/organization-user.service'
 import { boxToBoxResponse } from '../boxlite-rest/mappers/box-to-box.mapper'
 import type { AuthContext } from '../common/interfaces/auth-context.interface'
+import { listBoxesInputSchema, listBoxesOutputSchema } from './list-boxes.schema'
 
 /** The `authInfo.extra` key the controller stores the authenticated caller under. */
 export const MCP_CALLER_KEY = 'boxliteCaller'
@@ -43,7 +43,8 @@ export class McpServerFactory {
       'list_boxes',
       {
         description: 'List the boxes in one of your BoxLite organizations.',
-        inputSchema: z.object({ organization_id: z.uuid().describe('ID of the organization whose boxes to list') }),
+        inputSchema: listBoxesInputSchema,
+        outputSchema: listBoxesOutputSchema,
         annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       },
       ({ organization_id }) => this.listBoxes(caller, organization_id),
@@ -57,7 +58,8 @@ export class McpServerFactory {
     }
     // The same lookup and mapping as REST `GET /v1/boxes`.
     const boxes = await this.boxService.toBoxDtos(await this.boxService.findAllDeprecated(organizationId))
-    return { content: [{ type: 'text', text: JSON.stringify(boxes.map(boxToBoxResponse)) }] }
+    const result = boxes.map(boxToBoxResponse)
+    return { content: [{ type: 'text', text: JSON.stringify(result) }], structuredContent: result }
   }
 }
 

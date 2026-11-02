@@ -762,6 +762,15 @@ check the box list route applies, without its system-admin bypass. An
 organization the caller is not in, or one that does not exist, gets the same
 `isError` reply.
 
+The input is a strict object containing only the required `organization_id` UUID;
+unknown arguments are rejected before membership or box lookups. `tools/list`
+advertises an array `outputSchema` matching the mapped REST Box response,
+including optional activity, exit-code, and network fields. A successful call
+returns that array in `structuredContent` and the same JSON array in
+`content[0].text`, preserving existing text consumers. An empty organization
+returns `[]` in both forms. Authorization errors retain their text-only
+`isError` result and do not include structured success data.
+
 `list_boxes` explicitly advertises `readOnlyHint: true`, `destructiveHint: false`,
 and `openWorldHint: false`. The operation remains read-only. Under the MCP
 annotation contract, `destructiveHint` is meaningful only when `readOnlyHint`
