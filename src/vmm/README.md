@@ -29,21 +29,23 @@ boxlite-vmm
 | `vm` | `Vm<H>`: validate the configuration, allocate and register RAM on host backend `H`, own the devices in a `Chipset`, load the boot data, and run the vCPUs until the first event; `StopHandle` and `VmExit` |
 | `boot` | Linux x86_64 boot: `prepare` loads the pinned ELF kernel through linux-loader, places an optional initramfs at the top of RAM, writes the zero page, E820 map, command line and MP table, and sets up the 64-bit entry state (GDT, identity page tables, registers) |
 | `config` | `VmConfig { vcpu_count, memory_mib, kernel, cmdline, initramfs }` and its bounds: 1..=64 vCPUs, 1..=3072 MiB, a printable-ASCII command line under 2048 bytes |
-| `error` | VMM errors that keep the hypervisor's cause chain |
+| `error` | VMM errors that keep the hypervisor's cause chain, including a virtio device that cannot continue |
 | `memory` | `GuestRam`: owned guest RAM, the RAM layout, and the registration lifetime rules |
 | `cpu_features` | x86_64 guest CPUID for each vCPU and the boot MSRs |
 | `vcpu` | x86_64 vCPU workers: create and configure each vCPU, hold them at a start gate, run the guest and dispatch its exits until the VM ends |
 | `chipset` | `ChipsetBuilder`, the one registry of ranges and interrupt lines, and `Chipset`, the read-only machine it builds |
 | `bus` | `Bus`, `BusRange` and `BusDevice`, and `Buses::dispatch`, which serves the MMIO and port exits of a vCPU |
-| `virtio` | The virtio device contract: `VirtioDevice`, `DeviceSpec`, `DeviceEvent`, the activation context, event registration and wake handles, the split-virtqueue adapter (validation, EVENT_IDX, state save/restore, synchronous or deferred completion, and notification drain), and the default snapshot methods |
+| `virtio` | The virtio common infrastructure: the synchronous device contract (`VirtioDevice`, `DeviceSpec`, `DeviceEvent`, `ActivationContext`, `EventRegistrar`, `Waker`, `WorkerControl`), the split-virtqueue adapter (validation, EVENT_IDX, state save/restore, synchronous or deferred completion, and notification drain), the 4 KiB virtio-mmio transport (register file, feature negotiation, queue configuration and activation, Status=0 reset, post-activation queue-write rejection), the MMIO interrupt handle, and the default snapshot methods |
 | `irq` | `IrqChip`, the host interrupt controller as devices see it, and `IrqLine`, one device line; HVF and KVM provide the controller, WHP (M10) only local APICs |
 | `devices` | The console queue, and on x86_64 the 8250 UART at COM1 and the i8042 reset, with `add_legacy_devices`, which adds them to the chipset |
 | `events` | `Event`, which ends the VM, `EventSender`, which also latches the stop, and `EventLoop`, the poller that waits for the first event |
 
 The x86_64 KVM boot and lifecycle are in place; the M1 devices, arm64 and HVF
-follow in M1. The virtio common infrastructure (`virtio`) is landing for M2;
-the BoxLite engine adapter, engine selection, and `native` feature wiring
-follow in M2.
+follow in M1. The virtio common infrastructure (`virtio`) is in place for M2:
+the device contract, queue adapter, MMIO transport and interrupt handle are
+tested with a test device. Real device backends and the per-device worker
+follow, and the BoxLite engine adapter, engine selection, and `native` feature
+wiring follow in M2.
 Neither new crate depends on `boxlite-shared`, and both are unpublished while
 their interfaces are being established.
 
@@ -337,6 +339,49 @@ are built from. `Vm` owns the chipset they form.
   the oldest event, or `None` at its timeout, and rechecks the queue every
   second in case a wake-up was lost. Every event ends the VM; the VMM never
   restarts a guest.
+
+## Virtio-mmio transport
+
+`virtio::mmio::MmioTransport` is a `BusDevice` on a 4 KiB window, and
+`virtio::interrupt::MmioInterrupt` is the interrupt handle the device receives
+through `ActivationContext`.
+
+- **Registers.** Control registers take aligned 4-byte accesses; configuration
+  space forwards 1-, 2- and 4-byte accesses and splits an 8-byte access into two
+  4-byte device calls. Unknown, legacy and `QueueReset` registers read 0 and
+  ignore writes.
+- **Features.** The transport offers the device features plus
+  `VIRTIO_F_VERSION_1`, minus packed-ring, notification-data,
+  notification-config, ring-reset and admin-queue features. `FEATURES_OK`
+  validates the accepted subset and calls `set_features` once with
+  transport-owned bits removed. A rejected subset leaves the bit clear, so
+  Linux fails the device synchronously.
+- **Queues.** The transport holds a dense `QueueConfig` shadow, one per
+  `DeviceSpec::queue_max` slot. Queue registers are writable only after
+  `FEATURES_OK` and before `DRIVER_OK`; `QueueReady=0` keeps the configuration.
+  `DRIVER_OK` builds the `virtio_queue::Queue` values, validates them through
+  `queue::prepare_all`, and moves them into the device. A validation failure
+  leaves `DRIVER_OK` unset, sets `DEVICE_NEEDS_RESET` and raises a configuration
+  interrupt.
+- **After `DRIVER_OK`.** The device owns the queues; the transport rejects and
+  logs every queue-configuration write, including `QueueReady`. `QueueNotify`,
+  `InterruptACK` and `Status` stay live. `Status=0` stops the worker, resets the
+  device and clears the transport; it is the only queue-reconfiguration path.
+  Linux's queue teardown may warn on a `QueueReady` readback of 1; BoxLite never
+  hot-removes a virtio device.
+- **Interrupts.** `InterruptStatus` has used-buffer (0x1) and config-change
+  (0x2) bits. Raising always pulses the line; `InterruptACK` clears only the
+  acked bits and pulses again while any remain, so an edge line does not lose a
+  notification that arrived between Linux's read and acknowledgement.
+  `raise_config` also bumps the configuration generation; a reset keeps it
+  monotonic.
+- **Worker seam.** `WorkerControl` starts the worker after a successful
+  activation and stops it before `Status=0` resets the device. The transport is
+  not wired into `Vm` yet; step 4 provides the executor behind this seam.
+- **Errors.** `NeedsReset` sets `DEVICE_NEEDS_RESET` and raises the
+  configuration interrupt; `Fatal` sends `Event::DeviceFailed` with
+  `Error::VirtioDevice` and never stops the worker synchronously. The bus stays
+  infallible.
 
 ## Chipset
 
