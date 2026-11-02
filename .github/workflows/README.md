@@ -114,6 +114,11 @@ and bypass change filters. Combined Rust and CLI coverage runs on all three plat
 non-VM integration tests and Linux guest tests. Codecov requires 90% coverage of changed lines
 and reports total coverage.
 
+The Linux Rust jobs enable unprivileged user namespaces on their disposable runners
+so SSH guest tests can create private user/mount namespaces. This temporarily disables
+Ubuntu's AppArmor user-namespace restriction, as the Nix job does for its jailer.
+Namespace setup failures remain test errors.
+
 `make coverage:bindings:external` runs `make test:unit:scripts` before collecting
 native SDK profiles. The infra job also runs `make test:unit:scripts` whenever
 `tests/scripts/` or a script it drives (`scripts/ci/`, `scripts/test/coverage-bindings.sh`)
