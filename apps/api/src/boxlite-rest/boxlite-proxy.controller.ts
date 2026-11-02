@@ -48,6 +48,7 @@ import { PrepareTunnelDto } from '../box/dto/tunnel.dto'
 import { requestActor, UserContext } from '../common/decorators/user-context.decorator'
 import { Context } from '../common/context/context'
 import { recordBusinessEvent, recordOutcomes } from '../common/utils/business-event.util'
+import { SystemRole } from '../user/enums/system-role.enum'
 
 type ProxyActivityPolicy = { activity: boolean; autoResume: boolean }
 const USER_OPERATION: ProxyActivityPolicy = { activity: true, autoResume: true }
@@ -447,7 +448,9 @@ export class BoxliteProxyController {
     }
 
     if (opts?.operation) {
-      this.recordProxiedOperation(opts.operation, box, req, res)
+      const actor = requestActor(req)
+      const ctx = authContext.role === SystemRole.ADMIN ? Context.admin(actor) : Context.user(actor)
+      this.recordProxiedOperation(opts.operation, box, ctx, res)
     }
 
     if (policy.activity) {
@@ -524,12 +527,12 @@ export class BoxliteProxyController {
    * ends: the runner's (or a gateway error's) status decides success, and a
    * client that disconnects first leaves an exception.
    */
-  private recordProxiedOperation(name: ProxiedOperation, box: Box, req: Request, res: Response): void {
+  private recordProxiedOperation(name: ProxiedOperation, box: Box, ctx: Context, res: Response): void {
     const event = {
       name,
       correlationId: box.id,
       organizationId: box.organizationId,
-      ctx: Context.user(requestActor(req)),
+      ctx,
     }
     recordBusinessEvent({ ...event, outcome: 'requested' })
     let recorded = false
