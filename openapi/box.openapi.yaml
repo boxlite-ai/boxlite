@@ -450,7 +450,7 @@ paths:
         Cloud persists the target and applies it through a durable Runner job;
         the Box size and usage period change only after the Runner confirms the
         target. Failed retries are bounded; a terminal failure releases the
-        lifecycle fence and leaves the Box size and billing unchanged. A 504
+        lifecycle fence and leaves the committed Box size unchanged. A 504
         resize_in_progress means work continues in the background; retry the same
         target or send an empty query. Box info shows committed resources, while
         this endpoint reports the runtime allocation.
