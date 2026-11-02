@@ -10,6 +10,7 @@ import { FailedAuthTrackerService } from '../auth/failed-auth-tracker.service'
 import { JwtStrategy } from '../auth/jwt.strategy'
 import { BoxService } from '../box/services/box.service'
 import { BoxState } from '../box/enums/box-state.enum'
+import { NetworkInfoResponseDto } from '../box/dto/network-info.dto'
 import { TypedConfigService } from '../config/typed-config.service'
 import { OrganizationUserService } from '../organization/services/organization-user.service'
 import { MCP_METADATA_PATH, McpAuthMetadata } from './mcp-auth-metadata'
@@ -153,6 +154,14 @@ describe('McpController', () => {
     expect(body.result.tools[0].inputSchema.required).toEqual(['organization_id'])
     expect(body.result.tools[0].annotations.readOnlyHint).toBe(true)
     expect(body.result.tools[0].annotations.destructiveHint).toBe(false)
+    expect(body.result.tools[0].outputSchema).toEqual(
+      expect.objectContaining({
+        type: 'array',
+        items: expect.objectContaining({
+          required: expect.arrayContaining(['box_id', 'status', 'cpus', 'memory_mib']),
+        }),
+      }),
+    )
   })
 
   it('returns the boxes of an organization the caller belongs to', async () => {
@@ -164,7 +173,39 @@ describe('McpController', () => {
     const boxes = JSON.parse(body.result.content[0].text)
     // memory_mib comes from the REST mapper, so the reply went through the same mapping as GET /v1/boxes.
     expect(boxes).toEqual([expect.objectContaining({ box_id: 'box-1', name: 'web', memory_mib: 2048 })])
+    expect(body.result.structuredContent).toEqual(boxes)
     expect(findAllDeprecated).toHaveBeenCalledWith(MEMBER_ORG)
+  })
+
+  it('returns an empty structured array for an organization without boxes', async () => {
+    findAllDeprecated.mockResolvedValueOnce([])
+    const toBoxDtos = app.get(BoxService).toBoxDtos as jest.Mock
+    toBoxDtos.mockResolvedValueOnce([])
+
+    const body = await (await callListBoxes(MEMBER_ORG)).json()
+
+    expect(body.result.isError).toBeFalsy()
+    expect(body.result.structuredContent).toEqual([])
+    expect(JSON.parse(body.result.content[0].text)).toEqual([])
+    expect(findAllDeprecated).toHaveBeenCalledWith(MEMBER_ORG)
+  })
+
+  it('preserves optional network policy and a zero exit code in structured results', async () => {
+    const network = NetworkInfoResponseDto.fromBox({
+      inboundEnabled: false,
+      outboundEnabled: true,
+      outboundAllowNet: ['api.example.com'],
+    })
+    const toBoxDtos = app.get(BoxService).toBoxDtos as jest.Mock
+    toBoxDtos.mockResolvedValueOnce([{ id: 'box-1', state: BoxState.STOPPED, exitCode: 0, network }])
+
+    const body = await (await callListBoxes(MEMBER_ORG)).json()
+
+    expect(body.result.isError).toBeFalsy()
+    expect(body.result.structuredContent).toEqual([
+      expect.objectContaining({ box_id: 'box-1', status: 'stopped', exit_code: 0, network }),
+    ])
+    expect(JSON.parse(body.result.content[0].text)).toEqual(body.result.structuredContent)
   })
 
   it('refuses an organization the caller is not in without reading its boxes', async () => {
@@ -172,6 +213,7 @@ describe('McpController', () => {
 
     expect(body.result.isError).toBe(true)
     expect(body.result.content[0].text).toBe('Organization not found or not accessible')
+    expect(body.result).not.toHaveProperty('structuredContent')
     expect(exists).toHaveBeenCalledWith(FOREIGN_ORG, CALLER.userId)
     expect(findAllDeprecated).not.toHaveBeenCalled()
   })
@@ -181,6 +223,18 @@ describe('McpController', () => {
 
     expect(body.error ?? body.result.isError).toBeTruthy()
     expect(exists).not.toHaveBeenCalled()
+  })
+
+  it('rejects unknown tool arguments before any lookup', async () => {
+    const response = await rpc('tools/call', {
+      name: 'list_boxes',
+      arguments: { organization_id: MEMBER_ORG, unexpected: true },
+    })
+    const body = await response.json()
+
+    expect(body.error ?? body.result.isError).toBeTruthy()
+    expect(exists).not.toHaveBeenCalled()
+    expect(findAllDeprecated).not.toHaveBeenCalled()
   })
 
   it('rejects a legacy initialize handshake with the supported versions', async () => {
