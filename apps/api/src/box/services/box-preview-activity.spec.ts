@@ -3,6 +3,22 @@ import { BoxService } from './box.service'
 
 describe('Activity business events for browser presence', () => {
   afterEach(() => jest.restoreAllMocks())
+  it('keeps ordinary heartbeats free of preview events and cooldown writes', async () => {
+    const log = jest.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined)
+    const activity = { updateLastActivityAt: jest.fn().mockResolvedValue(undefined) }
+    const redis = { set: jest.fn() }
+    const service: BoxService = Object.assign(Object.create(BoxService.prototype), {
+      redis,
+      boxActivityService: activity,
+    })
+    const at = new Date('2026-11-02T00:00:00Z')
+
+    await service.updateLastActivityAt('box-1', at)
+
+    expect(activity.updateLastActivityAt).toHaveBeenCalledWith('box-1', at)
+    expect(redis.set).not.toHaveBeenCalled()
+    expect(log).not.toHaveBeenCalled()
+  })
   it.each(['accepted', 'duplicate', 'redis failure'])('derives organization and fails closed: %s', async (result) => {
     const log = jest.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined)
     jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined)
