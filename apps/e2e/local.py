@@ -30,8 +30,8 @@ PORTS = dict(API=3300, RUNNER=38080, PROXY=34000, REGISTRY_PROXY=34100,
 ADMIN_KEY = "e2e-admin-key"
 RUNNER_KEY = "e2e-runner-key"
 PROXY_KEY = "e2e-proxy-key"
-POSTGRES_PASSWORD = "e2e-postgres"
-MINIO_PASSWORD = "e2e-minio"
+POSTGRES_PASSWORD = os.environ.get("POSTGRES_PASSWORD", "e2e-postgres")
+MINIO_PASSWORD = os.environ.get("MINIO_PASSWORD", "e2e-minio")
 ENCRYPTION_KEY = hashlib.sha256(b"boxlite-e2e-encryption").hexdigest()
 ENCRYPTION_SALT = hashlib.sha256(b"boxlite-e2e-salt").hexdigest()
 GUEST_IMAGE = DEPENDENCIES["guest"]["image"]
@@ -116,7 +116,7 @@ def base_env():
         "AWS_SECRET_ACCESS_KEY": MINIO_PASSWORD, "AWS_DEFAULT_BUCKET": "boxlite",
         "VOLUME_STORAGE_BACKEND": "s3",
         "BOXLITE_E2E_API_URL": api, "BOXLITE_E2E_ADMIN_KEY": ADMIN_KEY,
-        "BOXLITE_E2E_API_KEY": ADMIN_KEY, "BOXLITE_E2E_AUTH": "api-key",
+        "BOXLITE_E2E_API_KEY": ADMIN_KEY,
         "BOXLITE_REST_URL": api, "BOXLITE_HOME": str(STATE / "client-home"),
         "BOXLITE_E2E_API_LOG": str(STATE / "logs/api.log"),
         "BOXLITE_E2E_RUNNER_LOG": str(STATE / "logs/runner.log"),
@@ -134,6 +134,7 @@ def base_env():
         "SVIX_AUTH_TOKEN": "", "KAFKA_ENABLED": "false", "INCIDENT_IO_ENABLED": "false",
         "CERT_PATH": "", "CERT_KEY_PATH": "", "ENABLE_TLS": "false",
     })
+    env.setdefault("BOXLITE_E2E_AUTH", "api-key")
     env["PATH"] = f"{ROOT / '.venv-e2e/bin'}:{ROOT / 'target/debug'}:{env.get('PATH', '')}"
     env["PYTHONPATH"] = f"{E2E / 'lib'}:{env.get('PYTHONPATH', '')}"
     return env
@@ -172,13 +173,7 @@ def make(target, env, **variables):
 
 
 def build(env):
-    python = ROOT / ".venv-e2e/bin/python"
-    needs_deps = not python.exists()
-    if not needs_deps:
-        needs_deps = subprocess.run(
-            [str(python), "-c", "import pytest, uv"], capture_output=True).returncode != 0
-    if needs_deps:
-        make("test:e2e:deps", env)
+    make("test:e2e:deps", env)
     make("test:e2e:deps:apps", env)
     make("test:e2e:deps:node", env)
     make("runtime:debug", env)
@@ -222,7 +217,7 @@ def start_process(name, argv, cwd, health, env, timeout):
             [str(item) for item in argv], cwd=cwd, env=env,
             stdout=output, stderr=subprocess.STDOUT, start_new_session=True)
     pids = load_pids()
-    pids[name] = process.pid
+    pids[name] = {"pid": process.pid, "starttime": process_starttime(process.pid)}
     save_pids(pids)
     wait_http(health, timeout, process)
     return process
@@ -239,17 +234,30 @@ def save_pids(pids):
     path.write_text(json.dumps(pids, indent=2))
 
 
+def process_starttime(pid):
+    raw = Path(f"/proc/{pid}/stat").read_text()
+    return raw[raw.rfind(")") + 2:].split()[19]
+
+
+def process_matches(pid, starttime):
+    try:
+        return process_starttime(pid) == starttime
+    except (FileNotFoundError, ProcessLookupError):
+        return False
+
+
 def stop_host():
-    for name, pid in load_pids().items():
+    for entry in load_pids().values():
+        if not isinstance(entry, dict) or not process_matches(entry.get("pid"), entry.get("starttime")):
+            continue
+        pid = entry["pid"]
         try:
             os.killpg(pid, signal.SIGTERM)
         except ProcessLookupError:
-            pass
+            continue
         deadline = time.monotonic() + 10
         while time.monotonic() < deadline:
-            try:
-                os.killpg(pid, 0)
-            except ProcessLookupError:
+            if not process_matches(pid, entry["starttime"]):
                 break
             time.sleep(0.1)
         else:
@@ -362,6 +370,13 @@ def doctor(env):
         missing.append("docker-compose")
     if not os.access("/dev/kvm", os.R_OK | os.W_OK):
         missing.append("read/write /dev/kvm")
+    if not shutil.which("mount-s3"):
+        missing.append("mount-s3")
+    if not os.access("/dev/fuse", os.R_OK | os.W_OK):
+        missing.append("read/write /dev/fuse")
+    fuse = Path("/etc/fuse.conf")
+    if not (fuse.exists() and any(line.strip() == "user_allow_other" for line in fuse.read_text().splitlines())):
+        missing.append("user_allow_other in /etc/fuse.conf")
     if shutil.which("node"):
         node = subprocess.run(["node", "--version"], capture_output=True, text=True, check=True).stdout.strip()
         if tuple(map(int, node.lstrip("v").split(".")[:2])) < (22, 12):
@@ -376,11 +391,10 @@ def doctor(env):
 def status(env):
     write_files()
     compose(["ps"], env)
-    for name, pid in load_pids().items():
-        try:
-            os.kill(pid, 0)
-            print(f"{name}: running (pid {pid})")
-        except ProcessLookupError:
+    for name, entry in load_pids().items():
+        if isinstance(entry, dict) and process_matches(entry.get("pid"), entry.get("starttime")):
+            print(f"{name}: running (pid {entry['pid']})")
+        else:
             print(f"{name}: stopped")
             raise Failure(f"{name} is not running")
 
