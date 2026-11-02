@@ -57,6 +57,9 @@ impl RestRuntime {
         if options.advanced.privileged {
             self.client.require_privileged_enabled().await?;
         }
+        if options.advanced.nested_virtualization {
+            self.client.require_nested_virtualization_enabled().await?;
+        }
         if options.volumes.iter().any(|v| v.cache_volume.is_some()) {
             self.client.require_cache_volumes_enabled().await?;
         }
@@ -280,12 +283,6 @@ impl BoxOptions {
             ));
         }
 
-        if self.advanced.nested_virtualization {
-            return Err(BoxliteError::Unsupported(
-                "nested virtualization is only supported by the local runtime".to_string(),
-            ));
-        }
-
         // Mounts. `BoxOptions::sanitize` is local-only, so
         // `VolumeSpec::validate` — the "exactly one origin" invariant that C and
         // Go callers can violate by setting the fields directly — has no other
@@ -382,6 +379,11 @@ impl RuntimeBackend for RestRuntime {
         if let Some(ref box_name) = name
             && let Some(litebox) = self.get(box_name).await?
         {
+            if options.advanced.nested_virtualization {
+                return Err(BoxliteError::Unsupported(
+                    "cannot verify nested virtualization for an existing remote box; create a new box".into(),
+                ));
+            }
             return Ok((litebox, false));
         }
         // Create new box
@@ -616,13 +618,12 @@ mod tests {
         (port, server)
     }
 
-    /// Like `json_server`, but returns each request's line with its JSON body
-    /// (`Null` when it has none), so a test can read what reached the server.
+    /// Record the request line, JSON body (`Null` when absent), and headers.
     async fn recording_json_server(
         bodies: Vec<&'static str>,
     ) -> (
         u16,
-        tokio::task::JoinHandle<Vec<(String, serde_json::Value)>>,
+        tokio::task::JoinHandle<Vec<(String, serde_json::Value, String)>>,
     ) {
         let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
         let port = listener.local_addr().unwrap().port();
@@ -650,7 +651,7 @@ mod tests {
                 } else {
                     serde_json::from_slice(&payload).unwrap()
                 };
-                requests.push((head.lines().next().unwrap().to_string(), json));
+                requests.push((head.lines().next().unwrap().to_string(), json, head));
                 socket
                     .write_all(
                         format!(
@@ -1006,9 +1007,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn create_rejects_nested_virtualization_in_rest_mode() {
-        let options = BoxliteRestOptions::new("http://localhost:1");
-        let runtime = RestRuntime::new(&options).expect("failed to create REST runtime");
+    async fn create_rejects_unadvertised_nested_virtualization() {
+        let (port, server) = json_server(vec![r#"{"capabilities":{}}"#]).await;
+        let runtime =
+            RestRuntime::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}"))).unwrap();
         let mut advanced = crate::runtime::advanced_options::AdvancedBoxOptions::default();
         advanced.nested_virtualization = true;
         let box_options = BoxOptions {
@@ -1019,10 +1021,11 @@ mod tests {
         let error = RuntimeBackend::create(&runtime, box_options, None)
             .await
             .err()
-            .expect("REST nested virtualization must be rejected before network I/O");
+            .expect("unadvertised nesting must be rejected before create");
 
         assert!(matches!(error, BoxliteError::Unsupported(_)));
-        assert!(error.to_string().contains("local runtime"));
+        assert!(error.to_string().contains("nested virtualization"));
+        assert_eq!(server.await.unwrap(), ["GET /v1/config HTTP/1.1"]);
     }
 
     /// A host path has no meaning against a REST runtime — the server's
@@ -1224,6 +1227,55 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn nested_virtualization_crosses_rest_and_rechecks_support() {
+        let (port, server) = recording_json_server(vec![
+            BOX_RESPONSE,
+            BOX_RESPONSE,
+            r#"{"capabilities":{"nested_virtualization_enabled":true}}"#,
+            BOX_RESPONSE,
+            r#"{"capabilities":{}}"#,
+        ])
+        .await;
+        let runtime = RestRuntime::new(
+            &BoxliteRestOptions::new(format!("http://127.0.0.1:{port}"))
+                .with_api_key("nesting-contract"),
+        )
+        .unwrap();
+        let mut explicit_off = BoxOptions::default();
+        explicit_off.advanced.nested_virtualization = false;
+        for options in [BoxOptions::default(), explicit_off] {
+            RuntimeBackend::create(&runtime, options, None)
+                .await
+                .unwrap();
+        }
+        let mut options = BoxOptions::default();
+        options.advanced.nested_virtualization = true;
+        RuntimeBackend::create(&runtime, options.clone(), None)
+            .await
+            .expect("advertised nesting must reach create");
+        let error = RuntimeBackend::create(&runtime, options, None)
+            .await
+            .err()
+            .expect("a replacement server must advertise nesting again");
+        assert!(matches!(error, BoxliteError::Unsupported(_)));
+        let requests = server.await.unwrap();
+        for index in [0, 1, 3] {
+            assert_eq!(requests[index].0, "POST /v1/boxes HTTP/1.1");
+            let headers = requests[index].2.to_ascii_lowercase();
+            assert!(headers.contains("content-type: application/json\r\n"));
+            assert!(headers.contains("authorization: bearer nesting-contract\r\n"));
+        }
+        assert_eq!(requests[0].1, requests[1].1);
+        assert!(requests[0].1.get("advanced").is_none());
+        assert_eq!(requests[2].0, "GET /v1/config HTTP/1.1");
+        assert_eq!(
+            requests[3].1["advanced"],
+            serde_json::json!({"nested_virtualization": true})
+        );
+        assert_eq!(requests[4].0, "GET /v1/config HTTP/1.1");
+    }
+
+    #[tokio::test]
     async fn advertised_cache_volume_reaches_the_create_request() {
         let (port, server) = recording_json_server(vec![
             r#"{"capabilities":{"cache_volumes_enabled":true}}"#,
@@ -1303,7 +1355,7 @@ mod tests {
         }
 
         let requests = server.await.unwrap();
-        let lines: Vec<&str> = requests.iter().map(|(line, _)| line.as_str()).collect();
+        let lines: Vec<&str> = requests.iter().map(|(line, _, _)| line.as_str()).collect();
         assert_eq!(
             lines,
             [
@@ -1452,9 +1504,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn get_or_create_rejects_nested_virtualization_in_rest_mode() {
-        let options = BoxliteRestOptions::new("http://localhost:1");
-        let runtime = RestRuntime::new(&options).expect("failed to create REST runtime");
+    async fn get_or_create_rejects_unverifiable_existing_nested_virtualization() {
+        let (port, server) = json_server(vec![BOX_RESPONSE]).await;
+        let runtime =
+            RestRuntime::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}"))).unwrap();
         let mut advanced = crate::runtime::advanced_options::AdvancedBoxOptions::default();
         advanced.nested_virtualization = true;
         let box_options = BoxOptions {
@@ -1466,10 +1519,11 @@ mod tests {
             RuntimeBackend::get_or_create(&runtime, box_options, Some("nested".to_string()))
                 .await
                 .err()
-                .expect("REST nested virtualization must be rejected before network I/O");
+                .expect("existing remote options cannot be verified");
 
         assert!(matches!(error, BoxliteError::Unsupported(_)));
-        assert!(error.to_string().contains("local runtime"));
+        assert!(error.to_string().contains("existing remote box"));
+        assert_eq!(server.await.unwrap(), ["GET /v1/boxes/nested HTTP/1.1"]);
     }
 
     fn images_on(port: u16) -> crate::runtime::ImageHandle {

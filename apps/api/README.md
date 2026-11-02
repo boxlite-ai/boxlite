@@ -3,6 +3,20 @@
 The NestJS control-plane service. See the [apps hub](../README.md) for how it fits with the
 other services and [`API.md`](../API.md) for its interfaces.
 
+## Per-box nested virtualization
+
+`POST /v1/boxes` accepts `advanced.nested_virtualization`, a strict boolean that
+defaults to false for new boxes:
+
+```json
+{"image":"python:slim","advanced":{"nested_virtualization":true}}
+```
+
+The selected Runner must authorize `nested-virtualization` through its process
+environment and run on a capable host. The API stores the choice for job retries;
+an enabled request bypasses the warm pool. It does not enable guest privileged
+mode or change existing boxes. See [Runner setup and upgrade order](../runner/README.md#nested-virtualization).
+
 ## Business events
 
 `recordBusinessEvent` (`src/common/utils/business-event.util.ts`) writes one structured log record

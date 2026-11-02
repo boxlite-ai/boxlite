@@ -20,6 +20,7 @@ export class BoxliteConfigController {
     return {
       capabilities: {
         privileged_enabled: true,
+        nested_virtualization_enabled: true,
         // On wherever snapshot storage is configured (BOX_SNAPSHOT_ARCHIVE_PREFIX).
         snapshots_enabled: this.snapshotService.isEnabled(),
         create_from_snapshot_enabled: this.snapshotService.isEnabled(),

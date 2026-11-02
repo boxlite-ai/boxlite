@@ -6,6 +6,16 @@
 import { RunnerAdapterV0 } from './runnerAdapter.v0'
 
 describe('RunnerAdapterV0 createBox', () => {
+  it.each([undefined, null, false, true])('forwards the nested virtualization choice %s', async (choice) => {
+    const adapter = new RunnerAdapterV0()
+    const create = jest.fn().mockResolvedValue({ data: { daemonVersion: '1.0' } })
+    ;(adapter as any).boxApiClient = { create }
+
+    await adapter.createBox({ id: 'box-1', nestedVirtualization: choice } as any, 'base')
+
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({ nestedVirtualization: choice ?? false }))
+  })
+
   // The runner body carries the row's outbound policy as is; the Daytona-era
   // networkBlockAll / networkAllowList pair is gone from the wire.
   it('sends the outbound policy as the enabled flag and entries', async () => {
@@ -13,13 +23,16 @@ describe('RunnerAdapterV0 createBox', () => {
     const create = jest.fn().mockResolvedValue({ data: { daemonVersion: '1.0' } })
     ;(adapter as any).boxApiClient = { create }
 
-    await adapter.createBox({
-      id: 'box-1',
-      image: 'base',
-      env: {},
-      outboundEnabled: false,
-      outboundAllowNet: ['api.openai.com', '10.0.0.0/8'],
-    } as any, 'base')
+    await adapter.createBox(
+      {
+        id: 'box-1',
+        image: 'base',
+        env: {},
+        outboundEnabled: false,
+        outboundAllowNet: ['api.openai.com', '10.0.0.0/8'],
+      } as any,
+      'base',
+    )
 
     expect(create).toHaveBeenCalledWith(
       expect.objectContaining({ outboundEnabled: false, outboundAllowNet: ['api.openai.com', '10.0.0.0/8'] }),

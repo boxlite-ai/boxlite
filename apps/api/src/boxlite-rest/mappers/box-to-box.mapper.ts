@@ -50,6 +50,7 @@ export function createBoxToCreateBox(dto: RestCreateBoxDto, target?: string): Cr
   createDto.user = dto.user
   createDto.runAsUser = dto.user
   createDto.privileged = dto.advanced?.privileged ?? false
+  createDto.nestedVirtualization = dto.advanced?.nested_virtualization ?? false
   createDto.workingDir = dto.working_dir
   createDto.entrypoint = dto.entrypoint
   createDto.cmd = dto.cmd

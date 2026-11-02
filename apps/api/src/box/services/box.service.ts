@@ -6,7 +6,7 @@
 
 import { ForbiddenException, Injectable, Logger, NotFoundException, ConflictException } from '@nestjs/common'
 import { InjectRepository } from '@nestjs/typeorm'
-import { Not, Repository, LessThan, In, JsonContains, FindOptionsWhere, ILike } from 'typeorm'
+import { Not, Repository, LessThan, In, IsNull, JsonContains, FindOptionsWhere, ILike } from 'typeorm'
 import { Box } from '../entities/box.entity'
 import { persistWithGeneratedBoxName } from '../utils/box-name-generator'
 import { boxImageIsOrgOwned } from '../utils/image-ownership.util'
@@ -341,6 +341,7 @@ export class BoxService {
       // define — which is exactly what 16d9248bb removed.
       box.runAsUser = createBoxDto.runAsUser
       box.privileged = createBoxDto.privileged ?? false
+      box.nestedVirtualization = createBoxDto.nestedVirtualization ?? false
       box.workingDir = createBoxDto.workingDir
       box.entrypoint = createBoxDto.entrypoint
       box.cmd = createBoxDto.cmd
@@ -899,7 +900,7 @@ export class BoxService {
 
     const updatedBox = await this.boxRepository.updateWhere(box.id, {
       updateData,
-      whereCondition: { pending: box.pending, state: box.state },
+      whereCondition: { pending: box.pending, state: box.state, organizationId: box.organizationId },
     })
 
     recordBoxRequested('box.delete', updatedBox.id, ctx)
@@ -1516,32 +1517,40 @@ export class BoxService {
     await this.createForWarmPool(event.warmPool)
   }
 
-  @Cron(CronExpression.EVERY_MINUTE, { name: 'handle-unschedulable-runners' })
-  @LogExecution('handle-unschedulable-runners')
+  @Cron(CronExpression.EVERY_MINUTE, { name: 'retire-unusable-warm-pool-boxes' })
+  @LogExecution('retire-unusable-warm-pool-boxes')
   @WithInstrumentation()
-  private async handleUnschedulableRunners() {
+  private async retireUnusableWarmPoolBoxes() {
     const runners = await this.runnerRepository.find({ where: { unschedulable: true } })
-
-    if (runners.length === 0) {
-      return
+    const unassigned = {
+      organizationId: BOX_WARM_POOL_UNASSIGNED_ORGANIZATION,
+      desiredState: Not(BoxDesiredState.DESTROYED),
+      pending: false,
     }
-
-    //  find all boxes that are using the unschedulable runners and have organizationId = '00000000-0000-0000-0000-000000000000'
-    const boxes = await this.boxRepository.find({
-      where: {
-        runnerId: In(runners.map((runner) => runner.id)),
-        organizationId: '00000000-0000-0000-0000-000000000000',
-        state: BoxState.STARTED,
-        desiredState: Not(BoxDesiredState.DESTROYED),
+    // Legacy boxes may expose nesting. Retire them through the normal lifecycle
+    // before replenishing the pool with boxes whose saved choice is known.
+    const where: FindOptionsWhere<Box>[] = [
+      {
+        ...unassigned,
+        nestedVirtualization: IsNull(),
+        state: Not(In([BoxState.DESTROYED, BoxState.ARCHIVED])),
       },
-    })
+    ]
+    if (runners.length > 0) {
+      where.push({
+        ...unassigned,
+        runnerId: In(runners.map((runner) => runner.id)),
+        state: BoxState.STARTED,
+      })
+    }
+    const boxes = await this.boxRepository.find({ where })
 
     if (boxes.length === 0) {
       return
     }
 
     const destroyPromises = boxes.map((box) =>
-      this.destroy(box.id, undefined, Context.platform(PlatformReason.WARM_POOL)),
+      this.destroy(box.id, BOX_WARM_POOL_UNASSIGNED_ORGANIZATION, Context.platform(PlatformReason.WARM_POOL)),
     )
     const results = await Promise.allSettled(destroyPromises)
 

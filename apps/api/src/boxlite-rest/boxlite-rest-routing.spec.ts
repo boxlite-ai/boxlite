@@ -385,9 +385,18 @@ describe('BoxLite REST routing', () => {
       })
 
       for (const path of [`/snapshots/golden/boxes`, `/boxes/named-box/snapshots/golden/boxes`]) {
-        const response = await post(`/api/v1${prefix}${path}`, { name: ' worker ' })
-        expect(response.status).toBe(201)
-        expect(await response.json()).toMatchObject({ box_id: 'new-box', name: 'worker', status: 'configured' })
+        for (const choice of [undefined, false, true]) {
+          const options = choice === undefined ? undefined : { advanced: { nested_virtualization: choice } }
+          const response = await post(`/api/v1${prefix}${path}`, { name: ' worker ', options })
+          expect(response.status).toBe(201)
+          expect(await response.json()).toMatchObject({ box_id: 'new-box', name: 'worker', status: 'configured' })
+          expect(app.get(BoxService).create).toHaveBeenLastCalledWith(
+            expect.objectContaining({ nestedVirtualization: choice ?? false, privileged: false }),
+            { id: 'org-123' },
+            expect.anything(),
+            { maxCreatedBoxes: 5, initialSnapshotId: 'snap-1' },
+          )
+        }
       }
       expect(app.get(BoxService).create).toHaveBeenCalledWith(
         expect.objectContaining({ name: 'worker', disk: 10, target: 'us' }),

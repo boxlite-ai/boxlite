@@ -1264,6 +1264,7 @@ fn build_box_options(req: &CreateBoxRequest) -> Result<BoxOptions, boxlite::Boxl
             });
             advanced.set_capabilities(capabilities)?;
             advanced.set_privileged(req.advanced.privileged);
+            advanced.nested_virtualization = req.advanced.nested_virtualization;
             advanced
         },
         // Neither deadline is forwarded; `serve` holds both and sweeps them.
@@ -2266,6 +2267,20 @@ mod tests {
         let capabilities = opts.advanced.capabilities().expect("capabilities set");
         assert_eq!(capabilities.add, vec!["SYS_ADMIN"]);
         assert_eq!(capabilities.drop, vec!["CAP_NET_RAW"]);
+    }
+
+    #[test]
+    fn build_box_options_carries_nested_virtualization_from_the_wire() {
+        for (body, enabled) in [
+            (r#"{}"#, false),
+            (r#"{"advanced":{"nested_virtualization":false}}"#, false),
+            (r#"{"advanced":{"nested_virtualization":true}}"#, true),
+        ] {
+            let req = serde_json::from_str(body).expect("valid nested virtualization request");
+            let options = build_box_options(&req).unwrap();
+            assert_eq!(options.advanced.nested_virtualization, enabled);
+            assert!(!options.advanced.privileged);
+        }
     }
 
     /// A request that never mentions `advanced`/`capabilities` at all must

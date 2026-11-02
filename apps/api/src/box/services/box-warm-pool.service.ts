@@ -7,7 +7,7 @@
 import { Inject, Injectable, Logger } from '@nestjs/common'
 import { InjectRepository } from '@nestjs/typeorm'
 import { Cron, CronExpression } from '@nestjs/schedule'
-import { In, MoreThan, Not, Repository } from 'typeorm'
+import { In, IsNull, MoreThan, Not, Repository } from 'typeorm'
 import { RedisLockProvider } from '../common/redis-lock.provider'
 import { BoxRepository } from '../repositories/box.repository'
 import { Box } from '../entities/box.entity'
@@ -93,6 +93,7 @@ export class BoxWarmPoolService {
           organizationId: BOX_WARM_POOL_UNASSIGNED_ORGANIZATION,
         })
         .andWhere('box.state = :state', { state: BoxState.STARTED })
+        .andWhere('box.nestedVirtualization = :nestedVirtualization', { nestedVirtualization: false })
         .andWhere(`box.runnerId NOT IN (${excludedRunnersSubquery.getQuery()})`)
         // The subquery reads `:region` too, and it names that parameter rather
         // than building it from the tuple. The loop below binds it as well —
@@ -132,18 +133,30 @@ export class BoxWarmPoolService {
   }
 
   /**
-   * How many boxes a pool row currently has. Errored boxes do not count — the
-   * pool is short by one until they are cleaned up, which is what makes the
-   * top-up fire again.
+   * Count usable capacity plus legacy guests awaiting retirement. Known-off
+   * errored boxes may be replaced; legacy guests hold their slots until gone.
    */
   private countPoolBoxes(spec: WarmPoolSpec): Promise<number> {
+    const unassigned = {
+      ...warmPoolBoxWhere(spec),
+      organizationId: BOX_WARM_POOL_UNASSIGNED_ORGANIZATION,
+    }
     return this.boxRepository.count({
-      where: {
-        ...warmPoolBoxWhere(spec),
-        organizationId: BOX_WARM_POOL_UNASSIGNED_ORGANIZATION,
-        desiredState: BoxDesiredState.STARTED,
-        state: Not(In([BoxState.ERROR])),
-      },
+      where: [
+        {
+          ...unassigned,
+          nestedVirtualization: false,
+          desiredState: BoxDesiredState.STARTED,
+          state: Not(In([BoxState.ERROR])),
+        },
+        {
+          ...unassigned,
+          nestedVirtualization: IsNull(),
+          // Hold their slots until deletion finishes, avoiding a second pool
+          // allocation while the old guests still occupy Runner resources.
+          state: Not(In([BoxState.DESTROYED, BoxState.ARCHIVED])),
+        },
+      ],
     })
   }
 

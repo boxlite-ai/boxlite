@@ -133,6 +133,10 @@ export class Box {
   @Column({ default: false })
   privileged: boolean
 
+  // Null is legacy/unknown; only new boxes record an explicit choice.
+  @Column({ type: 'boolean', nullable: true })
+  nestedVirtualization: boolean | null = false
+
   @Column({ nullable: true })
   workingDir?: string
 
