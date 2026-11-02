@@ -207,7 +207,7 @@ Activity does not require the optional logging ClickHouse instance.
 | --- | --- | --- |
 | `user.registration` | `UserService.create`, through `recordOutcomes` | requested, success, exception |
 | `user.login` | `LoginEventRecorder` | success |
-| `org.active` | `OrganizationActivityInterceptor`, on a person's first request in an organization each UTC hour | success |
+| `org.active` | `OrganizationActivityInterceptor`, best effort on a person's first request in an organization each UTC hour; a process exit or lost Redis acknowledgment after claiming the key can suppress the rest of that hour | success |
 | `box.create`, `box.start`, `box.stop`, `box.delete` | `BoxService`, the auto-stop and auto-delete crons | requested |
 | `box.create`, `box.start`, `box.stop`, `box.delete` | `JobStateHandler`, when the runner job finishes | success, exception |
 | `box.exec`, `box.file_upload` | `BoxliteProxyController`, for `POST …/exec` and `PUT …/files` | requested, then success or exception by the response status |
@@ -314,6 +314,8 @@ await this.stop(event.boxId, undefined, Context.platform(PlatformReason.ORG_SUSP
 - The boot-time admin seed registers as `Context.platform(PlatformReason.BOOTSTRAP)`.
 - Job outcome events carry no context: the runner reports after the request has ended.
 - Admin box recovery and user creation retain the authenticated administrator in `Context.admin(actor)`.
+- Proxied exec and file-upload events select admin/user context from the authenticated role;
+  the requested and terminal event retain the same caller identity.
 - Add caller-decided fields to `Context`, not new service parameters.
 
 ## Admin organization metadata
