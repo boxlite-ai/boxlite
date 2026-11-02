@@ -50,9 +50,8 @@ service Guest {
 // Persistent SSH desired state and live listener control.
 service Ssh {
   // Apply supplied fields; absent fields retain their current desired values.
-  rpc Configure(SshConfigureRequest) returns (SshConfigureResponse);
-  // Return current listener state and public host identity, without secrets.
-  rpc Status(SshStatusRequest) returns (SshStatusResponse);
+  // With neither field supplied, query live status without initialization or writes.
+  rpc Control(SshControlRequest) returns (SshControlResponse);
 }
 
 // Command execution
@@ -216,17 +215,17 @@ message ThawResponse {
 // SSH runtime configuration
 // ============================================================================
 
-message SshConfigureRequest {
+message SshControlRequest {
   // Do not reinterpret legacy string fields as a nested configuration.
   reserved 1, 2, 3;
   reserved "listen_address", "ca_public_key", "principal";
 
+  // Complete replacement when supplied; absent retains the saved configuration.
   SshConfig config = 4;
+  // Absent retains the saved switch; false stops SSH without clearing credentials.
   optional bool enable = 5;
 }
-message SshConfigureResponse { SshStatus status = 1; }
-message SshStatusRequest {}
-message SshStatusResponse { SshStatus status = 1; }
+message SshControlResponse { SshStatus status = 1; }
 message SshStatus {
   // Whether the SSH listener is running.
   bool enabled = 1;

@@ -11,7 +11,7 @@ Read the [architecture overview](README.md) first. These diagrams follow its
 
 | Scope | Starts at | Finishes when |
 | --- | --- | --- |
-| Service generation | Successful listener start (Configure or restore) | Listener and tracked SSH work have drained |
+| Service generation | Successful listener start (Control or restore) | Listener and tracked SSH work have drained |
 | Connection | Accepted TCP socket | Russh session ends and connection cleanup drains |
 | Execution-backed channel | Shell, exec, SFTP, or direct Unix socket request | Process and output task finish, then execution resources are released |
 | Remote forwarding listener | TCP bind or container helper readiness | Listener stops and pending channel opens settle; established relays have a separate lifetime |
@@ -23,15 +23,16 @@ completion dependency. Diagrams omit routine logging and validation helpers.
 
 ## 1. Service configuration
 
-`Configure` merges supplied fields with saved state. The diagram shows a supplied
+`Control` merges supplied fields with saved state. The diagram shows a supplied
 configuration whose merged enable value is true: validation and persistence precede
 stopping the current generation, then the new address is bound. An empty update
-observes status, a healthy repeated enable does not restart, and a disabled update
-saves state and stops without binding.
+observes status before initialization checks and without disk I/O. A healthy
+repeated enable does not restart; a disabled update saves state and stops without
+binding.
 
 ```mermaid
 flowchart TD
-    RPC["Ssh.Configure RPC"] --> LOCK["Lock manager state"]
+    RPC["Ssh.Control RPC"] --> LOCK["Lock manager state"]
     LOCK --> PARSE["Reload, merge and validate"]
     PARSE -->|invalid| KEEP["Return InvalidArgument<br/>current generation stays running"]
     PARSE -->|valid| SAVE["Save desired state"]
@@ -43,11 +44,11 @@ flowchart TD
     START --> READY["Return enabled SshStatus"]
 ```
 
-`Status` reports availability, not a cleanup barrier. A disabled `Configure` calls the same
-`stop()` without starting a replacement. A later control call can resume waiting
+An empty `Control` reports availability, not a cleanup barrier. A disabled
+`Control` calls the same `stop()` without starting a replacement. A later control call can resume waiting
 after a drain timeout; the old tracking state is retained.
 
-Source: [configure/status/shutdown/stop](mod.rs#L127).
+Source: [control/status/shutdown/stop](mod.rs#L142).
 
 ## 2. Connection and authentication
 
@@ -241,7 +242,7 @@ Sources: [TCP lifecycle](forward.rs#L154), [TCP listener drain](forward.rs#L375)
 
 ## 5. Service shutdown
 
-A disabled update and replacement `configure()` share this stop path. Cancellation
+A disabled update and replacement `control()` share this stop path. Cancellation
 propagates down the task tree; the branches below run concurrently.
 
 ```mermaid
@@ -283,5 +284,5 @@ Sources: [stop barrier](mod.rs#L190), [TaskGroup](task_group.rs#L10),
 
 Desired state is persisted before service application in the container rootfs at
 `/etc/boxlite/ssh.cfg`. Container.Init restores enabled state without rewriting it;
-shutdown drains runtime tasks without changing that state. Configure reloads disk
+shutdown drains runtime tasks without changing that state. Control reloads disk
 before merging updates, including after an uncertain directory sync failure.

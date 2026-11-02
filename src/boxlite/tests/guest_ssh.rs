@@ -4,7 +4,7 @@ mod common;
 
 use boxlite::runtime::options::PortSpec;
 use boxlite::{BoxliteOptions, BoxliteRuntime, PortProtocol};
-use boxlite_shared::{SshClient, SshConfig, SshConfigureRequest, SshStatusRequest};
+use boxlite_shared::{SshClient, SshConfig, SshControlRequest};
 use std::path::Path;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
@@ -417,7 +417,7 @@ async fn guest_ssh_exec_inherits_container_default_user() {
         .join("sockets/box.sock");
     let mut ssh = SshClient::new(connect_rpc(socket).await.unwrap());
     let status = ssh
-        .configure(SshConfigureRequest {
+        .control(SshControlRequest {
             enable: Some(true),
             config: Some(SshConfig {
                 listen_address: "0.0.0.0:2222".into(),
@@ -631,7 +631,7 @@ async fn guest_ssh_accounts_share_identity_and_file_permissions() {
                 .collect(),
         };
         let status = ssh
-            .configure(SshConfigureRequest {
+            .control(SshControlRequest {
                 enable: Some(true),
                 config: Some(configuration.clone()),
             })
@@ -770,7 +770,7 @@ async fn guest_ssh_accounts_share_identity_and_file_permissions() {
         let mut invalid = configuration.clone();
         invalid.accounts.clear();
         let error = ssh
-            .configure(SshConfigureRequest {
+            .control(SshControlRequest {
                 enable: Some(true),
                 config: Some(invalid),
             })
@@ -779,7 +779,7 @@ async fn guest_ssh_accounts_share_identity_and_file_permissions() {
         assert_eq!(error.code(), tonic::Code::InvalidArgument);
         assert!(error.message().contains("accounts"));
         assert_eq!(
-            ssh.status(SshStatusRequest {})
+            ssh.control(SshControlRequest::default())
                 .await
                 .unwrap()
                 .into_inner()
@@ -798,7 +798,7 @@ async fn guest_ssh_accounts_share_identity_and_file_permissions() {
             .await;
         }
         configuration.accounts.remove(0);
-        ssh.configure(SshConfigureRequest {
+        ssh.control(SshControlRequest {
             enable: Some(true),
             config: Some(configuration),
         })
@@ -881,7 +881,7 @@ async fn guest_ssh_rpc_exec_pty_sftp_reconnect_and_vm_restart() {
         let channel = connect_rpc(socket.clone()).await.unwrap();
         let mut ssh = SshClient::new(channel);
         let disabled = ssh
-            .status(SshStatusRequest {})
+            .control(SshControlRequest::default())
             .await
             .unwrap()
             .into_inner()
@@ -899,7 +899,7 @@ async fn guest_ssh_rpc_exec_pty_sftp_reconnect_and_vm_restart() {
             assert_eq!(disabled.generation, 1);
         }
         let status = ssh
-            .configure(SshConfigureRequest {
+            .control(SshControlRequest {
                 enable: Some(true),
                 config: Some(config.clone()),
             })
@@ -925,7 +925,7 @@ async fn guest_ssh_rpc_exec_pty_sftp_reconnect_and_vm_restart() {
         let channel = connect_rpc(socket).await.unwrap();
         let mut ssh = SshClient::new(channel);
         assert_eq!(
-            ssh.status(SshStatusRequest {})
+            ssh.control(SshControlRequest::default())
                 .await
                 .unwrap()
                 .into_inner()
@@ -1064,14 +1064,14 @@ async fn guest_ssh_rpc_exec_pty_sftp_reconnect_and_vm_restart() {
             clients.push(sftp);
             tokio::time::timeout(Duration::from_secs(15), async {
                 if disable {
-                    ssh.configure(SshConfigureRequest {
+                    ssh.control(SshControlRequest {
                         enable: Some(false),
                         config: None,
                     })
                     .await
                     .unwrap();
                 } else {
-                    ssh.configure(SshConfigureRequest {
+                    ssh.control(SshControlRequest {
                         enable: Some(true),
                         config: Some(config.clone()),
                     })
@@ -1103,7 +1103,7 @@ async fn guest_ssh_rpc_exec_pty_sftp_reconnect_and_vm_restart() {
                 "SSH processes must be reaped before control returns"
             );
             if disable {
-                ssh.configure(SshConfigureRequest {
+                ssh.control(SshControlRequest {
                     enable: Some(true),
                     config: Some(config.clone()),
                 })

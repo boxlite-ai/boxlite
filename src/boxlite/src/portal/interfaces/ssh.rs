@@ -1,4 +1,4 @@
-//! Internal SSH wire boundary. No retry: Configure restarts the listener.
+//! Internal SSH wire boundary. No retry: a Control configuration update restarts the listener.
 
 use boxlite_shared::{self as proto, BoxliteError, BoxliteResult};
 use tonic::transport::Channel;
@@ -22,7 +22,7 @@ impl SshInterface {
     pub(crate) async fn configure(&mut self, config: SshConfig) -> BoxliteResult<SshStatus> {
         let response = self
             .client
-            .configure(proto::SshConfigureRequest {
+            .control(proto::SshControlRequest {
                 config: Some(config_to_proto(config)),
                 enable: Some(true),
             })
@@ -35,17 +35,17 @@ impl SshInterface {
     pub(crate) async fn status(&mut self) -> BoxliteResult<SshStatus> {
         let response = self
             .client
-            .status(proto::SshStatusRequest {})
+            .control(proto::SshControlRequest::default())
             .await
             .map_err(|status| map_tonic_err("status", status))?;
         status_from_proto("status", response.into_inner().status)
     }
 
-    /// Retain credentials while switching off the guest listener through Configure.
+    /// Retain credentials while switching off the guest listener through Control.
     pub(crate) async fn disable(&mut self) -> BoxliteResult<SshStatus> {
         let response = self
             .client
-            .configure(proto::SshConfigureRequest {
+            .control(proto::SshControlRequest {
                 config: None,
                 enable: Some(false),
             })

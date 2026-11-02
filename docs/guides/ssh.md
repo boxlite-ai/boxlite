@@ -167,15 +167,17 @@ the local `boxlite ssh forward` leaves that tunnel open; revoke it with `boxlite
 network tunnel BOX PORT --revoke`.
 
 ## Guest protocol and lifecycle
-The internal host-only `boxlite.v1.Ssh` gRPC service remains available on
-`sockets/box.sock` after `Guest.Init` succeeds. It exposes `Configure` and
-`Status`; mutations also require a ready container root filesystem. Configuration
+
+The internal host-only `boxlite.v1.Ssh` gRPC service on `sockets/box.sock` exposes
+one `Control` RPC. An empty request returns actual listener state, even before
+`Guest.Init` completes, without disk reads or writes, listener startup, or restart.
+Mutations require `Guest.Init` and a ready container root filesystem. Configuration
 uses field 4 and optional enable uses field 5; legacy fields 1–3 remain reserved.
 Host and guest versions must be upgraded together: old config-only calls no longer
-enable SSH, and the removed Disable RPC is unavailable.
+enable SSH, and the former Configure, Status, and Disable RPCs are unavailable.
 
-Configure accepts an unencrypted OpenSSH host private key and a non-empty
-`accounts` list. Each account has a unique `login` and at least one public key or
+A supplied configuration contains an unencrypted OpenSSH host private key and a
+non-empty `accounts` list. Each account has a unique `login` and at least one public key or
 CA configuration. Logins are 1–128 ASCII letters, digits, dots, underscores, or
 hyphens. Authentication selects only that login's credentials. A CA contains its
 public key and the required certificate principal; the principal need not equal
@@ -213,7 +215,7 @@ private key and SSH identity. A missing file defaults to disabled. Initializatio
 restores enabled SSH without running the main command; invalid or unreadable
 state logs a sanitized warning and does not prevent container initialization.
 
-The internal RPC `Configure(enable, config)` retains each absent field and
+The internal RPC `Control(enable, config)` retains each absent field and
 replaces supplied configuration. Configuration-only preserves the switch, an empty update observes,
 and enabling without configuration fails. Supplying configuration while enabled
 restarts the listener even if unchanged; repeated enable of a healthy listener
@@ -227,6 +229,7 @@ successful starts in the current VM. Shutdown drains SSH without changing saved
 intent and rejects new mutations. Public SDK signatures are unchanged:
 `configure(config)` replaces the configuration and enables SSH, `disable()` turns
 it off while retaining credentials, and `status()` observes the live listener.
-The host translates configuration to `Configure(enable=true, config=...)` and
-disable to `Configure(enable=false)` only when a VM exists. Internal partial
-updates are not exposed through SDKs. REST retains its POST, DELETE and GET routes.
+The host translates configuration to `Control(enable=true, config=...)` and
+disable to `Control(enable=false)` only when a VM exists; status sends an empty
+`Control()` request. Internal partial updates are not exposed through SDKs. REST
+retains its POST, DELETE and GET routes.

@@ -60,10 +60,10 @@ struct MockService(Arc<Mock>);
 #[tonic::async_trait]
 impl proto::Ssh for MockService {
     /// Capture the decoded configuration so assertions cover the serialization boundary.
-    async fn configure(
+    async fn control(
         &self,
-        request: Request<proto::SshConfigureRequest>,
-    ) -> Result<Response<proto::SshConfigureResponse>, Status> {
+        request: Request<proto::SshControlRequest>,
+    ) -> Result<Response<proto::SshControlResponse>, Status> {
         let request = request.into_inner();
         self.0
             .updates
@@ -73,17 +73,8 @@ impl proto::Ssh for MockService {
         if let Some(config) = request.config {
             *self.0.config.lock().unwrap() = Some(config);
         }
-        Ok(Response::new(proto::SshConfigureResponse {
-            status: self.0.reply("configure").await?,
-        }))
-    }
-    /// Use the shared response controls to exercise status errors and cancellation.
-    async fn status(
-        &self,
-        _: Request<proto::SshStatusRequest>,
-    ) -> Result<Response<proto::SshStatusResponse>, Status> {
-        Ok(Response::new(proto::SshStatusResponse {
-            status: self.0.reply("status").await?,
+        Ok(Response::new(proto::SshControlResponse {
+            status: self.0.reply("control").await?,
         }))
     }
 }
@@ -251,7 +242,7 @@ fn config() -> SshConfig {
     }
 }
 
-/// Preserve configuration fields and guest status across Configure and Status RPCs.
+/// Preserve configuration fields and guest status across the Control RPC.
 #[tokio::test]
 async fn ssh_requests_and_responses_cross_wire() {
     let f = fixture().await;
@@ -269,13 +260,13 @@ async fn ssh_requests_and_responses_cross_wire() {
     assert_eq!(f.ssh.status().await.unwrap(), status);
     assert_eq!(f.ssh.disable().await.unwrap(), status);
     let updates = f.mock.updates.lock().unwrap();
-    assert_eq!(updates.len(), 2);
+    assert_eq!(updates.len(), 3);
     assert_eq!(
         updates
             .iter()
             .map(|(enable, _)| *enable)
             .collect::<Vec<_>>(),
-        [Some(true), Some(false)]
+        [Some(true), None, Some(false)]
     );
     assert!(updates[0].1.is_some());
     assert!(updates[1..].iter().all(|(_, config)| config.is_none()));
@@ -292,7 +283,7 @@ async fn ssh_requests_and_responses_cross_wire() {
     assert_eq!(ca.principal, "principal sentinel");
     assert_eq!(
         *f.mock.requests.lock().unwrap(),
-        ["configure", "status", "configure"]
+        ["control", "control", "control"]
     );
 }
 
@@ -322,6 +313,8 @@ async fn ssh_errors_missing_status_and_no_retry() {
                 _ => matches!(error, BoxliteError::Rpc(_)),
             });
             assert!(error.to_string().contains("mock rejection"));
+            let name = ["configure", "status", "disable"][operation];
+            assert!(error.to_string().contains(&format!("SSH {name}:")));
         }
         *f.mock.error.lock().unwrap() = None;
         *f.mock.missing.lock().unwrap() = true;
@@ -332,6 +325,12 @@ async fn ssh_errors_missing_status_and_no_retry() {
         }
         .unwrap_err();
         assert!(matches!(error, BoxliteError::Internal(_)));
+        let name = ["configure", "status", "disable"][operation];
+        assert!(
+            error
+                .to_string()
+                .contains(&format!("SSH {name}: response missing status"))
+        );
         *f.mock.missing.lock().unwrap() = false;
     }
     assert_eq!(f.mock.requests.lock().unwrap().len(), 15);
@@ -427,7 +426,7 @@ async fn ssh_observation_uses_existing_vm_without_container_start() {
     assert!(!recovered.live.initialized());
     assert_eq!(
         *f.mock.requests.lock().unwrap(),
-        ["status", "configure", "status", "configure"]
+        ["control", "control", "control", "control"]
     );
 }
 

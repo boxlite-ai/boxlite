@@ -4,7 +4,7 @@ const LEGACY_SSH_CONFIGURATION: &[u8] = b"\x0a\x0e127.0.0.1:2222\x12\x08test-key
 #[test]
 fn ssh_configuration_legacy_fields_decode_without_config() {
     use prost::Message;
-    let decoded = super::SshConfigureRequest::decode(LEGACY_SSH_CONFIGURATION)
+    let decoded = super::SshControlRequest::decode(LEGACY_SSH_CONFIGURATION)
         .expect("legacy string fields must be ignored, not decoded as SshConfig");
     assert!(decoded.config.is_none());
 }
@@ -12,7 +12,7 @@ fn ssh_configuration_legacy_fields_decode_without_config() {
 #[test]
 fn ssh_configuration_uses_wire_tag_four() {
     use prost::Message;
-    let request = super::SshConfigureRequest {
+    let request = super::SshControlRequest {
         config: Some(super::SshConfig::default()),
         enable: None,
     };
@@ -23,12 +23,11 @@ fn ssh_configuration_uses_wire_tag_four() {
 fn ssh_enable_presence_roundtrips() {
     use prost::Message;
     for enable in [None, Some(false), Some(true)] {
-        let request = super::SshConfigureRequest {
+        let request = super::SshControlRequest {
             config: None,
             enable,
         };
-        let decoded =
-            super::SshConfigureRequest::decode(request.encode_to_vec().as_slice()).unwrap();
+        let decoded = super::SshControlRequest::decode(request.encode_to_vec().as_slice()).unwrap();
         assert_eq!(decoded.enable, enable);
     }
 }
@@ -80,7 +79,7 @@ fn ssh_configuration_mixed_legacy_fields_preserve_new_config() {
         [LEGACY_SSH_CONFIGURATION, current].concat(),
         [current.as_slice(), LEGACY_SSH_CONFIGURATION].concat(),
     ] {
-        let decoded = super::SshConfigureRequest::decode(wire.as_slice())
+        let decoded = super::SshControlRequest::decode(wire.as_slice())
             .expect("new configuration must decode alongside legacy fields");
         assert_eq!(
             decoded.config,
@@ -95,7 +94,7 @@ fn ssh_configuration_mixed_legacy_fields_preserve_new_config() {
 #[test]
 fn ssh_configuration_wire_roundtrip_redacts_credentials() {
     use prost::Message;
-    let request = super::SshConfigureRequest {
+    let request = super::SshControlRequest {
         config: Some(super::SshConfig {
             listen_address: "127.0.0.1:2222".into(),
             host_private_key: "test-only-private-marker".into(),
@@ -110,7 +109,7 @@ fn ssh_configuration_wire_roundtrip_redacts_credentials() {
         }),
         enable: None,
     };
-    let decoded = super::SshConfigureRequest::decode(request.encode_to_vec().as_slice()).unwrap();
+    let decoded = super::SshControlRequest::decode(request.encode_to_vec().as_slice()).unwrap();
     assert_eq!(request, decoded);
     let config = decoded.config.as_ref().unwrap();
     let account = &config.accounts[0];

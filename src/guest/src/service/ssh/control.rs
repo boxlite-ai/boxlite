@@ -1,18 +1,16 @@
 use crate::service::server::GuestServer;
-use boxlite_shared::{
-    Ssh, SshConfigureRequest, SshConfigureResponse, SshStatusRequest, SshStatusResponse,
-};
+use boxlite_shared::{Ssh, SshControlRequest, SshControlResponse};
 use tonic::{Request, Response, Status};
 
 #[tonic::async_trait]
 impl Ssh for GuestServer {
-    async fn configure(
+    async fn control(
         &self,
-        request: Request<SshConfigureRequest>,
-    ) -> Result<Response<SshConfigureResponse>, Status> {
+        request: Request<SshControlRequest>,
+    ) -> Result<Response<SshControlResponse>, Status> {
         let request = request.into_inner();
         if request.enable.is_none() && request.config.is_none() {
-            return Ok(Response::new(SshConfigureResponse {
+            return Ok(Response::new(SshControlResponse {
                 status: Some(self.ssh_manager.status().await),
             }));
         }
@@ -31,23 +29,14 @@ impl Ssh for GuestServer {
         let status = tokio::spawn(async move {
             guest
                 .ssh_manager
-                .configure(request.enable, request.config)
+                .control(request.enable, request.config)
                 .await
         })
         .await
         .map_err(|_| Status::internal("SSH operation failed"))?
         .map_err(|error| *error)?;
-        Ok(Response::new(SshConfigureResponse {
+        Ok(Response::new(SshControlResponse {
             status: Some(status),
-        }))
-    }
-
-    async fn status(
-        &self,
-        _: Request<SshStatusRequest>,
-    ) -> Result<Response<SshStatusResponse>, Status> {
-        Ok(Response::new(SshStatusResponse {
-            status: Some(self.ssh_manager.status().await),
         }))
     }
 }

@@ -139,7 +139,7 @@ impl SshManager {
         let _ = self.guest.set(Arc::downgrade(guest));
     }
 
-    pub(crate) async fn configure(
+    pub(crate) async fn control(
         &self,
         enable: Option<bool>,
         config: Option<boxlite_shared::SshConfig>,

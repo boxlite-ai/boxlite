@@ -17,8 +17,7 @@ impl ActivationGate {
 }
 use crate::layout::GuestLayout;
 use boxlite_shared::{
-    guest_init_response, GuestClient, GuestInitRequest, SshCaConfig, SshClient,
-    SshConfigureRequest, SshStatusRequest,
+    guest_init_response, GuestClient, GuestInitRequest, SshCaConfig, SshClient, SshControlRequest,
 };
 use russh::keys::ssh_key::certificate::Builder;
 use russh::keys::{Algorithm, Certificate, HashAlg, PrivateKey, PrivateKeyWithHashAlg, PublicKey};
@@ -48,7 +47,7 @@ async fn repeated_configuration_restarts_and_disconnects_old_transport() {
     );
     tokio::time::timeout(Duration::from_secs(2), client)
         .await
-        .expect("old transport must disconnect after Configure")
+        .expect("old transport must disconnect after Control")
         .ok();
     guest.stop().await;
 }
@@ -225,7 +224,7 @@ impl TestGuest {
         config: boxlite_shared::SshConfig,
     ) -> Result<boxlite_shared::SshStatus, Box<tonic::Status>> {
         self.ssh
-            .configure(SshConfigureRequest {
+            .control(SshControlRequest {
                 enable: Some(true),
                 config: Some(config),
             })
@@ -236,7 +235,7 @@ impl TestGuest {
 
     async fn status(&mut self) -> boxlite_shared::SshStatus {
         self.ssh
-            .status(SshStatusRequest {})
+            .control(SshControlRequest::default())
             .await
             .unwrap()
             .into_inner()
@@ -662,7 +661,8 @@ async fn grpc_ssh_control_lifecycle_and_bind_failure() {
     let mut fixture = TestGuest::new().await;
     let host = private_key();
     let ssh = config(&host, &[&private_key()], None);
-    assert!(!fixture.status().await.enabled);
+    assert_eq!(fixture.status().await, boxlite_shared::SshStatus::default());
+    assert!(!fixture._root.path().join("etc/boxlite").exists());
     assert_eq!(
         fixture.configure(ssh.clone()).await.unwrap_err().code(),
         tonic::Code::FailedPrecondition
@@ -691,7 +691,7 @@ async fn grpc_ssh_control_lifecycle_and_bind_failure() {
     drop(occupied);
     let recovered = fixture
         .ssh
-        .configure(SshConfigureRequest {
+        .control(SshControlRequest {
             enable: Some(true),
             config: None,
         })
@@ -707,7 +707,7 @@ async fn grpc_ssh_control_lifecycle_and_bind_failure() {
     for _ in 0..2 {
         let stopped = fixture
             .ssh
-            .configure(SshConfigureRequest {
+            .control(SshControlRequest {
                 enable: Some(false),
                 config: None,
             })
@@ -887,7 +887,7 @@ async fn ssh_failure_logs_and_status_redact_all_configuration_inputs() {
         let status = fixture
             .guest
             .ssh_manager
-            .configure(Some(true), Some(ssh))
+            .control(Some(true), Some(ssh))
             .with_subscriber(subscriber)
             .await;
         assert_eq!(
@@ -967,7 +967,7 @@ async fn stopping_disconnects_pre_authentication_and_forwarding_and_rotates_iden
         .success());
     fixture
         .ssh
-        .configure(SshConfigureRequest {
+        .control(SshControlRequest {
             enable: Some(false),
             config: None,
         })
@@ -1032,7 +1032,7 @@ async fn cancelled_disable_keeps_cleanup_ordered() {
     let mut client = fixture.ssh.clone();
     let operation = tokio::spawn(async move {
         client
-            .configure(SshConfigureRequest {
+            .control(SshControlRequest {
                 enable: Some(false),
                 config: None,
             })
@@ -1064,7 +1064,7 @@ async fn ssh_partial_updates_persist_and_reenable_without_restart() {
     fixture.init().await;
     let missing = fixture
         .ssh
-        .configure(SshConfigureRequest {
+        .control(SshControlRequest {
             enable: Some(true),
             config: None,
         })
@@ -1078,7 +1078,7 @@ async fn ssh_partial_updates_persist_and_reenable_without_restart() {
     let configuration = config(&host, &[&user], None);
     let saved = fixture
         .ssh
-        .configure(SshConfigureRequest {
+        .control(SshControlRequest {
             enable: None,
             config: Some(configuration.clone()),
         })
@@ -1090,7 +1090,7 @@ async fn ssh_partial_updates_persist_and_reenable_without_restart() {
     assert!(!saved.enabled);
     let active = fixture
         .ssh
-        .configure(SshConfigureRequest {
+        .control(SshControlRequest {
             enable: Some(true),
             config: None,
         })
@@ -1104,7 +1104,7 @@ async fn ssh_partial_updates_persist_and_reenable_without_restart() {
     let inode = std::fs::metadata(&path).unwrap().ino();
     let observed = fixture
         .ssh
-        .configure(SshConfigureRequest {
+        .control(SshControlRequest {
             enable: None,
             config: None,
         })
@@ -1123,7 +1123,7 @@ async fn ssh_partial_updates_persist_and_reenable_without_restart() {
         .success());
     let repeat = fixture
         .ssh
-        .configure(SshConfigureRequest {
+        .control(SshControlRequest {
             enable: Some(true),
             config: None,
         })
@@ -1141,7 +1141,7 @@ async fn ssh_partial_updates_persist_and_reenable_without_restart() {
     drop(client);
     fixture
         .ssh
-        .configure(SshConfigureRequest {
+        .control(SshControlRequest {
             enable: Some(false),
             config: None,
         })
@@ -1149,7 +1149,7 @@ async fn ssh_partial_updates_persist_and_reenable_without_restart() {
         .unwrap();
     let again = fixture
         .ssh
-        .configure(SshConfigureRequest {
+        .control(SshControlRequest {
             enable: Some(true),
             config: None,
         })
@@ -1178,7 +1178,7 @@ async fn ssh_shutdown_serializes_with_admitted_activation() {
     let mut update_client = fixture.ssh.clone();
     let update = tokio::spawn(async move {
         update_client
-            .configure(SshConfigureRequest {
+            .control(SshControlRequest {
                 enable: Some(true),
                 config: Some(configuration),
             })
@@ -1208,7 +1208,7 @@ async fn ssh_shutdown_serializes_with_admitted_activation() {
     .unwrap();
     let error = fixture
         .ssh
-        .configure(SshConfigureRequest {
+        .control(SshControlRequest {
             enable: Some(false),
             config: None,
         })
@@ -1218,7 +1218,9 @@ async fn ssh_shutdown_serializes_with_admitted_activation() {
     gate.release.add_permits(1);
     update.await.unwrap().unwrap();
     shutdown.await.unwrap().unwrap();
-    assert!(!fixture.status().await.enabled);
+    let stopped = fixture.status().await;
+    assert!(!stopped.enabled);
+    assert_eq!(fixture.status().await, stopped);
     assert_eq!(std::fs::read(path).unwrap(), saved);
     fixture.stop().await;
 }
@@ -1268,7 +1270,7 @@ async fn ssh_parallel_partial_updates_merge_both_fields() {
     let replacement = config(&private_key(), &[&private_key()], None);
     fixture
         .ssh
-        .configure(SshConfigureRequest {
+        .control(SshControlRequest {
             enable: None,
             config: Some(first),
         })
@@ -1278,11 +1280,11 @@ async fn ssh_parallel_partial_updates_merge_both_fields() {
     let mut second_client = fixture.ssh.clone();
     let expected = replacement.clone();
     let (enable, configure) = tokio::join!(
-        first_client.configure(SshConfigureRequest {
+        first_client.control(SshControlRequest {
             enable: Some(true),
             config: None
         }),
-        second_client.configure(SshConfigureRequest {
+        second_client.control(SshControlRequest {
             enable: None,
             config: Some(replacement)
         }),
@@ -1325,7 +1327,7 @@ async fn ssh_save_failure_keeps_live_listener_and_old_file() {
         assert_eq!(nix::libc::setrlimit(nix::libc::RLIMIT_FSIZE, &limited), 0);
         let result = fixture
             .ssh
-            .configure(SshConfigureRequest {
+            .control(SshControlRequest {
                 enable: Some(false),
                 config: None,
             })
@@ -1369,7 +1371,7 @@ async fn ssh_cancelled_storage_keeps_following_update_ordered() {
         let mut first_client = fixture.ssh.clone();
         let first = tokio::spawn(async move {
             first_client
-                .configure(SshConfigureRequest {
+                .control(SshControlRequest {
                     enable: Some(false),
                     config: None,
                 })
@@ -1382,7 +1384,7 @@ async fn ssh_cancelled_storage_keeps_following_update_ordered() {
         let mut second_client = fixture.ssh.clone();
         let mut second = tokio::spawn(async move {
             second_client
-                .configure(SshConfigureRequest {
+                .control(SshControlRequest {
                     enable: Some(true),
                     config: None,
                 })
@@ -1422,7 +1424,7 @@ async fn ssh_post_rename_sync_failure_reloads_for_next_update() {
     let copy = replacement.clone();
     let update = tokio::spawn(async move {
         client
-            .configure(SshConfigureRequest {
+            .control(SshControlRequest {
                 enable: None,
                 config: Some(copy),
             })
@@ -1441,7 +1443,7 @@ async fn ssh_post_rename_sync_failure_reloads_for_next_update() {
     assert_eq!(desired.config, Some(replacement.clone()));
     fixture
         .ssh
-        .configure(SshConfigureRequest {
+        .control(SshControlRequest {
             enable: Some(false),
             config: None,
         })
