@@ -856,17 +856,20 @@ mod tests {
         let (sent, received) = oneshot::channel();
         let server = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
-            tokio_tungstenite::accept_hdr_async(
-                stream,
+            #[expect(
+                clippy::result_large_err,
+                reason = "tungstenite fixes the handshake callback's ErrorResponse type"
+            )]
+            let callback =
                 move |request: &tokio_tungstenite::tungstenite::handshake::server::Request,
                       response| {
                     sent.send((request.uri().path().to_string(), request.headers().clone()))
                         .unwrap();
                     Ok(response)
-                },
-            )
-            .await
-            .unwrap()
+                };
+            tokio_tungstenite::accept_hdr_async(stream, callback)
+                .await
+                .unwrap()
         });
         let client = ApiClient::new(
             &BoxliteRestOptions::new(format!("http://{address}")).with_api_key("test-only-key"),
