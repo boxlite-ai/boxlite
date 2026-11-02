@@ -21,10 +21,10 @@ use crate::{
     events::EventLoop,
     memory::GuestMemoryMmap,
     virtio::{
-        ActivationContext, Budget, DeviceError, DeviceEvent, DeviceSnapshot, DeviceSpec,
-        EventContext, EventError, EventRegistrar, EventSource, FeatureError, MAX_CONFIG_LEN,
-        MAX_QUEUES, RestoreContext, SnapshotError, SnapshotSupport, SourceId, VirtioDevice,
-        VirtioInterrupt, Waker,
+        ActivationContext, DeviceError, DeviceEvent, DeviceSnapshot, DeviceSpec, EventContext,
+        EventError, EventRegistrar, EventSource, FeatureError, MAX_CONFIG_LEN, MAX_QUEUES,
+        RestoreContext, SnapshotError, SnapshotSupport, SourceId, VirtioDevice, VirtioInterrupt,
+        Waker,
     },
 };
 
@@ -298,36 +298,37 @@ fn activation_takes_the_context_and_reset_clears_it() {
 fn events_reach_the_device() {
     let mut device = TestDevice::new();
     let registrar = TestRegistrar::default();
-    let mut cx = EventContext::new(&registrar, 4, waker());
+    let mut cx = EventContext::new(&registrar, waker());
     assert!(device.on_event(DeviceEvent::QueueKick(3), &mut cx).is_ok());
-    assert!(device.on_event(DeviceEvent::Continue, &mut cx).is_ok());
+    assert!(
+        device
+            .on_event(DeviceEvent::BackendReady(SourceId(7)), &mut cx)
+            .is_ok()
+    );
     assert_eq!(
         device.events,
-        vec![DeviceEvent::QueueKick(3), DeviceEvent::Continue]
+        vec![
+            DeviceEvent::QueueKick(3),
+            DeviceEvent::BackendReady(SourceId(7))
+        ]
     );
 }
 
 #[test]
-fn the_event_context_registers_deregisters_and_budgets() {
+fn the_event_context_registers_deregisters_and_wakes() {
     let registrar = TestRegistrar::default();
     let calls = Arc::new(AtomicUsize::new(0));
     let counter = Arc::clone(&calls);
     let control: Waker = Arc::new(move || {
         counter.fetch_add(1, Ordering::SeqCst);
     });
-    let mut cx = EventContext::new(&registrar, 4, control);
+    let cx = EventContext::new(&registrar, control);
     let id = cx
         .register(DeviceEvent::BackendReady(SourceId(9)), Box::new(TestSource))
         .unwrap();
     let forwarded = cx.control().clone();
     forwarded();
     assert_eq!(calls.load(Ordering::SeqCst), 1);
-    assert!(cx.consume(2));
-    assert!(cx.consume(2));
-    assert!(cx.exhausted());
-    assert!(!cx.consume(1));
-    cx.reschedule();
-    assert!(cx.rescheduled());
     assert_eq!(
         *registrar.events.lock().unwrap(),
         vec![DeviceEvent::BackendReady(SourceId(9))]
@@ -370,16 +371,6 @@ fn the_spec_declares_bounded_queues_and_configuration() {
         ..spec
     };
     assert_eq!(unsupported.snapshot, SnapshotSupport::Unsupported);
-}
-
-#[test]
-fn the_budget_stops_at_zero() {
-    let mut budget = Budget::new(3);
-    assert_eq!(budget.remaining(), 3);
-    assert!(budget.consume(2));
-    assert_eq!(budget.remaining(), 1);
-    assert!(!budget.consume(2));
-    assert_eq!(budget.remaining(), 0);
 }
 
 #[test]

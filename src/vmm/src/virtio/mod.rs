@@ -9,8 +9,9 @@
 //! through `Arc<Mutex<dyn VirtioDevice>>`; the worker never holds the lock
 //! across blocking I/O.
 //!
-//! Queue start and stop arrive with the queue adapter and worker; every device
-//! needs the methods here first.
+//! A device processes the descriptors available in its queues; the virtqueue
+//! size bounds one event call. Queue start and stop arrive with the queue
+//! adapter and worker; every device needs the methods here first.
 
 use std::{fmt, sync::Arc};
 
@@ -59,8 +60,6 @@ pub(crate) enum DeviceEvent {
     QueueKick(u16),
     /// A background source registered by the device is ready.
     BackendReady(SourceId),
-    /// The device asked to be called again after its budget ran out.
-    Continue,
 }
 
 /// The identity of a background event source registered with the worker.
@@ -86,53 +85,16 @@ pub(crate) trait EventRegistrar: Send + Sync {
     fn deregister(&self, id: SourceId);
 }
 
-/// How much work a device may do in one worker call.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct Budget {
-    remaining: usize,
-}
-
-impl Budget {
-    /// A budget of `remaining` work units.
-    pub(crate) fn new(remaining: usize) -> Self {
-        Self { remaining }
-    }
-
-    /// Takes `work` units; returns `false` and leaves the budget at zero when
-    /// there is not enough left.
-    pub(crate) fn consume(&mut self, work: usize) -> bool {
-        if self.remaining >= work {
-            self.remaining -= work;
-            true
-        } else {
-            self.remaining = 0;
-            false
-        }
-    }
-
-    /// The units left.
-    pub(crate) fn remaining(&self) -> usize {
-        self.remaining
-    }
-}
-
 /// Per-event state the worker gives a device.
 pub(crate) struct EventContext<'a> {
     registrar: &'a dyn EventRegistrar,
-    budget: Budget,
     control: Waker,
-    rescheduled: bool,
 }
 
 impl<'a> EventContext<'a> {
-    /// A context with `budget` work units and the worker waker.
-    pub(crate) fn new(registrar: &'a dyn EventRegistrar, budget: usize, control: Waker) -> Self {
-        Self {
-            registrar,
-            budget: Budget::new(budget),
-            control,
-            rescheduled: false,
-        }
+    /// A context with the worker waker.
+    pub(crate) fn new(registrar: &'a dyn EventRegistrar, control: Waker) -> Self {
+        Self { registrar, control }
     }
 
     /// Registers a background source with the worker.
@@ -147,26 +109,6 @@ impl<'a> EventContext<'a> {
     /// Stops reporting a background source.
     pub(crate) fn deregister(&self, id: SourceId) {
         self.registrar.deregister(id);
-    }
-
-    /// Takes `work` units from the budget.
-    pub(crate) fn consume(&mut self, work: usize) -> bool {
-        self.budget.consume(work)
-    }
-
-    /// Whether the budget is exhausted.
-    pub(crate) fn exhausted(&self) -> bool {
-        self.budget.remaining() == 0
-    }
-
-    /// Asks the worker to call the device again after this event.
-    pub(crate) fn reschedule(&mut self) {
-        self.rescheduled = true;
-    }
-
-    /// Whether the device asked for another call.
-    pub(crate) fn rescheduled(&self) -> bool {
-        self.rescheduled
     }
 
     /// The waker for the worker's poller.
