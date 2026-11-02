@@ -162,7 +162,7 @@ console.log(JSON.stringify(await box.resize({cpus:3})));
     assert re.fullmatch(r"[A-Za-z0-9_-]+", box.id)
     database(
         f"ALTER TABLE box_usage_periods ADD CONSTRAINT acceptance_resize_failure "
-        f"CHECK (\"boxId\" <> '{box.id}' OR cpu < 4)"
+        f"CHECK (\"boxId\" <> '{box.id}' OR \"endAt\" IS NULL)"
     )
     try:
         code, stdout, stderr = await command(cli, env)
@@ -172,9 +172,14 @@ console.log(JSON.stringify(await box.resize({cpus:3})));
             'AND "completedAt" IS NULL',
             [box.id],
         )
-        assert pending["resizePhase"] == "BILLING_PENDING" and pending["attempt"] == 0
-        [desired] = database("SELECT cpu, mem, pending FROM box WHERE id=$1", [box.id])
-        assert desired == {"cpu": 4, "mem": 3, "pending": True}
+        assert pending["resizePhase"] == "APPLY" and pending["attempt"] >= 1
+        [desired] = database("SELECT cpu, mem, pending, \"resizeJobId\" FROM box WHERE id=$1", [box.id])
+        assert desired == {"cpu": 3, "mem": 2, "pending": True, "resizeJobId": pending["id"]}
+        [open_period] = database(
+            'SELECT cpu, mem FROM box_usage_periods WHERE "boxId"=$1 AND "endAt" IS NULL',
+            [box.id],
+        )
+        assert (open_period["cpu"], open_period["mem"]) == (3, 2)
         assert (await box.resize()).cpus == 3
         for path, body, status, message in [
             (f"/v1/boxes/{box.id}/stop", {}, 400, "state change in progress"),
@@ -195,9 +200,17 @@ console.log(JSON.stringify(await box.resize({cpus:3})));
             "ALTER TABLE box_usage_periods DROP CONSTRAINT IF EXISTS acceptance_resize_failure"
         )
     database(
-        'UPDATE job SET "nextAttemptAt"=statement_timestamp() WHERE id=$1',
+        'UPDATE job SET "leaseExpiresAt"=statement_timestamp() - interval \'1 second\', '
+        '"nextAttemptAt"=statement_timestamp() WHERE id=$1',
         [pending["id"]],
     )
+    for _ in range(30):
+        [state] = database('SELECT status FROM job WHERE id=$1', [pending["id"]])
+        if state["status"] == "PENDING":
+            break
+        await asyncio.sleep(1)
+    else:
+        raise AssertionError("resize job was not requeued after the completion failure")
     code, stdout, stderr = await command(cli, env)
     assert code == 0, stderr
     assert json.loads(stdout)["cpus"] == 4 and json.loads(stdout)["memory_mib"] == 3072
@@ -208,6 +221,8 @@ console.log(JSON.stringify(await box.resize({cpus:3})));
         "SELECT status, attempt FROM job WHERE id=$1", [pending["id"]]
     )
     assert completed["status"] == "COMPLETED" and completed["attempt"] >= 1
+    [committed] = database("SELECT cpu, mem, pending, \"resizeJobId\" FROM box WHERE id=$1", [box.id])
+    assert committed == {"cpu": 4, "mem": 3, "pending": False, "resizeJobId": None}
     periods = database(
         'SELECT cpu, mem, "startAt", "endAt" FROM box_usage_periods WHERE "boxId"=$1 '
         'UNION ALL SELECT cpu, mem, "startAt", "endAt" FROM box_usage_periods_archive '

@@ -6,13 +6,11 @@
 
 import { Injectable, Logger, OnApplicationShutdown } from '@nestjs/common'
 import { InjectRepository } from '@nestjs/typeorm'
-import { EntityManager, IsNull, LessThan, Not, Raw, Repository } from 'typeorm'
+import { EntityManager, IsNull, LessThan, Not, Repository } from 'typeorm'
 import { metrics, type Counter } from '@opentelemetry/api'
 import { BoxUsagePeriod } from '../entities/box-usage-period.entity'
 import { OnEvent } from '@nestjs/event-emitter'
 import { ConflictException } from '@nestjs/common'
-import { Job } from '../../box/entities/job.entity'
-import { JobStatus, JobType } from '../../box/dto/job.dto'
 import { BoxStateUpdatedEvent } from '../../box/events/box-state-updated.event'
 import { BoxDesiredStateUpdatedEvent } from '../../box/events/box-desired-state-updated.event'
 import { BoxState } from '../../box/enums/box-state.enum'
@@ -96,32 +94,6 @@ export class UsageService implements TrackableJobExecutions, OnApplicationShutdo
     const lease = await this.acquireLease(boxId)
     if (!lease) throw new ConflictException('Box usage is being updated; retry the request')
     return this.withLease(lease, operation, `resize ${boxId}`)
-  }
-
-  async activateResizeJob(jobId: string): Promise<void> {
-    const identity = await this.boxUsagePeriodRepository.manager.findOneBy(Job, { id: jobId, type: JobType.RESIZE_BOX })
-    if (!identity) return
-    await this.withResourceLock(identity.resourceId, async (signal) => {
-      await this.boxUsagePeriodRepository.manager.transaction(async (manager) => {
-        const box = await manager.findOne(Box, {
-          where: { id: identity.resourceId },
-          lock: { mode: 'pessimistic_write' },
-          loadEagerRelations: false,
-        })
-        const job = await manager.findOne(Job, { where: { id: jobId }, lock: { mode: 'pessimistic_write' } })
-        if (!job || job.resizePhase !== 'BILLING_PENDING' || job.status !== JobStatus.PENDING) return
-        if (!box || box.resizeJobId !== jobId || box.state !== BoxState.STARTED) {
-          throw new ConflictException('Resize billing no longer owns a running box')
-        }
-        signal.throwIfAborted()
-        const [{ now }] = await manager.query('SELECT statement_timestamp() AS now')
-        const at = new Date(now)
-        await this.closeUsagePeriod(box.id, manager, at)
-        await this.openUsagePeriodFor(box, box.state, manager, at)
-        await manager.update(Job, jobId, { resizePhase: 'APPLY', nextAttemptAt: at })
-        signal.throwIfAborted()
-      })
-    })
   }
 
   async onApplicationShutdown() {
@@ -226,7 +198,8 @@ export class UsageService implements TrackableJobExecutions, OnApplicationShutdo
    * (terminal) or whose state is still in flight gets none — the caller has
    * already closed whatever was open.
    */
-  private async openUsagePeriodFor(box: Box, state: BoxState, entityManager?: EntityManager, startAt?: Date) {
+  /** Public so resize completion can open the target period in its Box/Job transaction. */
+  async openUsagePeriodFor(box: Box, state: BoxState, entityManager?: EntityManager, startAt?: Date) {
     // The event's newState is the authority on where the box landed; the entity
     // it carries is a snapshot, and a synthetic transition may have been built
     // with a state of its own (see the warm-pool claim in box.service.ts).
@@ -257,7 +230,8 @@ export class UsageService implements TrackableJobExecutions, OnApplicationShutdo
     await (entityManager ? entityManager.save(usagePeriod) : this.boxUsagePeriodRepository.save(usagePeriod))
   }
 
-  private async closeUsagePeriod(boxId: string, entityManager?: EntityManager, endAt = new Date()) {
+  /** Public so resize completion can close the old period in its Box/Job transaction. */
+  async closeUsagePeriod(boxId: string, entityManager?: EntityManager, endAt = new Date()) {
     const where = { boxId, endAt: IsNull() }
     const lastUsagePeriod = entityManager
       ? await entityManager.findOne(BoxUsagePeriod, { where })
@@ -286,12 +260,6 @@ export class UsageService implements TrackableJobExecutions, OnApplicationShutdo
         const usagePeriods = await this.boxUsagePeriodRepository.find({
           where: {
             endAt: IsNull(),
-            // Exclude unready resize work before LIMIT, so a full batch of
-            // billing failures cannot starve unrelated daily rollovers.
-            boxId: Raw(
-              (alias) => `NOT EXISTS (SELECT 1 FROM "box" b JOIN "job" j ON j.id = b."resizeJobId"
-              WHERE b.id = ${alias} AND j."resizePhase" = 'BILLING_PENDING')`,
-            ),
             // 1 day ago
             startAt: LessThan(new Date(Date.now() - 1000 * 60 * 60 * 24)),
             organizationId: Not(BOX_WARM_POOL_UNASSIGNED_ORGANIZATION),
@@ -324,10 +292,6 @@ export class UsageService implements TrackableJobExecutions, OnApplicationShutdo
                   loadEagerRelations: false,
                 })
                 boxSignal.throwIfAborted()
-                if (box?.resizeJobId) {
-                  const resize = await transactionalEntityManager.findOneBy(Job, { id: box.resizeJobId })
-                  if (resize?.resizePhase === 'BILLING_PENDING') return
-                }
 
                 const currentUsagePeriod = await transactionalEntityManager.findOne(BoxUsagePeriod, {
                   where: { id: usagePeriod.id, boxId: usagePeriod.boxId, endAt: IsNull() },

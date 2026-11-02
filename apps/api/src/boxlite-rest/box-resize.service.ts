@@ -3,10 +3,8 @@ import {
   GatewayTimeoutException,
   Injectable,
   Logger,
-  OnApplicationBootstrap,
   ServiceUnavailableException,
 } from '@nestjs/common'
-import { Cron } from '@nestjs/schedule'
 import { DataSource, IsNull } from 'typeorm'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { Box } from '../box/entities/box.entity'
@@ -18,7 +16,13 @@ import { BoxService } from '../box/services/box.service'
 import { RunnerService } from '../box/services/runner.service'
 import { JobService } from '../box/services/job.service'
 import { assertWithinPerBoxLimits } from '../box/services/per-box-limits'
-import { BoxResources, ResizePayload, resizeTarget, validResources } from '../box/services/resize-resources'
+import {
+  BoxResources,
+  RESIZE_MAX_DURATION_MINUTES,
+  ResizePayload,
+  resizeTarget,
+  validResources,
+} from '../box/services/resize-resources'
 import { Organization } from '../organization/entities/organization.entity'
 import { OrganizationService } from '../organization/services/organization.service'
 import { UsageService } from '../usage/services/usage.service'
@@ -27,7 +31,7 @@ import { ResizeBoxDto } from './dto/resize-box.dto'
 import { BoxLookupCacheInvalidationService } from '../box/services/box-lookup-cache-invalidation.service'
 
 @Injectable()
-export class BoxResizeService implements OnApplicationBootstrap {
+export class BoxResizeService {
   private readonly logger = new Logger(BoxResizeService.name)
 
   constructor(
@@ -52,8 +56,8 @@ export class BoxResizeService implements OnApplicationBootstrap {
     this.assertRunning(box)
     const current = await this.observe(box)
     const target = resizeTarget(request, current)
-    assertWithinPerBoxLimits(target.cpus, Math.ceil(target.memory_mib / 1024), box.disk, organization)
-    if (target.cpus === current.cpus && target.memory_mib === current.memory_mib) return current
+    const targetMemoryGiB = Math.ceil(target.memory_mib / 1024)
+    assertWithinPerBoxLimits(target.cpus, targetMemoryGiB, box.disk, organization)
 
     const job = await this.usage.withResourceLock(box.id, async (signal) =>
       this.db.transaction(async (manager) => {
@@ -66,16 +70,30 @@ export class BoxResizeService implements OnApplicationBootstrap {
         this.assertRunning(locked)
         if (locked.pending || locked.runnerId !== box.runnerId || locked.cpu !== box.cpu || locked.mem !== box.mem)
           throw new ConflictException('Box changed; retry resize')
+        if (
+          target.cpus === current.cpus &&
+          target.memory_mib === current.memory_mib &&
+          locked.cpu === target.cpus &&
+          locked.mem === targetMemoryGiB
+        )
+          return null
+        if (target.cpus < locked.cpu || targetMemoryGiB < locked.mem)
+          throw new ConflictException('Resize cannot shrink the committed Box size')
         const existing = await manager.findOneBy(Job, {
           resourceId: box.id,
           resourceType: ResourceType.BOX,
           completedAt: IsNull(),
         })
         if (existing) throw new ConflictException('Box has unfinished lifecycle work')
+        const [{ now, deadline }] = await manager.query(
+          `SELECT statement_timestamp() AS now,
+                  statement_timestamp() + ($1::int * interval '1 minute') AS deadline`,
+          [RESIZE_MAX_DURATION_MINUTES],
+        )
         const payload: ResizePayload = {
           version: 1,
           ...target,
-          previous: { cpus: current.cpus, memory_mib: current.memory_mib },
+          previous: { cpus: locked.cpu, memory_mib: locked.mem * 1024 },
         }
         const created = new Job({
           type: JobType.RESIZE_BOX,
@@ -84,11 +102,11 @@ export class BoxResizeService implements OnApplicationBootstrap {
           resourceId: locked.id,
           payload: JSON.stringify(payload),
         })
-        created.resizePhase = 'BILLING_PENDING'
+        created.resizePhase = 'APPLY'
+        created.nextAttemptAt = new Date(now)
+        created.resizeDeadlineAt = new Date(deadline)
         await manager.insert(Job, created)
         await manager.update(Box, locked.id, {
-          cpu: target.cpus,
-          mem: Math.ceil(target.memory_mib / 1024),
           pending: true,
           resizeJobId: created.id,
         })
@@ -96,8 +114,14 @@ export class BoxResizeService implements OnApplicationBootstrap {
         return created
       }),
     )
+
+    if (!job) return current
     this.cache.invalidate({ id: box.id, organizationId: box.organizationId, name: box.name })
-    await this.activate(job)
+    try {
+      await this.jobs.notifyRunner(job.runnerId, job.id)
+    } catch {
+      this.logger.warn({ message: 'Resize notification lost; database polling will recover', jobId: job.id })
+    }
     return this.waitFor(job)
   }
 
@@ -152,64 +176,15 @@ export class BoxResizeService implements OnApplicationBootstrap {
         if (validResources(result)) return result
         throw new ConflictException('Resize completion has no valid resources')
       }
+      if (current.status === JobStatus.FAILED && current.completedAt) {
+        throw new ConflictException(current.errorMessage || 'Resize failed; the Box is unchanged')
+      }
       await sleep(250)
     }
     throw new GatewayTimeoutException({
       code: 'resize_in_progress',
       message:
-        'Configuration accepted; billing transition and resize continue in the background. Retry the same target or query resources.',
+        'Configuration accepted; resize continues in the background. Box size and billing update only after the Runner confirms completion. Retry the same target or query resources.',
     })
-  }
-
-  private async activate(job: Job): Promise<void> {
-    try {
-      await this.usage.activateResizeJob(job.id)
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      this.logger.error({ message: 'Resize billing will retry', jobId: job.id, boxId: job.resourceId, error: message })
-      try {
-        await this.db
-          .getRepository(Job)
-          .createQueryBuilder()
-          .update(Job)
-          .set({ errorMessage: message, nextAttemptAt: () => "statement_timestamp() + interval '15 seconds'" })
-          .where('id = :id AND "resizePhase" = :phase', { id: job.id, phase: 'BILLING_PENDING' })
-          .execute()
-      } catch (retryError) {
-        this.logger.error('Could not record billing retry; persisted job remains recoverable', retryError)
-      }
-      return
-    }
-    // Notification is only a hint; the committed job remains pollable if Redis fails.
-    try {
-      await this.jobs.notifyRunner(job.runnerId, job.id)
-    } catch {
-      this.logger.warn({ message: 'Resize notification lost; database polling will recover', jobId: job.id })
-    }
-  }
-
-  async onApplicationBootstrap(): Promise<void> {
-    await this.recoverBilling()
-  }
-
-  @Cron('*/15 * * * * *', { name: 'recover-resize-billing' })
-  async recoverBilling(): Promise<void> {
-    try {
-      const pending = await this.db
-        .getRepository(Job)
-        .createQueryBuilder('job')
-        .where('job.type = :type AND job.status = :status AND job.resizePhase = :phase', {
-          type: JobType.RESIZE_BOX,
-          status: JobStatus.PENDING,
-          phase: 'BILLING_PENDING',
-        })
-        .andWhere('(job.nextAttemptAt IS NULL OR job.nextAttemptAt <= statement_timestamp())')
-        .orderBy('job.updatedAt', 'ASC')
-        .take(100)
-        .getMany()
-      for (const job of pending) await this.activate(job)
-    } catch (error) {
-      this.logger.error('Cannot scan pending resize billing', error)
-    }
   }
 }

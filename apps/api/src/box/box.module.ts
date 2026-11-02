@@ -64,6 +64,7 @@ import { BoxSnapshotService } from './services/box-snapshot.service'
 import { BoxSnapshotSettler } from './services/box-snapshot-settler.service'
 import { SNAPSHOT_ARCHIVE_STORE, createSnapshotArchiveStore } from './stores/snapshot-archive.store'
 import { TypedConfigService } from '../config/typed-config.service'
+import { UsageModule } from '../usage/usage.module'
 
 @Module({
   imports: [
@@ -71,6 +72,7 @@ import { TypedConfigService } from '../config/typed-config.service'
     OrganizationModule,
     RegionModule,
     ImageModule,
+    UsageModule,
     TypeOrmModule.forFeature([
       Box,
       Runner,

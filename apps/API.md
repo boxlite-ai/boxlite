@@ -471,12 +471,15 @@ organization membership.
 | `POST`   | `/api/v1[/{prefix}]/boxes/{boxId}/resize` | Grows CPU/RAM through a durable job; `{}` queries actual allocation. |
 
 Resize requires `write:boxes` and a running Linux Box on a compatible Runner.
-Memory is rounded up to whole GiB. Acceptance saves desired resources before
-switching usage periods; the job becomes claimable only after that switch
-commits. `200` returns `BoxResources`. After 30 seconds, `504` with code
+Memory is rounded up to whole GiB. Acceptance stores the target and a durable job,
+but leaves the Box and usage period at their old values until the Runner confirms
+the target. Completion then updates Box CPU/RAM and switches the usage period in one
+transaction. `200` returns `BoxResources`. After 30 seconds, `504` with code
 `resize_in_progress` leaves the job running; repeating the same target joins it,
-while a different target returns `409`. The normal Box response reports desired
-resources, so use the empty resize request to inspect actual allocation.
+while a different target returns `409`. The normal Box response reports committed
+resources, so use the empty resize request to inspect actual allocation. Bounded
+failures become terminal after 10 attempts or 30 minutes and release the lifecycle
+fence; Box size and billing remain unchanged.
 
 </details>
 
