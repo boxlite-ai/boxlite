@@ -109,6 +109,13 @@ describe('BoxService business event actor', () => {
 
     await service.start('box-1', { id: 'org-1' } as any, ctx)
 
+    expect((service as any).boxRepository.updateWhere).toHaveBeenCalledWith(
+      'box-1',
+      expect.objectContaining({
+        updateData: expect.objectContaining({ startEventPending: true }),
+      }),
+    )
+
     expect(requested('box.start')?.[0]).toEqual({
       name: 'box.start',
       outcome: 'requested',

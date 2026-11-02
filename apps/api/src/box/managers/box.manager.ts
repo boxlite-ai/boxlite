@@ -339,6 +339,9 @@ export class BoxManager implements TrackableJobExecutions, OnApplicationShutdown
       const box = await this.boxRepository.findOneOrFail({
         where: { id: boxId },
       })
+      const startingExistingBox =
+        box.desiredState === BoxDesiredState.STARTED &&
+        (box.startEventPending || [BoxState.STOPPED, BoxState.STARTING, BoxState.RESTORING].includes(box.state))
 
       while (new Date().getTime() - startedAt.getTime() <= 10000) {
         if (
@@ -357,9 +360,6 @@ export class BoxManager implements TrackableJobExecutions, OnApplicationShutdown
 
         // Rely on the box action to return SYNC_AGAIN or DONT_SYNC_AGAIN to continue/break the sync loop.
         let syncState = DONT_SYNC_AGAIN
-        const startingExistingBox =
-          box.desiredState === BoxDesiredState.STARTED &&
-          [BoxState.STOPPED, BoxState.STARTING, BoxState.RESTORING].includes(box.state)
 
         try {
           switch (box.desiredState) {
