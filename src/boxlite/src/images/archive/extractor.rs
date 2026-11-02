@@ -137,6 +137,11 @@ impl<'a> LayerExtractor<'a> {
         self.deferred_dirs.apply()
     }
 
+    /// The single pass over one layer: create entries, apply whiteouts, and
+    /// return the decompressed byte count.
+    ///
+    /// Device nodes are the one entry type a rootless extractor cannot create,
+    /// so they are dropped here rather than handed to the metadata passes.
     fn extract_reader_with_whiteout_mode<R: Read>(
         &mut self,
         reader: R,
@@ -1157,6 +1162,8 @@ mod tests {
         }
     }
 
+    /// Build the uncompressed tar that the raw-extraction tests feed to
+    /// extract_raw.
     fn create_raw_tar(entries: &[RawTarEntry<'_>]) -> Vec<u8> {
         let mut builder = tar::Builder::new(Vec::new());
 
