@@ -17,11 +17,10 @@ import (
 type ExecutionInfo struct {
 	ExecutionID string   `json:"execution_id"`
 	Argv        []string `json:"argv"`
-	PID         uint32   `json:"pid"`
 	// StartedAt is the start time in Unix milliseconds.
-	StartedAt uint64 `json:"started_at"`
-	TTY       bool   `json:"tty"`
-	IsMain    bool   `json:"is_main"`
+	StartedAt     uint64 `json:"started_at"`
+	TTY           bool   `json:"tty"`
+	IsMainSession bool   `json:"is_main_session"`
 }
 
 type executionInfoListResult struct {
@@ -141,12 +140,11 @@ func convertExecutionInfoList(list *C.CExecutionInfoList) []ExecutionInfo {
 			}
 		}
 		out[i] = ExecutionInfo{
-			ExecutionID: cString(info.execution_id),
-			Argv:        argv,
-			PID:         uint32(info.pid),
-			StartedAt:   uint64(info.started_at),
-			TTY:         bool(info.tty),
-			IsMain:      bool(info.is_main),
+			ExecutionID:   cString(info.execution_id),
+			Argv:          argv,
+			StartedAt:     uint64(info.started_at),
+			TTY:           bool(info.tty),
+			IsMainSession: bool(info.is_main_session),
 		}
 	}
 	return out

@@ -84,12 +84,12 @@ func TestExecutionInventoryRecoveryHTTP(t *testing.T) {
 	var mainID string
 	found := false
 	for _, info := range inventory() {
-		if info.IsMain {
+		if info.IsMainSession {
 			mainID = info.ExecutionID
 		}
 		if info.ExecutionID == execution.ID() {
 			found = true
-			if info.PID == 0 || info.TTY || strings.Join(info.Argv, " ") != "sleep 300" {
+			if info.TTY || strings.Join(info.Argv, " ") != "sleep 300" {
 				t.Fatalf("wrong metadata: %+v", info)
 			}
 		}

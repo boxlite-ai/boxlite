@@ -74,8 +74,8 @@ func main() {
 ### Live Execution Discovery and Recovery
 
 `box.ListExecutions(ctx)` returns `[]ExecutionInfo` from the live guest,
-including its main process (`IsMain`). Fields are `ExecutionID` (canonical guest
-ID), `Argv`, `PID`, `StartedAt` (Unix milliseconds), `TTY`, and `IsMain`.
+including its main process (`IsMainSession`). Fields are `ExecutionID` (canonical guest
+ID), `Argv`, `StartedAt` (Unix milliseconds), `TTY`, and `IsMainSession`.
 Completed executions disappear. Listing never boots the box; a stopped or
 not-yet-started box returns an empty slice.
 
@@ -97,7 +97,7 @@ if err != nil {
 	log.Fatal(err)
 }
 for _, info := range executions {
-	if info.IsMain {
+	if info.IsMainSession {
 		continue
 	}
 	control, err := box.GetExecution(ctx, info.ExecutionID)

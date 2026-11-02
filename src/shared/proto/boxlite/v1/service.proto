@@ -88,12 +88,14 @@ service Execution {
 
 // Metadata captured at spawn, not reconstructed from a process listing.
 message ExecutionInfo {
+  reserved 3;
+  reserved "pid";
+
   string execution_id = 1;
   repeated string argv = 2;
-  uint32 pid = 3; // PID in the guest agent's namespace
   uint64 started_at = 4; // Unix epoch milliseconds
   bool tty = 5;
-  bool is_main = 6;
+  bool is_main_session = 6;
 }
 
 message ListExecutionsRequest {}

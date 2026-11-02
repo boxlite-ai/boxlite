@@ -239,7 +239,7 @@ runtime = boxlite.Boxlite.default()
 box = await runtime.get(box_id)
 
 for session in await box.list_executions():
-    print(session.execution_id, session.pid, session.argv, session.is_main)
+    print(session.execution_id, session.argv, session.is_main_session)
 
 target = next(s for s in await box.list_executions() if s.argv[:1] == ["pytest"])
 execution = await box.attach(target.execution_id)
@@ -263,9 +263,9 @@ What the list contains, and what it does not:
   The replay cache is bounded to 64 entries / 8 MiB; tombstones to
   1,024 entries / 5 MiB, so pressure can evict either earlier. Active readers
   finish before their replay is retired. None of this survives guest shutdown.
-- **The main command is included**, with `is_main=True`. Its id is the
+- **The main command is included**, with `is_main_session=True`. Its id is the
   container id, the same convention the wire layer uses.
-- **Metadata, not a process listing.** `argv`, `pid`, `started_at` and `tty`
+- **Metadata, not a process listing.** `argv`, `started_at` and `tty`
   are captured when the session is spawned, so they describe the BoxLite
   execution rather than whatever a `ps` parse would report.
 - **Listing never starts a box.** A stopped box lists nothing; it is not

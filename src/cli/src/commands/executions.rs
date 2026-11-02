@@ -24,12 +24,10 @@ struct ExecutionPresenter {
     #[tabled(rename = "ID")]
     #[serde(rename = "execution_id")]
     execution_id: String,
-    #[tabled(rename = "PID")]
-    pid: u32,
     #[tabled(rename = "TTY")]
     tty: bool,
     #[tabled(rename = "MAIN")]
-    is_main: bool,
+    is_main_session: bool,
     #[tabled(rename = "STARTED (UNIX MS)")]
     #[serde(rename = "started_at")]
     started_at: u64,
@@ -44,9 +42,8 @@ impl From<ExecutionInfo> for ExecutionPresenter {
     fn from(info: ExecutionInfo) -> Self {
         Self {
             execution_id: info.execution_id,
-            pid: info.pid,
             tty: info.tty,
-            is_main: info.is_main,
+            is_main_session: info.is_main_session,
             started_at: info.started_at,
             command: info.argv.join(" "),
             argv: info.argv,

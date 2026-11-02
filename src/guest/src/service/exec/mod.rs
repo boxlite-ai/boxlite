@@ -449,10 +449,9 @@ async fn spawn_execution(
         argv: std::iter::once(req.program.clone())
             .chain(req.args.iter().cloned())
             .collect(),
-        pid,
         started_at: started_at_ms,
         tty: req.tty.is_some(),
-        is_main: false,
+        is_main_session: false,
     });
     if let Some(reservation) = reservation {
         if !server.registry.publish(reservation, state.clone()).await {

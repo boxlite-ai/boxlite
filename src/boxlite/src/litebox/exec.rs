@@ -184,12 +184,10 @@ struct WaitState {
 pub struct ExecutionInfo {
     pub execution_id: String,
     pub argv: Vec<String>,
-    /// PID in the guest agent's namespace, not the host or container namespace.
-    pub pid: u32,
     /// Spawn time as Unix epoch milliseconds.
     pub started_at: u64,
     pub tty: bool,
-    pub is_main: bool,
+    pub is_main_session: bool,
 }
 
 /// Unique identifier for an execution.

@@ -31,16 +31,15 @@ async def test_native_inventory_includes_main_and_exec_without_boot(shared_runti
         await box.start()
         execution = await box.exec("sleep", ["300"], tty=True)
         inventory = await box.list_executions()
-        assert any(info.is_main for info in inventory)
+        assert any(info.is_main_session for info in inventory)
         info = next(info for info in inventory if info.execution_id == execution.id())
         assert isinstance(info, boxlite.ExecutionInfo)
         assert info.argv == ["sleep", "300"]
-        assert info.pid > 0
         assert info.started_at > 0
         assert info.tty is True
-        assert info.is_main is False
+        assert info.is_main_session is False
         with pytest.raises(AttributeError):
-            info.pid = 0
+            info.started_at = 0
         control = await box.get_execution(info.execution_id)
         await control.kill()
         await control.wait()
@@ -62,7 +61,7 @@ async def test_simplebox_inventory_recovers_main_output(shared_runtime):
     )
     await box.start()
     try:
-        main = next(info for info in await box.list_executions() if info.is_main)
+        main = next(info for info in await box.list_executions() if info.is_main_session)
         reader = await box.attach(main.execution_id, stdin=False)
         output = reader.stdout()
 

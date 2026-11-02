@@ -120,7 +120,7 @@ fn execution_inventory_and_recovery_across_cli_processes() {
     let executions = inventory.as_array().expect("top emits execution array");
     let init = executions
         .iter()
-        .find(|item| item["is_main"] == true)
+        .find(|item| item["is_main_session"] == true)
         .expect("init execution is listed");
     assert_eq!(init["tty"], true);
     let init_id = init["execution_id"].as_str().expect("canonical ID");
@@ -227,7 +227,7 @@ async fn recovered_init_attach_and_controls_are_box_scoped_and_independent() {
         .as_array()
         .unwrap()
         .iter()
-        .find(|item| item["is_main"] == true)
+        .find(|item| item["is_main_session"] == true)
         .unwrap();
     let init_id = init["execution_id"].as_str().unwrap();
     let path = format!("{}/v1/boxes/{box_id}/executions/{init_id}", serve.url());

@@ -571,8 +571,8 @@ if (boxlite_execute(box, &cmd, my_callback, NULL, &execution, &error) == Ok) {
 Drain the runtime as for other async operations. On success the callback owns
 the `CExecutionInfoList*` and must free it with
 `boxlite_free_execution_info_list`. Each record has `execution_id` (canonical
-guest ID), `argv`/`argc`, `pid`, `started_at` (Unix milliseconds), `tty`, and
-`is_main`. The main process is included; completed executions disappear.
+guest ID), `argv`/`argc`, `started_at` (Unix milliseconds), `tty`, and
+`is_main_session`. The main process is included; completed executions disappear.
 Listing never boots a box; a stopped/unstarted box returns an empty list.
 
 `boxlite_execution_id(execution)` returns an owned ID string; release it with

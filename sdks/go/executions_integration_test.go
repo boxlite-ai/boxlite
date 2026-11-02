@@ -47,10 +47,10 @@ func TestIntegrationExecutionInventoryControlsDoNotClaimOutput(t *testing.T) {
 	}
 	found, foundMain := false, false
 	for _, info := range inventory {
-		foundMain = foundMain || info.IsMain
+		foundMain = foundMain || info.IsMainSession
 		if info.ExecutionID == execution.ID() {
 			found = true
-			if info.PID == 0 || info.StartedAt == 0 || !info.TTY || info.IsMain || len(info.Argv) != 1 || info.Argv[0] != "cat" {
+			if info.StartedAt == 0 || !info.TTY || info.IsMainSession || len(info.Argv) != 1 || info.Argv[0] != "cat" {
 				t.Fatalf("incorrect execution metadata: %+v", info)
 			}
 		}
@@ -114,7 +114,7 @@ func TestIntegrationAttachExecutionReaderRecovery(t *testing.T) {
 	}
 	var mainID string
 	for _, info := range inventory {
-		if info.IsMain {
+		if info.IsMainSession {
 			mainID = info.ExecutionID
 		}
 	}

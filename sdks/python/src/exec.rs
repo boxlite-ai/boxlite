@@ -9,11 +9,10 @@ use tokio::sync::Mutex;
 pub(crate) struct PyExecutionInfo {
     pub(crate) execution_id: String,
     pub(crate) argv: Vec<String>,
-    pub(crate) pid: u32,
     /// Start time in Unix milliseconds.
     pub(crate) started_at: u64,
     pub(crate) tty: bool,
-    pub(crate) is_main: bool,
+    pub(crate) is_main_session: bool,
 }
 
 impl From<boxlite::litebox::ExecutionInfo> for PyExecutionInfo {
@@ -21,10 +20,9 @@ impl From<boxlite::litebox::ExecutionInfo> for PyExecutionInfo {
         Self {
             execution_id: info.execution_id,
             argv: info.argv,
-            pid: info.pid,
             started_at: info.started_at,
             tty: info.tty,
-            is_main: info.is_main,
+            is_main_session: info.is_main_session,
         }
     }
 }

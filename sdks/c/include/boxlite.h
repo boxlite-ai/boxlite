@@ -346,11 +346,10 @@ typedef struct CExecutionInfo {
   char *execution_id;
   char **argv;
   int argc;
-  uint32_t pid;
   // Start time in Unix milliseconds.
   uint64_t started_at;
   bool tty;
-  bool is_main;
+  bool is_main_session;
 } CExecutionInfo;
 
 // Owned list. Release it with `boxlite_free_execution_info_list`.

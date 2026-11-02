@@ -15,11 +15,10 @@ pub struct CExecutionInfo {
     pub execution_id: *mut c_char,
     pub argv: *mut *mut c_char,
     pub argc: c_int,
-    pub pid: u32,
     /// Start time in Unix milliseconds.
     pub started_at: u64,
     pub tty: bool,
-    pub is_main: bool,
+    pub is_main_session: bool,
 }
 
 /// Owned list. Release it with `boxlite_free_execution_info_list`.
@@ -47,10 +46,9 @@ impl From<boxlite::litebox::ExecutionInfo> for CExecutionInfo {
                 .into_raw(),
             argv,
             argc,
-            pid: info.pid,
             started_at: info.started_at,
             tty: info.tty,
-            is_main: info.is_main,
+            is_main_session: info.is_main_session,
         }
     }
 }

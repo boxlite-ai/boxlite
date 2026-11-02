@@ -730,7 +730,7 @@ mod release_tests {
         let registry = ExecutionRegistry::new();
         let _reservation = registry.reserve("not-spawned".into()).await.unwrap();
         let mut exits = Vec::new();
-        for (index, id, tty, is_main) in [
+        for (index, id, tty, is_main_session) in [
             (0, "container-init", false, true),
             (1, "sleep-one", false, false),
             (2, "sleep-two", true, false),
@@ -746,10 +746,9 @@ mod release_tests {
                 boxlite_shared::ExecutionInfo {
                     execution_id: id.into(),
                     argv: vec!["sleep".into(), "3600".into()],
-                    pid: (20_000 + index) as u32,
                     started_at: 1000 + index as u64,
                     tty,
-                    is_main,
+                    is_main_session,
                 },
             );
             assert!(registry.register(id.into(), state).await);
@@ -767,10 +766,9 @@ mod release_tests {
                 .collect::<Vec<_>>(),
             ["container-init", "sleep-one", "sleep-two"]
         );
-        assert!(live[0].is_main);
+        assert!(live[0].is_main_session);
         assert!(live[2].tty);
         assert_eq!(live[1].argv, ["sleep", "3600"]);
-        assert_eq!(live[1].pid, 20_001);
         assert_eq!(live[1].started_at, 1001);
 
         // Deliberately leave the entry in Live: the lifecycle observer has

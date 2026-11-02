@@ -946,10 +946,9 @@ async def list_executions(
             {
                 "execution_id": info.execution_id,
                 "argv": info.argv,
-                "pid": info.pid,
                 "started_at": info.started_at,
                 "tty": info.tty,
-                "is_main": info.is_main,
+                "is_main_session": info.is_main_session,
             }
             for info in executions
         ]

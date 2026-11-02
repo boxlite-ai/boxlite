@@ -32,7 +32,10 @@ fn test_top_lists_live_executions_including_the_main_session() {
         .success();
 
     let rows = inventory(&ctx, &box_id);
-    let mains: Vec<_> = rows.iter().filter(|row| row["is_main"] == true).collect();
+    let mains: Vec<_> = rows
+        .iter()
+        .filter(|row| row["is_main_session"] == true)
+        .collect();
     assert_eq!(mains.len(), 1, "exactly one main session: {rows:?}");
     // The main session is registered under the container id, not the short id
     // `run -d` prints.
@@ -44,10 +47,11 @@ fn test_top_lists_live_executions_including_the_main_session() {
 
     let execs: Vec<_> = rows
         .iter()
-        .filter(|row| row["is_main"] == false && row["argv"] == serde_json::json!(["sleep", "300"]))
+        .filter(|row| {
+            row["is_main_session"] == false && row["argv"] == serde_json::json!(["sleep", "300"])
+        })
         .collect();
     assert_eq!(execs.len(), 1, "the detached exec must be listed: {rows:?}");
-    assert!(execs[0]["pid"].as_u64().unwrap() > 0, "{rows:?}");
     assert_eq!(execs[0]["tty"], false, "{rows:?}");
 
     ctx.cleanup_box(&box_id);
@@ -68,7 +72,7 @@ fn test_top_id_kills_only_that_session() {
     let rows = inventory(&ctx, &box_id);
     let mut ids: Vec<String> = rows
         .iter()
-        .filter(|row| row["is_main"] == false)
+        .filter(|row| row["is_main_session"] == false)
         .map(|row| row["execution_id"].as_str().unwrap().to_string())
         .collect();
     assert_eq!(ids.len(), 2, "both detached execs must be listed: {rows:?}");

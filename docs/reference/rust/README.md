@@ -378,7 +378,7 @@ registry cleanup. Existing wait status/output may remain available in bounded
 guest retention after a session disappears from the list. Calling it on a
 created or stopped box returns an empty vector and does not start or restart
 the box. `ExecutionInfo` carries the canonical guest execution ID,
-argv, guest-agent PID, Unix-millisecond spawn time, PTY flag, and `is_main`.
+argv, guest-agent PID, Unix-millisecond spawn time, PTY flag, and `is_main_session`.
 
 `get_execution(id)` verifies the ID against this box's guest inventory and
 returns a control-only handle (no stdin/stdout/stderr). Its `wait`, `kill`,

@@ -19,15 +19,14 @@ describe("live execution inventory integration", { timeout: 120_000 }, () => {
       const execution = await native.exec("sleep", ["300"], undefined, true);
       const id = await execution.id();
       const inventory = await box.listExecutions();
-      expect(inventory.some((info) => info.isMain)).toBe(true);
+      expect(inventory.some((info) => info.isMainSession)).toBe(true);
       const info = inventory.find((item) => item.executionId === id);
       expect(info).toMatchObject({
         executionId: id,
         argv: ["sleep", "300"],
         tty: true,
-        isMain: false,
+        isMainSession: false,
       });
-      expect(info!.pid).toBeGreaterThan(0);
       expect(info!.startedAt).toBeGreaterThan(0);
       const control = await box.getExecution(id);
       await control.kill();
@@ -52,7 +51,7 @@ describe("live execution inventory integration", { timeout: 120_000 }, () => {
     try {
       const native = await box.nativeBox();
       await native.start();
-      const main = (await box.listExecutions()).find((info) => info.isMain)!;
+      const main = (await box.listExecutions()).find((info) => info.isMainSession)!;
       const reader = await box.attach(main.executionId, false);
       const stdout = await reader.stdout();
       let text = "";

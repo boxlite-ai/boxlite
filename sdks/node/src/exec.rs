@@ -17,11 +17,10 @@ const ERR_STDERR_UNAVAILABLE: &str = "stderr stream not available";
 pub struct JsExecutionInfo {
     pub execution_id: String,
     pub argv: Vec<String>,
-    pub pid: u32,
     /// Start time in Unix milliseconds.
     pub started_at: f64,
     pub tty: bool,
-    pub is_main: bool,
+    pub is_main_session: bool,
 }
 
 impl From<boxlite::litebox::ExecutionInfo> for JsExecutionInfo {
@@ -29,10 +28,9 @@ impl From<boxlite::litebox::ExecutionInfo> for JsExecutionInfo {
         Self {
             execution_id: info.execution_id,
             argv: info.argv,
-            pid: info.pid,
             started_at: info.started_at as f64,
             tty: info.tty,
-            is_main: info.is_main,
+            is_main_session: info.is_main_session,
         }
     }
 }

@@ -389,7 +389,6 @@ impl ContainerService for GuestServer {
                 // container.
                 let init_exit = match container.take_init_exec_handle() {
                     Ok(Some(handle)) => {
-                        let init_pid = handle.pid().as_raw() as u32;
                         let process =
                             crate::service::exec::process_instance::ProcessInstance::capture(
                                 handle.pid(),
@@ -507,10 +506,9 @@ impl ContainerService for GuestServer {
                         .with_metadata(boxlite_shared::ExecutionInfo {
                             execution_id: init_execution_id.clone(),
                             argv: init_argv,
-                            pid: init_pid,
                             started_at: init_started_at,
                             tty: init_tty,
-                            is_main: true,
+                            is_main_session: true,
                         });
                         if !self
                             .registry

@@ -409,9 +409,9 @@ await box.stop()
 ### Live Execution Inventory
 
 `await box.list_executions()` returns `list[boxlite.ExecutionInfo]` from the
-guest's live process inventory, including the main command (`is_main=True`).
-Each record has `execution_id` (canonical guest ID), `argv`, `pid`, `started_at`
-(Unix milliseconds), `tty`, and `is_main`. Completed commands are not history
+guest's live process inventory, including the main command (`is_main_session=True`).
+Each record has `execution_id` (canonical guest ID), `argv`, `started_at`
+(Unix milliseconds), `tty`, and `is_main_session`. Completed commands are not history
 entries and disappear from this list. Listing never starts a box: a stopped
 or not-yet-started native box returns an empty list.
 
@@ -428,7 +428,7 @@ while a reader is active is a conflict, not an implicit takeover.
 
 ```python
 for execution in await box.list_executions():
-    print(execution.execution_id, execution.pid, execution.argv, execution.is_main)
+    print(execution.execution_id, execution.argv, execution.is_main_session)
 ```
 
 ### Command Execution

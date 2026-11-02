@@ -1065,10 +1065,9 @@ Returned by `JsBox.listExecutions()` and `SimpleBox.listExecutions()`.
 interface ExecutionInfo {
   executionId: string;
   argv: string[];
-  pid: number;       // Guest-agent namespace
   startedAt: number; // Unix epoch milliseconds
   tty: boolean;
-  isMain: boolean;
+  isMainSession: boolean;
 }
 ```
 

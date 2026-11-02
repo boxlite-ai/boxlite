@@ -513,11 +513,10 @@ export interface JsExecStdin {
 export interface ExecutionInfo {
   executionId: string;
   argv: string[];
-  pid: number;
   /** Start time in Unix milliseconds. */
   startedAt: number;
   tty: boolean;
-  isMain: boolean;
+  isMainSession: boolean;
 }
 
 export interface JsExecution {

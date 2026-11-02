@@ -332,8 +332,8 @@ See [the Node.js reference](../../docs/reference/nodejs/README.md#registryhandle
 
 `await box.listExecutions()` is available on native `JsBox` and `SimpleBox`.
 It returns `ExecutionInfo[]` from the guest's live inventory, including the
-main process: `executionId` (canonical guest ID), `argv`, `pid`, `startedAt`
-(Unix milliseconds), `tty`, and `isMain`. Completed processes disappear; this
+main process: `executionId` (canonical guest ID), `argv`, `startedAt`
+(Unix milliseconds), `tty`, and `isMainSession`. Completed processes disappear; this
 is not execution history. Listing does not attach or consume output, and never
 boots a stopped box. A stopped/unstarted native box returns an empty list;
 an uncreated `SimpleBox` also returns an empty list without creating its box.
@@ -346,7 +346,7 @@ Only one output reader is permitted.
 
 ```typescript
 for (const execution of await box.listExecutions()) {
-  console.log(execution.executionId, execution.pid, execution.argv, execution.isMain);
+  console.log(execution.executionId, execution.argv, execution.isMainSession);
 }
 ```
 

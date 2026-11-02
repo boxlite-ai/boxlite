@@ -801,7 +801,7 @@ paths:
       description: |
         Returns the guest registry's live-session snapshot, not a parsed
         process listing. The main command session is included with
-        `is_main: true`; each returned guest execution ID is usable with the
+        `is_main_session: true`; each returned guest execution ID is usable with the
         existing attach and control endpoints. Finished sessions are excluded
         immediately, including the interval before registry cleanup. Existing
         wait status/output retention is bounded and is not durable history.
@@ -2863,7 +2863,7 @@ components:
         object as `ExecutionInfo`; the wire schema keeps a distinct name
         because `ExecutionInfo` here is the status shape returned by
         `GET /executions/{exec_id}`.
-      required: [execution_id, argv, pid, started_at, tty, is_main]
+      required: [execution_id, argv, started_at, tty, is_main_session]
       properties:
         execution_id:
           type: string
@@ -2873,9 +2873,6 @@ components:
           items:
             type: string
           description: The command as it was requested, program first
-        pid:
-          type: integer
-          description: PID in the guest agent's namespace
         started_at:
           type: integer
           format: int64
@@ -2883,7 +2880,7 @@ components:
         tty:
           type: boolean
           description: Whether the session owns a PTY
-        is_main:
+        is_main_session:
           type: boolean
           description: |
             True for the box's main command session (the container init),

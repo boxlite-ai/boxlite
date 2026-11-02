@@ -198,7 +198,7 @@ async fn recover_attached_execution(
         .await
         .map_err(|error| error_from_boxlite(&error))?;
     let stdin = execution.stdin();
-    let kind = if info.is_main {
+    let kind = if info.is_main_session {
         SessionKind::Main
     } else {
         SessionKind::Exec

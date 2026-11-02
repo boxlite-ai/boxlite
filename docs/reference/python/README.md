@@ -555,17 +555,16 @@ a process listing, so `execution_id` is always addressable.
 |-------|------|-------------|
 | `execution_id` | `str` | Identifier accepted by `attach()` and `Execution.kill()` |
 | `argv` | `list[str]` | The command as requested, program first |
-| `pid` | `int` | PID in the guest agent's namespace |
 | `started_at` | `int` | Spawn time, Unix epoch milliseconds |
 | `tty` | `bool` | Whether the session owns a PTY |
-| `is_main` | `bool` | `True` for the box's main command (the container init) |
+| `is_main_session` | `bool` | `True` for the box's main command (the container init) |
 
 The main session's `execution_id` is the container id, the same convention the
 wire layer uses.
 
 ```python
 for session in await box.list_executions():
-    marker = " (main)" if session.is_main else ""
+    marker = " (main)" if session.is_main_session else ""
     print(f"{session.execution_id}{marker}: {' '.join(session.argv)}")
 ```
 

@@ -29,11 +29,11 @@ async fn live_inventory_includes_init_and_recovers_controls_without_reader() {
     let live = handle.list_executions().await.unwrap();
     let main = live
         .iter()
-        .find(|info| info.is_main)
+        .find(|info| info.is_main_session)
         .expect("init must be discoverable");
     assert_ne!(main.execution_id, handle.id().as_str());
-    assert!(main.pid > 0 && main.started_at > 0);
-    assert_eq!(live.iter().filter(|info| !info.is_main).count(), 2);
+    assert!(main.started_at > 0);
+    assert_eq!(live.iter().filter(|info| !info.is_main_session).count(), 2);
     let info = live
         .iter()
         .find(|info| &info.execution_id == first.id())
@@ -57,7 +57,7 @@ async fn live_inventory_includes_init_and_recovers_controls_without_reader() {
     let live = handle.list_executions().await.unwrap();
     assert!(!live.iter().any(|info| &info.execution_id == first.id()));
     assert!(live.iter().any(|info| &info.execution_id == second.id()));
-    assert!(live.iter().any(|info| info.is_main));
+    assert!(live.iter().any(|info| info.is_main_session));
 
     // Drop the original eager output pump's receivers, then acquire a fresh
     // reader for the same guest ID without spawning another process.
