@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! The virtio device contract: object safety, feature delivery, synchronous
-//! configuration, activation, reset, event contexts and the default snapshot
+//! configuration, activation, reset, event delivery and the default snapshot
 //! methods.
 
 use std::{
@@ -21,10 +21,9 @@ use crate::{
     events::EventLoop,
     memory::GuestMemoryMmap,
     virtio::{
-        ActivationContext, DeviceError, DeviceEvent, DeviceSnapshot, DeviceSpec, EventContext,
-        EventError, EventRegistrar, EventSource, FeatureError, MAX_CONFIG_LEN, MAX_QUEUES,
-        RestoreContext, SnapshotError, SnapshotSupport, SourceId, VirtioDevice, VirtioInterrupt,
-        Waker,
+        ActivationContext, DeviceError, DeviceEvent, DeviceSnapshot, DeviceSpec, EventError,
+        EventRegistrar, EventSource, FeatureError, MAX_CONFIG_LEN, MAX_QUEUES, RestoreContext,
+        SnapshotError, SnapshotSupport, SourceId, VirtioDevice, VirtioInterrupt, Waker,
     },
 };
 
@@ -96,11 +95,7 @@ impl VirtioDevice for TestDevice {
         Ok(())
     }
 
-    fn on_event(
-        &mut self,
-        event: DeviceEvent,
-        _cx: &mut EventContext<'_>,
-    ) -> Result<(), DeviceError> {
+    fn on_event(&mut self, event: DeviceEvent) -> Result<(), DeviceError> {
         self.events.push(event);
         Ok(())
     }
@@ -207,15 +202,19 @@ fn sender() -> crate::events::EventSender {
     EventLoop::new().unwrap().sender()
 }
 
-fn activation() -> ActivationContext {
+fn activation_with(events: Arc<dyn EventRegistrar>, waker: Waker) -> ActivationContext {
     ActivationContext {
         memory: Arc::new(GuestMemoryMmap::from_ranges(&[(GuestAddress(0), 0x10000)]).unwrap()),
         queues: vec![Queue::new(8).unwrap()],
         interrupt: Arc::new(TestInterrupt::default()),
-        events: Arc::new(TestRegistrar::default()),
-        waker: waker(),
+        events,
+        waker,
         sender: sender(),
     }
+}
+
+fn activation() -> ActivationContext {
+    activation_with(Arc::new(TestRegistrar::default()), waker())
 }
 
 #[test]
@@ -297,12 +296,10 @@ fn activation_takes_the_context_and_reset_clears_it() {
 #[test]
 fn events_reach_the_device() {
     let mut device = TestDevice::new();
-    let registrar = TestRegistrar::default();
-    let mut cx = EventContext::new(&registrar, waker());
-    assert!(device.on_event(DeviceEvent::QueueKick(3), &mut cx).is_ok());
+    assert!(device.on_event(DeviceEvent::QueueKick(3)).is_ok());
     assert!(
         device
-            .on_event(DeviceEvent::BackendReady(SourceId(7)), &mut cx)
+            .on_event(DeviceEvent::BackendReady(SourceId(7)))
             .is_ok()
     );
     assert_eq!(
@@ -315,25 +312,25 @@ fn events_reach_the_device() {
 }
 
 #[test]
-fn the_event_context_registers_deregisters_and_wakes() {
-    let registrar = TestRegistrar::default();
+fn the_activation_context_registers_deregisters_and_wakes() {
+    let registrar = Arc::new(TestRegistrar::default());
     let calls = Arc::new(AtomicUsize::new(0));
     let counter = Arc::clone(&calls);
     let control: Waker = Arc::new(move || {
         counter.fetch_add(1, Ordering::SeqCst);
     });
-    let cx = EventContext::new(&registrar, control);
-    let id = cx
+    let ctx = activation_with(registrar.clone(), control);
+    let id = ctx
+        .events
         .register(DeviceEvent::BackendReady(SourceId(9)), Box::new(TestSource))
         .unwrap();
-    let forwarded = cx.control().clone();
-    forwarded();
+    (ctx.waker)();
     assert_eq!(calls.load(Ordering::SeqCst), 1);
     assert_eq!(
         *registrar.events.lock().unwrap(),
         vec![DeviceEvent::BackendReady(SourceId(9))]
     );
-    cx.deregister(id);
+    ctx.events.deregister(id);
     assert!(registrar.sources.lock().unwrap().is_empty());
 }
 

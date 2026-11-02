@@ -85,38 +85,6 @@ pub(crate) trait EventRegistrar: Send + Sync {
     fn deregister(&self, id: SourceId);
 }
 
-/// Per-event state the worker gives a device.
-pub(crate) struct EventContext<'a> {
-    registrar: &'a dyn EventRegistrar,
-    control: Waker,
-}
-
-impl<'a> EventContext<'a> {
-    /// A context with the worker waker.
-    pub(crate) fn new(registrar: &'a dyn EventRegistrar, control: Waker) -> Self {
-        Self { registrar, control }
-    }
-
-    /// Registers a background source with the worker.
-    pub(crate) fn register(
-        &self,
-        event: DeviceEvent,
-        source: Box<dyn EventSource>,
-    ) -> Result<SourceId, EventError> {
-        self.registrar.register(event, source)
-    }
-
-    /// Stops reporting a background source.
-    pub(crate) fn deregister(&self, id: SourceId) {
-        self.registrar.deregister(id);
-    }
-
-    /// The waker for the worker's poller.
-    pub(crate) fn control(&self) -> &Waker {
-        &self.control
-    }
-}
-
 /// The transport's interrupt and status handle, shared with the worker.
 pub(crate) trait VirtioInterrupt: Send + Sync {
     /// Raises the queue interrupt.
@@ -150,9 +118,9 @@ pub(crate) struct ActivationContext {
     pub(crate) queues: Vec<Queue>,
     /// The transport's interrupt and status handle.
     pub(crate) interrupt: Arc<dyn VirtioInterrupt>,
-    /// The worker's event registrar for backend sources.
+    /// The worker's event registrar for backend sources; the device stores it.
     pub(crate) events: Arc<dyn EventRegistrar>,
-    /// The worker's poller waker.
+    /// The worker's poller waker; the device stores it.
     pub(crate) waker: Waker,
     /// The run thread's sender for fatal device failures.
     pub(crate) sender: EventSender,
@@ -264,12 +232,9 @@ pub(crate) trait VirtioDevice: Send {
     fn reset(&mut self) -> Result<(), DeviceError>;
 
     /// Handles one worker event. `Ok(())` means this call finished; it does
-    /// not mean every submitted request completed.
-    fn on_event(
-        &mut self,
-        event: DeviceEvent,
-        cx: &mut EventContext<'_>,
-    ) -> Result<(), DeviceError>;
+    /// not mean every submitted request completed. The device uses the event
+    /// registrar and waker stored from [`ActivationContext`].
+    fn on_event(&mut self, event: DeviceEvent) -> Result<(), DeviceError>;
 
     /// Stops accepting new work and drains requests the device already took.
     fn quiesce(&mut self) -> Result<(), DeviceError> {
