@@ -366,7 +366,7 @@ impl<'a> LayerExtractor<'a> {
                     })?;
                 }
                 EntryType::Block | EntryType::Char | EntryType::Fifo => {
-                    Self::create_special_inode(
+                    let created = Self::create_special_inode(
                         &safe_path,
                         entry_type,
                         mode,
@@ -374,6 +374,13 @@ impl<'a> LayerExtractor<'a> {
                         device_minor,
                         is_root,
                     )?;
+                    if !created {
+                        // A rootless extractor cannot create device nodes, so
+                        // there is no path for the metadata passes below and
+                        // nothing for the merged rootfs to carry: the guest
+                        // supplies its own /dev.
+                        continue;
+                    }
                 }
                 EntryType::XGlobalHeader => {
                     trace!("Ignoring PAX global header {}", raw_path.display());
@@ -552,6 +559,10 @@ impl<'a> LayerExtractor<'a> {
     }
 
     /// Create a special inode (FIFO, char/block device).
+    ///
+    /// Returns whether the inode exists afterwards: a rootless extractor
+    /// cannot mknod a device, and the caller must not apply metadata to a path
+    /// that was never created.
     fn create_special_inode(
         path: &Path,
         entry_type: EntryType,
@@ -559,7 +570,7 @@ impl<'a> LayerExtractor<'a> {
         major: libc::dev_t,
         minor: libc::dev_t,
         is_root: bool,
-    ) -> BoxliteResult<()> {
+    ) -> BoxliteResult<bool> {
         match entry_type {
             EntryType::Fifo => {
                 let c_path = CString::new(path.as_os_str().as_bytes())
@@ -576,7 +587,7 @@ impl<'a> LayerExtractor<'a> {
             EntryType::Char | EntryType::Block => {
                 if !is_root {
                     trace!("Skipping device node {} (requires root)", path.display());
-                    return Ok(());
+                    return Ok(false);
                 }
                 let c_path = CString::new(path.as_os_str().as_bytes())
                     .map_err(|_| BoxliteError::Storage("Path contains NUL".into()))?;
@@ -598,7 +609,7 @@ impl<'a> LayerExtractor<'a> {
             }
             _ => {}
         }
-        Ok(())
+        Ok(true)
     }
 
     fn apply_whiteout(
@@ -1092,6 +1103,8 @@ mod tests {
         File(&'a [u8]),
         Hardlink(&'a str),
         Symlink(&'a str),
+        CharDevice { major: u32, minor: u32 },
+        Fifo,
     }
 
     fn raw_dir(path: &str) -> RawTarEntry<'_> {
@@ -1126,6 +1139,22 @@ mod tests {
         }
     }
 
+    fn raw_char_device(path: &str, major: u32, minor: u32) -> RawTarEntry<'_> {
+        RawTarEntry {
+            path,
+            kind: RawTarEntryKind::CharDevice { major, minor },
+            mode: 0o600,
+        }
+    }
+
+    fn raw_fifo(path: &str) -> RawTarEntry<'_> {
+        RawTarEntry {
+            path,
+            kind: RawTarEntryKind::Fifo,
+            mode: 0o600,
+        }
+    }
+
     fn create_raw_tar(entries: &[RawTarEntry<'_>]) -> Vec<u8> {
         let mut builder = tar::Builder::new(Vec::new());
 
@@ -1156,6 +1185,20 @@ mod tests {
                 RawTarEntryKind::Symlink(target) => {
                     header.set_link_name_literal(target.as_bytes()).unwrap();
                     header.set_entry_type(tar::EntryType::Symlink);
+                    header.set_size(0);
+                    header.set_cksum();
+                    builder.append(&header, &[][..]).unwrap();
+                }
+                RawTarEntryKind::CharDevice { major, minor } => {
+                    header.set_entry_type(tar::EntryType::Char);
+                    header.set_device_major(major).unwrap();
+                    header.set_device_minor(minor).unwrap();
+                    header.set_size(0);
+                    header.set_cksum();
+                    builder.append(&header, &[][..]).unwrap();
+                }
+                RawTarEntryKind::Fifo => {
+                    header.set_entry_type(tar::EntryType::Fifo);
                     header.set_size(0);
                     header.set_cksum();
                     builder.append(&header, &[][..]).unwrap();
@@ -2560,6 +2603,42 @@ mod tests {
         assert!(
             !dest.join("newdir").exists(),
             "a pax-oversized entry must fail before creating parent directories"
+        );
+    }
+
+    /// A device node in a layer must not abort extraction when the extractor
+    /// runs without root: mknod is refused, so the entry is dropped instead of
+    /// being skipped and then chmod'ed into ENOENT. A FIFO in the same layer
+    /// proves the other special-inode arm still creates its path.
+    #[test]
+    fn rootless_extraction_drops_device_nodes_without_failing() {
+        if unsafe { libc::geteuid() } == 0 {
+            // Root creates the node, so the defect is unreachable here.
+            return;
+        }
+        let temp = tempfile::tempdir().unwrap();
+        let dest = temp.path().join("extract");
+
+        extract_raw(
+            &[
+                raw_dir("dev"),
+                raw_char_device("dev/console", 5, 1),
+                raw_fifo("dev/initctl"),
+            ],
+            &dest,
+        )
+        .unwrap();
+
+        assert!(
+            !dest.join("dev/console").exists(),
+            "device node left behind"
+        );
+        let kind = fs::symlink_metadata(dest.join("dev/initctl"))
+            .unwrap()
+            .file_type();
+        assert!(
+            std::os::unix::fs::FileTypeExt::is_fifo(&kind),
+            "fifo was not created"
         );
     }
 }
