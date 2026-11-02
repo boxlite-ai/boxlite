@@ -19,6 +19,11 @@ name = "boxlite"
 path = "src/lib.rs"
 crate-type = ["rlib"]
 
+[[example]]
+name = "e2e_domains"
+path = "examples/e2e_domains.rs"
+required-features = ["rest"]
+
 [features]
 default = ["embedded-runtime", "krunfw", "e2fsprogs", "bubblewrap"]
 gvproxy = ["dep:libgvproxy-sys"]                             # Shim-side libgvproxy CGO shared library

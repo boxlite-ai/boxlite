@@ -175,8 +175,23 @@ async def test_unbind_deletes_the_target(server):
     with pytest.raises(boxlite.InvalidArgumentError):
         await domains_on(url).unbind("demo1")
     assert requests == []
-    await domains_on(url).unbind("demo1.app.test")
+    assert await domains_on(url).unbind("demo1.app.test") == ()
 
     assert [(method, path) for method, path, _ in requests] == [
         ("DELETE", "/v1/domains/demo1.app.test/target")
+    ]
+
+
+def test_sync_unbind_returns_empty_tuple_and_raises_on_failure(server):
+    url, replies, requests = server
+    replies[("DELETE", "/v1/domains/demo1.app.test/target")] = (204, None)
+    with boxlite.SyncBoxlite.rest(boxlite.BoxliteRestOptions(url=url)) as runtime:
+        assert runtime.domains.unbind("demo1.app.test") == ()
+        with pytest.raises(boxlite.InvalidArgumentError):
+            runtime.domains.unbind("demo1")
+        with pytest.raises(boxlite.NotFoundError):
+            runtime.domains.unbind("missing.app.test")
+    assert [(method, path) for method, path, _ in requests] == [
+        ("DELETE", "/v1/domains/demo1.app.test/target"),
+        ("DELETE", "/v1/domains/missing.app.test/target"),
     ]

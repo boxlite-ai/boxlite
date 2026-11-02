@@ -34,5 +34,10 @@ class SyncDomainHandle:
     def bind(self, domain: str, target: "DomainTarget") -> "Domain":
         return self._sync(self._handle.bind(domain, target))
 
-    def unbind(self, domain: str) -> None:
+    def unbind(self, domain: str) -> tuple[()]:
+        """Unbind a full hostname, returning ``()``; failures raise BoxliteError.
+
+        The organization keeps the hostname and its quota slot. Repeating
+        unbind on a held, already unbound hostname also returns ``()``.
+        """
         return self._sync(self._handle.unbind(domain))

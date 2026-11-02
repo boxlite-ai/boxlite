@@ -488,6 +488,13 @@ Both `boxlite.Box` and `boxlite.SimpleBox` expose `box.network`.
 | Read/write | `await connection.read(max_bytes)`, `await connection.write(data)` | Exchange bytes with the service |
 | Close | `await connection.close()` | Close the connection |
 
+`await runtime.domains.unbind(hostname)` and
+`runtime.domains.unbind(hostname)` in the sync API return the empty tuple `()`
+on success. Failures raise a `BoxliteError` subclass; `()` is not an error
+indicator. Unbinding requires the full hostname returned by `list()`, retains
+the organization's domain and quota slot, and succeeds again if that held
+hostname is already unbound.
+
 Creation accepts `(ip, port)` and IPv6 `(ip, port, 0, 0)` tuples. IPs must be
 numeric; hostnames and nonzero IPv6 flowinfo/scope_id are rejected. Bare ports and
 `SocketAddress` objects are no longer creation arguments.

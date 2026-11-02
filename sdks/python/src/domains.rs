@@ -211,8 +211,9 @@ impl PyDomainHandle {
     }
 
     /// Stop routing a full hostname, keeping it for the organization. Returns an
-    /// awaitable that resolves to None; a domain the organization does not
-    /// hold raises.
+    /// awaitable that resolves to the empty tuple `()` on success. Failures
+    /// raise a BoxliteError subclass; a domain the organization does not hold
+    /// is an error, not an empty result.
     fn unbind<'py>(&self, py: Python<'py>, domain: String) -> PyResult<Bound<'py, PyAny>> {
         let handle = Arc::clone(&self.handle);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {

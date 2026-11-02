@@ -1,4 +1,5 @@
 PHONY_TARGETS += _ensure-python-deps _ensure-node-deps _ensure-apps-deps
+PHONY_TARGETS += build\:e2e\:drivers
 
 # Ensure Python venv exists (lightweight, no package install).
 _ensure-python-deps:
@@ -54,3 +55,11 @@ dev\:go: $(if $(SETUP_DONE),,runtime\:debug)
 	@bash $(SCRIPT_DIR)/build/fix-go-symbols.sh target/debug/libboxlite.a
 	@cd sdks/go && go build -tags boxlite_dev ./...
 	@echo "✅ Go SDK built. You can now run: cd sdks/go && go test -tags boxlite_dev -v ./..."
+
+# Native REST acceptance clients. SETUP_DONE=1 with BOXLITE_DEPS_STUB=1
+# uses the same cloud-only build mode as e2e-cloud; no local VM is needed.
+build\:e2e\:drivers: dev\:go
+	@mkdir -p target/e2e
+	$(CC) -std=c11 -Wall -Wextra -Werror -Isdks/c/include apps/e2e/sdks/c/e2e_domains.c -Ltarget/debug -lboxlite -Wl,-rpath,$(PROJECT_ROOT)/target/debug -o target/e2e/domain-c
+	@cd sdks/go && go build -tags boxlite_dev -o ../../target/e2e/domain-go ../../apps/e2e/sdks/go/e2e_domains.go
+	@cargo build --locked -p boxlite --no-default-features --features rest --example e2e_domains
