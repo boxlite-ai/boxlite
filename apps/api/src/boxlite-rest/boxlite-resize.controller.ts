@@ -1,6 +1,7 @@
 import { Body, Controller, HttpCode, Param, Post, UseGuards, UsePipes, ValidationPipe } from '@nestjs/common'
 import { ApiExcludeController } from '@nestjs/swagger'
 import { CombinedAuthGuard } from '../auth/combined-auth.guard'
+import { AuthenticatedRateLimitGuard } from '../common/guards/authenticated-rate-limit.guard'
 import { OrganizationResourceActionGuard } from '../organization/guards/organization-resource-action.guard'
 import { RequiredOrganizationResourcePermissions } from '../organization/decorators/required-organization-resource-permissions.decorator'
 import { OrganizationResourcePermission } from '../organization/enums/organization-resource-permission.enum'
@@ -14,7 +15,7 @@ import { AuditTarget } from '../audit/enums/audit-target.enum'
 
 @ApiExcludeController()
 @Controller(['v1/boxes', 'v1/:prefix/boxes'])
-@UseGuards(CombinedAuthGuard, OrganizationResourceActionGuard)
+@UseGuards(CombinedAuthGuard, OrganizationResourceActionGuard, AuthenticatedRateLimitGuard)
 @UsePipes(new ValidationPipe({ transform: true, whitelist: true, forbidNonWhitelisted: true }))
 export class BoxliteResizeController {
   constructor(private readonly resize: BoxResizeService) {}
