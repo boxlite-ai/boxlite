@@ -119,9 +119,14 @@ pub(crate) struct CommandRejection {
 /// whose fields are private, so text is all there is to match; the marker keeps
 /// the wording match to what init reported.
 ///
-/// The two verdicts `validate` produces map 1:1 onto the POSIX statuses a
-/// shell reports: missing from `$PATH` is 127, present but not executable is
-/// 126 (`docker/cli` `toStatusError` classifies the same way).
+/// The two verdicts `validate` produces about the program map 1:1 onto the
+/// POSIX statuses a shell reports: missing from `$PATH` is 127, present but
+/// not executable is 126 (`docker/cli` `toStatusError` classifies the same
+/// way). Its other failures — no `PATH` in the process environment, or the
+/// permission probe itself erroring — say nothing about whether the command
+/// exists, so they stay faults. There is no lower-level status to read:
+/// validation runs before `execve`, and init's verdict reaches this process
+/// only as text.
 fn command_rejection(error: &libcontainer::error::LibcontainerError) -> Option<CommandRejection> {
     let text = error.to_string();
     let (_, reported_by_init) = text.split_once("error in executing process : ")?;

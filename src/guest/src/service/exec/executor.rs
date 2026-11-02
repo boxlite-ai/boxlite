@@ -131,10 +131,25 @@ impl GuestExecutor {
 /// not executable: 126) or a guest fault. Codes and wording match the
 /// container executor, so every exec caller sees one message shape.
 fn classify_spawn_error(program: &str, workdir: &str, error: std::io::Error) -> SpawnFailure {
+    let workdir_unusable = !workdir.is_empty() && !working_directory_is_searchable(workdir);
+    classify_spawn_error_with(program, workdir, workdir_unusable, error)
+}
+
+/// [`classify_spawn_error`] with the workdir verdict supplied by the caller.
+///
+/// Split out so tests can drive the workdir branch without depending on the
+/// effective UID: root can enter a mode-0000 directory, so the on-disk case
+/// cannot be reproduced in every test environment.
+fn classify_spawn_error_with(
+    program: &str,
+    workdir: &str,
+    workdir_unusable: bool,
+    error: std::io::Error,
+) -> SpawnFailure {
     // `Command::spawn` merges the `chdir` into the same error it reports for
     // `execve`; a configured working directory that cannot be entered is the
     // configuration's fault, not a verdict about the program.
-    if !workdir.is_empty() && !working_directory_is_searchable(workdir) {
+    if workdir_unusable {
         return SpawnFailure::Failed(BoxliteError::Internal(format!(
             "working directory '{workdir}' is not usable: {error}"
         )));
@@ -474,12 +489,33 @@ mod tests {
         assert_eq!(rejection.exit_code, 127);
     }
 
+    /// The workdir branch of the classifier, without relying on filesystem
+    /// permissions: root can enter a mode-0000 directory, so the on-disk case
+    /// below cannot run everywhere. A regression that turns a workdir EACCES
+    /// into 126 must fail here regardless of the effective UID.
+    #[test]
+    fn an_unusable_workdir_is_not_a_program_verdict() {
+        for errno in [nix::libc::ENOENT, nix::libc::EACCES] {
+            let failure = classify_spawn_error_with(
+                "/pol55/no-such-program",
+                "/pol55/locked",
+                true,
+                std::io::Error::from_raw_os_error(errno),
+            );
+            assert!(
+                matches!(failure, SpawnFailure::Failed(_)),
+                "errno {errno} from a bad workdir must stay a spawn failure"
+            );
+        }
+    }
+
     #[tokio::test]
-    async fn an_unenterable_workdir_is_not_a_program_verdict() {
+    async fn an_unenterable_workdir_on_disk_is_not_a_program_verdict() {
         use std::os::unix::fs::PermissionsExt;
 
         if unsafe { nix::libc::geteuid() } == 0 {
-            // Root can enter any directory, so the case cannot be produced.
+            // Root can enter any directory; the classifier branch is pinned
+            // UID-independently by `an_unusable_workdir_is_not_a_program_verdict`.
             return;
         }
         let dir = tempfile::tempdir().unwrap();

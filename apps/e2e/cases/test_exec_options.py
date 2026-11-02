@@ -57,3 +57,21 @@ async def test_exec_tty_collects_natural_exit_code(rt, image):
         )
     finally:
         await rt.remove(box.id, force=True)
+
+
+@pytest.mark.asyncio
+async def test_exec_tty_missing_program_returns_127(rt, image):
+    """A TTY rejection is a completed execution; its diagnostic uses the
+    merged stdout stream rather than a separate stderr channel."""
+    box = await rt.create(boxlite.BoxOptions(image=image, auto_remove=True))
+    try:
+        ex = await box.exec("this-binary-does-not-exist-2026", [], tty=True)
+        out, err = await drain(ex)
+        rc = await asyncio.wait_for(ex.wait(), timeout=30)
+        assert rc.exit_code == 127, f"TTY rejection exit code: {rc.exit_code}"
+        assert "this-binary-does-not-exist-2026" in out, (
+            f"TTY rejection diagnostic missing from stdout: {out!r}"
+        )
+        assert err == "", f"TTY rejection must not use stderr: {err!r}"
+    finally:
+        await rt.remove(box.id, force=True)

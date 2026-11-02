@@ -942,9 +942,59 @@ mod container_id_path_tests {
         );
     }
 
+    /// TTY requests take the PTY spawn branch instead of the pipe branch, and
+    /// the rejection diagnostic must land on the merged stdout stream there.
+    #[tokio::test]
+    async fn guest_executor_missing_program_with_tty_is_a_completed_execution() {
+        use boxlite_shared::ExecRequest;
+        use std::collections::HashMap;
+
+        let server = GuestServer::new(GuestLayout::new());
+        let req = ExecRequest {
+            execution_id: None,
+            program: "pol55-missing-tty-program".to_string(),
+            args: Vec::new(),
+            env: HashMap::from([("BOXLITE_EXECUTOR".to_string(), "guest".to_string())]),
+            workdir: String::new(),
+            timeout_ms: 0,
+            tty: Some(boxlite_shared::TtyConfig {
+                rows: 24,
+                cols: 80,
+                x_pixels: 0,
+                y_pixels: 0,
+                modes: Vec::new(),
+            }),
+            user: None,
+        };
+
+        let response = start_execution(&server, req, None).await;
+
+        assert!(response.error.is_none(), "{:?}", response.error);
+        assert_eq!(response.pid, 0, "a rejected spawn reports no process");
+        let exit = server.wait_execution(&response.execution_id).await.unwrap();
+        assert_eq!(exit.exit_code, 127);
+        let mut output = server
+            .attach_execution(&response.execution_id)
+            .await
+            .unwrap();
+        let event = output.recv().await.unwrap().unwrap();
+        let diagnostic = match event.event.unwrap() {
+            exec_output::Event::Stdout(stdout) => String::from_utf8(stdout.data).unwrap(),
+            event => panic!("a TTY rejection must arrive on merged stdout: {event:?}"),
+        };
+        assert!(
+            diagnostic.contains("pol55-missing-tty-program"),
+            "{diagnostic}"
+        );
+        assert!(
+            diagnostic.trim_end().ends_with("not found in $PATH"),
+            "{diagnostic}"
+        );
+    }
+
     #[tokio::test]
     async fn rejected_executions_finish_and_replay_on_the_requested_stream() {
-        for (tty, exit_code) in [(false, 127), (true, 126)] {
+        for (tty, exit_code) in [(false, 127), (false, 126), (true, 127), (true, 126)] {
             let server = GuestServer::new(GuestLayout::new());
             let state = ExecutionState::rejected(
                 crate::container::CommandRejection {
