@@ -43,6 +43,7 @@ func recoverCreateDto(boxId string, recoverDto dto.RecoverBoxDTO) dto.CreateBoxD
 		MemoryQuota:      recoverDto.MemoryQuota,
 		StorageQuota:     recoverDto.StorageQuota,
 		Env:              recoverDto.Env,
+		Privileged:       recoverDto.Privileged,
 		Volumes:          recoverDto.Volumes,
 		Secrets:          recoverDto.Secrets,
 		OutboundEnabled:  recoverDto.OutboundEnabled,

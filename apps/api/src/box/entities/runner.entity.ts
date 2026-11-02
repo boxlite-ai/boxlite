@@ -145,6 +145,9 @@ export class Runner {
   })
   apiVersion: string
 
+  @Column({ default: false })
+  supportsPrivileged: boolean
+
   @Column({
     nullable: true,
     type: 'timestamp with time zone',

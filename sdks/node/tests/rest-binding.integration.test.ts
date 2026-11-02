@@ -1,4 +1,6 @@
 import { mkdtempSync, rmSync } from "node:fs";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { describe, expect, test } from "vitest";
 import { JsBoxlite, BoxliteRestOptions, errorCode } from "../lib/index.js";
 
@@ -75,4 +77,65 @@ describe("errors thrown by the binding", () => {
       runtime.close();
     }
   });
+});
+
+describe("native box privilege metadata", () => {
+  test.each([false, true, undefined])(
+    "preserves %s through info, getInfo and listInfo",
+    async (privileged) => {
+      const boxId = "privilege-metadata";
+      const metadata = {
+        box_id: boxId,
+        name: null,
+        status: "configured",
+        created_at: "2026-07-14T00:00:00Z",
+        updated_at: "2026-07-14T00:00:00Z",
+        pid: null,
+        image: "alpine:latest",
+        cpus: 1,
+        memory_mib: 512,
+        privileged,
+      };
+      const server = createServer((request, response) => {
+        if (
+          request.method !== "GET" ||
+          !["/v1/boxes", `/v1/boxes/${boxId}`].includes(request.url ?? "")
+        ) {
+          response.writeHead(404).end();
+          return;
+        }
+        response.writeHead(200, { "Content-Type": "application/json" });
+        response.end(
+          JSON.stringify(
+            request.url === "/v1/boxes" ? { boxes: [metadata] } : metadata,
+          ),
+        );
+      });
+      await new Promise<void>((resolve) =>
+        server.listen(0, "127.0.0.1", resolve),
+      );
+      const { port } = server.address() as AddressInfo;
+      const runtime = JsBoxlite.rest(
+        new BoxliteRestOptions({ url: `http://127.0.0.1:${port}` }),
+      );
+      try {
+        const box = await runtime.get(boxId);
+        expect(box).not.toBeNull();
+        const infos = [
+          await runtime.getInfo(boxId),
+          ...(await runtime.listInfo()),
+          await box!.info(),
+        ];
+        expect(infos).toHaveLength(3);
+        for (const info of infos) {
+          expect(info).not.toBeNull();
+          expect(Reflect.get(info!, "privileged")).toBe(privileged);
+        }
+      } finally {
+        runtime.close();
+        server.closeAllConnections();
+        await new Promise<void>((resolve) => server.close(() => resolve()));
+      }
+    },
+  );
 });

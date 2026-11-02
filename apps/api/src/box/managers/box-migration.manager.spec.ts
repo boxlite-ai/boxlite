@@ -213,6 +213,23 @@ describe('BoxMigrationManager submitter loop', () => {
     expect(h.writes).toHaveLength(0)
   })
 
+  it('requires runner privilege support when placing a privileged import', async () => {
+    const migration = makeMigration(BoxMigrationState.PENDING_IMPORT, {
+      arcPath: 'box-migrations/box-1.boxlite',
+    })
+    migration.box.privileged = true
+    const h = makeHarness([migration])
+
+    await h.manager.submitMigrationJobs()
+
+    expect(h.runnerService.getRandomAvailableRunner).toHaveBeenCalledWith({
+      regions: [migration.box.region],
+      boxClass: migration.box.class,
+      excludedRunnerIds: [SOURCE_RUNNER],
+      requiresPrivileged: true,
+    })
+  })
+
   it('submits IMPORT_BOX to a runner other than the one being drained', async () => {
     const migration = makeMigration(BoxMigrationState.PENDING_IMPORT, {
       arcPath: 'box-migrations/box-1.boxlite',

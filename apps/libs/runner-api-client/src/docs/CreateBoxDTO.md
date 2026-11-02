@@ -21,6 +21,7 @@ Name | Type | Description | Notes
 **otelEndpoint** | **string** |  | [optional] [default to undefined]
 **outboundAllowNet** | **Array&lt;string&gt;** |  | [optional] [default to undefined]
 **outboundEnabled** | **boolean** | Outbound network policy. outboundEnabled is required: a request without it is rejected rather than started with a guessed policy. | [default to undefined]
+**privileged** | **boolean** |  | [optional] [default to undefined]
 **regionId** | **string** |  | [optional] [default to undefined]
 **registry** | [**RegistryDTO**](RegistryDTO.md) |  | [optional] [default to undefined]
 **runAsUser** | **string** |  | [optional] [default to undefined]
@@ -52,6 +53,7 @@ const instance: CreateBoxDTO = {
     otelEndpoint,
     outboundAllowNet,
     outboundEnabled,
+    privileged,
     regionId,
     registry,
     runAsUser,

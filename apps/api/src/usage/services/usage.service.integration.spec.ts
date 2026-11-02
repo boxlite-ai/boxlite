@@ -24,6 +24,7 @@ import { AddBoxSecrets1787000000000 } from '../../migrations/pre-deploy/17870000
 import { AddImageCatalog1787100000000 } from '../../migrations/pre-deploy/1787100000000-add-image-catalog-migration'
 import { ReplaceBoxNetworkFlags1791000000000 } from '../../migrations/pre-deploy/1791000000000-replace-box-network-flags-migration'
 import { DropBoxNetworkFlags1791000000000 } from '../../migrations/post-deploy/1791000000000-drop-box-network-flags-migration'
+import { AddGuestPrivileged1792540800000 } from '../../migrations/pre-deploy/1792540800000-add-guest-privileged-migration'
 import { BoxUsagePeriod } from '../entities/box-usage-period.entity'
 import { BoxUsagePeriodArchive } from '../entities/box-usage-period-archive.entity'
 import { BoxUsageExportOutbox, UsageExportStatus } from '../entities/box-usage-export-outbox.entity'
@@ -274,6 +275,7 @@ describeIfDatabase('UsageService (integration, real Postgres + Redis)', () => {
       // longer declares the flag columns the second drops.
       await new ReplaceBoxNetworkFlags1791000000000().up(queryRunner)
       await new DropBoxNetworkFlags1791000000000().up(queryRunner)
+      await new AddGuestPrivileged1792540800000().up(queryRunner)
     } finally {
       await queryRunner.release()
     }

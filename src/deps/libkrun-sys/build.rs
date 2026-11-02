@@ -167,6 +167,25 @@ fn libkrunfw_cache_key() -> String {
 /// Returns the path to the extracted source directory containing kernel.c.
 #[cfg(target_os = "macos")]
 fn download_libkrunfw_prebuilt(out_dir: &Path) -> PathBuf {
+    println!("cargo:rerun-if-env-changed=BOXLITE_LIBKRUNFW_SOURCE");
+    if let Some(source) = env::var_os("BOXLITE_LIBKRUNFW_SOURCE") {
+        let source = fs::canonicalize(source).expect("resolve firmware source directory");
+        for file in ["kernel.c", "kernel.config", "Makefile"] {
+            let path = source.join(file);
+            assert!(
+                path.is_file(),
+                "Missing firmware source: {}",
+                path.display()
+            );
+            println!("cargo:rerun-if-changed={}", path.display());
+        }
+        println!(
+            "cargo:warning=Using explicit firmware source: {}",
+            source.display()
+        );
+        return source;
+    }
+
     let cache_key = libkrunfw_cache_key();
     let versioned_dir = format!("libkrunfw-src-{cache_key}");
     let tarball_path = out_dir.join(format!("libkrunfw-prebuilt-{cache_key}.tar.gz"));
@@ -957,7 +976,27 @@ fn build() {
     // krun needs libkrunfw's pkgconfig for compilation.
     let build_from_source = env::var("BOXLITE_BUILD_LIBKRUNFW").is_ok();
 
-    if build_from_source {
+    println!("cargo:rerun-if-env-changed=BOXLITE_LIBKRUNFW_SOURCE");
+    if let Some(source) = env::var_os("BOXLITE_LIBKRUNFW_SOURCE") {
+        let source = fs::canonicalize(source).expect("BOXLITE_LIBKRUNFW_SOURCE must exist");
+        for file in ["kernel.c", "Makefile"] {
+            let path = source.join(file);
+            assert!(path.is_file(), "missing firmware input: {}", path.display());
+            println!("cargo:rerun-if-changed={}", path.display());
+        }
+        // An override must not leave the ordinary firmware's cache marker behind:
+        // unsetting it on the next build must restore the ordinary firmware.
+        if libkrunfw_install.exists() {
+            fs::remove_dir_all(&libkrunfw_install).expect("remove previous firmware install");
+        }
+        build_with_make(
+            &source,
+            &libkrunfw_install,
+            "libkrunfw",
+            &HashMap::new(),
+            &[],
+        );
+    } else if build_from_source {
         let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
         println!("cargo:warning=Building libkrunfw from source (BOXLITE_BUILD_LIBKRUNFW=1)");
         verify_vendored_sources(&manifest_dir, true);

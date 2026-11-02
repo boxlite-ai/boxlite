@@ -453,6 +453,18 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 		opts = append(opts, boxlite.WithUser(boxDto.RunAsUser))
 	}
 
+	if boxDto.Privileged {
+		advanced, advancedErr := boxlite.NewAdvancedBoxOptions()
+		if advancedErr != nil {
+			return "", "", advancedErr
+		}
+		defer advanced.Close()
+		if advancedErr = advanced.SetPrivileged(true); advancedErr != nil {
+			return "", "", advancedErr
+		}
+		opts = append(opts, boxlite.WithAdvancedOptions(advanced))
+	}
+
 	volumeMounts, err := c.getVolumeMounts(ctx, boxDto.Volumes)
 	if err != nil {
 		return "", "", err

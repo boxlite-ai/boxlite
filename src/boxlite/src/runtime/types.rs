@@ -479,6 +479,11 @@ pub struct BoxInfo {
     /// Allocated memory in MiB.
     pub memory_mib: u32,
 
+    /// Guest privilege recorded at creation. `None` means a remote server did
+    /// not report the mode; local metadata always contains the stored value.
+    #[serde(default)]
+    pub privileged: Option<bool>,
+
     /// Network configuration and current runtime publication metadata.
     ///
     /// Local producers always populate this field. `None` indicates metadata
@@ -567,6 +572,7 @@ impl BoxInfo {
             },
             cpus: config.options.cpus.unwrap_or(DEFAULT_CPUS),
             memory_mib: config.options.memory_mib.unwrap_or(DEFAULT_MEMORY_MIB),
+            privileged: Some(config.options.advanced.privileged),
             network: Some(NetworkInfo::new(
                 OutboundNetworkInfo {
                     mode: network_config.outbound.mode,
@@ -603,6 +609,7 @@ impl PartialEq for BoxInfo {
             && self.image == other.image
             && self.cpus == other.cpus
             && self.memory_mib == other.memory_mib
+            && self.privileged == other.privileged
             && self.network == other.network
             && self.labels == other.labels
             && self.auto_stop == other.auto_stop
@@ -940,6 +947,32 @@ mod tests {
             published_ports(&info).is_some_and(<[PublishedPort]>::is_empty),
             "a box with no requested mappings is known-empty"
         );
+    }
+
+    #[test]
+    fn privileged_reuse_metadata_reports_persisted_local_mode() {
+        for privileged in [false, true] {
+            let mut options = BoxOptions::default();
+            options.advanced.set_privileged(privileged);
+            let config = BoxConfig {
+                id: BoxID::parse("privilege-metadata").unwrap(),
+                name: None,
+                created_at: Utc::now(),
+                container: ContainerRuntimeConfig {
+                    id: ContainerID::new(),
+                },
+                options,
+                engine_kind: crate::vmm::VmmKind::Libkrun,
+                box_home: PathBuf::from("/tmp/privilege-metadata"),
+            };
+            let persisted = serde_json::to_vec(&config).unwrap();
+            let restored: BoxConfig = serde_json::from_slice(&persisted).unwrap();
+            let info = BoxInfo::new(&restored, &BoxState::new());
+            assert_eq!(
+                serde_json::to_value(info).unwrap()["privileged"].as_bool(),
+                Some(privileged)
+            );
+        }
     }
 
     /// `info()` and `list_info()` both build through `BoxInfo::new`, so this is

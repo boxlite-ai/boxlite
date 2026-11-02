@@ -66,6 +66,8 @@ definitions:
           Outbound network policy. outboundEnabled is required: a request without
           it is rejected rather than started with a guessed policy.
         type: boolean
+      privileged:
+        type: boolean
       regionId:
         type: string
       registry:
@@ -162,6 +164,8 @@ definitions:
           Outbound network policy. outboundEnabled is required: a request without
           it is rejected rather than started with a guessed policy.
         type: boolean
+      privileged:
+        type: boolean
       secrets:
         items:
           $ref: '#/definitions/dto.SecretDTO'
@@ -201,6 +205,8 @@ definitions:
         items:
           $ref: '#/definitions/RunnerServiceInfo'
         type: array
+      supportsPrivileged:
+        type: boolean
     type: object
   RunnerMetrics:
     properties:

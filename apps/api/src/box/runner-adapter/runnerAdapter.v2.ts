@@ -122,6 +122,10 @@ export class RunnerAdapterV2 implements RunnerAdapter {
       throw new Error(`Box ${box.id} has no image; cannot create on runner`)
     }
 
+    if (box.privileged && !this.runner.supportsPrivileged) {
+      throw new Error(`Runner ${this.runner.id} does not support privileged Boxes`)
+    }
+
     const payload = {
       id: box.id,
       image,
@@ -132,6 +136,7 @@ export class RunnerAdapterV2 implements RunnerAdapter {
       storageQuota: box.disk,
       env: box.env,
       runAsUser: box.runAsUser,
+      privileged: box.privileged,
       workingDir: box.workingDir,
       entrypoint: box.entrypoint,
       cmd: box.cmd,

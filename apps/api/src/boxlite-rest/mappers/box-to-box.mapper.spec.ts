@@ -130,6 +130,20 @@ describe('BoxLite lifecycle policy mapper', () => {
 // here: the mapper simply never read them, so a caller got a 201 and a box that
 // ignored the working directory, entrypoint, command and user they asked for.
 describe('BoxLite container process options mapper', () => {
+  it.each([false, true])('reports persisted guest privilege %s', (privileged) => {
+    const row = new Box('us', 'guest-policy')
+    row.id = 'box-1'
+    row.privileged = privileged
+
+    const response = boxToBoxResponse(BoxDto.fromBox(row, 'https://proxy.invalid'))
+
+    expect(response).toEqual(expect.objectContaining({ privileged }))
+  })
+
+  it('forwards guest privileged and preserves its default', () => {
+    expect(createBoxToCreateBox({ advanced: { privileged: true } }).privileged).toBe(true)
+    expect(createBoxToCreateBox({}).privileged).toBe(false)
+  })
   it('carries the container process options into the control-plane DTO', () => {
     const mapped = createBoxToCreateBox({
       working_dir: '/app',

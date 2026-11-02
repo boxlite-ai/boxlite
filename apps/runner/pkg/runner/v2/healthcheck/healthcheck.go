@@ -93,12 +93,10 @@ func (s *Service) Start(ctx context.Context) {
 	}
 }
 
-func (s *Service) sendHealthcheck(ctx context.Context) error {
-	reqCtx, cancel := context.WithTimeout(ctx, s.timeout)
-	defer cancel()
-
+func (s *Service) newHealthcheck() *apiclient.RunnerHealthcheck {
 	healthcheck := apiclient.NewRunnerHealthcheck(internal.Version)
 	healthcheck.SetDomain(s.domain)
+	healthcheck.SetSupportsPrivileged(true)
 
 	proxyUrl := fmt.Sprintf("http://%s:%d", s.domain, s.proxyPort)
 	apiUrl := fmt.Sprintf("http://%s:%d", s.domain, s.apiPort)
@@ -110,6 +108,14 @@ func (s *Service) sendHealthcheck(ctx context.Context) error {
 
 	healthcheck.SetProxyUrl(proxyUrl)
 	healthcheck.SetApiUrl(apiUrl)
+	return healthcheck
+}
+
+func (s *Service) sendHealthcheck(ctx context.Context) error {
+	reqCtx, cancel := context.WithTimeout(ctx, s.timeout)
+	defer cancel()
+
+	healthcheck := s.newHealthcheck()
 
 	runtimeHealth := apiclient.RunnerServiceHealth{
 		ServiceName: "boxlite",

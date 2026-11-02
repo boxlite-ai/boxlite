@@ -309,6 +309,8 @@ export interface JsContainerCapabilities {
 }
 
 export interface JsAdvancedBoxOptions {
+  /** Guest privilege; does not relax the runner's sandbox. */
+  privileged?: boolean;
   capabilities?: JsContainerCapabilities;
 }
 
@@ -454,6 +456,7 @@ export interface JsBoxInfo {
   image: string;
   cpus: number;
   memoryMib: number;
+  privileged?: boolean;
   network: JsNetworkInfo | null;
   autoStop: number;
   autoDelete: number;

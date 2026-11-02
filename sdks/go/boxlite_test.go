@@ -354,6 +354,53 @@ func TestAdvancedOptionsSetCapabilitiesDeepCopies(t *testing.T) {
 	}
 }
 
+func TestGuestPrivilegedAcceptsCanonicalFullCapabilities(t *testing.T) {
+	for _, name := range []string{"ALL", "cap_all"} {
+		t.Run(name, func(t *testing.T) {
+			advanced, err := NewAdvancedBoxOptions()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer advanced.Close()
+			if err := advanced.SetCapabilities(ContainerCapabilities{Add: []string{name}}); err != nil {
+				t.Fatal(err)
+			}
+			if err := advanced.SetPrivileged(true); err != nil {
+				t.Fatalf("canonical full capability policy must allow privilege: %v", err)
+			}
+			cfg := &boxConfig{}
+			WithAdvancedOptions(advanced)(cfg)
+			if err := buildAndFreeCOptions("alpine:latest", cfg); err != nil {
+				t.Fatalf("privileged full capability policy must apply: %v", err)
+			}
+		})
+	}
+}
+
+func TestGuestPrivilegedRejectsConflictingCapabilitiesAndClosedHandle(t *testing.T) {
+	advanced, err := NewAdvancedBoxOptions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer advanced.Close()
+	if err := advanced.SetPrivileged(true); err != nil {
+		t.Fatal(err)
+	}
+	if err := advanced.SetPrivileged(false); err != nil {
+		t.Fatal(err)
+	}
+	if err := advanced.SetCapabilities(ContainerCapabilities{Drop: []string{"NET_RAW"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := advanced.SetPrivileged(true); err == nil {
+		t.Fatal("privileged must reject an explicit capability override")
+	}
+	advanced.Close()
+	if err := advanced.SetPrivileged(true); err == nil {
+		t.Fatal("closed handle must be rejected")
+	}
+}
+
 func TestSetCapabilitiesRejectsEmbeddedNUL(t *testing.T) {
 	advanced, err := NewAdvancedBoxOptions()
 	if err != nil {

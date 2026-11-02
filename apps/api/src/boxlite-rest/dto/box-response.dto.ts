@@ -69,6 +69,11 @@ export class BoxResponseDto {
   })
   memory_mib: number
 
+  @ApiPropertyOptional({
+    description: 'Persisted guest privilege mode; absent means unknown, not false',
+  })
+  privileged?: boolean
+
   @ApiProperty({
     description: 'Labels attached to the box',
     type: 'object',

@@ -154,7 +154,8 @@ class ContainerCapabilities(BaseModel):
 class CreateBoxAdvancedOptions(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    capabilities: ContainerCapabilities = Field(default_factory=ContainerCapabilities)
+    capabilities: Optional[ContainerCapabilities] = None
+    privileged: bool = False
 
 
 class CreateBoxRequest(BaseModel):
@@ -352,6 +353,8 @@ def box_info_to_dict(info) -> dict:
     # the field's presence is what says the main command has exited.
     if info.state.exit_code is not None:
         box["exit_code"] = info.state.exit_code
+    if info.privileged is not None:
+        box["privileged"] = info.privileged
     return box
 
 
@@ -382,14 +385,15 @@ def build_box_options(req: CreateBoxRequest) -> boxlite.BoxOptions:
         kwargs["cmd"] = req.cmd
     if req.user is not None:
         kwargs["user"] = req.user
-    if req.advanced is not None and (
-        req.advanced.capabilities.add or req.advanced.capabilities.drop
-    ):
+    if req.advanced is not None:
         kwargs["advanced"] = boxlite.AdvancedBoxOptions(
+            privileged=req.advanced.privileged,
             capabilities=boxlite.ContainerCapabilities(
                 add=req.advanced.capabilities.add,
                 drop=req.advanced.capabilities.drop,
             )
+            if req.advanced.capabilities is not None
+            else None,
         )
     if req.secrets:
         kwargs["secrets"] = [
@@ -569,6 +573,7 @@ async def get_config():
         "overrides": {},
         "capabilities": {
             "linux_capabilities_enabled": True,
+            "privileged_enabled": True,
             "max_cpus": 16,
             "max_memory_mib": 16384,
             "max_disk_size_gb": 100,
