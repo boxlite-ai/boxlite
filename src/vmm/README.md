@@ -35,13 +35,15 @@ boxlite-vmm
 | `vcpu` | x86_64 vCPU workers: create and configure each vCPU, hold them at a start gate, run the guest and dispatch its exits until the VM ends |
 | `chipset` | `ChipsetBuilder`, the one registry of ranges and interrupt lines, and `Chipset`, the read-only machine it builds |
 | `bus` | `Bus`, `BusRange` and `BusDevice`, and `Buses::dispatch`, which serves the MMIO and port exits of a vCPU |
+| `virtio` | The virtio device contract: `VirtioDevice`, `DeviceSpec`, `DeviceEvent`, the activation context, event registration and wake handles, and the default snapshot methods |
 | `irq` | `IrqChip`, the host interrupt controller as devices see it, and `IrqLine`, one device line; HVF and KVM provide the controller, WHP (M10) only local APICs |
 | `devices` | The console queue, and on x86_64 the 8250 UART at COM1 and the i8042 reset, with `add_legacy_devices`, which adds them to the chipset |
 | `events` | `Event`, which ends the VM, `EventSender`, which also latches the stop, and `EventLoop`, the poller that waits for the first event |
 
 The x86_64 KVM boot and lifecycle are in place; the M1 devices, arm64 and HVF
-follow in M1. Virtio devices, the BoxLite
-engine adapter, engine selection, and `native` feature wiring follow in M2.
+follow in M1. The virtio common infrastructure (`virtio`) is landing for M2;
+the BoxLite engine adapter, engine selection, and `native` feature wiring
+follow in M2.
 Neither new crate depends on `boxlite-shared`, and both are unpublished while
 their interfaces are being established.
 
