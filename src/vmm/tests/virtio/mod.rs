@@ -44,7 +44,7 @@ impl TestDevice {
                 name: "test",
                 features: 0b111,
                 config_len: 4,
-                queue_max: &[4, 4],
+                queue_max: &[8],
                 snapshot: SnapshotSupport::Stopped,
             },
             features: 0,
@@ -268,6 +268,7 @@ fn activation_takes_the_context_and_reset_clears_it() {
     assert!(device.activate(activation()).is_ok());
     let ctx = device.activation.as_ref().expect("the device is activated");
     assert_eq!(ctx.queues.len(), 1);
+    assert_eq!(ctx.queues[0].max_size(), 8);
     assert_eq!(ctx.memory.iter().count(), 1);
     ctx.interrupt.raise();
     assert_eq!(ctx.interrupt.interrupt_status(), 0x1);
@@ -391,3 +392,6 @@ fn snapshot_and_event_errors_name_their_cause() {
     );
     assert_eq!(EventError::Closed.to_string(), "the event worker is closed");
 }
+
+#[path = "queue.rs"]
+mod queue;
