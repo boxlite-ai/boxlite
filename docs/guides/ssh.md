@@ -240,7 +240,10 @@ successful starts in the current VM. Shutdown drains SSH without changing saved
 intent and rejects new mutations. Public SDK signatures are unchanged:
 `configure(config)` replaces the configuration and enables SSH, `disable()` turns
 it off while retaining credentials, and `status()` observes the live listener.
-The host translates configuration to `Control(enable=true, config=...)` and
-disable to `Control(enable=false)` only when a VM exists; status sends an empty
-`Control()` request. Internal partial updates are not exposed through SDKs. REST
+The local runtime's `BoxImpl` translates configuration to
+`Control(enable=true, config=...)` and disable to `Control(enable=false)` only when
+a VM exists; status sends an empty `Control()` request. It also converts replies
+and errors to SDK types. The portal's `SshInterface` exposes only `control`,
+forwarding the wire request and response without retrying. Internal partial
+updates are not exposed through SDKs. REST
 retains its POST, DELETE and GET routes.

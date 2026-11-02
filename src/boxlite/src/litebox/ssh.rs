@@ -1,12 +1,11 @@
 //! SSH control with implicit startup restricted to configuration.
 
-use std::{fmt, future::Future, sync::Arc, time::Duration};
+use std::{fmt, sync::Arc, time::Duration};
 
-use boxlite_shared::{BoxliteError, BoxliteResult, constants::ssh::DRAIN_TIMEOUT};
+use boxlite_shared::{self as proto, BoxliteError, BoxliteResult, constants::ssh::DRAIN_TIMEOUT};
 use serde::{Deserialize, Serialize};
 
 use super::box_impl::BoxImpl;
-use crate::portal::interfaces::SshInterface;
 use crate::runtime::backend::BoxBackend;
 
 // Allow guest cleanup plus communication and scheduling overhead after startup.
@@ -159,7 +158,10 @@ impl BoxImpl {
         self.run_ssh(
             "configure",
             StartupPolicy::AllowStart,
-            |mut ssh| async move { ssh.configure(config).await },
+            proto::SshControlRequest {
+                config: Some(config_to_proto(config)),
+                enable: Some(true),
+            },
         )
         .await
     }
@@ -168,7 +170,7 @@ impl BoxImpl {
         self.run_ssh(
             "status",
             StartupPolicy::ExistingVmOnly,
-            |mut ssh| async move { ssh.status().await },
+            proto::SshControlRequest::default(),
         )
         .await
     }
@@ -177,23 +179,22 @@ impl BoxImpl {
         self.run_ssh(
             "disable",
             StartupPolicy::ExistingVmOnly,
-            |mut ssh| async move { ssh.disable().await },
+            proto::SshControlRequest {
+                config: None,
+                enable: Some(false),
+            },
         )
         .await
     }
 
     /// Share control policy without cancelling VM initialization midway through
     /// its transfer of resources into LiveState, matching exec's startup boundary.
-    async fn run_ssh<F, Fut>(
+    async fn run_ssh(
         &self,
         name: &str,
         startup: StartupPolicy,
-        op: F,
-    ) -> BoxliteResult<SshStatus>
-    where
-        F: FnOnce(SshInterface) -> Fut,
-        Fut: Future<Output = BoxliteResult<SshStatus>>,
-    {
+        request: proto::SshControlRequest,
+    ) -> BoxliteResult<SshStatus> {
         let stopped =
             || BoxliteError::Stopped(format!("SSH {name}: box {} stopped", self.config.id));
         if self.shutdown_token.is_cancelled() {
@@ -220,12 +221,58 @@ impl BoxImpl {
                         host_key_fingerprint: String::new(),
                     });
                 };
-                op(session.ssh().await?).await
+                let response = session.ssh().await?.control(request).await
+                    .map_err(|status| map_tonic_err(name, *status))?;
+                status_from_proto(name, response.status)
             }) => result.unwrap_or_else(|_| Err(BoxliteError::Rpc(format!(
                 "SSH {name}: timed out after {} seconds for box {}",
                 SSH_TIMEOUT.as_secs(), self.config.id
             )))),
         }
+    }
+}
+
+/// Preserve each login's credentials when crossing from the public API to the wire.
+fn config_to_proto(config: SshConfig) -> proto::SshConfig {
+    proto::SshConfig {
+        listen_address: config.listen_address,
+        host_private_key: config.host_private_key,
+        accounts: config
+            .accounts
+            .into_iter()
+            .map(|account| proto::SshAccount {
+                login: account.login,
+                authorized_keys: account.authorized_keys,
+                ca: account.ca.map(|ca| proto::SshCaConfig {
+                    public_key: ca.public_key,
+                    principal: ca.principal,
+                }),
+            })
+            .collect(),
+    }
+}
+
+/// Reject a missing status instead of treating an incomplete reply as disabled SSH.
+fn status_from_proto(name: &str, status: Option<proto::SshStatus>) -> BoxliteResult<SshStatus> {
+    let status = status
+        .ok_or_else(|| BoxliteError::Internal(format!("SSH {name}: response missing status")))?;
+    Ok(SshStatus {
+        enabled: status.enabled,
+        generation: status.generation,
+        listen_address: status.listen_address,
+        host_public_key: status.host_public_key,
+        host_key_fingerprint: status.host_key_fingerprint,
+    })
+}
+
+/// Preserve actionable guest error categories and include the failed SSH operation.
+fn map_tonic_err(name: &str, status: tonic::Status) -> BoxliteError {
+    let message = format!("SSH {name}: {status}");
+    match status.code() {
+        tonic::Code::InvalidArgument => BoxliteError::InvalidArgument(message),
+        tonic::Code::FailedPrecondition => BoxliteError::InvalidState(message),
+        tonic::Code::Unimplemented => BoxliteError::Unsupported(message),
+        _ => BoxliteError::Rpc(message),
     }
 }
 
