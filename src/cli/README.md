@@ -539,6 +539,11 @@ stderr without a TTY, or to merged stdout with `--tty`. The same execution
 statuses and streams come back through `boxlite serve` over REST. Rejection of
 the box's init command during `run` remains a CLI error with exit code `1`.
 
+`126`/`127` are the only new special cases added here (POL-55). They are not
+reserved: a command that started can also exit `126`/`127`, so use the
+diagnostic, which names the command, rather than the code alone. `125` is a
+normal command exit in BoxLite, not Docker's engine-error code.
+
 ### `boxlite list` (alias: `ls`, `ps`)
 
 List boxes.

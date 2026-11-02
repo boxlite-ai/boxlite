@@ -201,6 +201,13 @@ without a TTY, or on merged stdout with a TTY. Rejection of the box's init
 command during `start()` remains an `InvalidArgument` error; `boxlite run`
 prints an error and exits `1`.
 
+**New special case (POL-55).** `126` and `127` are the only new special cases
+added by this change. They are not reserved: a command that started can also
+exit `126` or `127`, so the code alone does not prove a startup refusal; the
+diagnostic names the command. `125` is a normal command exit in BoxLite, not
+Docker's engine-error code. Other startup failures, including an unusable
+working directory, remain errors and do not use these codes.
+
 **Maintenance contract:** The guest classifier recognizes youki's init-error
 marker and the fixed verdict suffix: `not found in $PATH` maps to `127`, and
 `does not have correct permissions` maps to `126`. Match the suffix, never
