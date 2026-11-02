@@ -159,8 +159,6 @@ def write_files():
         "DEX_IMAGE": DEPENDENCIES["images"]["dex"],
         "MINIO_IMAGE": minio_image_ref(),
         "DEX_CONFIG": str(STATE / "dex.yaml"),
-        "POSTGRES_PASSWORD": POSTGRES_PASSWORD,
-        "MINIO_PASSWORD": MINIO_PASSWORD,
         **{f"{name}_PORT": str(port) for name, port in PORTS.items()},
     }
     path = STATE / ".env"
