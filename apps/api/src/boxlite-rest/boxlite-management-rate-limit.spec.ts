@@ -20,8 +20,10 @@ import { OrganizationService } from '../organization/services/organization.servi
 import { OrganizationUserService } from '../organization/services/organization-user.service'
 import { RegistriesService } from '../registry/services/registries.service'
 import { SystemRole } from '../user/enums/system-role.enum'
+import { BoxResizeService } from './box-resize.service'
 import { BoxliteImageController } from './boxlite-image.controller'
 import { BoxliteRegistryController } from './boxlite-registry.controller'
+import { BoxliteResizeController } from './boxlite-resize.controller'
 
 const credentialId = '0aaa0000-0000-4000-8000-000000000001'
 const imageName = 'quay.io%2Facme%2Fapp'
@@ -43,6 +45,7 @@ const sdkOperations = [
     body: { registry_host: 'ghcr.io', username: 'test-user', password: 'test-only-password' },
   },
   { method: 'DELETE', path: `/images/registries/${credentialId}` },
+  { method: 'POST', path: '/boxes/box-id/resize', body: { cpus: 2 } },
 ]
 
 describe('BoxLite management rate limits', () => {
@@ -67,7 +70,10 @@ describe('BoxLite management rate limits', () => {
       create: jest.fn().mockResolvedValue({ id: credentialId, createdAt: new Date('2026-01-01T00:00:00Z') }),
       delete: jest.fn().mockResolvedValue(undefined),
     }
-    services = [...Object.values(images), ...Object.values(registries)]
+    const resize = {
+      resize: jest.fn().mockResolvedValue({ cpus: 2, memory_mib: 2048, max_cpus: 16, max_memory_mib: 8192 }),
+    }
+    services = [...Object.values(images), ...Object.values(registries), resize.resize]
     const redis = { get: jest.fn().mockResolvedValue(null), set: jest.fn().mockResolvedValue('OK') }
     const organizations = {
       findOne: jest.fn(async (id: string) => ({
@@ -91,10 +97,12 @@ describe('BoxLite management rate limits', () => {
         ...Reflect.getMetadata(MODULE_METADATA.CONTROLLERS, ImageModule),
         BoxliteRegistryController,
         BoxliteImageController,
+        BoxliteResizeController,
       ],
       providers: [
         { provide: ImageCatalogService, useValue: images },
         { provide: RegistriesService, useValue: registries },
+        { provide: BoxResizeService, useValue: resize },
         { provide: OrganizationService, useValue: organizations },
         {
           provide: OrganizationUserService,
