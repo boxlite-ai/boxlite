@@ -304,6 +304,18 @@ await this.stop(event.boxId, undefined, Context.platform(PlatformReason.ORG_SUSP
   keep their existing user context without an actor; explicit admin/platform decisions stay separate.
 - Add caller-decided fields to `Context`, not new service parameters.
 
+### Maintaining Activity coverage
+
+Test both the Dashboard volume controller and the REST controller: each must forward the
+caller's context to the shared service. API-key tests should exercise generated keys and
+`ensureApiKeyValue` with a missing configured key, preserving platform bootstrap attribution
+and keeping key material out of events. Ordinary heartbeats must update activity without
+writing a preview cooldown or emitting `box.open`.
+
+Run `make coverage:api` from the repository root to include these paths in the API LCOV
+report at `target/coverage/api/lcov.info`. The patch coverage requirement remains 90%; a
+passing test suite alone does not establish coverage of these caller boundaries.
+
 ## Admin organization metadata
 
 System administrators read registration fields on the existing organization routes.
