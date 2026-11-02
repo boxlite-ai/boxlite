@@ -38,12 +38,14 @@ export class BoxActivityService {
    *
    * Relies on the periodic flush to the database.
    */
-  async updateLastActivityAt(boxId: string, lastActivityAt: Date): Promise<void> {
+  async updateLastActivityAt(boxId: string, lastActivityAt: Date, signal?: AbortSignal): Promise<void> {
+    signal?.throwIfAborted()
     const lockKey = `box:update-last-activity:${boxId}`
     const acquired = await this.redisLockProvider.lock(
       lockKey,
       this.configService.getOrThrow('boxActivity.throttleTtlSeconds'),
     )
+    signal?.throwIfAborted()
     if (!acquired) {
       return
     }
