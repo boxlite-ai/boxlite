@@ -581,6 +581,41 @@ describe('BoxliteProxyController business events', () => {
     expect(events[1]).toEqual(['box.exec exception', expect.objectContaining({ 'exception.type': 'http_502' })])
   })
 
+  it.each(['closed', 'finished'])('accounts for a response already %s during the box lookup', async (state) => {
+    const { controller, boxService } = harness()
+    const box = await boxService.findOneByIdOrName()
+    let release!: (value: typeof box) => void
+    boxService.findOneByIdOrName.mockReturnValue(
+      new Promise((resolve) => {
+        release = resolve
+      }),
+    )
+    const res = Object.assign(response(), { destroyed: false, writableFinished: false })
+    const pending = controller.proxyExec(
+      activeAuth as never,
+      'public-box',
+      request('POST', '/exec'),
+      res as never,
+      jest.fn(),
+    )
+    if (state === 'finished') {
+      res.writableFinished = true
+      res.emit('finish')
+    }
+    res.destroyed = true
+    res.emit('close')
+    release(box)
+    await pending
+    expect(events.map(([message]) => message)).toEqual([
+      'box.exec requested',
+      state === 'finished' ? 'box.exec success' : 'box.exec exception',
+    ])
+    if (state === 'closed') expect(events[1][1]['exception.type']).toBe('client_closed')
+    res.emit('finish')
+    res.emit('close')
+    expect(events).toHaveLength(2)
+  })
+
   it('records a client that disconnects before the response completes as client_closed, once', async () => {
     const { controller } = harness()
     const res = response()

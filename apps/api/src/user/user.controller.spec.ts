@@ -148,7 +148,7 @@ describe('UserController.create', () => {
   it('creates the user as a registration by an admin', async () => {
     const { controller, userService } = makeController()
 
-    await controller.create({ id: 'user-1', name: 'User One' } as any)
+    await controller.create({ id: 'user-1', name: 'User One' } as any, { get: () => undefined } as never)
 
     expect(userService.create).toHaveBeenCalledWith({ id: 'user-1', name: 'User One' }, Context.admin())
   })
