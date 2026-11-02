@@ -19,6 +19,8 @@ class LocalE2ETest(unittest.TestCase):
         env = local.base_env()
         self.assertTrue(env["BOXLITE_E2E_API_URL"].startswith("http://127.0.0.1:"))
         self.assertEqual(env["PGPASSWORD"], local.POSTGRES_PASSWORD)
+        self.assertEqual(env["POSTGRES_PASSWORD"], local.POSTGRES_PASSWORD)
+        self.assertEqual(env["MINIO_PASSWORD"], local.MINIO_PASSWORD)
         self.assertEqual(env["S3_SECRET_KEY"], local.MINIO_PASSWORD)
         self.assertEqual(env["BOXLITE_HOME"], str(local.STATE / "client-home"))
 
