@@ -743,12 +743,6 @@ impl BoxImpl {
             task.abort();
         }
 
-        // Clear health status (box is no longer running)
-        {
-            let mut state = self.state.write();
-            state.clear_health_status();
-        }
-
         // Cancel the token - signals all in-flight operations to abort
         self.shutdown_token.cancel();
 
@@ -825,6 +819,9 @@ impl BoxImpl {
                         .container_exit_file(self.config.container.id.as_str()),
                 );
             }
+
+            // Clear health after teardown, which may refresh persisted state.
+            state.clear_health_status();
 
             if was_persisted {
                 // Box was persisted - sync to DB
@@ -1670,6 +1667,10 @@ impl crate::runtime::backend::BoxNetworkBackend for BoxImpl {
 // ============================================================================
 // TESTS
 // ============================================================================
+
+#[cfg(test)]
+#[path = "tests/stop.rs"]
+mod stop_tests;
 
 #[cfg(test)]
 mod tests {

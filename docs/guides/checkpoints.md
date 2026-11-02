@@ -12,6 +12,7 @@ checkpoint resource limits. There is no creation switch. Other platforms and
 unsupported configurations keep ordinary starts and disk operations; checkpoint
 operations report the concrete restriction. A running older shim needs an explicit
 stop and restart before using the new protocol. Reconnection never changes its mode.
+Successful explicit stop clears health status, failure count and last-check timestamp for ordinary and checkpoint VMs.
 
 For an enabled jailer, `max_open_files: null` selects automatic FD sizing. Ordinary
 mode keeps an effective 1,024-descriptor default. Owner mode reserves three bounded
