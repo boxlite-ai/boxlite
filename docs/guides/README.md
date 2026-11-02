@@ -14,6 +14,7 @@ Each guide walks through one task. How the underlying pieces work is in
   mirrored registries.
 - [Guest SSH control](ssh.md): turn the in-guest SSH server on and off.
 - [Docker inside a Box](docker-in-docker.md): run Docker Engine and Compose in a privileged guest.
+- [Docker Swarm across Boxes](docker-swarm.md): connect Swarm nodes and validate VIP, DNSRR and ingress.
 
 ## Building with BoxLite
 
