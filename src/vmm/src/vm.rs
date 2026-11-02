@@ -20,9 +20,8 @@ use crate::{
 /// The registers the boot vCPU starts with.
 #[cfg(target_arch = "x86_64")]
 pub(crate) type BootRegisters = boxlite_hypervisor::X86BootRegisters;
-/// arm64 boot registers arrive with the arm64 boot path.
-#[cfg(not(target_arch = "x86_64"))]
-pub(crate) type BootRegisters = ();
+#[cfg(target_arch = "aarch64")]
+pub(crate) type BootRegisters = boxlite_hypervisor::Arm64BootRegisters;
 
 /// How a VM ended.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -165,6 +164,26 @@ impl<H: boxlite_hypervisor::X86Vm> Vm<H> {
     /// stops and joins them all, and returns how the VM ended. A VM runs
     /// once; a second call fails with [`Error::AlreadyRan`].
     pub fn run(&mut self) -> Result<VmExit> {
+        self.run_vcpus()
+    }
+}
+
+#[cfg(target_arch = "aarch64")]
+impl<H: HostVm<Vcpu: boxlite_hypervisor::Arm64Vcpu>> Vm<H> {
+    /// Runs every vCPU on its own thread until the first event ends the VM,
+    /// stops and joins them all, and returns how the VM ended. Only vCPU 0
+    /// starts at the kernel; the guest starts the others with PSCI `CPU_ON`.
+    /// A VM runs once; a second call fails with [`Error::AlreadyRan`].
+    pub fn run(&mut self) -> Result<VmExit> {
+        self.run_vcpus()
+    }
+}
+
+impl<H: HostVm> Vm<H> {
+    fn run_vcpus(&mut self) -> Result<VmExit>
+    where
+        H: crate::vcpu::BootableVm,
+    {
         use std::{sync::PoisonError, thread};
 
         use boxlite_hypervisor::VcpuHandle as _;
@@ -177,6 +196,8 @@ impl<H: boxlite_hypervisor::X86Vm> Vm<H> {
         self.state = VmState::Exited;
         let gate = StartGate::default();
         let kicks = Mutex::new(Vec::new());
+        #[cfg(target_arch = "aarch64")]
+        let power = crate::vcpu::PowerStates::new(self.vcpu_count);
         let workers = Workers {
             host_vm: &*self.host_vm,
             vcpu_count: self.vcpu_count,
@@ -185,6 +206,8 @@ impl<H: boxlite_hypervisor::X86Vm> Vm<H> {
             sender: &self.sender,
             kicks: &kicks,
             gate: &gate,
+            #[cfg(target_arch = "aarch64")]
+            power: &power,
         };
         let events = self
             .events
@@ -218,6 +241,9 @@ impl<H: boxlite_hypervisor::X86Vm> Vm<H> {
                     tracing::warn!(%error, "failed to kick a vCPU");
                 }
             }
+            // A secondary the guest never started waits outside the guest.
+            #[cfg(target_arch = "aarch64")]
+            workers.power.wake_all();
             event
         });
         let console = self

@@ -19,10 +19,6 @@ use crate::{
 };
 
 /// A VM on `host_vm` with no boot data and no devices.
-#[cfg_attr(
-    not(target_arch = "x86_64"),
-    expect(clippy::unit_arg, reason = "arm64 has no boot registers yet.")
-)]
 fn bare<H: boxlite_hypervisor::Vm + 'static>(
     config: VmConfig,
     host_vm: impl FnOnce() -> boxlite_hypervisor::Result<H>,
@@ -121,10 +117,6 @@ fn a_rejected_mapping_returns_the_hypervisor_error_and_keeps_no_registration() {
 /// A chipset conflict fails the build before any RAM is registered, so the
 /// failed VM leaves nothing mapped and leaks no guest RAM.
 #[test]
-#[cfg_attr(
-    not(target_arch = "x86_64"),
-    expect(clippy::unit_arg, reason = "arm64 has no boot registers yet.")
-)]
 fn a_chipset_conflict_fails_before_any_ram_is_registered() {
     struct Idle;
 
@@ -381,7 +373,6 @@ fn a_kvm_guest_runs_64_bit_code_with_the_boot_cpu_state() {
 
 /// `Vm::run` on the mock backend, whose scripted vCPUs exit as listed and
 /// then wait for a kick.
-#[cfg(target_arch = "x86_64")]
 mod lifecycle {
     use std::{sync::mpsc, thread, time::Duration};
 
@@ -432,6 +423,7 @@ mod lifecycle {
         }
     }
 
+    #[cfg(target_arch = "x86_64")]
     #[test]
     fn only_vcpu_0_gets_the_boot_registers() {
         let (exit, vm) = run(mock(3, MockVm::with_scripts(vec![vec![Step::Shutdown]])));
@@ -448,6 +440,196 @@ mod lifecycle {
             .count();
         assert_eq!(boot, [&Call::SetBootRegisters { id: 0 }]);
         assert_eq!(features, 3);
+    }
+
+    /// Every vCPU gets the MPIDR the device tree names; only vCPU 0 starts
+    /// at the kernel, and the rest wait for `CPU_ON`.
+    #[cfg(target_arch = "aarch64")]
+    #[test]
+    fn each_vcpu_gets_its_mpidr_and_only_vcpu_0_starts_at_the_kernel() {
+        let backend = MockVm::with_scripts(vec![vec![Step::Shutdown]]);
+        let entries = backend.entries();
+        let (exit, vm) = run(mock(20, backend));
+        exit.unwrap();
+
+        let calls = vm.host_vm.calls();
+        let mut mpidrs: Vec<(u32, u64)> = calls
+            .iter()
+            .filter_map(|call| match call {
+                Call::SetMpidr { id, mpidr } => Some((*id, *mpidr)),
+                _ => None,
+            })
+            .collect();
+        mpidrs.sort_unstable();
+        let expected: Vec<(u32, u64)> = (0..20)
+            .map(|id| (id, u64::from(id % 16) | (u64::from(id / 16) << 8)))
+            .collect();
+        assert_eq!(mpidrs, expected);
+        let starts: Vec<_> = calls
+            .iter()
+            .filter(|call| matches!(call, Call::SetBootRegisters { .. }))
+            .collect();
+        assert_eq!(
+            starts,
+            [&Call::SetBootRegisters {
+                id: 0,
+                pc: 0,
+                x0: 0
+            }]
+        );
+        assert_eq!(
+            *entries.lock().unwrap(),
+            [0],
+            "a secondary entered the guest"
+        );
+    }
+
+    /// vCPU 2 starts where vCPU 0's `CPU_ON` points, with the context in X0;
+    /// vCPU 1, never named, never enters the guest.
+    #[cfg(target_arch = "aarch64")]
+    #[test]
+    fn cpu_on_starts_the_named_secondary_at_its_entry() {
+        let backend = MockVm::with_scripts(vec![
+            vec![Step::CpuOn {
+                target: 2,
+                entry: 0x8020_0000,
+                context_id: 7,
+            }],
+            vec![],
+            vec![Step::Shutdown],
+        ]);
+        let entries = backend.entries();
+
+        let (exit, vm) = run(mock(3, backend));
+
+        assert_eq!(exit.unwrap(), VmExit::GuestShutdown);
+        let starts: Vec<_> = vm
+            .host_vm
+            .calls()
+            .into_iter()
+            .filter(|call| matches!(call, Call::SetBootRegisters { .. }))
+            .collect();
+        assert_eq!(
+            starts,
+            [
+                Call::SetBootRegisters {
+                    id: 0,
+                    pc: 0,
+                    x0: 0
+                },
+                Call::SetBootRegisters {
+                    id: 2,
+                    pc: 0x8020_0000,
+                    x0: 7
+                },
+            ]
+        );
+        assert!(!entries.lock().unwrap().contains(&1), "vCPU 1 entered");
+    }
+
+    /// The guest reads `ALREADY_ON` for a second start or for vCPU 0, and
+    /// `INVALID_PARAMETERS` for an MPIDR no vCPU has.
+    #[cfg(target_arch = "aarch64")]
+    #[test]
+    fn cpu_on_answers_each_call() {
+        use boxlite_hypervisor::CpuOnResult;
+
+        let cpu_on = |target| Step::CpuOn {
+            target,
+            entry: 0x8020_0000,
+            context_id: 0,
+        };
+        let backend = MockVm::with_scripts(vec![vec![
+            cpu_on(1),
+            cpu_on(1),
+            cpu_on(0x101),
+            cpu_on(0),
+            Step::Shutdown,
+        ]]);
+
+        let (exit, vm) = run(mock(2, backend));
+
+        assert_eq!(exit.unwrap(), VmExit::GuestShutdown);
+        let answers: Vec<_> = vm
+            .host_vm
+            .calls()
+            .into_iter()
+            .filter_map(|call| match call {
+                Call::CpuOnAnswer { id: 0, result } => Some(result),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            answers,
+            [
+                CpuOnResult::Success,
+                CpuOnResult::AlreadyOn,
+                CpuOnResult::InvalidParameters,
+                CpuOnResult::AlreadyOn,
+            ]
+        );
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    #[test]
+    fn cpu_on_rejects_an_unaligned_entry_without_starting_the_target() {
+        use boxlite_hypervisor::CpuOnResult;
+
+        let backend = MockVm::with_scripts(vec![vec![
+            Step::CpuOn {
+                target: 1,
+                entry: 0x8020_0001,
+                context_id: 0,
+            },
+            Step::CpuOn {
+                target: 1,
+                entry: 0x8020_0000,
+                context_id: 7,
+            },
+            Step::Shutdown,
+        ]]);
+
+        let (exit, vm) = run(mock(2, backend));
+
+        assert_eq!(exit.unwrap(), VmExit::GuestShutdown);
+        let answers: Vec<_> = vm
+            .host_vm
+            .calls()
+            .into_iter()
+            .filter_map(|call| match call {
+                Call::CpuOnAnswer { id: 0, result } => Some(result),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            answers,
+            [CpuOnResult::InvalidParameters, CpuOnResult::Success]
+        );
+    }
+
+    /// A stop ends the secondaries the guest never started, which wait outside
+    /// the guest, and every vCPU is dropped before the RAM is unmapped.
+    #[cfg(target_arch = "aarch64")]
+    #[test]
+    fn a_stop_ends_secondaries_the_guest_never_started() {
+        let backend = MockVm::new();
+        let entries = backend.entries();
+        let vm = mock(4, backend);
+        vm.stop_handle().stop();
+
+        let (exit, vm) = run(vm);
+
+        assert_eq!(exit.unwrap(), VmExit::StopRequested);
+        let log = vm.host_vm.log();
+        drop(vm);
+        let drops = log
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|call| matches!(call, Call::DropVcpu { .. }))
+            .count();
+        assert_eq!(drops, 4);
+        assert!(entries.lock().unwrap().iter().all(|&id| id == 0));
     }
 
     #[test]
@@ -483,11 +665,15 @@ mod lifecycle {
 
     #[test]
     fn a_stop_from_another_thread_ends_the_run() {
-        let vm = mock(2, MockVm::new());
+        let (entered, entries) = mpsc::channel();
+        let vm = mock(4, MockVm::new().notifying_entries(entered));
         let stop = vm.stop_handle();
         let stopping = thread::spawn(move || {
-            thread::sleep(Duration::from_millis(50));
+            let entry = entries.recv_timeout(Duration::from_secs(5));
+            // Also stop on failure, so a failed observation does not leave
+            // a background VM running until the process exits.
             stop.stop();
+            entry.expect("no vCPU entered the guest");
         });
 
         let (exit, _) = run(vm);
@@ -766,4 +952,67 @@ fn a_kvm_vm_runs_until_its_guest_resets() {
     .unwrap();
 
     assert_eq!(vm.run().unwrap(), VmExit::GuestReset);
+}
+
+/// Two HVF vCPUs through `Vm::run`: vCPU 0 starts vCPU 1 with PSCI `CPU_ON`
+/// and waits in WFI; vCPU 1 powers the VM off, and the stop path kicks
+/// vCPU 0 out of its wait.
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+#[test]
+#[ignore = "requires Hypervisor.framework; run make test:integration:vmm:hvf"]
+fn an_hvf_vm_starts_a_secondary_with_cpu_on() {
+    use vm_memory::{Bytes, GuestAddress};
+
+    use crate::{
+        VmExit,
+        devices::arm64::{GICD_BASE, GICR_BASE},
+        vcpu::PSTATE_EL1H_DAIF,
+    };
+
+    /// `xd = value`, as `movz` then three `movk`s.
+    fn mov(xd: u32, value: u64) -> [u32; 4] {
+        let half = |shift: u32| ((value >> shift) & 0xffff) as u32;
+        [
+            0xd280_0000 | (half(0) << 5) | xd,
+            0xf2a0_0000 | (half(16) << 5) | xd,
+            0xf2c0_0000 | (half(32) << 5) | xd,
+            0xf2e0_0000 | (half(48) << 5) | xd,
+        ]
+    }
+    const HVC: u32 = 0xd400_0002;
+    const WFI: u32 = 0xd503_207f;
+    const SPIN: u32 = 0x1400_0000;
+    const CPU_ON_64: u64 = 0xc400_0003;
+    const SYSTEM_OFF: u64 = 0x8400_0008;
+
+    let secondary = RAM_START + 0x1000;
+    let mut boot: Vec<u32> = [mov(0, CPU_ON_64), mov(1, 1), mov(2, secondary), mov(3, 0)].concat();
+    boot.extend([HVC, WFI, SPIN]);
+    let mut second = mov(0, SYSTEM_OFF).to_vec();
+    second.push(HVC);
+    let bytes =
+        |code: &[u32]| -> Vec<u8> { code.iter().flat_map(|word| word.to_le_bytes()).collect() };
+
+    let mut vm = Vm::with_backend(
+        config(2, 2),
+        || boxlite_hypervisor::HvfVm::new(GICD_BASE, GICR_BASE),
+        |ram, _| {
+            let memory = ram.memory();
+            memory
+                .write_slice(&bytes(&boot), GuestAddress(RAM_START))
+                .unwrap();
+            memory
+                .write_slice(&bytes(&second), GuestAddress(secondary))
+                .unwrap();
+            Ok(BootRegisters {
+                pc: RAM_START,
+                x0: 0,
+                pstate: PSTATE_EL1H_DAIF,
+            })
+        },
+        |_| Ok(()),
+    )
+    .unwrap();
+
+    assert_eq!(vm.run().unwrap(), VmExit::GuestShutdown);
 }

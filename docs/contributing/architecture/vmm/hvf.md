@@ -250,6 +250,7 @@ sequenceDiagram
   coordinator->>coordinator: Receive stop request<br/>and set stop flag
   %% edge:stop_kick
   coordinator->>hvf: hv_vcpus_exit: kick both vCPUs out of guest execution, WFI included
+  Note over coordinator,thread1: If the guest never started vCPU 1, T1 still waits for CPU_ON<br/>outside the guest; the coordinator wakes it too
   Note over thread0,hvf: Each owner completes any pending device access before destruction<br/>without executing another guest instruction
   %% edge:stop_destroy0
   thread0->>hvf: hv_vcpu_destroy on T0
