@@ -87,12 +87,15 @@
       }
     },
     "test": {
+      "executor": "@nx/jest:jest",
+      "cache": true,
       "inputs": [
         "default",
         "^default",
         { "runtime": "git hash-object ../openapi/box.openapi.yaml ../openapi/admin.openapi.yaml" }
       ],
       "options": {
+        "jestConfig": "api/jest.config.mjs",
         "passWithNoTests": true
       }
     },
