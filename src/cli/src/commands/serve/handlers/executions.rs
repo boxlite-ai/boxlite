@@ -175,10 +175,18 @@ async fn recover_attached_execution(
     }
     let litebox = get_or_fetch_box(state, box_id).await?;
     let canonical = litebox.id().to_string();
-    let mut registry = state.executions.write().await;
-    if registry.contains_key(exec_id) {
-        return get_active_for_box(&registry, exec_id, &canonical);
+    {
+        // Re-check after fetching the box, still without the write lock: a
+        // session registered under the canonical id belongs to this box.
+        let registry = state.executions.read().await;
+        if registry.contains_key(exec_id) {
+            return get_active_for_box(&registry, exec_id, &canonical);
+        }
     }
+
+    // Both guest calls below are network round trips. Hold no registry lock
+    // across them: recovery only has to be consistent at the insert, and a
+    // stalled VM must not freeze status, signal, kill or AutoStop sweeps.
     let info = litebox
         .list_executions()
         .await
@@ -193,17 +201,37 @@ async fn recover_attached_execution(
                 "not_found",
             )
         })?;
-    let mut execution = litebox
+    let mut execution = match litebox
         .attach(boxlite::AttachOptions::execution(exec_id))
         .await
-        .map_err(|error| error_from_boxlite(&error))?;
+    {
+        Ok(execution) => execution,
+        Err(error) => {
+            // A concurrent recovery may have claimed the sole output reader
+            // first. Share the session it installed instead of surfacing the
+            // conflict; anything else is a real failure.
+            let registry = state.executions.read().await;
+            if let Ok(active) = get_active_for_box(&registry, exec_id, &canonical) {
+                return Ok(active);
+            }
+            return Err(error_from_boxlite(&error));
+        }
+    };
     let stdin = execution.stdin();
     let kind = if info.is_main_session {
         SessionKind::Main
     } else {
         SessionKind::Exec
     };
-    let active = ActiveExecution::new(canonical, kind, execution, stdin);
+    let active = ActiveExecution::new(canonical.clone(), kind, execution, stdin);
+
+    let mut registry = state.executions.write().await;
+    if registry.contains_key(exec_id) {
+        // Lost the race between the last check and this insert. Drop ours so
+        // the reader lease returns to the guest, then report the winner.
+        drop(active);
+        return get_active_for_box(&registry, exec_id, &canonical);
+    }
     registry.insert(exec_id.to_string(), Arc::clone(&active));
     Ok(active)
 }
