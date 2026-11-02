@@ -341,8 +341,8 @@ Run `make coverage:api` from the repository root to include these paths in the A
 report at `target/coverage/api/lcov.info`. The patch coverage requirement remains 90%; a
 passing test suite alone does not establish coverage of these caller boundaries.
 
-Run `make test:apps:dashboard FILTER=src/api/apiClient.test.ts` to check the Dashboard's
-source header on authenticated requests and retries. This target uses a file filter;
+Run `make test:apps:dashboard FILTER='sends the dashboard activity source'` to check the Dashboard's
+source header on authenticated requests. This target filters test names;
 omit `FILTER` to run all Dashboard unit tests.
 
 ## Admin organization metadata
