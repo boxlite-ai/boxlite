@@ -206,6 +206,11 @@ The child writes only a fixed-size record with `write(2)` and exits with
 `EPERM` stays `permission_denied` because a security module or seccomp can
 reject `execve`; the stage and errno preserve that distinction.
 
+A missing shebang interpreter is a residual ambiguity: the kernel returns
+`ENOENT` for it, exactly like a missing program, so it reports `not_found` with
+`stage=exec`. Separating the two needs an extra `access` check on the
+interpreter path, which is namespace-dependent and out of scope.
+
 This also removes the need for `SpawnFailure::Rejected(CommandRejection)` as a
 separate outcome: every spawn failure is a failure, with a typed reason.
 
@@ -266,7 +271,7 @@ their error path; a workload that cannot start is not a user command verdict.
 | Missing command -> `not_found` with `stage=exec` | guest executor error-pipe test |
 | Non-executable file -> `permission_denied` | guest executor error-pipe test |
 | Missing/unenterable workdir -> `bad_cwd` with `stage=chdir`, no probe race | guest executor test with a mode-0000 dir; UID-independent test of the classifier |
-| `ENOEXEC`/bad shebang -> `not_executable` or `other`, not 5xx | guest executor test |
+| `ENOEXEC` -> `not_executable`; missing shebang interpreter -> `not_found` with `stage=exec` | guest executor test |
 | No synthetic execution | `start_execution` returns an error; registry stays empty; `wait` is not callable |
 | Youki verdicts -> `not_found`/`permission_denied`, `stage=validate`, no errno | zygote classifier test feeding real `validate()` output |
 | Unknown build failure -> `Internal` | zygote test |
