@@ -35,10 +35,13 @@ import { v4 } from 'uuid'
 // )
 export class Job {
   @Column({ type: 'varchar', nullable: true })
-  resizePhase: 'BILLING_PENDING' | 'APPLY' | null = null
+  resizePhase: 'APPLY' | null = null
 
   @Column({ type: 'timestamptz', nullable: true })
   nextAttemptAt: Date | null = null
+
+  @Column({ type: 'timestamptz', nullable: true })
+  resizeDeadlineAt: Date | null = null
 
   @Column({ type: 'int', default: 0 })
   attempt = 0

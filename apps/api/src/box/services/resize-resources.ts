@@ -17,6 +17,12 @@ export interface ResizePayload extends ResizeTarget {
   previous: ResizeTarget
 }
 
+/** Resize retries are bounded so terminal failure can release the lifecycle fence. */
+export const RESIZE_MAX_ATTEMPTS = 10
+export const RESIZE_MAX_DURATION_MINUTES = 30
+export const RESIZE_TERMINAL_GRACE_MS = 2 * 60 * 1000
+export const RESIZE_LEASE_MS = 120_000
+
 export function validResources(value: unknown): value is BoxResources {
   if (!value || typeof value !== 'object') return false
   const r = value as BoxResources

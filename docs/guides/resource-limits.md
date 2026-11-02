@@ -267,15 +267,18 @@ REST clients use `POST /v1/boxes/{box_id}/resize` with
 
 Cloud uses the same SDK and CLI calls, rounding memory targets up to whole GiB:
 `await box.resize(memory_mib=1537)` requests 2048 MiB. The control plane saves
-the target, closes the previous usage period and opens a period billed at the
-target resources, then dispatches a durable resize job. Failures keep the target
-and retry. A 30-second wait can return `504 resize_in_progress`; retrying the
-same target joins that job. A different target conflicts until completion.
-Box info shows the accepted target; `resize()` with no options queries the
-Runner's allocation. Stop, delete and other conflicting lifecycle operations
-are rejected until resize completes; retry them afterward. If the Guest exits, resize waits for the same Box
-to restart before retrying; it does not restart the Guest itself. A restart can
-use old or partially applied resources, so reconciliation is still necessary.
+the target in a durable job, but the Box keeps its old CPU/RAM and usage period
+while the Runner applies the resize. Completion updates the Box and switches the
+usage period in one transaction. Retries are bounded; a job that reaches 10
+attempts or 30 minutes becomes terminal, releases the lifecycle fence, and leaves
+the old size and billing unchanged. A 30-second wait can return `504
+resize_in_progress`; retrying the same target joins that job. A different target
+conflicts until completion. Box info shows the committed (old until completion)
+size; `resize()` with no options queries the Runner's allocation. Stop, delete and
+other conflicting lifecycle operations are rejected while resize is active; retry
+them after completion or terminal failure. If the Guest exits, resize waits for the
+same Box to restart before retrying; it does not restart the Guest itself. A restart
+can use old or partially applied resources, so reconciliation is still necessary.
 
 Cloud admission must be enabled by the operator after upgrading the control
 plane and Runner; see the [rollout sequence](../../apps/api/README.md#cloud-resize).
