@@ -35,7 +35,7 @@ boxlite-vmm
 | `vcpu` | x86_64 vCPU workers: create and configure each vCPU, hold them at a start gate, run the guest and dispatch its exits until the VM ends |
 | `chipset` | `ChipsetBuilder`, the one registry of ranges and interrupt lines, and `Chipset`, the read-only machine it builds |
 | `bus` | `Bus`, `BusRange` and `BusDevice`, and `Buses::dispatch`, which serves the MMIO and port exits of a vCPU |
-| `virtio` | The virtio device contract: `VirtioDevice`, `DeviceSpec`, `DeviceEvent`, the activation context, event registration and wake handles, the split-virtqueue adapter (validation, EVENT_IDX, state save/restore, synchronous or deferred completion, and notification drain), and the default snapshot methods |
+| `virtio` | The virtio device contract: `VirtioDevice`, `DeviceSpec`, `DeviceEvent`, the activation context, event registration and wake handles, the `VirtQueues` facade (dense preparation and restoration, validation, EVENT_IDX, exactly-once deferred completion, a save guard, and notification drain), and the default snapshot methods |
 | `irq` | `IrqChip`, the host interrupt controller as devices see it, and `IrqLine`, one device line; HVF and KVM provide the controller, WHP (M10) only local APICs |
 | `devices` | The console queue, and on x86_64 the 8250 UART at COM1 and the i8042 reset, with `add_legacy_devices`, which adds them to the chipset |
 | `events` | `Event`, which ends the VM, `EventSender`, which also latches the stop, and `EventLoop`, the poller that waits for the first event |

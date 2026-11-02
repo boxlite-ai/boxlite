@@ -10,14 +10,14 @@
 //! across blocking I/O.
 //!
 //! A device processes the descriptors available in its queues; the virtqueue
-//! size bounds one event call. The queue adapter validates, saves and restores
-//! queues and runs the notification drain; queue start and stop arrive with the
-//! worker. Every device needs the methods here first.
+//! size bounds one event call. The [`VirtQueues`] facade prepares, validates,
+//! saves and restores the queue set, tracks deferred chains and runs the
+//! notification drain; queue start and stop arrive with the worker. Every
+//! device needs the methods here first.
 
 use std::{fmt, sync::Arc};
 
-use virtio_queue::Queue;
-
+use self::queue::VirtQueues;
 use crate::{events::EventSender, memory::GuestMemoryMmap};
 
 pub(crate) mod queue;
@@ -117,13 +117,14 @@ pub(crate) trait VirtioInterrupt: Send + Sync {
 pub(crate) struct ActivationContext {
     /// The guest memory the queues address.
     pub(crate) memory: Arc<GuestMemoryMmap>,
-    /// One queue per `DeviceSpec::queue_max` entry, in queue-number order.
+    /// The prepared queues, one slot per `DeviceSpec::queue_max` entry, in
+    /// queue-number order.
     ///
     /// The transport passes every queue, including unready ones, and never
-    /// filters or renumbers. Readiness stays inside each queue; the device
-    /// rejects a required-but-unready queue with [`DeviceError::NeedsReset`].
-    /// The device owns the queues after activation.
-    pub(crate) queues: Vec<Queue>,
+    /// filters or renumbers. The device checks [`VirtQueues::is_ready`] for the
+    /// queues it needs and rejects a required-but-unready queue with
+    /// [`DeviceError::NeedsReset`]. The device owns the facade after activation.
+    pub(crate) queues: VirtQueues,
     /// The transport's interrupt and status handle.
     pub(crate) interrupt: Arc<dyn VirtioInterrupt>,
     /// The worker's event registrar for backend sources; the device stores it.

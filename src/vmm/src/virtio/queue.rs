@@ -1,22 +1,25 @@
 // Copyright 2026 BoxLite Contributors
 // SPDX-License-Identifier: Apache-2.0
 
-//! The split-virtqueue adapter.
+//! The split-virtqueue collection facade.
 //!
-//! `ActivationContext::queues` is dense: one [`Queue`] per
-//! `DeviceSpec::queue_max` entry, in queue-number order. The transport passes
-//! every queue, including unready ones, and never filters or renumbers; a
-//! device checks the readiness of the queues it needs.
+//! [`VirtQueues`] owns the dense queue set one device receives on activation:
+//! one [`Queue`] per `DeviceSpec::queue_max` entry, in queue-number order. The
+//! transport builds it with [`VirtQueues::prepare`] and passes every queue,
+//! including unready ones; a device checks [`VirtQueues::is_ready`] for the
+//! queues it needs.
 //!
-//! `virtio_queue::QueueState` does not carry `num_added`, so [`save`] must run
-//! after quiescing the device and acting on the last notification decision.
-//! [`drain`] implements the disable/drain/enable loop that prevents a lost
-//! kick. A device completes a chain inline with [`Completion::Used`] or takes
-//! it with [`Completion::Deferred`]: a deferred chain has already left the
-//! available ring and has no used entry, and the device calls [`complete`]
-//! with its head and length when its backend finishes. Quiesce must complete
-//! every deferred chain and act on the returned interrupt decision before
-//! [`save`] runs.
+//! `virtio_queue::QueueState` does not carry `num_added`, so
+//! [`VirtQueues::save`] must run after quiescing the device and acting on the
+//! last notification decision. [`VirtQueues::drain`] implements the
+//! disable/drain/enable loop that prevents a lost kick. A device completes a
+//! chain inline with [`Completion::Used`] or takes it with
+//! [`Completion::Deferred`]: a deferred chain has already left the available
+//! ring and has no used entry. The facade records its head index; the device
+//! keeps the request and buffer metadata and calls [`VirtQueues::complete`] with
+//! that head and the used length when its backend finishes. Quiesce must
+//! complete every deferred chain and act on the returned interrupt decision
+//! before [`VirtQueues::save`] runs.
 
 use std::{fmt, mem::size_of};
 
@@ -32,6 +35,9 @@ use crate::memory::GuestMemoryMmap;
 pub(crate) const VIRTIO_F_INDIRECT_DESC: u64 = 1 << 28;
 /// `VIRTIO_F_EVENT_IDX`: `used_event` and `avail_event` drive notifications.
 pub(crate) const VIRTIO_F_EVENT_IDX: u64 = 1 << 29;
+
+/// The error reported for deferred-chain bookkeeping violations.
+const DEFERRED_CHAIN: &str = "virtio deferred chain";
 
 /// A queue the transport cannot prepare or restore.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -52,6 +58,8 @@ pub(crate) enum QueueError {
     },
     /// The size, address, or saved state is invalid.
     Invalid,
+    /// A deferred chain is still outstanding, so the queue state is not stable.
+    Busy,
     /// The rings do not fit in guest memory.
     Memory,
 }
@@ -62,6 +70,7 @@ impl QueueError {
             Self::MaxSize { .. } => "virtio queue maximum size",
             Self::Count { .. } => "virtio queue count",
             Self::Invalid => "virtio queue state",
+            Self::Busy => DEFERRED_CHAIN,
             Self::Memory => "virtio queue memory",
         }
     }
@@ -77,6 +86,7 @@ impl fmt::Display for QueueError {
                 write!(f, "queue count is {actual}, expected {expected}")
             }
             Self::Invalid => f.write_str("the queue state is invalid"),
+            Self::Busy => f.write_str("a deferred chain is still outstanding"),
             Self::Memory => f.write_str("the queue rings are outside guest memory"),
         }
     }
@@ -90,101 +100,7 @@ impl From<QueueError> for DeviceError {
     }
 }
 
-/// Validates every declared queue and applies the negotiated EVENT_IDX.
-///
-/// `queues` must hold exactly one queue per `queue_max` slot, in queue-number
-/// order. Unready queues are kept after their maximum-size check; the device
-/// decides whether it needs them. A ready queue must have a valid size, a
-/// non-zero available ring, and rings inside `memory`.
-pub(crate) fn prepare_all(
-    queues: &mut [Queue],
-    queue_max: &[u16],
-    event_idx: bool,
-    memory: &GuestMemoryMmap,
-) -> Result<(), QueueError> {
-    if queues.len() != queue_max.len() {
-        return Err(QueueError::Count {
-            expected: queue_max.len(),
-            actual: queues.len(),
-        });
-    }
-    for (queue, &max_size) in queues.iter().zip(queue_max) {
-        let actual = queue.max_size();
-        if actual != max_size {
-            return Err(QueueError::MaxSize {
-                expected: max_size,
-                actual,
-            });
-        }
-        if queue.ready() {
-            let size = queue.size();
-            if size == 0 || size > max_size || !size.is_power_of_two() {
-                return Err(QueueError::Invalid);
-            }
-            if queue.avail_ring() == 0 {
-                return Err(QueueError::Invalid);
-            }
-            if !queue.is_valid(memory) {
-                return Err(QueueError::Memory);
-            }
-        }
-    }
-    for queue in queues.iter_mut() {
-        queue.set_event_idx(event_idx);
-    }
-    Ok(())
-}
-
-/// Returns the saved state for every queue, in queue-number order.
-///
-/// Call after `quiesce` has completed every deferred chain and after the last
-/// [`QueueT::needs_notification`] decision: `QueueState` omits `num_added`, so
-/// an unresolved notification decision and an in-flight deferred chain are
-/// not preserved.
-pub(crate) fn save(queues: &[Queue]) -> Vec<QueueState> {
-    queues.iter().map(|queue| queue.state()).collect()
-}
-
-/// Restores the dense queue vector from saved state.
-///
-/// The negotiated `event_idx` replaces the saved flag. A ready queue must still
-/// have a non-zero available ring and pass `is_valid` against `memory`.
-pub(crate) fn restore(
-    states: &[QueueState],
-    queue_max: &[u16],
-    event_idx: bool,
-    memory: &GuestMemoryMmap,
-) -> Result<Vec<Queue>, QueueError> {
-    if states.len() != queue_max.len() {
-        return Err(QueueError::Count {
-            expected: queue_max.len(),
-            actual: states.len(),
-        });
-    }
-    let mut queues = Vec::with_capacity(states.len());
-    for (state, &max_size) in states.iter().zip(queue_max) {
-        if state.max_size != max_size {
-            return Err(QueueError::MaxSize {
-                expected: max_size,
-                actual: state.max_size,
-            });
-        }
-        let mut queue = Queue::try_from(*state).map_err(|_| QueueError::Invalid)?;
-        queue.set_event_idx(event_idx);
-        if queue.ready() {
-            if queue.avail_ring() == 0 {
-                return Err(QueueError::Invalid);
-            }
-            if !queue.is_valid(memory) {
-                return Err(QueueError::Memory);
-            }
-        }
-        queues.push(queue);
-    }
-    Ok(queues)
-}
-
-/// How [`drain`] finished with one descriptor chain.
+/// How [`VirtQueues::drain`] finished with one descriptor chain.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Completion {
     /// The chain is complete; drain adds its used entry with this length now.
@@ -192,33 +108,268 @@ pub(crate) enum Completion {
     /// The device took the chain for later completion.
     ///
     /// The chain has already left the available ring and has no used entry.
-    /// Consume it before returning and keep its head index and buffer metadata;
-    /// the adapter retains nothing. Call [`complete`] exactly once later.
+    /// Consume it before returning and keep its request and buffer metadata;
+    /// the facade records the head index. Call [`VirtQueues::complete`] exactly
+    /// once later, on the queue that produced the chain.
     Deferred,
 }
 
-/// Completes a chain that [`drain`] deferred.
-///
-/// Adds the used entry for `head` with `len` and returns whether the guest
-/// should be interrupted now; the caller raises the interrupt when this
-/// returns `true`. Call exactly once per deferred chain, on the queue that
-/// produced it. `needs_notification` has side effects, so this decision must
-/// be the last one acted on before [`save`]: a device with a deferred chain
-/// still outstanding must not save.
-pub(crate) fn complete(
-    queue: &mut Queue,
-    memory: &GuestMemoryMmap,
-    head: u16,
-    len: u32,
-) -> Result<bool, DeviceError> {
-    add_used(queue, memory, head, len)?;
-    queue.needs_notification(memory).map_err(queue_error)
+/// The dense queue set one device receives on activation.
+#[derive(Debug)]
+pub(crate) struct VirtQueues {
+    queues: Vec<Queue>,
+    deferred: Vec<Vec<u16>>,
+}
+
+impl VirtQueues {
+    /// Validates every declared queue and applies the negotiated EVENT_IDX.
+    ///
+    /// `queues` must hold exactly one queue per `queue_max` slot, in
+    /// queue-number order. Unready queues are kept after their maximum-size
+    /// check; the device decides whether it needs them. A ready queue must have
+    /// a valid size, a non-zero available ring, and rings inside `memory`.
+    pub(crate) fn prepare(
+        mut queues: Vec<Queue>,
+        queue_max: &[u16],
+        event_idx: bool,
+        memory: &GuestMemoryMmap,
+    ) -> Result<Self, QueueError> {
+        if queues.len() != queue_max.len() {
+            return Err(QueueError::Count {
+                expected: queue_max.len(),
+                actual: queues.len(),
+            });
+        }
+        for (queue, &max_size) in queues.iter().zip(queue_max) {
+            let actual = queue.max_size();
+            if actual != max_size {
+                return Err(QueueError::MaxSize {
+                    expected: max_size,
+                    actual,
+                });
+            }
+            if queue.ready() {
+                let size = queue.size();
+                if size == 0 || size > max_size || !size.is_power_of_two() {
+                    return Err(QueueError::Invalid);
+                }
+                if queue.avail_ring() == 0 {
+                    return Err(QueueError::Invalid);
+                }
+                if !queue.is_valid(memory) {
+                    return Err(QueueError::Memory);
+                }
+            }
+        }
+        for queue in &mut queues {
+            queue.set_event_idx(event_idx);
+        }
+        let deferred = vec![Vec::new(); queues.len()];
+        Ok(Self { queues, deferred })
+    }
+
+    /// Restores the dense queue vector from saved state.
+    ///
+    /// The negotiated `event_idx` replaces the saved flag. A ready queue must
+    /// still have a non-zero available ring and pass `is_valid` against
+    /// `memory`. No deferred chain can be restored: `save` refuses to run while
+    /// one remains.
+    pub(crate) fn restore(
+        states: &[QueueState],
+        queue_max: &[u16],
+        event_idx: bool,
+        memory: &GuestMemoryMmap,
+    ) -> Result<Self, QueueError> {
+        if states.len() != queue_max.len() {
+            return Err(QueueError::Count {
+                expected: queue_max.len(),
+                actual: states.len(),
+            });
+        }
+        let mut queues = Vec::with_capacity(states.len());
+        for (state, &max_size) in states.iter().zip(queue_max) {
+            if state.max_size != max_size {
+                return Err(QueueError::MaxSize {
+                    expected: max_size,
+                    actual: state.max_size,
+                });
+            }
+            let mut queue = Queue::try_from(*state).map_err(|_| QueueError::Invalid)?;
+            queue.set_event_idx(event_idx);
+            if queue.ready() {
+                if queue.avail_ring() == 0 {
+                    return Err(QueueError::Invalid);
+                }
+                if !queue.is_valid(memory) {
+                    return Err(QueueError::Memory);
+                }
+            }
+            queues.push(queue);
+        }
+        let deferred = vec![Vec::new(); queues.len()];
+        Ok(Self { queues, deferred })
+    }
+
+    /// Returns the number of declared queue slots.
+    pub(crate) fn len(&self) -> usize {
+        self.queues.len()
+    }
+
+    /// Returns whether queue `index` is ready, or false when `index` is out of
+    /// range.
+    pub(crate) fn is_ready(&self, index: usize) -> bool {
+        self.queues.get(index).is_some_and(|queue| queue.ready())
+    }
+
+    /// Returns the declared maximum size of queue `index`, if it exists.
+    pub(crate) fn max_size(&self, index: usize) -> Option<u16> {
+        self.queues.get(index).map(|queue| queue.max_size())
+    }
+
+    /// Drains every chain the driver made available and reports whether the
+    /// guest should be interrupted for chains completed synchronously.
+    ///
+    /// A stopped or unready queue is rejected before any ring access.
+    /// Notifications are disabled while draining; if `enable_notification`
+    /// reports work that arrived in the meantime, the drain repeats, so a kick
+    /// cannot be lost. `process` either completes a chain with
+    /// [`Completion::Used`] or takes it with [`Completion::Deferred`]. A
+    /// deferred chain is already consumed from the available ring but has no
+    /// used entry; the facade records its head for [`Self::complete`]. The
+    /// notification decision is resolved once per batch, after every synchronous
+    /// completion; `process` only classifies the chain, and drain writes the
+    /// used entry. An empty drain, or one that defers every chain, returns
+    /// `false`.
+    ///
+    /// The drain consumes every available chain; a device that needs to stop
+    /// early and put a chain back (rate limiting or backpressure) must not use
+    /// it.
+    ///
+    /// `indirect` is the negotiated `VIRTIO_F_INDIRECT_DESC` state. When it is
+    /// false, a chain containing an indirect descriptor is a guest error; the
+    /// check runs before `process`, so deferred chains get the same rejection.
+    pub(crate) fn drain<'a, F>(
+        &mut self,
+        index: usize,
+        memory: &'a GuestMemoryMmap,
+        indirect: bool,
+        mut process: F,
+    ) -> Result<bool, DeviceError>
+    where
+        F: FnMut(DescriptorChain<&'a GuestMemoryMmap>) -> Result<Completion, DeviceError>,
+    {
+        let Self { queues, deferred } = self;
+        let queue = queues
+            .get_mut(index)
+            .ok_or(DeviceError::NeedsReset("virtio queue"))?;
+        if !queue.ready() {
+            return Err(DeviceError::NeedsReset("virtio queue"));
+        }
+        let deferred = deferred
+            .get_mut(index)
+            .ok_or(DeviceError::NeedsReset("virtio queue"))?;
+
+        let mut completed = false;
+        loop {
+            queue.disable_notification(memory).map_err(queue_error)?;
+            let desc_table = GuestAddress(queue.desc_table());
+            let size = queue.size();
+            while let Some(chain) = queue.iter(memory).map_err(queue_error)?.next() {
+                let head = chain.head_index();
+                if !indirect && has_indirect(memory, desc_table, size, head)? {
+                    return Err(DeviceError::NeedsReset("indirect descriptor"));
+                }
+                match process(chain)? {
+                    Completion::Used(len) => {
+                        add_used(queue, memory, head, len)?;
+                        completed = true;
+                    }
+                    Completion::Deferred => defer(deferred, size, head)?,
+                }
+            }
+            if !queue.enable_notification(memory).map_err(queue_error)? {
+                break;
+            }
+        }
+        if completed {
+            queue.needs_notification(memory).map_err(queue_error)
+        } else {
+            Ok(false)
+        }
+    }
+
+    /// Completes a chain that [`Self::drain`] deferred.
+    ///
+    /// A stopped or unready queue is rejected before any ring access. Adds the
+    /// used entry for `head` with `len` and returns whether the guest should be
+    /// interrupted now; the caller raises the interrupt when this returns
+    /// `true`. The head must belong to a chain this queue deferred and must not
+    /// have been completed already. `needs_notification` has side effects, so
+    /// this decision must be the last one acted on before [`Self::save`]: a
+    /// device with a deferred chain still outstanding must not save.
+    pub(crate) fn complete(
+        &mut self,
+        index: usize,
+        memory: &GuestMemoryMmap,
+        head: u16,
+        len: u32,
+    ) -> Result<bool, DeviceError> {
+        let Self { queues, deferred } = self;
+        let queue = queues
+            .get_mut(index)
+            .ok_or(DeviceError::NeedsReset("virtio queue"))?;
+        if !queue.ready() || head >= queue.size() {
+            return Err(DeviceError::NeedsReset("virtio queue"));
+        }
+        let deferred = deferred
+            .get_mut(index)
+            .ok_or(DeviceError::NeedsReset("virtio queue"))?;
+        let position = deferred
+            .iter()
+            .position(|&candidate| candidate == head)
+            .ok_or(DeviceError::NeedsReset(DEFERRED_CHAIN))?;
+        add_used(queue, memory, head, len)?;
+        deferred.remove(position);
+        queue.needs_notification(memory).map_err(queue_error)
+    }
+
+    /// Returns the saved state for every queue, in queue-number order.
+    ///
+    /// Fails with [`QueueError::Busy`] while any deferred chain remains. Call
+    /// after `quiesce` has completed every deferred chain and after the last
+    /// notification decision: `QueueState` omits `num_added`, so an unresolved
+    /// notification decision is not preserved.
+    pub(crate) fn save(&self) -> Result<Vec<QueueState>, QueueError> {
+        if self.has_deferred() {
+            return Err(QueueError::Busy);
+        }
+        Ok(self.queues.iter().map(|queue| queue.state()).collect())
+    }
+
+    /// Returns whether any queue still has a deferred chain.
+    pub(crate) fn has_deferred(&self) -> bool {
+        self.deferred.iter().any(|heads| !heads.is_empty())
+    }
+
+    /// Returns the current state of queue `index`, if it exists.
+    #[cfg(test)]
+    pub(crate) fn state(&self, index: usize) -> Option<QueueState> {
+        self.queues.get(index).map(|queue| queue.state())
+    }
+}
+
+fn defer(deferred: &mut Vec<u16>, size: u16, head: u16) -> Result<(), DeviceError> {
+    if head >= size || deferred.contains(&head) {
+        return Err(DeviceError::NeedsReset(DEFERRED_CHAIN));
+    }
+    deferred.push(head);
+    Ok(())
 }
 
 /// Adds one used entry without resolving the notification decision.
 ///
-/// [`drain`] resolves the decision once per batch; [`complete`] resolves it
-/// per deferred chain.
+/// [`VirtQueues::drain`] resolves the decision once per batch;
+/// [`VirtQueues::complete`] resolves it per deferred chain.
 fn add_used(
     queue: &mut Queue,
     memory: &GuestMemoryMmap,
@@ -226,63 +377,6 @@ fn add_used(
     len: u32,
 ) -> Result<(), DeviceError> {
     queue.add_used(memory, head, len).map_err(queue_error)
-}
-
-/// Drains every chain the driver made available and reports whether the guest
-/// should be interrupted for chains completed synchronously.
-///
-/// Notifications are disabled while draining; if `enable_notification` reports
-/// work that arrived in the meantime, the drain repeats, so a kick cannot be
-/// lost. `process` either completes a chain with [`Completion::Used`] or takes
-/// it with [`Completion::Deferred`]. A deferred chain is already consumed from
-/// the available ring but has no used entry; the device calls [`complete`]
-/// later. The notification decision is resolved once per batch, after every
-/// synchronous completion; `process` only classifies the chain, and drain
-/// writes the used entry. An empty drain, or one that defers every chain,
-/// returns `false`.
-///
-/// The drain consumes every available chain; a device that needs to stop early
-/// and put a chain back (rate limiting or backpressure) must not use it.
-///
-/// `indirect` is the negotiated `VIRTIO_F_INDIRECT_DESC` state. When it is
-/// false, a chain containing an indirect descriptor is a guest error; the
-/// check runs before `process`, so deferred chains get the same rejection.
-pub(crate) fn drain<'a, F>(
-    queue: &mut Queue,
-    memory: &'a GuestMemoryMmap,
-    indirect: bool,
-    mut process: F,
-) -> Result<bool, DeviceError>
-where
-    F: FnMut(DescriptorChain<&'a GuestMemoryMmap>) -> Result<Completion, DeviceError>,
-{
-    let mut completed = false;
-    loop {
-        queue.disable_notification(memory).map_err(queue_error)?;
-        let desc_table = GuestAddress(queue.desc_table());
-        let size = queue.size();
-        while let Some(chain) = queue.iter(memory).map_err(queue_error)?.next() {
-            let head = chain.head_index();
-            if !indirect && has_indirect(memory, desc_table, size, head)? {
-                return Err(DeviceError::NeedsReset("indirect descriptor"));
-            }
-            match process(chain)? {
-                Completion::Used(len) => {
-                    add_used(queue, memory, head, len)?;
-                    completed = true;
-                }
-                Completion::Deferred => {}
-            }
-        }
-        if !queue.enable_notification(memory).map_err(queue_error)? {
-            break;
-        }
-    }
-    if completed {
-        queue.needs_notification(memory).map_err(queue_error)
-    } else {
-        Ok(false)
-    }
 }
 
 /// Returns whether the direct chain starting at `head` contains an indirect

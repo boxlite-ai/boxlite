@@ -364,7 +364,7 @@ today.
   - arm64: PL011, PL031 and PSCI;
   - x86_64: 8250 serial, CMOS RTC, and the i8042 reset.
 - **M2:**
-  - the virtio-mmio transport, with one split-virtqueue adapter that validates queues, applies EVENT_IDX, saves and restores `QueueState`, runs the disable/drain/enable notification loop, and lets a device defer a chain's completion to its backend;
+  - the virtio-mmio transport, with a `VirtQueues` facade that validates the dense queue set, applies EVENT_IDX, saves and restores `QueueState`, tracks each deferred chain's head so completion happens exactly once, refuses to save while a deferred chain is outstanding, runs the disable/drain/enable notification loop, and lets a device defer a chain's completion to its backend;
   - virtio-blk, virtio-vsock, virtio-net, virtio-console and virtio-rng;
   - virtio-balloon with free page reporting, so the host can reclaim unused
     guest memory as it can with libkrun today: at once on Linux, and under
