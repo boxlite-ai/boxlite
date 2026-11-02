@@ -31,7 +31,6 @@ import { BoxRepository } from '../box/repositories/box.repository'
 import { BoxLookupCacheInvalidationService } from '../box/services/box-lookup-cache-invalidation.service'
 import { RegionModule } from '../region/region.module'
 import { OrganizationRegionController } from './controllers/organization-region.controller'
-import { Region } from '../region/entities/region.entity'
 import { EncryptionModule } from '../encryption/encryption.module'
 import { UsageModule } from '../usage/usage.module'
 import { UsageController } from '../usage/controllers/usage.controller'
@@ -49,7 +48,6 @@ import { UsageController } from '../usage/controllers/usage.controller'
       OrganizationInvitation,
       Box,
       Volume,
-      Region,
     ]),
     EncryptionModule,
     UsageModule,

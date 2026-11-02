@@ -290,18 +290,6 @@ type OrganizationsAPI interface {
 	LeaveOrganizationExecute(r OrganizationsAPILeaveOrganizationRequest) (*http.Response, error)
 
 	/*
-	ListAvailableRegions List all available regions for the organization
-
-	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@return OrganizationsAPIListAvailableRegionsRequest
-	*/
-	ListAvailableRegions(ctx context.Context) OrganizationsAPIListAvailableRegionsRequest
-
-	// ListAvailableRegionsExecute executes the request
-	//  @return []Region
-	ListAvailableRegionsExecute(r OrganizationsAPIListAvailableRegionsRequest) ([]Region, *http.Response, error)
-
-	/*
 	ListOrganizationInvitations List pending organization invitations
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
@@ -2675,113 +2663,6 @@ func (a *OrganizationsAPIService) LeaveOrganizationExecute(r OrganizationsAPILea
 	}
 
 	return localVarHTTPResponse, nil
-}
-
-type OrganizationsAPIListAvailableRegionsRequest struct {
-	ctx context.Context
-	ApiService OrganizationsAPI
-	xBoxLiteOrganizationID *string
-}
-
-// Use with JWT to specify the organization ID
-func (r OrganizationsAPIListAvailableRegionsRequest) XBoxLiteOrganizationID(xBoxLiteOrganizationID string) OrganizationsAPIListAvailableRegionsRequest {
-	r.xBoxLiteOrganizationID = &xBoxLiteOrganizationID
-	return r
-}
-
-func (r OrganizationsAPIListAvailableRegionsRequest) Execute() ([]Region, *http.Response, error) {
-	return r.ApiService.ListAvailableRegionsExecute(r)
-}
-
-/*
-ListAvailableRegions List all available regions for the organization
-
- @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
- @return OrganizationsAPIListAvailableRegionsRequest
-*/
-func (a *OrganizationsAPIService) ListAvailableRegions(ctx context.Context) OrganizationsAPIListAvailableRegionsRequest {
-	return OrganizationsAPIListAvailableRegionsRequest{
-		ApiService: a,
-		ctx: ctx,
-	}
-}
-
-// Execute executes the request
-//  @return []Region
-func (a *OrganizationsAPIService) ListAvailableRegionsExecute(r OrganizationsAPIListAvailableRegionsRequest) ([]Region, *http.Response, error) {
-	var (
-		localVarHTTPMethod   = http.MethodGet
-		localVarPostBody     interface{}
-		formFiles            []formFile
-		localVarReturnValue  []Region
-	)
-
-	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "OrganizationsAPIService.ListAvailableRegions")
-	if err != nil {
-		return localVarReturnValue, nil, &GenericOpenAPIError{error: err.Error()}
-	}
-
-	localVarPath := localBasePath + "/regions"
-
-	localVarHeaderParams := make(map[string]string)
-	localVarQueryParams := url.Values{}
-	localVarFormParams := url.Values{}
-
-	// to determine the Content-Type header
-	localVarHTTPContentTypes := []string{}
-
-	// set Content-Type header
-	localVarHTTPContentType := selectHeaderContentType(localVarHTTPContentTypes)
-	if localVarHTTPContentType != "" {
-		localVarHeaderParams["Content-Type"] = localVarHTTPContentType
-	}
-
-	// to determine the Accept header
-	localVarHTTPHeaderAccepts := []string{"application/json"}
-
-	// set Accept header
-	localVarHTTPHeaderAccept := selectHeaderAccept(localVarHTTPHeaderAccepts)
-	if localVarHTTPHeaderAccept != "" {
-		localVarHeaderParams["Accept"] = localVarHTTPHeaderAccept
-	}
-	if r.xBoxLiteOrganizationID != nil {
-		parameterAddToHeaderOrQuery(localVarHeaderParams, "X-BoxLite-Organization-ID", r.xBoxLiteOrganizationID, "simple", "")
-	}
-	req, err := a.client.prepareRequest(r.ctx, localVarPath, localVarHTTPMethod, localVarPostBody, localVarHeaderParams, localVarQueryParams, localVarFormParams, formFiles)
-	if err != nil {
-		return localVarReturnValue, nil, err
-	}
-
-	localVarHTTPResponse, err := a.client.callAPI(req)
-	if err != nil || localVarHTTPResponse == nil {
-		return localVarReturnValue, localVarHTTPResponse, err
-	}
-
-	localVarBody, err := io.ReadAll(localVarHTTPResponse.Body)
-	localVarHTTPResponse.Body.Close()
-	localVarHTTPResponse.Body = io.NopCloser(bytes.NewBuffer(localVarBody))
-	if err != nil {
-		return localVarReturnValue, localVarHTTPResponse, err
-	}
-
-	if localVarHTTPResponse.StatusCode >= 300 {
-		newErr := &GenericOpenAPIError{
-			body:  localVarBody,
-			error: localVarHTTPResponse.Status,
-		}
-		return localVarReturnValue, localVarHTTPResponse, newErr
-	}
-
-	err = a.client.decode(&localVarReturnValue, localVarBody, localVarHTTPResponse.Header.Get("Content-Type"))
-	if err != nil {
-		newErr := &GenericOpenAPIError{
-			body:  localVarBody,
-			error: err.Error(),
-		}
-		return localVarReturnValue, localVarHTTPResponse, newErr
-	}
-
-	return localVarReturnValue, localVarHTTPResponse, nil
 }
 
 type OrganizationsAPIListOrganizationInvitationsRequest struct {

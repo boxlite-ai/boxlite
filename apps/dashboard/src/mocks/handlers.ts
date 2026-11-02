@@ -447,7 +447,6 @@ export const handlers = [
   }),
 
   http.get(`${API_URL}/shared-regions`, () => HttpResponse.json([])),
-  http.get(`${API_URL}/regions`, () => HttpResponse.json([])),
   http.get(`${API_URL}/api-keys`, () => HttpResponse.json([])),
   http.post(`${API_URL}/api-keys`, async ({ request }) => {
     const body = (await request.json().catch(() => ({}))) as { name?: string }

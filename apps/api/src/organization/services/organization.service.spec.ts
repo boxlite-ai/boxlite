@@ -40,7 +40,6 @@ const makeService = (found: Organization | null) => {
     {} as any,
     {} as any,
     {} as any,
-    {} as any,
   )
 
   return { service, organizationRepository, entityManager }
