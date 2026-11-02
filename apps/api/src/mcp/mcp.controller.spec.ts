@@ -152,6 +152,7 @@ describe('McpController', () => {
     expect(body.result.tools.map((tool: { name: string }) => tool.name)).toEqual(['list_boxes'])
     expect(body.result.tools[0].inputSchema.required).toEqual(['organization_id'])
     expect(body.result.tools[0].annotations.readOnlyHint).toBe(true)
+    expect(body.result.tools[0].annotations.destructiveHint).toBe(false)
   })
 
   it('returns the boxes of an organization the caller belongs to', async () => {

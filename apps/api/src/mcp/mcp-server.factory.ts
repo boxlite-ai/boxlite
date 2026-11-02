@@ -44,7 +44,7 @@ export class McpServerFactory {
       {
         description: 'List the boxes in one of your BoxLite organizations.',
         inputSchema: z.object({ organization_id: z.uuid().describe('ID of the organization whose boxes to list') }),
-        annotations: { readOnlyHint: true, openWorldHint: false },
+        annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       },
       ({ organization_id }) => this.listBoxes(caller, organization_id),
     )

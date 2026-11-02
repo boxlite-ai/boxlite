@@ -762,6 +762,11 @@ check the box list route applies, without its system-admin bypass. An
 organization the caller is not in, or one that does not exist, gets the same
 `isError` reply.
 
+`list_boxes` explicitly advertises `readOnlyHint: true`, `destructiveHint: false`,
+and `openWorldHint: false`. The operation remains read-only. Under the MCP
+annotation contract, `destructiveHint` is meaningful only when `readOnlyHint`
+is false; its explicit presence does not require a host confirmation prompt.
+
 </details>
 
 ## Runner API
