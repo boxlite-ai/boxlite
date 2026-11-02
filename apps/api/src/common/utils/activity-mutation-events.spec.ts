@@ -4,6 +4,7 @@ import { VolumeService } from '../../box/services/volume.service'
 import { VolumeState } from '../../box/enums/volume-state.enum'
 import { Context } from '../context/context'
 import { PlatformReason } from '../context/platform-reason.enum'
+import { generateApiKeyHash } from './api-key'
 
 const actor = Context.user({ userId: 'user-1', authMethod: 'api_key', clientSource: 'sdk', sdkVersion: '0.9.0' })
 const bootstrap = Context.platform(PlatformReason.BOOTSTRAP)
@@ -25,9 +26,10 @@ describe('Activity business events for mutations', () => {
     jest.spyOn(Logger.prototype, 'error').mockImplementation(capture)
   })
   afterEach(() => jest.restoreAllMocks())
-  const keyService = () => {
+  const keyService = (production = false) => {
     const repository = { findOne: jest.fn().mockResolvedValue(null), save: jest.fn(async (value) => value) }
-    return { repository, service: new ApiKeyService(repository as never, {} as never, {} as never, {} as never) }
+    const config = { getOrThrow: () => 'blk', get: () => production }
+    return { repository, service: new ApiKeyService(repository as never, {} as never, {} as never, config as never) }
   }
   const volumes = () => {
     const repository = { findOne: jest.fn().mockResolvedValue(null), save: jest.fn(async (value) => value) }
@@ -66,6 +68,32 @@ describe('Activity business events for mutations', () => {
     await createKey(service)
     expectLifecycle('api_key.create')
     expect(records[1]['correlation.id']).toMatch(/^[0-9a-f-]{36}$/)
+  })
+  it.each([false, true])(
+    'generates and persists a key without logging its secret: production=%s',
+    async (production) => {
+      const { service, repository } = keyService(production)
+      const result = await service.createApiKey('org-1', 'user-1', 'private-name', [], actor)
+
+      expect(result.value).toMatch(production ? /^blk_live_/ : /^blk_test_/)
+      expect(repository.save).toHaveBeenCalledWith(
+        expect.objectContaining({ keyHash: generateApiKeyHash(result.value) }),
+      )
+      expectLifecycle('api_key.create')
+      expect(JSON.stringify(records)).not.toContain(result.value)
+    },
+  )
+  it('passes bootstrap context through ensure creation of a missing configured key', async () => {
+    const { service, repository } = keyService()
+    const value = 'private-bootstrap-key'
+    const result = await service.ensureApiKeyValue('org-1', 'user-1', 'private-name', [], value, bootstrap)
+
+    expect(result.value).toBe(value)
+    expect(repository.save).toHaveBeenCalledWith(expect.objectContaining({ keyHash: generateApiKeyHash(value) }))
+    expect(records.map((record) => record['event.outcome'])).toEqual(['requested', 'success'])
+    expect(records[1]).toMatchObject({ 'actor.kind': 'platform', 'event.reason': 'bootstrap' })
+    expect(records[1]).not.toHaveProperty('user.id')
+    expect(JSON.stringify(records)).not.toContain(value)
   })
   it('records a rejected key creation without the key or database message', async () => {
     const { service, repository } = keyService()
