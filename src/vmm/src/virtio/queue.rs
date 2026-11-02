@@ -9,9 +9,14 @@
 //! device checks the readiness of the queues it needs.
 //!
 //! `virtio_queue::QueueState` does not carry `num_added`, so [`save`] must run
-//! after quiescing the device and resolving the last notification decision.
+//! after quiescing the device and acting on the last notification decision.
 //! [`drain`] implements the disable/drain/enable loop that prevents a lost
-//! kick.
+//! kick. A device completes a chain inline with [`Completion::Used`] or takes
+//! it with [`Completion::Deferred`]: a deferred chain has already left the
+//! available ring and has no used entry, and the device calls [`complete`]
+//! with its head and length when its backend finishes. Quiesce must complete
+//! every deferred chain and act on the returned interrupt decision before
+//! [`save`] runs.
 
 use std::{fmt, mem::size_of};
 
@@ -132,8 +137,9 @@ pub(crate) fn prepare_all(
 
 /// Returns the saved state for every queue, in queue-number order.
 ///
-/// Call after `quiesce` and the last [`QueueT::needs_notification`]:
-/// `QueueState` omits `num_added`, so an unresolved notification decision is
+/// Call after `quiesce` has completed every deferred chain and after the last
+/// [`QueueT::needs_notification`] decision: `QueueState` omits `num_added`, so
+/// an unresolved notification decision and an in-flight deferred chain are
 /// not preserved.
 pub(crate) fn save(queues: &[Queue]) -> Vec<QueueState> {
     queues.iter().map(|queue| queue.state()).collect()
@@ -178,8 +184,42 @@ pub(crate) fn restore(
     Ok(queues)
 }
 
-/// Completes one descriptor chain.
+/// How [`drain`] finished with one descriptor chain.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Completion {
+    /// The chain is complete; drain adds its used entry with this length now.
+    Used(u32),
+    /// The device took the chain for later completion.
+    ///
+    /// The chain has already left the available ring and has no used entry.
+    /// Consume it before returning and keep its head index and buffer metadata;
+    /// the adapter retains nothing. Call [`complete`] exactly once later.
+    Deferred,
+}
+
+/// Completes a chain that [`drain`] deferred.
+///
+/// Adds the used entry for `head` with `len` and returns whether the guest
+/// should be interrupted now; the caller raises the interrupt when this
+/// returns `true`. Call exactly once per deferred chain, on the queue that
+/// produced it. `needs_notification` has side effects, so this decision must
+/// be the last one acted on before [`save`]: a device with a deferred chain
+/// still outstanding must not save.
 pub(crate) fn complete(
+    queue: &mut Queue,
+    memory: &GuestMemoryMmap,
+    head: u16,
+    len: u32,
+) -> Result<bool, DeviceError> {
+    add_used(queue, memory, head, len)?;
+    queue.needs_notification(memory).map_err(queue_error)
+}
+
+/// Adds one used entry without resolving the notification decision.
+///
+/// [`drain`] resolves the decision once per batch; [`complete`] resolves it
+/// per deferred chain.
+fn add_used(
     queue: &mut Queue,
     memory: &GuestMemoryMmap,
     head: u16,
@@ -188,24 +228,33 @@ pub(crate) fn complete(
     queue.add_used(memory, head, len).map_err(queue_error)
 }
 
-/// Drains every available chain and reports whether the guest should be
-/// interrupted.
+/// Drains every chain the driver made available and reports whether the guest
+/// should be interrupted for chains completed synchronously.
 ///
 /// Notifications are disabled while draining; if `enable_notification` reports
 /// work that arrived in the meantime, the drain repeats, so a kick cannot be
-/// lost. `complete` returns the used length for one chain. An empty drain
-/// returns `false`, so it never raises a spurious interrupt.
+/// lost. `process` either completes a chain with [`Completion::Used`] or takes
+/// it with [`Completion::Deferred`]. A deferred chain is already consumed from
+/// the available ring but has no used entry; the device calls [`complete`]
+/// later. The notification decision is resolved once per batch, after every
+/// synchronous completion; `process` only classifies the chain, and drain
+/// writes the used entry. An empty drain, or one that defers every chain,
+/// returns `false`.
+///
+/// The drain consumes every available chain; a device that needs to stop early
+/// and put a chain back (rate limiting or backpressure) must not use it.
 ///
 /// `indirect` is the negotiated `VIRTIO_F_INDIRECT_DESC` state. When it is
-/// false, a chain containing an indirect descriptor is a guest error.
+/// false, a chain containing an indirect descriptor is a guest error; the
+/// check runs before `process`, so deferred chains get the same rejection.
 pub(crate) fn drain<'a, F>(
     queue: &mut Queue,
     memory: &'a GuestMemoryMmap,
     indirect: bool,
-    mut complete: F,
+    mut process: F,
 ) -> Result<bool, DeviceError>
 where
-    F: FnMut(DescriptorChain<&'a GuestMemoryMmap>) -> Result<u32, DeviceError>,
+    F: FnMut(DescriptorChain<&'a GuestMemoryMmap>) -> Result<Completion, DeviceError>,
 {
     let mut completed = false;
     loop {
@@ -217,9 +266,13 @@ where
             if !indirect && has_indirect(memory, desc_table, size, head)? {
                 return Err(DeviceError::NeedsReset("indirect descriptor"));
             }
-            let len = complete(chain)?;
-            queue.add_used(memory, head, len).map_err(queue_error)?;
-            completed = true;
+            match process(chain)? {
+                Completion::Used(len) => {
+                    add_used(queue, memory, head, len)?;
+                    completed = true;
+                }
+                Completion::Deferred => {}
+            }
         }
         if !queue.enable_notification(memory).map_err(queue_error)? {
             break;

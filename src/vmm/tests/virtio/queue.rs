@@ -1,7 +1,8 @@
 // Copyright 2026 BoxLite Contributors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Queue adapter tests: dense validation, state restore and notification drain.
+//! Queue adapter tests: dense validation, state restore, notification drain and
+//! deferred completion.
 
 use virtio_queue::{Queue, QueueT, desc::split::Descriptor};
 use vm_memory::{Address, Bytes, GuestAddress};
@@ -10,7 +11,7 @@ use crate::{
     memory::GuestMemoryMmap,
     virtio::{
         DeviceError,
-        queue::{self, QueueError, VIRTIO_F_EVENT_IDX, VIRTIO_F_INDIRECT_DESC},
+        queue::{self, Completion, QueueError, VIRTIO_F_EVENT_IDX, VIRTIO_F_INDIRECT_DESC},
     },
 };
 
@@ -284,7 +285,7 @@ fn save_after_a_notification_decision_round_trips_state() {
     let mut queue = ready_queue();
     write_desc(&memory, 0, DATA, 4, 0, 0);
     add_chain(&memory, 0);
-    assert!(queue::drain(&mut queue, &memory, false, |_| Ok(4)).unwrap());
+    assert!(queue::drain(&mut queue, &memory, false, |_| Ok(Completion::Used(4))).unwrap());
     let states = queue::save(std::slice::from_ref(&queue));
     let restored = queue::restore(&states, &[SIZE], false, &memory).unwrap();
     assert_eq!(restored[0].state(), states[0]);
@@ -301,7 +302,9 @@ fn drain_completes_every_available_chain() {
     let mut heads = Vec::new();
     let notify = queue::drain(&mut queue, &memory, false, |chain| {
         heads.push(chain.head_index());
-        Ok(chain.map(|descriptor| descriptor.len()).sum())
+        Ok(Completion::Used(
+            chain.map(|descriptor| descriptor.len()).sum(),
+        ))
     })
     .unwrap();
     assert!(notify);
@@ -336,7 +339,7 @@ fn without_event_idx_one_interrupt_per_batch() {
         write_desc(&memory, index, DATA, 4, 0, 0);
         add_chain(&memory, index);
     }
-    assert!(queue::drain(&mut queue, &memory, false, |_| Ok(4)).unwrap());
+    assert!(queue::drain(&mut queue, &memory, false, |_| Ok(Completion::Used(4))).unwrap());
     assert!(!queue::drain(&mut queue, &memory, false, |_| panic!("empty")).unwrap());
     assert_eq!(used_flags(&memory), 0);
 }
@@ -351,12 +354,12 @@ fn event_idx_suppresses_below_threshold() {
         write_desc(&memory, index, DATA, 4, 0, 0);
         add_chain(&memory, index);
     }
-    assert!(!queue::drain(&mut queue, &memory, false, |_| Ok(4)).unwrap());
+    assert!(!queue::drain(&mut queue, &memory, false, |_| Ok(Completion::Used(4))).unwrap());
     for index in 2..6 {
         write_desc(&memory, index, DATA, 4, 0, 0);
         add_chain(&memory, index);
     }
-    assert!(queue::drain(&mut queue, &memory, false, |_| Ok(4)).unwrap());
+    assert!(queue::drain(&mut queue, &memory, false, |_| Ok(Completion::Used(4))).unwrap());
 }
 
 #[test]
@@ -368,7 +371,7 @@ fn event_idx_wraps_used_indices() {
     queue.set_next_used(u16::MAX - 3);
     write_desc(&memory, 0, DATA, 4, 0, 0);
     add_chain(&memory, 0);
-    assert!(queue::drain(&mut queue, &memory, false, |_| Ok(4)).unwrap());
+    assert!(queue::drain(&mut queue, &memory, false, |_| Ok(Completion::Used(4))).unwrap());
     assert!(!queue::drain(&mut queue, &memory, false, |_| panic!("empty")).unwrap());
 }
 
@@ -385,7 +388,7 @@ fn drain_keeps_work_that_arrives_while_disabled() {
             write_desc(&memory, 1, DATA, 4, 0, 0);
             add_chain(&memory, 1);
         }
-        Ok(4)
+        Ok(Completion::Used(4))
     })
     .unwrap();
     assert!(notify);
@@ -406,7 +409,7 @@ fn drain_rejects_indirect_descriptors_when_not_negotiated() {
     let mut completed = false;
     let result = queue::drain(&mut queue, &memory, false, |_| {
         completed = true;
-        Ok(4)
+        Ok(Completion::Used(4))
     });
     assert_eq!(result, Err(DeviceError::NeedsReset("indirect descriptor")));
     assert!(!completed);
@@ -421,7 +424,7 @@ fn drain_rejects_a_mid_chain_indirect_descriptor() {
     write_desc(&memory, 1, INDIRECT, 16, INDIRECT_FLAG, 0);
     add_chain(&memory, 0);
     assert_eq!(
-        queue::drain(&mut queue, &memory, false, |_| Ok(4)),
+        queue::drain(&mut queue, &memory, false, |_| Ok(Completion::Used(4))),
         Err(DeviceError::NeedsReset("indirect descriptor"))
     );
 }
@@ -436,7 +439,9 @@ fn drain_accepts_indirect_descriptors_when_negotiated() {
     write_desc(&memory, 0, INDIRECT, 16, INDIRECT_FLAG, 0);
     add_chain(&memory, 0);
     let notify = queue::drain(&mut queue, &memory, true, |chain| {
-        Ok(chain.map(|descriptor| descriptor.len()).sum())
+        Ok(Completion::Used(
+            chain.map(|descriptor| descriptor.len()).sum(),
+        ))
     })
     .unwrap();
     assert!(notify);
@@ -449,7 +454,7 @@ fn drain_maps_invalid_avail_idx_to_needs_reset() {
     let mut queue = ready_queue();
     write_u16(&memory, GuestAddress(AVAIL + 2), SIZE + 1);
     assert_eq!(
-        queue::drain(&mut queue, &memory, false, |_| Ok(4)),
+        queue::drain(&mut queue, &memory, false, |_| Ok(Completion::Used(4))),
         Err(DeviceError::NeedsReset("virtio queue"))
     );
 }
@@ -474,7 +479,7 @@ fn drain_rejects_a_malformed_chain() {
     write_desc(&memory, 0, DATA, 4, NEXT, 9);
     add_chain(&memory, 0);
     assert_eq!(
-        queue::drain(&mut queue, &memory, false, |_| Ok(4)),
+        queue::drain(&mut queue, &memory, false, |_| Ok(Completion::Used(4))),
         Err(DeviceError::NeedsReset("virtio descriptor"))
     );
 }
@@ -486,7 +491,7 @@ fn drain_rejects_a_chain_cycle() {
     write_desc(&memory, 0, DATA, 4, NEXT, 0);
     add_chain(&memory, 0);
     assert_eq!(
-        queue::drain(&mut queue, &memory, false, |_| Ok(4)),
+        queue::drain(&mut queue, &memory, false, |_| Ok(Completion::Used(4))),
         Err(DeviceError::NeedsReset("virtio descriptor"))
     );
 }
@@ -500,4 +505,160 @@ fn complete_rejects_an_out_of_range_head() {
         Err(DeviceError::NeedsReset("virtio queue"))
     );
     assert_eq!(used_idx(&memory), 0);
+}
+
+#[test]
+fn drain_leaves_a_deferred_chain_for_later_completion() {
+    let memory = memory();
+    let mut queue = ready_queue();
+    write_desc(&memory, 0, DATA, 4, 0, 0);
+    add_chain(&memory, 0);
+
+    let notify = queue::drain(&mut queue, &memory, false, |_| Ok(Completion::Deferred)).unwrap();
+    assert!(!notify);
+    assert_eq!(queue.next_avail(), 1);
+    assert_eq!(queue.next_used(), 0);
+    assert_eq!(used_idx(&memory), 0);
+
+    assert!(queue::complete(&mut queue, &memory, 0, 4).unwrap());
+    assert_eq!(queue.next_used(), 1);
+    assert_eq!(used_idx(&memory), 1);
+    assert_eq!(used_entry(&memory, 0), (0, 4));
+}
+
+#[test]
+fn drain_adds_used_entries_in_completion_order_for_a_mixed_batch() {
+    let memory = memory();
+    let mut queue = ready_queue();
+    for index in 0..3 {
+        write_desc(&memory, index, DATA, 4, 0, 0);
+        add_chain(&memory, index);
+    }
+
+    let notify = queue::drain(&mut queue, &memory, false, |chain| {
+        match chain.head_index() {
+            0 => Ok(Completion::Used(4)),
+            1 => Ok(Completion::Deferred),
+            _ => Ok(Completion::Used(6)),
+        }
+    })
+    .unwrap();
+    assert!(notify);
+    assert_eq!(queue.next_avail(), 3);
+    assert_eq!(queue.next_used(), 2);
+    assert_eq!(used_entry(&memory, 0), (0, 4));
+    assert_eq!(used_entry(&memory, 1), (2, 6));
+
+    assert!(queue::complete(&mut queue, &memory, 1, 8).unwrap());
+    assert_eq!(queue.next_used(), 3);
+    assert_eq!(used_idx(&memory), 3);
+    assert_eq!(used_entry(&memory, 2), (1, 8));
+}
+
+#[test]
+fn a_deferred_chain_does_not_end_the_notification_drain() {
+    let memory = memory();
+    let mut queue = ready_queue();
+    write_desc(&memory, 0, DATA, 4, 0, 0);
+    add_chain(&memory, 0);
+
+    let mut calls = 0;
+    let notify = queue::drain(&mut queue, &memory, false, |_| {
+        calls += 1;
+        if calls == 1 {
+            write_desc(&memory, 1, DATA, 4, 0, 0);
+            add_chain(&memory, 1);
+            Ok(Completion::Deferred)
+        } else {
+            Ok(Completion::Used(4))
+        }
+    })
+    .unwrap();
+    assert!(notify);
+    assert_eq!(calls, 2);
+    assert_eq!(queue.next_avail(), 2);
+    assert_eq!(queue.next_used(), 1);
+    assert_eq!(used_entry(&memory, 0), (1, 4));
+}
+
+#[test]
+fn drain_rejects_a_deferred_indirect_chain_when_not_negotiated() {
+    let memory = memory();
+    let mut queue = ready_queue();
+    write_desc(&memory, 0, INDIRECT, 16, INDIRECT_FLAG, 0);
+    add_chain(&memory, 0);
+
+    let mut processed = false;
+    let result = queue::drain(&mut queue, &memory, false, |_| {
+        processed = true;
+        Ok(Completion::Deferred)
+    });
+    assert_eq!(result, Err(DeviceError::NeedsReset("indirect descriptor")));
+    assert!(!processed);
+    assert_eq!(used_idx(&memory), 0);
+}
+
+#[test]
+fn event_idx_notification_decisions_apply_to_later_completions() {
+    let memory = memory();
+    let mut queue = ready_queue();
+    queue.set_event_idx(true);
+    set_used_event(&memory, 0);
+    for index in 0..2 {
+        write_desc(&memory, index, DATA, 4, 0, 0);
+        add_chain(&memory, index);
+    }
+    assert!(!queue::drain(&mut queue, &memory, false, |_| Ok(Completion::Deferred)).unwrap());
+    assert!(queue::complete(&mut queue, &memory, 0, 4).unwrap());
+    assert!(!queue::complete(&mut queue, &memory, 1, 4).unwrap());
+}
+
+#[test]
+fn event_idx_crossing_notifies_on_the_completion_that_crosses() {
+    let memory = memory();
+    let mut queue = ready_queue();
+    queue.set_event_idx(true);
+    set_used_event(&memory, 2);
+    for index in 0..3 {
+        write_desc(&memory, index, DATA, 4, 0, 0);
+        add_chain(&memory, index);
+    }
+    assert!(!queue::drain(&mut queue, &memory, false, |_| Ok(Completion::Deferred)).unwrap());
+    assert!(!queue::complete(&mut queue, &memory, 0, 4).unwrap());
+    assert!(!queue::complete(&mut queue, &memory, 1, 4).unwrap());
+    assert!(queue::complete(&mut queue, &memory, 2, 4).unwrap());
+}
+
+#[test]
+fn drain_resolves_event_idx_once_per_batch() {
+    let memory = memory();
+    let mut queue = ready_queue();
+    queue.set_event_idx(true);
+    set_used_event(&memory, 1);
+    for index in 0..3 {
+        write_desc(&memory, index, DATA, 4, 0, 0);
+        add_chain(&memory, index);
+    }
+
+    assert!(queue::drain(&mut queue, &memory, false, |_| Ok(Completion::Used(4))).unwrap());
+    assert_eq!(used_idx(&memory), 3);
+}
+
+#[test]
+fn save_after_a_deferred_completion_round_trips_state() {
+    let memory = memory();
+    let mut queue = ready_queue();
+    queue.set_event_idx(true);
+    set_used_event(&memory, 0);
+    write_desc(&memory, 0, DATA, 4, 0, 0);
+    add_chain(&memory, 0);
+
+    assert!(!queue::drain(&mut queue, &memory, false, |_| Ok(Completion::Deferred)).unwrap());
+    assert!(queue::complete(&mut queue, &memory, 0, 4).unwrap());
+
+    let states = queue::save(std::slice::from_ref(&queue));
+    let restored = queue::restore(&states, &[SIZE], true, &memory).unwrap();
+    assert_eq!(restored[0].state(), states[0]);
+    assert_eq!(restored[0].next_avail(), 1);
+    assert_eq!(restored[0].next_used(), 1);
 }
