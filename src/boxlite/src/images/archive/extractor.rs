@@ -1139,6 +1139,7 @@ mod tests {
         }
     }
 
+    /// A character device entry, as a rootfs copied into a layer carries.
     fn raw_char_device(path: &str, major: u32, minor: u32) -> RawTarEntry<'_> {
         RawTarEntry {
             path,
@@ -1147,6 +1148,7 @@ mod tests {
         }
     }
 
+    /// A FIFO entry: a rootless extractor can create this one for real.
     fn raw_fifo(path: &str) -> RawTarEntry<'_> {
         RawTarEntry {
             path,
