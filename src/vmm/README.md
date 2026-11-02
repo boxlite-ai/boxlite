@@ -36,7 +36,7 @@ boxlite-vmm
 | `chipset` | `ChipsetBuilder`, the one registry of ranges and interrupt lines, and `Chipset`, the read-only machine it builds |
 | `bus` | `Bus`, `BusRange` and `BusDevice`, `Buses::dispatch`, which serves the MMIO and port exits of a vCPU, and the deferred-access types the next slice advances |
 | `io` | Deferred completion primitives: `Completion<T>`, its single-use `Completer<T>` (dropping it cancels the completion), `Waker`, and self-owned `ConfigBytes` |
-| `virtio` | The virtio device contract: `VirtioDevice`, `DeviceSpec`, `DeviceOp`, `DeviceEvent`, event registration and budget contexts, `PendingControl`, and the run thread's `ControlQueue` |
+| `virtio` | The virtio device contract: `VirtioDevice`, `DeviceSpec`, `DeviceOp`, `DeviceEvent`, event registration and budget contexts, `PendingControl`, the run thread's `ControlQueue`, and `SharedDevice`, the one device shared by its transport and worker |
 | `irq` | `IrqChip`, the host interrupt controller as devices see it, and `IrqLine`, one device line; HVF and KVM provide the controller, WHP (M10) only local APICs |
 | `devices` | The console queue, and on x86_64 the 8250 UART at COM1 and the i8042 reset, with `add_legacy_devices`, which adds them to the chipset |
 | `events` | `Event`, which ends the VM, `EventSender`, which also latches the stop, and `EventLoop`, the poller that waits for the first event |
@@ -328,6 +328,14 @@ are built from. `Vm` owns the chipset they form.
   `Bus::unclaimed`; Linux probes port `0x87` once at boot and takes `0xFF` as
   no ISA DMA controller. A device whose lock an earlier panic poisoned stops
   the next access too.
+- **Shared devices.** `virtio::cell::SharedDevice` holds one device under a
+  mutex, its cached spec, and a waiter list. A control path uses
+  `try_acquire`, or registers a waker with `try_acquire_or_register` and
+  retries; the worker uses a blocking `acquire`. A dropped guard releases the
+  device before it wakes every registered waiter, and registration and the
+  release drain share one mutex, so a wake cannot be lost. A poisoned device
+  panics on the control path and in the worker's acquire instead of looking
+  busy.
 - **Deferred access.** A device answers an access with
   `BusIo::Complete(value)`, or with `BusIo::Deferred(readiness)` when it must
   finish later. The bus wraps a deferred access in a `ReadIo` or `WriteIo`,

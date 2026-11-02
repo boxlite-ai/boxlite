@@ -350,6 +350,12 @@ today.
   the close. A cancelled read fills its buffer with zeros, and the vCPU
   releases the borrowed exit and calls `complete_pending_io`, which every
   backend requires before a vCPU stops.
+- **Shared access.** The transport and the device worker share one
+  `SharedDevice`. Control paths use `try_acquire`; the worker uses a blocking
+  `acquire`. The guard releases the device before waking registered control
+  paths, and registration and the release drain share one mutex, so a wake
+  cannot be lost. A poisoned device panics on both paths. The lock order is
+  control queue, transport, device; the worker never takes the transport lock.
 - **Locking.** A vCPU thread holds a device's lock for one register access and
   hands anything that can block to the device's worker. A lock that an
   earlier panic poisoned stops the next access too, as Firecracker and

@@ -7,6 +7,9 @@
 //! The transport calls the control methods; the worker calls
 //! [`VirtioDevice::on_event`]. A control method returns a [`DeviceOp`] so a
 //! slow operation can finish after the caller releases the device lock.
+//! The transport and the worker share one device through
+//! [`cell::SharedDevice`]; a control path that loses the race to the worker
+//! registers a waker and retries.
 //!
 //! Queue start and stop and the snapshot payload arrive with later slices;
 //! every device needs the methods here first.
@@ -15,6 +18,7 @@ use std::fmt;
 
 use crate::io::{Completer, Completion, ConfigBytes, Waker};
 
+pub(crate) mod cell;
 pub(crate) mod control;
 
 /// The largest number of queues a device may declare.
