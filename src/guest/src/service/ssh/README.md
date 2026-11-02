@@ -87,6 +87,8 @@ channel execution, forwarding, and shutdown through their completion points.
   initialization or disk I/O. Mutations require `Guest.Init` and a ready container rootfs.
 - Desired state is stored in `/etc/boxlite/ssh.cfg`; Container.Init restores it.
   Guest shutdown drains the live listener without changing the saved switch.
+  Restore failures log the container ID and sanitized error; task failures log
+  whether the task panicked or was cancelled, without its panic payload.
 - Supplying both fields replaces saved content without loading it. Explicit
   `enable=false` drains live SSH before storage access; storage errors still
   return failure, and the saved switch may restore SSH after a restart.

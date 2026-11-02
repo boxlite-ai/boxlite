@@ -561,8 +561,18 @@ impl ContainerService for GuestServer {
                     let root = shared_rootfs.clone();
                     let result =
                         tokio::spawn(async move { guest.ssh_manager.restore(root).await }).await;
-                    if !matches!(result, Ok(Ok(()))) {
-                        tracing::warn!("SSH state could not be restored");
+                    match result {
+                        Ok(Ok(())) => {}
+                        Ok(Err(error)) => tracing::warn!(
+                            %container_id,
+                            %error,
+                            "SSH state could not be restored"
+                        ),
+                        Err(error) => tracing::warn!(
+                            %container_id,
+                            reason = if error.is_panic() { "panic" } else { "cancelled" },
+                            "SSH state restore task failed"
+                        ),
                     }
                 }
 
