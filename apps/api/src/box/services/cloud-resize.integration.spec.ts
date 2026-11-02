@@ -402,6 +402,98 @@ databaseTests('Cloud resize jobs with Postgres and Redis', () => {
     expect(await db.getRepository(BoxUsagePeriod).count()).toBe(2)
   })
 
+  it('requeues an expired lease without waiting on a job held by another transaction', async () => {
+    const [claimed] = await claim()
+    await db.query(`UPDATE "job" SET "leaseExpiresAt" = statement_timestamp() - interval '1 second' WHERE id = $1`, [
+      claimed.id,
+    ])
+    const otherBox = Object.assign(new Box('held'), {
+      organizationId: randomUUID(),
+      osUser: 'root',
+      runnerId,
+      state: BoxState.STARTED,
+      cpu: 1,
+      mem: 1,
+    })
+    await db.getRepository(Box).save(otherBox)
+    const held = new Job({
+      type: JobType.RESIZE_BOX,
+      runnerId,
+      resourceType: ResourceType.BOX,
+      resourceId: otherBox.id,
+      payload: JSON.stringify({ version: 1, cpus: 4, memory_mib: 2048, previous: { cpus: 1, memory_mib: 1024 } }),
+    })
+    held.resizePhase = 'APPLY'
+    held.nextAttemptAt = new Date()
+    held.resizeDeadlineAt = new Date(Date.now() + RESIZE_MAX_DURATION_MINUTES * 60_000)
+    await db.getRepository(Job).insert(held)
+    await db.getRepository(Box).update(otherBox.id, { pending: true, resizeJobId: held.id })
+    await db.query(
+      `UPDATE "job" SET "status" = $1, "leaseExpiresAt" = statement_timestamp() - interval '1 second'
+       WHERE id = $2`,
+      [JobStatus.IN_PROGRESS, held.id],
+    )
+
+    const holder = db.createQueryRunner()
+    await holder.connect()
+    await holder.startTransaction()
+    let reaping: Promise<void> | undefined
+    try {
+      await holder.query('SELECT id FROM "job" WHERE id = $1 FOR UPDATE', [held.id])
+      reaping = leases.reapResizeJobs()
+      let requeued = false
+      for (let i = 0; i < 50; i++) {
+        const current = await db.getRepository(Job).findOneByOrFail({ id: job.id })
+        if (current.status === JobStatus.PENDING) {
+          requeued = true
+          break
+        }
+        await sleep(20)
+      }
+      expect(requeued).toBe(true)
+      expect(await db.getRepository(Job).findOneByOrFail({ id: held.id })).toMatchObject({
+        status: JobStatus.IN_PROGRESS,
+      })
+    } finally {
+      await holder.rollbackTransaction()
+      await holder.release()
+      await reaping
+    }
+  })
+
+  it('bounds terminalization behind a held Box row and retries on the next sweep', async () => {
+    await db.query(`UPDATE "job" SET "resizeDeadlineAt" = statement_timestamp() - interval '1 second' WHERE id = $1`, [
+      job.id,
+    ])
+    const holder = db.createQueryRunner()
+    await holder.connect()
+    await holder.startTransaction()
+    let reaping: Promise<void> | undefined
+    try {
+      await holder.query('SELECT id FROM "box" WHERE id = $1 FOR UPDATE', [box.id])
+      reaping = leases.reapResizeJobs()
+      await Promise.race([
+        reaping,
+        sleep(8_000).then(() => {
+          throw new Error('reaper exceeded its lock-wait bound')
+        }),
+      ])
+    } finally {
+      await holder.rollbackTransaction()
+      await holder.release()
+      await reaping
+    }
+    expect(await db.getRepository(Job).findOneByOrFail({ id: job.id })).toMatchObject({
+      status: JobStatus.PENDING,
+      completedAt: null,
+    })
+    await leases.reapResizeJobs()
+    expect(await db.getRepository(Job).findOneByOrFail({ id: job.id })).toMatchObject({
+      status: JobStatus.FAILED,
+      completedAt: expect.any(Date),
+    })
+  }, 20_000)
+
   it('terminalizes a PENDING job past its deadline and releases the fence', async () => {
     await db.query(`UPDATE "job" SET "resizeDeadlineAt" = statement_timestamp() - interval '1 second' WHERE id = $1`, [
       job.id,

@@ -159,10 +159,12 @@ console.log(JSON.stringify(await box.resize({cpus:3})));
     ]
     # DDL cannot bind a parameter inside a CHECK expression. The generated Box
     # identifier is constrained before quoting, and the constraint affects it alone.
+    # NOT VALID skips the closed periods from the earlier resizes while still
+    # rejecting the completion transaction's endAt write.
     assert re.fullmatch(r"[A-Za-z0-9_-]+", box.id)
     database(
         f"ALTER TABLE box_usage_periods ADD CONSTRAINT acceptance_resize_failure "
-        f"CHECK (\"boxId\" <> '{box.id}' OR \"endAt\" IS NULL)"
+        f"CHECK (\"boxId\" <> '{box.id}' OR \"endAt\" IS NULL) NOT VALID"
     )
     try:
         code, stdout, stderr = await command(cli, env)
@@ -180,7 +182,13 @@ console.log(JSON.stringify(await box.resize({cpus:3})));
             [box.id],
         )
         assert (open_period["cpu"], open_period["mem"]) == (3, 2)
-        assert (await box.resize()).cpus == 3
+        for _ in range(30):
+            observed = await box.resize()
+            if observed.cpus == 4 and observed.memory_mib == 3072:
+                break
+            await asyncio.sleep(1)
+        else:
+            raise AssertionError(f"runner did not apply runtime target: {observed}")
         for path, body, status, message in [
             (f"/v1/boxes/{box.id}/stop", {}, 400, "state change in progress"),
             (f"/v1/boxes/{box.id}/resize", {"memory_mib": 4096}, 409, "different resize target"),
