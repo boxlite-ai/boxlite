@@ -8,11 +8,14 @@ export class AddCloudResizeJobs1793232000000 implements MigrationInterface {
     await runner.query(`ALTER TABLE "job"
       ADD COLUMN "resizePhase" varchar,
       ADD COLUMN "nextAttemptAt" timestamptz,
+      ADD COLUMN "resizeDeadlineAt" timestamptz,
       ADD COLUMN "attempt" integer NOT NULL DEFAULT 0,
       ADD COLUMN "claimToken" uuid,
       ADD COLUMN "leaseExpiresAt" timestamptz`)
     await runner.query(`CREATE INDEX "job_resize_due_idx" ON "job" ("runnerId", "nextAttemptAt")
       WHERE "type" = 'RESIZE_BOX' AND "status" = 'PENDING' AND "resizePhase" = 'APPLY'`)
+    await runner.query(`CREATE INDEX "job_resize_reaper_idx" ON "job" ("status", "resizeDeadlineAt")
+      WHERE "type" = 'RESIZE_BOX' AND "completedAt" IS NULL`)
   }
 
   async down(runner: QueryRunner): Promise<void> {
@@ -20,9 +23,10 @@ export class AddCloudResizeJobs1793232000000 implements MigrationInterface {
     const [{ count }] = await runner.query(`SELECT count(*) FROM "job"
       WHERE "type" = 'RESIZE_BOX' AND "completedAt" IS NULL`)
     if (Number(count)) throw new Error('Drain resize jobs before reverting their schema')
+    await runner.query(`DROP INDEX "job_resize_reaper_idx"`)
     await runner.query(`DROP INDEX "job_resize_due_idx"`)
     await runner.query(`ALTER TABLE "job" DROP COLUMN "resizePhase", DROP COLUMN "nextAttemptAt",
-      DROP COLUMN "attempt", DROP COLUMN "claimToken", DROP COLUMN "leaseExpiresAt"`)
+      DROP COLUMN "resizeDeadlineAt", DROP COLUMN "attempt", DROP COLUMN "claimToken", DROP COLUMN "leaseExpiresAt"`)
     await runner.query(`ALTER TABLE "box" DROP COLUMN "resizeJobId"`)
   }
 }

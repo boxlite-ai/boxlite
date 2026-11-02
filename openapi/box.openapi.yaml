@@ -449,11 +449,13 @@ paths:
         Requires a running Linux/KVM box. An interrupted or failed request
         may have partially completed; inspect the box or retry the same target.
         Successfully allocated resources survive restart.
-        Cloud persists the target, switches billing intervals, then applies it
-        through a durable Runner job. Accepted targets are not rolled back on
-        failure. A 504 resize_in_progress means work continues in the background;
-        retry the same target or send an empty query. Box info shows the target,
-        while this endpoint reports the runtime allocation.
+        Cloud persists the target and applies it through a durable Runner job;
+        the Box size and usage period change only after the Runner confirms the
+        target. Failed retries are bounded; a terminal failure releases the
+        lifecycle fence and leaves the Box size and billing unchanged. A 504
+        resize_in_progress means work continues in the background; retry the same
+        target or send an empty query. Box info shows committed resources, while
+        this endpoint reports the runtime allocation.
       tags: [Boxes]
       requestBody:
         required: true

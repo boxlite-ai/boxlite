@@ -61,6 +61,7 @@ import { DomainService } from './services/domain.service'
 import { TunnelService } from './services/tunnel.service'
 import { AttachTicketService } from './services/attach-ticket.service'
 import { CpuIncidentModule } from './cpu-incidents/cpu-incident.module'
+import { UsageModule } from '../usage/usage.module'
 
 @Module({
   imports: [
@@ -69,6 +70,7 @@ import { CpuIncidentModule } from './cpu-incidents/cpu-incident.module'
     OrganizationModule,
     RegionModule,
     ImageModule,
+    UsageModule,
     TypeOrmModule.forFeature([
       Box,
       Runner,

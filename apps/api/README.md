@@ -58,19 +58,22 @@ accept this field before rolling out the added response property.
 ## Cloud resize
 
 `BoxResizeService` accepts the existing SDK/CLI resize request. Under a usage
-lease and Box row lock, it stores target CPU/GiB and a `RESIZE_BOX` job in
-`BILLING_PENDING`. `UsageService` closes the old interval and opens the target
-interval in the same transaction that moves the job to `APPLY`. Billing errors
-leave the target intact and retry at startup and every 15 seconds. Daily rollover
-excludes billing-pending jobs before its batch limit; APPLY jobs continue normal
-daily billing. State events recheck the current Box so delayed events cannot
-replace the resize's billing snapshot.
+lease and Box row lock, it stores the target CPU/GiB in a `RESIZE_BOX` payload,
+sets `resizePhase=APPLY`, and writes only `pending`/`resizeJobId` to the Box.
+The Box keeps its old size and the old usage period stays open while the Runner
+applies the target. `GET box` reports the committed size; the empty resize query
+reports the Runner's actual allocation.
 
-`ResizeJobService` uses database time, row locks and claim tokens. It requeues
-expired leases every 15 seconds and failed attempts with jittered 1–60 second
-backoff. Other jobs keep their existing failure policy. Conflicting lifecycle
-work is blocked by `resizeJobId`/`pending`. Same-target requests reuse the job;
-the HTTP wait expires after 30 seconds without cancelling it.
+`ResizeJobService` uses database time, row locks, claim tokens and a durable
+deadline. It requeues expired leases every 15 seconds and retries failures with
+jittered 1–60 second backoff. Completion validates the exact observed target and,
+in one transaction, updates Box `cpu/mem`, clears the fence, calls the existing
+`closeUsagePeriod` and `openUsagePeriodFor`, and marks the job `COMPLETED`. A
+resize that reaches 10 attempts or its 30-minute deadline, including an unclaimed
+PENDING job past the deadline, becomes terminal `FAILED`: the fence is released,
+the old Box size and usage period stay unchanged, and stop/suspension proceeds.
+Late completion reports are rejected. Same-target requests reuse the job; the HTTP
+wait expires after 30 seconds without cancelling it.
 
 Rollout order: install the additive migration, upgrade every API instance and
 Runner, then set `CLOUD_RESIZE_ENABLED=true` (default false). Old API claim/status
@@ -79,12 +82,16 @@ reject the new `RESIZE_BOX` response enum. Disable admission before
 rollback and drain all resize jobs before restoring old API binaries or schema.
 Disabling admission still permits queries and joining an existing target.
 
+If the branch was already deployed, the pre-deploy backfill must cover every open
+`RESIZE_BOX` job, restore Box `cpu/mem` from `payload.previous` when the old
+admission wrote the target, and reconcile the usage period to the previous shape.
+
 If the Guest stops, the job retains its target and retries after the same Box
-restarts. Resize never creates a replacement VM or automatically restarts a
-workload. Operators can restore the existing Box through its owning Runner's
-authenticated `POST /boxes/:boxId/start` with the existing metadata. A permanently
-lost Runner/Box needs operational recovery; indefinite retries do not reconstruct
-its data, and target billing continues until the operation is resolved.
+restarts, up to the bounded attempt/deadline limit. Resize never creates a
+replacement VM or automatically restarts a workload. Operators can restore the
+existing Box through its owning Runner's authenticated `POST /boxes/:boxId/start`
+with the existing metadata. A permanently lost Runner/Box needs operational
+recovery; a terminal failure leaves the old size and billing in place.
 
 Validation: `make test:apps:api` includes PostgreSQL/Redis tests when `DB_*` and
 `REDIS_*` are configured. On the isolated local stack, build with

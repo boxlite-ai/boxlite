@@ -22,6 +22,7 @@ import { BoxResizeService } from '../../boxlite-rest/box-resize.service'
 import { Organization } from '../../organization/entities/organization.entity'
 import { BoxLookupCacheInvalidationService } from './box-lookup-cache-invalidation.service'
 import { boxLookupCacheKeyById } from '../utils/box-lookup-cache.util'
+import { RESIZE_MAX_DURATION_MINUTES } from './resize-resources'
 
 const databaseTests = process.env.DB_HOST && process.env.REDIS_HOST ? describe : describe.skip
 const schema = `resize_${process.pid}_${randomUUID().replaceAll('-', '')}`
@@ -63,7 +64,7 @@ databaseTests('Cloud resize jobs with Postgres and Redis', () => {
     // Exercise the shipped additive DDL against the pre-feature shape.
     await db.query('ALTER TABLE "box" DROP COLUMN "resizeJobId"')
     await db.query(
-      'ALTER TABLE "job" DROP COLUMN "resizePhase", DROP COLUMN "nextAttemptAt", DROP COLUMN "attempt", DROP COLUMN "claimToken", DROP COLUMN "leaseExpiresAt"',
+      'ALTER TABLE "job" DROP COLUMN "resizePhase", DROP COLUMN "nextAttemptAt", DROP COLUMN "resizeDeadlineAt", DROP COLUMN "attempt", DROP COLUMN "claimToken", DROP COLUMN "leaseExpiresAt"',
     )
     const runner = db.createQueryRunner()
     try {
@@ -80,7 +81,7 @@ databaseTests('Cloud resize jobs with Postgres and Redis', () => {
       {} as never,
       {} as never,
     )
-    leases = new ResizeJobService(db.getRepository(Job), cache)
+    leases = new ResizeJobService(db.getRepository(Job), usage, cache)
     jobs = new JobService(
       db.getRepository(Job),
       redis,
@@ -137,19 +138,17 @@ databaseTests('Cloud resize jobs with Postgres and Redis', () => {
       mem: 1,
     })
     await db.getRepository(Box).save(box)
-    await db
-      .getRepository(BoxUsagePeriod)
-      .save({
-        boxId: box.id,
-        organizationId: box.organizationId,
-        region: box.region,
-        cpu: 1,
-        mem: 1,
-        gpu: 0,
-        disk: box.disk,
-        startAt: new Date(Date.now() - 60_000),
-        endAt: null,
-      })
+    await db.getRepository(BoxUsagePeriod).save({
+      boxId: box.id,
+      organizationId: box.organizationId,
+      region: box.region,
+      cpu: 1,
+      mem: 1,
+      gpu: 0,
+      disk: box.disk,
+      startAt: new Date(Date.now() - 60_000),
+      endAt: null,
+    })
     job = new Job({
       type: JobType.RESIZE_BOX,
       runnerId,
@@ -157,14 +156,15 @@ databaseTests('Cloud resize jobs with Postgres and Redis', () => {
       resourceId: box.id,
       payload: JSON.stringify({ version: 1, cpus: 4, memory_mib: 2048, previous: { cpus: 1, memory_mib: 1024 } }),
     })
-    job.resizePhase = 'BILLING_PENDING'
+    job.resizePhase = 'APPLY'
+    job.nextAttemptAt = new Date()
+    job.resizeDeadlineAt = new Date(Date.now() + RESIZE_MAX_DURATION_MINUTES * 60_000)
     await db.getRepository(Job).insert(job)
-    await db.getRepository(Box).update(box.id, { cpu: 4, mem: 2, pending: true, resizeJobId: job.id })
+    await db.getRepository(Box).update(box.id, { pending: true, resizeJobId: job.id })
     organization = Object.assign(new Organization(), { id: box.organizationId, maxCpuPerBox: 16, maxMemoryPerBox: 8 })
   })
 
   const claim = () => leases.claim(runnerId, 10)
-  const activate = () => usage.activateResizeJob(job.id)
   const open = () => db.getRepository(BoxUsagePeriod).find({ where: { boxId: box.id, endAt: IsNull() } })
   const freshAdmission = async () => {
     await db.getRepository(Job).delete(job.id)
@@ -180,48 +180,74 @@ databaseTests('Cloud resize jobs with Postgres and Redis', () => {
     }
     throw new Error(`resize did not reach ${phase}`)
   }
+  const stopJob = () => jobs.createJob(null, JobType.STOP_BOX, runnerId, ResourceType.BOX, box.id)
 
-  it('admits a rounded immutable target before billing and reuses retries across API recovery', async () => {
+  it('admits a rounded immutable target without changing Box or billing, then commits both on completion', async () => {
     await freshAdmission()
-    await db.query('ALTER TABLE "box_usage_periods" ADD CONSTRAINT fail_billing CHECK (cpu <> 4)')
     const request = coordinator.resize(box.id, organization, { cpus: 4, memory_mib: 1537 })
-    try {
-      const accepted = await untilJob('BILLING_PENDING')
-      expect(accepted.getPayload()).toMatchObject({ version: 1, cpus: 4, memory_mib: 2048 })
-      expect(await db.getRepository(Box).findOneByOrFail({ id: box.id })).toMatchObject({
-        cpu: 4,
-        mem: 2,
-        pending: true,
-      })
-      expect(await open()).toEqual([expect.objectContaining({ cpu: 1, mem: 1 })])
-      expect(await claim()).toEqual([])
-      await expect(coordinator.resize(box.id, organization, { cpus: 8 })).rejects.toThrow('different resize')
-      await db.query('ALTER TABLE "box_usage_periods" DROP CONSTRAINT fail_billing')
-      // Startup scan, including a lost phase-B response, must be idempotent.
-      await db.query('UPDATE "job" SET "nextAttemptAt" = NULL WHERE id = $1', [accepted.id])
-      await coordinator.onApplicationBootstrap()
-      await coordinator.recoverBilling()
-      const repeat = coordinator.resize(box.id, organization, { cpus: 4, memory_mib: 1537 })
-      const [claimed] = await claim()
-      await leases.report(
-        accepted.id,
-        runnerId,
-        claimed.claimToken,
-        JobStatus.COMPLETED,
-        undefined,
-        JSON.stringify(target),
-      )
-      expect(await request).toEqual(target)
-      expect(await repeat).toEqual(target)
-      expect(await db.getRepository(Job).count()).toBe(1)
-      expect(await db.getRepository(BoxUsagePeriod).count()).toBe(2)
-      const idKey = boxLookupCacheKeyById({ id: box.id, organizationId: box.organizationId, returnDestroyed: false })
-      expect(removeCache.mock.calls.filter(([keys]) => keys.includes(idKey))).toHaveLength(2)
-    } finally {
-      await db.query('ALTER TABLE "box_usage_periods" DROP CONSTRAINT IF EXISTS fail_billing')
-      await request.catch(() => {})
-    }
+    const accepted = await untilJob('APPLY')
+    expect(accepted.getPayload()).toMatchObject({ version: 1, cpus: 4, memory_mib: 2048 })
+    expect(await db.getRepository(Box).findOneByOrFail({ id: box.id })).toMatchObject({
+      cpu: 1,
+      mem: 1,
+      pending: true,
+      resizeJobId: accepted.id,
+    })
+    expect(await open()).toEqual([expect.objectContaining({ cpu: 1, mem: 1 })])
+    await expect(coordinator.resize(box.id, organization, { cpus: 8 })).rejects.toThrow('different resize')
+    const [claimed] = await claim()
+    await leases.report(
+      accepted.id,
+      runnerId,
+      claimed.claimToken,
+      JobStatus.COMPLETED,
+      undefined,
+      JSON.stringify(target),
+    )
+    expect(await request).toEqual(target)
+    expect(await db.getRepository(Box).findOneByOrFail({ id: box.id })).toMatchObject({
+      cpu: 4,
+      mem: 2,
+      pending: false,
+      resizeJobId: null,
+    })
+    const periods = await db.getRepository(BoxUsagePeriod).find({ order: { startAt: 'ASC' } })
+    expect(periods).toHaveLength(2)
+    expect(periods[0]).toMatchObject({ cpu: 1, mem: 1 })
+    expect(periods[1]).toMatchObject({ cpu: 4, mem: 2, endAt: null })
+    expect(periods[0].endAt).toEqual(periods[1].startAt)
+    const idKey = boxLookupCacheKeyById({ id: box.id, organizationId: box.organizationId, returnDestroyed: false })
+    expect(removeCache.mock.calls.filter(([keys]) => keys.includes(idKey))).toHaveLength(2)
   }, 40_000)
+
+  it('reconciles a runtime already at target while the Box is still old', async () => {
+    await freshAdmission()
+    runtimeResources = { ...target }
+    const request = coordinator.resize(box.id, organization, { cpus: 4, memory_mib: 2048 })
+    const accepted = await untilJob('APPLY')
+    expect(await db.getRepository(Box).findOneByOrFail({ id: box.id })).toMatchObject({
+      cpu: 1,
+      mem: 1,
+      pending: true,
+    })
+    const [claimed] = await claim()
+    await leases.report(
+      accepted.id,
+      runnerId,
+      claimed.claimToken,
+      JobStatus.COMPLETED,
+      undefined,
+      JSON.stringify(target),
+    )
+    expect(await request).toEqual(target)
+    expect(await db.getRepository(Box).findOneByOrFail({ id: box.id })).toMatchObject({
+      cpu: 4,
+      mem: 2,
+      pending: false,
+      resizeJobId: null,
+    })
+    expect(await db.getRepository(BoxUsagePeriod).count()).toBe(2)
+  })
 
   it('queries actual allocation and rejects unauthorized, disabled, oversized or conflicting changes before writes', async () => {
     await freshAdmission()
@@ -242,43 +268,70 @@ databaseTests('Cloud resize jobs with Postgres and Redis', () => {
     expect(await open()).toEqual([expect.objectContaining({ cpu: 1, mem: 1 })])
   })
 
-  it('cannot claim before billing, then rolls over exactly once under concurrent activation', async () => {
-    expect(await claim()).toEqual([])
-    await Promise.allSettled([activate(), activate()])
-    await activate()
+  it('treats a duplicate completion as a no-op', async () => {
+    const [claimed] = await claim()
+    await leases.report(job.id, runnerId, claimed.claimToken, JobStatus.COMPLETED, undefined, JSON.stringify(target))
     const periods = await db.getRepository(BoxUsagePeriod).find({ order: { startAt: 'ASC' } })
-    expect(periods).toHaveLength(2)
-    expect(periods[0].cpu).toBe(1)
-    expect(periods[0].endAt).toEqual(periods[1].startAt)
-    expect(periods[1]).toMatchObject({ cpu: 4, mem: 2, endAt: null })
+    const openPeriods = await open()
+    const duplicate = await leases.report(
+      job.id,
+      runnerId,
+      claimed.claimToken,
+      JobStatus.COMPLETED,
+      undefined,
+      JSON.stringify(target),
+    )
+    expect(duplicate.status).toBe(JobStatus.COMPLETED)
+    expect(await db.getRepository(BoxUsagePeriod).count()).toBe(2)
+    expect((await db.getRepository(BoxUsagePeriod).find({ order: { startAt: 'ASC' } })).map((row) => row.id)).toEqual(
+      periods.map((row) => row.id),
+    )
+    expect(await open()).toEqual(openPeriods)
+  })
+
+  it('claims immediately and completes once under concurrent claims', async () => {
     const claims = (await Promise.all([claim(), claim()])).flat()
     expect(claims).toHaveLength(1)
     expect(claims[0].claimToken).toBeTruthy()
-  })
-
-  it('preserves accepted configuration when billing fails and recovers after service restart', async () => {
-    await db.query(`ALTER TABLE "box_usage_periods" ADD CONSTRAINT reject_new_resize_period CHECK (cpu <> 4)`)
-    try {
-      await expect(activate()).rejects.toThrow()
-    } finally {
-      await db.query('ALTER TABLE "box_usage_periods" DROP CONSTRAINT reject_new_resize_period')
-    }
-    expect(await open()).toEqual([expect.objectContaining({ cpu: 1, endAt: null })])
-    expect(await db.getRepository(Box).findOneByOrFail({ id: box.id })).toMatchObject({ cpu: 4, mem: 2, pending: true })
+    await leases.report(job.id, runnerId, claims[0].claimToken, JobStatus.COMPLETED, undefined, JSON.stringify(target))
     expect(await claim()).toEqual([])
-    const restarted = new UsageService(
-      db.getRepository(BoxUsagePeriod),
-      new RedisLockProvider(redis),
-      repository,
-      {} as never,
-      {} as never,
-    )
-    await restarted.activateResizeJob(job.id)
-    expect(await open()).toEqual([expect.objectContaining({ cpu: 4, mem: 2 })])
+    expect(await db.getRepository(BoxUsagePeriod).count()).toBe(2)
   })
 
-  it('requeues failure without rolling back target or closing the job', async () => {
-    await activate()
+  it('rolls back Box and Job when the usage close fails, then completes on retry', async () => {
+    await db.query(
+      `ALTER TABLE "box_usage_periods" ADD CONSTRAINT reject_resize_close CHECK ("boxId" <> '${box.id}' OR "endAt" IS NULL)`,
+    )
+    try {
+      const [claimed] = await claim()
+      await expect(
+        leases.report(job.id, runnerId, claimed.claimToken, JobStatus.COMPLETED, undefined, JSON.stringify(target)),
+      ).rejects.toThrow()
+      expect(await db.getRepository(Box).findOneByOrFail({ id: box.id })).toMatchObject({
+        cpu: 1,
+        mem: 1,
+        pending: true,
+        resizeJobId: job.id,
+      })
+      expect(await open()).toEqual([expect.objectContaining({ cpu: 1, mem: 1, endAt: null })])
+      expect(await db.getRepository(Job).findOneByOrFail({ id: job.id })).toMatchObject({
+        status: JobStatus.IN_PROGRESS,
+      })
+      await db.query('ALTER TABLE "box_usage_periods" DROP CONSTRAINT reject_resize_close')
+      await leases.report(job.id, runnerId, claimed.claimToken, JobStatus.COMPLETED, undefined, JSON.stringify(target))
+    } finally {
+      await db.query('ALTER TABLE "box_usage_periods" DROP CONSTRAINT IF EXISTS reject_resize_close')
+    }
+    expect(await db.getRepository(Box).findOneByOrFail({ id: box.id })).toMatchObject({
+      cpu: 4,
+      mem: 2,
+      pending: false,
+      resizeJobId: null,
+    })
+    expect(await db.getRepository(BoxUsagePeriod).count()).toBe(2)
+  })
+
+  it('requeues a failure below the bound without changing Box or billing', async () => {
     const [first] = await claim()
     await leases.report(job.id, runnerId, first.claimToken, JobStatus.FAILED, 'temporary guest failure')
     const stored = await db.getRepository(Job).findOneByOrFail({ id: job.id })
@@ -286,22 +339,40 @@ databaseTests('Cloud resize jobs with Postgres and Redis', () => {
     expect(stored.nextAttemptAt.getTime()).toBeGreaterThan(Date.now() - 1000)
     expect(await claim()).toEqual([])
     expect(await db.getRepository(Box).findOneByOrFail({ id: box.id })).toMatchObject({
-      cpu: 4,
-      mem: 2,
+      cpu: 1,
+      mem: 1,
       resizeJobId: job.id,
     })
-    expect(await open()).toEqual([expect.objectContaining({ cpu: 4, mem: 2 })])
+    expect(await open()).toEqual([expect.objectContaining({ cpu: 1, mem: 1 })])
+  })
+
+  it('terminalizes at the attempt bound and releases the lifecycle fence', async () => {
+    const [claimed] = await claim()
+    await db.query('UPDATE "job" SET "attempt" = $2 WHERE id = $1', [job.id, 10])
+    await leases.report(job.id, runnerId, claimed.claimToken, JobStatus.FAILED, 'permanent failure')
+    expect(await db.getRepository(Job).findOneByOrFail({ id: job.id })).toMatchObject({
+      status: JobStatus.FAILED,
+      completedAt: expect.any(Date),
+      claimToken: null,
+    })
+    expect(await db.getRepository(Box).findOneByOrFail({ id: box.id })).toMatchObject({
+      cpu: 1,
+      mem: 1,
+      pending: false,
+      resizeJobId: null,
+    })
+    expect(await open()).toEqual([expect.objectContaining({ cpu: 1, mem: 1 })])
+    await expect(stopJob()).resolves.toBeTruthy()
   })
 
   it('expires a lost lease, fences stale completion, and completes once after reclaim', async () => {
-    await activate()
     const [first] = await claim()
     await db.query(`UPDATE "job" SET "leaseExpiresAt" = statement_timestamp() - interval '1 second' WHERE id = $1`, [
       job.id,
     ])
-    await leases.recoverExpired()
+    await leases.reapResizeJobs()
     await db.query('UPDATE "job" SET "nextAttemptAt" = statement_timestamp() WHERE id = $1', [job.id])
-    const restarted = new ResizeJobService(db.getRepository(Job), cache)
+    const restarted = new ResizeJobService(db.getRepository(Job), usage, cache)
     const [second] = await restarted.claim(runnerId, 10)
     expect(second.claimToken).not.toBe(first.claimToken)
     await expect(
@@ -331,6 +402,84 @@ databaseTests('Cloud resize jobs with Postgres and Redis', () => {
     expect(await db.getRepository(BoxUsagePeriod).count()).toBe(2)
   })
 
+  it('terminalizes a PENDING job past its deadline and releases the fence', async () => {
+    await db.query(`UPDATE "job" SET "resizeDeadlineAt" = statement_timestamp() - interval '1 second' WHERE id = $1`, [
+      job.id,
+    ])
+    await leases.reapResizeJobs()
+    expect(await db.getRepository(Job).findOneByOrFail({ id: job.id })).toMatchObject({
+      status: JobStatus.FAILED,
+      completedAt: expect.any(Date),
+    })
+    expect(await db.getRepository(Box).findOneByOrFail({ id: box.id })).toMatchObject({
+      cpu: 1,
+      mem: 1,
+      pending: false,
+      resizeJobId: null,
+    })
+    expect(await open()).toEqual([expect.objectContaining({ cpu: 1, mem: 1 })])
+    await expect(stopJob()).resolves.toBeTruthy()
+  })
+
+  it('terminalizes an IN_PROGRESS job past the deadline plus grace and invalidates cache', async () => {
+    await claim()
+    await db.query(
+      `UPDATE "job" SET "resizeDeadlineAt" = statement_timestamp() - interval '3 minutes',
+       "leaseExpiresAt" = statement_timestamp() + interval '1 hour' WHERE id = $1`,
+      [job.id],
+    )
+    await leases.reapResizeJobs()
+    expect(await db.getRepository(Job).findOneByOrFail({ id: job.id })).toMatchObject({
+      status: JobStatus.FAILED,
+      completedAt: expect.any(Date),
+    })
+    expect(await db.getRepository(Box).findOneByOrFail({ id: box.id })).toMatchObject({
+      cpu: 1,
+      mem: 1,
+      pending: false,
+      resizeJobId: null,
+    })
+    expect(await open()).toEqual([expect.objectContaining({ cpu: 1, mem: 1 })])
+    const idKey = boxLookupCacheKeyById({ id: box.id, organizationId: box.organizationId, returnDestroyed: false })
+    expect(removeCache.mock.calls.filter(([keys]) => keys.includes(idKey))).toHaveLength(1)
+    await expect(stopJob()).resolves.toBeTruthy()
+  })
+
+  it('terminalizes an IN_PROGRESS job at the attempt bound when its lease is gone', async () => {
+    await claim()
+    await db.query(
+      `UPDATE "job" SET "attempt" = 10, "leaseExpiresAt" = statement_timestamp() - interval '3 minutes'
+       WHERE id = $1`,
+      [job.id],
+    )
+    await leases.reapResizeJobs()
+    expect(await db.getRepository(Job).findOneByOrFail({ id: job.id })).toMatchObject({
+      status: JobStatus.FAILED,
+      completedAt: expect.any(Date),
+    })
+    expect(await db.getRepository(Box).findOneByOrFail({ id: box.id })).toMatchObject({
+      cpu: 1,
+      mem: 1,
+      pending: false,
+      resizeJobId: null,
+    })
+    expect(await open()).toEqual([expect.objectContaining({ cpu: 1, mem: 1 })])
+    const idKey = boxLookupCacheKeyById({ id: box.id, organizationId: box.organizationId, returnDestroyed: false })
+    expect(removeCache.mock.calls.filter(([keys]) => keys.includes(idKey))).toHaveLength(1)
+    await expect(stopJob()).resolves.toBeTruthy()
+  })
+
+  it('rejects a late completion after terminal failure without writing Box or billing', async () => {
+    const [claimed] = await claim()
+    await db.query('UPDATE "job" SET "attempt" = $2 WHERE id = $1', [job.id, 10])
+    await leases.report(job.id, runnerId, claimed.claimToken, JobStatus.FAILED, 'permanent failure')
+    await expect(
+      leases.report(job.id, runnerId, claimed.claimToken, JobStatus.COMPLETED, undefined, JSON.stringify(target)),
+    ).rejects.toThrow('already failed')
+    expect(await db.getRepository(Box).findOneByOrFail({ id: box.id })).toMatchObject({ cpu: 1, mem: 1 })
+    expect(await db.getRepository(BoxUsagePeriod).count()).toBe(1)
+  })
+
   it('keeps the resize fence through unrelated repository writes', async () => {
     await repository.updateWhere(box.id, { whereCondition: {}, updateData: { labels: { test: 'updated' } } })
     expect(await db.getRepository(Box).findOneByOrFail({ id: box.id })).toMatchObject({
@@ -339,66 +488,30 @@ databaseTests('Cloud resize jobs with Postgres and Redis', () => {
     })
   })
 
-  it('rolls APPLY billing daily and does not let 100 billing-pending boxes starve other periods', async () => {
-    const older = new Date(Date.now() - 3 * 86_400_000)
-    const blocked = Array.from({ length: 100 }, () => {
-      const row = Object.assign(new Box('test'), {
-        organizationId: box.organizationId,
-        osUser: 'root',
-        runnerId,
-        state: BoxState.STARTED,
-        cpu: 4,
-        mem: 2,
-        pending: true,
-      })
-      const queued = new Job({
-        type: JobType.RESIZE_BOX,
-        runnerId,
-        resourceType: ResourceType.BOX,
-        resourceId: row.id,
-        payload: job.payload,
-      })
-      queued.resizePhase = 'BILLING_PENDING'
-      row.resizeJobId = queued.id
-      return { row, queued }
-    })
-    await db.getRepository(Box).save(blocked.map(({ row }) => row))
-    await db.getRepository(Job).save(blocked.map(({ queued }) => queued))
-    await db
-      .getRepository(BoxUsagePeriod)
-      .save(
-        blocked.map(({ row }) => ({
-          boxId: row.id,
-          organizationId: row.organizationId,
-          region: row.region,
-          cpu: 1,
-          mem: 1,
-          gpu: 0,
-          disk: row.disk,
-          startAt: older,
-          endAt: null,
-        })),
-      )
-    await activate()
-    const [active] = await open()
-    await db.getRepository(BoxUsagePeriod).update(active.id, { startAt: new Date(Date.now() - 2 * 86_400_000) })
+  it('rolls APPLY billing daily at the old shape', async () => {
+    await db.query(
+      'UPDATE "box_usage_periods" SET "startAt" = statement_timestamp() - interval \'2 days\' WHERE "boxId" = $1',
+      [box.id],
+    )
     await usage.closeAndReopenUsagePeriods()
-    expect(await open()).toEqual([expect.objectContaining({ cpu: 4, mem: 2, startAt: expect.any(Date) })])
-    expect((await open())[0].id).not.toBe(active.id)
-    expect(await db.getRepository(BoxUsagePeriod).count({ where: { endAt: IsNull() } })).toBe(101)
-    expect(await db.getRepository(Job).count({ where: { resizePhase: 'BILLING_PENDING' } })).toBe(100)
+    const periods = await db.getRepository(BoxUsagePeriod).find({ where: { boxId: box.id }, order: { startAt: 'ASC' } })
+    expect(periods).toHaveLength(2)
+    expect(periods[0].endAt).toEqual(periods[1].startAt)
+    expect(periods[1]).toMatchObject({ cpu: 1, mem: 1, endAt: null })
   })
 
   it('does not let a delayed STARTED event restore the pre-resize billing snapshot', async () => {
     const event = new BoxStateUpdatedEvent(box, BoxState.STARTING, BoxState.STARTED)
-    await activate()
     const [claimed] = await claim()
     await leases.report(job.id, runnerId, claimed.claimToken, JobStatus.COMPLETED, undefined, JSON.stringify(target))
     await usage.handleBoxStateUpdate(event)
     expect(await open()).toEqual([expect.objectContaining({ cpu: 4, mem: 2 })])
   })
 
-  it('keeps old lifecycle claiming and failure semantics while hiding unready resize jobs', async () => {
+  it('keeps old lifecycle claiming and failure semantics while a resize job is not due', async () => {
+    await db.query('UPDATE "job" SET "nextAttemptAt" = statement_timestamp() + interval \'1 hour\' WHERE id = $1', [
+      job.id,
+    ])
     const ordinary = new Job({
       type: JobType.START_BOX,
       runnerId,
