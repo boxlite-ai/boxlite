@@ -371,6 +371,9 @@ caller's context to the shared service. API-key tests should exercise generated 
 and keeping key material out of events. Ordinary heartbeats must update activity without
 writing a preview cooldown or emitting `box.open`.
 
+Include administrator and member principals in HTTP tests of the shared request decorator.
+With authentication guards stubbed, these tests establish caller attribution, not access policy.
+
 Run `make coverage:api` from the repository root to include these paths in the API LCOV
 report at `target/coverage/api/lcov.info`. The patch coverage requirement remains 90%; a
 passing test suite alone does not establish coverage of these caller boundaries.
