@@ -39,6 +39,8 @@ case in this suite is using the same fixtures and the same path.
 
 `make test:e2e:setup` owns an isolated stack: dependency containers, current-source clients, API/Runner/proxies, fixtures and a real guest smoke. State lives in `target/e2e/`; no sudo or system services are used.
 
+Initialize submodules once (`git submodule update --init --recursive`, or `make setup`), then:
+
 ```bash
 nix develop -c make test:e2e:doctor
 nix develop -c make test:e2e:setup
