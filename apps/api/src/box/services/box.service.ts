@@ -61,7 +61,7 @@ import {
 } from '../dto/list-boxes-query.dto'
 import { createRangeFilter } from '../../common/utils/range-filter'
 import { recordBoxRequested, recordWarmPoolClaim } from '../utils/box-business-event.util'
-import { recordBusinessEvent } from '../../common/utils/business-event.util'
+import { mutationFailureType, recordBusinessEvent } from '../../common/utils/business-event.util'
 import { Context } from '../../common/context/context'
 import { PlatformReason } from '../../common/context/platform-reason.enum'
 import { LogExecution } from '../../common/decorators/log-execution.decorator'
@@ -1082,18 +1082,25 @@ export class BoxService {
   async updateLastActivityAt(boxId: string, lastActivityAt: Date, previewOpen = false): Promise<void> {
     await this.boxActivityService.updateLastActivityAt(boxId, lastActivityAt)
     if (!previewOpen) return
+    let operation = 'deduplicate'
     try {
       // Shared across proxy/API replicas; a failed Redis call suppresses telemetry.
       if ((await this.redis.set(`box:preview-open:${boxId}`, '1', 'EX', 60, 'NX')) !== 'OK') return
+      operation = 'load_box'
       const box = await this.findOne(boxId)
+      operation = 'record_event'
       recordBusinessEvent({
         name: 'box.open',
         outcome: 'success',
         correlationId: box.id,
         organizationId: box.organizationId,
       })
-    } catch {
-      this.logger.warn('Preview activity observation could not be recorded')
+    } catch (error) {
+      this.logger.warn('Preview activity observation could not be recorded', {
+        boxId,
+        operation,
+        errorType: mutationFailureType(error),
+      })
     }
   }
 
