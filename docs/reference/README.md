@@ -74,9 +74,8 @@ stderr without a TTY, or on merged stdout with a TTY, through the normal
 execution streams instead of a nested internal error or HTTP 500. This applies
 to local and REST `exec` executions with either executor; other nonzero
 process exit codes are unchanged. `126` and `127` are the only new special
-cases and are not reserved: a command that started can also exit with them, so
-the diagnostic names the command. `125` remains a normal command exit, not
-Docker's engine-error code.
+cases; see the [CLI exit-code table](cli/README.md#exit-codes) for their overlap
+with real command exits.
 Rejection of the box's init command during `start()` remains an error, so
 `boxlite run` prints an error and exits `1`. See
 [execution error handling](errors.md#executionstring).

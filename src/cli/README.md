@@ -541,8 +541,9 @@ the box's init command during `run` remains a CLI error with exit code `1`.
 
 `126`/`127` are the only new special cases added here (POL-55). They are not
 reserved: a command that started can also exit `126`/`127`, so use the
-diagnostic, which names the command, rather than the code alone. `125` is a
-normal command exit in BoxLite, not Docker's engine-error code.
+diagnostic rather than the code alone. See the
+[CLI exit-code table](../../docs/reference/cli/README.md#exit-codes) for the
+full map.
 
 ### `boxlite list` (alias: `ls`, `ps`)
 
