@@ -33,6 +33,33 @@ describe('Box entity destroy invariant', () => {
   })
 })
 
+describe('Box start event intent', () => {
+  it('defaults new boxes to no start intent and keeps the marker internal', () => {
+    const box = new Box('us')
+    expect(box).toHaveProperty('startEventPending', false)
+    expect(JSON.parse(JSON.stringify(box))).not.toHaveProperty('startEventPending')
+  })
+  it.each([BoxState.STOPPED, BoxState.UNKNOWN, BoxState.CREATING, BoxState.STARTING])(
+    'preserves a start intent while reconciling %s',
+    (state) => {
+      const box = Object.assign(new Box('us'), { state, startEventPending: true })
+      expect(box.enforceInvariants()).not.toHaveProperty('startEventPending')
+      expect(box.startEventPending).toBe(true)
+    },
+  )
+
+  it.each([BoxState.STARTED, BoxState.ERROR])('clears the intent with terminal %s persistence', (state) => {
+    const box = Object.assign(new Box('us'), { state, startEventPending: true })
+    expect(box.enforceInvariants()).toHaveProperty('startEventPending', false)
+    expect(box.startEventPending).toBe(false)
+  })
+
+  it.each([BoxDesiredState.STOPPED, BoxDesiredState.DESTROYED])('clears a superseded start: %s', (desiredState) => {
+    const box = Object.assign(new Box('us'), { desiredState, startEventPending: true })
+    expect(box.enforceInvariants()).toHaveProperty('startEventPending', false)
+  })
+})
+
 describe('Box entity secret redaction', () => {
   it('omits the secrets field from JSON.stringify output', () => {
     const box = new Box('us', 'secret-box')

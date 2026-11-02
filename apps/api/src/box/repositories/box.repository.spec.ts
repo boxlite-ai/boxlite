@@ -45,7 +45,7 @@ function makeRepository(execute: jest.Mock) {
   // invalidateLookupCacheOnUpdate touches the real cache service; stub it out —
   // it is incidental to the lock-timeout behavior under test.
   jest.spyOn(repo as any, 'invalidateLookupCacheOnUpdate').mockImplementation(() => undefined)
-  return { repo, query, execute, create, findOne }
+  return { repo, query, execute, create, findOne, queryBuilder }
 }
 
 describe('BoxRepository.updateWhere', () => {
@@ -93,11 +93,12 @@ const startedRow = {
 describe('BoxRepository.conditionalStartForProxy', () => {
   it('bounds the row-lock wait with a lock_timeout before the UPDATE', async () => {
     const execute = jest.fn().mockResolvedValue({ raw: [startedRow] })
-    const { repo, query, create } = makeRepository(execute)
+    const { repo, query, create, queryBuilder } = makeRepository(execute)
 
     const updated = await repo.conditionalStartForProxy('box-1', 'org-1')
 
     expect(updated).toEqual(startedRow)
+    expect(queryBuilder.set).toHaveBeenCalledWith(expect.objectContaining({ startEventPending: true }))
     // The RETURNING * row is a plain pg object; the repo must hydrate it into a
     // Box entity, not leak a raw row through the Promise<Box> contract.
     expect(create).toHaveBeenCalledWith(Box, startedRow)
@@ -134,5 +135,45 @@ describe('BoxRepository.conditionalStartForProxy', () => {
     const { repo } = makeRepository(execute)
 
     await expect(repo.conditionalStartForProxy('box-1', 'org-1')).resolves.toBeNull()
+  })
+})
+
+describe('BoxRepository start intent persistence', () => {
+  it.each(['update', 'updateWhere'] as const)('clears the marker in the terminal %s statement', async (method) => {
+    const box = Object.assign(new Box('us'), {
+      state: BoxState.STARTING,
+      desiredState: BoxDesiredState.STARTED,
+      startEventPending: true,
+      pending: true,
+    })
+    const update = jest.fn(async () => ({ affected: 1 }))
+    const entityManager = { update, findOne: jest.fn(async () => box) }
+    const manager = { transaction: jest.fn(async (callback) => callback(entityManager)) }
+    const repo = new BoxRepository(
+      { getRepository: () => ({ manager }), transaction: manager.transaction } as any,
+      {} as any,
+      {} as any,
+    )
+    for (const hook of [
+      'upsertLastActivity',
+      'emitUpdateEvents',
+      'invalidateLookupCacheOnUpdate',
+      'recordOrganizationActivity',
+    ]) {
+      jest.spyOn(repo as any, hook).mockImplementation(async () => undefined)
+    }
+    if (method === 'update') {
+      await repo.update(box.id, { updateData: { state: BoxState.STARTED }, entity: box })
+    } else {
+      await repo.updateWhere(box.id, { updateData: { state: BoxState.STARTED }, whereCondition: {} })
+    }
+    expect(update).toHaveBeenCalledWith(
+      Box,
+      expect.anything(),
+      expect.objectContaining({
+        state: BoxState.STARTED,
+        startEventPending: false,
+      }),
+    )
   })
 })

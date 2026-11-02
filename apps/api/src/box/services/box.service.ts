@@ -929,6 +929,7 @@ export class BoxService {
     const updateData: Partial<Box> = {
       pending: true,
       desiredState: BoxDesiredState.STARTED,
+      startEventPending: true,
       authToken: nanoid(32).toLocaleLowerCase(),
     }
 

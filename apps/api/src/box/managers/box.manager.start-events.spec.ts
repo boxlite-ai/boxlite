@@ -6,6 +6,7 @@ import { BoxDesiredState } from '../enums/box-desired-state.enum'
 import { RunnerState } from '../enums/runner-state.enum'
 import { BoxConflictError } from '../errors/box-conflict.error'
 import { JobConflictError } from '../errors/job-conflict.error'
+import { Box } from '../entities/box.entity'
 
 describe('Legacy start terminal events', () => {
   let events: Array<Record<string, string>>
@@ -21,7 +22,7 @@ describe('Legacy start terminal events', () => {
   afterEach(() => jest.restoreAllMocks())
 
   function harness(version = '0', state = BoxState.STOPPED, reported = BoxState.STARTED) {
-    const box = {
+    const box = Object.assign(new Box('us'), {
       id: 'box-1',
       organizationId: 'org-1',
       runnerId: 'runner-1',
@@ -30,7 +31,7 @@ describe('Legacy start terminal events', () => {
       pending: true,
       image: 'alpine',
       authToken: 'synthetic-token',
-    }
+    })
     let lockCode: unknown
     const locks = {
       lock: jest.fn(async (_key, _ttl, code) => {
@@ -46,18 +47,24 @@ describe('Legacy start terminal events', () => {
       update: jest.fn(async (_id, options) => {
         writes.push(options.updateData.state)
         Object.assign(options.entity, options.updateData)
+        options.entity.enforceInvariants()
         return box
       }),
       updateWhere: jest.fn(async (_id, options) => {
         writes.push(options.updateData.state)
         Object.assign(box, options.updateData)
+        box.enforceInvariants()
       }),
     }
     const runners = {
       findOneOrFail: jest.fn(async () => ({ id: box.runnerId, apiVersion: version, state: RunnerState.READY })),
       getRunnerApiVersion: jest.fn(async () => version),
     }
-    const adapter = { startBox: jest.fn(async () => undefined), boxInfo: jest.fn(async () => ({ state: reported })) }
+    const adapter = {
+      startBox: jest.fn(async () => undefined),
+      createBox: jest.fn(async () => undefined),
+      boxInfo: jest.fn(async () => ({ state: reported })),
+    }
     const activity = { getLastActivityAt: jest.fn(async () => new Date(Date.now() - 60 * 60 * 1000)) }
     const action = new BoxStartAction(
       runners as never,
@@ -67,7 +74,7 @@ describe('Legacy start terminal events', () => {
       {} as never,
       locks as never,
       activity as never,
-      {} as never,
+      { refFor: async (_runner, image) => image } as never,
     )
     const manager = new BoxManager(
       repository as never,
@@ -106,6 +113,41 @@ describe('Legacy start terminal events', () => {
     expect(events).toHaveLength(1)
   })
 
+  it('retains an existing start through runner instance loss and recreation', async () => {
+    const { manager, box, adapter, writes } = harness('0', BoxState.STARTING)
+    adapter.boxInfo.mockResolvedValueOnce({ state: BoxState.UNKNOWN })
+    await manager.syncInstanceState(box.id)
+    expect(adapter.createBox).toHaveBeenCalledTimes(1)
+    expect(writes).toEqual([BoxState.UNKNOWN, BoxState.CREATING, BoxState.STARTED])
+    expect(events).toEqual([expect.objectContaining({ 'event.outcome': 'success' })])
+  })
+
+  it.each([BoxState.STARTED, BoxState.ERROR])('retains a start across sync invocations until %s', async (reported) => {
+    jest.useFakeTimers()
+    try {
+      const { manager, box, adapter } = harness('0', BoxState.STARTING, reported)
+      Object.assign(box, { startEventPending: true })
+      adapter.boxInfo.mockResolvedValueOnce({ state: BoxState.UNKNOWN })
+      adapter.createBox.mockImplementationOnce(async () => {
+        jest.advanceTimersByTime(10_001)
+      })
+      await manager.syncInstanceState(box.id)
+      expect(box.state).toBe(BoxState.CREATING)
+      expect(events).toEqual([])
+      await manager.syncInstanceState(box.id)
+      expect(events).toEqual([
+        expect.objectContaining({
+          'event.outcome': reported === BoxState.STARTED ? 'success' : 'exception',
+        }),
+      ])
+      expect(box).toHaveProperty('startEventPending', false)
+      await manager.syncInstanceState(box.id)
+      expect(events).toHaveLength(1)
+    } finally {
+      jest.useRealTimers()
+    }
+  })
+
   it('records the manager catch outcome after persisting ERROR without leaking the runner error', async () => {
     const { manager, box, repository, adapter } = harness()
     adapter.startBox.mockRejectedValue(new Error('private-runner-secret'))
@@ -123,19 +165,23 @@ describe('Legacy start terminal events', () => {
 
   it.each([false, true])('leaves v2 terminal outcomes to its job handler: failure=%s', async (failure) => {
     const { manager, box, adapter } = harness('2', BoxState.STARTING)
+    Object.assign(box, { startEventPending: true })
     if (failure) adapter.boxInfo.mockRejectedValue(new Error('runner-failure'))
     await manager.syncInstanceState(box.id)
     expect(events).toEqual([])
+    expect(box).toHaveProperty('startEventPending', false)
   })
 
   it.each([BoxConflictError, JobConflictError])(
     'does not turn a skipped conflict into a failed start: %p',
     async (ErrorType) => {
       const { manager, box, adapter, repository } = harness()
+      Object.assign(box, { startEventPending: true })
       adapter.startBox.mockRejectedValue(new ErrorType())
       await manager.syncInstanceState(box.id)
       expect(repository.updateWhere).not.toHaveBeenCalled()
       expect(events).toEqual([])
+      expect(box).toHaveProperty('startEventPending', true)
     },
   )
 
