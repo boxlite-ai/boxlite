@@ -4,16 +4,9 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { Region } from '@boxlite-ai/api-client'
 import { createContext } from 'react'
 
 export interface IRegionsContext {
-  sharedRegions: Region[]
-  loadingSharedRegions: boolean
-  availableRegions: Region[]
-  loadingAvailableRegions: boolean
-  customRegions: Region[]
-  refreshAvailableRegions: () => Promise<Region[]>
   getRegionName: (regionId: string) => string | undefined
 }
 

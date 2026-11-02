@@ -3,6 +3,13 @@
 The web console at `app.boxlite.ai`. A Vite + React app, built and tested
 through Nx as the `dashboard` project.
 
+## Region names
+
+The console resolves shared-region names through `GET /api/shared-regions`.
+An unknown region keeps its stored ID as the display fallback. Region names do
+not depend on the selected organization, so switching organizations does not
+refetch this list.
+
 ## Commands
 
 Run these from `apps/`:

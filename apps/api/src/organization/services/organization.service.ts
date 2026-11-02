@@ -45,7 +45,6 @@ import { WithInstrumentation } from '../../common/decorators/otel.decorator'
 import { RegionService } from '../../region/services/region.service'
 import { Region } from '../../region/entities/region.entity'
 import { RegionType } from '../../region/enums/region-type.enum'
-import { RegionDto } from '../../region/dto/region.dto'
 import { EncryptionService } from '../../encryption/encryption.service'
 import { OtelConfigDto } from '../dto/otel-config.dto'
 import { boxLookupCacheKeyByAuthToken } from '../../box/utils/box-lookup-cache.util'
@@ -75,8 +74,6 @@ export class OrganizationService implements OnModuleInit, TrackableJobExecutions
     private readonly eventEmitter: EventEmitter2,
     private readonly configService: TypedConfigService,
     private readonly redisLockProvider: RedisLockProvider,
-    @InjectRepository(Region)
-    private readonly regionRepository: Repository<Region>,
     private readonly regionService: RegionService,
     private readonly encryptionService: EncryptionService,
   ) {
@@ -242,46 +239,6 @@ export class OrganizationService implements OnModuleInit, TrackableJobExecutions
     organization.name = trimmedName
 
     return this.organizationRepository.save(organization)
-  }
-
-  /**
-   * Lists all available regions for the organization.
-   *
-   * A region is available for the organization if either:
-   * - It is directly associated with the organization, or
-   * - It is not associated with any organization, but the organization has quotas allocated for the region or quotas are not enforced for the region
-   *
-   * @param organizationId - The organization ID.
-   * @returns The available regions
-   */
-  async listAvailableRegions(organizationId: string): Promise<RegionDto[]> {
-    const regions = await this.regionRepository
-      .createQueryBuilder('region')
-      .where('region."regionType" = :customRegionType AND region."organizationId" = :organizationId', {
-        customRegionType: RegionType.CUSTOM,
-        organizationId,
-      })
-      .orWhere('region."regionType" IN (:...otherRegionTypes) AND region."enforceQuotas" = false', {
-        otherRegionTypes: [RegionType.DEDICATED, RegionType.SHARED],
-      })
-      .orWhere(
-        'region."regionType" IN (:...otherRegionTypes) AND region."enforceQuotas" = true AND EXISTS (SELECT 1 FROM region_quota rq WHERE rq."regionId" = region."id" AND rq."organizationId" = :organizationId)',
-        {
-          otherRegionTypes: [RegionType.DEDICATED, RegionType.SHARED],
-          organizationId,
-        },
-      )
-      .orderBy(
-        `CASE region."regionType"
-          WHEN '${RegionType.CUSTOM}' THEN 1
-          WHEN '${RegionType.DEDICATED}' THEN 2
-          WHEN '${RegionType.SHARED}' THEN 3
-          ELSE 4
-        END`,
-      )
-      .getMany()
-
-    return regions.map(RegionDto.fromRegion)
   }
 
   async suspend(

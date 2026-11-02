@@ -46,7 +46,6 @@ describeIfDatabase('OrganizationService.getReferralCode (integration, real Postg
       {} as any,
       {} as any,
       {} as any,
-      {} as any,
     )
   })
 

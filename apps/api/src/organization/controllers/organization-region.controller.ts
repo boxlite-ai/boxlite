@@ -22,7 +22,6 @@ import { ApiOAuth2, ApiResponse, ApiOperation, ApiTags, ApiBearerAuth, ApiParam,
 import { RequiredOrganizationResourcePermissions } from '../decorators/required-organization-resource-permissions.decorator'
 import { OrganizationResourcePermission } from '../enums/organization-resource-permission.enum'
 import { OrganizationResourceActionGuard } from '../guards/organization-resource-action.guard'
-import { OrganizationService } from '../services/organization.service'
 import { Audit, TypedRequest } from '../../audit/decorators/audit.decorator'
 import { AuditAction } from '../../audit/enums/audit-action.enum'
 import { AuditTarget } from '../../audit/enums/audit-target.enum'
@@ -50,25 +49,7 @@ import { UpdateRegionDto } from '../../region/dto/update-region.dto'
 export class OrganizationRegionController {
   private readonly logger = new Logger(OrganizationRegionController.name)
 
-  constructor(
-    private readonly regionService: RegionService,
-    private readonly organizationService: OrganizationService,
-  ) {}
-
-  @Get()
-  @HttpCode(200)
-  @ApiOperation({
-    summary: 'List all available regions for the organization',
-    operationId: 'listAvailableRegions',
-  })
-  @ApiResponse({
-    status: 200,
-    description: 'List of all available regions',
-    type: [RegionDto],
-  })
-  async listAvailableRegions(@AuthContext() authContext: OrganizationAuthContext): Promise<RegionDto[]> {
-    return this.organizationService.listAvailableRegions(authContext.organizationId)
-  }
+  constructor(private readonly regionService: RegionService) {}
 
   @Post()
   @HttpCode(201)

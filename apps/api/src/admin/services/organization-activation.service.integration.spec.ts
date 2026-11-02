@@ -115,7 +115,6 @@ describeIfDatabase('AdminOrganizationActivationService (real PostgreSQL, applica
       {} as never,
       {} as never,
       {} as never,
-      {} as never,
     )
     service = new AdminOrganizationActivationService(dataSource)
   }, 30000)

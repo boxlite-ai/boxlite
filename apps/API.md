@@ -170,7 +170,7 @@ organization boundaries.
 </details>
 
 <details>
-<summary><b>Roles and regions</b> · 11 routes</summary>
+<summary><b>Roles and regions</b> · 10 routes</summary>
 
 | Method   | Path                                                 | What it does                                 |
 | -------- | ---------------------------------------------------- | -------------------------------------------- |
@@ -178,7 +178,6 @@ organization boundaries.
 | `POST`   | `/api/organizations/{organizationId}/roles`          | Creates an organization role.                |
 | `PUT`    | `/api/organizations/{organizationId}/roles/{roleId}` | Updates an organization role.                |
 | `DELETE` | `/api/organizations/{organizationId}/roles/{roleId}` | Deletes an organization role.                |
-| `GET`    | `/api/regions`                                       | Lists regions available to the organization. |
 | `POST`   | `/api/regions`                                       | Creates a region.                            |
 | `GET`    | `/api/regions/{id}`                                  | Gets a region by ID.                         |
 | `PATCH`  | `/api/regions/{id}`                                  | Updates a region's configuration.            |
