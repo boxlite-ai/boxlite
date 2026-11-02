@@ -44,6 +44,33 @@ fn test_exec_auto_starts_box() {
 }
 
 #[test]
+fn test_command_rejection_returns_posix_exit_status() {
+    let mut ctx = common::boxlite();
+    ctx.cmd.args(["run", "-d", "alpine:latest", "sleep", "300"]);
+    let output = ctx.cmd.assert().success().get_output().clone();
+    let box_id = String::from_utf8_lossy(&output.stdout).trim().to_string();
+
+    for program in ["this-binary-does-not-exist-2026", "/does/not/exist-2026"] {
+        ctx.new_cmd()
+            .args(["exec", &box_id, "--", program])
+            .assert()
+            .code(127)
+            .stderr(predicate::str::contains(program))
+            .stderr(predicate::str::contains("internal error").not());
+    }
+    ctx.new_cmd()
+        .args(["exec", &box_id, "--", "/etc/passwd"])
+        .assert()
+        .code(126);
+    ctx.new_cmd()
+        .args(["exec", &box_id, "--", "sh", "-c", "exit 23"])
+        .assert()
+        .code(23);
+
+    cleanup(&ctx, &box_id);
+}
+
+#[test]
 fn test_exec_not_found() {
     let mut ctx = common::boxlite();
     ctx.cmd

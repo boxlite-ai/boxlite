@@ -66,6 +66,19 @@ runner, preview proxy, telemetry collector — catalogued separately in
 [`apps/API.md`](../../apps/API.md). Those are deployment internals, not part of
 the portable contract above.
 
+### Unreleased: exec command rejections
+
+For `exec`, missing executables now complete with exit status `127`;
+non-executable files complete with `126`. The guest diagnostic arrives on
+stderr without a TTY, or on merged stdout with a TTY, through the normal
+execution streams instead of a nested internal error or HTTP 500. This applies
+to local and REST `exec` executions with either executor; other nonzero
+process exit codes are unchanged. `126` and `127` are the special cases for an
+`exec` startup refusal; every other value keeps its usual meaning.
+Rejection of the box's init command during `start()` remains an error, so
+`boxlite run` prints an error and exits `1`. See
+[execution error handling](errors.md#executionstring).
+
 ### Image API migration (breaking change)
 
 The image catalog replaces the old pull and digest-ID image operations. Regenerate
