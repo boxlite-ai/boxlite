@@ -40,6 +40,24 @@ async function intercept(user: unknown, set: jest.Mock): Promise<unknown> {
 }
 
 describe('OrganizationActivityInterceptor', () => {
+  it('keeps Redis error details out of its warning while allowing the response', async () => {
+    const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined)
+    await expect(intercept(member, jest.fn().mockRejectedValue(new Error('private-redis-secret')))).resolves.toBe(
+      'response',
+    )
+    expect(warn).toHaveBeenCalled()
+    expect(JSON.stringify(warn.mock.calls)).not.toContain('private-redis-secret')
+  })
+
+  it('does not wait for a Redis write that never settles', async () => {
+    await expect(
+      intercept(
+        member,
+        jest.fn(() => new Promise(() => undefined)),
+      ),
+    ).resolves.toBe('response')
+    expect(recordBusinessEvent).not.toHaveBeenCalled()
+  })
   beforeEach(() => {
     jest.mocked(recordBusinessEvent).mockClear()
     jest.useFakeTimers({ doNotFake: ['setImmediate'] }).setSystemTime(new Date('2026-10-23T23:30:00.000Z'))

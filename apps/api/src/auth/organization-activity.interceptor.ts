@@ -62,8 +62,13 @@ export class OrganizationActivityInterceptor implements NestInterceptor {
       if (first !== 'OK') {
         return
       }
-    } catch (error) {
-      this.logger.warn(`Could not record organization activity for user ${actor.userId}: ${error}`)
+    } catch {
+      this.logger.warn('Could not record organization activity', {
+        userId: actor.userId,
+        organizationId: membership.organizationId,
+        operation: 'deduplicate',
+        errorType: 'redis_error',
+      })
       return
     }
     recordBusinessEvent({

@@ -536,11 +536,18 @@ export class BoxliteProxyController {
     const finish = (exceptionType?: string) => {
       if (recorded) return
       recorded = true
+      res.off('finish', onFinish)
+      res.off('close', onClose)
       if (exceptionType) recordBusinessEvent({ ...event, outcome: 'exception', exceptionType })
       else recordBusinessEvent({ ...event, outcome: 'success' })
     }
-    res.once('finish', () => finish(res.statusCode >= 400 ? `http_${res.statusCode}` : undefined))
-    res.once('close', () => finish('client_closed'))
+    const onFinish = () => finish(res.statusCode >= 400 ? `http_${res.statusCode}` : undefined)
+    const onClose = () => finish('client_closed')
+    res.once('finish', onFinish)
+    res.once('close', onClose)
+    // The asynchronous box lookup may have outlived the response's terminal event.
+    if (res.writableFinished) onFinish()
+    else if (res.destroyed || res.closed) onClose()
   }
 
   private startActivityHeartbeat(boxId: string, autoStopSeconds: number): () => void {
