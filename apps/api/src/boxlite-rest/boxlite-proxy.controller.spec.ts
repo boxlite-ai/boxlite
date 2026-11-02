@@ -13,6 +13,7 @@ import { BoxliteProxyController } from './boxlite-proxy.controller'
 import { Context } from '../common/context/context'
 import { RequiredOrganizationResourcePermissions } from '../organization/decorators/required-organization-resource-permissions.decorator'
 import { OrganizationResourcePermission } from '../organization/enums/organization-resource-permission.enum'
+import { SystemRole } from '../user/enums/system-role.enum'
 
 jest.mock('http-proxy-middleware', () => ({
   createProxyMiddleware: jest.fn(),
@@ -579,6 +580,41 @@ describe('BoxliteProxyController business events', () => {
     res.emit('finish')
 
     expect(events[1]).toEqual(['box.exec exception', expect.objectContaining({ 'exception.type': 'http_502' })])
+  })
+
+  it.each(
+    [SystemRole.ADMIN, SystemRole.USER].flatMap((role) =>
+      ['exec', 'file_upload'].flatMap((operation) => [200, 502].map((status) => [role, operation, status] as const)),
+    ),
+  )('preserves %s identity for proxied %s status %s', async (role, operation, status) => {
+    const { controller } = harness()
+    const userId = role === SystemRole.ADMIN ? 'admin-1' : 'user-1'
+    const auth = { ...activeAuth, ...caller, userId, role }
+    const req = { method: operation === 'exec' ? 'POST' : 'PUT', url: '/operation', user: auth, get: () => undefined }
+    const res = response()
+    if (operation === 'exec') {
+      await controller.proxyExec(auth as never, 'public-box', req as never, res as never, jest.fn())
+    } else {
+      await controller.proxyFiles(auth as never, 'public-box', req as never, res as never, jest.fn())
+    }
+    res.statusCode = status
+    res.emit('finish')
+    res.emit('close')
+    expect(events.map(([message]) => message)).toEqual([
+      `box.${operation} requested`,
+      `box.${operation} ${status < 400 ? 'success' : 'exception'}`,
+    ])
+    for (const [, attributes] of events) {
+      expect(attributes).toEqual(
+        expect.objectContaining({
+          'actor.kind': role,
+          'user.id': userId,
+          'auth.method': 'api_key',
+          'organization.id': 'org-1',
+          'correlation.id': 'box-uuid',
+        }),
+      )
+    }
   })
 
   it.each(['closed', 'finished'])('accounts for a response already %s during the box lookup', async (state) => {
