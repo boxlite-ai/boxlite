@@ -643,7 +643,9 @@ reports the Runner's actual allocation.
 
 `ResizeJobService` uses database time, row locks, claim tokens and a durable
 deadline. It requeues expired leases every 15 seconds and retries failures with
-jittered 1–60 second backoff. Completion validates the exact observed target and,
+jittered 1–60 second backoff. Lease requeue skips rows locked by another
+transaction, and each terminalization bounds its row-lock wait, so one contended
+Box cannot stall unrelated cleanup. Completion validates the exact observed target and,
 in one transaction, updates Box `cpu/mem`, clears the fence, calls the existing
 `closeUsagePeriod` and `openUsagePeriodFor`, and marks the job `COMPLETED`. A
 resize that reaches 10 attempts or its 30-minute deadline, including an unclaimed

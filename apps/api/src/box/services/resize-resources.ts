@@ -22,6 +22,8 @@ export const RESIZE_MAX_ATTEMPTS = 10
 export const RESIZE_MAX_DURATION_MINUTES = 30
 export const RESIZE_TERMINAL_GRACE_MS = 2 * 60 * 1000
 export const RESIZE_LEASE_MS = 120_000
+/** Bound row-lock waits so one contended Box/Job cannot stall the reaper. */
+export const RESIZE_LOCK_TIMEOUT_MS = 5_000
 
 export function validResources(value: unknown): value is BoxResources {
   if (!value || typeof value !== 'object') return false

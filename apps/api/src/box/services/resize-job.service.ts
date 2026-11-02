@@ -8,6 +8,7 @@ import { Job } from '../entities/job.entity'
 import { JobDto, JobStatus, JobType } from '../dto/job.dto'
 import {
   RESIZE_LEASE_MS,
+  RESIZE_LOCK_TIMEOUT_MS,
   RESIZE_MAX_ATTEMPTS,
   RESIZE_TERMINAL_GRACE_MS,
   ResizePayload,
@@ -264,7 +265,7 @@ export class ResizeJobService implements OnApplicationBootstrap {
     await this.reapResizeJobs()
   }
 
-  @Cron('*/15 * * * * *', { name: 'reap-resize-jobs' })
+  @Cron('*/15 * * * * *', { name: 'reap-resize-jobs', waitForCompletion: true })
   async reapResizeJobs(): Promise<void> {
     await this.requeueExpiredLeases()
     await this.failExhaustedJobs()
@@ -272,22 +273,31 @@ export class ResizeJobService implements OnApplicationBootstrap {
 
   private async requeueExpiredLeases(): Promise<void> {
     try {
-      const result = await this.jobs
-        .createQueryBuilder()
-        .update(Job)
-        .set({
-          status: JobStatus.PENDING,
-          claimToken: null,
-          leaseExpiresAt: null,
-          errorMessage: 'Resize lease expired; retrying the persisted target',
-          nextAttemptAt: () => "statement_timestamp() + ((1 + floor(random() * 5))::int * interval '1 second')",
-        })
-        .where('type = :type AND status = :status', { type: JobType.RESIZE_BOX, status: JobStatus.IN_PROGRESS })
-        .andWhere('"leaseExpiresAt" <= statement_timestamp()')
-        .andWhere('attempt < :maxAttempts', { maxAttempts: RESIZE_MAX_ATTEMPTS })
-        .andWhere('("resizeDeadlineAt" IS NULL OR "resizeDeadlineAt" > statement_timestamp())')
-        .execute()
-      if (result.affected) this.logger.warn({ message: 'Requeued expired resize leases', count: result.affected })
+      const rows: Array<{ id: string }> = await this.jobs.query(
+        `UPDATE "job"
+         SET "status" = $1,
+             "claimToken" = NULL,
+             "leaseExpiresAt" = NULL,
+             "errorMessage" = $2,
+             "nextAttemptAt" = statement_timestamp() + ((1 + floor(random() * 5))::int * interval '1 second')
+         WHERE "id" IN (
+           SELECT "id" FROM "job"
+           WHERE "type" = $3 AND "status" = $4
+             AND "leaseExpiresAt" <= statement_timestamp()
+             AND "attempt" < $5
+             AND ("resizeDeadlineAt" IS NULL OR "resizeDeadlineAt" > statement_timestamp())
+           FOR UPDATE SKIP LOCKED
+         )
+         RETURNING "id"`,
+        [
+          JobStatus.PENDING,
+          'Resize lease expired; retrying the persisted target',
+          JobType.RESIZE_BOX,
+          JobStatus.IN_PROGRESS,
+          RESIZE_MAX_ATTEMPTS,
+        ],
+      )
+      if (rows.length) this.logger.warn({ message: 'Requeued expired resize leases', count: rows.length })
     } catch (error) {
       this.logger.error('Failed to requeue expired resize leases', error)
     }
@@ -329,6 +339,7 @@ export class ResizeJobService implements OnApplicationBootstrap {
   private async terminalizeFailedJob(id: string): Promise<void> {
     let changedBox: Box | undefined
     await this.jobs.manager.transaction(async (manager) => {
+      await manager.query(`SET LOCAL lock_timeout = '${RESIZE_LOCK_TIMEOUT_MS}ms'`)
       const identity = await manager.findOneBy(Job, { id })
       if (!identity) return
       const box = await manager.findOne(Box, {
