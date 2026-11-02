@@ -213,9 +213,17 @@ Activity does not require the optional logging ClickHouse instance.
 | `box.exec`, `box.file_upload` | `BoxliteProxyController`, for `POST …/exec` and `PUT …/files` | requested, then success or exception by the response status |
 | `tunnel.create` | `BoxliteProxyController`, through `recordOutcomes` | requested, success, exception |
 
+For v0 runners, which have no START_BOX job, BoxManager records an existing start's terminal
+`box.start` outcome after its state is persisted. Returned runner errors, startup timeouts and
+thrown starts yield `runner_start_failed`; v2 outcomes remain with JobStateHandler. Initial
+creation and repeated terminal syncs do not emit an extra start outcome.
+
 Box events go through `src/box/utils/box-business-event.util.ts`: the request and the outcome are
 recorded in different places, so one call cannot cover both. A proxied call that fails with an
 HTTP status records `http_<status>`; a client that disconnects first records `client_closed`.
+An already finished/closed response is accounted for after the box lookup, and outcome
+listeners are removed once recorded. Organization-presence Redis warnings use fixed categories,
+not raw error strings.
 
 An event names its entity by `correlation.id`: the user id for `user.*` and `org.active`, the box
 id for box and tunnel events. It also carries `organization.id`, so an organization's activity
@@ -299,6 +307,7 @@ await this.stop(event.boxId, undefined, Context.platform(PlatformReason.ORG_SUSP
   sends `X-BoxLite-Source` or `X-BoxLite-SDK-Version`, `client.source` and `sdk.version`.
 - The boot-time admin seed registers as `Context.platform(PlatformReason.BOOTSTRAP)`.
 - Job outcome events carry no context: the runner reports after the request has ended.
+- Admin box recovery and user creation retain the authenticated administrator in `Context.admin(actor)`.
 - Add caller-decided fields to `Context`, not new service parameters.
 
 ## Admin organization metadata
