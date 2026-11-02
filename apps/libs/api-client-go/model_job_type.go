@@ -20,6 +20,7 @@ type JobType string
 
 // List of JobType
 const (
+	JOBTYPE_RESIZE_BOX JobType = "RESIZE_BOX"
 	JOBTYPE_CREATE_BOX JobType = "CREATE_BOX"
 	JOBTYPE_START_BOX JobType = "START_BOX"
 	JOBTYPE_STOP_BOX JobType = "STOP_BOX"
@@ -36,6 +37,7 @@ const (
 
 // All allowed values of JobType enum
 var AllowedJobTypeEnumValues = []JobType{
+	"RESIZE_BOX",
 	"CREATE_BOX",
 	"START_BOX",
 	"STOP_BOX",

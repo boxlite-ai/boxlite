@@ -34,6 +34,24 @@ import { v4 } from 'uuid'
 //     .join(', ')})`,
 // )
 export class Job {
+  @Column({ type: 'varchar', nullable: true })
+  resizePhase: 'APPLY' | null = null
+
+  @Column({ type: 'timestamptz', nullable: true })
+  nextAttemptAt: Date | null = null
+
+  @Column({ type: 'timestamptz', nullable: true })
+  resizeDeadlineAt: Date | null = null
+
+  @Column({ type: 'int', default: 0 })
+  attempt = 0
+
+  @Column({ type: 'uuid', nullable: true })
+  claimToken: string | null = null
+
+  @Column({ type: 'timestamptz', nullable: true })
+  leaseExpiresAt: Date | null = null
+
   @PrimaryGeneratedColumn('uuid')
   id: string
 

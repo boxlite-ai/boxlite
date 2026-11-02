@@ -28,6 +28,9 @@ import { CommerceBoxLimitService } from './commerce-box-limit.service'
 import { BoxliteBoxSnapshotController } from './boxlite-box-snapshot.controller'
 import { BoxliteSnapshotController } from './boxlite-snapshot.controller'
 import { SnapshotBoxService } from './snapshot-box.service'
+import { BoxResizeService } from './box-resize.service'
+import { BoxliteResizeController } from './boxlite-resize.controller'
+import { UsageModule } from '../usage/usage.module'
 
 /** The controller's routes again, mounted at its unprefixed path alone. */
 function unprefixed<T extends Type>(controller: T, path: string): T {
@@ -45,6 +48,7 @@ function unprefixed<T extends Type>(controller: T, path: string): T {
  * a routing prefix is an organization id or `default`, never a collection.
  */
 const unprefixedMounts = [
+  unprefixed(BoxliteResizeController, 'v1/boxes'),
   unprefixed(BoxliteSnapshotController, 'v1/snapshots'),
   unprefixed(BoxliteBoxController, 'v1/boxes'),
   unprefixed(BoxliteBoxSnapshotController, 'v1/boxes'),
@@ -57,6 +61,7 @@ const unprefixedMounts = [
 
 @Module({
   imports: [
+    UsageModule,
     RegionModule,
     BoxModule,
     AuthModule,
@@ -67,6 +72,7 @@ const unprefixedMounts = [
     RegistryModule,
   ],
   controllers: [
+    BoxliteResizeController,
     BoxliteMeController,
     BoxliteConfigController,
     ...unprefixedMounts,
@@ -81,7 +87,7 @@ const unprefixedMounts = [
     BoxliteMemberController,
     BoxliteInvitationController,
   ],
-  providers: [BoxliteWsProxyService, CommerceBoxLimitService, SnapshotBoxService],
+  providers: [BoxliteWsProxyService, CommerceBoxLimitService, SnapshotBoxService, BoxResizeService],
   exports: [BoxliteWsProxyService],
 })
 export class BoxliteRestModule {}
