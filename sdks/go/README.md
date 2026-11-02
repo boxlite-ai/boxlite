@@ -262,7 +262,7 @@ local-only host listener that accepts repeated connections.
 ## Guest SSH
 
 `box.SSH()` configures, observes, and disables the box's guest SSH listener.
-SSH starts disabled; the SDK is not an SSH client.
+SSH defaults to disabled when no state is saved; the SDK is not an SSH client.
 
 ```go
 hostKey, err := os.ReadFile("host_ed25519") // unencrypted OpenSSH private key
@@ -296,7 +296,7 @@ runtime's lifetime.
   `box.Start` first or `Configure` returns `ErrInvalidState`. `Status` and
   `Disable` never start the box; a box that is not running reports disabled
   with generation zero. `Disable` is safe to repeat and keeps the generation.
-- **Keys:** the runtime parses and validates keys and never persists them. A
+- **Keys:** the guest validates keys and stores them on the container disk. A
   rejected configuration returns `ErrInvalidArgument` without echoing key
   material. `%v`, `%+v`, `%s`, and `%#v` redact keys and CA values; JSON
   encoding of these types does not.

@@ -24,6 +24,7 @@ impl SshInterface {
             .client
             .configure(proto::SshConfigureRequest {
                 config: Some(config_to_proto(config)),
+                enable: Some(true),
             })
             .await
             .map_err(|status| map_tonic_err("configure", status))?;
@@ -40,11 +41,14 @@ impl SshInterface {
         status_from_proto("status", response.into_inner().status)
     }
 
-    /// Request guest-side SSH teardown and return its reported state without retrying.
+    /// Retain credentials while switching off the guest listener through Configure.
     pub(crate) async fn disable(&mut self) -> BoxliteResult<SshStatus> {
         let response = self
             .client
-            .disable(proto::SshDisableRequest {})
+            .configure(proto::SshConfigureRequest {
+                config: None,
+                enable: Some(false),
+            })
             .await
             .map_err(|status| map_tonic_err("disable", status))?;
         status_from_proto("disable", response.into_inner().status)

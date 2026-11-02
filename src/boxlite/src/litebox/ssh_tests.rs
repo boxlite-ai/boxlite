@@ -16,6 +16,7 @@ use tonic::{Request, Response, Status};
 struct Mock {
     requests: Mutex<Vec<&'static str>>,
     config: Mutex<Option<proto::SshConfig>>,
+    updates: Mutex<Vec<(Option<bool>, Option<proto::SshConfig>)>>,
     error: Mutex<Option<tonic::Code>>,
     missing: Mutex<bool>,
     block: Mutex<bool>,
@@ -63,7 +64,15 @@ impl proto::Ssh for MockService {
         &self,
         request: Request<proto::SshConfigureRequest>,
     ) -> Result<Response<proto::SshConfigureResponse>, Status> {
-        *self.0.config.lock().unwrap() = request.into_inner().config;
+        let request = request.into_inner();
+        self.0
+            .updates
+            .lock()
+            .unwrap()
+            .push((request.enable, request.config.clone()));
+        if let Some(config) = request.config {
+            *self.0.config.lock().unwrap() = Some(config);
+        }
         Ok(Response::new(proto::SshConfigureResponse {
             status: self.0.reply("configure").await?,
         }))
@@ -75,15 +84,6 @@ impl proto::Ssh for MockService {
     ) -> Result<Response<proto::SshStatusResponse>, Status> {
         Ok(Response::new(proto::SshStatusResponse {
             status: self.0.reply("status").await?,
-        }))
-    }
-    /// Exercise disable's RPC path without simulating guest listener lifecycle.
-    async fn disable(
-        &self,
-        _: Request<proto::SshDisableRequest>,
-    ) -> Result<Response<proto::SshDisableResponse>, Status> {
-        Ok(Response::new(proto::SshDisableResponse {
-            status: self.0.reply("disable").await?,
         }))
     }
 }
@@ -251,7 +251,7 @@ fn config() -> SshConfig {
     }
 }
 
-/// Preserve configuration fields and guest status across serialization for all three RPCs.
+/// Preserve configuration fields and guest status across Configure and Status RPCs.
 #[tokio::test]
 async fn ssh_requests_and_responses_cross_wire() {
     let f = fixture().await;
@@ -268,6 +268,17 @@ async fn ssh_requests_and_responses_cross_wire() {
     );
     assert_eq!(f.ssh.status().await.unwrap(), status);
     assert_eq!(f.ssh.disable().await.unwrap(), status);
+    let updates = f.mock.updates.lock().unwrap();
+    assert_eq!(updates.len(), 2);
+    assert_eq!(
+        updates
+            .iter()
+            .map(|(enable, _)| *enable)
+            .collect::<Vec<_>>(),
+        [Some(true), Some(false)]
+    );
+    assert!(updates[0].1.is_some());
+    assert!(updates[1..].iter().all(|(_, config)| config.is_none()));
     let received = f.mock.config.lock().unwrap().clone().unwrap();
     assert_eq!(received.listen_address, "0.0.0.0:2222");
     assert_eq!(received.host_private_key, "private sentinel");
@@ -281,7 +292,7 @@ async fn ssh_requests_and_responses_cross_wire() {
     assert_eq!(ca.principal, "principal sentinel");
     assert_eq!(
         *f.mock.requests.lock().unwrap(),
-        ["configure", "status", "disable"]
+        ["configure", "status", "configure"]
     );
 }
 
@@ -416,7 +427,7 @@ async fn ssh_observation_uses_existing_vm_without_container_start() {
     assert!(!recovered.live.initialized());
     assert_eq!(
         *f.mock.requests.lock().unwrap(),
-        ["status", "disable", "status", "disable"]
+        ["status", "configure", "status", "configure"]
     );
 }
 

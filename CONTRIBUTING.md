@@ -75,7 +75,11 @@ The Rust report combines core, shared, REST, CLI (including authentication
 integration tests), C/Node/Python native bindings, native VMM, and the
 runtime/shutdown/network tests that need no VM. Hosted runtime and C unit tests
 use the existing test-only runtime constructor; production runtime creation
-still validates the host. Linux also collects guest unit coverage. Vendored
+still validates the host. Linux also collects guest unit coverage. Run guest tests with
+`make test:unit:guest` as a normal user. SSH tests require `unshare` and a
+working unprivileged user and mount namespace; missing or restricted namespace
+support is a test error. Nextest 0.9.116 or newer is required. Ordinary guest
+ownership tests remain outside that namespace. Vendored
 dependencies, standalone tests, and test scaffolding are excluded; production guest and SDK
 paths are not ignored by Codecov. SDK language wrappers, cloud apps, and shim
 subprocess execution are separate from the Rust unit report.

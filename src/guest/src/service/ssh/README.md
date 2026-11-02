@@ -14,7 +14,7 @@ flowchart TB
     CONTROL["Host control client"]
     CLIENT["SSH client"]
     subgraph GUEST["Guest VM"]
-        MANAGER["SshManager<br/>configure / status / disable"]
+        MANAGER["SshManager<br/>configure / status"]
         LISTENER["TCP listener<br/>accept connections"]
         RUSSH["russh<br/>SSH protocol engine"]
         HANDLER["SshConnection<br/>authorize and route requests"]
@@ -27,7 +27,7 @@ flowchart TB
         RUSSH -->|"callbacks"| HANDLER
         HANDLER --> BRIDGE --> WORK
     end
-    CONTROL -->|"Configure / Status / Disable<br/>gRPC over box.sock → vsock"| MANAGER
+    CONTROL -->|"Configure / Status<br/>gRPC over box.sock → vsock"| MANAGER
     CLIENT <-->|"SSH over TCP"| LISTENER
 ```
 
@@ -83,7 +83,9 @@ channel execution, forwarding, and shutdown through their completion points.
 
 ## Control API
 
-- SSH starts disabled; `Guest.Init` must finish before `Configure`.
+- SSH defaults to disabled. Mutations require `Guest.Init` and a ready container rootfs.
+- Desired state is stored in `/etc/boxlite/ssh.cfg`; Container.Init restores it.
+  Guest shutdown drains the live listener without changing the saved switch.
 - Host port forwarding is configured separately from the guest SSH listener.
 - The Rust runtime exposes `LiteBox::ssh()` for local boxes and for REST-backed
   boxes served by `boxlite serve`. The local runtime's guest RPC client is
@@ -215,7 +217,7 @@ session's forwarding permission; normal shell/exec sessions need none of them.
 | One channel | EOF ends input; CLOSE ends the channel and triggers bridge termination. Normal command completion sends exit status/signal, EOF, then CLOSE. |
 | One connection | `SshConnection::drop()` cancels connection tasks and terminates bridges. |
 | One forwarding listener | `cancel_tcpip_forward()` / `cancel_streamlocal_forward()` stop the selected listener. |
-| Whole SSH service | `SshManager::disable()` cancels and drains SSH work; valid `configure()` drains the previous generation before binding another listener. |
+| Whole SSH service | `SshManager::shutdown()` cancels and drains SSH work; valid `configure()` drains the previous generation before binding another listener. |
 
 `TaskGroup` combines **CancellationToken** (request shutdown) with **TaskTracker**
 (account for completion). Task counts depend on active work. A drain timeout

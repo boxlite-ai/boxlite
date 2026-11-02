@@ -17,7 +17,7 @@ enum StartupPolicy {
     ExistingVmOnly,
 }
 
-/// Complete guest SSH configuration. Keys are never persisted by the runtime.
+/// Complete guest SSH configuration, persisted on the container disk.
 ///
 /// Configuration deserializes strictly; REST serialization stays internal.
 #[derive(Clone, Deserialize)]
@@ -102,6 +102,8 @@ pub struct SshStatus {
 /// including after runtime recovery or attach before start. Spent handles return
 /// `Stopped`; other lifecycle states return `InvalidState`. Status is an observation
 /// at call time and does not prevent a concurrent `configure()` from enabling SSH.
+/// Disabling an idle box leaves its saved SSH state unchanged; disable it while
+/// running to persist the disabled switch.
 ///
 /// For the local backend, after startup each operation has a total 15-second
 /// budget: the guest's 10-second cleanup limit plus 5 seconds for
@@ -133,7 +135,7 @@ impl SshHandle {
         Self { backend }
     }
 
-    /// Validate and replace SSH configuration, disconnecting existing clients.
+    /// Persist and enable SSH configuration, disconnecting existing clients.
     /// Startup follows the policy described on [`SshHandle`].
     pub async fn configure(&self, config: SshConfig) -> BoxliteResult<SshStatus> {
         self.backend.ssh_configure(config).await
@@ -144,7 +146,7 @@ impl SshHandle {
         self.backend.ssh_status().await
     }
 
-    /// Stop SSH and disconnect clients. Repeated calls are supported.
+    /// Stop SSH and disconnect clients, retaining credentials. Repeated calls are supported.
     /// Never starts the VM or container main command.
     pub async fn disable(&self) -> BoxliteResult<SshStatus> {
         self.backend.ssh_disable().await

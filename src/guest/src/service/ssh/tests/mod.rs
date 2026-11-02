@@ -1,8 +1,24 @@
 use super::*;
+
+pub(super) struct ActivationGate {
+    pub(super) entered: tokio::sync::Notify,
+    pub(super) release: tokio::sync::Semaphore,
+}
+
+impl ActivationGate {
+    pub(super) async fn wait(&self) {
+        self.entered.notify_one();
+        self.release
+            .acquire()
+            .await
+            .expect("activation gate closed")
+            .forget();
+    }
+}
 use crate::layout::GuestLayout;
 use boxlite_shared::{
     guest_init_response, GuestClient, GuestInitRequest, SshCaConfig, SshClient,
-    SshConfigureRequest, SshDisableRequest, SshStatusRequest,
+    SshConfigureRequest, SshStatusRequest,
 };
 use russh::keys::ssh_key::certificate::Builder;
 use russh::keys::{Algorithm, Certificate, HashAlg, PrivateKey, PrivateKeyWithHashAlg, PublicKey};
@@ -189,6 +205,11 @@ impl TestGuest {
     }
 
     async fn init(&mut self) -> boxlite_shared::GuestInitResponse {
+        self.guest
+            .ssh_manager
+            .restore(self._root.path().to_path_buf())
+            .await
+            .unwrap();
         self.client
             .init(GuestInitRequest {
                 volumes: vec![],
@@ -205,6 +226,7 @@ impl TestGuest {
     ) -> Result<boxlite_shared::SshStatus, Box<tonic::Status>> {
         self.ssh
             .configure(SshConfigureRequest {
+                enable: Some(true),
                 config: Some(config),
             })
             .await
@@ -236,7 +258,7 @@ impl TestGuest {
     }
 
     async fn stop(self) {
-        self.guest.ssh_manager.disable().await.unwrap();
+        self.guest.ssh_manager.shutdown().await.unwrap();
         assert_eq!(
             self.guest
                 .ssh_manager
@@ -666,12 +688,29 @@ async fn grpc_ssh_control_lifecycle_and_bind_failure() {
         tonic::Code::Unavailable
     );
     assert!(!fixture.status().await.enabled);
+    drop(occupied);
+    let recovered = fixture
+        .ssh
+        .configure(SshConfigureRequest {
+            enable: Some(true),
+            config: None,
+        })
+        .await
+        .unwrap()
+        .into_inner()
+        .status
+        .unwrap();
+    assert!(recovered.enabled);
+    assert_eq!(recovered.generation, 2);
     let ready = fixture.configure(ssh.clone()).await.unwrap();
-    assert_eq!(ready.generation, 2);
+    assert_eq!(ready.generation, 3);
     for _ in 0..2 {
         let stopped = fixture
             .ssh
-            .disable(SshDisableRequest {})
+            .configure(SshConfigureRequest {
+                enable: Some(false),
+                config: None,
+            })
             .await
             .unwrap()
             .into_inner()
@@ -680,7 +719,7 @@ async fn grpc_ssh_control_lifecycle_and_bind_failure() {
         assert!(!stopped.enabled);
         assert!(stopped.host_public_key.is_empty());
     }
-    assert_eq!(fixture.configure(ssh).await.unwrap().generation, 3);
+    assert_eq!(fixture.configure(ssh).await.unwrap().generation, 4);
     fixture.stop().await;
 }
 
@@ -823,6 +862,12 @@ async fn ssh_failure_logs_and_status_redact_all_configuration_inputs() {
     let secret_line = secret.lines().nth(1).unwrap();
     for field in ["address", "host", "authorized", "ca", "principal"] {
         let fixture = TestGuest::new().await;
+        fixture
+            .guest
+            .ssh_manager
+            .restore(fixture._root.path().to_path_buf())
+            .await
+            .unwrap();
         let mut ssh = config(&host, &[&user], Some(&ca));
         match field {
             "address" => ssh.listen_address = secret.clone(),
@@ -842,7 +887,7 @@ async fn ssh_failure_logs_and_status_redact_all_configuration_inputs() {
         let status = fixture
             .guest
             .ssh_manager
-            .configure(ssh)
+            .configure(Some(true), Some(ssh))
             .with_subscriber(subscriber)
             .await;
         assert_eq!(
@@ -920,7 +965,14 @@ async fn stopping_disconnects_pre_authentication_and_forwarding_and_rotates_iden
         .await
         .unwrap()
         .success());
-    fixture.ssh.disable(SshDisableRequest {}).await.unwrap();
+    fixture
+        .ssh
+        .configure(SshConfigureRequest {
+            enable: Some(false),
+            config: None,
+        })
+        .await
+        .unwrap();
     let _ = tokio::time::timeout(Duration::from_secs(2), client)
         .await
         .unwrap();
@@ -963,7 +1015,7 @@ async fn stop_timeout_retains_cleanup_and_prevents_next_generation() {
 }
 
 #[tokio::test]
-async fn cancelled_disable_retains_group_and_rejects_pending_admission() {
+async fn cancelled_disable_keeps_cleanup_ordered() {
     let mut fixture = TestGuest::new().await;
     let configuration = config(&private_key(), &[&private_key()], None);
     fixture.start(configuration.clone()).await;
@@ -977,35 +1029,426 @@ async fn cancelled_disable_retains_group_and_rejects_pending_admission() {
         .clone()
         .unwrap();
     let cleanup = tasks.token();
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let client = tokio::net::TcpStream::connect(listener.local_addr().unwrap())
+    let mut client = fixture.ssh.clone();
+    let operation = tokio::spawn(async move {
+        client
+            .configure(SshConfigureRequest {
+                enable: Some(false),
+                config: None,
+            })
+            .await
+    });
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !tasks.is_cancelled() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    operation.abort();
+    drop(cleanup);
+    let status = tokio::time::timeout(Duration::from_secs(5), fixture.status())
         .await
         .unwrap();
-    let (stream, peer) = listener.accept().await.unwrap();
-
-    let mut disable = Box::pin(fixture.guest.ssh_manager.disable());
-    assert!(futures::poll!(&mut disable).is_pending());
-    assert!(tasks.is_cancelled());
-    let mut admission = Box::pin(fixture.guest.ssh_manager.spawn_connection(stream, peer));
-    assert!(futures::poll!(&mut admission).is_pending());
-    // Dropping the control future releases its state lock, but retains draining.
-    drop(disable);
-    admission.await;
-    let mut client = client;
-    let mut byte = [0];
-    assert_eq!(
-        tokio::io::AsyncReadExt::read(&mut client, &mut byte)
-            .await
-            .unwrap(),
-        0
-    );
-    assert!(fixture.guest.ssh_manager.state.lock().await.tasks.is_some());
-    drop(cleanup);
-    fixture.guest.ssh_manager.disable().await.unwrap();
-    assert!(fixture.guest.ssh_manager.state.lock().await.tasks.is_none());
+    assert!(!status.enabled);
     assert_eq!(
         fixture.configure(configuration).await.unwrap().generation,
         2
     );
+    fixture.stop().await;
+}
+
+#[tokio::test]
+async fn ssh_partial_updates_persist_and_reenable_without_restart() {
+    let mut fixture = TestGuest::new().await;
+    fixture.init().await;
+    let missing = fixture
+        .ssh
+        .configure(SshConfigureRequest {
+            enable: Some(true),
+            config: None,
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(missing.code(), tonic::Code::FailedPrecondition);
+    let path = fixture._root.path().join("etc/boxlite/ssh.cfg");
+    assert!(!path.exists());
+    let host = private_key();
+    let user = Arc::new(private_key());
+    let configuration = config(&host, &[&user], None);
+    let saved = fixture
+        .ssh
+        .configure(SshConfigureRequest {
+            enable: None,
+            config: Some(configuration.clone()),
+        })
+        .await
+        .unwrap()
+        .into_inner()
+        .status
+        .unwrap();
+    assert!(!saved.enabled);
+    let active = fixture
+        .ssh
+        .configure(SshConfigureRequest {
+            enable: Some(true),
+            config: None,
+        })
+        .await
+        .unwrap()
+        .into_inner()
+        .status
+        .unwrap();
+    assert!(active.enabled);
+    use std::os::unix::fs::MetadataExt;
+    let inode = std::fs::metadata(&path).unwrap().ino();
+    let observed = fixture
+        .ssh
+        .configure(SshConfigureRequest {
+            enable: None,
+            config: None,
+        })
+        .await
+        .unwrap()
+        .into_inner()
+        .status
+        .unwrap();
+    assert_eq!(observed, active);
+    assert_eq!(std::fs::metadata(&path).unwrap().ino(), inode);
+    let mut client = connect(active.listen_address.parse().unwrap(), &host).await;
+    assert!(client
+        .authenticate_publickey("root", PrivateKeyWithHashAlg::new(user, None))
+        .await
+        .unwrap()
+        .success());
+    let repeat = fixture
+        .ssh
+        .configure(SshConfigureRequest {
+            enable: Some(true),
+            config: None,
+        })
+        .await
+        .unwrap()
+        .into_inner()
+        .status
+        .unwrap();
+    assert_eq!(active, repeat);
+    let channel = client
+        .channel_open_session()
+        .await
+        .expect("repeated enable must retain the live connection");
+    channel.close().await.unwrap();
+    drop(client);
+    fixture
+        .ssh
+        .configure(SshConfigureRequest {
+            enable: Some(false),
+            config: None,
+        })
+        .await
+        .unwrap();
+    let again = fixture
+        .ssh
+        .configure(SshConfigureRequest {
+            enable: Some(true),
+            config: None,
+        })
+        .await
+        .unwrap()
+        .into_inner()
+        .status
+        .unwrap();
+    assert_eq!(again.generation, active.generation + 1);
+    assert_eq!(again.host_key_fingerprint, active.host_key_fingerprint);
+    let replacement = fixture.configure(configuration).await.unwrap();
+    assert_eq!(replacement.generation, again.generation + 1);
+    fixture.stop().await;
+}
+
+#[tokio::test]
+async fn ssh_shutdown_serializes_with_admitted_activation() {
+    let mut fixture = TestGuest::new().await;
+    fixture.init().await;
+    let configuration = config(&private_key(), &[&private_key()], None);
+    let gate = Arc::new(ActivationGate {
+        entered: tokio::sync::Notify::new(),
+        release: tokio::sync::Semaphore::new(0),
+    });
+    fixture.guest.ssh_manager.state.lock().await.activation_gate = Some(gate.clone());
+    let mut update_client = fixture.ssh.clone();
+    let update = tokio::spawn(async move {
+        update_client
+            .configure(SshConfigureRequest {
+                enable: Some(true),
+                config: Some(configuration),
+            })
+            .await
+    });
+    tokio::time::timeout(Duration::from_secs(5), gate.entered.notified())
+        .await
+        .unwrap();
+    let path = fixture._root.path().join("etc/boxlite/ssh.cfg");
+    let saved = std::fs::read(&path).unwrap();
+    let mut shutdown_client = fixture.client.clone();
+    let shutdown = tokio::spawn(async move {
+        shutdown_client
+            .shutdown(boxlite_shared::ShutdownRequest {})
+            .await
+    });
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !fixture
+            .guest
+            .shutting_down
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    let error = fixture
+        .ssh
+        .configure(SshConfigureRequest {
+            enable: Some(false),
+            config: None,
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(error.code(), tonic::Code::FailedPrecondition);
+    gate.release.add_permits(1);
+    update.await.unwrap().unwrap();
+    shutdown.await.unwrap().unwrap();
+    assert!(!fixture.status().await.enabled);
+    assert_eq!(std::fs::read(path).unwrap(), saved);
+    fixture.stop().await;
+}
+
+#[tokio::test]
+async fn ssh_requires_rootfs_and_preserves_service_on_storage_error() {
+    let mut fixture = TestGuest::new().await;
+    fixture
+        .client
+        .init(GuestInitRequest {
+            volumes: vec![],
+            network: None,
+        })
+        .await
+        .unwrap();
+    let configuration = config(&private_key(), &[&private_key()], None);
+    assert_eq!(
+        fixture
+            .configure(configuration.clone())
+            .await
+            .unwrap_err()
+            .code(),
+        tonic::Code::FailedPrecondition
+    );
+    fixture
+        .guest
+        .ssh_manager
+        .restore(fixture._root.path().to_path_buf())
+        .await
+        .unwrap();
+    let active = fixture.configure(configuration.clone()).await.unwrap();
+    let path = fixture._root.path().join("etc/boxlite/ssh.cfg");
+    std::fs::write(&path, b"invalid JSON").unwrap();
+    assert_eq!(
+        fixture.configure(configuration).await.unwrap_err().code(),
+        tonic::Code::Internal
+    );
+    assert_eq!(fixture.status().await, active);
+    fixture.stop().await;
+}
+
+#[tokio::test]
+async fn ssh_parallel_partial_updates_merge_both_fields() {
+    let mut fixture = TestGuest::new().await;
+    fixture.init().await;
+    let first = config(&private_key(), &[&private_key()], None);
+    let replacement = config(&private_key(), &[&private_key()], None);
+    fixture
+        .ssh
+        .configure(SshConfigureRequest {
+            enable: None,
+            config: Some(first),
+        })
+        .await
+        .unwrap();
+    let mut first_client = fixture.ssh.clone();
+    let mut second_client = fixture.ssh.clone();
+    let expected = replacement.clone();
+    let (enable, configure) = tokio::join!(
+        first_client.configure(SshConfigureRequest {
+            enable: Some(true),
+            config: None
+        }),
+        second_client.configure(SshConfigureRequest {
+            enable: None,
+            config: Some(replacement)
+        }),
+    );
+    enable.unwrap();
+    configure.unwrap();
+    let desired = persistence::load(fixture._root.path()).unwrap();
+    assert!(desired.enable);
+    assert_eq!(desired.config, Some(expected));
+    assert!(fixture.status().await.enabled);
+    fixture.stop().await;
+}
+
+#[tokio::test]
+async fn ssh_save_failure_keeps_live_listener_and_old_file() {
+    let mut fixture = TestGuest::new().await;
+    let active = fixture
+        .start(config(&private_key(), &[&private_key()], None))
+        .await;
+    let before_status = fixture.status().await;
+    let path = fixture._root.path().join("etc/boxlite/ssh.cfg");
+    let before = std::fs::read(&path).unwrap();
+    // Each nextest case has its own process. A zero file-size soft limit makes
+    // the real temporary-file write fail without changing the saved state.
+    let mut original = nix::libc::rlimit {
+        rlim_cur: 0,
+        rlim_max: 0,
+    };
+    // SAFETY: pointers reference live rlimit structures; SIGXFSZ is restored below.
+    unsafe {
+        assert_eq!(
+            nix::libc::getrlimit(nix::libc::RLIMIT_FSIZE, &mut original),
+            0
+        );
+        let old_signal = nix::libc::signal(nix::libc::SIGXFSZ, nix::libc::SIG_IGN);
+        let limited = nix::libc::rlimit {
+            rlim_cur: 0,
+            rlim_max: original.rlim_max,
+        };
+        assert_eq!(nix::libc::setrlimit(nix::libc::RLIMIT_FSIZE, &limited), 0);
+        let result = fixture
+            .ssh
+            .configure(SshConfigureRequest {
+                enable: Some(false),
+                config: None,
+            })
+            .await;
+        assert_eq!(nix::libc::setrlimit(nix::libc::RLIMIT_FSIZE, &original), 0);
+        nix::libc::signal(nix::libc::SIGXFSZ, old_signal);
+        assert_eq!(result.unwrap_err().code(), tonic::Code::Internal);
+    }
+    assert_eq!(std::fs::read(path).unwrap(), before);
+    assert_eq!(fixture.status().await, before_status);
+    assert!(tokio::net::TcpStream::connect(active).await.is_ok());
+    fixture.stop().await;
+}
+
+fn save_gate(after_rename: bool, fail: bool) -> Arc<persistence::SaveGate> {
+    let gate = Arc::new(persistence::SaveGate {
+        after_rename,
+        fail,
+        entered: tokio::sync::Notify::new(),
+        released: std::sync::Mutex::new(false),
+        wake: std::sync::Condvar::new(),
+    });
+    *persistence::SAVE_GATE.lock().unwrap() = Some(gate.clone());
+    gate
+}
+
+fn release_save(gate: &persistence::SaveGate) {
+    *persistence::SAVE_GATE.lock().unwrap() = None;
+    *gate.released.lock().unwrap() = true;
+    gate.wake.notify_one();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ssh_cancelled_storage_keeps_following_update_ordered() {
+    let mut fixture = TestGuest::new().await;
+    fixture
+        .start(config(&private_key(), &[&private_key()], None))
+        .await;
+    for after_rename in [false, true] {
+        let gate = save_gate(after_rename, false);
+        let mut first_client = fixture.ssh.clone();
+        let first = tokio::spawn(async move {
+            first_client
+                .configure(SshConfigureRequest {
+                    enable: Some(false),
+                    config: None,
+                })
+                .await
+        });
+        tokio::time::timeout(Duration::from_secs(5), gate.entered.notified())
+            .await
+            .unwrap();
+        first.abort();
+        let mut second_client = fixture.ssh.clone();
+        let mut second = tokio::spawn(async move {
+            second_client
+                .configure(SshConfigureRequest {
+                    enable: Some(true),
+                    config: None,
+                })
+                .await
+        });
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), &mut second)
+                .await
+                .is_err()
+        );
+        release_save(&gate);
+        assert!(
+            second
+                .await
+                .unwrap()
+                .unwrap()
+                .into_inner()
+                .status
+                .unwrap()
+                .enabled
+        );
+        assert!(persistence::load(fixture._root.path()).unwrap().enable);
+    }
+    fixture.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ssh_post_rename_sync_failure_reloads_for_next_update() {
+    let mut fixture = TestGuest::new().await;
+    fixture
+        .start(config(&private_key(), &[&private_key()], None))
+        .await;
+    let before = fixture.status().await;
+    let replacement = config(&private_key(), &[&private_key()], None);
+    let gate = save_gate(true, true);
+    let mut client = fixture.ssh.clone();
+    let copy = replacement.clone();
+    let update = tokio::spawn(async move {
+        client
+            .configure(SshConfigureRequest {
+                enable: None,
+                config: Some(copy),
+            })
+            .await
+    });
+    tokio::time::timeout(Duration::from_secs(5), gate.entered.notified())
+        .await
+        .unwrap();
+    release_save(&gate);
+    assert_eq!(
+        update.await.unwrap().unwrap_err().code(),
+        tonic::Code::Internal
+    );
+    assert_eq!(fixture.status().await, before);
+    let desired = persistence::load(fixture._root.path()).unwrap();
+    assert_eq!(desired.config, Some(replacement.clone()));
+    fixture
+        .ssh
+        .configure(SshConfigureRequest {
+            enable: Some(false),
+            config: None,
+        })
+        .await
+        .unwrap();
+    let desired = persistence::load(fixture._root.path()).unwrap();
+    assert!(!desired.enable);
+    assert_eq!(desired.config, Some(replacement));
     fixture.stop().await;
 }

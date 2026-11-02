@@ -848,6 +848,9 @@ boxlite ssh forward dev
 ```
 
 Every `configure` replaces the SSH configuration and disconnects existing clients.
+Configuration and the enable switch persist on the container disk; restarting the
+box restores enabled SSH. Disable retains credentials; on an idle box it leaves
+saved state unchanged.
 `forward` leaves the configuration and generation unchanged, so it can reopen
 forwarding without reconfiguring SSH.
 

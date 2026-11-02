@@ -11,7 +11,7 @@ Read the [architecture overview](README.md) first. These diagrams follow its
 
 | Scope | Starts at | Finishes when |
 | --- | --- | --- |
-| Service generation | Successful `configure()` | Listener and tracked SSH work have drained |
+| Service generation | Successful listener start (Configure or restore) | Listener and tracked SSH work have drained |
 | Connection | Accepted TCP socket | Russh session ends and connection cleanup drains |
 | Execution-backed channel | Shell, exec, SFTP, or direct Unix socket request | Process and output task finish, then execution resources are released |
 | Remote forwarding listener | TCP bind or container helper readiness | Listener stops and pending channel opens settle; established relays have a separate lifetime |
@@ -23,15 +23,19 @@ completion dependency. Diagrams omit routine logging and validation helpers.
 
 ## 1. Service configuration
 
-`Configure` replaces one complete SSH generation. Validation happens before
-stopping the current generation; binding the new address happens afterward.
+`Configure` merges supplied fields with saved state. The diagram shows a supplied
+configuration whose merged enable value is true: validation and persistence precede
+stopping the current generation, then the new address is bound. An empty update
+observes status, a healthy repeated enable does not restart, and a disabled update
+saves state and stops without binding.
 
 ```mermaid
 flowchart TD
-    RPC["Ssh.Configure RPC"] --> PARSE["SshManager::configure<br/>SshConfig::parse"]
+    RPC["Ssh.Configure RPC"] --> LOCK["Lock manager state"]
+    LOCK --> PARSE["Reload, merge and validate"]
     PARSE -->|invalid| KEEP["Return InvalidArgument<br/>current generation stays running"]
-    PARSE -->|valid| LOCK["Lock manager state"]
-    LOCK --> STOP["await stop()<br/>cancel and drain old generation"]
+    PARSE -->|valid| SAVE["Save desired state"]
+    SAVE --> STOP["await stop()<br/>cancel and drain old generation"]
     STOP -->|drain timeout| TIMEOUT["Return DeadlineExceeded<br/>disabled, cleanup still tracked"]
     STOP -->|drained| BIND["await TcpListener::bind"]
     BIND -->|failure| DISABLED["Return Unavailable<br/>service remains disabled"]
@@ -39,11 +43,11 @@ flowchart TD
     START --> READY["Return enabled SshStatus"]
 ```
 
-`Status` reports availability, not a cleanup barrier. `Disable` calls the same
+`Status` reports availability, not a cleanup barrier. A disabled `Configure` calls the same
 `stop()` without starting a replacement. A later control call can resume waiting
 after a drain timeout; the old tracking state is retained.
 
-Source: [configure/status/disable/stop](mod.rs#L127).
+Source: [configure/status/shutdown/stop](mod.rs#L127).
 
 ## 2. Connection and authentication
 
@@ -237,7 +241,7 @@ Sources: [TCP lifecycle](forward.rs#L154), [TCP listener drain](forward.rs#L375)
 
 ## 5. Service shutdown
 
-`disable()` and replacement `configure()` share this stop path. Cancellation
+A disabled update and replacement `configure()` share this stop path. Cancellation
 propagates down the task tree; the branches below run concurrently.
 
 ```mermaid
@@ -271,8 +275,13 @@ The diagram's final state has not yet been reached.
 | `wait()` | Closes the tracker and awaits tracked work, including cleanup registered during shutdown |
 
 SSH disable leaves the container's main process and non-SSH executions running.
-Full `Guest.Shutdown` attempts SSH disable, then continues with the execution
+Full `Guest.Shutdown` stops the runtime listener, then continues with the execution
 registry and container teardown even if disabling SSH returned an error.
 
 Sources: [stop barrier](mod.rs#L190), [TaskGroup](task_group.rs#L10),
 [guest shutdown](../guest.rs#L89). Time limits live in [limits.rs](limits.rs).
+
+Desired state is persisted before service application in the container rootfs at
+`/etc/boxlite/ssh.cfg`. Container.Init restores enabled state without rewriting it;
+shutdown drains runtime tasks without changing that state. Configure reloads disk
+before merging updates, including after an uncertain directory sync failure.

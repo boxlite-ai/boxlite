@@ -1,10 +1,10 @@
 # Guest SSH control
 
-SSH starts disabled. The Rust runtime exposes `LiteBox::ssh()` to configure,
+SSH starts disabled when no saved configuration exists. The Rust runtime exposes `LiteBox::ssh()` to configure,
 query, or disable it, for local boxes and for REST-backed boxes served by
 `boxlite serve` ([HTTP control](#http-control-with-boxlite-serve)) or the
 [hosted cloud API](#hosted-cloud-api). Only
-`configure()` follows the implicit-start policy of exec, metrics, and file
+`configure(config)` follows the implicit-start policy of exec, metrics, and file
 copying. A `Configured` or `Stopped` box using the image's default command can
 start implicitly. If `BoxOptions.cmd` or `entrypoint` explicitly sets the main
 command, configuration returns `InvalidState` in these states; call `start()`
@@ -14,6 +14,8 @@ instead of resumed.
 `status()` and `disable()` never start the VM or container main command. Valid
 `Configured` or `Stopped` handles return disabled status with generation zero and
 empty address and host identity fields, regardless of the configured command.
+Disabling such an idle box leaves its saved SSH state unchanged. Disable SSH while
+the box is running to persist the disabled switch.
 Running boxes send requests to the existing guest, including after `attach()`
 before `start()` and after runtime recovery. Other lifecycle states return
 `InvalidState`. Results describe the state observed by the call; a concurrent
@@ -84,9 +86,9 @@ For one account, configuration can instead read key files with
 - `forward` reads status and targets the port SSH actually bound, so a guest
   listener on port `0` works. It leaves configuration and generation unchanged.
   Ctrl-C ends only local forwarding; guest SSH stays enabled.
-- SSH lives in guest memory. A local CLI exit stops boxes that are not detached
-  (plain `boxlite run`, SDK boxes with `detach=false`); a box such a command started
-  loses SSH with its VM. Boxes from `boxlite create` and `run -d` keep running.
+- A local CLI exit stops boxes that are not detached (plain `boxlite run`, SDK
+  boxes with `detach=false`). Saved SSH intent is restored when the box restarts.
+  Boxes from `boxlite create` and `run -d` keep running.
 - Over REST, forwarding opens the box's public tunnel for the SSH port and leaves it
   open, so anyone who reaches it can attempt a login and wake a stopped box; SSH keys
   remain the access control. Close it with `boxlite network tunnel BOX PORT --revoke`.
@@ -101,7 +103,7 @@ convention, `/{prefix}/boxes/{box_id}/ssh`:
 |----------|----------|
 | `POST`   | Replace the complete `SshConfig` body; returns the resulting `SshStatus`. Every accepted call fully restarts the guest listener, so never retry it automatically. |
 | `GET`    | Read `SshStatus`. Never starts the VM or its main command. |
-| `DELETE` | Disable SSH idempotently; returns `SshStatus`. Never starts the VM or its main command. |
+| `DELETE` | Disable SSH idempotently; returns `SshStatus`. Never starts the VM or its main command. On an idle box, saved SSH state is unchanged. |
 
 The lifecycle and resume rules above also apply over HTTP. Authenticated
 `POST` requests count as AutoStop activity, including rejected configurations;
@@ -157,9 +159,8 @@ differences:
 - Lifecycle refusals from the API are a plain `409` with a message naming the
   reason; SDKs read them, like the runner's `409 invalid_state`, as `InvalidState`.
 
-SSH lives in guest memory, so every stop, restart, or auto-stop disables it.
-After the box runs again, run `boxlite ssh configure` to restore its configuration,
-then `boxlite ssh forward` to reconnect; forwarding fails on a disabled listener.
+Hosted servers running an older runtime may require configuration again after a
+restart. Forwarding fails while the listener is disabled.
 
 Forwarding uses the box's [public tunnel](#cli), which needs inbound access enabled on the box. Ending
 the local `boxlite ssh forward` leaves that tunnel open; revoke it with `boxlite
@@ -167,14 +168,11 @@ network tunnel BOX PORT --revoke`.
 
 ## Guest protocol and lifecycle
 The internal host-only `boxlite.v1.Ssh` gRPC service remains available on
-`sockets/box.sock` after `Guest.Init` succeeds. It exposes `Configure`, `Status`,
-and `Disable`; its schema is in `src/shared/proto/boxlite/v1/service.proto`.
-Raw protocol callers must regenerate their bindings and send
-`SshConfigureRequest.config` using field 4. Legacy string fields `listen_address`,
-`ca_public_key`, and `principal` (fields 1–3) are reserved and ignored. A
-legacy-only request returns `InvalidArgument` because `config` is missing,
-without changing the current service. There is no legacy request conversion or
-protocol version negotiation.
+`sockets/box.sock` after `Guest.Init` succeeds. It exposes `Configure` and
+`Status`; mutations also require a ready container root filesystem. Configuration
+uses field 4 and optional enable uses field 5; legacy fields 1–3 remain reserved.
+Host and guest versions must be upgraded together: old config-only calls no longer
+enable SSH, and the removed Disable RPC is unavailable.
 
 Configure accepts an unencrypted OpenSSH host private key and a non-empty
 `accounts` list. Each account has a unique `login` and at least one public key or
@@ -208,29 +206,27 @@ entered. Non-root SFTP and Unix socket helpers clear effective, permitted,
 inheritable, and ambient capabilities before serving; they retain the bounding
 set. TCP forwarding remains guest-side and uses the session's authorization.
 
-Every valid Configure fully restarts SSH, even if the configuration is identical:
-validate → stop listener → disconnect all clients → wait for SSH execution and
-forwarding cleanup → bind new listener. Invalid configuration returns a sanitized
-`InvalidArgument` error and leaves the old service running. If stopping takes
-longer than ten seconds, the request returns `DeadlineExceeded`, which the Rust
-runtime preserves as `BoxliteError::Rpc` with the original gRPC status; cleanup remains
-tracked and a later Configure must finish draining it before starting another
-listener. A bind failure returns `Unavailable` and leaves SSH disabled, without
-restoring the old configuration. Disable performs the same drain and is idempotent.
+Configuration is saved in `/etc/boxlite/ssh.cfg` in the container filesystem,
+with a root-owned 0700 directory and 0600 file. Container root and the host can
+read the credentials; clones, snapshots, exports and imports carry both the
+private key and SSH identity. A missing file defaults to disabled. Initialization
+restores enabled SSH without running the main command; invalid or unreadable
+state logs a sanitized warning and does not prevent container initialization.
 
-Status contains only `enabled`, the actual bound `listen_address`, `generation`,
-a comment-free `host_public_key`, and its SHA-256 `host_key_fingerprint`. Generation
-increments on each successful listener start. Disabled status has empty address
-and host identity fields. No authentication configuration or private key is returned.
+The internal RPC `Configure(enable, config)` retains each absent field and
+replaces supplied configuration. Configuration-only preserves the switch, an empty update observes,
+and enabling without configuration fails. Supplying configuration while enabled
+restarts the listener even if unchanged; repeated enable of a healthy listener
+preserves connections. Disabling retains credentials. Validation and persistence
+precede application: errors preserve the live listener; a bind or drain failure
+leaves the saved intent for a later retry. A post-rename sync error leaves disk
+durability uncertain, and the next update reloads the file.
 
-Configuration and status live only in guest memory. Reconnecting to the same VM
-preserves them. A VM restart starts disabled with generation zero and requires
-Configure again. Create, clone, export, and import do not carry SSH configuration
-or state. Old persisted SSH fields are ignored; existing databases and archives
-are not migrated or rewritten by this change.
-
-SSH restart terminates only SSH work. The container's main process and non-SSH
-executions continue. Guest shutdown calls Disable before cleaning up executions
-and containers, and continues cleanup even if Disable fails. SSH does not track
-guest shutdown: concurrent Configure may briefly restart it, with VM shutdown
-reclaiming any remaining resources.
+Status reports actual listener health and public host identity. Generation counts
+successful starts in the current VM. Shutdown drains SSH without changing saved
+intent and rejects new mutations. Public SDK signatures are unchanged:
+`configure(config)` replaces the configuration and enables SSH, `disable()` turns
+it off while retaining credentials, and `status()` observes the live listener.
+The host translates configuration to `Configure(enable=true, config=...)` and
+disable to `Configure(enable=false)` only when a VM exists. Internal partial
+updates are not exposed through SDKs. REST retains its POST, DELETE and GET routes.

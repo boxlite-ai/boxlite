@@ -97,13 +97,13 @@ impl GuestService for GuestServer {
         self.shutting_down
             .store(true, std::sync::atomic::Ordering::SeqCst);
 
-        // Disable SSH before draining the execution registry. Concurrent
-        // configuration may restart SSH; VM shutdown reclaims remaining resources.
+        // Close SSH before draining the execution registry. The SSH lock
+        // serializes its closing transition with configuration and restore.
         // Best-effort: a stuck session must not strand containers or skip the
         // filesystem sync that COW disk consistency on restart depends on.
         // `shutting_down` is already set, so nothing else would finish the
         // teardown if this returned.
-        let quiesce = self.ssh_manager.disable().await.inspect_err(|error| {
+        let quiesce = self.ssh_manager.shutdown().await.inspect_err(|error| {
             error!(%error, "SSH sessions did not quiesce; continuing guest teardown");
         });
 

@@ -89,7 +89,7 @@ impl From<PySshAccount> for SshAccount {
     }
 }
 
-/// Complete guest SSH configuration; keys are never persisted by the runtime.
+/// Complete guest SSH configuration; credentials persist on the container disk.
 /// `repr()` keeps the listener address and redacts all key material.
 #[pyclass(name = "SshConfig")]
 #[derive(Clone)]
