@@ -4,10 +4,7 @@
 //! The VM facade: configuration, host VM creation, RAM registration, boot
 //! loading, and running the vCPUs until the VM ends.
 
-use std::{
-    panic::{self, AssertUnwindSafe},
-    sync::{Arc, Mutex},
-};
+use std::sync::{Arc, Mutex};
 
 use boxlite_hypervisor::Vm as HostVm;
 
@@ -16,7 +13,7 @@ use crate::{
     config::VmConfig,
     devices::console::ConsoleWorker,
     error::{Error, Result},
-    events::{Event, EventLoop, EventSender, LoopEvent},
+    events::{Event, EventLoop, EventSender},
     memory::{GuestRam, ram_ranges},
     virtio::control::ControlHandle,
 };
@@ -175,11 +172,18 @@ impl<H: boxlite_hypervisor::X86Vm> Vm<H> {
     /// stops and joins them all, and returns how the VM ended. A VM runs
     /// once; a second call fails with [`Error::AlreadyRan`].
     pub fn run(&mut self) -> Result<VmExit> {
-        use std::{sync::PoisonError, thread};
+        use std::{
+            panic::{self, AssertUnwindSafe},
+            sync::PoisonError,
+            thread,
+        };
 
         use boxlite_hypervisor::VcpuHandle as _;
 
-        use crate::vcpu::{StartGate, Workers};
+        use crate::{
+            events::LoopEvent,
+            vcpu::{StartGate, Workers},
+        };
 
         if self.state != VmState::Created {
             return Err(Error::AlreadyRan);
