@@ -4,7 +4,9 @@
  */
 
 import { Request } from 'express'
-import { requestActor } from './user-context.decorator'
+import { ROUTE_ARGS_METADATA } from '@nestjs/common/constants'
+import { Context } from '../context/context'
+import { requestActor, UserContext } from './user-context.decorator'
 
 function request(user: unknown, headers: Record<string, string> = {}): Request {
   const sent = new Map(Object.entries(headers).map(([name, value]) => [name.toLowerCase(), value]))
@@ -12,6 +14,34 @@ function request(user: unknown, headers: Record<string, string> = {}): Request {
 }
 
 const person = { userId: 'user-1', role: 'user', email: 'user@boxlite.dev' }
+
+class ContextProbe {
+  handle(_context: Context) {}
+}
+UserContext()(ContextProbe.prototype, 'handle', 0)
+
+function decoratedContext(user: unknown, headers: Record<string, string> = {}): Context {
+  const parameters = Reflect.getMetadata(ROUTE_ARGS_METADATA, ContextProbe, 'handle')
+  const parameter = Object.values(parameters)[0] as { factory: (data: unknown, execution: unknown) => Context }
+  return parameter.factory(undefined, { switchToHttp: () => ({ getRequest: () => request(user, headers) }) })
+}
+
+describe('UserContext role attribution', () => {
+  it('preserves the authenticated administrator role and identity', () => {
+    expect(decoratedContext({ ...person, role: 'admin' })).toMatchObject({
+      actorKind: 'admin',
+      actor: { userId: person.userId, authMethod: 'jwt' },
+    })
+  })
+
+  it('does not elevate a member from a client role header', () => {
+    expect(decoratedContext(person, { 'X-BoxLite-Role': 'admin' }).actorKind).toBe('user')
+  })
+
+  it.each([undefined, { role: 'proxy' }, { role: 'admin' }])('keeps unidentified callers unprivileged: %p', (user) => {
+    expect(decoratedContext(user)).toMatchObject({ actorKind: 'user', actor: undefined })
+  })
+})
 
 describe('requestActor', () => {
   it('names an API key caller and the client labels it sent', () => {
