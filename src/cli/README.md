@@ -539,11 +539,8 @@ stderr without a TTY, or to merged stdout with `--tty`. The same execution
 statuses and streams come back through `boxlite serve` over REST. Rejection of
 the box's init command during `run` remains a CLI error with exit code `1`.
 
-`126`/`127` are the only new special cases added here (POL-55). They are not
-reserved: a command that started can also exit `126`/`127`, so use the
-diagnostic rather than the code alone. See the
-[CLI exit-code table](../../docs/reference/cli/README.md#exit-codes) for the
-full map.
+`126`/`127` are the special codes for an `exec` startup refusal; every other
+value keeps its usual meaning.
 
 ### `boxlite list` (alias: `ls`, `ps`)
 

@@ -1279,14 +1279,14 @@ For a richer treatment of the registry config (auth flows, fallbacks, mirrors), 
 | Code | Source | Meaning |
 |------|--------|---------|
 | `0` | success | Command (or box command) finished successfully |
-| `1` | runtime / box command | Any anyhow error from a CLI command — `main.rs:71` prints `Error: ...` to stderr and exits `1` — **or** the command's own exit `1` |
-| `2` | clap / box command | Invalid CLI usage (unknown flag, missing required arg, bad value) — **or** the command's own exit `2` |
-| `N` (3-255) | box command | `run`/`exec` propagate the exit status of a command that started, including `125` and `128-255` |
-| `126` | exec startup refusal (new) / box command | **New in POL-55:** `exec` reports a present but non-executable command as `126`. A command that started can also exit `126`; the stderr diagnostic distinguishes them |
-| `127` | exec startup refusal (new) / box command | **New in POL-55:** `exec` reports a missing command as `127`. A command that started can also exit `127`; the stderr diagnostic distinguishes them |
+| `1` | runtime | Any anyhow error from a CLI command — `main.rs:71` prints `Error: ...` to stderr and exits `1` |
+| `2` | clap | Invalid CLI usage (unknown flag, missing required arg, bad value) |
+| `N` (1-127) | box command | `run`/`exec` propagate the command's exit status |
+| `126` | exec startup refusal | Special case: the command exists but is not executable |
+| `127` | exec startup refusal | Special case: the command was not found |
 | `128 + N` | signal | `run`/`exec` exited because the box command was killed by signal *N* (e.g. `137` for `SIGKILL`, `143` for `SIGTERM`) |
 
-**Reading exit codes (POL-55).** `126` and `127` are the only new special cases. They are not reserved: a command that started can also exit `126`/`127`, and `125` is a normal command exit in BoxLite — not Docker's engine-error code. `1` and `2` can likewise be a CLI error or the command's own exit, and a command can exit `128-255` while `128+N` also denotes a signal. For `exec`, the startup-refusal diagnostic names the command; `run` init rejection exits `1` and does not use `126`/`127`. Other startup failures remain errors.
+`126`/`127` are the only special cases: an `exec` startup refusal. Every other value keeps its usual meaning: the command's own exit status, a CLI error, or a signal.
 
 `boxlite rm`, `start`, `stop`, `restart` aggregate per-target errors and exit `1` if any target failed, after attempting all targets.
 
