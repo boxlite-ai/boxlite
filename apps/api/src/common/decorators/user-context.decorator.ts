@@ -8,6 +8,7 @@ import { Request } from 'express'
 import { CustomHeaders } from '../constants/header.constants'
 import { Context, RequestActor } from '../context/context'
 import { AuthContextType, isAuthContext } from '../interfaces/auth-context.interface'
+import { SystemRole } from '../../user/enums/system-role.enum'
 
 // Spec builds load no passport types, so the user an auth guard attaches is declared here.
 type RequestWithUser = Request & {
@@ -36,7 +37,14 @@ export function requestActor(request: Request): RequestActor | undefined {
   }
 }
 
-/** A user context for the request's operation, naming who acted and how they called. */
-export const UserContext = createParamDecorator((_data: unknown, ctx: ExecutionContext): Context =>
-  Context.user(requestActor(ctx.switchToHttp().getRequest<Request>())),
+/** Actor kind follows the authenticated role; client headers only supply descriptive labels. */
+export function requestContext(request: Request): Context {
+  const actor = requestActor(request)
+  const user = (request as RequestWithUser).user
+  return actor && user?.role === SystemRole.ADMIN ? Context.admin(actor) : Context.user(actor)
+}
+
+/** Role and identity for the request's operation, shared by HTTP handlers and proxy dispatch. */
+export const UserContext = createParamDecorator(
+  (_data: unknown, ctx: ExecutionContext): Context => requestContext(ctx.switchToHttp().getRequest<Request>()),
 )

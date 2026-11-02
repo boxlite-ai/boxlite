@@ -48,10 +48,9 @@ import { reportedBoxState } from '../box/utils/box-state.util'
 import { Box } from '../box/entities/box.entity'
 import { TunnelService } from '../box/services/tunnel.service'
 import { PrepareTunnelDto } from '../box/dto/tunnel.dto'
-import { requestActor, UserContext } from '../common/decorators/user-context.decorator'
+import { requestContext, UserContext } from '../common/decorators/user-context.decorator'
 import { Context } from '../common/context/context'
 import { recordBusinessEvent, recordOutcomes } from '../common/utils/business-event.util'
-import { SystemRole } from '../user/enums/system-role.enum'
 
 type ProxyActivityPolicy = { activity: boolean; autoResume: boolean }
 const USER_OPERATION: ProxyActivityPolicy = { activity: true, autoResume: true }
@@ -519,9 +518,7 @@ export class BoxliteProxyController {
 
     req[AUDIT_TARGET_ID] = box.id
     if (opts?.operation) {
-      const actor = requestActor(req)
-      const ctx = authContext.role === SystemRole.ADMIN ? Context.admin(actor) : Context.user(actor)
-      this.recordProxiedOperation(opts.operation, box, ctx, res)
+      this.recordProxiedOperation(opts.operation, box, requestContext(req), res)
     }
 
     if (policy.activity) {

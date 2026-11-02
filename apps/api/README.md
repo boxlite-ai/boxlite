@@ -308,14 +308,16 @@ await this.stop(event.boxId, undefined, Context.platform(PlatformReason.ORG_SUSP
 | `Context.platform(reason)` | `platform` | the `PlatformReason`, such as `auto_stop` or `auto_resume` |
 
 - Only the platform gives a reason; user and admin contexts have none.
-- A request handler names its caller with `@UserContext() ctx`, or `requestActor(req)` where it
+- A request handler names its caller with `@UserContext() ctx`, or `requestContext(req)` where it
   already holds the request: `user.id`, `auth.method` (`api_key` or `jwt`) and, when the client
   sends `X-BoxLite-Source` or `X-BoxLite-SDK-Version`, `client.source` and `sdk.version`.
 - The boot-time admin seed registers as `Context.platform(PlatformReason.BOOTSTRAP)`.
 - Job outcome events carry no context: the runner reports after the request has ended.
 - Admin box recovery and user creation retain the authenticated administrator in `Context.admin(actor)`.
-- Proxied exec and file-upload events select admin/user context from the authenticated role;
-  the requested and terminal event retain the same caller identity.
+- The shared request context selects admin/user from the authenticated role, including tunnels,
+  proxied exec/uploads and decorated mutation handlers. Client headers cannot choose actor kind;
+  requested and terminal events retain the same caller identity. Service callers with no person
+  keep their existing user context without an actor; explicit admin/platform decisions stay separate.
 - Add caller-decided fields to `Context`, not new service parameters.
 
 ## Admin organization metadata

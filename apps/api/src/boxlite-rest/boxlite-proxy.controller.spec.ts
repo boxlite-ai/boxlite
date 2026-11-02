@@ -6,7 +6,7 @@
 
 import { EventEmitter } from 'node:events'
 import { ForbiddenException, HttpStatus, Logger, NotFoundException, RequestMethod } from '@nestjs/common'
-import { HTTP_CODE_METADATA, METHOD_METADATA, PATH_METADATA } from '@nestjs/common/constants'
+import { HTTP_CODE_METADATA, METHOD_METADATA, PATH_METADATA, ROUTE_ARGS_METADATA } from '@nestjs/common/constants'
 import { Reflector } from '@nestjs/core'
 import { createProxyMiddleware } from 'http-proxy-middleware'
 import { BoxliteProxyController } from './boxlite-proxy.controller'
@@ -535,6 +535,14 @@ describe('BoxliteProxyController business events', () => {
   const request = (method: string, url: string) => ({ method, url, user: caller, get: () => undefined }) as never
   const response = () => Object.assign(new EventEmitter(), { statusCode: 200 })
 
+  function tunnelRequestContext(req: unknown): Context {
+    const parameters: Record<string, { index: number; factory?: (data: unknown, execution: unknown) => Context }> =
+      Reflect.getMetadata(ROUTE_ARGS_METADATA, BoxliteProxyController, 'proxyNetworkTunnel')
+    const parameter = Object.values(parameters).find(({ index, factory }) => index === 3 && factory)
+    if (!parameter?.factory) throw new Error('Tunnel context decorator is missing')
+    return parameter.factory(undefined, { switchToHttp: () => ({ getRequest: () => req }) })
+  }
+
   beforeEach(() => {
     jest.clearAllMocks()
     events = []
@@ -715,5 +723,38 @@ describe('BoxliteProxyController business events', () => {
     ).rejects.toThrow()
 
     expect(events[1]).toEqual(['tunnel.create exception', expect.objectContaining({ 'exception.type': 'conflict' })])
+  })
+
+  it.each(
+    [SystemRole.ADMIN, SystemRole.USER].flatMap((role) =>
+      ['jwt', 'api_key'].flatMap((method) => [true, false].map((allowed) => [role, method, allowed] as const)),
+    ),
+  )('preserves decorated %s tunnel attribution with %s, allowed=%s', async (role, method, allowed) => {
+    const { controller, boxService } = harness()
+    const box = await boxService.findOneByIdOrName()
+    boxService.findOneByIdOrName.mockResolvedValue({ ...box, inboundEnabled: allowed })
+    const auth = { ...activeAuth, ...caller, role, apiKey: method === 'api_key' ? {} : undefined }
+    const req = {
+      user: auth,
+      get: (name: string) => (name.toLowerCase() === 'x-boxlite-source' ? 'dashboard' : undefined),
+    }
+    const ctx = tunnelRequestContext(req)
+    const result = controller.proxyNetworkTunnel(auth as never, 'public-box', 3000, ctx)
+    if (allowed) await result
+    else await expect(result).rejects.toThrow()
+    expect(events.map(([message]) => message)).toEqual([
+      'tunnel.create requested',
+      `tunnel.create ${allowed ? 'success' : 'exception'}`,
+    ])
+    for (const [, attributes] of events) {
+      expect(attributes).toMatchObject({
+        'actor.kind': role,
+        'user.id': caller.userId,
+        'auth.method': method,
+        'client.source': 'dashboard',
+        'organization.id': 'org-1',
+        'correlation.id': 'box-uuid',
+      })
+    }
   })
 })
