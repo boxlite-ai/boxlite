@@ -2832,7 +2832,7 @@ components:
 
     SshConfig:
       type: object
-      description: Complete replacement SSH configuration; never persisted or logged by the runtime.
+      description: Complete replacement SSH configuration; credentials persist on the container disk and are included in clones, snapshots, exports and imports. Key material is never logged.
       required: [listen_address, host_private_key, accounts]
       additionalProperties: false
       properties:

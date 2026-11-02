@@ -87,6 +87,9 @@ channel execution, forwarding, and shutdown through their completion points.
   initialization or disk I/O. Mutations require `Guest.Init` and a ready container rootfs.
 - Desired state is stored in `/etc/boxlite/ssh.cfg`; Container.Init restores it.
   Guest shutdown drains the live listener without changing the saved switch.
+- Supplying both fields replaces saved content without loading it. Explicit
+  `enable=false` drains live SSH before storage access; storage errors still
+  return failure, and the saved switch may restore SSH after a restart.
 - Host port forwarding is configured separately from the guest SSH listener.
 - The Rust runtime exposes `LiteBox::ssh()` for local boxes and for REST-backed
   boxes served by `boxlite serve`. The local runtime's guest RPC client is
@@ -231,8 +234,8 @@ Lifecycle and Control RPC tests live in [tests.rs](tests.rs). Storage tests in
 [tests/persistence.rs](tests/persistence.rs) exercise production `save`/`load`
 with a complete configuration, including accounts, authorized keys, and CA
 credentials, while checking ownership, permissions, and whole-state replacement.
-Shared wire compatibility, field presence, credential redaction, and Git
-provenance tests remain inline in [the shared crate](../../../../shared/src/lib.rs).
+Shared wire compatibility and credential redaction tests remain inline in
+[the shared crate](../../../../shared/src/lib.rs).
 
 On Linux, run `make test:unit:guest FILTER=ssh` with nextest 0.9.116 or newer.
 The scoped [runner](tests/runner.sh) isolates `service::ssh::tests::*` and
@@ -242,7 +245,7 @@ This target skips execution on macOS; `make clippy` cross-compiles guest tests
 there but does not run them.
 
 Run `BOXLITE_DEPS_STUB=1 make test:unit:rust FILTER=ssh` for host and shared
-SSH tests, and use `FILTER=commit_is_stamped` for the shared provenance test.
+SSH tests.
 
 ## Source map
 

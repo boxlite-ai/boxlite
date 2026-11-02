@@ -219,10 +219,21 @@ The internal RPC `Control(enable, config)` retains each absent field and
 replaces supplied configuration. Configuration-only preserves the switch, an empty update observes,
 and enabling without configuration fails. Supplying configuration while enabled
 restarts the listener even if unchanged; repeated enable of a healthy listener
-preserves connections. Disabling retains credentials. Validation and persistence
-precede application: errors preserve the live listener; a bind or drain failure
-leaves the saved intent for a later retry. A post-rename sync error leaves disk
-durability uncertain, and the next update reloads the file.
+preserves connections. A complete update supplying both fields replaces saved
+content without reading it, so `configure(config)` can repair a corrupt file.
+Partial updates reload saved state to retain omitted fields.
+
+Explicit disable stops the current listener and drains SSH work before reading
+or saving state, retaining credentials when persistence succeeds. If storage
+fails, the call returns an error but current SSH stays stopped; the saved switch
+may still be enabled and restore SSH after a restart. For example, a failed
+`disable()` followed by disabled `status()` confirms only the current VM is
+stopped. Repair storage and retry disable to persist it. Even if accompanying
+configuration is invalid, explicit disable stops SSH before returning the error.
+Other updates validate and persist before replacing the live listener; validation
+or storage errors preserve it. A bind or drain failure leaves the saved intent
+for a later retry. A post-rename sync error leaves disk durability uncertain,
+and the next partial update reloads the file.
 
 Status reports actual listener health and public host identity. Generation counts
 successful starts in the current VM. Shutdown drains SSH without changing saved

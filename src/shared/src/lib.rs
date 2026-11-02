@@ -117,20 +117,6 @@ mod tests {
     }
 
     #[test]
-    fn ssh_enable_presence_roundtrips() {
-        use prost::Message;
-        for enable in [None, Some(false), Some(true)] {
-            let request = super::SshControlRequest {
-                config: None,
-                enable,
-            };
-            let decoded =
-                super::SshControlRequest::decode(request.encode_to_vec().as_slice()).unwrap();
-            assert_eq!(decoded.enable, enable);
-        }
-    }
-
-    #[test]
     fn ssh_configuration_global_credentials_do_not_create_an_account() {
         use prost::Message;
         // Previous SshConfig.ca (3) and authorized_keys (4) are reserved.

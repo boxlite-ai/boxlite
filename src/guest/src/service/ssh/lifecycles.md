@@ -23,17 +23,20 @@ completion dependency. Diagrams omit routine logging and validation helpers.
 
 ## 1. Service configuration
 
-`Control` merges supplied fields with saved state. The diagram shows a supplied
-configuration whose merged enable value is true: validation and persistence precede
+`Control` reloads saved state for partial updates; supplying both fields skips
+the read so complete replacement can repair corrupt content. The diagram shows
+a supplied configuration whose enable value is true: validation and persistence precede
 stopping the current generation, then the new address is bound. An empty update
 observes status before initialization checks and without disk I/O. A healthy
-repeated enable does not restart; a disabled update saves state and stops without
-binding.
+repeated enable does not restart. Explicit `enable=false` stops and drains SSH
+before reading, validating, or saving state. Errors then leave current SSH stopped,
+but failure to save may allow SSH to be restored after a restart. A configuration-only
+update retaining a disabled switch saves state and stops without binding.
 
 ```mermaid
 flowchart TD
     RPC["Ssh.Control RPC"] --> LOCK["Lock manager state"]
-    LOCK --> PARSE["Reload, merge and validate"]
+    LOCK --> PARSE["Load missing fields, merge and validate"]
     PARSE -->|invalid| KEEP["Return InvalidArgument<br/>current generation stays running"]
     PARSE -->|valid| SAVE["Save desired state"]
     SAVE --> STOP["await stop()<br/>cancel and drain old generation"]
@@ -282,7 +285,9 @@ registry and container teardown even if disabling SSH returned an error.
 Sources: [stop barrier](mod.rs#L190), [TaskGroup](task_group.rs#L10),
 [guest shutdown](../guest.rs#L89). Time limits live in [limits.rs](limits.rs).
 
-Desired state is persisted before service application in the container rootfs at
-`/etc/boxlite/ssh.cfg`. Container.Init restores enabled state without rewriting it;
-shutdown drains runtime tasks without changing that state. Control reloads disk
-before merging updates, including after an uncertain directory sync failure.
+Desired state is persisted in the container rootfs at `/etc/boxlite/ssh.cfg`.
+Configuration and enable updates save before replacing the listener; explicit
+disable drains first, then attempts to save. Container.Init restores enabled
+state without rewriting it; shutdown drains runtime tasks without changing that
+state. Partial updates reload disk before merging, including after an uncertain
+directory sync failure.

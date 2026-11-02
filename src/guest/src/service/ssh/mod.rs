@@ -112,7 +112,6 @@ struct SshState {
     listener: Option<JoinHandle<()>>,
     status: boxlite_shared::SshStatus,
     rootfs: Option<PathBuf>,
-    closing: bool,
     #[cfg(test)]
     activation_gate: Option<Arc<ActivationGate>>,
 }
@@ -151,19 +150,26 @@ impl SshManager {
         if enable.is_none() && config.is_none() {
             return Ok(Self::live_status(&state));
         }
-        if state.closing || guest.shutting_down.load(Ordering::SeqCst) {
+        if guest.shutting_down.load(Ordering::SeqCst) {
             return Err(tonic::Status::failed_precondition("guest is shutting down").into());
         }
         let root = state
             .rootfs
             .clone()
             .ok_or_else(|| tonic::Status::failed_precondition("container rootfs is not ready"))?;
-        let load_root = root.clone();
-        let mut desired = tokio::task::spawn_blocking(move || persistence::load(&load_root))
-            .await
-            .map_err(|_| tonic::Status::internal("SSH state load failed"))?
-            .map_err(|_| tonic::Status::internal("SSH state load failed"))?;
+        if enable == Some(false) {
+            self.stop(&mut state).await?;
+        }
         let supplied = config.is_some();
+        let mut desired = if enable.is_some() && supplied {
+            persistence::DesiredState::default()
+        } else {
+            let load_root = root.clone();
+            tokio::task::spawn_blocking(move || persistence::load(&load_root))
+                .await
+                .map_err(|_| tonic::Status::internal("SSH state load failed"))?
+                .map_err(|_| tonic::Status::internal("SSH state load failed"))?
+        };
         desired.config = config.or(desired.config);
         desired.enable = enable.unwrap_or(desired.enable);
         let parsed = desired
@@ -181,7 +187,9 @@ impl SshManager {
             .map_err(|_| tonic::Status::internal("SSH state save failed"))?
             .map_err(|_| tonic::Status::internal("SSH state save failed"))?;
         if !enabled {
-            self.stop(&mut state).await?;
+            if enable.is_none() {
+                self.stop(&mut state).await?;
+            }
         } else if supplied || !Self::live_status(&state).enabled {
             self.stop(&mut state).await?;
             if !guest.shutting_down.load(Ordering::SeqCst) {
@@ -201,7 +209,7 @@ impl SshManager {
             .guest()
             .ok_or_else(|| tonic::Status::internal("SSH manager is not attached"))?;
         let mut state = self.state.lock().await;
-        if state.closing || guest.shutting_down.load(Ordering::SeqCst) {
+        if guest.shutting_down.load(Ordering::SeqCst) {
             return Ok(());
         }
         if let Some(existing) = &state.rootfs {
@@ -288,7 +296,6 @@ impl SshManager {
 
     pub(crate) async fn shutdown(&self) -> Result<boxlite_shared::SshStatus, Box<tonic::Status>> {
         let mut state = self.state.lock().await;
-        state.closing = true;
         self.stop(&mut state).await?;
         Ok(Self::live_status(&state))
     }

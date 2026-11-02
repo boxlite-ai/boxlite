@@ -1226,7 +1226,7 @@ async fn ssh_shutdown_serializes_with_admitted_activation() {
 }
 
 #[tokio::test]
-async fn ssh_requires_rootfs_and_preserves_service_on_storage_error() {
+async fn ssh_requires_rootfs_and_full_configuration_repairs_corrupt_state() {
     let mut fixture = TestGuest::new().await;
     fixture
         .client
@@ -1254,11 +1254,46 @@ async fn ssh_requires_rootfs_and_preserves_service_on_storage_error() {
     let active = fixture.configure(configuration.clone()).await.unwrap();
     let path = fixture._root.path().join("etc/boxlite/ssh.cfg");
     std::fs::write(&path, b"invalid JSON").unwrap();
+    let replacement = config(&private_key(), &[&private_key()], None);
+    let repaired = fixture
+        .configure(replacement.clone())
+        .await
+        .expect("complete configuration must replace corrupt saved content");
+    assert!(repaired.enabled);
+    assert_eq!(repaired.generation, active.generation + 1);
+    assert_ne!(repaired.host_key_fingerprint, active.host_key_fingerprint);
+    let desired = persistence::load(fixture._root.path()).unwrap();
+    assert!(desired.enable);
+    assert_eq!(desired.config, Some(replacement));
+    fixture.stop().await;
+}
+
+#[tokio::test]
+async fn ssh_disable_stops_live_listener_when_saved_state_is_corrupt() {
+    let mut fixture = TestGuest::new().await;
+    let address = fixture
+        .start(config(&private_key(), &[&private_key()], None))
+        .await;
+    let path = fixture._root.path().join("etc/boxlite/ssh.cfg");
+    std::fs::write(&path, b"invalid JSON").unwrap();
     assert_eq!(
-        fixture.configure(configuration).await.unwrap_err().code(),
+        fixture
+            .ssh
+            .control(SshControlRequest {
+                enable: Some(false),
+                config: None,
+            })
+            .await
+            .unwrap_err()
+            .code(),
         tonic::Code::Internal
     );
-    assert_eq!(fixture.status().await, active);
+    assert!(
+        !fixture.status().await.enabled,
+        "explicit disable must stop SSH even when saved state cannot be read"
+    );
+    assert!(tokio::net::TcpStream::connect(address).await.is_err());
+    assert_eq!(std::fs::read(path).unwrap(), b"invalid JSON");
     fixture.stop().await;
 }
 
@@ -1299,7 +1334,7 @@ async fn ssh_parallel_partial_updates_merge_both_fields() {
 }
 
 #[tokio::test]
-async fn ssh_save_failure_keeps_live_listener_and_old_file() {
+async fn ssh_disable_stops_live_listener_when_save_fails() {
     let mut fixture = TestGuest::new().await;
     let active = fixture
         .start(config(&private_key(), &[&private_key()], None))
@@ -1337,8 +1372,13 @@ async fn ssh_save_failure_keeps_live_listener_and_old_file() {
         assert_eq!(result.unwrap_err().code(), tonic::Code::Internal);
     }
     assert_eq!(std::fs::read(path).unwrap(), before);
-    assert_eq!(fixture.status().await, before_status);
-    assert!(tokio::net::TcpStream::connect(active).await.is_ok());
+    let stopped = fixture.status().await;
+    assert!(
+        !stopped.enabled,
+        "explicit disable must stop SSH even when saved state cannot be written"
+    );
+    assert_eq!(stopped.generation, before_status.generation);
+    assert!(tokio::net::TcpStream::connect(active).await.is_err());
     fixture.stop().await;
 }
 
