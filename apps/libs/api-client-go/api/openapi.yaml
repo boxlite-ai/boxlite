@@ -1262,35 +1262,6 @@ paths:
       tags:
       - organizations
   /regions:
-    get:
-      operationId: listAvailableRegions
-      parameters:
-      - description: Use with JWT to specify the organization ID
-        explode: false
-        in: header
-        name: X-BoxLite-Organization-ID
-        required: false
-        schema:
-          type: string
-        style: simple
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                items:
-                  $ref: "#/components/schemas/Region"
-                type: array
-          description: List of all available regions
-      security:
-      - bearer: []
-      - oauth2:
-        - openid
-        - profile
-        - email
-      summary: List all available regions for the organization
-      tags:
-      - organizations
     post:
       operationId: createRegion
       parameters:
@@ -6081,6 +6052,40 @@ components:
       - assignedRoleIds
       - role
       type: object
+    CreateRegion:
+      example:
+        name: us-east-1
+        proxyUrl: https://proxy.example.com
+      properties:
+        name:
+          description: Region name
+          example: us-east-1
+          type: string
+        proxyUrl:
+          description: Proxy URL for the region
+          example: https://proxy.example.com
+          nullable: true
+          type: string
+      required:
+      - name
+      type: object
+    CreateRegionResponse:
+      example:
+        id: region_12345
+        proxyApiKey: proxy-api-key-xyz
+      properties:
+        id:
+          description: ID of the created region
+          example: region_12345
+          type: string
+        proxyApiKey:
+          description: Proxy API key for the region
+          example: proxy-api-key-xyz
+          nullable: true
+          type: string
+      required:
+      - id
+      type: object
     RegionType:
       description: The type of the region
       enum:
@@ -6135,40 +6140,6 @@ components:
       - name
       - regionType
       - updatedAt
-      type: object
-    CreateRegion:
-      example:
-        name: us-east-1
-        proxyUrl: https://proxy.example.com
-      properties:
-        name:
-          description: Region name
-          example: us-east-1
-          type: string
-        proxyUrl:
-          description: Proxy URL for the region
-          example: https://proxy.example.com
-          nullable: true
-          type: string
-      required:
-      - name
-      type: object
-    CreateRegionResponse:
-      example:
-        id: region_12345
-        proxyApiKey: proxy-api-key-xyz
-      properties:
-        id:
-          description: ID of the created region
-          example: region_12345
-          type: string
-        proxyApiKey:
-          description: Proxy API key for the region
-          example: proxy-api-key-xyz
-          nullable: true
-          type: string
-      required:
-      - id
       type: object
     RegenerateApiKeyResponse:
       example:
@@ -8506,6 +8477,7 @@ components:
       example:
         id: id
         name: name
+        image: image
         organizationId: organizationId
         runnerId: runnerId
         regionId: regionId
@@ -8521,6 +8493,11 @@ components:
         id:
           type: string
         name:
+          type: string
+        image:
+          description: "Stored Box image reference, when available. Null when no image\
+            \ is stored."
+          nullable: true
           type: string
         organizationId:
           type: string
@@ -8574,6 +8551,7 @@ components:
         items:
         - id: id
           name: name
+          image: image
           organizationId: organizationId
           runnerId: runnerId
           regionId: regionId
@@ -8587,6 +8565,7 @@ components:
           observedAt: 2000-01-23T04:56:07.000+00:00
         - id: id
           name: name
+          image: image
           organizationId: organizationId
           runnerId: runnerId
           regionId: regionId
@@ -8658,6 +8637,7 @@ components:
       example:
         id: id
         name: name
+        image: image
         organizationId: organizationId
         runnerId: runnerId
         regionId: regionId
@@ -8681,6 +8661,11 @@ components:
         id:
           type: string
         name:
+          type: string
+        image:
+          description: "Stored Box image reference, when available. Null when no image\
+            \ is stored."
+          nullable: true
           type: string
         organizationId:
           type: string

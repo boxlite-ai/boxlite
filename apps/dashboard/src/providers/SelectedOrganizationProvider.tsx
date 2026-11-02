@@ -7,6 +7,7 @@
 import { ISelectedOrganizationContext, SelectedOrganizationContext } from '@/contexts/SelectedOrganizationContext'
 import { LocalStorageKey } from '@/enums/LocalStorageKey'
 import { useApi } from '@/hooks/useApi'
+import { useOrganizationBoxLimitsQuery } from '@/hooks/queries/useOrganizationBoxLimitsQuery'
 import { useOrganizations } from '@/hooks/useOrganizations'
 import { handleApiError } from '@/lib/error-handling'
 import { resolveSelectedOrganizationId } from '@/lib/organization-selection'
@@ -64,6 +65,8 @@ export function SelectedOrganizationProvider(props: Props) {
     }
     return organizations.find((org) => org.id === selectedOrganizationId) || null
   }, [organizations, selectedOrganizationId])
+
+  useOrganizationBoxLimitsQuery(selectedOrganization)
 
   useEffect(() => {
     if (!posthog || !selectedOrganizationId) {

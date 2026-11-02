@@ -18,6 +18,7 @@ import { OrganizationRole } from './entities/organization-role.entity'
 import { OrganizationUser } from './entities/organization-user.entity'
 import { OrganizationInvitation } from './entities/organization-invitation.entity'
 import { OrganizationService } from './services/organization.service'
+import { OrganizationBoxLimitsService } from './services/organization-box-limits.service'
 import { OrganizationRoleService } from './services/organization-role.service'
 import { OrganizationUserService } from './services/organization-user.service'
 import { OrganizationInvitationService } from './services/organization-invitation.service'
@@ -31,7 +32,6 @@ import { BoxRepository } from '../box/repositories/box.repository'
 import { BoxLookupCacheInvalidationService } from '../box/services/box-lookup-cache-invalidation.service'
 import { RegionModule } from '../region/region.module'
 import { OrganizationRegionController } from './controllers/organization-region.controller'
-import { Region } from '../region/entities/region.entity'
 import { EncryptionModule } from '../encryption/encryption.module'
 import { UsageModule } from '../usage/usage.module'
 import { UsageController } from '../usage/controllers/usage.controller'
@@ -49,7 +49,6 @@ import { UsageController } from '../usage/controllers/usage.controller'
       OrganizationInvitation,
       Box,
       Volume,
-      Region,
     ]),
     EncryptionModule,
     UsageModule,
@@ -65,6 +64,7 @@ import { UsageController } from '../usage/controllers/usage.controller'
   ],
   providers: [
     OnboardingService,
+    OrganizationBoxLimitsService,
     OrganizationService,
     OrganizationRoleService,
     OrganizationUserService,
@@ -81,6 +81,12 @@ import { UsageController } from '../usage/controllers/usage.controller'
       ) => new BoxRepository(dataSource, eventEmitter, boxLookupCacheInvalidationService),
     },
   ],
-  exports: [OrganizationService, OrganizationRoleService, OrganizationUserService, OrganizationInvitationService],
+  exports: [
+    OrganizationService,
+    OrganizationBoxLimitsService,
+    OrganizationRoleService,
+    OrganizationUserService,
+    OrganizationInvitationService,
+  ],
 })
 export class OrganizationModule {}

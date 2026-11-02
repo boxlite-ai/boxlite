@@ -3,6 +3,13 @@
 The web console at `app.boxlite.ai`. A Vite + React app, built and tested
 through Nx as the `dashboard` project.
 
+## Region names
+
+The console resolves shared-region names through `GET /api/shared-regions`.
+An unknown region keeps its stored ID as the display fallback. Region names do
+not depend on the selected organization, so switching organizations does not
+refetch this list.
+
 ## Commands
 
 Run these from `apps/`:
@@ -281,3 +288,26 @@ meantime, the console falls back to their personal organization.
 The welcome flow saves organization intent before confirming signup credit delivery.
 [Onboarding](ONBOARDING.md) describes the dedicated Quickstart page, public image templates,
 server-backed prompt drafts, and deployment/verification requirements.
+
+## Box limits refresh without interrupting creation
+
+Selecting an organization preloads its effective per-Box limits through the
+organization detail API. The create dialog shares that query, refreshes on
+opening and every 10 seconds while open in the foreground, and shows updated
+Custom maxima without resetting the form. A named preset is recalculated from
+its original size when limits change; Custom only reduces values that exceed a
+confirmed limit. Subscription mutations invalidate the affected organization's
+detail query without waiting for that refresh.
+
+The query overrides the global five-minute freshness and previous-query
+placeholder defaults, uses a 10-second request timeout, and passes cancellation
+to Axios. Its key includes the organization ID and stored quota tuple so a new
+organization or administrator quota edit cannot inherit unrelated limits.
+Queries never replace membership DTOs or their per-user default flags.
+
+Creation remains available while limits load. Until the first result, selected
+resources reach server validation unchanged. Later refreshes keep confirmed
+values; failures show a quiet inline notice. Normal background refreshes show
+no toast or loading lock. The API's 30-second grant cache still applies, followed
+by up to one polling interval and request latency before an open dialog updates.
+See [Cloud sandbox sizes](../../docs/guides/resource-limits.md#cloud-sandbox-sizes).

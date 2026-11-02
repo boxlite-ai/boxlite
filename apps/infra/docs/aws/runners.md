@@ -18,6 +18,9 @@ a failure stops subsequent updates. Updates verify artifact checksums and readin
 and already-converged hosts need no restart. Intentional release rollback needs `--allow-downgrade`.
 Hosts retain their disks and local box state and are protected against replacement/deletion.
 
+AWS keeps box state on the root disk. Configure `deploy.runners.rootDiskGb` and omit the GCP-only
+`dataDiskGb` field, which AWS rejects; see [runner sizing](../configuration.md#runner-sizing).
+
 ## Verify and recover
 
 Read each selected host's SSM command result, then perform the shared

@@ -24,6 +24,8 @@ var _ MappedNullable = &AdminBoxOverview{}
 type AdminBoxOverview struct {
 	Id string `json:"id"`
 	Name string `json:"name"`
+	// Stored Box image reference, when available. Null when no image is stored.
+	Image NullableString `json:"image,omitempty"`
 	OrganizationId string `json:"organizationId"`
 	RunnerId NullableString `json:"runnerId,omitempty"`
 	RegionId string `json:"regionId"`
@@ -113,6 +115,48 @@ func (o *AdminBoxOverview) GetNameOk() (*string, bool) {
 // SetName sets field value
 func (o *AdminBoxOverview) SetName(v string) {
 	o.Name = v
+}
+
+// GetImage returns the Image field value if set, zero value otherwise (both if not set or set to explicit null).
+func (o *AdminBoxOverview) GetImage() string {
+	if o == nil || IsNil(o.Image.Get()) {
+		var ret string
+		return ret
+	}
+	return *o.Image.Get()
+}
+
+// GetImageOk returns a tuple with the Image field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+// NOTE: If the value is an explicit nil, `nil, true` will be returned
+func (o *AdminBoxOverview) GetImageOk() (*string, bool) {
+	if o == nil {
+		return nil, false
+	}
+	return o.Image.Get(), o.Image.IsSet()
+}
+
+// HasImage returns a boolean if a field has been set.
+func (o *AdminBoxOverview) HasImage() bool {
+	if o != nil && o.Image.IsSet() {
+		return true
+	}
+
+	return false
+}
+
+// SetImage gets a reference to the given NullableString and assigns it to the Image field.
+func (o *AdminBoxOverview) SetImage(v string) {
+	o.Image.Set(&v)
+}
+// SetImageNil sets the value for Image to be an explicit nil
+func (o *AdminBoxOverview) SetImageNil() {
+	o.Image.Set(nil)
+}
+
+// UnsetImage ensures that no value is present for Image, not even an explicit nil
+func (o *AdminBoxOverview) UnsetImage() {
+	o.Image.Unset()
 }
 
 // GetOrganizationId returns the OrganizationId field value
@@ -481,6 +525,9 @@ func (o AdminBoxOverview) ToMap() (map[string]interface{}, error) {
 	toSerialize := map[string]interface{}{}
 	toSerialize["id"] = o.Id
 	toSerialize["name"] = o.Name
+	if o.Image.IsSet() {
+		toSerialize["image"] = o.Image.Get()
+	}
 	toSerialize["organizationId"] = o.OrganizationId
 	if o.RunnerId.IsSet() {
 		toSerialize["runnerId"] = o.RunnerId.Get()
@@ -554,6 +601,7 @@ func (o *AdminBoxOverview) UnmarshalJSON(data []byte) (err error) {
 	if err = json.Unmarshal(data, &additionalProperties); err == nil {
 		delete(additionalProperties, "id")
 		delete(additionalProperties, "name")
+		delete(additionalProperties, "image")
 		delete(additionalProperties, "organizationId")
 		delete(additionalProperties, "runnerId")
 		delete(additionalProperties, "regionId")

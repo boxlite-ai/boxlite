@@ -100,6 +100,11 @@ export const handlers = [
   // backend and no login (see MockAuthProvider for the fake session).
   http.get(`${API_URL}/config`, () => HttpResponse.json(buildMockConfig(BILLING_API_URL))),
   http.get(`${API_URL}/organizations`, () => HttpResponse.json([MOCK_ORGANIZATION])),
+  http.get(`${API_URL}/organizations/:organizationId`, ({ params }) =>
+    params.organizationId === MOCK_ORGANIZATION.id
+      ? HttpResponse.json(MOCK_ORGANIZATION)
+      : new HttpResponse(null, { status: 404 }),
+  ),
   http.get(`${API_URL}/organizations/:organizationId/concurrency`, ({ request }) => {
     const url = new URL(request.url)
     const to = new Date(url.searchParams.get('to') ?? Date.now())
@@ -447,7 +452,6 @@ export const handlers = [
   }),
 
   http.get(`${API_URL}/shared-regions`, () => HttpResponse.json([])),
-  http.get(`${API_URL}/regions`, () => HttpResponse.json([])),
   http.get(`${API_URL}/api-keys`, () => HttpResponse.json([])),
   http.post(`${API_URL}/api-keys`, async ({ request }) => {
     const body = (await request.json().catch(() => ({}))) as { name?: string }

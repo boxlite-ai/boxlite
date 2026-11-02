@@ -10,7 +10,7 @@ CONNECT does not stand in for the direct proxy path.
 
 | Area | Cases | Assertions |
 | --- | --- | --- |
-| Inbound/public | `test_box_management.py`, `test_preview_access.py` | Default disabled; prepare rejected when disabled; declared public port reaches the guest; undeclared port 404; disabling declared access 403 |
+| Inbound/public | `test_box_management.py`, `test_preview_access.py` | Default disabled; prepare rejected when disabled; declared public port reaches the guest; undeclared port 404; disabling declared access 403 or 404 |
 | Private identity | `test_preview_access.py` | Token, platform authorization and bearer access over HTTP/WS/CONNECT; absent/incorrect credentials rejected; masked repeat prepare; conflicting mode rejected; tokens and cookies isolated across ports and boxes |
 | Session protocol | `test_private_tunnel.py` | Explicit bad proof cannot fall back to a cookie; ambiguous proofs 400; exact-origin cookie checks; platform credentials and token Referer stripped; application credentials retained; reserved guest cookies removed |
 | Revoke | `test_tunnel_revoke.py` | Public/private new access denied; other port unaffected; idempotence; token rotation invalidates old cookie/token; existing WS/TCP remains usable; revoke works while stopped or inbound-disabled |
@@ -26,9 +26,12 @@ call prepare, which would undo the operation under test. The three-second
 authorization-cache window has a one-second request-scheduling allowance;
 a late successful rejection still fails the timing check.
 
-After box deletion, HTTP/WS/CONNECT accept 403 or 404: expired inbound metadata
-denies access with 403, while a cached enabled mode reaches the missing tunnel
-and returns 404. Revoking a port on an existing box still requires 404.
+After inbound is disabled or a box is deleted, HTTP/WS/CONNECT accept 403 or 404.
+Refreshed inbound metadata denies access with 403, while a cached enabled mode
+can reach the tunnel check, which returns 404 once it observes the disabled or
+missing box. The cases require access rejection within the existing cache window,
+regardless of which check rejects it. Revoking a port on an existing inbound-enabled
+box still requires 404.
 Raw HTTPS WebSocket/CONNECT probes explicitly require TLS 1.2 or newer and retain
 the default certificate and hostname verification.
 

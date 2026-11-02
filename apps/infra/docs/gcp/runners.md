@@ -33,7 +33,8 @@ completed operations proceed immediately. Deletion keeps the provider's default 
 
 Each assignment carries both binary and unit-environment policies, so an update also converges the API
 address, volume backend and registry proxy host. Existing hosts retain their disks, image caches and
-local box state; boot-image/startup changes do not replace them.
+local box state; machine-type and boot-image/startup changes do not resize or replace them.
+New hosts use the current [runner sizing settings](../configuration.md#runner-sizing).
 
 `runner:update` checks both assignments before writing, then updates them in the same order. It waits
 for each rollout and verifies that every policy on each targeted host reports compliant with the updated
@@ -51,7 +52,8 @@ The five-minute window controls rollout pacing; it does not continuously test bo
 ## Data disk
 
 Each host gets its own Hyperdisk Balanced disk, `<app>-<stage>-runner-data[-N]`, attached as `boxlite-data`:
-200 GiB at 3,600 IOPS and 290 MiB/s (240 MiB/s on `small`, the n4-standard-4 limit). Box state lives on it:
+200 GiB by default, with optional `deploy.runners.dataDiskGb` selecting its capacity at creation.
+Performance stays at 3,600 IOPS and 290 MiB/s (240 MiB/s on `small`, the n4-standard-4 limit). Box state lives on it:
 the boot script formats a blank disk once and mounts it at `/var/lib/boxlite` with `nofail`, so `rootDiskGb`
 sizes only the boot disk. The runner unit requires that mount: a host whose disk does not mount still boots
 and stays reachable, with the runner stopped: `systemctl status var-lib-boxlite.mount` says why, or

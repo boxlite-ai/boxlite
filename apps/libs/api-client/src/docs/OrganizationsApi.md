@@ -25,7 +25,6 @@ All URIs are relative to *http://localhost:3000*
 |[**getQuickstartPrompt**](#getquickstartprompt) | **GET** /organizations/{organizationId}/quickstart/prompt | Read your prompt draft in this organization|
 |[**getRegionById**](#getregionbyid) | **GET** /regions/{id} | Get region by ID|
 |[**leaveOrganization**](#leaveorganization) | **POST** /organizations/{organizationId}/leave | Leave organization|
-|[**listAvailableRegions**](#listavailableregions) | **GET** /regions | List all available regions for the organization|
 |[**listOrganizationInvitations**](#listorganizationinvitations) | **GET** /organizations/{organizationId}/invitations | List pending organization invitations|
 |[**listOrganizationInvitationsForAuthenticatedUser**](#listorganizationinvitationsforauthenticateduser) | **GET** /organizations/invitations | List organization invitations for authenticated user|
 |[**listOrganizationMembers**](#listorganizationmembers) | **GET** /organizations/{organizationId}/users | List organization members|
@@ -1120,56 +1119,6 @@ void (empty response body)
 | Status code | Description | Response headers |
 |-------------|-------------|------------------|
 |**204** | Organization left successfully |  -  |
-
-[[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
-
-# **listAvailableRegions**
-> Array<Region> listAvailableRegions()
-
-
-### Example
-
-```typescript
-import {
-    OrganizationsApi,
-    Configuration
-} from './api';
-
-const configuration = new Configuration();
-const apiInstance = new OrganizationsApi(configuration);
-
-let xBoxLiteOrganizationID: string; //Use with JWT to specify the organization ID (optional) (default to undefined)
-
-const { status, data } = await apiInstance.listAvailableRegions(
-    xBoxLiteOrganizationID
-);
-```
-
-### Parameters
-
-|Name | Type | Description  | Notes|
-|------------- | ------------- | ------------- | -------------|
-| **xBoxLiteOrganizationID** | [**string**] | Use with JWT to specify the organization ID | (optional) defaults to undefined|
-
-
-### Return type
-
-**Array<Region>**
-
-### Authorization
-
-[bearer](../README.md#bearer), [oauth2](../README.md#oauth2)
-
-### HTTP request headers
-
- - **Content-Type**: Not defined
- - **Accept**: application/json
-
-
-### HTTP response details
-| Status code | Description | Response headers |
-|-------------|-------------|------------------|
-|**200** | List of all available regions |  -  |
 
 [[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
 

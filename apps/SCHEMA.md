@@ -873,18 +873,6 @@ boundary.
 
 ## Known gaps
 
-### `region_quota` is queried but never created
-
-[`OrganizationService.listAvailableRegions()`](./api/src/organization/services/organization.service.ts)
-filters on `EXISTS (SELECT 1 FROM region_quota rq …)`. The identifier
-`region_quota` appears exactly once in the repository — in that SQL fragment.
-No entity and no migration creates the table.
-
-The method builds one statement from a `.where()` and two `.orWhere()`
-branches, so Postgres parses the subquery on every call regardless of which
-branch would match. It is reachable from a live endpoint in
-[`organization-region.controller.ts`](./api/src/organization/controllers/organization-region.controller.ts).
-
 ### Type drift on five reference columns
 
 `organization.id` and `runner.id` are `uuid`, but five columns that reference

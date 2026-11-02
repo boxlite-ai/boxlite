@@ -18,6 +18,7 @@ type BoxSummary = Pick<
   Box,
   | 'id'
   | 'name'
+  | 'image'
   | 'organizationId'
   | 'runnerId'
   | 'region'
@@ -264,6 +265,7 @@ export class AdminPlatformOverviewService {
       select: {
         id: true,
         name: true,
+        image: true,
         organizationId: true,
         runnerId: true,
         region: true,
@@ -292,6 +294,7 @@ export class AdminPlatformOverviewService {
       select: {
         id: true,
         name: true,
+        image: true,
         organizationId: true,
         runnerId: true,
         region: true,
@@ -360,6 +363,7 @@ export class AdminPlatformOverviewService {
     return {
       id: box.id,
       name: box.name,
+      image: box.image ?? null,
       organizationId: box.organizationId,
       runnerId: box.runnerId ?? null,
       regionId: box.region,
