@@ -168,6 +168,12 @@ For v0 runners, which have no START_BOX job, BoxManager records an existing star
 `box.start` outcome after its state is persisted. Returned runner errors, startup timeouts and
 thrown starts yield `runner_start_failed`; v2 outcomes remain with JobStateHandler. Initial
 creation and repeated terminal syncs do not emit an extra start outcome.
+Both accepted-start writes atomically set internal `startEventPending`; it survives runner
+instance loss and recreation across sync invocations. Entity invariants clear it in the
+terminal or superseding state write, including v2 job completion. Logging remains best effort,
+not an exactly-once outbox. Run the pre-deploy migration before upgrading the API; roll back
+the API before dropping the column. Already in-flight UNKNOWN/CREATING operations from before
+the upgrade have no marker and cannot be reliably backfilled as starts.
 
 Box events go through `src/box/utils/box-business-event.util.ts`: the request and the outcome are
 recorded in different places, so one call cannot cover both. A proxied call that fails with an
