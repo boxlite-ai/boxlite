@@ -230,6 +230,10 @@ two-second request timeout. API Redis NX/EX 60 deduplicates across replicas; Red
 Forwarding continues on telemetry failure. Reloads collapse and delivery is best effort: this is neither a
 navigation count nor a visitor count, and it does not add to requested-operation totals.
 
+API/proxy warnings identify the box and failing observation stage; proxy HTTP failures also
+identify the status, and transport failures distinguish timeouts. Raw database, Redis and URL
+error strings are excluded because they may contain credentials or user data.
+
 The preview marker is internal to the proxy/API exchange and is absent from the public OpenAPI parameters;
 ordinary heartbeat clients keep their existing signature and need no new header.
 
