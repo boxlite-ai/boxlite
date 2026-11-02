@@ -26,6 +26,7 @@ __pycache__/
 *.dist-info/
 .eggs/
 .venv/
+.venv-e2e/
 venv/
 env/
 .python-version

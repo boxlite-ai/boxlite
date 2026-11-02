@@ -35,6 +35,19 @@ received the corresponding HTTP requests by tailing `/var/log/boxlite-api.log`
 and `journalctl -u boxlite-runner`. If that meta-test passes, every other
 case in this suite is using the same fixtures and the same path.
 
+## Managed local E2E (preferred)
+
+`make test:e2e:setup` owns an isolated stack: dependency containers, current-source clients, API/Runner/proxies, fixtures and a real guest smoke. State lives in `target/e2e/`; no sudo or system services are used.
+
+```bash
+nix develop -c make test:e2e:doctor
+nix develop -c make test:e2e:setup
+make test:e2e FILTER=exec_working_dir
+make test:e2e:down
+```
+
+Nix is optional: install the same tools with the distro and run the same commands. Host prerequisites remain `/dev/kvm`, a Docker-compatible CLI, and (for volumes) `/dev/fuse`, `mount-s3` and `user_allow_other` in `/etc/fuse.conf`. The bootstrap instructions below are the legacy Ubuntu system-service path and are no longer used by `make test:e2e:setup`.
+
 ## Prereqs
 
 `BOXLITE_E2E_CATALOG_IMAGE` accepts tagged, digest-pinned, and untagged
