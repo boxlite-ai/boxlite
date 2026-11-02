@@ -178,6 +178,12 @@ an observation. The API derives organization from the stored box and leaves user
 polls and denied requests do not emit it; admission does not prove the guest rendered successfully.
 Per-box proxy singleflight and a separate 60-second cooldown bound attempts (including failed delivery), with a
 two-second request timeout. API Redis NX/EX 60 deduplicates across replicas; Redis failure suppresses the event.
+The API waits at most 1.5 seconds for the complete preview sequence, including the activity
+lock, buffered timestamp, deduplication and box lookup. A deadline suppresses the event and
+subsequent steps; ordinary heartbeat waits and errors keep their existing behavior. Already
+submitted shared Redis commands cannot be cancelled: a late lock can consume its throttle
+TTL without buffering activity, and an in-flight timestamp or expiring NX marker may still
+land. This deadline bounds handler waiting, not the shared Redis queue.
 Forwarding continues on telemetry failure. Reloads collapse and delivery is best effort: this is neither a
 navigation count nor a visitor count, and it does not add to requested-operation totals.
 
