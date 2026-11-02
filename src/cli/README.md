@@ -726,7 +726,15 @@ Display system-wide runtime information (version, paths, host/virtualization, bo
 |--------|-------------|
 | `--format FMT` | Output format: `yaml`, `json` (default: `yaml`). Table format is not supported. |
 
-**Output fields:** `version`, `homeDir`, `virtualization`, `os`, `arch`, `boxesTotal`, `boxesRunning`, `boxesStopped`, `boxesConfigured`, `imagesCount`.
+**Output fields:** `version`, `homeDir`, `virtualization`, `os`, `arch`, `boxesTotal`, `boxesRunning`, `boxesPaused`, `boxesStopped`, `boxesConfigured`, `imagesCount`.
+
+`boxesTotal` counts all boxes. `boxesRunning`, `boxesPaused`, `boxesStopped`, and
+`boxesConfigured` each count only boxes in that state. Other states contribute only
+to the total, so these counts can sum to less than `boxesTotal`. JSON and YAML
+always include `boxesPaused`, including when it is zero.
+
+For example, one running box and one paused box report `boxesTotal: 2`,
+`boxesRunning: 1`, and `boxesPaused: 1`.
 
 **Examples:**
 

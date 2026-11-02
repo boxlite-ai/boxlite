@@ -28,7 +28,8 @@ use std::time::Duration;
 use boxlite::runtime::options::VolumeSpec;
 use boxlite::{
     AttachOptions, BoxCommand, BoxOptions, BoxStatus, BoxliteError, BoxliteOptions, BoxliteRuntime,
-    CheckpointImportOptions, CopyOptions, ExecStdout, LiteBox, PauseOptions, ResizeOptions, RootfsSpec,
+    CheckpointImportOptions, CopyOptions, ExecStdout, LiteBox, PauseOptions, ResizeOptions,
+    RootfsSpec,
 };
 use boxlite_test_utils::home::{PerTestBoxHome, live_shim_pids};
 use futures::StreamExt;
@@ -686,11 +687,17 @@ async fn checkpoint_continues_the_same_guest_process_in_a_new_runtime() {
     source.start().await.expect("start");
     let source_shim = source.info().await.unwrap().pid;
     let ceiling = source.resize(ResizeOptions::default()).await.unwrap();
-    assert!(ceiling.max_cpus >= 3 && ceiling.max_memory_mib >= 640,
-        "resize/checkpoint acceptance needs 3 CPUs and 640 MiB of capacity");
-    let before_capture = source.resize(ResizeOptions {
-        cpus: Some(2), memory_mib: Some(512),
-    }).await.expect("grow before checkpoint");
+    assert!(
+        ceiling.max_cpus >= 3 && ceiling.max_memory_mib >= 640,
+        "resize/checkpoint acceptance needs 3 CPUs and 640 MiB of capacity"
+    );
+    let before_capture = source
+        .resize(ResizeOptions {
+            cpus: Some(2),
+            memory_mib: Some(512),
+        })
+        .await
+        .expect("grow before checkpoint");
     assert_eq!((before_capture.cpus, before_capture.memory_mib), (2, 512));
     assert_eq!(source.info().await.unwrap().pid, source_shim);
 
@@ -770,7 +777,10 @@ async fn checkpoint_continues_the_same_guest_process_in_a_new_runtime() {
         .await
         .expect("pause");
     assert_eq!(status(&source).await, BoxStatus::Paused);
-    assert!(source.resize(ResizeOptions::default()).await.is_err(), "paused owner must refuse resize");
+    assert!(
+        source.resize(ResizeOptions::default()).await.is_err(),
+        "paused owner must refuse resize"
+    );
     assert!(
         source.exec(BoxCommand::new("true")).await.is_err(),
         "a paused box must refuse exec"
@@ -893,13 +903,23 @@ async fn checkpoint_continues_the_same_guest_process_in_a_new_runtime() {
     restored.resume().await.expect("resume restored box");
     assert_eq!(status(&restored).await, BoxStatus::Running);
     let restored_shim = restored.info().await.unwrap().pid;
-    assert_eq!(restored.resize(ResizeOptions::default()).await.unwrap(), before_capture);
-    let after_restore = restored.resize(ResizeOptions {
-        cpus: Some(3), memory_mib: Some(640),
-    }).await.expect("grow the imported continuation");
+    assert_eq!(
+        restored.resize(ResizeOptions::default()).await.unwrap(),
+        before_capture
+    );
+    let after_restore = restored
+        .resize(ResizeOptions {
+            cpus: Some(3),
+            memory_mib: Some(640),
+        })
+        .await
+        .expect("grow the imported continuation");
     assert_eq!((after_restore.cpus, after_restore.memory_mib), (3, 640));
     assert_eq!(restored.info().await.unwrap().pid, restored_shim);
-    assert_eq!(run_ok(&restored, "cat", &["/sys/devices/system/cpu/online"]).await, "0-2");
+    assert_eq!(
+        run_ok(&restored, "cat", &["/sys/devices/system/cpu/online"]).await,
+        "0-2"
+    );
 
     // ── Same process, same execution, state from the cut, still counting ──
     let mut attached = restored

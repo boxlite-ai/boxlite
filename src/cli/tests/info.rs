@@ -15,6 +15,7 @@ const INFO_JSON_KEYS: &[&str] = &[
     "arch",
     "boxesTotal",
     "boxesRunning",
+    "boxesPaused",
     "boxesStopped",
     "boxesConfigured",
     "imagesCount",
@@ -88,6 +89,10 @@ fn test_info_box_counts() {
         .get("boxesRunning")
         .and_then(|n| n.as_u64())
         .unwrap_or(0);
+    let boxes_paused = obj
+        .get("boxesPaused")
+        .and_then(|n| n.as_u64())
+        .expect("boxesPaused");
     let boxes_stopped = obj
         .get("boxesStopped")
         .and_then(|n| n.as_u64())
@@ -98,7 +103,7 @@ fn test_info_box_counts() {
         .unwrap_or(0);
     assert!(boxes_total >= 1, "expected at least one box after create");
     assert_eq!(
-        boxes_configured + boxes_stopped + boxes_running,
+        boxes_configured + boxes_stopped + boxes_running + boxes_paused,
         boxes_total,
         "box count breakdown must sum to total"
     );

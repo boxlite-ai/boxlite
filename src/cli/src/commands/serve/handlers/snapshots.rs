@@ -33,11 +33,15 @@ pub(in crate::commands::serve) async fn create_snapshot(
         Err(resp) => return resp,
     };
 
-    match litebox
-        .snapshots()
-        .create(SnapshotOptions::default(), &req.name)
-        .await
-    {
+    let snapshots = litebox.snapshots();
+    let result = if req.name.trim().is_empty() {
+        snapshots.create_unnamed(SnapshotOptions::default()).await
+    } else {
+        snapshots
+            .create(SnapshotOptions::default(), &req.name)
+            .await
+    };
+    match result {
         Ok(info) => (StatusCode::CREATED, Json(snapshot_to_response(&info))).into_response(),
         Err(e) => error_from_boxlite(&e),
     }

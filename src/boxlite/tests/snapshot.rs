@@ -86,6 +86,38 @@ async fn create_stopped_box(runtime: &BoxliteRuntime) -> LiteBox {
 // ============================================================================
 
 #[tokio::test]
+async fn test_named_snapshot_rejects_empty_and_unnamed_snapshot_is_retrievable() {
+    let home = boxlite_test_utils::home::PerTestBoxHome::new();
+    let runtime = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+        ..Default::default()
+    })
+    .expect("create runtime");
+    let litebox = create_stopped_box(&runtime).await;
+    let snapshots = litebox.snapshots();
+
+    let error = snapshots
+        .create(SnapshotOptions::default(), "")
+        .await
+        .expect_err("an explicitly empty snapshot name must be rejected");
+    assert!(matches!(error, boxlite::BoxliteError::InvalidArgument(_)));
+
+    let generated = snapshots
+        .create_unnamed(SnapshotOptions::default())
+        .await
+        .expect("create snapshot with generated name");
+    assert!(!generated.name.is_empty());
+    let retrieved = snapshots.get(&generated.name).await.unwrap().unwrap();
+    assert_eq!(retrieved.id, generated.id);
+
+    runtime
+        .shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT))
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
 async fn test_cow_child_disks_exist_after_snapshot_create() {
     let home = boxlite_test_utils::home::PerTestBoxHome::new();
     let runtime = BoxliteRuntime::new(BoxliteOptions {

@@ -565,7 +565,12 @@ fn apply_command_scopes(
                     .copied()
                     .find(|option| option.id() == argument.get_id().as_str())
                     .expect("scoped argument must be a declared global option");
-                argument.global(option.propagates_value())
+                if scope.children.iter().all(|child| child.allows(option)) {
+                    argument.global(option.propagates_value())
+                } else {
+                    // Narrower children own their copies, including environment bindings.
+                    argument.global(false).env(None::<&'static str>)
+                }
             });
         apply_command_scopes(subcommand.args(scoped_args), scope.children, global_args)
     })
@@ -588,8 +593,7 @@ where
     let scope = command_scope(&command_path).expect("parsed command must have a declared scope");
 
     if let Some(option) = GlobalOption::ALL.iter().copied().find(|option| {
-        !scope.allows(*option)
-            && matches.value_source(option.id()) == Some(ValueSource::CommandLine)
+        !scope.allows(*option) && command_line_global_on_selected_path(&matches, option.id())
     }) {
         return Err(irrelevant_global_error(&mut parser, &command_path, option));
     }
@@ -698,6 +702,14 @@ fn command_line_values_along_selected_path(matches: &ArgMatches, id: &str) -> Ve
         current = child;
     }
     values
+}
+
+fn command_line_global_on_selected_path(matches: &ArgMatches, id: &str) -> bool {
+    (matches.try_contains_id(id).unwrap_or(false)
+        && matches.value_source(id) == Some(ValueSource::CommandLine))
+        || matches
+            .subcommand()
+            .is_some_and(|(_, child)| command_line_global_on_selected_path(child, id))
 }
 
 fn selected_command_path(matches: &ArgMatches) -> Vec<&str> {
@@ -1891,6 +1903,14 @@ mod tests {
                 "--config",
                 "/tmp/irrelevant.json",
             ][..],
+            &[
+                "boxlite",
+                "checkpoint",
+                "inspect",
+                "checkpoint-dir",
+                "--url",
+                "https://irrelevant.test",
+            ][..],
             &["boxlite", "completion", "bash", "--debug"][..],
         ] {
             let error = command()
@@ -1947,6 +1967,37 @@ mod tests {
 
         let error = try_parse_from(["boxlite", "auth", "--url", "https://example.test", "status"])
             .expect_err("leaf-only --url must follow the auth leaf");
+        assert_eq!(error.kind(), ErrorKind::UnknownArgument);
+    }
+
+    #[test]
+    fn checkpoint_globals_respect_child_scope_at_each_position() {
+        for id in ["url", "profile", "path_prefix"] {
+            let tokens = global_option_tokens(id);
+            for position in [1, 2, 5] {
+                let mut args = vec!["boxlite", "checkpoint", "export", "box", "checkpoint-dir"];
+                args.splice(position..position, tokens.iter().copied());
+                let cli = parse_projected(&args);
+                let value = match id {
+                    "url" => cli.global.url.as_deref(),
+                    "profile" => cli.global.profile.as_deref(),
+                    "path_prefix" => cli.global.path_prefix.as_deref(),
+                    _ => unreachable!(),
+                };
+                assert_eq!(value, Some(tokens[1]), "{args:?}");
+            }
+        }
+
+        let error = command()
+            .try_get_matches_from([
+                "boxlite",
+                "checkpoint",
+                "inspect",
+                "checkpoint-dir",
+                "--url",
+                "https://example.test",
+            ])
+            .expect_err("remote options must not be inherited by local inspection");
         assert_eq!(error.kind(), ErrorKind::UnknownArgument);
     }
 
@@ -2035,6 +2086,11 @@ mod tests {
             &["boxlite", "checkpoint", "import", "checkpoint-dir"],
             2,
             REGISTRY,
+        ),
+        (
+            &["boxlite", "checkpoint", "inspect", "checkpoint-dir"],
+            2,
+            LOCAL_WITHOUT_REGISTRY,
         ),
         (&["boxlite", "pull", "alpine"], 1, LOCAL_WITH_REGISTRY),
         (&["boxlite", "serve"], 1, LOCAL_WITH_REGISTRY),

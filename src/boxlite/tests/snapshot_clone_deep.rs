@@ -5,9 +5,6 @@
 //! export/import, error paths, stress, box lifecycle, data integrity, cleanup/GC,
 //! and archive format details.
 //!
-//! Tests #12 and #19 are BUG DETECTORS — they exercise known backing-chain
-//! dependency gaps that should be rejected but currently are not.
-//!
 //! Run with:
 //!
 //! ```sh
@@ -408,7 +405,7 @@ async fn test_snapshot_remove_success() {
     let litebox = create_stopped_box(&runtime, "rm-test").await;
     let box_id = litebox.id().to_string();
 
-    // Create two snapshots. Chain: disk → s2 → s1
+    // Create two independent snapshots.
     litebox
         .snapshots()
         .create(SnapshotOptions::default(), "s1")
@@ -536,12 +533,20 @@ async fn test_snapshot_remove_current_backing_rejected() {
         .await
         .unwrap();
 
-    // Container disk now backs into "active" snapshot.
-    // Removing it should be rejected.
+    // Capture keeps the source independent; restore makes its current disk
+    // a COW child of "active", establishing the dependency being tested.
+    litebox.snapshots().restore("active").await.unwrap();
+
     let result = litebox.snapshots().remove("active").await;
     assert!(
         result.is_err(),
         "removing snapshot that current disk depends on should fail"
+    );
+    let error = result.unwrap_err();
+    assert!(matches!(error, boxlite::BoxliteError::InvalidState(_)));
+    assert!(
+        error.to_string().contains("current disk depends"),
+        "{error}"
     );
 
     let _ = runtime.shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT)).await;

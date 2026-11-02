@@ -87,9 +87,12 @@ and `boxlite_create_box_from_snapshot`; see its [ownership rules](../../sdks/c/R
 
 - Cloud capture and restore require a stopped box. Only disk data is saved;
   memory snapshots and cross-runner snapshot copies remain unsupported.
-- Omit a name (or pass an empty name) to generate one. Rust also provides
-  `create_unnamed(options)`; Go accepts `Create(ctx, "")`; C accepts `NULL`.
-  Explicit duplicate names remain errors.
+- Omit the name in Python/Node.js to generate one; Rust provides
+  `create_unnamed(options)`. Explicit Python/Node.js/Rust names must be nonempty,
+  at most 255 UTF-8 bytes, without a leading dot, slash, backslash or NUL.
+  Duplicate names remain errors. Compatibility entry points still generate names
+  for Go `Create(ctx, "")`, C `NULL`/blank names, CLI omitted/empty `--name`,
+  and an omitted/empty REST capture name.
 - Cloud lookups accept an ID or name. Box-scoped `get` returns no value for
   absence; organization `get` raises `NotFound`, matching Volumes. `force` on
   organization removal ignores only missing snapshots, not permission errors.
@@ -104,8 +107,11 @@ and `boxlite_create_box_from_snapshot`; see its [ownership rules](../../sdks/c/R
   mounts and other settings use ordinary creation defaults or explicit options;
   source-box settings and secrets are not inherited. Do not supply an image or
   rootfs path. Rust/C's implicit default image is ignored for this operation.
-- Local runtimes retain their existing box-scoped disk snapshots and automatic
-  quiescing during capture. The organization catalog and create-from-snapshot
+- Local box-scoped capture creates an independent disk copy from Running or
+  Stopped; Running capture flushes/freezes before pausing and resumes/thaws afterward.
+  Paused sources refuse disk capture. Restore requires Stopped and creates a COW
+  child; removal refuses backing dependencies. See [disk capture](../concepts/storage.md#disk-capture-and-restoration).
+  The organization catalog and create-from-snapshot
   require a cloud server advertising the corresponding capability; `boxlite serve`
   does not implement these organization routes.
 

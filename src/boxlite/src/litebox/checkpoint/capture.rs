@@ -1,4 +1,4 @@
-//! Capture lifetime: an owner reservation survives cancellation of its caller.
+//! Capture lifetime: the shim session survives cancellation until its writer is joined.
 use crate::BoxID;
 use crate::vmm::checkpoint::{
     ControlClient,
@@ -213,6 +213,24 @@ pub(crate) fn stop_and_join_sync(
     }
     let mut handler = ShimHandler::from_pid(pid, id.clone());
     handler.stop()?;
+    // Detached sandboxes can outlive their launcher when cgroups are unavailable.
+    // Reap only the descendants we observed, checking identity again after stop.
+    for process in processes.iter().skip(1).rev() {
+        if let Some(start) = process.start_time
+            && crate::util::process_start_time(process.pid) == Some(start)
+        {
+            // SAFETY: this still belongs to the snapshotted launcher's tree.
+            if unsafe { libc::kill(process.pid as i32, libc::SIGKILL) } != 0 {
+                let error = std::io::Error::last_os_error();
+                if error.raw_os_error() != Some(libc::ESRCH) {
+                    return Err(BoxliteError::Engine(format!(
+                        "stop capture descendant {}: {error}",
+                        process.pid
+                    )));
+                }
+            }
+        }
+    }
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     while processes.iter().any(|record| {
         crate::util::is_process_alive(record.pid)
@@ -253,12 +271,17 @@ pub(crate) struct DiskCapture {
     pub path: std::path::PathBuf,
 }
 
+async fn thaw_guest(guest: &crate::portal::GuestSession) -> BoxliteResult<()> {
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        guest.guest().await?.thaw().await
+    })
+    .await
+    .map_err(|_| BoxliteError::Engine("guest thaw timed out".into()))?
+    .map(|_| ())
+}
+
 impl super::BoxImpl {
-    pub(crate) async fn capture_disk(
-        &self,
-        reservation: &crate::litebox::operation::Reservation,
-    ) -> BoxliteResult<DiskCapture> {
-        let reservation = reservation.duplicate()?;
+    pub(crate) async fn capture_disk(&self) -> BoxliteResult<DiskCapture> {
         let state = self.state.read().clone();
         let running = state.status == crate::BoxStatus::Running;
         let owner = running && self.uses_checkpoint_owner();
@@ -281,50 +304,66 @@ impl super::BoxImpl {
             None
         };
         let id = self.config.id.clone();
-        let cancel = self.shutdown_token.child_token();
+        // stop() ends a running box's token, but its disk remains capturable.
+        let cancel = if running {
+            self.shutdown_token.child_token()
+        } else {
+            self.runtime.shutdown_token.child_token()
+        };
         let canceller = CancelOnDrop(cancel.clone());
         let task = tokio::spawn(async move {
-            let _reservation = reservation;
-            let session = if owner {
-                Some(Session::begin(control, true).await?)
-            } else {
-                None
-            };
-            let directory = match tempfile::tempdir_in(temporary_root) {
-                Ok(directory) => Arc::new(directory),
-                Err(error) => {
-                    if let Some(session) = session {
-                        session.finish().await?;
-                    }
-                    return Err(BoxliteError::Storage(error.to_string()));
-                }
-            };
+            let directory = Arc::new(
+                tempfile::tempdir_in(temporary_root)
+                    .map_err(|error| BoxliteError::Storage(error.to_string()))?,
+            );
             let destination = directory.path().join("disk.qcow2");
-            if let Some(guest) = &guest
-                && !owner
-            {
-                let _ = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            if let Some(guest) = &guest {
+                // Flush guest dirty pages before Begin pauses the vCPUs. Draining
+                // host block queues alone cannot capture guest filesystem metadata.
+                let quiesce = tokio::time::timeout(std::time::Duration::from_secs(5), async {
                     guest.guest().await?.quiesce().await
                 })
-                .await;
+                .await
+                .map_err(|_| BoxliteError::Engine("guest quiesce timed out".into()))
+                .and_then(|result| result);
                 let pid =
                     pid.ok_or_else(|| BoxliteError::Engine("running box has no PID".into()))?;
+                if let Err(error) = quiesce {
+                    stop_and_join(pid, id, reader.clone()).await?;
+                    return Err(error);
+                }
                 if cancel.is_cancelled() {
                     stop_and_join(pid, id, reader.clone()).await?;
                     return Err(BoxliteError::Stopped(
                         "capture cancelled during quiesce".into(),
                     ));
                 }
-                if let Err(error) =
-                    signal_process(&reader, process.expect("running lifecycle"), libc::SIGSTOP)
+                if !owner
+                    && let Err(error) =
+                        signal_process(&reader, process.expect("running lifecycle"), libc::SIGSTOP)
                 {
-                    let _ = tokio::time::timeout(std::time::Duration::from_secs(5), async {
-                        guest.guest().await?.thaw().await
-                    })
-                    .await;
+                    if thaw_guest(guest).await.is_err() {
+                        stop_and_join(pid, id, reader.clone()).await?;
+                    }
                     return Err(BoxliteError::Engine(error.to_string()));
                 }
             }
+            let session = if owner {
+                match Session::begin(control, true).await {
+                    Ok(session) => Some(session),
+                    Err(error) => {
+                        if thaw_guest(guest.as_ref().expect("running guest"))
+                            .await
+                            .is_err()
+                        {
+                            stop_and_join(pid.expect("running PID"), id, reader.clone()).await?;
+                        }
+                        return Err(error);
+                    }
+                }
+            } else {
+                None
+            };
             let worker_cancel = cancel.clone();
             let worker_directory = directory.clone();
             let worker_path = destination.clone();
@@ -361,30 +400,23 @@ impl super::BoxImpl {
                     }
                     return Err(error);
                 }
-            } else if running {
-                if let Some(pid) = pid
-                    && signal_process(&reader, process.expect("running lifecycle"), libc::SIGCONT)
-                        .is_err()
-                {
+            } else if running
+                && let Some(pid) = pid
+                && signal_process(&reader, process.expect("running lifecycle"), libc::SIGCONT)
+                    .is_err()
+            {
+                stop_and_join(pid, id, reader.clone()).await?;
+                return Err(BoxliteError::Engine(
+                    "could not resume captured shim".into(),
+                ));
+            }
+            if let Some(guest) = guest
+                && let Err(error) = thaw_guest(&guest).await
+            {
+                if let Some(pid) = pid {
                     stop_and_join(pid, id, reader.clone()).await?;
-                    return Err(BoxliteError::Engine(
-                        "could not resume captured shim".into(),
-                    ));
                 }
-                if let Some(guest) = guest {
-                    let thaw = tokio::time::timeout(std::time::Duration::from_secs(5), async {
-                        guest.guest().await?.thaw().await
-                    })
-                    .await
-                    .map_err(|_| BoxliteError::Engine("guest thaw timed out".into()))
-                    .and_then(|result| result);
-                    if let Err(error) = thaw {
-                        if let Some(pid) = pid {
-                            stop_and_join(pid, id, reader.clone()).await?;
-                        }
-                        return Err(error);
-                    }
-                }
+                return Err(error);
             }
             result?;
             Ok(DiskCapture {
@@ -466,7 +498,7 @@ mod uncertain_identity_regression {
 mod writer_join_regression {
     use super::*;
     #[tokio::test]
-    async fn checkpoint_capture_requires_descendant_writer_exit_before_cleanup() {
+    async fn checkpoint_capture_stops_descendant_writers_before_cleanup() {
         use std::io::BufRead;
         let directory = tempfile::tempdir().unwrap();
         let mut launcher = std::process::Command::new("sh")
@@ -485,8 +517,8 @@ mod writer_join_regression {
         std::fs::write(&path, format!("{pid}\n{start}\n")).unwrap();
         let reader = crate::util::PidFileReader::at(path);
         let result = stop_and_join(pid, crate::runtime::id::BoxIDMint::mint(), reader).await;
-        // The launcher has exited but its detached writer did not. Keep files
-        // and leases, and never turn a queued kill into a join acknowledgement.
+        // A launcher may exit before its writer, even without an owned cgroup.
+        // Cleanup must terminate and observe the writer's exit as well.
         let writer_alive = crate::util::is_process_alive(writer);
         // SAFETY: this test started and still owns the known writer process.
         unsafe {
@@ -495,8 +527,8 @@ mod writer_join_regression {
         let _ = launcher.kill();
         let _ = launcher.wait();
         assert!(
-            writer_alive && result.is_err(),
-            "surviving writer authorized cleanup: {result:?}"
+            !writer_alive && result.is_ok(),
+            "writer teardown incomplete: alive={writer_alive}, {result:?}"
         );
     }
 }

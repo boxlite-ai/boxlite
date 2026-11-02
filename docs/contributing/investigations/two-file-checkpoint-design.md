@@ -6,6 +6,9 @@ Replace embedded disk/share archives with a checked memory image, a standalone Q
 
 2026-10-28 · Local path design reviewed by the coordinator against BoxLite `ef55b160` and bundled libkrun `04cd88a8`. Implementation and focused path-only unit, CLI and real-KVM verification pass; historical provider-based evidence below is separate from this revised contract.
 
+This dated study records an earlier design. The current operation admission and
+concurrency contract is documented in the [checkpoint guide](../../guides/checkpoints.md#support-and-lifecycle).
+
 ## Scope and observable behavior
 
 Remove Rust/Node `checkpoint_enabled` and CLI `--enable-checkpoint`. Select checkpoint owner mode automatically for supported Linux x86_64/KVM configurations; retain ordinary starts and disk operations elsewhere. Persist actual mode/protocol before reporting start success; never retry through another mode. Reconnection uses that record; legacy option decoding only identifies old live mode. Old shims require explicit restart for new operations.

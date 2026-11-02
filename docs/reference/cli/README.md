@@ -134,6 +134,11 @@ use `boxlite auth status --url URL` or `boxlite --url URL auth status`, not
 backend, and executing invocations reject unsupported options. Clap's `--help`
 and `--version` display actions remain terminal.
 
+Nested commands apply their own scope: `checkpoint export`/`import` accept REST
+options before the root command, after `checkpoint`, or after the subcommand.
+`checkpoint inspect` reads local files, rejects explicit REST options at every
+position, and ignores REST environment defaults.
+
 | Flag | Scope | Env Var | Description |
 |------|-------|---------|-------------|
 | `--debug` | all commands except `completion` | `RUST_LOG` (lower precedence) | Enable debug output. |
@@ -755,7 +760,15 @@ System-wide runtime information: version, home dir, virtualization status, OS/ar
 |------|---------|-------------|
 | `--format {yaml\|json}` | `yaml` | Output format |
 
-Output fields: `version`, `homeDir`, `virtualization` (`available` or `unavailable: <reason>`), `os`, `arch`, `boxesTotal`, `boxesRunning`, `boxesStopped`, `boxesConfigured`, `imagesCount`.
+Output fields: `version`, `homeDir`, `virtualization` (`available` or `unavailable: <reason>`), `os`, `arch`, `boxesTotal`, `boxesRunning`, `boxesPaused`, `boxesStopped`, `boxesConfigured`, `imagesCount`.
+
+`boxesTotal` counts all boxes. `boxesRunning`, `boxesPaused`, `boxesStopped`, and
+`boxesConfigured` each count only boxes in that state. Other states contribute only
+to the total, so these counts can sum to less than `boxesTotal`. JSON and YAML
+always include `boxesPaused`, including when it is zero.
+
+For example, one running box and one paused box report `boxesTotal: 2`,
+`boxesRunning: 1`, and `boxesPaused: 1`.
 
 ---
 

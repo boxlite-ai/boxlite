@@ -297,8 +297,10 @@ impl PyBox {
         let handle = Arc::clone(&slf.handle);
 
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            handle.stop().await.map_err(map_err)?;
-            Ok(())
+            match handle.stop().await {
+                Ok(()) | Err(boxlite::BoxliteError::NotFound(_)) => Ok(()),
+                Err(error) => Err(map_err(error)),
+            }
         })
     }
 

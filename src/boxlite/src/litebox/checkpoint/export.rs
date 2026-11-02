@@ -314,8 +314,7 @@ fn publish(
 
 impl BoxImpl {
     pub(crate) async fn export_checkpoint(&self, path: &Path) -> BoxliteResult<()> {
-        let reservation = self
-            .reserve(crate::litebox::operation::Action::Checkpoint)
+        self.check_operation(crate::litebox::operation::Action::Checkpoint)
             .await?;
         self.require_checkpoint("export a checkpoint")?;
         let resources = self.checkpoint_resources().await?;
@@ -379,7 +378,6 @@ impl BoxImpl {
         let reader = crate::util::PidFileReader::at(self.layout.pid_file_path());
         let id = self.id().clone();
         let task = tokio::spawn(async move {
-            let _reservation = reservation;
             let (parent, staging) = match stage(&parent_path) {
                 Ok(staged) => staged,
                 Err(error) => {
@@ -540,7 +538,6 @@ impl BoxImpl {
 }
 
 #[cfg(all(test, target_os = "linux"))]
-
 mod publication_regression {
     use super::*;
     #[test]

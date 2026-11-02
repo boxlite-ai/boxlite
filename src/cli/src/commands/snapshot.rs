@@ -132,13 +132,11 @@ pub async fn execute(args: SnapshotArgs, global: &GlobalFlags) -> anyhow::Result
     match args.command {
         SnapshotCommand::Create(args) => {
             let bx = get_box(&runtime, &args.box_id).await?;
-            let snapshot = bx
-                .snapshots()
-                .create(
-                    SnapshotOptions::default(),
-                    args.name.as_deref().unwrap_or(""),
-                )
-                .await?;
+            let snapshots = bx.snapshots();
+            let snapshot = match args.name.filter(|name| !name.trim().is_empty()) {
+                Some(name) => snapshots.create(SnapshotOptions::default(), &name).await,
+                None => snapshots.create_unnamed(SnapshotOptions::default()).await,
+            }?;
             println!("{}", snapshot.id);
         }
         SnapshotCommand::Ls(args) => {

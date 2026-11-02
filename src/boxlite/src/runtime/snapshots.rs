@@ -4,6 +4,10 @@ use crate::{BoxOptions, BoxliteResult, LiteBox, SnapshotInfo};
 use async_trait::async_trait;
 use std::sync::Arc;
 
+#[expect(
+    clippy::double_must_use,
+    reason = "async_trait generates a must-use boxed future"
+)]
 #[async_trait]
 pub(crate) trait RuntimeSnapshotBackend: Send + Sync {
     async fn list_snapshots(&self) -> BoxliteResult<Vec<SnapshotInfo>>;

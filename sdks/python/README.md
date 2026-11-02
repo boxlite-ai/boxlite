@@ -627,7 +627,10 @@ async for line in execution.stdout():
 
 ### Context Managers
 
-Use `async with` for automatic cleanup:
+Use `async with` for automatic cleanup. Async and sync context exits treat an
+already removed box (`NotFoundError`) as cleaned up, so a missing-box cleanup
+does not replace an exception raised by the body. Other cleanup errors propagate.
+Explicit `stop()` calls keep their normal error behavior.
 
 ```python
 # SimpleBox - auto cleanup
