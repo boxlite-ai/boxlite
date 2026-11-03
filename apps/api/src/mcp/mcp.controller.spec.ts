@@ -36,6 +36,7 @@ import { McpMetricsTools } from './tools/metrics/metrics-tools'
 import { AuthenticatedRateLimitGuard } from '../common/guards/authenticated-rate-limit.guard'
 
 const PROTOCOL = '2026-07-28'
+const LEGACY_PROTOCOLS = ['2025-03-26', '2025-06-18', '2025-11-25']
 const CALLER = { userId: 'user-1', email: 'user@example.com', role: 'user' }
 const MEMBER_ORG = '11111111-1111-4111-8111-111111111111'
 const FOREIGN_ORG = '22222222-2222-4222-8222-222222222222'
@@ -164,6 +165,37 @@ describe('McpController', () => {
 
   function callListBoxes(organizationId: string) {
     return rpc('tools/call', { name: 'list_boxes', arguments: { organization_id: organizationId } })
+  }
+
+  function legacyPost(
+    version: string,
+    method: string,
+    params: Record<string, unknown> = {},
+    { notification = false, authenticated = true } = {},
+  ) {
+    return fetch(baseUrl, {
+      method: 'POST',
+      headers: {
+        ...(authenticated ? { authorization: TOKEN } : {}),
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+        ...(method === 'initialize' ? {} : { 'mcp-protocol-version': version }),
+      },
+      body: JSON.stringify({ jsonrpc: '2.0', ...(notification ? {} : { id: 1 }), method, params }),
+      signal: AbortSignal.timeout(5000),
+    })
+  }
+
+  async function legacyReply(response: Awaited<ReturnType<typeof legacyPost>>) {
+    expect(response.status).toBe(200)
+    expect(response.headers.get('content-type')).toContain('text/event-stream')
+    expect(response.headers.get('mcp-session-id')).toBeNull()
+    // Inspect the SDK's request-scoped SSE reply without adapting its JSON-RPC payload.
+    const frames = [...(await response.text()).matchAll(/^data: (.+)$/gm)]
+    expect(frames).toHaveLength(1)
+    const body = JSON.parse(frames[0][1])
+    expect(body).toEqual(expect.objectContaining({ jsonrpc: '2.0', id: 1, result: expect.any(Object) }))
+    return body.result
   }
 
   it('advertises only the 2026-07-28 revision through server/discover', async () => {
@@ -310,26 +342,92 @@ describe('McpController', () => {
     }
   })
 
-  it('rejects a legacy initialize handshake with the supported versions', async () => {
-    const response = await fetch(baseUrl, {
-      method: 'POST',
-      headers: {
-        authorization: TOKEN,
-        'content-type': 'application/json',
-        accept: 'application/json, text/event-stream',
-      },
-      body: JSON.stringify({
-        jsonrpc: '2.0',
-        id: 1,
-        method: 'initialize',
-        params: { protocolVersion: '2025-11-25', capabilities: {}, clientInfo: { name: 'legacy', version: '0' } },
+  it.each(LEGACY_PROTOCOLS)('serves a stateless %s client through the authenticated tools', async (version) => {
+    const initialized = await legacyReply(
+      await legacyPost(version, 'initialize', {
+        protocolVersion: version,
+        capabilities: {},
+        clientInfo: { name: 'legacy-spec', version: '0' },
       }),
-    })
-    const body = await response.json()
+    )
+    expect(initialized.protocolVersion).toBe(version)
+    expect(initialized.serverInfo.name).toBe('boxlite')
+    expect(initialized.capabilities.tools).toBeDefined()
 
-    expect(response.status).toBe(400)
-    expect(body.error.code).toBe(-32022)
-    expect(body.error.data.supported).toEqual([PROTOCOL])
+    const notification = await legacyPost(version, 'notifications/initialized', {}, { notification: true })
+    expect(notification.status).toBe(202)
+    expect(notification.headers.get('mcp-session-id')).toBeNull()
+    expect(await notification.text()).toBe('')
+
+    const catalog = await legacyReply(await legacyPost(version, 'tools/list'))
+    expect(catalog).not.toHaveProperty('resultType')
+    expect(catalog.tools.map((tool: { name: string }) => tool.name)).toEqual(
+      expect.arrayContaining(['get_config', 'list_boxes']),
+    )
+    const listBoxes = catalog.tools.find((tool: { name: string }) => tool.name === 'list_boxes')
+    expect(listBoxes.inputSchema.required).toEqual(['organization_id'])
+    expect(listBoxes.outputSchema).toEqual(
+      expect.objectContaining({
+        type: 'object',
+        required: ['result'],
+        properties: {
+          result: expect.objectContaining({
+            type: 'array',
+            items: expect.objectContaining({ required: expect.arrayContaining(['box_id', 'status', 'memory_mib']) }),
+          }),
+        },
+      }),
+    )
+
+    const config = await legacyReply(await legacyPost(version, 'tools/call', { name: 'get_config', arguments: {} }))
+    expect(config.isError).toBeFalsy()
+    expect(config.structuredContent.capabilities).toEqual(
+      expect.objectContaining({ snapshots_enabled: false, inbound_update_enabled: true }),
+    )
+    expect(JSON.parse(config.content[0].text)).toEqual(config.structuredContent)
+    expect(findMembership).not.toHaveBeenCalled()
+
+    const callBoxes = (organizationId: string, extra: Record<string, unknown> = {}) =>
+      legacyPost(version, 'tools/call', {
+        name: 'list_boxes',
+        arguments: { organization_id: organizationId, ...extra },
+      })
+    const boxes = await legacyReply(await callBoxes(MEMBER_ORG))
+    expect(boxes.isError).toBeFalsy()
+    expect(boxes.structuredContent).toEqual({
+      result: [expect.objectContaining({ box_id: 'box-1', name: 'web', memory_mib: 2048 })],
+    })
+    expect(JSON.parse(boxes.content[0].text)).toEqual(boxes.structuredContent.result)
+    expect(findMembership).toHaveBeenCalledWith(MEMBER_ORG, CALLER.userId)
+    expect(findAllDeprecated).toHaveBeenCalledWith(MEMBER_ORG)
+
+    findAllDeprecated.mockResolvedValueOnce([])
+    const toBoxDtos = app.get(BoxService).toBoxDtos as jest.Mock
+    toBoxDtos.mockResolvedValueOnce([])
+    const empty = await legacyReply(await callBoxes(MEMBER_ORG))
+    expect(empty.isError).toBeFalsy()
+    expect(empty.structuredContent).toEqual({ result: [] })
+    expect(JSON.parse(empty.content[0].text)).toEqual([])
+
+    findAllDeprecated.mockClear()
+    const denied = await legacyReply(await callBoxes(FOREIGN_ORG))
+    expect(denied.isError).toBe(true)
+    expect(denied.content[0].text).toBe('Organization not found or not accessible')
+    expect(denied).not.toHaveProperty('structuredContent')
+    expect(findMembership).toHaveBeenLastCalledWith(FOREIGN_ORG, CALLER.userId)
+    expect(findAllDeprecated).not.toHaveBeenCalled()
+
+    findMembership.mockClear()
+    const invalid = await legacyReply(await callBoxes('not-a-uuid'))
+    const unknown = await legacyReply(await callBoxes(MEMBER_ORG, { unexpected: true }))
+    expect(invalid.isError).toBe(true)
+    expect(unknown.isError).toBe(true)
+    expect(findMembership).not.toHaveBeenCalled()
+    expect(findAllDeprecated).not.toHaveBeenCalled()
+
+    const unauthenticated = await legacyPost(version, 'tools/list', {}, { authenticated: false })
+    expect(unauthenticated.status).toBe(401)
+    expect(unauthenticated.headers.get('www-authenticate')).toContain('resource_metadata=')
   })
 
   it('rejects a modern request naming an unsupported version', async () => {
@@ -355,8 +453,8 @@ describe('McpController', () => {
     expect(response.status).toBe(403)
   })
 
-  it('offers no GET stream', async () => {
-    const response = await fetch(baseUrl, { headers: { authorization: TOKEN, accept: 'text/event-stream' } })
+  it.each(['GET', 'DELETE'])('offers no %s stream or session operation', async (method) => {
+    const response = await fetch(baseUrl, { method, headers: { authorization: TOKEN, accept: 'text/event-stream' } })
 
     expect(response.status).toBe(405)
   })

@@ -702,16 +702,26 @@ for persistence guarantees.
 **Service:** `apps/api` · **Path:** `/api/mcp` · **Port:** `3000` in
 deployments (shared with the control-plane API)
 
-A Model Context Protocol server for protocol revision `2026-07-28` only, over
-the Streamable HTTP transport, served from [`mcp`](./api/src/mcp/) and excluded
-from the product OpenAPI document. The revision is stateless: each POST carries
-its protocol version and client capabilities in `params._meta`, mirrored in the
+A stateless Model Context Protocol server over Streamable HTTP, served from
+[`mcp`](./api/src/mcp/) and excluded from the product OpenAPI document. Modern
+protocol revision `2026-07-28` carries its version and client capabilities in
+each POST's `params._meta`, mirrored in the
 `MCP-Protocol-Version`, `Mcp-Method`, and (for `tools/call`) `Mcp-Name`
 headers, and is answered with one JSON body. A header that disagrees with the
-body is refused with `400` (`-32020`). A request naming any other revision —
-including a legacy `initialize` handshake — is refused with `400` and
-`UnsupportedProtocolVersionError` (`-32022`) listing `2026-07-28`, so clients on
-an earlier revision cannot connect.
+body is refused with `400` (`-32020`). An unsupported version in a modern
+request envelope is refused with `400` and `UnsupportedProtocolVersionError`
+(`-32022`). Modern `server/discover` advertises `2026-07-28`.
+
+Legacy clients using revisions `2025-03-26`, `2025-06-18`, and `2025-11-25`
+can POST an `initialize` handshake, followed by `notifications/initialized`,
+`tools/list`, and `tools/call` at the same endpoint. The SDK serves legacy
+requests through its stateless compatibility path: request replies use
+request-scoped SSE, and notifications receive an empty `202` acknowledgement.
+Clients must accept both `application/json` and `text/event-stream`; subsequent
+POSTs carry the negotiated `MCP-Protocol-Version` header. Every POST requires
+authentication and binds its caller independently; initialization creates no
+authorization session. No `Mcp-Session-Id` is issued, GET and DELETE remain
+`405`, and the older HTTP+SSE transport is not provided.
 
 Only OAuth bearer tokens issued for this endpoint are accepted; API keys are
 not. A token must come from the API's issuer and name `MCP_RESOURCE_URL` as its
@@ -739,8 +749,8 @@ as an unknown path does.
 
 | Method   | Path       | What it does                                                                    |
 | -------- | ---------- | ------------------------------------------------------------------------------- |
-| `POST`   | `/api/mcp` | Answers one JSON-RPC request: `server/discover`, `tools/list`, or `tools/call`. |
-| `GET`    | `/api/mcp` | Returns `405`; protocol 2026-07-28 has no GET stream.                           |
+| `POST`   | `/api/mcp` | Serves modern JSON requests and legacy handshake, notification, and tool POSTs. |
+| `GET`    | `/api/mcp` | Returns `405`; this stateless endpoint provides no GET stream.                  |
 | `DELETE` | `/api/mcp` | Returns `405`; there is no session to end.                                      |
 
 </details>
@@ -858,12 +868,17 @@ shared tool wrapper validates results and sanitizes unexpected errors.
 
 Its input is a strict object containing only the required `organization_id` UUID;
 unknown arguments are rejected before membership or box lookups. `tools/list`
-advertises an array `outputSchema` matching the mapped REST Box response,
-including optional activity, exit-code, and network fields. A successful call
-returns that array in `structuredContent` and the same JSON array in
-`content[0].text`, preserving existing text consumers. An empty organization
-returns `[]` in both forms. Authorization errors retain their text-only
-`isError` result and do not include structured success data.
+advertises an array `outputSchema` matching the mapped REST Box response for
+modern clients, including optional activity, exit-code, and network fields.
+A modern call returns that array in `structuredContent`. The SDK adapts the
+legacy output schema to an object with a required array property `result`,
+and legacy calls return `{ "result": [...] }` in `structuredContent`.
+Both eras retain the plain JSON array in `content[0].text`, preserving existing
+text consumers. An empty organization returns `[]` in modern structured and
+both text results, and `{ "result": [] }` in legacy structured results.
+Object-shaped tools such as `get_config` retain their existing structured
+shape in both eras. Authorization errors retain their text-only `isError`
+result and do not include structured success data.
 
 `list_boxes` explicitly advertises `readOnlyHint: true`, `destructiveHint: false`,
 and `openWorldHint: false`. The operation remains read-only. Under the MCP

@@ -11,7 +11,8 @@ defines Box selectors and responses for lifecycle, network, and listing tools.
 membership lookups. Listing uses the shared organization access, cancellation,
 output validation, and sanitized error handling. It still requires membership
 without an additional read permission and returns the existing REST-mapped array
-in both structured and text results.
+in modern structured and both eras' text results. Legacy structured results
+use the SDK's `{ result: [...] }` wrapper.
 
 ```text
 mcp/
@@ -44,6 +45,27 @@ REST capability flags describe the hosted API, including private tunnels and
 per-execution user selection. The MCP MVP keeps public-only tunnel preparation
 and its existing execution input. New REST operations for SSH, tunnel revocation,
 and outbound policy remain explicit catalog exclusions until MCP contracts are added.
+
+## Stateless HTTP compatibility
+
+The controller explicitly selects the SDK's `legacy: 'stateless'` posture.
+Modern `2026-07-28` requests retain their JSON response mode and envelope
+validation. Legacy `2025-03-26`, `2025-06-18`, and `2025-11-25` clients use
+`initialize`, `notifications/initialized`, then ordinary tool POSTs; replies
+use request-scoped SSE and notifications receive an empty `202` response.
+
+Both paths use the same authenticated factory and fresh server per request.
+No session ID is issued, so initialization does not authorize a later request;
+the route guards and tool organization admission run independently each time.
+GET streams and DELETE session operations remain `405`.
+
+The SDK owns legacy schema and result adaptation: non-object output schemas
+become objects with a required `result` property, and matching structured
+values receive the same wrapper. Object outputs and existing text results
+keep their natural shape. The controller tests inspect actual SDK SSE replies,
+mapped Box results, empty arrays, and authorization failures for all three
+legacy revisions. See the [endpoint contract](../../../API.md#mcp-endpoint)
+for headers and OAuth discovery.
 
 ## Runner HTTP boundary
 

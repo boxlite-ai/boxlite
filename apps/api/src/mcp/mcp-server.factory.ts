@@ -22,9 +22,8 @@ export const MCP_CALLER_KEY = 'boxliteCaller'
 /**
  * Builds the MCP server for one request.
  *
- * The 2026-07-28 revision is stateless, so `createMcpHandler` asks for a fresh
- * server per request; the caller the controller authenticated arrives in
- * `authInfo.extra` and is bound into the tool handlers here. Organization
+ * Both protocol eras use a fresh server per request. The authenticated caller
+ * arrives in `authInfo.extra` and is bound into the tool handlers here. Organization
  * membership is checked per call: the organization arrives as a tool argument,
  * which the route guards never see.
  */

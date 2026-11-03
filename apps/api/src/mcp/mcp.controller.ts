@@ -28,15 +28,15 @@ import { AuthenticatedRateLimitGuard } from '../common/guards/authenticated-rate
 
 const METHOD_NOT_ALLOWED = {
   jsonrpc: '2.0',
-  error: { code: -32000, message: 'Method not allowed: MCP 2026-07-28 has no GET stream or session' },
+  error: { code: -32000, message: 'Method not allowed: this MCP endpoint has no GET stream or session' },
   id: null,
 }
 
 /**
- * Streamable HTTP endpoint for MCP protocol revision 2026-07-28 only.
+ * Stateless Streamable HTTP endpoint for modern and legacy MCP clients.
  *
- * Legacy (`initialize`-handshake) traffic is rejected with the supported
- * versions rather than served, and every POST is answered with one JSON body.
+ * Modern requests use JSON replies; the SDK serves legacy initialize-handshake
+ * traffic with request-scoped SSE replies without issuing a session ID.
  * Only OAuth bearer tokens issued for this endpoint are accepted, not API keys;
  * a 401 carries a bearer challenge naming the endpoint's OAuth discovery metadata.
  */
@@ -49,7 +49,7 @@ export class McpController implements OnModuleDestroy {
   private readonly serve: NodeMcpRequestHandler
 
   constructor(serverFactory: McpServerFactory) {
-    this.handler = createMcpHandler(serverFactory.forRequest, { legacy: 'reject', responseMode: 'json' })
+    this.handler = createMcpHandler(serverFactory.forRequest, { legacy: 'stateless', responseMode: 'json' })
     this.serve = toNodeHandler(this.handler)
   }
 
