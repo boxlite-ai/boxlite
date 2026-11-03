@@ -28,8 +28,10 @@ Remove pins from pip/npm/go/cargo installs and the browser recipe's Playwright i
 ## Validation
 
 Audit follow-ups refresh the Rust lockfile after the wildcard add, order C
-releases by publication time, and extract directly into the SDK destination.
-The C tests run real tar extraction in temporary directories and verify that
-repeated installation replaces an existing header instead of retaining it.
+releases by publication time, and stage extraction before replacing the SDK.
+The C tests run real tar extraction in temporary directories and verify both
+replacement of an existing header and preservation after extraction or final
+replacement failure. Replacement restores the previous SDK on failure; if
+restoration also fails, its staging directory is preserved and reported.
 
 The installation regression failed against the original pinned commands before production edits. After implementation, the focused Make dashboard checks passed 35 tests, including clipboard content. All seven installation blocks passed bash syntax checks. Browser inspection covered light/dark themes, all seven language tabs, desktop and 390px layouts; rendered code measured 14px/24px with normal tracking and no page overflow. No SDK installation or production deployment was performed. SDK runtime compatibility with whichever release users later install remains separate from the UI change.

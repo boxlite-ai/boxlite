@@ -20,8 +20,9 @@ C SDK command requires curl, jq and tar, and selects the first stable release
 with a matching platform archive among GitHub's 100 most recent releases,
 ordered by publication time. A
 new release without its C archive is skipped; no match stops the download.
-Extraction writes directly into `boxlite-c-sdk`, updating existing SDK files
-instead of nesting a new directory on repeated installation. Displayed and copied
+Extraction completes in a temporary directory before replacing `boxlite-c-sdk`.
+Failed extraction preserves the previous SDK; a failed replacement restores it.
+Displayed and copied
 commands both come from `src/lib/quickstart/interfaces.json`.
 
 ## Region names

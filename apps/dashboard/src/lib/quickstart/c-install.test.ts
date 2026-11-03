@@ -13,9 +13,19 @@ curl() {
        if [ -n "$TEST_ARCHIVE" ]; then command cp "$TEST_ARCHIVE" "\${!#}"; fi ;;
   esac
 }
+tar() {
+  command tar "$@" || return
+  if [ "$TEST_TAR_FAIL" = true ]; then return 1; fi
+}
+mv() {
+  case "$1" in
+    */new) if [ "$TEST_MOVE_FAIL" = true ]; then return 1; fi ;;
+  esac
+  command mv "$@"
+}
 `
 
-function install(releases: unknown, platform: string, cwd?: string, archive = ''): SpawnSyncReturns<string> & { installedHeader?: string } {
+function install(releases: unknown, platform: string, cwd?: string, archive = '', failure = 'none'): SpawnSyncReturns<string> & { installedHeader?: string } {
   if (!cwd) {
     const temp = mkdtempSync(join(tmpdir(), 'quickstart-c-install-'))
     try {
@@ -34,7 +44,7 @@ function install(releases: unknown, platform: string, cwd?: string, archive = ''
   }
   return spawnSync('bash', ['-c', mocks + getOnboardingCodeExamples().c.install], {
     cwd,
-    env: { ...process.env, TEST_RELEASES: JSON.stringify(releases), PLATFORM: platform, TEST_ARCHIVE: archive },
+    env: { ...process.env, TEST_RELEASES: JSON.stringify(releases), PLATFORM: platform, TEST_ARCHIVE: archive, TEST_TAR_FAIL: String(failure === 'tar'), TEST_MOVE_FAIL: String(failure === 'replace') },
     encoding: 'utf8',
     timeout: 5000,
   })
@@ -74,7 +84,7 @@ it('stops before downloading when no stable C archive is available', () => {
   expect(result.stdout).not.toContain('DOWNLOAD')
 })
 
-it('replaces an existing C SDK header on repeat installation instead of nesting the new SDK', () => {
+it.each(['none', 'tar', 'replace'])('replaces an existing C SDK header only after successful extraction (failure=%s)', (failure) => {
   const cwd = mkdtempSync(join(tmpdir(), 'quickstart-c-install-'))
   const root = 'boxlite-c-v9.9.6-darwin-arm64'
   try {
@@ -88,9 +98,9 @@ it('replaces an existing C SDK header on repeat installation instead of nesting 
     const result = install([{
       tag_name: 'v9.9.6', draft: false, prerelease: false,
       assets: [{ state: 'uploaded', name: `${root}.tar.gz`, browser_download_url: `https://github.com/boxlite-ai/boxlite/releases/download/v9.9.6/${root}.tar.gz` }],
-    }], 'darwin-arm64', cwd, archive)
-    expect(result.status, result.stderr).toBe(0)
-    expect(readFileSync(join(cwd, 'boxlite-c-sdk', 'include', 'boxlite.h'), 'utf8')).toBe('new SDK')
+    }], 'darwin-arm64', cwd, archive, failure)
+    expect(result.status, result.stderr).toBe(failure === 'none' ? 0 : 1)
+    expect(readFileSync(join(cwd, 'boxlite-c-sdk', 'include', 'boxlite.h'), 'utf8')).toBe(failure === 'none' ? 'new SDK' : 'old SDK')
   } finally {
     rmSync(cwd, { recursive: true, force: true })
   }
