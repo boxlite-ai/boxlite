@@ -180,6 +180,8 @@ migration's up/down and existing-row defaults are exercised. Set this variable t
 local PostgreSQL database when running `make coverage:api`; without it, that integration spec
 is skipped. Caller-attribution tests cover JWT and API-key administrators and both proxied
 exec/upload error categories without changing authentication policy.
+Integration fixtures that build their schema with explicit migrations must also apply
+the start-intent migration before querying the `Box` entity, including the usage ledger fixture.
 
 Box events go through `src/box/utils/box-business-event.util.ts`: the request and the outcome are
 recorded in different places, so one call cannot cover both. A proxied call that fails with an
