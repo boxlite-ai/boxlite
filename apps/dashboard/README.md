@@ -12,8 +12,11 @@ instead of wrapping commands; longer sections show up to 420px before scrolling.
 File and local-terminal headers keep copy actions separate from the code.
 
 Installation commands use the package manager's current release without fixed
-version numbers. The C SDK download resolves GitHub's latest release tag at
-execution because the archive names include that tag. Displayed and copied
+version numbers. Python uses `--upgrade` to update existing installations. The
+C SDK command requires curl, jq and tar, and selects the first stable release
+with a matching platform archive among GitHub's 100 most recent releases. A
+new release without its C archive is skipped; no match stops the download.
+Displayed and copied
 commands both come from `src/lib/quickstart/interfaces.json`.
 
 ## Region names

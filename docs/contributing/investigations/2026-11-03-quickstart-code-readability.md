@@ -17,13 +17,13 @@ Inspected main commit 30a7c982:
 
 Adopt scoped typography to preserve other pages' compact code styles. Reject global font changes and a new renderer because they expand scope without improving this walkthrough. Reject replacing one fixed package version with another because the requirement is unpinned installation.
 
-Official GitHub release metadata was read with gh api repos/boxlite-ai/boxlite/releases/latest. C assets contain the tag in their name, so latest/download alone cannot remove the embedded version. Resolve the latest release redirect at execution, extract its tag, and reuse the existing platform-specific artifact pattern. This adds no jq dependency. Keep the existing supported-platform choices.
+Official release metadata confirms that C assets contain the tag in their name. The [C build workflow](../../../.github/workflows/build-c.yml) uploads archives after release publication, so a latest-release redirect can point to an incomplete release. Use the [GitHub release list and asset URLs](https://docs.github.com/en/rest/releases/releases#list-releases) to select the first stable release containing the requested platform archive among the 100 most recent releases. This requires jq alongside curl and tar; no match stops before downloading. Keep the existing supported-platform choices.
 
 ## How it works
 
 Use a quickstart-scoped code typography class: existing mono font, 14px, 24px line height, normal tracking, no ligatures, preserved whitespace and horizontal scrolling. Increase bounded code height to 420px and group file/terminal titles with copy actions above code. Improve prose to 14px and step headings to 16px using the existing theme. Apply consistent typography to inline and dialog paths, including lazy fallbacks.
 
-Remove pins from pip/npm/go/cargo installs and the browser recipe's Playwright installation. Resolve the C release tag dynamically. CLI and REST have no dependency pins to remove.
+Remove pins from pip/npm/go/cargo installs and the browser recipe's Playwright installation. Python adds `--upgrade` because [pip otherwise preserves existing installations](https://pip.pypa.io/en/stable/cli/pip_install/#overview). C downloads an available platform archive rather than assuming the latest release is complete. CLI and REST have no dependency pins to remove.
 
 ## Validation
 

@@ -8,15 +8,13 @@ import {
 describe('onboarding code examples', () => {
   it('offers installation commands without fixed dependency versions', () => {
     const examples = getOnboardingCodeExamples()
-    expect(examples.python.install).toBe('pip install boxlite')
+    expect(examples.python.install).toBe('pip install --upgrade boxlite')
     expect(examples.typescript.install).toBe('npm install @boxlite-ai/boxlite tsx')
     expect(examples.go.install).toContain('go get github.com/boxlite-ai/boxlite/sdks/go\n')
     expect(examples.rust.install).toContain('cargo add boxlite --features rest')
     for (const example of Object.values(examples)) {
       expect(example.install).not.toMatch(/(?:==|@=?v?|VERSION=v)\d+\.\d+/)
     }
-    expect(examples.c.install).toContain('/releases/latest')
-    expect(examples.c.install).toContain('VERSION=${RELEASE_URL##*/}')
   })
 
   it('includes SDK, CLI, and REST entrypoints', () => {
