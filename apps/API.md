@@ -755,21 +755,41 @@ as an unknown path does.
 </details>
 
 <details>
-<summary><b>Tools</b> · Box listing and managed volumes</summary>
+<summary><b>Service tools</b> · 23 tools</summary>
 
-| Tool            | Arguments                                        | What it does                                                                            |
-| --------------- | ------------------------------------------------ | --------------------------------------------------------------------------------------- |
-| `list_boxes`    | `organization_id` (UUID)                         | Lists the organization's boxes, mapped as `GET /api/v1/boxes` maps them.                |
-| `list_volumes`  | `organization_id`                                | Lists managed volume summaries using `READ_VOLUMES`.                                    |
-| `get_volume`    | `organization_id`, `volume_id`                   | Returns one owned volume using `READ_VOLUMES`.                                          |
-| `create_volume` | `organization_id`, optional `name`               | Uses `WRITE_VOLUMES`, validates the REST DTO, and waits up to 30 seconds for readiness. |
-| `delete_volume` | `organization_id`, `volume_id`, optional `force` | Uses `DELETE_VOLUMES` and checks ownership before requesting deletion.                  |
-| `list_images` | `organization_id` | Lists recorded catalog references with `READ_IMAGES`. |
-| `get_image_usage` | `organization_id` | Returns image count, limit, and known bytes with `READ_IMAGES`. |
-| `get_image` | `organization_id`, `image_name` | Returns catalog versions and history with `READ_IMAGES`. |
-| `create_image_alias` | `organization_id`, `image_name`, `alias`, `digest` | Uses `WRITE_IMAGES` and the REST digest-based alias DTO. |
-| `delete_image_alias` | `organization_id`, `image_name`, `alias` | Uses `WRITE_IMAGES` to remove an alias. |
-| `delete_image` | `organization_id`, `image_name` | Uses `DELETE_IMAGES` to remove an unused catalog entry. |
+| Tool                 | Arguments                                                                                | What it does                                                                            |
+| -------------------- | ---------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| `list_boxes`         | `organization_id` (UUID)                                                                 | Lists the organization's boxes, mapped as `GET /api/v1/boxes` maps them.                |
+| `list_volumes`       | `organization_id`                                                                        | Lists managed volume summaries using `READ_VOLUMES`.                                    |
+| `get_volume`         | `organization_id`, `volume_id`                                                           | Returns one owned volume using `READ_VOLUMES`.                                          |
+| `create_volume`      | `organization_id`, optional `name`                                                       | Uses `WRITE_VOLUMES`, validates the REST DTO, and waits up to 30 seconds for readiness. |
+| `delete_volume`      | `organization_id`, `volume_id`, optional `force`                                         | Uses `DELETE_VOLUMES` and checks ownership before requesting deletion.                  |
+| `list_images`        | `organization_id`                                                                        | Lists recorded catalog references with `READ_IMAGES`.                                   |
+| `get_image_usage`    | `organization_id`                                                                        | Returns image count, limit, and known bytes with `READ_IMAGES`.                         |
+| `get_image`          | `organization_id`, `image_name`                                                          | Returns catalog versions and history with `READ_IMAGES`.                                |
+| `create_image_alias` | `organization_id`, `image_name`, `alias`, `digest`                                       | Uses `WRITE_IMAGES` and the REST digest-based alias DTO.                                |
+| `delete_image_alias` | `organization_id`, `image_name`, `alias`                                                 | Uses `WRITE_IMAGES` to remove an alias.                                                 |
+| `delete_image`       | `organization_id`, `image_name`                                                          | Uses `DELETE_IMAGES` to remove an unused catalog entry.                                 |
+| `list_registries`    | `organization_id`                                                                        | Lists public credential metadata with `READ_REGISTRIES`.                                |
+| `create_registry`    | `organization_id`, `registry_host`, `username`, `password`, optional `repository_prefix` | Creates a write-only registry login with `WRITE_REGISTRIES`.                            |
+| `delete_registry`    | `organization_id`, `registry_id`                                                         | Removes an owned, unused login with `DELETE_REGISTRIES`.                                |
+| `create_box`         | `organization_id`, supported hosted create fields                                        | Creates a Box with resource permissions and Commerce admission.                         |
+| `get_box`            | `organization_id`, `box_id`                                                              | Reads one owned Box by ID or exact name.                                                |
+| `box_exists`         | `organization_id`, `box_id`                                                              | Reports whether an owned Box exists.                                                    |
+| `delete_box`         | `organization_id`, `box_id`                                                              | Accepts a Box destruction request.                                                      |
+| `start_box`          | `organization_id`, `box_id`                                                              | Starts or waits for an already-starting Box.                                            |
+| `stop_box`           | `organization_id`, `box_id`                                                              | Requests stop and reports the current lifecycle state.                                  |
+| `set_box_inbound`    | `organization_id`, `box_id`, `mode`                                                      | Changes public inbound access with `WRITE_BOXES`.                                       |
+| `prepare_tunnel`     | `organization_id`, `box_id`, `port`                                                      | Declares a public guest-port tunnel with `WRITE_BOXES`.                                 |
+| `get_config`         | No arguments                                                                             | Reads the same public hosted capabilities as `GET /api/v1/config`.                      |
+
+`get_config` is pure capability data and requires no organization selection.
+It shares its source with REST: snapshots, cloning, export, and import remain
+disabled; inbound updates are enabled. The tool never reads deployment settings
+or organization secrets. The principal endpoint remains excluded because hosted
+`/me` does not yet report actual token grants. Snapshot, clone, export, import,
+runtime-wide metrics, and WebSocket attachment tools remain excluded because
+their hosted or HTTP JSON implementations are unavailable.
 
 Image tools scope catalog lookups to the authorized organization before
 mutation. They retain service checks for curated images, ready versions,
@@ -787,8 +807,8 @@ secret-store references, and raw backend errors never appear in replies or audit
 The service retains duplicate-login and in-use-credential checks.
 
 Box lifecycle tools add `create_box`, `get_box`, `box_exists`, `delete_box`,
-`start_box`, and `stop_box`. Box IDs or exact names may contain spaces and
-Unicode. Reads require membership and organization ownership; there is no
+`start_box`, and `stop_box`. Box selectors accept exact names containing spaces
+and Unicode. Reads require membership and organization ownership; there is no
 `READ_BOXES` permission. Creation, start, and stop require `WRITE_BOXES`;
 deletion requires `DELETE_BOXES`. Managed mounts additionally require both
 `READ_VOLUMES` and `WRITE_VOLUMES`, and service-side ownership validation.
@@ -812,15 +832,15 @@ port public. It does not wake the Box; the proxy wakes it on connection.
 Cancellation between activity/URI work and publication prevents a new public
 declaration and reports that activity may already have been recorded.
 
-New tools require actual membership even for administrators, then apply the
+Organization tools require actual membership even for administrators, then apply the
 existing organization resource-permission policy. Managed volume identifiers are
 UUIDs; a foreign resource and a missing resource receive sanitized errors.
-`force: true` accepts an already absent volume without a mutation. Deletion
+`force: true` accepts an already absent volume without a mutation. Volume deletion
 returns `{ "accepted": true }`; background storage deletion may still be pending.
-Creation and deletion create an audit record before effects, with actor and
-resource identifiers only. Audit admission failures prevent mutation; outcome
+Volume creation and deletion create an audit record before effects, with actor,
+tool, and resource identifiers. Audit admission failures prevent mutation; outcome
 update failures do not turn completed effects into retryable failures.
-New tools check request cancellation after membership and audit admission and
+Organization tools check cancellation after membership and audit admission and
 before business work. A cancellation never rolls back an effect already started.
 
 New inputs and structured outputs are strict typed objects, with the same JSON
@@ -828,12 +848,12 @@ in the text reply. Unexpected errors never echo backend messages or request
 payloads. The MCP HTTP boundary applies the existing authenticated rate limiter.
 Resource permissions are enforced; business OAuth scopes remain unimplemented.
 
-The tool checks that the caller belongs to the organization — the membership
+`list_boxes` checks that the caller belongs to the organization — the membership
 check the box list route applies, without its system-admin bypass. An
 organization the caller is not in, or one that does not exist, gets the same
 `isError` reply.
 
-The input is a strict object containing only the required `organization_id` UUID;
+Its input is a strict object containing only the required `organization_id` UUID;
 unknown arguments are rejected before membership or box lookups. `tools/list`
 advertises an array `outputSchema` matching the mapped REST Box response,
 including optional activity, exit-code, and network fields. A successful call
