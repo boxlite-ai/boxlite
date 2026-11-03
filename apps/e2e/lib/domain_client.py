@@ -51,7 +51,7 @@ class DomainClient:
             "node": ["node", str(DRIVERS / "node/e2e_domains.mjs")],
             "go": [str(ROOT / "target/e2e/domain-go")],
             "c": [str(ROOT / "target/e2e/domain-c")],
-            "rust": [str(ROOT / "target/debug/examples/e2e_domains")],
+            "rust": [str(ROOT / "target/debug/domain-rust")],
             "cli": [
                 os.environ.get("BOXLITE_E2E_CLI")
                 or shutil.which("boxlite")

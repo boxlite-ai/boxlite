@@ -201,8 +201,8 @@ make test:rest:e2e AUTH=api-key FILTER=subdomain
 The Python environment needs `greenlet` for the sync SDK. `BOXLITE_E2E_CLI`
 selects a CLI binary; otherwise the tests use `boxlite` on PATH, then
 `target/debug/boxlite`. C/Go/Rust drivers are built by the command above.
-The Rust driver lives in `src/boxlite/examples/e2e_domains.rs` so its Cargo
-target and source stay inside the crate when packaging.
+The Rust driver is the non-published `boxlite-e2e-rust` workspace package in
+`sdks/rust/`; its executable is `target/debug/domain-rust` at the repository root.
 Configured cases fail if a required client is missing. Public HTTPS probes
 honor standard proxy environment variables, verify certificates, and reject redirects.
 
@@ -417,7 +417,8 @@ apps/e2e/
 ├── sdks/
 │   ├── node/                # TypeScript drivers (fallback: scripts/test/image.js)
 │   ├── go/                  # Go drivers + e2e_image.go fallback for direct runs
-│   └── c/                   # C drivers + e2e_image.h fallback for direct runs
+│   ├── c/                   # C drivers + e2e_image.h fallback for direct runs
+│   └── rust/                # Rust acceptance drivers (private Cargo package)
 └── cases/
     ├── conftest.py                  # rt / image / box fixtures (REST-only)
     ├── test_path_verification.py    # Meta-test: prove SDK→API→Runner path

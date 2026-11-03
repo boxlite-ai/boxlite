@@ -62,4 +62,4 @@ build\:e2e\:drivers: dev\:go
 	@mkdir -p target/e2e
 	$(CC) -std=c11 -Wall -Wextra -Werror -Isdks/c/include apps/e2e/sdks/c/e2e_domains.c -Ltarget/debug -lboxlite -Wl,-rpath,$(PROJECT_ROOT)/target/debug -o target/e2e/domain-c
 	@cd sdks/go && go build -tags boxlite_dev -o ../../target/e2e/domain-go ../../apps/e2e/sdks/go/e2e_domains.go
-	@cargo build --locked -p boxlite --no-default-features --features rest --example e2e_domains
+	@cargo build --locked -p boxlite-e2e-rust --bin domain-rust
