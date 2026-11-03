@@ -38,6 +38,7 @@
  */
 
 import { artifactFetchCommand, verifyAgainstManifest, type RunnerArtifact } from './runner-binary.ts'
+import { renderRunnerEnvironment } from './runner-environment.ts'
 
 /**
  * Where the unit environment lives on a host.
@@ -131,6 +132,11 @@ export type BootInput = {
  */
 export const renderRunnerBoot = (input: BootInput): string => {
   const { platform } = input
+  const { BOXLITE_RUNNER_ENV, ...environment } = input.environment
+  const customEnvironment = renderRunnerEnvironment(BOXLITE_RUNNER_ENV, [
+    ...Object.keys(environment),
+    ...Object.keys(platform.unitEnvironment),
+  ])
   const region = input.region ?? null
   const fetch = (url: string, destination: string) =>
     artifactFetchCommand({ artifact: input.binary, url, destination, region })
@@ -150,7 +156,7 @@ export const renderRunnerBoot = (input: BootInput): string => {
     OTEL_LOGGING_ENABLED: 'true',
     OTEL_TRACING_ENABLED: 'true',
     OTEL_EXPORTER_OTLP_ENDPOINT: input.otlpUrl,
-    ...input.environment,
+    ...environment,
     ...platform.unitEnvironment,
   }
 
@@ -197,7 +203,7 @@ mkdir -p -m 750 /etc/boxlite
 cat > ${RUNNER_ENV_FILE} << 'RUNNERENV'
 ${Object.entries(unitEnvironment)
   .map(([key, value]) => `${key}=${value}`)
-  .join('\n')}
+  .join('\n')}${customEnvironment.block ? '\n' + customEnvironment.block : ''}
 RUNNERENV
 printf 'RUNNER_DOMAIN=%s\\n' "$HOST_IP" >> ${RUNNER_ENV_FILE}
 chmod 640 ${RUNNER_ENV_FILE}
