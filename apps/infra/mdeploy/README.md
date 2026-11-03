@@ -64,7 +64,8 @@ An unchanged map, including reordered keys, causes no environment-driven restart
 Values must be single-line strings; JSON trailing commas are invalid. The map
 adds process settings, not guest environment or secret references. Deployment-owned
 identity, API, storage, kernel and telemetry keys, direct runner-group settings,
-and secret names/address keys cannot be overridden here. Use their existing
+secret names/address keys, and `PATH` cannot be overridden here. The cloud secret
+wrappers need the deployment's tool search path. Use the existing
 configuration channels. Map values appear in deployment state and host configuration;
 use the secret channel for credentials.
 
