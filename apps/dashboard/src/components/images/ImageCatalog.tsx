@@ -56,7 +56,7 @@ function BoxLinks({ boxes }: { boxes: Box[] }) {
   )
 }
 
-/** Public templates and organization images share one searchable list. */
+/** API catalog rows, enriched with matching Quickstart template metadata. */
 export function ImageCatalog() {
   const navigate = useNavigate()
   const { selectedOrganization, authenticatedUserHasPermission } = useSelectedOrganization()
@@ -81,32 +81,18 @@ export function ImageCatalog() {
     if (usageError) handleApiError(usageError, 'Failed to fetch image usage')
   }, [usageError])
 
-  const catalog = useMemo(() => {
-    const rows: (Image & { templateId?: string })[] = images.map((image) => ({
-      ...image,
-      templateId: BOX_TEMPLATES.find((template) =>
-        image.curatedRef
-          ? template.image === image.curatedRef
-          : [imageStartRef(image), ...image.aliases.map((tag) => `${image.name}:${tag}`)].includes(template.image),
-      )?.id,
-    }))
-    for (const template of BOX_TEMPLATES) {
-      if (rows.some((image) => image.templateId === template.id)) continue
-      rows.push({
-        id: null,
-        name: template.name,
-        curated: true,
-        curatedRef: template.image,
-        aliases: [],
-        versionCount: 0,
-        sizeBytes: null,
-        lastUsedAt: null,
-        createdAt: null,
-        templateId: template.id,
-      })
-    }
-    return rows
-  }, [images])
+  const catalog = useMemo(
+    () =>
+      images.map((image) => ({
+        ...image,
+        templateId: BOX_TEMPLATES.find((template) =>
+          image.curatedRef
+            ? template.image === image.curatedRef
+            : [imageStartRef(image), ...image.aliases.map((tag) => `${image.name}:${tag}`)].includes(template.image),
+        )?.id,
+      })),
+    [images],
+  )
   const rows = useMemo(() => {
     const needle = filter.trim().toLowerCase()
     return catalog.filter((image) =>

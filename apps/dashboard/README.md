@@ -186,14 +186,25 @@ needs one, start a box from it, and it is listed once the box runs. The first
 is the only step a reader may have to take beforehand, so it links to Private
 registries; the second opens the box create.
 
-Every image row and every built-in image offers "New box", the same create
-dialog the Boxes page uses with the image filled in, so starting from an image
-is one click wherever the image is shown. The SDK call for the same start sits
-behind "Show the SDK call" for readers who will paste it rather than click.
+Images lists only rows returned by the image catalog API: the organization's
+registered images and the operator-configured system images. Quickstart's
+public templates are recommendations and do not add rows, search results, or
+counts to Images. An empty or failed catalog response must not insert templates
+as a fallback. A template image appears here once the API returns it as an
+organization or system image.
 
-Built-in images sit apart from the table. They are operator configuration with
-no versions, size or recorded starts, so a row for them would be a line of
-dashes, and a "never" under last started would be false.
+For members allowed to create boxes, every row offers "New box". If its reference
+matches a Quickstart template, the action opens that template with its startup
+configuration; otherwise it opens the shared create dialog with the image filled
+in. Matching a template does not change an image's ownership or removability.
+System images remain non-removable and do not count against the organization's
+image limit; usage comes from the separate usage API, not the displayed row count.
+
+A new organization with the default system-image configuration sees `base`,
+`python`, and `node`, with zero organization image slots used. The operator may
+configure additional system images, so three is not a fixed UI limit. See the
+[expected screenshots](../../docs/contributing/investigations/2026-11-03-images-catalog-membership.md#screenshots)
+for a new organization and an organization with registered images.
 
 ## A state the API records once is told in the past tense
 
