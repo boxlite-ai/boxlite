@@ -27,7 +27,6 @@ import qdrant from '@/assets/templates/qdrant.svg'
 import postgresql from '@/assets/templates/postgresql.svg'
 import k6 from '@/assets/templates/k6.svg'
 import uv from '@/assets/templates/uv.svg'
-import coder from '@/assets/templates/coder.svg'
 import bun from '@/assets/templates/bun.svg'
 import apachemaven from '@/assets/templates/apachemaven.svg'
 import gnu from '@/assets/templates/gnu.svg'
@@ -36,7 +35,6 @@ import { cn } from '@/lib/utils'
 const icons: Record<string, { src: string; className?: string }> = {
   python: { src: python },
   uv: { src: uv },
-  coder: { src: coder, className: 'dark:invert' },
   bun: { src: bun },
   maven: { src: apachemaven },
   gcc: { src: gnu },

@@ -97,3 +97,16 @@ it('initializes pgvector with a generated PostgreSQL password', async () => {
     expect.objectContaining({ envVars: { POSTGRES_PASSWORD: expect.stringMatching(/.{16,}/) } }),
   )
 })
+
+it('retires Coder Universal from selection and search and falls back to Python for old links', async () => {
+  state.create.mockResolvedValue({ id: 'python-1' })
+  await mount('/?template=coder')
+  expect(host.querySelector('[aria-label="Select Coder Universal"]')).toBeNull()
+  expect(host.querySelector('[aria-label="Select Python"]')?.getAttribute('aria-pressed')).toBe('true')
+  await click('Create Box')
+  expect(state.create).toHaveBeenCalledWith(
+    expect.objectContaining({ image: 'docker.io/library/python:3.12-slim' }),
+  )
+  await input('Search templates', 'coder')
+  expect(host.textContent).toContain('No templates found')
+})

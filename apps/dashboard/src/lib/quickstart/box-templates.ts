@@ -134,22 +134,6 @@ export const BOX_TEMPLATES: BoxTemplate[] = [
     },
   },
   {
-    id: 'coder',
-    name: 'Coder Universal',
-    category: 'Code',
-    description: 'Work across Python and Node.js projects with Git in one environment.',
-    image: 'docker.io/codercom/example-universal:ubuntu-noble-20261019',
-    cpu: 2,
-    memoryGiB: 4,
-    diskGiB: 30,
-    startup: {
-      entrypoint: ['/bin/sh'],
-      cmd: ['-c', 'while :; do sleep 3600; done'],
-    },
-    access: 'Terminal \u00b7 Git, Python and Node.js validated',
-    preparation: 'A large development image. Allow several minutes for the first download and startup.',
-  },
-  {
     id: 'browserless',
     name: 'Browserless Chromium',
     category: 'Browser',
