@@ -332,6 +332,27 @@ def stop_orphaned_boxes(grace=8.0):
     return box_processes()
 
 
+def box_dirs(home=RUNTIME_HOME):
+    """Box directories left in this checkout's runtime home."""
+    root = home / "boxes"
+    try:
+        return sorted(path for path in root.iterdir() if path.is_dir())
+    except FileNotFoundError:
+        return []
+
+
+def prune_box_dirs(dirs=None):
+    """Remove leftover box directories; returns how many were deleted."""
+    removed = 0
+    for path in dirs if dirs is not None else box_dirs():
+        try:
+            shutil.rmtree(path)
+        except FileNotFoundError:
+            continue
+        removed += 1
+    return removed
+
+
 def start(env):
     stop_host()
     start_process(
@@ -426,6 +447,10 @@ def down(env):
     if leftover:
         raise Failure("leftover box processes after teardown: "
                       + ", ".join(str(pid) for pid in leftover))
+    removed = prune_box_dirs()
+    if removed:
+        print(f"[e2e] removed {removed} leftover box director"
+              f"{'y' if removed == 1 else 'ies'}", flush=True)
 
 
 def doctor(env):

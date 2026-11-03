@@ -1,6 +1,7 @@
 """Exercise the Compose launcher's pure configuration boundaries."""
 import importlib.util
 from pathlib import Path
+import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -32,6 +33,23 @@ class LocalE2ETest(unittest.TestCase):
         self.assertFalse(local.owned_process(["/tmp/elsewhere/boxes/abc/bin/boxlite-shim"]))
         self.assertFalse(local.owned_process([f"{home}/boxes/abc/bin/python3"]))
         self.assertFalse(local.owned_process([]))
+
+    def test_prune_box_dirs_removes_only_box_directories(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            boxes = home / "boxes"
+            (boxes / "a").mkdir(parents=True)
+            (boxes / "b").mkdir()
+            (boxes / "stray-file").write_text("keep")
+            images = home / "images"
+            images.mkdir()
+
+            removed = local.prune_box_dirs(local.box_dirs(home))
+
+            self.assertEqual(removed, 2)
+            self.assertEqual([p.name for p in boxes.iterdir()], ["stray-file"])
+            self.assertTrue(images.is_dir())
+            self.assertEqual(local.prune_box_dirs(local.box_dirs(home)), 0)
 
 
 if __name__ == "__main__":
