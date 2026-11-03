@@ -24,6 +24,7 @@ import { RegistryTools } from './registry-tools'
 import { BoxTools } from './box-tools'
 import { NetworkTools } from './network-tools'
 import { McpExecutionTools } from './execution-tools'
+import { McpFileTools } from './file-tools'
 import { AuthenticatedRateLimitGuard } from '../common/guards/authenticated-rate-limit.guard'
 
 const PROTOCOL = '2026-07-28'
@@ -59,6 +60,7 @@ describe('McpController', () => {
         { provide: BoxTools, useValue: { register: jest.fn() } },
         { provide: NetworkTools, useValue: { register: jest.fn() } },
         { provide: McpExecutionTools, useValue: { register: jest.fn() } },
+        { provide: McpFileTools, useValue: { register: jest.fn() } },
         {
           provide: TypedConfigService,
           useValue: { get: (key: string) => (key === 'mcp.resourceUrl' ? RESOURCE : undefined) },

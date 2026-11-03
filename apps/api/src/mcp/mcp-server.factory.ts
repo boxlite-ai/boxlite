@@ -17,6 +17,7 @@ import { BoxTools } from './box-tools'
 import { NetworkTools } from './network-tools'
 import { registerConfigTool } from './config-tool'
 import { McpExecutionTools } from './execution-tools'
+import { McpFileTools } from './file-tools'
 
 /** The `authInfo.extra` key the controller stores the authenticated caller under. */
 export const MCP_CALLER_KEY = 'boxliteCaller'
@@ -45,6 +46,7 @@ export class McpServerFactory {
     private readonly boxTools: BoxTools,
     private readonly networkTools: NetworkTools,
     private readonly executionTools: McpExecutionTools,
+    private readonly fileTools: McpFileTools,
   ) {}
 
   /** The `createMcpHandler` factory. */
@@ -69,6 +71,7 @@ export class McpServerFactory {
     this.networkTools.register(server, caller)
     registerConfigTool(server)
     this.executionTools.register(server, caller)
+    this.fileTools.register(server, caller)
     return server
   }
 
