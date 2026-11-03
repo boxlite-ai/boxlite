@@ -28,8 +28,13 @@ tests present, six image-selection assertions failed because the field stayed
 empty. The tests cover submitted references, delayed catalogs, placeholder data,
 user edits and clearing, explicit prefills, refreshes and reopening.
 
-With the complete change restored, `make test:apps:dashboard` passed all 668
-tests in 89 files. `make lint:apps` completed with zero errors (361 warnings).
+Two plan-card render regressions also failed with all production changes
+reverted: both loaded and loading cards still had full outer borders. Restoring
+the change verified the current-plan marker, borderless surfaces, pricing,
+sales link and upgrade navigation.
+
+With the complete change restored, `make test:apps:dashboard` passed all 670
+tests in 90 files. `make lint:apps` completed with zero errors (361 warnings).
 The production `dashboard:build` Nx target, invoked through a temporary make
 target, built the dashboard and its API-client dependencies. The dashboard
 TypeScript check then passed with the generated declarations available.
