@@ -130,6 +130,13 @@ use `boxlite auth status --url URL` or `boxlite --url URL auth status`, not
 backend, and executing invocations reject unsupported options. Clap's `--help`
 and `--version` display actions remain terminal.
 
+Both `-h` and `--help` show command-specific `Options` before `Global options`.
+The global section contains only shared options accepted by that command.
+For example, `boxlite list -h` keeps `--all`, `--quiet`, and `--format` together,
+with `--context` and `--url` in the global section below.
+A command-specific definition, such as `auth login --url`, stays in `Options`.
+Commands without shared options omit the global section.
+
 | Flag | Scope | Env Var | Description |
 |------|-------|---------|-------------|
 | `--debug` | all commands except `completion` | `RUST_LOG` (lower precedence) | Enable debug output. |
