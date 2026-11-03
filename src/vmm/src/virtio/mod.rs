@@ -12,7 +12,8 @@
 //! A device processes the descriptors available in its queues; the virtqueue
 //! size bounds one event call. The [`VirtQueues`] facade prepares, validates,
 //! saves and restores the queue set, tracks deferred chains and runs the
-//! notification drain; queue start and stop arrive with the worker. Every
+//! notification drain; the transport starts and stops the worker on DRIVER_OK
+//! and Status=0, and rejects queue-configuration writes after DRIVER_OK. Every
 //! device needs the methods here first.
 
 use std::{fmt, sync::Arc};
@@ -20,6 +21,8 @@ use std::{fmt, sync::Arc};
 use self::queue::VirtQueues;
 use crate::{events::EventSender, memory::GuestMemoryMmap};
 
+pub(crate) mod interrupt;
+pub(crate) mod mmio;
 pub(crate) mod queue;
 
 /// The largest number of queues a device may declare.
@@ -86,6 +89,15 @@ pub(crate) trait EventRegistrar: Send + Sync {
 
     /// Stops reporting `id`.
     fn deregister(&self, id: SourceId);
+}
+
+/// Starts and stops the worker of one activated device.
+pub(crate) trait WorkerControl: Send + Sync {
+    /// Starts the worker. On error no worker runs.
+    fn start(&self) -> Result<(), DeviceError>;
+
+    /// Stops and joins the worker. On error the device must not be reset.
+    fn stop(&self) -> Result<(), DeviceError>;
 }
 
 /// The transport's interrupt and status handle, shared with the worker.
@@ -223,8 +235,11 @@ pub(crate) trait VirtioDevice: Send {
     /// The device's fixed description.
     fn spec(&self) -> &DeviceSpec;
 
-    /// Stores the features the driver accepted. The transport calls this once,
-    /// before any configuration read that depends on them.
+    /// Stores the features the driver accepted. The transport offers
+    /// `VIRTIO_F_VERSION_1` itself and calls this once with the transport-owned
+    /// bits removed, when the driver sets FEATURES_OK. A device may receive
+    /// configuration reads before this call; feature-dependent fields return a
+    /// default until then.
     fn set_features(&mut self, negotiated: u64) -> Result<(), FeatureError>;
 
     /// Reads the configuration space at `offset` into `data`.
