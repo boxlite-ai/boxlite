@@ -301,7 +301,34 @@ const VOLUME_SCOPES: &[CommandScope] = &[
         children: &[],
     },
 ];
+const ACTIONS_RUNNER_SCOPES: &[CommandScope] = &[
+    CommandScope {
+        name: "start",
+        globals: LOCAL_IMAGE_GLOBALS,
+        children: &[],
+    },
+    CommandScope {
+        name: "connect",
+        globals: LOCAL_IMAGE_GLOBALS,
+        children: &[],
+    },
+    CommandScope {
+        name: "run",
+        globals: LOCAL_IMAGE_GLOBALS,
+        children: &[],
+    },
+    CommandScope {
+        name: "status",
+        globals: LOCAL_GLOBALS,
+        children: &[],
+    },
+];
 const COMMAND_SCOPES: &[CommandScope] = &[
+    CommandScope {
+        name: "actions-runner",
+        globals: LOCAL_IMAGE_GLOBALS,
+        children: ACTIONS_RUNNER_SCOPES,
+    },
     box_command_scope("agent", AGENT_SCOPES),
     CommandScope {
         name: "run",
@@ -761,6 +788,10 @@ pub enum Commands {
 
     /// Manage named volumes on a REST server
     Volume(crate::commands::volume::VolumeArgs),
+
+    /// Manage GitHub Actions self-hosted runners in isolated micro-VMs
+    #[command(name = "actions-runner", visible_alias = "runner")]
+    ActionsRunner(crate::commands::actions_runner::ActionsRunnerArgs),
 
     /// Generate shell completion script (hidden from help)
     #[command(hide = true)]
