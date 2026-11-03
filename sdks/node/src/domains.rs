@@ -53,7 +53,7 @@ impl JsDomainTarget {
 }
 
 /// One domain the organization holds and what it routes to.
-#[napi(object)]
+#[napi(object, use_nullable = true)]
 #[derive(Clone, Debug)]
 pub struct JsDomain {
     pub hostname: String,
