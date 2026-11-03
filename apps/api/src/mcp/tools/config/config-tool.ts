@@ -22,6 +22,8 @@ export function registerConfigTool(server: McpServer): void {
           export_enabled: z.boolean(),
           import_enabled: z.boolean(),
           inbound_update_enabled: z.boolean(),
+          private_tunnels_enabled: z.boolean(),
+          exec_user_enabled: z.boolean(),
         }),
       }),
       annotations: readOnlyAnnotations,

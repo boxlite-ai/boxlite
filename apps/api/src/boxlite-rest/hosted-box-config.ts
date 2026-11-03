@@ -13,6 +13,8 @@ export function getHostedBoxConfig() {
       export_enabled: false,
       import_enabled: false,
       inbound_update_enabled: true,
+      private_tunnels_enabled: true,
+      exec_user_enabled: true,
     },
   }
 }

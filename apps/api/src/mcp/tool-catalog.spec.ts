@@ -67,6 +67,12 @@ const toolByOperation = {
 }
 
 const excludedOperations = new Set([
+  // New REST operations do not expand the selected MCP MVP during a main merge.
+  'configureSsh',
+  'getSshStatus',
+  'disableSsh',
+  'revokeTunnel',
+  'updateOutboundNetwork',
   'getCurrentPrincipal',
   'createSnapshot',
   'listSnapshots',

@@ -26,9 +26,17 @@ mcp/
 └── mcp-server.factory.ts  Per-request server assembly
 ```
 
+Shared harnesses under `tests/` are excluded from the application TypeScript
+build and remain compiled through the Jest test configuration.
+
 Every registered tool advertises `inputSchema` and `outputSchema`. The catalog
 test exercises the assembled endpoint and checks all 31 registrations; schema
 placement does not change the public tool contract.
+
+REST capability flags describe the hosted API, including private tunnels and
+per-execution user selection. The MCP MVP keeps public-only tunnel preparation
+and its existing execution input. New REST operations for SSH, tunnel revocation,
+and outbound policy remain explicit catalog exclusions until MCP contracts are added.
 
 ## Runner HTTP boundary
 

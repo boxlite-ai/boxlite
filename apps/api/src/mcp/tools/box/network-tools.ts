@@ -98,7 +98,7 @@ export class NetworkTools {
               throw new ConflictException('Box cannot be reached in its current state')
             const uri = await this.boxes.getNetworkTunnelUrl(box.id, organization_id, port)
             assertTunnelActive(signal)
-            await this.tunnels.declarePublic(box.id, port)
+            await this.tunnels.prepare(box.id, port, true)
             return { uri }
           },
           signal,
