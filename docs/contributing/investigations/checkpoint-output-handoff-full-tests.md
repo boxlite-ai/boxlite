@@ -240,11 +240,17 @@ production changes reverted, the new real-VM Node integration regression failed
 at inspection with the safe-integer error. After restoring the complete fix and
 rebuilding, it passed and checked the exact `1n << 63n` value in every share.
 
-The final Node regression is a focused pass, not a claim that the interrupted
-SDK matrix completed. Node's full raw-import continuation and the Go/C cloud
-cases were not rerun after this last fix. The earlier Python results remain
-valid; that final fix only changes Node inspection conversion. The complete
-cloud harness therefore remains partially qualified.
+The focused Node regression was followed by the full Node SDK round trip on
+2026-11-03 against `d3c32b0e`. The isolated harness passed its complete case in
+546 seconds (exit 0), retaining the original assertions. Node passed named
+capture, catalog get/list, managed restore to Paused, resume/pause, export of
+exactly two files, inspection, raw import to Paused, explicit resume and the
+catalog removal call. The same run repeated the managed/raw process-continuity
+checks and completed test-box cleanup.
+
+The Go/C cloud cases were not rerun. The earlier Python async/sync results remain
+valid; the last binding fix only changes Node inspection conversion. Complete
+cross-SDK and live-cloud qualification therefore remains partial.
 
 The harness uses real native/SDK and API service code, PostgreSQL, Redis and KVM,
 with test seams for identity, image resolution, placement and commerce. It does
