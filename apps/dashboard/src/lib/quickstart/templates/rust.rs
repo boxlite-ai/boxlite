@@ -1,4 +1,4 @@
-use boxlite::{BoxCommand, BoxOptions, BoxliteRestOptions, BoxliteRuntime, NetworkSpec, RootfsSpec};
+use boxlite::{BoxCommand, BoxOptions, BoxliteRestOptions, BoxliteRuntime, NetworkSpec, RootfsSpec, TunnelOptions};
 use futures::StreamExt;
 
 #[tokio::main]
@@ -23,9 +23,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 {{STEP_PREVIEW}}
     let server_code = {{SERVER_RS}};
     let _server = box_handle.exec(BoxCommand::new("python3").args(["-u", "-c", server_code])).await?;
-    // The 0.10.8 REST runtime requires the SDK guest address.
+    // Address the preview server inside the guest.
     let target = format!("{}:3000", boxlite::net::constants::GUEST_IP).parse()?;
-    let preview = box_handle.network().tunnel(target).await?;
+    let preview = box_handle.network().tunnel(target, TunnelOptions::default()).await?;
     let url = preview.uri().ok_or("Cloud did not return a preview URL")?;
     println!("Preview URL: {url}");
     Ok(())
