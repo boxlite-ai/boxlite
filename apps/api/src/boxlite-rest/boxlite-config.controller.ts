@@ -6,6 +6,7 @@
 
 import { Controller, Get } from '@nestjs/common'
 import { ApiTags, ApiExcludeController } from '@nestjs/swagger'
+import { getHostedBoxConfig } from './hosted-box-config'
 
 // Spec-first surface: the contract is openapi/box.openapi.yaml.
 @ApiExcludeController()
@@ -14,16 +15,6 @@ import { ApiTags, ApiExcludeController } from '@nestjs/swagger'
 export class BoxliteConfigController {
   @Get('config')
   getConfig() {
-    return {
-      capabilities: {
-        snapshots_enabled: false,
-        clone_enabled: false,
-        export_enabled: false,
-        import_enabled: false,
-        inbound_update_enabled: true,
-        private_tunnels_enabled: true,
-        exec_user_enabled: true,
-      },
-    }
+    return getHostedBoxConfig()
   }
 }

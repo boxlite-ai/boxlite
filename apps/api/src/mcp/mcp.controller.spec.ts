@@ -163,7 +163,7 @@ describe('McpController', () => {
     expect(body.result.resultType).toBe('complete')
     expect(typeof body.result.ttlMs).toBe('number')
     expect(typeof body.result.cacheScope).toBe('string')
-    expect(body.result.tools.map((tool: { name: string }) => tool.name)).toEqual(['list_boxes'])
+    expect(body.result.tools.map((tool: { name: string }) => tool.name)).toEqual(['list_boxes', 'get_config'])
     expect(body.result.tools[0].inputSchema.required).toEqual(['organization_id'])
     expect(body.result.tools[0].annotations.readOnlyHint).toBe(true)
     expect(body.result.tools[0].annotations.destructiveHint).toBe(false)

@@ -15,6 +15,7 @@ import { ImageTools } from './image-tools'
 import { RegistryTools } from './registry-tools'
 import { BoxTools } from './box-tools'
 import { NetworkTools } from './network-tools'
+import { registerConfigTool } from './config-tool'
 
 /** The `authInfo.extra` key the controller stores the authenticated caller under. */
 export const MCP_CALLER_KEY = 'boxliteCaller'
@@ -64,6 +65,7 @@ export class McpServerFactory {
     this.registryTools.register(server, caller)
     this.boxTools.register(server, caller)
     this.networkTools.register(server, caller)
+    registerConfigTool(server)
     return server
   }
 
