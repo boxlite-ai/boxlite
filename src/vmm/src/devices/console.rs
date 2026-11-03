@@ -61,7 +61,8 @@ impl ConsoleState {
     }
 }
 
-/// The serial port's sink: a write queues the bytes and returns.
+/// The serial and virtio sinks: clones enqueue into the same bounded queue.
+#[derive(Clone)]
 pub(crate) struct ConsoleWriter(Arc<ConsoleState>);
 
 impl Write for ConsoleWriter {
