@@ -1,17 +1,17 @@
 """Live execution inventory and non-booting convenience API."""
 
 import asyncio
+
 import pytest
 
 import boxlite
 from boxlite.simplebox import SimpleBox
 
 
+@pytest.mark.integration
 @pytest.mark.asyncio
-async def test_unstarted_simplebox_inventory_does_not_create():
-    box = object.__new__(SimpleBox)
-    box._started = False
-    box._box = None
+async def test_unstarted_simplebox_inventory_does_not_create(shared_runtime):
+    box = SimpleBox(image="alpine:latest", runtime=shared_runtime)
     assert await box.list_executions() == []
     assert box._box is None
 
@@ -41,6 +41,9 @@ async def test_native_inventory_includes_main_and_exec_without_boot(shared_runti
         with pytest.raises(AttributeError):
             info.started_at = 0
         control = await box.get_execution(info.execution_id)
+        for stream in (control.stdin, control.stdout, control.stderr):
+            with pytest.raises(RuntimeError, match="stream not available"):
+                stream()
         await control.kill()
         await control.wait()
         assert all(
@@ -61,7 +64,9 @@ async def test_simplebox_inventory_recovers_main_output(shared_runtime):
     )
     await box.start()
     try:
-        main = next(info for info in await box.list_executions() if info.is_main_session)
+        main = next(
+            info for info in await box.list_executions() if info.is_main_session
+        )
         reader = await box.attach(main.execution_id, stdin=False)
         output = reader.stdout()
 

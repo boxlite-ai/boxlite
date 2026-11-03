@@ -9,23 +9,8 @@ import (
 	"time"
 )
 
-func newInventoryRuntime(t *testing.T) *Runtime {
-	t.Helper()
-	rt, err := NewRuntime(WithHomeDir(t.TempDir()), WithImageRegistries(
-		ImageRegistry{Host: "docker.m.daocloud.io", Search: true},
-		ImageRegistry{Host: "docker.xuanyuan.me", Search: true},
-		ImageRegistry{Host: "docker.1ms.run", Search: true},
-		ImageRegistry{Host: "docker.io", Search: true},
-	))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = rt.Close() })
-	return rt
-}
-
 func TestIntegrationExecutionInventoryControlsDoNotClaimOutput(t *testing.T) {
-	rt := newInventoryRuntime(t)
+	rt := newTestRuntime(t)
 	box := createStartedBoxOrSkip(t, rt, "alpine:latest", WithAutoRemove(false), WithCmd("sleep", "300"))
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
@@ -103,7 +88,7 @@ func TestIntegrationExecutionInventoryControlsDoNotClaimOutput(t *testing.T) {
 }
 
 func TestIntegrationAttachExecutionReaderRecovery(t *testing.T) {
-	rt := newInventoryRuntime(t)
+	rt := newTestRuntime(t)
 	box := createStartedBoxOrSkip(t, rt, "alpine:latest", WithAutoRemove(false),
 		WithCmd("sh", "-c", "while true; do echo inventory-heartbeat; sleep 0.1; done"))
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
@@ -145,6 +130,9 @@ func TestIntegrationAttachExecutionReaderRecovery(t *testing.T) {
 			OnStdout: func(chunk []byte) { chunks <- string(chunk) },
 		})
 		if err != nil {
+			if !IsAlreadyExists(err) {
+				t.Fatalf("reattach after reader close: %v", err)
+			}
 			select {
 			case <-time.After(10 * time.Millisecond):
 			case <-ctx.Done():
@@ -170,7 +158,7 @@ func TestIntegrationAttachExecutionReaderRecovery(t *testing.T) {
 }
 
 func TestIntegrationListExecutionsNeverBootsCreatedBox(t *testing.T) {
-	rt := newInventoryRuntime(t)
+	rt := newTestRuntime(t)
 	ctx := context.Background()
 	box, err := rt.Create(ctx, "alpine:latest", WithAutoRemove(false))
 	if err != nil {

@@ -268,8 +268,19 @@ What the list contains, and what it does not:
 - **Metadata, not a process listing.** `argv`, `started_at` and `tty`
   are captured when the session is spawned, so they describe the BoxLite
   execution rather than whatever a `ps` parse would report.
-- **Listing never starts a box.** A stopped box lists nothing; it is not
-  woken to answer.
+- **Listing never starts or resumes a box.** Configured and stopped boxes list
+  nothing. A paused box returns an invalid-state error rather than claiming
+  that its sessions disappeared. Listing does not refresh the server's idle clock.
+
+`get_execution(id)` recovers wait and control without taking the output reader;
+`attach(id)` also claims that reader and returns a conflict if another reader
+still owns it. Attach includes output still present in the guest's bounded
+buffer, not durable history. A failed status request is an observation error,
+not a fabricated process exit; callers decide whether to try again.
+
+The main session reuses its execution ID after a box restart. Server-side
+recovery records belong to one box lifecycle and are discarded before an
+explicit or implicit restart, so an old exit cannot complete a new main session.
 
 ### One box per agent
 

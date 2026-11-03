@@ -478,11 +478,20 @@ func (m *ExecManager) Resolve(ctx context.Context, bx *boxlite.Box, id, boxID st
 }
 
 func (m *ExecManager) resolve(ctx context.Context, source executionSource, id, boxID string) (*ManagedExec, error) {
-	if current, err := m.GetForBox(id, boxID); !errors.Is(err, ErrExecNotFound) {
-		return current, err
+	cached, err := m.GetForBox(id, boxID)
+	if err != nil && !errors.Is(err, ErrExecNotFound) {
+		return nil, err
 	}
+	if cached != nil && !cached.isDone() {
+		return cached, nil
+	}
+	// The main session uses the container ID again after a box restart.
+	// Keep its terminal status until the guest reports that ID live again.
 	sessions, err := source.list(ctx)
 	if err != nil {
+		if cached != nil {
+			return cached, nil
+		}
 		return nil, err
 	}
 	var info *boxlite.ExecutionInfo
@@ -493,6 +502,9 @@ func (m *ExecManager) resolve(ctx context.Context, source executionSource, id, b
 		}
 	}
 	if info == nil {
+		if cached != nil {
+			return cached, nil
+		}
 		return nil, fmt.Errorf("%w: %s", ErrExecNotFound, id)
 	}
 	handle, err := source.get(ctx, id)
@@ -507,7 +519,7 @@ func (m *ExecManager) resolve(ctx context.Context, source executionSource, id, b
 		stderrBus: newStreamBus(streamBusBacklogCap),
 	}
 	m.mu.Lock()
-	if current, exists := m.execs[id]; exists {
+	if current, exists := m.execs[id]; exists && current != cached {
 		m.mu.Unlock()
 		_ = handle.Close()
 		if current.BoxID != boxID {
@@ -624,7 +636,9 @@ func (m *ExecManager) Kill(id string) error {
 	}
 
 	m.mu.Lock()
-	delete(m.execs, id)
+	if m.execs[id] == e {
+		delete(m.execs, id)
+	}
 	m.mu.Unlock()
 
 	if e.stdoutBus != nil {
@@ -876,9 +890,9 @@ func (m *ExecManager) escalate(e *ManagedExec, sig syscall.Signal, name string) 
 // the map). The map delete is idempotent.
 func (m *ExecManager) killAndEvict(e *ManagedExec) {
 	m.mu.RLock()
-	_, stillTracked := m.execs[e.ID]
+	current, stillTracked := m.execs[e.ID]
 	m.mu.RUnlock()
-	if !stillTracked {
+	if !stillTracked || current != e {
 		return
 	}
 
@@ -898,7 +912,9 @@ func (m *ExecManager) killAndEvict(e *ManagedExec) {
 	}
 
 	m.mu.Lock()
-	delete(m.execs, e.ID)
+	if m.execs[e.ID] == e {
+		delete(m.execs, e.ID)
+	}
 	m.mu.Unlock()
 
 	if e.stdoutBus != nil {
@@ -917,7 +933,7 @@ func (m *ExecManager) evictExited(e *ManagedExec) {
 	e.attachMu.Unlock()
 
 	m.mu.Lock()
-	if _, stillTracked := m.execs[e.ID]; !stillTracked {
+	if m.execs[e.ID] != e {
 		m.mu.Unlock()
 		return
 	}

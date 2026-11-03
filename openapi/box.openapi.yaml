@@ -97,8 +97,8 @@ info:
     Finished sessions disappear from the live list as soon as the guest sees
     exit. Wait status and output may remain available in the guest's bounded
     retention window, but this API does not promise durable execution history.
-    Listing does not start or restart a box; a box that is not running has no
-    live sessions, so it answers `{"executions": []}` rather than an error.
+    Listing does not start or restart a box. Configured and stopped boxes
+    answer `{"executions": []}`; paused boxes return an invalid-state error.
 
     Out-of-band control endpoints exist for clients that prefer a
     request/response style: `GET /executions/{exec_id}` (status),
@@ -806,9 +806,9 @@ paths:
         immediately, including the interval before registry cleanup. Existing
         wait status/output retention is bounded and is not durable history.
 
-        Listing never starts or restarts a box, and a box that is not running
-        has no live sessions: it answers `{"executions": []}` rather than an
-        error, so a monitor can poll it without waking anything.
+        Listing never starts or resumes a box. Configured and stopped boxes
+        answer `{"executions": []}`; paused boxes return an invalid-state
+        error. Polling does not refresh the box's idle clock.
       tags: [Execution]
       responses:
         "200":
@@ -817,6 +817,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ListExecutionsResponse"
+        "409":
+          $ref: "#/components/responses/ConflictError"
         "404":
           $ref: "#/components/responses/NotFoundError"
 

@@ -146,7 +146,10 @@ class SyncBox:
         return self._sync(self._box.list_executions())
 
     def get_execution(self, execution_id: str) -> "SyncExecution":
-        """Recover control without claiming the session's output reader."""
+        """Recover control without claiming output.
+
+        The handle's stream accessors raise RuntimeError because it has no streams.
+        """
         from ._execution import SyncExecution
 
         return SyncExecution(

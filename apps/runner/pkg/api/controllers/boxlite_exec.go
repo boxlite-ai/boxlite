@@ -23,13 +23,22 @@ var getExecutionBox = func(ctx *gin.Context, boxID string) (*sdkboxlite.Box, err
 }
 
 func resolveManagedExecution(ctx *gin.Context, boxID, execID string, attach bool) (*boxlite.ManagedExec, error) {
-	if !attach {
-		if current, err := execManager.GetForBox(execID, boxID); !errors.Is(err, boxlite.ErrExecNotFound) {
-			return current, err
+	cached, cachedErr := execManager.GetForBox(execID, boxID)
+	if cachedErr != nil && !errors.Is(cachedErr, boxlite.ErrExecNotFound) {
+		return nil, cachedErr
+	}
+	if !attach && cached != nil {
+		select {
+		case <-cached.Done:
+		default:
+			return cached, nil
 		}
 	}
 	bx, err := getExecutionBox(ctx, boxID)
 	if err != nil {
+		if !attach && cached != nil {
+			return cached, nil
+		}
 		return nil, fmt.Errorf("box not found: %w", err)
 	}
 	if attach {

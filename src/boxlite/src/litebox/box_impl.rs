@@ -519,25 +519,9 @@ impl BoxImpl {
         ))
     }
 
-    /// Make the main command's exit code survive the VM's power-off.
-    ///
-    /// The guest powers the VM off the moment init exits, which can cut the
-    /// in-flight `Wait` RPC — and the portal then reports `-1`
-    /// (`portal/interfaces/exec.rs::spawn_wait`), so `boxlite run` would give
-    /// the user a status the process never returned. That is the headline
-    /// behaviour of this whole change, and it must not hang on an RPC beating a
-    /// reboot.
-    ///
-    /// It does not have to. The guest writes the real code to the exit file
-    /// *before* powering off, so it is already on disk — just read it back.
-    ///
-    /// The trigger is any **negative** code, not the `-1` specifically. A real
-    /// process exit is 0-255, so a negative value always means the portal had no
-    /// exit code to give: either it lost the Wait, or it is encoding a signal
-    /// death as `-signal` (`map_wait_response`) — and those two overlap exactly
-    /// at `-1`, since SIGHUP is signal 1. The exit file is the right answer to
-    /// both, because the guest records the docker-convention code (`128 + n` for
-    /// a signal), which is what every consumer of this already expects.
+    /// The guest writes init's exit code before powering the VM off. Recover
+    /// that record if Wait loses its transport or reports a negative signal;
+    /// ordinary exec sessions retain their original signal convention.
     fn exit_code_from_file_when_portal_has_none(
         &self,
         mut upstream: tokio::sync::mpsc::UnboundedReceiver<crate::litebox::ExecResult>,
@@ -546,22 +530,29 @@ impl BoxImpl {
         let exit_file = self.layout.container_exit_file(self.container_id());
 
         tokio::spawn(async move {
-            while let Some(mut result) = upstream.recv().await {
-                if result.exit_code < 0
-                    && let Some(record) = Self::read_exit_record_soon(&exit_file).await
-                {
-                    tracing::debug!(
-                        portal_code = result.exit_code,
-                        recovered = record.exit_code,
-                        "portal had no exit code for the main command; took it from the exit file"
-                    );
-                    result.exit_code = record.exit_code;
-                    // error_message is left alone: if the portal had something
-                    // to say about how the wait ended, it is still true.
+            let mut result = tokio::select! {
+                _ = tx.closed() => return,
+                result = upstream.recv() => result,
+            };
+            if result.as_ref().is_none_or(|result| result.exit_code < 0) {
+                let record = tokio::select! {
+                    _ = tx.closed() => return,
+                    record = Self::read_exit_record_soon(&exit_file) => record,
+                };
+                if let Some(record) = record {
+                    match &mut result {
+                        Some(result) => result.exit_code = record.exit_code,
+                        None => {
+                            result = Some(crate::litebox::ExecResult {
+                                exit_code: record.exit_code,
+                                error_message: None,
+                            })
+                        }
+                    }
                 }
-                if tx.send(result).is_err() {
-                    break;
-                }
+            }
+            if let Some(result) = result {
+                let _ = tx.send(result);
             }
         });
 
@@ -656,11 +647,10 @@ impl BoxImpl {
         ))
     }
 
-    /// Live sessions in the box. Listing is read-only: a box that is not
-    /// running has none, and saying so is not an error — waking it to answer
-    /// a question about it would be a side effect the caller never asked for.
+    /// Live sessions in the box. Inactive boxes have none; paused boxes reject
+    /// discovery until resumed. Listing never starts or resumes a VM.
     pub(crate) async fn list_executions(&self) -> BoxliteResult<Vec<crate::ExecutionInfo>> {
-        if self.shutdown_token.is_cancelled() || self.state.read().status != BoxStatus::Running {
+        if self.shutdown_token.is_cancelled() || !self.state.read().status.is_active() {
             return Ok(Vec::new());
         }
         let live = self.existing_live_state().await?;
@@ -685,7 +675,20 @@ impl BoxImpl {
                 self.config.id
             )));
         }
-        Ok(interface.control_existing(execution_id, self.shutdown_token.clone()))
+        if execution_id != self.container_id() {
+            return Ok(interface.control_existing(execution_id, self.shutdown_token.clone()));
+        }
+        let result_rx = self.exit_code_from_file_when_portal_has_none(
+            interface.wait_existing(execution_id, self.shutdown_token.clone()),
+        );
+        Ok(Execution::new(
+            execution_id.to_owned(),
+            Box::new(interface),
+            result_rx,
+            None,
+            None,
+            None,
+        ))
     }
 
     /// Recover a running VM only. Unlike ensure_booted, this path can never
@@ -1309,9 +1312,8 @@ impl BoxImpl {
         let _guard = LockGuard::new(&*locker);
 
         // Build the box (lock is held)
-        // The returned cleanup_guard stays armed until we disarm it after all
-        // operations succeed. If any operation fails, the guard's Drop will
-        // cleanup the VM process and directory.
+        // New and restarted VMs remain guarded until DB persistence succeeds.
+        // Running adoption disarms cleanup before reconnecting to the live VM.
         let mut state = state;
         state.outbound_policy = self
             .runtime
@@ -1804,6 +1806,8 @@ mod tests {
     use tokio::sync::{Notify, Semaphore};
     use tonic::transport::{Endpoint, Server};
     use tonic::{Request, Response, Status};
+
+    mod execution_recovery;
 
     fn published_ports(info: &BoxInfo) -> Option<&[PublishedPort]> {
         info.network

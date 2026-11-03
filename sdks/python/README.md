@@ -425,6 +425,8 @@ still owns output. Use `await box.attach(id, stdin=False)` to recover streams
 after the old reader disconnects. Both are available on native and convenience
 boxes, with synchronous counterparts; neither starts a stopped box. Attaching
 while a reader is active is a conflict, not an implicit takeover.
+The control handle's `stdin()`, `stdout()`, and `stderr()` raise `RuntimeError`
+because it has no streams; synchronous handles behave the same way.
 
 ```python
 for execution in await box.list_executions():

@@ -1,15 +1,18 @@
-//go:build boxlite_dev && boxlite_integration
+//go:build boxlite_dev
+
+// Copyright 2026 BoxLite AI
+// SPDX-License-Identifier: AGPL-3.0
 
 package controllers
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	sdk "github.com/boxlite-ai/boxlite/sdks/go"
 	"github.com/gin-gonic/gin"
@@ -18,32 +21,46 @@ import (
 
 // Start outside ExecManager, then recover the real guest IDs through HTTP.
 // This is the same ownership gap a client/server restart creates.
-func TestExecutionInventoryRecoveryHTTP(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-	defer cancel()
+func TestIntegrationExecutionInventoryRecoveryHTTP(t *testing.T) {
+	ctx := context.Background()
 	runtime, err := sdk.NewRuntime(sdk.WithHomeDir(t.TempDir()))
 	if err != nil {
+		var runtimeErr *sdk.Error
+		if errors.As(err, &runtimeErr) && runtimeErr.Code == sdk.ErrUnsupported {
+			t.Skipf("virtualization prerequisite unavailable: %v", err)
+		}
 		t.Fatal(err)
 	}
-	defer runtime.Close()
-	box, err := runtime.Create(ctx, "docker.m.daocloud.io/library/alpine:latest",
-		sdk.WithName("e2e-api-box"), sdk.WithAutoRemove(false), sdk.WithCmd("sh", "-c", "while true; do echo recovered-main; sleep 0.1; done"))
+	t.Cleanup(func() { _ = runtime.Close() })
+	box, err := runtime.Create(ctx, "alpine:latest",
+		sdk.WithName("e2e-api-box"), sdk.WithCPUs(1), sdk.WithMemory(512), sdk.WithAutoRemove(false),
+		sdk.WithCmd("sh", "-c", "while true; do echo recovered-main; sleep 0.1; done"))
 	if err != nil {
+		var createErr *sdk.Error
+		if errors.As(err, &createErr) && (createErr.Code == sdk.ErrStorage || createErr.Code == sdk.ErrImage || createErr.Code == sdk.ErrNetwork) {
+			t.Skipf("image prerequisite unavailable: %v", err)
+		}
 		t.Fatal(err)
 	}
-	defer box.Close()
-	defer runtime.ForceRemove(context.Background(), box.ID())
+	t.Cleanup(func() {
+		_ = runtime.ForceRemove(context.Background(), box.ID())
+		_ = box.Close()
+	})
 	if err := box.Start(ctx); err != nil {
+		var startErr *sdk.Error
+		if errors.As(err, &startErr) && (startErr.Code == sdk.ErrStorage || startErr.Code == sdk.ErrImage || startErr.Code == sdk.ErrNetwork) {
+			t.Skipf("boot prerequisite unavailable: %v", err)
+		}
 		t.Fatal(err)
 	}
 	execution, err := box.StartExecution(ctx, "sleep", []string{"300"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer execution.Close()
+	t.Cleanup(func() { _ = execution.Close() })
 
 	manager := withFreshExecManager(t)
-	defer manager.Stop()
+	t.Cleanup(manager.Stop)
 	previous := getExecutionBox
 	getExecutionBox = func(_ *gin.Context, id string) (*sdk.Box, error) {
 		if id != box.Name() {
@@ -51,7 +68,7 @@ func TestExecutionInventoryRecoveryHTTP(t *testing.T) {
 		}
 		return box, nil
 	}
-	defer func() { getExecutionBox = previous }()
+	t.Cleanup(func() { getExecutionBox = previous })
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
 	router.GET("/v1/boxes/:boxId/executions", BoxliteListExecutions)
@@ -59,7 +76,7 @@ func TestExecutionInventoryRecoveryHTTP(t *testing.T) {
 	router.GET("/v1/boxes/:boxId/executions/:execId/attach", BoxliteExecAttach)
 	router.DELETE("/v1/boxes/:boxId/executions/:execId", BoxliteExecKill)
 	server := httptest.NewServer(router)
-	defer server.Close()
+	t.Cleanup(server.Close)
 	base := "/v1/boxes/" + box.Name() + "/executions"
 	request := func(method, path string) *httptest.ResponseRecorder {
 		t.Helper()
@@ -86,6 +103,9 @@ func TestExecutionInventoryRecoveryHTTP(t *testing.T) {
 	for _, info := range inventory() {
 		if info.IsMainSession {
 			mainID = info.ExecutionID
+			if info.StartedAt == 0 || len(info.Argv) == 0 {
+				t.Fatalf("missing main metadata: %+v", info)
+			}
 		}
 		if info.ExecutionID == execution.ID() {
 			found = true
@@ -122,7 +142,9 @@ func TestExecutionInventoryRecoveryHTTP(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	connection.SetReadDeadline(time.Now().Add(10 * time.Second))
+	if deadline, ok := t.Deadline(); ok {
+		_ = connection.SetReadDeadline(deadline)
+	}
 	_, data, err := connection.ReadMessage()
 	connection.Close()
 	if err != nil || !strings.Contains(string(data), "recovered-main") {
@@ -137,5 +159,58 @@ func TestExecutionInventoryRecoveryHTTP(t *testing.T) {
 	info, err := box.Info(ctx)
 	if err != nil || info.Running {
 		t.Fatalf("listing started a stopped box: %+v, %v", info, err)
+	}
+	retained, ok := manager.Get(mainID)
+	if !ok {
+		t.Fatal("main execution was not retained")
+	}
+	<-retained.Done
+	response = request(http.MethodGet, base+"/"+mainID)
+	var status ExecutionInfoResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &status); err != nil {
+		t.Fatal(err)
+	}
+	if response.Code != http.StatusOK || status.Status != "completed" {
+		t.Fatalf("stopped main status was not retained: %d %s", response.Code, response.Body.String())
+	}
+	if err := box.Close(); err != nil {
+		t.Fatal(err)
+	}
+	restarted, err := runtime.Get(ctx, "e2e-api-box")
+	if err != nil {
+		t.Fatal(err)
+	}
+	box = restarted
+	if err := box.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	response = request(http.MethodGet, base+"/"+mainID)
+	if err := json.Unmarshal(response.Body.Bytes(), &status); err != nil {
+		t.Fatal(err)
+	}
+	if response.Code != http.StatusOK || status.Status != "running" {
+		t.Fatalf("restarted main was shadowed by retained status: %d %s", response.Code, response.Body.String())
+	}
+	connection, _, err = websocket.DefaultDialer.DialContext(ctx, wsURL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer connection.Close()
+	if deadline, ok := t.Deadline(); ok {
+		_ = connection.SetReadDeadline(deadline)
+	}
+	_, data, err = connection.ReadMessage()
+	if err != nil || !strings.Contains(string(data), "recovered-main") {
+		t.Fatalf("restarted main output not recovered: %q, %v", data, err)
+	}
+	duplicate, rejection, err := websocket.DefaultDialer.DialContext(ctx, wsURL, nil)
+	if duplicate != nil {
+		_ = duplicate.Close()
+	}
+	if rejection != nil {
+		defer rejection.Body.Close()
+	}
+	if err == nil || rejection == nil || rejection.StatusCode != http.StatusConflict {
+		t.Fatalf("second output reader was not rejected: response=%v, err=%v", rejection, err)
 	}
 }

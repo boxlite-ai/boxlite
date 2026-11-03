@@ -7,11 +7,14 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"strings"
 	"sync"
 	"syscall"
 	"testing"
 	"time"
+
+	sdk "github.com/boxlite-ai/boxlite/sdks/go"
 )
 
 // stubExecHandle records every Signal/Kill call. Optional override hooks
@@ -107,6 +110,91 @@ func TestInventoryRecoveryDoesNotReapAnExistingSession(t *testing.T) {
 	}
 	if _, present := manager.Get(execution.ID); !present {
 		t.Fatal("discovered live session was evicted")
+	}
+}
+
+type inventoryExecHandle struct {
+	stubExecHandle
+	done chan struct{}
+}
+
+func (h *inventoryExecHandle) Wait(context.Context) (int, error) {
+	<-h.done
+	return 42, nil
+}
+
+type inventoryExecutionSource struct {
+	entries []sdk.ExecutionInfo
+	handle  *inventoryExecHandle
+}
+
+func (s *inventoryExecutionSource) list(context.Context) ([]sdk.ExecutionInfo, error) {
+	return s.entries, nil
+}
+
+func (s *inventoryExecutionSource) get(context.Context, string) (execHandle, error) {
+	return s.handle, nil
+}
+
+func (s *inventoryExecutionSource) attach(context.Context, string, io.Writer, io.Writer) (execHandle, io.Writer, error) {
+	return nil, nil, errors.New("control recovery must not acquire output")
+}
+
+func TestResolveReplacesRetainedMainOnlyWhenLiveAgain(t *testing.T) {
+	manager := newQuietManager(t)
+	first := &inventoryExecHandle{done: make(chan struct{})}
+	source := &inventoryExecutionSource{
+		entries: []sdk.ExecutionInfo{{ExecutionID: "main", IsMainSession: true}},
+		handle:  first,
+	}
+	retained, err := manager.resolve(context.Background(), source, "main", "api-box")
+	if err != nil {
+		t.Fatal(err)
+	}
+	close(first.done)
+	<-retained.Done
+	source.entries = nil
+	completed, err := manager.resolve(context.Background(), source, "main", "api-box")
+	if err != nil || completed != retained || completed.ExitCode != 42 {
+		t.Fatalf("terminal status was not retained: execution=%v, err=%v", completed, err)
+	}
+
+	source.entries = []sdk.ExecutionInfo{{ExecutionID: "main", IsMainSession: true}}
+	next := &inventoryExecHandle{done: make(chan struct{})}
+	source.handle = next
+	t.Cleanup(func() { close(next.done) })
+	current, err := manager.resolve(context.Background(), source, "main", "api-box")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.resolve(context.Background(), source, "main", "different-box"); !errors.Is(err, ErrBoxMismatch) {
+		t.Fatalf("recovery lost the API box ownership boundary: %v", err)
+	}
+	if err := manager.Signal(current.ID, int(syscall.SIGTERM)); err != nil {
+		t.Fatalf("retained main shadowed the new guest session: %v", err)
+	}
+	if signals, _ := next.snapshot(); len(signals) != 1 {
+		t.Fatalf("signal did not reach the restarted main: %v", signals)
+	}
+	if signals, _ := first.snapshot(); len(signals) != 0 {
+		t.Fatalf("signal reached the old main handle: %v", signals)
+	}
+}
+
+func TestRetainedMainCleanupDoesNotEvictItsReplacement(t *testing.T) {
+	manager := newQuietManager(t)
+	retained := registerStub(t, manager, "main", &stubExecHandle{})
+	close(retained.Done)
+	handle := &stubExecHandle{}
+	registerStub(t, manager, retained.ID, handle)
+
+	manager.evictExited(retained)
+	manager.killAndEvict(retained)
+	if err := manager.Signal(retained.ID, int(syscall.SIGTERM)); err != nil {
+		t.Fatalf("stale cleanup removed the restarted main: %v", err)
+	}
+	if signals, killed := handle.snapshot(); len(signals) != 1 || killed != 0 {
+		t.Fatalf("replacement was reaped: signals=%v kills=%d", signals, killed)
 	}
 }
 

@@ -808,8 +808,9 @@ and `is_main_session`. Created/stopped boxes return an empty list without starti
 
 Use a returned ID with `boxlite_box_get_execution` for control-only access,
 or `boxlite_box_attach_execution` for stdin/output. Both return an owned
-`CExecutionHandle` released with `boxlite_execution_free`; freeing a handle
-does not kill the process. Only one output reader is allowed per session.
+`CExecutionHandle` released with `boxlite_execution_free`; freeing a recovered
+or attached handle does not kill the process. Only one output reader is allowed
+per session. Attachment includes available buffered output.
 See the [recovery guide](../../guides/ai-agent-integration.md#recovering-control-after-losing-the-handle)
 for completed-session retention.
 

@@ -230,10 +230,7 @@ impl BoxBackend for RestBox {
                         _ = tokio::time::sleep(std::time::Duration::from_millis(100)) => {}
                     },
                     Err(error) => {
-                        let _ = tx.send(ExecResult {
-                            exit_code: -1,
-                            error_message: Some(error.to_string()),
-                        });
+                        tracing::warn!(%path, %error, "Recovered execution status unavailable");
                         return;
                     }
                 }
@@ -1638,6 +1635,38 @@ mod tests {
         );
         let resp: BoxResponse = serde_json::from_str(&body).expect("BoxResponse");
         RestBox::new(client_for(port), resp.to_box_info().expect("to_box_info"))
+    }
+
+    #[tokio::test]
+    async fn recovered_wait_does_not_invent_an_exit_on_status_failure() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let request = read_request_head(&mut stream).await;
+            assert!(
+                String::from_utf8_lossy(&request).starts_with("GET /v1/boxes/box-1/executions ")
+            );
+            write_status_response(&mut stream, r#"{"executions":[{"execution_id":"exec-1","argv":["sleep","300"],"started_at":1,"tty":false,"is_main_session":false}]}"#).await;
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let request = read_request_head(&mut stream).await;
+            assert!(
+                String::from_utf8_lossy(&request)
+                    .starts_with("GET /v1/boxes/box-1/executions/exec-1 ")
+            );
+            let body = r#"{"error":{"message":"guest unavailable","type":"NetworkError","code":"unavailable"}}"#;
+            stream.write_all(format!("HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
+        });
+        let sandbox = rest_box_for(port, "box-1");
+        let execution = sandbox.get_execution("exec-1").await.unwrap();
+        let outcome = tokio::time::timeout(std::time::Duration::from_secs(5), execution.wait())
+            .await
+            .unwrap();
+        server.await.unwrap();
+        assert!(
+            outcome.is_err(),
+            "a failed observation is not a process exit: {outcome:?}"
+        );
     }
 
     /// Send a minimal HTTP/1.1 200 OK with a JSON body.

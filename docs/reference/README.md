@@ -81,6 +81,7 @@ process exit codes are unchanged. `126` and `127` are the special cases for an
 Rejection of the box's init command during `start()` remains an error, so
 `boxlite run` prints an error and exits `1`. See
 [execution error handling](errors.md#executionstring).
+
 ### Unreleased: execution inventory (POL-485, additive)
 
 Boxes expose live executions through SDK `list_executions` / `listExecutions` /
@@ -89,6 +90,9 @@ Boxes expose live executions through SDK `list_executions` / `listExecutions` /
 Discovered IDs work with attach and control operations; listing never starts
 a box and retains no completed-session history. Existing status schemas and
 request defaults are unchanged.
+
+REST main-session attachment accepts a box name or ID. Session ownership uses
+the canonical box ID, so status queries work with either spelling.
 
 See [recovering a lost handle](../guides/ai-agent-integration.md#recovering-control-after-losing-the-handle)
 for usage and the bounded exit-status/output retention policy.

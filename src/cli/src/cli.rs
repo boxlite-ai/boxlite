@@ -725,13 +725,13 @@ pub enum Commands {
     /// Execute a command in a running box
     Exec(crate::commands::exec::ExecArgs),
     /// Show live guest executions in a box
-    Top(crate::commands::executions::TopArgs),
+    Top(crate::commands::top::TopArgs),
     /// Reattach to a guest execution by ID
-    Attach(crate::commands::executions::AttachArgs),
+    Attach(crate::commands::attach::AttachArgs),
     /// Kill a guest execution by ID
-    Kill(crate::commands::executions::KillArgs),
+    Kill(crate::commands::kill::KillArgs),
     /// Send a signal to a guest execution by ID
-    Signal(crate::commands::executions::SignalArgs),
+    Signal(crate::commands::signal::SignalArgs),
     /// Create a new box
     Create(crate::commands::create::CreateArgs),
 

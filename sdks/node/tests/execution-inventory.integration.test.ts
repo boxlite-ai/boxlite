@@ -51,7 +51,9 @@ describe("live execution inventory integration", { timeout: 120_000 }, () => {
     try {
       const native = await box.nativeBox();
       await native.start();
-      const main = (await box.listExecutions()).find((info) => info.isMainSession)!;
+      const main = (await box.listExecutions()).find(
+        (info) => info.isMainSession,
+      )!;
       const reader = await box.attach(main.executionId, false);
       const stdout = await reader.stdout();
       let text = "";
@@ -61,6 +63,10 @@ describe("live execution inventory integration", { timeout: 120_000 }, () => {
         text += chunk;
       }
       expect(text).toContain("recovered-wrapper");
+      const control = await box.getExecution(main.executionId);
+      await control.kill();
+      await control.wait();
+      await expect(box.listExecutions()).resolves.toEqual([]);
     } finally {
       await box.stop();
     }

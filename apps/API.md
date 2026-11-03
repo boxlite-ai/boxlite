@@ -469,11 +469,12 @@ organization membership.
 </details>
 
 <details>
-<summary><b>Execution, files, metrics, networking, and SSH</b> · 15 routes</summary>
+<summary><b>Execution, files, metrics, networking, and SSH</b> · 16 routes</summary>
 
 | Method   | Path                                                          | What it does                                            |
 | -------- | ------------------------------------------------------------- | ------------------------------------------------------- |
 | `POST`   | `/api/v1[/{prefix}]/boxes/{boxId}/exec`                       | Starts a command execution through the assigned runner. |
+| `GET`    | `/api/v1[/{prefix}]/boxes/{boxId}/executions`                 | Lists live guest executions, including the main session, without resuming the box or recording activity. |
 | `GET`    | `/api/v1[/{prefix}]/boxes/{boxId}/executions/{execId}`        | Gets execution status and exit information.             |
 | `DELETE` | `/api/v1[/{prefix}]/boxes/{boxId}/executions/{execId}`        | Kills an execution.                                     |
 | `WS`     | `/api/v1[/{prefix}]/boxes/{boxId}/executions/{execId}/attach` | Attaches a bidirectional WebSocket to an execution; a browser authenticates with `?ticket=`. |
@@ -488,6 +489,14 @@ organization membership.
 | `POST`   | `/api/v1[/{prefix}]/boxes/{boxId}/ssh`                        | Replaces guest SSH configuration once; counts as activity and may auto-resume a box. |
 | `GET`    | `/api/v1[/{prefix}]/boxes/{boxId}/ssh`                        | Reads guest SSH status without resuming the box or counting as activity. |
 | `DELETE` | `/api/v1[/{prefix}]/boxes/{boxId}/ssh`                        | Disables guest SSH without resuming the box or counting as activity. |
+
+Execution inventory is an organization-member read, like execution status; it
+does not require `write:boxes`. Box lookup remains scoped to that organization.
+The response is `{ "executions": [...] }`, with `execution_id`, `argv`,
+`started_at` (Unix milliseconds), `tty`, and `is_main_session` on each entry.
+Use the returned guest ID with the status, attach, signal, resize, and kill
+routes, including for the main session; terminating main can stop the box.
+Listing a stopped box returns an empty inventory and never starts it.
 
 The exec, signal, resize, files, and metrics handlers are registered as
 catch-all reverse proxies to the box's assigned runner; the methods shown are
@@ -731,11 +740,12 @@ runtime and its microVMs.
 </details>
 
 <details>
-<summary><b>Embedded BoxLite operations</b> · 13 routes</summary>
+<summary><b>Embedded BoxLite operations</b> · 14 routes</summary>
 
 | Method    | Path                                           | What it does                                          |
 | --------- | ---------------------------------------------- | ----------------------------------------------------- |
 | `POST`    | `/v1/boxes/{boxId}/exec`                       | Starts a command inside the local box.                |
+| `GET`     | `/v1/boxes/{boxId}/executions`                 | Lists live guest execution IDs, including main; stopped boxes return an empty list without booting. |
 | `GET`     | `/v1/boxes/{boxId}/executions/{execId}`        | Gets local execution status.                          |
 | `DELETE`  | `/v1/boxes/{boxId}/executions/{execId}`        | Kills a local execution.                              |
 | `WS`      | `/v1/boxes/{boxId}/executions/{execId}/attach` | Attaches a WebSocket to local execution I/O.          |

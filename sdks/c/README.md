@@ -586,7 +586,8 @@ process.
 live streams for an existing ID without starting the box. Register stdout,
 stderr, and exit callbacks as for `boxlite_box_exec`. If a reader is already
 active, attach reports a conflict without stealing its output. A new client can
-attach after the former reader disconnects; old output is not replayed.
+attach after the former reader disconnects. Attachment includes available buffered
+output; it does not guarantee a complete historical log.
 Freeing an attached handle releases its reader without killing the process.
 
 #### Network Tunnels

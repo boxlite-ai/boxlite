@@ -330,17 +330,6 @@ typedef void (*CExecutionSignalCb)(CBoxliteError*, void*);
 // Execution PTY resize completion.
 typedef void (*CExecutionResizeCb)(CBoxliteError*, void*);
 
-typedef struct BoxRunner CBoxliteSimple;
-
-// Result structure for runner command execution
-typedef struct ExecResult {
-  int exit_code;
-  char *stdout_text;
-  char *stderr_text;
-} ExecResult;
-
-typedef struct ExecResult CBoxliteExecResult;
-
 // Owned metadata for one live guest execution, including the main process.
 typedef struct CExecutionInfo {
   char *execution_id;
@@ -361,6 +350,17 @@ typedef struct CExecutionInfoList {
 // Live execution inventory completion. The caller owns the returned list and
 // must release it with `boxlite_free_execution_info_list`.
 typedef void (*CExecutionInfoListCb)(struct CExecutionInfoList*, CBoxliteError*, void*);
+
+typedef struct BoxRunner CBoxliteSimple;
+
+// Result structure for runner command execution
+typedef struct ExecResult {
+  int exit_code;
+  char *stdout_text;
+  char *stderr_text;
+} ExecResult;
+
+typedef struct ExecResult CBoxliteExecResult;
 
 typedef struct ImageHandle CBoxliteImageHandle;
 
@@ -1230,6 +1230,15 @@ enum BoxliteErrorCode boxlite_execution_tty_resize(CExecutionHandle *execution,
 
 void boxlite_execution_free(CExecutionHandle *execution);
 
+// Callback owns the returned list; errors are borrowed during dispatch only.
+enum BoxliteErrorCode boxlite_list_executions(CBoxHandle *handle,
+                                              CExecutionInfoListCb cb,
+                                              void *user_data,
+                                              CBoxliteError *out_error);
+
+// Free the list and all IDs/argv strings. Null is accepted.
+void boxlite_free_execution_info_list(struct CExecutionInfoList *list);
+
 enum BoxliteErrorCode boxlite_simple_new(const char *image,
                                          int cpus,
                                          int memory_mib,
@@ -1246,15 +1255,6 @@ enum BoxliteErrorCode boxlite_simple_run(CBoxliteSimple *box_runner,
 void boxlite_simple_free(CBoxliteSimple *box_runner);
 
 void boxlite_result_free(CBoxliteExecResult *result);
-
-// Callback owns the returned list; errors are borrowed during dispatch only.
-enum BoxliteErrorCode boxlite_list_executions(CBoxHandle *handle,
-                                              CExecutionInfoListCb cb,
-                                              void *user_data,
-                                              CBoxliteError *out_error);
-
-// Free the list and all IDs/argv strings. Null is accepted.
-void boxlite_free_execution_info_list(struct CExecutionInfoList *list);
 
 enum BoxliteErrorCode boxlite_image_pull(CBoxliteImageHandle *handle,
                                          const char *image_ref,

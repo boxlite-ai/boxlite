@@ -84,7 +84,18 @@ fn test_top_id_kills_only_that_session() {
         .assert()
         .success();
 
-    let remaining = inventory(&ctx, &box_id);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let remaining = loop {
+        let remaining = inventory(&ctx, &box_id);
+        if !remaining.iter().any(|row| row["execution_id"] == victim) {
+            break remaining;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "killed session stayed live: {remaining:?}"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    };
     let remaining_ids: Vec<&str> = remaining
         .iter()
         .map(|row| row["execution_id"].as_str().unwrap())

@@ -14,6 +14,7 @@ const ERR_STDERR_UNAVAILABLE: &str = "stderr stream not available";
 
 /// Metadata for a live execution in the guest, including its main process.
 #[napi(object)]
+#[derive(Debug)]
 pub struct JsExecutionInfo {
     pub execution_id: String,
     pub argv: Vec<String>,

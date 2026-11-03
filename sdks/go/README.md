@@ -88,8 +88,9 @@ same `Stdout`, `Stderr`, `OnStdout`, and `OnStderr` sink options as
 `StartExecution`. An existing reader causes a synchronous conflict rather than
 stealing output. Launch options do not apply to attachment. After the original
 reader disconnects, a fresh client can discover and attach by ID. Attachment
-does not boot the box or replay old output, and closing an attached handle
-releases its reader without killing the guest process.
+does not boot the box. It includes available buffered output, without guaranteeing
+a complete historical log. Closing an attached handle releases its reader without
+killing the guest process.
 
 ```go
 executions, err := box.ListExecutions(ctx)

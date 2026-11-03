@@ -2,7 +2,6 @@
 
 use std::ffi::CString;
 use std::os::raw::{c_char, c_int, c_void};
-use std::ptr;
 
 use crate::error::{BoxliteErrorCode, null_pointer_error, write_error};
 use crate::event_queue::{CExecutionInfoListCb, OwnedFfiPtr, RuntimeEvent, push_event};
@@ -115,8 +114,6 @@ pub(crate) unsafe fn free_execution_info_list(list: *mut CExecutionInfoList) {
                     }
                 }
                 free_raw_slice(info.argv, info.argc);
-                info.execution_id = ptr::null_mut();
-                info.argv = ptr::null_mut();
             }
         }
         free_raw_slice(list.items, list.count);
@@ -126,6 +123,7 @@ pub(crate) unsafe fn free_execution_info_list(list: *mut CExecutionInfoList) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ptr;
 
     #[test]
     fn list_rejects_null_box_without_scheduling() {

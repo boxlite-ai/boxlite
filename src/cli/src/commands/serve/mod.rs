@@ -114,17 +114,8 @@ struct AppState {
     /// measured against `BoxInfo.last_updated`, which tracks state transitions
     /// and would report a long-running busy box as idle since boot.
     last_activity: RwLock<HashMap<String, Instant>>,
-    /// Terminal status of recovered executions, keyed by the box id clients
-    /// address the box with and the execution id.
-    ///
-    /// A recovered control handle only answers while the guest still lists the
-    /// session: exit retires it from the live inventory, and `GET
-    /// /executions/{id}` would then 404 a session that ended with a real exit
-    /// code. The runner never has this gap — it caches the status when
-    /// `watchRecovered` observes the exit — so serve records it here the moment
-    /// recovery's `wait` resolves. Keyed by box because guest exec ids are
-    /// per-box counters and may repeat across boxes. An unset slot means the
-    /// watcher is still waiting.
+    /// Recovered exit status, scoped by canonical box ID and retained for the
+    /// same grace period as executions whose output this server owns.
     recovered_terminals: RwLock<HashMap<TerminalKey, TerminalSlot>>,
 }
 
@@ -135,12 +126,12 @@ type TerminalKey = (String, String);
 /// status handler. Unset means the watcher is still waiting.
 type TerminalSlot = Arc<OnceCell<RecoveredTerminal>>;
 
-/// How a recovered execution ended, recorded by its watcher.
+/// A recovered wait outcome. Transport failures are not process exits.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(in crate::commands::serve) struct RecoveredTerminal {
-    /// `completed` or `killed`, the wire vocabulary status pollers match on.
-    pub(in crate::commands::serve) status: &'static str,
     pub(in crate::commands::serve) exit_code: Option<i32>,
+    pub(in crate::commands::serve) error: Option<String>,
+    recorded_at: Instant,
 }
 
 /// The deadlines `serve` enforces for one box. `0` disables either.
@@ -157,14 +148,7 @@ impl LifecyclePolicy {
 }
 
 impl AppState {
-    /// Watch a recovered execution until it exits and remember how.
-    ///
-    /// Call this the first time a request recovers control of a session. From
-    /// then on the session stops being listed once it exits, and the cached
-    /// control handle has nothing left to ask, so this watcher is where the
-    /// exit status is kept — the same division of labour as the runner's
-    /// `watchRecovered`. Idempotent: the entry is created once per session and
-    /// later callers leave the existing watcher alone.
+    /// Start one wait observer without claiming an output reader.
     pub(in crate::commands::serve) async fn watch_recovered(
         &self,
         box_id: &str,
@@ -174,31 +158,24 @@ impl AppState {
         let key = (box_id.to_string(), exec_id.to_string());
         let slot = {
             let mut terminals = self.recovered_terminals.write().await;
-            match terminals.get(&key) {
-                Some(existing) => Arc::clone(existing),
-                None => {
-                    let slot = Arc::new(OnceCell::new());
-                    terminals.insert(key, Arc::clone(&slot));
-                    slot
-                }
+            if terminals.contains_key(&key) {
+                return;
             }
+            let slot = Arc::new(OnceCell::new());
+            terminals.insert(key, Arc::clone(&slot));
+            slot
         };
-        if slot.get().is_some() {
-            return;
-        }
         tokio::spawn(async move {
             let terminal = match execution.wait().await {
                 Ok(result) => RecoveredTerminal {
-                    status: "completed",
                     exit_code: Some(result.code()),
+                    error: None,
+                    recorded_at: Instant::now(),
                 },
-                // The handle could not report an exit; the session is gone
-                // either way. Report it as killed rather than leaving pollers
-                // on "running" forever — that is what a vanished session looks
-                // like from the wire.
-                Err(_) => RecoveredTerminal {
-                    status: "killed",
+                Err(error) => RecoveredTerminal {
                     exit_code: None,
+                    error: Some(error.to_string()),
+                    recorded_at: Instant::now(),
                 },
             };
             let _ = slot.set(terminal);
@@ -215,6 +192,19 @@ impl AppState {
         terminals
             .get(&(box_id.to_string(), exec_id.to_string()))
             .and_then(|slot| slot.get().cloned())
+    }
+
+    /// A new box lifecycle must not reuse the previous main session's status
+    /// or output reader: its execution ID is the persistent container ID.
+    async fn forget_recovered(&self, box_id: &str) {
+        self.recovered_terminals
+            .write()
+            .await
+            .retain(|(owner, _), _| owner != box_id);
+        self.executions
+            .write()
+            .await
+            .retain(|_, active| active.box_id() != box_id);
     }
 
     /// Remember a box's deadlines. A policy with neither set is not stored.
@@ -278,6 +268,7 @@ impl AppState {
     pub(in crate::commands::serve) async fn forget_box(&self, box_id: &str) {
         self.lifecycle.write().await.remove(box_id);
         self.last_activity.write().await.remove(box_id);
+        self.forget_recovered(box_id).await;
     }
 
     /// Drop idle clocks for spellings that name no box.
@@ -1075,6 +1066,11 @@ async fn run_reap_once(
     shutdown_grace: std::time::Duration,
     max_lifetime: std::time::Duration,
 ) {
+    state.recovered_terminals.write().await.retain(|_, slot| {
+        slot.get().is_none_or(|terminal| {
+            now.saturating_duration_since(terminal.recorded_at) <= COMPLETED_RETENTION_GRACE
+        })
+    });
     let candidates: Vec<(String, Arc<ActiveExecution>)> = {
         let map = state.executions.read().await;
         map.iter()
@@ -1508,6 +1504,9 @@ fn activity_box_id<'a>(method: &Method, path: &'a str) -> Option<&'a str> {
     if tail == "ssh" && matches!(*method, Method::GET | Method::HEAD | Method::DELETE) {
         return None;
     }
+    if tail == "executions" && matches!(*method, Method::GET | Method::HEAD) {
+        return None;
+    }
     Some(box_id)
 }
 
@@ -1655,6 +1654,9 @@ async fn get_or_resume_box(state: &AppState, box_id: &str) -> Result<Arc<LiteBox
             "ConflictError",
             "conflict",
         ));
+    }
+    if !info.status.is_active() {
+        state.forget_recovered(info.id.as_ref()).await;
     }
 
     get_or_fetch_box(state, box_id).await
@@ -1858,11 +1860,11 @@ async fn get_or_attach_main_session(
     state: &AppState,
     box_id: &str,
 ) -> Result<Arc<ActiveExecution>, Response> {
-    if let Some(active) = find_main_session(&*state.executions.read().await, box_id) {
+    let litebox = get_or_resume_box(state, box_id).await?;
+    let canonical = litebox.id().as_ref();
+    if let Some(active) = find_main_session(&*state.executions.read().await, canonical) {
         return Ok(active);
     }
-
-    let litebox = get_or_resume_box(state, box_id).await?;
 
     // Attaching boots the box (creating its container) and subscribes to the main
     // command's session, but does *not* run init — `POST /start` does. So a client
@@ -1876,7 +1878,7 @@ async fn get_or_attach_main_session(
     // second Attach, so the loser would get a permanently silent Execution. A
     // per-box open lock would scope that to the same box; worth doing, not here.
     let mut executions = state.executions.write().await;
-    register_main_session(&mut executions, box_id, || async {
+    register_main_session(&mut executions, canonical, || async {
         litebox.attach(boxlite::AttachOptions::main()).await
     })
     .await
@@ -2099,6 +2101,7 @@ mod tests {
     use boxlite::runtime::options::NetworkSpec;
     use std::time::Duration;
 
+    mod executions;
     mod ssh;
 
     // --- API-key auth decision (pure; no runtime/network needed) ---

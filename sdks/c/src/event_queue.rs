@@ -12,7 +12,7 @@ use std::sync::{Condvar, Mutex};
 
 use boxlite::BoxliteError;
 
-use crate::executions::CExecutionInfoList;
+use crate::exec::CExecutionInfoList;
 use crate::images::{CImageDetail, CImageInfoList, CImagePullResult, CImageUsage};
 use crate::info::{CBoxInfo, CBoxInfoList};
 use crate::metrics::{CBoxMetrics, CRuntimeMetrics};
