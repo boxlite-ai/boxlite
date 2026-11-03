@@ -18,6 +18,8 @@ import { McpAuthGuard } from './mcp-auth.guard'
 import { McpController } from './mcp.controller'
 import { McpMetadataController } from './mcp-metadata.controller'
 import { McpServerFactory } from './mcp-server.factory'
+import { VolumeTools } from './volume-tools'
+import { AuthenticatedRateLimitGuard } from '../common/guards/authenticated-rate-limit.guard'
 
 const PROTOCOL = '2026-07-28'
 const CALLER = { userId: 'user-1', email: 'user@example.com', role: 'user' }
@@ -46,6 +48,7 @@ describe('McpController', () => {
       providers: [
         McpServerFactory,
         McpAuthMetadata,
+        { provide: VolumeTools, useValue: { register: jest.fn() } },
         {
           provide: TypedConfigService,
           useValue: { get: (key: string) => (key === 'mcp.resourceUrl' ? RESOURCE : undefined) },
@@ -76,6 +79,8 @@ describe('McpController', () => {
           return true
         },
       })
+      .overrideGuard(AuthenticatedRateLimitGuard)
+      .useValue({ canActivate: () => true })
       .compile()
 
     app = moduleRef.createNestApplication()

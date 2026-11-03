@@ -24,6 +24,7 @@ import { McpAuthChallengeFilter } from './mcp-auth-challenge.filter'
 import { McpAuthGuard } from './mcp-auth.guard'
 import { MCP_CALLER_KEY, McpServerFactory } from './mcp-server.factory'
 import { McpOriginGuard } from './origin.guard'
+import { AuthenticatedRateLimitGuard } from '../common/guards/authenticated-rate-limit.guard'
 
 const METHOD_NOT_ALLOWED = {
   jsonrpc: '2.0',
@@ -41,7 +42,7 @@ const METHOD_NOT_ALLOWED = {
  */
 @ApiExcludeController()
 @Controller('mcp')
-@UseGuards(McpOriginGuard, McpAuthGuard)
+@UseGuards(McpOriginGuard, McpAuthGuard, AuthenticatedRateLimitGuard)
 @UseFilters(McpAuthChallengeFilter)
 export class McpController implements OnModuleDestroy {
   private readonly handler: McpHttpHandler
