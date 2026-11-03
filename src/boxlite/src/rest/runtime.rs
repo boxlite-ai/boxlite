@@ -361,10 +361,7 @@ impl RuntimeBackend for RestRuntime {
             .client
             .post_checkpoint(file, options.name.as_deref())
             .await?;
-        Ok(litebox_from_rest(Arc::new(RestBox::new(
-            self.client.clone(),
-            response.to_box_info()?,
-        ))))
+        super::checkpoints::wait_for_paused(&self.client, response).await
     }
 
     async fn create(&self, options: BoxOptions, name: Option<String>) -> BoxliteResult<LiteBox> {

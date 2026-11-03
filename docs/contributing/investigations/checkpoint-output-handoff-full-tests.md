@@ -164,3 +164,90 @@ this is not live GCS/IAM or cloud checkpoint qualification.
 
 The [focused handoff record](checkpoint-output-handoff.md) documents the failing
 old implementation, passing regression tests, and three real checkpoint KVM cases.
+
+## Direct follow-up corrections (2026-11-03)
+
+The original full-run results above are retained. The following targeted checks
+cover only failures directly introduced or exposed by the managed-checkpoint
+commits; they do not constitute another full-matrix pass.
+
+- The exact `JobType` expectation now includes `PAUSE_BOX`, `RESUME_BOX`,
+  `CREATE_CHECKPOINT` and `IMPORT_CHECKPOINT`. Their API producers, executor
+  dispatch and native runner handlers were checked before updating the list.
+  `make test:apps:api FILTER=JobType` changed from one failure and one pass to
+  two passes, with Nx daemon and isolated plugin workers disabled for this host.
+- The infrastructure coverage check now excludes Markdown from its test-source
+  inventory. A report whose filename contains `tests` is prose, while executable
+  files under documentation directories remain subject to the existing check.
+  The tracked report itself reproduced the false positive before the correction.
+  `make test:apps:infra` changed from 732 passed, two failed and one skipped to
+  733 passed, one failed and one skipped in its first test phase. The remaining
+  wheel-fixture failure is unchanged; subsequent phases did not run.
+
+These two corrections change test expectations and classification only. They do not
+change the job protocol, checkpoint implementation or coverage exclusions.
+
+The subsequent isolated API/database/runner/KVM run exposed a separate defect in
+the new raw-import path: native inspection returned memory-format version 9 as
+the response schema version, while the API requires schema version 1. A real
+managed restore and explicit resume passed process identity, start time, heap
+marker, boot identity and advancing-counter checks before raw import returned
+503, `Runner returned an invalid checkpoint inspection`.
+
+Native inspection now reports admission-summary schema version 1. Memory-format
+9 and local-path metadata version 2 retain their existing native validation;
+the API's strict schema check is unchanged. The existing production inspection
+test was extended before the fix and failed with actual 9 versus expected 1.
+After the fix, `make test:unit:rust FILTER=checkpoint_cloud_` passed six tests in
+each of the default and REST configurations, using dependency stubs on macOS.
+These unit results do not establish VM restoration; `make fmt:check:rust` also passed.
+
+After that correction, the real managed and raw restores both preserved the
+guest process. The Python SDK stage then exposed a second integration gap:
+new targets were reported as `unknown`, and raw-import SDK calls did not wait
+for restoration. The cloud mapper now reports an admitted target heading for
+Paused as restoring (`configured` on the REST wire). Managed and raw imports
+share the existing bounded SDK polling, submit once, and return only at Paused;
+other unknown or running states remain errors.
+
+The same SDK boundary also revealed a media-type mismatch: the SDK and OpenAPI
+use `application/zstd`, but the cloud import route accepted only octet-stream.
+Public import now accepts both, and public export reports `application/zstd`.
+Internal runner transfer framing and media types are unchanged.
+
+With every non-test change reverted, the new regressions failed on
+`unknown` versus `configured`, `Configured` versus `Paused`, rejected zstd
+uploads (400 versus 201), and the octet-stream export header. Restoring all fixes
+passed 55 default and 63 REST checkpoint unit tests, plus 21 targeted API tests.
+These checks include actual HTTP requests, strict rejection of unexpected
+restore states, and verification that polling never resubmits the upload.
+
+### Real SDK follow-up and remaining qualification
+
+The isolated production-controller/database/runner/KVM harness passed managed
+and raw restore, explicit resume, and the original process/start-time/heap-marker/
+boot-identity/counter assertions. Python async and sync SDKs both passed named
+capture, catalog operations, managed restore, pause/resume, pair export/inspection,
+raw import and resume. The storage client uploaded and downloaded real native
+archives through an isolated GCS-protocol service.
+
+Node completed capture, catalog lookup, managed restore, resume/pause and export,
+then inspection rejected the native `next_synthetic_ino` value `2^63`. The pinned
+N-API serializer already converts large opaque JSON integers losslessly to
+`bigint`; the binding's extra recursive rejection prevented that conversion.
+Removing it leaves all typed numeric-field range checks intact. With all
+production changes reverted, the new real-VM Node integration regression failed
+at inspection with the safe-integer error. After restoring the complete fix and
+rebuilding, it passed and checked the exact `1n << 63n` value in every share.
+
+The final Node regression is a focused pass, not a claim that the interrupted
+SDK matrix completed. Node's full raw-import continuation and the Go/C cloud
+cases were not rerun after this last fix. The earlier Python results remain
+valid; that final fix only changes Node inspection conversion. The complete
+cloud harness therefore remains partially qualified.
+
+The harness uses real native/SDK and API service code, PostgreSQL, Redis and KVM,
+with test seams for identity, image resolution, placement and commerce. It does
+not qualify live GCS/IAM: no test bucket was available. No cloud resources or
+deployments were created. The existing firmware was reused, and host security
+policy was unchanged. Task services and VMs were stopped after each run.

@@ -67,6 +67,9 @@ export function reportedBoxState(box: Pick<Box, 'state' | 'desiredState'>): BoxS
       if (box.desiredState === BoxDesiredState.STARTED) {
         return BoxState.CREATING
       }
+      if (box.desiredState === BoxDesiredState.PAUSED) {
+        return BoxState.RESTORING
+      }
       break
   }
   return box.state

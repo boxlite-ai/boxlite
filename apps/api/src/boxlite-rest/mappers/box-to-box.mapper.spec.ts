@@ -4,11 +4,22 @@
  */
 
 import { BoxState } from '../../box/enums/box-state.enum'
+import { BoxDesiredState } from '../../box/enums/box-desired-state.enum'
 import { Box } from '../../box/entities/box.entity'
 import { BoxDto } from '../../box/dto/box.dto'
 import { boxToBoxResponse, createBoxToCreateBox } from './box-to-box.mapper'
 
 describe('BoxLite lifecycle policy mapper', () => {
+  it('reports an admitted checkpoint target as configured until it is paused', () => {
+    const box = new Box('test', 'restored')
+    box.state = BoxState.UNKNOWN
+    box.desiredState = BoxDesiredState.PAUSED
+
+    expect(boxToBoxResponse(BoxDto.fromBox(box, '')).status).toBe('configured')
+    box.state = BoxState.PAUSED
+    expect(boxToBoxResponse(BoxDto.fromBox(box, '')).status).toBe('paused')
+  })
+
   it.each([
     ['enabled', true],
     ['disabled', false],

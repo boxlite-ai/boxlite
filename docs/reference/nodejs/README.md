@@ -37,9 +37,10 @@ Complete API reference for the BoxLite Node.js/TypeScript SDK.
 
 `JsCheckpointInfo` has `id`, `boxId`, `name`, `status`, optional `error`,
 `createdAt` (Unix seconds), `cpus`, `memoryBytes`, `containerDiskBytes` and
-`sizeBytes`. Numeric metadata that exceeds JavaScript's safe integer range is
-rejected. Inspection preserves complete nested dependency records under
-`shares` and `diskDependencies` using their native schema; top-level fields
+`sizeBytes`. These typed numeric fields reject values outside JavaScript's safe
+integer range. Inspection preserves complete nested dependency records under
+`shares` and `diskDependencies`, representing larger integers losslessly as
+`bigint` rather than rejecting valid native inode/handle values. Top-level fields
 use camelCase. Paths belong to the caller, including over REST.
 
 Omitting a capture name, or passing `null`, generates one. Optional option bags

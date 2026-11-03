@@ -20,6 +20,10 @@ describe('JobType', () => {
       'DISCARD_EXPORTED_BOX',
       'CREATE_SNAPSHOT',
       'RESTORE_SNAPSHOT',
+      'PAUSE_BOX',
+      'RESUME_BOX',
+      'CREATE_CHECKPOINT',
+      'IMPORT_CHECKPOINT',
     ])
   })
 })

@@ -570,9 +570,11 @@ export interface JsCheckpointDependencies {
   bootDiskSha256: string;
   qcow2Bytes: number;
   qcow2Sha256: string;
+  /** Opaque native records; large integer values are lossless bigint values. */
   shares: Array<Record<string, unknown>>;
   localRoots: Record<string, string>;
   bootDiskPath?: string;
+  /** Opaque native records; large integer values are lossless bigint values. */
   diskDependencies: unknown;
 }
 

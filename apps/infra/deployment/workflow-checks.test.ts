@@ -356,8 +356,8 @@ test('a change to codecov.yml selects the suite that checks codecov.yml', () => 
 
 // Codecov rejects the empty upload with "Testable files changed" when a changed
 // file is not ignored, so every test source has to match an ignore glob. Select by
-// any path carrying "test" or "spec" as a word: deliberately wider than the globs,
-// so a suite named by a convention nobody has added yet fails here rather than on
+// any non-Markdown path carrying "test" or "spec" as a word: deliberately wider
+// than the globs, so a suite named by a new convention fails here rather than on
 // Codecov. That width is paid for by naming the production files that carry those
 // words. picomatch approximates Codecov's matcher, which ships no library to
 // test against.
@@ -380,6 +380,7 @@ test('every test source is ignored, so a test-only change still qualifies for th
   const tracked = spawnSync('git', ['ls-files'], { cwd: REPO_ROOT, encoding: 'utf8', maxBuffer: 64 << 20 })
   assert.equal(tracked.status, 0, tracked.stderr)
   const testSources = tracked.stdout.trim().split('\n')
+    .filter((path) => !path.endsWith('.md'))
     .filter((path) => /(^|[^a-z0-9])(test|spec)s?([^a-z0-9]|$)/i.test(path) && !production.includes(path))
   assert.ok(testSources.length > 100, `expected the repo's test sources, found ${testSources.length}`)
   const testable = testSources.filter((path) => !ignore.some((pattern) => matches(pattern, path)))

@@ -99,33 +99,40 @@ impl CheckpointBackend for RestCheckpoints {
         validate_name(key)?;
         self.client.require_checkpoint_management_enabled().await?;
         let path = format!("/checkpoints/{}/boxes", urlencoding::encode(key));
-        let mut response: BoxResponse = self
+        let response: BoxResponse = self
             .client
             .post_checkpoint_json(&path, &NameRequest { name })
             .await?;
-        let poll_path = format!("/boxes/{}", urlencoding::encode(&response.box_id));
-        let mut poll = OperationPoll::new();
-        loop {
-            match response.status.as_str() {
-                "paused" => {
-                    return Ok(litebox_from_rest(Arc::new(RestBox::new(
-                        self.client.clone(),
-                        response.to_box_info()?,
-                    ))));
-                }
-                "configured" | "creating" | "restoring" => {
-                    poll.wait(&format!("checkpoint box '{}' restore", response.box_id))
-                        .await?
-                }
-                status => {
-                    return Err(BoxliteError::InvalidState(format!(
-                        "checkpoint box '{}' is {status}, expected paused",
-                        response.box_id
-                    )));
-                }
+        wait_for_paused(&self.client, response).await
+    }
+}
+
+pub(super) async fn wait_for_paused(
+    client: &ApiClient,
+    mut response: BoxResponse,
+) -> BoxliteResult<LiteBox> {
+    let poll_path = format!("/boxes/{}", urlencoding::encode(&response.box_id));
+    let mut poll = OperationPoll::new();
+    loop {
+        match response.status.as_str() {
+            "paused" => {
+                return Ok(litebox_from_rest(Arc::new(RestBox::new(
+                    client.clone(),
+                    response.to_box_info()?,
+                ))));
             }
-            response = self.client.get(&poll_path).await?;
+            "configured" | "creating" | "restoring" => {
+                poll.wait(&format!("checkpoint box '{}' restore", response.box_id))
+                    .await?
+            }
+            status => {
+                return Err(BoxliteError::InvalidState(format!(
+                    "checkpoint box '{}' is {status}, expected paused",
+                    response.box_id
+                )));
+            }
         }
+        response = client.get(&poll_path).await?;
     }
 }
 

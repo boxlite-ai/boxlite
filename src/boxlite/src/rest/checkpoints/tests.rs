@@ -1,4 +1,6 @@
 use super::*;
+use crate::rest::runtime::RestRuntime;
+use crate::runtime::backend::RuntimeBackend;
 use crate::{BoxliteRestOptions, CheckpointHandle};
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -18,7 +20,7 @@ async fn server(replies: Vec<(u16, Value)>) -> (ApiClient, tokio::task::JoinHand
                     .unwrap()
                     .unwrap();
             let mut bytes = Vec::new();
-            loop {
+            let header_end = loop {
                 let mut buffer = [0; 4096];
                 let count = stream.read(&mut buffer).await.unwrap();
                 assert_ne!(count, 0);
@@ -34,11 +36,21 @@ async fn server(replies: Vec<(u16, Value)>) -> (ApiClient, tokio::task::JoinHand
                         })
                         .unwrap_or(0);
                     if bytes.len() >= end + 4 + length {
-                        break;
+                        break end;
                     }
                 }
-            }
-            requests.push(String::from_utf8(bytes).unwrap());
+            };
+            let header = String::from_utf8(bytes[..header_end].to_vec()).unwrap();
+            requests.push(
+                if header
+                    .to_ascii_lowercase()
+                    .contains("content-type: application/zstd")
+                {
+                    header
+                } else {
+                    String::from_utf8(bytes).unwrap()
+                },
+            );
             let body = if status == 204 {
                 String::new()
             } else {
@@ -51,7 +63,7 @@ async fn server(replies: Vec<(u16, Value)>) -> (ApiClient, tokio::task::JoinHand
     (ApiClient::new(&options).unwrap(), task)
 }
 fn capabilities() -> Value {
-    json!({"capabilities":{"checkpoint_management_enabled":true}})
+    json!({"capabilities":{"checkpoint_management_enabled":true,"checkpoints_enabled":true}})
 }
 fn info(status: &str) -> Value {
     json!({"id":"checkpoint-1","box_id":"source","name":"saved","created_at":1,"status":status,"error":null,"cpus":2,"memory_bytes":4096,"container_disk_bytes":8192,"size_bytes":16384})
@@ -132,6 +144,46 @@ async fn checkpoint_create_from_waits_for_paused_and_rejects_running_without_ret
     assert!(matches!(error, BoxliteError::InvalidState(_)));
     assert!(error.to_string().contains("child-1"));
     task.await.unwrap();
+}
+
+#[tokio::test]
+async fn checkpoint_raw_import_waits_for_paused_without_resubmitting() {
+    let pair = crate::litebox::checkpoint::pair::tests::fixture();
+    let (client, task) = server(vec![
+        (200, capabilities()),
+        (201, bx("configured")),
+        (200, bx("configured")),
+        (200, bx("paused")),
+        (200, bx("paused")),
+    ])
+    .await;
+    let restored = RestRuntime { client }
+        .import_checkpoint(pair.path(), Default::default())
+        .await
+        .unwrap();
+    assert_eq!(
+        restored.info().await.unwrap().status,
+        crate::BoxStatus::Paused
+    );
+    let requests = task.await.unwrap();
+    assert!(requests[1].starts_with("POST /base/v1/team/boxes/checkpoint/import "));
+    assert!(
+        requests[2..]
+            .iter()
+            .all(|request| request.starts_with("GET /base/v1/team/boxes/child-1 "))
+    );
+
+    for status in ["running", "unknown"] {
+        let (client, task) = server(vec![(200, capabilities()), (201, bx(status))]).await;
+        let error = RestRuntime { client }
+            .import_checkpoint(pair.path(), Default::default())
+            .await
+            .err()
+            .expect("raw import must refuse a target that is not restoring or paused");
+        assert!(matches!(error, BoxliteError::InvalidState(_)));
+        assert!(error.to_string().contains("child-1"));
+        assert_eq!(task.await.unwrap().len(), 2);
+    }
 }
 
 #[tokio::test]

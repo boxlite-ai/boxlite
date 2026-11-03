@@ -168,7 +168,7 @@ export class CheckpointTransferService {
         responseType: 'stream',
         signal: controller.signal,
       })
-      response.status(200).type('application/octet-stream')
+      response.status(200).type('application/zstd')
       await pipeline(stream, response)
     } finally {
       response.off('close', abort)

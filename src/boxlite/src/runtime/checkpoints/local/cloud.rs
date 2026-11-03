@@ -30,6 +30,7 @@ pub struct CloudCheckpointConfiguration {
 /// Verified native summary for a server-issued upload transfer identity.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CloudCheckpointInspection {
+    /// Admission-summary schema version, independent of the memory file format.
     pub version: u32,
     pub pair_sha256: String,
     pub memory_file_bytes: u64,
@@ -250,7 +251,7 @@ pub(crate) fn prepare(
     let (pair_sha256, memory_file_bytes) = fingerprint(pair, origin)?;
     Ok((
         CloudCheckpointInspection {
-            version: pair.dependencies.version,
+            version: 1,
             pair_sha256,
             memory_file_bytes,
             qcow2_bytes: pair.dependencies.qcow2_bytes,

@@ -44,8 +44,10 @@ missing; runtime catalog `get()` rejects. `remove(id, true)` ignores absence onl
 Ready checkpoints survive source deletion. For explicit pair transfer, use
 `source.exportCheckpoint(path)` and `runtime.importCheckpoint(path, { name })`;
 paths remain caller-local over REST. `JsBoxlite.inspectCheckpoint(path)` inspects
-local files synchronously. Numeric metadata outside JavaScript's safe integer
-range is rejected instead of rounded. Coordinate external host writers before
+local files synchronously. Typed numeric fields outside JavaScript's safe integer
+range are rejected instead of rounded. Opaque records in `shares` and
+`diskDependencies` preserve larger integers as `bigint`; use a bigint-aware
+serializer when converting them to JSON. Coordinate external host writers before
 `pause({ hostWritersStopped: true })`. See [checkpoint contracts](../../docs/guides/checkpoints.md).
 
 ## Installation

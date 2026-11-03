@@ -109,7 +109,10 @@ until its source is stopped. A failed operation never becomes ready from partial
 REST management uses `/checkpoints` and `/boxes/{id}/checkpoints`, relative to
 the usual API prefix. Clients require `checkpoint_management_enabled`; absence
 or false produces Unsupported before submission. A cloud capture is polled to
-ready and a new target to Paused. Polling timeout identifies the returned resource
+ready and a new target to Paused. Both managed restore and raw-pair import wait
+for Paused before returning an SDK box handle. An admitted cloud target can
+initially report `configured` while restoration is pending; it is not yet runnable.
+Polling timeout identifies the returned resource
 ID and does not resubmit memory import. Losing the initial response can leave a
 committed resource; inspect the catalog rather than blindly retrying. Raw pair
 transfer remains separate below.
@@ -232,7 +235,12 @@ session and does not recover old orphan handles.
 ## Failure and compatibility
 
 Runner upload admission uses `BoxliteRuntime::inspect_cloud_upload` to verify both
-members and return a typed configuration summary and complete-pair digest. It
+the pair and its captured configuration. Its inspection response uses admission
+schema version 1; this is separate from memory-file format 9 and local-path
+metadata version 2. The native parser validates those file formats before
+returning an inspection.
+
+The inspection contains a typed configuration summary and complete-pair digest. It
 does not open saved host paths. `import_checkpoint_pair` rechecks that digest and
 registers a managed resource using an exact boot from trusted runtime storage or
 an authorized runner download; it creates no VM. The runner then uses
@@ -368,6 +376,9 @@ submitting restoration, matching the server's box-creation volume restriction.
 Keep guest data inside the container disk for REST transfers. HTTP
 transfers require current v2 path metadata; re-export older checkpoints before
 uploading them. Local imports retain their existing compatibility.
+
+Public checkpoint uploads and downloads use `application/zstd`. The cloud upload
+route also accepts `application/octet-stream` for existing callers.
 
 ## Reattaching command output after restore
 

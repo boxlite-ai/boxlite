@@ -102,8 +102,8 @@ export class BoxliteBoxCheckpointController {
     @Query() query: CheckpointNameDto,
     @Req() request: Request,
   ) {
-    if (!request.is('application/octet-stream'))
-      throw new BadRequestException('Checkpoint import requires application/octet-stream')
+    if (!request.is(['application/zstd', 'application/octet-stream']))
+      throw new BadRequestException('Checkpoint import requires application/zstd or application/octet-stream')
     return this.transfers.import(auth, request, query.name)
   }
 

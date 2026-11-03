@@ -31,6 +31,7 @@ fn checkpoint_cloud_inspection_allowlist_and_execution_ignore_saved_host_securit
         metadata["application"]["options"]["env"] = json!([["TOKEN", "captured-value"]]);
     });
     let summary = inspect(&source.path().join("pair")).unwrap();
+    assert_eq!(summary.version, 1);
     assert_eq!(summary.resources.cpus, 1);
     assert_eq!(summary.resources.max_cpus, 2);
     let json = serde_json::to_string(&summary).unwrap();

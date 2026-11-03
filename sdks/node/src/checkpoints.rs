@@ -21,37 +21,6 @@ fn safe_integer(value: u64, field: &str) -> Result<i64> {
     Ok(value as i64)
 }
 
-// Opaque native dependency records may contain 64-bit inode/handle values too.
-fn check_json_numbers(value: &Value) -> Result<()> {
-    match value {
-        Value::Number(number) => {
-            if number
-                .as_u64()
-                .is_some_and(|value| value > MAX_SAFE_INTEGER)
-                || number
-                    .as_i64()
-                    .is_some_and(|value| value < -(MAX_SAFE_INTEGER as i64))
-            {
-                return Err(map_err(boxlite::BoxliteError::InvalidArgument(
-                    "checkpoint dependency exceeds JavaScript's safe integer range".into(),
-                )));
-            }
-        }
-        Value::Array(values) => {
-            for value in values {
-                check_json_numbers(value)?;
-            }
-        }
-        Value::Object(values) => {
-            for value in values.values() {
-                check_json_numbers(value)?;
-            }
-        }
-        _ => {}
-    }
-    Ok(())
-}
-
 #[napi(object)]
 #[derive(Clone, Debug)]
 pub struct JsPauseOptions {
@@ -103,6 +72,7 @@ impl TryFrom<CheckpointInfo> for JsCheckpointInfo {
 }
 
 /// Top-level fields use camelCase; opaque share/state records retain the native schema.
+/// N-API preserves large integers in opaque records as BigInt.
 #[napi(object)]
 pub struct JsCheckpointDependencies {
     pub version: u32,
@@ -128,13 +98,9 @@ impl TryFrom<CheckpointDependencies> for JsCheckpointDependencies {
             .shares
             .into_iter()
             .map(|share| {
-                let value = serde_json::to_value(share)
-                    .map_err(|error| Error::from_reason(error.to_string()))?;
-                check_json_numbers(&value)?;
-                Ok(value)
+                serde_json::to_value(share).map_err(|error| Error::from_reason(error.to_string()))
             })
             .collect::<Result<Vec<_>>>()?;
-        check_json_numbers(&info.disk_dependencies)?;
         Ok(Self {
             version: info.version,
             cpus: info.cpus,
