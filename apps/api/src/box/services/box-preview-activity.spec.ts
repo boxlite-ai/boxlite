@@ -1,5 +1,6 @@
 import { Logger } from '@nestjs/common'
 import { BoxService } from './box.service'
+import * as businessEvents from '../../common/utils/business-event.util'
 
 describe('Activity business events for browser presence', () => {
   afterEach(() => jest.restoreAllMocks())
@@ -19,14 +20,19 @@ describe('Activity business events for browser presence', () => {
     expect(redis.set).not.toHaveBeenCalled()
     expect(log).not.toHaveBeenCalled()
   })
-  it.each(['accepted', 'duplicate', 'redis failure', 'lookup failure'])(
+  it.each(['accepted', 'duplicate', 'redis failure', 'lookup failure', 'recorder failure'])(
     'derives organization and fails closed: %s',
     async (result) => {
       const log = jest.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined)
       const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined)
+      if (result === 'recorder failure')
+        jest.spyOn(businessEvents, 'recordBusinessEvent').mockImplementationOnce(() => {
+          throw new Error('private-recorder-error')
+        })
       const redis = { set: jest.fn() }
       if (result === 'redis failure') redis.set.mockRejectedValue(new Error('private-redis-error'))
-      else redis.set.mockResolvedValue(result === 'accepted' || result === 'lookup failure' ? 'OK' : null)
+      else
+        redis.set.mockResolvedValue(['accepted', 'lookup failure', 'recorder failure'].includes(result) ? 'OK' : null)
       const findOne =
         result === 'lookup failure'
           ? jest.fn().mockRejectedValue(new Error('private-database-error'))
@@ -52,7 +58,8 @@ describe('Activity business events for browser presence', () => {
       if (result.endsWith('failure')) {
         expect(warn).toHaveBeenCalledWith('Preview activity observation could not be recorded', {
           boxId: 'box-1',
-          operation: result === 'redis failure' ? 'deduplicate' : 'load_box',
+          operation:
+            result === 'redis failure' ? 'deduplicate' : result === 'lookup failure' ? 'load_box' : 'record_event',
           errorType: 'internal',
         })
         expect(JSON.stringify(warn.mock.calls)).not.toContain('private-')
