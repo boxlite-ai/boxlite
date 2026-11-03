@@ -735,10 +735,19 @@ from servers and CLIs, not browsers.
 
 A request without a valid token gets `401` with an RFC 6750 challenge that
 names the endpoint's RFC 9728 metadata, so a host can find where to sign in:
-`WWW-Authenticate: Bearer error="invalid_token", error_description="…", resource_metadata="<origin>/.well-known/oauth-protected-resource/api/mcp"`.
+`WWW-Authenticate: Bearer error="invalid_token", error_description="…", scope="openid profile email", resource_metadata="<origin>/.well-known/oauth-protected-resource/api/mcp"`.
 The body and the failed-auth throttling are those of every other `401`. The
 metadata names `MCP_RESOURCE_URL` as the `resource` and the issuer the `jwt`
-strategy accepts as the only authorization server; it advertises no scopes.
+strategy accepts as the only authorization server. Its `scopes_supported` is
+`["openid", "profile", "email"]`, matching the challenge's default identity scopes.
+Clients following MCP scope discovery can request these during login without a
+manual scope override. The server does not advertise `offline_access`; clients
+may request refresh access separately according to their configuration.
+These identity scopes do not grant organization or tool permissions. The provider
+must still issue the identity claims required by the JWT strategy, including
+`email_verified: true` for Auth0 database identities. Existing tokens are not
+changed by discovery updates; reconnect through a fresh authorization flow when
+an older token lacks those claims.
 `MCP_RESOURCE_URL` is the endpoint's public URL, such as
 `https://dev.boxlite.ai/api/mcp`, and must name the `/api/mcp` route. Without
 it the challenge carries no `resource_metadata` and the metadata route answers

@@ -11,6 +11,9 @@ import { TypedConfigService } from '../../config/typed-config.service'
 /** Where this API serves MCP: the `mcp` controller under the `api` global prefix. */
 const MCP_ROUTE = '/api/mcp'
 
+/** Identity scopes for default login; tool access still uses organization permissions. */
+export const MCP_IDENTITY_SCOPES = ['openid', 'profile', 'email'] as const
+
 /**
  * The RFC 9728 metadata route for {@link MCP_ROUTE}. The well-known prefix goes
  * before the whole route path, so the route sits outside the `api` prefix and
@@ -54,7 +57,11 @@ export class McpAuthMetadata {
     }
     // The issuer the JWT strategy checks `iss` against is the one the
     // authorization server's own metadata reports, so a host's issuer check holds.
-    return { resource: this.resource.href, authorization_servers: [this.jwtStrategy.issuer] }
+    return {
+      resource: this.resource.href,
+      authorization_servers: [this.jwtStrategy.issuer],
+      scopes_supported: [...MCP_IDENTITY_SCOPES],
+    }
   }
 }
 

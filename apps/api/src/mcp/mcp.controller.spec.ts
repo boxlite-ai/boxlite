@@ -428,6 +428,7 @@ describe('McpController', () => {
     const unauthenticated = await legacyPost(version, 'tools/list', {}, { authenticated: false })
     expect(unauthenticated.status).toBe(401)
     expect(unauthenticated.headers.get('www-authenticate')).toContain('resource_metadata=')
+    expect(unauthenticated.headers.get('www-authenticate')).toContain('scope="openid profile email"')
   })
 
   it('rejects a modern request naming an unsupported version', async () => {
@@ -459,7 +460,7 @@ describe('McpController', () => {
     expect(response.status).toBe(405)
   })
 
-  it('answers a request without a token with a challenge naming the metadata', async () => {
+  it('advertises default identity scopes in the authentication challenge', async () => {
     const response = await fetch(baseUrl, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -470,14 +471,19 @@ describe('McpController', () => {
     expect(response.status).toBe(401)
     expect(challenge).toMatch(/^Bearer error="invalid_token"/)
     expect(challenge).toContain('resource_metadata="https://boxlite.test/.well-known/oauth-protected-resource/api/mcp"')
+    expect(challenge).toContain('scope="openid profile email"')
     // The global filter's logic still answers, so the failed attempt is counted.
     expect(incrementFailedAuth).toHaveBeenCalledTimes(1)
   })
 
-  it('serves the protected resource metadata outside the api prefix', async () => {
+  it('serves identity scope metadata outside the api prefix', async () => {
     const response = await fetch(`${origin}/.well-known/oauth-protected-resource/api/mcp`)
 
     expect(response.status).toBe(200)
-    expect(await response.json()).toEqual({ resource: RESOURCE, authorization_servers: [ISSUER] })
+    expect(await response.json()).toEqual({
+      resource: RESOURCE,
+      authorization_servers: [ISSUER],
+      scopes_supported: ['openid', 'profile', 'email'],
+    })
   })
 })
