@@ -781,7 +781,9 @@ as an unknown path does.
 
 `get_config` is pure capability data and requires no organization selection.
 It shares its source with REST: snapshots, cloning, export, and import remain
-disabled; inbound updates are enabled. The tool never reads deployment settings
+disabled; inbound updates, private tunnels, and per-exec user selection are enabled
+in the hosted API. The MCP tunnel tool remains public-only, and the execution tool
+does not yet expose per-exec user selection. The tool never reads deployment settings
 or organization secrets. The principal endpoint remains excluded because hosted
 `/me` does not yet report actual token grants. Snapshot, clone, export, import,
 runtime-wide metrics, and WebSocket attachment tools remain excluded because

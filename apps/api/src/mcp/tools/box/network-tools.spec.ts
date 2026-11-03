@@ -26,7 +26,7 @@ describe('MCP Box network tools', () => {
   let fixture: ReturnType<typeof accessFixture>
   let harness: Awaited<ReturnType<typeof toolHarness>>
   let boxes: { updateInboundEnabled: jest.Mock; updateLastActivityAt: jest.Mock; getNetworkTunnelUrl: jest.Mock }
-  let tunnels: { declarePublic: jest.Mock }
+  let tunnels: { prepare: jest.Mock }
   let tools: NetworkTools
   const box = {
     id: RESOURCE_ID,
@@ -44,7 +44,7 @@ describe('MCP Box network tools', () => {
       updateLastActivityAt: jest.fn().mockResolvedValue(undefined),
       getNetworkTunnelUrl: jest.fn().mockResolvedValue('https://8080-box.preview.example'),
     }
-    tunnels = { declarePublic: jest.fn().mockResolvedValue(undefined) }
+    tunnels = { prepare: jest.fn().mockResolvedValue({ isPublic: true, token: null }) }
     tools = new NetworkTools(
       fixture.access,
       boxes as unknown as BoxService,
@@ -74,7 +74,7 @@ describe('MCP Box network tools', () => {
     expect((await harness.call(name, args(name))).result.isError).toBe(true)
     expect(fixture.boxes.findOneByIdOrName).not.toHaveBeenCalled()
     for (const operation of Object.values(boxes)) expect(operation).not.toHaveBeenCalled()
-    expect(tunnels.declarePublic).not.toHaveBeenCalled()
+    expect(tunnels.prepare).not.toHaveBeenCalled()
   })
   it.each(NAMES)('requires WRITE_BOXES before %s', async (name) => {
     fixture.member.assignedRoles = []
@@ -86,7 +86,7 @@ describe('MCP Box network tools', () => {
     fixture.boxes.findOneByIdOrName.mockResolvedValue({ ...box, organizationId: FOREIGN_ORGANIZATION_ID })
     expect((await harness.call(name, args(name))).result.isError).toBe(true)
     for (const operation of Object.values(boxes)) expect(operation).not.toHaveBeenCalled()
-    expect(tunnels.declarePublic).not.toHaveBeenCalled()
+    expect(tunnels.prepare).not.toHaveBeenCalled()
     expect(fixture.auditService.createLog).not.toHaveBeenCalled()
   })
   it('updates inbound mode with the REST DTO and existing audited action', async () => {
@@ -107,12 +107,12 @@ describe('MCP Box network tools', () => {
     expect(JSON.parse(result.content[0].text)).toEqual(result.structuredContent)
     expect(boxes.updateLastActivityAt).toHaveBeenCalledWith(RESOURCE_ID, expect.any(Date))
     expect(boxes.getNetworkTunnelUrl).toHaveBeenCalledWith(RESOURCE_ID, ORGANIZATION_ID, 8080)
-    expect(tunnels.declarePublic).toHaveBeenCalledWith(RESOURCE_ID, 8080)
+    expect(tunnels.prepare).toHaveBeenCalledWith(RESOURCE_ID, 8080, true)
     expect(fixture.auditService.createLog.mock.invocationCallOrder[0]).toBeLessThan(
       boxes.updateLastActivityAt.mock.invocationCallOrder[0],
     )
     expect(boxes.updateLastActivityAt.mock.invocationCallOrder[0]).toBeLessThan(
-      tunnels.declarePublic.mock.invocationCallOrder[0],
+      tunnels.prepare.mock.invocationCallOrder[0],
     )
   })
   it('preserves best-effort activity updates without logging backend error payloads', async () => {
@@ -131,15 +131,15 @@ describe('MCP Box network tools', () => {
     fixture.boxes.findOneByIdOrName.mockResolvedValue({ ...box, inboundEnabled: false })
     expect((await harness.call('prepare_tunnel', args('prepare_tunnel'))).result.isError).toBe(true)
     expect(boxes.updateLastActivityAt).not.toHaveBeenCalled()
-    expect(tunnels.declarePublic).not.toHaveBeenCalled()
+    expect(tunnels.prepare).not.toHaveBeenCalled()
   })
   it('preserves the auto-resume readiness gate without waking a Box while preparing its URL', async () => {
     fixture.boxes.findOneByIdOrName.mockResolvedValue({ ...box, state: BoxState.STOPPED, autoResume: true })
     expect((await harness.call('prepare_tunnel', args('prepare_tunnel'))).result.isError).toBeFalsy()
     fixture.boxes.findOneByIdOrName.mockResolvedValue({ ...box, state: BoxState.STOPPED, autoResume: false })
-    tunnels.declarePublic.mockClear()
+    tunnels.prepare.mockClear()
     expect((await harness.call('prepare_tunnel', args('prepare_tunnel'))).result.isError).toBe(true)
-    expect(tunnels.declarePublic).not.toHaveBeenCalled()
+    expect(tunnels.prepare).not.toHaveBeenCalled()
   })
   it('rejects reserved, invalid ports and unsupported inbound allowlists before authorization', async () => {
     for (const port of [0, 65536, 22222, 1.5]) {
@@ -186,7 +186,7 @@ describe('MCP Box network tools', () => {
         type: 'text',
         text: 'Tool call cancelled; Box activity may already have been recorded',
       })
-      expect(tunnels.declarePublic).not.toHaveBeenCalled()
+      expect(tunnels.prepare).not.toHaveBeenCalled()
     },
   )
 })

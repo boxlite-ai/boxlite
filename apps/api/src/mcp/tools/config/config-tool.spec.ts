@@ -37,6 +37,8 @@ describe('MCP hosted capability tool', () => {
       export_enabled: false,
       import_enabled: false,
       inbound_update_enabled: true,
+      private_tunnels_enabled: true,
+      exec_user_enabled: true,
     })
     expect(JSON.parse(result.content[0].text)).toEqual(result.structuredContent)
   })
