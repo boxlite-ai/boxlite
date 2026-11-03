@@ -17,6 +17,38 @@ import (
 
 const browserUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
 
+func TestAppDomainAuthCallbackRequiresWarningAcceptance(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, tc := range []struct {
+		name, host string
+		accepted   bool
+		wantStatus int
+	}{
+		{"app callback", "demo.app.boxlite.test", false, http.StatusOK},
+		{"proxy callback", "proxy.boxlite.test", false, http.StatusNoContent},
+		{"accepted app callback", "demo.app.boxlite.test", true, http.StatusNoContent},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			engine := gin.New()
+			engine.Use((&Proxy{config: &config.Config{ProxyAppDomain: appDomain}}).browserWarningMiddleware())
+			engine.Any("/*path", func(ctx *gin.Context) { ctx.Status(http.StatusNoContent) })
+			request := httptest.NewRequest(http.MethodGet, "http://"+tc.host+loginCallbackPath, nil)
+			request.Header.Set("User-Agent", browserUserAgent)
+			if tc.accepted {
+				request.AddCookie(&http.Cookie{Name: PREVIEW_PAGE_ACCEPT_COOKIE_NAME, Value: "true"})
+			}
+			response := httptest.NewRecorder()
+			engine.ServeHTTP(response, request)
+			if response.Code != tc.wantStatus {
+				t.Fatalf("callback status = %d, want %d", response.Code, tc.wantStatus)
+			}
+			if tc.wantStatus == http.StatusOK && !strings.Contains(response.Body.String(), "Preview URL Warning") {
+				t.Fatal("app callback did not show the browser warning")
+			}
+		})
+	}
+}
+
 // An access token proves nothing before the tunnel policy runs, and public
 // tunnels ignore it, so it must not skip the anti-phishing page. Accepting
 // the page returns to the token URL without putting the token in a query.

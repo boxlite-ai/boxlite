@@ -16,6 +16,7 @@ import { BoxMigration } from '../entities/box-migration.entity'
 import { Tunnel } from '../entities/tunnel.entity'
 import { Domain } from '../entities/domain.entity'
 import { BoxState } from '../enums/box-state.enum'
+import { BoxDesiredState } from '../enums/box-desired-state.enum'
 import { DOMAIN_COUNT_LIMIT_CODE, DOMAIN_NOT_OWNED_CODE, SUBDOMAIN_TOO_SHORT_CODE } from '../errors/domain.error'
 import { BoxDestroyedEvent } from '../events/box-destroyed.event'
 import { AddDomain1792972800000 } from '../../migrations/pre-deploy/1792972800000-add-domain-migration'
@@ -160,6 +161,20 @@ describeIfDatabase('DomainService (integration, real Postgres)', () => {
       [organizationId],
     )
   }
+
+  it.each(['destroyed', 'destroy-requested', 'deleted'])(
+    'review regression: refuses a stale Box lookup after %s',
+    async (state) => {
+      const box = await makeBox()
+      const hostname = (await service.claim(ORG, 'stale-name')).hostname
+      if (state === 'deleted') await boxes.delete(box.id)
+      else if (state === 'destroyed') await boxes.update(box.id, { state: BoxState.DESTROYED })
+      else await boxes.update(box.id, { desiredState: BoxDesiredState.DESTROYED, pending: true })
+
+      await expect(service.bind(box, 3000, hostname)).rejects.toMatchObject({ status: 404 })
+      await expect(service.resolve(hostname)).resolves.toBeNull()
+    },
+  )
 
   it('acquisition separation: bind refuses an unowned full hostname without allocating it', async () => {
     const box = await makeBox()

@@ -86,6 +86,30 @@ test("a user domain under the stage's registrable domain is refused", () => {
   }
 })
 
+test('a user domain cannot share the overridden dashboard registrable domain', () => {
+  for (const domain of ['users.dashboard.example', 'DASHBOARD.EXAMPLE']) {
+    assert.throws(
+      () =>
+        read({
+          ...complete,
+          DASHBOARD_DOMAIN: 'console.dashboard.example',
+          STACK_USER_DOMAIN: domain,
+          CLOUDFLARE_USER_ZONE_ID: 'user-zone',
+        }),
+      /shares dashboard\.example with DASHBOARD_DOMAIN/,
+    )
+  }
+  assert.equal(
+    read({
+      ...complete,
+      DASHBOARD_DOMAIN: 'console.dashboard.example',
+      STACK_USER_DOMAIN: 'apps.independent.example',
+      CLOUDFLARE_USER_ZONE_ID: 'user-zone',
+    }).userDomain?.domain,
+    'apps.independent.example',
+  )
+})
+
 test('the OpenAPI reader uses only the fixed feature flag', () => {
   for (const flag of [undefined, '', ' ', 'false', 'true', ' true ']) {
     const result = read({ ...complete, OTEL_OPENAPI_ENABLED: flag })

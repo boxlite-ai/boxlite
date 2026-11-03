@@ -96,7 +96,7 @@ holding that domain. On GCP the edge writes
 `*.<STACK_USER_DOMAIN>` into that zone and issues its certificate through its own DNS authorization;
 the apex is not used. The API and the proxy learn the domain as `PROXY_APP_DOMAIN`. Unset, the stage
 offers no named apps. The deploy refuses a user domain under the same registrable domain as
-`STACK_DOMAIN` (a sibling such as `apps.boxlite.ai` beside `dev.boxlite.ai` included), and refuses one
+`STACK_DOMAIN` or an overridden `DASHBOARD_DOMAIN` (a sibling such as `apps.boxlite.ai` beside `dev.boxlite.ai` included), and refuses one
 on AWS, whose edge serves none.
 The token is created in Cloudflare's dashboard; a provider login does not generate it.
 

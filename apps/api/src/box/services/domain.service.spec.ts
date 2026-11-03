@@ -48,7 +48,9 @@ function makeService(
   const query = jest.fn()
   const manager = {
     query,
-    findOne: jest.fn().mockResolvedValue(options.held ?? null),
+    findOne: jest.fn((entity, lookup) =>
+      Promise.resolve(entity === Box ? Object.assign(makeBox(), lookup.where) : (options.held ?? null)),
+    ),
     count: jest.fn().mockResolvedValue(options.used ?? 0),
   }
   query.mockImplementation((sql: string) => {
@@ -171,7 +173,7 @@ describe('DomainService.bind', () => {
       status: 400,
       response: { code: REGION_NOT_SUPPORTED_CODE },
     })
-    expect(query).not.toHaveBeenCalled()
+    expect(query.mock.calls.some(([sql]) => sql.startsWith('UPDATE'))).toBe(false)
   })
 
   it('updates only an owned full hostname, without inserting or applying claim rules', async () => {
@@ -187,14 +189,14 @@ describe('DomainService.bind', () => {
       url: 'https://demo1.other.example',
       target: { type: 'box', box: box.id, port: 3000 },
     })
-    expect(query).toHaveBeenCalledTimes(1)
+    expect(query).toHaveBeenCalledTimes(2)
     expect(query).toHaveBeenCalledWith(expect.stringContaining('WHERE "hostname" = $1 AND "organization_id" = $2'), [
       'demo1.other.example',
       ORG,
       box.id,
       3000,
     ])
-    expect(query.mock.calls[0][0]).toMatch(/^UPDATE/)
+    expect(query.mock.calls[1][0]).toMatch(/^UPDATE/)
     expect(manager.count).not.toHaveBeenCalled()
   })
 
@@ -204,7 +206,7 @@ describe('DomainService.bind', () => {
       status: 404,
       response: { code: DOMAIN_NOT_OWNED_CODE, message: expect.stringContaining('Dashboard > Domains') },
     })
-    expect(query).toHaveBeenCalledTimes(1)
+    expect(query).toHaveBeenCalledTimes(2)
   })
 })
 

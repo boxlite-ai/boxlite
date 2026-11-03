@@ -73,14 +73,14 @@ With `PROXY_APP_DOMAIN` set (the deploy passes the stage's `STACK_USER_DOMAIN`),
 under it — `demo.apps.example` — is a platform subdomain bound to one box port through
 `PUT /api/v1/domains/{domain}/target`. The proxy classifies the Host by
 suffix *before* the `<port>-<id>` parse, since `3000-abc.apps.example` is a valid name of that
-shape, lowercases it and drops any port, then asks `GET /api/preview/domains/{hostname}` on every
+shape, drops any port and trailing DNS root dot, lowercases it, then asks `GET /api/preview/domains/{hostname}` on every
 request. The API's domain service resolves the stored box-port target; its preview controller
 then checks the target's public tunnel, inbound and box state before returning `{boxId, port}`.
 Private tunnels and other refusals return `404`, and an
 API failure is `502` — the proxy never falls back to a stale answer or to the legacy parse. The
 lookup is not cached, so a released name stops forwarding at once; the port's access verdict keeps
 its 3-second cache. There is no sign-in on these hosts: a box with inbound disabled is a `404`, not
-a redirect. `/health`, `/login`, and `/callback` under a platform subdomain belong to the user's service, and
+a redirect. `/health`, `/login`, `/callback`, and `/__boxlite/auth/callback` under a platform subdomain belong to the user's service, and
 the browser warning applies as on any box host. The app domain's apex itself is not a box host.
 
 Domain ownership and bindings survive tunnel revocation. Binding a name does not

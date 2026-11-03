@@ -397,12 +397,13 @@ export const DNS_LABEL_MAX_LENGTH = 63
  * Platform subdomains: `<name>.<appDomain>` routes to one box port.
  *
  * `appDomain` is unset where the deployment has no wildcard certificate and
- * record for it; the API then refuses explicit names rather than minting URLs
+ * record for it; the API then refuses new claims rather than minting URLs
  * nothing serves. Like `PROXY_DOMAIN`, it may carry a port for a local stack
  * whose proxy does not listen on 80/443: the port goes into the URL, never
  * into the hostname a name is stored and resolved under (`appHost`). The
  * minimum length bounds only the name a caller picks, not the suffix, and
- * only new claims: a name already held stays usable.
+ * only new claims: a name already held stays usable, including when the
+ * deployment no longer offers new claims.
  *
  * Exported so its rules can be tested directly rather than through an import
  * whose side effect is reading the process environment.
@@ -412,7 +413,7 @@ export function domainConfig(env: NodeJS.ProcessEnv = process.env) {
   const appDomainShape =
     /^(?<host>[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+)(:(?<port>[1-9][0-9]{0,4}))?$/
   const appDomainMatch = appDomain === undefined ? undefined : appDomainShape.exec(appDomain)
-  if (appDomain !== undefined && !appDomainMatch) {
+  if (appDomain !== undefined && (!appDomainMatch || Number(appDomainMatch.groups?.port) > 65535)) {
     throw new Error(
       `PROXY_APP_DOMAIN must be a hostname such as "app.example.com", optionally with a port, got "${env.PROXY_APP_DOMAIN}"`,
     )
@@ -428,6 +429,13 @@ export function domainConfig(env: NodeJS.ProcessEnv = process.env) {
     throw new Error(
       `PLATFORM_SUBDOMAIN_MIN_LENGTH must be an integer from 1 to ${DNS_LABEL_MAX_LENGTH}, got "${env.PLATFORM_SUBDOMAIN_MIN_LENGTH}"`,
     )
+  }
+  if (
+    appHost &&
+    (appHost.split('.').some((label) => label.length > DNS_LABEL_MAX_LENGTH) ||
+      appHost.length + 1 + platformSubdomainMinLength > 253)
+  ) {
+    throw new Error('PROXY_APP_DOMAIN must leave room for the minimum subdomain within a valid DNS hostname')
   }
   return { appDomain, appHost, platformSubdomainMinLength }
 }

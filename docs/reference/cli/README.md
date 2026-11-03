@@ -1032,7 +1032,7 @@ supported". See [Domains](../../concepts/networking.md#domains).
 | Subcommand | Synopsis | Notes |
 |---|---|---|
 | `bind` | `boxlite domain bind DOMAIN --type TYPE [target options]` | `--type` is required; currently only `box`, which requires `--box BOX --port PORT` |
-| `ls` (`list`) | `boxlite domain ls [-q \| --format FORMAT]` | Every full hostname and its target (`-` while unbound), then the allowance; quiet prints full hostnames |
+| `ls` (`list`) | `boxlite domain ls [-q \| --format FORMAT]` | Every full hostname and its target (`-` while unbound); table adds the allowance footer, JSON/YAML return an array of domain rows, quiet prints full hostnames |
 | `unbind` | `boxlite domain unbind HOSTNAME` | Full hostname required; it stays with the organization |
 
 For `bind`, `DOMAIN` is an owned full hostname (`demo1.apps.example`).
@@ -1050,8 +1050,9 @@ public: the name answers once `boxlite network tunnel` has declared the port
 and the box has inbound access enabled, in either order. `unbind` stops
 routing the name;
 requests that start afterwards get `404`, and the name still counts against
-the allowance until the platform raises it. Binding it again, to any box
-port, does not count it twice.
+the allowance. Binding it again to a live box port does not count it twice.
+New bindings reject a Box being destroyed or already removed. Existing bindings
+survive Box deletion; deleting the owning organization releases its names.
 
 ```bash
 boxlite domain bind demo1.apps.example --type box --box web-a --port 3000   # demo1.apps.example → web-a:3000

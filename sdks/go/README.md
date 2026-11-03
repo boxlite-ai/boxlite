@@ -280,7 +280,9 @@ On a hosted runtime the organization can route a name of its own
 App binding with `app_target_not_supported`.
 
 Each call is one blocking request, like `Network.Tunnel`: `ctx` is checked
-before the request is sent, not while it is in flight.
+before and after waiting for another call on the same handle. Cancellation
+observed after that wait prevents the request; it does not interrupt a request
+already in flight.
 
 ## Guest SSH
 

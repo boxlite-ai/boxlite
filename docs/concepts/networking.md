@@ -128,10 +128,16 @@ desired Box state; routing follows the actual-state checks and existing three-se
 access cache. Once those checks observe a destroyed or missing Box, the name answers
 `404`. Revoking the tunnel also preserves the binding: the name answers `404` while
 the port is revoked, and serves again once the port is prepared as public again.
+New bindings reject a Box whose destruction has already been requested or completed,
+or whose database row has been removed. Deleting the owning organization releases
+its names; another organization can then request them. If organization deletion
+fails, ownership and bindings remain intact.
 
-`domain ls` lists every full hostname the organization holds with what it routes to,
-its allowance (`limit`, `used`, `remaining`) and `min_length`, the shortest
-new name allowed. The REST list also provides `domain_suffix` for the request
+`domain ls` lists every full hostname the organization holds with what it routes to.
+The default table adds the allowance (`limit`, `used`, `remaining`) and `min_length`,
+the shortest new name allowed, in its footer. JSON and YAML output contain only
+the domain rows as an array; quiet output contains only hostnames.
+The REST list includes the allowance and also provides `domain_suffix` for the request
 preview, or null when requests are unavailable.
 A new name must be lowercase letters, digits and hyphens,
 not start or end with a hyphen, not look like `<digits>-…`, and not be one of

@@ -203,6 +203,8 @@ selects a CLI binary; otherwise the tests use `boxlite` on PATH, then
 `target/debug/boxlite`. C/Go/Rust drivers are built by the command above.
 The Rust driver is the non-published `boxlite-e2e-rust` workspace package in
 `sdks/rust/`; its executable is `target/debug/domain-rust` at the repository root.
+`make test:e2e:drivers` checks the driver's argument handling without a cloud or VM;
+malformed invocations print usage and exit with an error.
 Configured cases fail if a required client is missing. Public HTTPS probes
 honor standard proxy environment variables, verify certificates, and reject redirects.
 

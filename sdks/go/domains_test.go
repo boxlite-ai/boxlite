@@ -3,12 +3,14 @@ package boxlite
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
 	"sync"
 	"testing"
+	"time"
 )
 
 // A loopback server answers the box API's domain routes, so what the test
@@ -112,6 +114,74 @@ func TestDomainsRejectAClosedHandleAndAnUnknownTargetType(t *testing.T) {
 		t.Fatalf("List on nil handle: %v", err)
 	}
 	if _, err := (&Domains{}).Bind(context.Background(), "demo", DomainTarget{Type: "app", Box: "shop"}); err == nil {
-		t.Fatal("Bind accepted an unknown target type")
+		t.Fatal("Bind accepted Box fields for an App target")
+	}
+	if _, err := (&Domains{}).Bind(context.Background(), "demo", DomainTarget{Type: "other"}); err == nil || err.Error() != `unsupported domain target type "other"` {
+		t.Fatalf("Bind unknown target type: %v", err)
+	}
+}
+
+// Observe the initial cancellation check before allowing the caller to wait
+// for the domain mutex. Capturing Err first keeps cancellation deterministic.
+type observedDomainContext struct {
+	context.Context
+	once    sync.Once
+	checked chan struct{}
+}
+
+func (c *observedDomainContext) Err() error {
+	err := c.Context.Err()
+	c.once.Do(func() { close(c.checked) })
+	return err
+}
+
+func TestDomainsCancelWhileWaitingForAnotherCall(t *testing.T) {
+	requests := make(chan struct{}, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests <- struct{}{}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"domains":[],"limit":2,"used":0,"remaining":2,"min_length":5}`)
+	}))
+	defer server.Close()
+	runtime, err := NewRest(BoxliteRestOptions{URL: server.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close()
+	domains, err := runtime.Domains()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer domains.Close()
+	base, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ctx := &observedDomainContext{Context: base, checked: make(chan struct{})}
+	domains.mu.Lock()
+	unlock := sync.OnceFunc(domains.mu.Unlock)
+	defer unlock()
+	result := make(chan error, 1)
+	go func() {
+		_, err := domains.List(ctx)
+		result <- err
+	}()
+	select {
+	case <-ctx.checked:
+	case <-time.After(5 * time.Second):
+		t.Fatal("List did not check cancellation")
+	}
+	cancel()
+	unlock()
+	select {
+	case err := <-result:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("List after cancellation = %v, want context.Canceled", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("cancelled List did not return")
+	}
+	select {
+	case <-requests:
+		t.Fatal("cancelled List reached the API")
+	default:
 	}
 }

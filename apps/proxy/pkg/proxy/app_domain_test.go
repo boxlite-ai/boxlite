@@ -71,6 +71,7 @@ func TestAppDomainHostClassification(t *testing.T) {
 		"demo.app.boxlite.test":       "demo.app.boxlite.test",
 		"Demo.APP.BoxLite.test:443":   "demo.app.boxlite.test",
 		"demo.app.boxlite.test.":      "demo.app.boxlite.test",
+		"Demo.APP.BoxLite.test.:4000": "demo.app.boxlite.test",
 		"3000-abc.app.boxlite.test":   "3000-abc.app.boxlite.test",
 		"a.b.app.boxlite.test":        "a.b.app.boxlite.test",
 		"app.boxlite.test":            "",

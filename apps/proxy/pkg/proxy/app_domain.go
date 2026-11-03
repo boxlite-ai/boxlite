@@ -33,11 +33,10 @@ func (p *Proxy) appDomain() string {
 
 // bareHost lowercases a host and drops a trailing dot and any port.
 func bareHost(host string) string {
-	hostname := strings.ToLower(strings.TrimSuffix(host, "."))
-	if bare, _, err := net.SplitHostPort(hostname); err == nil {
-		return bare
+	if bare, _, err := net.SplitHostPort(host); err == nil {
+		host = bare
 	}
-	return hostname
+	return strings.ToLower(strings.TrimSuffix(host, "."))
 }
 
 // appDomainHost reports whether the request Host names a platform subdomain

@@ -67,19 +67,22 @@ const registrableDomainOf = (domain: string): string => domain.split('.').slice(
  * A separate registrable domain is the point. Under `STACK_DOMAIN` a user's page
  * is same-site with the dashboard, can set cookies the dashboard receives, and a
  * blocklist that flags one user's app takes the platform's domain with it. So a
- * value under the same registrable domain as `STACK_DOMAIN` is refused rather
+ * value under the same registrable domain as `STACK_DOMAIN` or an overridden
+ * `DASHBOARD_DOMAIN` is refused rather
  * than served — a sibling like `apps.boxlite.ai` beside `dev.boxlite.ai` too.
  * It is a different domain, so its records go into its own Cloudflare zone.
  */
 export const userDomainFrom = (environment: NodeJS.ProcessEnv): UserDomain | null => {
   const domain = optional(environment, 'STACK_USER_DOMAIN')?.toLowerCase()
   if (!domain) return null
-  const stackDomain = optional(environment, 'STACK_DOMAIN')?.toLowerCase()
-  if (stackDomain !== undefined && registrableDomainOf(domain) === registrableDomainOf(stackDomain)) {
-    throw new StackEnvError(
-      `STACK_USER_DOMAIN ${domain} shares ${registrableDomainOf(domain)} with STACK_DOMAIN ${stackDomain}; ` +
-        "users' apps need a registrable domain of their own",
-    )
+  for (const key of ['STACK_DOMAIN', 'DASHBOARD_DOMAIN']) {
+    const platformDomain = optional(environment, key)?.toLowerCase()
+    if (platformDomain && registrableDomainOf(domain) === registrableDomainOf(platformDomain)) {
+      throw new StackEnvError(
+        `STACK_USER_DOMAIN ${domain} shares ${registrableDomainOf(domain)} with ${key} ${platformDomain}; ` +
+          "users' apps need a registrable domain of their own",
+      )
+    }
   }
   return {
     domain,

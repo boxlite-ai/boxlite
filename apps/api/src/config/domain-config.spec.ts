@@ -24,6 +24,27 @@ describe('domainConfig', () => {
     expect(config.appHost).toBe('app.localhost')
   })
 
+  it.each(['1', '65535'])('accepts the port boundary %s', (port) => {
+    expect(domainConfig({ PROXY_APP_DOMAIN: `app.example.com:${port}` }).appDomain).toBe(`app.example.com:${port}`)
+  })
+
+  it.each(['65536', '99999'])('rejects out-of-range port %s', (port) => {
+    expect(() => domainConfig({ PROXY_APP_DOMAIN: `app.example.com:${port}` })).toThrow('PROXY_APP_DOMAIN')
+  })
+
+  it('requires room for the configured minimum name within a 253-character hostname', () => {
+    const fits = ['a'.repeat(63), 'b'.repeat(63), 'c'.repeat(63), 'd'.repeat(55)].join('.')
+    expect(domainConfig({ PROXY_APP_DOMAIN: fits }).appHost).toBe(fits)
+    expect(() => domainConfig({ PROXY_APP_DOMAIN: `${fits}d` })).toThrow('PROXY_APP_DOMAIN')
+    expect(() => domainConfig({ PROXY_APP_DOMAIN: fits, PLATFORM_SUBDOMAIN_MIN_LENGTH: '6' })).toThrow(
+      'PROXY_APP_DOMAIN',
+    )
+  })
+
+  it('rejects a suffix containing a DNS label longer than 63 characters', () => {
+    expect(() => domainConfig({ PROXY_APP_DOMAIN: `${'a'.repeat(64)}.example` })).toThrow('PROXY_APP_DOMAIN')
+  })
+
   it.each([
     'app',
     'app..boxlite.ai',

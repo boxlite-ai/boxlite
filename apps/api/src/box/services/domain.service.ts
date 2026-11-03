@@ -12,6 +12,8 @@ import { BadRequestError } from '../../exceptions/bad-request.exception'
 import { RegionService } from '../../region/services/region.service'
 import { Box } from '../entities/box.entity'
 import { Domain, DomainTarget } from '../entities/domain.entity'
+import { BoxState } from '../enums/box-state.enum'
+import { BoxDesiredState } from '../enums/box-desired-state.enum'
 import {
   DomainCountLimitReachedError,
   DomainNotOwnedError,
@@ -78,7 +80,8 @@ export type HeldDomains = {
  * `domainCountLimit`; binding neither declares the port public nor
  * needs it to be, and several names may route to one port. Unbinding is by
  * full hostname and keeps it held. Box destruction and tunnel revocation preserve
- * bindings; only explicit unbind or rebind changes the stored target. Resolution
+ * bindings while the organization exists; organization deletion releases its
+ * names. Otherwise only explicit unbind or rebind changes the stored target. Resolution
  * returns that target; the preview controller applies the port's public access policy.
  */
 @Injectable()
@@ -161,16 +164,28 @@ export class DomainService {
   /** Route an already owned full hostname to a Box port; never allocate a name. */
   async bind(box: Box, port: number, rawDomain: string): Promise<HeldDomain> {
     const hostname = this.fullHostname(rawDomain, 'Bind')
-    await this.assertReachableFromPlatformProxy(box)
-    const [, bound]: [unknown[], number] = await this.dataSource.query(
-      `UPDATE "domain" SET "box_id" = $3, "port" = $4, "target_type" = 'box', "app_id" = NULL, "updated_at" = now()
-       WHERE "hostname" = $1 AND "organization_id" = $2`,
-      [hostname, box.organizationId, box.id, port],
-    )
-    if (bound === 0) {
-      throw new DomainNotOwnedError(hostname)
-    }
-    return { hostname, url: this.urlFor(hostname), target: { type: 'box', box: box.id, port } }
+    return this.dataSource.transaction(async (manager) => {
+      await manager.query(`SET LOCAL lock_timeout = '5s'`)
+      // Serialize target admission with destroy requests and physical deletion;
+      // the controller's earlier Box lookup may already be stale.
+      const current = await manager.findOne(Box, {
+        where: { id: box.id, organizationId: box.organizationId },
+        lock: { mode: 'pessimistic_write' },
+      })
+      if (!current || current.state === BoxState.DESTROYED || current.desiredState === BoxDesiredState.DESTROYED) {
+        throw new NotFoundException(`Box ${box.id} not found`)
+      }
+      await this.assertReachableFromPlatformProxy(current)
+      const [, bound]: [unknown[], number] = await manager.query(
+        `UPDATE "domain" SET "box_id" = $3, "port" = $4, "target_type" = 'box', "app_id" = NULL, "updated_at" = now()
+         WHERE "hostname" = $1 AND "organization_id" = $2`,
+        [hostname, current.organizationId, current.id, port],
+      )
+      if (bound === 0) {
+        throw new DomainNotOwnedError(hostname)
+      }
+      return { hostname, url: this.urlFor(hostname), target: { type: 'box', box: current.id, port } }
+    })
   }
 
   /**

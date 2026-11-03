@@ -134,6 +134,7 @@ test('a CLI that is not there is reported, not treated as an answer', () => {
     ...STAGE,
     apiHost: API_HOST,
     proxyDomain: PROXY_DOMAIN,
+    appDomain: APP_DOMAIN,
     lookup,
     log: (line) => logged.push(line),
   })

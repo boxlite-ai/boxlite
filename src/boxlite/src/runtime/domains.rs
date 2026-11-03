@@ -78,6 +78,12 @@ pub struct DomainHandle {
     backend: Arc<dyn DomainBackend>,
 }
 
+impl std::fmt::Debug for DomainHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DomainHandle").finish_non_exhaustive()
+    }
+}
+
 impl DomainHandle {
     /// Internal constructor used by `BoxliteRuntime`.
     pub(crate) fn new(backend: Arc<dyn DomainBackend>) -> Self {

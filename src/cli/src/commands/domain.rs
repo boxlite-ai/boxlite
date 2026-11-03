@@ -28,7 +28,7 @@ pub enum DomainCommand {
     /// Route an owned full hostname to a target; request names in Dashboard > Domains.
     Bind(BindArgs),
 
-    /// List the domains the organization holds and its allowance.
+    /// List held domains; the table footer shows the allowance.
     #[command(visible_alias = "list")]
     Ls(LsArgs),
 

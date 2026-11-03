@@ -188,6 +188,10 @@ func (d *Domains) begin(ctx context.Context) error {
 		return err
 	}
 	d.mu.Lock()
+	if err := ctx.Err(); err != nil {
+		d.mu.Unlock()
+		return err
+	}
 	if d.handle == nil {
 		d.mu.Unlock()
 		return closedDomainsError()
