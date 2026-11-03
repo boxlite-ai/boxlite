@@ -23,7 +23,13 @@ import { OrganizationResourcePermission as Permission } from '../../../organizat
 import { hasOrganizationResourcePermissions } from '../../../organization/guards/organization-resource-action.guard'
 import { McpToolAccess } from '../shared/mcp-tool-access'
 import { McpToolAudit } from '../shared/mcp-tool-audit'
-import { boxResponseSchema, boxSelectorSchema, boxToolInput } from './box.schema'
+import {
+  boxResponseSchema,
+  boxSelectorSchema,
+  boxToolInput,
+  listBoxesInputSchema,
+  listBoxesOutputSchema,
+} from './box.schema'
 import {
   acceptedOutput,
   assertMcpActive,
@@ -96,6 +102,23 @@ export class BoxTools {
   ) {}
 
   register(server: McpServer, caller: AuthContext): void {
+    registerMcpTool(
+      server,
+      'list_boxes',
+      {
+        description: 'List the boxes in one of your BoxLite organizations.',
+        inputSchema: listBoxesInputSchema,
+        outputSchema: listBoxesOutputSchema,
+        annotations: readOnlyAnnotations,
+      },
+      async ({ organization_id }, context) => {
+        const signal = context.mcpReq.signal
+        const auth = await this.access.organization(caller, organization_id, [], signal)
+        assertMcpActive(signal)
+        const boxes = await this.boxes.toBoxDtos(await this.boxes.findAllDeprecated(auth.organizationId))
+        return boxes.map(boxResult)
+      },
+    )
     registerMcpTool(
       server,
       'get_box',

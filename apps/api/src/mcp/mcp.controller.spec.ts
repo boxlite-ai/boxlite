@@ -5,14 +5,19 @@
 
 import { Test } from '@nestjs/testing'
 import { UnauthorizedException, type INestApplication } from '@nestjs/common'
+import { McpServer, type CallToolResult, type ServerContext } from '@modelcontextprotocol/server'
 import type { AddressInfo } from 'net'
 import { FailedAuthTrackerService } from '../auth/failed-auth-tracker.service'
 import { JwtStrategy } from '../auth/jwt.strategy'
 import { BoxService } from '../box/services/box.service'
+import { BoxStateWaiterService } from '../box/services/box-state-waiter.service'
+import { CommerceBoxLimitService } from '../boxlite-rest/commerce-box-limit.service'
 import { BoxState } from '../box/enums/box-state.enum'
 import { NetworkInfoResponseDto } from '../box/dto/network-info.dto'
 import { TypedConfigService } from '../config/typed-config.service'
 import { OrganizationUserService } from '../organization/services/organization-user.service'
+import { OrganizationService } from '../organization/services/organization.service'
+import type { AuthContext } from '../common/interfaces/auth-context.interface'
 import { MCP_METADATA_PATH, McpAuthMetadata } from './auth/mcp-auth-metadata'
 import { McpAuthGuard } from './auth/mcp-auth.guard'
 import { McpController } from './mcp.controller'
@@ -22,6 +27,8 @@ import { VolumeTools } from './tools/volume/volume-tools'
 import { ImageTools } from './tools/image/image-tools'
 import { RegistryTools } from './tools/registry/registry-tools'
 import { BoxTools } from './tools/box/box-tools'
+import { McpToolAccess } from './tools/shared/mcp-tool-access'
+import { McpToolAudit } from './tools/shared/mcp-tool-audit'
 import { NetworkTools } from './tools/box/network-tools'
 import { McpExecutionTools } from './tools/execution/execution-tools'
 import { McpFileTools } from './tools/files/file-tools'
@@ -40,13 +47,15 @@ describe('McpController', () => {
   let app: INestApplication
   let origin: string
   let baseUrl: string
-  let exists: jest.Mock
+  let findMembership: jest.Mock
   let findAllDeprecated: jest.Mock
   let incrementFailedAuth: jest.Mock
 
   beforeAll(async () => {
-    exists = jest.fn((organizationId: string, userId: string) =>
-      Promise.resolve(organizationId === MEMBER_ORG && userId === CALLER.userId),
+    findMembership = jest.fn((organizationId: string, userId: string) =>
+      Promise.resolve(
+        organizationId === MEMBER_ORG && userId === CALLER.userId ? { role: 'member', assignedRoles: [] } : null,
+      ),
     )
     findAllDeprecated = jest.fn().mockResolvedValue([{ id: 'box-1' }])
     incrementFailedAuth = jest.fn().mockResolvedValue(undefined)
@@ -58,7 +67,11 @@ describe('McpController', () => {
         { provide: VolumeTools, useValue: { register: jest.fn() } },
         { provide: ImageTools, useValue: { register: jest.fn() } },
         { provide: RegistryTools, useValue: { register: jest.fn() } },
-        { provide: BoxTools, useValue: { register: jest.fn() } },
+        BoxTools,
+        McpToolAccess,
+        { provide: McpToolAudit, useValue: {} },
+        { provide: BoxStateWaiterService, useValue: {} },
+        { provide: CommerceBoxLimitService, useValue: {} },
         { provide: NetworkTools, useValue: { register: jest.fn() } },
         { provide: McpExecutionTools, useValue: { register: jest.fn() } },
         { provide: McpFileTools, useValue: { register: jest.fn() } },
@@ -69,7 +82,8 @@ describe('McpController', () => {
         },
         { provide: JwtStrategy, useValue: { issuer: ISSUER } },
         { provide: FailedAuthTrackerService, useValue: { incrementFailedAuth } },
-        { provide: OrganizationUserService, useValue: { exists } },
+        { provide: OrganizationUserService, useValue: { findOne: findMembership } },
+        { provide: OrganizationService, useValue: { findOne: jest.fn().mockResolvedValue({ id: MEMBER_ORG }) } },
         {
           provide: BoxService,
           useValue: {
@@ -109,7 +123,7 @@ describe('McpController', () => {
   })
 
   beforeEach(() => {
-    exists.mockClear()
+    findMembership.mockClear()
     findAllDeprecated.mockClear()
     incrementFailedAuth.mockClear()
   })
@@ -169,7 +183,16 @@ describe('McpController', () => {
     expect(body.result.resultType).toBe('complete')
     expect(typeof body.result.ttlMs).toBe('number')
     expect(typeof body.result.cacheScope).toBe('string')
-    expect(body.result.tools.map((tool: { name: string }) => tool.name)).toEqual(['list_boxes', 'get_config'])
+    expect(body.result.tools.map((tool: { name: string }) => tool.name)).toEqual([
+      'list_boxes',
+      'get_box',
+      'box_exists',
+      'create_box',
+      'delete_box',
+      'start_box',
+      'stop_box',
+      'get_config',
+    ])
     expect(body.result.tools[0].inputSchema.required).toEqual(['organization_id'])
     expect(body.result.tools[0].annotations.readOnlyHint).toBe(true)
     expect(body.result.tools[0].annotations.destructiveHint).toBe(false)
@@ -233,7 +256,7 @@ describe('McpController', () => {
     expect(body.result.isError).toBe(true)
     expect(body.result.content[0].text).toBe('Organization not found or not accessible')
     expect(body.result).not.toHaveProperty('structuredContent')
-    expect(exists).toHaveBeenCalledWith(FOREIGN_ORG, CALLER.userId)
+    expect(findMembership).toHaveBeenCalledWith(FOREIGN_ORG, CALLER.userId)
     expect(findAllDeprecated).not.toHaveBeenCalled()
   })
 
@@ -241,7 +264,7 @@ describe('McpController', () => {
     const body = await (await callListBoxes('not-a-uuid')).json()
 
     expect(body.error ?? body.result.isError).toBeTruthy()
-    expect(exists).not.toHaveBeenCalled()
+    expect(findMembership).not.toHaveBeenCalled()
   })
 
   it('rejects unknown tool arguments before any lookup', async () => {
@@ -252,8 +275,39 @@ describe('McpController', () => {
     const body = await response.json()
 
     expect(body.error ?? body.result.isError).toBeTruthy()
-    expect(exists).not.toHaveBeenCalled()
+    expect(findMembership).not.toHaveBeenCalled()
     expect(findAllDeprecated).not.toHaveBeenCalled()
+  })
+
+  it('does not list boxes when cancelled during membership admission', async () => {
+    let admit!: (membership: { role: string; assignedRoles: [] }) => void
+    const membership = new Promise<{ role: string; assignedRoles: [] }>((resolve) => {
+      admit = resolve
+    })
+    findMembership.mockReturnValueOnce(membership)
+    const registrations = jest.spyOn(McpServer.prototype, 'registerTool')
+    const server = app.get(McpServerFactory).create(CALLER as AuthContext)
+    try {
+      const registration = registrations.mock.calls.find(([name]) => name === 'list_boxes')
+      if (!registration) throw new Error('list_boxes was not registered')
+      const invoke = registration[2] as (
+        args: Record<string, unknown>,
+        context: ServerContext,
+      ) => Promise<CallToolResult>
+      const controller = new AbortController()
+      const pending = invoke({ organization_id: MEMBER_ORG }, {
+        mcpReq: { signal: controller.signal },
+      } as ServerContext)
+      expect(findMembership).toHaveBeenCalledWith(MEMBER_ORG, CALLER.userId)
+      controller.abort()
+      admit({ role: 'member', assignedRoles: [] })
+      const result = await pending
+      expect(findAllDeprecated).not.toHaveBeenCalled()
+      expect(result.isError).toBe(true)
+    } finally {
+      registrations.mockRestore()
+      await server.close()
+    }
   })
 
   it('rejects a legacy initialize handshake with the supported versions', async () => {
