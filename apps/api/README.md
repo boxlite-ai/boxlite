@@ -175,6 +175,12 @@ not an exactly-once outbox. Run the pre-deploy migration before upgrading the AP
 the API before dropping the column. Already in-flight UNKNOWN/CREATING operations from before
 the upgrade have no marker and cannot be reliably backfilled as starts.
 
+The API CI job sets `BOXLITE_TEST_POSTGRES_URL` to its PostgreSQL service so the start-intent
+migration's up/down and existing-row defaults are exercised. Set this variable to a disposable
+local PostgreSQL database when running `make coverage:api`; without it, that integration spec
+is skipped. Caller-attribution tests cover JWT and API-key administrators and both proxied
+exec/upload error categories without changing authentication policy.
+
 Box events go through `src/box/utils/box-business-event.util.ts`: the request and the outcome are
 recorded in different places, so one call cannot cover both. A proxied call that fails with an
 HTTP status records `http_<status>`; a client that disconnects first records `client_closed`.
