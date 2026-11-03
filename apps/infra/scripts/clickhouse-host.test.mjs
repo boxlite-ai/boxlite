@@ -60,10 +60,7 @@ test('installs AWS CLI v2 without relying on Ubuntu awscli packaging', () => {
 
   assert.doesNotMatch(script, /apt-get install[^\n]*\bawscli\b/)
   assert.match(script, /apt-get install -y docker\.io curl unzip/)
-  assert.match(
-    script,
-    /curl --fail --location --retry 5 --retry-all-errors --connect-timeout 10 --max-time 300/,
-  )
+  assert.match(script, /curl --fail --location --retry 5 --retry-all-errors --connect-timeout 10 --max-time 300/)
   assert.match(script, /https:\/\/awscli\.amazonaws\.com\/awscli-exe-linux-x86_64\.zip/)
   assert.doesNotMatch(script, /if ! command -v aws/)
   assert.match(script, /\/usr\/local\/bin\/aws --version 2>&1 \| grep -q '\^aws-cli\/2\\\.'/)
@@ -116,7 +113,7 @@ test('encodes deterministic user data within the EC2 limit', () => {
 
 test('rejects user data over the EC2 decoded-byte limit', () => {
   const oversizedVolumeId = Array.from({ length: 2_048 }, (_, index) =>
-    createHash('sha256').update(String(index)).digest('hex')
+    createHash('sha256').update(String(index)).digest('hex'),
   ).join('')
 
   assert.throws(
@@ -131,8 +128,10 @@ test('loads the schema after SST relocates the module under .sst/platform', asyn
   const bundledModule = join(platformDirectory, 'clickhouse-host.ts')
   mkdirSync(platformDirectory, { recursive: true })
   copyFileSync(new URL('../mdeploy/stack/clickhouse-host.ts', import.meta.url), bundledModule)
-  mkdirSync(join(directory, 'shared'))
-  copyFileSync(new URL('../shared/clickhouse-retention.ts', import.meta.url), join(directory, 'shared/clickhouse-retention.ts'))
+  copyFileSync(
+    new URL('../mdeploy/stack/clickhouse-retention.ts', import.meta.url),
+    join(platformDirectory, 'clickhouse-retention.ts'),
+  )
 
   const relocated = await import(pathToFileURL(bundledModule).href)
 

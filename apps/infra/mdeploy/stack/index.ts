@@ -28,7 +28,7 @@ import type { Cache, CacheProvider } from './cache.ts'
 import { CACHE_PASSWORD_VARIABLE, cacheEnvironment } from './cache.ts'
 import type { ClickHouse, ClickHouseMode, ClickHouseProvider } from './clickhouse.ts'
 import { CLICKHOUSE_PASSWORD_VARIABLE, clickHouseEnvironment } from './clickhouse.ts'
-import { DEFAULT_CLICKHOUSE_RETENTION_HOURS } from '../../shared/clickhouse-retention.ts'
+import { DEFAULT_CLICKHOUSE_RETENTION_HOURS } from './clickhouse-retention.ts'
 import type { Cluster, ClusterProvider, WorkloadHost } from './cluster.ts'
 import type { Collector, CollectorProvider } from './collector.ts'
 import { COLLECTOR_API_KEY_STORE_KEY, COLLECTOR_API_KEY_VARIABLE } from './collector.ts'
@@ -59,7 +59,6 @@ import type { RunnerAssignment, RunnerProvider, RunnerSlot, Runners } from './ru
 import { API_RUNNER_TOKEN_VARIABLE } from './runners.ts'
 import type { Storage, StorageProvider } from './storage.ts'
 import type { DeployConfig } from '../src/config.ts'
-
 
 /**
  * The containerised workloads the cluster places. The runner is a machine and

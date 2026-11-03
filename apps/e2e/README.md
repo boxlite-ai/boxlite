@@ -29,6 +29,9 @@ Product acceptance cases use the REST-mode runtime built by `conftest.py::rt`.
 `test_network_harness.py` separately checks probe failures and framing without
 creating a box; those checks are not counted as product E2E evidence.
 
+The Node tunnel driver waits for every created box's removal before closing its runtime.
+A failed removal fails the case after the other removals settle; the runtime closes even when cleanup fails.
+
 `cases/test_path_verification.py` is the meta-test: it spawns one box, runs
 one exec, and asserts that **both** `:3000` (API) and `:8080` (runner)
 received the corresponding HTTP requests by tailing `/var/log/boxlite-api.log`
