@@ -293,6 +293,7 @@ test('invalid maps and deployment-owned keys fail before rendering boot or polic
     'OTEL_LOGGING_ENABLED',
     'OTEL_TRACING_ENABLED',
     'BOXLITE_KERNEL_PATH',
+    'PATH',
     'BOXLITE_RUNNER_ENV',
   ]) {
     invalid.push(JSON.stringify({ [key]: 'override' }))
