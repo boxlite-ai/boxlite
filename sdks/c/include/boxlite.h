@@ -778,6 +778,15 @@ typedef void (*CBoxVolumeRemoveCb)(CBoxliteError*, void*);
 extern "C" {
 #endif // __cplusplus
 
+// Require nested virtualization for this box (RC): nonzero enables, zero disables.
+// The local runtime must explicitly enable nested-virtualization, including on
+// restart. Host support is checked at boot. Null returns InvalidArgument.
+//
+// # Safety
+// `opts` must be null or a live, exclusively accessible advanced-options handle.
+enum BoxliteErrorCode boxlite_advanced_options_set_nested_virtualization(CAdvancedBoxOptions *opts,
+                                                                         int enabled);
+
 // Allocate a `CAdvancedBoxOptions` initialized to `AdvancedBoxOptions::default()`
 // (secure-by-default security profile, mount isolation off, no health check).
 //
@@ -1784,6 +1793,16 @@ enum BoxliteErrorCode boxlite_runtime_new(const char *home_dir,
                                           int image_registries_count,
                                           CBoxliteRuntime **out_runtime,
                                           CBoxliteError *out_error);
+
+// Create a local runtime with an explicit comma-separated RC feature allowlist
+// (for example, "nested-virtualization"). Null enables none; unknown tokens fail.
+// Does not read BOXLITE_EXPERIMENTAL. Ownership matches boxlite_runtime_new.
+enum BoxliteErrorCode boxlite_runtime_new_experimental(const char *home_dir,
+                                                       const struct BoxliteImageRegistry *image_registries,
+                                                       int image_registries_count,
+                                                       const char *features,
+                                                       CBoxliteRuntime **out_runtime,
+                                                       CBoxliteError *out_error);
 
 enum BoxliteErrorCode boxlite_runtime_images(CBoxliteRuntime *runtime,
                                              CBoxliteImageHandle **out_handle,

@@ -138,6 +138,12 @@ impl RuntimeBuilder {
     pub fn build(self) -> BoxliteResult<BoxliteRuntime> {
         BoxliteRuntime::new_with_experimental_features(self.options, self.features)
     }
+
+    /// Construct without host validation for tests that never start a VM.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn build_for_test(self) -> BoxliteResult<BoxliteRuntime> {
+        BoxliteRuntime::new_for_test_with_features(self.options, self.features)
+    }
 }
 
 #[cfg(test)]

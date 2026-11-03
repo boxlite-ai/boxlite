@@ -28,6 +28,19 @@ type ContainerCapabilities struct {
 	Drop []string
 }
 
+// SetNestedVirtualization requires nested virtualization for this box (RC).
+// The local runtime must enable "nested-virtualization" with
+// WithExperimentalFeatures, including on restart. Host support is checked at boot.
+func (a *AdvancedBoxOptions) SetNestedVirtualization(enabled bool) error {
+	if a == nil || a.handle == nil {
+		return fmt.Errorf("boxlite: advanced options handle is closed")
+	}
+	if C.boxlite_advanced_options_set_nested_virtualization(a.handle, boolToCInt(enabled)) != C.Ok {
+		return fmt.Errorf("boxlite: failed to set nested virtualization")
+	}
+	return nil
+}
+
 // AdvancedBoxOptions is the Go-side handle for a `CAdvancedBoxOptions`.
 // Construct via `NewAdvancedBoxOptions`; release via `Close` once it has
 // been attached to a box (or you no longer need it).

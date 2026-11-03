@@ -58,6 +58,7 @@ type Config struct {
 	InitializeDaemonTelemetry          bool          `envconfig:"INITIALIZE_DAEMON_TELEMETRY" default:"true"`
 	BuildEngine                        string        `envconfig:"BUILD_ENGINE" default:"buildkit" validate:"oneof=buildkit legacy"`
 	BoxliteHomeDir                     string        `envconfig:"BOXLITE_HOME_DIR"`
+	ExperimentalFeatures               string        `envconfig:"BOXLITE_EXPERIMENTAL"`
 	InsecureRegistries                 string        `envconfig:"INSECURE_REGISTRIES"`
 	RegistryProxyHost                  string        `envconfig:"REGISTRY_PROXY_HOST"`
 	RegistryProxyUsername              string        `envconfig:"REGISTRY_PROXY_USERNAME"`

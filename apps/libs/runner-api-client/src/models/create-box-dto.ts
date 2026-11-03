@@ -49,6 +49,8 @@ export interface CreateBoxDTO {
     'regionId'?: string;
     'registry'?: RegistryDTO;
     'runAsUser'?: string;
+    /** Request nested virtualization, subject to Runner authorization. */
+    'nestedVirtualization'?: boolean;
     'secrets'?: Array<DtoSecretDTO>;
     'skipStart'?: boolean;
     'storageQuota'?: number;
