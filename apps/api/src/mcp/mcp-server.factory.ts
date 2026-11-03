@@ -10,6 +10,7 @@ import { OrganizationUserService } from '../organization/services/organization-u
 import { boxToBoxResponse } from '../boxlite-rest/mappers/box-to-box.mapper'
 import type { AuthContext } from '../common/interfaces/auth-context.interface'
 import { listBoxesInputSchema, listBoxesOutputSchema } from './list-boxes.schema'
+import { VolumeTools } from './volume-tools'
 
 /** The `authInfo.extra` key the controller stores the authenticated caller under. */
 export const MCP_CALLER_KEY = 'boxliteCaller'
@@ -32,6 +33,7 @@ export class McpServerFactory {
   constructor(
     private readonly boxService: BoxService,
     private readonly organizationUserService: OrganizationUserService,
+    private readonly volumeTools: VolumeTools,
   ) {}
 
   /** The `createMcpHandler` factory. */
@@ -49,6 +51,7 @@ export class McpServerFactory {
       },
       ({ organization_id }) => this.listBoxes(caller, organization_id),
     )
+    this.volumeTools.register(server, caller)
     return server
   }
 

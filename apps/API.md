@@ -751,11 +751,31 @@ as an unknown path does.
 </details>
 
 <details>
-<summary><b>Tools</b> · 1 tool</summary>
+<summary><b>Tools</b> · Box listing and managed volumes</summary>
 
-| Tool         | Arguments                | What it does                                                             |
-| ------------ | ------------------------ | ------------------------------------------------------------------------ |
-| `list_boxes` | `organization_id` (UUID) | Lists the organization's boxes, mapped as `GET /api/v1/boxes` maps them. |
+| Tool            | Arguments                                        | What it does                                                                            |
+| --------------- | ------------------------------------------------ | --------------------------------------------------------------------------------------- |
+| `list_boxes`    | `organization_id` (UUID)                         | Lists the organization's boxes, mapped as `GET /api/v1/boxes` maps them.                |
+| `list_volumes`  | `organization_id`                                | Lists managed volume summaries using `READ_VOLUMES`.                                    |
+| `get_volume`    | `organization_id`, `volume_id`                   | Returns one owned volume using `READ_VOLUMES`.                                          |
+| `create_volume` | `organization_id`, optional `name`               | Uses `WRITE_VOLUMES`, validates the REST DTO, and waits up to 30 seconds for readiness. |
+| `delete_volume` | `organization_id`, `volume_id`, optional `force` | Uses `DELETE_VOLUMES` and checks ownership before requesting deletion.                  |
+
+New tools require actual membership even for administrators, then apply the
+existing organization resource-permission policy. Managed volume identifiers are
+UUIDs; a foreign resource and a missing resource receive sanitized errors.
+`force: true` accepts an already absent volume without a mutation. Deletion
+returns `{ "accepted": true }`; background storage deletion may still be pending.
+Creation and deletion create an audit record before effects, with actor and
+resource identifiers only. Audit admission failures prevent mutation; outcome
+update failures do not turn completed effects into retryable failures.
+New tools check request cancellation after membership and audit admission and
+before business work. A cancellation never rolls back an effect already started.
+
+New inputs and structured outputs are strict typed objects, with the same JSON
+in the text reply. Unexpected errors never echo backend messages or request
+payloads. The MCP HTTP boundary applies the existing authenticated rate limiter.
+Resource permissions are enforced; business OAuth scopes remain unimplemented.
 
 The tool checks that the caller belongs to the organization — the membership
 check the box list route applies, without its system-admin bypass. An
