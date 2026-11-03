@@ -269,6 +269,69 @@ def stop_host():
     save_pids({})
 
 
+def _argv(pid):
+    try:
+        raw = Path(f"/proc/{pid}/cmdline").read_bytes()
+    except OSError:
+        return []
+    return [part.decode("utf-8", "replace") for part in raw.split(b"\0") if part]
+
+
+def owned_process(argv, home=RUNTIME_HOME):
+    """Return True for a bwrap/shim process belonging to this checkout."""
+    if not argv:
+        return False
+    if f"{home}/boxes/" not in "\0".join(argv):
+        return False
+    return Path(argv[0]).name in ("bwrap", "boxlite-shim")
+
+
+def box_processes():
+    """PIDs of bwrap/boxlite-shim processes under this checkout's runtime home."""
+    pids = []
+    for entry in Path("/proc").iterdir():
+        if entry.name.isdigit():
+            pid = int(entry.name)
+            if owned_process(_argv(pid)):
+                pids.append(pid)
+    return pids
+
+
+def _signal_owned(pid, sig):
+    """Signal a process, and its group only when it leads one."""
+    try:
+        if os.getpgid(pid) == pid:
+            os.killpg(pid, sig)
+        else:
+            os.kill(pid, sig)
+    except ProcessLookupError:
+        pass
+
+
+def stop_orphaned_boxes(grace=8.0):
+    """Kill bwrap/boxlite-shim pairs left behind by an earlier runner.
+
+    The jailer starts every shim with setsid(), so signalling the runner's
+    process group never reaches it. Terminate the shim's own pid/group, then
+    escalate to SIGKILL and return whatever is still alive.
+    """
+    pids = box_processes()
+    if not pids:
+        return []
+    print(f"[e2e] stopping {len(pids)} leftover box process(es)", flush=True)
+    for pid in pids:
+        _signal_owned(pid, signal.SIGTERM)
+    deadline = time.monotonic() + grace
+    while time.monotonic() < deadline and box_processes():
+        time.sleep(0.1)
+    for pid in box_processes():
+        _signal_owned(pid, signal.SIGKILL)
+    deadline = time.monotonic() + 2
+    while time.monotonic() < deadline and box_processes():
+        time.sleep(0.05)
+    return box_processes()
+
+
 def start(env):
     stop_host()
     start_process(
@@ -357,7 +420,12 @@ def up(env):
 def down(env):
     write_files()
     stop_host()
+    stop_orphaned_boxes()
     compose(["down"], env)
+    leftover = stop_orphaned_boxes()
+    if leftover:
+        raise Failure("leftover box processes after teardown: "
+                      + ", ".join(str(pid) for pid in leftover))
 
 
 def doctor(env):
@@ -398,6 +466,7 @@ def status(env):
         else:
             print(f"{name}: stopped")
             raise Failure(f"{name} is not running")
+    print(f"box processes: {len(box_processes())} running")
 
 
 def main(argv=None):

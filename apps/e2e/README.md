@@ -48,6 +48,8 @@ make test:e2e FILTER=exec_working_dir
 make test:e2e:down
 ```
 
+`make test:e2e:down` also terminates `bwrap`/`boxlite-shim` processes left in this checkout's runtime home by an interrupted run, and fails if any survive. The jailer starts every shim with `setsid()`, so signalling the runner's process group never reaches them.
+
 Nix is optional: install the same tools with the distro and run the same commands. Host prerequisites remain Docker with Compose v2, `/dev/kvm`, and (for volumes) `/dev/fuse`, `mount-s3` and `user_allow_other` in `/etc/fuse.conf`. The devshell includes `docker-compose`; Ubuntu can use `docker-compose-v2`. The bootstrap instructions below are the legacy Ubuntu system-service path and are no longer used by `make test:e2e:setup`.
 
 ## Prereqs

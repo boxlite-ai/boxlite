@@ -25,5 +25,14 @@ class LocalE2ETest(unittest.TestCase):
         self.assertEqual(env["BOXLITE_HOME"], str(local.STATE / "client-home"))
 
 
+    def test_owned_process_is_scoped_to_this_checkout(self):
+        home = str(local.RUNTIME_HOME)
+        self.assertTrue(local.owned_process([f"{home}/boxes/abc/bin/boxlite-shim"]))
+        self.assertTrue(local.owned_process(["/usr/bin/bwrap", f"{home}/boxes/abc/tmp"]))
+        self.assertFalse(local.owned_process(["/tmp/elsewhere/boxes/abc/bin/boxlite-shim"]))
+        self.assertFalse(local.owned_process([f"{home}/boxes/abc/bin/python3"]))
+        self.assertFalse(local.owned_process([]))
+
+
 if __name__ == "__main__":
     unittest.main()
