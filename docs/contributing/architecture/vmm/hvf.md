@@ -14,7 +14,7 @@ flowchart TB
     thread0["Host thread T0"]
     thread1["Host thread T1"]
     disk["Virtual disk device"]
-    worker["Disk I/O worker"]
+    worker["Virtio workers"]
     backing["Host allocation<br/>512 MiB"]
     hvf["HVF API<br/>Hypervisor.framework"]
   end
@@ -61,7 +61,7 @@ sequenceDiagram
   box VMM · one macOS process
     participant coordinator as VM coordinator
     participant disk as Virtual disk
-    participant worker as I/O worker
+    participant worker as Virtio workers
   end
   box Host · macOS APIs
     participant hvf as Hypervisor.framework
@@ -87,7 +87,7 @@ sequenceDiagram
   %% edge:setup_disk
   coordinator->>disk: Configure registers<br/>and interrupt line
   %% edge:setup_worker
-  disk->>worker: Start disk worker
+  disk->>worker: Add the disk to the virtio workers
   Note over coordinator,guest_ram: One allocation, two address spaces · guest RAM is not a second copy
 ```
 
@@ -156,14 +156,14 @@ sequenceDiagram
   thread0->>thread0: HVF backend decodes<br/>address, size and value<br/>into MmioWrite
 ```
 
-### 2.4 The VMM resumes Linux while the worker reads the disk
+### 2.4 The VMM resumes Linux while the workers read the disk
 
 ```mermaid
 sequenceDiagram
   box VMM · device emulation and host I/O
     participant thread0 as Thread T0
     participant disk as Virtual disk
-    participant worker as I/O worker
+    participant worker as Virtio workers
   end
   box Host · macOS API and storage
     participant hvf as Hypervisor.framework
@@ -175,13 +175,13 @@ sequenceDiagram
   %% edge:read_dispatch
   thread0->>disk: Bus dispatches<br/>MmioWrite
   %% edge:read_wake
-  disk->>worker: Signal queue event
+  disk->>worker: Kick the queue
   par Guest execution
     %% edge:io_advance
     thread0->>hvf: Complete the MMIO write: advance PC by 4
     %% edge:io_resume
     thread0->>hvf: hv_vcpu_run: Linux continues
-  and Device worker
+  and Virtio workers
     %% edge:io_dequeue
     worker->>guest_ram: Read request through the host mapping
     %% edge:io_read
@@ -199,7 +199,7 @@ sequenceDiagram
 ```mermaid
 sequenceDiagram
   box VMM · completion
-    participant worker as I/O worker
+    participant worker as Virtio workers
   end
   box Host · macOS API and interrupt controller
     participant hvf as Hypervisor.framework
@@ -208,7 +208,7 @@ sequenceDiagram
   box VM · interrupt handler
     participant kernel as Linux kernel<br/>and disk driver
   end
-  Note over worker,hvf: Continue after the worker publishes completion (2.4)<br/>Guest re-entry may still be pending
+  Note over worker,hvf: Continue after the workers publish completion (2.4)<br/>Guest re-entry may still be pending
   %% edge:io_signal
   worker->>hvf: VMM interrupt path calls hv_gic_set_spi
   %% edge:io_pending
@@ -227,7 +227,7 @@ sequenceDiagram
     participant guest_ram as Guest RAM
     participant program as Application
   end
-  Note over kernel,program: The host worker has filled the shared buffers<br/>Linux now completes the read inside the guest
+  Note over kernel,program: The virtio workers have filled the shared buffers<br/>Linux now completes the read inside the guest
   %% edge:io_consume
   kernel->>guest_ram: Read completion<br/>and file bytes
   %% edge:io_return
@@ -267,7 +267,7 @@ sequenceDiagram
 sequenceDiagram
   box VMM · lifecycle and device work
     participant coordinator as VM coordinator
-    participant worker as I/O worker
+    participant worker as Virtio workers
   end
   box Host · macOS API
     participant hvf as Hypervisor.framework
@@ -277,7 +277,7 @@ sequenceDiagram
   end
   Note over coordinator,guest_ram: Both vCPU threads have ended · the guest can no longer execute
   %% edge:stop_worker
-  coordinator->>worker: Stop and join worker
+  coordinator->>worker: Shut down the workers and join the thread
   %% edge:stop_worker_done
   worker-->>coordinator: Worker ended<br/>no more RAM accesses
   %% edge:stop_unmap

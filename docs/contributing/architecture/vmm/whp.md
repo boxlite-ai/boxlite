@@ -11,7 +11,7 @@ only reserves its module.
 flowchart TB
   subgraph vmm["VMM · one Windows process"]
     disk["Virtual disk"]
-    worker["Disk worker"]
+    worker["Virtio workers"]
     backing["Host allocation"]
     ioapic["IOAPIC"]
     coordinator["Coordinator"]
@@ -92,7 +92,7 @@ sequenceDiagram
     participant pic as PIC
     participant pit as PIT timer
     participant disk as Virtual disk
-    participant worker as I/O worker
+    participant worker as Virtio workers
   end
   %% edge:whp_4_e1
   coordinator->>ioapic: Create device IRQ routing
@@ -103,7 +103,7 @@ sequenceDiagram
   %% edge:whp_4_e4
   coordinator->>disk: Configure registers and device interrupt line
   %% edge:whp_4_e5
-  disk->>worker: Start disk worker
+  disk->>worker: Add the disk to the virtio workers
   Note over coordinator,worker: WHP supplies local APICs, while these chipset devices run in the VMM<br/>M10 chooses the crate that implements IOAPIC, PIC and PIT
 ```
 
@@ -199,14 +199,14 @@ sequenceDiagram
   thread0->>thread0: WHP emulator decodes<br/>instruction bytes and<br/>guest address<br/>into MmioWrite
 ```
 
-### 2.6 Resume Linux while the worker reads the disk
+### 2.6 Resume Linux while the workers read the disk
 
 ```mermaid
 sequenceDiagram
   box VMM · device emulation and host I/O
     participant thread0 as Thread T0
     participant disk as Virtual disk
-    participant worker as I/O worker
+    participant worker as Virtio workers
   end
   box Host · Windows API and storage
     participant host_api as WHP
@@ -218,13 +218,13 @@ sequenceDiagram
   %% edge:whp_8_e1
   thread0->>disk: Bus dispatches<br/>MmioWrite
   %% edge:whp_8_e2
-  disk->>worker: Signal queue event
+  disk->>worker: Kick the queue
   par Guest execution
   %% edge:whp_8_e3
     thread0->>thread0: WHP emulator completes<br/>the write and advances RIP
   %% edge:whp_8_e4
     thread0->>host_api: WHvRunVirtualProcessor: Linux continues
-  and Device worker
+  and Virtio workers
   %% edge:whp_8_e5
     worker->>guest_ram: Read request through the host mapping
   %% edge:whp_8_e6
@@ -242,7 +242,7 @@ sequenceDiagram
 ```mermaid
 sequenceDiagram
   box VMM · device completion and IRQ routing
-    participant worker as I/O worker
+    participant worker as Virtio workers
     participant ioapic as IOAPIC
   end
   box Host · Windows API and per-vCPU interrupts
@@ -252,7 +252,7 @@ sequenceDiagram
   box VM · guest interrupt handler
     participant kernel as Linux kernel
   end
-  Note over worker,host_api: Continue once the worker publishes completion (2.6)<br/>Guest re-entry may still be pending
+  Note over worker,host_api: Continue once the workers publish completion (2.6)<br/>Guest re-entry may still be pending
   %% edge:whp_9_e1
   worker->>ioapic: Pulse the disk's<br/>edge-triggered line
   %% edge:whp_9_e2
@@ -273,7 +273,7 @@ sequenceDiagram
     participant guest_ram as Guest RAM
     participant program as Application
   end
-  Note over kernel,program: The host worker has filled the shared buffers<br/>Linux now completes the read inside the guest
+  Note over kernel,program: The virtio workers have filled the shared buffers<br/>Linux now completes the read inside the guest
   %% edge:whp_10_e1
   kernel->>guest_ram: Read completion<br/>and file bytes
   %% edge:whp_10_e2
@@ -341,7 +341,7 @@ sequenceDiagram
 sequenceDiagram
   box VMM · lifecycle and remaining resources
     participant coordinator as VM coordinator
-    participant worker as I/O worker
+    participant worker as Virtio workers
     participant backing as Host allocation
   end
   box Host · Windows API
