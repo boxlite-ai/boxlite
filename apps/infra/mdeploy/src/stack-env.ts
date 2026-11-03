@@ -20,6 +20,7 @@
  * there would read whatever that shell happened to hold.
  */
 
+import { renderRunnerEnvironment } from '../stack/runner-environment.ts'
 import { apiEnvironmentFrom } from './api-environment.ts'
 import { clickHouseRetentionHours } from '../stack/clickhouse-retention.ts'
 import {
@@ -285,6 +286,11 @@ const channels = ({
   const proxy = split(PROXY_GROUP)
   const collector = split(OTEL_GROUP)
   const runner = split(RUNNER_GROUP)
+  renderRunnerEnvironment(runner.values.BOXLITE_RUNNER_ENV, [
+    ...Object.keys(runner.values),
+    ...Object.keys(runner.addresses),
+    ...Object.keys(runner.addresses).map((name) => `${name}_ARN`),
+  ])
   return {
     apiEnvironment: api.environment,
     apiSecrets: api.secrets,

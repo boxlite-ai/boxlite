@@ -6,6 +6,7 @@ PHONY_TARGETS += test\:apps\:infra-local
 PHONY_TARGETS += test\:apps\:proxy test\:apps\:dashboard
 PHONY_TARGETS += test\:apps\:mdeploy test\:e2e\:drivers
 PHONY_TARGETS += _local-registry
+PHONY_TARGETS += test\:apps\:infra\:mdeploy test\:apps\:infra\:mstage
 
 # Mirrors GitHub Actions strategy.fail-fast. Default false: aggregator
 # targets run every sub-suite even if an earlier one fails, then exit
@@ -672,6 +673,14 @@ test\:apps\:infra-config: _ensure-apps-deps _ensure-infra-deps
 	@echo "🧪 Installing and type-checking the SST deployment config..."
 	@cd apps/infra && IAM_PERMISSIONS_BOUNDARY_STAGE=ci npm run sst -- install --stage ci
 	@cd apps/infra && npm run typecheck
+
+test\:apps\:infra\:mdeploy: _ensure-infra-deps
+	@cd apps/infra && npm run --silent typecheck:mdeploy
+	@cd apps/infra && npm exec -- tsx --conditions=development --test --test-concurrency=1 mdeploy/test/*.test.ts
+
+test\:apps\:infra\:mstage: _ensure-infra-deps
+	@cd apps/infra && npm run --silent typecheck:mstage
+	@cd apps/infra && npm exec -- tsx --conditions=development --test --test-concurrency=1 mstage/test/*.test.ts
 
 test\:apps\:api: _ensure-apps-deps
 	@echo "🧪 Running API unit tests..."
