@@ -782,6 +782,22 @@ audit admission. Results expose only public credential metadata; passwords,
 secret-store references, and raw backend errors never appear in replies or audits.
 The service retains duplicate-login and in-use-credential checks.
 
+Box lifecycle tools add `create_box`, `get_box`, `box_exists`, `delete_box`,
+`start_box`, and `stop_box`. Box IDs or exact names may contain spaces and
+Unicode. Reads require membership and organization ownership; there is no
+`READ_BOXES` permission. Creation, start, and stop require `WRITE_BOXES`;
+deletion requires `DELETE_BOXES`. Managed mounts additionally require both
+`READ_VOLUMES` and `WRITE_VOLUMES`, and service-side ownership validation.
+
+Creation reuses the REST DTO, mapper, Commerce admission, and `Context.user()`.
+Only hosted create fields are exposed: `advanced`, `rootfs_path`, `ports`,
+`tty`, and ignored `detach` are absent and rejected. Environment and secret
+values never enter audit metadata. Create/start retain the 30-second startup
+wait, including the existing already-starting branch. Stop returns the current
+state, which may be `stopping`; deletion returns `{ "accepted": true }` while
+destruction continues asynchronously. Missing and foreign Boxes both produce
+`{ "exists": false }` from `box_exists`; backend failures remain tool errors.
+
 New tools require actual membership even for administrators, then apply the
 existing organization resource-permission policy. Managed volume identifiers are
 UUIDs; a foreign resource and a missing resource receive sanitized errors.
