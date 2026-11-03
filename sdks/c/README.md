@@ -573,7 +573,8 @@ the `CExecutionInfoList*` and must free it with
 `boxlite_free_execution_info_list`. Each record has `execution_id` (canonical
 guest ID), `argv`/`argc`, `started_at` (Unix milliseconds), `tty`, and
 `is_main_session`. The main process is included; completed executions disappear.
-Listing never boots a box; a stopped/unstarted box returns an empty list.
+Listing never boots a box; a stopped/unstarted box returns an empty list, and
+a paused box returns an invalid-state error.
 
 `boxlite_execution_id(execution)` returns an owned ID string; release it with
 `boxlite_free_string`. `boxlite_box_get_execution(box, id, &execution, &error)`

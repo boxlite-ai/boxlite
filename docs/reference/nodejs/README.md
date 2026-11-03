@@ -1072,7 +1072,8 @@ interface ExecutionInfo {
 ```
 
 The list excludes completed sessions. A created or stopped box returns `[]`
-without starting. Use `getExecution(executionId)` for independent control, or
+without starting; a paused box returns an invalid-state error. Use
+`getExecution(executionId)` for independent control, or
 `attach(executionId)` for streams; an existing output reader is a conflict.
 See the [recovery guide](../../guides/ai-agent-integration.md#recovering-control-after-losing-the-handle)
 for retention semantics.

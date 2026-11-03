@@ -804,7 +804,8 @@ local-only host listener that accepts repeated connections.
 read-only guest query. The callback owns its `CExecutionInfoList`; release it
 with `boxlite_free_execution_info_list`. Each entry contains `execution_id`,
 `argv`/`argc`, Unix-millisecond `started_at`, `tty`,
-and `is_main_session`. Created/stopped boxes return an empty list without starting.
+and `is_main_session`. Created/stopped boxes return an empty list without starting;
+a paused box returns an invalid-state error.
 
 Use a returned ID with `boxlite_box_get_execution` for control-only access,
 or `boxlite_box_attach_execution` for stdin/output. Both return an owned

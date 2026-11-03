@@ -463,9 +463,10 @@ boxlite exec -e DEBUG=1 -w /app mybox -- pytest tests/
 **Synopsis:** `boxlite top [OPTIONS] BOX`
 
 List live guest executions, including the box's init process. The list is read
-from the guest and does not start a configured or stopped box. Execution IDs
-are canonical guest IDs and can be used by `attach`, `kill`, and `signal`,
-including from a different CLI process.
+from the guest and does not start a configured or stopped box. A paused box is
+rejected with an invalid-state error. Execution IDs are canonical guest IDs and
+can be used by `attach`, `kill`, and `signal`, including from a different CLI
+process.
 
 | Flag | Short | Default | Description |
 |------|-------|---------|-------------|

@@ -335,8 +335,9 @@ It returns `ExecutionInfo[]` from the guest's live inventory, including the
 main process: `executionId` (canonical guest ID), `argv`, `startedAt`
 (Unix milliseconds), `tty`, and `isMainSession`. Completed processes disappear; this
 is not execution history. Listing does not attach or consume output, and never
-boots a stopped box. A stopped/unstarted native box returns an empty list;
-an uncreated `SimpleBox` also returns an empty list without creating its box.
+boots a stopped box. A stopped/unstarted native box returns an empty list; a
+paused box returns an invalid-state error. An uncreated `SimpleBox` also
+returns an empty list without creating its box.
 
 Use `await box.getExecution(executionId)` for control-only access while another
 client owns output, or `await box.attach(executionId, false)` to recover streams

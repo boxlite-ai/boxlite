@@ -413,7 +413,8 @@ guest's live process inventory, including the main command (`is_main_session=Tru
 Each record has `execution_id` (canonical guest ID), `argv`, `started_at`
 (Unix milliseconds), `tty`, and `is_main_session`. Completed commands are not history
 entries and disappear from this list. Listing never starts a box: a stopped
-or not-yet-started native box returns an empty list.
+or not-yet-started native box returns an empty list, and a paused box returns
+an invalid-state error.
 
 `SimpleBox.list_executions()` exposes the same async operation without creating
 a box. `SyncBox.list_executions()` and `SyncSimpleBox.list_executions()` return

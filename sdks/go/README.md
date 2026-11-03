@@ -77,7 +77,8 @@ func main() {
 including its main process (`IsMainSession`). Fields are `ExecutionID` (canonical guest
 ID), `Argv`, `StartedAt` (Unix milliseconds), `TTY`, and `IsMainSession`.
 Completed executions disappear. Listing never boots the box; a stopped or
-not-yet-started box returns an empty slice.
+not-yet-started box returns an empty slice, and a paused box returns an
+invalid-state error.
 
 `box.GetExecution(ctx, id)` recovers a control-only `*Execution`: `ID()`,
 `Wait`, `Kill`, `Signal`, and `ResizeTTY` work without claiming stdout/stderr.

@@ -354,7 +354,8 @@ and driven through `attach()` for streams or `get_execution()` for a control
 handle. Call `kill()`, `signal()`, `resize_tty()`, or `wait()` on that handle.
 Listing reads the guest's own registry, never boots or resumes a box, and lists
 only unfinished sessions: a finished execution's exit status is read through
-`wait()`. See [`ExecutionInfo`](#boxliteexecutioninfo) for the fields.
+`wait()`. A created or stopped box returns an empty list; a paused box returns
+an invalid-state error. See [`ExecutionInfo`](#boxliteexecutioninfo) for the fields.
 
 `attach()` with no argument follows the box's main command — the container
 init, which is what `run IMAGE COMMAND` starts. Pass `execution_id` to

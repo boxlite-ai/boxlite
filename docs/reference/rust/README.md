@@ -377,7 +377,8 @@ as soon as their guest process exits, including the short interval before
 registry cleanup. Existing wait status/output may remain available in bounded
 guest retention after a session disappears from the list. Calling it on a
 created or stopped box returns an empty vector and does not start or restart
-the box. `ExecutionInfo` carries the canonical guest execution ID,
+the box. A paused box returns an invalid-state error instead of claiming its
+sessions disappeared. `ExecutionInfo` carries the canonical guest execution ID,
 argv, Unix-millisecond spawn time, PTY flag, and `is_main_session`.
 
 `get_execution(id)` verifies the ID against this box's guest inventory and
