@@ -43,7 +43,7 @@
     "label": "Rust",
     "group": "sdk",
     "icon": "rust",
-    "install": "cargo add boxlite --features rest\ncargo add tokio --features macros,rt-multi-thread\ncargo add futures",
+    "install": "cargo add 'boxlite@*' --features rest\ncargo add tokio --features macros,rt-multi-thread\ncargo add futures",
     "run": "BOXLITE_API_KEY=$KEY cargo run",
     "codeLanguage": "rust",
     "setupLabel": "Run in your local terminal",

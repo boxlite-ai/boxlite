@@ -23,7 +23,7 @@ Official release metadata confirms that C assets contain the tag in their name. 
 
 Use a quickstart-scoped code typography class: existing mono font, 14px, 24px line height, normal tracking, no ligatures, preserved whitespace and horizontal scrolling. Increase bounded code height to 420px and group file/terminal titles with copy actions above code. Improve prose to 14px and step headings to 16px using the existing theme. Apply consistent typography to inline and dialog paths, including lazy fallbacks.
 
-Remove pins from pip/npm/go/cargo installs and the browser recipe's Playwright installation. Python adds `--upgrade` because [pip otherwise preserves existing installations](https://pip.pypa.io/en/stable/cli/pip_install/#overview). C downloads an available platform archive rather than assuming the latest release is complete. CLI and REST have no dependency pins to remove.
+Remove pins from pip/npm/go/cargo installs and the browser recipe's Playwright installation. Python adds `--upgrade` because [pip otherwise preserves existing installations](https://pip.pypa.io/en/stable/cli/pip_install/#overview). Rust uses `cargo add 'boxlite@*'` to replace existing version constraints without a numeric pin ([Cargo dependency syntax](https://doc.rust-lang.org/cargo/reference/specifying-dependencies.html#wildcard-requirements)); its preview supplies `TunnelOptions::default()` for the current SDK API. C downloads an available platform archive rather than assuming the latest release is complete. CLI and REST have no dependency pins to remove.
 
 ## Validation
 

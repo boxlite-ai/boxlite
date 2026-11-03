@@ -12,7 +12,9 @@ instead of wrapping commands; longer sections show up to 420px before scrolling.
 File and local-terminal headers keep copy actions separate from the code.
 
 Installation commands use the package manager's current release without fixed
-version numbers. Python uses `--upgrade` to update existing installations. The
+version numbers. Python uses `--upgrade` to update existing installations. Rust
+uses a quoted wildcard requirement to replace older dependency constraints,
+and the example supplies the current tunnel API's `TunnelOptions`. The
 C SDK command requires curl, jq and tar, and selects the first stable release
 with a matching platform archive among GitHub's 100 most recent releases. A
 new release without its C archive is skipped; no match stops the download.
