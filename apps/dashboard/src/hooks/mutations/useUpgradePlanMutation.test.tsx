@@ -10,9 +10,13 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { queryKeys } from '../queries/queryKeys'
 import { useUpgradePlanMutation } from './useUpgradePlanMutation'
+import { useDowngradePlanMutation } from './useDowngradePlanMutation'
+import { useKeepPlanMutation } from './useKeepPlanMutation'
 
 const mocks = vi.hoisted(() => ({
   upgradePlan: vi.fn(),
+  downgradePlan: vi.fn(),
+  withdrawPendingPlan: vi.fn(),
 }))
 
 vi.mock('@/hooks/useApi', () => ({
@@ -20,9 +24,13 @@ vi.mock('@/hooks/useApi', () => ({
 }))
 
 let upgradePlan: ReturnType<typeof useUpgradePlanMutation> | undefined
+let downgradePlan: ReturnType<typeof useDowngradePlanMutation> | undefined
+let keepPlan: ReturnType<typeof useKeepPlanMutation> | undefined
 
 function UpgradePlanProbe() {
   upgradePlan = useUpgradePlanMutation()
+  downgradePlan = useDowngradePlanMutation()
+  keepPlan = useKeepPlanMutation()
   return null
 }
 
@@ -66,6 +74,33 @@ describe('useUpgradePlanMutation', () => {
     document.body.innerHTML = ''
     vi.clearAllMocks()
   })
+
+  it.each(['upgrade', 'downgrade', 'keep'] as const)(
+    'refreshes the changed organization limits after %s without waiting for that read',
+    async (action) => {
+      invalidateQueries.mockImplementation(({ queryKey }) =>
+        JSON.stringify(queryKey) === JSON.stringify(queryKeys.organization.detail('org-1'))
+          ? new Promise(() => undefined)
+          : Promise.resolve(),
+      )
+      let completed = false
+      await act(async () => {
+        const params = { organizationId: 'org-1', planId: 'pro' }
+        const result =
+          action === 'upgrade'
+            ? upgradePlan?.mutateAsync(params)
+            : action === 'downgrade'
+              ? downgradePlan?.mutateAsync(params)
+              : keepPlan?.mutateAsync({ ...params, kind: 'cancel' })
+        void result?.then(() => {
+          completed = true
+        })
+        await new Promise((resolve) => setTimeout(resolve, 0))
+      })
+      expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: queryKeys.organization.detail('org-1') })
+      expect(completed).toBe(true)
+    },
+  )
 
   it('refreshes the plan block and the wallet after an upgrade applies in place', async () => {
     await act(async () => {

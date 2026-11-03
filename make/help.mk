@@ -82,6 +82,7 @@ help:
 	@echo "    make test:all:c             - Run C SDK full suite (unit + integration)"
 	@echo "    make test:apps              - Run the apps workspace test matrix"
 	@echo "    make test:apps:api          - Run API unit tests (FILTER=<pattern>)"
+	@echo "    make test:apps:dashboard    - Run Dashboard tests (FILTER=<pattern>)"
 	@echo "    make test:apps:proxy        - Run proxy unit tests (FILTER=<pattern>)"
 	@echo "    make fmt:apps:proxy         - Format the proxy Go service"
 	@echo "    make test:skill:boxlite-diagrams - Run diagram skill validator tests"

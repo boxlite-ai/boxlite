@@ -11,6 +11,7 @@ import { RoutePath } from '@/enums/RoutePath'
 import { useCreateBoxMutation } from '@/hooks/mutations/useCreateBoxMutation'
 import { useConfig } from '@/hooks/useConfig'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
+import { useOrganizationBoxLimitsQuery } from '@/hooks/queries/useOrganizationBoxLimitsQuery'
 import { getBoxRouteId } from '@/lib/box-identity'
 import { boxHourlyPrice, formatPriceCents, type BoxSpec } from '@/lib/box-price'
 import { handleApiError } from '@/lib/error-handling'
@@ -169,6 +170,11 @@ function ResourceField({
         {label} <span className="text-muted-foreground">({unit})</span>
       </div>
       <Stepper value={value} onChange={onChange} max={max} onExceed={onExceed} />
+      {max != null && (
+        <span className="font-mono text-meta text-muted-foreground">
+          Max {max} {unit}
+        </span>
+      )}
     </div>
   )
 }
@@ -587,12 +593,20 @@ export const CreateBoxDialog = ({
   const setOpen = onOpenChange ?? setInternalOpen
 
   const { selectedOrganization } = useSelectedOrganization()
+  const {
+    data: confirmedLimits,
+    isError: limitsError,
+    refetch: refreshLimits,
+  } = useOrganizationBoxLimitsQuery(selectedOrganization, { enabled: open, poll: open })
+  useEffect(() => {
+    if (open && selectedOrganization?.id) void refreshLimits({ cancelRefetch: false })
+  }, [open, selectedOrganization?.id, refreshLimits])
   const createBoxMutation = useCreateBoxMutation()
   const { data: availableVolumes = [] } = useVolumesQuery()
   const { data: catalogImages = [] } = useImagesQuery()
 
-  // Per-box ceilings for the current org (backend rejects a create above these).
-  const limits = resolvePerBoxLimits(selectedOrganization)
+  // Only confirmed effective limits constrain input; the server validates unknown limits on creation.
+  const limits = resolvePerBoxLimits(confirmedLimits)
 
   // A DEFAULT value can exceed a stricter per-org cap (e.g. DEFAULTS.disk=10
   // vs an org's maxDiskPerBox=3), which would otherwise send an over-limit
@@ -648,22 +662,28 @@ export const CreateBoxDialog = ({
   }, [open, initialCpu, initialMemory, initialDisk, prefillVolume, prefillImage])
 
   useEffect(() => {
-    if (!open) return
+    if (!open || !confirmedLimits) return
 
-    const nextCpu = limits.cpu == null ? cpu : Math.min(cpu, limits.cpu)
-    const nextMemory = limits.memory == null ? memory : Math.min(memory, limits.memory)
-    const nextDisk = limits.disk == null ? disk : Math.min(disk, limits.disk)
+    // Preserve preset intent when a higher grant arrives; Custom retains entered values.
+    const preset = SIZE_PRESETS.find((p) => p.id === sizePreset)
+    const requestedCpu = preset?.cpu ?? cpu
+    const requestedMemory = preset?.memory ?? memory
+    const requestedDisk = preset?.disk ?? disk
+    const nextCpu = limits.cpu == null ? requestedCpu : Math.min(requestedCpu, limits.cpu)
+    const nextMemory = limits.memory == null ? requestedMemory : Math.min(requestedMemory, limits.memory)
+    const nextDisk = limits.disk == null ? requestedDisk : Math.min(requestedDisk, limits.disk)
 
     if (nextCpu !== cpu) setCpu(nextCpu)
     if (nextMemory !== memory) setMemory(nextMemory)
     if (nextDisk !== disk) setDisk(nextDisk)
 
     setCapped((current) => ({
-      cpu: limits.cpu != null && (nextCpu !== cpu || (current.cpu && nextCpu >= limits.cpu)),
-      memory: limits.memory != null && (nextMemory !== memory || (current.memory && nextMemory >= limits.memory)),
-      disk: limits.disk != null && (nextDisk !== disk || (current.disk && nextDisk >= limits.disk)),
+      cpu: limits.cpu != null && (nextCpu !== requestedCpu || (current.cpu && nextCpu >= limits.cpu)),
+      memory:
+        limits.memory != null && (nextMemory !== requestedMemory || (current.memory && nextMemory >= limits.memory)),
+      disk: limits.disk != null && (nextDisk !== requestedDisk || (current.disk && nextDisk >= limits.disk)),
     }))
-  }, [open, cpu, memory, disk, limits.cpu, limits.memory, limits.disk])
+  }, [open, confirmedLimits, sizePreset, cpu, memory, disk, limits.cpu, limits.memory, limits.disk])
 
   // What the catalog already holds, as references that can be typed back in.
   // A curated image goes in under its short name — that is what the API
@@ -842,7 +862,7 @@ export const CreateBoxDialog = ({
               content was ever these three numbers. What a box can do and what
               it costs is not an advanced concern; it gets the same visibility
               as Lifecycle and Volumes below. */}
-          <div className="flex flex-col gap-[13px] border-t border-border pt-5">
+          <fieldset aria-label="Box resources" className="flex min-w-0 flex-col gap-[13px] border-t border-border pt-5">
             {/* Matches the sibling `▸ Lifecycle` / `▸ Volumes` treatment rather
                 than `ascii.SectionTitle`: inside this dialog the established
                 label scale is 10px/1.2px (Name, Image), and SectionTitle's
@@ -852,6 +872,15 @@ export const CreateBoxDialog = ({
               <span style={{ color: BRAND }}>▸</span> Size
             </div>
 
+            {(limitsError || !confirmedLimits) && (
+              <p role="status" className="font-mono text-meta text-muted-foreground">
+                {limitsError
+                  ? confirmedLimits
+                    ? 'Could not refresh limits. Showing last known limits.'
+                    : 'Could not load limits. Limits are checked when you create.'
+                  : 'Limits are checked when you create.'}
+              </p>
+            )}
             <div role="group" aria-label="Size" className="grid grid-cols-2 gap-[6px] sm:grid-cols-4">
               {SIZE_PRESETS.map((p) => (
                 <AsciiChip
@@ -916,7 +945,7 @@ export const CreateBoxDialog = ({
                 />
               </div>
             )}
-          </div>
+          </fieldset>
 
           {/* Volumes and lifecycle are real controls, but they are the third
               and fourth decision on a screen whose promise is "a box for your

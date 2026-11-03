@@ -140,6 +140,34 @@ function confirmButton() {
 }
 
 describe('the image list', () => {
+  it.each([
+    { label: 'empty', images: [] },
+    { label: 'organization-only', images: [ORG_IMAGE] },
+    { label: 'system and organization', images: [BUILT_IN_IMAGE, ORG_IMAGE] },
+  ])('lists only API images for an $label catalog', async ({ images }) => {
+    state.images = images
+    await renderCatalog()
+
+    expect(document.querySelectorAll('button[title^="New box from "]')).toHaveLength(images.length)
+    const search = document.querySelector<HTMLInputElement>('input[placeholder="Filter images…"]')
+    expect(search?.nextElementSibling?.textContent).toBe(String(images.length))
+    for (const template of BOX_TEMPLATES) {
+      expect(buttonWithTitle(`New box from ${template.name}`)).toBeUndefined()
+    }
+  })
+
+  it('does not find a Quickstart-only template when filtering images', async () => {
+    await renderCatalog()
+
+    const search = document.querySelector<HTMLInputElement>('input[placeholder="Filter images…"]')
+    if (!search) throw new Error('filter field missing')
+    await act(async () => typeInto(search, BOX_TEMPLATES[0].image))
+
+    expect(document.querySelectorAll('button[title^="New box from "]')).toHaveLength(0)
+    expect(document.body.textContent).toContain('No image matches')
+    expect(search.nextElementSibling?.textContent).toBe('0')
+  })
+
   it('shows the image count against the limit, and the bytes the versions declare', async () => {
     await renderCatalog()
 
@@ -166,6 +194,7 @@ describe('the image list', () => {
     ]
     await renderCatalog()
 
+    expect(document.querySelectorAll('button[title^="New box from "]')).toHaveLength(2)
     expect(buttonWithTitle(`Remove ${name}`)).toBeDefined()
     await act(async () => buttonWithTitle(`Remove ${name}`)!.click())
     await act(async () => confirmButton()!.click())
@@ -218,6 +247,7 @@ describe('the image list', () => {
       expect.objectContaining({ description: 'usage unavailable' }),
     )
     expect(document.body.textContent).not.toContain('of 20 images')
+    expect(document.querySelectorAll('button[title^="New box from "]')).toHaveLength(0)
   })
 })
 

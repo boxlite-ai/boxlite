@@ -3,6 +3,15 @@
 The web console at `app.boxlite.ai`. A Vite + React app, built and tested
 through Nx as the `dashboard` project.
 
+## Quickstart catalog
+
+Coder Universal is no longer offered as a quickstart template. Its preset
+requested 30 GB of disk, which exceeds a 10 GB per-box disk ceiling. Removing
+the preset avoids offering a configuration those organizations cannot create;
+its disk request has not been reduced without runtime validation. Existing
+boxes and custom-image support are unaffected. Old `?template=coder` links use
+the picker's existing unknown-template fallback and select Python.
+
 ## Region names
 
 The console resolves shared-region names through `GET /api/shared-regions`.
@@ -153,14 +162,25 @@ needs one, start a box from it, and it is listed once the box runs. The first
 is the only step a reader may have to take beforehand, so it links to Private
 registries; the second opens the box create.
 
-Every image row and every built-in image offers "New box", the same create
-dialog the Boxes page uses with the image filled in, so starting from an image
-is one click wherever the image is shown. The SDK call for the same start sits
-behind "Show the SDK call" for readers who will paste it rather than click.
+Images lists only rows returned by the image catalog API: the organization's
+registered images and the operator-configured system images. Quickstart's
+public templates are recommendations and do not add rows, search results, or
+counts to Images. An empty or failed catalog response must not insert templates
+as a fallback. A template image appears here once the API returns it as an
+organization or system image.
 
-Built-in images sit apart from the table. They are operator configuration with
-no versions, size or recorded starts, so a row for them would be a line of
-dashes, and a "never" under last started would be false.
+For members allowed to create boxes, every row offers "New box". If its reference
+matches a Quickstart template, the action opens that template with its startup
+configuration; otherwise it opens the shared create dialog with the image filled
+in. Matching a template does not change an image's ownership or removability.
+System images remain non-removable and do not count against the organization's
+image limit; usage comes from the separate usage API, not the displayed row count.
+
+A new organization with the default system-image configuration sees `base`,
+`python`, and `node`, with zero organization image slots used. The operator may
+configure additional system images, so three is not a fixed UI limit. See the
+[expected screenshots](../../docs/contributing/investigations/2026-11-03-images-catalog-membership.md#screenshots)
+for a new organization and an organization with registered images.
 
 ## A state the API records once is told in the past tense
 
@@ -288,3 +308,26 @@ meantime, the console falls back to their personal organization.
 The welcome flow saves organization intent before confirming signup credit delivery.
 [Onboarding](ONBOARDING.md) describes the dedicated Quickstart page, public image templates,
 server-backed prompt drafts, and deployment/verification requirements.
+
+## Box limits refresh without interrupting creation
+
+Selecting an organization preloads its effective per-Box limits through the
+organization detail API. The create dialog shares that query, refreshes on
+opening and every 10 seconds while open in the foreground, and shows updated
+Custom maxima without resetting the form. A named preset is recalculated from
+its original size when limits change; Custom only reduces values that exceed a
+confirmed limit. Subscription mutations invalidate the affected organization's
+detail query without waiting for that refresh.
+
+The query overrides the global five-minute freshness and previous-query
+placeholder defaults, uses a 10-second request timeout, and passes cancellation
+to Axios. Its key includes the organization ID and stored quota tuple so a new
+organization or administrator quota edit cannot inherit unrelated limits.
+Queries never replace membership DTOs or their per-user default flags.
+
+Creation remains available while limits load. Until the first result, selected
+resources reach server validation unchanged. Later refreshes keep confirmed
+values; failures show a quiet inline notice. Normal background refreshes show
+no toast or loading lock. The API's 30-second grant cache still applies, followed
+by up to one polling interval and request latency before an open dialog updates.
+See [Cloud sandbox sizes](../../docs/guides/resource-limits.md#cloud-sandbox-sizes).

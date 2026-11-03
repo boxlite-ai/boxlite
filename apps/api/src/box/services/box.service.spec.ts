@@ -65,6 +65,7 @@ function makeService() {
     noop, // imageRegistrarService
     noop, // imagePreparationService
     passThroughPullFailures(), // imagePullFailureService
+    {} as any, // organizationBoxLimits (unused by these lifecycle tests)
   )
   return { service, boxRepository, eventEmitter, organizationService }
 }
@@ -204,6 +205,7 @@ function makeNetworkTunnelService() {
     noop, // imageRegistrarService
     noop, // imagePreparationService
     passThroughPullFailures(), // imagePullFailureService
+    {} as any, // organizationBoxLimits (unused by these lifecycle tests)
   )
   jest.spyOn(service, 'findOneByIdOrName').mockResolvedValue({
     id: 'MixedCaseBox',
@@ -374,6 +376,7 @@ describe('BoxService inbound defaults', () => {
       getValidatedOrDefaultRegion: jest.fn().mockResolvedValue({ id: 'region-1' }),
       getValidatedOrDefaultClass: jest.fn().mockReturnValue('small'),
       organizationService: { assertOrganizationIsNotSuspended: jest.fn() },
+      organizationBoxLimits: { resolve: jest.fn(async (organization) => organization) },
       redis: { exists: jest.fn().mockResolvedValue(1) },
       logger: { log: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() },
       warmPoolService,
