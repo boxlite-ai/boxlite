@@ -19,6 +19,7 @@ import { McpController } from './mcp.controller'
 import { McpMetadataController } from './mcp-metadata.controller'
 import { McpServerFactory } from './mcp-server.factory'
 import { VolumeTools } from './volume-tools'
+import { ImageTools } from './image-tools'
 import { AuthenticatedRateLimitGuard } from '../common/guards/authenticated-rate-limit.guard'
 
 const PROTOCOL = '2026-07-28'
@@ -49,6 +50,7 @@ describe('McpController', () => {
         McpServerFactory,
         McpAuthMetadata,
         { provide: VolumeTools, useValue: { register: jest.fn() } },
+        { provide: ImageTools, useValue: { register: jest.fn() } },
         {
           provide: TypedConfigService,
           useValue: { get: (key: string) => (key === 'mcp.resourceUrl' ? RESOURCE : undefined) },
