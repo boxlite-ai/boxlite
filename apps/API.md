@@ -773,6 +773,15 @@ duplicate aliases, and images still used by boxes. Alias and catalog deletion
 return `{ "completed": true }`; deleting catalog metadata does not erase image
 bytes from a registry or a Runner cache. All three catalog mutations are audited.
 
+Registry tools `list_registries`, `create_registry`, and `delete_registry` use
+`READ_REGISTRIES`, `WRITE_REGISTRIES`, and `DELETE_REGISTRIES`, respectively.
+Creation accepts `registry_host`, optional `repository_prefix`, `username`, and
+write-only `password`, using the REST DTO and configured upstream allowlist.
+Deletion accepts a UUID `registry_id` and verifies organization ownership before
+audit admission. Results expose only public credential metadata; passwords,
+secret-store references, and raw backend errors never appear in replies or audits.
+The service retains duplicate-login and in-use-credential checks.
+
 New tools require actual membership even for administrators, then apply the
 existing organization resource-permission policy. Managed volume identifiers are
 UUIDs; a foreign resource and a missing resource receive sanitized errors.
