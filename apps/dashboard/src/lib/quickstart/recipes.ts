@@ -55,7 +55,7 @@ shutil.rmtree(root)`),
         '-lc',
         String.raw`set -eu
 python3 -m venv /tmp/browser-env
-/tmp/browser-env/bin/pip install 'playwright==1.51.1'
+/tmp/browser-env/bin/pip install playwright
 /tmp/browser-env/bin/playwright install --with-deps chromium
 /tmp/browser-env/bin/python - <<'PY'
 from playwright.sync_api import sync_playwright

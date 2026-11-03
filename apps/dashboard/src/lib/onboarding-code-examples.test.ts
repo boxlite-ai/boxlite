@@ -6,6 +6,24 @@ import {
 } from './onboarding-code-examples'
 
 describe('onboarding code examples', () => {
+  it('offers installation commands without fixed dependency versions', () => {
+    const examples = getOnboardingCodeExamples()
+    expect(examples.python.install).toBe('pip install --upgrade boxlite')
+    expect(examples.typescript.install).toBe('npm install @boxlite-ai/boxlite tsx')
+    expect(examples.go.install).toContain('go get github.com/boxlite-ai/boxlite/sdks/go\n')
+    expect(examples.rust.install).toContain("cargo add 'boxlite@*' --features rest\ncargo update -p boxlite")
+    for (const example of Object.values(examples)) {
+      expect(example.install).not.toMatch(/(?:==|@=?v?|VERSION=v)\d+\.\d+/)
+    }
+  })
+
+  it('renders the current Rust tunnel options contract', () => {
+    const { example } = getOnboardingCodeExamples().rust
+    expect(example).toContain('TunnelOptions')
+    expect(example).toContain('.tunnel(target, TunnelOptions::default())')
+    expect(example).not.toContain('tunnel(target).await')
+  })
+
   it('includes SDK, CLI, and REST entrypoints', () => {
     const examples = getOnboardingCodeExamples()
 
