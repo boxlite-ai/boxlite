@@ -3,6 +3,18 @@
 The NestJS control-plane service. See the [apps hub](../README.md) for how it fits with the
 other services and [`API.md`](../API.md) for its interfaces.
 
+## Tests
+
+Use the API unit-test target to select files before their suites load:
+
+```sh
+make test:apps:api TEST_PATH=src/mcp FILTER=Mcp
+```
+
+`TEST_PATH` matches test file paths; `FILTER` selects test names within those files.
+A path pattern with no matching files fails rather than reporting an empty success.
+Without `TEST_PATH`, the target retains its existing API-suite selection.
+
 ## Admin Box image
 
 `GET /api/admin/boxes` and `GET /api/admin/boxes/{id}` include `image`, the stored
