@@ -85,6 +85,12 @@ consumers before producers; mixed-version traffic is not supported during activa
   evidence. Comma-separated `include=usage,activation` selects both. Omitting `include`
   reads neither section.
 
+Admin detail also returns the stored `suspended` boolean from the same organization
+lookup. This flag does not evaluate `suspendedUntil` or establish whether Boxes have
+stopped. The response property is optional and read-only in generated clients for
+older-server compatibility; an absent flag means unknown, never false. No schema
+migration or additional query is needed.
+
 `createdAt` is organization creation time, not user signup or first Box creation. `createdBy`
 is the stored creator association, independent of current membership. Account linking
 rewrites it to the primary user ID, so it is not an immutable historical identity.

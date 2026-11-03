@@ -10,6 +10,7 @@ Name | Type | Description | Notes
 **creator** | [**AdminOrganizationCreator**](AdminOrganizationCreator.md) | Current creator identity. | [default to undefined]
 **organizationId** | **string** |  | [default to undefined]
 **name** | **string** |  | [default to undefined]
+**suspended** | **boolean** | Stored organization suspension flag; does not evaluate suspendedUntil. Older servers may omit it. | [optional] [readonly] [default to undefined]
 **members** | [**AdminOrganizationMemberPage**](AdminOrganizationMemberPage.md) |  | [default to undefined]
 **boxes** | [**AdminOrganizationBoxPage**](AdminOrganizationBoxPage.md) |  | [default to undefined]
 **impact** | [**AdminOrganizationImpact**](AdminOrganizationImpact.md) |  | [default to undefined]
@@ -28,6 +29,7 @@ const instance: AdminOrganizationDetail = {
     creator,
     organizationId,
     name,
+    suspended,
     members,
     boxes,
     impact,
