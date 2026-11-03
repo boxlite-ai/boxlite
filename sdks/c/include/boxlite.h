@@ -1796,6 +1796,7 @@ enum BoxliteErrorCode boxlite_runtime_new(const char *home_dir,
 
 // Create a local runtime with an explicit comma-separated RC feature allowlist
 // (for example, "nested-virtualization"). Null enables none; unknown tokens fail.
+// Invalid UTF-8 returns InvalidArgument; unknown UTF-8 tokens return Config.
 // Does not read BOXLITE_EXPERIMENTAL. Ownership matches boxlite_runtime_new.
 enum BoxliteErrorCode boxlite_runtime_new_experimental(const char *home_dir,
                                                        const struct BoxliteImageRegistry *image_registries,

@@ -9,14 +9,24 @@ fn nested_virtualization_setter_updates_options_and_rejects_null() {
             boxlite_advanced_options_new(&mut advanced, &mut error),
             BoxliteErrorCode::Ok
         );
-        assert!(!(*advanced).options.nested_virtualization);
+        assert!(
+            !advanced
+                .as_ref()
+                .expect("successful construction returns a handle")
+                .options
+                .nested_virtualization
+        );
         for value in [1, 0, -1] {
             assert_eq!(
                 boxlite_advanced_options_set_nested_virtualization(advanced, value),
                 BoxliteErrorCode::Ok
             );
-            assert_eq!((*advanced).options.nested_virtualization, value != 0);
-            assert!(!(*advanced).options.privileged);
+            let options = &advanced
+                .as_ref()
+                .expect("the handle stays live until it is freed")
+                .options;
+            assert_eq!(options.nested_virtualization, value != 0);
+            assert!(!options.privileged);
         }
         boxlite_advanced_options_free(advanced);
         assert_eq!(
@@ -56,9 +66,14 @@ fn nested_virtualization_runtime_constructors_preserve_explicit_authorization() 
             assert_eq!(code, BoxliteErrorCode::Ok);
             let mut options = boxlite::BoxOptions::default();
             options.advanced.nested_virtualization = true;
-            let result = (*runtime)
-                .tokio_rt
-                .block_on((*runtime).runtime.create(options, None));
+            let result = {
+                let handle = runtime
+                    .as_ref()
+                    .expect("successful construction returns a runtime");
+                handle
+                    .tokio_rt
+                    .block_on(handle.runtime.create(options, None))
+            };
             if features == Some(c"nested-virtualization") {
                 assert!(result.is_ok(), "{:?}", result.err());
             } else {
@@ -125,5 +140,34 @@ fn nested_virtualization_runtime_rejects_invalid_features_before_initializing() 
             );
             boxlite_error_free(&mut error);
         }
+    }
+}
+
+#[test]
+fn nested_virtualization_runtime_rejects_invalid_utf8_as_invalid_argument() {
+    unsafe {
+        let invalid = [0xffu8, 0];
+        let mut runtime = ptr::null_mut();
+        let mut error = FFIError::default();
+        assert_eq!(
+            boxlite_runtime_new_experimental(
+                ptr::null(),
+                ptr::null(),
+                0,
+                invalid.as_ptr().cast(),
+                &mut runtime,
+                &mut error,
+            ),
+            BoxliteErrorCode::InvalidArgument
+        );
+        assert!(runtime.is_null());
+        assert!(!error.message.is_null());
+        assert!(
+            CStr::from_ptr(error.message)
+                .to_str()
+                .unwrap()
+                .contains("UTF-8")
+        );
+        boxlite_error_free(&mut error);
     }
 }

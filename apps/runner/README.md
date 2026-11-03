@@ -20,7 +20,7 @@ Set `BOXLITE_EXPERIMENTAL=nested-virtualization` on the **Runner process** to
 authorize this release-candidate capability. Each new box still defaults off;
 an internal Runner create payload opts in with `"nestedVirtualization":true`.
 The Runner forwards authorization and the per-box choice through the Go/C SDK.
-Unauthorized requests fail before volume mounts. Guest environment variables
+Unauthorized requests return HTTP 400 before volume mounts. Guest environment variables
 cannot authorize nesting, and enabling nesting does not grant guest privilege.
 
 Comma-separated features are validated at startup. Existing boxes and archive
@@ -32,6 +32,18 @@ Cloud stages deliver process settings through
 [`BOXLITE_RUNNER_ENV`](../infra/mdeploy/README.md#runner-process-environment).
 This Runner protocol support does not add a control-plane REST option. Upgrade
 Runners before enabling callers that send the field; older Runners ignore it.
+
+Startup uses one private configuration builder to preserve the operator's feature
+allowlist alongside registry, storage and logging settings. Its tests decode the
+process environment and pass the resulting settings through the real Go/C SDK;
+unknown features must fail native validation before host initialization.
+
+The Linux x86_64 Go CI job preserves full-suite coverage, grants KVM access, and
+then runs only `NestedVirtualization` tests with
+`BOXLITE_REQUIRE_NESTED_RUNTIME_TESTS=1`. In that qualification pass, an unavailable
+local runtime fails instead of skipping. Both atomic coverage profiles are merged
+before upload. This verifies metadata creation/replay and authorization, without
+booting a box or establishing nested guest execution.
 
 For the system-wide context (CDN, load balancers, where the runner fits in
 the request path), see [`apps/README.md`](../README.md).

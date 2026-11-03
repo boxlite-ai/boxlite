@@ -79,6 +79,9 @@ For a local runtime, pass `WithExperimentalFeatures("nested-virtualization")` to
 when creating the box. Check each returned error and close the advanced handle
 after creation. Both settings are required; the SDK does not read
 `BOXLITE_EXPERIMENTAL`. Keep the runtime feature enabled on subsequent restarts.
+Pass one feature token per argument, such as
+`WithExperimentalFeatures("custom-kernel", "nested-virtualization")`;
+commas or NUL inside an individual name are rejected before runtime initialization.
 Host support is checked when the box boots; REST runtimes reject this box option.
 
 ### Archive Export and Import
@@ -333,8 +336,17 @@ Build from source (requires Rust toolchain):
 make dev:go
 
 # Run tests
-cd sdks/go && go test -tags boxlite_dev -v ./...
+make test:unit:go
 ```
+
+Nested-virtualization argument tests always check malformed tokens before native
+host validation. Local-runtime tests normally skip `ErrUnsupported` when the host
+cannot use KVM or Hypervisor.framework. Set
+`BOXLITE_REQUIRE_NESTED_RUNTIME_TESTS=1` to make those constructor checks mandatory;
+the Linux x86_64 CI metadata pass uses this setting after granting KVM access.
+Host-independent SDK and Runner tests also pass options through Go/C to the native
+REST backend: nesting must fail before HTTP, while clearing the flag permits a
+loopback create request. These checks verify option forwarding without a VM.
 
 ## License
 

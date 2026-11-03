@@ -2,7 +2,12 @@ package boxlite
 
 import (
 	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -17,7 +22,7 @@ func TestNestedVirtualizationRequiresExplicitRuntimeFeature(t *testing.T) {
 			rt, err := NewRuntime(opts...)
 			if err != nil {
 				var runtimeErr *Error
-				if errors.As(err, &runtimeErr) && runtimeErr.Code == ErrUnsupported {
+				if errors.As(err, &runtimeErr) && runtimeErr.Code == ErrUnsupported && os.Getenv("BOXLITE_REQUIRE_NESTED_RUNTIME_TESTS") != "1" {
 					t.Skipf("host virtualization unavailable: %v", err)
 				}
 				t.Fatal(err)
@@ -61,6 +66,54 @@ func TestNestedVirtualizationSetterRejectsClosedHandles(t *testing.T) {
 	}
 }
 
+func TestNestedVirtualizationSetterReachesNativeRESTBoundary(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		if r.Method != http.MethodPost || r.URL.Path != "/v1/boxes" {
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		_, _ = io.WriteString(w, `{"box_id":"rest-box","name":"boundary","status":"configured","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z","pid":null,"image":"alpine:latest","cpus":1,"memory_mib":128}`)
+	}))
+	defer server.Close()
+	rt, err := NewRest(BoxliteRestOptions{URL: server.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rt.Close()
+	advanced, err := NewAdvancedBoxOptions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer advanced.Close()
+
+	for _, enabled := range []bool{true, false, true} {
+		if err := advanced.SetNestedVirtualization(enabled); err != nil {
+			t.Fatal(err)
+		}
+		before := requests.Load()
+		box, err := rt.Create(t.Context(), "alpine:latest", WithName("boundary"), WithAdvancedOptions(advanced))
+		if box != nil {
+			box.Close()
+		}
+		if enabled {
+			var runtimeErr *Error
+			if !errors.As(err, &runtimeErr) || runtimeErr.Code != ErrUnsupported || !strings.Contains(err.Error(), "nested virtualization") {
+				t.Fatalf("native REST validation must reject nesting: %v", err)
+			}
+			if requests.Load() != before {
+				t.Fatal("nesting must be rejected before HTTP")
+			}
+		} else if err != nil || box == nil || requests.Load() != before+1 {
+			t.Fatalf("disabling nesting must allow native REST creation: box=%v error=%v requests=%d", box, err, requests.Load()-before)
+		}
+	}
+}
+
 func TestNestedVirtualizationRuntimeRejectsInvalidFeatures(t *testing.T) {
 	for _, feature := range []string{"unknown", "nested-virtualization,", "nested-virtualization\x00"} {
 		rt, err := NewRuntime(WithHomeDir(t.TempDir()), WithExperimentalFeatures(feature))
@@ -86,4 +139,29 @@ func TestNestedVirtualizationFeatureOptionCopiesAndReplaces(t *testing.T) {
 	if len(cfg.experimentalFeatures) != 0 {
 		t.Fatal("an empty option must clear previously selected features")
 	}
+}
+
+func TestNestedVirtualizationRejectsCombinedFeatureName(t *testing.T) {
+	t.Run("invalid_tokens", func(t *testing.T) {
+		for _, feature := range []string{"custom-kernel,nested-virtualization", "nested-virtualization\x00"} {
+			rt, err := NewRuntime(WithHomeDir(t.TempDir()), WithExperimentalFeatures(feature))
+			if rt != nil {
+				rt.Close()
+			}
+			if err == nil || !strings.Contains(err.Error(), "single tokens") {
+				t.Fatalf("invalid feature %q must fail token validation before host initialization: %v", feature, err)
+			}
+		}
+	})
+	t.Run("valid_tokens", func(t *testing.T) {
+		rt, err := NewRuntime(WithHomeDir(t.TempDir()), WithExperimentalFeatures("custom-kernel", "nested-virtualization"))
+		if err != nil {
+			var runtimeErr *Error
+			if errors.As(err, &runtimeErr) && runtimeErr.Code == ErrUnsupported && os.Getenv("BOXLITE_REQUIRE_NESTED_RUNTIME_TESTS") != "1" {
+				t.Skipf("host virtualization unavailable: %v", err)
+			}
+			t.Fatalf("distinct valid feature names must remain supported: %v", err)
+		}
+		rt.Close()
+	})
 }

@@ -410,7 +410,7 @@ func (c *Client) Close() error {
 // Returns the box ID and runtime version.
 func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, string, error) {
 	if boxDto.NestedVirtualization && !c.nestedVirtualizationAllowed {
-		return "", "", fmt.Errorf("nested virtualization requires BOXLITE_EXPERIMENTAL=nested-virtualization on the Runner")
+		return "", "", errdefs.ErrInvalidArgument.WithMessage("nested virtualization requires BOXLITE_EXPERIMENTAL=nested-virtualization on the Runner")
 	}
 	// Before any side effect: a request without a policy must not leave
 	// volume mounts or a box behind.

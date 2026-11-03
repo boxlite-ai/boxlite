@@ -65,10 +65,12 @@ func NewRuntime(opts ...RuntimeOption) (*Runtime, error) {
 
 	var handle *C.CBoxliteRuntime
 	var cerr C.CBoxliteError
-	features := strings.Join(cfg.experimentalFeatures, ",")
-	if strings.IndexByte(features, 0) >= 0 {
-		return nil, fmt.Errorf("boxlite: experimental feature names cannot contain NUL")
+	for _, name := range cfg.experimentalFeatures {
+		if strings.ContainsAny(name, ",\x00") {
+			return nil, fmt.Errorf("boxlite: experimental feature names must be single tokens without commas or NUL")
+		}
 	}
+	features := strings.Join(cfg.experimentalFeatures, ",")
 	cFeatures := toCString(features)
 	defer C.free(unsafe.Pointer(cFeatures))
 	code := C.boxlite_runtime_new_experimental(

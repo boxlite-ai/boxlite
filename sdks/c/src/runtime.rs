@@ -116,6 +116,7 @@ pub unsafe extern "C" fn boxlite_runtime_new(
 
 /// Create a local runtime with an explicit comma-separated RC feature allowlist
 /// (for example, "nested-virtualization"). Null enables none; unknown tokens fail.
+/// Invalid UTF-8 returns InvalidArgument; unknown UTF-8 tokens return Config.
 /// Does not read BOXLITE_EXPERIMENTAL. Ownership matches boxlite_runtime_new.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_runtime_new_experimental(
@@ -226,7 +227,9 @@ unsafe fn runtime_new(
         let features = if features.is_null() {
             Ok(ExperimentalFeatures::default())
         } else {
-            c_str_to_string(features).and_then(|value| ExperimentalFeatures::parse(&value))
+            c_str_to_string(features)
+                .map_err(|_| BoxliteError::InvalidArgument("features must be valid UTF-8".into()))
+                .and_then(|value| ExperimentalFeatures::parse(&value))
         };
         let features = match features {
             Ok(features) => features,
