@@ -142,6 +142,9 @@ describe('BoxliteProxyController', () => {
 
     expect(boxService.updateLastActivityAt).not.toHaveBeenCalled()
     expect(autoResume.ensureReady).not.toHaveBeenCalled()
+    const proxyOptions = jest.mocked(createProxyMiddleware).mock.calls[0][0]
+    const pathRewrite = proxyOptions.pathRewrite as (path: string, req: unknown) => string
+    expect(pathRewrite('/api/v1/boxes/public-box/executions', {})).toBe('/v1/boxes/box-uuid/executions')
   })
 
   it('does not expose execution inventory outside the caller organization', async () => {
