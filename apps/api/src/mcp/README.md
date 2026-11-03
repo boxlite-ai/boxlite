@@ -65,3 +65,12 @@ Header/PAX/Parser conversion never reads or extracts files on the API host.
 Both tools require `WRITE_BOXES`, refresh activity and may auto-resume, matching REST.
 Guest paths at or under mounted filesystems remain unsupported by the underlying copy API.
 Runner ignores `overwrite` and `follow_symlinks`; these tools reject both arguments.
+
+## Box metrics
+
+`get_box_metrics` observes one organization's Box without refreshing activity or
+auto-resuming it. Membership access follows the REST metrics route.
+Results contain CPU, memory, execution and transfer counters, plus available network
+counters. Zero values remain zero; unavailable optional network counters remain absent.
+The tool omits Runner-only flat timing fields and does not advertise unimplemented
+`boot_timing` stages or runtime-wide metrics.

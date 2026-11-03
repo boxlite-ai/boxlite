@@ -18,6 +18,7 @@ import { NetworkTools } from './network-tools'
 import { registerConfigTool } from './config-tool'
 import { McpExecutionTools } from './execution-tools'
 import { McpFileTools } from './file-tools'
+import { McpMetricsTools } from './metrics-tools'
 
 /** The `authInfo.extra` key the controller stores the authenticated caller under. */
 export const MCP_CALLER_KEY = 'boxliteCaller'
@@ -47,6 +48,7 @@ export class McpServerFactory {
     private readonly networkTools: NetworkTools,
     private readonly executionTools: McpExecutionTools,
     private readonly fileTools: McpFileTools,
+    private readonly metricsTools: McpMetricsTools,
   ) {}
 
   /** The `createMcpHandler` factory. */
@@ -72,6 +74,7 @@ export class McpServerFactory {
     registerConfigTool(server)
     this.executionTools.register(server, caller)
     this.fileTools.register(server, caller)
+    this.metricsTools.register(server, caller)
     return server
   }
 
