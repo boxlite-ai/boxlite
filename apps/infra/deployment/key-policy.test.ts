@@ -55,15 +55,18 @@ function sourceFiles(directory: string): string[] {
 
 function keysReadFromSource() {
   const keys = new Set<string>()
-  for (const directory of SCANNED) {
-    for (const path of sourceFiles(directory)) {
-      // Comments stripped first. A doc comment writing `process.env.X` to explain a pattern is prose,
-      // and scanning it put a key named X in the allowlist — the repo already has liveText for exactly
-      // this distinction.
-      for (const match of liveText('script', readFileSync(path, 'utf8')).matchAll(ENV_READ)) {
-        const key = match.slice(1).find(Boolean)
-        if (key) keys.add(key)
-      }
+  const paths = [
+    ...SCANNED.flatMap(sourceFiles),
+    // The legacy deploy imports this configuration reader through mdeploy's package export.
+    join(INFRA_ROOT, 'mdeploy/stack/clickhouse-retention.ts'),
+  ]
+  for (const path of paths) {
+    // Comments stripped first. A doc comment writing `process.env.X` to explain a pattern is prose,
+    // and scanning it put a key named X in the allowlist — the repo already has liveText for exactly
+    // this distinction.
+    for (const match of liveText('script', readFileSync(path, 'utf8')).matchAll(ENV_READ)) {
+      const key = match.slice(1).find(Boolean)
+      if (key) keys.add(key)
     }
   }
   return keys
@@ -333,11 +336,14 @@ test('a value quoted across lines is refused, and the message says why it might 
   assert.deepEqual(parseDotenv(multiline), { STACK_DOMAIN: 'first\nsecond', RUNNERS: '1' }, 'dotenv does read it')
   assert.notDeepEqual(parseDotenv('KEY="first'), {}, 'an unterminated quote yields a key, which is why')
 
-  assert.throws(() => validateDotenvSyntax(multiline), (error: any) => {
-    assert.match(error.message, /line 2 is not an assignment/)
-    assert.match(error.message, /cannot contain a newline/)
-    return true
-  })
+  assert.throws(
+    () => validateDotenvSyntax(multiline),
+    (error: any) => {
+      assert.match(error.message, /line 2 is not an assignment/)
+      assert.match(error.message, /cannot contain a newline/)
+      return true
+    },
+  )
   assert.throws(() => serializeStageConfig({ STACK_DOMAIN: 'first\nsecond' }), /contains a newline/)
 })
 

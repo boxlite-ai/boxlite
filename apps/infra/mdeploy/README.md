@@ -103,6 +103,8 @@ and hour validation for both clouds. The legacy deployment path imports it throu
 This keeps one retention rule without a dependency from mdeploy back into its enclosing infra project.
 The lint configuration permits eager imports of this entrypoint, which has no dependencies,
 while keeping mdeploy's CLI entrypoints lazy.
+The legacy key-policy contract scans this exported configuration reader alongside the legacy source roots,
+so moving the helper preserves its check against the shared store's allowlist.
 
 Run `make test:apps:infra` from the repository root for tooling checks. A passing local test or
 preview is not live rollout proof; follow the [deployment verification](../docs/deployment.md#verify-the-result).
