@@ -616,7 +616,7 @@ test\:apps\:infra-config: _ensure-apps-deps _ensure-infra-deps
 
 test\:apps\:api: _ensure-apps-deps
 	@echo "🧪 Running API unit tests..."
-	@cd apps && yarn nx run api:test --runInBand $(if $(TEST_FILES),--testPathPatterns '$(TEST_FILES)',) $(if $(FILTER),--testNamePattern '$(FILTER)',)
+	@cd apps && yarn nx run api:test --runInBand $(if $(TEST_PATH),--testPathPatterns '$(TEST_PATH)' --passWithNoTests=false,$(if $(TEST_FILES),--testPathPatterns '$(TEST_FILES)',)) $(if $(FILTER),--testNamePattern '$(FILTER)',)
 
 test\:apps\:dashboard: _ensure-apps-deps
 	@cd apps && yarn nx run dashboard:test --run $(if $(FILTER),--testNamePattern '$(FILTER)',)
