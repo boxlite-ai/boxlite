@@ -55,7 +55,14 @@ service Guest {
   // compares it with what it recorded before a checkpoint pause to tell
   // whether it reconnected to the same running guest.
   rpc RunningState(RunningStateRequest) returns (RunningStateResponse);
+
+  // After checkpoint resume, retire captured output consumers and wait for
+  // their forwarding tasks to release their leases before allowing reattach.
+  rpc DetachCheckpointOutput(DetachCheckpointOutputRequest) returns (DetachCheckpointOutputResponse);
 }
+
+message DetachCheckpointOutputRequest {}
+message DetachCheckpointOutputResponse {}
 
 // In-memory SSH control; requires successful Guest.Init.
 service Ssh {

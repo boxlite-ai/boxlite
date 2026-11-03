@@ -38,6 +38,7 @@ fn dependencies(share: ShareDependency) -> CheckpointDependencies {
         version: 9,
         cpus: 1,
         memory_bytes: 4096,
+        network_device: false,
         boot_memory_mib: 0,
         max_memory_mib: 0,
         container_disk_bytes: 4096,

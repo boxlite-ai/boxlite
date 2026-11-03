@@ -68,6 +68,7 @@ impl GuestServer {
         &self,
         exec_id: &str,
     ) -> Result<mpsc::Receiver<Result<ExecOutput, Status>>, ExecutionError> {
+        let _handoff = self.output_handoff.read().await;
         info!(execution_id = %exec_id, "attach request");
         match self.execution_lookup(exec_id).await? {
             ExecutionLookup::Live(state) => match state.attach(exec_id).await {
@@ -782,6 +783,39 @@ mod container_id_path_tests {
     use boxlite_shared::errors::BoxliteError;
     use boxlite_shared::{exec_output, ExecStdin};
     use nix::unistd::{pipe, write, Pid};
+
+    #[tokio::test]
+    async fn cancelled_checkpoint_handoff_still_releases_the_consumer() {
+        use boxlite_shared::Guest as _;
+
+        let server = GuestServer::new(GuestLayout::new());
+        let (_stdin_peer, stdin) = pipe().unwrap();
+        let (stdout, _stdout_peer) = pipe().unwrap();
+        let handle = ExecHandle::new(Pid::from_raw(13_006), stdin, stdout, None).unwrap();
+        let state =
+            ExecutionState::new_for_test(handle, ExitSlot::settled_for_test(ExitStatus::Code(0)));
+        server
+            .registry
+            .register("handoff".into(), state.clone())
+            .await;
+        let mut old = server.attach_execution("handoff").await.unwrap();
+        let gate = server.output_handoff.read().await;
+        let mut request =
+            Box::pin(server.detach_checkpoint_output(tonic::Request::new(Default::default())));
+        assert!(futures::poll!(&mut request).is_pending());
+        drop(request);
+        assert!(state.has_active_reader());
+        drop(gate);
+
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_secs(1), old.recv())
+                .await
+                .expect("cancelled RPC must still finish handoff")
+                .is_none()
+        );
+        assert!(!state.has_active_reader());
+        let _new = server.attach_execution("handoff").await.unwrap();
+    }
 
     /// The retry gate must not re-spawn when the container is already running:
     /// `spawn_request` can fail after spawning (the PTY console handshake), and

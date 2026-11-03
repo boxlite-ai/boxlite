@@ -372,10 +372,19 @@ impl BoxImpl {
         self.settle("resume", outcome).await?;
         let reconnected = async {
             let live = self.ensure_booted().await?;
-            self.check_guest_identity(live.guest_session()).await
+            self.check_guest_identity(live.guest_session()).await?;
+            tokio::time::timeout(GUEST_STATE_TIMEOUT, async {
+                live.guest_session()
+                    .guest()
+                    .await?
+                    .detach_checkpoint_output()
+                    .await
+            })
+            .await
+            .map_err(|_| BoxliteError::Engine("checkpoint output handoff timed out".into()))?
         };
         if let Err(error) = reconnected.await {
-            tracing::error!(box_id = %self.config.id, %error, "Resumed guest failed its identity check; stopping it");
+            tracing::error!(box_id = %self.config.id, %error, "Resumed guest reconnection failed; stopping it");
             let stopped = self.stop().await;
             return Err(BoxliteError::Engine(format!(
                 "resume: {error}; {}",
@@ -820,6 +829,7 @@ mod tests {
         ));
 
         litebox.resume().await.unwrap();
+        assert!(fx.guest.called("Guest.DetachCheckpointOutput"));
         assert_eq!(fx.persisted(), BoxStatus::Running);
         assert_eq!(owner.calls(), ["pause(true)", "resume"]);
         assert!(is_process_alive(fx.pid));

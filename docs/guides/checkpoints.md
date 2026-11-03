@@ -369,34 +369,28 @@ Keep guest data inside the container disk for REST transfers. HTTP
 transfers require current v2 path metadata; re-export older checkpoints before
 uploading them. Local imports retain their existing compatibility.
 
-## Unresolved: restored command output cannot always be reattached
+## Reattaching command output after restore
 
-The SDK receives a command's stdout and stderr through the guest agent's Attach
-RPC. In the managed checkpoint acceptance case, the restored command remains
-alive, but its old output consumer still holds the exclusive reader lease. A new
-Attach returns `AlreadyExists: execution output is already attached`; the SDK
-then observes stdout EOF and cannot receive the restored command's output.
+Explicit checkpoint resume verifies the saved guest identity, then asks the guest
+agent to retire captured output consumers. The agent aborts and joins their
+forwarding tasks before acknowledging the handoff. Attach registration is
+serialized with that cleanup, which continues even if its RPC caller disconnects.
+The process, output buffers and pipe drainers remain alive. A new Attach can then
+read the restored command's output; a second active reader is still
+rejected.
 
-This issue is not fixed. The failing case has already completed capture/export,
-source VM and home deletion, archive import/replay, restored box creation,
-checkpoint deletion, and explicit resume. Diagnostics confirmed the original
-process identity and heap remained present; stdout EOF did not mean that the
-guest process had exited.
+The handoff retires pre-resume SDK and SSH output consumers. Reattach after resume;
+captured network connections are not promised to continue. The host bounds the
+handoff RPC and stops the VM if reconnection or handoff fails. Guests predating
+this RPC require a fresh checkpoint captured with a current guest agent.
 
-The latest diagnostic run correlated the old connection/response with the new
-Attach on the guest's monotonic clock. The new claim timed out after one second
-while the old connection had not reported EOF, error, response drop, forwarder
-closure, or lease release. This does not establish a safe takeover mechanism.
-The next investigation must establish a checkpoint-specific invalidation and
-completed handoff of the old consumer, while preserving rejection of a second
-Attach to a genuinely active reader. Increasing the timeout, adding sleeps or
-retries, or removing acceptance assertions is not a verified fix.
+Previously, the restored process and heap survived but an old Attach could retain
+its exclusive reader lease indefinitely. A new Attach returned `AlreadyExists`,
+and the SDK observed stdout EOF. Waiting one second for transport teardown did
+not prove the old reader had released its lease; resume now explicitly waits for
+forwarding-task destruction instead.
 
-Relevant paths are `src/guest/src/service/exec/{state,output}.rs`,
-`src/guest/src/service/server.rs`,
-`src/boxlite/src/portal/interfaces/exec.rs`, and the checkpoint resume lifecycle.
-Reproduce on Linux x86_64 with KVM, the real runtime, and working unprivileged
-bubblewrap namespaces:
+Reproduce and verify on Linux x86_64 with KVM and the real runtime:
 
 ```sh
 make test:checkpoint:acceptance \
@@ -405,8 +399,10 @@ make test:checkpoint:acceptance \
 
 The case retains its 300 MiB heap checks, actual resize to 512 MiB, explicit source
 stop before non-force removal, process identity checks, and cold-start assertions.
-The standalone continuation and independent REST KVM cases passed on an earlier
-build; they do not establish that this managed catalog case or the complete
-cross-SDK/cloud workflow passes. A separate runner box-ID export validation bug
-has been fixed and passed focused regressions, but its full cloud/pair workflow
-still needs independent verification. Live GCS IAM has not been validated.
+On 2026-11-03, the managed catalog case, standalone process-continuation case and
+independent-home REST case all passed on Linux x86_64/KVM with the rebuilt guest.
+For the implementation rationale and validation record, see
+[checkpoint output handoff](../contributing/investigations/checkpoint-output-handoff.md).
+
+This focused scenario does not validate the complete cross-SDK/cloud workflow or
+live GCS IAM.

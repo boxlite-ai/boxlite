@@ -200,6 +200,26 @@ impl ExecutionRegistry {
         }
     }
 
+    /// Retire captured consumers while preserving executions and output buffers.
+    pub(crate) async fn detach_checkpoint_output(&self) {
+        let states: Vec<_> = self
+            .inner
+            .lock()
+            .await
+            .entries
+            .values()
+            .filter_map(|entry| match entry {
+                ExecutionEntry::Live(state) | ExecutionEntry::Retained { state, .. } => {
+                    Some(state.clone())
+                }
+                _ => None,
+            })
+            .collect();
+        for state in states {
+            state.detach_checkpoint_output().await;
+        }
+    }
+
     /// Check if execution exists.
     pub async fn exists(&self, exec_id: &str) -> bool {
         self.inner.lock().await.entries.contains_key(exec_id)

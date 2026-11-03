@@ -66,6 +66,15 @@ struct Service(Arc<FakeGuest>);
 
 #[tonic::async_trait]
 impl Guest for Service {
+    async fn detach_checkpoint_output(
+        &self,
+        _: Request<boxlite_shared::DetachCheckpointOutputRequest>,
+    ) -> Result<Response<boxlite_shared::DetachCheckpointOutputResponse>, Status> {
+        self.0.call("Guest.DetachCheckpointOutput");
+        Ok(Response::new(
+            boxlite_shared::DetachCheckpointOutputResponse {},
+        ))
+    }
     async fn init(
         &self,
         _: Request<GuestInitRequest>,
