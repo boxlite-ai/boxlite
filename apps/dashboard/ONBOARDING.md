@@ -34,7 +34,14 @@ checks, production build and UI walkthrough. Document observed results before pu
 
 Apply the additive API migration before releasing the dashboard. The organization use case and per-user draft endpoints must be deployed together with this UI. See [API persistence contract](../api/src/organization/ONBOARDING.md) for authorization, validation, revision conflicts and retention.
 
-Public templates share their catalog with Images. Virtual and curated template rows are not removable from the catalog; an organization-owned image remains removable even if its reference matches a template; user-imported images retain their existing lifecycle. Public registry availability and runner architecture can change; this PR does not guarantee every future upstream tag remains available.
+Public templates are listed on Quickstart, not automatically on Images. Images
+shows only organization and system images returned by its catalog API. A returned
+image may reuse a matching template's icon and startup configuration; this does
+not change its ownership. System images are not removable, while an
+organization-owned image remains removable under the existing permissions and
+box-reference checks, even if it matches a template. Public registry availability
+and runner architecture can change; templates do not guarantee every future
+upstream tag remains available.
 
 ## UI comparison
 
@@ -54,7 +61,7 @@ After: choose Deploy from prompt, enter a request, wait for Saved, refresh, and 
 
 ## Verification boundaries
 
-Targeted dashboard tests cover routing, credit backoff, template rows, generated code steps, organization-save errors, and prompt autosave/revision behavior. API tests cover validation, authorization, idempotency and revision conflicts. Migration tests run against a disposable PostgreSQL database supplied through `ONBOARDING_TEST_DATABASE_URL` and create/drop their own schema. Frontend and API TypeScript checks and the dashboard production build passed locally.
+Targeted dashboard tests cover routing, credit backoff, template selection and image catalog membership, generated code steps, organization-save errors, and prompt autosave/revision behavior. API tests cover validation, authorization, idempotency and revision conflicts. Migration tests run against a disposable PostgreSQL database supplied through `ONBOARDING_TEST_DATABASE_URL` and create/drop their own schema. Frontend and API TypeScript checks and the dashboard production build passed locally.
 
 The browser walkthrough used MSW fixtures. The integrated signup flow has not been deployed or accepted against the production API; complete that check after migration and backend deployment. Terminal auto-connect is included as a behavior change; a full-revert regression demonstration was not run for it.
 
