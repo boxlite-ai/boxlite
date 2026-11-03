@@ -257,7 +257,7 @@ impl MmioTransport {
             0x024 => self.driver_features_sel = value,
             0x050 => self.notify(value),
             0x064 => self.interrupt.ack_interrupt(value as u8),
-            0x070 => self.write_status(value as u8),
+            0x070 => self.write_status(value),
             0x0ac => {
                 tracing::debug!(offset, "ignoring the MMIO SHM selector");
             }
@@ -358,11 +358,13 @@ impl MmioTransport {
     }
 
     /// Handles a Status register write.
-    fn write_status(&mut self, requested: u8) {
+    fn write_status(&mut self, requested: u32) {
         if requested == 0 {
             self.reset();
             return;
         }
+        // Reserved high bits must not turn a nonzero write into a reset.
+        let requested = requested as u8;
         let current = self.status();
         if current & (FAILED | NEEDS_RESET) != 0 {
             tracing::debug!(

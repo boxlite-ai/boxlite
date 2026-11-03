@@ -91,6 +91,42 @@ fn a_failed_clear_is_reported_and_drop_retries_it() {
 }
 
 #[test]
+fn a_pulse_after_a_failed_clear_lowers_before_raising() {
+    let vm = Arc::new(MockVm::failing_at(&[1]));
+
+    let line = IrqLine::new(vm.clone(), 9);
+    assert!(line.pulse().is_err());
+    line.pulse().unwrap();
+
+    assert_eq!(
+        vm.calls(),
+        [
+            set(9, true),
+            set(9, false),
+            set(9, false),
+            set(9, true),
+            set(9, false)
+        ],
+        "the recovery lowers the stuck line before the next raise"
+    );
+}
+
+#[test]
+fn a_pulse_after_a_failed_set_retries_the_raise_without_lowering() {
+    let vm = Arc::new(MockVm::failing_at(&[0]));
+
+    let line = IrqLine::new(vm.clone(), 4);
+    assert!(line.pulse().is_err());
+    line.pulse().unwrap();
+
+    assert_eq!(
+        vm.calls(),
+        [set(4, true), set(4, true), set(4, false)],
+        "a failed set left the line low, so the next pulse only raises"
+    );
+}
+
+#[test]
 fn a_failed_level_leaves_the_line_as_it_was() {
     let vm = Arc::new(MockVm::failing_at(&[0]));
 

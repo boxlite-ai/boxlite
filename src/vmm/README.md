@@ -327,10 +327,11 @@ are built from. `Vm` owns the chipset they form.
 - **Lines.** `irq::IrqLine` drives one line through `IrqChip::set_line`,
   which every host VM implements with `Vm::set_irq_line`; the distinct name
   keeps the two traits from colliding where both are in scope. It is not
-  `Clone`. `pulse` raises an edge; `set_level` holds a level, makes no host
-  call for a repeated level and keeps the old level when the host call fails,
-  so the next call retries. Dropping a line held high lowers it and logs a
-  failure to do so.
+  `Clone`. `pulse` raises an edge and lowers a line a failed clear left high
+  before raising again, so the next notification still makes an edge;
+  `set_level` holds a level, makes no host call for a repeated level and
+  keeps the old level when the host call fails, so the next call retries.
+  Dropping a line held high lowers it and logs a failure to do so.
 - **Events.** A device ends the VM by sending `Event::GuestReset` or
   `Event::DeviceFailed` through an `EventSender`, which never blocks or
   panics, latches the stop for every vCPU, and wakes the `EventLoop`'s `mio`

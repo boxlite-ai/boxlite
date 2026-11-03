@@ -377,9 +377,10 @@ stopping the worker synchronously.
   through the VMM's interrupt path, which calls `Vm::set_irq_line`. The host's
   in-kernel controller wakes a vCPU waiting for it, so the VMM wakes no thread.
 - **Naming.** Devices hold an `IrqLine`, which is not `Clone`, so a device
-  cannot share its line. `pulse` raises an edge and `set_level` holds a level,
-  skipping a repeated one; as with OpenVMM's `LineInterrupt`, dropping a line
-  held high lowers it. It calls the object-safe `IrqChip` trait, which every
+  cannot share its line. `pulse` raises an edge and lowers a line a failed
+  clear left high before raising again; `set_level` holds a level, skipping a
+  repeated one; as with OpenVMM's `LineInterrupt`, dropping a line held high
+  lowers it. It calls the object-safe `IrqChip` trait, which every
   host VM implements through `Vm::set_irq_line`. The survey found no dominant
   name: `VirtioInterrupt`, `InterruptSourceGroup` and `IrqSender` each appear
   once or twice.

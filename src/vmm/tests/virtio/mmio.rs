@@ -556,6 +556,23 @@ fn status_writes_are_cumulative() {
 }
 
 #[test]
+fn a_status_write_with_reserved_high_bits_does_not_reset() {
+    let mut fixture = make(spec(0b111));
+    fixture.negotiate();
+    fixture.activate();
+
+    fixture.write(0x070, 0x100);
+
+    assert_eq!(
+        fixture.status(),
+        ACKNOWLEDGE | DRIVER | FEATURES_OK | DRIVER_OK,
+        "a nonzero write whose low byte is zero is not Status=0"
+    );
+    assert_eq!(fixture.state.lock().unwrap().resets, 0);
+    assert_eq!(fixture.worker.stops.load(Ordering::SeqCst), 0);
+}
+
+#[test]
 fn queue_ready_zero_keeps_the_configuration() {
     let mut fixture = make(spec(0b111));
     fixture.negotiate();
