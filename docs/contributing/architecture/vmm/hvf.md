@@ -279,7 +279,7 @@ sequenceDiagram
   %% edge:stop_worker
   coordinator->>worker: Shut down the workers and join the thread
   %% edge:stop_worker_done
-  worker-->>coordinator: Worker ended<br/>no more RAM accesses
+  worker-->>coordinator: Workers ended<br/>no more RAM accesses
   %% edge:stop_unmap
   coordinator->>hvf: hv_vm_unmap
   %% edge:stop_ram_view

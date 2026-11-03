@@ -385,7 +385,10 @@ fn snapshot_and_event_errors_name_their_cause() {
         SnapshotError::Unsupported.to_string(),
         "the device does not support snapshots"
     );
-    assert_eq!(EventError::Closed.to_string(), "the event worker is closed");
+    assert_eq!(
+        EventError::Closed.to_string(),
+        "the worker generation is closed"
+    );
     assert_eq!(
         EventError::Register(io::ErrorKind::PermissionDenied).to_string(),
         "the poller refused the source: permission denied"

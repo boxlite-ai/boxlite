@@ -140,7 +140,7 @@ HVF and KVM keep these rules; [M10](#room-for-later-milestones) covers WHP:
     alone do not provide these guarantees.
   - Both ranges align to the host page size, which is 16 KiB on Apple silicon.
 - **Interrupt lines.** A line is a GIC SPI INTID (32 and up) on arm64 and a GSI
-  on x86_64. Devices set lines from vCPU threads and the virtio workers
+  on x86_64. Devices set lines from vCPU threads and the virtio worker
   thread. An edge-triggered interrupt is a set followed by a clear.
 - **Errors.**
   - `boxlite_hypervisor::Error` names the failed operation and its resource
@@ -377,7 +377,7 @@ worker slot synchronously.
   always pulses; `InterruptACK` clears only the acked bits and pulses again
   while any remain, so an edge line does not lose a notification that arrived
   between Linux's read and acknowledgement.
-- **Raising an interrupt.** Devices raise their lines from the virtio workers
+- **Raising an interrupt.** Devices raise their lines from the virtio worker
   thread through the VMM's interrupt path, which calls `Vm::set_irq_line`. The
   host's in-kernel controller wakes a vCPU waiting for it, so the VMM wakes no
   thread.

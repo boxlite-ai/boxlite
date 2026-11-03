@@ -3,13 +3,15 @@
 
 //! The virtio workers: the runtime that delivers every device's events.
 //!
-//! A VM's [`VirtioWorkers`] serves every virtio device. A transport sees only
-//! the [`WorkerControl`] handle [`VirtioWorkers::add`] returns, which forwards
-//! to a [`WorkerRuntime`]. The one runtime is [`SharedRuntime`]: one poller and
-//! one thread for every device, as Firecracker and libkrun run their devices.
-//! A slow `on_event` therefore delays every other device. A per-device runtime
-//! can replace it behind the same trait without changing the transport, the
-//! devices or `Vm`.
+//! A worker is one device's slot: its generation, its kicks and its sources.
+//! Threads are the runtime's choice, not the worker's. A VM's
+//! [`VirtioWorkers`] holds every device's worker. A transport sees only the
+//! [`WorkerControl`] handle [`VirtioWorkers::add`] returns, which forwards to
+//! a [`WorkerRuntime`]. The one runtime is [`SharedRuntime`]: one poller and
+//! one `virtio-worker` thread run every worker, as Firecracker and libkrun run
+//! their devices. A slow `on_event` therefore delays every other device. A
+//! per-device runtime can replace it behind the same trait without changing
+//! the transport, the devices or `Vm`.
 
 use std::{
     io,

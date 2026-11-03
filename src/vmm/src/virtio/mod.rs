@@ -250,7 +250,7 @@ pub(crate) enum EventError {
 impl fmt::Display for EventError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Closed => f.write_str("the event worker is closed"),
+            Self::Closed => f.write_str("the worker generation is closed"),
             Self::Register(kind) => write!(f, "the poller refused the source: {kind}"),
         }
     }
@@ -298,7 +298,7 @@ pub(crate) trait VirtioDevice: Send {
     /// Clears features, queues, backend and in-flight work for a driver reset.
     fn reset(&mut self) -> Result<(), DeviceError>;
 
-    /// Handles one workers event. `Ok(())` means this call finished; it does
+    /// Handles one worker event. `Ok(())` means this call finished; it does
     /// not mean every submitted request completed. The device uses the event
     /// registrar and waker stored from [`ActivationContext`]. The call runs on
     /// the workers' shared thread and must not block.

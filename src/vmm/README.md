@@ -398,8 +398,9 @@ through `ActivationContext`.
 ## Virtio workers
 
 `virtio::worker::VirtioWorkers` runs every virtio device's events for one VM.
-`VirtioWorkers::add` gives a transport the `WorkerControl` handle of its device's
-slot. The handle forwards to a `WorkerRuntime`, so a per-device runtime can
+A worker is one device's slot, with its generation, kicks and sources; which
+thread runs it is the runtime's choice. `VirtioWorkers::add` gives a transport
+the `WorkerControl` handle of its device's slot. The handle forwards to a `WorkerRuntime`, so a per-device runtime can
 replace the shared one without changing the transport, the devices or `Vm`.
 
 - **One thread.** `SharedRuntime` owns one `mio::Poll`, its one `Waker`, and
