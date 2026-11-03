@@ -428,7 +428,7 @@ describe('McpController', () => {
     const unauthenticated = await legacyPost(version, 'tools/list', {}, { authenticated: false })
     expect(unauthenticated.status).toBe(401)
     expect(unauthenticated.headers.get('www-authenticate')).toContain('resource_metadata=')
-    expect(unauthenticated.headers.get('www-authenticate')).toContain('scope="openid profile email"')
+    expect(unauthenticated.headers.get('www-authenticate')).not.toContain('scope=')
   })
 
   it('rejects a modern request naming an unsupported version', async () => {
@@ -460,7 +460,9 @@ describe('McpController', () => {
     expect(response.status).toBe(405)
   })
 
-  it('advertises default identity scopes in the authentication challenge', async () => {
+  // Auth0 strict third-party (dynamically registered) clients refuse OIDC scopes,
+  // so the challenge requires none; identity arrives as access-token claims.
+  it('answers a request without a token with a challenge naming the metadata and no scopes', async () => {
     const response = await fetch(baseUrl, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -471,19 +473,15 @@ describe('McpController', () => {
     expect(response.status).toBe(401)
     expect(challenge).toMatch(/^Bearer error="invalid_token"/)
     expect(challenge).toContain('resource_metadata="https://boxlite.test/.well-known/oauth-protected-resource/api/mcp"')
-    expect(challenge).toContain('scope="openid profile email"')
+    expect(challenge).not.toContain('scope=')
     // The global filter's logic still answers, so the failed attempt is counted.
     expect(incrementFailedAuth).toHaveBeenCalledTimes(1)
   })
 
-  it('serves identity scope metadata outside the api prefix', async () => {
+  it('serves the protected resource metadata outside the api prefix, advertising no OIDC scopes', async () => {
     const response = await fetch(`${origin}/.well-known/oauth-protected-resource/api/mcp`)
 
     expect(response.status).toBe(200)
-    expect(await response.json()).toEqual({
-      resource: RESOURCE,
-      authorization_servers: [ISSUER],
-      scopes_supported: ['openid', 'profile', 'email'],
-    })
+    expect(await response.json()).toEqual({ resource: RESOURCE, authorization_servers: [ISSUER] })
   })
 })

@@ -735,19 +735,23 @@ from servers and CLIs, not browsers.
 
 A request without a valid token gets `401` with an RFC 6750 challenge that
 names the endpoint's RFC 9728 metadata, so a host can find where to sign in:
-`WWW-Authenticate: Bearer error="invalid_token", error_description="…", scope="openid profile email", resource_metadata="<origin>/.well-known/oauth-protected-resource/api/mcp"`.
+`WWW-Authenticate: Bearer error="invalid_token", error_description="…", resource_metadata="<origin>/.well-known/oauth-protected-resource/api/mcp"`.
 The body and the failed-auth throttling are those of every other `401`. The
 metadata names `MCP_RESOURCE_URL` as the `resource` and the issuer the `jwt`
-strategy accepts as the only authorization server. Its `scopes_supported` is
-`["openid", "profile", "email"]`, matching the challenge's default identity scopes.
-Clients following MCP scope discovery can request these during login without a
-manual scope override. The server does not advertise `offline_access`; clients
-may request refresh access separately according to their configuration.
-These identity scopes do not grant organization or tool permissions. The provider
-must still issue the identity claims required by the JWT strategy, including
-`email_verified: true` for Auth0 database identities. Existing tokens are not
-changed by discovery updates; reconnect through a fresh authorization flow when
-an older token lacks those claims.
+strategy accepts as the only authorization server. Neither the challenge nor
+the metadata names scopes: Auth0 refuses OIDC scopes to the strict third-party
+clients that hosts register dynamically, and organization and tool access
+comes from organization permissions, not scopes.
+
+The caller's identity comes from the access token. Tokens may carry it under
+the `https://boxlite.ai/claims/` namespace, which the Auth0 Action writes for
+the MCP audience (`email_verified`, `email`, `name`). A namespaced claim takes
+precedence over the plain one of the same name: a namespaced `email_verified`
+other than `true` fails the Auth0 database identity's email-verification check
+(`403 email_verification_required`) even beside a plain `true`, and a
+namespaced `email` or `name` that is not a string is a `401`. Tokens with
+plain claims only work as before. An older token is not changed; reconnect
+through a fresh authorization flow when it lacks the claims.
 `MCP_RESOURCE_URL` is the endpoint's public URL, such as
 `https://dev.boxlite.ai/api/mcp`, and must name the `/api/mcp` route. Without
 it the challenge carries no `resource_metadata` and the metadata route answers

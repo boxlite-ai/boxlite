@@ -9,6 +9,7 @@ import { UnauthorizedException, type ExecutionContext } from '@nestjs/common'
 import { errors, exportJWK, generateKeyPair, SignJWT, type KeyLike } from 'jose'
 import { JwtStrategy } from '../../auth/jwt.strategy'
 import type { TypedConfigService } from '../../config/typed-config.service'
+import { EmailVerificationRequiredException } from '../../exceptions/email-verification-required.exception'
 import { SystemRole } from '../../user/enums/system-role.enum'
 import { McpAuthMetadata } from './mcp-auth-metadata'
 import { McpAuthGuard } from './mcp-auth.guard'
@@ -47,12 +48,16 @@ describe('McpAuthGuard', () => {
     await new Promise((resolve) => jwks.close(resolve))
   })
 
-  function tokenFor(audience: string): Promise<string> {
-    return new SignJWT({ email_verified: true })
+  function tokenFor(
+    audience: string,
+    claims: Record<string, unknown> = { email_verified: true },
+    subject = 'user-1',
+  ): Promise<string> {
+    return new SignJWT(claims)
       .setProtectedHeader({ alg: 'RS256', kid: 'test-key' })
       .setIssuer(ISSUER)
       .setAudience(audience)
-      .setSubject('user-1')
+      .setSubject(subject)
       .setIssuedAt()
       .setExpirationTime('5m')
       .sign(privateKey)
@@ -76,6 +81,26 @@ describe('McpAuthGuard', () => {
 
     await expect(guard(MCP_RESOURCE).canActivate(context)).resolves.toBe(true)
     expect(request.user).toEqual(CALLER)
+  })
+
+  // What Auth0 issues a dynamically registered client: the identity only under the
+  // BoxLite namespace, for a database user the email-verification gate applies to.
+  it('admits a database identity whose verification arrives only as a namespaced claim', async () => {
+    const token = await tokenFor(MCP_RESOURCE, { 'https://boxlite.ai/claims/email_verified': true }, 'auth0|user-1')
+    const { context } = requestWith(`Bearer ${token}`)
+
+    await expect(guard(MCP_RESOURCE).canActivate(context)).resolves.toBe(true)
+  })
+
+  it('refuses a database identity whose namespaced verification is false', async () => {
+    const token = await tokenFor(
+      MCP_RESOURCE,
+      { email_verified: true, 'https://boxlite.ai/claims/email_verified': false },
+      'auth0|user-1',
+    )
+    const { context } = requestWith(`Bearer ${token}`)
+
+    await expect(guard(MCP_RESOURCE).canActivate(context)).rejects.toBeInstanceOf(EmailVerificationRequiredException)
   })
 
   it('refuses a dashboard token, issued for the API audience', async () => {

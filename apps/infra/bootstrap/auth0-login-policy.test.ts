@@ -331,6 +331,7 @@ test('parseAuth0LoginPolicyOptions defaults to preview and requires exact tenant
       accountLinkApiOrigin: undefined,
       accountLinkSecret: undefined,
       disableAccountLink: false,
+      mcpResourceUrl: undefined,
     },
   )
   assert.equal(
@@ -377,6 +378,27 @@ test('parseAuth0LoginPolicyOptions takes the account link API origin only as a b
     'api.example.com',
   ]) {
     assert.throws(() => origin(refused), /must be a bare https origin/, refused)
+  }
+})
+
+test('parseAuth0LoginPolicyOptions takes the MCP resource only as the exact URL of /api/mcp', () => {
+  const required = ['--tenant', 'tenant.us.auth0.com', '--client-id', 'spa_123', '--connection', 'boxlite-users']
+  const resource = (value: string) =>
+    parseAuth0LoginPolicyOptions([...required, '--mcp-resource-url', value]).mcpResourceUrl
+
+  assert.equal(resource('https://dev.boxlite.ai/api/mcp'), 'https://dev.boxlite.ai/api/mcp')
+  assert.equal(resource('http://localhost:3001/api/mcp'), 'http://localhost:3001/api/mcp')
+  for (const refused of [
+    'https://dev.boxlite.ai/mcp',
+    'https://dev.boxlite.ai/api/mcp/',
+    'https://dev.boxlite.ai/api/mcp?tenant=1',
+    'https://dev.boxlite.ai/api/mcp#top',
+    'https://user:pass@dev.boxlite.ai/api/mcp',
+    'https://DEV.boxlite.ai/api/mcp',
+    'ftp://dev.boxlite.ai/api/mcp',
+    'dev.boxlite.ai/api/mcp',
+  ]) {
+    assert.throws(() => resource(refused), /--mcp-resource-url must be the exact http\(s\) URL of \/api\/mcp/, refused)
   }
 })
 
@@ -1059,7 +1081,10 @@ test('Auth0LoginPolicyConfigurator applies, binds last, reads back, and journals
 
 type ActionHandler = (event: any, api: any) => Promise<void>
 
-function loadAction(context: Record<string, unknown> = {}): {
+function loadAction(
+  context: Record<string, unknown> = {},
+  values: { mcpResourceUrl?: string } = {},
+): {
   onExecutePostLogin: ActionHandler
   onContinuePostLogin: ActionHandler
 } {
@@ -1067,6 +1092,7 @@ function loadAction(context: Record<string, unknown> = {}): {
     clientId: 'spa_123',
     connectionName: 'boxlite-users',
     formId: 'ap_verify',
+    ...values,
   })
   const exports: Record<string, ActionHandler> = {}
   runInNewContext(source, { exports, ...context })
@@ -1198,6 +1224,91 @@ test('login policy continuation trusts only the exact verification form', async 
   assert.equal(success.claims.email_verified, true)
   assert.match(wrongForm.denied[0], /Email verification failed/)
   assert.deepEqual(wrongForm.claims, {})
+})
+
+const MCP_RESOURCE = 'https://dev.boxlite.ai/api/mcp'
+// Pinned to the literal: the API reads these exact names (apps/api/src/auth/jwt.strategy.ts),
+// so a rename on either side must break a test.
+const MCP_EMAIL_VERIFIED_CLAIM = 'https://boxlite.ai/claims/email_verified'
+const MCP_EMAIL_CLAIM = 'https://boxlite.ai/claims/email'
+const MCP_NAME_CLAIM = 'https://boxlite.ai/claims/name'
+
+// A login through a dynamically registered MCP client: a client id of its own, and
+// no `authorization` object, which Auth0 documents as optional.
+function mcpClientEvent(user: Record<string, unknown>, resource = MCP_RESOURCE) {
+  const event: Record<string, any> = managedEvent({
+    client: { client_id: 'dcr_client_1' },
+    resource_server: { identifier: resource },
+    user: { ...managedEvent().user, ...user },
+  })
+  delete event.authorization
+  return event
+}
+
+test('login policy gives MCP tokens namespaced identity claims for any client, without authorization metadata', async () => {
+  const { onExecutePostLogin } = loadAction({}, { mcpResourceUrl: MCP_RESOURCE })
+
+  for (const clientId of ['dcr_client_1', 'dcr_client_2']) {
+    const capture = actionApi()
+    await onExecutePostLogin(
+      { ...mcpClientEvent({ email_verified: true }), client: { client_id: clientId } },
+      capture.api,
+    )
+
+    assert.deepEqual(capture.denied, [])
+    assert.equal(capture.claims[MCP_EMAIL_VERIFIED_CLAIM], true)
+    assert.equal(capture.claims[MCP_EMAIL_CLAIM], 'person@example.com')
+    assert.equal(capture.claims[MCP_NAME_CLAIM], 'Person')
+  }
+})
+
+test('login policy reports an unverified address to MCP as a boolean false', async () => {
+  const { onExecutePostLogin } = loadAction({}, { mcpResourceUrl: MCP_RESOURCE })
+
+  for (const emailVerified of [false, undefined, 'true']) {
+    const capture = actionApi()
+    await onExecutePostLogin(mcpClientEvent({ email_verified: emailVerified }), capture.api)
+
+    assert.equal(capture.claims[MCP_EMAIL_VERIFIED_CLAIM], false, String(emailVerified))
+  }
+})
+
+test('login policy leaves non-string profile values out of MCP claims', async () => {
+  const { onExecutePostLogin } = loadAction({}, { mcpResourceUrl: MCP_RESOURCE })
+  const capture = actionApi()
+
+  await onExecutePostLogin(mcpClientEvent({ email_verified: true, email: 42, name: null }), capture.api)
+
+  assert.equal(capture.claims[MCP_EMAIL_VERIFIED_CLAIM], true)
+  assert.equal(MCP_EMAIL_CLAIM in capture.claims, false)
+  assert.equal(MCP_NAME_CLAIM in capture.claims, false)
+})
+
+test('login policy adds MCP claims only for the configured resource', async () => {
+  const otherResource = actionApi()
+  const unconfigured = actionApi()
+
+  await loadAction({}, { mcpResourceUrl: MCP_RESOURCE }).onExecutePostLogin(
+    mcpClientEvent({ email_verified: true }, 'https://dev.boxlite.ai/api'),
+    otherResource.api,
+  )
+  await loadAction().onExecutePostLogin(mcpClientEvent({ email_verified: true }), unconfigured.api)
+
+  for (const capture of [otherResource, unconfigured]) {
+    assert.equal(Object.keys(capture.claims).some((claim) => claim.startsWith('https://boxlite.ai/claims/')), false)
+  }
+})
+
+test('login policy keeps the verification Form result in MCP claims', async () => {
+  const { onContinuePostLogin } = loadAction({}, { mcpResourceUrl: MCP_RESOURCE })
+  const capture = actionApi()
+
+  await onContinuePostLogin(
+    managedEvent({ prompt: { id: 'ap_verify', fields: {} }, resource_server: { identifier: MCP_RESOURCE } }),
+    capture.api,
+  )
+
+  assert.equal(capture.claims[MCP_EMAIL_VERIFIED_CLAIM], true)
 })
 
 const POLICY_SOURCE = readFileSync(new URL('./auth0/login-policy.js', import.meta.url), 'utf8')

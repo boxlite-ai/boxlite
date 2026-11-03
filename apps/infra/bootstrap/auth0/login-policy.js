@@ -32,6 +32,12 @@ const ACCOUNT_LINK_FORM_ID = __ACCOUNT_LINK_FORM_ID_JSON__
 // The tenant's own domain: its token endpoint and Management API answer there
 // whichever domain the login itself runs on.
 const AUTH0_DOMAIN = __AUTH0_DOMAIN_JSON__
+// The Auth0 API Identifier of the MCP endpoint, the API's MCP_RESOURCE_URL.
+// Empty adds no MCP claims.
+const MCP_RESOURCE_URL = __MCP_RESOURCE_URL_JSON__
+// The API reads the identity of an MCP token under this namespace, which
+// Auth0 recommends for custom claims so they never collide with its own.
+const MCP_CLAIMS_NAMESPACE = 'https://boxlite.ai/claims'
 
 // The API refuses a request signed for any audience but the one it serves.
 const ADOPT_AUDIENCE = 'boxlite-account-link-adopt'
@@ -70,10 +76,28 @@ function needsAccountLink(event) {
 }
 
 function setIdentityClaims(event, api, emailVerified = event.user?.email_verified === true) {
+  setMcpIdentityClaims(event, api, emailVerified)
   if (!event.authorization) return
   api.accessToken.setCustomClaim('email_verified', emailVerified)
   api.accessToken.setCustomClaim('email', event.user?.email)
   api.accessToken.setCustomClaim('name', event.user?.name)
+}
+
+/**
+ * A token for the MCP endpoint carries its identity under the BoxLite
+ * namespace. It is chosen by the API the token is for, not the client: each
+ * dynamically registered client has its own id, and Auth0 may leave
+ * `event.authorization` unset for it.
+ */
+function setMcpIdentityClaims(event, api, emailVerified) {
+  if (!MCP_RESOURCE_URL || event.resource_server?.identifier !== MCP_RESOURCE_URL) return
+  api.accessToken.setCustomClaim(`${MCP_CLAIMS_NAMESPACE}/email_verified`, emailVerified === true)
+  if (typeof event.user?.email === 'string') {
+    api.accessToken.setCustomClaim(`${MCP_CLAIMS_NAMESPACE}/email`, event.user.email)
+  }
+  if (typeof event.user?.name === 'string') {
+    api.accessToken.setCustomClaim(`${MCP_CLAIMS_NAMESPACE}/name`, event.user.name)
+  }
 }
 
 async function tokenEndpoint(body, headers = {}) {

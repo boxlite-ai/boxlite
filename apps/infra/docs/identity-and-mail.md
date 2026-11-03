@@ -38,7 +38,14 @@ publishes no discovery metadata. Turn a stage on in this order, dev first:
    `auth0 api patch connections/<id> --data '{"is_domain_connection": true}'`.
 4. Store the URL: `npm run mstage env set -- MCP_RESOURCE_URL=https://dev.boxlite.ai/api/mcp --stage dev --digest`,
    then deploy through `mdeploy-all.yml`.
-5. Check that `https://dev.boxlite.ai/.well-known/oauth-protected-resource/api/mcp` returns
+5. After that deploy, add `--mcp-resource-url https://dev.boxlite.ai/api/mcp` to the
+   [login policy apply](#auth0-email-first-login-policy). The Action then writes
+   `https://boxlite.ai/claims/email_verified`, `/email`, and `/name` into every token for
+   that API, whichever client asked and whether or not it requested OIDC scopes, so
+   dynamically registered clients pass the email-verification check. The value must equal
+   the API identifier and `MCP_RESOURCE_URL` exactly. Pass it on every later apply too: an
+   apply without it rewrites the Action with the MCP claims off.
+6. Check that `https://dev.boxlite.ai/.well-known/oauth-protected-resource/api/mcp` returns
    JSON naming that resource, and that an unauthenticated `POST /api/mcp` returns `401`
    with `resource_metadata`.
 

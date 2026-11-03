@@ -151,6 +151,12 @@ export interface Auth0LoginPolicyOptions {
    * than silently leaving every later login unlinked.
    */
   disableAccountLink?: boolean
+  /**
+   * The Auth0 API Identifier of the MCP endpoint, the API's `MCP_RESOURCE_URL`.
+   * Tokens for it carry the identity under the BoxLite claims namespace. Unset,
+   * the Action adds no MCP claims, so every reapply must pass it again.
+   */
+  mcpResourceUrl?: string
 }
 
 export function parseAuth0LoginPolicyOptions(
@@ -170,6 +176,7 @@ export function parseAuth0LoginPolicyOptions(
       'replace-link-form': { type: 'boolean', default: false },
       'account-link-api-origin': { type: 'string' },
       'disable-account-link': { type: 'boolean', default: false },
+      'mcp-resource-url': { type: 'string' },
     },
   })
   if (values['disable-account-link'] && values['account-link-api-origin'] !== undefined) {
@@ -191,7 +198,26 @@ export function parseAuth0LoginPolicyOptions(
     replaceLinkForm: values['replace-link-form'] ?? false,
     ...accountLinkOptions(values['account-link-api-origin'], environment[ACCOUNT_LINK_SECRET_ENV]),
     disableAccountLink: values['disable-account-link'] ?? false,
+    mcpResourceUrl: parseMcpResourceUrl(values['mcp-resource-url']),
   }
+}
+
+// Auth0 matches the API Identifier exactly, so only the exact, normalized URL is taken.
+function parseMcpResourceUrl(value: string | undefined): string | undefined {
+  if (value === undefined) return undefined
+  const resource = requireExactValue('--mcp-resource-url', value)
+  const refusal = '--mcp-resource-url must be the exact http(s) URL of /api/mcp, such as https://api.example.com/api/mcp'
+  let url: URL
+  try {
+    url = new URL(resource)
+  } catch {
+    throw new Error(refusal)
+  }
+  if (!['http:', 'https:'].includes(url.protocol) || url.pathname !== '/api/mcp' || url.href !== resource) {
+    throw new Error(refusal)
+  }
+  if (url.username || url.password || url.search || url.hash) throw new Error(refusal)
+  return resource
 }
 
 function accountLinkOptions(
@@ -410,6 +436,7 @@ export function hydrateLoginPolicyAction(
     accountLinkApiOrigin?: string
     accountLinkFormId?: string
     tenant?: string
+    mcpResourceUrl?: string
   },
 ): string {
   const replacements: Record<string, string> = {
@@ -419,9 +446,10 @@ export function hydrateLoginPolicyAction(
     __ACCOUNT_LINK_API_ORIGIN_JSON__: JSON.stringify(values.accountLinkApiOrigin ?? ''),
     __ACCOUNT_LINK_FORM_ID_JSON__: JSON.stringify(values.accountLinkFormId ?? ''),
     __AUTH0_DOMAIN_JSON__: JSON.stringify(values.tenant ?? ''),
+    __MCP_RESOURCE_URL_JSON__: JSON.stringify(values.mcpResourceUrl ?? ''),
   }
   const hydrated = source.replace(
-    /__(?:BOXLITE_CLIENT_ID|BOXLITE_DB_CONNECTION|EMAIL_VERIFICATION_FORM_ID|ACCOUNT_LINK_API_ORIGIN|ACCOUNT_LINK_FORM_ID|AUTH0_DOMAIN)_JSON__/g,
+    /__(?:BOXLITE_CLIENT_ID|BOXLITE_DB_CONNECTION|EMAIL_VERIFICATION_FORM_ID|ACCOUNT_LINK_API_ORIGIN|ACCOUNT_LINK_FORM_ID|AUTH0_DOMAIN|MCP_RESOURCE_URL)_JSON__/g,
     (placeholder) => replacements[placeholder],
   )
   const unresolved = hydrated.match(/__[A-Z_]+_JSON__/)
@@ -1399,6 +1427,7 @@ export class Auth0LoginPolicyConfigurator {
         accountLinkApiOrigin: this.options.accountLinkApiOrigin,
         accountLinkFormId: linkFormId,
         tenant: this.options.tenant,
+        mcpResourceUrl: this.options.mcpResourceUrl,
       }),
       runtime: 'node22',
     }
