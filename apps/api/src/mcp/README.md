@@ -22,3 +22,24 @@ establish that repeating it is safe. Runner error bodies and credentials are nev
 This adapter has no tool registrations. Its consumers own tool schemas, representation
 conversion and result projection. It covers only the existing execution, file and Box metrics
 HTTP endpoints; streaming attachment requires a separate transport.
+
+## Execution tools
+
+`exec_box` starts an asynchronous command and returns `execution_id`.
+Commands can contact external systems under the Box network policy, so execution is
+annotated as an open-world operation.
+`get_execution` returns state, optional exit code and diagnostics; command output requires
+the separate streaming transport, which these tools do not implement.
+
+`kill_execution` uses DELETE and removes the Runner registry entry.
+`signal_execution` accepts only signals 1, 2, 3, 6, 10, 12, 15 and 28; SIGKILL uses
+the kill tool. `resize_execution` requires an execution started with `tty: true`.
+
+Execution mutations require `WRITE_BOXES`; status follows REST membership access.
+All five operations refresh activity and may auto-resume, so their annotations reflect
+these lifecycle effects. Box names may include spaces or Unicode; only the resolved
+internal ID enters the Runner route. Unknown arguments and unsupported signals fail
+before authorization or network access.
+
+Responses project only implemented fields. Malformed or oversized execution-start
+responses report an uncertain outcome because the command may already be running.
