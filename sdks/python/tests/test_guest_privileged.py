@@ -1,6 +1,14 @@
 """Guest privilege is a separate option from the runner's sandbox policy."""
 
+import importlib.util
+
+import pytest
+
 import boxlite
+
+if importlib.util.find_spec("boxlite.boxlite") is None:
+    pytest.skip("native extension module not built", allow_module_level=True)
+from boxlite.boxlite import AdvancedBoxOptions, BoxOptions  # noqa: F401 - validate native exports
 
 
 def test_guest_privileged_defaults_off():

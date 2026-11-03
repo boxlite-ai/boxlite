@@ -27,6 +27,9 @@ import { BoxliteInvitationController } from './boxlite-invitation.controller'
 import { CommerceBoxLimitService } from './commerce-box-limit.service'
 import { BoxliteBoxSnapshotController } from './boxlite-box-snapshot.controller'
 import { BoxliteSnapshotController } from './boxlite-snapshot.controller'
+import { BoxliteCheckpointController, BoxliteBoxCheckpointController } from './boxlite-checkpoint.controller'
+import { CheckpointBoxService } from './checkpoint-box.service'
+import { CheckpointTransferService } from './checkpoint-transfer.service'
 import { SnapshotBoxService } from './snapshot-box.service'
 
 /** The controller's routes again, mounted at its unprefixed path alone. */
@@ -45,6 +48,8 @@ function unprefixed<T extends Type>(controller: T, path: string): T {
  * a routing prefix is an organization id or `default`, never a collection.
  */
 const unprefixedMounts = [
+  unprefixed(BoxliteCheckpointController, 'v1/checkpoints'),
+  unprefixed(BoxliteBoxCheckpointController, 'v1/boxes'),
   unprefixed(BoxliteSnapshotController, 'v1/snapshots'),
   unprefixed(BoxliteBoxController, 'v1/boxes'),
   unprefixed(BoxliteBoxSnapshotController, 'v1/boxes'),
@@ -70,6 +75,8 @@ const unprefixedMounts = [
     BoxliteMeController,
     BoxliteConfigController,
     ...unprefixedMounts,
+    BoxliteCheckpointController,
+    BoxliteBoxCheckpointController,
     BoxliteCacheController,
     BoxliteBoxController,
     BoxliteBoxSnapshotController,
@@ -81,7 +88,13 @@ const unprefixedMounts = [
     BoxliteMemberController,
     BoxliteInvitationController,
   ],
-  providers: [BoxliteWsProxyService, CommerceBoxLimitService, SnapshotBoxService],
+  providers: [
+    BoxliteWsProxyService,
+    CommerceBoxLimitService,
+    SnapshotBoxService,
+    CheckpointBoxService,
+    CheckpointTransferService,
+  ],
   exports: [BoxliteWsProxyService],
 })
 export class BoxliteRestModule {}

@@ -2,6 +2,7 @@
 
 mod advanced_options;
 mod box_handle;
+mod checkpoints;
 mod exec;
 mod images;
 mod info;
@@ -95,6 +96,10 @@ fn boxlite_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyTunnelOptions>()?;
     m.add_class::<PyCopyOptions>()?;
     m.add_class::<PySnapshotInfo>()?;
+    m.add_class::<checkpoints::PyCheckpointInfo>()?;
+    m.add_class::<checkpoints::PyCheckpointDependencies>()?;
+    m.add_class::<checkpoints::PyCheckpointHandle>()?;
+    m.add_class::<checkpoints::PyRuntimeCheckpointHandle>()?;
     m.add_class::<PySnapshotHandle>()?;
     m.add_class::<crate::snapshots::PyRuntimeSnapshotHandle>()?;
     m.add_class::<PySnapshotOptions>()?;

@@ -9,6 +9,7 @@ import { Box } from '../entities/box.entity'
 import { BoxLastActivity } from '../entities/box-last-activity.entity'
 import { BoxMigration } from '../entities/box-migration.entity'
 import { BoxSnapshot } from '../entities/box-snapshot.entity'
+import { BoxCheckpoint } from '../entities/box-checkpoint.entity'
 import { BoxSnapshotState } from '../enums/box-snapshot-state.enum'
 import { BoxState } from '../enums/box-state.enum'
 import { BoxDesiredState } from '../enums/box-desired-state.enum'
@@ -161,6 +162,22 @@ export class BoxRepository extends BaseRepository<Box> {
           snapshot.region !== box.region
         ) {
           throw new ConflictException('Snapshot is no longer ready or does not match the box disk and region')
+        }
+      }
+      if (box.initialCheckpointId) {
+        const checkpoint = await entityManager.findOne(BoxCheckpoint, {
+          where: { id: box.initialCheckpointId, organizationId: box.organizationId },
+          lock: { mode: 'pessimistic_read' },
+        })
+        if (
+          !checkpoint ||
+          checkpoint.state !== 'ready' ||
+          checkpoint.region !== box.region ||
+          checkpoint.cpus !== box.cpu ||
+          checkpoint.memoryMib !== box.mem * 1024 ||
+          checkpoint.diskGb !== box.disk
+        ) {
+          throw new ConflictException('Checkpoint is no longer ready or does not match target resources/region')
         }
       }
       await this.lockRegistryCredential(box, entityManager)
@@ -381,9 +398,7 @@ export class BoxRepository extends BaseRepository<Box> {
       return [box, previousBox] as const
     }
 
-    const [updatedBox, previousBox] = transaction
-      ? await update(transaction)
-      : await this.manager.transaction(update)
+    const [updatedBox, previousBox] = transaction ? await update(transaction) : await this.manager.transaction(update)
     await this.recordOrganizationActivity(updatedBox, previousBox)
     return updatedBox
   }

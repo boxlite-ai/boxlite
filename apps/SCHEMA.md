@@ -726,6 +726,44 @@ copy and fail the comparison it exists for.
 
 **Index:** `(state)`.
 
+### `box_checkpoint`, `box_checkpoint_operation` and `box_checkpoint_transfer`
+
+Migration `1793600000000` adds `paused` to actual/desired box states,
+`box.initialCheckpointId` (indexed), `box.checkpointOperationId`, and
+`runner.checkpointsEnabled` (boolean, default false). These references are
+application-owned; no source-box FK cascades a retained resource away.
+
+| Table                      | Stored contract                                                                                                                                                                                                                                                             |
+| -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `box_checkpoint`           | UUID `id`, organization/name/source/region, `creating/ready/failed/deleting` state, fixed private archive URI, visibility, native checkpoint/runner IDs, content/boot digests, allowlisted configuration, captured CPU/memory/disk, size, error, creation/update timestamps |
+| `box_checkpoint_operation` | UUID operation identity, organization/box/checkpoint/job IDs, `pause/resume/capture/restore` kind, `pending/succeeded/failed` state, structured error and creation time                                                                                                     |
+| `box_checkpoint_transfer`  | Server-issued UUID, organization/runner, upload/export kind, `staging/registered/consumed/cleanup` state, native inspection/digest/ID, hidden resource and target identities, expiration and creation time                                                                  |
+
+Non-deleting organization/name pairs are unique; failed names remain occupied.
+Checkpoint indexes cover organization/source and state. Operation job IDs are
+unique; state and checkpoint/state indexes support reconciliation. Transfer
+expiration is indexed. The hidden resource's size includes memory, QCOW2 and boot.
+
+Capture transactionally inserts resource, operation and BACKUP job and claims
+the source box. Restore inserts its operation/job together while holding the
+new target and a shared resource lock. Ordinary target admission holds that
+resource lock through box insertion. Delete and transfer cleanup take its
+exclusive lock, refuse live child/operation references, and close admission
+before native cleanup. A native DELETE acknowledgement is required before the
+transfer lease is released. Failed cleanup retains durable state for retry.
+
+Settlement requires the exact job/operation and `nativeCompleted:true`;
+repeated or stale reports cannot republish or release another operation.
+Unclaimed PENDING jobs expire after ten minutes. Claimed work without native
+acknowledgement remains held, even when generic stale-job handling fails its job.
+Ready publication additionally requires complete positive size and SHA256
+metadata. Successful restore releases its resource pin and leaves the new box
+Paused. Failed/destroyed children release abandoned pins only without live work.
+
+Apply this pre-deploy migration before API and runner updates. Old health reports
+cannot advertise support. Rollback refuses paused boxes and outstanding box
+checkpoint references; PostgreSQL enum additions remain after downgrade.
+
 ### `box_snapshot`
 
 `box.initialSnapshotId` is an internal, indexed reference for a newly creating
@@ -850,6 +888,13 @@ A box bills against exactly one open period at a time. Closing a period writes
 the archive row and the outbox row in the same transaction, so a usage fact can
 never be archived without an export intent, and an intent can never survive a
 rolled-back archive.
+
+Paused VMs retain their full CPU, GPU, memory and disk allocation in this ledger,
+including a restored box as soon as it reaches Paused. Running → Paused → resume
+keeps allocation continuous; adjacent periods may split at a shared timestamp.
+Stop keeps the existing disk-only rule, and terminal states close the period.
+Daily rollover and drift reconciliation use the same state rules; missed events
+are repaired from the present, without backfilling past usage.
 
 ### `box_usage_periods`
 

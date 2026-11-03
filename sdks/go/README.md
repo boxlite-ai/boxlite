@@ -356,6 +356,56 @@ runtime's lifetime.
 See the [SSH guide](../../docs/guides/ssh.md) for listener behavior,
 authentication rules, and the HTTP contract.
 
+## Memory checkpoints
+
+Memory checkpoints preserve a paused guest process. Native capture/restore requires
+Linux x86_64 with KVM; a REST-backed runtime can connect from other supported hosts.
+Pause explicitly before capture, then resume explicitly when execution should continue:
+
+```go
+if err := box.Pause(ctx, boxlite.PauseOptions{}); err != nil { return err }
+checkpoints, err := box.Checkpoints()
+if err != nil { return err }
+defer checkpoints.Close()
+saved, err := checkpoints.Create(ctx, "before-upgrade")
+if err != nil { return err }
+restored, err := rt.CreateFromCheckpoint(ctx, saved.Id, "restored")
+if err != nil { return err }
+defer restored.Close()
+return restored.Resume(ctx)
+```
+
+`Checkpoints.List`, `Get`, and `Remove` manage the same resources as the Rust/REST
+API. `rt.Checkpoints()` includes checkpoints whose source box was deleted.
+Box-scoped `Get` returns nil for absence; runtime-scoped `Get` returns an error.
+`Remove(ctx, id, true)` suppresses only absence. Close each catalog handle.
+Restore creates a new **Paused** box with the captured resources; it does not
+replace the source. `Create(ctx, "")` generates a name.
+
+`box.ExportCheckpoint(ctx, directory)`, `rt.ImportCheckpoint(ctx, directory,
+boxlite.CheckpointImportOptions{Name: "restored"})`, and
+`boxlite.InspectCheckpoint(directory)` use the public two-file format. Paths are
+caller-local, including for REST; file contents cross the transport. Inspection
+preserves nested dependency information. The runtime never removes caller files.
+
+Cancellation stops waiting, not native work. Keep source files and output
+directories available until native completion; runner staging cleanup should
+wait with a non-cancelled completion context. Late results are still drained and
+freed after caller cancellation.
+
+Runner-only `InspectCloudUpload`, `ImportCheckpointPair`,
+`ExportCheckpointArchive`, `ImportCheckpointArchive`, and
+`CreateFromCheckpointWithOperation` provide validated upload admission and
+managed transport with durable operation IDs. These use a separate managed
+archive format; ordinary pair methods never accept it implicitly. A supplied
+`CloudCheckpointImportOptions.TrustedBoot` must be runtime-owned or downloaded
+under organization authorization, never taken from uploaded metadata or a
+public client's host path. Upload validation errors remain `ErrInvalidArgument`;
+OS/storage failures remain `ErrStorage` across the native boundary.
+
+See the [checkpoint guide](../../docs/guides/checkpoints.md) for dependencies and
+unsupported configurations.
+
 ## Development
 
 Build from source (requires Rust toolchain):

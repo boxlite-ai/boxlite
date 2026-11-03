@@ -13,7 +13,10 @@ import { SNAPSHOT_OPERATION_STATES } from '../constants/box.constants'
  * Refuse a change to a box whose disk a snapshot job owns. Deletion is the one
  * change such a box admits, and it does not come through here.
  */
-export function assertNoSnapshotOperation(box: Pick<Box, 'id' | 'state'>): void {
+export function assertNoSnapshotOperation(box: Pick<Box, 'id' | 'state' | 'checkpointOperationId'>): void {
+  if (box.checkpointOperationId) {
+    throw new ConflictException(`Box ${box.id} has a checkpoint operation in progress`)
+  }
   if (SNAPSHOT_OPERATION_STATES.includes(box.state)) {
     throw new ConflictException(`Box ${box.id} is ${box.state} a snapshot; it can only be deleted until that finishes`)
   }
@@ -38,6 +41,9 @@ export function reportedBoxState(box: Pick<Box, 'state' | 'desiredState'>): BoxS
       if (box.desiredState === BoxDesiredState.DESTROYED) {
         return BoxState.DESTROYING
       }
+      break
+    case BoxState.PAUSED:
+      if (box.desiredState === BoxDesiredState.DESTROYED) return BoxState.DESTROYING
       break
     case BoxState.STOPPED:
       if (box.desiredState === BoxDesiredState.STARTED) {

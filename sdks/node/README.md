@@ -24,6 +24,30 @@ and `SimpleBox.agents` for agent and turn methods, grouped options and error han
 - **Zero daemon** - No background processes required
 - **Cross-platform** - macOS ARM64, Linux x86_64/ARM64
 
+## Memory checkpoints
+
+On a supported Linux x86_64/KVM runtime, checkpoint an explicitly paused box and
+restore its processes into a new Paused box. A macOS client can use REST:
+
+```typescript
+const source = (await runtime.get("source-box"))!;
+await source.pause();
+const saved = await source.checkpoint.create("before-upgrade");
+console.log(await runtime.checkpoints().list());
+const child = await runtime.createFromCheckpoint(saved.id, { name: "restored" });
+await child.resume();
+await runtime.checkpoints().remove(saved.id);
+```
+
+The captured resources are preserved. Box-scoped `get()` returns `null` when
+missing; runtime catalog `get()` rejects. `remove(id, true)` ignores absence only.
+Ready checkpoints survive source deletion. For explicit pair transfer, use
+`source.exportCheckpoint(path)` and `runtime.importCheckpoint(path, { name })`;
+paths remain caller-local over REST. `JsBoxlite.inspectCheckpoint(path)` inspects
+local files synchronously. Numeric metadata outside JavaScript's safe integer
+range is rejected instead of rounded. Coordinate external host writers before
+`pause({ hostWritersStopped: true })`. See [checkpoint contracts](../../docs/guides/checkpoints.md).
+
 ## Installation
 
 ```bash

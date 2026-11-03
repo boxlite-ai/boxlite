@@ -55,6 +55,19 @@ const EXPECTED: Record<string, OrganizationResourcePermission[] | null> = {
   proxyExecStatus: null,
   proxyMetrics: null,
   getSshStatus: null,
+  // memory checkpoint controllers
+  listAllCheckpoints: null,
+  getAnyCheckpoint: null,
+  removeAnyCheckpoint: [DELETE_BOXES],
+  createBoxFromCheckpoint: [WRITE_BOXES],
+  importCheckpoint: [WRITE_BOXES],
+  exportCheckpoint: [WRITE_BOXES],
+  pauseBox: [WRITE_BOXES],
+  resumeBox: [WRITE_BOXES],
+  createCheckpoint: [WRITE_BOXES],
+  listCheckpoints: null,
+  getCheckpoint: null,
+  removeCheckpoint: [DELETE_BOXES],
   // snapshot controllers
   createSnapshot: [WRITE_BOXES],
   createBoxFromSnapshot: [WRITE_BOXES],
@@ -94,7 +107,7 @@ describe('REST box/proxy/snapshot/cache permission coverage (GHSA-2qqv-7cwv-mj8h
     (controller) =>
       [Reflect.getMetadata(PATH_METADATA, controller)]
         .flat()
-        .some((path: string) => /boxes|snapshots|caches/.test(path)),
+        .some((path: string) => /boxes|snapshots|checkpoints|caches/.test(path)),
   )
   const handlers = controllers.flatMap((controller) =>
     routeMethods(controller).map((method) => [`${controller.name}.${method}`, controller, method] as const),

@@ -100,6 +100,16 @@ func (s *BoxSyncService) GetRemoteBoxStates(ctx context.Context) (map[string]api
 	if err != nil {
 		return nil, fmt.Errorf("failed to get boxes from API: %w", err)
 	}
+	// Keep this separate from Started so an older API refusing the new state
+	// cannot disable reconciliation of boxes it already understands.
+	paused, pausedErr := s.fetchRunnerBoxes(ctx, string(apiclient.BOXSTATE_PAUSED), true)
+	if pausedErr != nil {
+		s.log.WarnContext(ctx, "Paused box query unavailable; continuing existing reconciliation", "error", pausedErr)
+	} else {
+		for id, state := range paused {
+			remoteBoxes[id] = state
+		}
+	}
 
 	// Boxes the control plane still believes are coming up. Fetching them is
 	// what lets the existing mismatch loop below repair a startup whose job
@@ -299,6 +309,8 @@ func (s *BoxSyncService) convertToApiState(localState enums.BoxState) apiclient.
 		return apiclient.BOXSTATE_DESTROYING
 	case enums.BoxStateStarted:
 		return apiclient.BOXSTATE_STARTED
+	case enums.BoxStatePaused:
+		return apiclient.BOXSTATE_PAUSED
 	case enums.BoxStateStopped:
 		return apiclient.BOXSTATE_STOPPED
 	case enums.BoxStateStarting:
@@ -324,6 +336,8 @@ func (s *BoxSyncService) convertFromApiState(apiState apiclient.BoxState) enums.
 		return enums.BoxStateDestroying
 	case apiclient.BOXSTATE_STARTED:
 		return enums.BoxStateStarted
+	case apiclient.BOXSTATE_PAUSED:
+		return enums.BoxStatePaused
 	case apiclient.BOXSTATE_STOPPED:
 		return enums.BoxStateStopped
 	case apiclient.BOXSTATE_STARTING:

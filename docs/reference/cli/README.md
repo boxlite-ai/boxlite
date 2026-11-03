@@ -612,6 +612,18 @@ paused (same container, initialized); otherwise it stops the VM and fails. Same 
 - `boxlite checkpoint export BOX DIRECTORY`
 - `boxlite checkpoint inspect DIRECTORY`
 - `boxlite checkpoint import [--name NAME] DIRECTORY`
+- `boxlite checkpoint create BOX [--name NAME]`
+- `boxlite checkpoint list [--box BOX]`
+- `boxlite checkpoint get ID_OR_NAME`
+- `boxlite checkpoint remove ID_OR_NAME [--force]`
+- `boxlite checkpoint restore ID_OR_NAME [--name NAME]`
+
+`create` captures an explicitly Paused box into the persistent runtime catalog;
+`list`/`get` print checkpoint JSON metadata. Ready checkpoints survive source
+deletion and retain their exact boot dependency. `restore` creates a new Paused
+box and prints its ID; call `resume` to continue execution. It does not overwrite
+the source. `remove --force` ignores absence only; in-use resources still fail.
+Remote management requires `checkpoint_management_enabled` discovery.
 
 `export` requires owner-confirmed Paused and publishes exactly `snapshot.mem` and
 `snapshot.qcow2` into a new directory; the box stays Paused. `inspect` reads dependency

@@ -28,6 +28,7 @@ import { CommerceBoxLimitService } from './commerce-box-limit.service'
 import { AUDIT_CONTEXT_KEY, AuditContext } from '../audit/decorators/audit.decorator'
 import { BoxliteBoxSnapshotController } from './boxlite-box-snapshot.controller'
 import { BoxSnapshotService } from '../box/services/box-snapshot.service'
+import { BoxCheckpointService } from '../box/services/box-checkpoint.service'
 import { BoxliteSnapshotController } from './boxlite-snapshot.controller'
 import { SnapshotBoxService } from './snapshot-box.service'
 import { BoxliteRestModule } from './boxlite-rest.module'
@@ -109,7 +110,13 @@ describe('BoxLite REST routing', () => {
   }
 
   async function startApp(controllers: any[], providers: any[]) {
-    const moduleRef = await Test.createTestingModule({ controllers, providers })
+    const moduleRef = await Test.createTestingModule({
+      controllers,
+      providers: [
+        { provide: BoxCheckpointService, useValue: { isEnabled: jest.fn().mockResolvedValue(false) } },
+        ...providers,
+      ],
+    })
       // The proxy controller is here only for its routes. Mock whatever it
       // injects, so a constructor dependency added later (#1723 added
       // TunnelService) cannot stop these routing tests from building.

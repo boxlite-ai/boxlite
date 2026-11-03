@@ -1,5 +1,6 @@
 """Snapshot contracts across the native extension and a real HTTP boundary."""
 
+import importlib.util
 import json
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -7,6 +8,10 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import pytest
 
 import boxlite
+
+if importlib.util.find_spec("boxlite.boxlite") is None:
+    pytest.skip("native extension module not built", allow_module_level=True)
+from boxlite.boxlite import Boxlite, BoxOptions  # noqa: F401 - validate native exports
 
 
 @pytest.fixture

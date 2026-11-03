@@ -299,7 +299,9 @@ export class RunnerService {
     if (params.boxClass !== undefined) {
       runnerFilter.class = params.boxClass
     }
+    if (params.id !== undefined) runnerFilter.id = params.id
     if (params.apiVersion !== undefined) runnerFilter.apiVersion = params.apiVersion
+    if (params.checkpointsEnabled !== undefined) runnerFilter.checkpointsEnabled = params.checkpointsEnabled
 
     const runners = await this.runnerRepository.find({
       where: runnerFilter,
@@ -363,6 +365,7 @@ export class RunnerService {
       diskGiB?: number
     },
     appVersion?: string,
+    checkpointsEnabled?: boolean,
   ): Promise<void> {
     const runner = await this.findOne(runnerId)
     if (!runner) {
@@ -376,6 +379,7 @@ export class RunnerService {
     }
 
     const updateData: Partial<Runner> = {
+      checkpointsEnabled: checkpointsEnabled === true,
       state: RunnerState.READY,
       lastChecked: new Date(),
     }
@@ -978,6 +982,8 @@ export class RunnerService {
 export const NO_AVAILABLE_RUNNERS = 'No available runners'
 
 export class GetRunnerParams {
+  id?: string
+  checkpointsEnabled?: boolean
   apiVersion?: string
   regions?: string[]
   boxClass?: BoxClass

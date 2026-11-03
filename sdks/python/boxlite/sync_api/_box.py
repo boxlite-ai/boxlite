@@ -11,6 +11,7 @@ from ._agents import SyncAgents
 if TYPE_CHECKING:
     from ..boxlite import Box, BoxMetrics, BoxResources, TunnelOptions
     from ._boxlite import SyncBoxlite
+    from ._checkpoints import SyncCheckpointHandle
     from ._execution import SyncExecution
     from ._network import SyncNetworkHandle
     from ._snapshots import SyncSnapshotHandle
@@ -100,6 +101,25 @@ class SyncBox:
 
         self._runtime._require_started()
         return SyncSnapshotHandle(self._runtime, self._box.snapshot)
+
+    @property
+    def checkpoint(self) -> "SyncCheckpointHandle":
+        from ._checkpoints import SyncCheckpointHandle
+
+        self._runtime._require_started()
+        return SyncCheckpointHandle(self._runtime, self._box.checkpoint)
+
+    def pause(self, *, host_writers_stopped: bool = False) -> None:
+        self._runtime._require_started()
+        self._sync(self._box.pause(host_writers_stopped=host_writers_stopped))
+
+    def resume(self) -> None:
+        self._runtime._require_started()
+        self._sync(self._box.resume())
+
+    def export_checkpoint(self, path: str) -> None:
+        self._runtime._require_started()
+        self._sync(self._box.export_checkpoint(path))
 
     def start(self) -> None:
         """

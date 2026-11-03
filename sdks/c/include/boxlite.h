@@ -148,6 +148,10 @@ typedef struct CBoxCopyInStream CBoxCopyInStream;
 // Opaque handle for a streaming copy-out (pull archive bytes from the guest).
 typedef struct CBoxCopyOutStream CBoxCopyOutStream;
 
+// Opaque checkpoint capability. Capture requires a box-scoped handle;
+// list/get/remove use the scope chosen by the accessor.
+typedef struct CheckpointHandle CheckpointHandle;
+
 // Opaque credential handle. Wraps a core `Arc<dyn Credential>` so the
 // concrete credential kind (today only `ApiKeyCredential`) is hidden
 // behind one C type, matching the trait/interface surface in the other
@@ -293,6 +297,39 @@ typedef void (*CBoxRemoveBoxCb)(CBoxliteError*, void*);
 
 // Box start completion.
 typedef void (*CBoxStartBoxCb)(CBoxliteError*, void*);
+
+// Checkpoint metadata. Strings are owned by this value; error may be null.
+// created_at is Unix seconds; disk sizes are bytes.
+typedef struct CCheckpointInfo {
+  char *id;
+  char *box_id;
+  char *name;
+  char *status;
+  char *error;
+  int64_t created_at;
+  uint16_t cpus;
+  uint64_t memory_bytes;
+  uint64_t container_disk_bytes;
+  uint64_t size_bytes;
+} CCheckpointInfo;
+
+typedef struct CCheckpointInfoList {
+  struct CCheckpointInfo *items;
+  size_t count;
+} CCheckpointInfoList;
+
+typedef struct CheckpointHandle CBoxliteCheckpointHandle;
+
+// Checkpoint metadata completion. Success transfers ownership; release with
+// boxlite_free_checkpoint_info. A box-scoped missing lookup returns null without
+// an error; an organization lookup returns NotFound. Errors are callback-scoped.
+typedef void (*CBoxCheckpointInfoCb)(struct CCheckpointInfo*, CBoxliteError*, void*);
+
+// Checkpoint list completion. Release the owned list with boxlite_free_checkpoint_info_list.
+typedef void (*CBoxCheckpointListCb)(struct CCheckpointInfoList*, CBoxliteError*, void*);
+
+// Checkpoint remove/restore completion. The error is borrowed during the callback.
+typedef void (*CBoxCheckpointOpCb)(CBoxliteError*, void*);
 
 // Copy (into / out of) completion.
 typedef void (*CBoxCopyCb)(CBoxliteError*, void*);
@@ -1131,6 +1168,161 @@ enum BoxliteErrorCode boxlite_start_box(CBoxHandle *handle,
 char *boxlite_box_id(CBoxHandle *handle);
 
 void boxlite_box_free(CBoxHandle *handle);
+
+// Release metadata returned by create/get. Null is accepted.
+// # Safety
+// info must be null or an unmodified, owned result not previously freed.
+void boxlite_free_checkpoint_info(struct CCheckpointInfo *info);
+
+// Release an entire checkpoint list. Entries must not be freed individually.
+// # Safety
+// list must be null or an unmodified, owned result not previously freed.
+void boxlite_free_checkpoint_info_list(struct CCheckpointInfoList *list);
+
+// Obtain the runtime checkpoint catalog. Does not contact a remote server.
+// # Safety
+// runtime/out_handle must be valid and non-null; out_error may be null.
+// The caller owns the handle and must call boxlite_checkpoint_free.
+enum BoxliteErrorCode boxlite_runtime_checkpoints(CBoxliteRuntime *runtime,
+                                                  CBoxliteCheckpointHandle **out_handle,
+                                                  CBoxliteError *out_error);
+
+// Obtain checkpoints captured from one box. Restores always create a new box.
+// # Safety
+// box_handle/out_handle must be valid and non-null; out_error may be null.
+// The returned handle owns a reference to the box and must be freed separately.
+enum BoxliteErrorCode boxlite_box_checkpoints(CBoxHandle *box_handle,
+                                              CBoxliteCheckpointHandle **out_handle,
+                                              CBoxliteError *out_error);
+
+// Release a checkpoint handle; queued calls keep their own references.
+// # Safety
+// handle must be null or a live handle not previously freed. No concurrent access.
+void boxlite_checkpoint_free(CBoxliteCheckpointHandle *handle);
+
+// Capture a Paused box, waiting for a ready checkpoint. Null name generates one.
+// # Safety
+// handle/cb must be valid and non-null; name is null or valid UTF-8 and is copied.
+// Callback fires only on runtime_drain. Its metadata must be freed by the caller.
+enum BoxliteErrorCode boxlite_checkpoint_create(CBoxliteCheckpointHandle *handle,
+                                                const char *name,
+                                                CBoxCheckpointInfoCb cb,
+                                                void *user_data,
+                                                CBoxliteError *out_error);
+
+// List checkpoints in this handle's scope. The callback owns the whole list.
+// # Safety
+// handle/cb must be valid and non-null; user_data must survive callback dispatch.
+enum BoxliteErrorCode boxlite_checkpoint_list(CBoxliteCheckpointHandle *handle,
+                                              CBoxCheckpointListCb cb,
+                                              void *user_data,
+                                              CBoxliteError *out_error);
+
+// Get metadata by scoped ID/name. A missing box-scoped checkpoint
+// returns null without error; organization lookups return NotFound.
+// # Safety
+// handle/checkpoint/cb must be valid and non-null. checkpoint is copied before return.
+enum BoxliteErrorCode boxlite_checkpoint_get(CBoxliteCheckpointHandle *handle,
+                                             const char *checkpoint,
+                                             CBoxCheckpointInfoCb cb,
+                                             void *user_data,
+                                             CBoxliteError *out_error);
+
+// Delete a checkpoint. Nonzero force ignores absence, not permission or busy errors.
+// # Safety
+// handle/checkpoint/cb must be valid and non-null. Strings are copied before return.
+enum BoxliteErrorCode boxlite_checkpoint_remove(CBoxliteCheckpointHandle *handle,
+                                                const char *checkpoint,
+                                                int force,
+                                                CBoxCheckpointOpCb cb,
+                                                void *user_data,
+                                                CBoxliteError *out_error);
+
+// Pause a running box. Nonzero host_writers_stopped asserts external writers are stopped.
+// Completion is dispatched once by boxlite_runtime_drain; immediate errors do not call cb.
+enum BoxliteErrorCode boxlite_box_pause(CBoxHandle *handle,
+                                        int host_writers_stopped,
+                                        CBoxCheckpointOpCb cb,
+                                        void *user_data,
+                                        CBoxliteError *out_error);
+
+// Resume a Paused box explicitly; never substitutes a cold start.
+enum BoxliteErrorCode boxlite_box_resume(CBoxHandle *handle,
+                                         CBoxCheckpointOpCb cb,
+                                         void *user_data,
+                                         CBoxliteError *out_error);
+
+// Export the public two-file checkpoint to a caller-owned directory.
+// The directory must remain available until native completion, even after cancellation.
+enum BoxliteErrorCode boxlite_box_export_checkpoint(CBoxHandle *handle,
+                                                    const char *path,
+                                                    CBoxCheckpointOpCb cb,
+                                                    void *user_data,
+                                                    CBoxliteError *out_error);
+
+// Import a caller-owned public pair directory into a new Paused box.
+// A null name leaves the target unnamed. The source must outlive native completion.
+enum BoxliteErrorCode boxlite_import_checkpoint(CBoxliteRuntime *runtime,
+                                                const char *path,
+                                                const char *name,
+                                                CBoxCreateBoxCb cb,
+                                                void *user_data,
+                                                CBoxliteError *out_error);
+
+// Create a new Paused box from a managed checkpoint; captured resources are retained.
+enum BoxliteErrorCode boxlite_create_box_from_checkpoint(CBoxliteRuntime *runtime,
+                                                         const char *checkpoint,
+                                                         const char *name,
+                                                         CBoxCreateBoxCb cb,
+                                                         void *user_data,
+                                                         CBoxliteError *out_error);
+
+// Runner-only cloud restore with durable operation identity and cloud configuration validation.
+enum BoxliteErrorCode boxlite_create_box_from_checkpoint_with_operation(CBoxliteRuntime *runtime,
+                                                                        const char *checkpoint,
+                                                                        const char *name,
+                                                                        const char *operation_id,
+                                                                        CBoxCreateBoxCb cb,
+                                                                        void *user_data,
+                                                                        CBoxliteError *out_error);
+
+// Inspect a caller-local public pair, preserving the full dependency schema as owned JSON.
+// Free a successful out_json with boxlite_free_string. No runtime or VM is created.
+enum BoxliteErrorCode boxlite_inspect_checkpoint(const char *path,
+                                                 char **out_json,
+                                                 CBoxliteError *out_error);
+
+// Runner-only complete pair validation and allowlisted admission summary as owned JSON.
+// Saved host paths are never opened. Free successful out_json with boxlite_free_string.
+enum BoxliteErrorCode boxlite_inspect_cloud_upload(const char *path,
+                                                   char **out_json,
+                                                   CBoxliteError *out_error);
+
+// Runner-only archive transport. Export never removes the managed resource.
+enum BoxliteErrorCode boxlite_export_checkpoint_archive(CBoxliteRuntime *runtime,
+                                                        const char *checkpoint,
+                                                        const char *path,
+                                                        CBoxCheckpointOpCb cb,
+                                                        void *user_data,
+                                                        CBoxliteError *out_error);
+
+// Runner-only managed archive registration with a canonical operation UUID.
+// Source files remain caller-owned until native completion.
+enum BoxliteErrorCode boxlite_import_checkpoint_archive(CBoxliteRuntime *runtime,
+                                                        const char *path,
+                                                        const char *operation_id,
+                                                        CBoxCheckpointInfoCb cb,
+                                                        void *user_data,
+                                                        CBoxliteError *out_error);
+
+// Runner-only public-pair registration. options_json is CloudCheckpointImportOptions;
+// trusted_boot is a trusted runner file, never a client-supplied host path.
+enum BoxliteErrorCode boxlite_import_checkpoint_pair(CBoxliteRuntime *runtime,
+                                                     const char *path,
+                                                     const char *options_json,
+                                                     CBoxCheckpointInfoCb cb,
+                                                     void *user_data,
+                                                     CBoxliteError *out_error);
 
 enum BoxliteErrorCode boxlite_copy_into(CBoxHandle *handle,
                                         const char *host_src,

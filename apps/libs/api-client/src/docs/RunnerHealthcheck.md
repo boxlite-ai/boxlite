@@ -5,6 +5,7 @@
 
 Name | Type | Description | Notes
 ------------ | ------------- | ------------- | -------------
+**checkpointsEnabled** | **boolean** | Native Linux x86_64 memory checkpoint support; omitted means disabled | [optional] [default to undefined]
 **metrics** | [**RunnerHealthMetrics**](RunnerHealthMetrics.md) | Runner metrics | [optional] [default to undefined]
 **serviceHealth** | [**Array&lt;RunnerServiceHealth&gt;**](RunnerServiceHealth.md) | Health status of individual services on the runner | [optional] [default to undefined]
 **domain** | **string** | Runner domain | [optional] [default to undefined]
@@ -18,6 +19,7 @@ Name | Type | Description | Notes
 import { RunnerHealthcheck } from './api';
 
 const instance: RunnerHealthcheck = {
+    checkpointsEnabled,
     metrics,
     serviceHealth,
     domain,

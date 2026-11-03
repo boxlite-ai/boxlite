@@ -136,7 +136,7 @@ impl BoxStatus {
             (Configured, Stopped) |
             (Configured, Failed) |
             (Configured, Unknown) |
-            // Running → Stopping (graceful), Stopped (crash), Paused (SIGSTOP), or Failed (runtime crash)
+            // Running → Stopping (graceful), Stopped (crash), Paused (checkpoint owner), or Failed (runtime crash)
             (Running, Stopping) |
             (Running, Stopped) |
             (Running, Paused) |
@@ -299,6 +299,9 @@ pub struct BoxState {
     /// exports through a different runtime process. No descriptors are retained.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) checkpoint_paths: Option<super::checkpoint::provider::LocalPaths>,
+    /// Published atomically with the box for native memory-import redelivery.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) checkpoint_import_identity: Option<crate::runtime::checkpoints::ImportIdentity>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) start_mode: Option<crate::vmm::checkpoint::support::StartMode>,
     /// The storage an imported box runs from instead of an image. Set once,
@@ -410,6 +413,7 @@ impl BoxState {
             resolved_image: None,
             checkpoint_guest: None,
             checkpoint_paths: None,
+            checkpoint_import_identity: None,
             start_mode: None,
             restored_storage: None,
         }

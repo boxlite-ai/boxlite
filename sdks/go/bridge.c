@@ -121,3 +121,10 @@ extern void goBoxliteOnSnapshotOp(CBoxliteError *err, void *ud);
 CBoxSnapshotInfoCb cbSnapshotInfo(void) { return goBoxliteOnSnapshotInfo; }
 CBoxSnapshotListCb cbSnapshotList(void) { return goBoxliteOnSnapshotList; }
 CBoxSnapshotOpCb cbSnapshotOp(void) { return goBoxliteOnSnapshotOp; }
+
+extern void goBoxliteOnCheckpointInfo(CCheckpointInfo *info, CBoxliteError *err, void *ud);
+extern void goBoxliteOnCheckpointList(CCheckpointInfoList *list, CBoxliteError *err, void *ud);
+extern void goBoxliteOnCheckpointOp(CBoxliteError *err, void *ud);
+CBoxCheckpointInfoCb cbCheckpointInfo(void) { return goBoxliteOnCheckpointInfo; }
+CBoxCheckpointListCb cbCheckpointList(void) { return goBoxliteOnCheckpointList; }
+CBoxCheckpointOpCb cbCheckpointOp(void) { return goBoxliteOnCheckpointOp; }

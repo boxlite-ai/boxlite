@@ -167,6 +167,36 @@ impl JsBox {
         }
     }
 
+    #[napi(getter)]
+    pub fn checkpoint(&self) -> crate::checkpoints::JsCheckpointHandle {
+        crate::checkpoints::JsCheckpointHandle {
+            handle: Arc::clone(&self.handle),
+        }
+    }
+
+    #[napi]
+    pub async fn pause(&self, options: Option<crate::checkpoints::JsPauseOptions>) -> Result<()> {
+        self.handle
+            .pause(boxlite::PauseOptions {
+                host_writers_stopped: options
+                    .and_then(|options| options.host_writers_stopped)
+                    .unwrap_or(false),
+            })
+            .await
+            .map_err(map_err)
+    }
+
+    #[napi]
+    pub async fn resume(&self) -> Result<()> {
+        self.handle.resume().await.map_err(map_err)
+    }
+
+    /// Export to a caller-local directory, including on a REST runtime.
+    #[napi]
+    pub async fn export_checkpoint(&self, path: String) -> Result<()> {
+        self.handle.export_checkpoint(path).await.map_err(map_err)
+    }
+
     /// Get the SSH control handle for this box.
     ///
     /// Creating the handle never starts the VM; only `configure` may start it.

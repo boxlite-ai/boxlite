@@ -499,7 +499,7 @@ durations, and network counters. All values come from
 `/info` combines:
 
 - A snapshot from `metrics.Collector.Collect(ctx)` — host CPU load
-  average, CPU/mem %, summed allocated CPU/RAM across running boxes,
+  average, CPU/mem %, summed allocated CPU/RAM across running and paused boxes,
   disk usage of the BoxLite home's filesystem, artifact count, started
   box count.
 - `runner.InspectRunnerServices(ctx)` — pings the BoxLite runtime with
@@ -538,15 +538,18 @@ the counters maintained in `pkg/common/` (operation counts, etc.).
 
 ### Box state sync
 
-[`pkg/services/sandbox_sync.go`](pkg/services/sandbox_sync.go). Runs every
+[`pkg/services/box_sync.go`](pkg/services/box_sync.go). Runs every
 10 s (configurable in `main.go`). For each local box, fetches the
 authoritative state from BoxLite, then asks the control-plane API for
-all boxes currently `STARTED` and not under reconciliation, and
+all boxes currently `STARTED` or `PAUSED` and not under reconciliation, and
 calls `UpdateBoxState` whenever the two disagree. One-way: local
 state wins.
 
-Boxes that don't appear in the remote `STARTED` list are skipped — the
-runner does not push state for boxes the API isn't tracking.
+The two states are queried independently, so an older API rejecting `PAUSED`
+does not disable existing `STARTED` reconciliation. `CREATING`/`STARTING`
+confirmation additionally requires a recorded native Running transition;
+Paused never substitutes for that start confirmation. Boxes outside these
+candidate queries are skipped.
 
 ### Metrics collector
 
@@ -558,7 +561,65 @@ independent loops:
   smoothed CPU % without re-sampling on each request.
 - **Allocated resources snapshot** every
   `AllocatedResourcesSnapshotInterval` — queries `Boxlite.ListInfo()`
-  and sums the CPU/RAM allocations across running boxes.
+  and sums the CPU/RAM allocations across running and paused boxes. The
+  started-box count still includes only running boxes: pause retains its
+  reservation while stopping releases CPU/RAM.
+
+### Memory checkpoints
+
+The v2 jobs `PAUSE_BOX`, `RESUME_BOX`, `CREATE_CHECKPOINT` and
+`IMPORT_CHECKPOINT` call the Go SDK's native checkpoint interfaces. Capture
+requires a Paused source. Restore creates a new Paused box with its own exact
+boot copy; only a subsequent resume continues the saved process. For example,
+pause a task, capture `before-upgrade`, restore it into a new box, then resume.
+Disk snapshot restore remains a separate stopped-disk operation.
+
+The runner advertises `checkpointsEnabled` only on Linux x86_64 with KVM,
+default kernel configuration and available GCS credential/emulator discovery.
+The API separately checks configured storage and organization admission.
+Individual unsupported box configurations are rejected by native validation.
+Custom kernels, external shares and other native restrictions are not relaxed.
+
+Internal bearer-authenticated transfer routes are:
+
+| Method | Path | Result |
+| --- | --- | --- |
+| POST | `/api/checkpoint-transfers/:transferId` | Validate a bounded tar+zstd public pair and return native allowlisted inspection |
+| POST | `/api/checkpoint-transfers/:transferId/register` | Register the inspected digest using trusted runtime-cache boot or a same-organization managed archive |
+| POST | `/api/checkpoint-transfers/:transferId/export` | Stream a Paused source's public pair |
+| DELETE | `/api/checkpoint-transfers/:transferId` | Acknowledge cleanup after native consumers finish |
+
+Transfer UUIDs and boot archive URIs come from the control plane, never saved
+host paths. Export's `boxId` is an opaque Box ID, including the control plane's
+12-character alphanumeric IDs, rather than a UUID. It follows the native Box ID
+parser: 1–128 ASCII letters, digits, `_` or `-`. Transfer, operation and
+organization identities remain canonical UUIDs; replay retains the original
+source and organization binding. Public pair transport accepts exactly `snapshot.mem` and
+`snapshot.qcow2`, bounded to 16 GiB; managed archives additionally own boot.
+Native inspection and registration recheck content identity. Raw import jobs
+also match their organization, allocation and admitted configuration against
+the persisted inspection before creating a VM.
+
+`<BoxLite home>/checkpoint-work` holds durable operation/transfer records and
+private staging. Duplicate jobs match the same operation and payload; completed
+work is reported without repeating a memory import. An uncertain pause/resume
+is acknowledged only after native state confirms its result, and is never
+blindly repeated. Terminal records and transfer tombstones retain replay
+identity; temporary payloads and native registrations are removed after their
+consumers finish. A cleanup error retains its record for a subsequent retry.
+
+Native calls use a completion context independent of request/job cancellation.
+Destroy and stop wait behind native checkpoint ownership; cancellation cannot
+delete files or a VM still in use. Job reports include the operation UUID,
+actual cloud state and `nativeCompleted`; a missing/unreadable journal is not
+proof of completion. The terminal report uses its own bounded context so a
+cancelled request can still deliver that acknowledgement.
+
+Malformed uploads retain `InvalidArgumentError`/400, conflicting identities
+`InvalidStateError`/409, unsupported inputs `UnsupportedError`/400, and storage
+failures `StorageError`/500. Existing raw-pair and global error mappings are
+unchanged. Local REST/native-boundary tests do not replace independent KVM
+process-continuation and real cloud object-store acceptance.
 
 `Collect(ctx)` reads the current values with a short timeout and is
 called from both `/info` and the v2 healthcheck. Disk numbers come from
@@ -736,7 +797,7 @@ scripts/build/fix-go-symbols.sh target/debug/libboxlite.a
   - [`pkg/api/controllers/boxlite_files.go`](pkg/api/controllers/boxlite_files.go), [`boxlite_metrics.go`](pkg/api/controllers/boxlite_metrics.go), [`info.go`](pkg/api/controllers/info.go)
 
 - **Services / state**:
-  - [`pkg/services/box.go`](pkg/services/box.go), [`sandbox_sync.go`](pkg/services/sandbox_sync.go)
+  - [`pkg/services/box.go`](pkg/services/box.go), [`box_sync.go`](pkg/services/box_sync.go)
   - [`pkg/boxlite/client.go`](pkg/boxlite/client.go) — Go SDK wrapper
   - [`pkg/boxlite/exec_manager.go`](pkg/boxlite/exec_manager.go) — `ManagedExec`, reaping
   - [`pkg/cache/`](pkg/cache/) — backup info and artifact error caches

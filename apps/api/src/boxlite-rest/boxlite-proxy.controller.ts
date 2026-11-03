@@ -38,10 +38,7 @@ import { AuthContext } from '../common/decorators/auth-context.decorator'
 import { OrganizationAuthContext } from '../common/interfaces/auth-context.interface'
 import { BoxService, ProxyAdmission } from '../box/services/box.service'
 import { RunnerService } from '../box/services/runner.service'
-import {
-  AUTO_RESUMABLE_STATES,
-  BoxAutoResumeService,
-} from '../box/services/box-auto-resume.service'
+import { AUTO_RESUMABLE_STATES, BoxAutoResumeService } from '../box/services/box-auto-resume.service'
 import { BoxState } from '../box/enums/box-state.enum'
 import { BoxDesiredState } from '../box/enums/box-desired-state.enum'
 import { assertNoSnapshotOperation, reportedBoxState } from '../box/utils/box-state.util'
@@ -348,10 +345,7 @@ export class BoxliteProxyController {
     // Refuse at once a box the CONNECT could never wake. A box it can wake
     // gets its URI as it is: the proxy wakes it on the CONNECT, and waits for
     // the service to listen, so waking it here would only hold the caller.
-    if (
-      box.state !== BoxState.STARTED &&
-      (!box.autoResume || !AUTO_RESUMABLE_STATES.includes(box.state))
-    ) {
+    if (box.state !== BoxState.STARTED && (!box.autoResume || !AUTO_RESUMABLE_STATES.includes(box.state))) {
       throw new ConflictException(`Box ${boxId} is not running (state: ${box.state})`)
     }
 

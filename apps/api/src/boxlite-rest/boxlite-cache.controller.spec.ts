@@ -23,13 +23,11 @@ describe('runner cache contract', () => {
     expect(await validate(plainToInstance(CreateBoxDto, { volumes: [volume] }))).not.toHaveLength(0)
   })
   it('uses only the authenticated tenant for the runner request', async () => {
-    const fetcher = jest
-      .spyOn(global, 'fetch')
-      .mockResolvedValue({
-        ok: true,
-        status: 200,
-        json: async () => ({ type: 'cache', id: 'build', in_use: false }),
-      } as Response)
+    const fetcher = jest.spyOn(global, 'fetch').mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ type: 'cache', id: 'build', in_use: false }),
+    } as Response)
     try {
       const controller = new BoxliteCacheController(
         {

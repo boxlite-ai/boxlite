@@ -612,6 +612,33 @@ impl ApiClient {
         )
     }
 
+    pub async fn require_checkpoint_management_enabled(&self) -> BoxliteResult<()> {
+        let config = match self.get_config().await {
+            Err(BoxliteError::NotFound(_)) => {
+                return Err(BoxliteError::Unsupported(
+                    "Remote server did not advertise checkpoint management".into(),
+                ));
+            }
+            result => result?,
+        };
+        ensure_capability(
+            "checkpoint_management",
+            config
+                .capabilities
+                .and_then(|caps| caps.checkpoint_management_enabled),
+        )
+    }
+
+    /// Memory operations may already be committed when their response is lost.
+    pub async fn post_checkpoint_json<B: Serialize, T: DeserializeOwned>(
+        &self,
+        path: &str,
+        body: &B,
+    ) -> BoxliteResult<T> {
+        self.send_json(self.checkpoint_http.post(self.url(path)).json(body))
+            .await
+    }
+
     /// A single streaming request: import is never retried after response loss.
     pub async fn post_checkpoint<T: DeserializeOwned>(
         &self,

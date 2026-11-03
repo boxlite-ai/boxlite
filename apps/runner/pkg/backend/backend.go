@@ -10,6 +10,7 @@ import (
 	"context"
 
 	"github.com/boxlite-ai/runner/pkg/api/dto"
+	blclient "github.com/boxlite-ai/runner/pkg/boxlite"
 	"github.com/boxlite-ai/runner/pkg/models"
 )
 
@@ -37,4 +38,10 @@ type BoxBackend interface {
 
 	// Health
 	Ping(ctx context.Context) error
+}
+
+// CheckpointBackend is optional so legacy backends refuse checkpoint jobs
+// before any VM or file side effect.
+type CheckpointBackend interface {
+	ExecuteCheckpoint(context.Context, blclient.CheckpointJob) (*blclient.CheckpointResult, error)
 }

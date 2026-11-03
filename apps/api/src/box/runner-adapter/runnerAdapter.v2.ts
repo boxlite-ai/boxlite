@@ -11,6 +11,9 @@ import { RunnerAdapter, RunnerInfo, RunnerBoxInfo, StartBoxResponse } from './ru
 import { Runner } from '../entities/runner.entity'
 import { Box } from '../entities/box.entity'
 import { BoxSnapshot } from '../entities/box-snapshot.entity'
+import { BoxCheckpoint, BoxCheckpointOperation } from '../entities/box-checkpoint.entity'
+import { BoxDesiredState } from '../enums/box-desired-state.enum'
+import { randomUUID } from 'crypto'
 import { BoxSnapshotState } from '../enums/box-snapshot-state.enum'
 import { Job } from '../entities/job.entity'
 import { BoxState } from '../enums/box-state.enum'
@@ -124,6 +127,61 @@ export class RunnerAdapterV2 implements RunnerAdapter {
       throw new Error(`Box ${box.id} has no image; cannot create on runner`)
     }
 
+    if (box.initialCheckpointId) {
+      await this.boxRepository.manager.transaction(async (manager) => {
+        const target = await manager.findOne(Box, {
+          where: { id: box.id },
+          lock: { mode: 'pessimistic_write' },
+          loadEagerRelations: false,
+        })
+        if (!target || target.desiredState !== BoxDesiredState.PAUSED || target.checkpointOperationId) return
+        if (!this.runner.checkpointsEnabled) throw new Error('Runner does not support memory checkpoints')
+        const checkpoint = await manager.findOne(BoxCheckpoint, {
+          where: { id: box.initialCheckpointId, organizationId: box.organizationId, state: 'ready' },
+          lock: { mode: 'pessimistic_read' },
+        })
+        if (!checkpoint) throw new Error('Checkpoint is no longer ready')
+        if (checkpoint.nativeRunnerId && checkpoint.nativeRunnerId !== this.runner.id)
+          throw new Error('Checkpoint transfer belongs to a different runner')
+        const operationId = randomUUID()
+        const job = await this.jobService.createJob(
+          manager,
+          JobType.IMPORT_CHECKPOINT,
+          this.runner.id,
+          ResourceType.BACKUP,
+          box.id,
+          {
+            operationId,
+            checkpointId: checkpoint.id,
+            archiveUri: checkpoint.archiveUri,
+            nativeCheckpointId: checkpoint.nativeCheckpointId,
+            contentSha256: checkpoint.contentSha256,
+            organizationId: box.organizationId,
+            configuration: checkpoint.configuration,
+            cpu: checkpoint.cpus,
+            memoryMib: checkpoint.memoryMib,
+          },
+        )
+        await manager.insert(BoxCheckpointOperation, {
+          id: operationId,
+          organizationId: box.organizationId,
+          boxId: box.id,
+          checkpointId: checkpoint.id,
+          jobId: job.id,
+          kind: 'restore',
+          state: 'pending',
+        })
+        await this.boxRepository.updateWhere(
+          box.id,
+          {
+            updateData: { checkpointOperationId: operationId, state: BoxState.RESTORING },
+            whereCondition: { state: BoxState.UNKNOWN, desiredState: BoxDesiredState.PAUSED },
+          },
+          manager,
+        )
+      })
+      return undefined
+    }
     let snapshotArchiveUri: string | undefined
     if (box.initialSnapshotId) {
       const snapshot = await this.boxRepository.manager.findOneByOrFail(BoxSnapshot, {

@@ -118,7 +118,13 @@ func (e *Executor) Execute(ctx context.Context, job *apiclient.Job) {
 	}
 
 	// Report status to API
-	if err := e.updateJobStatus(ctx, job.GetId(), status, resultMetadata, errorMessage); err != nil {
+	reportCtx := ctx
+	if checkpointJobType(job.GetType()) {
+		var cancel context.CancelFunc
+		reportCtx, cancel = context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+		defer cancel()
+	}
+	if err := e.updateJobStatus(reportCtx, job.GetId(), status, resultMetadata, errorMessage); err != nil {
 		jobLog.ErrorContext(ctx, "Failed to update job status", "error", err)
 	}
 }
@@ -170,6 +176,8 @@ func (e *Executor) executeJob(ctx context.Context, job *apiclient.Job) (any, err
 		resultMetadata, err = e.createSnapshot(ctx, job)
 	case apiclient.JOBTYPE_RESTORE_SNAPSHOT:
 		resultMetadata, err = e.restoreSnapshot(ctx, job)
+	case apiclient.JOBTYPE_PAUSE_BOX, apiclient.JOBTYPE_RESUME_BOX, apiclient.JOBTYPE_CREATE_CHECKPOINT, apiclient.JOBTYPE_IMPORT_CHECKPOINT:
+		resultMetadata, err = e.checkpoint(ctx, job)
 	default:
 		err = fmt.Errorf("unknown job type: %s", job.GetType())
 	}

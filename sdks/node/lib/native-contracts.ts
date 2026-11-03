@@ -536,6 +536,59 @@ export interface RuntimeSnapshotHandle {
   remove(idOrName: string, force?: boolean): Promise<void>;
 }
 
+export interface JsPauseOptions {
+  hostWritersStopped?: boolean;
+}
+
+export interface JsCheckpointImportOptions {
+  name?: string;
+}
+
+/** Captured resources, including the source-independent boot dependency. */
+export interface JsCheckpointInfo {
+  id: string;
+  boxId: string;
+  name: string;
+  status: "creating" | "ready" | "failed" | "deleting";
+  error?: string;
+  createdAt: number;
+  cpus: number;
+  memoryBytes: number;
+  containerDiskBytes: number;
+  sizeBytes: number;
+}
+
+/** Caller-local pair inspection. Opaque nested records retain the native schema. */
+export interface JsCheckpointDependencies {
+  version: number;
+  cpus: number;
+  memoryBytes: number;
+  bootMemoryMib: number;
+  maxMemoryMib: number;
+  containerDiskBytes: number;
+  bootDiskBytes: number;
+  bootDiskSha256: string;
+  qcow2Bytes: number;
+  qcow2Sha256: string;
+  shares: Array<Record<string, unknown>>;
+  localRoots: Record<string, string>;
+  bootDiskPath?: string;
+  diskDependencies: unknown;
+}
+
+export interface JsCheckpointHandle {
+  create(name?: string | null): Promise<JsCheckpointInfo>;
+  list(): Promise<JsCheckpointInfo[]>;
+  get(idOrName: string): Promise<JsCheckpointInfo | null>;
+  remove(idOrName: string, force?: boolean | null): Promise<void>;
+}
+
+export interface JsRuntimeCheckpointHandle {
+  list(): Promise<JsCheckpointInfo[]>;
+  get(idOrName: string): Promise<JsCheckpointInfo>;
+  remove(idOrName: string, force?: boolean | null): Promise<void>;
+}
+
 export interface JsSnapshotInfo {
   id: string;
   status: string;
@@ -684,6 +737,10 @@ export interface JsBox {
     workingDir?: string | null,
   ): Promise<JsExecution>;
   readonly snapshot: JsSnapshotHandle;
+  readonly checkpoint: JsCheckpointHandle;
+  pause(options?: JsPauseOptions | null): Promise<void>;
+  resume(): Promise<void>;
+  exportCheckpoint(path: string): Promise<void>;
   readonly network: JsNetworkHandle;
   readonly ssh: JsSshHandle;
   cloneBox(
@@ -713,6 +770,15 @@ export interface JsGetOrCreateResult {
 }
 
 export interface JsBoxlite {
+  checkpoints(): JsRuntimeCheckpointHandle;
+  createFromCheckpoint(
+    idOrName: string,
+    options?: JsCheckpointImportOptions | null,
+  ): Promise<JsBox>;
+  importCheckpoint(
+    path: string,
+    options?: JsCheckpointImportOptions | null,
+  ): Promise<JsBox>;
   readonly snapshots: RuntimeSnapshotHandle;
   createFromSnapshot(
     snapshot: string,
@@ -746,6 +812,7 @@ export interface JsBoxliteConstructor {
   new (options: JsOptions): JsBoxlite;
   withDefaultConfig(): JsBoxlite;
   initDefault(options: JsOptions): void;
+  inspectCheckpoint(path: string): JsCheckpointDependencies;
   /** Connect to a remote BoxLite REST server. Takes the native
    *  `BoxliteRestOptions` class (see `NativeBoxliteRestOptions`). */
   rest(options: NativeBoxliteRestOptions): JsBoxlite;

@@ -354,6 +354,7 @@ pub(super) struct ServerConfig {
 pub(super) struct ServerCapabilities {
     pub cache_volumes_enabled: bool,
     pub checkpoints_enabled: bool,
+    pub checkpoint_management_enabled: bool,
     pub linux_capabilities_enabled: bool,
     pub privileged_enabled: bool,
     pub nested_virtualization_enabled: bool,

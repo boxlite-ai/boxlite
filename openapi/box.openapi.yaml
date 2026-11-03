@@ -616,6 +616,150 @@ paths:
         "409":
           $ref: "#/components/responses/ConflictError"
 
+  /{prefix}/boxes/{box_id}/checkpoints:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+      - $ref: "#/components/parameters/boxId"
+    post:
+      operationId: createManagedCheckpoint
+      summary: Capture an explicitly paused box into the checkpoint catalog
+      description: |
+        Requires checkpoint_management_enabled. Keeps the source Paused.
+        Completed resources retain their exact boot dependency and outlive the source.
+        Creating resources must be polled until ready; failed records report their error.
+      tags: [Boxes]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateCheckpointRequest"
+      responses:
+        "201":
+          description: Checkpoint admitted or completed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Checkpoint"
+        "409":
+          $ref: "#/components/responses/ConflictError"
+    get:
+      operationId: listBoxCheckpoints
+      summary: List checkpoints captured from this box
+      tags: [Boxes]
+      responses:
+        "200":
+          description: Source-scoped checkpoint catalog
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListCheckpointsResponse"
+
+  /{prefix}/boxes/{box_id}/checkpoints/{checkpoint}:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+      - $ref: "#/components/parameters/boxId"
+      - $ref: "#/components/parameters/checkpoint"
+    get:
+      operationId: getBoxCheckpoint
+      summary: Read a checkpoint within the source box scope
+      tags: [Boxes]
+      responses:
+        "200":
+          description: Checkpoint metadata
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Checkpoint"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+    delete:
+      operationId: deleteBoxCheckpoint
+      summary: Delete an unused checkpoint within the source box scope
+      tags: [Boxes]
+      responses:
+        "204":
+          description: Deletion accepted
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
+
+  /{prefix}/checkpoints:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+    get:
+      operationId: listCheckpoints
+      summary: List runtime or organization checkpoints, including deleted sources
+      tags: [Boxes]
+      responses:
+        "200":
+          description: Checkpoint catalog
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListCheckpointsResponse"
+
+  /{prefix}/checkpoints/{checkpoint}:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+      - $ref: "#/components/parameters/checkpoint"
+    get:
+      operationId: getCheckpoint
+      summary: Read checkpoint metadata by scoped ID or exact name
+      tags: [Boxes]
+      responses:
+        "200":
+          description: Checkpoint metadata
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Checkpoint"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+    delete:
+      operationId: deleteCheckpoint
+      summary: Delete an unused checkpoint and its managed storage
+      description: An active capture or import returns 409. Source deletion does not delete checkpoints.
+      tags: [Boxes]
+      responses:
+        "204":
+          description: Deletion accepted
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
+
+  /{prefix}/checkpoints/{checkpoint}/boxes:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+      - $ref: "#/components/parameters/checkpoint"
+    post:
+      operationId: createBoxFromCheckpoint
+      summary: Create a new Paused box from a ready checkpoint
+      description: |
+        Requires checkpoint_management_enabled. Captured CPU, memory and disk
+        configuration cannot be overridden. Poll an asynchronous target until paused;
+        only explicit resume continues execution. Never automatically resubmit after timeout.
+      tags: [Boxes]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CheckpointBoxRequest"
+      responses:
+        "201":
+          description: New box admitted for restoration; final state Paused
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Box"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
+
   /{prefix}/boxes/{box_id}/ssh:
     parameters:
       - $ref: "#/components/parameters/prefix"
@@ -2018,6 +2162,14 @@ components:
   # Parameters
   # -------------------------------------------------------------------------
   parameters:
+    checkpoint:
+      name: checkpoint
+      in: path
+      required: true
+      description: Within the authorized scope, ID takes priority over exact name; selected state errors never fall back to name
+      schema:
+        type: string
+        pattern: '^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$'
     prefix:
       name: prefix
       in: path
@@ -2337,6 +2489,9 @@ components:
               type: boolean
               description: Whether pause, resume and two-file checkpoint upload/download are supported; absent means unsupported
               example: true
+            checkpoint_management_enabled:
+              type: boolean
+              description: Whether persistent memory checkpoint capture, catalog management and new Paused box restoration are supported; absent means unsupported
             snapshots_enabled:
               type: boolean
               description: Whether snapshot create/list/get/remove/restore is supported
@@ -2717,7 +2872,7 @@ components:
         - `running`: VM active, accepting commands
         - `stopping`: Graceful shutdown in progress (transient)
         - `stopped`: VM terminated, can be restarted
-        - `paused`: VM frozen via SIGSTOP (during snapshot/export)
+        - `paused`: Checkpoint owner has paused guest vCPUs and devices; explicit resume is required
         - `failed`: Initialization failed; diagnostic state is retained
         - `unknown`: Error recovery state
         - `exporting`: Stopped, while a server that snapshots after replying
@@ -3206,6 +3361,70 @@ components:
           type: integer
           format: int64
           description: Unix timestamp (seconds), once the restore has ended
+
+    CreateCheckpointRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          pattern: '^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$'
+          description: Omit to generate a name; explicit empty names are invalid
+
+    CheckpointBoxRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          description: Optional name for the newly created box
+
+    Checkpoint:
+      type: object
+      required: [id, box_id, name, created_at, status, cpus, memory_bytes, container_disk_bytes, size_bytes]
+      properties:
+        id:
+          type: string
+          format: uuid
+        box_id:
+          type: string
+          description: Immutable source identity, retained after source deletion
+        name:
+          type: string
+        created_at:
+          type: integer
+          format: int64
+          description: Unix seconds
+        status:
+          type: string
+          enum: [creating, ready, failed, deleting]
+        error:
+          type: string
+          nullable: true
+        cpus:
+          type: integer
+        memory_bytes:
+          type: integer
+          format: int64
+          minimum: 0
+        container_disk_bytes:
+          type: integer
+          format: int64
+          minimum: 0
+        size_bytes:
+          type: integer
+          format: int64
+          minimum: 0
+          description: All managed members including boot; zero until complete size is known
+
+    ListCheckpointsResponse:
+      type: object
+      required: [checkpoints]
+      properties:
+        checkpoints:
+          type: array
+          items:
+            $ref: "#/components/schemas/Checkpoint"
 
     CreateSnapshotRequest:
       type: object

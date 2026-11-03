@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	sdkboxlite "github.com/boxlite-ai/boxlite/sdks/go"
 	blclient "github.com/boxlite-ai/runner/pkg/boxlite"
 	"github.com/shirou/gopsutil/v4/cpu"
 	"github.com/shirou/gopsutil/v4/disk"
@@ -33,7 +34,10 @@ type CollectorConfig struct {
 }
 
 type Collector struct {
-	boxlite        *blclient.Client
+	boxlite interface {
+		runtimeMetricsReader
+		ListInfo(context.Context) ([]sdkboxlite.BoxInfo, error)
+	}
 	log            *slog.Logger
 	boxliteHomeDir string
 	// diskUsage reads a filesystem's capacity and use; tests replace it so the
@@ -238,9 +242,11 @@ func (c *Collector) snapshotAllocatedResources(ctx context.Context) {
 			var startedCount float32
 
 			for _, box := range boxes {
-				if box.Running {
+				if box.Running || box.State == sdkboxlite.StatePaused {
 					totalCPU += float32(box.CPUs)
 					totalMemoryMiB += float32(box.MemoryMiB)
+				}
+				if box.Running {
 					startedCount++
 				}
 			}

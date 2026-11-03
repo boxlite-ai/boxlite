@@ -36,9 +36,9 @@ it Stopped; this exception does not permit snapshot restore or disk capture.
 Operations refresh persisted state and, for an active checkpoint owner, query the
 shim's authoritative state. The shim rejects conflicting mutations with `Busy`
 while a capture session is active; Stop can terminate that session. Snapshot
-removal also refuses an active owner capture. Runtime/entity locks remain, but
-there is no separate host operation-file reservation or universal serialization
-of lifecycle/storage calls across processes.
+removal also refuses an active owner capture. Runtime/entity locks remain. The
+managed checkpoint catalog has its own operation lease, but other lifecycle and
+storage calls have no universal serialization across processes.
 
 Serialize lifecycle and storage calls for each source box. Concurrent stopped-disk
 capture/install, restore, removal and duplicate-name creation are not protected by
@@ -59,6 +59,60 @@ Snapshot creation installs an independent copy; restoring a snapshot while Stopp
 creates a COW child backed by that snapshot. Removal refuses snapshots that still
 back a live disk or another disk chain. A checkpoint instead preserves memory and
 devices alongside its paired disk and imports as Paused.
+
+## Managed checkpoints
+
+The runtime catalog keeps named checkpoints after their source box is deleted.
+Capture requires an explicit pause and leaves the source Paused. Restoration
+creates a **new** Paused box; it does not replace the source's memory.
+
+```sh
+boxlite pause web
+boxlite checkpoint create web --name before-upgrade
+boxlite checkpoint list
+boxlite checkpoint get before-upgrade
+boxlite checkpoint restore before-upgrade --name web-copy
+boxlite resume web-copy
+boxlite checkpoint remove before-upgrade
+```
+
+Rust exposes the same operations through `source.checkpoints()` and
+`runtime.checkpoints()?`:
+
+```rust
+source.pause(PauseOptions::default()).await?;
+let saved = source.checkpoints().create(Some("before-upgrade".into())).await?;
+let restored = runtime.create_from_checkpoint(&saved.id, Some("web-copy".into())).await?;
+restored.resume().await?;
+```
+
+Names are runtime-wide, case-sensitive and match
+`[A-Za-z0-9][A-Za-z0-9._-]{0,127}`; omitting one generates it. UUID-shaped names
+are valid. Lookup first restricts the source scope, then selects an existing ID,
+then an exact non-deleting name only if that ID is absent. A selected record's
+state error never redirects an operation to a different resource.
+
+Metadata reports `creating`, `ready`, `failed` or `deleting`, captured resources
+and total managed size. Failed records retain their name until removal. Scoped
+Rust `get` returns `None` for absence; runtime `get` returns NotFound. Forced
+removal ignores only absence. Capture/import holds a checkpoint-operation lease;
+concurrent catalog mutations return an in-use error. This does not serialize
+unrelated box lifecycle or disk operations.
+
+Catalog storage owns a verified boot copy in addition to the unchanged pair.
+A restored box owns another boot copy, so deleting the checkpoint cannot break
+its resume or later cold start. External share contents remain external and
+must still be prepared and kept unchanged for recovery. Interrupted captures
+become failed after restart; staging whose native writers may remain is retained
+until its source is stopped. A failed operation never becomes ready from partial files.
+
+REST management uses `/checkpoints` and `/boxes/{id}/checkpoints`, relative to
+the usual API prefix. Clients require `checkpoint_management_enabled`; absence
+or false produces Unsupported before submission. A cloud capture is polled to
+ready and a new target to Paused. Polling timeout identifies the returned resource
+ID and does not resubmit memory import. Losing the initial response can leave a
+committed resource; inspect the catalog rather than blindly retrying. Raw pair
+transfer remains separate below.
 
 ## Export, inspect and import
 
@@ -176,6 +230,21 @@ selected boot path persist across runtime restarts; a cold start creates a new g
 session and does not recover old orphan handles.
 
 ## Failure and compatibility
+
+Runner upload admission uses `BoxliteRuntime::inspect_cloud_upload` to verify both
+members and return a typed configuration summary and complete-pair digest. It
+does not open saved host paths. `import_checkpoint_pair` rechecks that digest and
+registers a managed resource using an exact boot from trusted runtime storage or
+an authorized runner download; it creates no VM. The runner then uses
+`create_from_checkpoint_with_operation` with a persistent operation identity.
+That path rebuilds host isolation and lifecycle settings and applies the same
+effective network policy as preflight. Ordinary local raw import and default
+catalog restore retain their existing configuration behavior.
+
+The new cloud upload boundary classifies confirmed malformed input as
+InvalidArgument; actual OS/storage failures and corrupt trusted boot remain
+Storage. Existing raw import keeps its Storage error mapping. The global HTTP
+mapping is unchanged: InvalidArgument is 400 and Storage is 500.
 
 Live CPU and memory growth remain available on checkpoint-owner boxes. For
 example, a box created with 1 CPU / 256 MiB can grow to 2 CPUs / 512 MiB,
@@ -299,3 +368,45 @@ submitting restoration, matching the server's box-creation volume restriction.
 Keep guest data inside the container disk for REST transfers. HTTP
 transfers require current v2 path metadata; re-export older checkpoints before
 uploading them. Local imports retain their existing compatibility.
+
+## Unresolved: restored command output cannot always be reattached
+
+The SDK receives a command's stdout and stderr through the guest agent's Attach
+RPC. In the managed checkpoint acceptance case, the restored command remains
+alive, but its old output consumer still holds the exclusive reader lease. A new
+Attach returns `AlreadyExists: execution output is already attached`; the SDK
+then observes stdout EOF and cannot receive the restored command's output.
+
+This issue is not fixed. The failing case has already completed capture/export,
+source VM and home deletion, archive import/replay, restored box creation,
+checkpoint deletion, and explicit resume. Diagnostics confirmed the original
+process identity and heap remained present; stdout EOF did not mean that the
+guest process had exited.
+
+The latest diagnostic run correlated the old connection/response with the new
+Attach on the guest's monotonic clock. The new claim timed out after one second
+while the old connection had not reported EOF, error, response drop, forwarder
+closure, or lease release. This does not establish a safe takeover mechanism.
+The next investigation must establish a checkpoint-specific invalidation and
+completed handoff of the old consumer, while preserving rejection of a second
+Attach to a genuinely active reader. Increasing the timeout, adding sleeps or
+retries, or removing acceptance assertions is not a verified fix.
+
+Relevant paths are `src/guest/src/service/exec/{state,output}.rs`,
+`src/guest/src/service/server.rs`,
+`src/boxlite/src/portal/interfaces/exec.rs`, and the checkpoint resume lifecycle.
+Reproduce on Linux x86_64 with KVM, the real runtime, and working unprivileged
+bubblewrap namespaces:
+
+```sh
+make test:checkpoint:acceptance \
+  FILTER=checkpoint_catalog_survives_source_and_resource_deletion
+```
+
+The case retains its 300 MiB heap checks, actual resize to 512 MiB, explicit source
+stop before non-force removal, process identity checks, and cold-start assertions.
+The standalone continuation and independent REST KVM cases passed on an earlier
+build; they do not establish that this managed catalog case or the complete
+cross-SDK/cloud workflow passes. A separate runner box-ID export validation bug
+has been fixed and passed focused regressions, but its full cloud/pair workflow
+still needs independent verification. Live GCS IAM has not been validated.

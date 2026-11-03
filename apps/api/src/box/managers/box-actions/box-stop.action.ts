@@ -35,7 +35,7 @@ export class BoxStopAction extends BoxAction {
 
     const runnerAdapter = await this.runnerAdapterFactory.create(runner)
 
-    if (box.state === BoxState.STARTED) {
+    if (box.state === BoxState.STARTED || box.state === BoxState.PAUSED) {
       // stop box
       await runnerAdapter.stopBox(box.id, force)
       await this.updateBoxState(box, BoxState.STOPPING, lockCode)

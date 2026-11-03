@@ -403,6 +403,59 @@ them.
 
 </details>
 
+## Memory checkpoints
+
+The hosted portable routes support memory checkpoints when
+`BOX_CHECKPOINT_ARCHIVE_PREFIX` is a valid `gs://bucket/prefix/` and a ready
+v2 runner advertises `checkpointsEnabled=true`. Both `checkpoints_enabled`
+and `checkpoint_management_enabled` in `GET /api/v1/config` otherwise report
+false. Older runner health reports reset the capability to false.
+
+| Method       | Path (under `/api/v1[/{prefix}]`)        | Result                                               |
+| ------------ | ---------------------------------------- | ---------------------------------------------------- |
+| POST         | `/boxes/{box}/pause`                     | Running to Paused; waits for the submitted operation |
+| POST         | `/boxes/{box}/resume`                    | Explicit Paused to Running; no cold-start fallback   |
+| POST / GET   | `/boxes/{box}/checkpoints`               | Capture a Paused box / list its named resources      |
+| GET / DELETE | `/boxes/{box}/checkpoints/{checkpoint}`  | Source-scoped metadata / accepted deletion           |
+| GET          | `/checkpoints`                           | Organization resources, including deleted sources    |
+| GET / DELETE | `/checkpoints/{checkpoint}`              | Metadata / accepted deletion                         |
+| POST         | `/checkpoints/{checkpoint}/boxes`        | New box with captured resources, finishing Paused    |
+| POST         | `/boxes/{box}/checkpoint/export`         | Stream a raw memory/disk pair from a Paused box      |
+| POST         | `/boxes/checkpoint/import?name=optional` | Stream a raw pair into a new Paused box              |
+
+Capture and new-box requests accept `{name?: string}`; names are 1–128 ASCII
+letters, digits, dot, underscore or hyphen, starting with a letter or digit.
+Names are exact and case-sensitive. Organization/source scope applies before
+ID-first lookup. A selected failed or deleting ID never redirects to a namesake.
+Mutations require `write:boxes`; resource deletion requires `delete:boxes`.
+Reads require organization membership. Metadata exposes no storage URI or host path.
+
+For example, pause `worker`, create `{name:"before-upgrade"}` at its
+checkpoint collection, poll its returned ID until `ready`, then POST `{}`
+to that resource's `/boxes` route. Poll the new box until `paused`; resume
+that new box explicitly. Capture failures reserve their names until deletion.
+Restoring never rewinds the source. Completed checkpoints survive source deletion.
+
+Capture quota (`BOX_CHECKPOINT_MAX_PER_ORGANIZATION`, default 10) serializes
+organization admission. Child creation uses ordinary image, organization,
+compute, network and box-count admission, bypasses the warm pool and disables
+auto-resume/auto-delete. In-use resources return 409; archive deletion retries
+until storage deletion succeeds. Disk snapshots still require a stopped box. Organization suspension stops Paused VMs after its normal grace period; resume applies the same suspension policy as ordinary start. Deleting a restoring target retains its native lease until completion.
+
+Raw uploads are bounded to 16 GiB, with at most ten outstanding transfers per
+organization and a one-hour expiration. The runner inspects the pair, returns a
+strict configuration/resource summary, and verifies its digest during native
+registration. Only server-issued transfer identities and same-organization boot
+archives are accepted. Saved host paths, caller summaries and object keys are
+never admission inputs. Hidden imported resources remain leased through native
+completion; expiration and disconnects do not establish completion.
+
+Native categories retain their envelopes: InvalidArgument and Unsupported are
+400, InvalidState is 409, and Storage/Database/Internal remain 500. Accepted
+asynchronous failures remain recorded on their job/operation. A pause/resume
+wait can return 504 with its operation ID while work continues; inspect state
+before retrying. A missing callback never triggers another memory import.
+
 ## Hosted BoxLite-compatible API
 
 **Service:** `apps/api` · **Base path:** `/api/v1` · **Port:** `3000` in

@@ -8,6 +8,7 @@
 mod advanced_options;
 mod agents;
 mod box_handle;
+mod checkpoints;
 mod copy;
 mod exec;
 mod images;
@@ -26,6 +27,10 @@ mod volumes;
 // Re-export all public types
 pub use advanced_options::{JsAdvancedBoxOptions, JsContainerCapabilities, JsSecurityOptions};
 pub use box_handle::JsBox;
+pub use checkpoints::{
+    JsCheckpointDependencies, JsCheckpointHandle, JsCheckpointImportOptions, JsCheckpointInfo,
+    JsPauseOptions, JsRuntimeCheckpointHandle,
+};
 pub use copy::JsCopyOptions;
 pub use exec::{JsExecResult, JsExecStderr, JsExecStdin, JsExecStdout, JsExecution};
 pub use images::{

@@ -7,7 +7,7 @@
 //! Each table has queryable columns for efficient filtering + JSON blob for full data.
 
 /// Current schema version.
-pub const SCHEMA_VERSION: i32 = 10;
+pub const SCHEMA_VERSION: i32 = 11;
 
 /// Schema version tracking table.
 pub const SCHEMA_VERSION_TABLE: &str = r#"
@@ -151,6 +151,19 @@ CREATE INDEX IF NOT EXISTS idx_snapshot_box ON snapshot(box_id);
 "#;
 
 /// Get all schema creation statements.
+pub const CHECKPOINT_TABLE: &str = r#"
+CREATE TABLE IF NOT EXISTS checkpoint (
+    id TEXT PRIMARY KEY NOT NULL,
+    box_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    status TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    json TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_checkpoint_name ON checkpoint(name) WHERE status!='deleting';
+CREATE INDEX IF NOT EXISTS idx_checkpoint_box ON checkpoint(box_id);
+"#;
+
 pub fn all_schemas() -> Vec<&'static str> {
     vec![
         SCHEMA_VERSION_TABLE,
@@ -161,5 +174,6 @@ pub fn all_schemas() -> Vec<&'static str> {
         BASE_DISK_TABLE,
         BASE_DISK_REF_TABLE,
         SNAPSHOT_TABLE,
+        CHECKPOINT_TABLE,
     ]
 }

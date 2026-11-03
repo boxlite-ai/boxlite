@@ -26,15 +26,13 @@ const activeAuth = {
 
 function makeHarness() {
   const boxService = {
-    findOneByIdOrName: jest
-      .fn()
-      .mockResolvedValue({
-        id: 'box-uuid',
-        runnerId: 'runner-1',
-        autoResume: true,
-        state: 'started',
-        inboundEnabled: true,
-      }),
+    findOneByIdOrName: jest.fn().mockResolvedValue({
+      id: 'box-uuid',
+      runnerId: 'runner-1',
+      autoResume: true,
+      state: 'started',
+      inboundEnabled: true,
+    }),
     updateLastActivityAt: jest.fn().mockResolvedValue(undefined),
     getNetworkTunnelUrl: jest.fn().mockResolvedValue('https://3000-box.proxy.test'),
   }
@@ -209,9 +207,9 @@ describe('BoxliteProxyController', () => {
     const { controller, boxService, tunnelService } = makeHarness()
     tunnelService.prepare.mockRejectedValue(new Error('database unavailable'))
 
-    await expect(
-      controller.proxyNetworkTunnel(activeAuth as never, 'public-box', 3000),
-    ).rejects.toThrow('database unavailable')
+    await expect(controller.proxyNetworkTunnel(activeAuth as never, 'public-box', 3000)).rejects.toThrow(
+      'database unavailable',
+    )
     expect(boxService.getNetworkTunnelUrl).toHaveBeenCalledWith('public-box', 'org-1', 3000)
   })
 
@@ -235,9 +233,7 @@ describe('BoxliteProxyController', () => {
       inboundEnabled: false,
     })
 
-    await expect(
-      controller.proxyNetworkTunnel(activeAuth as never, 'public-box', 3000),
-    ).rejects.toMatchObject({
+    await expect(controller.proxyNetworkTunnel(activeAuth as never, 'public-box', 3000)).rejects.toMatchObject({
       status: 409,
     })
     expect(boxService.getNetworkTunnelUrl).not.toHaveBeenCalled()
@@ -253,9 +249,7 @@ describe('BoxliteProxyController', () => {
       inboundEnabled: true,
     })
 
-    await expect(
-      controller.proxyNetworkTunnel(activeAuth as never, 'public-box', 3000),
-    ).rejects.toMatchObject({
+    await expect(controller.proxyNetworkTunnel(activeAuth as never, 'public-box', 3000)).rejects.toMatchObject({
       status: 409,
       // Pin the reason: without inboundEnabled: true this 409s at the visibility
       // gate instead, and the state policy under test never runs.
@@ -304,9 +298,9 @@ describe('BoxliteProxyController', () => {
       inboundEnabled: false,
     })
 
-    await expect(
-      controller.proxyNetworkTunnel(activeAuth as never, 'public-box', 3000),
-    ).rejects.toMatchObject({ status: 409 })
+    await expect(controller.proxyNetworkTunnel(activeAuth as never, 'public-box', 3000)).rejects.toMatchObject({
+      status: 409,
+    })
     expect(boxService.updateLastActivityAt).not.toHaveBeenCalled()
   })
 
@@ -324,9 +318,9 @@ describe('BoxliteProxyController', () => {
         inboundEnabled: true,
       })
 
-      await expect(
-        controller.proxyNetworkTunnel(activeAuth as never, 'public-box', 3000),
-      ).rejects.toMatchObject({ status: 409 })
+      await expect(controller.proxyNetworkTunnel(activeAuth as never, 'public-box', 3000)).rejects.toMatchObject({
+        status: 409,
+      })
       expect(autoResume.ensureReady).not.toHaveBeenCalled()
       expect(boxService.getNetworkTunnelUrl).not.toHaveBeenCalled()
     },
@@ -363,9 +357,7 @@ describe('BoxliteProxyController', () => {
         inboundEnabled: true,
       })
 
-      await expect(
-        controller.proxyNetworkTunnel(activeAuth as never, 'public-box', 3000),
-      ).rejects.toMatchObject({
+      await expect(controller.proxyNetworkTunnel(activeAuth as never, 'public-box', 3000)).rejects.toMatchObject({
         status: 409,
         message: expect.stringContaining('is not running'),
       })

@@ -49,6 +49,17 @@ pub(crate) struct RestBox {
 }
 
 impl RestBox {
+    pub(super) fn checkpoint_backend(
+        &self,
+    ) -> Arc<dyn crate::runtime::checkpoints::CheckpointBackend> {
+        Arc::new(super::checkpoints::RestCheckpoints::new(
+            self.client.clone(),
+            Some(self.id.to_string()),
+        ))
+    }
+}
+
+impl RestBox {
     pub fn new(client: ApiClient, info: BoxInfo) -> Self {
         Self {
             client,

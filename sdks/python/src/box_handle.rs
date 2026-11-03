@@ -52,6 +52,50 @@ impl PyBox {
         }
     }
 
+    /// Captures of this explicitly paused box.
+    #[getter]
+    fn checkpoint(&self) -> crate::checkpoints::PyCheckpointHandle {
+        crate::checkpoints::PyCheckpointHandle {
+            handle: Arc::clone(&self.handle),
+        }
+    }
+
+    #[pyo3(signature = (*, host_writers_stopped=false))]
+    fn pause<'py>(
+        &self,
+        py: Python<'py>,
+        host_writers_stopped: bool,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let handle = Arc::clone(&self.handle);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            handle
+                .pause(boxlite::PauseOptions {
+                    host_writers_stopped,
+                })
+                .await
+                .map_err(map_err)
+        })
+    }
+
+    fn resume<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let handle = Arc::clone(&self.handle);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            handle.resume().await.map_err(map_err)
+        })
+    }
+
+    /// Write the checkpoint pair to a caller-local directory.
+    fn export_checkpoint<'py>(
+        &self,
+        py: Python<'py>,
+        path: std::path::PathBuf,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let handle = Arc::clone(&self.handle);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            handle.export_checkpoint(path).await.map_err(map_err)
+        })
+    }
+
     /// Get the network handle for this box.
     #[getter]
     fn network(&self) -> PyNetworkHandle {

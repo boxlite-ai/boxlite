@@ -11,6 +11,10 @@ import { DataSource, IsNull, Not, Repository } from 'typeorm'
 import { Box } from '../../box/entities/box.entity'
 import { BoxLastActivity } from '../../box/entities/box-last-activity.entity'
 import { BoxState } from '../../box/enums/box-state.enum'
+import { BoxDesiredState } from '../../box/enums/box-desired-state.enum'
+import { BoxStateUpdatedEvent } from '../../box/events/box-state-updated.event'
+import { BoxDesiredStateUpdatedEvent } from '../../box/events/box-desired-state-updated.event'
+import { AddMemoryCheckpoints1793600000000 } from '../../migrations/pre-deploy/1793600000000-add-memory-checkpoints-migration'
 import { BOX_WARM_POOL_UNASSIGNED_ORGANIZATION } from '../../box/constants/box.constants'
 import { RedisLockProvider } from '../../box/common/redis-lock.provider'
 import { CustomNamingStrategy } from '../../common/utils/naming-strategy.util'
@@ -285,6 +289,7 @@ describeIfDatabase('UsageService (integration, real Postgres + Redis)', () => {
       await new AddGuestPrivileged1792540800000().up(queryRunner)
       await new AddBoxInitialSnapshot1792972800000().up(queryRunner)
       await new AddBoxNestedVirtualization1793250000000().up(queryRunner)
+      await new AddMemoryCheckpoints1793600000000().up(queryRunner)
     } finally {
       await queryRunner.release()
     }
@@ -334,6 +339,79 @@ describeIfDatabase('UsageService (integration, real Postgres + Redis)', () => {
   beforeEach(async () => {
     await truncateTables()
     await redis.del(...lockKeys)
+  })
+
+  describe('Paused checkpoint allocation', () => {
+    const fullShape = { cpu: box.cpu, gpu: box.gpu, mem: box.mem, disk: box.disk }
+    it('opens full allocation from a restored Paused event even when its entity snapshot still says restoring', async () => {
+      await insertBox({ state: BoxState.RESTORING })
+      const entity = await dataSource.getRepository(Box).findOneByOrFail({ id: box.id })
+      await serviceForPersistedBox().handleBoxStateUpdate(
+        new BoxStateUpdatedEvent(entity, BoxState.RESTORING, BoxState.PAUSED),
+      )
+      expect(await openPeriods()).toEqual([expect.objectContaining(fullShape)])
+    })
+    it('keeps Started to Paused to resumed allocation contiguous with exactly one open period', async () => {
+      await insertBox({ state: BoxState.STARTED })
+      const service = serviceForPersistedBox(),
+        ids: string[] = []
+      let previous = BoxState.UNKNOWN
+      for (const state of [BoxState.STARTED, BoxState.PAUSED, BoxState.STARTED]) {
+        await dataSource.getRepository(Box).update(box.id, { state })
+        const entity = await dataSource.getRepository(Box).findOneByOrFail({ id: box.id })
+        await service.handleBoxStateUpdate(new BoxStateUpdatedEvent(entity, previous, state))
+        const open = await openPeriods()
+        expect(open).toEqual([expect.objectContaining(fullShape)])
+        ids.push(open[0].id)
+        previous = state
+      }
+      expect(new Set(ids).size).toBe(3)
+      const segments = await Promise.all(ids.map((id) => periods.findOneByOrFail({ id })))
+      expect(segments[0].endAt).toEqual(segments[1].startAt)
+      expect(segments[1].endAt).toEqual(segments[2].startAt)
+      expect(segments[2].endAt).toBeNull()
+    })
+    it('reopens full Paused allocation during daily rollover without relying on reconciliation', async () => {
+      await insertBox({ state: BoxState.PAUSED })
+      const original = await openPeriod({ startAt: new Date(Date.now() - 2 * DAY_MS) })
+      await serviceForPersistedBox().closeAndReopenUsagePeriods()
+      const open = await openPeriods()
+      expect(open).toEqual([expect.objectContaining(fullShape)])
+      expect(open[0].id).not.toBe(original.id)
+      expect((await periods.findOneByOrFail({ id: original.id })).endAt).toEqual(open[0].startAt)
+    })
+    it.each(['missing', 'cpu', 'mem', 'gpu'] as const)(
+      'repairs Paused %s allocation drift through the production candidate SQL and leaves a correct period intact',
+      async (drift) => {
+        await insertBox({ state: BoxState.PAUSED })
+        if (drift !== 'missing') await openPeriod({ [drift]: box[drift] + 1 })
+        const service = serviceForPersistedBox(),
+          beforeRepair = Date.now()
+        await service.reconcileUsagePeriods()
+        const open = await openPeriods()
+        expect(open).toEqual([expect.objectContaining(fullShape)])
+        expect(open[0].startAt.getTime()).toBeGreaterThanOrEqual(beforeRepair)
+        const rows = await periods.count()
+        await service.reconcileUsagePeriods()
+        expect(await openPeriods()).toEqual([expect.objectContaining({ id: open[0].id, ...fullShape })])
+        expect(await periods.count()).toBe(rows)
+      },
+    )
+    it('switches Paused allocation to disk-only on stop and closes it on destruction', async () => {
+      await insertBox({ state: BoxState.PAUSED })
+      const entity = await dataSource.getRepository(Box).findOneByOrFail({ id: box.id }),
+        service = serviceForPersistedBox()
+      await service.handleBoxStateUpdate(new BoxStateUpdatedEvent(entity, BoxState.RESTORING, BoxState.PAUSED))
+      expect(await openPeriods()).toEqual([expect.objectContaining(fullShape)])
+      await service.handleBoxStateUpdate(new BoxStateUpdatedEvent(entity, BoxState.PAUSED, BoxState.STOPPING))
+      expect(await openPeriods()).toEqual([expect.objectContaining({ cpu: 0, gpu: 0, mem: 0, disk: box.disk })])
+      await service.handleBoxStateUpdate(new BoxStateUpdatedEvent(entity, BoxState.STOPPING, BoxState.STOPPED))
+      expect(await openPeriods()).toHaveLength(1)
+      await service.handleBoxDesiredStateUpdate(
+        new BoxDesiredStateUpdatedEvent(entity, BoxDesiredState.STOPPED, BoxDesiredState.DESTROYED),
+      )
+      expect(await openPeriods()).toHaveLength(0)
+    })
   })
 
   it('archives closed periods and leaves the open one in place', async () => {

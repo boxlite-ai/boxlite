@@ -140,6 +140,9 @@ export class Runner {
   })
   appVersion: string | null
 
+  @Column({ type: 'boolean', default: false })
+  checkpointsEnabled = false
+
   @Column({
     default: '0',
   })

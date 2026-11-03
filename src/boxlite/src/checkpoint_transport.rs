@@ -144,7 +144,7 @@ fn require_relocatable(pair: &pair::VerifiedPair) -> BoxliteResult<()> {
     Ok(())
 }
 
-fn rename_exclusive(source: &Path, destination: &Path) -> BoxliteResult<()> {
+pub(crate) fn rename_exclusive(source: &Path, destination: &Path) -> BoxliteResult<()> {
     use std::os::unix::ffi::OsStrExt;
     let source = std::ffi::CString::new(source.as_os_str().as_bytes()).map_err(invalid)?;
     let destination =

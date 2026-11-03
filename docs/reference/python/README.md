@@ -9,6 +9,7 @@ Complete API reference for the BoxLite Python SDK.
 
 - [Runtime Management](#runtime-management)
 - [Box Handle](#box-handle)
+- [Memory Checkpoints](#memory-checkpoints)
 - [SSH Control](#ssh-control)
 - [Network Tunnels](#network-tunnels)
 - [Command Execution](#command-execution)
@@ -19,6 +20,35 @@ Complete API reference for the BoxLite Python SDK.
 - [Constants](#constants)
 
 ---
+
+## Memory checkpoints
+
+| Surface | Signature / result |
+| --- | --- |
+| `box.pause()` | `async (*, host_writers_stopped=False) -> None` |
+| `box.resume()` | `async () -> None` |
+| `box.export_checkpoint(path)` | Export a pair into a new caller-local directory |
+| `runtime.import_checkpoint(path, *, name=None)` | Import a caller-local pair; return a new Paused `Box` |
+| `Boxlite.inspect_checkpoint(path)` | Synchronous local `CheckpointDependencies`; no runtime needed |
+| `box.checkpoint.create(*, name=None)` | Capture an explicitly paused source; wait for ready `CheckpointInfo` |
+| `box.checkpoint.list/get/remove` | `list()`; `get(id_or_name) -> CheckpointInfo \| None`; `remove(id_or_name, *, force=False)` |
+| `runtime.checkpoints()` | Catalog including checkpoints from deleted source boxes; `list/get/remove` as above, but missing `get()` raises `NotFoundError` |
+| `runtime.create_from_checkpoint(id_or_name, *, name=None)` | Return a new Paused `Box`, preserving captured resources |
+
+`CheckpointInfo` has `id`, `box_id`, `name`, `status`, `error`, `created_at`
+(Unix seconds), `cpus`, `memory_bytes`, `container_disk_bytes` and `size_bytes`.
+`CheckpointDependencies` exposes the native dependency fields, including complete
+`shares`, `local_roots`, `boot_disk_path` and `disk_dependencies`; nested records
+retain the native schema and Python integers retain their full precision.
+Omitting `name`, or passing `None`, leaves it absent from the REST request;
+the server generates a name. Explicit empty names are rejected.
+
+`SyncBoxlite` and `SyncBox` mirror these methods without `await`;
+`SyncCheckpointHandle` and `SyncRuntimeCheckpointHandle` require their runtime
+to remain started. Inspection is synchronous in both APIs. Explicit `resume()`
+is required after restore; there is no in-place memory rollback. See the
+[SDK example](../../../sdks/python/README.md#memory-checkpoints) and
+[platform/dependency constraints](../../guides/checkpoints.md).
 
 ## Runtime management
 

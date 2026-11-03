@@ -26,6 +26,14 @@ The type of the job
 
 * `RESTORE_SNAPSHOT` (value: `'RESTORE_SNAPSHOT'`)
 
+* `PAUSE_BOX` (value: `'PAUSE_BOX'`)
+
+* `RESUME_BOX` (value: `'RESUME_BOX'`)
+
+* `CREATE_CHECKPOINT` (value: `'CREATE_CHECKPOINT'`)
+
+* `IMPORT_CHECKPOINT` (value: `'IMPORT_CHECKPOINT'`)
+
 * `UNKNOWN_DEFAULT_OPEN_API` (value: `'11184809'`)
 
 [[Back to Model list]](../README.md#documentation-for-models) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to README]](../README.md)

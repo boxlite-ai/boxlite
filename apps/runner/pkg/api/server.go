@@ -119,6 +119,11 @@ func (a *ApiServer) Start(ctx context.Context) error {
 	protected.Use(middlewares.AuthMiddleware(a.apiToken))
 	protected.GET("/v1/caches/:tenant/:cache", controllers.BoxliteCache)
 	protected.DELETE("/v1/caches/:tenant/:cache", controllers.BoxliteCache)
+	checkpointTransfers := controllers.CheckpointTransferHandler(nil)
+	protected.POST("/api/checkpoint-transfers/:transferId", checkpointTransfers)
+	protected.POST("/api/checkpoint-transfers/:transferId/register", checkpointTransfers)
+	protected.POST("/api/checkpoint-transfers/:transferId/export", checkpointTransfers)
+	protected.DELETE("/api/checkpoint-transfers/:transferId", checkpointTransfers)
 
 	metricsController := protected.Group("/metrics")
 	{

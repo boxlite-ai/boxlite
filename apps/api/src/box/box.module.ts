@@ -62,6 +62,9 @@ import { BoxSnapshotRestore } from './entities/box-snapshot-restore.entity'
 import { BoxSnapshotService } from './services/box-snapshot.service'
 import { BoxSnapshotSettler } from './services/box-snapshot-settler.service'
 import { SNAPSHOT_ARCHIVE_STORE, createSnapshotArchiveStore } from './stores/snapshot-archive.store'
+import { BoxCheckpoint, BoxCheckpointOperation, BoxCheckpointTransfer } from './entities/box-checkpoint.entity'
+import { BoxCheckpointService } from './services/box-checkpoint.service'
+import { BoxCheckpointSettler } from './services/box-checkpoint-settler.service'
 import { TypedConfigService } from '../config/typed-config.service'
 
 @Module({
@@ -82,6 +85,9 @@ import { TypedConfigService } from '../config/typed-config.service'
       Tunnel,
       BoxSnapshot,
       BoxSnapshotRestore,
+      BoxCheckpoint,
+      BoxCheckpointOperation,
+      BoxCheckpointTransfer,
     ]),
   ],
   controllers: [BoxController, RunnerController, PreviewController, VolumeController, JobController],
@@ -111,6 +117,8 @@ import { TypedConfigService } from '../config/typed-config.service'
     BoxMigrationJobReceiver,
     BoxSnapshotService,
     BoxSnapshotSettler,
+    BoxCheckpointService,
+    BoxCheckpointSettler,
     {
       provide: SNAPSHOT_ARCHIVE_STORE,
       inject: [TypedConfigService],
@@ -147,6 +155,7 @@ import { TypedConfigService } from '../config/typed-config.service'
     BoxStateWaiterService,
     BoxAutoResumeService,
     BoxSnapshotService,
+    BoxCheckpointService,
   ],
 })
 export class BoxModule {}

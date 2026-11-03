@@ -296,6 +296,36 @@ and optional `error` alongside disk sizes and source `box_id`.
 See [snapshot contracts](../../docs/reference/README.md#snapshot-sdk-and-cli)
 for completion, options, and local-runtime support.
 
+### Memory Checkpoints
+
+Checkpoints capture a paused VM, including its in-memory processes. Restore
+creates a separate Paused box with the captured CPU and memory allocation;
+call `resume()` explicitly to continue it.
+
+```python
+source = await runtime.get("source-box")
+await source.pause()
+saved = await source.checkpoint.create(name="before-upgrade")
+for checkpoint in await runtime.checkpoints().list():
+    print(checkpoint.name, checkpoint.status, checkpoint.size_bytes)
+child = await runtime.create_from_checkpoint(saved.id, name="restored")
+await child.resume()
+await runtime.checkpoints().remove(saved.id)
+```
+
+`source.checkpoint.get()` returns `None` for absence; runtime catalog `get()`
+raises `NotFoundError`. `force=True` on either `remove()` suppresses only absence.
+Ready resources survive source-box deletion. `SyncBoxlite` and `SyncBox` expose
+the same operations without `await`, within the sync runtime's context.
+
+For explicit two-file transfer, use `await source.export_checkpoint(path)` and
+`await runtime.import_checkpoint(path, name="restored")`. Paths belong to the
+SDK caller, including over REST; `Boxlite.inspect_checkpoint(path)` reads them
+locally and returns `CheckpointDependencies`. Actual capture/restore requires a
+supported Linux x86_64/KVM runtime; macOS clients can connect over REST. External
+host writers must stay stopped while paused; pass `host_writers_stopped=True`
+only after coordinating them. See [checkpoint contracts](../../docs/guides/checkpoints.md).
+
 ### Box Configuration
 
 #### `boxlite.BoxOptions`

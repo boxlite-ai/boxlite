@@ -12,6 +12,168 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
+pub(in crate::commands::serve) struct NameRequest {
+    #[serde(default, deserialize_with = "nonnull_name")]
+    name: Option<String>,
+}
+
+fn nonnull_name<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<String>, D::Error> {
+    use serde::Deserialize;
+    String::deserialize(deserializer).map(Some)
+}
+
+pub(in crate::commands::serve) async fn create_managed(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    body: Result<Json<NameRequest>, axum::extract::rejection::JsonRejection>,
+) -> Response {
+    let request = match body {
+        Ok(Json(request)) => request,
+        Err(error) => {
+            return error_from_boxlite(&boxlite::BoxliteError::InvalidArgument(error.body_text()));
+        }
+    };
+    let box_ = match get_or_fetch_box(&state, &id).await {
+        Ok(box_) => box_,
+        Err(error) => return error,
+    };
+    match box_.checkpoints().create(request.name).await {
+        Ok(info) => (StatusCode::CREATED, Json(info)).into_response(),
+        Err(error) => error_from_boxlite(&error),
+    }
+}
+
+pub(in crate::commands::serve) async fn list_managed(
+    State(state): State<Arc<AppState>>,
+) -> Response {
+    match state
+        .runtime
+        .checkpoints()
+        .expect("catalog handle")
+        .list()
+        .await
+    {
+        Ok(infos) => Json(serde_json::json!({"checkpoints": infos})).into_response(),
+        Err(error) => error_from_boxlite(&error),
+    }
+}
+
+pub(in crate::commands::serve) async fn list_scoped(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Response {
+    let box_ = match get_or_fetch_box(&state, &id).await {
+        Ok(box_) => box_,
+        Err(error) => return error,
+    };
+    match box_.checkpoints().list().await {
+        Ok(infos) => Json(serde_json::json!({"checkpoints": infos})).into_response(),
+        Err(error) => error_from_boxlite(&error),
+    }
+}
+
+pub(in crate::commands::serve) async fn get_managed(
+    State(state): State<Arc<AppState>>,
+    Path(key): Path<String>,
+) -> Response {
+    match state
+        .runtime
+        .checkpoints()
+        .expect("catalog handle")
+        .get(&key)
+        .await
+    {
+        Ok(info) => Json(info).into_response(),
+        Err(error) => error_from_boxlite(&error),
+    }
+}
+
+pub(in crate::commands::serve) async fn get_scoped(
+    State(state): State<Arc<AppState>>,
+    Path((id, key)): Path<(String, String)>,
+) -> Response {
+    let box_ = match get_or_fetch_box(&state, &id).await {
+        Ok(box_) => box_,
+        Err(error) => return error,
+    };
+    match box_.checkpoints().get(&key).await {
+        Ok(Some(info)) => Json(info).into_response(),
+        Ok(None) => error_from_boxlite(&boxlite::BoxliteError::NotFound(format!(
+            "checkpoint '{key}'"
+        ))),
+        Err(error) => error_from_boxlite(&error),
+    }
+}
+
+pub(in crate::commands::serve) async fn remove_managed(
+    State(state): State<Arc<AppState>>,
+    Path(key): Path<String>,
+) -> Response {
+    match state
+        .runtime
+        .checkpoints()
+        .expect("catalog handle")
+        .remove(&key, false)
+        .await
+    {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(error) => error_from_boxlite(&error),
+    }
+}
+
+pub(in crate::commands::serve) async fn remove_scoped(
+    State(state): State<Arc<AppState>>,
+    Path((id, key)): Path<(String, String)>,
+) -> Response {
+    let box_ = match get_or_fetch_box(&state, &id).await {
+        Ok(box_) => box_,
+        Err(error) => return error,
+    };
+    match box_.checkpoints().remove(&key, false).await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(error) => error_from_boxlite(&error),
+    }
+}
+
+pub(in crate::commands::serve) async fn restore_managed(
+    State(state): State<Arc<AppState>>,
+    Path(key): Path<String>,
+    body: Result<Json<NameRequest>, axum::extract::rejection::JsonRejection>,
+) -> Response {
+    let request = match body {
+        Ok(Json(request)) => request,
+        Err(error) => {
+            return error_from_boxlite(&boxlite::BoxliteError::InvalidArgument(error.body_text()));
+        }
+    };
+    // The detached operation owns its input lease and native cleanup even when
+    // the HTTP caller disconnects after submission.
+    let result = tokio::spawn(async move {
+        let box_ = state
+            .runtime
+            .create_from_checkpoint(&key, request.name)
+            .await?;
+        let info = box_.info().await?;
+        let response = state.box_response(&info).await;
+        state
+            .boxes
+            .write()
+            .await
+            .insert(info.id.to_string(), Arc::new(box_));
+        Ok::<_, boxlite::BoxliteError>(response)
+    })
+    .await;
+    match result {
+        Ok(Ok(response)) => (StatusCode::CREATED, Json(response)).into_response(),
+        Ok(Err(error)) => error_from_boxlite(&error),
+        Err(error) => error_from_boxlite(&storage(error)),
+    }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(in crate::commands::serve) struct PauseRequest {
     #[serde(default)]
     host_writers_stopped: bool,

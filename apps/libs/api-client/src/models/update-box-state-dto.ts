@@ -53,6 +53,7 @@ export const UpdateBoxStateDtoStateEnum = {
     RESIZING: 'resizing',
     EXPORTING: 'exporting',
     IMPORTING: 'importing',
+    PAUSED: 'paused',
     UNKNOWN_DEFAULT_OPEN_API: '11184809',
 } as const;
 

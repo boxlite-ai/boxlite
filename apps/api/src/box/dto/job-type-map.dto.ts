@@ -19,6 +19,10 @@ import { ResourceType } from '../enums/resource-type.enum'
  * under BACKUP to keep out of the box's own lifecycle slot.
  */
 export interface JobTypeMap {
+  [JobType.PAUSE_BOX]: { resourceType: [ResourceType.BACKUP] }
+  [JobType.RESUME_BOX]: { resourceType: [ResourceType.BACKUP] }
+  [JobType.CREATE_CHECKPOINT]: { resourceType: [ResourceType.BACKUP] }
+  [JobType.IMPORT_CHECKPOINT]: { resourceType: [ResourceType.BACKUP] }
   [JobType.CREATE_BOX]: {
     resourceType: [ResourceType.BOX]
   }

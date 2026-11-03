@@ -277,6 +277,46 @@ int main() {
 }
 ```
 
+### Memory Checkpoints
+
+The native API exposes memory checkpoints through the runtime's post-and-drain
+queue. Obtain a `CBoxliteCheckpointHandle` with `boxlite_box_checkpoints` or
+`boxlite_runtime_checkpoints`, then call `boxlite_checkpoint_create`, `_list`,
+`_get`, or `_remove`. Free the handle with `boxlite_checkpoint_free`.
+
+Pause the source explicitly with `boxlite_box_pause` before capture. A null
+capture name generates one; an explicit empty name is invalid.
+`boxlite_create_box_from_checkpoint` returns a **new Paused box** preserving the
+captured resources. Call `boxlite_box_resume` to continue it. It never rolls
+back the source box. Runtime catalogs retain checkpoints after source deletion.
+Native capture/restore requires Linux x86_64/KVM; REST clients can run remotely.
+
+Successful submission produces one completion from `boxlite_runtime_drain`;
+immediate errors produce none. Metadata callbacks transfer `CCheckpointInfo`
+or `CCheckpointInfoList` ownership to the caller. Release them with
+`boxlite_free_checkpoint_info` or `boxlite_free_checkpoint_info_list`; do not
+free list entries individually. Errors are borrowed during callback dispatch.
+Box-scoped missing get returns null without error; root get returns NotFound.
+Force removal suppresses only absence.
+
+`boxlite_box_export_checkpoint` and `boxlite_import_checkpoint` use a caller-local
+two-file directory. `boxlite_inspect_checkpoint` synchronously returns the full
+dependency schema as owned UTF-8 JSON; release it with `boxlite_free_string`.
+Keep caller-owned directories/files alive until native completion, even if a
+higher-level caller stops waiting.
+
+The runner-only `boxlite_inspect_cloud_upload`, `boxlite_import_checkpoint_pair`,
+`boxlite_export_checkpoint_archive`, `boxlite_import_checkpoint_archive`, and
+`boxlite_create_box_from_checkpoint_with_operation` add validated upload admission,
+managed archive transport and durable operation identity. They do not change the
+public pair format. A trusted boot path may come only from runtime-owned storage
+or an organization-authorized download, never from uploaded metadata. New cloud
+helpers retain InvalidArgument for invalid upload content and Storage for actual
+I/O failures; old raw import/inspection retain their previous error categories.
+
+See the [checkpoint guide](../../docs/guides/checkpoints.md) for supported
+configurations and recovery dependencies.
+
 ### Runtime Image Management
 
 `boxlite_runtime_images()` returns the images a runtime can boot from: the

@@ -5,6 +5,7 @@ package metrics
 
 import (
 	"context"
+	sdkboxlite "github.com/boxlite-ai/boxlite/sdks/go"
 	"io"
 	"log/slog"
 	"strings"
@@ -31,6 +32,61 @@ func newTestCollector(home string, usage disk.UsageStat, askedPath *string) *Col
 	}
 	c.cpuRing.Value = CPUSnapshot{timestamp: time.Now(), cpuPercent: 1}
 	return c
+}
+
+type allocationReaderFixture struct {
+	infos   []sdkboxlite.BoxInfo
+	reads   int
+	sampled chan struct{}
+}
+
+func (r *allocationReaderFixture) ListInfo(context.Context) ([]sdkboxlite.BoxInfo, error) {
+	r.reads++
+	if r.reads == 2 {
+		close(r.sampled)
+	}
+	return r.infos, nil
+}
+func (r *allocationReaderFixture) Metrics(context.Context) (*sdkboxlite.RuntimeMetrics, error) {
+	return &sdkboxlite.RuntimeMetrics{}, nil
+}
+
+func allocationCollectorForTest(t *testing.T, reader *allocationReaderFixture) *Collector {
+	t.Helper()
+	return &Collector{boxlite: reader, log: quietLogger(), allocatedResourcesSnapshotInterval: time.Millisecond}
+}
+
+func TestCheckpointPausedAllocationUsesReservedResources(t *testing.T) {
+	for _, paused := range []bool{true, false} {
+		t.Run(map[bool]string{true: "paused retains reservation", false: "stopped releases reservation"}[paused], func(t *testing.T) {
+			state := sdkboxlite.State("stopped")
+			if paused {
+				state = "paused"
+			}
+			reader := &allocationReaderFixture{sampled: make(chan struct{}), infos: []sdkboxlite.BoxInfo{{State: "running", Running: true, CPUs: 2, MemoryMiB: 1024}, {State: state, Running: false, CPUs: 4, MemoryMiB: 2048}, {State: "stopped", CPUs: 8, MemoryMiB: 4096}}}
+			collector := allocationCollectorForTest(t, reader)
+			ctx, cancel := context.WithCancel(context.Background())
+			done := make(chan struct{})
+			go func() { defer close(done); collector.snapshotAllocatedResources(ctx) }()
+			defer func() { cancel(); <-done }()
+			select {
+			case <-reader.sampled:
+			case <-time.After(3 * time.Second):
+				t.Fatal("allocation sampler never read production input")
+			}
+			collector.resourcesMutex.RLock()
+			cpu, mem, started := collector.allocatedCPU, collector.allocatedMemoryGiB, collector.startedBoxCount
+			collector.resourcesMutex.RUnlock()
+			wantCPU, wantMem := float32(2), float32(1)
+			if paused {
+				wantCPU = 6
+				wantMem = 3
+			}
+			if cpu != wantCPU || mem != wantMem || started != 1 {
+				t.Fatalf("sampled cpu=%v mem=%v started=%v; want %v %v 1", cpu, mem, started, wantCPU, wantMem)
+			}
+		})
+	}
 }
 
 func TestCollectReportsTheBoxliteHomeFilesystem(t *testing.T) {
