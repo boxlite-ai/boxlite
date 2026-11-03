@@ -14,6 +14,7 @@ import { VolumeTools } from './volume-tools'
 import { ImageTools } from './image-tools'
 import { RegistryTools } from './registry-tools'
 import { BoxTools } from './box-tools'
+import { NetworkTools } from './network-tools'
 
 /** The `authInfo.extra` key the controller stores the authenticated caller under. */
 export const MCP_CALLER_KEY = 'boxliteCaller'
@@ -40,6 +41,7 @@ export class McpServerFactory {
     private readonly imageTools: ImageTools,
     private readonly registryTools: RegistryTools,
     private readonly boxTools: BoxTools,
+    private readonly networkTools: NetworkTools,
   ) {}
 
   /** The `createMcpHandler` factory. */
@@ -61,6 +63,7 @@ export class McpServerFactory {
     this.imageTools.register(server, caller)
     this.registryTools.register(server, caller)
     this.boxTools.register(server, caller)
+    this.networkTools.register(server, caller)
     return server
   }
 
