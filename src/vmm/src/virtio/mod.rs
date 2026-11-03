@@ -10,11 +10,12 @@
 //! across blocking I/O.
 //!
 //! A device processes the descriptors available in its queues; the virtqueue
-//! size bounds one event call. The [`VirtQueues`] facade prepares, validates,
-//! saves and restores the queue set, tracks deferred chains and runs the
-//! notification drain; the transport starts and stops the worker on DRIVER_OK
-//! and Status=0, and rejects queue-configuration writes after DRIVER_OK. Every
-//! device needs the methods here first.
+//! size bounds one event call. The [`VirtQueues`] facade prepares and validates
+//! the queue set, tracks deferred chains and runs the notification drain;
+//! `save` and `restore` return [`SnapshotError::Unsupported`] until M8. The
+//! transport starts and stops the worker on DRIVER_OK and Status=0, and rejects
+//! queue-configuration writes after DRIVER_OK. Every device needs the methods
+//! here first.
 
 use std::{fmt, sync::Arc};
 

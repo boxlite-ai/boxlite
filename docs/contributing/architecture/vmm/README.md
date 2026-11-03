@@ -394,11 +394,11 @@ stopping the worker synchronously.
     control accesses and width-split configuration access, synchronous
     FEATURES_OK validation, a dense queue shadow validated at DRIVER_OK,
     post-DRIVER_OK queue-write rejection, Status=0 reset, and a `VirtQueues`
-    facade that validates the dense queue set, applies EVENT_IDX, saves and
-    restores `QueueState`, tracks each deferred chain's head so completion
-    happens exactly once, refuses to save while a deferred chain is
-    outstanding, runs the disable/drain/enable notification loop, and lets a
-    device defer a chain's completion to its backend;
+    facade that validates the dense queue set, applies EVENT_IDX, tracks each
+    deferred chain's head so completion happens exactly once, keeps
+    `save`/`restore` as `SnapshotError::Unsupported` stubs until M8, runs the
+    disable/drain/enable notification loop, and lets a device defer a chain's
+    completion to its backend;
   - virtio-blk, virtio-vsock, virtio-net, virtio-console and virtio-rng;
   - virtio-balloon with free page reporting, so the host can reclaim unused
     guest memory as it can with libkrun today: at once on Linux, and under
