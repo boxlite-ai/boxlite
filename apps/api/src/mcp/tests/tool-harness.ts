@@ -15,8 +15,8 @@ import { OrganizationService } from '../../organization/services/organization.se
 import { OrganizationUserService } from '../../organization/services/organization-user.service'
 import { BoxService } from '../../box/services/box.service'
 import { AuditService } from '../../audit/services/audit.service'
-import { McpToolAccess } from '../mcp-tool-access'
-import { McpToolAudit } from '../mcp-tool-audit'
+import { McpToolAccess } from '../tools/shared/mcp-tool-access'
+import { McpToolAudit } from '../tools/shared/mcp-tool-audit'
 
 export const ORGANIZATION_ID = '11111111-1111-4111-8111-111111111111'
 export const FOREIGN_ORGANIZATION_ID = '22222222-2222-4222-8222-222222222222'

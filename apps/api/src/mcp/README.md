@@ -1,4 +1,36 @@
-# MCP runtime boundary
+# MCP server
+
+The root module, controller, and server factory assemble the HTTP endpoint and
+bind the authenticated caller. Feature registrations, schemas, and their tests
+live together under `tools/`; each feature module owns its input and output
+contracts. Only schemas shared across tools are extracted: `tools/box/box.schema.ts`
+defines Box selectors and responses for lifecycle, network, and listing tools.
+
+```text
+mcp/
+├── auth/                 OAuth guards, discovery metadata, and origin policy
+├── tools/
+│   ├── box/              Lifecycle, listing schemas, inbound access, and tunnels
+│   ├── config/           Hosted capability discovery
+│   ├── execution/        Asynchronous execution controls
+│   ├── files/            Upload/download tools and archive conversion
+│   ├── image/            Catalog and alias tools
+│   ├── metrics/          Box metrics tool
+│   ├── registry/         Credential metadata tools
+│   ├── shared/           Registration, authorization, and audit support
+│   └── volume/           Managed volume tools
+├── runner/               Trusted, bounded Runner HTTP adapter and its tests
+├── tests/                Shared HTTP test harnesses
+├── mcp.module.ts         Nest providers and module imports
+├── mcp.controller.ts     MCP HTTP transport
+└── mcp-server.factory.ts  Per-request server assembly
+```
+
+Every registered tool advertises `inputSchema` and `outputSchema`. The catalog
+test exercises the assembled endpoint and checks all 31 registrations; schema
+placement does not change the public tool contract.
+
+## Runner HTTP boundary
 
 `McpRunnerHttp.execute` accepts an authorized `OrganizationAuthContext`, a Box identifier,
 and one typed operation. It resolves the Box within that organization, checks ownership,

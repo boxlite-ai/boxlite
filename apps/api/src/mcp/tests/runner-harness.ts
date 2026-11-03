@@ -9,8 +9,8 @@ import type { McpServer } from '@modelcontextprotocol/server'
 import type { BoxService } from '../../box/services/box.service'
 import type { RunnerService } from '../../box/services/runner.service'
 import type { BoxAutoResumeService } from '../../box/services/box-auto-resume.service'
-import { McpRunnerHttp } from '../runner-http'
-import type { McpToolAccess } from '../mcp-tool-access'
+import { McpRunnerHttp } from '../runner/runner-http'
+import type { McpToolAccess } from '../tools/shared/mcp-tool-access'
 import { accessFixture, ORGANIZATION_ID, toolHarness } from './tool-harness'
 
 /** Two real HTTP boundaries: SDK tool calls and the production adapter's Runner requests. */
