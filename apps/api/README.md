@@ -54,6 +54,8 @@ make test:apps:api TEST_PATH=src/mcp FILTER=Mcp
 ```
 
 `TEST_PATH` matches test file paths; `FILTER` selects test names within those files.
+A focused run calls Jest with the API configuration directly, preserving patterns
+such as `src/mcp|boxlite-volume.controller.spec` as one argument.
 A path pattern with no matching files fails rather than reporting an empty success.
 Without `TEST_PATH`, the target retains its existing API-suite selection.
 
