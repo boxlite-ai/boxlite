@@ -242,7 +242,7 @@ async fn wait_rpc_failure_returns_error_without_terminal_result() {
     let error = within_deadline(execution.wait()).await.unwrap_err();
     assert!(matches!(
         &error,
-        BoxliteError::Internal(message) if message == "Result channel closed"
+        BoxliteError::Internal(message) if message.contains("no longer observable")
     ));
 }
 

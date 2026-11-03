@@ -195,6 +195,8 @@ impl BoxBackend for RestBox {
     }
 
     async fn get_execution(&self, execution_id: &str) -> BoxliteResult<Execution> {
+        // The inventory is box-scoped, so an ID absent here is a definite
+        // NotFound: do not hand out a handle that can never observe anything.
         if !self
             .list_executions()
             .await?
@@ -210,6 +212,10 @@ impl BoxBackend for RestBox {
         let client = self.client.clone();
         let path = format!("/boxes/{}/executions/{}", self.box_id_str(), execution_id);
         tokio::spawn(async move {
+            // Start responsive and back off to 1s: a long-running session must
+            // not generate a status request every 100ms.
+            let mut delay = std::time::Duration::from_millis(100);
+            let mut failures = 0u32;
             loop {
                 let response = tokio::select! {
                     _ = tx.closed() => return,
@@ -219,21 +225,55 @@ impl BoxBackend for RestBox {
                     Ok(info)
                         if matches!(info.status.as_str(), "completed" | "killed" | "timed_out") =>
                     {
-                        let _ = tx.send(ExecResult {
-                            exit_code: info.exit_code.unwrap_or(-1),
-                            error_message: None,
-                        });
+                        match info.exit_code {
+                            Some(exit_code) => {
+                                let _ = tx.send(ExecResult {
+                                    exit_code,
+                                    error_message: None,
+                                });
+                            }
+                            None => tracing::warn!(
+                                %path,
+                                status = %info.status,
+                                "Recovered execution completed without an exit code"
+                            ),
+                        }
                         return;
                     }
-                    Ok(_) => tokio::select! {
-                        _ = tx.closed() => return,
-                        _ = tokio::time::sleep(std::time::Duration::from_millis(100)) => {}
-                    },
-                    Err(error) => {
-                        tracing::warn!(%path, %error, "Recovered execution status unavailable");
+                    Ok(_) => {
+                        failures = 0;
+                    }
+                    Err(BoxliteError::NotFound(_)) => {
+                        // The server no longer retains this session; the waiter
+                        // cannot observe an outcome any more.
+                        tracing::debug!(%path, "Recovered execution left the retained window");
                         return;
+                    }
+                    Err(error) => {
+                        // A transport blip is not a process exit. Retry with the
+                        // same backoff, but stop after a bounded run of failures
+                        // so a dead endpoint does not pin the handle forever.
+                        failures += 1;
+                        if failures >= 5 {
+                            tracing::warn!(
+                                %path,
+                                %error,
+                                "Recovered execution status unavailable; giving up"
+                            );
+                            return;
+                        }
+                        tracing::warn!(
+                            %path,
+                            %error,
+                            "Recovered execution status unavailable; retrying"
+                        );
                     }
                 }
+                tokio::select! {
+                    _ = tx.closed() => return,
+                    _ = tokio::time::sleep(delay) => {}
+                }
+                delay = (delay * 2).min(std::time::Duration::from_secs(1));
             }
         });
         Ok(Execution::new(
@@ -1661,11 +1701,12 @@ mod tests {
         let execution = sandbox.get_execution("exec-1").await.unwrap();
         let outcome = tokio::time::timeout(std::time::Duration::from_secs(5), execution.wait())
             .await
-            .unwrap();
+            .expect("status retries must finish inside the deadline");
         server.await.unwrap();
+        let error = outcome.expect_err("a failed observation is not a process exit");
         assert!(
-            outcome.is_err(),
-            "a failed observation is not a process exit: {outcome:?}"
+            error.to_string().contains("no longer observable"),
+            "observation failure should be explicit, got: {error}"
         );
     }
 

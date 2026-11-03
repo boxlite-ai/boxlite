@@ -264,7 +264,9 @@ impl Execution {
             .get_or_try_init(|| async {
                 let mut rx = self.wait_state.rx.lock().await;
                 rx.recv().await.ok_or_else(|| {
-                    boxlite_shared::BoxliteError::Internal("Result channel closed".into())
+                    boxlite_shared::BoxliteError::Internal(
+                        "execution status is no longer observable (the session ended or the connection was lost)".into(),
+                    )
                 })
             })
             .await
