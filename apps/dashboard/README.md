@@ -13,12 +13,15 @@ File and local-terminal headers keep copy actions separate from the code.
 
 Installation commands use the package manager's current release without fixed
 version numbers. Python uses `--upgrade` to update existing installations. Rust
-uses a quoted wildcard requirement to replace older dependency constraints,
+uses a quoted wildcard requirement followed by `cargo update -p boxlite` to
+replace older dependency constraints and refresh an existing lockfile,
 and the example supplies the current tunnel API's `TunnelOptions`. The
 C SDK command requires curl, jq and tar, and selects the first stable release
-with a matching platform archive among GitHub's 100 most recent releases. A
+with a matching platform archive among GitHub's 100 most recent releases,
+ordered by publication time. A
 new release without its C archive is skipped; no match stops the download.
-Displayed and copied
+Extraction writes directly into `boxlite-c-sdk`, updating existing SDK files
+instead of nesting a new directory on repeated installation. Displayed and copied
 commands both come from `src/lib/quickstart/interfaces.json`.
 
 ## Region names

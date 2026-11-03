@@ -11,7 +11,7 @@ describe('onboarding code examples', () => {
     expect(examples.python.install).toBe('pip install --upgrade boxlite')
     expect(examples.typescript.install).toBe('npm install @boxlite-ai/boxlite tsx')
     expect(examples.go.install).toContain('go get github.com/boxlite-ai/boxlite/sdks/go\n')
-    expect(examples.rust.install).toContain("cargo add 'boxlite@*' --features rest")
+    expect(examples.rust.install).toContain("cargo add 'boxlite@*' --features rest\ncargo update -p boxlite")
     for (const example of Object.values(examples)) {
       expect(example.install).not.toMatch(/(?:==|@=?v?|VERSION=v)\d+\.\d+/)
     }
