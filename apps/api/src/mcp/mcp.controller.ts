@@ -20,10 +20,10 @@ import { createMcpHandler, type AuthInfo, type McpHttpHandler } from '@modelcont
 import { toNodeHandler, type NodeMcpRequestHandler } from '@modelcontextprotocol/node'
 import type { Request, Response } from 'express'
 import type { AuthContext } from '../common/interfaces/auth-context.interface'
-import { McpAuthChallengeFilter } from './mcp-auth-challenge.filter'
-import { McpAuthGuard } from './mcp-auth.guard'
+import { McpAuthChallengeFilter } from './auth/mcp-auth-challenge.filter'
+import { McpAuthGuard } from './auth/mcp-auth.guard'
 import { MCP_CALLER_KEY, McpServerFactory } from './mcp-server.factory'
-import { McpOriginGuard } from './origin.guard'
+import { McpOriginGuard } from './auth/origin.guard'
 import { AuthenticatedRateLimitGuard } from '../common/guards/authenticated-rate-limit.guard'
 
 const METHOD_NOT_ALLOWED = {
