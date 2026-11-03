@@ -10,6 +10,7 @@ import { CommerceBoxLimitService } from '../../../boxlite-rest/commerce-box-limi
 import { BoxState } from '../../../box/enums/box-state.enum'
 import { BoxDesiredState } from '../../../box/enums/box-desired-state.enum'
 import { ActorKind } from '../../../common/context/actor-kind.enum'
+import { SystemRole } from '../../../user/enums/system-role.enum'
 import { OrganizationResourcePermission as Permission } from '../../../organization/enums/organization-resource-permission.enum'
 import { BoxTools } from './box-tools'
 import {
@@ -21,14 +22,16 @@ import {
   toolHarness,
 } from '../../tests/tool-harness'
 
-const NAME = '我的 Box with spaces'
-const NAMES = ['create_box', 'get_box', 'box_exists', 'delete_box', 'start_box', 'stop_box']
+const NAME = 'caf\u00e9 Box with spaces'
+const NAMES = ['list_boxes', 'create_box', 'get_box', 'box_exists', 'delete_box', 'start_box', 'stop_box']
 const INPUT = { organization_id: ORGANIZATION_ID, box_id: NAME }
 
-describe('MCP Box lifecycle tools', () => {
+describe('MCP Box tools', () => {
   let fixture: ReturnType<typeof accessFixture>
   let harness: Awaited<ReturnType<typeof toolHarness>>
   let boxes: {
+    findAllDeprecated: jest.Mock
+    toBoxDtos: jest.Mock
     create: jest.Mock
     toBoxDto: jest.Mock
     toBoxDtoWithExitCode: jest.Mock
@@ -61,6 +64,8 @@ describe('MCP Box lifecycle tools', () => {
     fixture = accessFixture()
     fixture.boxes.findOneByIdOrName.mockResolvedValue(entity)
     boxes = {
+      findAllDeprecated: jest.fn().mockResolvedValue([entity]),
+      toBoxDtos: jest.fn().mockResolvedValue([dto]),
       create: jest.fn().mockResolvedValue(dto),
       toBoxDto: jest.fn().mockImplementation(async (box) => ({ ...dto, state: box.state })),
       toBoxDtoWithExitCode: jest.fn().mockResolvedValue(dto),
@@ -84,16 +89,39 @@ describe('MCP Box lifecycle tools', () => {
   })
 
   function args(name: string) {
-    return name === 'create_box' ? { organization_id: ORGANIZATION_ID } : INPUT
+    return ['list_boxes', 'create_box'].includes(name) ? { organization_id: ORGANIZATION_ID } : INPUT
   }
 
-  it('advertises six strict tools and destructive stop/delete hints', async () => {
+  it('advertises seven strict tools and destructive stop/delete hints', async () => {
     const { result } = await harness.list()
     expect(result.tools.map((tool: { name: string }) => tool.name).sort()).toEqual([...NAMES].sort())
     for (const tool of result.tools) {
       expect(tool.inputSchema.additionalProperties).toBe(false)
-      expect(tool.outputSchema.additionalProperties).toBe(false)
+      if (tool.name === 'list_boxes') expect(tool.outputSchema.type).toBe('array')
+      else expect(tool.outputSchema.additionalProperties).toBe(false)
       expect(tool.annotations.destructiveHint).toBe(['delete_box', 'stop_box'].includes(tool.name))
+    }
+  })
+  it('lists organization boxes with membership alone and the REST response mapping', async () => {
+    fixture.member.assignedRoles = []
+    const { result } = await harness.call('list_boxes', { organization_id: ORGANIZATION_ID })
+    expect(result.isError).toBeFalsy()
+    expect(result.structuredContent).toEqual([
+      expect.objectContaining({ box_id: RESOURCE_ID, name: NAME, memory_mib: 2048, exit_code: 0 }),
+    ])
+    expect(JSON.parse(result.content[0].text)).toEqual(result.structuredContent)
+    expect(boxes.findAllDeprecated).toHaveBeenCalledWith(ORGANIZATION_ID)
+    expect(boxes.toBoxDtos).toHaveBeenCalledWith([entity])
+  })
+  it('requires actual membership for an administrator listing boxes', async () => {
+    fixture.memberships.findOne.mockResolvedValue(null)
+    const role = caller.role
+    caller.role = SystemRole.ADMIN
+    try {
+      expect((await harness.call('list_boxes', { organization_id: ORGANIZATION_ID })).result.isError).toBe(true)
+      expect(boxes.findAllDeprecated).not.toHaveBeenCalled()
+    } finally {
+      caller.role = role
     }
   })
   it.each(NAMES)('requires actual membership before %s', async (name) => {

@@ -19,7 +19,7 @@ import {
   toolHarness,
 } from '../../tests/tool-harness'
 
-const INPUT = { organization_id: ORGANIZATION_ID, box_id: '我的 Box' }
+const INPUT = { organization_id: ORGANIZATION_ID, box_id: 'caf\u00e9 Box' }
 const NAMES = ['set_box_inbound', 'prepare_tunnel']
 
 describe('MCP Box network tools', () => {

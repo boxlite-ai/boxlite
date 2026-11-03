@@ -850,10 +850,11 @@ in the text reply. Unexpected errors never echo backend messages or request
 payloads. The MCP HTTP boundary applies the existing authenticated rate limiter.
 Resource permissions are enforced; business OAuth scopes remain unimplemented.
 
-`list_boxes` checks that the caller belongs to the organization — the membership
-check the box list route applies, without its system-admin bypass. An
-organization the caller is not in, or one that does not exist, gets the same
-`isError` reply.
+`list_boxes` is registered by `BoxTools` and uses the shared organization access
+check, without an additional resource read permission or a system-admin membership
+bypass. Missing and inaccessible organizations get the same `isError` reply.
+Cancellation during membership admission prevents the subsequent Box query; the
+shared tool wrapper validates results and sanitizes unexpected errors.
 
 Its input is a strict object containing only the required `organization_id` UUID;
 unknown arguments are rejected before membership or box lookups. `tools/list`

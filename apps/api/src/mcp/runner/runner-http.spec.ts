@@ -161,11 +161,14 @@ describe('McpRunnerHttp real HTTP boundary', () => {
     expect(calls).toHaveLength(0)
   })
 
-  it.each(['my box', '测试'])('resolves public Box name %s without putting it in the Runner path', async (name) => {
-    await adapter.execute(AUTH, name, { kind: 'metrics' })
-    expect(boxes.findOneByIdOrName).toHaveBeenCalledWith(name, 'org-1')
-    expect(calls[0].url).toBe('/v1/boxes/internal-box/metrics')
-  })
+  it.each(['my box', 'caf\u00e9'])(
+    'resolves public Box name %s without putting it in the Runner path',
+    async (name) => {
+      await adapter.execute(AUTH, name, { kind: 'metrics' })
+      expect(boxes.findOneByIdOrName).toHaveBeenCalledWith(name, 'org-1')
+      expect(calls[0].url).toBe('/v1/boxes/internal-box/metrics')
+    },
+  )
 
   it('uses the same denial for missing and foreign Boxes', async () => {
     boxes.findOneByIdOrName.mockRejectedValue(new NotFoundException('private lookup details'))

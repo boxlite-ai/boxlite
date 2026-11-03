@@ -49,7 +49,7 @@ describe('McpFileTools HTTP tar boundary', () => {
     })
   }
 
-  it.each(['hello 世界\n', '', '\ufeffhello'])(
+  it.each(['hello caf\u00e9\n', '', '\ufeffhello'])(
     'round-trips UTF-8 content %j across actual HTTP and standard tar headers',
     async (content) => {
       let uploaded: Buffer
@@ -78,11 +78,11 @@ describe('McpFileTools HTTP tar boundary', () => {
   )
 
   it('uses installed PAX support for Unicode and long guest basenames', async () => {
-    const path = `/tmp/${'长'.repeat(60)}.txt`
-    const archive = archiveTextFile(path, 'hello 世界')
+    const path = `/tmp/${'\u00e9'.repeat(90)}.txt`
+    const archive = archiveTextFile(path, 'hello caf\u00e9')
     download(archive, false)
     expect((await harness.call('download_files', { ...scope, path })).result.structuredContent.file.content).toBe(
-      'hello 世界',
+      'hello caf\u00e9',
     )
   })
 

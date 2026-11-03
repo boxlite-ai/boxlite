@@ -6,6 +6,13 @@ live together under `tools/`; each feature module owns its input and output
 contracts. Only schemas shared across tools are extracted: `tools/box/box.schema.ts`
 defines Box selectors and responses for lifecycle, network, and listing tools.
 
+`BoxTools` owns all seven Box listing and lifecycle registrations, including
+`list_boxes`. The factory depends on tool groups; it performs no Box queries or
+membership lookups. Listing uses the shared organization access, cancellation,
+output validation, and sanitized error handling. It still requires membership
+without an additional read permission and returns the existing REST-mapped array
+in both structured and text results.
+
 ```text
 mcp/
 ├── auth/                 OAuth guards, discovery metadata, and origin policy
