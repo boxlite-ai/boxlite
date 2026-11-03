@@ -126,6 +126,10 @@ describe('OnboardingGuideDialog tabs', () => {
     expect(document.querySelector('[aria-label="Quickstart action"]')).toBeNull()
     expect(document.body.textContent).toContain('Create key')
     expect(document.body.textContent).toContain('pip install boxlite')
+    const installSection = [...document.querySelectorAll('h2')]
+      .find((item) => item.textContent === '2. Choose your SDK or CLI')!.closest('section')!
+    await click([...installSection.querySelectorAll('button')].find((item) => item.textContent === 'Copy'))
+    expect(mocks.copy).toHaveBeenCalledWith('pip install boxlite')
     expect(document.body.textContent).toContain('Hello from BoxLite')
     expect([...document.querySelectorAll('h2')].map((item) => item.textContent)).toEqual([
       '1. Get an API key',

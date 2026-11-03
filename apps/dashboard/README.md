@@ -3,6 +3,19 @@
 The web console at `app.boxlite.ai`. A Vite + React app, built and tested
 through Nx as the `dashboard` project.
 
+## SDK and CLI quickstart readability
+
+The walkthrough uses a dedicated `quickstart-code` type style: 14px monospaced
+text, 24px line height, normal letter spacing and preserved indentation. The
+10px tracked label style is reserved for labels. Code panes scroll horizontally
+instead of wrapping commands; longer sections show up to 420px before scrolling.
+File and local-terminal headers keep copy actions separate from the code.
+
+Installation commands use the package manager's current release without fixed
+version numbers. The C SDK download resolves GitHub's latest release tag at
+execution because the archive names include that tag. Displayed and copied
+commands both come from `src/lib/quickstart/interfaces.json`.
+
 ## Region names
 
 The console resolves shared-region names through `GET /api/shared-regions`.

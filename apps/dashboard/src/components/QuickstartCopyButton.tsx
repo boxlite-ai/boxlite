@@ -39,7 +39,7 @@ export function QuickstartCopyButton({
       className={cn(
         'flex h-7 flex-none items-center justify-center focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand',
         quiet
-          ? 'min-w-10 rounded-none px-2 font-display text-label transition-colors hover:bg-foreground/[0.06]'
+          ? 'min-w-10 rounded-none px-2 font-display text-xs tracking-normal transition-colors hover:bg-foreground/[0.06]'
           : 'min-w-[76px] border-2 bg-[hsl(var(--code-background))] px-[10px] text-label font-semibold uppercase tracking-[1px] transition-[color,border-color,background-color,transform,box-shadow] active:translate-x-px active:translate-y-px active:shadow-none',
         failed
           ? quiet
