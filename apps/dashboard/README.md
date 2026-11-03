@@ -21,7 +21,9 @@ with a matching platform archive among GitHub's 100 most recent releases,
 ordered by publication time. A
 new release without its C archive is skipped; no match stops the download.
 Extraction completes in a temporary directory before replacing `boxlite-c-sdk`.
-Failed extraction preserves the previous SDK; a failed replacement restores it.
+Failed extraction preserves the previous SDK. A failed or interrupted
+replacement restores it when possible. If restoration fails, the previous SDK
+is retained in the staging directory and its path is printed to stderr.
 Displayed and copied
 commands both come from `src/lib/quickstart/interfaces.json`.
 
