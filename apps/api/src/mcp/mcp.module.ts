@@ -19,10 +19,22 @@ import { ImageTools } from './image-tools'
 import { ImageModule } from '../image/image.module'
 import { RegistryModule } from '../registry/registry.module'
 import { RegistryTools } from './registry-tools'
+import { BoxTools } from './box-tools'
+import { CommerceBoxLimitService } from '../boxlite-rest/commerce-box-limit.service'
 
 @Module({
   imports: [AuthModule, BoxModule, OrganizationModule, AuditModule, ImageModule, RegistryModule],
   controllers: [McpController, McpMetadataController],
-  providers: [McpServerFactory, McpAuthMetadata, McpToolAccess, McpToolAudit, VolumeTools, ImageTools, RegistryTools],
+  providers: [
+    McpServerFactory,
+    McpAuthMetadata,
+    McpToolAccess,
+    McpToolAudit,
+    VolumeTools,
+    ImageTools,
+    RegistryTools,
+    BoxTools,
+    CommerceBoxLimitService,
+  ],
 })
 export class McpModule {}

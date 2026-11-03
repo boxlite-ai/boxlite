@@ -13,6 +13,7 @@ import { listBoxesInputSchema, listBoxesOutputSchema } from './list-boxes.schema
 import { VolumeTools } from './volume-tools'
 import { ImageTools } from './image-tools'
 import { RegistryTools } from './registry-tools'
+import { BoxTools } from './box-tools'
 
 /** The `authInfo.extra` key the controller stores the authenticated caller under. */
 export const MCP_CALLER_KEY = 'boxliteCaller'
@@ -38,6 +39,7 @@ export class McpServerFactory {
     private readonly volumeTools: VolumeTools,
     private readonly imageTools: ImageTools,
     private readonly registryTools: RegistryTools,
+    private readonly boxTools: BoxTools,
   ) {}
 
   /** The `createMcpHandler` factory. */
@@ -58,6 +60,7 @@ export class McpServerFactory {
     this.volumeTools.register(server, caller)
     this.imageTools.register(server, caller)
     this.registryTools.register(server, caller)
+    this.boxTools.register(server, caller)
     return server
   }
 
