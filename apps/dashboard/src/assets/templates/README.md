@@ -11,4 +11,3 @@ Assets are bundled locally; rendering never depends on a remote image service.
 
 Expanded catalog: uv, Bun, Apache Maven and GNU marks also use Simple Icons CC0.
 GCC uses the GNU mark; Browserless Chromium uses the existing Chromium mark.
-Coder Universal uses the Coder mark from Simple Icons under CC0.

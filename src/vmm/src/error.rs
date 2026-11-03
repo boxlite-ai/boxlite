@@ -30,6 +30,13 @@ pub enum Error {
     /// A device constructor raised interrupt `line` before the chipset was
     /// built.
     LineNotArmed(u32),
+    /// A virtio device transport or worker cannot continue.
+    VirtioDevice {
+        /// The device's short name.
+        device: &'static str,
+        /// Why the device stopped.
+        reason: &'static str,
+    },
     /// Opening or loading the kernel image failed.
     LoadKernel { path: PathBuf, source: io::Error },
     /// Opening or loading the initramfs failed.
@@ -79,6 +86,9 @@ impl fmt::Display for Error {
                     "interrupt line {line} raised before the chipset is built"
                 )
             }
+            Self::VirtioDevice { device, reason } => {
+                write!(f, "virtio device {device}: {reason}")
+            }
             Self::LoadKernel { path, .. } => {
                 write!(f, "failed to load the kernel {}", path.display())
             }
@@ -108,6 +118,7 @@ impl error::Error for Error {
             | Self::InvalidCommandLine(_)
             | Self::ChipsetConflicts(_)
             | Self::LineNotArmed(_)
+            | Self::VirtioDevice { .. }
             | Self::UnexpectedExit { .. }
             | Self::VcpuPanicked { .. }
             | Self::AlreadyRan => None,
@@ -150,5 +161,15 @@ mod tests {
                 .expect("host cause");
             assert_eq!(cause.kind(), kind);
         }
+    }
+
+    #[test]
+    fn a_virtio_device_error_names_the_device_and_reason() {
+        let error = Error::VirtioDevice {
+            device: "rng",
+            reason: "queue failed",
+        };
+        assert_eq!(error.to_string(), "virtio device rng: queue failed");
+        assert!(error.source().is_none());
     }
 }

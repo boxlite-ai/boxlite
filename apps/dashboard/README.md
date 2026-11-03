@@ -27,6 +27,15 @@ is retained in the staging directory and its path is printed to stderr.
 Displayed and copied
 commands both come from `src/lib/quickstart/interfaces.json`.
 
+## Quickstart catalog
+
+Coder Universal is no longer offered as a quickstart template. Its preset
+requested 30 GB of disk, which exceeds a 10 GB per-box disk ceiling. Removing
+the preset avoids offering a configuration those organizations cannot create;
+its disk request has not been reduced without runtime validation. Existing
+boxes and custom-image support are unaffected. Old `?template=coder` links use
+the picker's existing unknown-template fallback and select Python.
+
 ## Region names
 
 The console resolves shared-region names through `GET /api/shared-regions`.

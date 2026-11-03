@@ -10,14 +10,21 @@
 //! across blocking I/O.
 //!
 //! A device processes the descriptors available in its queues; the virtqueue
-//! size bounds one event call. Queue start and stop arrive with the queue
-//! adapter and worker; every device needs the methods here first.
+//! size bounds one event call. The [`VirtQueues`] facade prepares and validates
+//! the queue set, tracks deferred chains and runs the notification drain;
+//! `save` and `restore` return [`SnapshotError::Unsupported`] until M8. The
+//! transport starts and stops the worker on DRIVER_OK and Status=0, and rejects
+//! queue-configuration writes after DRIVER_OK. Every device needs the methods
+//! here first.
 
 use std::{fmt, sync::Arc};
 
-use virtio_queue::Queue;
-
+use self::queue::VirtQueues;
 use crate::{events::EventSender, memory::GuestMemoryMmap};
+
+pub(crate) mod interrupt;
+pub(crate) mod mmio;
+pub(crate) mod queue;
 
 /// The largest number of queues a device may declare.
 pub(crate) const MAX_QUEUES: usize = 16;
@@ -85,6 +92,15 @@ pub(crate) trait EventRegistrar: Send + Sync {
     fn deregister(&self, id: SourceId);
 }
 
+/// Starts and stops the worker of one activated device.
+pub(crate) trait WorkerControl: Send + Sync {
+    /// Starts the worker. On error no worker runs.
+    fn start(&self) -> Result<(), DeviceError>;
+
+    /// Stops and joins the worker. On error the device must not be reset.
+    fn stop(&self) -> Result<(), DeviceError>;
+}
+
 /// The transport's interrupt and status handle, shared with the worker.
 pub(crate) trait VirtioInterrupt: Send + Sync {
     /// Raises the queue interrupt.
@@ -114,8 +130,14 @@ pub(crate) trait VirtioInterrupt: Send + Sync {
 pub(crate) struct ActivationContext {
     /// The guest memory the queues address.
     pub(crate) memory: Arc<GuestMemoryMmap>,
-    /// The validated queues, owned by the device after activation.
-    pub(crate) queues: Vec<Queue>,
+    /// The prepared queues, one slot per `DeviceSpec::queue_max` entry, in
+    /// queue-number order.
+    ///
+    /// The transport passes every queue, including unready ones, and never
+    /// filters or renumbers. The device checks [`VirtQueues::is_ready`] for the
+    /// queues it needs and rejects a required-but-unready queue with
+    /// [`DeviceError::NeedsReset`]. The device owns the facade after activation.
+    pub(crate) queues: VirtQueues,
     /// The transport's interrupt and status handle.
     pub(crate) interrupt: Arc<dyn VirtioInterrupt>,
     /// The worker's event registrar for backend sources; the device stores it.
@@ -214,8 +236,11 @@ pub(crate) trait VirtioDevice: Send {
     /// The device's fixed description.
     fn spec(&self) -> &DeviceSpec;
 
-    /// Stores the features the driver accepted. The transport calls this once,
-    /// before any configuration read that depends on them.
+    /// Stores the features the driver accepted. The transport offers
+    /// `VIRTIO_F_VERSION_1` itself and calls this once with the transport-owned
+    /// bits removed, when the driver sets FEATURES_OK. A device may receive
+    /// configuration reads before this call; feature-dependent fields return a
+    /// default until then.
     fn set_features(&mut self, negotiated: u64) -> Result<(), FeatureError>;
 
     /// Reads the configuration space at `offset` into `data`.

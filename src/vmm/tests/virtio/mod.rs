@@ -24,6 +24,7 @@ use crate::{
         ActivationContext, DeviceError, DeviceEvent, DeviceSnapshot, DeviceSpec, EventError,
         EventRegistrar, EventSource, FeatureError, MAX_CONFIG_LEN, MAX_QUEUES, RestoreContext,
         SnapshotError, SnapshotSupport, SourceId, VirtioDevice, VirtioInterrupt, Waker,
+        queue::VirtQueues,
     },
 };
 
@@ -44,7 +45,7 @@ impl TestDevice {
                 name: "test",
                 features: 0b111,
                 config_len: 4,
-                queue_max: &[4, 4],
+                queue_max: &[8],
                 snapshot: SnapshotSupport::Stopped,
             },
             features: 0,
@@ -203,9 +204,18 @@ fn sender() -> crate::events::EventSender {
 }
 
 fn activation_with(events: Arc<dyn EventRegistrar>, waker: Waker) -> ActivationContext {
+    let memory = Arc::new(GuestMemoryMmap::from_ranges(&[(GuestAddress(0), 0x10000)]).unwrap());
+    let queues = VirtQueues::prepare(
+        vec![Queue::new(8).unwrap()],
+        &[8],
+        false,
+        false,
+        Arc::clone(&memory),
+    )
+    .unwrap();
     ActivationContext {
-        memory: Arc::new(GuestMemoryMmap::from_ranges(&[(GuestAddress(0), 0x10000)]).unwrap()),
-        queues: vec![Queue::new(8).unwrap()],
+        memory,
+        queues,
         interrupt: Arc::new(TestInterrupt::default()),
         events,
         waker,
@@ -268,6 +278,8 @@ fn activation_takes_the_context_and_reset_clears_it() {
     assert!(device.activate(activation()).is_ok());
     let ctx = device.activation.as_ref().expect("the device is activated");
     assert_eq!(ctx.queues.len(), 1);
+    assert_eq!(ctx.queues.max_size(0), Some(8));
+    assert!(!ctx.queues.is_ready(0));
     assert_eq!(ctx.memory.iter().count(), 1);
     ctx.interrupt.raise();
     assert_eq!(ctx.interrupt.interrupt_status(), 0x1);
@@ -391,3 +403,6 @@ fn snapshot_and_event_errors_name_their_cause() {
     );
     assert_eq!(EventError::Closed.to_string(), "the event worker is closed");
 }
+
+#[path = "queue.rs"]
+mod queue;
