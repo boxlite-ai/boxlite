@@ -33,6 +33,7 @@ help:
 	@echo "    make vmm:boot:host  - Build the same kernel with Linux host tools instead"
 	@echo "    make skillbox-image - Build SkillBox Docker image (APT_SOURCE=mirrors.aliyun.com for China)"
 	@echo "    make build:apps     - Build the apps workspace (api, dashboard, runner, libs…)"
+	@echo "    make build:apps:dashboard - Build and type-check the dashboard"
 	@echo ""
 	@echo "  Plugins:"
 	@echo "    make plugin:boxlite:check    - Validate BoxLite plugin and package tests"

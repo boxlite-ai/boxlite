@@ -1684,7 +1684,10 @@ mod tests {
         };
 
         assert_eq!(runtime.list_domains().await.unwrap().remaining, 1);
-        let bound = runtime.bind_domain("demo1", &target).await.unwrap();
+        let bound = runtime
+            .bind_domain("demo1.app.test", &target)
+            .await
+            .unwrap();
         runtime.unbind_domain("demo1.app.test").await.unwrap();
 
         assert_eq!(bound.hostname, "demo1.app.test");
@@ -1692,7 +1695,7 @@ mod tests {
             server.await.unwrap(),
             [
                 "GET /v1/domains HTTP/1.1",
-                "PUT /v1/domains/demo1/target HTTP/1.1",
+                "PUT /v1/domains/demo1.app.test/target HTTP/1.1",
                 "DELETE /v1/domains/demo1.app.test/target HTTP/1.1",
             ]
         );

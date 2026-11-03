@@ -16,7 +16,7 @@ import { BoxMigration } from '../entities/box-migration.entity'
 import { Tunnel } from '../entities/tunnel.entity'
 import { Domain } from '../entities/domain.entity'
 import { BoxState } from '../enums/box-state.enum'
-import { DOMAIN_COUNT_LIMIT_CODE, SUBDOMAIN_TAKEN_CODE, SUBDOMAIN_TOO_SHORT_CODE } from '../errors/domain.error'
+import { DOMAIN_COUNT_LIMIT_CODE, DOMAIN_NOT_OWNED_CODE, SUBDOMAIN_TOO_SHORT_CODE } from '../errors/domain.error'
 import { BoxDestroyedEvent } from '../events/box-destroyed.event'
 import { AddDomain1792972800000 } from '../../migrations/pre-deploy/1792972800000-add-domain-migration'
 import { DomainService } from './domain.service'
@@ -161,9 +161,41 @@ describeIfDatabase('DomainService (integration, real Postgres)', () => {
     )
   }
 
+  it('acquisition separation: bind refuses an unowned full hostname without allocating it', async () => {
+    const box = await makeBox()
+    await expect(service.bind(box, 3000, `unowned.${APP_DOMAIN}`)).rejects.toMatchObject({
+      status: 404,
+      response: { code: 'domain_not_owned', message: expect.stringContaining('Dashboard') },
+    })
+    expect(await heldNames(ORG)).toEqual([])
+  })
+
+  it('acquisition separation: bind refuses a short name without allocating it', async () => {
+    const box = await makeBox()
+    await expect(service.bind(box, 3000, 'shortname')).rejects.toMatchObject({ status: 400 })
+    expect(await heldNames(ORG)).toEqual([])
+  })
+
+  it('claims an unbound full hostname and preserves its target on a repeated request', async () => {
+    const box = await makeBox()
+    await expect(service.claim(ORG, 'Demo1')).resolves.toEqual({
+      hostname: `demo1.${APP_DOMAIN}`,
+      url: `https://demo1.${APP_DOMAIN}`,
+      target: null,
+    })
+    await service.bind(box, 3000, `demo1.${APP_DOMAIN}`)
+    minLength = 10
+    await expect(service.claim(ORG, 'demo1')).resolves.toMatchObject({
+      target: { type: 'box', box: box.id, port: 3000 },
+    })
+    expect(await heldNames(ORG)).toEqual([{ hostname: `demo1.${APP_DOMAIN}`, box_id: box.id, port: 3000 }])
+    expect((await service.listHeld(ORG)).domainSuffix).toBe(APP_DOMAIN)
+  })
+
   it('hostname contract: unbind selects the exact held hostname independently of the configured suffix', async () => {
     const box = await makeBox()
-    await service.bind(box, 3000, 'demo1')
+    await service.claim(box.organizationId, 'demo1')
+    await service.bind(box, 3000, `demo1.${APP_DOMAIN}`)
     await dataSource.query(
       `INSERT INTO "domain" ("hostname", "kind", "organization_id", "box_id", "port") VALUES ($1, 'platform', $2, $3, 3000)`,
       ['demo1.other.example', ORG, box.id],
@@ -183,7 +215,8 @@ describeIfDatabase('DomainService (integration, real Postgres)', () => {
     )
     expect(columns.map((column) => column.column_name)).toEqual(expect.arrayContaining(['target_type', 'app_id']))
     const box = await makeBox()
-    await service.bind(box, 3000, 'demo1')
+    await service.claim(box.organizationId, 'demo1')
+    await service.bind(box, 3000, `demo1.${APP_DOMAIN}`)
     const insertApp = (type: string, app: string, boxId: string | null = null, port: number | null = null) =>
       dataSource.query(
         `INSERT INTO "domain" ("hostname", "kind", "organization_id", "target_type", "app_id", "box_id", "port")
@@ -219,7 +252,8 @@ describeIfDatabase('DomainService (integration, real Postgres)', () => {
     await service.unbind(ORG, 'shop1.app.boxlite.test')
     await expect(service.resolve('shop1.app.boxlite.test')).resolves.toBeNull()
     const replacement = await makeBox()
-    await service.bind(replacement, 8080, 'shop1')
+    await service.claim(replacement.organizationId, 'shop1')
+    await service.bind(replacement, 8080, `shop1.${APP_DOMAIN}`)
     await expect(service.resolve('shop1.app.boxlite.test')).resolves.toEqual({
       type: 'box',
       box: replacement.id,
@@ -233,7 +267,8 @@ describeIfDatabase('DomainService (integration, real Postgres)', () => {
 
   it('resolves the stored target independently of tunnel publication', async () => {
     const box = await makeBox()
-    await service.bind(box, 3000, 'demo1')
+    await service.claim(box.organizationId, 'demo1')
+    await service.bind(box, 3000, `demo1.${APP_DOMAIN}`)
     const target = { type: 'box', box: box.id, port: 3000 }
 
     await expect(service.resolve(`demo1.${APP_DOMAIN}`)).resolves.toEqual(target)
@@ -247,8 +282,11 @@ describeIfDatabase('DomainService (integration, real Postgres)', () => {
 
   it('binds a name before its port is public, and admits preview once the port is declared', async () => {
     const box = await makeBox()
+    await service.claim(ORG, 'demo1')
 
-    await expect(service.bind(box, 3000, 'demo1')).resolves.toMatchObject({ url: `https://demo1.${APP_DOMAIN}` })
+    await expect(service.bind(box, 3000, `demo1.${APP_DOMAIN}`)).resolves.toMatchObject({
+      url: `https://demo1.${APP_DOMAIN}`,
+    })
 
     await expect(tunnels.isPublicAccessAllowed(box.id, 3000)).resolves.toBe(false)
     await expect(preview.resolveDomain(`demo1.${APP_DOMAIN}`)).rejects.toBeInstanceOf(NotFoundException)
@@ -260,7 +298,8 @@ describeIfDatabase('DomainService (integration, real Postgres)', () => {
 
   it('keeps a private tunnel private when a domain is bound to its port', async () => {
     const box = await makeBox()
-    await service.bind(box, 3000, 'demo1')
+    await service.claim(box.organizationId, 'demo1')
+    await service.bind(box, 3000, `demo1.${APP_DOMAIN}`)
     const prepared = await tunnels.prepare(box.id, 3000, false)
 
     await expect(tunnels.access(box.id, 3000, prepared.token!)).resolves.toMatchObject({ isPublic: false })
@@ -276,8 +315,10 @@ describeIfDatabase('DomainService (integration, real Postgres)', () => {
     const box = await makeBox()
     await tunnels.prepare(box.id, 3000)
 
-    await service.bind(box, 3000, 'first1')
-    await service.bind(box, 3000, 'second')
+    await service.claim(box.organizationId, 'first1')
+    await service.bind(box, 3000, `first1.${APP_DOMAIN}`)
+    await service.claim(box.organizationId, 'second')
+    await service.bind(box, 3000, `second.${APP_DOMAIN}`)
 
     await expect(preview.resolveDomain(`first1.${APP_DOMAIN}`)).resolves.toEqual({ boxId: box.id, port: 3000 })
     await expect(preview.resolveDomain(`second.${APP_DOMAIN}`)).resolves.toEqual({ boxId: box.id, port: 3000 })
@@ -290,8 +331,11 @@ describeIfDatabase('DomainService (integration, real Postgres)', () => {
   it('repeats the same binding without a second name and keeps the count at one', async () => {
     const box = await makeBox()
 
-    await service.bind(box, 3000, 'demo1')
-    await expect(service.bind(box, 3000, 'demo1')).resolves.toMatchObject({ url: `https://demo1.${APP_DOMAIN}` })
+    await service.claim(box.organizationId, 'demo1')
+    await service.bind(box, 3000, `demo1.${APP_DOMAIN}`)
+    await expect(service.bind(box, 3000, `demo1.${APP_DOMAIN}`)).resolves.toMatchObject({
+      url: `https://demo1.${APP_DOMAIN}`,
+    })
 
     const held = await service.listHeld(ORG)
     expect(held).toMatchObject({ used: 1, limit: 1, remaining: 0, minLength: 5 })
@@ -307,7 +351,8 @@ describeIfDatabase('DomainService (integration, real Postgres)', () => {
   it('unbinds by name idempotently, keeps the name for the organization, and keeps the port public', async () => {
     const box = await makeBox()
     await tunnels.prepare(box.id, 3000)
-    await service.bind(box, 3000, 'demo1')
+    await service.claim(box.organizationId, 'demo1')
+    await service.bind(box, 3000, `demo1.${APP_DOMAIN}`)
 
     await service.unbind(ORG, `demo1.${APP_DOMAIN}`)
     await service.unbind(ORG, `Demo1.${APP_DOMAIN}`)
@@ -321,7 +366,8 @@ describeIfDatabase('DomainService (integration, real Postgres)', () => {
   it('refuses to unbind a name the organization does not hold', async () => {
     const mine = await makeBox()
     await tunnels.prepare(mine.id, 3000)
-    await service.bind(mine, 3000, 'demo1')
+    await service.claim(mine.organizationId, 'demo1')
+    await service.bind(mine, 3000, `demo1.${APP_DOMAIN}`)
 
     await expect(service.unbind(OTHER_ORG, `demo1.${APP_DOMAIN}`)).rejects.toMatchObject({ status: 404 })
     await expect(service.unbind(ORG, `nobody.${APP_DOMAIN}`)).rejects.toMatchObject({ status: 404 })
@@ -332,10 +378,13 @@ describeIfDatabase('DomainService (integration, real Postgres)', () => {
     const first = await makeBox()
     const second = await makeBox()
     await tunnels.prepare(second.id, 8080)
-    await service.bind(first, 3000, 'demo1')
+    await service.claim(first.organizationId, 'demo1')
+    await service.bind(first, 3000, `demo1.${APP_DOMAIN}`)
     await service.unbind(ORG, `demo1.${APP_DOMAIN}`)
 
-    await expect(service.bind(second, 8080, 'demo1')).resolves.toMatchObject({ url: `https://demo1.${APP_DOMAIN}` })
+    await expect(service.bind(second, 8080, `demo1.${APP_DOMAIN}`)).resolves.toMatchObject({
+      url: `https://demo1.${APP_DOMAIN}`,
+    })
 
     await expect(service.resolve(`demo1.${APP_DOMAIN}`)).resolves.toEqual({ type: 'box', box: second.id, port: 8080 })
     expect((await service.listHeld(ORG)).used).toBe(1)
@@ -344,7 +393,8 @@ describeIfDatabase('DomainService (integration, real Postgres)', () => {
   it('moves a name bound to another of the organization ports, at full allowance', async () => {
     const first = await makeBox()
     const second = await makeBox()
-    await service.bind(first, 3000, 'demo1')
+    await service.claim(first.organizationId, 'demo1')
+    await service.bind(first, 3000, `demo1.${APP_DOMAIN}`)
 
     await expect(service.bind(second, 8080, `Demo1.${APP_DOMAIN}.`)).resolves.toMatchObject({
       hostname: `demo1.${APP_DOMAIN}`,
@@ -357,23 +407,25 @@ describeIfDatabase('DomainService (integration, real Postgres)', () => {
   it('keeps a name from every other organization, bound or released', async () => {
     const mine = await makeBox()
     const theirs = await makeBox(OTHER_ORG)
-    await service.bind(mine, 3000, 'demo1')
+    await service.claim(mine.organizationId, 'demo1')
+    await service.bind(mine, 3000, `demo1.${APP_DOMAIN}`)
 
-    await expect(service.bind(theirs, 3000, 'demo1')).rejects.toMatchObject({
-      status: 409,
-      response: { code: SUBDOMAIN_TAKEN_CODE },
+    await expect(service.bind(theirs, 3000, `demo1.${APP_DOMAIN}`)).rejects.toMatchObject({
+      status: 404,
+      response: { code: DOMAIN_NOT_OWNED_CODE },
     })
     await service.unbind(ORG, `demo1.${APP_DOMAIN}`)
-    await expect(service.bind(theirs, 3000, 'demo1')).rejects.toMatchObject({ status: 409 })
+    await expect(service.bind(theirs, 3000, `demo1.${APP_DOMAIN}`)).rejects.toMatchObject({ status: 404 })
 
     expect(await heldNames(OTHER_ORG)).toEqual([])
   })
 
   it('refuses a new name once the allowance is used, and keeps the existing binding', async () => {
     const box = await makeBox()
-    await service.bind(box, 3000, 'first1')
+    await service.claim(box.organizationId, 'first1')
+    await service.bind(box, 3000, `first1.${APP_DOMAIN}`)
 
-    await expect(service.bind(box, 3000, 'second')).rejects.toMatchObject({
+    await expect(service.claim(ORG, 'second')).rejects.toMatchObject({
       status: 400,
       response: { code: DOMAIN_COUNT_LIMIT_CODE },
     })
@@ -383,13 +435,16 @@ describeIfDatabase('DomainService (integration, real Postgres)', () => {
   it('applies the minimum length to new names only', async () => {
     const box = await makeBox()
     minLength = 2
-    await service.bind(box, 3000, 'ab')
+    await service.claim(box.organizationId, 'ab')
+    await service.bind(box, 3000, `ab.${APP_DOMAIN}`)
     await service.unbind(ORG, `ab.${APP_DOMAIN}`)
     minLength = 5
 
-    await expect(service.bind(box, 3000, 'ab')).resolves.toMatchObject({ url: `https://ab.${APP_DOMAIN}` })
+    await expect(service.bind(box, 3000, `ab.${APP_DOMAIN}`)).resolves.toMatchObject({
+      url: `https://ab.${APP_DOMAIN}`,
+    })
     await setLimit(ORG, 2)
-    await expect(service.bind(box, 8080, 'cd')).rejects.toMatchObject({
+    await expect(service.claim(ORG, 'cd')).rejects.toMatchObject({
       status: 400,
       response: { code: SUBDOMAIN_TOO_SHORT_CODE },
     })
@@ -397,12 +452,11 @@ describeIfDatabase('DomainService (integration, real Postgres)', () => {
 
   it('admits only as many new names as the allowance, under concurrent claims', async () => {
     await setLimit(ORG, 2)
-    const box = await makeBox()
 
     const outcomes = await Promise.allSettled([
-      service.bind(box, 3001, 'name-one'),
-      service.bind(box, 3002, 'name-two'),
-      service.bind(box, 3003, 'name-three'),
+      service.claim(ORG, 'name-one'),
+      service.claim(ORG, 'name-two'),
+      service.claim(ORG, 'name-three'),
     ])
 
     const fulfilled = outcomes.filter((outcome) => outcome.status === 'fulfilled')
@@ -414,10 +468,7 @@ describeIfDatabase('DomainService (integration, real Postgres)', () => {
   })
 
   it('gives a contested new name to exactly one organization', async () => {
-    const mine = await makeBox()
-    const theirs = await makeBox(OTHER_ORG)
-
-    const outcomes = await Promise.allSettled([service.bind(mine, 3000, 'demo1'), service.bind(theirs, 3000, 'demo1')])
+    const outcomes = await Promise.allSettled([service.claim(ORG, 'demo1'), service.claim(OTHER_ORG, 'demo1')])
 
     expect(outcomes.filter((outcome) => outcome.status === 'fulfilled')).toHaveLength(1)
     expect(outcomes.filter((outcome) => outcome.status === 'rejected')).toHaveLength(1)
@@ -430,7 +481,8 @@ describeIfDatabase('DomainService (integration, real Postgres)', () => {
   it('keeps the binding through a revoke: the name answers nothing until the port is declared again', async () => {
     const box = await makeBox()
     await tunnels.prepare(box.id, 3000)
-    await service.bind(box, 3000, 'demo1')
+    await service.claim(box.organizationId, 'demo1')
+    await service.bind(box, 3000, `demo1.${APP_DOMAIN}`)
 
     await tunnels.revoke(box.id, 3000)
 
@@ -446,8 +498,10 @@ describeIfDatabase('DomainService (integration, real Postgres)', () => {
     await setLimit(ORG, 2)
     const box = await makeBox()
     await tunnels.prepare(box.id, 3000)
-    await service.bind(box, 3000, 'name-one')
-    await service.bind(box, 8080, 'name-two')
+    await service.claim(box.organizationId, 'name-one')
+    await service.bind(box, 3000, `name-one.${APP_DOMAIN}`)
+    await service.claim(box.organizationId, 'name-two')
+    await service.bind(box, 8080, `name-two.${APP_DOMAIN}`)
 
     const moduleRef = await Test.createTestingModule({
       imports: [EventEmitterModule.forRoot()],
@@ -488,7 +542,8 @@ describeIfDatabase('DomainService (integration, real Postgres)', () => {
   it('domain retention: deleting the Box row keeps its target until explicit rebind', async () => {
     const box = await makeBox()
     await tunnels.prepare(box.id, 3000)
-    await service.bind(box, 3000, 'demo1')
+    await service.claim(box.organizationId, 'demo1')
+    await service.bind(box, 3000, `demo1.${APP_DOMAIN}`)
 
     await dataSource.query(`DELETE FROM "${schemaName}"."box" WHERE "id" = $1`, [box.id])
 
@@ -517,7 +572,8 @@ describeIfDatabase('DomainService (integration, real Postgres)', () => {
   it('keeps the target but refuses preview when its box disables inbound access', async () => {
     const box = await makeBox()
     await tunnels.prepare(box.id, 3000)
-    await service.bind(box, 3000, 'demo1')
+    await service.claim(box.organizationId, 'demo1')
+    await service.bind(box, 3000, `demo1.${APP_DOMAIN}`)
 
     await boxes.update(box.id, { inboundEnabled: false })
     // The access verdict is cached for 3 seconds by design; a fresh service

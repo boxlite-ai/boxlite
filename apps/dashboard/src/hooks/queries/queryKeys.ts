@@ -7,6 +7,10 @@
 import type { AuditLogsQueryParams } from './useAuditLogsQuery'
 
 export const queryKeys = {
+  domains: {
+    all: ['domains'] as const,
+    list: (organizationId: string) => [...queryKeys.domains.all, organizationId, 'list'] as const,
+  },
   config: {
     all: ['config'] as const,
   },

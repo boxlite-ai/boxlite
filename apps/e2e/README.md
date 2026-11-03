@@ -176,8 +176,8 @@ or runner services are needed — the remote stack provides everything.
 
 `cases/test_subdomain.py` exercises Python async/sync, Node, Go, C, Rust and
 the CLI through the deployed API and proxy. It checks full-hostname bind/list/
-unbind, short-label rebind to a second guest port, rejected port-suffixed
-hostnames, retained quota, HTTPS guest responses, and independent tunnel access.
+unbind, full-hostname rebind to a second guest port, rejected short names and
+port-suffixed hostnames, retained quota, HTTPS guest responses, and independent tunnel access.
 Python unbind success is the empty tuple `()` in both APIs; failures raise.
 A separate case verifies that binding does not publish a port: the domain
 needs a public tunnel and becomes unavailable after revocation or private prepare.
@@ -213,8 +213,8 @@ with pytest-xdist. The API key determines the organization: a local environment
 override can select a different organization even when the profile is named p1.
 Check that organization's held domains before choosing a local override.
 
-Setup refuses a hostname already bound to a target, or a full quota occupied by
-another hostname. It never deletes a reservation or changes quota. Teardown
+Request the short test name in Dashboard > Domains first, then configure its
+full hostname. Setup refuses an unowned hostname or one already bound to a target. It never deletes a reservation or changes quota. Teardown
 unbinds only the case's own Box and removes that Box, retaining the hostname and
 its slot. A killed process can skip teardown: automatic Box deletion does not
 clear its domain binding. Inspect `boxlite domain ls` under the same profile;

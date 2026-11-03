@@ -91,10 +91,10 @@ def domains_on(url):
 @pytest.mark.asyncio
 async def test_bind_puts_the_target_and_reads_the_bound_domain(server):
     url, replies, requests = server
-    replies[("PUT", "/v1/domains/demo1/target")] = (200, BOUND)
+    replies[("PUT", "/v1/domains/demo1.app.test/target")] = (200, BOUND)
 
     bound = await domains_on(url).bind(
-        "demo1", boxlite.DomainTarget(type="box", box="web-a", port=3000)
+        "demo1.app.test", boxlite.DomainTarget(type="box", box="web-a", port=3000)
     )
 
     [(_, _, body)] = requests
@@ -105,7 +105,7 @@ async def test_bind_puts_the_target_and_reads_the_bound_domain(server):
         "AbCdEf123456",
         3000,
     )
-    replies[("PUT", "/v1/domains/shop1/target")] = (
+    replies[("PUT", "/v1/domains/shop1.app.test/target")] = (
         200,
         {
             **BOUND,
@@ -115,7 +115,7 @@ async def test_bind_puts_the_target_and_reads_the_bound_domain(server):
         },
     )
     app = await domains_on(url).bind(
-        "shop1", boxlite.DomainTarget(type="app", app="shop")
+        "shop1.app.test", boxlite.DomainTarget(type="app", app="shop")
     )
     assert json.loads(requests[-1][2]) == {"type": "app", "app": "shop"}
     assert (app.target.type, app.target.app, app.target.box, app.target.port) == (

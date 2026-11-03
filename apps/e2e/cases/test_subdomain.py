@@ -58,12 +58,12 @@ async def held_domain(rt, hostname):
 
 @asynccontextmanager
 async def domain_box(rt, image, hostname):
-    current, held = await held_domain(rt, hostname)
+    current, _ = await held_domain(rt, hostname)
     assert current is None or current.target is None, (
         "test hostname is bound; inspect its target and explicitly unbind it before retrying"
     )
-    assert current is not None or held.remaining > 0, (
-        "domain quota is occupied by another hostname; configure the held test name or provision the organization"
+    assert current is not None, (
+        "request the test hostname in Dashboard > Domains before running subdomain cases"
     )
     async with service_box(rt, image) as (box, marker):
         try:
@@ -159,11 +159,14 @@ async def test_subdomain_clients(subdomain_hostname, rt, image, tmp_path, sdk):
             "bind", f"{hostname}:4000", PORT, box_id=box.id, error="invalid domain"
         )
         await client.call(
+            "bind", hostname.split(".")[0], PORT, box_id=box.id, error="bind requires a full hostname"
+        )
+        await client.call(
             "unbind", hostname.split(".")[0], error="unbind requires a full hostname"
         )
         await assert_list(client, hostname, box.id, PORT, quota)
 
-        await client.call("bind", hostname.split(".")[0], PORT + 1, box_id=box.id)
+        await client.call("bind", hostname, PORT + 1, box_id=box.id)
         await assert_list(client, hostname, box.id, PORT + 1, quota)
         await expect_http(
             f"https://{hostname}", 200, marker + b"-second", retry=(502, 503)

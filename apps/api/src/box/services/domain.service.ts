@@ -14,6 +14,7 @@ import { Box } from '../entities/box.entity'
 import { Domain, DomainTarget } from '../entities/domain.entity'
 import {
   DomainCountLimitReachedError,
+  DomainNotOwnedError,
   PlatformDomainNotConfiguredError,
   RegionNotSupportedError,
   SubdomainTakenError,
@@ -21,18 +22,15 @@ import {
 } from '../errors/domain.error'
 
 /**
- * The collections mounted under `v1/:prefix/`. A name equal to one of them
- * makes `/v1/domains/<name>/target` also match `v1/:prefix/<name>/:id` —
- * `DELETE /v1/domains/boxes/target` would read as deleting box `target` — so
- * no such name can be claimed. The REST controller spec derives this list
- * from the registered routes and fails when a new collection is missing.
+ * REST collection names remain reserved alongside the platform's own labels.
+ * The controller spec derives this list from registered routes to keep that
+ * naming policy consistent when a collection is added.
  */
 export const REST_COLLECTION_NAMES: readonly string[] = ['boxes', 'domains', 'images', 'volumes']
 
 /**
- * Names under the app domain that would read as the platform's own, whose
- * shape collides with something else that resolves there, or that would make
- * the REST route for the name ambiguous. `^\d+-` is refused because
+ * Names under the app domain that would read as the platform's own or whose
+ * shape collides with another kind of host. `^\d+-` is refused because
  * `3000-abc.<appDomain>` is also the shape of a legacy port-box host.
  */
 export const RESERVED_PLATFORM_SUBDOMAINS: ReadonlySet<string> = new Set([
@@ -69,14 +67,15 @@ export type HeldDomains = {
   remaining: number
   /** The shortest platform subdomain a new claim may use. */
   minLength: number
+  domainSuffix: string | null
 }
 
 /**
  * Organization-owned hostnames and their typed targets; binding supports Box ports.
  *
  * A name and a tunnel are separate resources. Binding records which box port
- * a name routes to, under the organization row lock that also holds the count
- * of names against `domainCountLimit`; it neither declares the port public nor
+ * a name routes to. Claiming separately holds the organization row lock to enforce
+ * `domainCountLimit`; binding neither declares the port public nor
  * needs it to be, and several names may route to one port. Unbinding is by
  * full hostname and keeps it held. Box destruction and tunnel revocation preserve
  * bindings; only explicit unbind or rebind changes the stored target. Resolution
@@ -103,7 +102,7 @@ export class DomainService {
 
   /**
    * Lowercase and validate the name a caller picked. Length against the
-   * configured minimum is a claim-time rule, checked by `bind` for new names
+   * configured minimum is a claim-time rule, checked by `claim` for new names
    * only, so a name held before the minimum rose stays bindable.
    */
   parseSubdomain(raw: string): string {
@@ -119,74 +118,58 @@ export class DomainService {
     return subdomain
   }
 
-  /**
-   * The stored hostname a caller's domain names. A bare label is a platform
-   * name under the app domain; a dotted value is a full hostname, accepted
-   * only under the app domain until custom domains exist (POL-1122). Case and
-   * a trailing root dot are not significant.
-   */
-  hostnameFor(rawDomain: string, appHost: string): string {
-    const domain = rawDomain.trim().toLowerCase().replace(/\.$/, '')
-    if (!domain.includes('.')) {
-      return `${this.parseSubdomain(domain)}.${appHost}`
-    }
-    const suffix = `.${appHost}`
-    if (!domain.endsWith(suffix)) {
-      throw new BadRequestError(`Domain "${rawDomain}" is not under ${appHost}; only platform names can be bound`)
-    }
-    return `${this.parseSubdomain(domain.slice(0, -suffix.length))}${suffix}`
-  }
-
-  /**
-   * Bind `domain` to the box port and return the bound name. The port's public
-   * declaration is not touched: the name answers once the port is public.
-   * Repeating the same binding is a no-op, a name bound to another of the
-   * organization's ports moves here, and other names on this port stay.
-   */
-  async bind(box: Box, port: number, rawDomain: string): Promise<HeldDomain> {
+  /** Claim a short platform name without binding it or changing an existing target. */
+  async claim(organizationId: string, rawName: string): Promise<HeldDomain> {
     const platform = this.appDomain()
     if (!platform) {
       throw new PlatformDomainNotConfiguredError()
     }
-    const hostname = this.hostnameFor(rawDomain, platform.appHost)
-    const subdomain = hostname.slice(0, hostname.indexOf('.'))
-    await this.assertReachableFromPlatformProxy(box)
-
-    await this.dataSource.transaction(async (manager) => {
-      const limit = await this.lockOrganizationLimit(manager, box.organizationId)
-
+    const subdomain = this.parseSubdomain(rawName)
+    const hostname = this.fullHostname(`${subdomain}.${platform.appHost}`, 'Claim')
+    return this.dataSource.transaction(async (manager) => {
+      const limit = await this.lockOrganizationLimit(manager, organizationId)
       const held = await manager.findOne(Domain, { where: { hostname } })
-      if (held && held.organizationId !== box.organizationId) {
-        throw new SubdomainTakenError(hostname)
-      }
-      if (!held) {
-        const minLength = this.configService.getOrThrow('domain.platformSubdomainMinLength')
-        if (subdomain.length < minLength) {
-          throw new SubdomainTooShortError(subdomain, minLength)
+      if (held) {
+        if (held.organizationId !== organizationId) {
+          throw new SubdomainTakenError(hostname)
         }
-        const used = await manager.count(Domain, { where: { organizationId: box.organizationId } })
-        if (used >= limit) {
-          throw new DomainCountLimitReachedError(limit, used)
-        }
+        return { hostname, url: this.urlFor(hostname), target: this.targetOf(held) }
       }
-
-      // The hostname's unique constraint decides a race between organizations
-      // for a new name: the loser's upsert matches no row and binds nothing.
-      // Within the organization the row lock above orders binds, so moving a
-      // name off another port is a plain update.
-      const bound: { id: string }[] = await manager.query(
-        `INSERT INTO "domain" ("hostname", "kind", "organization_id", "box_id", "port")
-         VALUES ($1, 'platform', $2, $3, $4)
-         ON CONFLICT ("hostname") DO UPDATE
-         SET "box_id" = EXCLUDED."box_id", "port" = EXCLUDED."port", "target_type" = 'box', "app_id" = NULL, "updated_at" = now()
-         WHERE "domain"."organization_id" = EXCLUDED."organization_id"
-         RETURNING "id"`,
-        [hostname, box.organizationId, box.id, port],
+      const minLength = this.configService.getOrThrow('domain.platformSubdomainMinLength')
+      if (subdomain.length < minLength) {
+        throw new SubdomainTooShortError(subdomain, minLength)
+      }
+      const used = await manager.count(Domain, { where: { organizationId } })
+      if (used >= limit) {
+        throw new DomainCountLimitReachedError(limit, used)
+      }
+      // Organizations lock different rows. The unique hostname resolves their
+      // race without overwriting the winner's ownership or target.
+      const claimed: { id: string }[] = await manager.query(
+        `INSERT INTO "domain" ("hostname", "kind", "organization_id")
+         VALUES ($1, 'platform', $2)
+         ON CONFLICT ("hostname") DO NOTHING RETURNING "id"`,
+        [hostname, organizationId],
       )
-      if (bound.length === 0) {
+      if (claimed.length === 0) {
         throw new SubdomainTakenError(hostname)
       }
+      return { hostname, url: this.urlFor(hostname), target: null }
     })
+  }
+
+  /** Route an already owned full hostname to a Box port; never allocate a name. */
+  async bind(box: Box, port: number, rawDomain: string): Promise<HeldDomain> {
+    const hostname = this.fullHostname(rawDomain, 'Bind')
+    await this.assertReachableFromPlatformProxy(box)
+    const [, bound]: [unknown[], number] = await this.dataSource.query(
+      `UPDATE "domain" SET "box_id" = $3, "port" = $4, "target_type" = 'box', "app_id" = NULL, "updated_at" = now()
+       WHERE "hostname" = $1 AND "organization_id" = $2`,
+      [hostname, box.organizationId, box.id, port],
+    )
+    if (bound === 0) {
+      throw new DomainNotOwnedError(hostname)
+    }
     return { hostname, url: this.urlFor(hostname), target: { type: 'box', box: box.id, port } }
   }
 
@@ -196,14 +179,7 @@ export class DomainService {
    * already released is left as it is. The port's own declaration is untouched.
    */
   async unbind(organizationId: string, rawDomain: string): Promise<void> {
-    const hostname = rawDomain.trim().toLowerCase().replace(/\.$/, '')
-    if (
-      !hostname.includes('.') ||
-      hostname.length > 253 ||
-      hostname.split('.').some((label) => label.length > DNS_LABEL_MAX_LENGTH || !SUBDOMAIN_PATTERN.test(label))
-    ) {
-      throw new BadRequestError('Unbind requires a full hostname, such as demo.apps.example')
-    }
+    const hostname = this.fullHostname(rawDomain, 'Unbind')
     // TypeORM answers an UPDATE with [rows, rowCount]; the count says whether
     // the organization holds the name, bound or not.
     const [, released]: [unknown[], number] = await this.dataSource.query(
@@ -259,7 +235,20 @@ export class DomainService {
       used: rows.length,
       remaining: Math.max(0, limit - rows.length),
       minLength: this.configService.getOrThrow('domain.platformSubdomainMinLength'),
+      domainSuffix: this.appDomain()?.appHost ?? null,
     }
+  }
+
+  private fullHostname(raw: string, operation: string): string {
+    const hostname = raw.trim().toLowerCase().replace(/\.$/, '')
+    if (
+      !hostname.includes('.') ||
+      hostname.length > 253 ||
+      hostname.split('.').some((label) => label.length > DNS_LABEL_MAX_LENGTH || !SUBDOMAIN_PATTERN.test(label))
+    ) {
+      throw new BadRequestError(`${operation} requires a full hostname, such as demo.apps.example`)
+    }
+    return hostname
   }
 
   private targetOf(row: StoredTarget): DomainTarget | null {

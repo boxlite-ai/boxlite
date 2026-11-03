@@ -459,9 +459,9 @@ export const deployStack = ({
     PROXY_DOMAIN: inputs.proxyDomain,
     PROXY_PROTOCOL: inputs.proxyProtocol,
     PROXY_TEMPLATE_URL: inputs.proxyTemplateUrl,
-    // The API mints `demo.<userDomain>` URLs only where the edge below serves
-    // that wildcard. Absent, it refuses domain binding with a clear error
-    // instead of minting URLs nothing answers.
+    // New domain requests need the wildcard served by the edge below.
+    // Without this suffix, claims are refused; bindings of already owned
+    // full hostnames still use the stored ownership record.
     ...(platformDomain ? { PROXY_APP_DOMAIN: platformDomain } : {}),
     S3_DEFAULT_BUCKET: storage.name,
   }

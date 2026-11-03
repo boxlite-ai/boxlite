@@ -72,7 +72,15 @@ class DomainClient:
             tail = (
                 ["--format", "json"]
                 if action == "list"
-                else [args[0], "--box", box_id, "--port", str(args[1])]
+                else [
+                    args[0],
+                    "--type",
+                    "box",
+                    "--box",
+                    box_id,
+                    "--port",
+                    str(args[1]),
+                ]
                 if action == "bind"
                 else list(args)
             )

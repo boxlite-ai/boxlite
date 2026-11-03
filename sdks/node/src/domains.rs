@@ -101,7 +101,7 @@ impl JsDomainList {
     }
 }
 
-/// Bind accepts a platform name or full hostname; unbind requires a full hostname.
+/// Bind and unbind require an owned full hostname; request names in Dashboard > Domains.
 #[napi]
 pub struct JsDomainHandle {
     pub(crate) handle: Arc<DomainHandle>,
@@ -116,7 +116,7 @@ impl JsDomainHandle {
         JsDomainList::from_core(held)
     }
 
-    /// Route `domain` to `target`, claiming it if new. A domain bound
+    /// Route `domain` to `target`, requiring ownership; request names in Dashboard > Domains first. A domain bound
     /// elsewhere in the organization moves.
     #[napi]
     pub async fn bind(&self, domain: String, target: JsDomainTarget) -> Result<JsDomain> {

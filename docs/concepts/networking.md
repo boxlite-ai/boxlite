@@ -74,18 +74,28 @@ box's, so they live under `/v1/domains` and a box port is only what one routes
 to:
 
 ```bash
-boxlite domain bind demo --box web-a --port 3000   # PUT /v1/domains/demo/target
-boxlite domain ls                                  # GET /v1/domains
-boxlite domain unbind demo.apps.example            # DELETE /v1/domains/demo.apps.example/target
+boxlite domain bind demo1.apps.example --type box --box web-a --port 3000   # PUT /v1/domains/demo1.apps.example/target
+boxlite domain ls                                             # GET /v1/domains
+boxlite domain unbind demo1.apps.example                      # DELETE /v1/domains/demo1.apps.example/target
 ```
 
 The SDKs expose the same three calls as `runtime.domains`: `list()`,
 `bind(domain, target)` and `unbind(domain)`. A target is
 `{"type": "box", "box": <id or name>, "port": 3000}`; `type` leaves room for
-other kinds of target without changing the call. Bind accepts a name (`demo`)
-or its full hostname, `demo.<user domain>`. List returns full hostnames and
-unbind requires one; it rejects short labels and URLs. Each stage serves
-named apps under its own user domain, a registrable domain separate from the
+other kinds of target without changing the call. The CLI requires the same
+explicit choice as `--type box`, with `--box` and `--port` required for that
+type; no other CLI target types are currently supported. Bind and unbind require
+an owned full hostname, such as `demo1.apps.example`; short labels and URLs are
+rejected. Request names separately in **Dashboard → Domains**, alongside Images
+and Volumes: enter a short name (`demo1`), preview its full hostname, then submit.
+The page lists every acquired hostname and its Box/port, App reference, or unbound
+state. App binding is reserved and remains unsupported.
+
+`POST /v1/domains` with `{"name":"demo1"}` acquires the full hostname without a
+binding. Repeating a request for your own name preserves its target. Binding
+never acquires a name: a missing or foreign hostname returns `404 domain_not_owned`
+and directs the caller to Dashboard → Domains. List returns full hostnames.
+Each stage serves named apps under its own user domain, a registrable domain separate from the
 platform's (see [Deployment](../../apps/infra/docs/deployment.md#cloudflare-api-token));
 `apps.example` stands in for it here.
 
@@ -121,7 +131,9 @@ the port is revoked, and serves again once the port is prepared as public again.
 
 `domain ls` lists every full hostname the organization holds with what it routes to,
 its allowance (`limit`, `used`, `remaining`) and `min_length`, the shortest
-new name allowed. A new name must be lowercase letters, digits and hyphens,
+new name allowed. The REST list also provides `domain_suffix` for the request
+preview, or null when requests are unavailable.
+A new name must be lowercase letters, digits and hyphens,
 not start or end with a hyphen, not look like `<digits>-…`, and not be one of
 the platform's own names or the API's collection names (`boxes`, `images`,
 `volumes`, `domains`); names held before `min_length` rose stay bindable.

@@ -12,6 +12,7 @@ import {
   HttpCode,
   HttpStatus,
   Param,
+  Post,
   Put,
   UseGuards,
   UsePipes,
@@ -27,6 +28,7 @@ import { OrganizationAuthContext } from '../common/interfaces/auth-context.inter
 import { BoxService } from '../box/services/box.service'
 import { HeldDomain, DomainService } from '../box/services/domain.service'
 import { DomainTargetDto } from './dto/domain-target.dto'
+import { ClaimDomainDto } from './dto/claim-domain.dto'
 
 type RestDomain = HeldDomain
 
@@ -36,12 +38,12 @@ type RestDomainList = {
   used: number
   remaining: number
   min_length: number
+  domain_suffix: string | null
 }
 
 /**
  * Domains are the organization's, not a box's: they are listed and bound
- * here. Bind accepts a platform label (`demo`) or full hostname
- * (`demo.apps.example`); list and unbind identify domains by full hostname.
+ * here. Claim accepts a short name; bind and unbind require an owned full hostname.
  */
 // Spec-first surface (openapi/box.openapi.yaml), like the other REST controllers.
 @Controller(['v1/domains', 'v1/:prefix/domains'])
@@ -69,11 +71,18 @@ export class BoxliteDomainController {
       used: held.used,
       remaining: held.remaining,
       min_length: held.minLength,
+      domain_suffix: held.domainSuffix,
     }
   }
 
+  @Post()
+  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
+  async claim(@AuthContext() authContext: OrganizationAuthContext, @Body() input: ClaimDomainDto): Promise<RestDomain> {
+    return this.domainService.claim(authContext.organizationId, input.name)
+  }
+
   /**
-   * Route a domain to a box port, claiming the name if it is new. A name bound
+   * Route an owned full hostname to a box port. A name bound
    * to another of the organization's ports moves here; other names on this
    * port stay. The port is not declared public here: the name answers once
    * `POST …/network/tunnel` has declared it and the box allows inbound access,

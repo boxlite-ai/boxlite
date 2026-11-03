@@ -297,8 +297,8 @@ pub unsafe extern "C" fn boxlite_domain_list(
     }
 }
 
-/// Route `domain` (a platform name such as "demo", or its full hostname) to
-/// `target`, claiming it if new. A domain bound elsewhere in the organization
+/// Route `domain` (an owned full hostname) to
+/// `target`, requiring ownership; request names in Dashboard > Domains first. A domain bound elsewhere in the organization
 /// moves. On `Ok`, `*out_domain` must be released with `boxlite_free_domain`.
 ///
 /// # Safety

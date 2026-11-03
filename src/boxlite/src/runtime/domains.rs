@@ -71,8 +71,8 @@ pub(crate) trait DomainBackend: Send + Sync {
 /// Runtime-scoped handle for the organization's domains.
 ///
 /// Obtained from [`BoxliteRuntime::domains`](crate::BoxliteRuntime::domains).
-/// Bind accepts a platform name (`demo`) or a full hostname. Unbind requires
-/// the full hostname returned by list (`demo.apps.example`).
+/// Bind and unbind require a full hostname owned by the organization.
+/// Request new names in Dashboard > Domains before binding.
 #[derive(Clone)]
 pub struct DomainHandle {
     backend: Arc<dyn DomainBackend>,
@@ -91,13 +91,13 @@ impl DomainHandle {
         self.backend.list_domains().await
     }
 
-    /// Route `domain` to `target`, claiming it if the organization does not
-    /// hold it yet. A domain bound elsewhere in the organization moves; other
+    /// Route an owned full hostname to `target`. Request new names in
+    /// Dashboard > Domains first. A domain bound elsewhere moves; other
     /// domains on the target port stay. The port is not made public: the
     /// domain answers once the port's tunnel is declared. Repeating it is a
     /// no-op.
     pub async fn bind(&self, domain: &str, target: &DomainTarget) -> BoxliteResult<Domain> {
-        let domain = path_segment(domain)?;
+        let domain = full_hostname(domain, "bind")?;
         match target {
             DomainTarget::Box { box_ref, port } => {
                 if box_ref.trim().is_empty() {
@@ -119,35 +119,40 @@ impl DomainHandle {
                 }
             }
         }
-        self.backend.bind_domain(domain, target).await
+        self.backend.bind_domain(&domain, target).await
     }
 
     /// Stop routing a full hostname, keeping it for the organization. Safe to repeat
     /// on a held domain; one the organization does not hold is `NotFound`.
     pub async fn unbind(&self, domain: &str) -> BoxliteResult<()> {
-        let hostname = path_segment(domain)?
-            .trim_end_matches('.')
-            .to_ascii_lowercase();
-        if !hostname.contains('.')
-            || hostname.len() > 253
-            || hostname.split('.').any(|label| {
-                label.len() > 63
-                    || !label
-                        .as_bytes()
-                        .first()
-                        .is_some_and(u8::is_ascii_alphanumeric)
-                    || !label
-                        .as_bytes()
-                        .last()
-                        .is_some_and(u8::is_ascii_alphanumeric)
-            })
-        {
-            return Err(BoxliteError::InvalidArgument(
-                "unbind requires a full hostname, such as demo.apps.example".into(),
-            ));
-        }
+        let hostname = full_hostname(domain, "unbind")?;
         self.backend.unbind_domain(&hostname).await
     }
+}
+
+fn full_hostname(domain: &str, operation: &str) -> BoxliteResult<String> {
+    let hostname = path_segment(domain)?
+        .trim_end_matches('.')
+        .to_ascii_lowercase();
+    if !hostname.contains('.')
+        || hostname.len() > 253
+        || hostname.split('.').any(|label| {
+            label.len() > 63
+                || !label
+                    .as_bytes()
+                    .first()
+                    .is_some_and(u8::is_ascii_alphanumeric)
+                || !label
+                    .as_bytes()
+                    .last()
+                    .is_some_and(u8::is_ascii_alphanumeric)
+        })
+    {
+        return Err(BoxliteError::InvalidArgument(format!(
+            "{operation} requires a full hostname, such as demo.apps.example"
+        )));
+    }
+    Ok(hostname)
 }
 
 /// `domain` trimmed, if it can only name a domain: it is sent as one path
@@ -164,7 +169,7 @@ fn path_segment(domain: &str) -> BoxliteResult<&str> {
             .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'.')
     {
         return Err(BoxliteError::InvalidArgument(format!(
-            "invalid domain {domain:?}: use a name like `demo` or a hostname like `demo.apps.example`"
+            "invalid domain {domain:?}: use a full hostname like `demo.apps.example`"
         )));
     }
     Ok(domain)
@@ -181,8 +186,13 @@ mod tests {
         async fn list_domains(&self) -> BoxliteResult<DomainList> {
             unreachable!()
         }
-        async fn bind_domain(&self, _: &str, _: &DomainTarget) -> BoxliteResult<Domain> {
-            unreachable!()
+        async fn bind_domain(&self, domain: &str, target: &DomainTarget) -> BoxliteResult<Domain> {
+            self.0.lock().unwrap().push(domain.into());
+            Ok(Domain {
+                hostname: domain.into(),
+                url: format!("https://{domain}"),
+                target: Some(target.clone()),
+            })
         }
         async fn unbind_domain(&self, domain: &str) -> BoxliteResult<()> {
             self.0.lock().unwrap().push(domain.into());
@@ -211,6 +221,34 @@ mod tests {
         }
         assert!(backend.0.lock().unwrap().is_empty());
         handle.unbind(" DEMO.Apps.Example. ").await.unwrap();
+        assert_eq!(*backend.0.lock().unwrap(), ["demo.apps.example"]);
+    }
+
+    #[tokio::test]
+    async fn bind_requires_a_full_hostname_before_calling_the_backend() {
+        let backend = Arc::new(RecordingBackend(std::sync::Mutex::new(Vec::new())));
+        let handle = DomainHandle::new(backend.clone());
+        let target = DomainTarget::Box {
+            box_ref: "web-a".into(),
+            port: 3000,
+        };
+        for invalid in [
+            "demo",
+            "demo.",
+            "https://demo.apps.example",
+            "demo.apps.example:8080",
+            "-demo.apps.example",
+        ] {
+            assert!(
+                matches!(
+                    handle.bind(invalid, &target).await,
+                    Err(BoxliteError::InvalidArgument(_))
+                ),
+                "{invalid} accepted"
+            );
+        }
+        assert!(backend.0.lock().unwrap().is_empty());
+        handle.bind(" DEMO.Apps.Example. ", &target).await.unwrap();
         assert_eq!(*backend.0.lock().unwrap(), ["demo.apps.example"]);
     }
 

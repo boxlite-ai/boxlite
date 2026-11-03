@@ -629,13 +629,13 @@ export interface DomainList {
 }
 
 /**
- * Bind accepts a platform name or full hostname; unbind requires a full hostname.
+ * Bind and unbind require an owned full hostname; request names in Dashboard > Domains.
  */
 export interface DomainHandle {
   /** Every held domain, unbound ones included, with the allowance. */
   list(): Promise<DomainList>;
   /**
-   * Route `domain` to `target`, claiming it if new. A domain bound elsewhere
+   * Route `domain` to `target`, requiring ownership; request names in Dashboard > Domains first. A domain bound elsewhere
    * in the organization moves; other domains on the target port stay. The
    * port is not made public: the domain answers once its tunnel is declared.
    */

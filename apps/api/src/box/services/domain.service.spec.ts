@@ -6,6 +6,7 @@
 import { Box } from '../entities/box.entity'
 import {
   DOMAIN_COUNT_LIMIT_CODE,
+  DOMAIN_NOT_OWNED_CODE,
   PLATFORM_DOMAIN_NOT_CONFIGURED_CODE,
   REGION_NOT_SUPPORTED_CODE,
   SUBDOMAIN_TAKEN_CODE,
@@ -23,8 +24,8 @@ function makeBox(): Box {
 }
 
 /**
- * The manager replays canned answers for the statements `bind` issues, in
- * order: lock, held lookup, count, upsert. Integration tests run the real
+ * The manager replays canned answers for the statements `claim` issues, in
+ * order: lock, held lookup, count, insert. Integration tests run the real
  * SQL; this pins the decisions between the statements.
  */
 function makeService(
@@ -32,7 +33,13 @@ function makeService(
     appDomain?: string
     minLength?: number
     limit?: number
-    held?: { organizationId: string } | null
+    held?: {
+      organizationId: string
+      targetType?: string
+      boxId?: string | null
+      appId?: string | null
+      port?: number | null
+    } | null
     used?: number
     regionProxyUrl?: string | null
     upsertRows?: number
@@ -50,6 +57,7 @@ function makeService(
     if (sql.includes('INSERT INTO "domain"')) {
       return Promise.resolve(Array.from({ length: options.upsertRows ?? 1 }, () => ({ id: 'domain-1' })))
     }
+    if (sql.startsWith('UPDATE "domain"')) return Promise.resolve([[], options.upsertRows ?? 1])
     return Promise.resolve([])
   })
   const dataSource = { transaction: jest.fn((work: (m: unknown) => Promise<unknown>) => work(manager)), query }
@@ -97,131 +105,106 @@ describe('DomainService.parseSubdomain', () => {
   })
 })
 
-describe('DomainService.hostnameFor', () => {
-  const { service } = makeService()
-
-  it('reads a bare label and the full platform hostname as the same name', () => {
-    for (const domain of ['demo1', 'Demo1', 'demo1.app.boxlite.test', 'DEMO1.App.Boxlite.Test.']) {
-      expect(service.hostnameFor(domain, 'app.boxlite.test')).toBe('demo1.app.boxlite.test')
-    }
-  })
-
-  it('refuses a hostname outside the app domain until custom domains exist', () => {
-    expect(() => service.hostnameFor('api.example.com', 'app.boxlite.test')).toThrow('not under app.boxlite.test')
-    expect(() => service.hostnameFor('app.boxlite.test.evil.com', 'app.boxlite.test')).toThrow('not under')
-  })
-
-  it('applies the label rules to the part before the app domain', () => {
-    expect(() => service.hostnameFor('a.b.app.boxlite.test', 'app.boxlite.test')).toThrow('Invalid subdomain')
-    expect(() => service.hostnameFor('boxes.app.boxlite.test', 'app.boxlite.test')).toThrow('reserved')
-  })
-})
-
-describe('DomainService.bind', () => {
-  it('hostname contract: unbind rejects a bare label before any write', async () => {
+describe('DomainService.claim', () => {
+  it('requests a short name and returns an unbound full hostname', async () => {
     const { service, query } = makeService()
-    query.mockResolvedValue([[], 1])
-    await expect(service.unbind(ORG, 'demo1')).rejects.toMatchObject({ status: 400 })
-    expect(query).not.toHaveBeenCalled()
+    await expect(service.claim(ORG, ' Demo1 ')).resolves.toEqual({
+      hostname: 'demo1.app.boxlite.test',
+      url: 'https://demo1.app.boxlite.test',
+      target: null,
+    })
+    expect(query).toHaveBeenLastCalledWith(expect.stringContaining('DO NOTHING'), ['demo1.app.boxlite.test', ORG])
   })
 
-  it('refuses every name where the deployment has no app domain', async () => {
+  it('refuses claims when the platform domain is not configured', async () => {
     const { service, query } = makeService({ appDomain: undefined })
-
-    await expect(service.bind(makeBox(), 3000, 'demo1')).rejects.toMatchObject({
+    await expect(service.claim(ORG, 'demo1')).rejects.toMatchObject({
       status: 400,
       response: { code: PLATFORM_DOMAIN_NOT_CONFIGURED_CODE },
     })
     expect(query).not.toHaveBeenCalled()
   })
 
-  it('refuses a box whose region has a proxy of its own, before any write', async () => {
-    const { service, query } = makeService({ regionProxyUrl: 'https://proxy.eu.boxlite.test' })
+  it('requires a short name rather than a full hostname', async () => {
+    await expect(makeService().service.claim(ORG, 'demo1.app.boxlite.test')).rejects.toMatchObject({ status: 400 })
+  })
 
-    await expect(service.bind(makeBox(), 3000, 'demo1')).rejects.toMatchObject({
+  it('applies minimum length and quota only to new claims', async () => {
+    await expect(makeService().service.claim(ORG, 'demo')).rejects.toMatchObject({
+      response: { code: SUBDOMAIN_TOO_SHORT_CODE },
+    })
+    await expect(makeService({ used: 1 }).service.claim(ORG, 'demo1')).rejects.toMatchObject({
+      response: { code: DOMAIN_COUNT_LIMIT_CODE },
+    })
+    const { service, manager } = makeService({
+      used: 1,
+      minLength: 10,
+      held: { organizationId: ORG, targetType: 'box', boxId: 'mybox', appId: null, port: 3000 },
+    })
+    await expect(service.claim(ORG, 'demo1')).resolves.toMatchObject({
+      target: { type: 'box', box: 'mybox', port: 3000 },
+    })
+    expect(manager.count).not.toHaveBeenCalled()
+  })
+
+  it('refuses a foreign claim and a lost cross-organization race', async () => {
+    for (const options of [{ held: { organizationId: OTHER_ORG } }, { upsertRows: 0 }]) {
+      await expect(makeService(options).service.claim(ORG, 'demo1')).rejects.toMatchObject({
+        status: 409,
+        response: { code: SUBDOMAIN_TAKEN_CODE },
+      })
+    }
+  })
+})
+
+describe('DomainService.bind', () => {
+  it('rejects short bind and unbind inputs before any write', async () => {
+    const { service, query } = makeService()
+    await expect(service.bind(makeBox(), 3000, 'demo1')).rejects.toMatchObject({ status: 400 })
+    await expect(service.unbind(ORG, 'demo1')).rejects.toMatchObject({ status: 400 })
+    expect(query).not.toHaveBeenCalled()
+  })
+
+  it('refuses a box with its own regional proxy before writing', async () => {
+    const { service, query } = makeService({ regionProxyUrl: 'https://proxy.eu.boxlite.test' })
+    await expect(service.bind(makeBox(), 3000, 'demo1.app.boxlite.test')).rejects.toMatchObject({
       status: 400,
       response: { code: REGION_NOT_SUPPORTED_CODE },
     })
     expect(query).not.toHaveBeenCalled()
   })
 
-  it('accepts a region whose proxy is the platform proxy, whatever its case', async () => {
-    const { service } = makeService({ regionProxyUrl: 'https://Proxy.BoxLite.test' })
-
-    await expect(service.bind(makeBox(), 3000, 'demo1')).resolves.toMatchObject({
-      url: 'https://demo1.app.boxlite.test',
+  it('updates only an owned full hostname, without inserting or applying claim rules', async () => {
+    const { service, query, manager } = makeService({
+      appDomain: undefined,
+      used: 1,
+      minLength: 10,
+      regionProxyUrl: 'https://Proxy.BoxLite.test',
     })
-  })
-
-  it('upserts the box port as the target under the organization lock, without declaring the port', async () => {
-    const { service, query } = makeService()
     const box = makeBox()
-
-    await expect(service.bind(box, 3000, 'Demo1')).resolves.toEqual({
-      hostname: 'demo1.app.boxlite.test',
-      url: 'https://demo1.app.boxlite.test',
+    await expect(service.bind(box, 3000, ' DEMO1.Other.Example. ')).resolves.toEqual({
+      hostname: 'demo1.other.example',
+      url: 'https://demo1.other.example',
       target: { type: 'box', box: box.id, port: 3000 },
     })
-
-    const statements = query.mock.calls.map(([sql]) => sql as string)
-    expect(statements).toHaveLength(3)
-    expect(statements[0]).toContain('SET LOCAL lock_timeout')
-    expect(statements[1]).toContain('FOR UPDATE')
-    expect(statements[2]).toContain('INSERT INTO "domain"')
-    expect(query.mock.calls[2][1]).toEqual(['demo1.app.boxlite.test', ORG, box.id, 3000])
+    expect(query).toHaveBeenCalledTimes(1)
+    expect(query).toHaveBeenCalledWith(expect.stringContaining('WHERE "hostname" = $1 AND "organization_id" = $2'), [
+      'demo1.other.example',
+      ORG,
+      box.id,
+      3000,
+    ])
+    expect(query.mock.calls[0][0]).toMatch(/^UPDATE/)
+    expect(manager.count).not.toHaveBeenCalled()
   })
 
-  it('refuses a new name shorter than the minimum, but not a held one', async () => {
-    const fresh = makeService({ minLength: 5 })
-    await expect(fresh.service.bind(makeBox(), 3000, 'demo')).rejects.toMatchObject({
-      status: 400,
-      response: { code: SUBDOMAIN_TOO_SHORT_CODE },
+  it('directs missing or foreign owners to Dashboard without inserting', async () => {
+    const { service, query } = makeService({ upsertRows: 0 })
+    await expect(service.bind(makeBox(), 3000, 'demo1.app.boxlite.test')).rejects.toMatchObject({
+      status: 404,
+      response: { code: DOMAIN_NOT_OWNED_CODE, message: expect.stringContaining('Dashboard > Domains') },
     })
-
-    const held = makeService({ minLength: 5, held: { organizationId: ORG } })
-    await expect(held.service.bind(makeBox(), 3000, 'demo')).resolves.toMatchObject({
-      url: 'https://demo.app.boxlite.test',
-    })
-  })
-
-  it('refuses a new name once the organization holds its limit, and lets a held name through', async () => {
-    const full = makeService({ limit: 1, used: 1 })
-    await expect(full.service.bind(makeBox(), 3000, 'demo1')).rejects.toMatchObject({
-      status: 400,
-      response: { code: DOMAIN_COUNT_LIMIT_CODE },
-    })
-    expect(full.query.mock.calls.some(([sql]) => (sql as string).includes('INSERT INTO'))).toBe(false)
-
-    const reuse = makeService({ limit: 1, used: 1, held: { organizationId: ORG } })
-    await expect(reuse.service.bind(makeBox(), 3000, 'demo1')).resolves.toMatchObject({
-      url: 'https://demo1.app.boxlite.test',
-    })
-  })
-
-  it('refuses a name another organization holds, bound or not', async () => {
-    const { service } = makeService({ held: { organizationId: OTHER_ORG } })
-
-    await expect(service.bind(makeBox(), 3000, 'demo1')).rejects.toMatchObject({
-      status: 409,
-      response: { code: SUBDOMAIN_TAKEN_CODE },
-    })
-  })
-
-  it("moves a held name to the new target and leaves the port's other names alone", async () => {
-    const { service, query } = makeService({ held: { organizationId: ORG } })
-
-    await expect(service.bind(makeBox(), 3000, 'demo1')).resolves.toMatchObject({ target: { port: 3000 } })
-
-    const statements = query.mock.calls.map(([sql]) => sql as string)
-    const upsert = statements.find((sql) => sql.includes('INSERT INTO "domain"'))
-    expect(upsert).toContain('SET "box_id" = EXCLUDED."box_id", "port" = EXCLUDED."port"')
-    expect(statements.some((sql) => sql.startsWith('UPDATE'))).toBe(false)
-  })
-
-  it('treats an upsert that bound nothing as a lost race for the name', async () => {
-    const { service } = makeService({ upsertRows: 0 })
-
-    await expect(service.bind(makeBox(), 3000, 'demo1')).rejects.toMatchObject({ status: 409 })
+    expect(query).toHaveBeenCalledTimes(1)
   })
 })
 

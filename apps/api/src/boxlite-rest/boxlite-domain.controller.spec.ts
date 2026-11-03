@@ -8,6 +8,7 @@ import { HTTP_CODE_METADATA, METHOD_METADATA, PATH_METADATA } from '@nestjs/comm
 import { Reflector } from '@nestjs/core'
 import { readdirSync, readFileSync } from 'node:fs'
 import { BoxliteDomainController } from './boxlite-domain.controller'
+import { ClaimDomainDto } from './dto/claim-domain.dto'
 import { DomainTargetDto } from './dto/domain-target.dto'
 import { RequiredOrganizationResourcePermissions } from '../organization/decorators/required-organization-resource-permissions.decorator'
 import { OrganizationResourcePermission } from '../organization/enums/organization-resource-permission.enum'
@@ -30,7 +31,9 @@ function makeHarness() {
       used: 2,
       remaining: 0,
       minLength: 5,
+      domainSuffix: 'app.test',
     }),
+    claim: jest.fn().mockResolvedValue({ hostname: 'demo1.app.test', url: 'https://demo1.app.test', target: null }),
     bind: jest.fn().mockResolvedValue({
       hostname: 'demo1.app.test',
       url: 'https://demo1.app.test',
@@ -61,7 +64,9 @@ describe('BoxliteDomainController', () => {
 
   it('typed target contract: App binding is explicitly unsupported before Box lookup', async () => {
     const { controller, boxService, domainService } = makeHarness()
-    await expect(controller.bind(auth as never, 'demo1', { type: 'app', app: 'shop' } as never)).rejects.toMatchObject({
+    await expect(
+      controller.bind(auth as never, 'demo1.app.test', { type: 'app', app: 'shop' } as never),
+    ).rejects.toMatchObject({
       status: 400,
       response: { code: 'app_target_not_supported' },
     })
@@ -73,8 +78,7 @@ describe('BoxliteDomainController', () => {
     expect(Reflect.getMetadata(PATH_METADATA, BoxliteDomainController)).toEqual(['v1/domains', 'v1/:prefix/domains'])
   })
 
-  // `/v1/domains/<name>/target` has the shape of `v1/:prefix/<collection>/:id`,
-  // so a name equal to a collection would reach that collection's route too.
+  // Keep the platform's reserved-label policy aligned with its REST collections.
   // Read from source: importing every controller pulls ESM-only dependencies.
   it('reserves every collection mounted under v1/:prefix as a name', () => {
     const collections = new Set<string>()
@@ -109,7 +113,35 @@ describe('BoxliteDomainController', () => {
       used: 2,
       remaining: 0,
       min_length: 5,
+      domain_suffix: 'app.test',
     })
+  })
+
+  it('claims a short name for the authenticated organization with POST and write permission', async () => {
+    const { controller, domainService, boxService } = makeHarness()
+    const handler = BoxliteDomainController.prototype.claim
+    expect(Reflect.getMetadata(METHOD_METADATA, handler)).toBe(RequestMethod.POST)
+    expect(new Reflector().get(RequiredOrganizationResourcePermissions, handler)).toEqual([
+      OrganizationResourcePermission.WRITE_BOXES,
+    ])
+    await expect(controller.claim(auth as never, { name: 'demo1' })).resolves.toMatchObject({
+      hostname: 'demo1.app.test',
+      target: null,
+    })
+    expect(domainService.claim).toHaveBeenCalledWith('org-1', 'demo1')
+    expect(boxService.findOneByIdOrName).not.toHaveBeenCalled()
+    const pipe = new ValidationPipe({ transform: true, whitelist: true, forbidNonWhitelisted: true })
+    for (const body of [
+      {},
+      { name: 42 },
+      { name: '' },
+      { name: 'a'.repeat(64) },
+      { name: 'demo1', organizationId: 'other' },
+    ]) {
+      await expect(pipe.transform(body, { type: 'body', metatype: ClaimDomainDto })).rejects.toMatchObject({
+        status: 400,
+      })
+    }
   })
 
   it('binds with PUT on the target, resolving the box by id or name in the organization', async () => {
@@ -121,10 +153,10 @@ describe('BoxliteDomainController', () => {
       OrganizationResourcePermission.WRITE_BOXES,
     ])
 
-    const result = await controller.bind(auth as never, 'demo1', { type: 'box', box: 'web-a', port: 3000 })
+    const result = await controller.bind(auth as never, 'demo1.app.test', { type: 'box', box: 'web-a', port: 3000 })
 
     expect(boxService.findOneByIdOrName).toHaveBeenCalledWith('web-a', 'org-1')
-    expect(domainService.bind).toHaveBeenCalledWith(expect.objectContaining({ id: 'box-uuid' }), 3000, 'demo1')
+    expect(domainService.bind).toHaveBeenCalledWith(expect.objectContaining({ id: 'box-uuid' }), 3000, 'demo1.app.test')
     expect(result).toEqual({
       hostname: 'demo1.app.test',
       url: 'https://demo1.app.test',
@@ -138,9 +170,9 @@ describe('BoxliteDomainController', () => {
     const { controller, domainService, boxService } = makeHarness()
     boxService.findOneByIdOrName.mockResolvedValue({ id: 'box-uuid', inboundEnabled: false })
 
-    await controller.bind(auth as never, 'demo1', { type: 'box', box: 'web-a', port: 3000 })
+    await controller.bind(auth as never, 'demo1.app.test', { type: 'box', box: 'web-a', port: 3000 })
 
-    expect(domainService.bind).toHaveBeenCalledWith(expect.objectContaining({ id: 'box-uuid' }), 3000, 'demo1')
+    expect(domainService.bind).toHaveBeenCalledWith(expect.objectContaining({ id: 'box-uuid' }), 3000, 'demo1.app.test')
   })
 
   it('accepts a box target and rejects a target whose type and fields disagree', async () => {

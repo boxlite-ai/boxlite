@@ -1031,14 +1031,21 @@ supported". See [Domains](../../concepts/networking.md#domains).
 
 | Subcommand | Synopsis | Notes |
 |---|---|---|
-| `bind` | `boxlite domain bind DOMAIN --box BOX --port PORT` | Prints the target and the URL; `--box` takes an id or name |
+| `bind` | `boxlite domain bind DOMAIN --type TYPE [target options]` | `--type` is required; currently only `box`, which requires `--box BOX --port PORT` |
 | `ls` (`list`) | `boxlite domain ls [-q \| --format FORMAT]` | Every full hostname and its target (`-` while unbound), then the allowance; quiet prints full hostnames |
 | `unbind` | `boxlite domain unbind HOSTNAME` | Full hostname required; it stays with the organization |
 
-For `bind`, `DOMAIN` is the name (`demo`) or its full hostname. `unbind` accepts
-only a full hostname returned by `ls`; bare labels are rejected. `bind` claims a new name
-against the organization's allowance and moves a held name from another box
-port at once; other names on the target port stay. It does not make the port
+For `bind`, `DOMAIN` is an owned full hostname (`demo1.apps.example`).
+Request it first in **Dashboard → Domains** using a short name; the page shows
+the full hostname and its binding. Select the
+target with `--type`: currently only `box` is supported, with `--box` (an id
+or name) and `--port` (1–65535) required for that type. The CLI rejects missing
+or unsupported types before sending a request. Scripts using the previous
+implicit Box syntax must add `--type box`. Binding prints the target and URL.
+`unbind` accepts only a full hostname returned by `ls`; bare labels are rejected.
+`bind` never requests a name: an unowned hostname returns `404 domain_not_owned`
+and asks you to use Dashboard → Domains. Binding moves a held name from another
+box port at once; other names on the target port stay. It does not make the port
 public: the name answers once `boxlite network tunnel` has declared the port
 and the box has inbound access enabled, in either order. `unbind` stops
 routing the name;
@@ -1047,10 +1054,10 @@ the allowance until the platform raises it. Binding it again, to any box
 port, does not count it twice.
 
 ```bash
-boxlite domain bind demo --box web-a --port 3000   # demo.apps.example → web-a:3000
-boxlite domain bind demo --box web-b --port 3000   # move it, same URL
+boxlite domain bind demo1.apps.example --type box --box web-a --port 3000   # demo1.apps.example → web-a:3000
+boxlite domain bind demo1.apps.example --type box --box web-b --port 3000   # move it, same URL
 boxlite domain ls
-boxlite domain unbind demo.apps.example
+boxlite domain unbind demo1.apps.example
 ```
 
 ---

@@ -50,7 +50,7 @@ type DomainList struct {
 }
 
 // Domains is a runtime-scoped handle for the organization's domains. Bind accepts
-// a platform name or full hostname; Unbind requires a full hostname.
+// an owned full hostname; request names in Dashboard > Domains.
 //
 // Each call is one blocking REST request, like Network.Tunnel: ctx is checked
 // before the request is sent, not while it is in flight.
@@ -103,7 +103,7 @@ func (d *Domains) List(ctx context.Context) (*DomainList, error) {
 	return held, nil
 }
 
-// Bind routes domain to target, claiming it if new. A domain bound elsewhere
+// Bind routes domain to target, requiring ownership; request names in Dashboard > Domains first. A domain bound elsewhere
 // in the organization moves; other domains on the target port stay. The port
 // is not made public: the domain answers once Tunnel has declared it.
 func (d *Domains) Bind(ctx context.Context, domain string, target DomainTarget) (*Domain, error) {

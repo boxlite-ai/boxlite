@@ -267,8 +267,8 @@ On a hosted runtime the organization can route a name of its own
 
 - `rt.Domains() (*Domains, error)` returns the handle; a local runtime returns
   an `ErrUnsupported` error. Release it with `Close()`.
-- `domains.Bind(ctx, "demo", boxlite.DomainTarget{Type: boxlite.DomainTargetBox, Box: "web-a", Port: 3000}) (*Domain, error)`
-  claims the name if new, or moves it from another box port. `Box` takes an
+- `domains.Bind(ctx, "demo.apps.example", boxlite.DomainTarget{Type: boxlite.DomainTargetBox, Box: "web-a", Port: 3000}) (*Domain, error)`
+  requires an owned full hostname; request new names in Dashboard > Domains first. `Box` takes an
   id or name.
 - `domains.List(ctx) (*DomainList, error)` returns every held full `Hostname`
   (`Target` nil while unbound) and the allowance.

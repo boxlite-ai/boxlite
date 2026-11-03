@@ -173,8 +173,8 @@ impl PyDomainList {
     }
 }
 
-/// Runtime-scoped handle for the organization's domains. Bind accepts a platform
-/// name or full hostname; unbind requires a full hostname.
+/// Runtime-scoped handle for the organization's domains. Bind and unbind require
+/// an owned full hostname; request names in Dashboard > Domains first.
 #[pyclass(name = "DomainHandle")]
 pub(crate) struct PyDomainHandle {
     pub(crate) handle: Arc<DomainHandle>,
@@ -193,7 +193,7 @@ impl PyDomainHandle {
         })
     }
 
-    /// Route `domain` to `target`, claiming it if new. A domain bound
+    /// Route `domain` to `target`, requiring ownership; request names in Dashboard > Domains first. A domain bound
     /// elsewhere in the organization moves. Returns an awaitable that
     /// resolves to the bound `Domain`.
     fn bind<'py>(

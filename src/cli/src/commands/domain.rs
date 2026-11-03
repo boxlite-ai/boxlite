@@ -1,16 +1,16 @@
 //! `boxlite domain {bind,ls,unbind}` — the organization's domains.
 //!
 //! A domain is the organization's, not a box's: `bind` routes one to a box
-//! port (claiming it if new), `ls` shows every held domain with what it routes
+//! port using its owned full hostname, `ls` shows every held domain with what it routes
 //! to, unbound ones included, and `unbind` stops routing one while the
 //! organization keeps it. Domains are a REST-runtime capability; the embedded
 //! runtime answers "not supported".
 
 use std::io::Write;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use boxlite::{Domain, DomainTarget};
-use clap::{Args, Subcommand};
+use clap::{Args, Subcommand, ValueEnum};
 use serde::Serialize;
 use tabled::Tabled;
 
@@ -25,7 +25,7 @@ pub struct DomainArgs {
 
 #[derive(Subcommand, Debug)]
 pub enum DomainCommand {
-    /// Route a domain to a box port, claiming the name if it is new.
+    /// Route an owned full hostname to a target; request names in Dashboard > Domains.
     Bind(BindArgs),
 
     /// List the domains the organization holds and its allowance.
@@ -38,17 +38,26 @@ pub enum DomainCommand {
 
 #[derive(Args, Debug)]
 pub struct BindArgs {
-    /// A platform name (`demo`) or its full hostname (`demo.apps.example`)
+    /// An owned full hostname (`demo1.apps.example`); short names are rejected
     #[arg(value_name = "DOMAIN")]
     pub domain: String,
 
-    /// The box to route to, by id or name
-    #[arg(long = "box", value_name = "BOX", required = true, requires = "port")]
-    pub box_ref: String,
+    /// The kind of resource the domain routes to
+    #[arg(long = "type", value_enum, value_name = "TYPE")]
+    pub target_type: BindTargetType,
 
-    /// The guest port inside the box
-    #[arg(long, value_name = "PORT", requires = "box_ref", value_parser = clap::value_parser!(u16).range(1..))]
-    pub port: u16,
+    /// The box id or name; required for --type box
+    #[arg(long = "box", value_name = "BOX", required_if_eq("target_type", "box"))]
+    pub box_ref: Option<String>,
+
+    /// The guest port inside the box; required for --type box
+    #[arg(long, value_name = "PORT", required_if_eq("target_type", "box"), value_parser = clap::value_parser!(u16).range(1..))]
+    pub port: Option<u16>,
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+pub enum BindTargetType {
+    Box,
 }
 
 #[derive(Args, Debug)]
@@ -111,13 +120,17 @@ pub async fn execute(args: DomainArgs, global: &GlobalFlags) -> Result<()> {
 }
 
 async fn bind(args: BindArgs, global: &GlobalFlags) -> Result<()> {
-    let runtime = global.create_runtime()?;
-    let target = DomainTarget::Box {
-        box_ref: args.box_ref.clone(),
-        port: args.port,
+    let (target, destination) = match args.target_type {
+        BindTargetType::Box => {
+            let box_ref = args.box_ref.context("--box is required for --type box")?;
+            let port = args.port.context("--port is required for --type box")?;
+            let destination = format!("{box_ref}:{port}");
+            (DomainTarget::Box { box_ref, port }, destination)
+        }
     };
+    let runtime = global.create_runtime()?;
     let domain = runtime.domains()?.bind(&args.domain, &target).await?;
-    println!("{} → {}:{}", domain.hostname, args.box_ref, args.port);
+    println!("{} → {destination}", domain.hostname);
     println!("{}", domain.url);
     Ok(())
 }
@@ -177,24 +190,87 @@ mod tests {
     }
 
     #[test]
-    fn bind_takes_the_domain_and_a_box_port_target() {
-        let args = domain_args(&["bind", "demo", "--box", "web-a", "--port", "3000"]).unwrap();
-        let DomainCommand::Bind(bind) = args.command else {
-            panic!("expected bind");
-        };
-        assert_eq!(
-            (bind.domain.as_str(), bind.box_ref.as_str(), bind.port),
-            ("demo", "web-a", 3000)
-        );
+    fn bind_takes_the_domain_and_an_explicit_box_target() {
+        for (port, expected_port) in [("1", 1), ("3000", 3000), ("65535", 65535)] {
+            let args = domain_args(&[
+                "bind",
+                "demo1.apps.example",
+                "--type",
+                "box",
+                "--box",
+                "web-a",
+                "--port",
+                port,
+            ])
+            .unwrap_or_else(|error| panic!("explicit Box target was rejected: {error}"));
+            let DomainCommand::Bind(bind) = args.command else {
+                panic!("expected bind");
+            };
+            assert_eq!(
+                (bind.domain.as_str(), bind.box_ref.as_deref(), bind.port),
+                ("demo1.apps.example", Some("web-a"), Some(expected_port))
+            );
+        }
     }
 
     #[test]
-    fn bind_needs_both_box_and_a_nonzero_port() {
+    fn bind_requires_the_selected_type_and_its_fields() {
         for args in [
-            &["bind", "demo", "--box", "web-a"][..],
-            &["bind", "demo", "--port", "3000"][..],
-            &["bind", "demo", "--box", "web-a", "--port", "0"][..],
-            &["bind", "demo", "web-a", "3000"][..],
+            &[
+                "bind",
+                "demo1.apps.example",
+                "--box",
+                "web-a",
+                "--port",
+                "3000",
+            ][..],
+            &["bind", "demo1.apps.example", "--type", "app"][..],
+            &["bind", "demo1.apps.example", "--type", "unknown"][..],
+            &["bind", "demo1.apps.example", "--type", "box"][..],
+            &[
+                "bind",
+                "demo1.apps.example",
+                "--type",
+                "box",
+                "--box",
+                "web-a",
+            ][..],
+            &[
+                "bind",
+                "demo1.apps.example",
+                "--type",
+                "box",
+                "--port",
+                "3000",
+            ][..],
+            &[
+                "bind",
+                "demo1.apps.example",
+                "--type",
+                "box",
+                "--box",
+                "web-a",
+                "--port",
+                "0",
+            ][..],
+            &[
+                "bind",
+                "demo1.apps.example",
+                "--type",
+                "box",
+                "--box",
+                "web-a",
+                "--port",
+                "65536",
+            ][..],
+            &[
+                "bind",
+                "demo1.apps.example",
+                "--type",
+                "box",
+                "web-a",
+                "3000",
+            ][..],
         ] {
             assert!(domain_args(args).is_err(), "{args:?} was accepted");
         }

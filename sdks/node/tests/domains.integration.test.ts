@@ -81,9 +81,12 @@ describe("domains on a REST runtime", () => {
   });
 
   test("bind puts the target and reads the bound domain", async () => {
-    replies.set("PUT /v1/domains/demo1/target", { status: 200, body: BOUND });
+    replies.set("PUT /v1/domains/demo1.app.test/target", {
+      status: 200,
+      body: BOUND,
+    });
 
-    const bound = await runtime.domains.bind("demo1", {
+    const bound = await runtime.domains.bind("demo1.app.test", {
       type: "box",
       box: "web-a",
       port: 3000,
@@ -95,7 +98,7 @@ describe("domains on a REST runtime", () => {
       port: 3000,
     });
     expect(bound).toEqual(BOUND);
-    replies.set("PUT /v1/domains/shop1/target", {
+    replies.set("PUT /v1/domains/shop1.app.test/target", {
       status: 200,
       body: {
         ...BOUND,
@@ -104,7 +107,7 @@ describe("domains on a REST runtime", () => {
         target: { type: "app", app: "shop" },
       },
     });
-    const app = await runtime.domains.bind("shop1", {
+    const app = await runtime.domains.bind("shop1.app.test", {
       type: "app",
       app: "shop",
     });

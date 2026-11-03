@@ -1947,7 +1947,7 @@ mod tests {
         (&["boxlite", "volume", "delete", "volume"], 2, VOLUME),
         (
             &[
-                "boxlite", "domain", "bind", "demo", "--box", "b", "--port", "1",
+                "boxlite", "domain", "bind", "demo", "--type", "box", "--box", "b", "--port", "1",
             ],
             2,
             VOLUME,

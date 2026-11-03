@@ -7,6 +7,7 @@ import { HttpException, HttpStatus } from '@nestjs/common'
 
 export const DOMAIN_COUNT_LIMIT_CODE = 'domain_count_limit_reached'
 export const SUBDOMAIN_TOO_SHORT_CODE = 'subdomain_too_short'
+export const DOMAIN_NOT_OWNED_CODE = 'domain_not_owned'
 export const SUBDOMAIN_TAKEN_CODE = 'subdomain_taken'
 export const REGION_NOT_SUPPORTED_CODE = 'region_not_supported'
 export const PLATFORM_DOMAIN_NOT_CONFIGURED_CODE = 'platform_domain_not_configured'
@@ -46,6 +47,19 @@ export class SubdomainTooShortError extends HttpException {
   }
 }
 
+export class DomainNotOwnedError extends HttpException {
+  constructor(hostname: string) {
+    super(
+      {
+        message: `This organization does not own ${hostname}. Request a domain in Dashboard > Domains before binding.`,
+        code: DOMAIN_NOT_OWNED_CODE,
+      },
+      HttpStatus.NOT_FOUND,
+    )
+    this.name = 'DomainNotOwnedError'
+  }
+}
+
 /** Held by another organization, bound or not. */
 export class SubdomainTakenError extends HttpException {
   constructor(hostname: string) {
@@ -75,7 +89,7 @@ export class PlatformDomainNotConfiguredError extends HttpException {
   constructor() {
     super(
       {
-        message: 'This deployment has no platform domain; subdomains cannot be bound.',
+        message: 'This deployment has no platform domain; domains cannot be requested.',
         code: PLATFORM_DOMAIN_NOT_CONFIGURED_CODE,
       },
       HttpStatus.BAD_REQUEST,

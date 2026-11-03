@@ -125,6 +125,40 @@ describe('BoxLite REST routing', () => {
     await app?.close()
   })
 
+  it('domain acquisition accepts a short name at canonical and organization routes, rejecting caller-supplied ownership', async () => {
+    const claim = jest
+      .fn()
+      .mockResolvedValue({ hostname: 'demo1.apps.test', url: 'https://demo1.apps.test', target: null })
+    await startApp(
+      [BoxliteDomainController],
+      [
+        { provide: DomainService, useValue: { claim } },
+        { provide: BoxService, useValue: {} },
+      ],
+    )
+    const address = app.getHttpServer().address() as AddressInfo
+    for (const prefix of ['', '/org-123']) {
+      const url = `http://127.0.0.1:${address.port}/api/v1${prefix}/domains`
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name: 'demo1' }),
+      })
+      expect(response.status).toBe(201)
+      expect(await response.json()).toMatchObject({ hostname: 'demo1.apps.test', target: null })
+      const invalid = await fetch(url, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name: 'demo1', organizationId: 'foreign' }),
+      })
+      expect(invalid.status).toBe(400)
+    }
+    expect(claim.mock.calls).toEqual([
+      ['org-123', 'demo1'],
+      ['org-123', 'demo1'],
+    ])
+  })
+
   it('hostname contract: actual controller order rejects reserved bare-label unbind without deleting a Box', async () => {
     const moduleSource = readFileSync(join(__dirname, 'boxlite-rest.module.ts'), 'utf8')
     const registered = moduleSource.match(/controllers:\s*\[([^\]]+)\]/)![1]

@@ -685,7 +685,8 @@ and there is no short `name`. Box targets have `target.box` and `target.port`;
 reserved `BoxliteDomainTargetApp` targets have `target.app`. Inactive reference
 pointers are NULL; both are NULL while unbound. Initialize unused input fields
 to zero. App binding currently returns `app_target_not_supported`.
-`boxlite_domain_unbind()` requires the full hostname. A local runtime answers
+`boxlite_domain_bind()` and `boxlite_domain_unbind()` require an owned full hostname.
+Request new names in Dashboard > Domains before binding. A local runtime answers
 `Unsupported`. The changed domain structures require rebuilding C consumers.
 
 Release the management handle with `boxlite_free_domain_handle()`, the result

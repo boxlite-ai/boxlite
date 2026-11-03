@@ -145,6 +145,7 @@ describe('Box API JSON Schema nullability', () => {
         used: 3,
         remaining: 0,
         minLength: 5,
+        domainSuffix: 'app.test',
       }),
     }
     const controller = new BoxliteDomainController(domains as never, {} as never)
