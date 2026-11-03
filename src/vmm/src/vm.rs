@@ -94,7 +94,9 @@ impl Vm<boxlite_hypervisor::KvmVm> {
     /// output goes to `console` through a queue, so a slow sink never stalls
     /// the guest.
     pub fn new(config: VmConfig, console: Box<dyn std::io::Write + Send>) -> Result<Self> {
-        use crate::devices::{console::DEFAULT_QUEUE_BYTES, x86_64::add_legacy_devices};
+        use crate::devices::{
+            cmos::host_clock, console::DEFAULT_QUEUE_BYTES, x86_64::add_legacy_devices,
+        };
 
         let (writer, worker) =
             ConsoleWorker::spawn(console, DEFAULT_QUEUE_BYTES).map_err(Error::SpawnConsole)?;
@@ -102,7 +104,7 @@ impl Vm<boxlite_hypervisor::KvmVm> {
             config,
             boxlite_hypervisor::KvmVm::new,
             |ram, config| crate::boot::prepare(ram, config).map(|setup| setup.boot_regs),
-            |chipset| add_legacy_devices(chipset, writer),
+            |chipset| add_legacy_devices(chipset, writer, Box::new(host_clock)),
         )?;
         vm.console = Mutex::new(Some(worker));
         Ok(vm)
@@ -156,6 +158,12 @@ impl<H: HostVm> Vm<H> {
     /// [`run`](Self::run) starts.
     pub fn stop_handle(&self) -> StopHandle {
         StopHandle(self.sender.clone())
+    }
+
+    /// The chipset, for tests that read its counters after a run.
+    #[cfg(test)]
+    pub(crate) fn chipset(&self) -> &Chipset {
+        &self.chipset
     }
 }
 
