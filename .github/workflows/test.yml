@@ -795,6 +795,7 @@ jobs:
       DB_USERNAME: postgres
       DB_PASSWORD: postgres
       DB_DATABASE: boxlite
+      BOXLITE_TEST_POSTGRES_URL: postgres://postgres:postgres@localhost:5432/boxlite
     defaults: # Keep package-manager commands inside the apps workspace.
       run: # Applies only to shell steps, not actions.
         working-directory: "apps"

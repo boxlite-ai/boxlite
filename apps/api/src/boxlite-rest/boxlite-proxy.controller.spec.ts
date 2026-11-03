@@ -592,12 +592,16 @@ describe('BoxliteProxyController business events', () => {
 
   it.each(
     [SystemRole.ADMIN, SystemRole.USER].flatMap((role) =>
-      ['exec', 'file_upload'].flatMap((operation) => [200, 502].map((status) => [role, operation, status] as const)),
+      ['exec', 'file_upload'].flatMap((operation) =>
+        [200, 502].flatMap((status) =>
+          ['jwt', 'api_key'].map((authMethod) => [role, operation, status, authMethod] as const),
+        ),
+      ),
     ),
-  )('preserves %s identity for proxied %s status %s', async (role, operation, status) => {
+  )('preserves %s identity for proxied %s status %s with %s', async (role, operation, status, authMethod) => {
     const { controller } = harness()
     const userId = role === SystemRole.ADMIN ? 'admin-1' : 'user-1'
-    const auth = { ...activeAuth, ...caller, userId, role }
+    const auth = { ...activeAuth, ...caller, userId, role, apiKey: authMethod === 'api_key' ? {} : undefined }
     const req = { method: operation === 'exec' ? 'POST' : 'PUT', url: '/operation', user: auth, get: () => undefined }
     const res = response()
     if (operation === 'exec') {
@@ -612,12 +616,13 @@ describe('BoxliteProxyController business events', () => {
       `box.${operation} requested`,
       `box.${operation} ${status < 400 ? 'success' : 'exception'}`,
     ])
+    if (status >= 400) expect(events[1][1]['exception.type']).toBe(`http_${status}`)
     for (const [, attributes] of events) {
       expect(attributes).toEqual(
         expect.objectContaining({
           'actor.kind': role,
           'user.id': userId,
-          'auth.method': 'api_key',
+          'auth.method': authMethod,
           'organization.id': 'org-1',
           'correlation.id': 'box-uuid',
         }),

@@ -1,9 +1,14 @@
 import { AdminBoxController } from './box.controller'
 import { UserController } from '../../user/user.controller'
 
-describe('Admin request actor propagation', () => {
+describe.each(['jwt', 'api_key'] as const)('Admin request actor propagation with %s', (authMethod) => {
   const request = {
-    user: { userId: 'admin-1', role: 'admin', email: 'admin@example.test', apiKey: {} },
+    user: {
+      userId: 'admin-1',
+      role: 'admin',
+      email: 'admin@example.test',
+      ...(authMethod === 'api_key' ? { apiKey: {} } : {}),
+    },
     get: () => undefined,
   }
 
@@ -21,7 +26,7 @@ describe('Admin request actor propagation', () => {
       organization,
       expect.objectContaining({
         actorKind: 'admin',
-        actor: expect.objectContaining({ userId: 'admin-1', authMethod: 'api_key' }),
+        actor: expect.objectContaining({ userId: 'admin-1', authMethod }),
       }),
     )
   })
@@ -35,7 +40,7 @@ describe('Admin request actor propagation', () => {
       input,
       expect.objectContaining({
         actorKind: 'admin',
-        actor: expect.objectContaining({ userId: 'admin-1', authMethod: 'api_key' }),
+        actor: expect.objectContaining({ userId: 'admin-1', authMethod }),
       }),
     )
   })
