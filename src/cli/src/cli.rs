@@ -64,7 +64,7 @@ where
 #[derive(Parser, Debug)]
 #[command(name = "boxlite", author, version, about = "BoxLite CLI")]
 pub struct Cli {
-    #[command(flatten)]
+    #[command(flatten, next_help_heading = "Global options")]
     pub global: GlobalFlags,
 
     #[command(subcommand)]
