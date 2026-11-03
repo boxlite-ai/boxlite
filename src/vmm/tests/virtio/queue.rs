@@ -1,8 +1,10 @@
 // Copyright 2026 BoxLite Contributors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Queue facade tests: dense validation, state restore, notification drain,
-//! deferred completion and the save guard.
+//! Queue facade tests: dense validation, notification drain, deferred
+//! completion and the snapshot stubs.
+
+use std::sync::Arc;
 
 use virtio_queue::{Queue, QueueT, desc::split::Descriptor};
 use vm_memory::{Address, Bytes, GuestAddress};
@@ -10,7 +12,7 @@ use vm_memory::{Address, Bytes, GuestAddress};
 use crate::{
     memory::GuestMemoryMmap,
     virtio::{
-        DeviceError,
+        DeviceError, SnapshotError,
         queue::{Completion, QueueError, VIRTIO_F_EVENT_IDX, VIRTIO_F_INDIRECT_DESC, VirtQueues},
     },
 };
@@ -27,8 +29,8 @@ const USED2: u64 = 0xd000;
 const NEXT: u16 = 1;
 const INDIRECT_FLAG: u16 = 4;
 
-fn memory() -> GuestMemoryMmap {
-    GuestMemoryMmap::from_ranges(&[(GuestAddress(0), 0x10000)]).unwrap()
+fn memory() -> Arc<GuestMemoryMmap> {
+    Arc::new(GuestMemoryMmap::from_ranges(&[(GuestAddress(0), 0x10000)]).unwrap())
 }
 
 fn read_u16(memory: &GuestMemoryMmap, address: GuestAddress) -> u16 {
@@ -63,8 +65,20 @@ fn ready_queue_at(desc_table: u64, avail_ring: u64, used_ring: u64) -> Queue {
     queue
 }
 
-fn prepared(queue: Queue, event_idx: bool, memory: &GuestMemoryMmap) -> VirtQueues {
-    VirtQueues::prepare(vec![queue], &[SIZE], event_idx, memory).unwrap()
+fn prepared(
+    queue: Queue,
+    event_idx: bool,
+    indirect: bool,
+    memory: &Arc<GuestMemoryMmap>,
+) -> VirtQueues {
+    VirtQueues::prepare(
+        vec![queue],
+        &[SIZE],
+        event_idx,
+        indirect,
+        Arc::clone(memory),
+    )
+    .unwrap()
 }
 
 fn write_desc_at(
@@ -138,7 +152,14 @@ fn feature_bits_match_virtio() {
 #[test]
 fn prepare_accepts_a_dense_ready_queue() {
     let memory = memory();
-    let queues = VirtQueues::prepare(vec![ready_queue()], &[SIZE], true, &memory).unwrap();
+    let queues = VirtQueues::prepare(
+        vec![ready_queue()],
+        &[SIZE],
+        true,
+        false,
+        Arc::clone(&memory),
+    )
+    .unwrap();
     let state = queues.state(0).expect("queue 0 exists");
     assert!(state.event_idx_enabled);
     assert_eq!(state.size, SIZE);
@@ -151,7 +172,14 @@ fn prepare_accepts_a_dense_ready_queue() {
 fn prepare_requires_one_queue_per_slot() {
     let memory = memory();
     assert_eq!(
-        VirtQueues::prepare(vec![ready_queue()], &[SIZE, SIZE], false, &memory).err(),
+        VirtQueues::prepare(
+            vec![ready_queue()],
+            &[SIZE, SIZE],
+            false,
+            false,
+            Arc::clone(&memory)
+        )
+        .err(),
         Some(QueueError::Count {
             expected: 2,
             actual: 1
@@ -163,7 +191,14 @@ fn prepare_requires_one_queue_per_slot() {
 fn prepare_checks_each_slot_max_size() {
     let memory = memory();
     assert_eq!(
-        VirtQueues::prepare(vec![Queue::new(4).unwrap()], &[SIZE], false, &memory).err(),
+        VirtQueues::prepare(
+            vec![Queue::new(4).unwrap()],
+            &[SIZE],
+            false,
+            false,
+            Arc::clone(&memory)
+        )
+        .err(),
         Some(QueueError::MaxSize {
             expected: SIZE,
             actual: 4
@@ -174,8 +209,14 @@ fn prepare_checks_each_slot_max_size() {
 #[test]
 fn prepare_keeps_unready_queues_but_applies_event_idx() {
     let memory = memory();
-    let queues =
-        VirtQueues::prepare(vec![Queue::new(SIZE).unwrap()], &[SIZE], true, &memory).unwrap();
+    let queues = VirtQueues::prepare(
+        vec![Queue::new(SIZE).unwrap()],
+        &[SIZE],
+        true,
+        false,
+        Arc::clone(&memory),
+    )
+    .unwrap();
     assert!(!queues.is_ready(0));
     assert!(queues.state(0).unwrap().event_idx_enabled);
 }
@@ -186,7 +227,7 @@ fn prepare_rejects_a_zero_avail_ring() {
     let mut queue = ready_queue();
     queue.try_set_avail_ring_address(GuestAddress(0)).unwrap();
     assert_eq!(
-        VirtQueues::prepare(vec![queue], &[SIZE], false, &memory).err(),
+        VirtQueues::prepare(vec![queue], &[SIZE], false, false, Arc::clone(&memory)).err(),
         Some(QueueError::Invalid)
     );
 }
@@ -199,109 +240,9 @@ fn prepare_rejects_rings_outside_memory() {
         .try_set_used_ring_address(GuestAddress(0x1_0000))
         .unwrap();
     assert_eq!(
-        VirtQueues::prepare(vec![queue], &[SIZE], false, &memory).err(),
+        VirtQueues::prepare(vec![queue], &[SIZE], false, false, Arc::clone(&memory)).err(),
         Some(QueueError::Memory)
     );
-}
-
-#[test]
-fn queue_state_round_trips_every_field() {
-    let memory = memory();
-    let mut queue = ready_queue();
-    queue.set_next_avail(9);
-    queue.set_next_used(10);
-    let queues = VirtQueues::prepare(vec![queue], &[SIZE], true, &memory).unwrap();
-    let states = queues.save().unwrap();
-    let restored = VirtQueues::restore(&states, &[SIZE], true, &memory).unwrap();
-    let state = restored.state(0).unwrap();
-    assert_eq!(state, states[0]);
-    assert_eq!(state.next_avail, 9);
-    assert_eq!(state.next_used, 10);
-    assert!(state.event_idx_enabled);
-    assert_eq!(state.desc_table, DESC);
-    assert_eq!(state.avail_ring, AVAIL);
-    assert_eq!(state.used_ring, USED);
-}
-
-#[test]
-fn restore_rejects_a_different_max_size() {
-    let memory = memory();
-    let states = prepared(ready_queue(), false, &memory).save().unwrap();
-    assert_eq!(
-        VirtQueues::restore(&states, &[4], false, &memory).err(),
-        Some(QueueError::MaxSize {
-            expected: 4,
-            actual: SIZE
-        })
-    );
-}
-
-#[test]
-fn restore_rejects_invalid_states() {
-    let memory = memory();
-    let saved = prepared(ready_queue(), false, &memory).save().unwrap();
-    let mut state = saved[0];
-
-    state.size = 0;
-    assert_eq!(
-        VirtQueues::restore(&[state], &[SIZE], false, &memory).err(),
-        Some(QueueError::Invalid)
-    );
-    state = saved[0];
-    state.size = 15;
-    assert_eq!(
-        VirtQueues::restore(&[state], &[SIZE], false, &memory).err(),
-        Some(QueueError::Invalid)
-    );
-    state = saved[0];
-    state.desc_table = 0xf;
-    assert_eq!(
-        VirtQueues::restore(&[state], &[SIZE], false, &memory).err(),
-        Some(QueueError::Invalid)
-    );
-    state = saved[0];
-    state.avail_ring = 0x1;
-    assert_eq!(
-        VirtQueues::restore(&[state], &[SIZE], false, &memory).err(),
-        Some(QueueError::Invalid)
-    );
-    state = saved[0];
-    state.used_ring = 0x3;
-    assert_eq!(
-        VirtQueues::restore(&[state], &[SIZE], false, &memory).err(),
-        Some(QueueError::Invalid)
-    );
-    state = saved[0];
-    state.max_size = 0;
-    assert_eq!(
-        VirtQueues::restore(&[state], &[0], false, &memory).err(),
-        Some(QueueError::Invalid)
-    );
-}
-
-#[test]
-fn restore_rejects_ready_rings_outside_memory() {
-    let memory = memory();
-    let saved = prepared(ready_queue(), false, &memory).save().unwrap();
-    let mut state = saved[0];
-    state.used_ring = 0x1_0000;
-    assert_eq!(
-        VirtQueues::restore(&[state], &[SIZE], false, &memory).err(),
-        Some(QueueError::Memory)
-    );
-    state.ready = false;
-    assert!(VirtQueues::restore(&[state], &[SIZE], false, &memory).is_ok());
-}
-
-#[test]
-fn restore_reapplies_negotiated_event_idx() {
-    let memory = memory();
-    let mut state = prepared(ready_queue(), false, &memory).save().unwrap()[0];
-    state.event_idx_enabled = true;
-    let restored = VirtQueues::restore(&[state], &[SIZE], false, &memory).unwrap();
-    assert!(!restored.state(0).unwrap().event_idx_enabled);
-    let restored = VirtQueues::restore(&[state], &[SIZE], true, &memory).unwrap();
-    assert!(restored.state(0).unwrap().event_idx_enabled);
 }
 
 #[test]
@@ -311,37 +252,22 @@ fn prepare_reapplies_event_idx_after_reset() {
     queue.set_event_idx(true);
     queue.reset();
     assert!(!queue.event_idx_enabled());
-    let queues = VirtQueues::prepare(vec![queue], &[SIZE], true, &memory).unwrap();
+    let queues =
+        VirtQueues::prepare(vec![queue], &[SIZE], true, false, Arc::clone(&memory)).unwrap();
     assert!(queues.state(0).unwrap().event_idx_enabled);
-}
-
-#[test]
-fn save_after_a_notification_decision_round_trips_state() {
-    let memory = memory();
-    let mut queues = prepared(ready_queue(), false, &memory);
-    write_desc(&memory, 0, DATA, 4, 0, 0);
-    add_chain(&memory, 0);
-    assert!(
-        queues
-            .drain(0, &memory, false, |_| Ok(Completion::Used(4)))
-            .unwrap()
-    );
-    let states = queues.save().unwrap();
-    let restored = VirtQueues::restore(&states, &[SIZE], false, &memory).unwrap();
-    assert_eq!(restored.state(0).unwrap(), states[0]);
 }
 
 #[test]
 fn drain_completes_every_available_chain() {
     let memory = memory();
-    let mut queues = prepared(ready_queue(), false, &memory);
+    let mut queues = prepared(ready_queue(), false, false, &memory);
     for index in 0..3 {
         write_desc(&memory, index, DATA, 4, 0, 0);
         add_chain(&memory, index);
     }
     let mut heads = Vec::new();
     let notify = queues
-        .drain(0, &memory, false, |chain| {
+        .drain(0, |chain| {
             heads.push(chain.head_index());
             Ok(Completion::Used(
                 chain.map(|descriptor| descriptor.len()).sum(),
@@ -363,10 +289,8 @@ fn drain_completes_every_available_chain() {
 fn empty_drain_does_not_interrupt() {
     for event_idx in [false, true] {
         let memory = memory();
-        let mut queues = prepared(ready_queue(), event_idx, &memory);
-        let notify = queues
-            .drain(0, &memory, false, |_| panic!("no chain"))
-            .unwrap();
+        let mut queues = prepared(ready_queue(), event_idx, false, &memory);
+        let notify = queues.drain(0, |_| panic!("no chain")).unwrap();
         assert!(!notify);
         assert_eq!(used_idx(&memory), 0);
         assert_eq!(used_flags(&memory), 0);
@@ -377,47 +301,31 @@ fn empty_drain_does_not_interrupt() {
 #[test]
 fn without_event_idx_one_interrupt_per_batch() {
     let memory = memory();
-    let mut queues = prepared(ready_queue(), false, &memory);
+    let mut queues = prepared(ready_queue(), false, false, &memory);
     for index in 0..4 {
         write_desc(&memory, index, DATA, 4, 0, 0);
         add_chain(&memory, index);
     }
-    assert!(
-        queues
-            .drain(0, &memory, false, |_| Ok(Completion::Used(4)))
-            .unwrap()
-    );
-    assert!(
-        !queues
-            .drain(0, &memory, false, |_| panic!("empty"))
-            .unwrap()
-    );
+    assert!(queues.drain(0, |_| Ok(Completion::Used(4))).unwrap());
+    assert!(!queues.drain(0, |_| panic!("empty")).unwrap());
     assert_eq!(used_flags(&memory), 0);
 }
 
 #[test]
 fn event_idx_suppresses_below_threshold() {
     let memory = memory();
-    let mut queues = prepared(ready_queue(), true, &memory);
+    let mut queues = prepared(ready_queue(), true, false, &memory);
     set_used_event(&memory, 5);
     for index in 0..2 {
         write_desc(&memory, index, DATA, 4, 0, 0);
         add_chain(&memory, index);
     }
-    assert!(
-        !queues
-            .drain(0, &memory, false, |_| Ok(Completion::Used(4)))
-            .unwrap()
-    );
+    assert!(!queues.drain(0, |_| Ok(Completion::Used(4))).unwrap());
     for index in 2..6 {
         write_desc(&memory, index, DATA, 4, 0, 0);
         add_chain(&memory, index);
     }
-    assert!(
-        queues
-            .drain(0, &memory, false, |_| Ok(Completion::Used(4)))
-            .unwrap()
-    );
+    assert!(queues.drain(0, |_| Ok(Completion::Used(4))).unwrap());
 }
 
 #[test]
@@ -425,31 +333,23 @@ fn event_idx_wraps_used_indices() {
     let memory = memory();
     let mut queue = ready_queue();
     queue.set_next_used(u16::MAX - 3);
-    let mut queues = prepared(queue, true, &memory);
+    let mut queues = prepared(queue, true, false, &memory);
     set_used_event(&memory, u16::MAX - 3);
     write_desc(&memory, 0, DATA, 4, 0, 0);
     add_chain(&memory, 0);
-    assert!(
-        queues
-            .drain(0, &memory, false, |_| Ok(Completion::Used(4)))
-            .unwrap()
-    );
-    assert!(
-        !queues
-            .drain(0, &memory, false, |_| panic!("empty"))
-            .unwrap()
-    );
+    assert!(queues.drain(0, |_| Ok(Completion::Used(4))).unwrap());
+    assert!(!queues.drain(0, |_| panic!("empty")).unwrap());
 }
 
 #[test]
 fn drain_keeps_work_that_arrives_while_disabled() {
     let memory = memory();
-    let mut queues = prepared(ready_queue(), false, &memory);
+    let mut queues = prepared(ready_queue(), false, false, &memory);
     write_desc(&memory, 0, DATA, 4, 0, 0);
     add_chain(&memory, 0);
     let mut count = 0;
     let notify = queues
-        .drain(0, &memory, false, |_| {
+        .drain(0, |_| {
             count += 1;
             if count == 1 {
                 write_desc(&memory, 1, DATA, 4, 0, 0);
@@ -466,11 +366,11 @@ fn drain_keeps_work_that_arrives_while_disabled() {
 #[test]
 fn drain_rejects_indirect_descriptors_when_not_negotiated() {
     let memory = memory();
-    let mut queues = prepared(ready_queue(), false, &memory);
+    let mut queues = prepared(ready_queue(), false, false, &memory);
     write_desc(&memory, 0, INDIRECT, 16, INDIRECT_FLAG, 0);
     add_chain(&memory, 0);
     let mut completed = false;
-    let result = queues.drain(0, &memory, false, |_| {
+    let result = queues.drain(0, |_| {
         completed = true;
         Ok(Completion::Used(4))
     });
@@ -482,12 +382,12 @@ fn drain_rejects_indirect_descriptors_when_not_negotiated() {
 #[test]
 fn drain_rejects_a_mid_chain_indirect_descriptor() {
     let memory = memory();
-    let mut queues = prepared(ready_queue(), false, &memory);
+    let mut queues = prepared(ready_queue(), false, false, &memory);
     write_desc(&memory, 0, DATA, 4, NEXT, 1);
     write_desc(&memory, 1, INDIRECT, 16, INDIRECT_FLAG, 0);
     add_chain(&memory, 0);
     assert_eq!(
-        queues.drain(0, &memory, false, |_| Ok(Completion::Used(4))),
+        queues.drain(0, |_| Ok(Completion::Used(4))),
         Err(DeviceError::NeedsReset("indirect descriptor"))
     );
 }
@@ -495,14 +395,14 @@ fn drain_rejects_a_mid_chain_indirect_descriptor() {
 #[test]
 fn drain_accepts_indirect_descriptors_when_negotiated() {
     let memory = memory();
-    let mut queues = prepared(ready_queue(), false, &memory);
+    let mut queues = prepared(ready_queue(), false, true, &memory);
     memory
         .write_obj(Descriptor::new(DATA, 4, 0, 0), GuestAddress(INDIRECT))
         .unwrap();
     write_desc(&memory, 0, INDIRECT, 16, INDIRECT_FLAG, 0);
     add_chain(&memory, 0);
     let notify = queues
-        .drain(0, &memory, true, |chain| {
+        .drain(0, |chain| {
             Ok(Completion::Used(
                 chain.map(|descriptor| descriptor.len()).sum(),
             ))
@@ -515,10 +415,10 @@ fn drain_accepts_indirect_descriptors_when_negotiated() {
 #[test]
 fn drain_maps_invalid_avail_idx_to_needs_reset() {
     let memory = memory();
-    let mut queues = prepared(ready_queue(), false, &memory);
+    let mut queues = prepared(ready_queue(), false, false, &memory);
     write_u16(&memory, GuestAddress(AVAIL + 2), SIZE + 1);
     assert_eq!(
-        queues.drain(0, &memory, false, |_| Ok(Completion::Used(4))),
+        queues.drain(0, |_| Ok(Completion::Used(4))),
         Err(DeviceError::NeedsReset("virtio queue"))
     );
 }
@@ -526,10 +426,10 @@ fn drain_maps_invalid_avail_idx_to_needs_reset() {
 #[test]
 fn drain_propagates_completion_errors() {
     let memory = memory();
-    let mut queues = prepared(ready_queue(), false, &memory);
+    let mut queues = prepared(ready_queue(), false, false, &memory);
     write_desc(&memory, 0, DATA, 4, 0, 0);
     add_chain(&memory, 0);
-    let result = queues.drain(0, &memory, false, |_| Err(DeviceError::Fatal("backend")));
+    let result = queues.drain(0, |_| Err(DeviceError::Fatal("backend")));
     assert_eq!(result, Err(DeviceError::Fatal("backend")));
     assert_eq!(used_idx(&memory), 0);
 }
@@ -537,11 +437,11 @@ fn drain_propagates_completion_errors() {
 #[test]
 fn drain_rejects_a_malformed_chain() {
     let memory = memory();
-    let mut queues = prepared(ready_queue(), false, &memory);
+    let mut queues = prepared(ready_queue(), false, false, &memory);
     write_desc(&memory, 0, DATA, 4, NEXT, 9);
     add_chain(&memory, 0);
     assert_eq!(
-        queues.drain(0, &memory, false, |_| Ok(Completion::Used(4))),
+        queues.drain(0, |_| Ok(Completion::Used(4))),
         Err(DeviceError::NeedsReset("virtio descriptor"))
     );
 }
@@ -549,11 +449,11 @@ fn drain_rejects_a_malformed_chain() {
 #[test]
 fn drain_rejects_a_chain_cycle() {
     let memory = memory();
-    let mut queues = prepared(ready_queue(), false, &memory);
+    let mut queues = prepared(ready_queue(), false, false, &memory);
     write_desc(&memory, 0, DATA, 4, NEXT, 0);
     add_chain(&memory, 0);
     assert_eq!(
-        queues.drain(0, &memory, false, |_| Ok(Completion::Used(4))),
+        queues.drain(0, |_| Ok(Completion::Used(4))),
         Err(DeviceError::NeedsReset("virtio descriptor"))
     );
 }
@@ -561,9 +461,9 @@ fn drain_rejects_a_chain_cycle() {
 #[test]
 fn complete_rejects_an_out_of_range_head() {
     let memory = memory();
-    let mut queues = prepared(ready_queue(), false, &memory);
+    let mut queues = prepared(ready_queue(), false, false, &memory);
     assert_eq!(
-        queues.complete(0, &memory, SIZE, 4),
+        queues.complete(0, SIZE, 4),
         Err(DeviceError::NeedsReset("virtio queue"))
     );
     assert_eq!(used_idx(&memory), 0);
@@ -572,20 +472,18 @@ fn complete_rejects_an_out_of_range_head() {
 #[test]
 fn drain_leaves_a_deferred_chain_for_later_completion() {
     let memory = memory();
-    let mut queues = prepared(ready_queue(), false, &memory);
+    let mut queues = prepared(ready_queue(), false, false, &memory);
     write_desc(&memory, 0, DATA, 4, 0, 0);
     add_chain(&memory, 0);
 
-    let notify = queues
-        .drain(0, &memory, false, |_| Ok(Completion::Deferred))
-        .unwrap();
+    let notify = queues.drain(0, |_| Ok(Completion::Deferred)).unwrap();
     assert!(!notify);
     let state = queues.state(0).unwrap();
     assert_eq!(state.next_avail, 1);
     assert_eq!(state.next_used, 0);
     assert_eq!(used_idx(&memory), 0);
 
-    assert!(queues.complete(0, &memory, 0, 4).unwrap());
+    assert!(queues.complete(0, 0, 4).unwrap());
     let state = queues.state(0).unwrap();
     assert_eq!(state.next_used, 1);
     assert_eq!(used_idx(&memory), 1);
@@ -595,14 +493,14 @@ fn drain_leaves_a_deferred_chain_for_later_completion() {
 #[test]
 fn drain_adds_used_entries_in_completion_order_for_a_mixed_batch() {
     let memory = memory();
-    let mut queues = prepared(ready_queue(), false, &memory);
+    let mut queues = prepared(ready_queue(), false, false, &memory);
     for index in 0..3 {
         write_desc(&memory, index, DATA, 4, 0, 0);
         add_chain(&memory, index);
     }
 
     let notify = queues
-        .drain(0, &memory, false, |chain| match chain.head_index() {
+        .drain(0, |chain| match chain.head_index() {
             0 => Ok(Completion::Used(4)),
             1 => Ok(Completion::Deferred),
             _ => Ok(Completion::Used(6)),
@@ -615,7 +513,7 @@ fn drain_adds_used_entries_in_completion_order_for_a_mixed_batch() {
     assert_eq!(used_entry(&memory, 0), (0, 4));
     assert_eq!(used_entry(&memory, 1), (2, 6));
 
-    assert!(queues.complete(0, &memory, 1, 8).unwrap());
+    assert!(queues.complete(0, 1, 8).unwrap());
     let state = queues.state(0).unwrap();
     assert_eq!(state.next_used, 3);
     assert_eq!(used_idx(&memory), 3);
@@ -625,13 +523,13 @@ fn drain_adds_used_entries_in_completion_order_for_a_mixed_batch() {
 #[test]
 fn a_deferred_chain_does_not_end_the_notification_drain() {
     let memory = memory();
-    let mut queues = prepared(ready_queue(), false, &memory);
+    let mut queues = prepared(ready_queue(), false, false, &memory);
     write_desc(&memory, 0, DATA, 4, 0, 0);
     add_chain(&memory, 0);
 
     let mut calls = 0;
     let notify = queues
-        .drain(0, &memory, false, |_| {
+        .drain(0, |_| {
             calls += 1;
             if calls == 1 {
                 write_desc(&memory, 1, DATA, 4, 0, 0);
@@ -653,12 +551,12 @@ fn a_deferred_chain_does_not_end_the_notification_drain() {
 #[test]
 fn drain_rejects_a_deferred_indirect_chain_when_not_negotiated() {
     let memory = memory();
-    let mut queues = prepared(ready_queue(), false, &memory);
+    let mut queues = prepared(ready_queue(), false, false, &memory);
     write_desc(&memory, 0, INDIRECT, 16, INDIRECT_FLAG, 0);
     add_chain(&memory, 0);
 
     let mut processed = false;
-    let result = queues.drain(0, &memory, false, |_| {
+    let result = queues.drain(0, |_| {
         processed = true;
         Ok(Completion::Deferred)
     });
@@ -670,135 +568,55 @@ fn drain_rejects_a_deferred_indirect_chain_when_not_negotiated() {
 #[test]
 fn event_idx_notification_decisions_apply_to_later_completions() {
     let memory = memory();
-    let mut queues = prepared(ready_queue(), true, &memory);
+    let mut queues = prepared(ready_queue(), true, false, &memory);
     set_used_event(&memory, 0);
     for index in 0..2 {
         write_desc(&memory, index, DATA, 4, 0, 0);
         add_chain(&memory, index);
     }
-    assert!(
-        !queues
-            .drain(0, &memory, false, |_| Ok(Completion::Deferred))
-            .unwrap()
-    );
-    assert!(queues.complete(0, &memory, 0, 4).unwrap());
-    assert!(!queues.complete(0, &memory, 1, 4).unwrap());
+    assert!(!queues.drain(0, |_| Ok(Completion::Deferred)).unwrap());
+    assert!(queues.complete(0, 0, 4).unwrap());
+    assert!(!queues.complete(0, 1, 4).unwrap());
 }
 
 #[test]
 fn event_idx_crossing_notifies_on_the_completion_that_crosses() {
     let memory = memory();
-    let mut queues = prepared(ready_queue(), true, &memory);
+    let mut queues = prepared(ready_queue(), true, false, &memory);
     set_used_event(&memory, 2);
     for index in 0..3 {
         write_desc(&memory, index, DATA, 4, 0, 0);
         add_chain(&memory, index);
     }
-    assert!(
-        !queues
-            .drain(0, &memory, false, |_| Ok(Completion::Deferred))
-            .unwrap()
-    );
-    assert!(!queues.complete(0, &memory, 0, 4).unwrap());
-    assert!(!queues.complete(0, &memory, 1, 4).unwrap());
-    assert!(queues.complete(0, &memory, 2, 4).unwrap());
+    assert!(!queues.drain(0, |_| Ok(Completion::Deferred)).unwrap());
+    assert!(!queues.complete(0, 0, 4).unwrap());
+    assert!(!queues.complete(0, 1, 4).unwrap());
+    assert!(queues.complete(0, 2, 4).unwrap());
 }
 
 #[test]
 fn drain_resolves_event_idx_once_per_batch() {
     let memory = memory();
-    let mut queues = prepared(ready_queue(), true, &memory);
+    let mut queues = prepared(ready_queue(), true, false, &memory);
     set_used_event(&memory, 1);
     for index in 0..3 {
         write_desc(&memory, index, DATA, 4, 0, 0);
         add_chain(&memory, index);
     }
 
-    assert!(
-        queues
-            .drain(0, &memory, false, |_| Ok(Completion::Used(4)))
-            .unwrap()
-    );
+    assert!(queues.drain(0, |_| Ok(Completion::Used(4))).unwrap());
     assert_eq!(used_idx(&memory), 3);
-}
-
-#[test]
-fn save_after_a_deferred_completion_round_trips_state() {
-    let memory = memory();
-    let mut queues = prepared(ready_queue(), true, &memory);
-    set_used_event(&memory, 0);
-    write_desc(&memory, 0, DATA, 4, 0, 0);
-    add_chain(&memory, 0);
-
-    assert!(
-        !queues
-            .drain(0, &memory, false, |_| Ok(Completion::Deferred))
-            .unwrap()
-    );
-    assert!(queues.complete(0, &memory, 0, 4).unwrap());
-
-    let states = queues.save().unwrap();
-    let restored = VirtQueues::restore(&states, &[SIZE], true, &memory).unwrap();
-    let state = restored.state(0).unwrap();
-    assert_eq!(state, states[0]);
-    assert_eq!(state.next_avail, 1);
-    assert_eq!(state.next_used, 1);
-}
-
-#[test]
-fn save_rejects_outstanding_deferred() {
-    let memory = memory();
-    let mut queues = prepared(ready_queue(), false, &memory);
-    write_desc(&memory, 0, DATA, 4, 0, 0);
-    add_chain(&memory, 0);
-
-    assert!(
-        !queues
-            .drain(0, &memory, false, |_| Ok(Completion::Deferred))
-            .unwrap()
-    );
-    assert_eq!(queues.save().err(), Some(QueueError::Busy));
-
-    assert!(queues.complete(0, &memory, 0, 4).unwrap());
-    assert!(queues.save().is_ok());
-}
-
-#[test]
-fn save_is_busy_when_any_queue_has_deferred() {
-    let memory = memory();
-    let mut queues = VirtQueues::prepare(
-        vec![ready_queue(), ready_queue_at(DESC2, AVAIL2, USED2)],
-        &[SIZE, SIZE],
-        false,
-        &memory,
-    )
-    .unwrap();
-    write_desc_at(&memory, DESC2, 0, DATA, 4, 0, 0);
-    add_chain_at(&memory, AVAIL2, 0);
-
-    assert!(
-        !queues
-            .drain(1, &memory, false, |_| Ok(Completion::Deferred))
-            .unwrap()
-    );
-    assert_eq!(queues.save().err(), Some(QueueError::Busy));
-
-    assert!(queues.complete(1, &memory, 0, 4).unwrap());
-    let states = queues.save().unwrap();
-    assert_eq!(states.len(), 2);
-    assert_eq!(states[0].avail_ring, AVAIL);
-    assert_eq!(states[1].avail_ring, AVAIL2);
 }
 
 #[test]
 fn complete_rejects_a_head_that_was_never_deferred() {
     let memory = memory();
-    let mut queues = prepared(ready_queue(), false, &memory);
+    let mut queues = prepared(ready_queue(), false, false, &memory);
     write_desc(&memory, 0, DATA, 4, 0, 0);
     add_chain(&memory, 0);
 
     assert_eq!(
-        queues.complete(0, &memory, 0, 4),
+        queues.complete(0, 0, 4),
         Err(DeviceError::NeedsReset("virtio deferred chain"))
     );
     assert_eq!(used_idx(&memory), 0);
@@ -807,18 +625,14 @@ fn complete_rejects_a_head_that_was_never_deferred() {
 #[test]
 fn complete_rejects_a_second_completion() {
     let memory = memory();
-    let mut queues = prepared(ready_queue(), false, &memory);
+    let mut queues = prepared(ready_queue(), false, false, &memory);
     write_desc(&memory, 0, DATA, 4, 0, 0);
     add_chain(&memory, 0);
 
-    assert!(
-        !queues
-            .drain(0, &memory, false, |_| Ok(Completion::Deferred))
-            .unwrap()
-    );
-    assert!(queues.complete(0, &memory, 0, 4).unwrap());
+    assert!(!queues.drain(0, |_| Ok(Completion::Deferred)).unwrap());
+    assert!(queues.complete(0, 0, 4).unwrap());
     assert_eq!(
-        queues.complete(0, &memory, 0, 4),
+        queues.complete(0, 0, 4),
         Err(DeviceError::NeedsReset("virtio deferred chain"))
     );
     assert_eq!(used_idx(&memory), 1);
@@ -831,64 +645,58 @@ fn complete_rejects_a_completion_on_the_wrong_queue() {
         vec![ready_queue(), ready_queue_at(DESC2, AVAIL2, USED2)],
         &[SIZE, SIZE],
         false,
-        &memory,
+        false,
+        Arc::clone(&memory),
     )
     .unwrap();
     write_desc(&memory, 0, DATA, 4, 0, 0);
     add_chain(&memory, 0);
-    assert!(
-        !queues
-            .drain(0, &memory, false, |_| Ok(Completion::Deferred))
-            .unwrap()
-    );
+    assert!(!queues.drain(0, |_| Ok(Completion::Deferred)).unwrap());
 
     assert_eq!(
-        queues.complete(1, &memory, 0, 4),
+        queues.complete(1, 0, 4),
         Err(DeviceError::NeedsReset("virtio deferred chain"))
     );
     assert_eq!(used_idx_at(&memory, USED2), 0);
-    assert_eq!(queues.save().err(), Some(QueueError::Busy));
+    assert_eq!(used_idx(&memory), 0);
 
-    assert!(queues.complete(0, &memory, 0, 4).unwrap());
+    assert!(queues.complete(0, 0, 4).unwrap());
 }
 
 #[test]
 fn deferred_chains_complete_out_of_order() {
     let memory = memory();
-    let mut queues = prepared(ready_queue(), false, &memory);
+    let mut queues = prepared(ready_queue(), false, false, &memory);
     for index in 0..3 {
         write_desc(&memory, index, DATA, 4, 0, 0);
         add_chain(&memory, index);
     }
-    assert!(
-        !queues
-            .drain(0, &memory, false, |_| Ok(Completion::Deferred))
-            .unwrap()
-    );
+    assert!(!queues.drain(0, |_| Ok(Completion::Deferred)).unwrap());
 
-    assert!(queues.complete(0, &memory, 2, 6).unwrap());
-    assert!(queues.complete(0, &memory, 0, 4).unwrap());
-    assert!(queues.complete(0, &memory, 1, 5).unwrap());
+    assert!(queues.complete(0, 2, 6).unwrap());
+    assert!(queues.complete(0, 0, 4).unwrap());
+    assert!(queues.complete(0, 1, 5).unwrap());
     assert_eq!(used_entry(&memory, 0), (2, 6));
     assert_eq!(used_entry(&memory, 1), (0, 4));
     assert_eq!(used_entry(&memory, 2), (1, 5));
-    assert!(queues.save().is_ok());
+    assert_eq!(used_idx(&memory), 3);
 }
 
 #[test]
 fn drain_rejects_a_duplicate_deferred_head() {
     let memory = memory();
-    let mut queues = prepared(ready_queue(), false, &memory);
+    let mut queues = prepared(ready_queue(), false, false, &memory);
     write_desc(&memory, 0, DATA, 4, 0, 0);
     add_chain(&memory, 0);
     add_chain(&memory, 0);
 
     assert_eq!(
-        queues.drain(0, &memory, false, |_| Ok(Completion::Deferred)),
+        queues.drain(0, |_| Ok(Completion::Deferred)),
         Err(DeviceError::NeedsReset("virtio deferred chain"))
     );
     assert_eq!(used_idx(&memory), 0);
-    assert_eq!(queues.save().err(), Some(QueueError::Busy));
+    assert!(queues.complete(0, 0, 4).unwrap());
+    assert_eq!(used_idx(&memory), 1);
 }
 
 #[test]
@@ -898,7 +706,8 @@ fn dense_multi_queue_indices_are_preserved() {
         vec![ready_queue(), Queue::new(SIZE).unwrap()],
         &[SIZE, SIZE],
         false,
-        &memory,
+        false,
+        Arc::clone(&memory),
     )
     .unwrap();
     assert_eq!(queues.len(), 2);
@@ -909,61 +718,21 @@ fn dense_multi_queue_indices_are_preserved() {
 
     write_desc(&memory, 0, DATA, 4, 0, 0);
     add_chain(&memory, 0);
-    assert!(
-        queues
-            .drain(0, &memory, false, |_| Ok(Completion::Used(4)))
-            .unwrap()
-    );
+    assert!(queues.drain(0, |_| Ok(Completion::Used(4))).unwrap());
     assert_eq!(used_idx(&memory), 1);
     assert_eq!(used_idx_at(&memory, USED2), 0);
-
-    let states = queues.save().unwrap();
-    assert_eq!(states.len(), 2);
-    assert!(states[0].ready);
-    assert!(!states[1].ready);
-}
-
-#[test]
-fn restore_requires_one_state_per_slot() {
-    let memory = memory();
-    let states = prepared(ready_queue(), false, &memory).save().unwrap();
-    assert_eq!(
-        VirtQueues::restore(&states, &[SIZE, SIZE], false, &memory).err(),
-        Some(QueueError::Count {
-            expected: 2,
-            actual: 1
-        })
-    );
-}
-
-#[test]
-fn restore_round_trips_multiple_queues() {
-    let memory = memory();
-    let queues = VirtQueues::prepare(
-        vec![ready_queue(), ready_queue_at(DESC2, AVAIL2, USED2)],
-        &[SIZE, SIZE],
-        false,
-        &memory,
-    )
-    .unwrap();
-    let states = queues.save().unwrap();
-    let restored = VirtQueues::restore(&states, &[SIZE, SIZE], false, &memory).unwrap();
-    assert_eq!(restored.len(), 2);
-    assert_eq!(restored.state(0).unwrap(), states[0]);
-    assert_eq!(restored.state(1).unwrap(), states[1]);
-    assert_eq!(restored.state(1).unwrap().avail_ring, AVAIL2);
 }
 
 #[test]
 fn drain_and_complete_reject_an_unknown_queue_index() {
     let memory = memory();
-    let mut queues = prepared(ready_queue(), false, &memory);
+    let mut queues = prepared(ready_queue(), false, false, &memory);
     assert_eq!(
-        queues.drain(1, &memory, false, |_| Ok(Completion::Used(4))),
+        queues.drain(1, |_| Ok(Completion::Used(4))),
         Err(DeviceError::NeedsReset("virtio queue"))
     );
     assert_eq!(
-        queues.complete(1, &memory, 0, 4),
+        queues.complete(1, 0, 4),
         Err(DeviceError::NeedsReset("virtio queue"))
     );
 }
@@ -971,14 +740,20 @@ fn drain_and_complete_reject_an_unknown_queue_index() {
 #[test]
 fn drain_and_complete_reject_a_not_ready_queue() {
     let memory = memory();
-    let mut queues =
-        VirtQueues::prepare(vec![Queue::new(SIZE).unwrap()], &[SIZE], false, &memory).unwrap();
+    let mut queues = VirtQueues::prepare(
+        vec![Queue::new(SIZE).unwrap()],
+        &[SIZE],
+        false,
+        false,
+        Arc::clone(&memory),
+    )
+    .unwrap();
     assert_eq!(
-        queues.drain(0, &memory, false, |_| Ok(Completion::Used(4))),
+        queues.drain(0, |_| Ok(Completion::Used(4))),
         Err(DeviceError::NeedsReset("virtio queue"))
     );
     assert_eq!(
-        queues.complete(0, &memory, 0, 4),
+        queues.complete(0, 0, 4),
         Err(DeviceError::NeedsReset("virtio queue"))
     );
     assert_eq!(used_idx(&memory), 0);
@@ -987,12 +762,8 @@ fn drain_and_complete_reject_a_not_ready_queue() {
 #[test]
 fn queue_errors_name_their_cause() {
     assert_eq!(
-        QueueError::Busy.to_string(),
-        "a deferred chain is still outstanding"
-    );
-    assert_eq!(
-        DeviceError::from(QueueError::Busy),
-        DeviceError::NeedsReset("virtio deferred chain")
+        DeviceError::from(QueueError::Invalid),
+        DeviceError::NeedsReset("virtio queue state")
     );
     assert_eq!(
         QueueError::Count {
@@ -1010,4 +781,32 @@ fn queue_errors_name_their_cause() {
         .to_string(),
         "queue maximum size is 4, expected 8"
     );
+}
+
+#[test]
+fn restore_reports_snapshots_unsupported() {
+    let memory = memory();
+    let state = prepared(ready_queue(), false, false, &memory)
+        .state(0)
+        .unwrap();
+    assert_eq!(
+        VirtQueues::restore(&[state], &[SIZE], false, false, Arc::clone(&memory)).err(),
+        Some(SnapshotError::Unsupported)
+    );
+    assert_eq!(
+        VirtQueues::restore(&[], &[SIZE], false, false, Arc::clone(&memory)).err(),
+        Some(SnapshotError::Unsupported)
+    );
+}
+
+#[test]
+fn save_reports_snapshots_unsupported() {
+    let memory = memory();
+    let mut queues = prepared(ready_queue(), false, false, &memory);
+    assert_eq!(queues.save().err(), Some(SnapshotError::Unsupported));
+
+    write_desc(&memory, 0, DATA, 4, 0, 0);
+    add_chain(&memory, 0);
+    assert!(!queues.drain(0, |_| Ok(Completion::Deferred)).unwrap());
+    assert_eq!(queues.save().err(), Some(SnapshotError::Unsupported));
 }

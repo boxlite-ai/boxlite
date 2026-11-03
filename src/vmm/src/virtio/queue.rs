@@ -9,26 +9,28 @@
 //! including unready ones; a device checks [`VirtQueues::is_ready`] for the
 //! queues it needs.
 //!
-//! `virtio_queue::QueueState` does not carry `num_added`, so
-//! [`VirtQueues::save`] must run after quiescing the device and acting on the
-//! last notification decision. [`VirtQueues::drain`] implements the
-//! disable/drain/enable loop that prevents a lost kick. A device completes a
-//! chain inline with [`Completion::Used`] or takes it with
+//! `prepare` also stores the guest-memory `Arc` and the negotiated
+//! `VIRTIO_F_INDIRECT_DESC` flag, so [`VirtQueues::drain`] and
+//! [`VirtQueues::complete`] do not take them on every call.
+//!
+//! A device completes a chain inline with [`Completion::Used`] or takes it with
 //! [`Completion::Deferred`]: a deferred chain has already left the available
 //! ring and has no used entry. The facade records its head index; the device
 //! keeps the request and buffer metadata and calls [`VirtQueues::complete`] with
-//! that head and the used length when its backend finishes. Quiesce must
-//! complete every deferred chain and act on the returned interrupt decision
-//! before [`VirtQueues::save`] runs.
+//! that head and the used length when its backend finishes.
+//!
+//! Queue snapshots are deferred to M8: [`VirtQueues::save`] and
+//! [`VirtQueues::restore`] keep their signatures but return
+//! [`SnapshotError::Unsupported`].
 
-use std::{fmt, mem::size_of};
+use std::{fmt, mem::size_of, sync::Arc};
 
 use virtio_queue::{
     DescriptorChain, Queue, QueueOwnedT, QueueState, QueueT, desc::split::Descriptor,
 };
 use vm_memory::{Address, Bytes, GuestAddress};
 
-use super::DeviceError;
+use super::{DeviceError, SnapshotError};
 use crate::memory::GuestMemoryMmap;
 
 /// `VIRTIO_F_INDIRECT_DESC`: the driver may point a chain at an indirect table.
@@ -39,7 +41,7 @@ pub(crate) const VIRTIO_F_EVENT_IDX: u64 = 1 << 29;
 /// The error reported for deferred-chain bookkeeping violations.
 const DEFERRED_CHAIN: &str = "virtio deferred chain";
 
-/// A queue the transport cannot prepare or restore.
+/// A queue the transport cannot prepare.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum QueueError {
     /// The queue's maximum differs from the declared slot.
@@ -56,10 +58,8 @@ pub(crate) enum QueueError {
         /// The actual queue count.
         actual: usize,
     },
-    /// The size, address, or saved state is invalid.
+    /// The queue size or ring address is invalid.
     Invalid,
-    /// A deferred chain is still outstanding, so the queue state is not stable.
-    Busy,
     /// The rings do not fit in guest memory.
     Memory,
 }
@@ -70,7 +70,6 @@ impl QueueError {
             Self::MaxSize { .. } => "virtio queue maximum size",
             Self::Count { .. } => "virtio queue count",
             Self::Invalid => "virtio queue state",
-            Self::Busy => DEFERRED_CHAIN,
             Self::Memory => "virtio queue memory",
         }
     }
@@ -86,7 +85,6 @@ impl fmt::Display for QueueError {
                 write!(f, "queue count is {actual}, expected {expected}")
             }
             Self::Invalid => f.write_str("the queue state is invalid"),
-            Self::Busy => f.write_str("a deferred chain is still outstanding"),
             Self::Memory => f.write_str("the queue rings are outside guest memory"),
         }
     }
@@ -119,20 +117,26 @@ pub(crate) enum Completion {
 pub(crate) struct VirtQueues {
     queues: Vec<Queue>,
     deferred: Vec<Vec<u16>>,
+    memory: Arc<GuestMemoryMmap>,
+    indirect: bool,
 }
 
 impl VirtQueues {
-    /// Validates every declared queue and applies the negotiated EVENT_IDX.
+    /// Validates every declared queue and applies the negotiated features.
     ///
     /// `queues` must hold exactly one queue per `queue_max` slot, in
     /// queue-number order. Unready queues are kept after their maximum-size
     /// check; the device decides whether it needs them. A ready queue must have
     /// a valid size, a non-zero available ring, and rings inside `memory`.
+    ///
+    /// The facade stores `memory` and `indirect` for later calls; the Arc is
+    /// shared with the activation context, so guest RAM is not copied.
     pub(crate) fn prepare(
         mut queues: Vec<Queue>,
         queue_max: &[u16],
         event_idx: bool,
-        memory: &GuestMemoryMmap,
+        indirect: bool,
+        memory: Arc<GuestMemoryMmap>,
     ) -> Result<Self, QueueError> {
         if queues.len() != queue_max.len() {
             return Err(QueueError::Count {
@@ -156,7 +160,7 @@ impl VirtQueues {
                 if queue.avail_ring() == 0 {
                     return Err(QueueError::Invalid);
                 }
-                if !queue.is_valid(memory) {
+                if !queue.is_valid(memory.as_ref()) {
                     return Err(QueueError::Memory);
                 }
             }
@@ -165,49 +169,27 @@ impl VirtQueues {
             queue.set_event_idx(event_idx);
         }
         let deferred = vec![Vec::new(); queues.len()];
-        Ok(Self { queues, deferred })
+        Ok(Self {
+            queues,
+            deferred,
+            memory,
+            indirect,
+        })
     }
 
     /// Restores the dense queue vector from saved state.
     ///
-    /// The negotiated `event_idx` replaces the saved flag. A ready queue must
-    /// still have a non-zero available ring and pass `is_valid` against
-    /// `memory`. No deferred chain can be restored: `save` refuses to run while
-    /// one remains.
+    /// Queue snapshots are deferred to M8, so this always returns
+    /// [`SnapshotError::Unsupported`]. The parameters keep the signature the
+    /// snapshot implementation will use.
     pub(crate) fn restore(
-        states: &[QueueState],
-        queue_max: &[u16],
-        event_idx: bool,
-        memory: &GuestMemoryMmap,
-    ) -> Result<Self, QueueError> {
-        if states.len() != queue_max.len() {
-            return Err(QueueError::Count {
-                expected: queue_max.len(),
-                actual: states.len(),
-            });
-        }
-        let mut queues = Vec::with_capacity(states.len());
-        for (state, &max_size) in states.iter().zip(queue_max) {
-            if state.max_size != max_size {
-                return Err(QueueError::MaxSize {
-                    expected: max_size,
-                    actual: state.max_size,
-                });
-            }
-            let mut queue = Queue::try_from(*state).map_err(|_| QueueError::Invalid)?;
-            queue.set_event_idx(event_idx);
-            if queue.ready() {
-                if queue.avail_ring() == 0 {
-                    return Err(QueueError::Invalid);
-                }
-                if !queue.is_valid(memory) {
-                    return Err(QueueError::Memory);
-                }
-            }
-            queues.push(queue);
-        }
-        let deferred = vec![Vec::new(); queues.len()];
-        Ok(Self { queues, deferred })
+        _states: &[QueueState],
+        _queue_max: &[u16],
+        _event_idx: bool,
+        _indirect: bool,
+        _memory: Arc<GuestMemoryMmap>,
+    ) -> Result<Self, SnapshotError> {
+        Err(SnapshotError::Unsupported)
     }
 
     /// Returns the number of declared queue slots.
@@ -245,20 +227,21 @@ impl VirtQueues {
     /// early and put a chain back (rate limiting or backpressure) must not use
     /// it.
     ///
-    /// `indirect` is the negotiated `VIRTIO_F_INDIRECT_DESC` state. When it is
-    /// false, a chain containing an indirect descriptor is a guest error; the
-    /// check runs before `process`, so deferred chains get the same rejection.
-    pub(crate) fn drain<'a, F>(
-        &mut self,
-        index: usize,
-        memory: &'a GuestMemoryMmap,
-        indirect: bool,
-        mut process: F,
-    ) -> Result<bool, DeviceError>
+    /// The stored `indirect` flag is the negotiated `VIRTIO_F_INDIRECT_DESC`
+    /// state. When it is false, a chain containing an indirect descriptor is a
+    /// guest error; the check runs before `process`, so deferred chains get the
+    /// same rejection.
+    pub(crate) fn drain<F>(&mut self, index: usize, mut process: F) -> Result<bool, DeviceError>
     where
-        F: FnMut(DescriptorChain<&'a GuestMemoryMmap>) -> Result<Completion, DeviceError>,
+        F: for<'a> FnMut(DescriptorChain<&'a GuestMemoryMmap>) -> Result<Completion, DeviceError>,
     {
-        let Self { queues, deferred } = self;
+        let Self {
+            queues,
+            deferred,
+            memory,
+            indirect,
+        } = self;
+        let memory = memory.as_ref();
         let queue = queues
             .get_mut(index)
             .ok_or(DeviceError::NeedsReset("virtio queue"))?;
@@ -276,7 +259,7 @@ impl VirtQueues {
             let size = queue.size();
             while let Some(chain) = queue.iter(memory).map_err(queue_error)?.next() {
                 let head = chain.head_index();
-                if !indirect && has_indirect(memory, desc_table, size, head)? {
+                if !*indirect && has_indirect(memory, desc_table, size, head)? {
                     return Err(DeviceError::NeedsReset("indirect descriptor"));
                 }
                 match process(chain)? {
@@ -305,16 +288,20 @@ impl VirtQueues {
     /// interrupted now; the caller raises the interrupt when this returns
     /// `true`. The head must belong to a chain this queue deferred and must not
     /// have been completed already. `needs_notification` has side effects, so
-    /// this decision must be the last one acted on before [`Self::save`]: a
-    /// device with a deferred chain still outstanding must not save.
+    /// the caller must act on this decision immediately.
     pub(crate) fn complete(
         &mut self,
         index: usize,
-        memory: &GuestMemoryMmap,
         head: u16,
         len: u32,
     ) -> Result<bool, DeviceError> {
-        let Self { queues, deferred } = self;
+        let Self {
+            queues,
+            deferred,
+            memory,
+            ..
+        } = self;
+        let memory = memory.as_ref();
         let queue = queues
             .get_mut(index)
             .ok_or(DeviceError::NeedsReset("virtio queue"))?;
@@ -335,20 +322,11 @@ impl VirtQueues {
 
     /// Returns the saved state for every queue, in queue-number order.
     ///
-    /// Fails with [`QueueError::Busy`] while any deferred chain remains. Call
-    /// after `quiesce` has completed every deferred chain and after the last
-    /// notification decision: `QueueState` omits `num_added`, so an unresolved
-    /// notification decision is not preserved.
-    pub(crate) fn save(&self) -> Result<Vec<QueueState>, QueueError> {
-        if self.has_deferred() {
-            return Err(QueueError::Busy);
-        }
-        Ok(self.queues.iter().map(|queue| queue.state()).collect())
-    }
-
-    /// Returns whether any queue still has a deferred chain.
-    pub(crate) fn has_deferred(&self) -> bool {
-        self.deferred.iter().any(|heads| !heads.is_empty())
+    /// Queue snapshots are deferred to M8, so this always returns
+    /// [`SnapshotError::Unsupported`]. Deferred-head tracking stays, so a later
+    /// implementation can reject an outstanding chain.
+    pub(crate) fn save(&self) -> Result<Vec<QueueState>, SnapshotError> {
+        Err(SnapshotError::Unsupported)
     }
 
     /// Returns the current state of queue `index`, if it exists.
