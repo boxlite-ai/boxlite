@@ -47,6 +47,10 @@ export interface AdminOrganizationDetail {
     'creator': AdminOrganizationCreator | null;
     'organizationId': string;
     'name': string;
+    /**
+     * Stored organization suspension flag; does not evaluate suspendedUntil. Older servers may omit it.
+     */
+    'suspended'?: boolean;
     'members': AdminOrganizationMemberPage;
     'boxes': AdminOrganizationBoxPage;
     'impact': AdminOrganizationImpact;
