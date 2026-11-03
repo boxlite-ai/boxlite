@@ -25,6 +25,7 @@ import { NetworkTools } from './network-tools'
 import { McpRunnerHttp } from './runner-http'
 import { McpExecutionTools } from './execution-tools'
 import { McpFileTools } from './file-tools'
+import { McpMetricsTools } from './metrics-tools'
 
 @Module({
   imports: [AuthModule, BoxModule, OrganizationModule, AuditModule, ImageModule, RegistryModule],
@@ -43,6 +44,7 @@ import { McpFileTools } from './file-tools'
     McpRunnerHttp,
     McpExecutionTools,
     McpFileTools,
+    McpMetricsTools,
   ],
 })
 export class McpModule {}
