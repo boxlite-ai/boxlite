@@ -165,7 +165,7 @@ func TestIntegrationListExecutionsNeverBootsCreatedBox(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer box.Close()
-	defer rt.ForceRemove(ctx, box.ID())
+	defer func() { _ = rt.ForceRemove(ctx, box.ID()) }()
 	before, err := box.Info(ctx)
 	if err != nil {
 		t.Fatal(err)
