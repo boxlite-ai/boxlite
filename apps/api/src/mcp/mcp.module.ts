@@ -15,10 +15,12 @@ import { AuditModule } from '../audit/audit.module'
 import { McpToolAccess } from './mcp-tool-access'
 import { McpToolAudit } from './mcp-tool-audit'
 import { VolumeTools } from './volume-tools'
+import { ImageTools } from './image-tools'
+import { ImageModule } from '../image/image.module'
 
 @Module({
-  imports: [AuthModule, BoxModule, OrganizationModule, AuditModule],
+  imports: [AuthModule, BoxModule, OrganizationModule, AuditModule, ImageModule],
   controllers: [McpController, McpMetadataController],
-  providers: [McpServerFactory, McpAuthMetadata, McpToolAccess, McpToolAudit, VolumeTools],
+  providers: [McpServerFactory, McpAuthMetadata, McpToolAccess, McpToolAudit, VolumeTools, ImageTools],
 })
 export class McpModule {}

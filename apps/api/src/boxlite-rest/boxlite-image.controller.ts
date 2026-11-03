@@ -12,12 +12,12 @@ import { CombinedAuthGuard } from '../auth/combined-auth.guard'
 import { AuthContext } from '../common/decorators/auth-context.decorator'
 import { AuthenticatedRateLimitGuard } from '../common/guards/authenticated-rate-limit.guard'
 import { OrganizationAuthContext } from '../common/interfaces/auth-context.interface'
-import { ImageDetailDto } from '../image/dto/image.dto'
-import { ImageCatalogService, ImageReference } from '../image/services/image-catalog.service'
+import { ImageCatalogService } from '../image/services/image-catalog.service'
 import { RequiredOrganizationResourcePermissions } from '../organization/decorators/required-organization-resource-permissions.decorator'
 import { OrganizationResourcePermission } from '../organization/enums/organization-resource-permission.enum'
 import { OrganizationResourceActionGuard } from '../organization/guards/organization-resource-action.guard'
 import { CreateAliasDto } from './dto/create-alias.dto'
+import { toImageDetail, toImageInfo } from './mappers/image-response.mapper'
 
 type RestImageInfo = {
   reference: string
@@ -144,40 +144,5 @@ export class BoxliteImageController {
   @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.DELETE_IMAGES])
   async remove(@AuthContext() authContext: OrganizationAuthContext, @Param('name') name: string): Promise<void> {
     await this.imageCatalogService.delete(authContext.organization, name)
-  }
-}
-
-function toImageDetail(detail: ImageDetailDto): RestImageDetail {
-  return {
-    name: detail.name,
-    aliases: detail.aliases,
-    curated: detail.curated,
-    versions: detail.versions.map((version) => ({
-      digest: version.digest,
-      size_bytes: version.sizeBytes,
-      source_ref: version.sourceRef,
-      recorded_at: version.createdAt,
-      aliases: version.aliases,
-      last_used_at: version.lastUsedAt,
-      upstream_missing_at: version.upstreamMissingAt,
-    })),
-    history: detail.history.map((event) => ({
-      alias: event.aliasName,
-      from_digest: event.fromDigest,
-      to_digest: event.toDigest,
-      actor: event.actorId,
-      recorded_at: event.createdAt,
-    })),
-  }
-}
-
-function toImageInfo(reference: ImageReference): RestImageInfo {
-  return {
-    reference: reference.reference,
-    repository: reference.name,
-    tag: reference.tag,
-    id: reference.digest,
-    cached_at: reference.recordedAt.toISOString(),
-    size_bytes: reference.sizeBytes,
   }
 }

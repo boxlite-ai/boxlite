@@ -764,6 +764,18 @@ as an unknown path does.
 | `get_volume`    | `organization_id`, `volume_id`                   | Returns one owned volume using `READ_VOLUMES`.                                          |
 | `create_volume` | `organization_id`, optional `name`               | Uses `WRITE_VOLUMES`, validates the REST DTO, and waits up to 30 seconds for readiness. |
 | `delete_volume` | `organization_id`, `volume_id`, optional `force` | Uses `DELETE_VOLUMES` and checks ownership before requesting deletion.                  |
+| `list_images` | `organization_id` | Lists recorded catalog references with `READ_IMAGES`. |
+| `get_image_usage` | `organization_id` | Returns image count, limit, and known bytes with `READ_IMAGES`. |
+| `get_image` | `organization_id`, `image_name` | Returns catalog versions and history with `READ_IMAGES`. |
+| `create_image_alias` | `organization_id`, `image_name`, `alias`, `digest` | Uses `WRITE_IMAGES` and the REST digest-based alias DTO. |
+| `delete_image_alias` | `organization_id`, `image_name`, `alias` | Uses `WRITE_IMAGES` to remove an alias. |
+| `delete_image` | `organization_id`, `image_name` | Uses `DELETE_IMAGES` to remove an unused catalog entry. |
+
+Image tools scope catalog lookups to the authorized organization before
+mutation. They retain service checks for curated images, ready versions,
+duplicate aliases, and images still used by boxes. Alias and catalog deletion
+return `{ "completed": true }`; deleting catalog metadata does not erase image
+bytes from a registry or a Runner cache. All three catalog mutations are audited.
 
 New tools require actual membership even for administrators, then apply the
 existing organization resource-permission policy. Managed volume identifiers are
