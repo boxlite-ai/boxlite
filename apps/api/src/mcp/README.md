@@ -61,6 +61,10 @@ and truncation fail with an archive-mode suggestion. UTF-8 BOMs are preserved.
 
 Text payloads are capped at 60 KiB by encoded byte length; complete tar bodies are
 capped at 64 KiB, including metadata. Base64 inputs are checked against decoded limits.
+These payload caps do not raise the API's existing 100 KiB JSON request limit: the
+entire serialized MCP request must also fit. JSON escaping can expand text beyond
+that limit before tool validation runs; use a smaller payload or `tar_base64` for
+heavily escaped text.
 Header/PAX/Parser conversion never reads or extracts files on the API host.
 Both tools require `WRITE_BOXES`, refresh activity and may auto-resume, matching REST.
 Guest paths at or under mounted filesystems remain unsupported by the underlying copy API.
