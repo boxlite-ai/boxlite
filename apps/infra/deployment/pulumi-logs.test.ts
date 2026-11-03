@@ -2,12 +2,13 @@
 // Copyright (c) 2026 BoxLite AI
 
 import assert from 'node:assert/strict'
-import { spawn } from 'node:child_process'
+import { createHook } from 'node:async_hooks'
+import { spawn, type ChildProcess } from 'node:child_process'
 import { chmod, mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import test from 'node:test'
-import { setTimeout as delay } from 'node:timers/promises'
+import { setImmediate as immediate, setTimeout as delay } from 'node:timers/promises'
 import { fileURLToPath } from 'node:url'
 
 import { removePulumiEventLogs, withPulumiEventLogCleanup } from './pulumi-logs.js'
@@ -33,6 +34,8 @@ function syntheticSecretList(manifest: readonly string[], values: Record<string,
 
 const SYNTHETIC_PROVIDER_TOKEN = 'synthetic-provider-token-for-regression-only'
 const INFRA_ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)))
+// Cold Node/tsx startup competes with the other test files for CPU and filesystem access.
+const SUBPROCESS_STARTUP_TIMEOUT_MS = 30_000
 
 function spawnWrapper(args: any, options: any) {
   return spawn(process.execPath, ['--import', 'tsx', 'deployment/sst.ts', ...args], {
@@ -91,16 +94,73 @@ async function waitFor(predicate: any, description: any, timeoutMs = 5_000) {
   throw new Error(`Timed out waiting for ${description}`)
 }
 
-function waitForExit(child: any, timeoutMs = 5_000) {
-  return Promise.race([
-    new Promise((resolve, reject) => {
-      child.once('error', reject)
-      child.once('exit', (code: any, signal: any) => resolve({ code, signal }))
-    }),
-    delay(timeoutMs).then(() => {
-      throw new Error('Timed out waiting for the SST wrapper to exit')
-    }),
-  ])
+function waitForExit(child: ChildProcess, timeoutMs = SUBPROCESS_STARTUP_TIMEOUT_MS) {
+  return new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve, reject) => {
+    const onError = (error: Error) => {
+      cleanup()
+      reject(error)
+    }
+    const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
+      cleanup()
+      resolve({ code, signal })
+    }
+    const timer = setTimeout(() => {
+      cleanup()
+      reject(new Error('Timed out waiting for the SST wrapper to exit'))
+    }, timeoutMs)
+
+    function cleanup() {
+      clearTimeout(timer)
+      child.off('error', onError)
+      child.off('exit', onExit)
+    }
+
+    child.once('error', onError)
+    child.once('exit', onExit)
+  })
+}
+
+for (const outcome of ['exit', 'launch error', 'timeout'] as const) {
+  test(`exit waits release their timer and listeners after ${outcome}`, async () => {
+    const fixture = await fixtureRoot()
+    const child = spawn(
+      outcome === 'launch error' ? join(fixture, 'missing-child') : process.execPath,
+      ['-e', outcome === 'timeout' ? 'setInterval(() => {}, 1_000)' : ''],
+      { stdio: 'ignore' },
+    )
+    const closed = new Promise<void>((resolve) => child.once('close', () => resolve()))
+    const activeTimers = new Set<number>()
+    let captureTimer = true
+    // Follow the helper's own timer so clearing an unrelated handle cannot satisfy the check.
+    const timerLifecycle = createHook({
+      init(id, type) {
+        if (captureTimer && type === 'Timeout') activeTimers.add(id)
+      },
+      destroy(id) {
+        activeTimers.delete(id)
+      },
+    }).enable()
+
+    try {
+      const completion = waitForExit(child, outcome === 'timeout' ? 10 : 5_000)
+      captureTimer = false
+      assert.equal(activeTimers.size, 1, 'the exit wait must have a bounded timer')
+      if (outcome === 'exit') await assert.doesNotReject(completion)
+      else if (outcome === 'launch error') await assert.rejects(completion, { code: 'ENOENT' })
+      else await assert.rejects(completion, /Timed out waiting for the SST wrapper to exit/)
+
+      // Timer destruction is reported on the next turn of the event loop.
+      await immediate()
+      assert.equal(activeTimers.size, 0, 'the settled exit wait must not retain its timer')
+      assert.equal(child.listenerCount('exit'), 0, 'the exit listener must be released')
+      assert.equal(child.listenerCount('error'), 0, 'the error listener must be released')
+    } finally {
+      timerLifecycle.disable()
+      if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL')
+      await closed
+      await rm(fixture, { recursive: true, force: true })
+    }
+  })
 }
 
 test('removes nested Pulumi event logs without reading or deleting non-secret diagnostics', async () => {
@@ -167,11 +227,11 @@ test('cleans a generated event log before exiting after SIGTERM', async () => {
 const { mkdirSync, writeFileSync } = require('node:fs')
 const { dirname } = require('node:path')
 mkdirSync(dirname(process.env.SYNTHETIC_EVENT_LOG_PATH), { recursive: true })
-writeFileSync(process.env.SYNTHETIC_SST_PID_PATH, String(process.pid))
-writeFileSync(process.env.SYNTHETIC_EVENT_LOG_PATH, 'synthetic-provider-token-for-regression-only')
 process.on('SIGINT', () => process.exit(0))
 process.on('SIGTERM', () => {})
 setInterval(() => {}, 1_000)
+writeFileSync(process.env.SYNTHETIC_SST_PID_PATH, String(process.pid))
+writeFileSync(process.env.SYNTHETIC_EVENT_LOG_PATH, 'synthetic-provider-token-for-regression-only')
 `,
     'utf8',
   )
@@ -191,9 +251,9 @@ setInterval(() => {}, 1_000)
   })
 
   try {
-    await waitFor(() => fileExists(eventLog), 'the synthetic SST event log')
+    await waitFor(() => fileExists(eventLog), 'the synthetic SST event log', SUBPROCESS_STARTUP_TIMEOUT_MS)
     childPid = Number.parseInt(await readFile(childPidFile, 'utf8'), 10)
-    const wrapperExit = waitForExit(wrapper)
+    const wrapperExit = waitForExit(wrapper, 5_000)
     wrapper.kill('SIGTERM')
     const result = await wrapperExit
 
@@ -225,18 +285,19 @@ test('waits for native SST to cancel its detached Pulumi child before the wrappe
     fakeSst,
     `#!/usr/bin/env node
 const { spawn } = require('node:child_process')
-const grandchild = spawn(process.execPath, ['-e', \`
-  const { writeFileSync } = require('node:fs')
-  writeFileSync(process.env.SYNTHETIC_SST_GRANDCHILD_PID_PATH, String(process.pid))
-  process.on('SIGINT', () => process.exit(0))
-  process.on('SIGTERM', () => {})
-  setInterval(() => {}, 1_000)
-\`], { detached: true, stdio: 'ignore', env: process.env })
+let grandchild
 process.on('SIGINT', () => {
   grandchild.once('exit', () => process.exit(0))
   grandchild.kill('SIGINT')
 })
 process.on('SIGTERM', () => {})
+grandchild = spawn(process.execPath, ['-e', \`
+  const { writeFileSync } = require('node:fs')
+  process.on('SIGINT', () => process.exit(0))
+  process.on('SIGTERM', () => {})
+  setInterval(() => {}, 1_000)
+  writeFileSync(process.env.SYNTHETIC_SST_GRANDCHILD_PID_PATH, String(process.pid))
+\`], { detached: true, stdio: 'ignore', env: process.env })
 setInterval(() => {}, 1_000)
 `,
     'utf8',
@@ -256,9 +317,9 @@ setInterval(() => {}, 1_000)
   })
 
   try {
-    await waitFor(() => fileExists(grandchildPidFile), 'the synthetic SST grandchild')
+    await waitFor(() => fileExists(grandchildPidFile), 'the synthetic SST grandchild', SUBPROCESS_STARTUP_TIMEOUT_MS)
     grandchildPid = Number.parseInt(await readFile(grandchildPidFile, 'utf8'), 10)
-    const wrapperExit = waitForExit(wrapper)
+    const wrapperExit = waitForExit(wrapper, 5_000)
     wrapper.kill('SIGTERM')
 
     assert.deepEqual(await wrapperExit, { code: 143, signal: null })
@@ -297,10 +358,10 @@ test('force-stops native SST when repeated termination rejects graceful cancella
     fakeSst,
     `#!/usr/bin/env node
 const { writeFileSync } = require('node:fs')
-writeFileSync(process.env.SYNTHETIC_SST_PID_PATH, String(process.pid))
 process.on('SIGINT', () => writeFileSync(process.env.SYNTHETIC_GRACEFUL_SIGNAL_PATH, 'received'))
 process.on('SIGTERM', () => {})
 setInterval(() => {}, 1_000)
+writeFileSync(process.env.SYNTHETIC_SST_PID_PATH, String(process.pid))
 `,
     'utf8',
   )
@@ -320,9 +381,9 @@ setInterval(() => {}, 1_000)
   })
 
   try {
-    await waitFor(() => fileExists(childPidFile), 'the synthetic SST child')
+    await waitFor(() => fileExists(childPidFile), 'the synthetic SST child', SUBPROCESS_STARTUP_TIMEOUT_MS)
     childPid = Number.parseInt(await readFile(childPidFile, 'utf8'), 10)
-    const wrapperExit = waitForExit(wrapper)
+    const wrapperExit = waitForExit(wrapper, 5_000)
     wrapper.kill('SIGTERM')
     await waitFor(() => fileExists(gracefulSignalFile), 'the first graceful SST interrupt')
     wrapper.kill('SIGTERM')
@@ -608,7 +669,11 @@ writeFileSync(process.env.SYNTHETIC_ENV_PATH, JSON.stringify(process.env))
        * without this the unreadable-store case passes with its guard deleted: `stored` stays undefined,
        * hydration throws a TypeError, and every assertion above is satisfied by a stack trace.
        */
-      assert.doesNotMatch(stderr, /^\s+at |\b(TypeError|ReferenceError|SyntaxError)\b/m, `${description} must be refused, not crashed`)
+      assert.doesNotMatch(
+        stderr,
+        /^\s+at |\b(TypeError|ReferenceError|SyntaxError)\b/m,
+        `${description} must be refused, not crashed`,
+      )
       // The fake sst writes that file only on its fall-through, so its absence is the proof no plan was
       // ever started — the refusal has to land before sst is asked to build anything.
       assert.equal(await fileExists(capturedEnv), false, `sst must not run with ${description}`)
@@ -727,7 +792,11 @@ writeFileSync(process.env.SYNTHETIC_PLAN_PATH, args[0])
 
   try {
     const deploying = spawnWrapper(['deploy', '--stage', 'ci'], { env: environment, stdio: 'ignore' })
-    assert.deepEqual(await waitForExit(deploying), { code: 1, signal: null }, 'a deploy must stop when the store cannot be read')
+    assert.deepEqual(
+      await waitForExit(deploying),
+      { code: 1, signal: null },
+      'a deploy must stop when the store cannot be read',
+    )
     assert.equal(await fileExists(planCalled), false, 'no plan may run without the stage configuration')
 
     // Each subcommand individually rather than assumed from `deploy`: remove tears the stack down,
@@ -904,11 +973,11 @@ if (args[0] === 'secret' && args[1] === 'list') {
   process.exit(0)
 }
 if (args[0] !== 'state' || args[1] !== 'export') process.exit(99)
-writeFileSync(process.env.SYNTHETIC_SST_PID_PATH, String(process.pid))
 // The wrapper must still terminate a state export that refuses graceful shutdown.
 process.on('SIGTERM', () => {})
 process.on('SIGINT', () => process.exit(0))
 setInterval(() => {}, 1_000)
+writeFileSync(process.env.SYNTHETIC_SST_PID_PATH, String(process.pid))
 `,
     'utf8',
   )
@@ -927,9 +996,9 @@ setInterval(() => {}, 1_000)
   })
 
   try {
-    await waitFor(() => fileExists(childPidFile), 'the synthetic state-export process')
+    await waitFor(() => fileExists(childPidFile), 'the synthetic state-export process', SUBPROCESS_STARTUP_TIMEOUT_MS)
     childPid = Number.parseInt(await readFile(childPidFile, 'utf8'), 10)
-    const wrapperExit = waitForExit(wrapper)
+    const wrapperExit = waitForExit(wrapper, 5_000)
     wrapper.kill('SIGTERM')
 
     assert.deepEqual(await wrapperExit, { code: 143, signal: null })
@@ -990,10 +1059,10 @@ fi
     fakeCurl,
     `#!/usr/bin/env node
 const { writeFileSync } = require('node:fs')
-writeFileSync(process.env.SYNTHETIC_CURL_PID_PATH, String(process.pid))
 // The wrapper must reap the preflight even when it refuses graceful shutdown.
 process.on('SIGTERM', () => {})
 setInterval(() => {}, 1_000)
+writeFileSync(process.env.SYNTHETIC_CURL_PID_PATH, String(process.pid))
 `,
     'utf8',
   )
@@ -1017,9 +1086,9 @@ setInterval(() => {}, 1_000)
   })
 
   try {
-    await waitFor(() => fileExists(curlPidFile), 'the synthetic release preflight')
+    await waitFor(() => fileExists(curlPidFile), 'the synthetic release preflight', SUBPROCESS_STARTUP_TIMEOUT_MS)
     curlPid = Number.parseInt(await readFile(curlPidFile, 'utf8'), 10)
-    const wrapperExit = waitForExit(wrapper)
+    const wrapperExit = waitForExit(wrapper, 5_000)
     wrapper.kill('SIGTERM')
 
     assert.deepEqual(await wrapperExit, { code: 143, signal: null })
