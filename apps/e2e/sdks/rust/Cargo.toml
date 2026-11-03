@@ -1,0 +1,15 @@
+[package]
+name = "boxlite-e2e-rust"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[[bin]]
+name = "domain-rust"
+path = "e2e_domains.rs"
+
+[dependencies]
+boxlite = { path = "../../../../src/boxlite", default-features = false, features = ["rest"] }
+serde_json = "1.0"
+tokio = { version = "1.37", features = ["macros", "rt-multi-thread"] }

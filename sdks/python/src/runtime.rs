@@ -4,6 +4,7 @@ use boxlite::{BoxArchive, BoxOptions, BoxliteOptions, BoxliteRuntime};
 use pyo3::prelude::*;
 
 use crate::box_handle::PyBox;
+use crate::domains::PyDomainHandle;
 use crate::images::PyImageHandle;
 use crate::info::PyBoxInfo;
 use crate::metrics::PyRuntimeMetrics;
@@ -179,6 +180,17 @@ impl PyBoxlite {
     fn volumes(&self) -> PyResult<PyVolumeHandle> {
         let handle = self.runtime.volumes().map_err(map_err)?;
         Ok(PyVolumeHandle {
+            handle: Arc::new(handle),
+        })
+    }
+
+    /// Return the organization's domain handle: list, bind and unbind
+    /// domains by name. A local runtime raises the same unsupported error as
+    /// the runtime API.
+    #[getter]
+    fn domains(&self) -> PyResult<PyDomainHandle> {
+        let handle = self.runtime.domains().map_err(map_err)?;
+        Ok(PyDomainHandle {
             handle: Arc::new(handle),
         })
     }

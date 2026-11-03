@@ -21,10 +21,14 @@ import (
 )
 
 type Config struct {
-	ProxyPort             int                `envconfig:"PROXY_PORT" validate:"required"`
-	ProxyProtocol         string             `envconfig:"PROXY_PROTOCOL" validate:"required"`
-	ProxyApiKey           string             `envconfig:"PROXY_API_KEY" validate:"required"`
-	TunnelCookieKey       string             `envconfig:"TUNNEL_COOKIE_KEY"`
+	ProxyPort       int    `envconfig:"PROXY_PORT" validate:"required"`
+	ProxyProtocol   string `envconfig:"PROXY_PROTOCOL" validate:"required"`
+	ProxyApiKey     string `envconfig:"PROXY_API_KEY" validate:"required"`
+	TunnelCookieKey string `envconfig:"TUNNEL_COOKIE_KEY"`
+	// The parent of platform subdomains, the stage's user domain. A request
+	// whose Host is one label under it is resolved through the API's domain
+	// lookup instead of the `<port>-<box>` encoding. Unset disables that path.
+	ProxyAppDomain        string             `envconfig:"PROXY_APP_DOMAIN"`
 	CookieDomain          *string            `envconfig:"COOKIE_DOMAIN"`
 	TLSCertFile           string             `envconfig:"TLS_CERT_FILE"`
 	TLSKeyFile            string             `envconfig:"TLS_KEY_FILE"`

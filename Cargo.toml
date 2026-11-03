@@ -15,6 +15,7 @@ members = [
     "sdks/c",
     "sdks/python",
     "sdks/node",
+    "apps/e2e/sdks/rust",
 ]
 exclude = ["build/tmp", "target", ".venv", "examples/*/.venv"]
 

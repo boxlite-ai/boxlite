@@ -669,6 +669,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "boxlite-e2e-rust"
+version = "0.1.0"
+dependencies = [
+ "boxlite",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "boxlite-guest"
 version = "0.11.0"
 dependencies = [

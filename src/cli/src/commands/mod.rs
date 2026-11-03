@@ -2,6 +2,7 @@ pub mod agent;
 pub mod auth;
 pub mod cp;
 pub mod create;
+pub mod domain;
 pub mod exec;
 pub mod images;
 pub mod info;

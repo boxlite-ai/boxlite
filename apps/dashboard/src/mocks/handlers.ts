@@ -5,6 +5,7 @@
  */
 
 import { onboardingHandlers } from './onboarding-handlers'
+import { domainHandlers } from './domain-handlers'
 import {
   OrganizationEmail,
   OrganizationPlan,
@@ -95,6 +96,7 @@ function boxesPullingThrough(credential: { registryHost: string; repositoryPrefi
 }
 
 export const handlers = [
+  ...domainHandlers(),
   ...onboardingHandlers(API_URL),
   // Core dashboard surface — fully self-contained so `start:mock` needs no
   // backend and no login (see MockAuthProvider for the fake session).

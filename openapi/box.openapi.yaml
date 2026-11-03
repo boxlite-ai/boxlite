@@ -147,6 +147,8 @@ tags:
     description: Managed persistent volumes
   - name: Registries
     description: Logins the server pulls private images with
+  - name: Domains
+    description: Names the organization holds and the box ports they route to
 
 # ===========================================================================
 # Paths
@@ -1140,6 +1142,10 @@ paths:
         Returns 409 while the box's inbound access is `disabled`. Enable it
         with `network.inbound.mode` at create, or later with
         `PUT /{prefix}/boxes/{box_id}/network/inbound`.
+
+        The URI is always the port's generated one. Domains bound to the
+        port (`bindDomain`) start answering once it is declared here; list
+        them with `listDomains`.
       tags: [Network]
       parameters:
         - name: port
@@ -1185,7 +1191,9 @@ paths:
         ports of the box are unaffected.
 
         Safe to repeat, and succeeds for a port that was never opened.
-        Calling `prepareTunnel` again reopens the port at the same URI.
+        Calling `prepareTunnel` again reopens the port at the same URI. A
+        platform hostname bound to the port stays bound: it answers `404`
+        while the port is revoked and serves again once it is reopened.
       tags: [Network]
       parameters:
         - name: port
@@ -1289,6 +1297,128 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+
+  /{prefix}/domains:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+    get:
+      operationId: listDomains
+      summary: List the domains the organization holds
+      description: |
+        Every held hostname and its Box/App target, or null while unbound,
+        with the organization's allowance. Unbound domains still occupy slots.
+        `domain_suffix` is the configured platform hostname suffix, or null
+        when requests are unavailable; `min_length` applies to new claims only.
+      tags: [Domains]
+      responses:
+        "200":
+          description: Held domains and the organization's allowance
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DomainList"
+    post:
+      operationId: claimDomain
+      summary: Request a platform domain using a short name
+      description: |
+        Claims a short name for the organization and returns its full hostname,
+        initially unbound. Dashboard > Domains uses this operation. A repeated
+        claim by the owner returns the held domain without changing its target.
+        Only new claims check the minimum length and domain count allowance.
+        Names use letters, digits and hyphens, cannot start/end with a hyphen,
+        match `<digits>-…`, or use a reserved platform or REST collection name.
+        Error codes: `platform_domain_not_configured`, `subdomain_too_short`,
+        `domain_count_limit_reached` (400), `subdomain_taken` (409).
+      tags: [Domains]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [name]
+              properties:
+                name:
+                  type: string
+                  minLength: 1
+                  maxLength: 63
+                  description: A short label, not a full hostname; normalized to lowercase.
+                  example: demo-app
+      responses:
+        "201":
+          description: The acquired domain, preserving any existing binding
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Domain"
+        "400":
+          $ref: "#/components/responses/BadRequestError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
+
+  /{prefix}/domains/{domain}/target:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+      - name: domain
+        in: path
+        required: true
+        description: An owned full hostname; short names and URLs are rejected, case and a trailing root dot are normalized.
+        schema:
+          type: string
+          minLength: 3
+          maxLength: 254
+          pattern: '^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)+\.?$'
+        example: demo-app.apps.example
+    put:
+      operationId: bindDomain
+      summary: Route an owned domain to a box port
+      description: |
+        Updates a full hostname already owned by the organization; never claims
+        or expands a short name. Unknown names and names owned by another
+        organization return `domain_not_owned` (404), directing the caller to
+        Dashboard > Domains to request a domain first. Owned names remain
+        bindable independently of the configured suffix, minimum, or quota.
+        The port is not declared public: the domain answers once the tunnel is
+        public and the Box allows inbound access, in either order.
+        A name bound to another port moves here; other names stay in place.
+        Error codes: `region_not_supported` and `app_target_not_supported` (400).
+        App binding is reserved and remains unsupported.
+      tags: [Domains]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DomainTarget"
+      responses:
+        "200":
+          description: The domain as now bound
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Domain"
+        "400":
+          $ref: "#/components/responses/BadRequestError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+    delete:
+      operationId: unbindDomain
+      summary: Stop routing a domain
+      description: |
+        Stops routing the exact full hostname, independently of the configured
+        suffix. The organization keeps the name and it still occupies a slot.
+        New requests get 404; existing connections run until they close.
+        The port's own URL stays public until revokeTunnel.
+        Safe to repeat for an owned name; a name not owned by the caller is 404.
+      tags: [Domains]
+      responses:
+        "204":
+          description: The domain routes nowhere
+        "400":
+          $ref: "#/components/responses/BadRequestError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
 
   # -------------------------------------------------------------------------
   # Metrics
@@ -2930,6 +3060,103 @@ components:
         token:
           type: [string, "null"]
           description: Null for public tunnels; complete on private creation, masked on subsequent calls.
+
+    DomainTarget:
+      description: A Box port or a reserved App reference. App binding currently returns 400 app_target_not_supported.
+      oneOf:
+        - $ref: "#/components/schemas/BoxDomainTarget"
+        - $ref: "#/components/schemas/AppDomainTarget"
+      discriminator:
+        propertyName: type
+        mapping:
+          box: "#/components/schemas/BoxDomainTarget"
+          app: "#/components/schemas/AppDomainTarget"
+
+    BoxDomainTarget:
+      type: object
+      additionalProperties: false
+      description: |
+        A Box port. `box` selects the resource and `port` the guest service.
+      required: [type, box, port]
+      properties:
+        type:
+          type: string
+          enum: [box]
+        box:
+          type: string
+          description: |
+            The box, by id or name, when binding; the box id when read back.
+          example: web-a
+        port:
+          type: integer
+          minimum: 1
+          maximum: 65535
+          example: 3000
+
+    AppDomainTarget:
+      type: object
+      additionalProperties: false
+      description: Reserved App identity; App binding is unavailable until the App resource exists.
+      required: [type, app]
+      properties:
+        type:
+          type: string
+          enum: [app]
+        app:
+          type: string
+          minLength: 1
+          maxLength: 255
+          pattern: '\S'
+          description: An opaque App reference.
+          example: shop
+
+    Domain:
+      type: object
+      description: A domain the organization holds and what it currently routes to.
+      required: [hostname, url, target]
+      properties:
+        hostname:
+          type: string
+          example: demo-app.app.example.test
+        url:
+          type: string
+          example: https://demo-app.app.example.test
+        target:
+          description: Where the domain routes; null while it is held but unbound.
+          oneOf:
+            - $ref: "#/components/schemas/DomainTarget"
+            - type: "null"
+
+    DomainList:
+      type: object
+      required: [domains, limit, used, remaining, min_length, domain_suffix]
+      properties:
+        domains:
+          type: array
+          items:
+            $ref: "#/components/schemas/Domain"
+        limit:
+          type: integer
+          description: How many domains the organization may hold, bound or not.
+          example: 1
+        used:
+          type: integer
+          description: How many it holds now.
+          example: 1
+        remaining:
+          type: integer
+          minimum: 0
+          example: 0
+        domain_suffix:
+          type: [string, "null"]
+          description: Platform hostname suffix for new requests; null when unavailable.
+          example: apps.example
+        min_length:
+          type: integer
+          minimum: 1
+          maximum: 63
+          description: The shortest platform name a new claim may use.
+          example: 5
 
     # =======================================================================
     # Metrics

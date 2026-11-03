@@ -172,6 +172,58 @@ pytest apps/e2e/cases/ -v --timeout=120
 For CI, use the stage-specific secrets below. No local bootstrap, Postgres,
 or runner services are needed — the remote stack provides everything.
 
+## Subdomain acceptance
+
+`cases/test_subdomain.py` exercises Python async/sync, Node, Go, C, Rust and
+the CLI through the deployed API and proxy. It checks full-hostname bind/list/
+unbind, full-hostname rebind to a second guest port, rejected short names and
+port-suffixed hostnames, retained quota, HTTPS guest responses, and independent tunnel access.
+Python unbind success is the empty tuple `()` in both APIs; failures raise.
+A separate case verifies that binding does not publish a port: the domain
+needs a public tunnel and becomes unavailable after revocation or private prepare.
+
+Set `BOXLITE_E2E_DOMAIN` in GitHub **Settings → Secrets and variables → Actions → Variables**
+as a repository variable containing the dedicated full hostname for dev.
+The workflow reads it for the **p1 main suite** (`BOXLITE_DEV_API_KEY`);
+the p2 identity step does not bind it. There is no hostname default in code.
+Missing configuration fails cloud dev setup; local runs without it skip these
+cases. They are not marked `smoke` and do not run on prod.
+
+For a local run, build the SDKs/CLI from the checkout, then the native drivers:
+
+```bash
+BOXLITE_DEPS_STUB=1 make build:e2e:drivers SETUP_DONE=1
+export BOXLITE_E2E_DOMAIN="$(gh variable get BOXLITE_E2E_DOMAIN --repo boxlite-ai/boxlite)"
+BOXLITE_E2E_PROFILE=p1 BOXLITE_E2E_SKIP_PATH_VERIFY=1 \
+make test:rest:e2e AUTH=api-key FILTER=subdomain
+```
+
+The Python environment needs `greenlet` for the sync SDK. `BOXLITE_E2E_CLI`
+selects a CLI binary; otherwise the tests use `boxlite` on PATH, then
+`target/debug/boxlite`. C/Go/Rust drivers are built by the command above.
+The Rust driver is the non-published `boxlite-e2e-rust` workspace package in
+`sdks/rust/`; its executable is `target/debug/domain-rust` at the repository root.
+`make test:e2e:drivers` checks the driver's argument handling without a cloud or VM;
+malformed invocations print usage and exit with an error.
+Configured cases fail if a required client is missing. Public HTTPS probes
+honor standard proxy environment variables, verify certificates, and reject redirects.
+
+All cases reuse this one hostname and run serially. A hostname-specific file
+lock prevents overlapping local processes; CI retains its stage concurrency
+group. Do not run the same hostname simultaneously from different machines or
+with pytest-xdist. The API key determines the organization: a local environment
+override can select a different organization even when the profile is named p1.
+Check that organization's held domains before choosing a local override.
+
+Request the short test name in Dashboard > Domains first, then configure its
+full hostname. Setup refuses an unowned hostname or one already bound to a target. It never deletes a reservation or changes quota. Teardown
+unbinds only the case's own Box and removes that Box, retaining the hostname and
+its slot. A killed process can skip teardown: automatic Box deletion does not
+clear its domain binding. Inspect `boxlite domain ls` under the same profile;
+after confirming that the target is from the interrupted test, recover with
+`boxlite domain unbind "$BOXLITE_E2E_DOMAIN"` before rerunning. A binding that
+moves to another target during the test is left intact and reported as a failure.
+
 ## The cloud legs (CI)
 
 `.github/workflows/e2e-cloud.yml` runs this suite against a deployed
@@ -307,10 +359,11 @@ Two things keep that from recurring:
   Some older polyglot drivers (`apps/e2e/sdks/`) and CLI cases still create
   boxes without the prefix or lifetime, so the CI sweep cannot reclaim them.
   The Node tunnel driver now supplies both and disables auto-resume for its
-  stopped-box scenario. The ones the
-  cloud legs run — Node and the CLI — remove their box in a `finally`, so
-  there this only bites when a run is killed mid-driver; the Go and C drivers
-  exit past their own cleanup, and both legs `--ignore` those cases.
+  stopped-box scenario. The older Node and CLI cases remove their box in a
+  `finally`, so this bites when a run is killed mid-driver; the old Go and C
+  drivers exit past their own cleanup, and both legs `--ignore` those cases.
+  Subdomain clients in every language share the bounded Python service-box
+  fixture, which also removes the Box if a client operation fails.
   Clearing anything left behind means `--any-name`, by a human who has read
   the report first — which is why CI never passes it.
 
@@ -366,7 +419,8 @@ apps/e2e/
 ├── sdks/
 │   ├── node/                # TypeScript drivers (fallback: scripts/test/image.js)
 │   ├── go/                  # Go drivers + e2e_image.go fallback for direct runs
-│   └── c/                   # C drivers + e2e_image.h fallback for direct runs
+│   ├── c/                   # C drivers + e2e_image.h fallback for direct runs
+│   └── rust/                # Rust acceptance drivers (private Cargo package)
 └── cases/
     ├── conftest.py                  # rt / image / box fixtures (REST-only)
     ├── test_path_verification.py    # Meta-test: prove SDK→API→Runner path

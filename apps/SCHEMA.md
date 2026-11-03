@@ -51,6 +51,7 @@ flowchart LR
         t_activity["box_last_activity"]
         t_migration["box_migration"]
         t_tunnel["tunnel"]
+        t_domain["domain"]
         t_runner["runner"]
         t_region["region"]
         t_volume["volume"]
@@ -79,6 +80,7 @@ flowchart LR
     t_activity ==>|"boxId"| t_box
     t_migration ==>|"boxId"| t_box
     t_tunnel ==>|"box_id"| t_box
+    t_domain -.->|"box_id"| t_box
     t_imgver ==>|"imageId"| t_image
     t_imgtag ==>|"imageId"| t_image
     t_imgtag ==>|"versionId"| t_imgver
@@ -133,6 +135,7 @@ that no longer resolves.
 | `box_last_activity`                      | `boxId`                      | `box.id`                       | foreign key | `CASCADE` |
 | `box_migration`                          | `boxId`                      | `box.id`                       | foreign key | `CASCADE` |
 | `tunnel`                                 | `box_id`                     | `box.id`                       | foreign key | `CASCADE` |
+| `domain`                                | `box_id`                     | `box.id`                       | application | retained |
 | `image_version`                          | `imageId`                    | `image.id`                     | foreign key | `CASCADE` |
 | `image_tag`                              | `imageId`                    | `image.id`                     | foreign key | `CASCADE` |
 | `image_tag`                              | `versionId`                  | `image_version.id`             | foreign key | `RESTRICT` |
@@ -202,6 +205,7 @@ state inline.
 | `suspensionReason` | `character varying` | nullable |
 | `suspensionCleanupGracePeriodHours` | `integer` | default `24` |
 | `image_count_limit` | `integer` | default `20`; catalog entries an organization may keep |
+| `domain_count_limit` | `integer` | default `1`; domain names an organization may hold, bound or released |
 | `boxLimitedNetworkEgress` | `boolean` | default `false` |
 | `experimentalConfig` | `jsonb` | nullable |
 | `createdAt` / `updatedAt` | `timestamptz` | |
@@ -758,6 +762,60 @@ The migration creates no declarations for existing boxes. Existing preview and
 tunnel hostnames become reachable only after the owner prepares that port with
 `POST /api/v1/boxes/{boxId}/network/tunnel?port={port}`. Rows survive box
 stop/start and proxy restart; hard deletion of a box removes its rows.
+
+### `domain`
+
+A hostname an organization holds, and its typed target. The hostname belongs to
+the organization for as long as the row exists. `target_type` selects Box or App;
+its reference (`box_id` or `app_id`) is null while held but unbound. Box bindings
+name the port independently of its tunnel, and several hostnames can share a port.
+
+| Column | Type | Notes |
+| ------ | ---- | ----- |
+| `id` | `uuid` | primary key |
+| `hostname` | `character varying(253)` | the full lowercase hostname, such as `demo.apps.example` |
+| `kind` | `character varying` | `platform` (a subdomain of the app domain) or `custom` (reserved for owned domains) |
+| `organization_id` | `uuid` | holder; no FK, like `box.organization_id` |
+| `target_type` | `character varying` | `box` (default) or `app`; selects which reference is meaningful |
+| `app_id` | `character varying(255)` | reserved App reference; nullable, nonblank when set; no App table/FK exists yet |
+| `box_id` | `character varying(12)` | Box reference without FK; retained after Box deletion; null for App targets or unbound Box targets |
+| `port` | `integer` | the target port, 1–65535; required when `box_id` is set, ignored when it is null |
+| `created_at` / `updated_at` | `timestamptz` | |
+
+**Unique:** `hostname`, so one organization holds a name. **Index:**
+`(organization_id)`, `(box_id, port)` and `(app_id)`, not unique. **Check:** Box
+targets have no `app_id`, and a non-null `box_id` requires a valid port. App targets
+have no `box_id` or `port`. Unsupported target types and blank App references fail.
+
+Binding runs under `SELECT … FOR UPDATE` on the organization row, which is how
+the count of held names is held against `organization.domain_count_limit`; it
+does not touch `tunnel`. Binding a name held for another of the organization's
+ports sets the Box type/reference/port, clears `app_id`, and leaves other names on
+that port alone. Unbinding (by full hostname, `DELETE /api/v1/domains/{hostname}/target`)
+clears both target references and port, retaining the target type and the row.
+Destroying a Box and later deleting its database row preserve `box_id` and `port`.
+Lists and target resolution continue to return that stored target until explicit
+unbind or rebind. The REST binding endpoint validates the live Box and its
+organization; no foreign key ties the domain's lifetime to Box cleanup.
+Revoking the tunnel also preserves the target: the name answers 404 until the port
+is declared again. Held names, including unbound names and bindings to deleted
+Boxes, still count against the limit and can be rebound only by their organization.
+
+`DomainService.resolve` reads the stored target independently of port publication.
+`PreviewController.resolveDomain` accepts only Box targets and then applies
+`TunnelService.isPublicAccessAllowed` before returning a routable target to the proxy. This keeps domain ownership and
+binding separate from tunnel policy while preserving the same public-access,
+inbound and box-state checks. A stored target may therefore resolve internally
+while its preview endpoint returns 404. Destroy requests first update the desired
+Box state; preview refusal follows the actual-state check and its existing
+three-second access cache. Destroyed or missing Boxes fail that check even when
+the domain retains their ID and port.
+
+App storage and the tagged REST/SDK representation are reserved for future App
+resources. App binding returns `400 app_target_not_supported` before any Box lookup
+or write. Persisted App references can be listed and unbound, but cannot forward
+traffic. App integration must add existence/organization checks, routing and the
+App deletion policy before enabling writes.
 
 ### `box_last_activity`
 

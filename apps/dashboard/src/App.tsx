@@ -44,6 +44,7 @@ const Keys = React.lazy(() => import('./pages/Keys'))
 const Billing = React.lazy(() => import('./pages/Billing'))
 const BillingPlanChange = React.lazy(() => import('./pages/BillingPlanChange'))
 const Volumes = React.lazy(() => import('./pages/Volumes'))
+const Domains = React.lazy(() => import('./pages/Domains'))
 const FirstBoxWelcome = React.lazy(() => import('./components/first-run/FirstBoxWelcome'))
 const FirstBoxQuickstart = React.lazy(() =>
   import('./components/first-run/FirstBoxOnboarding').then((m) => ({ default: m.FirstBoxQuickstart })),
@@ -185,6 +186,7 @@ function App() {
         <Route path={getRouteSubPath(RoutePath.WELCOME)} element={<FirstBoxWelcome />} />
         <Route path={getRouteSubPath(RoutePath.QUICKSTART)} element={<FirstBoxQuickstart />} />
         <Route path={getRouteSubPath(RoutePath.VOLUMES)} element={<Volumes />} />
+        <Route path={getRouteSubPath(RoutePath.DOMAINS)} element={<Domains />} />
         <Route path={getRouteSubPath(RoutePath.IMAGES)} element={<Images tab="images" />} />
         {/* The static segment is declared before `:idOrRef`, as the API orders its routes. */}
         <Route path={getRouteSubPath(RoutePath.IMAGE_REGISTRIES)} element={<Images tab="registries" />} />

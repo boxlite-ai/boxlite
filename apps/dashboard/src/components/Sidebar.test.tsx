@@ -79,6 +79,9 @@ describe('Sidebar primary navigation', () => {
 
     expect(volumeLinks.length).toBeGreaterThan(0)
     expect(volumeLinks.every((link) => link.textContent === 'Volumes')).toBe(true)
+    const domainLinks = [...document.querySelectorAll<HTMLAnchorElement>('a[href="/dashboard/domains"]')]
+    expect(domainLinks.length).toBeGreaterThan(0)
+    expect(domainLinks.every((link) => link.textContent === 'Domains')).toBe(true)
   })
 
   it('groups organization management under one profile entry', async () => {
