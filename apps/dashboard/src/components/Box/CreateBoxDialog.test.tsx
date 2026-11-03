@@ -18,10 +18,10 @@ const state = vi.hoisted(() => ({
   org: null as unknown,
   config: { billingApiUrl: 'http://billing.test' } as { billingApiUrl?: string },
   pricesQuery: { data: undefined, isLoading: false } as { data: unknown; isLoading: boolean },
-  // The catalog behind the image suggestions. Empty by default: the dialog has
-  // to work before an organization has pulled anything, which is the state
-  // every new organization is in.
+  // Empty results also cover loading or an unavailable catalog; system images
+  // normally appear even before an organization has pulled its own images.
   catalogImages: [] as { name: string; curated: boolean; aliases: string[] }[],
+  catalogPlaceholder: false,
 }))
 
 const LIVE_PRICES = {
@@ -59,7 +59,7 @@ vi.mock('@/hooks/queries/useVolumesQuery', () => ({
   useVolumesQuery: () => ({ data: [{ id: 'vol-1', name: 'subtitle-models', state: 'ready' }] }),
 }))
 vi.mock('@/hooks/queries/useImagesQuery', () => ({
-  useImagesQuery: () => ({ data: state.catalogImages }),
+  useImagesQuery: () => ({ data: state.catalogImages, isPlaceholderData: state.catalogPlaceholder }),
 }))
 vi.mock('@/hooks/useConfig', () => ({ useConfig: () => state.config }))
 vi.mock('@/hooks/queries/useUsagePricesQuery', () => ({
@@ -136,6 +136,7 @@ describe('CreateBoxDialog per-org resource cap', () => {
     state.config = { billingApiUrl: 'http://billing.test' }
     state.pricesQuery = { data: LIVE_PRICES, isLoading: false }
     state.catalogImages = []
+    state.catalogPlaceholder = false
     mutationMocks.refreshOrganizations.mockReset().mockResolvedValue(undefined)
     organizationsApi.getOrganization.mockReset().mockImplementation(async () => ({ data: state.org }))
     mutationMocks.createBox.mockReset().mockResolvedValue({ id: 'created-box' })
@@ -650,10 +651,84 @@ describe('CreateBoxDialog per-org resource cap', () => {
       return [...document.querySelectorAll('[role="menuitem"]')].map((item) => item.textContent)
     }
 
-    // The whole reason the field is free text: the catalog only ever contains
-    // images something already booted from, so the first box on a new image
-    // has nothing to pick.
-    it('sends no image at all when the field is left blank', async () => {
+    it.each([
+      { first: { name: 'python', curated: true, aliases: [] }, expected: 'python' },
+      { first: { name: 'quay.io/acme/app', curated: false, aliases: ['v1'] }, expected: 'quay.io/acme/app:v1' },
+    ])('selects and submits the first image suggestion $expected', async ({ first, expected }) => {
+      state.catalogImages = [first, { name: 'base', curated: true, aliases: [] }]
+      await renderOpen()
+
+      expect(imageInput()?.value).toBe(expected)
+      await submit()
+      expect(mutationMocks.createBox).toHaveBeenCalledWith(expect.objectContaining({ image: expected }))
+    })
+
+    it('selects the first image when the catalog arrives after opening', async () => {
+      await renderOpen()
+      expect(imageInput()?.value).toBe('')
+
+      state.catalogImages = [{ name: 'node', curated: true, aliases: [] }]
+      await rerenderOpen()
+
+      expect(imageInput()?.value).toBe('node')
+    })
+
+    it('waits for the current catalog instead of selecting placeholder images', async () => {
+      state.catalogImages = [{ name: 'old-org/image', curated: false, aliases: ['v1'] }]
+      state.catalogPlaceholder = true
+      await renderOpen()
+      expect(imageInput()?.value).toBe('')
+
+      state.catalogImages = [{ name: 'python', curated: true, aliases: [] }]
+      state.catalogPlaceholder = false
+      await rerenderOpen()
+
+      expect(imageInput()?.value).toBe('python')
+    })
+
+    it('keeps the initial selection through refreshes and selects again on reopening', async () => {
+      state.catalogImages = [{ name: 'python', curated: true, aliases: [] }]
+      await renderOpen()
+      expect(imageInput()?.value).toBe('python')
+
+      state.catalogImages = [{ name: 'node', curated: true, aliases: [] }]
+      await rerenderOpen()
+      expect(imageInput()?.value).toBe('python')
+
+      await act(async () => root?.render(withQueries(<CreateBoxDialog open={false} onOpenChange={() => {}} />)))
+      await rerenderOpen()
+      expect(imageInput()?.value).toBe('node')
+    })
+
+    it.each(['quay.io/acme/custom:v2', ''])('preserves user input %j when the catalog arrives', async (value) => {
+      await renderOpen()
+      const input = imageInput()!
+      await act(async () => typeInto(input, 'draft'))
+      await act(async () => typeInto(input, value))
+
+      state.catalogImages = [{ name: 'python', curated: true, aliases: [] }]
+      await rerenderOpen()
+
+      expect(imageInput()?.value).toBe(value)
+      await submit()
+      expect(mutationMocks.createBox).toHaveBeenCalledWith(expect.objectContaining({ image: value || undefined }))
+    })
+
+    it('preserves a cleared default when the catalog refreshes', async () => {
+      state.catalogImages = [{ name: 'python', curated: true, aliases: [] }]
+      await renderOpen()
+      expect(imageInput()?.value).toBe('python')
+      await act(async () => typeInto(imageInput()!, ''))
+
+      state.catalogImages = [{ name: 'node', curated: true, aliases: [] }]
+      await rerenderOpen()
+
+      expect(imageInput()?.value).toBe('')
+      await submit()
+      expect(mutationMocks.createBox).toHaveBeenCalledWith(expect.objectContaining({ image: undefined }))
+    })
+
+    it('sends no image when the catalog is empty and the field is left blank', async () => {
       await renderOpen()
 
       await submit()
@@ -702,12 +777,19 @@ describe('CreateBoxDialog per-org resource cap', () => {
     })
 
     it('fills the field from a suggestion and submits it', async () => {
-      state.catalogImages = [{ name: 'quay.io/acme/app', curated: false, aliases: ['v1'] }]
+      state.catalogImages = [
+        { name: 'python', curated: true, aliases: [] },
+        { name: 'quay.io/acme/app', curated: false, aliases: ['v1'] },
+      ]
       await renderOpen()
 
       await openDropdown('Choose a known image')
       await selectMenuItem('quay.io/acme/app:v1')
 
+      expect(imageInput()?.value).toBe('quay.io/acme/app:v1')
+
+      state.catalogImages = [{ name: 'node', curated: true, aliases: [] }]
+      await rerenderOpen()
       expect(imageInput()?.value).toBe('quay.io/acme/app:v1')
 
       await submit()
@@ -875,6 +957,7 @@ describe('CreateBoxDialog per-org resource cap', () => {
   // The Images page opens this from an image's row; the reference it hands
   // over is what the box is created from.
   it('submits the image it was pre-filled with', async () => {
+    state.catalogImages = [{ name: 'python', curated: true, aliases: [] }]
     await rerenderOpenWith({ prefillImage: 'ghcr.io/acme/agent:v1.4.2' })
 
     await submit()

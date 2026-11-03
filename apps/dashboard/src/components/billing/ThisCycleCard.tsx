@@ -78,7 +78,7 @@ export function ThisCycleCard() {
     return (
       <section>
         <SectionTitle title="This Cycle" />
-        <Panel className="px-[22px] py-6">
+        <Panel className="border-0 px-[22px] py-6">
           <Skeleton className="h-[72px] w-full" />
         </Panel>
       </section>
@@ -91,7 +91,7 @@ export function ThisCycleCard() {
   return (
     <section>
       <SectionTitle title="This Cycle" count={`${plan.planName} · ${window}`} />
-      <Panel>
+      <Panel className="border-0">
         <div className="flex flex-col gap-6 px-[22px] py-6 sm:flex-row sm:gap-14">
           <Metric
             label="Quota Remaining"
@@ -106,7 +106,7 @@ export function ThisCycleCard() {
         </div>
 
         {!unlimited && (
-          <div className="border-t border-border px-[22px] py-4">
+          <div className="border-t border-border/40 px-[22px] py-4">
             <div className="flex items-center gap-4 font-mono text-[12px]">
               <span className="w-[100px] shrink-0 uppercase tracking-[0.5px] text-muted-foreground">Quota used</span>
               <span className="w-[140px] shrink-0 tabular-nums text-foreground">
@@ -119,7 +119,7 @@ export function ThisCycleCard() {
         )}
 
         {concurrencyLimit != null && runningBoxes != null && (
-          <div className="border-t border-border px-[22px] py-4">
+          <div className="border-t border-border/40 px-[22px] py-4">
             <div className="flex items-center gap-4 font-mono text-[12px]">
               <span className="w-[100px] shrink-0 uppercase tracking-[0.5px] text-muted-foreground">
                 Concurrent boxes
@@ -134,7 +134,7 @@ export function ThisCycleCard() {
         )}
 
         {note && (
-          <div className="border-t border-border px-[22px] py-4">
+          <div className="border-t border-border/40 px-[22px] py-4">
             <PanelNote>{note}</PanelNote>
           </div>
         )}

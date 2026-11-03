@@ -49,7 +49,7 @@ export function PlanSection() {
   return (
     <div className="flex flex-col gap-8">
       {isError ? (
-        <Panel className="flex flex-col items-center gap-3 px-[22px] py-10">
+        <Panel className="border-0 flex flex-col items-center gap-3 px-[22px] py-10">
           <span className="font-mono text-[13px] text-foreground">Oops, something went wrong</span>
           <span className="font-mono text-[11px] text-muted-foreground">There was an error loading billing data.</span>
           <Button variant="outline" onClick={handleRetry} className="mt-1 font-mono text-[12px]">

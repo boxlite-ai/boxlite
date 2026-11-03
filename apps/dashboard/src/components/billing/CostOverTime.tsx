@@ -99,7 +99,7 @@ export function CostOverTime() {
           </div>
         }
       />
-      <Panel>
+      <Panel className="border-0">
         {active.isError ? (
           <Empty className="py-12">
             <EmptyHeader>

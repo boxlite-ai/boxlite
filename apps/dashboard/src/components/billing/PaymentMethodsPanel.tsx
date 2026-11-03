@@ -84,17 +84,17 @@ export function PaymentMethodsPanel({
       <SectionTitle title="Payment Method" />
 
       {isLoading ? (
-        <Panel className="flex items-center gap-5 px-[22px] py-5">
+        <Panel className="border-0 flex items-center gap-5 px-[22px] py-5">
           <Skeleton className="h-[52px] w-[82px] shrink-0" />
           <Skeleton className="h-5 w-full max-w-xs" />
         </Panel>
       ) : isError ? (
-        <Panel className="flex flex-wrap items-center justify-between gap-4 px-[22px] py-5">
+        <Panel className="border-0 flex flex-wrap items-center justify-between gap-4 px-[22px] py-5">
           <span className="font-mono text-[13px] text-muted-foreground">Payment methods unavailable</span>
           <SetupButton connected={actionConnected} isLoading={isActionLoading} onClick={onAction} />
         </Panel>
       ) : hasPaymentMethods ? (
-        <Panel>
+        <Panel className="border-0">
           <ul aria-label="Saved payment methods" className="w-full divide-y divide-border">
             {paymentMethods.map((method, index) => {
               const display = paymentMethodDisplay(method.details)
@@ -138,7 +138,7 @@ export function PaymentMethodsPanel({
           </ul>
         </Panel>
       ) : (
-        <Panel className="flex flex-wrap items-center justify-between gap-4 px-[22px] py-5">
+        <Panel className="border-0 flex flex-wrap items-center justify-between gap-4 px-[22px] py-5">
           <span className="font-mono text-[13px] text-muted-foreground">Payment method not connected</span>
           <SetupButton connected={false} isLoading={isActionLoading} onClick={onAction} />
         </Panel>
