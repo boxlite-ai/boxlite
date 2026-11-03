@@ -21,8 +21,15 @@
  */
 
 import { apiEnvironmentFrom } from './api-environment.ts'
-import { clickHouseRetentionHours } from '../../shared/clickhouse-retention.ts'
-import { OTEL_GROUP, PROXY_GROUP, RUNNER_GROUP, serviceSecretsFrom, splitServiceChannels, type GroupDeclaration } from './env.ts'
+import { clickHouseRetentionHours } from '../stack/clickhouse-retention.ts'
+import {
+  OTEL_GROUP,
+  PROXY_GROUP,
+  RUNNER_GROUP,
+  serviceSecretsFrom,
+  splitServiceChannels,
+  type GroupDeclaration,
+} from './env.ts'
 import type { RunnerSlot } from '../stack/runners.ts'
 import { runnerNameFor } from '../stack/runners.ts'
 import type { Cloud } from 'mstage/config'

@@ -3,7 +3,7 @@
 
 import { existsSync, readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
-import { DEFAULT_CLICKHOUSE_RETENTION_HOURS } from '../../shared/clickhouse-retention.ts'
+import { DEFAULT_CLICKHOUSE_RETENTION_HOURS } from './clickhouse-retention.ts'
 
 export const CLICKHOUSE_IMAGE =
   'clickhouse/clickhouse-server@sha256:c67cd26ea87301f3115e5fa7822905bcbb89cbd81e52bdd1ab7a938d1d5b77d8'
@@ -31,9 +31,10 @@ export const OPENAPI_READER_USERNAME = 'otel_openapi_reader'
 /** Preserve an existing user's identity; the host substitutes only a SHA-256 hash. */
 export function renderClickHouseLogReaderSql() {
   const username = OPENAPI_READER_USERNAME
-  const source = typeof schemaSource === 'string'
-    ? resolve(dirname(schemaSource), 'openapi-log-reader.sql')
-    : new URL('openapi-log-reader.sql', schemaSource)
+  const source =
+    typeof schemaSource === 'string'
+      ? resolve(dirname(schemaSource), 'openapi-log-reader.sql')
+      : new URL('openapi-log-reader.sql', schemaSource)
   return `CREATE USER IF NOT EXISTS "${username}" IDENTIFIED WITH sha256_hash BY '__PASSWORD_SHA256__';
 ALTER USER "${username}" IDENTIFIED WITH sha256_hash BY '__PASSWORD_SHA256__';
 ${readFileSync(source, 'utf8').replaceAll('__LOG_READER__', `"${username}"`).replaceAll('__LOG_READER_PROFILE__', `"${username}_limits"`)}`
@@ -196,9 +197,7 @@ systemctl enable --now boxlite-clickhouse
 export function encodeClickHouseUserData(input: ClickHouseUserDataInput) {
   const userData = Buffer.from(buildClickHouseUserData(input))
   if (userData.byteLength > EC2_USER_DATA_MAX_BYTES) {
-    throw new Error(
-      `ClickHouse user data is ${userData.byteLength} bytes; EC2 allows ${EC2_USER_DATA_MAX_BYTES}`,
-    )
+    throw new Error(`ClickHouse user data is ${userData.byteLength} bytes; EC2 allows ${EC2_USER_DATA_MAX_BYTES}`)
   }
   return userData.toString('base64')
 }
