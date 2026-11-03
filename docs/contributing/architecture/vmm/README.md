@@ -339,6 +339,27 @@ today.
   earlier panic poisoned stops the next access too, as Firecracker and
   cloud-hypervisor do: the panic was a VMM bug, never guest input.
 
+### Virtio-mmio transport
+
+`virtio::mmio::MmioTransport` is a `BusDevice` on a 4 KiB window. It owns the
+register file, queue configuration, status and interrupt; the device owns the
+queues after DRIVER_OK. Control registers take aligned 4-byte accesses, config
+space forwards 1/2/4-byte accesses and splits 8-byte accesses. The transport
+offers `VIRTIO_F_VERSION_1` and masks packed rings, notification data,
+notification-config data, ring reset and the admin queue; FEATURES_OK calls
+`set_features` once and fails synchronously if the accepted subset is invalid.
+
+Before DRIVER_OK the transport holds a dense `QueueConfig` shadow and accepts
+queue writes only after FEATURES_OK; `QueueReady=0` keeps the configuration.
+DRIVER_OK builds the queues, prepares them into the `VirtQueues` facade, and
+moves them into the `ActivationContext`. After DRIVER_OK every
+queue-configuration write is rejected and logged, as Firecracker does;
+QueueNotify, InterruptACK and Status stay live, and Status=0 is the only
+queue-reconfiguration path. Activation failure leaves DRIVER_OK unset, sets
+`DEVICE_NEEDS_RESET` and raises the configuration interrupt. A fatal device
+error sends `Event::DeviceFailed` through `Error::VirtioDevice` without
+stopping the worker synchronously.
+
 ### Interrupts
 
 - **No emulated controller.** HVF and KVM provide in-kernel interrupt
@@ -347,13 +368,19 @@ today.
   machine, and the chipset builder rejects a second claim of a line. It
   declares virtio-mmio interrupts edge-triggered, as Firecracker, libkrun and
   dragonball do.
+- **Virtio interrupts.** `MmioInterrupt` owns the line, the interrupt status
+  bits, the shared device status and the configuration generation. Raising
+  always pulses; `InterruptACK` clears only the acked bits and pulses again
+  while any remain, so an edge line does not lose a notification that arrived
+  between Linux's read and acknowledgement.
 - **Raising an interrupt.** Devices raise their lines from their own threads
   through the VMM's interrupt path, which calls `Vm::set_irq_line`. The host's
   in-kernel controller wakes a vCPU waiting for it, so the VMM wakes no thread.
 - **Naming.** Devices hold an `IrqLine`, which is not `Clone`, so a device
-  cannot share its line. `pulse` raises an edge and `set_level` holds a level,
-  skipping a repeated one; as with OpenVMM's `LineInterrupt`, dropping a line
-  held high lowers it. It calls the object-safe `IrqChip` trait, which every
+  cannot share its line. `pulse` raises an edge and lowers a line a failed
+  clear left high before raising again; `set_level` holds a level, skipping a
+  repeated one; as with OpenVMM's `LineInterrupt`, dropping a line held high
+  lowers it. It calls the object-safe `IrqChip` trait, which every
   host VM implements through `Vm::set_irq_line`. The survey found no dominant
   name: `VirtioInterrupt`, `InterruptSourceGroup` and `IrqSender` each appear
   once or twice.
@@ -364,7 +391,15 @@ today.
   - arm64: PL011, PL031 and PSCI;
   - x86_64: 8250 serial, CMOS RTC, and the i8042 reset.
 - **M2:**
-  - the virtio-mmio transport, with a `VirtQueues` facade that validates the dense queue set, applies EVENT_IDX, saves and restores `QueueState`, tracks each deferred chain's head so completion happens exactly once, refuses to save while a deferred chain is outstanding, runs the disable/drain/enable notification loop, and lets a device defer a chain's completion to its backend;
+  - the virtio-mmio transport: a 4 KiB register file with aligned 4-byte
+    control accesses and width-split configuration access, synchronous
+    FEATURES_OK validation, a dense queue shadow validated at DRIVER_OK,
+    post-DRIVER_OK queue-write rejection, Status=0 reset, and a `VirtQueues`
+    facade that validates the dense queue set, applies EVENT_IDX, tracks each
+    deferred chain's head so completion happens exactly once, keeps
+    `save`/`restore` as `SnapshotError::Unsupported` stubs until M8, runs the
+    disable/drain/enable notification loop, and lets a device defer a chain's
+    completion to its backend;
   - virtio-blk, virtio-vsock, virtio-net, virtio-console and virtio-rng;
   - virtio-balloon with free page reporting, so the host can reclaim unused
     guest memory as it can with libkrun today: at once on Linux, and under
@@ -658,6 +693,7 @@ the M10 notes used these pinned sources:
 | Project | Pin | Files |
 | --- | --- | --- |
 | [Firecracker](https://github.com/firecracker-microvm/firecracker/tree/68698adfee9b252df130b7a98e3ba04eb81f0f54) | `68698ad` | `src/vmm/src/vstate/`, `src/vmm/src/arch/*/layout.rs`, `src/vmm/src/arch/aarch64/regs.rs`, `src/vmm/src/arch/aarch64/vcpu.rs`, `src/vmm/src/arch/aarch64/fdt.rs`, `src/vmm/src/arch/x86_64/regs.rs`, `src/vmm/src/arch/x86_64/vcpu.rs`, `src/vmm/src/arch/x86_64/mod.rs`, `src/vmm/src/arch/x86_64/mptable.rs` |
+| [VIRTIO](https://docs.oasis-open.org/virtio/virtio/v1.4/cs01/virtio-v1.4-cs01.html) | `1.4 CS01` | §2.1 (device status), §2.4 (reset), §2.7 (split queues), §4.2.2 (MMIO register layout) |
 | [crosvm](https://github.com/google/crosvm/tree/4c88690f44c382e34bdff7ad18ca10f8f9de6aa2) | `4c88690` | `hypervisor/src/lib.rs`, `devices/src/bus.rs`, `aarch64/src/lib.rs` |
 | [OpenVMM](https://github.com/microsoft/openvmm/tree/998904f2debee98416c5d007a17f05be1b7dad34) | `998904f` | `vmm_core/virt_whp/src/`, `vmm_core/virt/src/irqcon.rs`, `vm/x86/x86emu/` |
 | [cloud-hypervisor](https://github.com/cloud-hypervisor/cloud-hypervisor/tree/c24527002473dec810ef98fe3befb558ff2d5ede) | `c245270` | `hypervisor/src/`, `vm-device/src/bus.rs`, `arch/src/*/layout.rs`, `README.md` |

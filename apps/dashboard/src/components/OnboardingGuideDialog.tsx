@@ -436,14 +436,14 @@ type CopyTarget = 'api-key' | 'install' | 'code' | 'creation' | 'execution' | 'p
 
 function QuickstartCode({ code, language }: { code: string; language: string }) {
   return (
-    <Suspense fallback={<pre className="overflow-auto whitespace-pre p-4 text-label leading-relaxed">{code}</pre>}>
+    <Suspense fallback={<pre className="quickstart-code overflow-auto whitespace-pre p-4">{code}</pre>}>
       <CodeBlock
         code={code}
         preserveWhitespace
         language={language}
         showCopy={false}
         className="w-full rounded-none border-0 bg-transparent shadow-none"
-        codeAreaClassName="max-h-[280px] overflow-auto rounded-none px-4 pb-4 pt-1 pr-4 text-label leading-relaxed"
+        codeAreaClassName="quickstart-code max-h-[420px] overflow-auto rounded-none px-4 pb-5 pt-4 pr-4"
       />
     </Suspense>
   )
@@ -452,7 +452,7 @@ function QuickstartCode({ code, language }: { code: string; language: string }) 
 function QuickstartStepHeading({ title }: { title: string }) {
   const split = title.indexOf(' ')
   return (
-    <h2 className="font-display text-sm font-semibold">
+    <h2 className="font-display text-base font-semibold">
       <span className="quickstart-step-number">{title.slice(0, split)}</span> {title.slice(split + 1)}
     </h2>
   )
@@ -500,10 +500,10 @@ function InlineCodeSteps({
       ).map((part, index) => (
         <section key={part.id} className="quickstart-step min-w-0">
           <QuickstartStepHeading title={part.title} />
-          <p className="mt-2 max-w-[900px] font-display text-xs leading-relaxed text-muted-foreground">{part.note}</p>
+          <p className="mt-2 max-w-[900px] font-display text-sm leading-relaxed text-muted-foreground">{part.note}</p>
           <div className="mt-4 overflow-hidden rounded-none bg-[hsl(var(--code-background))]">
-            <div className="flex items-center justify-between px-4 pb-1 pt-2">
-              <span className="text-label text-muted-foreground">
+            <div className="flex items-center justify-between border-b border-border/60 px-4 py-2">
+              <span className="font-mono text-xs tracking-normal text-muted-foreground">
                 {EXAMPLE_FILES[language]} · part {index + 1}
               </span>
               <QuickstartCopyButton
@@ -653,13 +653,13 @@ function OnboardingGuideContent({
         <div className="quickstart-sequence min-w-0">
           <section className="quickstart-step min-w-0">
             <QuickstartStepHeading title="1. Get an API key" />
-            <p className="mt-2 max-w-[900px] font-display text-xs leading-relaxed text-muted-foreground">
+            <p className="mt-2 max-w-[900px] font-display text-sm leading-relaxed text-muted-foreground">
               An API key connects your local code to your BoxLite organization. Create one here, or set BOXLITE_API_KEY
               in your terminal to use an existing key.
             </p>
             {createdKey ? (
               <div className="mt-4 flex items-start gap-3 rounded-none bg-[hsl(var(--code-background))] p-3">
-                <code className="min-w-0 flex-1 break-all text-label leading-relaxed">{createdKey.value}</code>
+                <code className="quickstart-code min-w-0 flex-1 break-all">{createdKey.value}</code>
                 <QuickstartCopyButton
                   quiet
                   copied={copiedTarget === 'api-key'}
@@ -696,25 +696,26 @@ function OnboardingGuideContent({
               <QuickstartStepHeading title="2. Choose your SDK or CLI" />
               <InterfacePicker quiet selected={language} onSelect={setLanguage} />
             </div>
-            <p className="mt-2 max-w-[900px] font-display text-xs leading-relaxed text-muted-foreground">
+            <p className="mt-2 max-w-[900px] font-display text-sm leading-relaxed text-muted-foreground">
               {language === 'cli'
                 ? 'Install the BoxLite CLI to create and manage Boxes from your terminal. The commands below connect using your API key.'
                 : language === 'rest'
                   ? 'Use curl and jq to call the BoxLite REST API directly, without an SDK. The requests below create a Box and execute a command using your API key.'
                   : `Install the ${activeInterface.label} SDK in your local project to create Boxes, run commands and read results from your code. Run the installation command below in your terminal.`}
             </p>
-            <div className="mt-4 flex items-start gap-2 rounded-none bg-[hsl(var(--code-background))] p-3">
-              <div className="min-w-0 flex-1">
-                <QuickstartCode code={activeExample.install} language="bash" />
+            <div className="mt-4 overflow-hidden rounded-none border border-border/60 bg-[hsl(var(--code-background))]">
+              <div className="flex items-center justify-between border-b border-border/60 px-4 py-2">
+                <span className="font-mono text-xs tracking-normal text-muted-foreground">Local terminal</span>
+                <QuickstartCopyButton
+                  quiet
+                  copied={copiedTarget === 'install'}
+                  onClick={() => void copyText(activeExample.install, 'install')}
+                />
               </div>
-              <QuickstartCopyButton
-                quiet
-                copied={copiedTarget === 'install'}
-                onClick={() => void copyText(activeExample.install, 'install')}
-              />
+              <QuickstartCode code={activeExample.install} language="bash" />
             </div>
           </section>
-          <p className="font-display text-xs leading-relaxed text-muted-foreground">
+          <p className="font-display text-sm leading-relaxed text-muted-foreground">
             Save parts 1–3 in order in <span className="font-mono text-foreground">{EXAMPLE_FILES[language]}</span>, or
             use Copy full example below. Run the complete file once to create your Box and open a preview.
           </p>
@@ -727,7 +728,7 @@ function OnboardingGuideContent({
             onCopy={copyText}
           />
           <div className="flex flex-wrap items-center justify-between gap-3 rounded-none bg-[hsl(var(--code-background))] px-4 py-3">
-            <pre className="min-w-0 overflow-x-auto whitespace-pre-wrap break-words text-label leading-relaxed">
+            <pre className="quickstart-code min-w-0 overflow-x-auto whitespace-pre">
               ${' '}
               {language === 'cli'
                 ? 'bash quickstart.sh'
@@ -950,7 +951,7 @@ function OnboardingGuideContent({
                 </div>
                 <div className="flex items-start gap-3 border border-border bg-[hsl(var(--code-background))] px-[14px] py-3">
                   <span className="flex-none pt-[1px] text-success">$</span>
-                  <pre className="scrollbar-elevated min-w-0 flex-1 overflow-x-auto whitespace-pre text-body leading-relaxed text-foreground">
+                  <pre className="quickstart-code scrollbar-elevated min-w-0 flex-1 overflow-x-auto whitespace-pre text-foreground">
                     {activeExample.install}
                   </pre>
                   <QuickstartCopyButton
@@ -990,7 +991,7 @@ function OnboardingGuideContent({
                 <div className={cn('relative min-h-0', preview ? 'h-[220px] flex-none sm:h-auto sm:flex-1' : 'flex-1')}>
                   <Suspense
                     fallback={
-                      <pre className="scrollbar-elevated h-full overflow-auto whitespace-pre rounded-none p-3 pr-24 text-meta leading-relaxed">
+                      <pre className="quickstart-code scrollbar-elevated h-full overflow-auto whitespace-pre rounded-none p-4 pr-24">
                         {renderedExample}
                       </pre>
                     }
@@ -1000,7 +1001,7 @@ function OnboardingGuideContent({
                       language={activeExample.codeLanguage}
                       showCopy={false}
                       className="h-full rounded-none"
-                      codeAreaClassName="h-full overflow-auto whitespace-pre pr-24 text-meta leading-relaxed"
+                      codeAreaClassName="quickstart-code h-full overflow-auto whitespace-pre pr-24"
                     />
                   </Suspense>
                   <QuickstartCopyButton

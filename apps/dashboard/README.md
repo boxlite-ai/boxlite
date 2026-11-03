@@ -3,6 +3,39 @@
 The web console at `app.boxlite.ai`. A Vite + React app, built and tested
 through Nx as the `dashboard` project.
 
+## SDK and CLI quickstart readability
+
+The walkthrough uses a dedicated `quickstart-code` type style: 14px monospaced
+text, 24px line height, normal letter spacing and preserved indentation. The
+10px tracked label style is reserved for labels. Code panes scroll horizontally
+instead of wrapping commands; longer sections show up to 420px before scrolling.
+File and local-terminal headers keep copy actions separate from the code.
+
+Installation commands use the package manager's current release without fixed
+version numbers. Python uses `--upgrade` to update existing installations. Rust
+uses a quoted wildcard requirement followed by `cargo update -p boxlite` to
+replace older dependency constraints and refresh an existing lockfile,
+and the example supplies the current tunnel API's `TunnelOptions`. The
+C SDK command requires curl, jq and tar, and selects the first stable release
+with a matching platform archive among GitHub's 100 most recent releases,
+ordered by publication time. A
+new release without its C archive is skipped; no match stops the download.
+Extraction completes in a temporary directory before replacing `boxlite-c-sdk`.
+Failed extraction preserves the previous SDK. A failed or interrupted
+replacement restores it when possible. If restoration fails, the previous SDK
+is retained in the staging directory and its path is printed to stderr.
+Displayed and copied
+commands both come from `src/lib/quickstart/interfaces.json`.
+
+## Quickstart catalog
+
+Coder Universal is no longer offered as a quickstart template. Its preset
+requested 30 GB of disk, which exceeds a 10 GB per-box disk ceiling. Removing
+the preset avoids offering a configuration those organizations cannot create;
+its disk request has not been reduced without runtime validation. Existing
+boxes and custom-image support are unaffected. Old `?template=coder` links use
+the picker's existing unknown-template fallback and select Python.
+
 ## Region names
 
 The console resolves shared-region names through `GET /api/shared-regions`.
@@ -153,14 +186,25 @@ needs one, start a box from it, and it is listed once the box runs. The first
 is the only step a reader may have to take beforehand, so it links to Private
 registries; the second opens the box create.
 
-Every image row and every built-in image offers "New box", the same create
-dialog the Boxes page uses with the image filled in, so starting from an image
-is one click wherever the image is shown. The SDK call for the same start sits
-behind "Show the SDK call" for readers who will paste it rather than click.
+Images lists only rows returned by the image catalog API: the organization's
+registered images and the operator-configured system images. Quickstart's
+public templates are recommendations and do not add rows, search results, or
+counts to Images. An empty or failed catalog response must not insert templates
+as a fallback. A template image appears here once the API returns it as an
+organization or system image.
 
-Built-in images sit apart from the table. They are operator configuration with
-no versions, size or recorded starts, so a row for them would be a line of
-dashes, and a "never" under last started would be false.
+For members allowed to create boxes, every row offers "New box". If its reference
+matches a Quickstart template, the action opens that template with its startup
+configuration; otherwise it opens the shared create dialog with the image filled
+in. Matching a template does not change an image's ownership or removability.
+System images remain non-removable and do not count against the organization's
+image limit; usage comes from the separate usage API, not the displayed row count.
+
+A new organization with the default system-image configuration sees `base`,
+`python`, and `node`, with zero organization image slots used. The operator may
+configure additional system images, so three is not a fixed UI limit. See the
+[expected screenshots](../../docs/contributing/investigations/2026-11-03-images-catalog-membership.md#screenshots)
+for a new organization and an organization with registered images.
 
 ## A state the API records once is told in the past tense
 

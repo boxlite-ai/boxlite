@@ -476,3 +476,15 @@ body {
 .quickstart-step h2 {
   position: relative;
 }
+
+/* Code is reading material, not a tracked uppercase label. Keep this scoped to
+   the walkthrough so other compact console code blocks retain their scale. */
+.quickstart-code {
+  font-family: 'IBM Plex Mono', ui-monospace, 'SFMono-Regular', 'SF Mono', monospace;
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 24px;
+  letter-spacing: normal;
+  font-variant-ligatures: none;
+  tab-size: 4;
+}
