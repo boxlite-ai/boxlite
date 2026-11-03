@@ -21,6 +21,7 @@ import { RegistryModule } from '../registry/registry.module'
 import { RegistryTools } from './registry-tools'
 import { BoxTools } from './box-tools'
 import { CommerceBoxLimitService } from '../boxlite-rest/commerce-box-limit.service'
+import { NetworkTools } from './network-tools'
 
 @Module({
   imports: [AuthModule, BoxModule, OrganizationModule, AuditModule, ImageModule, RegistryModule],
@@ -35,6 +36,7 @@ import { CommerceBoxLimitService } from '../boxlite-rest/commerce-box-limit.serv
     RegistryTools,
     BoxTools,
     CommerceBoxLimitService,
+    NetworkTools,
   ],
 })
 export class McpModule {}

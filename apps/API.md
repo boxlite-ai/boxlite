@@ -802,6 +802,16 @@ state, which may be `stopping`; deletion returns `{ "accepted": true }` while
 destruction continues asynchronously. Missing and foreign Boxes both produce
 `{ "exists": false }` from `box_exists`; backend failures remain tool errors.
 
+`set_box_inbound` accepts `organization_id`, `box_id`, and `mode` (`enabled` or
+`disabled`); `prepare_tunnel` accepts the same IDs and a guest `port` from 1 to
+65535, excluding terminal port 22222. Both require `WRITE_BOXES`, verify resource
+ownership, and advertise public interaction. Inbound updates use the existing
+audited action. Tunnel preparation records activity, preserves inbound and
+auto-resume readiness gates, then returns the service URI after declaring that
+port public. It does not wake the Box; the proxy wakes it on connection.
+Cancellation between activity/URI work and publication prevents a new public
+declaration and reports that activity may already have been recorded.
+
 New tools require actual membership even for administrators, then apply the
 existing organization resource-permission policy. Managed volume identifiers are
 UUIDs; a foreign resource and a missing resource receive sanitized errors.
