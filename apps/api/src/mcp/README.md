@@ -43,3 +43,25 @@ before authorization or network access.
 
 Responses project only implemented fields. Malformed or oversized execution-start
 responses report an uncertain outcome because the command may already be running.
+
+## File transfer tools
+
+`upload_files` accepts `file: {format: "utf8", content: "hello"}` or
+`file: {format: "tar_base64", archive_base64: "...", source_is_directory: true}`.
+The UTF-8 form creates a standard single-file tar in memory, using the destination
+basename; existing copy destination semantics apply. Archive mode preserves directory
+and binary transfers, with an optional source-kind hint for the guest.
+
+`download_files` defaults to `format: "utf8"`; choose `"tar_base64"` for directory or
+binary sources. Results contain a `file` object with the selected representation and
+`source_is_directory`. Archive results use `null` when older guests omit the shape hint.
+Text conversion requires an explicit file hint and exactly one complete regular UTF-8
+file; directories, links, multiple entries, compressed or malformed tar, control bytes
+and truncation fail with an archive-mode suggestion. UTF-8 BOMs are preserved.
+
+Text payloads are capped at 60 KiB by encoded byte length; complete tar bodies are
+capped at 64 KiB, including metadata. Base64 inputs are checked against decoded limits.
+Header/PAX/Parser conversion never reads or extracts files on the API host.
+Both tools require `WRITE_BOXES`, refresh activity and may auto-resume, matching REST.
+Guest paths at or under mounted filesystems remain unsupported by the underlying copy API.
+Runner ignores `overwrite` and `follow_symlinks`; these tools reject both arguments.

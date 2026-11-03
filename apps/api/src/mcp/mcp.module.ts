@@ -24,6 +24,7 @@ import { CommerceBoxLimitService } from '../boxlite-rest/commerce-box-limit.serv
 import { NetworkTools } from './network-tools'
 import { McpRunnerHttp } from './runner-http'
 import { McpExecutionTools } from './execution-tools'
+import { McpFileTools } from './file-tools'
 
 @Module({
   imports: [AuthModule, BoxModule, OrganizationModule, AuditModule, ImageModule, RegistryModule],
@@ -41,6 +42,7 @@ import { McpExecutionTools } from './execution-tools'
     NetworkTools,
     McpRunnerHttp,
     McpExecutionTools,
+    McpFileTools,
   ],
 })
 export class McpModule {}
