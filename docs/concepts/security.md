@@ -63,3 +63,21 @@ The complete threat model is in
 [`THREAT_MODEL.md`](../../src/boxlite/src/jailer/THREAT_MODEL.md). How the jailer grants
 guest networking and host access is in
 [Jailer network permissions](../contributing/architecture/jailer-network-permissions.md).
+
+## GNU ARM64 VMM policy
+
+Network-disabled GNU ARM64 boxes retain VMM seccomp filtering during startup,
+execution and shutdown. The target policy permits the libc, Go and libkrun calls
+needed for thread initialization, firmware mappings, Unix control sockets, KVM
+setup and unprivileged filesystem identity queries.
+
+KVM requests and supported scalar arguments remain restricted; unlisted calls
+still trap. `clone3` matches the x86 GNU allowance because classic seccomp cannot
+inspect its pointed-to arguments. The jailer and VM remain separate isolation
+layers. This policy does not resolve static-glibc firmware-loading compatibility.
+
+On Linux ARM64 with KVM, verify guest execution and live VMM thread filtering with:
+
+```sh
+make test:integration:python FILTER=network_disabled_arm64_guest_keeps_seccomp
+```

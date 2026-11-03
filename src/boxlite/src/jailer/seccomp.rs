@@ -26,11 +26,10 @@
 //!
 //! ## TODO: Tighten filters
 //!
-//! The current VMM filter is intentionally broad — all arg-restricted entries
-//! from the original Firecracker filters were widened to unrestricted to get
-//! libkrun working. Original filters are backed up as `*.original.json` in
-//! `resources/seccomp/`. Future work: profile libkrun's actual syscall args
-//! and restore per-argument restrictions where possible.
+//! Some target profiles retain broad permissions for libkrun. The GNU ARM64
+//! profile constrains scalar arguments for KVM requests, legacy clone, sockets,
+//! mappings, process controls, and resource limits. clone3 remains unrestricted:
+//! classic seccomp cannot inspect the pointed-to clone_args structure.
 
 use boxlite_shared::errors::BoxliteError;
 use std::collections::HashMap;
@@ -512,5 +511,86 @@ mod tests {
             libc::WTERMSIG(status)
         );
         assert_eq!(libc::WEXITSTATUS(status), 0);
+    }
+
+    #[cfg(all(target_arch = "aarch64", target_env = "gnu"))]
+    #[test]
+    fn test_arm64_vmm_syscall_boundaries() {
+        let bytes = include_bytes!(concat!(env!("OUT_DIR"), "/seccomp_filter.bpf"));
+        let filters = deserialize_binary(&bytes[..]).unwrap();
+        let filter = get_filter(&filters, SeccompRole::Vmm).unwrap();
+        let delay = libc::timespec {
+            tv_sec: 0,
+            tv_nsec: 1,
+        };
+        let mut sockets = [0; 2];
+        assert_eq!(
+            unsafe { libc::socketpair(libc::AF_UNIX, libc::SOCK_STREAM, 0, sockets.as_mut_ptr()) },
+            0
+        );
+        let cases = [
+            (
+                libc::SYS_shutdown,
+                sockets[0].into(),
+                libc::SHUT_RDWR,
+                false,
+            ),
+            (
+                libc::SYS_nanosleep,
+                &delay as *const _ as libc::c_long,
+                0,
+                false,
+            ),
+            (libc::SYS_gettid, 0, 0, false),
+            (libc::SYS_getuid, 0, 0, false),
+            (libc::SYS_getgid, 0, 0, false),
+            (libc::SYS_mount, 0, 0, true),
+            (libc::SYS_ptrace, 0, 0, true),
+            (libc::SYS_bpf, 0, 0, true),
+            (
+                libc::SYS_socket,
+                libc::AF_INET.into(),
+                libc::SOCK_STREAM,
+                true,
+            ),
+        ];
+        for (number, first, second, denied) in cases {
+            // Isolate SIGSYS and filter installation from the test runner.
+            let pid = unsafe { libc::fork() };
+            assert!(pid >= 0, "fork failed");
+            if pid == 0 {
+                if apply_filter(filter).is_err() {
+                    unsafe { libc::_exit(2) };
+                }
+                // All arguments are scalars or pointers inherited across fork.
+                // Use raw syscalls so vDSO implementations cannot bypass seccomp.
+                let result = unsafe { libc::syscall(number, first, second, 0, 0, 0, 0) };
+                unsafe { libc::_exit(i32::from(result == -1)) };
+            }
+            let mut status = 0;
+            loop {
+                let waited = unsafe { libc::waitpid(pid, &mut status, 0) };
+                if waited == pid {
+                    break;
+                }
+                assert!(
+                    waited == -1 && unsafe { *libc::__errno_location() } == libc::EINTR,
+                    "waitpid failed"
+                );
+            }
+            if denied {
+                assert!(
+                    libc::WIFSIGNALED(status),
+                    "syscall {number} was not trapped"
+                );
+                assert_eq!(libc::WTERMSIG(status), libc::SIGSYS);
+            } else {
+                assert!(libc::WIFEXITED(status), "syscall {number} was trapped");
+                assert_eq!(libc::WEXITSTATUS(status), 0);
+            }
+        }
+        for fd in sockets {
+            unsafe { libc::close(fd) };
+        }
     }
 }
