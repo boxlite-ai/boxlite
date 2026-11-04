@@ -197,6 +197,19 @@ describe('updating a credential', () => {
 })
 
 describe('connecting a registry', () => {
+  it('connects the first registry from the empty-list action', async () => {
+    state.credentials = []
+    await renderPanel()
+    const actions = [...document.querySelectorAll('button')].filter((item) => item.textContent === 'Connect a registry')
+    act(() => actions.at(-1)?.click())
+    await fillAndSubmit({ prefix: 'acme/' })
+    expect(mocks.create).toHaveBeenCalledWith({
+      organizationId: 'org-1',
+      credential: { registryHost: 'ghcr.io', repositoryPrefix: 'acme/', username: 'acme-bot', password: PASSWORD },
+    })
+    expect(document.getElementById('registry-password')).toBeNull()
+  })
+
   it('takes the secret in a masked field, and sends it only in the create', async () => {
     await renderPanel()
     open()
