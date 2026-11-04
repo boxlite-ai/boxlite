@@ -284,7 +284,7 @@ impl<'a> LayerExtractor<'a> {
                         .write(true)
                         .create(true)
                         .truncate(true)
-                        .mode(mode)
+                        .mode(if is_root { mode } else { mode | 0o600 })
                         .open(&safe_path)
                         .map_err(|e| {
                             BoxliteError::Storage(format!(
@@ -2563,3 +2563,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "extractor_permission_tests.rs"]
+mod permission_tests;
