@@ -43,7 +43,6 @@ Dated root-cause analyses and design studies, newest first.
 - 2026-11-06 · [SSH connection dialog](investigations/ssh-connection-dialog.md): progressive connection steps, saved-key recovery, and backend-compatible SSH controls.
 - 2026-11-06 · [Registration email policy](investigations/2026-11-06-registration-email-policy.md): disposable-domain rejection at platform account creation with existing-user access preserved.
 - 2026-11-04 · [CLI-managed SSH setup](investigations/ssh-quick-configuration.md): historical credential and printed-command design, superseded by direct OpenSSH login.
-- 2026-11-03 · [Tunnel custom domains](investigations/2026-11-03-tunnel-custom-domains.md): subscription-gated Dashboard setup and DNS challenges, preserved binding fields with new subscription/readiness failures, suffix-based persistence, and platform-only allowance; the first release uses GCP managed certificates and the existing certificate map.
 - 2026-11-02 · [VMM virtio-net device](investigations/2026-11-02-vmm-virtio-net.md): guest queue framing, gvproxy stream backpressure, event contracts and device-only qualification.
 - 2026-10-28 · [Agent REST API design](investigations/2026-10-28-agent-rest-api-design.md): nine HTTP operations for agents, turns and interaction, with snapshot, retry and event-recovery contracts.
 - 2026-10-23 · [Organization activity facts](investigations/organization-activation-facts.md): lifecycle timestamps, transaction boundaries, and migration availability.
