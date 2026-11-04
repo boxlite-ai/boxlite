@@ -125,11 +125,12 @@ export function sshConnectionInstructions(apiUrl: string, organizationId: string
   const quote = (value: string) => {
     if ([...value].some((character) => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127))
       throw new Error('Invalid connection argument')
+    if (/^[a-zA-Z0-9_-]+$/.test(value)) return value
     return `'${value.replace(/'/g, `'"'"'`)}'`
   }
   const url = new URL(apiUrl, window.location.origin)
   if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) throw new Error('Invalid API URL')
-  const cli = `boxlite --context=YOUR_CONTEXT --path-prefix=${quote(organizationId)}`
+  const cli = `boxlite --path-prefix=${quote(organizationId)}`
   // OpenSSH expands percent tokens before passing ProxyCommand to a shell.
   const proxy = `${cli} ssh --proxy -- ${quote(boxId)}`.replace(/%/g, '%%')
   const filename = `boxlite-${boxId}-key`

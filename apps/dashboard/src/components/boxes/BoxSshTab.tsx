@@ -220,12 +220,12 @@ function SshControls({
                   Host fingerprint: {status?.host_key_fingerprint || 'Enable SSH to read the host fingerprint.'}
                 </p>
                 <p>
-                  1. Use a BoxLite CLI version with cloud SSH proxy support. Run <code>boxlite context ls</code> to find
-                  a context for <code>{instructions.endpoint}</code> with access to this organization.
+                  1. Use a BoxLite CLI version with cloud SSH proxy support. Run <code>boxlite context ls</code> and
+                  confirm your current CLI context points to <code>{instructions.endpoint}</code> with access to this
+                  organization. Switch with <code>boxlite context use</code> if needed.
                 </p>
                 <p>
-                  2. Replace YOUR_CONTEXT below with that context's name. The dashboard cannot detect your local
-                  contexts. Open the folder containing the downloaded key and run:
+                  2. Open the folder containing the downloaded key and run. This command uses your current CLI context:
                 </p>
                 <pre className="whitespace-pre-wrap break-all bg-muted p-3 text-xs leading-6">
                   {instructions.connect}

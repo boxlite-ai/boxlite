@@ -79,6 +79,15 @@ describe('SSH REST boundary', () => {
 })
 
 describe('SSH connection instructions', () => {
+  it('keeps ordinary IDs readable with only the outer ProxyCommand quotes', () => {
+    vi.stubGlobal('window', { location: { origin: 'http://localhost:3000' } })
+    const commands = sshConnectionInstructions('https://api.example.test', 'mock-org-00000000', 'mock-box-running')
+    expect(commands.connect).toBe(
+      'chmod 600 boxlite-mock-box-running-key\n' +
+        "ssh -i ./boxlite-mock-box-running-key -o IdentitiesOnly=yes -o 'ProxyCommand=boxlite --path-prefix=mock-org-00000000 ssh --proxy -- mock-box-running' box@boxlite-mock-box-running",
+    )
+  })
+
   it('preserves cloud routing through the shell and OpenSSH proxy expansion', async () => {
     vi.stubGlobal('window', { location: { origin: 'http://localhost:3000' } })
     const apiUrl = 'https://api.example.test/a%20b'
@@ -105,7 +114,6 @@ describe('SSH connection instructions', () => {
       expect(result.error).toBeUndefined()
       expect(result.status).not.toBe(0) // The recording proxy cannot finish an SSH handshake.
       expect(readFileSync(record, 'utf8').split('\0').filter(Boolean)).toEqual([
-        '--context=YOUR_CONTEXT',
         `--path-prefix=${organization}`,
         'ssh',
         '--proxy',
@@ -119,6 +127,7 @@ describe('SSH connection instructions', () => {
     expect(commands.connect).toContain('box@boxlite-box-1')
     expect(commands.connect).not.toContain('--listen')
     expect(commands.connect).not.toContain('--url')
+    expect(commands.connect).not.toContain('--context')
     expect(commands.connect).not.toContain('StrictHostKeyChecking=no')
   })
 

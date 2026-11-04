@@ -24,16 +24,17 @@ Setup then creates new identities. Failed setup retains generated keys for a
 manual retry. Browser Ed25519 support and a secure context are required.
 
 The dialog supplies an OpenSSH command using
-`ProxyCommand=boxlite --context=YOUR_CONTEXT --path-prefix=… ssh --proxy -- BOX`, matching the
+`ProxyCommand=boxlite --path-prefix=… ssh --proxy -- BOX`, matching the
 cloud CLI syntax in [#2327](https://github.com/boxlite-ai/boxlite/pull/2327).
-Use a CLI build containing that change. Run `boxlite context ls` and replace
-`YOUR_CONTEXT` with a context whose endpoint matches the API address shown in
-the dialog and whose credentials can access the selected organization. The
-dashboard cannot detect local contexts and does not supply a `--url` override.
+Use a CLI build containing that change. The command uses the current CLI context;
+it supplies neither `--context` nor `--url`. Run `boxlite context ls` to confirm
+the current context matches the API address shown in the dialog and can access
+the selected organization. Switch with `boxlite context use` if needed.
 From the download directory, run the
 displayed `chmod 600` and SSH commands; SSH starts and stops the proxy itself,
 without a separate forwarding terminal or local listening port. The
-organization argument survives shell quoting and OpenSSH percent expansion;
+organization argument survives shell quoting and OpenSSH percent expansion.
+Ordinary IDs need no inner quotes; special characters remain safely quoted.
 API credentials are loaded by the CLI, never embedded in the command.
 
 Compare the displayed host fingerprint before accepting it; a fresh Setup may
