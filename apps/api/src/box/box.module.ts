@@ -38,6 +38,7 @@ import { ImageModule } from '../image/image.module'
 import { Region } from '../region/entities/region.entity'
 import { JobController } from './controllers/job.controller'
 import { JobService } from './services/job.service'
+import { ResizeJobService } from './services/resize-job.service'
 import { JobStateHandlerService } from './services/job-state-handler.service'
 import { Job } from './entities/job.entity'
 import { BoxLookupCacheInvalidationService } from './services/box-lookup-cache-invalidation.service'
@@ -66,6 +67,7 @@ import { BoxCheckpoint, BoxCheckpointOperation, BoxCheckpointTransfer } from './
 import { BoxCheckpointService } from './services/box-checkpoint.service'
 import { BoxCheckpointSettler } from './services/box-checkpoint-settler.service'
 import { TypedConfigService } from '../config/typed-config.service'
+import { UsageModule } from '../usage/usage.module'
 
 @Module({
   imports: [
@@ -73,6 +75,7 @@ import { TypedConfigService } from '../config/typed-config.service'
     OrganizationModule,
     RegionModule,
     ImageModule,
+    UsageModule,
     TypeOrmModule.forFeature([
       Box,
       Runner,
@@ -107,6 +110,7 @@ import { TypedConfigService } from '../config/typed-config.service'
     BoxStopAction,
     BoxDestroyAction,
     JobService,
+    ResizeJobService,
     JobStateHandlerService,
     BoxActivityService,
     BoxExitCodeService,
@@ -142,6 +146,8 @@ import { TypedConfigService } from '../config/typed-config.service'
     },
   ],
   exports: [
+    BoxLookupCacheInvalidationService,
+    JobService,
     BoxService,
     TunnelService,
     AttachTicketService,

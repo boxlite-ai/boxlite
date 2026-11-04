@@ -31,6 +31,9 @@ import { BoxliteCheckpointController, BoxliteBoxCheckpointController } from './b
 import { CheckpointBoxService } from './checkpoint-box.service'
 import { CheckpointTransferService } from './checkpoint-transfer.service'
 import { SnapshotBoxService } from './snapshot-box.service'
+import { BoxResizeService } from './box-resize.service'
+import { BoxliteResizeController } from './boxlite-resize.controller'
+import { UsageModule } from '../usage/usage.module'
 
 /** The controller's routes again, mounted at its unprefixed path alone. */
 function unprefixed<T extends Type>(controller: T, path: string): T {
@@ -50,6 +53,7 @@ function unprefixed<T extends Type>(controller: T, path: string): T {
 const unprefixedMounts = [
   unprefixed(BoxliteCheckpointController, 'v1/checkpoints'),
   unprefixed(BoxliteBoxCheckpointController, 'v1/boxes'),
+  unprefixed(BoxliteResizeController, 'v1/boxes'),
   unprefixed(BoxliteSnapshotController, 'v1/snapshots'),
   unprefixed(BoxliteBoxController, 'v1/boxes'),
   unprefixed(BoxliteBoxSnapshotController, 'v1/boxes'),
@@ -62,6 +66,7 @@ const unprefixedMounts = [
 
 @Module({
   imports: [
+    UsageModule,
     RegionModule,
     BoxModule,
     AuthModule,
@@ -72,6 +77,7 @@ const unprefixedMounts = [
     RegistryModule,
   ],
   controllers: [
+    BoxliteResizeController,
     BoxliteMeController,
     BoxliteConfigController,
     ...unprefixedMounts,
@@ -94,6 +100,7 @@ const unprefixedMounts = [
     SnapshotBoxService,
     CheckpointBoxService,
     CheckpointTransferService,
+    BoxResizeService,
   ],
   exports: [BoxliteWsProxyService],
 })

@@ -20,6 +20,8 @@ import {
   UpdateJobStatusDto,
 } from '../dto/job.dto'
 import { JobService } from '../services/job.service'
+import { ResizeJobService } from '../services/resize-job.service'
+import { JobType } from '../enums/job-type.enum'
 import { JobAccessGuard } from '../guards/job-access.guard'
 
 @ApiTags('jobs')
@@ -30,7 +32,10 @@ import { JobAccessGuard } from '../guards/job-access.guard'
 export class JobController {
   private readonly logger = new Logger(JobController.name)
 
-  constructor(private readonly jobService: JobService) {}
+  constructor(
+    private readonly jobService: JobService,
+    private readonly resizeJobs: ResizeJobService,
+  ) {}
 
   @Get()
   @ApiOperation({
@@ -183,6 +188,20 @@ export class JobController {
     @Body() updateJobStatusDto: UpdateJobStatusDto,
   ): Promise<JobDto> {
     this.logger.debug(`Runner ${runnerContext.runnerId} updating job ${jobId} status to ${updateJobStatusDto.status}`)
+
+    const existing = await this.jobService.findOne(jobId)
+    if (existing?.type === JobType.RESIZE_BOX) {
+      return new JobDto(
+        await this.resizeJobs.report(
+          jobId,
+          runnerContext.runnerId,
+          updateJobStatusDto.claimToken,
+          updateJobStatusDto.status,
+          updateJobStatusDto.errorMessage,
+          updateJobStatusDto.resultMetadata,
+        ),
+      )
+    }
 
     const job = await this.jobService.updateJobStatus(
       jobId,

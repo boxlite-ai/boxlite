@@ -23,6 +23,9 @@ export interface JobTypeMap {
   [JobType.RESUME_BOX]: { resourceType: [ResourceType.BACKUP] }
   [JobType.CREATE_CHECKPOINT]: { resourceType: [ResourceType.BACKUP] }
   [JobType.IMPORT_CHECKPOINT]: { resourceType: [ResourceType.BACKUP] }
+  [JobType.RESIZE_BOX]: {
+    resourceType: [ResourceType.BOX]
+  }
   [JobType.CREATE_BOX]: {
     resourceType: [ResourceType.BOX]
   }

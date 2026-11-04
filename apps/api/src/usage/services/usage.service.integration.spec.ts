@@ -30,6 +30,7 @@ import { ReplaceBoxNetworkFlags1791000000000 } from '../../migrations/pre-deploy
 import { DropBoxNetworkFlags1791000000000 } from '../../migrations/post-deploy/1791000000000-drop-box-network-flags-migration'
 import { AddBoxSnapshotStates1791200000000 } from '../../migrations/pre-deploy/1791200000000-add-box-snapshot-states-migration'
 import { AddGuestPrivileged1792540800000 } from '../../migrations/pre-deploy/1792540800000-add-guest-privileged-migration'
+import { AddCloudResizeJobs1793232000000 } from '../../migrations/pre-deploy/1793232000000-add-cloud-resize-jobs-migration'
 import { AddBoxInitialSnapshot1792972800000 } from '../../migrations/pre-deploy/1792972800000-add-box-initial-snapshot-migration'
 import { AddBoxNestedVirtualization1793250000000 } from '../../migrations/pre-deploy/1793250000000-add-box-nested-virtualization-migration'
 import { BoxUsagePeriod } from '../entities/box-usage-period.entity'
@@ -288,6 +289,7 @@ describeIfDatabase('UsageService (integration, real Postgres + Redis)', () => {
       // Adds `box.privileged`, which the entity declares.
       await new AddGuestPrivileged1792540800000().up(queryRunner)
       await new AddBoxInitialSnapshot1792972800000().up(queryRunner)
+      await new AddCloudResizeJobs1793232000000().up(queryRunner)
       await new AddBoxNestedVirtualization1793250000000().up(queryRunner)
       await new AddMemoryCheckpoints1793600000000().up(queryRunner)
     } finally {
@@ -346,6 +348,7 @@ describeIfDatabase('UsageService (integration, real Postgres + Redis)', () => {
     it('opens full allocation from a restored Paused event even when its entity snapshot still says restoring', async () => {
       await insertBox({ state: BoxState.RESTORING })
       const entity = await dataSource.getRepository(Box).findOneByOrFail({ id: box.id })
+      await dataSource.getRepository(Box).update(box.id, { state: BoxState.PAUSED })
       await serviceForPersistedBox().handleBoxStateUpdate(
         new BoxStateUpdatedEvent(entity, BoxState.RESTORING, BoxState.PAUSED),
       )
@@ -403,8 +406,10 @@ describeIfDatabase('UsageService (integration, real Postgres + Redis)', () => {
         service = serviceForPersistedBox()
       await service.handleBoxStateUpdate(new BoxStateUpdatedEvent(entity, BoxState.RESTORING, BoxState.PAUSED))
       expect(await openPeriods()).toEqual([expect.objectContaining(fullShape)])
+      await dataSource.getRepository(Box).update(box.id, { state: BoxState.STOPPING })
       await service.handleBoxStateUpdate(new BoxStateUpdatedEvent(entity, BoxState.PAUSED, BoxState.STOPPING))
       expect(await openPeriods()).toEqual([expect.objectContaining({ cpu: 0, gpu: 0, mem: 0, disk: box.disk })])
+      await dataSource.getRepository(Box).update(box.id, { state: BoxState.STOPPED })
       await service.handleBoxStateUpdate(new BoxStateUpdatedEvent(entity, BoxState.STOPPING, BoxState.STOPPED))
       expect(await openPeriods()).toHaveLength(1)
       await service.handleBoxDesiredStateUpdate(

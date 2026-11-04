@@ -18,6 +18,9 @@ export { JobType, JobStatus, ResourceType }
 
 @ApiSchema({ name: 'Job' })
 export class JobDto {
+  @ApiPropertyOptional({ description: 'Lease token required for resize job heartbeats and results' })
+  claimToken?: string
+
   @ApiProperty({
     description: 'The ID of the job',
     example: 'job123',
@@ -95,6 +98,7 @@ export class JobDto {
   updatedAt?: string
 
   constructor(job: Job) {
+    this.claimToken = job.claimToken || undefined
     this.id = job.id
     this.type = job.type
     this.status = job.status
@@ -170,6 +174,11 @@ export class ListJobsQueryDto {
 
 @ApiSchema({ name: 'UpdateJobStatus' })
 export class UpdateJobStatusDto {
+  @ApiPropertyOptional({ description: 'Token returned by the resize job claim' })
+  @IsOptional()
+  @IsString()
+  claimToken?: string
+
   @ApiProperty({
     description: 'The new status of the job',
     enum: JobStatus,

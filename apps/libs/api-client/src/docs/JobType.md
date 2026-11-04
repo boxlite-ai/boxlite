@@ -4,6 +4,8 @@ The type of the job
 
 ## Enum
 
+* `RESIZE_BOX` (value: `'RESIZE_BOX'`)
+
 * `CREATE_BOX` (value: `'CREATE_BOX'`)
 
 * `START_BOX` (value: `'START_BOX'`)

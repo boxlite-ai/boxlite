@@ -21,6 +21,8 @@ var _ MappedNullable = &UpdateJobStatus{}
 
 // UpdateJobStatus struct for UpdateJobStatus
 type UpdateJobStatus struct {
+	// Token returned by the resize job claim
+	ClaimToken *string `json:"claimToken,omitempty"`
 	// The new status of the job
 	Status JobStatus `json:"status"`
 	// Error message if the job failed
@@ -48,6 +50,38 @@ func NewUpdateJobStatus(status JobStatus) *UpdateJobStatus {
 func NewUpdateJobStatusWithDefaults() *UpdateJobStatus {
 	this := UpdateJobStatus{}
 	return &this
+}
+
+// GetClaimToken returns the ClaimToken field value if set, zero value otherwise.
+func (o *UpdateJobStatus) GetClaimToken() string {
+	if o == nil || IsNil(o.ClaimToken) {
+		var ret string
+		return ret
+	}
+	return *o.ClaimToken
+}
+
+// GetClaimTokenOk returns a tuple with the ClaimToken field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+func (o *UpdateJobStatus) GetClaimTokenOk() (*string, bool) {
+	if o == nil || IsNil(o.ClaimToken) {
+		return nil, false
+	}
+	return o.ClaimToken, true
+}
+
+// HasClaimToken returns a boolean if a field has been set.
+func (o *UpdateJobStatus) HasClaimToken() bool {
+	if o != nil && !IsNil(o.ClaimToken) {
+		return true
+	}
+
+	return false
+}
+
+// SetClaimToken gets a reference to the given string and assigns it to the ClaimToken field.
+func (o *UpdateJobStatus) SetClaimToken(v string) {
+	o.ClaimToken = &v
 }
 
 // GetStatus returns the Status field value
@@ -148,6 +182,9 @@ func (o UpdateJobStatus) MarshalJSON() ([]byte, error) {
 
 func (o UpdateJobStatus) ToMap() (map[string]interface{}, error) {
 	toSerialize := map[string]interface{}{}
+	if !IsNil(o.ClaimToken) {
+		toSerialize["claimToken"] = o.ClaimToken
+	}
 	toSerialize["status"] = o.Status
 	if !IsNil(o.ErrorMessage) {
 		toSerialize["errorMessage"] = o.ErrorMessage
@@ -198,6 +235,7 @@ func (o *UpdateJobStatus) UnmarshalJSON(data []byte) (err error) {
 	additionalProperties := make(map[string]interface{})
 
 	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "claimToken")
 		delete(additionalProperties, "status")
 		delete(additionalProperties, "errorMessage")
 		delete(additionalProperties, "resultMetadata")

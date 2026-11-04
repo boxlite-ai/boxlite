@@ -28,6 +28,8 @@ function productBoxControllerPaths(): unknown[] {
     .filter((path) => path !== undefined)
 }
 
+// Cloud resize is a separate controller (BoxliteResizeController) backed by the
+// Runner native resize path. This suite guards only the removed product route.
 describe('Box resource resize removal', () => {
   let app: INestApplication | undefined
 

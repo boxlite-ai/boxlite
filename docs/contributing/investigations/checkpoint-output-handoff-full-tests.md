@@ -264,3 +264,18 @@ with test seams for identity, image resolution, placement and commerce. It does
 not qualify live GCS/IAM: no test bucket was available. No cloud resources or
 deployments were created. The existing firmware was reused, and host security
 policy was unchanged. Task services and VMs were stopped after each run.
+
+### Integration with durable cloud resize
+
+The merge of `x_features` at `292f0a87` preserves resize's usage lease, Box row
+lock and persisted-state checks while keeping Paused compute billing. Job maps
+and REST module registrations include both features. Billing fixtures persist
+the transition before dispatching its event, retaining stale event snapshots and
+the original assertions.
+
+On 2026-11-04, `make test:apps:api` with a checkpoint/resize/REST/usage name filter
+passed 601 tests across 39 suites in 271 seconds, using isolated PostgreSQL and
+Redis. The filter skipped 1,825 other tests. API TypeScript checking and formatting
+of the resolved files also passed. Independent merge review found no regression.
+The earlier real-VM SDK results apply to the pre-merge build; those full round
+trips were not repeated for this merge.

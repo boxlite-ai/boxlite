@@ -10,6 +10,7 @@ import { EntityManager, IsNull, LessThan, Not, Repository } from 'typeorm'
 import { metrics, type Counter } from '@opentelemetry/api'
 import { BoxUsagePeriod } from '../entities/box-usage-period.entity'
 import { OnEvent } from '@nestjs/event-emitter'
+import { ConflictException } from '@nestjs/common'
 import { BoxStateUpdatedEvent } from '../../box/events/box-state-updated.event'
 import { BoxDesiredStateUpdatedEvent } from '../../box/events/box-desired-state-updated.event'
 import { BoxState } from '../../box/enums/box-state.enum'
@@ -89,6 +90,13 @@ export class UsageService implements TrackableJobExecutions, OnApplicationShutdo
     private readonly runnerRepository: Repository<Runner>,
   ) {}
 
+  /** Serialize configuration acceptance with every writer of its billing snapshot. */
+  async withResourceLock<T>(boxId: string, operation: (signal: AbortSignal) => Promise<T>): Promise<T> {
+    const lease = await this.acquireLease(boxId)
+    if (!lease) throw new ConflictException('Box usage is being updated; retry the request')
+    return this.withLease(lease, operation, `resize ${boxId}`)
+  }
+
   async onApplicationShutdown() {
     this.shutdownController.abort(new Error('UsageService is shutting down'))
     //  wait for all active jobs to finish
@@ -127,49 +135,61 @@ export class UsageService implements TrackableJobExecutions, OnApplicationShutdo
       lease,
       async (signal) => {
         signal.throwIfAborted()
-        switch (event.newState) {
-          case BoxState.STARTED:
-          case BoxState.PAUSED: {
-            await this.boxUsagePeriodRepository.manager.transaction(async (transactionalEntityManager) => {
+        // State events can wait behind a resize's billing transaction. Recheck
+        // their authority under the same usage lease and Box row lock.
+        await this.boxUsagePeriodRepository.manager.transaction(async (manager) => {
+          const current = await manager.findOne(Box, {
+            where: { id: event.box.id },
+            lock: { mode: 'pessimistic_write' },
+            loadEagerRelations: false,
+          })
+          if (!current || current.state !== event.newState || current.resizeJobId) return
+          switch (event.newState) {
+            case BoxState.STARTED:
+            case BoxState.PAUSED: {
               const transitionAt = new Date()
-              await this.closeUsagePeriod(event.box.id, transactionalEntityManager, transitionAt)
+              await this.closeUsagePeriod(current.id, manager, transitionAt)
               signal.throwIfAborted()
-              await this.openUsagePeriodFor(event.box, event.newState, transactionalEntityManager, transitionAt)
+              await this.openUsagePeriodFor(current, current.state, manager, transitionAt)
               signal.throwIfAborted()
-            })
-            break
-          }
-          // Billing stops charging compute the moment a stop is requested.
-          case BoxState.STOPPING:
-            await this.closeUsagePeriod(event.box.id)
-            signal.throwIfAborted()
-            await this.openUsagePeriodFor(event.box, event.newState)
-            break
-          // Safeguards if STOPPING state is skipped
-          case BoxState.STOPPED: {
-            const cpuUsagePeriod = await this.boxUsagePeriodRepository.findOne({
-              where: {
-                boxId: event.box.id,
-                endAt: IsNull(),
-                cpu: Not(0),
-              },
-            })
-            signal.throwIfAborted()
-            if (cpuUsagePeriod) {
-              await this.closeUsagePeriod(event.box.id)
-              signal.throwIfAborted()
-              await this.openUsagePeriodFor(event.box, event.newState)
+              break
             }
-            break
+            // Billing stops charging compute the moment a stop is requested.
+            case BoxState.STOPPING: {
+              const at = new Date()
+              await this.closeUsagePeriod(current.id, manager, at)
+              signal.throwIfAborted()
+              await this.openUsagePeriodFor(current, current.state, manager, at)
+              break
+            }
+            // Safeguards if STOPPING state is skipped
+            case BoxState.STOPPED: {
+              const cpuUsagePeriod = await manager.findOne(BoxUsagePeriod, {
+                where: {
+                  boxId: event.box.id,
+                  endAt: IsNull(),
+                  cpu: Not(0),
+                },
+              })
+              signal.throwIfAborted()
+              if (cpuUsagePeriod) {
+                const at = new Date()
+                await this.closeUsagePeriod(current.id, manager, at)
+                signal.throwIfAborted()
+                await this.openUsagePeriodFor(current, current.state, manager, at)
+              }
+              break
+            }
+            case BoxState.ERROR:
+            case BoxState.ARCHIVED:
+            case BoxState.DESTROYING:
+            case BoxState.DESTROYED: {
+              await this.closeUsagePeriod(current.id, manager)
+              break
+            }
           }
-          case BoxState.ERROR:
-          case BoxState.ARCHIVED:
-          case BoxState.DESTROYING:
-          case BoxState.DESTROYED: {
-            await this.closeUsagePeriod(event.box.id)
-            break
-          }
-        }
+          signal.throwIfAborted()
+        })
       },
       `box ${event.box.id}`,
     )
@@ -180,7 +200,8 @@ export class UsageService implements TrackableJobExecutions, OnApplicationShutdo
    * (terminal) or whose state is still in flight gets none — the caller has
    * already closed whatever was open.
    */
-  private async openUsagePeriodFor(box: Box, state: BoxState, entityManager?: EntityManager, startAt?: Date) {
+  /** Public so resize completion can open the target period in its Box/Job transaction. */
+  async openUsagePeriodFor(box: Box, state: BoxState, entityManager?: EntityManager, startAt?: Date) {
     // The event's newState is the authority on where the box landed; the entity
     // it carries is a snapshot, and a synthetic transition may have been built
     // with a state of its own (see the warm-pool claim in box.service.ts).
@@ -211,7 +232,8 @@ export class UsageService implements TrackableJobExecutions, OnApplicationShutdo
     await (entityManager ? entityManager.save(usagePeriod) : this.boxUsagePeriodRepository.save(usagePeriod))
   }
 
-  private async closeUsagePeriod(boxId: string, entityManager?: EntityManager, endAt = new Date()) {
+  /** Public so resize completion can close the old period in its Box/Job transaction. */
+  async closeUsagePeriod(boxId: string, entityManager?: EntityManager, endAt = new Date()) {
     const where = { boxId, endAt: IsNull() }
     const lastUsagePeriod = entityManager
       ? await entityManager.findOne(BoxUsagePeriod, { where })
@@ -263,6 +285,7 @@ export class UsageService implements TrackableJobExecutions, OnApplicationShutdo
             async (boxSignal) => {
               await this.boxUsagePeriodRepository.manager.transaction(async (transactionalEntityManager) => {
                 boxSignal.throwIfAborted()
+
                 // Keep current attribution stable through the rollover, and use
                 // one Box -> usage-period lock order for competing writers.
                 const box = await transactionalEntityManager.findOne(Box, {
@@ -444,6 +467,7 @@ export class UsageService implements TrackableJobExecutions, OnApplicationShutdo
         signal.throwIfAborted()
         const box = await this.boxRepository.findOne({ where: { id: candidate.box_id } })
         signal.throwIfAborted()
+        if (box?.resizeJobId) return
         const expected = expectedOpenPeriod(box)
 
         const open = await this.boxUsagePeriodRepository.findOne({
