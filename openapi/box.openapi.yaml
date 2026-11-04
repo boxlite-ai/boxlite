@@ -553,11 +553,16 @@ paths:
     delete:
       operationId: disableSsh
       summary: Disable guest SSH
-      description: Stops guest SSH and disconnects clients; idempotent, and never starts the VM or its main command.
+      description: |
+        Stops guest SSH and disconnects clients on a running box. Repeated calls
+        succeed when SSH is already disabled and the box is still running.
+        A configured or stopped box returns 409 invalid_state without changing
+        saved SSH intent. Never starts or resumes the VM or its main command,
+        and does not count as activity.
       tags: [Boxes]
       responses:
         "200":
-          description: SSH disabled or already disabled
+          description: SSH disabled or already disabled on a running box
           content:
             application/json:
               schema:

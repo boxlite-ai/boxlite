@@ -199,7 +199,12 @@ checks the running state again before dispatch.
 |----------|---------------|----------|-----------|
 | `POST`   | `write:boxes` | Counts after authorization and box lookup, including lifecycle refusals | Running box: configured. `stopped` box: auto-resumed on its default command. `409` when the box is not ready and `auto_resume=false`, when it must start a box with an explicit `cmd`/`entrypoint`, or when it cannot resume (`error`, `archived`, …). |
 | `GET`    | membership    | None      | `started` or `stopped` only; a stopped box reports disabled status with generation `0`. Other states answer `409`. |
-| `DELETE` | `write:boxes` | None      | Same as `GET`; idempotent. |
+| `DELETE` | `write:boxes` | None      | Running boxes only; repeated calls succeed even when SSH is already disabled. Stopped or transitional boxes return `409` without changing saved SSH intent. |
+
+Cloud disable now matches the local runtime: a stopped box returns `409` instead
+of the previous successful disabled status. Call disable while the box is
+running to persist the disabled switch; status on a stopped box only reports
+that no listener is currently running.
 
 With auto-resume enabled, configuring SSH waits for a box already starting
 (`creating`, `starting`, `restoring`), even with an explicit `cmd` or `entrypoint`.

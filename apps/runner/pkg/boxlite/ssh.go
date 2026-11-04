@@ -33,27 +33,10 @@ func (c *Client) SSHEnable(ctx context.Context, boxID string) (*boxlite.SSHStatu
 }
 
 // SSHStatus reports a box's guest SSH listener without starting the box.
-func (c *Client) SSHStatus(ctx context.Context, boxID string) (*boxlite.SSHStatus, error) {
-	return c.observeSSH(ctx, boxID, (*boxlite.SSH).Status)
-}
-
-// SSHDisable stops a box's guest SSH listener without starting the box.
-func (c *Client) SSHDisable(ctx context.Context, boxID string) (*boxlite.SSHStatus, error) {
-	return c.observeSSH(ctx, boxID, (*boxlite.SSH).Disable)
-}
-
-// observeSSH runs an SSH call that must never boot the box.
-//
 // A stopped or never-started box has no live listener, regardless of saved SSH
-// intent, and reports disabled. Fetching a handle for such a box would evict
-// and leak one per call (see evictBox). A running box is asked through its
-// handle; Status and Disable leave a handle whose box has meanwhile stopped
-// unbooted.
-func (c *Client) observeSSH(
-	ctx context.Context,
-	boxID string,
-	call func(*boxlite.SSH, context.Context) (*boxlite.SSHStatus, error),
-) (*boxlite.SSHStatus, error) {
+// intent. Return disabled without fetching a handle, which would be evicted
+// and leaked on every observation of an idle box (see evictBox).
+func (c *Client) SSHStatus(ctx context.Context, boxID string) (*boxlite.SSHStatus, error) {
 	info, err := c.runtime.GetInfo(ctx, boxID)
 	if err != nil {
 		return nil, fmt.Errorf("read state of box %s: %w", boxID, err)
@@ -66,8 +49,18 @@ func (c *Client) observeSSH(
 		if err != nil {
 			return nil, err
 		}
-		return call(bx.SSH(), ctx)
+		return bx.SSH().Status(ctx)
 	default:
 		return nil, fmt.Errorf("%w: %s is %s", ErrBoxNotRunning, boxID, info.State)
 	}
+}
+
+// SSHDisable stops SSH on a running box. Repeated calls are supported, but
+// an idle box is refused without changing its saved SSH intent or booting it.
+func (c *Client) SSHDisable(ctx context.Context, boxID string) (*boxlite.SSHStatus, error) {
+	bx, err := c.runningBox(ctx, boxID)
+	if err != nil {
+		return nil, err
+	}
+	return bx.SSH().Disable(ctx)
 }

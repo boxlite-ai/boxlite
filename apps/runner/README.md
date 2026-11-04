@@ -465,8 +465,9 @@ the counters maintained in `pkg/common/` (operation counts, etc.).
 | Method | Path | Controller | Purpose |
 | --- | --- | --- | --- |
 | `POST` | `/v1/boxes/:boxId/ssh` | `BoxliteSSHConfigure` | Strict `SshConfig` parse → one `SSH().Configure` on a running box |
+| `POST` | `/v1/boxes/:boxId/ssh/enable` | `BoxliteSSHEnable` | Enable saved configuration on a running box; otherwise `409` |
 | `GET` | `/v1/boxes/:boxId/ssh` | `BoxliteSSHStatus` | `SshStatus`; stopped boxes answer disabled from persisted state |
-| `DELETE` | `/v1/boxes/:boxId/ssh` | `BoxliteSSHDisable` | Idempotent disable; never boots |
+| `DELETE` | `/v1/boxes/:boxId/ssh` | `BoxliteSSHDisable` | Disable on a running box; otherwise `409`. Repeatable while running; never boots |
 
 - **Running-state checks.** Configure on a box observed as not running answers
   `409 invalid_state`; the API resumes a box first when its policy allows. The
@@ -474,9 +475,12 @@ the counters maintained in `pkg/common/` (operation counts, etc.).
   The shared helper retains the tunnel's known race: after a runner restart,
   a fresh handle can still boot a box that exits after these checks. Preventing
   that race requires a runtime operation that cannot implicitly start a box.
-- **No handle churn.** Status and disable read a stopped or never-started box's
-  state from the runtime and answer the zero disabled status without fetching a
-  handle (see `evictBox`). Other states, such as paused, answer `409`.
+- **No handle churn.** Status reads a stopped or never-started box's state
+  and returns the zero disabled status without fetching a handle (see `evictBox`).
+  Enable and disable instead return `409 invalid_state`; they never claim a
+  saved-state change succeeded on an idle box. Other states, such as paused,
+  also answer `409`. The SDK prevents these mutations from starting a box even
+  if it stops after the runner's checks.
 - **Strict body.** The parser matches member names exactly and rejects unknown,
   case-variant, duplicate, missing, and `null` members (`ca` may be `null`).
   Every rejection is the fixed `400 invalid SSH configuration`, so private key
@@ -641,7 +645,7 @@ the Swagger UI (development only).
 | `GET` | `/v1/boxes/:boxId/metrics` | Per-box metrics |
 | `POST` | `/v1/boxes/:boxId/ssh` | Configure guest SSH once; running boxes only |
 | `GET` | `/v1/boxes/:boxId/ssh` | Guest SSH status; never boots |
-| `DELETE` | `/v1/boxes/:boxId/ssh` | Disable guest SSH; never boots |
+| `DELETE` | `/v1/boxes/:boxId/ssh` | Disable guest SSH on a running box; otherwise `409`; never boots |
 
 ---
 

@@ -492,7 +492,7 @@ organization membership.
 | `POST`   | `/api/v1[/{prefix}]/boxes/{boxId}/ssh`                        | Replaces guest SSH configuration once; counts as activity and may auto-resume a box. |
 | `POST`   | `/api/v1[/{prefix}]/boxes/{boxId}/ssh/enable`                 | Enables saved SSH configuration on a running box; no auto-resume or activity. |
 | `GET`    | `/api/v1[/{prefix}]/boxes/{boxId}/ssh`                        | Reads guest SSH status without resuming the box or counting as activity. |
-| `DELETE` | `/api/v1[/{prefix}]/boxes/{boxId}/ssh`                        | Disables guest SSH without resuming the box or counting as activity. |
+| `DELETE` | `/api/v1[/{prefix}]/boxes/{boxId}/ssh`                        | Disables guest SSH on a running box; otherwise `409`. No auto-resume or activity. |
 
 The exec, signal, resize, files, and metrics handlers are registered as
 catch-all reverse proxies to the box's assigned runner; the methods shown are
@@ -753,7 +753,7 @@ runtime and its microVMs.
 | `POST`    | `/v1/boxes/{boxId}/ssh`                        | Configures guest SSH once after checking that the box is running; otherwise `409 invalid_state`. |
 | `POST`    | `/v1/boxes/{boxId}/ssh/enable`                 | Enables saved SSH configuration only while running; otherwise `409 invalid_state`. |
 | `GET`     | `/v1/boxes/{boxId}/ssh`                        | Reads guest SSH status; a stopped box answers disabled status without a handle. |
-| `DELETE`  | `/v1/boxes/{boxId}/ssh`                        | Disables guest SSH; never boots the box.              |
+| `DELETE`  | `/v1/boxes/{boxId}/ssh`                        | Disables guest SSH on a running box; otherwise `409 invalid_state`. Never boots.              |
 
 </details>
 

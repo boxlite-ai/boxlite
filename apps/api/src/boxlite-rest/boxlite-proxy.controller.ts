@@ -72,7 +72,7 @@ function refuseImplicitSshStart(box: Box, boxId: string): void {
   }
 }
 
-// SSH status and disable never start a box. The runner answers a stopped box's
+// SSH status never starts a box. The runner answers a stopped box's
 // disabled status itself; a box between states has no answer to give yet.
 function requireSshObservable(box: Box, boxId: string): void {
   if (box.state !== BoxState.STARTED && box.state !== BoxState.STOPPED) {
@@ -83,7 +83,7 @@ function requireSshObservable(box: Box, boxId: string): void {
 function requireSshRunning(box: Box, boxId: string): void {
   const state = reportedBoxState(box)
   if (state !== BoxState.STARTED || box.desiredState !== BoxDesiredState.STARTED) {
-    throw new ConflictException(`Box ${boxId} is not running (state: ${state}); start it before enabling SSH`)
+    throw new ConflictException(`Box ${boxId} is not running (state: ${state}); start it before changing SSH`)
   }
 }
 
@@ -335,7 +335,7 @@ export class BoxliteProxyController {
       res,
       next,
       OBSERVATION_ONLY,
-      { admit: requireSshObservable },
+      { admit: requireSshRunning },
     )
   }
 
