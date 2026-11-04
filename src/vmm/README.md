@@ -498,14 +498,16 @@ existing instrumented unit profiles. Use the matching toolchain's LLVM tools;
 the output is `target/coverage/lcov.info`, not a three-platform qualification.
 
 Both real-boot entry points build the freestanding `balloon_init.c` test init.
-The guest touches scratch and independent live regions, reports exact PFNs to
-a test-only observation port, unmaps scratch, verifies unchanged capacity/live
-data, reallocates/touches, and unbinds/rebinds the driver. The observer measures
-`mincore` residency and used completions; it never reclaims through that port.
-Reporting-off and `init_on_free=1` runs must retain freed backing without any
-report completion. Security settings are not weakened, and watchdog expiry
-fails. Three-platform real-guest reporting/reclaim/reuse/lifetime evidence is
-still required; these commands do not waive the arm64 prerequisites.
+The guest touches scratch and independent live regions, announces each phase on
+its console, unmaps scratch, verifies unchanged capacity/live data,
+reallocates/touches, and unbinds/rebinds the driver. The host samples `mincore`
+residency across the run against those markers and counts used completions; the
+test needs no device or kernel capability of its own. Reporting-off and
+`init_on_free=1` runs must retain freed backing without any report completion.
+Security settings are not weakened, and watchdog expiry fails. Sampled
+residency is not the exact-PFN evidence a per-page protocol would give, and
+three-platform real-guest reporting/reclaim/reuse/lifetime evidence is still
+required; these commands do not waive the arm64 prerequisites.
 
 ## Chipset
 

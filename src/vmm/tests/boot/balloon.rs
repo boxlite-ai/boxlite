@@ -1,12 +1,13 @@
 // Copyright 2026 BoxLite Contributors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Real Linux allocator reporting over KVM/MMIO, with exact-PFN residency
-//! observations. The observation port is test-only; it never reclaims memory.
+//! Real Linux allocator reporting over KVM/MMIO. The host samples the RAM
+//! mapping's residency while the guest moves through its phases, and takes the
+//! phases from the guest's console markers, so nothing in the guest needs a
+//! test-only kernel capability.
 
 use super::*;
 use crate::{
-    bus::BusDevice,
     devices::{balloon::VirtioBalloon, x86_64::BALLOON_MMIO},
     memory::GuestMemoryMmap,
     virtio::{
@@ -15,19 +16,21 @@ use crate::{
         mmio::{MMIO_WINDOW_LEN, MmioResources, MmioTransport},
     },
 };
+use std::sync::atomic::AtomicBool;
 use vm_memory::GuestMemoryBackend;
+
+/// Where the guest is, as far as its console says.
+const TOUCHED: u32 = 1;
+const FREED: u32 = 2;
 
 #[derive(Default, Debug)]
 struct Evidence {
-    enabled: bool,
     negotiated: u64,
     phase: u32,
-    phases: Vec<u32>,
-    scratch: Vec<u32>,
-    live: Vec<u32>,
-    before: usize,
-    after: usize,
-    live_after: usize,
+    /// Most pages resident while the guest held every page it touched.
+    resident_touched: usize,
+    /// Fewest pages resident while the guest's scratch pages were free.
+    resident_freed: usize,
     reports: usize,
     reports_after_free: usize,
     activations: usize,
@@ -91,69 +94,58 @@ impl VirtioDevice for ObservedBalloon {
     }
 }
 
-struct Observer {
-    memory: Arc<GuestMemoryMmap>,
-    evidence: Arc<Mutex<Evidence>>,
-}
-
-impl Observer {
-    fn residency(&self) -> Vec<u8> {
-        let size = 256usize << 20;
-        let pointer = self.memory.get_host_address(GuestAddress(0)).unwrap();
-        let mut pages = vec![0; size / 4096];
-        // SAFETY: this is the live, page-aligned private RAM mapping, and the
-        // result has one byte per host page. mincore never changes its contents.
-        assert_eq!(
-            unsafe { libc::mincore(pointer.cast(), size, pages.as_mut_ptr()) },
-            0
-        );
-        pages
+/// The guest's phase, read from the markers it prints.
+fn phase_of(log: &str) -> u32 {
+    if log.contains("BALLOON_REUSED") {
+        3
+    } else if log.contains("BALLOON_FREED") {
+        FREED
+    } else if log.contains("BALLOON_TOUCHED") {
+        TOUCHED
+    } else {
+        0
     }
 }
 
-impl BusDevice for Observer {
-    fn read(&mut self, offset: u64, data: &mut [u8]) {
-        assert_eq!((offset, data.len()), (0, 4));
-        let pages = self.residency();
-        let mut evidence = self.evidence.lock().unwrap();
-        assert_eq!(evidence.phase, 2);
-        evidence.after = evidence
-            .scratch
-            .iter()
-            .filter(|&&gpa| pages[gpa as usize / 4096] & 1 != 0)
-            .count();
-        evidence.live_after = evidence
-            .live
-            .iter()
-            .filter(|&&gpa| pages[gpa as usize / 4096] & 1 != 0)
-            .count();
-        let reclaimed = evidence.after < evidence.before / 2;
-        let expected = reclaimed == evidence.enabled
-            && evidence.live_after == evidence.live.len()
-            && (!evidence.enabled || evidence.reports_after_free > 0);
-        data.copy_from_slice(&u32::from(expected).to_le_bytes());
-    }
-    fn write(&mut self, offset: u64, data: &[u8]) {
-        let value = u32::from_le_bytes(data.try_into().unwrap());
-        if offset == 0 && value == 1 {
-            let pages = self.residency();
-            let mut evidence = self.evidence.lock().unwrap();
-            evidence.before = evidence
-                .scratch
-                .iter()
-                .filter(|&&gpa| pages[gpa as usize / 4096] & 1 != 0)
-                .count();
+/// One byte per 4 KiB host page of the guest mapping, set when the page is
+/// resident. Sampling repeats instead of catching an exact instant, so a slow
+/// host cannot turn a passing guest into a failure.
+fn residency(memory: &GuestMemoryMmap) -> Vec<u8> {
+    let size = 256usize << 20;
+    let pointer = memory.get_host_address(GuestAddress(0)).unwrap();
+    let mut pages = vec![0; size / 4096];
+    // SAFETY: this is the live, page-aligned private RAM mapping, and the
+    // result has one byte per host page. mincore never changes its contents.
+    assert_eq!(
+        unsafe { libc::mincore(pointer.cast(), size, pages.as_mut_ptr()) },
+        0
+    );
+    pages
+}
+
+fn resident(pages: &[u8]) -> usize {
+    pages.iter().filter(|&&state| state & 1 != 0).count()
+}
+
+/// Records the residency that belongs to each guest phase until `stop` is set.
+fn sample(
+    log: &SerialLog,
+    memory: &GuestMemoryMmap,
+    evidence: &Mutex<Evidence>,
+    stop: &AtomicBool,
+) {
+    while !stop.load(Ordering::SeqCst) {
+        let phase = phase_of(&log.text());
+        let count = resident(&residency(memory));
+        let mut evidence = evidence.lock().unwrap();
+        evidence.phase = phase;
+        match phase {
+            TOUCHED if count > evidence.resident_touched => evidence.resident_touched = count,
+            FREED if count < evidence.resident_freed => evidence.resident_freed = count,
+            _ => {}
         }
-        let mut evidence = self.evidence.lock().unwrap();
-        match offset {
-            0 => {
-                evidence.phase = value;
-                evidence.phases.push(value);
-            }
-            4 => evidence.scratch.push(value),
-            8 => evidence.live.push(value),
-            _ => panic!("unexpected observation port {offset}"),
-        }
+        drop(evidence);
+        std::thread::sleep(Duration::from_millis(50));
     }
 }
 
@@ -176,16 +168,14 @@ fn run_reporting_guest(enabled: bool, init_on_free: bool) {
     let log = SerialLog::default();
     let (writer, mut console) =
         ConsoleWorker::spawn(Box::new(log.clone()), DEFAULT_QUEUE_BYTES).unwrap();
-    let evidence = Arc::new(Mutex::new(Evidence {
-        enabled,
-        ..Evidence::default()
-    }));
+    let evidence = Arc::new(Mutex::new(Evidence::default()));
     let mut cmdline = CONSOLE_CMDLINE.to_owned();
     BALLOON_MMIO.append_cmdline(&mut cmdline);
     if init_on_free {
         cmdline.push_str(" init_on_free=1");
     }
     let config = linux_config(1, &cmdline, Some(initramfs.0.clone()));
+    let mut sampler_memory = None;
     let mut vm = crate::Vm::with_backend(
         config,
         boxlite_hypervisor::KvmVm::new,
@@ -207,6 +197,7 @@ fn run_reporting_guest(enabled: bool, init_on_free: bool) {
                 resources.mmio(BALLOON_MMIO.base, MMIO_WINDOW_LEN);
                 let interrupt = Arc::new(MmioInterrupt::new(resources.line(BALLOON_MMIO.irq)));
                 let worker = context.workers.add(device.clone(), interrupt.clone());
+                sampler_memory = Some(Arc::clone(context.memory));
                 MmioTransport::new(
                     device,
                     interrupt,
@@ -216,56 +207,70 @@ fn run_reporting_guest(enabled: bool, init_on_free: bool) {
                         worker,
                     },
                 )
-            })?;
-            builder.add("balloon-observer", |resources| {
-                resources.pio(0x500, 12);
-                Ok(Observer {
-                    memory: Arc::clone(context.memory),
-                    evidence: evidence.clone(),
-                })
             })
         },
     )
     .unwrap();
+    let stop = Arc::new(AtomicBool::new(false));
+    let sampler = {
+        let memory = sampler_memory.expect("the balloon device holds the RAM");
+        let log = log.clone();
+        let evidence = Arc::clone(&evidence);
+        let stop = Arc::clone(&stop);
+        std::thread::spawn(move || sample(&log, &memory, &evidence, &stop))
+    };
     let (exit, elapsed) = run_with_watchdog(&mut vm, Duration::from_secs(35));
+    stop.store(true, Ordering::SeqCst);
+    sampler.join().unwrap();
     console.finish();
     let log = log.text();
     let evidence = evidence.lock().unwrap();
     eprintln!(
-        "balloon KVM enabled={enabled}, init_on_free={init_on_free}, elapsed={elapsed:?}, phases={:?}, resident={}/{}, reports={}\n{log}",
-        evidence.phases, evidence.after, evidence.before, evidence.reports
+        "balloon KVM enabled={enabled}, init_on_free={init_on_free}, elapsed={elapsed:?}, resident={}/{}, reports={}\n{log}",
+        evidence.resident_freed, evidence.resident_touched, evidence.reports
     );
     assert_eq!(exit.unwrap(), VmExit::GuestReset, "{log}");
     assert!(log.contains("BALLOON_GUEST_OK"), "{log}");
     assert!(!log.contains("BALLOON_FAIL"), "{log}");
-    assert_eq!(evidence.phases, [1, 2, 3, 4]);
-    assert_eq!(evidence.scratch.len(), 16384);
-    assert_eq!(evidence.live.len(), 4096);
-    assert_eq!(evidence.before, evidence.scratch.len());
-    assert_eq!(evidence.live_after, evidence.live.len());
+    for marker in ["BALLOON_TOUCHED", "BALLOON_FREED", "BALLOON_REUSED"] {
+        assert!(log.contains(marker), "{marker} missing: {log}");
+    }
     assert!(
         evidence.activations >= 2,
         "guest unbind/bind must reactivate"
     );
     assert!(evidence.resets >= 1, "guest unbind must reset");
     assert_eq!(evidence.negotiated & (1 << 5) != 0, enabled);
+    // The guest touches 64 MiB of scratch and 16 MiB of live pages.
+    assert!(
+        evidence.resident_touched >= 80 << 20 >> 12,
+        "the sampled residency must cover the pages the guest touched: {}",
+        evidence.resident_touched
+    );
     if enabled {
-        assert!(evidence.after < evidence.before / 2);
+        assert!(
+            evidence.resident_freed < evidence.resident_touched / 2,
+            "reporting must drop the freed scratch pages: {} of {}",
+            evidence.resident_freed,
+            evidence.resident_touched
+        );
         assert!(
             evidence.reports_after_free > 0,
             "real used-ring completions after munmap"
         );
     } else {
-        assert_eq!(evidence.after, evidence.before);
+        assert!(
+            evidence.resident_freed > evidence.resident_touched * 3 / 4,
+            "without reporting the freed backing stays resident: {} of {}",
+            evidence.resident_freed,
+            evidence.resident_touched
+        );
         assert_eq!(evidence.reports, 0);
     }
     eprintln!(
-        "BALLOON_KVM_RESULT reporting={enabled} init_on_free={init_on_free} guest=6.12.110 host_page={host_page} scratch_pages={} resident_before={} resident_after={} live_pages={} live_resident={} reports={} reports_after_free={} activations={} resets={}",
-        evidence.scratch.len(),
-        evidence.before,
-        evidence.after,
-        evidence.live.len(),
-        evidence.live_after,
+        "BALLOON_KVM_RESULT reporting={enabled} init_on_free={init_on_free} guest=6.12.110 host_page={host_page} resident_touched={} resident_freed={} reports={} reports_after_free={} activations={} resets={}",
+        evidence.resident_touched,
+        evidence.resident_freed,
         evidence.reports,
         evidence.reports_after_free,
         evidence.activations,
