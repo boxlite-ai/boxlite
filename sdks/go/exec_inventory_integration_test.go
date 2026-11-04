@@ -141,13 +141,14 @@ func TestIntegrationAttachExecutionReaderRecovery(t *testing.T) {
 		}
 	}
 	defer attached.Close()
-	select {
-	case chunk := <-chunks:
-		if !strings.Contains(chunk, "inventory-heartbeat") {
-			t.Fatalf("unexpected recovered output: %q", chunk)
+	var output strings.Builder
+	for !strings.Contains(output.String(), "inventory-heartbeat") {
+		select {
+		case chunk := <-chunks:
+			output.WriteString(chunk)
+		case <-ctx.Done():
+			t.Fatalf("fresh client received no live output: %q", output.String())
 		}
-	case <-ctx.Done():
-		t.Fatal("fresh client received no live output")
 	}
 	if attached.ID() != mainID {
 		t.Fatal("attach changed the guest execution ID")
