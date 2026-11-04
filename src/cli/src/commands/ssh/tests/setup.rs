@@ -1,6 +1,13 @@
 use super::*;
 use std::os::unix::fs::{PermissionsExt, symlink};
 
+fn local(context: &str) -> ConnectionTarget {
+    ConnectionTarget {
+        context: context.into(),
+        rest: None,
+    }
+}
+
 #[tokio::test]
 async fn setup_applies_managed_credentials_and_only_reports_success_after_configure() {
     use super::super::tests::{Server, status};
@@ -14,18 +21,17 @@ async fn setup_applies_managed_credentials_and_only_reports_success_after_config
     ])
     .await;
     // Exercise the selected-box operation through the existing REST recording fixture.
-    // The public setup command's local-only guard is tested separately.
     let runtime =
         boxlite::BoxliteRuntime::rest(boxlite::BoxliteRestOptions::new(&server.url)).unwrap();
     let sandbox = runtime.get("box-1").await.unwrap().unwrap();
     let home = tempfile::tempdir().unwrap();
-    let error = configure(&sandbox, home.path(), "default")
+    let error = configure(&sandbox, home.path(), &local("default"))
         .await
         .unwrap_err();
     assert!(error.to_string().contains("configure failed"), "{error:#}");
     let unsupported_home = home.path().join("${HOME}");
     fs::create_dir(&unsupported_home).unwrap();
-    let error = configure(&sandbox, &unsupported_home, "default")
+    let error = configure(&sandbox, &unsupported_home, &local("default"))
         .await
         .unwrap_err();
     assert!(
@@ -38,7 +44,9 @@ async fn setup_applies_managed_credentials_and_only_reports_success_after_config
         !unsupported_home.join("boxes").exists(),
         "reject unrepresentable paths before writing credentials"
     );
-    let output = configure(&sandbox, home.path(), "default").await.unwrap();
+    let output = configure(&sandbox, home.path(), &local("default"))
+        .await
+        .unwrap();
     let requests = server.bodies();
     assert_eq!(requests.len(), 2);
     assert_eq!(requests[0], requests[1], "retry must reuse both identities");
@@ -56,6 +64,7 @@ async fn setup_applies_managed_credentials_and_only_reports_success_after_config
         public_key(&directory.join("client_key")).unwrap()
     );
     assert!(output.contains("SSH configured for box box-1"));
+    assert!(output.contains("SSH host key fingerprint: SHA256:host"));
     assert!(output.contains("CLI exit stops non-detached boxes"));
     assert!(output.contains("running detached box"));
     assert!(output.contains("  ssh "));
@@ -124,7 +133,8 @@ fn generated_command_preserves_arguments_through_shell_and_openssh() {
     fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
     let key = directory.join("client_key");
     let context = "default ' % $()";
-    let command = connection_command(&executable, &directory, "testbox", &key, context).unwrap();
+    let command =
+        connection_command(&executable, &directory, "testbox", &key, &local(context)).unwrap();
     let record = temp.path().join("args");
     let output = Command::new("/bin/sh")
         .args([
@@ -158,7 +168,8 @@ fn generated_command_preserves_arguments_through_shell_and_openssh() {
             "--context",
             context,
             "ssh",
-            "proxy",
+            "--proxy",
+            "--",
             "testbox"
         ]
     );
@@ -168,7 +179,7 @@ fn generated_command_preserves_arguments_through_shell_and_openssh() {
             &directory,
             "testbox",
             Path::new("/tmp/${HOME}/key"),
-            context
+            &local(context)
         )
         .is_err()
     );

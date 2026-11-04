@@ -10,7 +10,6 @@ use tokio::sync::{mpsc, oneshot};
 use crate::cli::GlobalFlags;
 
 pub(super) async fn execute(target: &str, global: &GlobalFlags) -> Result<()> {
-    super::require_local(global)?;
     let mut hangup = signal(SignalKind::hangup())?;
     let mut terminate = signal(SignalKind::terminate())?;
     let mut interrupt = signal(SignalKind::interrupt())?;

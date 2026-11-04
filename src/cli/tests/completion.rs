@@ -98,35 +98,33 @@ fn completion_contains_subcommands(#[case] shell: &str) {
 }
 
 #[rstest]
-#[case("bash", "boxlite__subcmd__ssh__subcmd__run)")]
-#[case("zsh", "_boxlite__subcmd__ssh__subcmd__run_commands()")]
-#[case(
-    "fish",
-    "__fish_boxlite_using_subcommand ssh; and __fish_seen_subcommand_from run\""
-)]
-fn completion_ssh_only_contains_separate_operations(#[case] shell: &str, #[case] marker: &str) {
+#[case("bash")]
+#[case("zsh")]
+#[case("fish")]
+fn completion_ssh_advertises_operation_options(#[case] shell: &str) {
     let assert = boxlite_cmd().args(["completion", shell]).assert().success();
     let stdout = std::str::from_utf8(&assert.get_output().stdout).unwrap();
-    assert!(
-        !stdout.contains(marker),
-        "{shell}: still advertises {marker}"
-    );
-    assert!(
-        !stdout.contains("configure-and-forward"),
-        "{shell}: completion still advertises the removed command"
-    );
     for name in [
         "configure",
-        "setup",
         "proxy",
         "status",
         "enable",
         "disable",
-        "forward",
+        "tunnel",
     ] {
-        let expected = marker.replace("run", name);
-        assert!(stdout.contains(&expected), "{shell}: missing {expected}");
+        let option = if shell == "fish" {
+            format!("-l {name}")
+        } else {
+            format!("--{name}")
+        };
+        assert!(stdout.contains(&option), "{shell}: missing {option}");
+        assert!(
+            !stdout.contains(&format!("ssh__subcmd__{name}")),
+            "{shell}: obsolete subcommand {name}"
+        );
     }
+    assert!(!stdout.contains("configure-and-forward"));
+    assert!(!stdout.contains("ssh__subcmd__setup"));
 }
 
 #[test]

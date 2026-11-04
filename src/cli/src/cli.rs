@@ -255,43 +255,6 @@ const DOMAIN_SCOPES: &[CommandScope] = &[
         children: &[],
     },
 ];
-const SSH_SCOPES: &[CommandScope] = &[
-    CommandScope {
-        name: "proxy",
-        globals: BOX_GLOBALS,
-        children: &[],
-    },
-    CommandScope {
-        name: "setup",
-        globals: BOX_GLOBALS,
-        children: &[],
-    },
-    CommandScope {
-        name: "enable",
-        globals: BOX_GLOBALS,
-        children: &[],
-    },
-    CommandScope {
-        name: "configure",
-        globals: BOX_GLOBALS,
-        children: &[],
-    },
-    CommandScope {
-        name: "status",
-        globals: BOX_GLOBALS,
-        children: &[],
-    },
-    CommandScope {
-        name: "disable",
-        globals: BOX_GLOBALS,
-        children: &[],
-    },
-    CommandScope {
-        name: "forward",
-        globals: BOX_GLOBALS,
-        children: &[],
-    },
-];
 const fn box_command_scope(name: &'static str, children: &'static [CommandScope]) -> CommandScope {
     CommandScope {
         name,
@@ -418,7 +381,7 @@ const COMMAND_SCOPES: &[CommandScope] = &[
     CommandScope {
         name: "ssh",
         globals: BOX_GLOBALS,
-        children: SSH_SCOPES,
+        children: &[],
     },
     CommandScope {
         name: "serve",
@@ -784,7 +747,13 @@ pub enum Commands {
     /// Manage box networking
     Network(crate::commands::network::NetworkArgs),
 
-    /// Set up, configure, inspect, enable, disable, or forward to guest SSH
+    /// Set up guest SSH and print a connection command
+    ///
+    /// With no operation option, generate or reuse client and host keys,
+    /// enable box on guest port 22, and print the server fingerprint and SSH command.
+    /// Setup replaces the complete configuration and disconnects existing clients.
+    /// Use --configure, --status, --enable, --disable, --tunnel, or --proxy
+    /// for another operation. All operations support local and cloud contexts.
     Ssh(crate::commands::ssh::SshArgs),
 
     /// Agent instances and turns
@@ -1062,18 +1031,20 @@ impl GlobalFlags {
     ///
     /// Uses the same context snapshot as `create_runtime`, including credentials.
     pub fn targets_rest(&self) -> anyhow::Result<bool> {
-        let stored = self.load_selected_profile()?;
-        let env_api_key = std::env::var("BOXLITE_API_KEY").ok();
-        Ok(self.resolve_rest_options(stored, env_api_key).is_some())
+        Ok(self.rest_options()?.is_some())
     }
 
-    pub fn create_runtime(&self) -> anyhow::Result<BoxliteRuntime> {
+    pub(crate) fn rest_options(&self) -> anyhow::Result<Option<BoxliteRestOptions>> {
         let stored = self.load_selected_profile()?;
         // Clap reads BOXLITE_REST_URL into `self.url`; BOXLITE_API_KEY is the
         // one credential env we still consult directly here.
         let env_api_key = std::env::var("BOXLITE_API_KEY").ok();
 
-        match self.resolve_rest_options(stored, env_api_key) {
+        Ok(self.resolve_rest_options(stored, env_api_key))
+    }
+
+    pub fn create_runtime(&self) -> anyhow::Result<BoxliteRuntime> {
+        match self.rest_options()? {
             Some(opts) => BoxliteRuntime::rest(opts).map_err(Into::into),
             None => {
                 // No URL anywhere → local runtime, unchanged behavior.

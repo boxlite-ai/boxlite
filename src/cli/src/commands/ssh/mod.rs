@@ -8,7 +8,7 @@ use boxlite::{
     BoxTunnel, BoxliteRuntime, LiteBox, SocketAddress, SshAccount, SshConfig, SshStatus,
     TunnelOptions,
 };
-use clap::{Args, Subcommand};
+use clap::{ArgGroup, Args};
 
 use crate::cli::GlobalFlags;
 use crate::commands::network::tunnel::{forward_until_interrupted, parse_socket_address};
@@ -21,65 +21,55 @@ mod setup;
 mod tests;
 
 #[derive(Args, Debug)]
+#[command(group(ArgGroup::new("operation").args(["configure", "status", "enable", "disable", "tunnel", "proxy"])))]
+#[command(group(ArgGroup::new("credentials").args(["ssh_config", "host_key"])))]
 pub struct SshArgs {
-    #[command(subcommand)]
-    pub command: SshCommand,
-}
+    /// Box ID or name
+    #[arg(value_name = "BOX")]
+    pub target: String,
 
-#[derive(Subcommand, Debug)]
-pub enum SshCommand {
     /// Replace the complete guest SSH configuration; prints status JSON.
     /// Every accepted configuration disconnects existing SSH clients.
-    Configure(ConfigureArgs),
-    /// Generate or reuse local keys, configure box@0.0.0.0:22, and print an SSH command.
-    /// Replaces the complete configuration and disconnects existing clients (local only).
-    Setup(BoxArgs),
+    #[arg(long, requires = "credentials")]
+    pub configure: bool,
+
     /// Print guest SSH status JSON without starting the box.
-    Status(BoxArgs),
+    #[arg(long)]
+    pub status: bool,
+
     /// Enable saved SSH configuration on a running box; prints status JSON.
-    Enable(BoxArgs),
+    #[arg(long)]
+    pub enable: bool,
+
     /// Disable guest SSH on a running box; prints status JSON.
-    Disable(BoxArgs),
+    #[arg(long)]
+    pub disable: bool,
+
     /// Forward a local listener to already enabled guest SSH until Ctrl-C.
-    Forward(ForwardArgs),
-    /// Connect stdin/stdout to enabled guest SSH for OpenSSH ProxyCommand (local only).
-    Proxy(BoxArgs),
-}
+    #[arg(long)]
+    pub tunnel: bool,
 
-#[derive(Args, Debug)]
-pub struct BoxArgs {
-    /// Box ID or name
-    #[arg(value_name = "BOX")]
-    pub target: String,
-}
-
-#[derive(Args, Debug)]
-pub struct ConfigureArgs {
-    /// Box ID or name
-    #[arg(value_name = "BOX")]
-    pub target: String,
+    /// Connect stdin/stdout to enabled guest SSH for OpenSSH ProxyCommand.
+    #[arg(long)]
+    pub proxy: bool,
 
     #[command(flatten)]
     pub source: ConfigSource,
-}
-
-#[derive(Args, Debug)]
-pub struct ForwardArgs {
-    /// Box ID or name
-    #[arg(value_name = "BOX")]
-    pub target: String,
 
     /// Bind a local TCP port/address or unix:/absolute/path socket
-    #[arg(long, value_name = "ADDRESS", value_parser = parse_socket_address, default_value = "127.0.0.1:0")]
+    #[arg(long, value_name = "ADDRESS", value_parser = parse_socket_address,
+          default_value = "127.0.0.1:0", requires = "tunnel",
+          conflicts_with_all = ["configure", "status", "enable", "disable", "proxy"])]
     pub listen: SocketAddress,
 }
 
 /// Exactly one source: a complete `SshConfig` JSON file, or one login built
 /// from key files.
 #[derive(Args, Debug)]
+#[group(requires = "configure", conflicts_with_all = ["status", "enable", "disable", "tunnel", "proxy"])]
 pub struct ConfigSource {
     /// Complete SshConfig JSON file; supports several accounts and CAs
-    #[arg(long, value_name = "FILE", required_unless_present = "host_key",
+    #[arg(long, value_name = "FILE",
           conflicts_with_all = ["host_key", "login", "authorized_key", "guest_listen"])]
     pub ssh_config: Option<PathBuf>,
 
@@ -157,39 +147,30 @@ fn read_public_key(path: &Path) -> Result<String> {
 }
 
 pub async fn execute(args: SshArgs, global: &GlobalFlags) -> Result<()> {
-    match args.command {
-        SshCommand::Configure(args) => {
-            let config = args.source.load()?;
-            let (_runtime, sandbox) = find_box(global, &args.target).await?;
-            print_status(&sandbox.ssh().configure(config).await?)
-        }
-        SshCommand::Setup(args) => setup::execute(&args.target, global).await,
-        SshCommand::Proxy(args) => proxy::execute(&args.target, global).await,
-        SshCommand::Status(args) => {
-            let (_runtime, sandbox) = find_box(global, &args.target).await?;
-            print_status(&sandbox.ssh().status().await?)
-        }
-        SshCommand::Enable(args) => {
-            let (_runtime, sandbox) = find_box(global, &args.target).await?;
-            print_status(&sandbox.ssh().enable().await?)
-        }
-        SshCommand::Disable(args) => {
-            let (_runtime, sandbox) = find_box(global, &args.target).await?;
-            print_status(&sandbox.ssh().disable().await?)
-        }
-        SshCommand::Forward(args) => {
-            let (_runtime, sandbox) = find_box(global, &args.target).await?;
-            let status = sandbox.ssh().status().await?;
-            forward(&sandbox, &status, args.listen).await
-        }
+    if args.configure {
+        let config = args.source.load()?;
+        let (_runtime, sandbox) = find_box(global, &args.target).await?;
+        return print_status(&sandbox.ssh().configure(config).await?);
     }
-}
-
-fn require_local(global: &GlobalFlags) -> Result<()> {
-    if global.targets_rest()? {
-        bail!("SSH setup and proxy require a local runtime");
+    if args.proxy {
+        return proxy::execute(&args.target, global).await;
     }
-    Ok(())
+    if !(args.status || args.enable || args.disable || args.tunnel) {
+        return setup::execute(&args.target, global).await;
+    }
+    let (_runtime, sandbox) = find_box(global, &args.target).await?;
+    let status = if args.enable {
+        sandbox.ssh().enable().await?
+    } else if args.disable {
+        sandbox.ssh().disable().await?
+    } else {
+        sandbox.ssh().status().await?
+    };
+    if args.tunnel {
+        forward(&sandbox, &status, args.listen).await
+    } else {
+        print_status(&status)
+    }
 }
 
 /// The runtime is returned so it outlives the box handle for the whole command.
@@ -240,7 +221,7 @@ async fn ssh_tunnel(sandbox: &LiteBox, status: &SshStatus) -> Result<BoxTunnel> 
     if !status.enabled {
         bail!(
             "guest SSH is disabled or the box is not running; enable it with \
-             `boxlite ssh setup`, `configure`, or `enable`"
+             `boxlite ssh BOX`, `boxlite ssh BOX --configure`, or `boxlite ssh BOX --enable`"
         );
     }
     Ok(sandbox
