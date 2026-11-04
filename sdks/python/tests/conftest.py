@@ -30,6 +30,15 @@ if os.environ.get("BOXLITE_REQUIRE_NATIVE") == "1":
         SshStatus,
     )
 
+    # Preserve the established missing-SSH failure before checking new exports.
+    # isort: split
+    from boxlite.boxlite import (  # noqa: F401 - imported for the check
+        CheckpointDependencies,
+        CheckpointHandle,
+        CheckpointInfo,
+        RuntimeCheckpointHandle,
+    )
+
 
 def _test_registries() -> list:
     """Mirror list, built lazily.

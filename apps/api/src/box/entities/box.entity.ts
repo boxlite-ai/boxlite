@@ -68,6 +68,13 @@ export class Box {
   @Column({ type: 'uuid', nullable: true })
   initialSnapshotId?: string | null
 
+  @Index('box_initial_checkpoint_idx')
+  @Column({ type: 'uuid', nullable: true })
+  initialCheckpointId?: string | null
+
+  @Column({ type: 'uuid', nullable: true })
+  checkpointOperationId?: string | null
+
   /**
    * Whether this box's image is the organization's rather than the operator's
    * curated set, decided once when the box was created.
@@ -268,10 +275,25 @@ export class Box {
 
   private validateDesiredStateTransition(): void {
     switch (this.desiredState) {
+      case BoxDesiredState.PAUSED:
+        if (
+          [
+            BoxState.UNKNOWN,
+            BoxState.CREATING,
+            BoxState.RESTORING,
+            BoxState.IMPORTING,
+            BoxState.PAUSED,
+            BoxState.STARTED,
+            BoxState.ERROR,
+          ].includes(this.state)
+        )
+          break
+        throw new Error(`Box ${this.id} cannot be paused from ${this.state}`)
       case BoxDesiredState.STARTED:
         if (
           [
             BoxState.STARTED,
+            BoxState.PAUSED,
             BoxState.STOPPED,
             BoxState.STARTING,
             BoxState.CREATING,
@@ -286,9 +308,14 @@ export class Box {
         throw new Error(`Box ${this.id} is not in a valid state to be started. State: ${this.state}`)
       case BoxDesiredState.STOPPED:
         if (
-          [BoxState.STARTED, BoxState.STOPPING, BoxState.STOPPED, BoxState.ERROR, BoxState.RESIZING].includes(
-            this.state,
-          ) ||
+          [
+            BoxState.STARTED,
+            BoxState.PAUSED,
+            BoxState.STOPPING,
+            BoxState.STOPPED,
+            BoxState.ERROR,
+            BoxState.RESIZING,
+          ].includes(this.state) ||
           SNAPSHOT_OPERATION_STATES.includes(this.state)
         ) {
           break
@@ -299,12 +326,17 @@ export class Box {
           [
             BoxState.DESTROYED,
             BoxState.DESTROYING,
+            BoxState.PAUSED,
+            BoxState.UNKNOWN,
+            BoxState.CREATING,
             BoxState.STOPPED,
             BoxState.STARTED,
             BoxState.ARCHIVED,
             BoxState.ERROR,
             BoxState.ARCHIVING,
           ].includes(this.state) ||
+          // Native completion still owns the checkpoint lease after deletion.
+          (this.state === BoxState.RESTORING && Boolean(this.checkpointOperationId)) ||
           // Deleting a box mid-snapshot is allowed, and fails the snapshot job.
           SNAPSHOT_OPERATION_STATES.includes(this.state)
         ) {
@@ -337,7 +369,8 @@ export class Box {
     // in either has no desired-state work pending — which is also what lets a
     // delete request in.
     const inSnapshotOperation =
-      SNAPSHOT_OPERATION_STATES.includes(this.state) && this.desiredState === BoxDesiredState.STOPPED
+      (SNAPSHOT_OPERATION_STATES.includes(this.state) && this.desiredState === BoxDesiredState.STOPPED) ||
+      (Boolean(this.checkpointOperationId) && this.desiredState !== BoxDesiredState.DESTROYED)
     if (!this.pending && String(this.state) !== String(this.desiredState) && !inSnapshotOperation) {
       changes.pending = true
     }

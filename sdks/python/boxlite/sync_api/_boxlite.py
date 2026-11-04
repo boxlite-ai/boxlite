@@ -16,10 +16,12 @@ if TYPE_CHECKING:
         Boxlite,
         BoxliteRestOptions,
         BoxOptions,
+        CheckpointDependencies,
         Options,
         RuntimeMetrics,
     )
     from ._box import SyncBox
+    from ._checkpoints import SyncRuntimeCheckpointHandle
     from ._images import SyncImageHandle
     from ._snapshots import SyncRuntimeSnapshotHandle
 
@@ -327,6 +329,37 @@ class SyncBoxlite:
             self,
             self._sync(self._boxlite.create_from_snapshot(snapshot, options, name)),
         )
+
+    def checkpoints(self) -> "SyncRuntimeCheckpointHandle":
+        from ._checkpoints import SyncRuntimeCheckpointHandle
+
+        self._require_started()
+        return SyncRuntimeCheckpointHandle(self, self._boxlite.checkpoints())
+
+    def create_from_checkpoint(
+        self, id_or_name: str, *, name: str | None = None
+    ) -> "SyncBox":
+        from ._box import SyncBox
+
+        self._require_started()
+        return SyncBox(
+            self,
+            self._sync(self._boxlite.create_from_checkpoint(id_or_name, name=name)),
+        )
+
+    def import_checkpoint(self, path: str, *, name: str | None = None) -> "SyncBox":
+        from ._box import SyncBox
+
+        self._require_started()
+        return SyncBox(
+            self, self._sync(self._boxlite.import_checkpoint(path, name=name))
+        )
+
+    @staticmethod
+    def inspect_checkpoint(path: str) -> "CheckpointDependencies":
+        from ..boxlite import Boxlite
+
+        return Boxlite.inspect_checkpoint(path)
 
     def get_or_create(
         self,

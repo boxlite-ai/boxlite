@@ -463,6 +463,21 @@ class TestRequireNativeGate:
         assert result.returncode != 0
         assert "cannot import name 'SshAccount'" in output
 
+    def test_an_extension_without_checkpoint_types_fails_the_run(
+        self, extensionless_boxlite, tmp_path
+    ):
+        (extensionless_boxlite / "boxlite.py").write_text(
+            "Boxlite = Box = SshAccount = SshCaConfig = SshConfig = "
+            "SshHandle = SshStatus = object\n"
+        )
+
+        result = _import_conftest_under_gate(extensionless_boxlite, tmp_path)
+
+        assert result.returncode != 0
+        assert "cannot import name 'CheckpointDependencies'" in (
+            result.stdout + result.stderr
+        )
+
     def test_the_gate_stays_silent_without_the_variable(
         self, extensionless_boxlite, tmp_path
     ):

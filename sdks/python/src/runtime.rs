@@ -127,6 +127,64 @@ impl PyBoxlite {
         })
     }
 
+    fn checkpoints(&self) -> PyResult<crate::checkpoints::PyRuntimeCheckpointHandle> {
+        Ok(crate::checkpoints::PyRuntimeCheckpointHandle {
+            handle: self.runtime.checkpoints().map_err(map_err)?,
+        })
+    }
+
+    /// Restore captured resources into a new Paused box.
+    #[pyo3(signature = (id_or_name, *, name=None))]
+    fn create_from_checkpoint<'py>(
+        &self,
+        py: Python<'py>,
+        id_or_name: String,
+        name: Option<String>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let runtime = Arc::clone(&self.runtime);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let handle = runtime
+                .create_from_checkpoint(&id_or_name, name)
+                .await
+                .map_err(map_err)?;
+            Ok(PyBox {
+                handle: Arc::new(handle),
+            })
+        })
+    }
+
+    /// Import a caller-local pair into a new Paused box.
+    #[pyo3(signature = (path, *, name=None))]
+    fn import_checkpoint<'py>(
+        &self,
+        py: Python<'py>,
+        path: std::path::PathBuf,
+        name: Option<String>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let runtime = Arc::clone(&self.runtime);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let handle = runtime
+                .import_checkpoint(path, boxlite::CheckpointImportOptions { name })
+                .await
+                .map_err(map_err)?;
+            Ok(PyBox {
+                handle: Arc::new(handle),
+            })
+        })
+    }
+
+    /// Inspect caller-local files without a runtime or VM.
+    #[staticmethod]
+    fn inspect_checkpoint(
+        py: Python<'_>,
+        path: std::path::PathBuf,
+    ) -> PyResult<crate::checkpoints::PyCheckpointDependencies> {
+        let info = py
+            .detach(|| BoxliteRuntime::inspect_checkpoint(path))
+            .map_err(map_err)?;
+        crate::checkpoints::PyCheckpointDependencies::from_core(py, info)
+    }
+
     #[pyo3(signature = (_state=None))]
     fn list_info<'py>(
         &self,

@@ -603,6 +603,18 @@ V2 rebuilds internal shared directories and permits different target inodes.
 - `boxlite checkpoint export BOX DIRECTORY`
 - `boxlite checkpoint inspect DIRECTORY`
 - `boxlite checkpoint import [--name NAME] DIRECTORY`
+- `boxlite checkpoint create BOX [--name NAME]`
+- `boxlite checkpoint list [--box BOX]`
+- `boxlite checkpoint get ID_OR_NAME`
+- `boxlite checkpoint remove ID_OR_NAME [--force]`
+- `boxlite checkpoint restore ID_OR_NAME [--name NAME]`
+
+Managed checkpoints retain their exact boot dependency and survive source deletion.
+`create` requires Paused; `restore` creates a new Paused box, then explicit `resume`
+continues the captured process. `list` and `get` print JSON metadata. Runtime names
+are case-sensitive; ID takes precedence over name within the requested scope.
+`remove --force` suppresses only absence. REST clients require
+`checkpoint_management_enabled` for these operations.
 
 Export downloads to a caller-local directory when using REST; import uploads from it.
 Inspection stays local, opens no shares and creates no runtime. Import verifies dependencies

@@ -9,6 +9,7 @@ pub(in crate::commands::serve) async fn get_config() -> Json<ServerConfig> {
         capabilities: ServerCapabilities {
             cache_volumes_enabled: false,
             checkpoints_enabled: cfg!(all(target_os = "linux", target_arch = "x86_64")),
+            checkpoint_management_enabled: cfg!(all(target_os = "linux", target_arch = "x86_64")),
             linux_capabilities_enabled: true,
             privileged_enabled: true,
             nested_virtualization_enabled: true,

@@ -70,6 +70,8 @@ pub struct CheckpointDependencies {
     pub disk_dependencies: serde_json::Value,
     #[serde(skip_serializing)]
     pub(crate) application: serde_json::Value,
+    #[serde(skip_serializing)]
+    pub(crate) network_device: bool,
 }
 
 pub(crate) struct VerifiedPair {
@@ -94,20 +96,78 @@ pub(crate) fn invalid(message: impl std::fmt::Display) -> BoxliteError {
     BoxliteError::Storage(format!("invalid checkpoint: {message}"))
 }
 
+/// The cloud upload boundary needs the original failure category. Existing
+/// callers deliberately retain their legacy Storage mapping.
+#[derive(Debug)]
+pub(crate) enum PairFailure {
+    InvalidInput(BoxliteError),
+    Io(std::io::Error),
+}
+impl PairFailure {
+    pub(crate) fn legacy(self) -> BoxliteError {
+        match self {
+            Self::InvalidInput(error) => error,
+            Self::Io(error) => invalid(error),
+        }
+    }
+    pub(crate) fn cloud(self) -> BoxliteError {
+        match self {
+            Self::InvalidInput(error) => BoxliteError::InvalidArgument(error.to_string()),
+            Self::Io(error) => invalid(error),
+        }
+    }
+}
+type PairResult<T> = Result<T, PairFailure>;
+fn input(message: impl std::fmt::Display) -> PairFailure {
+    PairFailure::InvalidInput(invalid(message))
+}
+fn read_exact(mut file: &File, buffer: &mut [u8]) -> PairResult<()> {
+    let end = file
+        .stream_position()
+        .map_err(PairFailure::Io)?
+        .checked_add(buffer.len() as u64)
+        .ok_or_else(|| input("read range overflow"))?;
+    if file.metadata().map_err(PairFailure::Io)?.len() < end {
+        return Err(input("checkpoint member is truncated"));
+    }
+    file.read_exact(buffer).map_err(PairFailure::Io)
+}
+
 pub(crate) fn digest(file: &File, offset: u64, length: u64) -> BoxliteResult<[u8; 32]> {
+    digest_checked(file, offset, length).map_err(PairFailure::legacy)
+}
+pub(crate) fn digest_checked(file: &File, offset: u64, length: u64) -> PairResult<[u8; 32]> {
     use std::os::unix::fs::FileExt;
+    digest_with(file, offset, length, |buffer, position| {
+        file.read_exact_at(buffer, position)
+    })
+}
+
+fn digest_with(
+    file: &File,
+    offset: u64,
+    length: u64,
+    read_at: impl Fn(&mut [u8], u64) -> std::io::Result<()>,
+) -> PairResult<[u8; 32]> {
+    let file_length = file.metadata().map_err(PairFailure::Io)?.len();
+    if offset
+        .checked_add(length)
+        .is_none_or(|end| end > file_length)
+    {
+        return Err(input("checkpoint digest range is truncated"));
+    }
     let mut hash = Sha256::new();
     let mut buffer = vec![0; 1 << 20];
     let mut done = 0;
     while done < length {
         let count = (length - done).min(buffer.len() as u64) as usize;
-        file.read_exact_at(
+        read_at(
             &mut buffer[..count],
             offset
                 .checked_add(done)
-                .ok_or_else(|| invalid("digest overflow"))?,
+                .ok_or_else(|| input("digest overflow"))?,
         )
-        .map_err(invalid)?;
+        .map_err(PairFailure::Io)?;
         hash.update(&buffer[..count]);
         done += count as u64;
     }
@@ -376,23 +436,21 @@ fn validate_extents(metadata: &serde_json::Value, payload: u64) -> BoxliteResult
     Ok(ram_bytes)
 }
 
-pub(crate) fn inspect_memory(mut memory: &File) -> BoxliteResult<CheckpointDependencies> {
-    memory.seek(SeekFrom::Start(0)).map_err(invalid)?;
+fn inspect_memory_checked(mut memory: &File) -> PairResult<CheckpointDependencies> {
+    memory.seek(SeekFrom::Start(0)).map_err(PairFailure::Io)?;
     let mut prefix = [0; 12];
-    memory.read_exact(&mut prefix).map_err(invalid)?;
+    read_exact(memory, &mut prefix)?;
     if &prefix[..8] != b"KRUNVM\0\0" {
-        return Err(invalid(
+        return Err(input(
             "unsupported checkpoint version/format; version 9 directory required",
         ));
     }
     if u32::from_le_bytes(prefix[8..].try_into().unwrap()) != 9 {
-        return Err(invalid(
-            "unsupported checkpoint version; version 9 required",
-        ));
+        return Err(input("unsupported checkpoint version; version 9 required"));
     }
-    memory.seek(SeekFrom::Start(0)).map_err(invalid)?;
+    memory.seek(SeekFrom::Start(0)).map_err(PairFailure::Io)?;
     let mut header = [0; HEADER as usize];
-    memory.read_exact(&mut header).map_err(invalid)?;
+    read_exact(memory, &mut header)?;
     let number = |offset| u64::from_le_bytes(header[offset..offset + 8].try_into().unwrap());
     let (total, metadata_bytes, payload_bytes) = (number(16), number(24), number(32));
     if u32::from_le_bytes(header[12..16].try_into().unwrap()) != HEADER as u32
@@ -403,29 +461,30 @@ pub(crate) fn inspect_memory(mut memory: &File) -> BoxliteResult<CheckpointDepen
             .checked_add(metadata_bytes)
             .and_then(|n| n.checked_add(payload_bytes))
             != Some(total)
-        || memory.metadata().map_err(invalid)?.len() != total
+        || memory.metadata().map_err(PairFailure::Io)?.len() != total
     {
-        return Err(invalid("memory envelope bounds/reserved fields mismatch"));
+        return Err(input("memory envelope bounds/reserved fields mismatch"));
     }
-    if digest(memory, HEADER, metadata_bytes)? != header[48..80]
-        || digest(memory, HEADER + metadata_bytes, payload_bytes)? != header[80..112]
+    if digest_checked(memory, HEADER, metadata_bytes)? != header[48..80]
+        || digest_checked(memory, HEADER + metadata_bytes, payload_bytes)? != header[80..112]
     {
-        return Err(invalid("memory checksum mismatch"));
+        return Err(input("memory checksum mismatch"));
     }
     let mut bytes = vec![0; metadata_bytes as usize];
-    memory.read_exact(&mut bytes).map_err(invalid)?;
-    let metadata: serde_json::Value = serde_json::from_slice(&bytes).map_err(invalid)?;
+    read_exact(memory, &mut bytes)?;
+    let metadata: serde_json::Value = serde_json::from_slice(&bytes).map_err(input)?;
     if metadata["application_schema"] != 1 {
-        return Err(invalid("unsupported application schema"));
+        return Err(input("unsupported application schema"));
     }
-    let memory_bytes = validate_extents(&metadata, payload_bytes)?;
+    let memory_bytes =
+        validate_extents(&metadata, payload_bytes).map_err(PairFailure::InvalidInput)?;
     let boot_bytes = metadata["regions"]
         .as_array()
         .expect("validated regions")
         .iter()
         .map(|r| r["len"].as_u64().expect("validated region length"))
         .sum::<u64>();
-    let boot_memory_mib = u32::try_from(boot_bytes >> 20).map_err(invalid)?;
+    let boot_memory_mib = u32::try_from(boot_bytes >> 20).map_err(input)?;
     let max_memory_mib = if metadata["memory"].is_null() {
         boot_memory_mib
     } else {
@@ -434,10 +493,10 @@ pub(crate) fn inspect_memory(mut memory: &File) -> BoxliteResult<CheckpointDepen
                 .as_u64()
                 .expect("validated memory maximum"),
         )
-        .map_err(invalid)?
+        .map_err(input)?
     };
     let boot = &metadata["disk_dependencies"][1]["external_readonly_boot"];
-    let boot_hash: [u8; 32] = serde_json::from_value(boot["sha256"].clone()).map_err(invalid)?;
+    let boot_hash: [u8; 32] = serde_json::from_value(boot["sha256"].clone()).map_err(input)?;
     Ok(CheckpointDependencies {
         version: 9,
         cpus: metadata["cpus"]
@@ -449,14 +508,14 @@ pub(crate) fn inspect_memory(mut memory: &File) -> BoxliteResult<CheckpointDepen
         max_memory_mib,
         container_disk_bytes: metadata["disks"][0]["disk_bytes"]
             .as_u64()
-            .ok_or_else(|| invalid("container capacity missing"))?,
+            .ok_or_else(|| input("container capacity missing"))?,
         boot_disk_bytes: boot["length"]
             .as_u64()
-            .ok_or_else(|| invalid("boot physical length missing"))?,
+            .ok_or_else(|| input("boot physical length missing"))?,
         boot_disk_sha256: hex::encode(boot_hash),
         qcow2_bytes: number(40),
         qcow2_sha256: hex::encode(&header[112..144]),
-        shares: shares(&metadata["fs"])?,
+        shares: shares(&metadata["fs"]).map_err(PairFailure::InvalidInput)?,
         local_roots: metadata["application"]["local_paths"]["shares"]
             .as_object()
             .into_iter()
@@ -468,12 +527,19 @@ pub(crate) fn inspect_memory(mut memory: &File) -> BoxliteResult<CheckpointDepen
             .map(Into::into),
         disk_dependencies: metadata["disk_dependencies"].clone(),
         application: metadata["application"].clone(),
+        network_device: !metadata["nic"].is_null(),
     })
 }
 
 pub(crate) fn open(path: &Path) -> BoxliteResult<VerifiedPair> {
-    if !std::fs::symlink_metadata(path).map_err(invalid)?.is_dir() {
-        return Err(invalid(
+    open_checked(path).map_err(PairFailure::legacy)
+}
+pub(crate) fn open_checked(path: &Path) -> PairResult<VerifiedPair> {
+    if !std::fs::symlink_metadata(path)
+        .map_err(PairFailure::Io)?
+        .is_dir()
+    {
+        return Err(input(
             "unsupported checkpoint version/format; version 9 two-file directory required",
         ));
     }
@@ -481,7 +547,7 @@ pub(crate) fn open(path: &Path) -> BoxliteResult<VerifiedPair> {
         .read(true)
         .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW)
         .open(path)
-        .map_err(invalid)?;
+        .map_err(PairFailure::Io)?;
     let mut names = directory_names(&directory)?;
     names.sort();
     if names
@@ -490,13 +556,13 @@ pub(crate) fn open(path: &Path) -> BoxliteResult<VerifiedPair> {
             std::ffi::OsString::from(DISK),
         ]
     {
-        return Err(invalid(
+        return Err(input(
             "directory must contain exactly snapshot.mem and snapshot.qcow2",
         ));
     }
     // Pin the directory and open both children relative to it, avoiding a
     // destination replacement redirect between validation and use.
-    let child = |name: &str| -> BoxliteResult<File> {
+    let child = |name: &str| -> PairResult<File> {
         use std::os::fd::{AsRawFd, FromRawFd};
         let name = std::ffi::CString::new(name).expect("fixed filename");
         // SAFETY: name is terminated and directory remains a live FD.
@@ -508,18 +574,23 @@ pub(crate) fn open(path: &Path) -> BoxliteResult<VerifiedPair> {
             )
         };
         if fd < 0 {
-            return Err(invalid(std::io::Error::last_os_error()));
+            let error = std::io::Error::last_os_error();
+            return Err(if error.raw_os_error() == Some(libc::ELOOP) {
+                input("pair member is a symlink")
+            } else {
+                PairFailure::Io(error)
+            });
         }
         // SAFETY: openat returned a new owned descriptor.
         let file = unsafe { File::from_raw_fd(fd) };
-        if !file.metadata().map_err(invalid)?.is_file() {
-            return Err(invalid("pair child is not a regular file"));
+        if !file.metadata().map_err(PairFailure::Io)?.is_file() {
+            return Err(input("pair child is not a regular file"));
         }
         Ok(file)
     };
     let memory = child(MEMORY)?;
     let disk = child(DISK)?;
-    let dependencies = inspect_memory(&memory)?;
+    let dependencies = inspect_memory_checked(&memory)?;
     Ok(VerifiedPair {
         memory,
         disk,
@@ -527,17 +598,20 @@ pub(crate) fn open(path: &Path) -> BoxliteResult<VerifiedPair> {
     })
 }
 
-fn directory_names(directory: &File) -> BoxliteResult<Vec<std::ffi::OsString>> {
+fn directory_names(directory: &File) -> PairResult<Vec<std::ffi::OsString>> {
     use std::os::fd::{FromRawFd, IntoRawFd};
     use std::os::unix::ffi::OsStringExt;
-    let fd = directory.try_clone().map_err(invalid)?.into_raw_fd();
+    let fd = directory
+        .try_clone()
+        .map_err(PairFailure::Io)?
+        .into_raw_fd();
     // SAFETY: fd is a new owned directory descriptor, transferred on success.
     let stream = unsafe { libc::fdopendir(fd) };
     if stream.is_null() {
         let error = std::io::Error::last_os_error();
         // SAFETY: fdopendir did not consume fd on failure.
         drop(unsafe { File::from_raw_fd(fd) });
-        return Err(invalid(error));
+        return Err(PairFailure::Io(error));
     }
     struct Entries(*mut libc::DIR);
     impl Drop for Entries {
@@ -559,7 +633,7 @@ fn directory_names(directory: &File) -> BoxliteResult<Vec<std::ffi::OsString>> {
             let entry = libc::readdir(entries.0);
             if entry.is_null() {
                 if *errno != 0 {
-                    return Err(invalid(std::io::Error::last_os_error()));
+                    return Err(PairFailure::Io(std::io::Error::last_os_error()));
                 }
                 break;
             }
@@ -574,26 +648,37 @@ fn directory_names(directory: &File) -> BoxliteResult<Vec<std::ffi::OsString>> {
 
 impl VerifiedPair {
     pub fn verify_disk(&self) -> BoxliteResult<()> {
-        if self.disk.metadata().map_err(invalid)?.len() != self.dependencies.qcow2_bytes
-            || hex::encode(digest(&self.disk, 0, self.dependencies.qcow2_bytes)?)
-                != self.dependencies.qcow2_sha256
+        self.verify_disk_checked().map_err(PairFailure::legacy)
+    }
+    pub(crate) fn verify_disk_checked(&self) -> PairResult<()> {
+        if self.dependencies.qcow2_bytes < 104 {
+            return Err(input("truncated QCOW2 header"));
+        }
+        if self.disk.metadata().map_err(PairFailure::Io)?.len() != self.dependencies.qcow2_bytes
+            || hex::encode(digest_checked(
+                &self.disk,
+                0,
+                self.dependencies.qcow2_bytes,
+            )?) != self.dependencies.qcow2_sha256
         {
-            return Err(invalid("paired QCOW2 length/checksum mismatch"));
+            return Err(input("paired QCOW2 length/checksum mismatch"));
         }
         use std::os::unix::fs::FileExt;
         let mut header = [0; 104];
-        self.disk.read_exact_at(&mut header, 0).map_err(invalid)?;
+        self.disk
+            .read_exact_at(&mut header, 0)
+            .map_err(PairFailure::Io)?;
         if u64::from_be_bytes(header[24..32].try_into().unwrap())
             != self.dependencies.container_disk_bytes
         {
-            return Err(invalid("QCOW2 capacity differs from saved device"));
+            return Err(input("QCOW2 capacity differs from saved device"));
         }
         if &header[..4] != b"QFI\xfb"
             || !matches!(u32::from_be_bytes(header[4..8].try_into().unwrap()), 2 | 3)
             || header[8..20].iter().any(|&b| b != 0)
             || (header[4..8] == 3u32.to_be_bytes() && header[72..80].iter().any(|&b| b != 0))
         {
-            return Err(invalid("container must be standalone QCOW2"));
+            return Err(input("container must be standalone QCOW2"));
         }
         Ok(())
     }

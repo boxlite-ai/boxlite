@@ -75,6 +75,7 @@ pub struct BoxliteRuntime {
     /// Surfaced via `registries()`.
     registry_backend: Option<Arc<dyn RegistryBackend>>,
     snapshot_backend: Option<Arc<dyn RuntimeSnapshotBackend>>,
+    checkpoint_backend: Arc<dyn super::checkpoints::CheckpointBackend>,
 }
 
 // ============================================================================
@@ -128,6 +129,10 @@ impl BoxliteRuntime {
     }
 
     fn from_local(local: LocalRuntime) -> Self {
+        let checkpoint_backend = Arc::new(super::checkpoints::local::LocalCheckpoints::new(
+            local.0.clone(),
+            None,
+        ));
         let backend_arc = Arc::new(local);
         let image_backend = Arc::clone(&backend_arc) as Arc<dyn ImageBackend>;
         let volume_backend = Arc::clone(&backend_arc) as Arc<dyn VolumeBackend>;
@@ -138,6 +143,7 @@ impl BoxliteRuntime {
             auth_backend: None,
             registry_backend: None,
             snapshot_backend: None,
+            checkpoint_backend,
         }
     }
 
@@ -166,6 +172,7 @@ impl BoxliteRuntime {
         let volume_backend = Arc::clone(&rest_runtime) as Arc<dyn VolumeBackend>;
         let registry_backend = Arc::clone(&rest_runtime) as Arc<dyn RegistryBackend>;
         let snapshot_backend = Arc::clone(&rest_runtime) as Arc<dyn RuntimeSnapshotBackend>;
+        let checkpoint_backend = rest_runtime.checkpoint_backend();
         Ok(Self {
             backend: rest_runtime,
             image_backend,
@@ -173,6 +180,7 @@ impl BoxliteRuntime {
             auth_backend: Some(auth_backend),
             registry_backend: Some(registry_backend),
             snapshot_backend: Some(snapshot_backend),
+            checkpoint_backend,
         })
     }
 
@@ -445,6 +453,80 @@ impl BoxliteRuntime {
         options: crate::runtime::options::CheckpointImportOptions,
     ) -> BoxliteResult<LiteBox> {
         self.backend.import_checkpoint(path.as_ref(), options).await
+    }
+
+    /// Manage memory checkpoints, including those whose source box was deleted.
+    pub fn checkpoints(&self) -> BoxliteResult<crate::RuntimeCheckpointHandle> {
+        Ok(crate::RuntimeCheckpointHandle(
+            crate::CheckpointHandle::new(self.checkpoint_backend.clone()),
+        ))
+    }
+
+    /// Create a new Paused box from a ready checkpoint. Call `resume` explicitly.
+    pub async fn create_from_checkpoint(
+        &self,
+        checkpoint: &str,
+        name: Option<String>,
+    ) -> BoxliteResult<LiteBox> {
+        super::checkpoints::validate_name(checkpoint)?;
+        self.checkpoint_backend.create_from(checkpoint, name).await
+    }
+
+    /// Runner transport: write a managed archive, distinct from a public pair.
+    pub async fn export_checkpoint_archive(
+        &self,
+        checkpoint: &str,
+        path: impl AsRef<std::path::Path>,
+    ) -> BoxliteResult<()> {
+        super::checkpoints::validate_name(checkpoint)?;
+        self.checkpoint_backend
+            .export_archive(checkpoint, path.as_ref())
+            .await
+    }
+
+    /// Runner transport: register a validated managed archive under a stable UUID.
+    pub async fn import_checkpoint_archive(
+        &self,
+        path: impl AsRef<std::path::Path>,
+        operation_id: &str,
+    ) -> BoxliteResult<crate::CheckpointInfo> {
+        self.checkpoint_backend
+            .import_archive(path.as_ref(), operation_id)
+            .await
+    }
+
+    /// Runner import with a durable operation identity published with the box.
+    /// Requires cloud-supported configuration and rebuilds host isolation and
+    /// lifecycle controls; the captured guest configuration is preserved.
+    pub async fn create_from_checkpoint_with_operation(
+        &self,
+        checkpoint: &str,
+        name: Option<String>,
+        operation_id: &str,
+    ) -> BoxliteResult<LiteBox> {
+        super::checkpoints::validate_name(checkpoint)?;
+        self.checkpoint_backend
+            .create_from_operation(checkpoint, name, operation_id)
+            .await
+    }
+
+    /// Runner-only full pair preflight. Does not open saved host paths or create a VM.
+    pub fn inspect_cloud_upload(
+        path: impl AsRef<std::path::Path>,
+    ) -> BoxliteResult<crate::CloudCheckpointInspection> {
+        super::checkpoints::local::cloud::inspect(path.as_ref())
+    }
+
+    /// Runner-only registration using a preflight digest and trusted boot source.
+    /// This creates a managed resource, never a target VM.
+    pub async fn import_checkpoint_pair(
+        &self,
+        path: impl AsRef<std::path::Path>,
+        options: crate::CloudCheckpointImportOptions,
+    ) -> BoxliteResult<crate::CheckpointInfo> {
+        self.checkpoint_backend
+            .import_pair(path.as_ref(), options)
+            .await
     }
 
     /// Inspect memory checksums and required bindings without opening shares or

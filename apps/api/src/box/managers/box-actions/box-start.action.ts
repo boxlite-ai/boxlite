@@ -82,10 +82,14 @@ export class BoxStartAction extends BoxAction {
     // A tenant's image was pinned by the resolver when the box was created. A
     // curated one keeps its tag on the box — the warm pool matches on it — and
     // is pinned here instead, to the build this runner already booted.
-    const image = boxImageIsOrgOwned(box) ? box.image : await this.curatedImagePins.refFor(runner.id, box.image)
+    const image =
+      box.initialCheckpointId || boxImageIsOrgOwned(box)
+        ? box.image
+        : await this.curatedImagePins.refFor(runner.id, box.image)
 
     const runnerAdapter = await this.runnerAdapterFactory.create(runner)
     await runnerAdapter.createBox(box, image, metadata)
+    if (box.initialCheckpointId) return DONT_SYNC_AGAIN
 
     await this.updateBoxState(box, BoxState.CREATING, lockCode)
     return SYNC_AGAIN

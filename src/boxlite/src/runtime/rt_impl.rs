@@ -37,8 +37,12 @@ pub(crate) fn litebox_from_impl(box_impl: SharedBoxImpl) -> LiteBox {
     let box_backend: Arc<dyn crate::runtime::backend::BoxBackend> = box_impl.clone();
     let network_backend: Arc<dyn crate::runtime::backend::BoxNetworkBackend> = box_impl.clone();
     let snapshot_backend: Arc<dyn crate::runtime::backend::SnapshotBackend> =
-        Arc::new(LocalSnapshotBackend::new(box_impl));
-    LiteBox::new(box_backend, network_backend, snapshot_backend)
+        Arc::new(LocalSnapshotBackend::new(box_impl.clone()));
+    let checkpoints = Arc::new(super::checkpoints::local::LocalCheckpoints::new(
+        box_impl.runtime.clone(),
+        Some(box_impl),
+    ));
+    LiteBox::new(box_backend, network_backend, snapshot_backend).with_checkpoints(checkpoints)
 }
 
 /// Record that the box's main command is over, taking its exit code from the
@@ -157,6 +161,7 @@ pub struct RuntimeImpl {
 
     /// Snapshot manager for per-box snapshot lifecycle (create, remove, restore).
     pub(crate) snapshot_mgr: crate::litebox::snapshot_mgr::SnapshotManager,
+    pub(crate) checkpoint_catalog: super::checkpoints::local::Catalog,
 
     /// Per-entity lock manager for multiprocess-safe locking.
     ///
@@ -326,6 +331,10 @@ impl RuntimeImpl {
             crate::disk::BaseDiskManager::new(layout.bases_dir(), base_disk_store.clone());
         let snapshot_store = crate::db::SnapshotStore::new(db.clone());
         let snapshot_mgr = crate::litebox::snapshot_mgr::SnapshotManager::new(snapshot_store);
+        let checkpoint_catalog = super::checkpoints::local::Catalog::new(
+            db.clone(),
+            layout.home_dir().join("checkpoints"),
+        )?;
         let box_store = BoxStore::new(db);
 
         // Initialize lock manager for per-entity multiprocess-safe locking
@@ -367,6 +376,7 @@ impl RuntimeImpl {
             experimental_features,
             base_disk_mgr,
             snapshot_mgr,
+            checkpoint_catalog,
             lock_manager,
             network_factory: crate::net::default_factory(),
             _runtime_lock: runtime_lock,

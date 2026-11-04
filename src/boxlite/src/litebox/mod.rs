@@ -73,6 +73,7 @@ pub struct LiteBox {
     network_backend: Arc<dyn BoxNetworkBackend>,
     /// Backend for snapshot lifecycle operations.
     snapshot_backend: Arc<dyn SnapshotBackend>,
+    checkpoint_backend: Arc<dyn crate::runtime::checkpoints::CheckpointBackend>,
 }
 
 impl LiteBox {
@@ -90,7 +91,21 @@ impl LiteBox {
             box_backend,
             network_backend,
             snapshot_backend,
+            checkpoint_backend: Arc::new(crate::runtime::checkpoints::UnsupportedCheckpoints),
         }
+    }
+
+    pub(crate) fn with_checkpoints(
+        mut self,
+        backend: Arc<dyn crate::runtime::checkpoints::CheckpointBackend>,
+    ) -> Self {
+        self.checkpoint_backend = backend;
+        self
+    }
+
+    /// Manage persistent memory checkpoints captured from this box.
+    pub fn checkpoints(&self) -> crate::CheckpointHandle {
+        crate::CheckpointHandle::new(self.checkpoint_backend.clone())
     }
 
     pub fn id(&self) -> &BoxID {

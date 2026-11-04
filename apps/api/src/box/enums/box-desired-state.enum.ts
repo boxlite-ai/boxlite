@@ -9,4 +9,5 @@ export enum BoxDesiredState {
   STARTED = 'started',
   STOPPED = 'stopped',
   RESIZED = 'resized',
+  PAUSED = 'paused',
 }

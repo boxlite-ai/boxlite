@@ -67,6 +67,10 @@ pub use runtime::advanced_options::{
     AdvancedBoxOptions, ContainerCapabilities, HealthCheckOptions, NetworkRateLimit,
     ResourceLimits, SecurityOptions,
 };
+pub use runtime::checkpoints::{CheckpointHandle, CheckpointInfo, RuntimeCheckpointHandle};
+pub use runtime::checkpoints::{
+    CloudCheckpointConfiguration, CloudCheckpointImportOptions, CloudCheckpointInspection,
+};
 pub use runtime::options::{
     BoxArchive, BoxOptions, BoxliteOptions, CheckpointImportOptions, CloneOptions, ExportOptions,
     ImageRegistry, ImageRegistryAuth, ImageRegistryProxy, InboundNetworkConfig, NetworkMode,

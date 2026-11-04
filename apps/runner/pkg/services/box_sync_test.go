@@ -102,6 +102,9 @@ func remoteBox(id string, state apiclient.BoxState) map[string]any {
 // runnerAPIStub records the state updates the sync loop pushes and can be told
 // to reject the transitional-state query the way an older API does.
 type runnerAPIStub struct {
+	pausedBoxes          []map[string]any
+	rejectPaused         bool
+	pausedRequests       int
 	transitionalBoxes    []map[string]any
 	rejectTransitional   bool
 	startedBoxes         []map[string]any
@@ -116,6 +119,19 @@ func (s *runnerAPIStub) handler(t *testing.T) http.Handler {
 		response.Header().Set("Content-Type", "application/json")
 
 		if request.Method == http.MethodGet && request.URL.Path == "/box/for-runner" {
+			if request.URL.Query().Get("states") == "paused" {
+				s.pausedRequests++
+				if request.URL.Query().Get("skipReconcilingBoxes") != "true" {
+					t.Error("paused query must skip reconciling boxes")
+				}
+				if s.rejectPaused {
+					response.WriteHeader(400)
+					_, _ = response.Write([]byte(`{"message":"unsupported state"}`))
+					return
+				}
+				_ = json.NewEncoder(response).Encode(s.pausedBoxes)
+				return
+			}
 			if request.URL.Query().Get("states") == string(apiclient.BOXSTATE_STARTED) {
 				_ = json.NewEncoder(response).Encode(s.startedBoxes)
 				return
@@ -150,6 +166,43 @@ func (s *runnerAPIStub) handler(t *testing.T) http.Handler {
 		t.Errorf("unexpected request %s %s", request.Method, request.URL.Path)
 		response.WriteHeader(http.StatusNotFound)
 	})
+}
+
+func TestCheckpointPausedSyncPreservesStateAndOldAPIFallback(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		local  sdkboxlite.State
+		remote apiclient.BoxState
+		reject bool
+		want   string
+	}{
+		{"pause must be reported", "paused", "started", false, "paused"},
+		{"paused remains paused", "paused", "paused", false, ""},
+		{"stopped paused VM reconciles", "stopped", "paused", false, "stopped"},
+		{"old API keeps started reconciliation", "stopped", "started", true, "stopped"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			api := &runnerAPIStub{rejectPaused: tc.reject}
+			if tc.remote == "paused" {
+				api.pausedBoxes = []map[string]any{remoteBox("box-1", tc.remote)}
+			} else {
+				api.startedBoxes = []map[string]any{remoteBox("box-1", tc.remote)}
+			}
+			server := httptest.NewServer(api.handler(t))
+			defer server.Close()
+			reader := &stubBoxReader{infos: []sdkboxlite.BoxInfo{{ID: "box-1", State: tc.local}}}
+			service := newSyncServiceForTest(server, reader)
+			if err := service.PerformSync(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if got := api.updates["/box/box-1/state"]; got != tc.want {
+				t.Fatalf("state=%q want=%q", got, tc.want)
+			}
+			if api.pausedRequests != 1 {
+				t.Fatalf("paused candidate queries=%d want 1", api.pausedRequests)
+			}
+		})
+	}
 }
 
 func newSyncServiceForTest(

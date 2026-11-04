@@ -102,6 +102,7 @@ pub(crate) struct ServerCapabilities {
     pub private_tunnels_enabled: Option<bool>,
     pub exec_user_enabled: Option<bool>,
     pub checkpoints_enabled: Option<bool>,
+    pub checkpoint_management_enabled: Option<bool>,
 }
 
 // ============================================================================

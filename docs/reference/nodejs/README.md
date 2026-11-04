@@ -9,6 +9,7 @@ Complete API reference for the BoxLite Node.js/TypeScript SDK.
 
 - [Runtime Management](#runtime-management)
 - [Box Handle](#box-handle)
+- [Memory Checkpoints](#memory-checkpoints)
 - [Network Tunnels](#network-tunnels)
 - [Guest SSH Control](#guest-ssh-control)
 - [Command Execution](#command-execution)
@@ -19,6 +20,36 @@ Complete API reference for the BoxLite Node.js/TypeScript SDK.
 - [Constants](#constants)
 
 ---
+
+## Memory checkpoints
+
+| Surface | Signature / result |
+| --- | --- |
+| `box.pause(options?)` | `{ hostWritersStopped?: boolean } -> Promise<void>` |
+| `box.resume()` | `Promise<void>` |
+| `box.exportCheckpoint(path)` | Export a pair to a new caller-local directory |
+| `runtime.importCheckpoint(path, options?)` | `{ name?: string } -> Promise<JsBox>`; new Paused box |
+| `JsBoxlite.inspectCheckpoint(path)` | Synchronous caller-local `JsCheckpointDependencies` |
+| `box.checkpoint.create(name?)` | Capture an explicitly paused source; wait for ready `JsCheckpointInfo` |
+| `box.checkpoint.list/get/remove` | `list()`; `get(idOrName) -> Promise<JsCheckpointInfo \| null>`; `remove(idOrName, force?)` |
+| `runtime.checkpoints()` | Source-independent catalog; `list/get/remove` as above, but missing `get()` rejects |
+| `runtime.createFromCheckpoint(idOrName, options?)` | `{ name?: string } -> Promise<JsBox>`; new Paused box with captured resources |
+
+`JsCheckpointInfo` has `id`, `boxId`, `name`, `status`, optional `error`,
+`createdAt` (Unix seconds), `cpus`, `memoryBytes`, `containerDiskBytes` and
+`sizeBytes`. These typed numeric fields reject values outside JavaScript's safe
+integer range. Inspection preserves complete nested dependency records under
+`shares` and `diskDependencies`, representing larger integers losslessly as
+`bigint` rather than rejecting valid native inode/handle values. Top-level fields
+use camelCase. Paths belong to the caller, including over REST.
+
+Omitting a capture name, or passing `null`, generates one. Optional option bags
+also accept `null` for defaults; for example, `box.pause(null)` uses
+`hostWritersStopped: false`, and `createFromCheckpoint(id, null)` omits a name.
+
+Explicit `resume()` continues the restored processes. This API does not roll
+back the source box in place. See the [SDK example](../../../sdks/node/README.md#memory-checkpoints)
+and [platform/dependency constraints](../../guides/checkpoints.md).
 
 ## Runtime management
 

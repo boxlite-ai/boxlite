@@ -25,7 +25,7 @@ export interface SnapshotArchiveStore {
  * scheme it accepts until an S3 store exists.
  */
 export function createSnapshotArchiveStore(configService: TypedConfigService): SnapshotArchiveStore | null {
-  if (!configService.get('boxSnapshot.archivePrefix')) {
+  if (!configService.get('boxSnapshot.archivePrefix') && !configService.get('boxCheckpoint.archivePrefix')) {
     return null
   }
   return new GcsSnapshotArchiveStore(configService.get('gcs.projectId')?.trim() || undefined)

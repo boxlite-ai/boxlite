@@ -9,6 +9,7 @@ import { Reflector } from '@nestjs/core'
 import { Test } from '@nestjs/testing'
 import { ValidationPipe, type INestApplication } from '@nestjs/common'
 import type { AddressInfo } from 'net'
+import { Readable } from 'node:stream'
 import { CombinedAuthGuard } from '../auth/combined-auth.guard'
 import { AuthenticatedRateLimitGuard } from '../common/guards/authenticated-rate-limit.guard'
 import { OrganizationResourceActionGuard } from '../organization/guards/organization-resource-action.guard'
@@ -28,12 +29,15 @@ import { CommerceBoxLimitService } from './commerce-box-limit.service'
 import { AUDIT_CONTEXT_KEY, AuditContext } from '../audit/decorators/audit.decorator'
 import { BoxliteBoxSnapshotController } from './boxlite-box-snapshot.controller'
 import { BoxSnapshotService } from '../box/services/box-snapshot.service'
+import { BoxCheckpointService } from '../box/services/box-checkpoint.service'
 import { BoxliteSnapshotController } from './boxlite-snapshot.controller'
 import { SnapshotBoxService } from './snapshot-box.service'
 import { BoxliteRestModule } from './boxlite-rest.module'
 import { BoxliteCacheController } from './boxlite-cache.controller'
 import { RunnerService } from '../box/services/runner.service'
 import { RegionService } from '../region/services/region.service'
+import { BoxliteBoxCheckpointController } from './boxlite-checkpoint.controller'
+import { CheckpointTransferService } from './checkpoint-transfer.service'
 
 jest.mock('http-proxy-middleware', () => ({
   createProxyMiddleware: jest.fn(),
@@ -57,6 +61,47 @@ describe('BoxLite REST routing', () => {
   let app: INestApplication
   let updateInboundEnabled: jest.Mock
   let setOutboundNetwork: jest.Mock
+
+  it.each([
+    ['application/zstd', 201],
+    ['application/octet-stream', 201],
+    ['application/json', 400],
+  ])('accepts checkpoint upload media type %s with status %s', async (contentType, status) => {
+    const transfers = { import: jest.fn().mockResolvedValue({ box_id: 'child-1', status: 'configured' }) }
+    await startApp([BoxliteBoxCheckpointController], [{ provide: CheckpointTransferService, useValue: transfers }])
+    const address = app.getHttpServer().address() as AddressInfo
+    const response = await fetch(`http://127.0.0.1:${address.port}/api/v1/boxes/checkpoint/import`, {
+      method: 'POST',
+      headers: { 'Content-Type': contentType },
+      body: '{}',
+    })
+    expect(response.status).toBe(status)
+    expect(transfers.import).toHaveBeenCalledTimes(status === 201 ? 1 : 0)
+  })
+
+  it('exports checkpoint pairs with the documented zstd media type', async () => {
+    const source = { getRepository: () => ({ update: jest.fn().mockResolvedValue(undefined) }) }
+    const checkpoints = { requireStorage: jest.fn(), requireRunner: jest.fn().mockResolvedValue({ id: 'runner-1' }) }
+    const boxes = { findOneByIdOrName: jest.fn().mockResolvedValue({ id: 'box-1', runnerId: 'runner-1' }) }
+    const transfers = new CheckpointTransferService(
+      source as any,
+      checkpoints as any,
+      {} as any,
+      boxes as any,
+      {} as any,
+    )
+    jest.spyOn(transfers as any, 'reserve').mockResolvedValue({ id: 'transfer-1', runnerId: 'runner-1' })
+    jest.spyOn(transfers as any, 'call').mockResolvedValue(Readable.from(['pair bytes']))
+    jest.spyOn(transfers as any, 'cleanup').mockResolvedValue(undefined)
+    await startApp([BoxliteBoxCheckpointController], [{ provide: CheckpointTransferService, useValue: transfers }])
+    const address = app.getHttpServer().address() as AddressInfo
+    const response = await fetch(`http://127.0.0.1:${address.port}/api/v1/boxes/box-1/checkpoint/export`, {
+      method: 'POST',
+    })
+    expect(response.status).toBe(200)
+    expect(response.headers.get('content-type')).toBe('application/zstd')
+    expect(await response.text()).toBe('pair bytes')
+  })
 
   async function startRoutingTestApp(snapshotService: Record<string, jest.Mock> = {}) {
     updateInboundEnabled = jest.fn((_boxId: string, inboundEnabled: boolean) => Promise.resolve({ inboundEnabled }))
@@ -109,7 +154,13 @@ describe('BoxLite REST routing', () => {
   }
 
   async function startApp(controllers: any[], providers: any[]) {
-    const moduleRef = await Test.createTestingModule({ controllers, providers })
+    const moduleRef = await Test.createTestingModule({
+      controllers,
+      providers: [
+        { provide: BoxCheckpointService, useValue: { isEnabled: jest.fn().mockResolvedValue(false) } },
+        ...providers,
+      ],
+    })
       // The proxy controller is here only for its routes. Mock whatever it
       // injects, so a constructor dependency added later (#1723 added
       // TunnelService) cannot stop these routing tests from building.

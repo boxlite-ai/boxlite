@@ -1731,6 +1731,7 @@ export const ListBoxesPaginatedStatesEnum = {
     RESIZING: 'resizing',
     EXPORTING: 'exporting',
     IMPORTING: 'importing',
+    PAUSED: 'paused',
     UNKNOWN_DEFAULT_OPEN_API: '11184809',
 } as const;
 export type ListBoxesPaginatedStatesEnum = typeof ListBoxesPaginatedStatesEnum[keyof typeof ListBoxesPaginatedStatesEnum];

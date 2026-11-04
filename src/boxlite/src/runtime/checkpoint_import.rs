@@ -80,10 +80,37 @@ pub(crate) async fn import_checkpoint(
     path: &Path,
     options: CheckpointImportOptions,
 ) -> BoxliteResult<LiteBox> {
+    import_with_boot(runtime, path, options, None, None).await
+}
+
+pub(crate) async fn import_managed_checkpoint(
+    runtime: &SharedRuntimeImpl,
+    path: &Path,
+    options: CheckpointImportOptions,
+    boot: PathBuf,
+    identity: Option<crate::runtime::checkpoints::ImportIdentity>,
+) -> BoxliteResult<LiteBox> {
+    import_with_boot(runtime, path, options, Some(boot), identity).await
+}
+
+async fn import_with_boot(
+    runtime: &SharedRuntimeImpl,
+    path: &Path,
+    options: CheckpointImportOptions,
+    managed_boot: Option<PathBuf>,
+    identity: Option<crate::runtime::checkpoints::ImportIdentity>,
+) -> BoxliteResult<LiteBox> {
     support::check_host(Host::current())?;
     let pair = pair::open(path)?;
-    let application: Application =
-        serde_json::from_value(pair.dependencies.application.clone()).map_err(invalid)?;
+    let application: Application = if identity.is_some() {
+        super::checkpoints::local::cloud::prepare(
+            &pair,
+            super::checkpoints::local::cloud::Origin::Managed,
+        )?
+        .1
+    } else {
+        serde_json::from_value(pair.dependencies.application.clone()).map_err(invalid)?
+    };
     let local_paths = application.local_paths.as_ref().ok_or_else(|| invalid(
         "unsupported provider-era checkpoint: automatic local paths are absent; export a local-path checkpoint"
     ))?;
@@ -109,7 +136,10 @@ pub(crate) async fn import_checkpoint(
         .as_u64()
         .ok_or_else(|| invalid("invalid boot length"))?;
     let mut cached_pin = None;
-    let boot_path = if local_paths.boot_disk.try_exists().map_err(invalid)? {
+    let managed = managed_boot.is_some();
+    let boot_path = if let Some(path) = managed_boot {
+        path
+    } else if local_paths.boot_disk.try_exists().map_err(invalid)? {
         local_paths.boot_disk.clone()
     } else {
         let records = runtime
@@ -137,14 +167,14 @@ pub(crate) async fn import_checkpoint(
         })?
     };
     let boot_path = boot_path.canonicalize().map_err(invalid)?;
-    if cached_pin.is_none() {
+    if !managed && cached_pin.is_none() {
         cached_pin = runtime
             .base_disk_mgr
             .store()
             .find_by_base_path(&boot_path.to_string_lossy())?
             .map(|record| record.id().clone());
     }
-    let boot = OpenOptions::new()
+    let mut boot = OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
         .open(&boot_path)
@@ -180,6 +210,32 @@ pub(crate) async fn import_checkpoint(
             armed: true,
         };
         layout.prepare()?;
+        let boot_path = if managed {
+            let owned_boot = layout.root().join("disks/checkpoint-boot.raw");
+            let destination = owned_boot.clone();
+            boot = tokio::task::spawn_blocking(move || {
+                let mut output = OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .create_new(true)
+                    .mode(0o600)
+                    .open(&destination)
+                    .map_err(invalid)?;
+                std::io::copy(&mut boot, &mut output).map_err(invalid)?;
+                output.sync_all().map_err(invalid)?;
+                if output.metadata().map_err(invalid)?.len() != boot_length
+                    || pair::digest(&output, 0, boot_length)? != boot_hash
+                {
+                    return Err(invalid("private boot dependency changed during copy"));
+                }
+                File::open(destination).map_err(invalid)
+            })
+            .await
+            .map_err(invalid)??;
+            owned_boot
+        } else {
+            boot_path
+        };
         let mut local_paths = application
             .local_paths
             .clone()
@@ -408,6 +464,7 @@ pub(crate) async fn import_checkpoint(
         state.start_mode = Some(support::StartMode::Owner { protocol: 2 });
         state.outbound_policy = application.outbound_policy;
         state.checkpoint_guest = Some(application.guest);
+        state.checkpoint_import_identity = identity;
         local_paths.boot_disk = storage.disks[1].path.clone();
         state.checkpoint_paths = Some(local_paths);
         state.restored_storage = Some(storage);

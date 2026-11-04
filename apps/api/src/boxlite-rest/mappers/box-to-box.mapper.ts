@@ -90,6 +90,8 @@ function mapState(state: string | BoxState | undefined): string {
   switch (state) {
     case BoxState.STARTED:
       return 'running'
+    case BoxState.PAUSED:
+      return 'paused'
     case BoxState.STOPPED:
     case BoxState.ARCHIVED:
       return 'stopped'

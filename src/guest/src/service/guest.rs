@@ -15,6 +15,24 @@ use tracing::{debug, error, info, warn};
 
 #[tonic::async_trait]
 impl GuestService for GuestServer {
+    async fn detach_checkpoint_output(
+        &self,
+        _: Request<boxlite_shared::DetachCheckpointOutputRequest>,
+    ) -> Result<Response<boxlite_shared::DetachCheckpointOutputResponse>, Status> {
+        let gate = self.output_handoff.clone();
+        let registry = self.registry.clone();
+        // RPC cancellation must not abandon cleanup after taking task handles.
+        tokio::spawn(async move {
+            let _handoff = gate.write().await;
+            registry.detach_checkpoint_output().await;
+        })
+        .await
+        .map_err(|error| Status::internal(format!("checkpoint output handoff: {error}")))?;
+        Ok(Response::new(
+            boxlite_shared::DetachCheckpointOutputResponse {},
+        ))
+    }
+
     /// Initialize guest environment.
     ///
     /// This must be called first after connection. It:

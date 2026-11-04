@@ -1,10 +1,17 @@
 """SDK boundary checks; real runner behavior is make test:runner-ci:cache."""
 
+import importlib.util
 import tempfile
 import unittest
 
+import pytest
+
 import boxlite
 from boxlite.errors import UnsupportedError
+
+if importlib.util.find_spec("boxlite.boxlite") is None:
+    pytest.skip("native extension module not built", allow_module_level=True)
+from boxlite.boxlite import Boxlite, BoxOptions  # noqa: F401 - validate native exports
 
 
 class CacheVolumeContract(unittest.IsolatedAsyncioTestCase):

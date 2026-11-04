@@ -304,6 +304,61 @@ impl JsBoxlite {
         })
     }
 
+    #[napi]
+    pub fn checkpoints(&self) -> Result<crate::checkpoints::JsRuntimeCheckpointHandle> {
+        Ok(crate::checkpoints::JsRuntimeCheckpointHandle {
+            handle: self.runtime.checkpoints().map_err(map_err)?,
+        })
+    }
+
+    /// Restore captured resources into a new Paused box.
+    #[napi]
+    pub async fn create_from_checkpoint(
+        &self,
+        id_or_name: String,
+        options: Option<crate::checkpoints::JsCheckpointImportOptions>,
+    ) -> Result<JsBox> {
+        let handle = self
+            .runtime
+            .create_from_checkpoint(&id_or_name, options.and_then(|options| options.name))
+            .await
+            .map_err(map_err)?;
+        Ok(JsBox {
+            handle: Arc::new(handle),
+        })
+    }
+
+    /// Import a caller-local pair, uploading bytes on a REST runtime.
+    #[napi]
+    pub async fn import_checkpoint(
+        &self,
+        path: String,
+        options: Option<crate::checkpoints::JsCheckpointImportOptions>,
+    ) -> Result<JsBox> {
+        let handle = self
+            .runtime
+            .import_checkpoint(
+                path,
+                boxlite::CheckpointImportOptions {
+                    name: options.and_then(|options| options.name),
+                },
+            )
+            .await
+            .map_err(map_err)?;
+        Ok(JsBox {
+            handle: Arc::new(handle),
+        })
+    }
+
+    #[napi]
+    pub fn inspect_checkpoint(
+        path: String,
+    ) -> Result<crate::checkpoints::JsCheckpointDependencies> {
+        BoxliteRuntime::inspect_checkpoint(path)
+            .map_err(map_err)?
+            .try_into()
+    }
+
     /// Get runtime metrics.
     ///
     /// Returns aggregated statistics about all boxes managed by this runtime.

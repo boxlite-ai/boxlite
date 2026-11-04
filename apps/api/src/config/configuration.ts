@@ -378,6 +378,18 @@ export function boxSnapshotConfig(env: NodeJS.ProcessEnv = process.env) {
   return { archivePrefix: `${GCS_URI_SCHEME}${[bucket, ...segments].join('/')}/`, maxPerOrganization }
 }
 
+export function boxCheckpointConfig(env: NodeJS.ProcessEnv = process.env) {
+  try {
+    return boxSnapshotConfig({
+      ...env,
+      BOX_SNAPSHOT_ARCHIVE_PREFIX: env.BOX_CHECKPOINT_ARCHIVE_PREFIX,
+      BOX_SNAPSHOT_MAX_PER_ORGANIZATION: env.BOX_CHECKPOINT_MAX_PER_ORGANIZATION,
+    })
+  } catch (error) {
+    throw new Error((error as Error).message.replaceAll('BOX_SNAPSHOT_', 'BOX_CHECKPOINT_'))
+  }
+}
+
 /**
  * The login-time account link, merging a person's logins into one account.
  *
@@ -762,6 +774,7 @@ const configuration = {
   },
   boxMigration: boxMigrationConfig(),
   boxSnapshot: boxSnapshotConfig(),
+  boxCheckpoint: boxCheckpointConfig(),
   boxSync: {
     // How long a claimed startup job may sit without completing before a
     // runner reporting the box as started is allowed to close it out. This is

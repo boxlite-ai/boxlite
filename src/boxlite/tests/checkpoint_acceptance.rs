@@ -1075,3 +1075,173 @@ async fn checkpoint_continues_the_same_guest_process_in_a_new_runtime() {
         .shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT))
         .await;
 }
+
+/// Managed boot/pair ownership survives source deletion and checkpoint removal.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "real KVM acceptance; run with FILTER=checkpoint_catalog_survives_source_and_resource_deletion"]
+async fn checkpoint_catalog_survives_source_and_resource_deletion() {
+    init_tracing();
+    require_kvm();
+    let source_home = PerTestBoxHome::isolated();
+    let _logs = BoxLogs::new(&source_home.path, "catalog-source");
+    let share = tempfile::tempdir().unwrap();
+    let archive_home = tempfile::tempdir().unwrap();
+    let archive = archive_home.path().join("managed.zst");
+    let runtime = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: source_home.path.clone(),
+        image_registries: common::test_registries(),
+        ..Default::default()
+    })
+    .unwrap();
+    let source = runtime
+        .create(
+            BoxOptions {
+                rootfs: RootfsSpec::Image("alpine:latest".into()),
+                cpus: Some(1),
+                memory_mib: Some(256),
+                auto_delete: Some(0),
+                volumes: vec![VolumeSpec::bind_mount(
+                    share.path().to_str().unwrap(),
+                    SHARE_GUEST,
+                )],
+                ..Default::default()
+            },
+            None,
+        )
+        .await
+        .unwrap();
+    source.start().await.unwrap();
+    // The resize helper touches 300 MiB before emitting its first start line.
+    let resources = source
+        .resize(ResizeOptions {
+            memory_mib: Some(512),
+            ..Default::default()
+        })
+        .await
+        .expect("grow memory before starting the catalog helper");
+    assert_eq!(resources.memory_mib, 512);
+    source
+        .copy_into(helper_binary(), HELPER_GUEST, CopyOptions::default())
+        .await
+        .unwrap();
+    run_ok(&source, "chmod", &["0755", HELPER_GUEST]).await;
+    run_ok(&source, "mkdir", &["-p", DISK_DIR]).await;
+    let boot_id = run_ok(&source, "cat", &["/proc/sys/kernel/random/boot_id"]).await;
+    let mut execution = source
+        .exec(BoxCommand::new(HELPER_GUEST).args([DISK_DIR, SHARE_GUEST, "resize"]))
+        .await
+        .unwrap();
+    let execution_id = execution.id().clone();
+    let mut lines = Lines::new(execution.stdout().unwrap(), None);
+    let start = lines.next().await;
+    lines.start = Some(start.clone());
+    let before = lines.ticks(3).await;
+    let identity = before.last().unwrap().clone();
+    let started = start_time(&source, identity.pid).await;
+    source
+        .pause(PauseOptions {
+            host_writers_stopped: true,
+        })
+        .await
+        .unwrap();
+    let cut = cut_counter(share.path());
+    let checkpoint = source
+        .checkpoints()
+        .create(Some("before-upgrade".into()))
+        .await
+        .unwrap();
+    assert_eq!(checkpoint.status, "ready");
+    assert!(checkpoint.size_bytes > checkpoint.memory_bytes);
+    assert_eq!(status(&source).await, BoxStatus::Paused);
+    runtime
+        .export_checkpoint_archive(&checkpoint.id, &archive)
+        .await
+        .unwrap();
+    source
+        .stop()
+        .await
+        .expect("stop captured source before removal");
+    runtime.remove(source.id().as_str(), false).await.unwrap();
+    assert_eq!(
+        runtime
+            .checkpoints()
+            .unwrap()
+            .get(&checkpoint.id)
+            .await
+            .unwrap(),
+        checkpoint
+    );
+    drop(lines);
+    drop(execution);
+    drop(source);
+    runtime
+        .shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT))
+        .await
+        .unwrap();
+    drop(runtime);
+    // Remove the original home, including the saved absolute boot/cache paths.
+    std::fs::remove_dir_all(&source_home.path).unwrap();
+    let target_home = PerTestBoxHome::isolated();
+    let _target_logs = BoxLogs::new(&target_home.path, "catalog-restored");
+    let target = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: target_home.path.clone(),
+        ..Default::default()
+    })
+    .unwrap();
+    let checkpoint_operation = uuid::Uuid::new_v4().to_string();
+    let imported = target
+        .import_checkpoint_archive(&archive, &checkpoint_operation)
+        .await
+        .unwrap();
+    assert_eq!(
+        target
+            .import_checkpoint_archive(&archive, &checkpoint_operation)
+            .await
+            .unwrap(),
+        imported
+    );
+    // This local case retains an external share. Runner operation-aware import
+    // intentionally rejects external mounts; its cloud-only replay is separate.
+    let restored = target
+        .create_from_checkpoint(&imported.id, Some("continued".into()))
+        .await
+        .unwrap();
+    assert_eq!(status(&restored).await, BoxStatus::Paused);
+    target
+        .checkpoints()
+        .unwrap()
+        .remove(&imported.id, false)
+        .await
+        .unwrap();
+    assert!(restored.exec(BoxCommand::new("true")).await.is_err());
+    restored.resume().await.unwrap();
+    let mut attached = restored
+        .attach(AttachOptions::execution(execution_id).read_only())
+        .await
+        .unwrap();
+    let mut continued = Lines::new(attached.stdout().unwrap(), Some(start));
+    loop {
+        let tick = continued.ticks(1).await.pop().unwrap();
+        assert_eq!(
+            (tick.pid, tick.marker.as_str()),
+            (identity.pid, identity.marker.as_str())
+        );
+        if tick.n > cut + 3 {
+            break;
+        }
+    }
+    assert_eq!(start_time(&restored, identity.pid).await, started);
+    assert_eq!(
+        run_ok(&restored, "cat", &["/proc/sys/kernel/random/boot_id"]).await,
+        boot_id
+    );
+    restored.stop().await.unwrap();
+    let restored = target.get(restored.id().as_str()).await.unwrap().unwrap();
+    restored.start().await.unwrap();
+    run_ok(&restored, "true", &[]).await;
+    restored.stop().await.unwrap();
+    target
+        .shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT))
+        .await
+        .unwrap();
+}

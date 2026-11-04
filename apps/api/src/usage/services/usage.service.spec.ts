@@ -141,29 +141,32 @@ describe('UsageService.handleBoxStateUpdate', () => {
     expect(service.activeJobs.size).toBe(0)
   })
 
-  it('opens a full-resource period when the box starts', async () => {
-    const { service, usagePeriodRepository } = makeService()
+  it.each([BoxState.STARTED, BoxState.PAUSED])(
+    'opens a full-resource period when the box becomes %s',
+    async (state) => {
+      const { service, usagePeriodRepository } = makeService([], state)
 
-    await service.handleBoxStateUpdate(event(BoxState.STARTED))
+      await service.handleBoxStateUpdate(event(state))
 
-    expect(usagePeriodRepository.save).toHaveBeenCalledTimes(1)
-    expect(usagePeriodRepository.save).toHaveBeenCalledWith(
-      expect.objectContaining({
-        boxId: 'box-1',
-        organizationId: 'org-1',
-        region: 'us',
-        cpu: 2,
-        gpu: 1,
-        mem: 4,
-        disk: 10,
-        endAt: null,
-      }),
-    )
-    // billing starts now, not at some inherited timestamp
-    const [[opened]] = usagePeriodRepository.save.mock.calls
-    expect(opened.startAt).toBeInstanceOf(Date)
-    expect(Date.now() - opened.startAt.getTime()).toBeLessThan(5_000)
-  })
+      expect(usagePeriodRepository.save).toHaveBeenCalledTimes(1)
+      expect(usagePeriodRepository.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          boxId: 'box-1',
+          organizationId: 'org-1',
+          region: 'us',
+          cpu: 2,
+          gpu: 1,
+          mem: 4,
+          disk: 10,
+          endAt: null,
+        }),
+      )
+      // billing starts now, not at some inherited timestamp
+      const [[opened]] = usagePeriodRepository.save.mock.calls
+      expect(opened.startAt).toBeInstanceOf(Date)
+      expect(Date.now() - opened.startAt.getTime()).toBeLessThan(5_000)
+    },
+  )
 
   it('closes the previous period before opening a new one when the box starts', async () => {
     const stale = openPeriod()

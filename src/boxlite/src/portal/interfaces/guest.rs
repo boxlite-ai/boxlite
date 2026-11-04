@@ -109,6 +109,21 @@ impl GuestInterface {
             .into_inner())
     }
 
+    /// Wait for captured output consumers to relinquish their reading leases.
+    pub(crate) async fn detach_checkpoint_output(&mut self) -> BoxliteResult<()> {
+        self.client
+            .detach_checkpoint_output(boxlite_shared::DetachCheckpointOutputRequest {})
+            .await
+            .map_err(|error| {
+                if error.code() == tonic::Code::Unimplemented {
+                    BoxliteError::Unsupported("this guest predates checkpoint output handoff; re-export with a current guest".into())
+                } else {
+                    error.into()
+                }
+            })?;
+        Ok(())
+    }
+
     /// Shutdown the guest agent.
     pub async fn shutdown(&mut self) -> BoxliteResult<()> {
         let _response = self.client.shutdown(ShutdownRequest {}).await?;

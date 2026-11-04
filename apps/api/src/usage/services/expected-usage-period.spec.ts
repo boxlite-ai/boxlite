@@ -15,6 +15,7 @@ describe('expectedOpenPeriod', () => {
   // what it bills — the exhaustiveness check below fails until it appears here.
   const cases: [BoxState, ExpectedOpenPeriod][] = [
     [BoxState.STARTED, FULL_COMPUTE],
+    [BoxState.PAUSED, FULL_COMPUTE],
     [BoxState.STOPPING, DISK_ONLY],
     [BoxState.STOPPED, DISK_ONLY],
     // A stopped box whose disk a snapshot job is reading or replacing still

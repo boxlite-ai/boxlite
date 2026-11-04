@@ -30,6 +30,7 @@ import { UsageExportOutboxService } from './usage-export-outbox.service'
 import { Box } from '../../box/entities/box.entity'
 import { Runner } from '../../box/entities/runner.entity'
 import {
+  BOX_STATES_BILLING_COMPUTE,
   BOX_STATES_BILLING_DISK_ONLY,
   BOX_STATES_WITHOUT_OPEN_PERIOD,
   BOX_STATES_WITH_OPEN_PERIOD,
@@ -144,7 +145,8 @@ export class UsageService implements TrackableJobExecutions, OnApplicationShutdo
           })
           if (!current || current.state !== event.newState || current.resizeJobId) return
           switch (event.newState) {
-            case BoxState.STARTED: {
+            case BoxState.STARTED:
+            case BoxState.PAUSED: {
               const transitionAt = new Date()
               await this.closeUsagePeriod(current.id, manager, transitionAt)
               signal.throwIfAborted()
@@ -425,7 +427,7 @@ export class UsageService implements TrackableJobExecutions, OnApplicationShutdo
              -- the ledger stores organizationId as text, the box table as uuid
              OR p."organizationId" <> b."organizationId"::text
              OR p.region <> b.region
-             OR (b.state = :started AND (p.cpu <> b.cpu OR p.mem <> b.mem OR p.gpu <> b.gpu))
+             OR (b.state IN (:...computeStates) AND (p.cpu <> b.cpu OR p.mem <> b.mem OR p.gpu <> b.gpu))
              OR (b.state IN (:...diskOnlyStates) AND (p.cpu <> 0 OR p.mem <> 0 OR p.gpu <> 0))
            ))
         OR (b.state IN (:...withoutStates) AND p.id IS NOT NULL)
@@ -434,7 +436,7 @@ export class UsageService implements TrackableJobExecutions, OnApplicationShutdo
             withStates: BOX_STATES_WITH_OPEN_PERIOD,
             withoutStates: BOX_STATES_WITHOUT_OPEN_PERIOD,
             diskOnlyStates: BOX_STATES_BILLING_DISK_ONLY,
-            started: BoxState.STARTED,
+            computeStates: BOX_STATES_BILLING_COMPUTE,
           },
         )
         .orderBy('b."updatedAt"', 'ASC')

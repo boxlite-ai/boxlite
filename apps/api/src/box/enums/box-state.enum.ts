@@ -22,4 +22,5 @@ export enum BoxState {
   // like `ALTER TYPE ... ADD VALUE`, so the two orders stay the same.
   EXPORTING = 'exporting',
   IMPORTING = 'importing',
+  PAUSED = 'paused',
 }

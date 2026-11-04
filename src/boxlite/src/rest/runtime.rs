@@ -32,6 +32,14 @@ pub(crate) struct RestRuntime {
 }
 
 impl RestRuntime {
+    pub(crate) fn checkpoint_backend(
+        &self,
+    ) -> Arc<dyn crate::runtime::checkpoints::CheckpointBackend> {
+        Arc::new(super::checkpoints::RestCheckpoints::new(
+            self.client.clone(),
+            None,
+        ))
+    }
     pub(super) async fn validate_create_options(&self, options: &BoxOptions) -> BoxliteResult<()> {
         options.sanitize_remote()?;
 
@@ -211,8 +219,9 @@ fn image_path(name: &str) -> String {
 pub(super) fn litebox_from_rest(rest_box: Arc<RestBox>) -> LiteBox {
     let box_backend: Arc<dyn crate::runtime::backend::BoxBackend> = rest_box.clone();
     let network_backend: Arc<dyn crate::runtime::backend::BoxNetworkBackend> = rest_box.clone();
+    let checkpoints = rest_box.checkpoint_backend();
     let snapshot_backend: Arc<dyn crate::runtime::backend::SnapshotBackend> = rest_box;
-    LiteBox::new(box_backend, network_backend, snapshot_backend)
+    LiteBox::new(box_backend, network_backend, snapshot_backend).with_checkpoints(checkpoints)
 }
 
 impl BoxOptions {
@@ -352,10 +361,7 @@ impl RuntimeBackend for RestRuntime {
             .client
             .post_checkpoint(file, options.name.as_deref())
             .await?;
-        Ok(litebox_from_rest(Arc::new(RestBox::new(
-            self.client.clone(),
-            response.to_box_info()?,
-        ))))
+        super::checkpoints::wait_for_paused(&self.client, response).await
     }
 
     async fn create(&self, options: BoxOptions, name: Option<String>) -> BoxliteResult<LiteBox> {

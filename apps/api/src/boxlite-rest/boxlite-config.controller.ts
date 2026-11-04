@@ -6,6 +6,7 @@
 
 import { Controller, Get } from '@nestjs/common'
 import { ApiTags, ApiExcludeController } from '@nestjs/swagger'
+import { BoxCheckpointService } from '../box/services/box-checkpoint.service'
 import { BoxSnapshotService } from '../box/services/box-snapshot.service'
 
 // Spec-first surface: the contract is openapi/box.openapi.yaml.
@@ -13,10 +14,13 @@ import { BoxSnapshotService } from '../box/services/box-snapshot.service'
 @ApiTags('BoxLite REST')
 @Controller('v1')
 export class BoxliteConfigController {
-  constructor(private readonly snapshotService: BoxSnapshotService) {}
+  constructor(
+    private readonly snapshotService: BoxSnapshotService,
+    private readonly checkpoints: BoxCheckpointService,
+  ) {}
 
   @Get('config')
-  getConfig() {
+  async getConfig() {
     return {
       capabilities: {
         privileged_enabled: true,
@@ -26,6 +30,8 @@ export class BoxliteConfigController {
         create_from_snapshot_enabled: this.snapshotService.isEnabled(),
         snapshot_copy_enabled: false,
         memory_snapshots_enabled: false,
+        checkpoints_enabled: await this.checkpoints.isEnabled(),
+        checkpoint_management_enabled: await this.checkpoints.isEnabled(),
         cache_volumes_enabled: true,
         clone_enabled: false,
         export_enabled: false,

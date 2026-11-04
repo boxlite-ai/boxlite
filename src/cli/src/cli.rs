@@ -308,6 +308,31 @@ const VOLUME_SCOPES: &[CommandScope] = &[
 ];
 const CHECKPOINT_SCOPES: &[CommandScope] = &[
     CommandScope {
+        name: "create",
+        globals: BOX_GLOBALS,
+        children: &[],
+    },
+    CommandScope {
+        name: "list",
+        globals: BOX_GLOBALS,
+        children: &[],
+    },
+    CommandScope {
+        name: "get",
+        globals: BOX_GLOBALS,
+        children: &[],
+    },
+    CommandScope {
+        name: "remove",
+        globals: BOX_GLOBALS,
+        children: &[],
+    },
+    CommandScope {
+        name: "restore",
+        globals: BOX_GLOBALS,
+        children: &[],
+    },
+    CommandScope {
         name: "inspect",
         globals: LOCAL_GLOBALS,
         children: &[],
@@ -815,7 +840,7 @@ pub enum Commands {
     /// Resume a paused box
     Resume(crate::commands::checkpoint::ResumeArgs),
 
-    /// Export or import a paused box as a two-file checkpoint directory
+    /// Manage memory checkpoints or transfer a two-file checkpoint directory
     Checkpoint(crate::commands::checkpoint::CheckpointArgs),
 
     /// Grow a running box, or show its allocation and boot ceilings

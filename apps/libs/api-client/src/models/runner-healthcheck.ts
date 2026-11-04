@@ -22,6 +22,10 @@ import type { RunnerServiceHealth } from './runner-service-health';
 
 export interface RunnerHealthcheck {
     /**
+     * Native Linux x86_64 memory checkpoint support; omitted means disabled
+     */
+    'checkpointsEnabled'?: boolean;
+    /**
      * Runner metrics
      */
     'metrics'?: RunnerHealthMetrics;

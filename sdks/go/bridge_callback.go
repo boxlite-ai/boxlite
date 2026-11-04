@@ -522,6 +522,75 @@ func goBoxliteOnSnapshotOp(errPtr *C.CBoxliteError, userData unsafe.Pointer) {
 	deliverUnitResult(userData, errPtr)
 }
 
+// goBoxliteOnCheckpointInfo delivers owned metadata from capture, lookup, or registration.
+//
+//export goBoxliteOnCheckpointInfo
+func goBoxliteOnCheckpointInfo(info *C.CCheckpointInfo, errPtr *C.CBoxliteError, userData unsafe.Pointer) {
+	h := ptrToHandle(userData)
+	if h == 0 {
+		return
+	}
+	if !claimOrFreePayload(h, &info, func(i **C.CCheckpointInfo) {
+		if i != nil && *i != nil {
+			C.boxlite_free_checkpoint_info(*i)
+		}
+	}) {
+		return
+	}
+	defer h.Delete()
+	if info != nil {
+		defer C.boxlite_free_checkpoint_info(info)
+	}
+	ch, ok := h.Value().(chan checkpointResult)
+	if !ok {
+		return
+	}
+	if err := errorFromCError(errPtr); err != nil {
+		ch <- checkpointResult{err: err}
+		return
+	}
+	if info == nil {
+		ch <- checkpointResult{}
+		return
+	}
+	v := cCheckpointInfoToGo(info)
+	ch <- checkpointResult{value: &v}
+}
+
+//export goBoxliteOnCheckpointList
+func goBoxliteOnCheckpointList(list *C.CCheckpointInfoList, errPtr *C.CBoxliteError, userData unsafe.Pointer) {
+	h := ptrToHandle(userData)
+	if h == 0 {
+		return
+	}
+	if !claimOrFreePayload(h, &list, func(l **C.CCheckpointInfoList) {
+		if l != nil && *l != nil {
+			C.boxlite_free_checkpoint_info_list(*l)
+		}
+	}) {
+		return
+	}
+	defer h.Delete()
+	if list != nil {
+		defer C.boxlite_free_checkpoint_info_list(list)
+	}
+	ch, ok := h.Value().(chan checkpointListResult)
+	if !ok {
+		return
+	}
+	if err := errorFromCError(errPtr); err != nil {
+		ch <- checkpointListResult{err: err}
+		return
+	}
+	checkpoints := convertCheckpointInfoList(list)
+	ch <- checkpointListResult{value: checkpoints}
+}
+
+//export goBoxliteOnCheckpointOp
+func goBoxliteOnCheckpointOp(errPtr *C.CBoxliteError, userData unsafe.Pointer) {
+	deliverUnitResult(userData, errPtr)
+}
+
 //export goBoxliteOnRegistryCreate
 func goBoxliteOnRegistryCreate(login *C.CRegistryCredential, errPtr *C.CBoxliteError, userData unsafe.Pointer) {
 	h := ptrToHandle(userData)
@@ -937,7 +1006,7 @@ type executionWaitResult struct {
 
 type sshStatusResult struct {
 	value *SSHStatus
-	err error
+	err   error
 }
 
 type snapshotResult struct {
@@ -946,5 +1015,14 @@ type snapshotResult struct {
 }
 type snapshotListResult struct {
 	value []SnapshotInfo
+	err   error
+}
+
+type checkpointResult struct {
+	value *CheckpointInfo
+	err   error
+}
+type checkpointListResult struct {
+	value []CheckpointInfo
 	err   error
 }

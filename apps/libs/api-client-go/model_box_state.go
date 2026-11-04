@@ -35,6 +35,7 @@ const (
 	BOXSTATE_RESIZING BoxState = "resizing"
 	BOXSTATE_EXPORTING BoxState = "exporting"
 	BOXSTATE_IMPORTING BoxState = "importing"
+	BOXSTATE_PAUSED BoxState = "paused"
 	BOXSTATE_UNKNOWN_DEFAULT_OPEN_API BoxState = "unknown_default_open_api"
 )
 
@@ -55,6 +56,7 @@ var AllowedBoxStateEnumValues = []BoxState{
 	"resizing",
 	"exporting",
 	"importing",
+	"paused",
 	"unknown_default_open_api",
 }
 

@@ -1840,6 +1840,11 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route("/v1/boxes/{box_id}/pause", post(checkpoints::pause))
         .route("/v1/boxes/{box_id}/resume", post(checkpoints::resume))
         .route("/v1/boxes/{box_id}/checkpoint/export", post(checkpoints::export))
+        .route("/v1/checkpoints", get(checkpoints::list_managed))
+        .route("/v1/checkpoints/{checkpoint}", get(checkpoints::get_managed).delete(checkpoints::remove_managed))
+        .route("/v1/checkpoints/{checkpoint}/boxes", post(checkpoints::restore_managed))
+        .route("/v1/boxes/{box_id}/checkpoints", post(checkpoints::create_managed).get(checkpoints::list_scoped))
+        .route("/v1/boxes/{box_id}/checkpoints/{checkpoint}", get(checkpoints::get_scoped).delete(checkpoints::remove_scoped))
         .route(
             "/v1/boxes",
             post(boxes::create_box).get(boxes::list_boxes),
@@ -2013,6 +2018,7 @@ mod tests {
     use boxlite::runtime::options::NetworkSpec;
     use std::time::Duration;
 
+    mod checkpoints;
     mod resize;
     mod ssh;
 

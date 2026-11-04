@@ -20,9 +20,12 @@ export interface BillableBox extends UsagePeriodShape {
 
 export type ExpectedOpenPeriod = UsagePeriodShape | null
 
+/** Paused VMs retain the same allocated compute and memory as running VMs. */
+export const BOX_STATES_BILLING_COMPUTE: BoxState[] = [BoxState.STARTED, BoxState.PAUSED]
+
 /** States that must have an open period. */
 export const BOX_STATES_WITH_OPEN_PERIOD: BoxState[] = [
-  BoxState.STARTED,
+  ...BOX_STATES_BILLING_COMPUTE,
   BoxState.STOPPING,
   BoxState.STOPPED,
   BoxState.EXPORTING,
@@ -49,9 +52,8 @@ export const BOX_STATES_BILLING_DISK_ONLY: BoxState[] = [
   BoxState.IMPORTING,
 ]
 
-// Every remaining state is in neither list and bills nothing, the same answer a
-// terminal box gets: CREATING, STARTING and UNKNOWN, plus RESTORING, RESIZING
-// and ARCHIVING, which no writer in this repository ever assigns.
+// Remaining transitional states have no open-period rule: CREATING, STARTING,
+// UNKNOWN, RESTORING, RESIZING and ARCHIVING.
 //
 // Answering "nothing" rather than "leave whatever is there alone" is safe
 // because the only caller that acts on that answer destructively is the
@@ -68,7 +70,7 @@ const RESOURCE_EPSILON = 1e-6
 
 /**
  * What the box's open usage period should charge, given the state it is in
- * right now: full compute while running, disk alone once it has stopped, and
+ * right now: full compute while running or Paused, disk alone once stopped, and
  * nothing at all otherwise.
  *
  * This is the single source of truth for the state -> period rule, shared by
@@ -80,7 +82,7 @@ export function expectedOpenPeriod(box: BillableBox | null | undefined): Expecte
   if (!box) {
     return null
   }
-  if (box.state === BoxState.STARTED) {
+  if (BOX_STATES_BILLING_COMPUTE.includes(box.state)) {
     return { cpu: box.cpu, gpu: box.gpu, mem: box.mem, disk: box.disk }
   }
   if (BOX_STATES_BILLING_DISK_ONLY.includes(box.state)) {

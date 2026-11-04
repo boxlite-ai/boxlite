@@ -254,13 +254,21 @@ export class BoxManager implements TrackableJobExecutions, OnApplicationShutdown
         })
         .andWhere('box."desiredState"::text != box.state::text')
         .andWhere('box."desiredState"::text IN (:...supportedDesiredStates)', {
-          supportedDesiredStates: [BoxDesiredState.STARTED, BoxDesiredState.STOPPED, BoxDesiredState.DESTROYED],
+          supportedDesiredStates: [
+            BoxDesiredState.STARTED,
+            BoxDesiredState.STOPPED,
+            BoxDesiredState.DESTROYED,
+            BoxDesiredState.PAUSED,
+          ],
         })
         // A stopped box mid-snapshot differs from its desired state on purpose;
         // its job's settlement brings it back. Deleting it is still synced.
         .andWhere('NOT (box.state IN (:...snapshotStates) AND box."desiredState" = :snapshotDesiredState)', {
           snapshotStates: SNAPSHOT_OPERATION_STATES,
           snapshotDesiredState: BoxDesiredState.STOPPED,
+        })
+        .andWhere('(box."checkpointOperationId" IS NULL OR box."desiredState" = :checkpointDestroy)', {
+          checkpointDestroy: BoxDesiredState.DESTROYED,
         })
         .orderBy('activity."lastActivityAt"', 'DESC', 'NULLS LAST')
 
@@ -365,11 +373,18 @@ export class BoxManager implements TrackableJobExecutions, OnApplicationShutdown
           break
         }
 
+        if (box.checkpointOperationId && box.desiredState !== BoxDesiredState.DESTROYED) break
+
         // Rely on the box action to return SYNC_AGAIN or DONT_SYNC_AGAIN to continue/break the sync loop.
         let syncState = DONT_SYNC_AGAIN
 
         try {
           switch (box.desiredState) {
+            case BoxDesiredState.PAUSED: {
+              if (box.initialCheckpointId && box.state === BoxState.UNKNOWN)
+                syncState = await this.boxStartAction.run(box, lockCode)
+              break
+            }
             case BoxDesiredState.STARTED: {
               syncState = await this.boxStartAction.run(box, lockCode)
               break

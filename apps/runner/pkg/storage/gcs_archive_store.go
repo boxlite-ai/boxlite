@@ -33,6 +33,22 @@ type GCSArchiveStore struct {
 	client *gcs.Client
 }
 
+// Ready checks credential/emulator discovery before advertising checkpoint
+// support. The API separately admits only configured checkpoint buckets.
+func (s *GCSArchiveStore) Ready(ctx context.Context) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.client != nil {
+		return nil
+	}
+	client, err := gcs.NewClient(ctx)
+	if err != nil {
+		return err
+	}
+	s.client = client
+	return nil
+}
+
 func (s *GCSArchiveStore) object(ctx context.Context, arcPath string) (*gcs.ObjectHandle, error) {
 	bucket, key, err := parseGCSURI(arcPath)
 	if err != nil {

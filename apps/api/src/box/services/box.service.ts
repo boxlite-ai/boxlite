@@ -114,6 +114,8 @@ const DEFAULT_BOX_GPU = 0
 export type BoxCreationOptions = {
   maxCreatedBoxes?: number
   initialSnapshotId?: string
+  initialCheckpointId?: string
+  initialCheckpointRunnerId?: string
 }
 
 export type ProxyAdmission = (box: Box, boxId: string) => void
@@ -268,7 +270,8 @@ export class BoxService {
       const resolvedImage = await this.imageResolverService.resolve(organization, createBoxDto.image)
       const image = resolvedImage.ref
       const needsFreshBox =
-        Boolean(options.initialSnapshotId) || requiresFreshBox(createBoxDto, organization, resolvedImage)
+        Boolean(options.initialSnapshotId || options.initialCheckpointId) ||
+        requiresFreshBox(createBoxDto, organization, resolvedImage)
 
       if (createBoxDto.volumes && createBoxDto.volumes.length > 0) {
         for (const volume of createBoxDto.volumes) {
@@ -331,6 +334,8 @@ export class BoxService {
 
       box.organizationId = organization.id
       box.initialSnapshotId = options.initialSnapshotId
+      box.initialCheckpointId = options.initialCheckpointId
+      if (options.initialCheckpointId) box.desiredState = BoxDesiredState.PAUSED
 
       //  TODO: make configurable
       box.class = boxClass
@@ -394,7 +399,9 @@ export class BoxService {
       // own input or placement refuses must not spend one. Only the box limit
       // and a name collision, which the insert itself settles, come after it.
       const runnerParams: GetRunnerParams = {
-        ...(options.initialSnapshotId ? { apiVersion: '2' } : {}),
+        ...(options.initialSnapshotId || options.initialCheckpointId ? { apiVersion: '2' } : {}),
+        ...(options.initialCheckpointId ? { checkpointsEnabled: true } : {}),
+        ...(options.initialCheckpointRunnerId ? { id: options.initialCheckpointRunnerId } : {}),
         regions: [region.id],
         boxClass,
       }
@@ -995,8 +1002,8 @@ export class BoxService {
       throw new BoxError('State change in progress')
     }
 
-    if (box.state !== BoxState.STARTED) {
-      throw new BoxError('Box is not started')
+    if (![BoxState.STARTED, BoxState.PAUSED].includes(box.state)) {
+      throw new BoxError('Box is not started or paused')
     }
 
     if (box.pending) {
@@ -1449,8 +1456,13 @@ export class BoxService {
       return
     }
 
+    if (box.checkpointOperationId) return
+    if (box.desiredState === BoxDesiredState.PAUSED && newState !== BoxState.PAUSED) {
+      throw new BadRequestError('Paused boxes require an explicit checkpoint resume')
+    }
+
     //  only allow updating the state of started | stopped boxes
-    if (![BoxState.STARTED, BoxState.STOPPED].includes(box.state)) {
+    if (![BoxState.STARTED, BoxState.STOPPED, BoxState.PAUSED].includes(box.state)) {
       // One exception: a runner reporting STARTED for a box we still show as
       // coming up. That means its startup job finished on the runner but the
       // completion never reached us. Believe it only once the job has stopped

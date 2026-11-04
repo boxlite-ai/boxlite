@@ -21,6 +21,8 @@ var _ MappedNullable = &RunnerHealthcheck{}
 
 // RunnerHealthcheck struct for RunnerHealthcheck
 type RunnerHealthcheck struct {
+	// Native Linux x86_64 memory checkpoint support; omitted means disabled
+	CheckpointsEnabled *bool `json:"checkpointsEnabled,omitempty"`
 	// Runner metrics
 	Metrics *RunnerHealthMetrics `json:"metrics,omitempty"`
 	// Health status of individual services on the runner
@@ -54,6 +56,38 @@ func NewRunnerHealthcheck(appVersion string) *RunnerHealthcheck {
 func NewRunnerHealthcheckWithDefaults() *RunnerHealthcheck {
 	this := RunnerHealthcheck{}
 	return &this
+}
+
+// GetCheckpointsEnabled returns the CheckpointsEnabled field value if set, zero value otherwise.
+func (o *RunnerHealthcheck) GetCheckpointsEnabled() bool {
+	if o == nil || IsNil(o.CheckpointsEnabled) {
+		var ret bool
+		return ret
+	}
+	return *o.CheckpointsEnabled
+}
+
+// GetCheckpointsEnabledOk returns a tuple with the CheckpointsEnabled field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+func (o *RunnerHealthcheck) GetCheckpointsEnabledOk() (*bool, bool) {
+	if o == nil || IsNil(o.CheckpointsEnabled) {
+		return nil, false
+	}
+	return o.CheckpointsEnabled, true
+}
+
+// HasCheckpointsEnabled returns a boolean if a field has been set.
+func (o *RunnerHealthcheck) HasCheckpointsEnabled() bool {
+	if o != nil && !IsNil(o.CheckpointsEnabled) {
+		return true
+	}
+
+	return false
+}
+
+// SetCheckpointsEnabled gets a reference to the given bool and assigns it to the CheckpointsEnabled field.
+func (o *RunnerHealthcheck) SetCheckpointsEnabled(v bool) {
+	o.CheckpointsEnabled = &v
 }
 
 // GetMetrics returns the Metrics field value if set, zero value otherwise.
@@ -250,6 +284,9 @@ func (o RunnerHealthcheck) MarshalJSON() ([]byte, error) {
 
 func (o RunnerHealthcheck) ToMap() (map[string]interface{}, error) {
 	toSerialize := map[string]interface{}{}
+	if !IsNil(o.CheckpointsEnabled) {
+		toSerialize["checkpointsEnabled"] = o.CheckpointsEnabled
+	}
 	if !IsNil(o.Metrics) {
 		toSerialize["metrics"] = o.Metrics
 	}
@@ -309,6 +346,7 @@ func (o *RunnerHealthcheck) UnmarshalJSON(data []byte) (err error) {
 	additionalProperties := make(map[string]interface{})
 
 	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "checkpointsEnabled")
 		delete(additionalProperties, "metrics")
 		delete(additionalProperties, "serviceHealth")
 		delete(additionalProperties, "domain")

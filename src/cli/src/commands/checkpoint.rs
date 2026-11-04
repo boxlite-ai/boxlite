@@ -1,5 +1,4 @@
-//! `pause`, `resume` and `checkpoint export|import` for checkpoint-enabled
-//! boxes. Directory operands are always caller-local.
+//! Pause/resume, persistent checkpoint management and caller-local pair transfers.
 
 use crate::cli::GlobalFlags;
 use boxlite::{BoxliteError, BoxliteRuntime, CheckpointImportOptions, LiteBox, PauseOptions};
@@ -29,7 +28,7 @@ pub struct ResumeArgs {
     pub target: String,
 }
 
-/// Export or import a paused box as a two-file checkpoint directory
+/// Manage memory checkpoints or transfer a two-file checkpoint directory
 #[derive(Args, Debug)]
 pub struct CheckpointArgs {
     #[command(subcommand)]
@@ -44,6 +43,31 @@ pub enum CheckpointCommand {
     Export(ExportArgs),
     /// Create a new, paused box from a checkpoint directory
     Import(ImportArgs),
+    /// Capture a paused box into the persistent checkpoint catalog
+    Create {
+        target: String,
+        #[arg(long)]
+        name: Option<String>,
+    },
+    /// List managed checkpoints, including those whose source box was deleted
+    List {
+        #[arg(long = "box")]
+        source: Option<String>,
+    },
+    /// Read checkpoint metadata by ID or name
+    Get { checkpoint: String },
+    /// Remove a managed checkpoint; force ignores only absence
+    Remove {
+        checkpoint: String,
+        #[arg(long)]
+        force: bool,
+    },
+    /// Create a new Paused box from a managed checkpoint; resume explicitly
+    Restore {
+        checkpoint: String,
+        #[arg(long)]
+        name: Option<String>,
+    },
 }
 
 #[derive(Args, Debug)]
@@ -99,6 +123,50 @@ pub async fn resume(args: ResumeArgs, global: &GlobalFlags) -> anyhow::Result<()
 
 pub async fn checkpoint(args: CheckpointArgs, global: &GlobalFlags) -> anyhow::Result<()> {
     match args.command {
+        CheckpointCommand::Create { target, name } => {
+            let runtime = global.create_runtime()?;
+            let info = find_box(&runtime, &target)
+                .await?
+                .checkpoints()
+                .create(name)
+                .await?;
+            println!("{}", serde_json::to_string_pretty(&info)?);
+        }
+        CheckpointCommand::List { source } => {
+            let runtime = global.create_runtime()?;
+            let infos = match source {
+                Some(source) => {
+                    find_box(&runtime, &source)
+                        .await?
+                        .checkpoints()
+                        .list()
+                        .await?
+                }
+                None => runtime.checkpoints()?.list().await?,
+            };
+            println!("{}", serde_json::to_string_pretty(&infos)?);
+        }
+        CheckpointCommand::Get { checkpoint } => {
+            let runtime = global.create_runtime()?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&runtime.checkpoints()?.get(&checkpoint).await?)?
+            );
+        }
+        CheckpointCommand::Remove { checkpoint, force } => {
+            global
+                .create_runtime()?
+                .checkpoints()?
+                .remove(&checkpoint, force)
+                .await?;
+        }
+        CheckpointCommand::Restore { checkpoint, name } => {
+            let box_ = global
+                .create_runtime()?
+                .create_from_checkpoint(&checkpoint, name)
+                .await?;
+            println!("{}", box_.id());
+        }
         CheckpointCommand::Inspect { path } => {
             println!(
                 "{}",

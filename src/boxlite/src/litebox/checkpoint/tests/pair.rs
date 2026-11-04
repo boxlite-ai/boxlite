@@ -26,9 +26,30 @@ pub(crate) fn fixture() -> tempfile::TempDir {
     seal(directory.path(), &metadata);
     directory
 }
+
+pub(crate) fn managed_fixture() -> tempfile::TempDir {
+    let directory = fixture();
+    let memory = std::fs::read(directory.path().join(MEMORY)).unwrap();
+    let length = u64::from_le_bytes(memory[24..32].try_into().unwrap()) as usize;
+    let mut metadata: serde_json::Value =
+        serde_json::from_slice(&memory[160..160 + length]).unwrap();
+    let boot = vec![7; 4096];
+    metadata["regions"][0]["len"] = serde_json::json!(1 << 20);
+    metadata["cpus"] = serde_json::json!([{}, {}]);
+    metadata["application"]["resources"] =
+        serde_json::json!({"cpus":1,"memory_mib":1,"max_cpus":2,"max_memory_mib":1});
+    std::fs::write(directory.path().join("boot.raw"), &boot).unwrap();
+    metadata["disk_dependencies"][1]["external_readonly_boot"]["sha256"] =
+        serde_json::json!(Sha256::digest(&boot).to_vec());
+    seal_payload(directory.path(), &metadata, 1 << 20);
+    directory
+}
 fn seal(directory: &Path, metadata: &serde_json::Value) {
+    seal_payload(directory, metadata, 4096);
+}
+fn seal_payload(directory: &Path, metadata: &serde_json::Value, payload_bytes: usize) {
     let metadata = serde_json::to_vec(metadata).unwrap();
-    let payload = vec![0u8; 4096];
+    let payload = vec![0u8; payload_bytes];
     let disk = File::open(directory.join(DISK)).unwrap();
     let disk_bytes = disk.metadata().unwrap().len();
     let mut header = [0u8; 160];
@@ -50,6 +71,73 @@ fn seal(directory: &Path, metadata: &serde_json::Value) {
     file.write_all(&header).unwrap();
     file.write_all(&metadata).unwrap();
     file.write_all(&payload).unwrap();
+}
+
+pub(crate) fn cloud_fixture(change: impl FnOnce(&mut serde_json::Value)) -> tempfile::TempDir {
+    let source = managed_fixture();
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir(root.path().join("pair")).unwrap();
+    std::fs::copy(
+        source.path().join(DISK),
+        root.path().join("pair").join(DISK),
+    )
+    .unwrap();
+    std::fs::copy(source.path().join("boot.raw"), root.path().join("boot.raw")).unwrap();
+    let memory = std::fs::read(source.path().join(MEMORY)).unwrap();
+    let length = u64::from_le_bytes(memory[24..32].try_into().unwrap()) as usize;
+    let mut metadata: serde_json::Value =
+        serde_json::from_slice(&memory[160..160 + length]).unwrap();
+    let application = Application {
+        source_box_id: "cloud-source".into(),
+        guest: crate::litebox::checkpoint::GuestIdentity {
+            boot_id: "guest-boot".into(),
+            container_id: crate::runtime::types::ContainerID::new().to_string(),
+            init_pid: 42,
+        },
+        options: crate::BoxOptions {
+            rootfs: crate::RootfsSpec::Image("alpine:latest".into()),
+            network: crate::NetworkSpec::Disabled,
+            ..Default::default()
+        },
+        resources: crate::BoxResources {
+            cpus: 1,
+            memory_mib: 1,
+            max_cpus: 2,
+            max_memory_mib: 1,
+        },
+        container_image_config: Default::default(),
+        outbound_policy: None,
+        local_paths: Some(crate::litebox::checkpoint::provider::LocalPaths {
+            version: 2,
+            shares: Default::default(),
+            boot_disk: root.path().join("boot.raw"),
+        }),
+    };
+    metadata["application"] = serde_json::to_value(application).unwrap();
+    metadata["fs"] = serde_json::json!({"devices":[{"tag":crate::runtime::constants::mount_tags::SHARED,"vm_owned":false,"read_only":false}],"sessions":[{"objects":[],"init_len":0,"dax_offsets":[],"state":{"handles":[],"dax":{"mappings":[]}}}]});
+    change(&mut metadata);
+    seal_payload(&root.path().join("pair"), &metadata, 1 << 20);
+    root
+}
+
+#[test]
+fn checkpoint_pair_checksum_os_fault_is_internal_at_cloud_and_legacy_boundaries() {
+    let source = fixture();
+    let disk = File::open(source.path().join(DISK)).unwrap();
+    // Fault injection sits beneath the production checksum loop, retaining
+    // descriptor metadata/range checks and the actual parser error handling.
+    let read_failure = |_: &mut [u8], _: u64| Err(std::io::Error::from_raw_os_error(libc::EIO));
+    let error = digest_with(&disk, 0, 104, read_failure)
+        .unwrap_err()
+        .cloud();
+    assert!(matches!(error, BoxliteError::Storage(_)));
+    assert_eq!(error.http().0, 500);
+    assert!(matches!(
+        digest_with(&disk, 0, 104, read_failure)
+            .unwrap_err()
+            .legacy(),
+        BoxliteError::Storage(_)
+    ));
 }
 
 #[test]

@@ -110,6 +110,7 @@ func (s *Service) sendHealthcheck(ctx context.Context) error {
 
 	healthcheck.SetProxyUrl(proxyUrl)
 	healthcheck.SetApiUrl(apiUrl)
+	healthcheck.SetCheckpointsEnabled(s.boxlite.Checkpoints().Enabled(reqCtx))
 
 	runtimeHealth := apiclient.RunnerServiceHealth{
 		ServiceName: "boxlite",

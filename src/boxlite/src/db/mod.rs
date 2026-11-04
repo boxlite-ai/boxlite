@@ -8,6 +8,7 @@
 
 pub(crate) mod base_disk;
 mod boxes;
+pub(crate) mod checkpoint;
 mod images;
 pub(crate) mod migration;
 mod schema;

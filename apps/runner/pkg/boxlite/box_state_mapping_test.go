@@ -20,8 +20,8 @@ func TestToBoxState(t *testing.T) {
 		want enums.BoxState
 	}{
 		{"running", enums.BoxStateStarted},
-		// A snapshot freeze keeps the VM up, so the box stays started.
-		{"paused", enums.BoxStateStarted},
+		// A memory checkpoint freezes execution until an explicit resume.
+		{"paused", enums.BoxState("paused")},
 		{"stopping", enums.BoxStateStopping},
 		{"stopped", enums.BoxStateStopped},
 		{"configured", enums.BoxStateCreating},

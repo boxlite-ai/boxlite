@@ -1767,6 +1767,7 @@ paths:
             - resizing
             - exporting
             - importing
+            - paused
             type: string
           type: array
         style: form
@@ -6067,6 +6068,7 @@ components:
       - resizing
       - exporting
       - importing
+      - paused
       type: string
     BoxDesiredState:
       description: The desired state of the box
@@ -6075,6 +6077,7 @@ components:
       - started
       - stopped
       - resized
+      - paused
       type: string
     BoxVolume:
       example:
@@ -6474,6 +6477,7 @@ components:
           - resizing
           - exporting
           - importing
+          - paused
           example: started
           type: string
         errorReason:
@@ -6999,6 +7003,7 @@ components:
       type: object
     RunnerHealthcheck:
       example:
+        checkpointsEnabled: true
         metrics: ""
         serviceHealth:
         - serviceName: runner
@@ -7012,6 +7017,10 @@ components:
         apiUrl: http://api.boxlite.example.com:8080
         appVersion: v0.0.0-dev
       properties:
+        checkpointsEnabled:
+          description: Native Linux x86_64 memory checkpoint support; omitted means
+            disabled
+          type: boolean
         metrics:
           allOf:
           - $ref: "#/components/schemas/RunnerHealthMetrics"
@@ -7136,6 +7145,10 @@ components:
       - DISCARD_EXPORTED_BOX
       - CREATE_SNAPSHOT
       - RESTORE_SNAPSHOT
+      - PAUSE_BOX
+      - RESUME_BOX
+      - CREATE_CHECKPOINT
+      - IMPORT_CHECKPOINT
       type: string
     Job:
       example:

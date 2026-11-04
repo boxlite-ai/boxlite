@@ -415,6 +415,12 @@ impl ExecutionState {
         .map_err(|_| ExecutionError::AlreadyAttached)?;
         let (tx, rx) = mpsc::channel(100);
         let execution_id = exec_id.to_owned();
+        // Once spawned, the forwarder must be registered without another await:
+        // cancelling Attach must never strand a consumer outside lifecycle cleanup.
+        let mut inner = self.inner.lock().await;
+        if inner.released {
+            return Err(ExecutionError::HandleUnavailable);
+        }
         let task = tokio::spawn(async move {
             loop {
                 // End as soon as the consumer goes away, not at the next
@@ -432,26 +438,23 @@ impl ExecutionState {
             tracing::info!(%execution_id, "execution output forwarding ended");
         });
 
-        let (task_to_abort, displaced) = {
-            let mut inner = self.inner.lock().await;
-            if inner.released {
-                (Some(task), None)
-            } else {
-                (None, inner.output_task.replace(task))
-            }
-        };
+        let displaced = inner.output_task.replace(task);
+        drop(inner);
         // A forwarder releases the consumer lease when its stream drops, which
         // happens before its handle reports finished. So a displaced forwarder is
         // already ending, and this join cannot wait on live output.
         if let Some(displaced) = displaced {
             let _ = displaced.await;
         }
-        if let Some(task) = task_to_abort {
+        Ok(rx)
+    }
+
+    pub(crate) async fn detach_checkpoint_output(&self) {
+        let task = self.inner.lock().await.output_task.take();
+        if let Some(task) = task {
             task.abort();
             let _ = task.await;
-            return Err(ExecutionError::HandleUnavailable);
         }
-        Ok(rx)
     }
 
     async fn join_finished_output_task(&self) {
@@ -1074,5 +1077,37 @@ mod release_tests {
         drop(second);
 
         assert_eq!(state.output_task_count().await, 1);
+    }
+
+    #[tokio::test]
+    async fn checkpoint_handoff_releases_a_still_open_consumer() {
+        let (state, _tracked_fds, peers) = state_with_tracked_handle();
+        let mut old = state.attach("checkpoint-exec").await.unwrap();
+        assert!(matches!(
+            state.attach("checkpoint-exec").await,
+            Err(ExecutionError::AlreadyAttached)
+        ));
+
+        state.detach_checkpoint_output().await;
+        assert!(
+            !state.has_active_reader(),
+            "handoff must complete lease release"
+        );
+        assert!(old.recv().await.is_none());
+        let mut restored = state.attach("checkpoint-exec").await.unwrap();
+        assert!(matches!(
+            state.attach("checkpoint-exec").await,
+            Err(ExecutionError::AlreadyAttached)
+        ));
+        nix::unistd::write(&peers[1], b"after restore").unwrap();
+        let output = tokio::time::timeout(std::time::Duration::from_secs(1), restored.recv())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        let Some(boxlite_shared::exec_output::Event::Stdout(stdout)) = output.event else {
+            panic!("expected preserved stdout pipe");
+        };
+        assert_eq!(stdout.data, b"after restore");
     }
 }

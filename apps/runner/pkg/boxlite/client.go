@@ -59,6 +59,8 @@ type Client struct {
 	volumeCleanupMutex  sync.Mutex
 	lastVolumeCleanup   time.Time
 	volumeCleanup       volumeCleanupConfig
+	checkpointOnce      sync.Once
+	checkpointService   *CheckpointService
 
 	// afterGuestStateCheck runs right after DialGuestPort's persisted-state
 	// check, before it fetches a handle. Tests use it to land a stop in that
@@ -412,12 +414,22 @@ func (c *Client) HomeDir() string {
 // `timeout=0` means "use the runtime default (10s)". Negative values are
 // clamped by the SDK.
 func (c *Client) Shutdown(ctx context.Context, timeout time.Duration) error {
+	checkpoints := c.Checkpoints()
+	checkpoints.lifecycle.Lock()
+	defer checkpoints.lifecycle.Unlock()
 	return c.runtime.Shutdown(ctx, timeout)
 }
 
 // Close releases the BoxLite runtime handle. Prefer calling `Shutdown` first
 // so boxes get a graceful stop before the C handle is freed.
 func (c *Client) Close() error {
+	// Close must not wake a Go FFI wait and make its files appear unused while
+	// native checkpoint work is still running. Wait before taking c.mu: a
+	// completing restore needs that mutex to publish its cached handle.
+	checkpoints := c.Checkpoints()
+	checkpoints.lifecycle.Lock()
+	defer checkpoints.lifecycle.Unlock()
+	checkpoints.closing = true
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -665,6 +677,8 @@ func (c *Client) Start(ctx context.Context, boxId string, authToken *string, met
 
 // Stop stops a running box.
 func (c *Client) Stop(ctx context.Context, boxId string, force bool) error {
+	unlock := c.Checkpoints().lock("box:" + boxId)
+	defer unlock()
 	bx, err := c.getOrFetchBox(ctx, boxId)
 	if err != nil {
 		return err
@@ -679,6 +693,8 @@ func (c *Client) Stop(ctx context.Context, boxId string, force bool) error {
 
 // Destroy removes a box entirely.
 func (c *Client) Destroy(ctx context.Context, boxId string) error {
+	unlock := c.Checkpoints().lock("box:" + boxId)
+	defer unlock()
 	c.cacheMu.Lock()
 	defer c.cacheMu.Unlock()
 	c.forgetBox(boxId)
@@ -710,9 +726,7 @@ func ToBoxState(state boxlite.State) enums.BoxState {
 	case boxlite.StateRunning:
 		return enums.BoxStateStarted
 	case boxlite.StatePaused:
-		// vCPUs frozen for a snapshot's point-in-time consistency. The VM is up,
-		// so the control plane should keep seeing the box as started.
-		return enums.BoxStateStarted
+		return enums.BoxStatePaused
 	case boxlite.StateStopping:
 		return enums.BoxStateStopping
 	case boxlite.StateStopped:

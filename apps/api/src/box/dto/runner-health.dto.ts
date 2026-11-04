@@ -115,6 +115,11 @@ export class RunnerServiceHealthDto {
 
 @ApiSchema({ name: 'RunnerHealthcheck' })
 export class RunnerHealthcheckDto {
+  @ApiPropertyOptional({ description: 'Native Linux x86_64 memory checkpoint support; omitted means disabled' })
+  @IsOptional()
+  @IsBoolean()
+  checkpointsEnabled?: boolean
+
   @ApiPropertyOptional({
     description: 'Runner metrics',
     type: RunnerHealthMetricsDto,

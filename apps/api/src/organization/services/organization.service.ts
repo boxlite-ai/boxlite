@@ -624,7 +624,8 @@ export class OrganizationService implements OnModuleInit, TrackableJobExecutions
           .createQueryBuilder('box')
           .select('1')
           .where(
-            `"box"."organizationId" = "organization"."id" AND "box"."desiredState" = '${BoxDesiredState.STARTED}' and "box"."state" NOT IN ('${BoxState.ERROR}')`,
+            `"box"."organizationId" = "organization"."id" AND "box"."desiredState" IN (:...liveDesiredStates) and "box"."state" NOT IN ('${BoxState.ERROR}')`,
+            { liveDesiredStates: [BoxDesiredState.STARTED, BoxDesiredState.PAUSED] },
           ),
       )
       .take(100)
@@ -641,7 +642,7 @@ export class OrganizationService implements OnModuleInit, TrackableJobExecutions
     const boxes = await this.boxRepository.find({
       where: {
         organizationId: In(suspendedOrganizationIds),
-        desiredState: BoxDesiredState.STARTED,
+        desiredState: In([BoxDesiredState.STARTED, BoxDesiredState.PAUSED]),
         state: Not(In([BoxState.ERROR])),
       },
     })

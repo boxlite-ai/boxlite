@@ -12,6 +12,7 @@ const (
 	BoxStateDestroyed  BoxState = "destroyed"
 	BoxStateDestroying BoxState = "destroying"
 	BoxStateStarted    BoxState = "started"
+	BoxStatePaused     BoxState = "paused"
 	BoxStateStopped    BoxState = "stopped"
 	BoxStateStarting   BoxState = "starting"
 	BoxStateStopping   BoxState = "stopping"

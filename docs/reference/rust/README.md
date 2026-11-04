@@ -106,6 +106,8 @@ let runtime = BoxliteRuntime::default_runtime();
 | `images` | `fn images(&self) -> BoxliteResult<ImageHandle>` | The images this runtime can boot from; never fails |
 | `import_checkpoint` | `async fn import_checkpoint(&self, dir: impl AsRef<Path>, options: CheckpointImportOptions) -> BoxliteResult<LiteBox>` | Create a new, `Paused` box from a verified checkpoint pair using prepared target mounts and an exact boot dependency; `CheckpointImportOptions { name: Option<String> }`. With REST, uploads the caller-local pair and creates the remote box; server capability required. See [checkpoints](../../guides/checkpoints.md) |
 | `inspect_checkpoint` | `fn inspect_checkpoint(dir: impl AsRef<Path>) -> BoxliteResult<CheckpointDependencies>` | Associated function; read memory checksums, pair digest and saved local dependency paths without creating a runtime or box |
+| `checkpoints` | `fn checkpoints(&self) -> BoxliteResult<RuntimeCheckpointHandle>` | Persistent runtime/organization catalog: `list()`, `get(id_or_name)` and `remove(id_or_name, force)`, independent of the source's lifetime |
+| `create_from_checkpoint` | `async fn create_from_checkpoint(&self, id_or_name: &str, name: Option<String>) -> BoxliteResult<LiteBox>` | Create a new Paused box from a ready managed checkpoint; captured resources cannot be overridden; resume explicitly |
 
 #### Example
 
@@ -396,6 +398,7 @@ HTTP contract, reconfiguration, disable, and generation semantics.
 | `metrics` | `async fn metrics(&self) -> BoxliteResult<BoxMetrics>` | Get box metrics |
 | `stop` | `async fn stop(&self) -> BoxliteResult<()>` | Stop the box |
 | `pause` | `async fn pause(&self, options: PauseOptions) -> BoxliteResult<()>` | Pause a supported owner-mode box at one consistent cut. `PauseOptions { host_writers_stopped: bool }` must be `true` when the box has volumes (else `InvalidArgument`) |
+| `checkpoints` | `fn checkpoints(&self) -> CheckpointHandle` | Source-scoped catalog: `create(name: Option<String>)`, `list()`, `get(id_or_name)` returning optional metadata, and `remove(id_or_name, force)`; creation requires an explicit pause |
 | `resume` | `async fn resume(&self) -> BoxliteResult<()>` | Resume a paused box; a guest that is not the paused one is stopped and `Engine` is returned |
 | `export_checkpoint` | `async fn export_checkpoint(&self, dir: impl AsRef<Path>) -> BoxliteResult<()>` | Write a paused box to a new two-file directory; prepare saved mounts and exact boot contents on the target; with REST, downloads into the caller-local directory; the box stays paused |
 

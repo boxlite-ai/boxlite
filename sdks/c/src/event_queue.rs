@@ -12,6 +12,7 @@ use std::sync::{Condvar, Mutex};
 
 use boxlite::BoxliteError;
 
+use crate::checkpoints::{CCheckpointInfo, CCheckpointInfoList};
 use crate::images::{CImageDetail, CImageInfoList, CImagePullResult, CImageUsage};
 use crate::info::{CBoxInfo, CBoxInfoList};
 use crate::metrics::{CBoxMetrics, CRuntimeMetrics};
@@ -177,6 +178,22 @@ pub(crate) type CBoxSnapshotListFn =
 /// Snapshot remove/restore completion. The error is borrowed during the callback.
 pub type CBoxSnapshotOpCb = Option<extern "C" fn(*mut crate::CBoxliteError, *mut c_void)>;
 pub(crate) type CBoxSnapshotOpFn = extern "C" fn(*mut crate::CBoxliteError, *mut c_void);
+
+/// Checkpoint metadata completion. Success transfers ownership; release with
+/// boxlite_free_checkpoint_info. A box-scoped missing lookup returns null without
+/// an error; an organization lookup returns NotFound. Errors are callback-scoped.
+pub type CBoxCheckpointInfoCb =
+    Option<extern "C" fn(*mut CCheckpointInfo, *mut crate::CBoxliteError, *mut c_void)>;
+pub(crate) type CBoxCheckpointInfoFn =
+    extern "C" fn(*mut CCheckpointInfo, *mut crate::CBoxliteError, *mut c_void);
+/// Checkpoint list completion. Release the owned list with boxlite_free_checkpoint_info_list.
+pub type CBoxCheckpointListCb =
+    Option<extern "C" fn(*mut CCheckpointInfoList, *mut crate::CBoxliteError, *mut c_void)>;
+pub(crate) type CBoxCheckpointListFn =
+    extern "C" fn(*mut CCheckpointInfoList, *mut crate::CBoxliteError, *mut c_void);
+/// Checkpoint remove/restore completion. The error is borrowed during the callback.
+pub type CBoxCheckpointOpCb = Option<extern "C" fn(*mut crate::CBoxliteError, *mut c_void)>;
+pub(crate) type CBoxCheckpointOpFn = extern "C" fn(*mut crate::CBoxliteError, *mut c_void);
 
 /// Volume create completion.
 ///
@@ -504,6 +521,21 @@ pub enum RuntimeEvent {
     },
     SnapshotOp {
         cb: CBoxSnapshotOpFn,
+        user_data: usize,
+        result: Result<(), BoxliteError>,
+    },
+    CheckpointInfo {
+        cb: CBoxCheckpointInfoFn,
+        user_data: usize,
+        result: Result<Option<OwnedFfiPtr<CCheckpointInfo>>, BoxliteError>,
+    },
+    CheckpointList {
+        cb: CBoxCheckpointListFn,
+        user_data: usize,
+        result: Result<OwnedFfiPtr<CCheckpointInfoList>, BoxliteError>,
+    },
+    CheckpointOp {
+        cb: CBoxCheckpointOpFn,
         user_data: usize,
         result: Result<(), BoxliteError>,
     },

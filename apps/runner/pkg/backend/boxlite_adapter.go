@@ -26,6 +26,10 @@ func (a *BoxliteAdapter) BoxliteClient() *blclient.Client {
 	return a.client
 }
 
+func (a *BoxliteAdapter) ExecuteCheckpoint(ctx context.Context, job blclient.CheckpointJob) (*blclient.CheckpointResult, error) {
+	return a.client.ExecuteCheckpoint(ctx, job)
+}
+
 func (a *BoxliteAdapter) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, string, error) {
 	return a.client.Create(ctx, boxDto)
 }

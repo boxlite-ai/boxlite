@@ -20,6 +20,8 @@ import { getStateChangeLockKey } from '../utils/lock-key.util'
 import { BOX_WARM_POOL_UNASSIGNED_ORGANIZATION } from '../constants/box.constants'
 import { BoxMigrationJobReceiver, isMigrationJobType } from './box-migration-job-receiver.service'
 import { BoxSnapshotSettler, isSnapshotJobType } from './box-snapshot-settler.service'
+import { BoxCheckpointSettler, isCheckpointJobType } from './box-checkpoint-settler.service'
+import { Optional } from '@nestjs/common'
 import { ImagePullFailureService } from '../../image/services/image-pull-failure.service'
 
 /**
@@ -36,6 +38,7 @@ export class JobStateHandlerService {
     private readonly boxMigrationJobReceiver: BoxMigrationJobReceiver,
     private readonly imagePullFailureService: ImagePullFailureService,
     private readonly boxSnapshotSettler: BoxSnapshotSettler,
+    @Optional() private readonly boxCheckpointSettler?: BoxCheckpointSettler,
   ) {}
 
   /**
@@ -64,6 +67,12 @@ export class JobStateHandlerService {
     // box's EXPORTING or IMPORTING state are what keep other work out.
     if (isSnapshotJobType(job.type)) {
       await this.boxSnapshotSettler.settle(job)
+      return
+    }
+
+    if (isCheckpointJobType(job.type)) {
+      if (!this.boxCheckpointSettler) throw new Error('Checkpoint settler is not configured')
+      await this.boxCheckpointSettler.settle(job)
       return
     }
 

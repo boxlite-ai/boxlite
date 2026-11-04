@@ -27,6 +27,7 @@ pub(crate) struct GuestInitState {
 /// - Execution: Command execution with bidirectional streaming
 /// - Files: Container-rootfs file transfer
 pub(crate) struct GuestServer {
+    pub(crate) output_handoff: Arc<tokio::sync::RwLock<()>>,
     /// Guest filesystem layout
     pub layout: GuestLayout,
 
@@ -76,6 +77,7 @@ impl GuestServer {
     /// the environment, then Container.Init to start the container.
     pub fn new(layout: GuestLayout) -> Self {
         Self {
+            output_handoff: Arc::new(tokio::sync::RwLock::new(())),
             layout,
             init_state: Arc::new(Mutex::new(GuestInitState::default())),
             boot_id: uuid::Uuid::new_v4().to_string(),

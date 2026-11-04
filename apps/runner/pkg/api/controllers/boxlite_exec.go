@@ -93,9 +93,11 @@ func startOptionsFrom(req ExecRequest) boxlite.StartOptions {
 // execStartStatus classifies a failed exec start into the HTTP status the
 // caller should see. A stopped / wrong-state box is a 409: the box exists
 // but isn't accepting execs right now, and answering 500 leaks
-//   internal error: HTTP 500 Internal Server Error:
-//   {"error":"exec failed: failed to start execution: boxlite: stopped:
-//    Handle invalidated after stop(). ... (code=11)"}
+//
+//	internal error: HTTP 500 Internal Server Error:
+//	{"error":"exec failed: failed to start execution: boxlite: stopped:
+//	 Handle invalidated after stop(). ... (code=11)"}
+//
 // and fires the SDK's 'all 5xx is bug' guard. An unknown user or group is
 // the caller's mistake (400), not a runner fault — answering 500 there would
 // hide the #2116 misclassification. Everything else is a runner fault (500).
