@@ -12,6 +12,7 @@ Name | Type | Description | Notes
 **env** | **{ [key: string]: string; }** | Environment variables for the box | [default to undefined]
 **labels** | **{ [key: string]: string; }** | Labels for the box | [default to undefined]
 **network** | [**NetworkInfo**](NetworkInfo.md) | The network policy in both directions | [optional] [default to undefined]
+**nestedVirtualization** | **boolean** | Saved nested virtualization requirement; null means unknown | [optional] [readonly] [default to undefined]
 **target** | **string** | The target environment for the box | [default to undefined]
 **image** | **string** | The image used for the box | [optional] [default to undefined]
 **cpu** | **number** | The CPU quota for the box | [default to undefined]
@@ -49,6 +50,7 @@ const instance: Box = {
     env,
     labels,
     network,
+    nestedVirtualization,
     target,
     image,
     cpu,

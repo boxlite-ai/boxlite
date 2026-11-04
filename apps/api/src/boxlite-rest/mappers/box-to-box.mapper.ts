@@ -17,6 +17,8 @@ import { CreateBoxDto } from '../../box/dto/create-box.dto'
 
 export function boxToBoxResponse(box: BoxDto): BoxResponseDto {
   return {
+    advanced:
+      typeof box.nestedVirtualization === 'boolean' ? { nested_virtualization: box.nestedVirtualization } : undefined,
     box_id: box.id,
     name: box.name,
     status: mapState(box.state),
@@ -40,6 +42,7 @@ export function boxToBoxResponse(box: BoxDto): BoxResponseDto {
 export function createBoxToCreateBox(dto: RestCreateBoxDto, target?: string): CreateBoxDto {
   const createDto = new CreateBoxDto()
   createDto.name = dto.name
+  createDto.nestedVirtualization = dto.advanced?.nested_virtualization
   createDto.image = dto.image
   // `user` feeds two unrelated things. `osUser` is a Daytona-era provisioning
   // label — it only ever became a DAYTONA_SANDBOX_USER env var, was never the

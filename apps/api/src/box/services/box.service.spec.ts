@@ -426,6 +426,41 @@ describe('BoxService inbound defaults', () => {
     )
   })
 
+  it.each([undefined, false])('refuses nesting before any side effect when operator setting is %j', async (enabled) => {
+    const { service, boxRepository, runnerService, warmPoolService } = makeCreateService({
+      configService: { get: jest.fn().mockReturnValue(enabled) },
+    })
+    const dto = createBoxToCreateBox({ advanced: { nested_virtualization: true } })
+    await expect(service.create(dto, activeOrg, Context.user())).rejects.toMatchObject({
+      response: expect.objectContaining({ code: 'unsupported' }),
+    })
+    expect(boxRepository.insert).not.toHaveBeenCalled()
+    expect(runnerService.getRandomAvailableRunner).not.toHaveBeenCalled()
+    expect(warmPoolService.fetchWarmPoolBox).not.toHaveBeenCalled()
+    expect((service as any).imageAdmissionService.assert).not.toHaveBeenCalled()
+  })
+
+  it.each([undefined, false, true])('persists nested=%j and constrains placement only for true', async (required) => {
+    const { service, boxRepository, runnerService, warmPoolService } = makeCreateService({
+      configService: { get: jest.fn().mockReturnValue(true) },
+      redis: { exists: jest.fn().mockResolvedValue(0) },
+      imageResolverService: { resolve: jest.fn().mockResolvedValue({ ref: 'base', isOrgOwned: false }) },
+    })
+    const dto = createBoxToCreateBox({
+      name: 'nested-box',
+      advanced: required === undefined ? undefined : { nested_virtualization: required },
+    })
+    await service.create(dto, activeOrg, Context.user())
+    const stored = boxRepository.insert.mock.calls[0][0]
+    expect(stored.nestedVirtualization).toBe(required === true)
+    expect(runnerService.getRandomAvailableRunner.mock.calls[0][0]).toEqual({
+      regions: ['region-1'],
+      boxClass: 'small',
+      ...(required === true ? { nestedVirtualization: true } : {}),
+    })
+    expect(warmPoolService.fetchWarmPoolBox).toHaveBeenCalledTimes(required === true ? 0 : 1)
+  })
+
   /**
    * The one path every existing caller takes, and the only one asserted through
    * the real resolver: a mocked one would make this a test of the mock. The

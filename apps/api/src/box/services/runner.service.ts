@@ -44,6 +44,7 @@ import Redis from 'ioredis'
 import { runnerLookupCacheKeyById, RUNNER_LOOKUP_CACHE_TTL_MS } from '../utils/runner-lookup-cache.util'
 import { BoxRepository } from '../repositories/box.repository'
 import { RunnerServiceInfo } from '../common/runner-service-info'
+import { assertNestedVirtualizationEnabled } from '../utils/nested-virtualization.util'
 
 @Injectable()
 export class RunnerService {
@@ -275,6 +276,9 @@ export class RunnerService {
   }
 
   async findAvailableRunners(params: GetRunnerParams): Promise<Runner[]> {
+    if (params.nestedVirtualization === true) {
+      assertNestedVirtualizationEnabled(this.configService.get('nestedVirtualizationEnabled'))
+    }
     const runnerFilter: FindOptionsWhere<Runner> = {
       state: RunnerState.READY,
       unschedulable: Not(true),
@@ -300,11 +304,48 @@ export class RunnerService {
       runnerFilter.class = params.boxClass
     }
 
+    if (params.nestedVirtualization === true) {
+      runnerFilter.apiVersion = '0'
+    }
+
     const runners = await this.runnerRepository.find({
       where: runnerFilter,
     })
 
-    return runners.sort((a, b) => b.availabilityScore - a.availabilityScore).slice(0, 10)
+    const candidates = runners.sort((a, b) => b.availabilityScore - a.availabilityScore).slice(0, 10)
+    return params.nestedVirtualization === true ? this.filterNestedRunners(candidates) : candidates
+  }
+
+  async requireNestedVirtualization(runner: Runner): Promise<void> {
+    assertNestedVirtualizationEnabled(this.configService.get('nestedVirtualizationEnabled'))
+    if ((await this.filterNestedRunners([runner])).length === 0) {
+      throw new HttpException(
+        { message: `Runner ${runner.id} cannot confirm nested virtualization support`, code: 'unsupported' },
+        HttpStatus.BAD_REQUEST,
+      )
+    }
+  }
+
+  private async filterNestedRunners(runners: Runner[]): Promise<Runner[]> {
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), (this.configService.get('runnerHealthTimeout') ?? 3) * 1000)
+    try {
+      const eligible = await Promise.all(
+        runners.map(async (runner) => {
+          if (runner.apiVersion !== '0') return false
+          try {
+            const adapter = await this.runnerAdapterFactory.create(runner)
+            return (await adapter.runnerInfo(controller.signal)).nestedVirtualizationEnabled === true
+          } catch {
+            this.logger.debug(`Runner ${runner.id} could not confirm nested virtualization`)
+            return false
+          }
+        }),
+      )
+      return runners.filter((_, index) => eligible[index])
+    } finally {
+      clearTimeout(timeout)
+    }
   }
 
   /**
@@ -977,6 +1018,7 @@ export class RunnerService {
 export const NO_AVAILABLE_RUNNERS = 'No available runners'
 
 export class GetRunnerParams {
+  nestedVirtualization?: boolean
   regions?: string[]
   boxClass?: BoxClass
   excludedRunnerIds?: string[]

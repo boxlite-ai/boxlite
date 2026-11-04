@@ -14,6 +14,7 @@ import { BoxState } from '../enums/box-state.enum'
 import { RunnerServiceInfo } from '../common/runner-service-info'
 
 export interface RunnerBoxInfo {
+  nestedVirtualization?: boolean
   state: BoxState
   daemonVersion?: string
 }
@@ -29,6 +30,7 @@ export interface RunnerMetrics {
 }
 
 export interface RunnerInfo {
+  nestedVirtualizationEnabled?: boolean
   serviceHealth?: RunnerServiceInfo[]
   metrics?: RunnerMetrics
   appVersion?: string

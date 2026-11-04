@@ -74,6 +74,10 @@ export class Box {
   @Column({ type: 'boolean', nullable: true })
   imageIsOrgOwned?: boolean | null
 
+  // Legacy null is unknown; new ordinary boxes save an explicit false.
+  @Column({ type: 'boolean', nullable: true })
+  nestedVirtualization: boolean | null = false
+
   @Column({
     type: 'uuid',
     nullable: true,

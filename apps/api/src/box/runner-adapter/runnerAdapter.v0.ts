@@ -238,6 +238,7 @@ export class RunnerAdapterV0 implements RunnerAdapter {
       serviceHealth: response.data.serviceHealth,
       metrics: response.data.metrics,
       appVersion: response.data.appVersion,
+      nestedVirtualizationEnabled: response.data.nestedVirtualizationEnabled,
     }
   }
 
@@ -246,6 +247,7 @@ export class RunnerAdapterV0 implements RunnerAdapter {
     return {
       state: this.convertBoxState(boxInfo.data.state),
       daemonVersion: boxInfo.data.daemonVersion,
+      nestedVirtualization: boxInfo.data.nestedVirtualization,
     }
   }
 
@@ -255,6 +257,7 @@ export class RunnerAdapterV0 implements RunnerAdapter {
     metadata?: { [key: string]: string },
   ): Promise<StartBoxResponse | undefined> {
     const response = await this.boxApiClient.create({
+      ...(box.nestedVirtualization === true ? { nestedVirtualization: true } : {}),
       id: box.id,
       image,
       osUser: box.osUser,
@@ -331,6 +334,7 @@ export class RunnerAdapterV0 implements RunnerAdapter {
 
   async recoverBox(box: Box): Promise<void> {
     const recoverBoxDTO: RecoverBoxDTO = {
+      ...(box.nestedVirtualization === true ? { nestedVirtualization: true } : {}),
       osUser: box.osUser,
       cpuQuota: box.cpu,
       gpuQuota: box.gpu,

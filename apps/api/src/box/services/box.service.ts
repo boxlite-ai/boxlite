@@ -91,6 +91,7 @@ import { BoxActivityService } from './box-activity.service'
 import { assertWithinPerBoxLimits } from './per-box-limits'
 import { OrganizationBoxLimitsService } from '../../organization/services/organization-box-limits.service'
 import { requiresFreshBox } from '../utils/warm-pool-eligibility.util'
+import { assertNestedVirtualizationEnabled, assertSavedNestedVirtualization } from '../utils/nested-virtualization.util'
 import { OutboundPolicy, setRunnerOutbound } from '../runner-adapter/network-policy'
 import { isCuratedSelector, withoutRegistryProxy } from '../../image/utils/image-ref.util'
 import {
@@ -179,7 +180,10 @@ export class BoxService {
     runnerParams: GetRunnerParams,
     persist: () => Promise<Box>,
   ): Promise<Box> {
-    const runner = await this.runnerService.getRandomAvailableRunner(runnerParams)
+    const runner = await this.runnerService.getRandomAvailableRunner({
+      ...runnerParams,
+      ...(box.nestedVirtualization === true ? { nestedVirtualization: true } : {}),
+    })
     box.runnerId = runner.id
     return persist()
   }
@@ -234,6 +238,9 @@ export class BoxService {
     ctx: Context,
     options: BoxCreationOptions = {},
   ): Promise<BoxDto> {
+    if (createBoxDto.nestedVirtualization === true) {
+      assertNestedVirtualizationEnabled(this.configService.get('nestedVirtualizationEnabled'))
+    }
     const outboundEnabled = createBoxDto.outboundEnabled ?? !organization.boxLimitedNetworkEgress
     if (hasDisabledOutboundRules(outboundEnabled ? 'enabled' : 'disabled', createBoxDto.outboundAllowNet)) {
       throw new BadRequestError(DISABLED_OUTBOUND_RULES_ERROR)
@@ -330,6 +337,7 @@ export class BoxService {
       box.cmd = createBoxDto.cmd
       box.env = createBoxDto.env || {}
       box.secrets = createBoxDto.secrets || []
+      box.nestedVirtualization = createBoxDto.nestedVirtualization ?? false
       box.labels = createBoxDto.labels || {}
 
       box.image = image
@@ -1019,10 +1027,17 @@ export class BoxService {
       throw new ForbiddenException('Recovering boxes with runner API version 2 is not supported')
     }
 
+    if (box.nestedVirtualization === true) {
+      await this.runnerService.requireNestedVirtualization(runner)
+    }
+
     const runnerAdapter = await this.runnerAdapterFactory.create(runner)
 
     try {
       await runnerAdapter.recoverBox(box)
+      if (box.nestedVirtualization === true) {
+        assertSavedNestedVirtualization(box.id, (await runnerAdapter.boxInfo(box.id)).nestedVirtualization)
+      }
     } catch (error) {
       if (error instanceof Error && error.message.includes('storage cannot be further expanded')) {
         const errorMsg = `Box storage cannot be further expanded. Maximum expansion of ${(box.disk * 0.1).toFixed(2)}GB (10% of original ${box.disk.toFixed(2)}GB) has been reached. Please contact support for further assistance.`
@@ -1385,6 +1400,14 @@ export class BoxService {
 
     if (!box) {
       throw new NotFoundException(`Box with ID ${boxId} not found`)
+    }
+
+    if (newState === BoxState.STARTED && box.nestedVirtualization === true) {
+      if (!box.runnerId) throw new BoxError(`Box ${box.id} has no Runner to confirm nested virtualization`)
+      const runner = await this.runnerService.findOneOrFail(box.runnerId)
+      if (runner.apiVersion !== '0') throw new BoxError(`Box ${box.id} requires a compatible V0 Runner`)
+      const adapter = await this.runnerAdapterFactory.create(runner)
+      assertSavedNestedVirtualization(box.id, (await adapter.boxInfo(box.id)).nestedVirtualization)
     }
 
     // Before any state handling, and deliberately not inside it: this is a fact

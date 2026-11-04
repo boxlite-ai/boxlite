@@ -143,6 +143,14 @@ export class BoxDto {
   })
   network?: NetworkInfoResponseDto
 
+  @ApiPropertyOptional({
+    type: Boolean,
+    description: 'Saved nested virtualization requirement; null means unknown',
+    nullable: true,
+    readOnly: true,
+  })
+  nestedVirtualization?: boolean | null
+
   @ApiProperty({
     description: 'The target environment for the box',
     example: 'local',
@@ -375,6 +383,7 @@ export class BoxDto {
       memory: box.mem,
       disk: box.disk,
       network: NetworkInfoResponseDto.fromBox(box),
+      nestedVirtualization: box.nestedVirtualization,
       labels: box.labels,
       volumes: box.volumes,
       state,

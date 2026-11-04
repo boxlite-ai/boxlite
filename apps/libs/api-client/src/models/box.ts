@@ -59,6 +59,10 @@ export interface Box {
      */
     'network'?: NetworkInfo;
     /**
+     * Saved nested virtualization requirement; null means unknown
+     */
+    'nestedVirtualization'?: boolean | null;
+    /**
      * The target environment for the box
      */
     'target': string;

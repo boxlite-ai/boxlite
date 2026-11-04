@@ -4,13 +4,29 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { IsEnum, IsObject, IsOptional, IsString, IsNumber, IsBoolean, IsArray, IsInt, Min } from 'class-validator'
+import {
+  IsEnum,
+  IsObject,
+  IsOptional,
+  IsString,
+  IsNumber,
+  IsBoolean,
+  IsArray,
+  IsInt,
+  Min,
+  ValidateIf,
+} from 'class-validator'
 import { ApiPropertyOptional, ApiSchema } from '@nestjs/swagger'
 import { BoxClass } from '../enums/box-class.enum'
 import { BoxSecret, BoxVolume } from './box.dto'
 
 @ApiSchema({ name: 'CreateBox' })
 export class CreateBoxDto {
+  @ApiPropertyOptional({ description: 'Immutable nested virtualization requirement (RC)' })
+  @ValidateIf((_, value) => value !== undefined)
+  @IsBoolean()
+  nestedVirtualization?: boolean
+
   @ApiPropertyOptional({
     description: 'The name of the box. If not provided, the box ID will be used as the name',
     example: 'MyBox',

@@ -35,6 +35,8 @@ type Box struct {
 	Labels map[string]string `json:"labels"`
 	// The network policy in both directions
 	Network *NetworkInfo `json:"network,omitempty"`
+	// Saved nested virtualization requirement; null means unknown
+	NestedVirtualization NullableBool `json:"nestedVirtualization,omitempty"`
 	// The target environment for the box
 	Target string `json:"target"`
 	// The image used for the box
@@ -290,6 +292,48 @@ func (o *Box) HasNetwork() bool {
 // SetNetwork gets a reference to the given NetworkInfo and assigns it to the Network field.
 func (o *Box) SetNetwork(v NetworkInfo) {
 	o.Network = &v
+}
+
+// GetNestedVirtualization returns the NestedVirtualization field value if set, zero value otherwise (both if not set or set to explicit null).
+func (o *Box) GetNestedVirtualization() bool {
+	if o == nil || IsNil(o.NestedVirtualization.Get()) {
+		var ret bool
+		return ret
+	}
+	return *o.NestedVirtualization.Get()
+}
+
+// GetNestedVirtualizationOk returns a tuple with the NestedVirtualization field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+// NOTE: If the value is an explicit nil, `nil, true` will be returned
+func (o *Box) GetNestedVirtualizationOk() (*bool, bool) {
+	if o == nil {
+		return nil, false
+	}
+	return o.NestedVirtualization.Get(), o.NestedVirtualization.IsSet()
+}
+
+// HasNestedVirtualization returns a boolean if a field has been set.
+func (o *Box) HasNestedVirtualization() bool {
+	if o != nil && o.NestedVirtualization.IsSet() {
+		return true
+	}
+
+	return false
+}
+
+// SetNestedVirtualization gets a reference to the given NullableBool and assigns it to the NestedVirtualization field.
+func (o *Box) SetNestedVirtualization(v bool) {
+	o.NestedVirtualization.Set(&v)
+}
+// SetNestedVirtualizationNil sets the value for NestedVirtualization to be an explicit nil
+func (o *Box) SetNestedVirtualizationNil() {
+	o.NestedVirtualization.Set(nil)
+}
+
+// UnsetNestedVirtualization ensures that no value is present for NestedVirtualization, not even an explicit nil
+func (o *Box) UnsetNestedVirtualization() {
+	o.NestedVirtualization.Unset()
 }
 
 // GetTarget returns the Target field value
@@ -1002,6 +1046,9 @@ func (o Box) ToMap() (map[string]interface{}, error) {
 	if !IsNil(o.Network) {
 		toSerialize["network"] = o.Network
 	}
+	if o.NestedVirtualization.IsSet() {
+		toSerialize["nestedVirtualization"] = o.NestedVirtualization.Get()
+	}
 	toSerialize["target"] = o.Target
 	if !IsNil(o.Image) {
 		toSerialize["image"] = o.Image
@@ -1120,6 +1167,7 @@ func (o *Box) UnmarshalJSON(data []byte) (err error) {
 		delete(additionalProperties, "env")
 		delete(additionalProperties, "labels")
 		delete(additionalProperties, "network")
+		delete(additionalProperties, "nestedVirtualization")
 		delete(additionalProperties, "target")
 		delete(additionalProperties, "image")
 		delete(additionalProperties, "cpu")

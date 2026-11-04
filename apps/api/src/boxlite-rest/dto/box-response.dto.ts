@@ -9,6 +9,9 @@ import { NetworkInfoResponseDto } from '../../box/dto/network-info.dto'
 
 @ApiSchema({ name: 'Box' })
 export class BoxResponseDto {
+  @ApiPropertyOptional({ description: 'Safe projection of saved requirements, absent for legacy unknown values' })
+  advanced?: { nested_virtualization: boolean }
+
   @ApiProperty({
     description: 'The public 12-character Box ID shown to users and SDK clients',
     example: 'aB3cD4eF5gH6',

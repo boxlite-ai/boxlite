@@ -19,6 +19,7 @@ import { WithSpan } from '../../../common/decorators/otel.decorator'
 import { BoxActivityService } from '../../services/box-activity.service'
 import { CuratedImagePinService } from '../../../image/services/curated-image-pin.service'
 import { boxImageIsOrgOwned } from '../../utils/image-ownership.util'
+import { assertSavedNestedVirtualization } from '../../utils/nested-virtualization.util'
 
 @Injectable()
 export class BoxStartAction extends BoxAction {
@@ -70,6 +71,10 @@ export class BoxStartAction extends BoxAction {
       return DONT_SYNC_AGAIN
     }
 
+    if (box.nestedVirtualization === true) {
+      await this.runnerService.requireNestedVirtualization(runner)
+    }
+
     const organization = await this.organizationService.findOne(box.organizationId)
 
     const metadata: { [key: string]: string } = { ...organization?.boxMetadata }
@@ -115,6 +120,10 @@ export class BoxStartAction extends BoxAction {
       )
     }
 
+    if (box.nestedVirtualization === true) {
+      await this.runnerService.requireNestedVirtualization(runner)
+      assertSavedNestedVirtualization(box.id, (await runnerAdapter.boxInfo(box.id)).nestedVirtualization)
+    }
     await runnerAdapter.startBox(box.id, box.authToken, metadata)
 
     await this.updateBoxState(box, BoxState.STARTING, lockCode)
@@ -136,6 +145,9 @@ export class BoxStartAction extends BoxAction {
 
     switch (boxInfo.state) {
       case BoxState.STARTED: {
+        if (box.nestedVirtualization === true) {
+          assertSavedNestedVirtualization(box.id, boxInfo.nestedVirtualization)
+        }
         await this.updateBoxState(box, BoxState.STARTED, lockCode, undefined, undefined, boxInfo.daemonVersion)
 
         //  if box was transferred to a new runner, remove it from the old runner

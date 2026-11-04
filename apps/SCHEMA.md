@@ -27,6 +27,13 @@ control plane through `runner` telemetry columns, `job` results and CPU incident
 
 ## Overview
 
+`box.nestedVirtualization` is nullable saved intent: legacy `NULL` means unknown,
+and new application-created rows store false or true explicitly. The additive
+migration has no database default or legacy backfill. Public responses omit
+unknown values; clients must not read omission as false. The requirement is
+immutable and does not record hardware qualification. Rollback refuses true
+rows; retire their boxes and drain their jobs before deploying older workers.
+
 The tables sort into three planes. **Tenancy** is who a caller is and what
 they may do; **fleet** is the microVMs and the machines that run them;
 **metering** is what gets billed.

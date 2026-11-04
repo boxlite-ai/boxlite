@@ -6459,6 +6459,7 @@ components:
         labels:
           boxlite.io/public: "true"
         network: ""
+        nestedVirtualization: true
         target: local
         image: boxlite/base
         cpu: 2
@@ -6523,6 +6524,11 @@ components:
           allOf:
           - $ref: "#/components/schemas/NetworkInfo"
           description: The network policy in both directions
+        nestedVirtualization:
+          description: Saved nested virtualization requirement; null means unknown
+          nullable: true
+          readOnly: true
+          type: boolean
         target:
           description: The target environment for the box
           example: local
@@ -6658,6 +6664,7 @@ components:
           labels:
             boxlite.io/public: "true"
           network: ""
+          nestedVirtualization: true
           target: local
           image: boxlite/base
           cpu: 2
@@ -6696,6 +6703,7 @@ components:
           labels:
             boxlite.io/public: "true"
           network: ""
+          nestedVirtualization: true
           target: local
           image: boxlite/base
           cpu: 2

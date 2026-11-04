@@ -36,6 +36,16 @@ import {
 
 const logger = new Logger('CreateBoxDto')
 
+export class CreateBoxAdvancedOptionsDto {
+  @ValidateIf((_, value) => value !== undefined)
+  @IsBoolean()
+  nested_virtualization?: boolean
+
+  @ValidateIf((_, value) => value !== undefined)
+  @IsIn([undefined], { message: 'Linux capabilities are not supported for cloud boxes' })
+  capabilities?: never
+}
+
 @ValidatorConstraint({ name: 'isNetworkAllowEntry', async: false })
 class IsNetworkAllowEntryConstraint implements ValidatorConstraintInterface {
   validate(value: unknown): boolean {
@@ -351,12 +361,9 @@ export class CreateBoxDto {
   })
   rootfs_path?: never
 
-  // advanced.capabilities is implemented by `boxlite serve` and the reference
-  // server; the runner has no path for it yet. Lift this once the runner
-  // forwards a capability policy.
   @ValidateIf((_, value) => value !== undefined)
-  @IsIn([undefined], {
-    message: 'advanced options are not supported for cloud boxes',
-  })
-  advanced?: never
+  @IsObject()
+  @ValidateNested()
+  @Type(() => CreateBoxAdvancedOptionsDto)
+  advanced?: CreateBoxAdvancedOptionsDto
 }

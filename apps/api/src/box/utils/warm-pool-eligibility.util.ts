@@ -29,7 +29,14 @@ import { ResolvedImage } from '../../image/services/image-resolver.service'
 export function requiresFreshBox(
   createBoxDto: Pick<
     CreateBoxDto,
-    'outboundEnabled' | 'outboundAllowNet' | 'runAsUser' | 'workingDir' | 'entrypoint' | 'cmd' | 'secrets'
+    | 'outboundEnabled'
+    | 'outboundAllowNet'
+    | 'runAsUser'
+    | 'workingDir'
+    | 'entrypoint'
+    | 'cmd'
+    | 'secrets'
+    | 'nestedVirtualization'
   >,
   organization: { boxLimitedNetworkEgress?: boolean },
   resolvedImage: Pick<ResolvedImage, 'isOrgOwned'>,
@@ -63,5 +70,10 @@ export function requiresFreshBox(
   // silently drop them.
   const overridesSecrets = (createBoxDto.secrets?.length ?? 0) > 0
 
-  return overridesNetworkPolicy || overridesContainerProcess || overridesSecrets
+  return (
+    overridesNetworkPolicy ||
+    overridesContainerProcess ||
+    overridesSecrets ||
+    createBoxDto.nestedVirtualization === true
+  )
 }

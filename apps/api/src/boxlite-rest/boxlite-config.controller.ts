@@ -6,16 +6,20 @@
 
 import { Controller, Get } from '@nestjs/common'
 import { ApiTags, ApiExcludeController } from '@nestjs/swagger'
+import { TypedConfigService } from '../config/typed-config.service'
 
 // Spec-first surface: the contract is openapi/box.openapi.yaml.
 @ApiExcludeController()
 @ApiTags('BoxLite REST')
 @Controller('v1')
 export class BoxliteConfigController {
+  constructor(private readonly config: TypedConfigService) {}
+
   @Get('config')
   getConfig() {
     return {
       capabilities: {
+        nested_virtualization_enabled: this.config.get('nestedVirtualizationEnabled') === true,
         snapshots_enabled: false,
         clone_enabled: false,
         export_enabled: false,

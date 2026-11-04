@@ -692,6 +692,38 @@ Deploy the pre-deploy migration, then the API, then runners. See the
 retry and restart limitations and [the table schema](SCHEMA.md#runner_cpu_incident)
 for persistence guarantees.
 
+### Nested virtualization (RC)
+
+`POST /api/v1[/{prefix}]/boxes` accepts optional
+`"advanced":{"nested_virtualization":true}`. Omitted or false keeps ordinary
+creation behavior; null and non-booleans return 400. Linux capability policies
+remain unsupported, including an empty capabilities object.
+
+Cloud admission requires `NESTED_VIRTUALIZATION_ENABLED=true` on the API and
+lifecycle workers; it defaults off. Discovery advertises this setting as
+`capabilities.nested_virtualization_enabled` through `/api/v1/config`.
+An opted-in request bypasses the ordinary warm pool and selects only V0 Runners
+whose live `/info` reports `nestedVirtualizationEnabled:true`. At most ten
+eligible-ranked candidates are probed under the shared `runnerHealthTimeout`;
+ten opted-out Runners can hide a compatible eleventh and yield the existing
+no-capacity error. Ordinary scheduling adds no capability probes.
+
+Create, restart and recovery preserve the immutable saved requirement. The API
+checks native-backed Runner Box info before accepting a nested STARTED state;
+missing or false confirmation fails with the box ID. V2 jobs, archive export
+and cross-runner migration cannot establish this RC contract and are refused.
+Responses expose only saved intent as `advanced.nested_virtualization`; legacy
+unknown rows omit it. A true value does not prove hardware qualification or L2
+guest execution. The portable [OpenAPI contract](../openapi/box.openapi.yaml)
+and [SDK usage](../docs/guides/nested-virtualization.md) also apply here.
+
+Apply the nullable database migration first. Deploy all API instances and job
+workers while disabled, then compatible Runners, then enable Cloud admission.
+Every enabled lifecycle worker must understand the saved requirement. Before
+rolling back to older workers, retire nested boxes and drain their queued jobs;
+the column rollback refuses any remaining true row. TypeORM's named `each`
+transaction mode is supported without changing the existing migration settings.
+
 ## Runner API
 
 **Service:** `apps/runner` · **Base path:** `/` · **Port:** `3003` in

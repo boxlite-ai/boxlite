@@ -66,8 +66,9 @@ GetOrCreate refuses an existing ordinary or unknown box when true was requested.
 `BoxInfo.advanced` contains a safe projection of saved configuration, without
 sandbox policy. Older responses remain unknown rather than reading as false.
 A saved true value does not prove that an L2 guest has executed.
-Servers that do not advertise this contract, including Cloud before its separate
-integration, cannot accept nested requests through the SDK.
+Servers that do not advertise this contract cannot accept nested requests through
+the SDK. Cloud deployments require their separate
+[admission and rollout](../../apps/API.md#nested-virtualization-rc) settings.
 
 ## Supported hosts
 

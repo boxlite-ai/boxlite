@@ -317,6 +317,12 @@ export class BoxMigrationManager implements TrackableJobExecutions, OnApplicatio
           return false
         }
 
+        if (box.nestedVirtualization === true) {
+          this.logger.warn(`Box ${box.id} requires nested virtualization; archive migration is unsupported`)
+          await this.markRollback(entityManager, current)
+          return false
+        }
+
         if (!current.isUndisturbedBy(box)) {
           this.logger.log(`Box ${box.id} was touched during its migration; rolling back instead of ${jobType}`)
           await this.markRollback(entityManager, current)

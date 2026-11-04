@@ -109,13 +109,8 @@ export class JobStateHandlerService {
       const updateData: Partial<Box> = {}
 
       if (job.status === JobStatus.COMPLETED) {
-        this.logger.debug(`CREATE_BOX job ${job.id} completed successfully, marking box ${boxId} as STARTED`)
-        updateData.state = BoxState.STARTED
-        updateData.errorReason = null
-        const metadata = job.getResultMetadata()
-        if (metadata?.daemonVersion && typeof metadata.daemonVersion === 'string') {
-          updateData.daemonVersion = metadata.daemonVersion
-        }
+        this.logger.debug(`CREATE_BOX job ${job.id} completed`)
+        Object.assign(updateData, this.completedStartupUpdate(box, job))
       } else if (job.status === JobStatus.FAILED) {
         this.logger.error(`CREATE_BOX job ${job.id} failed for box ${boxId}: ${job.errorMessage}`)
         updateData.state = BoxState.ERROR
@@ -130,7 +125,7 @@ export class JobStateHandlerService {
       // Warm-pool top-up creates stock no one requested; the claim records
       // that box's box.create pair instead (BoxService.assignWarmPoolBox).
       if (box.organizationId !== BOX_WARM_POOL_UNASSIGNED_ORGANIZATION) {
-        recordBoxJobOutcome('box.create', job.status, box.id)
+        recordBoxJobOutcome('box.create', updateData.state === BoxState.ERROR ? JobStatus.FAILED : job.status, box.id)
       }
     } catch (error) {
       this.logger.error(`Error handling CREATE_BOX job completion for box ${boxId}:`, error)
@@ -158,13 +153,8 @@ export class JobStateHandlerService {
       const updateData: Partial<Box> = {}
 
       if (job.status === JobStatus.COMPLETED) {
-        this.logger.debug(`START_BOX job ${job.id} completed successfully, marking box ${boxId} as STARTED`)
-        updateData.state = BoxState.STARTED
-        updateData.errorReason = null
-        const metadata = job.getResultMetadata()
-        if (metadata?.daemonVersion && typeof metadata.daemonVersion === 'string') {
-          updateData.daemonVersion = metadata.daemonVersion
-        }
+        this.logger.debug(`START_BOX job ${job.id} completed`)
+        Object.assign(updateData, this.completedStartupUpdate(box, job))
       } else if (job.status === JobStatus.FAILED) {
         this.logger.error(`START_BOX job ${job.id} failed for box ${boxId}: ${job.errorMessage}`)
         updateData.state = BoxState.ERROR
@@ -178,6 +168,24 @@ export class JobStateHandlerService {
       await this.boxRepository.update(boxId, { updateData, entity: box })
     } catch (error) {
       this.logger.error(`Error handling START_BOX job completion for box ${boxId}:`, error)
+    }
+  }
+
+  private completedStartupUpdate(box: Box, job: Job): Partial<Box> {
+    if (box.nestedVirtualization === true) {
+      return {
+        state: BoxState.ERROR,
+        recoverable: false,
+        errorReason: `Box ${box.id}: V2 startup jobs cannot confirm nested virtualization`,
+      }
+    }
+    const metadata = job.getResultMetadata()
+    return {
+      state: BoxState.STARTED,
+      errorReason: null,
+      ...(metadata?.daemonVersion && typeof metadata.daemonVersion === 'string'
+        ? { daemonVersion: metadata.daemonVersion }
+        : {}),
     }
   }
 
