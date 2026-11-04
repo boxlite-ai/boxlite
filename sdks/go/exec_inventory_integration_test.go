@@ -90,7 +90,7 @@ func TestIntegrationExecutionInventoryControlsDoNotClaimOutput(t *testing.T) {
 func TestIntegrationAttachExecutionReaderRecovery(t *testing.T) {
 	rt := newTestRuntime(t)
 	box := createStartedBoxOrSkip(t, rt, "alpine:latest", WithAutoRemove(false),
-		WithCmd("sh", "-c", "while true; do echo inventory-heartbeat; sleep 0.1; done"))
+		WithCmd("sh", "-c", "while true; do if [ -e /tmp/go-attached ]; then echo attached-live; break; fi; sleep 0.1; done; sleep 30"))
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	inventory, err := box.ListExecutions(ctx)
@@ -141,8 +141,14 @@ func TestIntegrationAttachExecutionReaderRecovery(t *testing.T) {
 		}
 	}
 	defer attached.Close()
+	// Output the guest retained can satisfy a marker match on its own, so the
+	// token asserted below is only produced after the trigger exec runs — that
+	// is, after this attach. Replayed ring content cannot contain it.
+	if _, err := box.Exec(ctx, "touch", "/tmp/go-attached"); err != nil {
+		t.Fatalf("trigger live output: %v", err)
+	}
 	var output strings.Builder
-	for !strings.Contains(output.String(), "inventory-heartbeat") {
+	for !strings.Contains(output.String(), "attached-live") {
 		select {
 		case chunk := <-chunks:
 			output.WriteString(chunk)

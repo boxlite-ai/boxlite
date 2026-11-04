@@ -30,13 +30,14 @@ pub struct CExecutionInfoList {
 }
 
 impl CExecutionInfo {
-    /// Fallible because these strings come from the guest, not from the C
-    /// caller: a NUL byte in a listed argv would otherwise panic inside the
-    /// spawned task, and the callback would never fire.
+    /// Stage one entry's strings as owned `CString`s, so nothing is converted
+    /// to a raw pointer until every entry in the list has succeeded.
     ///
-    /// Every string is built as a `CString` and released with `into_raw` only
-    /// after the last one succeeds, so an early error frees what it allocated.
-    fn try_from_info(info: boxlite::litebox::ExecutionInfo) -> Result<Self, BoxliteError> {
+    /// These strings come from the guest, not from the C caller: a NUL byte in
+    /// a listed argv would otherwise panic inside the spawned task and the
+    /// callback would never fire. Staging also means a failure frees what it
+    /// allocated by normal `Drop` — no partially converted list to reclaim.
+    fn stage(info: boxlite::litebox::ExecutionInfo) -> Result<StagedExecutionInfo, BoxliteError> {
         let argv = info
             .argv
             .into_iter()
@@ -47,15 +48,41 @@ impl CExecutionInfo {
             .collect::<Result<Vec<_>, _>>()?;
         let execution_id = CString::new(info.execution_id)
             .map_err(|_| BoxliteError::Internal("guest execution ID contains a NUL byte".into()))?;
-        let (argv, argc) = into_raw_slice(argv.into_iter().map(CString::into_raw).collect());
-        Ok(Self {
-            execution_id: execution_id.into_raw(),
+        Ok(StagedExecutionInfo {
             argv,
-            argc,
+            execution_id,
             started_at: info.started_at,
             tty: info.tty,
             is_main_session: info.is_main_session,
         })
+    }
+
+    #[cfg(test)]
+    fn try_from_info(info: boxlite::litebox::ExecutionInfo) -> Result<Self, BoxliteError> {
+        Self::stage(info).map(Self::from)
+    }
+}
+
+/// One entry whose strings are still owned Rust values.
+struct StagedExecutionInfo {
+    argv: Vec<CString>,
+    execution_id: CString,
+    started_at: u64,
+    tty: bool,
+    is_main_session: bool,
+}
+
+impl From<StagedExecutionInfo> for CExecutionInfo {
+    fn from(staged: StagedExecutionInfo) -> Self {
+        let (argv, argc) = into_raw_slice(staged.argv.into_iter().map(CString::into_raw).collect());
+        Self {
+            execution_id: staged.execution_id.into_raw(),
+            argv,
+            argc,
+            started_at: staged.started_at,
+            tty: staged.tty,
+            is_main_session: staged.is_main_session,
+        }
     }
 }
 
@@ -79,11 +106,15 @@ pub unsafe extern "C" fn boxlite_list_executions(
         let user_data = user_data as usize;
         handle.tokio_rt.spawn(async move {
             let result = lite.list_executions().await.and_then(|executions| {
-                let items = executions
+                // Stage every entry before converting any: a failure therefore
+                // returns with only dropped `CString`s, never a half-built list
+                // whose raw strings nothing would free.
+                let staged = executions
                     .into_iter()
-                    .map(CExecutionInfo::try_from_info)
+                    .map(CExecutionInfo::stage)
                     .collect::<Result<Vec<_>, _>>()?;
-                let (items, count) = into_raw_slice(items);
+                let (items, count) =
+                    into_raw_slice(staged.into_iter().map(CExecutionInfo::from).collect());
                 Ok(OwnedFfiPtr::new_with(
                     Box::new(CExecutionInfoList { items, count }),
                     free_execution_info_list,
@@ -176,6 +207,25 @@ mod tests {
             }));
             boxlite_free_execution_info_list(list);
         }
+    }
+
+    #[test]
+    fn one_bad_entry_converts_nothing_and_leaks_nothing() {
+        // A valid entry followed by one with a NUL byte: the whole list fails,
+        // and because entries are only converted after every one staged, the
+        // first entry's strings are dropped rather than stranded.
+        let entries = vec![
+            info(vec!["sh", "-c", "echo hi"]),
+            info(vec!["sh", "-c", "echo a\0b"]),
+        ];
+        let staged = entries
+            .into_iter()
+            .map(CExecutionInfo::stage)
+            .collect::<Result<Vec<_>, _>>();
+        assert!(
+            staged.is_err(),
+            "a NUL byte anywhere in the list must fail the whole listing"
+        );
     }
 
     #[test]

@@ -1235,7 +1235,7 @@ async fn probe_execution_status(
         Ok(Ok(info)) => match info.status.as_str() {
             "completed" | "killed" | "timed_out" => ProbeResult::Terminal(ExecResult {
                 exit_code: info.exit_code.unwrap_or(-1),
-                error_message: None,
+                error_message: info.error_message,
             }),
             _ => ProbeResult::StillRunning,
         },
