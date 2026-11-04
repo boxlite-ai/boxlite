@@ -114,6 +114,8 @@ impl From<JsContainerCapabilities> for ContainerCapabilities {
 #[napi(object)]
 #[derive(Clone, Debug)]
 pub struct JsAdvancedBoxOptions {
+    /// Require nested virtualization; local runtime authorization is separate.
+    pub nested_virtualization: Option<bool>,
     pub capabilities: Option<JsContainerCapabilities>,
 }
 

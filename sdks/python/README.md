@@ -268,6 +268,37 @@ The CLI captures `Principal.path_prefix` at login and caches it
 under the active profile, so subsequent `boxlite` commands route
 correctly without an extra flag.
 
+### Nested virtualization (RC)
+
+Local runtimes require explicit authorization and a per-box request:
+
+```python
+rt = boxlite.Boxlite(
+    boxlite.Options(
+        experimental_features=["nested-virtualization"],
+    )
+)
+box = await rt.create(
+    boxlite.BoxOptions(
+        image="alpine:latest",
+        advanced=boxlite.AdvancedBoxOptions(nested_virtualization=True),
+    )
+)
+assert (await box.info()).advanced.nested_virtualization is True
+```
+
+`Boxlite.init_default(Options(...))` accepts the same authorization; call it
+before `Boxlite.default()`. SDK constructors never read `BOXLITE_EXPERIMENTAL`.
+Each feature-list element must be one token; comma lists and unknown names fail.
+
+A REST runtime uses the same `BoxOptions` without local authorization.
+Its server must advertise `capabilities.nested_virtualization_enabled: true`
+and confirm the saved requirement. Omitted/false preserves the old create request.
+Missing or false confirmation fails with the returned box ID and leaves it unchanged.
+`BoxInfo.advanced` and its nested value may be `None` for older servers.
+Saved true records intent, not successful L2 execution; see the
+[host requirements and REST contract](../../docs/guides/nested-virtualization.md).
+
 ### Box Configuration
 
 #### `boxlite.BoxOptions`
@@ -293,6 +324,7 @@ Configuration options for creating a box.
     [private tunnel examples](../../docs/concepts/networking.md#private-cloud-tunnels).
 - `secrets: List[Secret]` - Host-side HTTPS secret substitution rules
 - `advanced: AdvancedBoxOptions | None` - Expert-only container options
+  - `nested_virtualization: bool` - Immutable RC requirement, default `False`; requires runtime/server authorization
   - `capabilities.add: List[str]` - Capabilities added to BoxLite's baseline
   - `capabilities.drop: List[str]` - Capabilities removed from the resulting set
 - `auto_delete: int | None` - `0` keeps the box after stop; above `0`, a REST runtime deletes it that many seconds after stop and a local runtime at stop. Default `None` keeps the runtime's default (`auto_remove` locally)

@@ -1,3 +1,4 @@
+use boxlite::experimental::RuntimeBuilder;
 use std::sync::Arc;
 
 use boxlite::{BoxArchive, BoxOptions, BoxliteOptions, BoxliteRuntime};
@@ -8,7 +9,9 @@ use crate::box_handle::JsBox;
 use crate::images::JsImageHandle;
 use crate::info::JsBoxInfo;
 use crate::metrics::JsRuntimeMetrics;
-use crate::options::{JsBoxOptions, JsBoxliteRestOptions, JsOptions, js_options_into_core};
+use crate::options::{
+    JsBoxOptions, JsBoxliteRestOptions, JsOptions, js_options_into_core, js_runtime_features,
+};
 use crate::util::map_err;
 use crate::volumes::JsVolumeHandle;
 
@@ -35,10 +38,14 @@ impl JsBoxlite {
     /// ```
     #[napi(constructor)]
     pub fn new(options: JsOptions) -> Result<Self> {
+        let features = js_runtime_features(&options)?;
         let core_opts = js_options_into_core(options)?;
         // Executable-owned logging init (the library no longer auto-installs a subscriber).
         let _ = boxlite::init_logging_for(&core_opts.home_dir);
-        let runtime = BoxliteRuntime::new(core_opts).map_err(map_err)?;
+        let runtime = RuntimeBuilder::new(core_opts)
+            .with_features(features)
+            .build()
+            .map_err(map_err)?;
 
         Ok(Self {
             runtime: Arc::new(runtime),
@@ -81,9 +88,13 @@ impl JsBoxlite {
     /// ```
     #[napi]
     pub fn init_default(options: JsOptions) -> Result<()> {
+        let features = js_runtime_features(&options)?;
         let core_opts = js_options_into_core(options)?;
         let _ = boxlite::init_logging_for(&core_opts.home_dir);
-        BoxliteRuntime::init_default_runtime(core_opts).map_err(map_err)
+        RuntimeBuilder::new(core_opts)
+            .with_features(features)
+            .init_default()
+            .map_err(map_err)
     }
 
     /// Create a runtime that connects to a remote BoxLite REST backend.

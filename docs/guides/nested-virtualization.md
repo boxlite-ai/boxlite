@@ -43,9 +43,12 @@ The local runtime checks the opt-in again when it consumes persisted box
 configuration, so a later CLI `start` or `restart` also needs the variable and
 an SDK process must construct its runtime with the same explicit feature. The
 REST client requires explicit server support before forwarding this requirement.
-Uploaded archives requesting nesting remain unsupported over REST.
-Local C/Go callers use explicit runtime authorization and advanced box options;
-they do not read the process environment.
+Uploaded archives requesting nesting remain unsupported over REST. The
+[Python SDK](../../sdks/python/README.md#nested-virtualization-rc),
+[Node SDK](../../sdks/node/README.md#nested-virtualization-rc),
+[Go SDK](../../sdks/go/README.md#nested-virtualization-experimental), and
+[C SDK](../../sdks/c/README.md#nested-virtualization-rc) expose explicit runtime
+authorization and advanced box options; they do not read the process environment.
 
 ## REST contract and saved metadata
 

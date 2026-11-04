@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use boxlite::BoxliteRestOptions;
+use boxlite::experimental::ExperimentalFeatures;
 use boxlite::litebox::copy::CopyOptions;
 use boxlite::runtime::advanced_options::{HealthCheckOptions, SecurityOptions};
 use boxlite::runtime::constants::images;
@@ -23,16 +24,24 @@ pub(crate) struct PyOptions {
     /// Registry transport, TLS, search, and auth configuration.
     #[pyo3(get, set)]
     pub(crate) image_registries: Vec<PyImageRegistry>,
+    /// Explicit local runtime authorization; never read from the process ENV.
+    #[pyo3(get, set)]
+    pub(crate) experimental_features: Vec<String>,
 }
 
 #[pymethods]
 impl PyOptions {
     #[new]
-    #[pyo3(signature = (home_dir=None, image_registries=vec![]))]
-    fn new(home_dir: Option<String>, image_registries: Vec<PyImageRegistry>) -> Self {
+    #[pyo3(signature = (home_dir=None, image_registries=vec![], *, experimental_features=vec![]))]
+    fn new(
+        home_dir: Option<String>,
+        image_registries: Vec<PyImageRegistry>,
+        experimental_features: Vec<String>,
+    ) -> Self {
         Self {
             home_dir,
             image_registries,
+            experimental_features,
         }
     }
 
@@ -45,6 +54,11 @@ impl PyOptions {
 }
 
 impl PyOptions {
+    pub(crate) fn runtime_features(&self) -> PyResult<ExperimentalFeatures> {
+        ExperimentalFeatures::from_names(self.experimental_features.iter().map(String::as_str))
+            .map_err(crate::util::map_err)
+    }
+
     pub(crate) fn into_core(self) -> PyResult<BoxliteOptions> {
         let mut config = BoxliteOptions::default();
 
@@ -734,6 +748,7 @@ impl TryFrom<PyBoxOptions> for BoxOptions {
         }
 
         if let Some(advanced) = py_opts.advanced {
+            opts.advanced.nested_virtualization = advanced.nested_virtualization;
             if let Some(security) = advanced.security {
                 opts.advanced.security = SecurityOptions::from(security);
             }
@@ -1259,6 +1274,7 @@ mod tests {
     #[test]
     fn security_only_advanced_options_leaves_capabilities_unspecified() {
         let advanced = PyAdvancedBoxOptions {
+            nested_virtualization: false,
             security: Some(default_py_security()),
             health_check: None,
             capabilities: None,
@@ -1279,6 +1295,7 @@ mod tests {
     #[test]
     fn explicit_capabilities_still_convert() {
         let advanced = PyAdvancedBoxOptions {
+            nested_virtualization: false,
             security: None,
             health_check: None,
             capabilities: Some(PyContainerCapabilities {

@@ -383,6 +383,8 @@ export interface ContainerCapabilities {
 }
 
 export interface AdvancedBoxOptions {
+  /** RC requirement; remote authorization belongs to the server. */
+  nestedVirtualization?: boolean;
   capabilities?: ContainerCapabilities;
 }
 
@@ -643,6 +645,7 @@ export class SimpleBox {
       user: options.user,
       advanced: options.advanced
         ? {
+            nestedVirtualization: options.advanced.nestedVirtualization,
             capabilities: options.advanced.capabilities
               ? {
                   add: [...(options.advanced.capabilities.add ?? [])],

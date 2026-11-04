@@ -256,6 +256,8 @@ pub struct JsBoxInfo {
 
     /// Allocated memory in MiB
     pub memory_mib: u32,
+    /// Saved requirements; absent metadata remains unknown.
+    pub advanced: Option<JsBoxAdvancedInfo>,
 
     /// Network configuration and resolved local publications, when available.
     pub network: Either<JsNetworkInfo, Null>,
@@ -274,6 +276,12 @@ pub struct JsBoxInfo {
 
     /// Health status
     pub health_status: JsHealthStatus,
+}
+
+#[napi(object)]
+#[derive(Clone, Debug)]
+pub struct JsBoxAdvancedInfo {
+    pub nested_virtualization: Option<bool>,
 }
 
 impl From<BoxInfo> for JsBoxInfo {
@@ -295,6 +303,9 @@ impl From<BoxInfo> for JsBoxInfo {
             image: info.image,
             cpus: info.cpus,
             memory_mib: info.memory_mib,
+            advanced: info.advanced.map(|advanced| JsBoxAdvancedInfo {
+                nested_virtualization: advanced.nested_virtualization,
+            }),
             network: match info.network {
                 Some(network) => Either::A(JsNetworkInfo::from(network)),
                 None => Either::B(Null),

@@ -299,6 +299,9 @@ impl From<PyContainerCapabilities> for ContainerCapabilities {
 #[pyclass(name = "AdvancedBoxOptions")]
 #[derive(Clone, Debug)]
 pub struct PyAdvancedBoxOptions {
+    /// Require nested virtualization; local runtime authorization is separate.
+    #[pyo3(get, set)]
+    pub nested_virtualization: bool,
     /// Security isolation options.
     #[pyo3(get, set)]
     pub security: Option<PySecurityOptions>,
@@ -322,16 +325,18 @@ pub struct PyAdvancedBoxOptions {
 #[pymethods]
 impl PyAdvancedBoxOptions {
     #[new]
-    #[pyo3(signature = (security=None, health_check=None, capabilities=None))]
+    #[pyo3(signature = (security=None, health_check=None, capabilities=None, *, nested_virtualization=false))]
     fn new(
         security: Option<PySecurityOptions>,
         health_check: Option<PyHealthCheckOptions>,
         capabilities: Option<PyContainerCapabilities>,
+        nested_virtualization: bool,
     ) -> Self {
         Self {
             security,
             health_check,
             capabilities,
+            nested_virtualization,
         }
     }
 }

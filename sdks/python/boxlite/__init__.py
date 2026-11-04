@@ -13,6 +13,7 @@ try:
         AdvancedBoxOptions,
         ApiKeyCredential,
         Box,
+        BoxAdvancedInfo,
         BoxInfo,
         Boxlite,
         BoxliteRestOptions,
@@ -70,6 +71,7 @@ try:
         # Core Rust API
         "Options",
         "AdvancedBoxOptions",
+        "BoxAdvancedInfo",
         "ContainerCapabilities",
         "ImageRegistry",
         "BoxOptions",

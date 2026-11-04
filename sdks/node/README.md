@@ -95,6 +95,34 @@ main();
 
 ## API Reference
 
+### Nested virtualization (RC)
+
+Local runtimes require explicit authorization and a per-box request:
+
+```typescript
+import { JsBoxlite } from '@boxlite-ai/boxlite';
+
+const rt = new JsBoxlite({ experimentalFeatures: ['nested-virtualization'] });
+const box = await rt.create({
+  image: 'alpine:latest',
+  advanced: { nestedVirtualization: true },
+});
+console.log((await box.info()).advanced?.nestedVirtualization);
+```
+
+`JsBoxlite.initDefault` accepts the same runtime options before
+`withDefaultConfig()`. Constructors never read `BOXLITE_EXPERIMENTAL`.
+Use one feature token per list element; commas and unknown names are rejected.
+The boolean is strict; null, strings, and numbers are rejected.
+
+A REST runtime uses the same box options without local authorization.
+Its server must advertise `capabilities.nested_virtualization_enabled: true`
+and confirm the saved requirement. Omitted/false preserves the old create request.
+Missing or false confirmation fails with the returned box ID and leaves it unchanged.
+`info.advanced?.nestedVirtualization` is undefined for unknown legacy metadata,
+distinct from explicit false. Saved true does not prove L2 execution; see the
+[host requirements and REST contract](../../docs/guides/nested-virtualization.md).
+
 ### Remote BoxLite server (REST)
 
 Connect to a remote BoxLite server instead of the local runtime.

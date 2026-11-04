@@ -309,6 +309,8 @@ export interface JsContainerCapabilities {
 }
 
 export interface JsAdvancedBoxOptions {
+  /** RC requirement; remote authorization belongs to the server. */
+  nestedVirtualization?: boolean;
   capabilities?: JsContainerCapabilities;
 }
 
@@ -346,6 +348,8 @@ export interface JsBoxOptions {
 }
 
 export interface JsOptions {
+  /** Explicit RC authorization for an embedded runtime. */
+  experimentalFeatures?: string[];
   homeDir?: string;
   imageRegistries?: JsImageRegistry[];
 }
@@ -445,6 +449,8 @@ export interface JsNetworkInfo {
 }
 
 export interface JsBoxInfo {
+  /** Persisted configuration; absence means the producer did not report it. */
+  advanced?: { nestedVirtualization?: boolean };
   id: string;
   name?: string;
   state: JsBoxStateInfo;

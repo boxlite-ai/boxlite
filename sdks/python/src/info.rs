@@ -366,6 +366,14 @@ impl From<BoxStateInfo> for PyBoxStateInfo {
 // BoxInfo - Container info with nested state
 // ============================================================================
 
+/// Read-only saved requirements; absent values remain unknown.
+#[pyclass(name = "BoxAdvancedInfo", frozen)]
+#[derive(Clone, Debug)]
+pub(crate) struct PyBoxAdvancedInfo {
+    #[pyo3(get)]
+    pub(crate) nested_virtualization: Option<bool>,
+}
+
 #[pyclass(name = "BoxInfo")]
 #[derive(Clone)]
 pub(crate) struct PyBoxInfo {
@@ -387,6 +395,8 @@ pub(crate) struct PyBoxInfo {
     pub(crate) cpus: u8,
     #[pyo3(get)]
     pub(crate) memory_mib: u32,
+    #[pyo3(get)]
+    pub(crate) advanced: Option<PyBoxAdvancedInfo>,
     #[pyo3(get)]
     pub(crate) network: Option<PyNetworkInfo>,
     #[pyo3(get)]
@@ -415,6 +425,9 @@ impl PyBoxInfo {
             "image": self.image,
             "cpus": self.cpus,
             "memory_mib": self.memory_mib,
+            "advanced": self.advanced.as_ref().map(|advanced| serde_json::json!({
+                "nested_virtualization": advanced.nested_virtualization,
+            })),
             "network": network,
             "auto_stop": self.auto_stop,
             "auto_delete": self.auto_delete,
@@ -451,6 +464,9 @@ impl From<BoxInfo> for PyBoxInfo {
             image: info.image,
             cpus: info.cpus,
             memory_mib: info.memory_mib,
+            advanced: info.advanced.map(|advanced| PyBoxAdvancedInfo {
+                nested_virtualization: advanced.nested_virtualization,
+            }),
             network: info.network.map(PyNetworkInfo::from),
             auto_stop: info.auto_stop,
             auto_delete: info.auto_delete,

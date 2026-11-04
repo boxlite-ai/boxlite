@@ -1,3 +1,4 @@
+use boxlite::experimental::ExperimentalFeatures;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -59,10 +60,24 @@ impl From<JsHealthCheckOptions> for HealthCheckOptions {
 #[napi(object)]
 #[derive(Clone, Debug)]
 pub struct JsOptions {
+    /// Explicit local runtime authorization; never read from the process ENV.
+    pub experimental_features: Option<Vec<String>>,
     /// Home directory for BoxLite data (defaults to ~/.boxlite)
     pub home_dir: Option<String>,
     /// Registry transport, TLS, search, and auth configuration.
     pub image_registries: Option<Vec<JsImageRegistry>>,
+}
+
+pub(crate) fn js_runtime_features(options: &JsOptions) -> napi::Result<ExperimentalFeatures> {
+    ExperimentalFeatures::from_names(
+        options
+            .experimental_features
+            .as_deref()
+            .unwrap_or_default()
+            .iter()
+            .map(String::as_str),
+    )
+    .map_err(crate::util::map_err)
 }
 
 pub(crate) fn js_options_into_core(js_opts: JsOptions) -> napi::Result<BoxliteOptions> {
@@ -537,6 +552,11 @@ impl TryFrom<JsBoxOptions> for BoxOptions {
             .unwrap_or_default();
 
         let health_check = js_opts.health_check.map(HealthCheckOptions::from);
+        let nested_virtualization = js_opts
+            .advanced
+            .as_ref()
+            .and_then(|advanced| advanced.nested_virtualization)
+            .unwrap_or(false);
         let capabilities: Option<ContainerCapabilities> = js_opts
             .advanced
             .and_then(|advanced| advanced.capabilities)
@@ -556,6 +576,7 @@ impl TryFrom<JsBoxOptions> for BoxOptions {
             .collect();
 
         let mut advanced = AdvancedBoxOptions::default();
+        advanced.nested_virtualization = nested_virtualization;
         advanced.set_capabilities(capabilities)?;
         advanced.security = security;
         advanced.health_check = health_check;
@@ -726,6 +747,7 @@ mod tests {
         let password = test_registry_password();
         let token = test_bearer_token();
         let opts = js_options_into_core(JsOptions {
+            experimental_features: None,
             home_dir: Some("/tmp/boxlite-node".into()),
             image_registries: Some(vec![
                 JsImageRegistry {
@@ -943,6 +965,7 @@ mod tests {
 
         let mut with_capabilities = js.clone();
         with_capabilities.advanced = Some(JsAdvancedBoxOptions {
+            nested_virtualization: None,
             capabilities: Some(JsContainerCapabilities {
                 add: Some(vec!["NET_ADMIN".into(), "SYS_PTRACE".into()]),
                 drop: Some(vec!["MKNOD".into(), "NET_RAW".into()]),
