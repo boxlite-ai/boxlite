@@ -466,8 +466,12 @@ pub trait FileSystem {
     /// file system did not return a `Handle` from `open` then the contents of
     /// `handle` are undefined.
     ///
-    /// If `flush` is `true` then the contents of the file should also be flushed to disk.
-    #[allow(clippy::too_many_arguments)]
+    /// `flush` is the FUSE close/flush hint, not an fsync request. Like the
+    /// migrated libkrun backend, release does not promise host durability.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Preserve the migrated FUSE operation signature"
+    )]
     fn release(
         &self,
         ctx: Context,
