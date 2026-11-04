@@ -108,6 +108,38 @@ describe('ApiClient 401 -> bounded re-login recovery', () => {
   afterEach(() => {
     vi.restoreAllMocks()
   })
+  it('CI methods use the explicitly supplied original organization, current token and REST paths', async () => {
+    const requests: any[] = []
+    const api = await makeClient(vi.fn(), 200, { status: 'connected' }, requests)
+    api.setAccessToken('new-token')
+    await api.getCiSettings('original-org')
+    await api.setCiCapacity('original-org', null)
+    await api.getCiConnectConfiguration('original-org')
+    await api.startCiConnect('original-org', {
+      github_account: 'alice',
+      follow_installation: true,
+      allow_public_repositories: true,
+    })
+    await api.completeCiConnect('original-org', 'attempt-id', { code: 'private-code', state: 'private-state' })
+    expect(requests.map((request) => request.url)).toEqual([
+      '/v1/original-org/ci/settings',
+      '/v1/original-org/ci/settings',
+      '/v1/original-org/ci/connect/configuration',
+      '/v1/original-org/ci/connect/web',
+      '/v1/original-org/ci/connect/attempt-id/complete',
+    ])
+    expect(requests.every((request) => request.headers.Authorization === 'Bearer new-token')).toBe(true)
+    expect(JSON.parse(requests[1].data)).toEqual({ max_concurrent_jobs: null })
+    expect(JSON.parse(requests[4].data)).toEqual({ code: 'private-code', state: 'private-state' })
+  })
+  it('CI completion discards Axios request bodies from surfaced errors', async () => {
+    const api = await makeClient(vi.fn(), 403, { message: 'private-code private-token' })
+    const error = await api
+      .completeCiConnect('original-org', 'attempt-id', { code: 'private-code', state: 'private-state' })
+      .catch((error) => error)
+    expect(error.message).toBe('GitHub authorization could not be completed. Restart connect.')
+    expect(error.cause).toBeUndefined()
+  })
 
   it('first 401 triggers onUnauthorized once and suspends the caller (no error flash)', async () => {
     const onUnauthorized = vi.fn(() => Promise.resolve())

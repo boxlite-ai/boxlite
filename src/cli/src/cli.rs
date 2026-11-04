@@ -305,6 +305,15 @@ const COMMAND_SCOPES: &[CommandScope] = &[
         ],
     ),
     box_command_scope("import", &[]),
+    CommandScope {
+        name: "ci",
+        globals: VOLUME_GLOBALS,
+        children: &[CommandScope {
+            name: "connect",
+            globals: VOLUME_GLOBALS,
+            children: &[],
+        }],
+    },
     box_command_scope("agent", AGENT_SCOPES),
     CommandScope {
         name: "run",
@@ -726,6 +735,8 @@ fn normalize_empty_urls(cli: &mut Cli) {
 #[derive(Subcommand, Debug)]
 #[non_exhaustive]
 pub enum Commands {
+    /// Connect GitHub Actions to BoxLite.
+    Ci(crate::commands::ci::CiArgs),
     /// Manage the current local or remote target.
     Context(crate::contexts::ContextArgs),
     /// Run a command in a new box
@@ -1090,6 +1101,13 @@ impl GlobalFlags {
                 self.create_runtime_with_options(options)
             }
         }
+    }
+
+    pub(crate) fn selected_rest_options(&self) -> anyhow::Result<Option<BoxliteRestOptions>> {
+        Ok(self.resolve_rest_options(
+            self.load_selected_profile()?,
+            std::env::var("BOXLITE_API_KEY").ok(),
+        ))
     }
 
     fn load_selected_profile(&self) -> anyhow::Result<Option<crate::credentials::Profile>> {

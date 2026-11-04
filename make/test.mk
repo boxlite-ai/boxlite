@@ -5,6 +5,7 @@ PHONY_TARGETS += test\:apps\:runner
 PHONY_TARGETS += test\:apps\:infra-local
 PHONY_TARGETS += test\:apps\:proxy test\:apps\:dashboard
 PHONY_TARGETS += test\:apps\:mdeploy test\:e2e\:drivers
+PHONY_TARGETS += test\:apps\:ci-listener
 PHONY_TARGETS += _local-registry
 PHONY_TARGETS += test\:apps\:infra\:mdeploy test\:apps\:infra\:mstage
 
@@ -688,6 +689,13 @@ test\:apps\:api: _ensure-apps-deps
 
 test\:apps\:dashboard: _ensure-apps-deps
 	@cd apps && yarn nx run dashboard:test --run $(if $(FILTER),--testNamePattern '$(FILTER)',)
+
+test\:apps\:ci-listener: _ensure-apps-deps
+	@cd apps && yarn nx run ci-listener:test --runInBand $(if $(FILTER),--testNamePattern '$(FILTER)',)
+
+PHONY_TARGETS += test\:apps\:github-ci-runner
+test\:apps\:github-ci-runner: _ensure-apps-deps
+	@cd apps && yarn nx run github-ci-runner:test --runInBand $(if $(FILTER),--testNamePattern '$(FILTER)',)
 
 test\:apps\:runner: dev\:go
 	@echo "🧪 Running runner Go tests..."

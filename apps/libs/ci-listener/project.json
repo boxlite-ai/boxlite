@@ -1,0 +1,18 @@
+{
+  "name": "ci-listener",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "libs/ci-listener/src",
+  "projectType": "library",
+  "targets": {
+    "build": {
+      "executor": "@nx/js:tsc",
+      "options": {
+        "outputPath": "dist/libs/ci-listener",
+        "tsConfig": "libs/ci-listener/tsconfig.lib.json",
+        "packageJson": "libs/ci-listener/package.json",
+        "main": "libs/ci-listener/src/index.ts"
+      }
+    }
+  },
+  "tags": []
+}

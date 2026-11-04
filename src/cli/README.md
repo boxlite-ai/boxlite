@@ -33,6 +33,23 @@ Other commands use `--agent ID` and `--turn TURN` to select existing work.
 See the [agent CLI reference](../../docs/reference/cli/README.md#boxlite-agent)
 for commands, grouped options and error behavior.
 
+## GitHub CI connect (in development)
+
+`boxlite --context dev ci connect GITHUB_ACCOUNT` binds a GitHub App installation
+using the selected remote BoxLite context and a browser device authorization.
+Use `--allow-public-repositories` to include public repositories, and `--no-browser`
+to print the authorization URL without opening it. The account may be a personal
+GitHub account or organization.
+
+The command requires BoxLite organization ownership and GitHub installation ownership.
+An API key needs `write:boxes` and `delete:boxes`. Current and future App-selected
+repositories follow the binding. A conflicting binding is rejected rather than replaced.
+
+The current API reports `provisioning` after binding; runner capacity is not ready yet.
+See the [Listener README](../../../apps/github-ci-runner/README.md#hosted-connect)
+for deployment status and authentication requirements. CI logs and results remain in GitHub
+Actions; running jobs use ordinary Box management commands.
+
 ## Installation
 
 ### One-line install (Linux & macOS Apple Silicon)

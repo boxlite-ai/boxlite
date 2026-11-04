@@ -39,6 +39,7 @@ import { BoxSessionProvider } from './providers/BoxSessionProvider'
 // load on demand under the dashboard <Outlet> Suspense boundary, so the initial
 // /boxes paint no longer ships Admin/Billing/Settings/Keys/box-details and their
 // recharts/terminal deps. Boxes + the Dashboard shell stay eager (first paint).
+const CiConnectCallback = React.lazy(() => import('./pages/CiConnectCallback'))
 const Keys = React.lazy(() => import('./pages/Keys'))
 // Billing pulls in the plan/wallet/usage sections (and recharts) behind this one chunk.
 const Billing = React.lazy(() => import('./pages/Billing'))
@@ -154,6 +155,16 @@ function App() {
     <Routes>
       <Route path={RoutePath.LANDING} element={<LandingPage />} />
       <Route path="/lander" element={<Navigate to={RoutePath.LANDING} replace />} />
+      <Route
+        path="/settings/ci/callback"
+        element={
+          <Suspense fallback={<LoadingFallback />}>
+            <ApiProvider>
+              <CiConnectCallback />
+            </ApiProvider>
+          </Suspense>
+        }
+      />
       <Route path={RoutePath.LOGOUT} element={<Logout />} />
       <Route path={RoutePath.DOCS} element={<DocsRedirect />} />
       <Route path={RoutePath.SLACK} element={<SlackRedirect />} />

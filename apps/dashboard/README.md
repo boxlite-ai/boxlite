@@ -271,12 +271,12 @@ refetch this list.
 
 Run these from `apps/`:
 
-| Command | What it does |
-| --- | --- |
-| `yarn nx run dashboard:dev` | Dev server on `:3000`, proxying `/api` to `http://localhost:3001` |
-| `yarn nx run dashboard:build` | Production build, with a typecheck pass |
-| `yarn nx run dashboard:test` | Vitest suite |
-| `yarn nx run dashboard:test --coverage` | Same, writing lcov to `target/coverage/dashboard` |
+| Command                                 | What it does                                                      |
+| --------------------------------------- | ----------------------------------------------------------------- |
+| `yarn nx run dashboard:dev`             | Dev server on `:3000`, proxying `/api` to `http://localhost:3001` |
+| `yarn nx run dashboard:build`           | Production build, with a typecheck pass                           |
+| `yarn nx run dashboard:test`            | Vitest suite                                                      |
+| `yarn nx run dashboard:test --coverage` | Same, writing lcov to `target/coverage/dashboard`                 |
 
 `npm run start:mock` (from `apps/`) serves the console against the MSW handlers
 in `src/mocks`, with no backend and no login. Its `VITE_BASE_API_URL` must end in
@@ -752,3 +752,51 @@ Clicking Images in a compact rail reveals its children. Quota metadata uses read
 12px type. Template columns use a 240px minimum in the available content width;
 short Quickstart code blocks expand naturally. Billing and box details retain all
 data and actions while removing excess whitespace and dotted leaders.
+
+## GitHub CI settings and browser connect
+
+Organization → CI lets account owners connect a GitHub personal account or
+organization and set one concurrent-worker total across every connected repository.
+Leave the maximum blank to inherit Commerce, or use zero to pause new workers.
+Other Boxes consume the same commercial account allowance. Repository limits are
+not exposed. GitHub owns job logs; use existing Box tools for worker inspection.
+
+Connect uses the existing BoxLite login and GitHub App browser OAuth with S256
+PKCE. The original account ID survives in tab-scoped session metadata, so changing
+the selected account cannot redirect the binding. The bootstrap removes callback
+query/fragment data before dynamically loading the app and telemetry. Authorization
+codes and state stay in module memory; refreshing or losing login requires restart.
+The page-level completion promise also handles React StrictMode duplicate effects.
+
+The API needs the optional `CI_GITHUB_APP_CLIENT_SECRET` secret reference and the
+exact `${DASHBOARD_URL}/settings/ci/callback` URL registered on its App. A missing
+secret leaves the scheduler and CLI Device Flow available while disabling the
+browser button. Install/authorize is followed by current-owner and installation
+verification on the API; an installation callback alone cannot claim an account.
+
+Run `make test:apps:dashboard` and `make build:apps:dashboard` from the repository
+root. Local DOM/HTTP tests do not replace a real App connect and workflow run on
+the deployed API and Dashboard.
+
+```mermaid
+sequenceDiagram
+    actor U as Account owner
+    participant D as Dashboard
+    participant A as BoxLite API
+    participant P as PostgreSQL
+    participant G as GitHub App
+    U->>D: Connect GitHub account and public-repository policy
+    D->>A: Authenticated web start under original account
+    A->>P: Store actor, App, state hash and encrypted verifier
+    A-->>D: Fixed authorize URL with S256 challenge
+    D->>G: Authorize in browser
+    G-->>D: Fixed callback with code and state
+    D->>D: Scrub URL before app and telemetry load
+    D->>A: Complete under original BoxLite account
+    A->>P: Validate state and atomically claim once, erase verifier
+    A->>G: Exchange code with verifier and OAuth Client Secret
+    A->>G: Verify GitHub ownership and current App installation
+    A->>P: Recheck owner and commit binding, default quota and wake
+    A-->>D: Connected with durable Listener setup state
+    Note over D,A: Browser metadata never grants binding authority
+```

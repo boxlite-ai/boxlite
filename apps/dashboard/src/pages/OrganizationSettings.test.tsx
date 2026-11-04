@@ -86,7 +86,7 @@ describe('Organization settings tabs', () => {
     expect([...document.querySelectorAll('input')].some((input) => input.value === 'org-1')).toBe(true)
     expect(mocks.api.organizationsApi.listOrganizationInvitations).not.toHaveBeenCalled()
     const tabs = [...document.querySelectorAll<HTMLButtonElement>('[role="tab"]')]
-    expect(tabs.map((tab) => tab.textContent)).toEqual(['General', 'Member'])
+    expect(tabs.map((tab) => tab.textContent)).toEqual(['General', 'Member', 'CI'])
     expect(tabs[0].getAttribute('aria-selected')).toBe('true')
     await act(async () => tabs[1].dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0 })))
     expect(document.querySelector('output')?.textContent).toBe('/dashboard/settings?tab=member')
