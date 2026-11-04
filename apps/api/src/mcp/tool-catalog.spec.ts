@@ -186,7 +186,7 @@ describe('Mcp assembled tool catalog', () => {
     const body = await response.json()
     const tools = body.result.tools
     expect(tools.map((tool: { name: string }) => tool.name).sort()).toEqual(
-      [...Object.values(toolByOperation), 'list_organizations'].sort(),
+      [...Object.values(toolByOperation), 'list_organizations', 'get_execution_output'].sort(),
     )
     for (const tool of tools) {
       expect(tool.inputSchema).toEqual(expect.objectContaining({ type: 'object', additionalProperties: false }))

@@ -13,6 +13,7 @@ import { BoxTools } from './tools/box/box-tools'
 import { NetworkTools } from './tools/box/network-tools'
 import { registerConfigTool } from './tools/config/config-tool'
 import { McpExecutionTools } from './tools/execution/execution-tools'
+import { McpExecutionOutputTools } from './tools/execution/execution-output-tools'
 import { McpFileTools } from './tools/files/file-tools'
 import { McpMetricsTools } from './tools/metrics/metrics-tools'
 import { OrganizationTools } from './tools/organization/organization-tools'
@@ -40,6 +41,7 @@ export class McpServerFactory {
     private readonly fileTools: McpFileTools,
     private readonly metricsTools: McpMetricsTools,
     private readonly organizationTools: OrganizationTools,
+    private readonly executionOutputTools: McpExecutionOutputTools,
   ) {}
 
   /** The `createMcpHandler` factory. */
@@ -55,6 +57,7 @@ export class McpServerFactory {
     this.networkTools.register(server, caller)
     registerConfigTool(server)
     this.executionTools.register(server, caller)
+    this.executionOutputTools.register(server, caller)
     this.fileTools.register(server, caller)
     this.metricsTools.register(server, caller)
     return server

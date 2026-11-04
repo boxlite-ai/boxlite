@@ -31,6 +31,7 @@ import { McpToolAccess } from './tools/shared/mcp-tool-access'
 import { McpToolAudit } from './tools/shared/mcp-tool-audit'
 import { NetworkTools } from './tools/box/network-tools'
 import { McpExecutionTools } from './tools/execution/execution-tools'
+import { McpExecutionOutputTools } from './tools/execution/execution-output-tools'
 import { McpFileTools } from './tools/files/file-tools'
 import { McpMetricsTools } from './tools/metrics/metrics-tools'
 import { OrganizationTools } from './tools/organization/organization-tools'
@@ -76,6 +77,7 @@ describe('McpController', () => {
         { provide: CommerceBoxLimitService, useValue: {} },
         { provide: NetworkTools, useValue: { register: jest.fn() } },
         { provide: McpExecutionTools, useValue: { register: jest.fn() } },
+        { provide: McpExecutionOutputTools, useValue: { register: jest.fn() } },
         { provide: McpFileTools, useValue: { register: jest.fn() } },
         { provide: McpMetricsTools, useValue: { register: jest.fn() } },
         { provide: OrganizationTools, useValue: { register: jest.fn() } },

@@ -44,7 +44,7 @@ Shared harnesses under `tests/` are excluded from the application TypeScript
 build and remain compiled through the Jest test configuration.
 
 Every registered tool advertises `inputSchema` and `outputSchema`. The catalog
-test exercises the assembled endpoint and checks all 32 registrations; schema
+test exercises the assembled endpoint and checks all 33 registrations; schema
 placement does not change the public tool contract.
 
 ## Tool failures
@@ -142,25 +142,8 @@ establish that repeating it is safe. Runner error bodies and credentials are nev
 
 This adapter has no tool registrations. Its consumers own tool schemas, representation
 conversion and result projection. It covers only the existing execution, file and Box metrics
-HTTP endpoints. The separate WebSocket adapter is described below.
-
-## Runner WebSocket boundary
-
-`McpRunnerWebSocket.capture` adapts the existing Runner execution attachment
-endpoint without adding a Runner API or changing execution behavior.
-Callers supply an authorized organization context and validated byte/time budgets;
-the adapter resolves the Box within that organization and rechecks ownership.
-Runner addresses and credentials come only from the stored Runner record.
-
-The adapter captures bounded stdout/stderr, validates exit frames, and reports
-unknown history completeness because replay eviction and live loss are not exposed.
-It sends no stdin or execution-control messages. Redirects, compression, and retries
-are disabled; handshake, message size, reading, and connection cleanup are bounded.
-Typed readiness failures keep their service classification.
-
-Attachment claims the single connection slot and refreshes activity; it may resume
-the Box. Disconnecting starts the Runner's existing orphan grace and may eventually
-lead to execution termination. Tool callers must account for these lifecycle effects.
+HTTP endpoints; the separate `McpRunnerWebSocket` adapter handles bounded output
+capture through the existing execution attachment endpoint.
 
 ## Execution tools
 
@@ -168,7 +151,7 @@ lead to execution termination. Tool callers must account for these lifecycle eff
 Commands can contact external systems under the Box network policy, so execution is
 annotated as an open-world operation.
 `get_execution` returns state, optional exit code and diagnostics; its response does not
-include stdout or stderr.
+include stdout or stderr. Use `get_execution_output` for a separate bounded output capture.
 
 `kill_execution` uses DELETE and removes the Runner registry entry.
 `signal_execution` accepts only signals 1, 2, 3, 6, 10, 12, 15 and 28; SIGKILL uses
@@ -204,6 +187,45 @@ For longer scripts or source, use `upload_files`, then execute the staged file w
 a short command and guest path. Uploads remain bounded at 60 KiB of UTF-8 text or
 64 KiB for a complete decoded tar, including metadata. Stage files in a confirmed
 existing guest root-filesystem directory outside mounts; `/workspace` is not guaranteed.
+
+### Execution output capture
+
+`get_execution_output` opens the Runner's existing WebSocket attach channel and
+returns `execution_id`, UTF-8 `stdout` and `stderr`, `stop_reason`, nullable
+`exit_code`, `limit_reached`, and `history_complete: "unknown"`. It never starts or
+replays a command and sends no stdin, signal, resize, or other application messages.
+TTY executions merge stderr into stdout. Binary or invalid UTF-8 bytes use replacement
+characters; file tools remain the binary-transfer path.
+
+`max_bytes` bounds combined raw stdout/stderr bytes: default 32 KiB, maximum 64 KiB.
+Replacement decoding can produce a larger encoded text result than that raw-byte
+budget. `wait_seconds` bounds reading after upgrade: default 2, range 1–15 seconds.
+The handshake has a separate five-second deadline and close cleanup a one-second
+bound; service lookup and readiness precede the handshake. `stop_reason` is `exit`,
+`time_limit`, or `byte_limit`; only an observed, validated exit frame supplies
+`exit_code`. Reaching a capture deadline or byte budget does not mean the process
+exited. `limit_reached` means the byte budget stopped this capture, including an
+exact boundary; it does not prove that another byte existed.
+
+Historical completeness stays unknown even after an exit with `limit_reached: false`:
+Runner's per-stream 256 KiB replay can evict earlier bytes, and slow live subscribers
+can lose chunks without a loss indicator on this protocol. Completed entries also
+have finite retention. Repeated calls may replay duplicate tail bytes; they are
+separate captures without continuation cursors or durable history guarantees.
+
+Capture requires `WRITE_BOXES`, records Box activity, and may auto-resume it.
+It occupies the execution's single attach slot; another attached client causes a
+structured 409 conflict. Disconnecting starts the Runner's configured orphan grace;
+an execution left disconnected may later receive signals and be terminated. The
+tool therefore advertises `readOnlyHint: false` and conservative
+`destructiveHint: true`. Cancellation releases the connection without explicitly
+killing the command, but cannot revoke a submitted resume or disable orphan reaping.
+
+Runner credentials and endpoints come only from the resolved stored Runner record.
+The adapter disables redirects, compression, and retries, bounds each message to
+256 KiB plus its channel prefix, sanitizes errors, and preserves typed service
+readiness failures before connection. A socket close without an exit frame is an
+error rather than evidence of command completion.
 
 ## File transfer tools
 

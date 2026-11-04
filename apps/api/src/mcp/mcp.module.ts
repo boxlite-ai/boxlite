@@ -23,7 +23,9 @@ import { BoxTools } from './tools/box/box-tools'
 import { CommerceBoxLimitService } from '../boxlite-rest/commerce-box-limit.service'
 import { NetworkTools } from './tools/box/network-tools'
 import { McpRunnerHttp } from './runner/runner-http'
+import { McpRunnerWebSocket } from './runner/runner-websocket'
 import { McpExecutionTools } from './tools/execution/execution-tools'
+import { McpExecutionOutputTools } from './tools/execution/execution-output-tools'
 import { McpFileTools } from './tools/files/file-tools'
 import { McpMetricsTools } from './tools/metrics/metrics-tools'
 import { OrganizationTools } from './tools/organization/organization-tools'
@@ -43,7 +45,9 @@ import { OrganizationTools } from './tools/organization/organization-tools'
     CommerceBoxLimitService,
     NetworkTools,
     McpRunnerHttp,
+    McpRunnerWebSocket,
     McpExecutionTools,
+    McpExecutionOutputTools,
     McpFileTools,
     McpMetricsTools,
     OrganizationTools,
