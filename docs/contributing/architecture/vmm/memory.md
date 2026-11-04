@@ -152,7 +152,7 @@ sequenceDiagram
 
 </details>
 
-### 2.4 The host worker accesses the same byte through a different pointer
+### 2.4 The virtio workers access the same byte through a different pointer
 
 <details>
 <summary>Show sequence diagram</summary>
@@ -160,7 +160,7 @@ sequenceDiagram
 ```mermaid
 sequenceDiagram
   box VMM · host process
-    participant worker as Device worker
+    participant worker as Virtio workers
     participant region as MemoryRegion
   end
   box Host · CPU and physical memory
@@ -180,7 +180,7 @@ sequenceDiagram
   host_pt-->>cpu: Same HPA<br/>0x1234_1000
   %% edge:memory_5_e6
   cpu->>physical_ram: Write the same physical byte
-  Note over worker,physical_ram: The worker uses host translation, not guest stage 1 or stage 2<br/>Host users synchronize conflicting accesses<br/>Guest-shared fields follow protocol atomicity and ordering<br/>Raw pointers and volatile access alone do not synchronize memory
+  Note over worker,physical_ram: The workers use host translation, not guest stage 1 or stage 2<br/>Host users synchronize conflicting accesses<br/>Guest-shared fields follow protocol atomicity and ordering<br/>Raw pointers and volatile access alone do not synchronize memory
 ```
 
 </details>
@@ -218,7 +218,7 @@ sequenceDiagram
   thread0->>host_api: Complete the access and re-enter
   %% edge:memory_6_e7
   host_api->>kernel: Continue guest execution
-  Note over kernel,disk: This is the device path used to notify the disk worker<br/>Request descriptors and file buffers still live in ordinary guest RAM
+  Note over kernel,disk: This is the device path used to notify the virtio workers<br/>Request descriptors and file buffers still live in ordinary guest RAM
 ```
 
 </details>
@@ -268,7 +268,7 @@ sequenceDiagram
   box VMM · lifecycle and memory ownership
     participant coordinator as VM coordinator
     participant vcpus as vCPU threads
-    participant worker as Device worker
+    participant worker as Virtio workers
     participant backing as Host allocation
   end
   box Host · hypervisor

@@ -30,13 +30,16 @@ pub enum Error {
     /// A device constructor raised interrupt `line` before the chipset was
     /// built.
     LineNotArmed(u32),
-    /// A virtio device transport or worker cannot continue.
+    /// A virtio device, its transport or its worker slot cannot continue.
     VirtioDevice {
         /// The device's short name.
         device: &'static str,
         /// Why the device stopped.
         reason: &'static str,
     },
+    /// The virtio workers could not start, their poller or thread failed, or
+    /// they did not stop in time (`TimedOut`).
+    VirtioWorker(io::Error),
     /// Opening or loading the kernel image failed.
     LoadKernel { path: PathBuf, source: io::Error },
     /// Opening or loading the initramfs failed.
@@ -89,6 +92,7 @@ impl fmt::Display for Error {
             Self::VirtioDevice { device, reason } => {
                 write!(f, "virtio device {device}: {reason}")
             }
+            Self::VirtioWorker(_) => f.write_str("the virtio workers failed"),
             Self::LoadKernel { path, .. } => {
                 write!(f, "failed to load the kernel {}", path.display())
             }
@@ -128,7 +132,8 @@ impl error::Error for Error {
             | Self::WriteBootData { source, .. }
             | Self::SpawnVcpu { source, .. }
             | Self::EventLoop(source)
-            | Self::SpawnConsole(source) => Some(source),
+            | Self::SpawnConsole(source)
+            | Self::VirtioWorker(source) => Some(source),
             Self::Hypervisor(source) => Some(source),
         }
     }

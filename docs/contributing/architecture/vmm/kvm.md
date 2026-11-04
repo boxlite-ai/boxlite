@@ -17,7 +17,7 @@ Boxes use libkrun.
 flowchart TB
   subgraph vmm["VMM · one Linux process"]
     disk["Virtual disk"]
-    worker["Disk worker"]
+    worker["Virtio workers"]
     backing["Host allocation"]
     coordinator["Coordinator"]
     thread0["Thread T0"]
@@ -272,7 +272,7 @@ sequenceDiagram
 
 </details>
 
-### 2.7 Resume Linux while the worker reads the disk
+### 2.7 Resume Linux while the workers read the disk
 
 <details>
 <summary>Show sequence diagram</summary>
@@ -282,7 +282,7 @@ sequenceDiagram
   box VMM · device emulation and host I/O
     participant thread0 as Thread T0
     participant disk as Virtual disk
-    participant worker as I/O worker
+    participant worker as Virtio workers
   end
   box Host · Linux kernel and storage
     participant host_api as KVM
@@ -294,11 +294,11 @@ sequenceDiagram
   %% edge:kvm_9_e1
   thread0->>disk: Bus dispatches<br/>MmioWrite
   %% edge:kvm_9_e2
-  disk->>worker: Signal queue event
+  disk->>worker: Kick the queue
   par Guest execution
   %% edge:kvm_9_e3
     thread0->>host_api: KVM_RUN completes the MMIO instruction, then Linux continues
-  and Device worker
+  and Virtio workers
   %% edge:kvm_9_e4
     worker->>guest_ram: Read request through the host mapping
   %% edge:kvm_9_e5
@@ -321,7 +321,7 @@ sequenceDiagram
 ```mermaid
 sequenceDiagram
   box VMM · device completion
-    participant worker as I/O worker
+    participant worker as Virtio workers
   end
   box Host · KVM interrupt controllers
     participant host_api as KVM
@@ -331,7 +331,7 @@ sequenceDiagram
   box VM · guest interrupt handler
     participant kernel as Linux kernel
   end
-  Note over worker,host_api: Continue once the worker publishes completion (2.7)<br/>Guest re-entry may still be pending
+  Note over worker,host_api: Continue once the workers publish completion (2.7)<br/>Guest re-entry may still be pending
   %% edge:kvm_10_e1
   worker->>host_api: KVM_IRQ_LINE: assert, then clear the device GSI
   %% edge:kvm_10_e2
@@ -357,7 +357,7 @@ sequenceDiagram
     participant guest_ram as Guest RAM
     participant program as Application
   end
-  Note over kernel,program: The host worker has filled the shared buffers<br/>Linux now completes the read inside the guest
+  Note over kernel,program: The virtio workers have filled the shared buffers<br/>Linux now completes the read inside the guest
   %% edge:kvm_11_e1
   kernel->>guest_ram: Read completion<br/>and file bytes
   %% edge:kvm_11_e2
@@ -409,7 +409,7 @@ sequenceDiagram
 sequenceDiagram
   box VMM · lifecycle and remaining resources
     participant coordinator as VM coordinator
-    participant worker as I/O worker
+    participant worker as Virtio workers
     participant backing as Host allocation
   end
   box Host · Linux kernel

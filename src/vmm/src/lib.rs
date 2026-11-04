@@ -66,7 +66,7 @@ mod vcpu;
     not(test),
     expect(
         dead_code,
-        reason = "Only tests exercise the virtio contract and transport until devices are wired into the machine."
+        reason = "The machine owns only the virtio workers; only tests add a virtio device yet."
     )
 )]
 mod virtio;
