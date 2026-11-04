@@ -461,7 +461,10 @@ or no-op defaults.
 The Linux backend requires a returned `STATX_MNT_ID` (Linux 5.8+); a missing
 mount identity fails explicitly rather than merging bind-mount aliases. Xattr
 mutations on write-only files/directories use pinned proc-FD paths, preserving
-host xattr authority without requiring unrelated data-read permission.
+host xattr authority without requiring unrelated data-read permission. ACCESS
+selects one guest permission class - owner, else group, else other - and then
+bounds success by the host effective identity; guest root bypasses the read and
+write bits and needs one execute bit for `X_OK`.
 If a directory-plus listing fails after accepting complete entries, the reply
 returns that prefix; an empty listing still returns the host error. A later
 queue error cannot suppress notification of earlier published completions.
@@ -473,10 +476,8 @@ checks, not consequences proved by these reply flags.
 
 Operations run under the host's existing authority, without changing credentials,
 capabilities or umask. CREATE/MKDIR/MKNOD/SYMLINK accept each uid/gid only when
-it is zero or matches the host; other identities get EPERM. ACCESS retains
-libkrun's combined guest owner/group/other bit checks, not strict POSIX class
-precedence, then also requires access by the host effective identity. SETATTR
-retains the source's host-authority semantics.
+it is zero or matches the host; other identities get EPERM. SETATTR retains the
+source's host-authority semantics.
 Read-only enforcement also covers truncating opens and metadata changes.
 Raw parent lookup is refused for every export directory; nested listings omit
 host `..`, so an anchored directory moved outside an export cannot expose its

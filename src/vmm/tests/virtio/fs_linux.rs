@@ -317,6 +317,33 @@ fn access_checks_guest_permissions_and_never_exceeds_host_ability() {
 }
 
 #[test]
+fn access_selects_one_permission_class_instead_of_any_matching_bits() {
+    let directory = Directory::new();
+    let path = directory.0.join("file");
+    fs::write(&path, b"contents").unwrap();
+    // Owner: read/write, group: none, other: read.
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o604)).unwrap();
+    let fs = directory.backend();
+    let inode = fs.lookup(ctx(), 1, c"file").unwrap().inode;
+    // The test process owns the file, so the host-identity check allows the
+    // read; only the guest permission class can deny it. A group caller must
+    // not fall through to the other bits.
+    let group = Context {
+        uid: foreign(ctx().uid),
+        gid: ctx().gid,
+        pid: 0,
+    };
+    error(fs.access(group, inode, libc::R_OK as u32), libc::EACCES);
+    let outsider = Context {
+        uid: foreign(ctx().uid),
+        gid: foreign(ctx().gid),
+        pid: 0,
+    };
+    fs.access(outsider, inode, libc::R_OK as u32).unwrap();
+    fs::set_permissions(path, fs::Permissions::from_mode(0o600)).unwrap();
+}
+
+#[test]
 fn never_cache_replies_and_open_objects_survive_repeated_forget_and_unlink() {
     let directory = Directory::new();
     let fs = directory.backend();
