@@ -221,11 +221,8 @@ function SshControls({
                 </p>
                 <p className="text-muted-foreground">
                   The proxy requires inbound access and opens a public tunnel protected by SSH authentication. Exiting
-                  SSH leaves that tunnel open. Revoke it when finished:
+                  SSH leaves that tunnel open.
                 </p>
-                <pre className="whitespace-pre-wrap break-all bg-muted p-3 text-xs leading-6">
-                  {instructions.revoke}
-                </pre>
               </>
             )}
           </div>

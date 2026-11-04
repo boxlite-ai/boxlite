@@ -137,6 +137,5 @@ export function sshConnectionInstructions(apiUrl: string, organizationId: string
     filename,
     login: `boxlite auth login --url ${quote(url.href.replace(/\/$/, ''))}`,
     connect: `chmod 600 ${filename}\nssh -i ./${filename} -o IdentitiesOnly=yes -o ${quote(`ProxyCommand=${proxy}`)} box@boxlite-${boxId}`,
-    revoke: `${cli} network tunnel ${quote(boxId)} 22 --revoke`,
   }
 }

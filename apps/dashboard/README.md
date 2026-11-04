@@ -31,7 +31,7 @@ API credentials are loaded by the CLI, never embedded in the command.
 Compare the displayed host fingerprint before accepting it; a fresh Setup may
 change it. The cloud proxy requires server tunnel support and inbound access.
 It opens a public tunnel protected by SSH authentication; exiting SSH leaves
-the tunnel declaration open. The dialog also shows the command to revoke it.
+the tunnel declaration open.
 Setup itself does not open a tunnel.
 
 The connection dialog scrolls as one document. Command blocks retain their full

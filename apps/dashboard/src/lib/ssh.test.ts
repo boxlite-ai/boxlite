@@ -119,7 +119,6 @@ describe('SSH connection instructions', () => {
     expect(commands.connect).toContain('box@boxlite-box-1')
     expect(commands.connect).not.toContain('--listen')
     expect(commands.connect).not.toContain('StrictHostKeyChecking=no')
-    expect(commands.revoke).toContain("network tunnel 'box-1' 22 --revoke")
   })
 
   it('refuses control characters, unsafe box IDs, and credential-bearing URLs', () => {
