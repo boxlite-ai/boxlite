@@ -1286,6 +1286,17 @@ enum BoxliteErrorCode boxlite_box_attach_execution(CBoxHandle *handle,
                                                    CExecutionHandle **out_execution,
                                                    CBoxliteError *out_error);
 
+// Attach output only, without opening a stdin channel.
+//
+// Use this for a client that never writes. Freeing a stdin-attached handle
+// sends a stdin close to the guest, which a process reading stdin observes as
+// EOF — it can exit or change state on it. A read-only attach sends nothing on
+// free. A current reader still causes an immediate conflict error.
+enum BoxliteErrorCode boxlite_box_attach_execution_read_only(CBoxHandle *handle,
+                                                             const char *execution_id,
+                                                             CExecutionHandle **out_execution,
+                                                             CBoxliteError *out_error);
+
 // Return an owned copy of the canonical guest execution ID. Null means an
 // invalid handle; release a non-null result with `boxlite_free_string`.
 char *boxlite_execution_id(CExecutionHandle *execution);

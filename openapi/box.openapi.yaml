@@ -805,9 +805,10 @@ paths:
         Returns the guest registry's live-session snapshot, not a parsed
         process listing. The main command session is included with
         `is_main_session: true`; each returned guest execution ID is usable with the
-        existing attach and control endpoints. Finished sessions are excluded
-        immediately, including the interval before registry cleanup. Existing
-        wait status/output retention is bounded and is not durable history.
+        existing attach and control endpoints. Sessions are excluded once the
+        guest reaper records their exit, which can lag process exit briefly, and
+        before registry cleanup. Existing wait status/output retention is bounded
+        and is not durable history.
 
         Listing never starts or resumes a box. Configured and stopped boxes
         answer `{"executions": []}`; paused boxes return an invalid-state

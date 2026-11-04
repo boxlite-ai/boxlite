@@ -812,6 +812,9 @@ or `boxlite_box_attach_execution` for stdin/output. Both return an owned
 `CExecutionHandle` released with `boxlite_execution_free`; freeing a recovered
 or attached handle does not kill the process. Only one output reader is allowed
 per session. Attachment includes available buffered output.
+Use `boxlite_box_attach_execution_read_only` when the client only reads: a
+stdin attach that is freed sends the guest a stdin close, which a process
+reading stdin sees as EOF.
 See the [recovery guide](../../guides/ai-agent-integration.md#recovering-control-after-losing-the-handle)
 for completed-session retention.
 

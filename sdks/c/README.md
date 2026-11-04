@@ -591,6 +591,11 @@ attach after the former reader disconnects. Attachment includes available buffer
 output; it does not guarantee a complete historical log.
 Freeing an attached handle releases its reader without killing the process.
 
+`boxlite_box_attach_execution_read_only` is the same attach without a stdin
+channel. Prefer it when the client only reads: freeing a stdin attach sends a
+stdin close to the guest, which a process reading stdin sees as EOF and may act
+on.
+
 #### Network Tunnels
 
 ```c

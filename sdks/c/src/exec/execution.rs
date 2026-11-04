@@ -129,7 +129,15 @@ pub unsafe extern "C" fn boxlite_box_get_execution(
     out_execution: *mut *mut CExecutionHandle,
     out_error: *mut CBoxliteError,
 ) -> BoxliteErrorCode {
-    unsafe { recover_execution(handle, execution_id, out_execution, out_error, false) }
+    unsafe {
+        recover_execution(
+            handle,
+            execution_id,
+            out_execution,
+            out_error,
+            Recovery::Control,
+        )
+    }
 }
 
 /// Attach live streams to an existing guest execution. A current reader causes
@@ -142,7 +150,50 @@ pub unsafe extern "C" fn boxlite_box_attach_execution(
     out_execution: *mut *mut CExecutionHandle,
     out_error: *mut CBoxliteError,
 ) -> BoxliteErrorCode {
-    unsafe { recover_execution(handle, execution_id, out_execution, out_error, true) }
+    unsafe {
+        recover_execution(
+            handle,
+            execution_id,
+            out_execution,
+            out_error,
+            Recovery::Attach,
+        )
+    }
+}
+
+/// Attach output only, without opening a stdin channel.
+///
+/// Use this for a client that never writes. Freeing a stdin-attached handle
+/// sends a stdin close to the guest, which a process reading stdin observes as
+/// EOF — it can exit or change state on it. A read-only attach sends nothing on
+/// free. A current reader still causes an immediate conflict error.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_box_attach_execution_read_only(
+    handle: *mut CBoxHandle,
+    execution_id: *const c_char,
+    out_execution: *mut *mut CExecutionHandle,
+    out_error: *mut CBoxliteError,
+) -> BoxliteErrorCode {
+    unsafe {
+        recover_execution(
+            handle,
+            execution_id,
+            out_execution,
+            out_error,
+            Recovery::AttachReadOnly,
+        )
+    }
+}
+
+/// Which kind of handle to recover for an execution ID.
+#[derive(Clone, Copy)]
+enum Recovery {
+    /// Control only: no streams at all.
+    Control,
+    /// Output streams plus stdin.
+    Attach,
+    /// Output streams only; freeing sends no stdin close.
+    AttachReadOnly,
 }
 
 unsafe fn recover_execution(
@@ -150,7 +201,7 @@ unsafe fn recover_execution(
     execution_id: *const c_char,
     out_execution: *mut *mut CExecutionHandle,
     out_error: *mut CBoxliteError,
-    attach: bool,
+    recovery: Recovery,
 ) -> BoxliteErrorCode {
     unsafe {
         if out_execution.is_null() {
@@ -176,13 +227,20 @@ unsafe fn recover_execution(
         };
         let handle = &*handle;
         let result = handle.tokio_rt.block_on(async {
-            if attach {
-                handle
-                    .handle
-                    .attach(boxlite::AttachOptions::execution(id))
-                    .await
-            } else {
-                handle.handle.get_execution(id).await
+            match recovery {
+                Recovery::Control => handle.handle.get_execution(id).await,
+                Recovery::Attach => {
+                    handle
+                        .handle
+                        .attach(boxlite::AttachOptions::execution(id))
+                        .await
+                }
+                Recovery::AttachReadOnly => {
+                    handle
+                        .handle
+                        .attach(boxlite::AttachOptions::execution(id).read_only())
+                        .await
+                }
             }
         });
         match result {
