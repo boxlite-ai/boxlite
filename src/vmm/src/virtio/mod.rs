@@ -11,8 +11,8 @@
 //!
 //! A device processes the descriptors available in its queues; the virtqueue
 //! size bounds one event call. The [`VirtQueues`] facade prepares and validates
-//! the queue set, tracks deferred chains and runs the notification drain;
-//! `save` and `restore` return [`SnapshotError::Unsupported`] until M8. The
+//! the queue set, tracks deferred chains, runs the notification drain and
+//! saves/restores quiescent queue state paired with guest RAM. The
 //! transport starts and stops the worker on DRIVER_OK and Status=0, and rejects
 //! queue-configuration writes after DRIVER_OK. Every device needs the methods
 //! here first.
@@ -186,16 +186,24 @@ impl fmt::Display for DeviceError {
 
 impl std::error::Error for DeviceError {}
 
-/// A snapshot encoding failure.
+/// A snapshot cannot be captured or restored.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SnapshotError {
     /// The device does not support snapshots.
     Unsupported,
+    /// Outstanding work must finish before a snapshot can be captured.
+    Busy(&'static str),
+    /// The snapshot state is invalid or incompatible with its restore context.
+    Invalid(&'static str),
 }
 
 impl fmt::Display for SnapshotError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("the device does not support snapshots")
+        match self {
+            Self::Unsupported => f.write_str("the device does not support snapshots"),
+            Self::Busy(what) => write!(f, "snapshot is busy: {what}"),
+            Self::Invalid(what) => write!(f, "invalid snapshot: {what}"),
+        }
     }
 }
 

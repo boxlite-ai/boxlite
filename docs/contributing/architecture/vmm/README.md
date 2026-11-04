@@ -396,10 +396,10 @@ stopping the worker synchronously.
     FEATURES_OK validation, a dense queue shadow validated at DRIVER_OK,
     post-DRIVER_OK queue-write rejection, Status=0 reset, and a `VirtQueues`
     facade that validates the dense queue set, applies EVENT_IDX, tracks each
-    deferred chain's head so completion happens exactly once, keeps
-    `save`/`restore` as `SnapshotError::Unsupported` stubs until M8, runs the
-    disable/drain/enable notification loop, and lets a device defer a chain's
-    completion to its backend;
+    deferred chain's head so completion happens exactly once, and supports
+    single-chain pop and retryable notification drains. Its quiescent queue
+    snapshots validate cursors against matching RAM; whole-VM snapshots remain
+    M8 work. See the [queue contract](../../../../src/vmm/README.md#virtqueues);
   - virtio-blk, virtio-vsock, virtio-net, virtio-console and virtio-rng;
   - virtio-balloon with free page reporting, so the host can reclaim unused
     guest memory as it can with libkrun today: at once on Linux, and under

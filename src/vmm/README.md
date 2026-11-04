@@ -35,7 +35,7 @@ boxlite-vmm
 | `vcpu` | x86_64 vCPU workers: create and configure each vCPU, hold them at a start gate, run the guest and dispatch its exits until the VM ends |
 | `chipset` | `ChipsetBuilder`, the one registry of ranges and interrupt lines, and `Chipset`, the read-only machine it builds |
 | `bus` | `Bus`, `BusRange` and `BusDevice`, and `Buses::dispatch`, which serves the MMIO and port exits of a vCPU |
-| `virtio` | The virtio common infrastructure: the synchronous device contract (`VirtioDevice`, `DeviceSpec`, `DeviceEvent`, `ActivationContext`, `EventRegistrar`, `Waker`, `WorkerControl`), the `VirtQueues` facade (dense preparation and validation, EVENT_IDX, exactly-once deferred completion, notification drain, the stored guest-memory Arc and negotiated indirect flag, and `save`/`restore` stubs that report snapshots unsupported until M8), the 4 KiB virtio-mmio transport (register file, feature negotiation, queue configuration and activation, Status=0 reset, post-activation queue-write rejection), the MMIO interrupt handle, and the default snapshot methods |
+| `virtio` | The synchronous device contract, the [VirtQueues facade](#virtqueues) (dense validation, backpressure, completion, notifications and quiescent queue snapshots), the 4 KiB virtio-mmio transport (feature negotiation, queue configuration, activation and reset), the MMIO interrupt handle, and default device snapshot methods |
 | `irq` | `IrqChip`, the host interrupt controller as devices see it, and `IrqLine`, one device line; HVF and KVM provide the controller, WHP (M10) only local APICs |
 | `devices` | The console queue, and on x86_64 the 8250 UART at COM1 and the i8042 reset, with `add_legacy_devices`, which adds them to the chipset |
 | `events` | `Event`, which ends the VM, `EventSender`, which also latches the stop, and `EventLoop`, the poller that waits for the first event |
@@ -48,6 +48,53 @@ follow, and the BoxLite engine adapter, engine selection, and `native` feature
 wiring follow in M2.
 Neither new crate depends on `boxlite-shared`, and both are unpublished while
 their interfaces are being established.
+
+## VirtQueues
+
+`VirtQueues::prepare` retains every declared slot, including unready queues,
+and stores shared guest RAM and the negotiated EVENT_IDX/INDIRECT_DESC flags.
+Devices check their required slots with `is_ready`; `size` returns the
+configured size for a bounded processing turn, while `max_size` returns the
+declared limit.
+
+| Operation | Ownership and completion |
+| --- | --- |
+| `pop(index)` | Takes at most one chain and records its deferred head. The device keeps request metadata and calls `complete(index, head, len)` exactly once. |
+| `drain(index, callback)` | `Used(len)` publishes a used entry; `Deferred` retains the head for later completion. |
+| `Completion::Retry` | The callback has not consumed or modified the chain. Drain rewinds that head, reenables kicks and returns, retaining the interrupt decision for earlier completions. |
+
+For example, `pop(0)` takes head 3 without advancing used.idx;
+`complete(0, 3, 64)` returns that head with length 64. A second completion is
+rejected. Returning `Retry` instead leaves the head available for the next
+drain, so it requires no device-private deferred request.
+
+Pop keeps kicks enabled and refreshes `avail_event` after consumption.
+Drain uses the disable/process/enable loop, except when Retry ends the batch.
+After backpressure, the device must resume when capacity returns; after budget
+exhaustion, it must schedule another turn for remaining work.
+
+Both completion paths use the library's EVENT_IDX decision. Without EVENT_IDX,
+they publish used entries, execute a SeqCst fence, then inspect avail.flags'
+NO_INTERRUPT bit. Callers may coalesce interrupts but must retain any true
+decision until delivered, including across quiesce/resume.
+
+### Queue snapshots
+
+Stop guest and worker access before `save`, and capture matching guest RAM.
+Save returns one `QueueState` per slot. Deferred heads or unequal consumed and
+completed cursors return `SnapshotError::Busy("incomplete virtio chains")`;
+device-private requests are not serialized. Pending, unconsumed chains are allowed.
+
+Restore validates slot count, maxima, size, address alignment, EVENT_IDX and
+equal consumed/completed cursors. Ready queues must fit RAM, whose used.idx must
+match next_used; wrapping avail.idx minus next_avail must not exceed queue size.
+Unready slots are retained without accessing their rings. Invalid input returns
+`SnapshotError::Invalid(reason)` before any guest-memory write.
+
+The device snapshot owner must validate its required ready slots and saved
+feature set, and supply the saved indirect flag: QueueState does not contain it.
+Device resources, pending interrupts and VM snapshot orchestration remain the
+caller's responsibility; default device snapshot methods remain unsupported.
 
 ## Guest RAM
 

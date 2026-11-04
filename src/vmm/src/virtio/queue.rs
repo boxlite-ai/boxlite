@@ -19,11 +19,17 @@
 //! keeps the request and buffer metadata and calls [`VirtQueues::complete`] with
 //! that head and the used length when its backend finishes.
 //!
-//! Queue snapshots are deferred to M8: [`VirtQueues::save`] and
-//! [`VirtQueues::restore`] keep their signatures but return
-//! [`SnapshotError::Unsupported`].
+//! Snapshots require all consumed chains to have completed; the caller stops
+//! guest/worker access and pairs queue state with the same guest RAM image.
 
-use std::{fmt, mem::size_of, sync::Arc};
+use std::{
+    fmt,
+    mem::size_of,
+    sync::{
+        Arc,
+        atomic::{Ordering, fence},
+    },
+};
 
 use virtio_queue::{
     DescriptorChain, Queue, QueueOwnedT, QueueState, QueueT, desc::split::Descriptor,
@@ -40,6 +46,8 @@ pub(crate) const VIRTIO_F_EVENT_IDX: u64 = 1 << 29;
 
 /// The error reported for deferred-chain bookkeeping violations.
 const DEFERRED_CHAIN: &str = "virtio deferred chain";
+/// The driver's ordinary used-buffer interrupt suppression flag.
+const VIRTQ_AVAIL_F_NO_INTERRUPT: u16 = 1;
 
 /// A queue the transport cannot prepare.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -110,6 +118,11 @@ pub(crate) enum Completion {
     /// the facade records the head index. Call [`VirtQueues::complete`] exactly
     /// once later, on the queue that produced the chain.
     Deferred,
+    /// Leave this chain available and stop the drain for backpressure.
+    ///
+    /// The callback must not consume or modify the chain. The device resumes
+    /// when capacity returns, or schedules another call if its budget ran out.
+    Retry,
 }
 
 /// The dense queue set one device receives on activation.
@@ -179,17 +192,51 @@ impl VirtQueues {
 
     /// Restores the dense queue vector from saved state.
     ///
-    /// Queue snapshots are deferred to M8, so this always returns
-    /// [`SnapshotError::Unsupported`]. The parameters keep the signature the
-    /// snapshot implementation will use.
+    /// Validates queue configuration, negotiated features and ring cursors
+    /// against RAM from the same stopped snapshot before returning the facade.
+    /// Unready slots are retained without reading their rings. The caller must
+    /// supply the saved indirect feature: QueueState does not record it.
     pub(crate) fn restore(
-        _states: &[QueueState],
-        _queue_max: &[u16],
-        _event_idx: bool,
-        _indirect: bool,
-        _memory: Arc<GuestMemoryMmap>,
+        states: &[QueueState],
+        queue_max: &[u16],
+        event_idx: bool,
+        indirect: bool,
+        memory: Arc<GuestMemoryMmap>,
     ) -> Result<Self, SnapshotError> {
-        Err(SnapshotError::Unsupported)
+        if states.len() != queue_max.len() {
+            return Err(SnapshotError::Invalid("virtio queue count"));
+        }
+        let queues = states
+            .iter()
+            .map(|state| {
+                if state.event_idx_enabled != event_idx || state.next_avail != state.next_used {
+                    return Err(SnapshotError::Invalid("virtio queue features or cursors"));
+                }
+                Queue::try_from(*state).map_err(|_| SnapshotError::Invalid("virtio queue state"))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let restored = Self::prepare(queues, queue_max, event_idx, indirect, memory)
+            .map_err(|error| SnapshotError::Invalid(error.reason()))?;
+        for queue in &restored.queues {
+            if queue.ready() {
+                let avail = queue
+                    .avail_idx(&*restored.memory, Ordering::Acquire)
+                    .map_err(|_| SnapshotError::Invalid("virtio available ring"))?
+                    .0;
+                let used = queue
+                    .used_idx(&*restored.memory, Ordering::Acquire)
+                    .map_err(|_| SnapshotError::Invalid("virtio used ring"))?
+                    .0;
+                if used != queue.next_used()
+                    || avail.wrapping_sub(queue.next_avail()) > queue.size()
+                {
+                    return Err(SnapshotError::Invalid(
+                        "virtio ring cursors do not match RAM",
+                    ));
+                }
+            }
+        }
+        Ok(restored)
     }
 
     /// Returns the number of declared queue slots.
@@ -208,6 +255,48 @@ impl VirtQueues {
         self.queues.get(index).map(|queue| queue.max_size())
     }
 
+    /// Returns the configured size of queue `index`, if it exists.
+    pub(crate) fn size(&self, index: usize) -> Option<u16> {
+        self.queues.get(index).map(|queue| queue.size())
+    }
+
+    /// Takes at most one chain for a consumer that may stop for backpressure.
+    /// The head is deferred until `complete`; guest kicks remain enabled.
+    /// Bound a processing turn with [`Self::size`]; schedule another turn if
+    /// work remains when its budget is exhausted.
+    pub(crate) fn pop(
+        &mut self,
+        index: usize,
+    ) -> Result<Option<DescriptorChain<Arc<GuestMemoryMmap>>>, DeviceError> {
+        let queue = self
+            .queues
+            .get_mut(index)
+            .ok_or(DeviceError::NeedsReset("virtio queue"))?;
+        if !queue.ready() {
+            return Err(DeviceError::NeedsReset("virtio queue"));
+        }
+        let memory = self.memory.as_ref();
+        // Enable before the iterator's avail.idx read, so an empty return
+        // cannot miss a racing kick. Refresh after consumption for EVENT_IDX.
+        queue.enable_notification(memory).map_err(queue_error)?;
+        let Some(chain) = queue
+            .iter(Arc::clone(&self.memory))
+            .map_err(queue_error)?
+            .next()
+        else {
+            return Ok(None);
+        };
+        let head = chain.head_index();
+        if !self.indirect
+            && has_indirect(memory, GuestAddress(queue.desc_table()), queue.size(), head)?
+        {
+            return Err(DeviceError::NeedsReset("indirect descriptor"));
+        }
+        defer(&mut self.deferred[index], queue.size(), head)?;
+        queue.enable_notification(memory).map_err(queue_error)?;
+        Ok(Some(chain))
+    }
+
     /// Drains every chain the driver made available and reports whether the
     /// guest should be interrupted for chains completed synchronously.
     ///
@@ -223,9 +312,10 @@ impl VirtQueues {
     /// used entry. An empty drain, or one that defers every chain, returns
     /// `false`.
     ///
-    /// The drain consumes every available chain; a device that needs to stop
-    /// early and put a chain back (rate limiting or backpressure) must not use
-    /// it.
+    /// Returning [`Completion::Retry`] rewinds the untouched chain and ends
+    /// this drain with notifications enabled. Earlier synchronous completions
+    /// still contribute to the interrupt decision. Use [`Self::pop`] when the
+    /// device needs to own a chain across calls.
     ///
     /// The stored `indirect` flag is the negotiated `VIRTIO_F_INDIRECT_DESC`
     /// state. When it is false, a chain containing an indirect descriptor is a
@@ -253,6 +343,7 @@ impl VirtQueues {
             .ok_or(DeviceError::NeedsReset("virtio queue"))?;
 
         let mut completed = false;
+        let mut retry = false;
         loop {
             queue.disable_notification(memory).map_err(queue_error)?;
             let desc_table = GuestAddress(queue.desc_table());
@@ -268,27 +359,33 @@ impl VirtQueues {
                         completed = true;
                     }
                     Completion::Deferred => defer(deferred, size, head)?,
+                    Completion::Retry => {
+                        queue.go_to_previous_position();
+                        retry = true;
+                        break;
+                    }
                 }
             }
-            if !queue.enable_notification(memory).map_err(queue_error)? {
+            let available = queue.enable_notification(memory).map_err(queue_error)?;
+            if retry || !available {
                 break;
             }
         }
         if completed {
-            queue.needs_notification(memory).map_err(queue_error)
+            needs_notification(queue, memory)
         } else {
             Ok(false)
         }
     }
 
-    /// Completes a chain that [`Self::drain`] deferred.
+    /// Completes a chain that [`Self::drain`] deferred or [`Self::pop`] took.
     ///
     /// A stopped or unready queue is rejected before any ring access. Adds the
     /// used entry for `head` with `len` and returns whether the guest should be
     /// interrupted now; the caller raises the interrupt when this returns
     /// `true`. The head must belong to a chain this queue deferred and must not
-    /// have been completed already. `needs_notification` has side effects, so
-    /// the caller must act on this decision immediately.
+    /// have been completed already. The caller may coalesce notifications, but
+    /// must retain a true decision until the interrupt has been raised.
     pub(crate) fn complete(
         &mut self,
         index: usize,
@@ -317,16 +414,24 @@ impl VirtQueues {
             .ok_or(DeviceError::NeedsReset(DEFERRED_CHAIN))?;
         add_used(queue, memory, head, len)?;
         deferred.remove(position);
-        queue.needs_notification(memory).map_err(queue_error)
+        needs_notification(queue, memory)
     }
 
     /// Returns the saved state for every queue, in queue-number order.
     ///
-    /// Queue snapshots are deferred to M8, so this always returns
-    /// [`SnapshotError::Unsupported`]. Deferred-head tracking stays, so a later
-    /// implementation can reject an outstanding chain.
+    /// The caller must stop guest and worker access before capturing state.
+    /// Consumed requests must all be complete; host request metadata is not
+    /// represented by QueueState and cannot be silently discarded.
     pub(crate) fn save(&self) -> Result<Vec<QueueState>, SnapshotError> {
-        Err(SnapshotError::Unsupported)
+        if self.deferred.iter().any(|heads| !heads.is_empty())
+            || self
+                .queues
+                .iter()
+                .any(|queue| queue.next_avail() != queue.next_used())
+        {
+            return Err(SnapshotError::Busy("incomplete virtio chains"));
+        }
+        Ok(self.queues.iter().map(Queue::state).collect())
     }
 
     /// Returns the current state of queue `index`, if it exists.
@@ -334,6 +439,19 @@ impl VirtQueues {
     pub(crate) fn state(&self, index: usize) -> Option<QueueState> {
         self.queues.get(index).map(|queue| queue.state())
     }
+}
+
+fn needs_notification(queue: &mut Queue, memory: &GuestMemoryMmap) -> Result<bool, DeviceError> {
+    if queue.event_idx_enabled() {
+        return queue.needs_notification(memory).map_err(queue_error);
+    }
+    // virtio-queue 0.18 ignores NO_INTERRUPT. Publish used entries before
+    // checking the driver's ordinary split-ring suppression flag.
+    fence(Ordering::SeqCst);
+    let flags: u16 = memory
+        .read_obj(GuestAddress(queue.avail_ring()))
+        .map_err(|_| DeviceError::NeedsReset("virtio interrupt suppression"))?;
+    Ok(u16::from_le(flags) & VIRTQ_AVAIL_F_NO_INTERRUPT == 0)
 }
 
 fn defer(deferred: &mut Vec<u16>, size: u16, head: u16) -> Result<(), DeviceError> {
