@@ -222,17 +222,21 @@ for runtime support, connection lifetime and persistence.
 
 ```bash
 boxlite run -d --name dev alpine:latest tail -f /dev/null
-boxlite ssh configure dev --host-key ./host_key --login alice \
-  --authorized-key ~/.ssh/id_ed25519.pub
-boxlite ssh forward dev
-# stdout: tcp://127.0.0.1:52811   stderr: host key, fingerprint, connect hint
-ssh -p 52811 -l alice 127.0.0.1
+boxlite ssh setup dev
+# Copy and execute the complete ssh command printed by setup.
 ```
 
-`boxlite ssh configure` replaces the configuration and prints `SshStatus` JSON.
-Then `forward` opens a local listener until Ctrl-C, leaving the configuration and
-generation unchanged. `status` and `disable` also print `SshStatus` JSON.
-The CLI never generates keys.
+`setup` generates client and host keys in the local box directory, enables `box`
+on guest port 22, and prints a command using `ssh proxy` as ProxyCommand. It takes
+no key flags and reuses both saved keys on subsequent calls. Setup replaces the
+whole guest SSH configuration, including any previously configured host key.
+`configure` retains full configuration control and prints status JSON.
+
+`proxy` forwards only stdin/stdout; `forward` remains available for a local TCP
+listener. Both require enabled SSH. `enable` restores saved SSH configuration;
+`disable` stops SSH while retaining credentials. Both require a running local box.
+Setup, proxy and enable are local-only. An active local proxy/forward holds the
+runtime home lock; stop it before issuing another local CLI command on that home.
 See [`boxlite ssh`](../../docs/reference/cli/README.md#boxlite-ssh) for flags and the
 [SSH guide](../../docs/guides/ssh.md#cli) for lifecycle rules.
 

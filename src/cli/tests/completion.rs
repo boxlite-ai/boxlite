@@ -115,7 +115,15 @@ fn completion_ssh_only_contains_separate_operations(#[case] shell: &str, #[case]
         !stdout.contains("configure-and-forward"),
         "{shell}: completion still advertises the removed command"
     );
-    for name in ["configure", "status", "disable", "forward"] {
+    for name in [
+        "configure",
+        "setup",
+        "proxy",
+        "status",
+        "enable",
+        "disable",
+        "forward",
+    ] {
         let expected = marker.replace("run", name);
         assert!(stdout.contains(&expected), "{shell}: missing {expected}");
     }

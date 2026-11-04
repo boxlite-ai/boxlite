@@ -89,7 +89,10 @@ async fn runtime_ssh_shutdown_during_vm_startup() {
         );
         // Observers must finish while configure is parked in VM initialization.
         assert_initial_ssh_disabled(sandbox.ssh().status().await.unwrap());
-        assert_initial_ssh_disabled(sandbox.ssh().disable().await.unwrap());
+        assert!(matches!(
+            sandbox.ssh().disable().await,
+            Err(boxlite::BoxliteError::InvalidState(_))
+        ));
         assert_eq!(
             sandbox.info().await.unwrap().status,
             boxlite::BoxStatus::Configured
@@ -155,7 +158,7 @@ async fn start_recorded_main(sandbox: &boxlite::LiteBox, attached: Option<boxlit
     .expect("main command must record its execution within 30 seconds");
 }
 
-/// Only configure requires explicit startup; observations preserve workload records.
+/// Configure and disable reject idle boxes; status preserves workload records.
 async fn check_ssh_start_policy(
     mut options: boxlite::BoxOptions,
     initial_state: boxlite::BoxStatus,
@@ -214,6 +217,11 @@ async fn check_ssh_start_policy(
         let error = result.unwrap_err();
         assert!(matches!(error, boxlite::BoxliteError::InvalidState(_)));
         assert!(error.to_string().contains("start the box explicitly"));
+    } else if matches!(operation, SshOperation::Disable) {
+        assert!(matches!(
+            result,
+            Err(boxlite::BoxliteError::InvalidState(_))
+        ));
     } else {
         assert_initial_ssh_disabled(result.unwrap());
     }
@@ -1176,7 +1184,10 @@ async fn runtime_ssh_control_and_recovered_handle() {
         let before = sandbox.info().await.unwrap();
         let initial = sandbox.ssh().status().await.unwrap();
         assert_initial_ssh_disabled(initial);
-        assert_initial_ssh_disabled(sandbox.ssh().disable().await.unwrap());
+        assert!(matches!(
+            sandbox.ssh().disable().await,
+            Err(boxlite::BoxliteError::InvalidState(_))
+        ));
         let after = sandbox.info().await.unwrap();
         assert_eq!(after.status, before.status);
         assert_eq!(after.pid, before.pid);

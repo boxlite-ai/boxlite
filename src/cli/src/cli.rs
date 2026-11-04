@@ -257,6 +257,21 @@ const DOMAIN_SCOPES: &[CommandScope] = &[
 ];
 const SSH_SCOPES: &[CommandScope] = &[
     CommandScope {
+        name: "proxy",
+        globals: BOX_GLOBALS,
+        children: &[],
+    },
+    CommandScope {
+        name: "setup",
+        globals: BOX_GLOBALS,
+        children: &[],
+    },
+    CommandScope {
+        name: "enable",
+        globals: BOX_GLOBALS,
+        children: &[],
+    },
+    CommandScope {
         name: "configure",
         globals: BOX_GLOBALS,
         children: &[],
@@ -769,7 +784,7 @@ pub enum Commands {
     /// Manage box networking
     Network(crate::commands::network::NetworkArgs),
 
-    /// Configure, inspect, disable, or forward to guest SSH
+    /// Set up, configure, inspect, enable, disable, or forward to guest SSH
     Ssh(crate::commands::ssh::SshArgs),
 
     /// Agent instances and turns

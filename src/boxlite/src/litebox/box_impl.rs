@@ -1635,6 +1635,10 @@ impl crate::runtime::backend::BoxBackend for BoxImpl {
         BoxImpl::ssh_configure(self, config).await
     }
 
+    async fn ssh_enable(&self) -> BoxliteResult<SshStatus> {
+        BoxImpl::ssh_enable(self).await
+    }
+
     async fn ssh_status(&self) -> BoxliteResult<SshStatus> {
         BoxImpl::ssh_status(self).await
     }
