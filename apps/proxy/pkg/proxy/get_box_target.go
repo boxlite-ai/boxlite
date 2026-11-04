@@ -52,7 +52,7 @@ func (p *Proxy) GetProxyTarget(ctx *gin.Context) (*common_proxy.RequestTarget, e
 	// A platform subdomain carries no port or box in its name: the API says
 	// which port it routes to, and its answer already applies the tunnel,
 	// inbound and box-state checks below. Nothing here signs a user in.
-	if hostname, ok := p.appDomainHost(ctx.Request.Host); ok {
+	if hostname, ok := p.namedDomainHost(ctx.Request.Host); ok {
 		boxId, targetPort, err := p.resolveAppDomain(ctx.Request.Context(), hostname)
 		if errors.Is(err, errAppDomainNotFound) {
 			ctx.Error(common_errors.NewNotFoundError(err))
@@ -340,6 +340,9 @@ func (p *Proxy) validateAndCache(
 // parseHost returns the target port as a number, so every caller compares one
 // canonical form: a label like "03000" is port 3000.
 func (p *Proxy) parseHost(host string) (targetPort uint16, boxId string, baseHost string, err error) {
+	if p.config != nil && p.config.CustomDomainsEnabled && !p.generatedDomainHost(host) {
+		return 0, "", "", errors.New("host is outside the generated tunnel namespace")
+	}
 	// Extract port and box ID from the host header
 	// Expected format: 1234-some-id-uuid.proxy.domain
 	if host == "" {

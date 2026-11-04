@@ -89,6 +89,13 @@ async function createServices(sharedDefault: boolean) {
     }
   }
   const entityManager = {
+    // This membership fixture contains no custom-domain configurations; real
+    // PostgreSQL lifecycle tests cover tombstones and transactional rollback.
+    query: async (sql: string) => {
+      if (sql.startsWith('UPDATE custom_domain_config') || sql.startsWith('DELETE FROM custom_domain_subscription'))
+        return [[], 0]
+      throw new Error(`Unexpected fixture SQL: ${sql}`)
+    },
     find,
     findOne: async (...args: Parameters<typeof find>) => (await find(...args))[0] ?? null,
     count: async (...args: Parameters<typeof find>) => (await find(...args)).length,

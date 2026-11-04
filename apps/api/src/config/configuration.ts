@@ -6,6 +6,7 @@
 
 import { turnstileConfig } from './turnstile-config'
 import { checkpointConfig } from './checkpoint-config'
+import { customDomainConfig } from './custom-domain-config'
 
 /**
  * A whole number at least 1, or a hard failure.
@@ -611,6 +612,7 @@ function ciWorkerResources() {
 const configuration = {
   turnstile: turnstileConfig(),
   checkpoint: checkpointConfig(),
+  customDomains: customDomainConfig(),
   production: process.env.NODE_ENV === 'production',
   version: process.env.VERSION || '0.0.0-dev',
   environment: process.env.ENVIRONMENT,

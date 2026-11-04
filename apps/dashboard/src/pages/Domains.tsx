@@ -33,6 +33,7 @@ import React, { useState } from 'react'
 import { generatePath, Link } from 'react-router-dom'
 import { toast } from 'sonner'
 import { usePageTitle } from '@/hooks/usePageTitle'
+import CustomDomains from './CustomDomains'
 
 const SHORT_NAME = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/
 
@@ -69,7 +70,7 @@ function OrganizationDomains({ organizationId, canManage }: { organizationId: st
   }
 
   return (
-    <div className="page-container flex h-[var(--app-content-height,calc(100svh_-_60px))] min-h-0 flex-col pt-5 lg:pt-[26px]">
+    <div className="page-container flex h-[var(--app-content-height,calc(100svh_-_60px))] min-h-0 flex-col overflow-y-auto pt-5 lg:pt-[26px]">
       <div className="resource-page-header">
         <h1 className="font-display text-page font-semibold text-foreground">Domains</h1>
         <p className="mt-2 text-body leading-relaxed text-muted-foreground">
@@ -97,14 +98,16 @@ function OrganizationDomains({ organizationId, canManage }: { organizationId: st
           <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-meta text-muted-foreground sm:col-span-2">
             <span className="inline-flex items-center gap-2 font-mono tabular-nums">
               <span>
-                {data.used} / {data.limit} domains held · {data.remaining} available
+                {data.used} / {data.limit} platform domains held · {data.remaining} available
               </span>
               <QuotaTicks used={data.used} limit={data.limit} />
             </span>
             {!data.domain_suffix ? (
               <span>Domain requests are unavailable on this deployment.</span>
             ) : data.remaining === 0 ? (
-              <span className="text-warning">Domain limit reached. Reuse a held domain or request a higher limit.</span>
+              <span className="text-warning">
+                Platform domain limit reached. Reuse a held domain or request a higher limit.
+              </span>
             ) : null}
           </div>
         )}
@@ -231,6 +234,7 @@ function OrganizationDomains({ organizationId, canManage }: { organizationId: st
         )}
       </div>
 
+      <CustomDomains organizationId={organizationId} canManage={canManage} held={data?.domains ?? []} />
       <Dialog
         open={open}
         onOpenChange={(next) => {

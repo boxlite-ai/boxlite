@@ -15,6 +15,7 @@ import { OrganizationInvitation } from '../entities/organization-invitation.enti
 import { OrganizationRole } from '../entities/organization-role.entity'
 import { OrganizationUser } from '../entities/organization-user.entity'
 import { OrganizationService } from './organization.service'
+import { AddCustomDomainConfig1793764800000 } from '../../migrations/pre-deploy/1793764800000-add-custom-domain-config-migration'
 
 const describeIfDatabase = process.env.DB_HOST ? describe : describe.skip
 const schemaName = `org_domain_${process.pid}_${randomUUID().replaceAll('-', '')}`
@@ -42,6 +43,12 @@ describeIfDatabase('organization domain lifecycle (real Postgres)', () => {
     }).initialize()
     await dataSource.query(`CREATE SCHEMA "${schemaName}"`)
     await dataSource.synchronize()
+    const runner = dataSource.createQueryRunner()
+    try {
+      await new AddCustomDomainConfig1793764800000().up(runner)
+    } finally {
+      await runner.release()
+    }
     await dataSource.query(
       `CREATE TABLE "${schemaName}".deletion_blocker (organization_id uuid REFERENCES "${schemaName}".organization(id))`,
     )
@@ -75,6 +82,7 @@ describeIfDatabase('organization domain lifecycle (real Postgres)', () => {
   })
 
   beforeEach(async () => {
+    await dataSource.query(`TRUNCATE custom_domain_config, custom_domain_subscription`)
     await dataSource.query(`DELETE FROM "${schemaName}".deletion_blocker`)
     await dataSource.getRepository(Domain).clear()
     await organizations.query(`DELETE FROM "${schemaName}".organization`)
@@ -122,5 +130,21 @@ describeIfDatabase('organization domain lifecycle (real Postgres)', () => {
       organizationId: organization.id,
     })
     expect(await organizations.existsBy({ id: organization.id })).toBe(true)
+  })
+
+  it('keeps durable cloud cleanup ownership after organization deletion and rolls it back on failure', async () => {
+    await dataSource.query(
+      `INSERT INTO custom_domain_config (organization_id, hostname, challenge, challenge_expires_at, provider_state)
+      VALUES ($1, 'app.customer.com', 'proof', now() + interval '1 day', '{"certificate":"owned-resource"}')`,
+      [organization.id],
+    )
+    await dataSource.query(`INSERT INTO "${schemaName}".deletion_blocker VALUES ($1)`, [organization.id])
+    await expect(service.delete(organization.id)).rejects.toThrow()
+    expect((await dataSource.query(`SELECT deleted_at FROM custom_domain_config`))[0].deleted_at).toBeNull()
+    await dataSource.query(`DELETE FROM "${schemaName}".deletion_blocker`)
+    await service.delete(organization.id)
+    const [row] = await dataSource.query(`SELECT phase, provider_state, deleted_at FROM custom_domain_config`)
+    expect(row).toMatchObject({ phase: 'deleting', provider_state: { certificate: 'owned-resource' } })
+    expect(row.deleted_at).not.toBeNull()
   })
 })

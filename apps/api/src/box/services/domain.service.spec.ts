@@ -160,6 +160,40 @@ describe('DomainService.claim', () => {
       })
     }
   })
+
+  it('custom allowance: lets an organization holding custom names claim its first platform name', async () => {
+    const { service, manager } = makeService({ limit: 1 })
+    const held = [{ organizationId: ORG, kind: 'custom' }]
+    manager.count.mockImplementation(
+      async (_entity, { where }) =>
+        held.filter((row) => Object.entries(where).every(([key, value]) => row[key as keyof typeof row] === value))
+          .length,
+    )
+
+    await expect(service.claim(ORG, 'first-name')).resolves.toMatchObject({ hostname: 'first-name.app.boxlite.test' })
+  })
+})
+
+describe('DomainService.listHeld', () => {
+  it.each([0, 1])('custom allowance: lists every held name but reports platform use for limit %i', async (limit) => {
+    const { service, query } = makeService({ limit })
+    const unbound = { targetType: 'box', boxId: null, appId: null, port: null }
+    const rows = [
+      { ...unbound, hostname: 'app.customer.example', kind: 'custom' },
+      ...(limit ? [{ ...unbound, hostname: 'first-name.app.boxlite.test', kind: 'platform' }] : []),
+    ]
+    query.mockResolvedValueOnce([{ limit }]).mockResolvedValueOnce(rows)
+
+    const held = await service.listHeld(ORG)
+
+    expect(held).toMatchObject({ limit, used: limit, remaining: 0 })
+    expect(held.domains).toHaveLength(limit + 1)
+    expect(held.domains[0]).toEqual({
+      hostname: 'app.customer.example',
+      url: 'https://app.customer.example',
+      target: null,
+    })
+  })
 })
 
 describe('DomainService.bind', () => {
@@ -192,14 +226,15 @@ describe('DomainService.bind', () => {
       url: 'https://demo1.other.example',
       target: { type: 'box', box: box.id, port: 3000 },
     })
-    expect(query).toHaveBeenCalledTimes(2)
+    expect(query).toHaveBeenCalledTimes(3)
     expect(query).toHaveBeenCalledWith(expect.stringContaining('WHERE "hostname" = $1 AND "organization_id" = $2'), [
       'demo1.other.example',
       ORG,
       box.id,
       3000,
+      false,
     ])
-    expect(query.mock.calls[1][0]).toMatch(/^UPDATE/)
+    expect(query.mock.calls[2][0]).toMatch(/^UPDATE/)
     expect(manager.count).not.toHaveBeenCalled()
   })
 
@@ -209,7 +244,7 @@ describe('DomainService.bind', () => {
       status: 404,
       response: { code: DOMAIN_NOT_OWNED_CODE, message: expect.stringContaining('Dashboard > Domains') },
     })
-    expect(query).toHaveBeenCalledTimes(2)
+    expect(query).toHaveBeenCalledTimes(4)
   })
 })
 
@@ -223,7 +258,7 @@ describe('DomainService.resolve', () => {
       box: 'AbCdEf123456',
       port: 3000,
     })
-    expect(query).toHaveBeenCalledWith(expect.any(String), ['demo1.app.boxlite.test'])
+    expect(query).toHaveBeenCalledWith(expect.any(String), ['demo1.app.boxlite.test', false])
   })
 
   it('returns null for an unknown or unbound name', async () => {

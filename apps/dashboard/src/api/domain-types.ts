@@ -15,3 +15,18 @@ export interface DomainList {
   min_length: number
   domain_suffix: string | null
 }
+
+export interface CustomDomain {
+  id: string
+  hostname: string
+  phase: 'pending_verification' | 'pending_certificate_dns' | 'provisioning' | 'ready'
+  ready: boolean
+  errorCode: string | null
+  challengeExpiresAt: string | null
+  dnsRecords: { name: string; type: 'CNAME' | 'TXT'; value: string }[]
+}
+export interface CustomDomainList {
+  enabled: boolean
+  subscription: 'active' | 'required' | 'unavailable'
+  domains: CustomDomain[]
+}

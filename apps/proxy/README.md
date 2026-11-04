@@ -67,7 +67,7 @@ The first label of the host is `<port>-<id>`, where `<id>` takes one of two form
 A host without a `<port>-` label serves only the utility routes listed in
 [service interfaces](../../docs/contributing/architecture/platform/api.md#preview-proxy-api).
 
-### Platform subdomains
+### Platform and customer domains
 
 With `PROXY_APP_DOMAIN` set (the deploy passes the stage's `STACK_USER_DOMAIN`), a Host one label
 under it — `demo.apps.example` — is a platform subdomain bound to one box port through
@@ -87,6 +87,15 @@ Domain ownership and bindings survive tunnel revocation. Binding a name does not
 publish its port, and unbinding does not revoke it. Domain lookup itself carries no
 access verdict; the preview controller combines lookup and authorization in this
 single API request so HTTP, WebSocket and CONNECT retain the same access policy.
+
+With `CUSTOM_DOMAINS_ENABLED=true`, other valid DNS hosts use the same exact lookup.
+Only one label beneath `PROXY_DOMAIN` can use the generated `<port>-<box>` parser;
+`3000-somebox.customer.example` cannot bypass ownership by looking like a generated URL.
+Unknown or suspended customer names return 404; an unavailable API returns 502.
+Utility paths on customer hosts belong to the Box, while the proxy's own host
+continues serving its health/login routes. The API also requires current subscription,
+DNS and HTTPS leases for customer domains. TLS terminates at the existing GCP
+TargetSSLProxy using its Certificate Manager map; this feature does not enable local TLS.
 
 ## Request paths
 
@@ -303,6 +312,7 @@ working directory override it, but loading stops at the first file that is missi
 | `PROXY_PROTOCOL`                                                                 | `http` or `https`, for redirects and `X-Forwarded-Proto` (required)                     |
 | `PROXY_API_KEY`                                                                  | Bearer key for API calls; fallback input to purpose-separated session signing (required)                          |
 | `PROXY_APP_DOMAIN`                                                               | Parent of platform subdomains (the stage's `STACK_USER_DOMAIN`); unset disables it      |
+| `PROXY_DOMAIN`, `CUSTOM_DOMAINS_ENABLED`                                          | Generated-host namespace and opt-in exact lookup for customer domains; the namespace is required when enabled |
 | `BOXLITE_API_URL`                                                                | Control-plane API base URL, ending in `/api` (required)                                 |
 | `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`, `OIDC_DOMAIN`, `OIDC_PUBLIC_DOMAIN`, `OIDC_AUDIENCE` | Login for private tunnels; an unset client ID, domain, or audience comes from the API's `/config` at startup |
 | `TUNNEL_COOKIE_KEY` | Optional independent cookie-signing secret, shared by all proxy replicas; rotating it invalidates browser sessions |

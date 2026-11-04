@@ -70,7 +70,7 @@ func (p *Proxy) handleTunnelConnect(writer http.ResponseWriter, request *http.Re
 // whose answer already applies the inbound and declaration checks; the
 // legacy `<port>-<box>` authority runs them here.
 func (p *Proxy) admitTunnelConnect(writer http.ResponseWriter, request *http.Request) (string, uint16, bool) {
-	if hostname, isAppDomain := p.appDomainHost(request.Host); isAppDomain {
+	if hostname, isAppDomain := p.namedDomainHost(request.Host); isAppDomain {
 		boxID, port, err := p.resolveAppDomain(request.Context(), hostname)
 		switch {
 		case errors.Is(err, errAppDomainNotFound):

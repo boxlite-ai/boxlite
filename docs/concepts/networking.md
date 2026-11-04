@@ -119,8 +119,8 @@ A port can have several names: binding a new one leaves the others in place.
 `unbind` stops routing a name: requests that start afterwards get
 `404`, connections already open run until they close, and the port's
 generated URL stays public until the tunnel is revoked. An unbound name is
-still the organization's — nobody else can claim it, it still counts against
-the organization's domain allowance, and the same organization can bind it
+still the organization's — nobody else can claim it, platform names still count
+against the platform allowance, and the same organization can bind it
 again to any of its box ports. Destroying the box, including later cleanup of its
 database row, preserves the binding: `domain ls` still shows the original Box ID
 and port until explicit unbind or rebind. A destroy request first changes the
@@ -134,8 +134,9 @@ its names; another organization can then request them. If organization deletion
 fails, ownership and bindings remain intact.
 
 `domain ls` lists every full hostname the organization holds with what it routes to.
-The default table adds the allowance (`limit`, `used`, `remaining`) and `min_length`,
-the shortest new name allowed, in its footer. JSON and YAML output contain only
+The default table adds the platform allowance (`limit`, `used`, `remaining`) and `min_length`,
+the shortest new platform name allowed, in its footer. Custom domains appear in
+the same list without using that allowance. JSON and YAML output contain only
 the domain rows as an array; quiet output contains only hostnames.
 The REST list includes the allowance and also provides `domain_suffix` for the request
 preview, or null when requests are unavailable.
@@ -143,9 +144,37 @@ A new name must be lowercase letters, digits and hyphens,
 not start or end with a hyphen, not look like `<digits>-…`, and not be one of
 the platform's own names or the API's collection names (`boxes`, `images`,
 `volumes`, `domains`); names held before `min_length` rose stay bindable.
-A box in a region served by its own proxy cannot take a platform name
+A box in a region served by its own proxy cannot take a named domain
 (`region_not_supported`): the app domain's wildcard record points at the
 default proxy only.
+
+#### Bring your own domain
+
+On an enabled GCP deployment, an organization with an active subscription can add
+its own hostname in **Dashboard → Domains → Add custom domain**. Platform-domain
+allowance does not limit this flow, even when it is zero or full.
+
+1. Enter a public subdomain, such as `app.example.com`; use ASCII/Punycode, at most 220 bytes, with no wildcard or apex domain.
+2. At your DNS provider, add the traffic CNAME and configuration-specific TXT shown in the guide; turn off CDN proxying.
+3. Click **Check DNS / retry**, then add the certificate authorization CNAME when it appears.
+4. Keep all records in place; BoxLite checks ownership and traffic DNS, requests a Google-managed certificate, and checks HTTPS at the proxy entry.
+5. When the domain is **Ready**, bind a Box port in Dashboard or with the existing CLI/SDK bind operation; the public-tunnel and inbound rules above still apply.
+
+Bind does not perform DNS challenges: it reads the saved subscription, DNS and
+HTTPS readiness. A known custom domain returns `403 subscription_required` when
+subscription is required, or `409 subscription_not_ready` / `domain_not_ready`
+when its eligibility or setup is not ready. Request and response fields are unchanged.
+
+Actual subscription expiry suspends new binds and new requests while retaining
+the configuration, target and certificate. Cancelling renewal during a still-paid
+period does not suspend access. Eligibility and DNS/TLS checks have leases of at
+most five minutes; an outage never extends the old lease. Existing connections
+are not forcibly disconnected. Recovery requires fresh checks.
+
+**Unbind** keeps the domain and HTTPS configuration. **Delete configuration** in
+Dashboard releases ownership and stops new requests, then cleans up cloud resources
+asynchronously. Delete and unbind remain available after subscription expiry.
+After deletion, remove the DNS records; adding the hostname again creates a new TXT challenge.
 
 Domain responses expose `hostname`, `url` and `target`; there is no short `name`
 field. CLI lists use `HOSTNAME`, including full-hostname output with `ls -q`.

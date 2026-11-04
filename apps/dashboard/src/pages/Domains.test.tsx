@@ -8,11 +8,19 @@ import Domains from './Domains'
 import type { DomainList, HeldDomain } from '@/api/domain-types'
 import { MemoryRouter } from 'react-router-dom'
 
-const state = vi.hoisted(() => ({ organizationId: 'org-1', canManage: true, list: vi.fn(), claim: vi.fn() }))
+const state = vi.hoisted(() => ({
+  organizationId: 'org-1',
+  canManage: true,
+  list: vi.fn(),
+  claim: vi.fn(),
+  custom: vi.fn(),
+}))
 const feedback = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn(), copy: vi.fn() }))
 vi.mock('sonner', () => ({ toast: { success: feedback.success, error: feedback.error } }))
 vi.mock('@/lib/copy-text', () => ({ copyToClipboard: feedback.copy }))
-vi.mock('@/hooks/useApi', () => ({ useApi: () => ({ listDomains: state.list, claimDomain: state.claim }) }))
+vi.mock('@/hooks/useApi', () => ({
+  useApi: () => ({ listDomains: state.list, claimDomain: state.claim, listCustomDomains: state.custom }),
+}))
 vi.mock('@/hooks/useSelectedOrganization', () => ({
   useSelectedOrganization: () => ({
     selectedOrganization: { id: state.organizationId },
@@ -50,6 +58,7 @@ describe('Domains page', () => {
     state.organizationId = 'org-1'
     state.canManage = true
     state.list.mockReset().mockResolvedValue(list)
+    state.custom.mockReset().mockResolvedValue({ enabled: false, subscription: 'required', domains: [] })
     state.claim
       .mockReset()
       .mockResolvedValue({ hostname: 'my-app.apps.test', url: 'https://my-app.apps.test', target: null })
@@ -133,7 +142,7 @@ describe('Domains page', () => {
       'shop-one.apps.testAppshop-app—',
       'spare.apps.testUnbound——',
     ])
-    expect(document.body.textContent).toContain('3 / 5 domains held')
+    expect(document.body.textContent).toContain('3 / 5 platform domains held')
     const links = document.querySelectorAll('tbody a')
     expect(links).toHaveLength(1)
     expect(links[0].textContent).toBe('box-123')

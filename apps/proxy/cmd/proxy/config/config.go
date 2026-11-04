@@ -6,6 +6,7 @@ package config
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net/http"
 	"strings"
@@ -29,6 +30,8 @@ type Config struct {
 	// whose Host is one label under it is resolved through the API's domain
 	// lookup instead of the `<port>-<box>` encoding. Unset disables that path.
 	ProxyAppDomain        string             `envconfig:"PROXY_APP_DOMAIN"`
+	ProxyDomain           string             `envconfig:"PROXY_DOMAIN"`
+	CustomDomainsEnabled  bool               `envconfig:"CUSTOM_DOMAINS_ENABLED"`
 	CookieDomain          *string            `envconfig:"COOKIE_DOMAIN"`
 	TLSCertFile           string             `envconfig:"TLS_CERT_FILE"`
 	TLSKeyFile            string             `envconfig:"TLS_KEY_FILE"`
@@ -81,6 +84,9 @@ func GetConfig() (*Config, error) {
 	err = validate.Struct(config)
 	if err != nil {
 		return nil, err
+	}
+	if config.CustomDomainsEnabled && strings.TrimSpace(config.ProxyDomain) == "" {
+		return nil, fmt.Errorf("custom domains require PROXY_DOMAIN to delimit generated tunnel hosts")
 	}
 
 	if config.ProxyPort == 0 {

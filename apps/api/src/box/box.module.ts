@@ -58,6 +58,12 @@ import { BoxMigrationJobReceiver } from './services/box-migration-job-receiver.s
 import { Tunnel } from './entities/tunnel.entity'
 import { Domain } from './entities/domain.entity'
 import { DomainService } from './services/domain.service'
+import { CustomDomainController } from './controllers/custom-domain.controller'
+import { CustomDomainService } from './services/custom-domain.service'
+import { CustomDomainSubscriptionService } from './services/custom-domain-subscription.service'
+import { CustomDomainDnsService } from './services/custom-domain-dns.service'
+import { CustomDomainGcpService } from './services/custom-domain-gcp.service'
+import { CustomDomainWorkerService } from './services/custom-domain-worker.service'
 import { TunnelService } from './services/tunnel.service'
 import { AttachTicketService } from './services/attach-ticket.service'
 import { CpuIncidentModule } from './cpu-incidents/cpu-incident.module'
@@ -100,7 +106,14 @@ import { GcpDiskClient } from './services/gcp-disk-client'
       RunnerDiskUsageSample,
     ]),
   ],
-  controllers: [BoxController, RunnerController, PreviewController, VolumeController, JobController],
+  controllers: [
+    BoxController,
+    RunnerController,
+    PreviewController,
+    VolumeController,
+    JobController,
+    CustomDomainController,
+  ],
   providers: [
     CheckpointService,
     CheckpointArchiveStore,
@@ -132,6 +145,11 @@ import { GcpDiskClient } from './services/gcp-disk-client'
     BoxMigrationJobReceiver,
     TunnelService,
     DomainService,
+    CustomDomainService,
+    CustomDomainSubscriptionService,
+    CustomDomainDnsService,
+    CustomDomainGcpService,
+    CustomDomainWorkerService,
     AttachTicketService,
     RunnerDiskExpansionService,
     GcpDiskClient,
