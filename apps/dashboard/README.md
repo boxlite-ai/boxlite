@@ -40,6 +40,11 @@ newlines into copied commands.
 
 Enable and Disable reuse saved credentials. SSH status errors remain visible;
 mutations are not automatically retried. Switching tabs preserves the shell.
+The SSH tests cover delayed reads and mutations completing after a refresh,
+and a box stopping during key generation: obsolete responses cannot overwrite
+the latest status, and obsolete generated credentials cannot configure the box.
+While setup is pending, the connection dialog stays open so the download is not
+lost through an accidental close.
 Mock preview simulates these actions with a clearly marked mock host fingerprint;
 it does not start an SSH server. See [the design](https://github.com/boxlite-ai/boxlite/issues/2325).
 

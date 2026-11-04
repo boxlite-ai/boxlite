@@ -22,7 +22,7 @@ vi.mock('@/hooks/useConfig', () => ({
 }))
 vi.mock('@/hooks/useSelectedOrganization', () => ({
   useSelectedOrganization: () => ({
-    selectedOrganization: { id: mocks.organization },
+    selectedOrganization: mocks.organization ? { id: mocks.organization } : undefined,
     authenticatedUserHasPermission: () => mocks.permitted,
   }),
 }))
@@ -54,8 +54,17 @@ function button(label: string): HTMLButtonElement {
 async function click(label: string) {
   await act(async () => button(label).click())
 }
-async function render(state = BoxState.STARTED, id = 'box-1') {
-  await act(async () => root.render(<BoxSshTab box={{ id, state } as Box} />))
+async function render(state = BoxState.STARTED, id = 'box-1', refreshSignal = 0) {
+  await act(async () => root.render(<BoxSshTab box={{ id, state } as Box} refreshSignal={refreshSignal} />))
+}
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  let reject!: (error: Error) => void
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise
+    reject = rejectPromise
+  })
+  return { promise, resolve, reject }
 }
 beforeEach(() => {
   globalThis.IS_REACT_ACT_ENVIRONMENT = true
@@ -89,6 +98,88 @@ afterEach(() => {
 })
 
 describe('BoxSshTab', () => {
+  it('does not read SSH without a selected organization', async () => {
+    mocks.organization = ''
+    await render()
+    expect(host.textContent).toBe('')
+    expect(mocks.get).not.toHaveBeenCalled()
+  })
+
+  it.each(['success', 'failure'])('ignores a stale status %s after refresh', async (outcome) => {
+    const stale = deferred<{ data: typeof status }>()
+    mocks.get.mockReturnValueOnce(stale.promise)
+    await render()
+    expect(button('Setup').disabled).toBe(true)
+
+    await render(BoxState.STARTED, 'box-1', 1)
+    expect(host.textContent).toContain('SSH disabled')
+    await act(async () => {
+      if (outcome === 'success') stale.resolve({ data: status })
+      else stale.reject(new Error('outdated status request'))
+    })
+
+    expect(host.textContent).toContain('SSH disabled')
+    expect(host.querySelector('[role="alert"]')).toBeNull()
+    expect(button('Setup').disabled).toBe(false)
+  })
+
+  it('does not configure SSH if the box stops during key generation', async () => {
+    const keys = deferred<typeof credentials>()
+    mocks.generate.mockReturnValueOnce(keys.promise)
+    await render()
+    await click('Setup')
+    await click('Set up SSH')
+    await render(BoxState.STOPPED)
+    await act(async () => keys.resolve(credentials))
+
+    expect(mocks.post).not.toHaveBeenCalled()
+    expect(document.body.textContent).not.toContain('Download private key')
+    expect(button('Set up SSH').disabled).toBe(true)
+  })
+
+  it.each(['success', 'failure'])('ignores a stale mutation %s after refresh', async (outcome) => {
+    const stale = deferred<{ data: typeof status }>()
+    await render()
+    mocks.post.mockReturnValueOnce(stale.promise)
+    await click('Enable')
+    await render(BoxState.STARTED, 'box-1', 1)
+
+    await act(async () => {
+      if (outcome === 'success') stale.resolve({ data: status })
+      else stale.reject(new Error('outdated enable request'))
+    })
+
+    expect(host.textContent).toContain('SSH disabled')
+    expect(host.querySelector('[role="alert"]')).toBeNull()
+    expect(button('Enable').disabled).toBe(false)
+  })
+
+  it('keeps the setup dialog open until key generation and configuration finish', async () => {
+    const keys = deferred<typeof credentials>()
+    mocks.generate.mockReturnValueOnce(keys.promise)
+    await render()
+    await click('Setup')
+    await click('Set up SSH')
+    await click('Close')
+    expect(document.querySelector('[role="dialog"]')).not.toBeNull()
+
+    await act(async () => keys.resolve(credentials))
+    expect(button('Download private key')).toBeDefined()
+    await click('Close')
+    expect(document.querySelector('[role="dialog"]')).toBeNull()
+  })
+
+  it('reports an enable failure without changing the observed status or retrying', async () => {
+    await render()
+    mocks.post.mockRejectedValueOnce(new Error('private server details'))
+    await click('Enable')
+    expect(host.textContent).toContain('Unable to enable SSH')
+    expect(host.textContent).toContain('SSH disabled')
+    expect(host.textContent).not.toContain('private server details')
+    expect(mocks.post).toHaveBeenCalledOnce()
+    expect(button('Enable').disabled).toBe(false)
+  })
+
   it('sets up once, downloads the client key, and reopens details without reconfiguring', async () => {
     await render()
     await click('Setup')

@@ -40,6 +40,13 @@ describe('SSH credentials', () => {
 })
 
 describe('SSH REST boundary', () => {
+  it('refuses setup without credentials before making a request', async () => {
+    const post = vi.fn()
+    const api = { axiosInstance: { post } } as unknown as ApiClient
+    await expect(requestSsh(api, 'org', 'box', 'setup')).rejects.toThrow('SSH setup requires credentials')
+    expect(post).not.toHaveBeenCalled()
+  })
+
   it('encodes the scope and uses each existing endpoint without retrying', async () => {
     const status = { enabled: false, generation: 0, listen_address: '', host_public_key: '', host_key_fingerprint: '' }
     const http = {
