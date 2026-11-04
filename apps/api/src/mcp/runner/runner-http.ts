@@ -8,6 +8,8 @@ import { BoxService } from '../../box/services/box.service'
 import { RunnerService } from '../../box/services/runner.service'
 import { BoxAutoResumeService } from '../../box/services/box-auto-resume.service'
 import type { OrganizationAuthContext } from '../../common/interfaces/auth-context.interface'
+import { RunnerHttpError, runnerError } from './runner-error'
+export { RunnerHttpError } from './runner-error'
 
 export const RUNNER_JSON_LIMIT = 128 * 1024
 export const RUNNER_ARCHIVE_LIMIT = 64 * 1024
@@ -36,9 +38,6 @@ export interface RunnerReply {
   sourceIsDirectory?: boolean
 }
 
-/** Only this error's message is suitable for returning through MCP. */
-export class RunnerHttpError extends Error {}
-
 /** Credentialed, organization-scoped HTTP boundary; callers cannot choose URLs or headers. */
 @Injectable()
 export class McpRunnerHttp {
@@ -56,7 +55,7 @@ export class McpRunnerHttp {
     operation: RunnerOperation,
     signal?: AbortSignal,
   ): Promise<RunnerReply> {
-    const request = runnerRequest(operation)
+    let request: ReturnType<typeof runnerRequest> | undefined
     let stopHeartbeat = (): void => undefined
     let dispatched = false
     let knownFailure = false
@@ -65,6 +64,7 @@ export class McpRunnerHttp {
     signal?.addEventListener('abort', cancel, { once: true })
     let timeout: ReturnType<typeof setTimeout> | undefined
     try {
+      request = runnerRequest(operation)
       if (signal?.aborted) controller.abort()
       requireActive(controller.signal)
       if (!auth.organizationId || auth.organization?.id !== auth.organizationId) {
@@ -127,25 +127,51 @@ export class McpRunnerHttp {
       })
       if (!response.ok) {
         knownFailure = true
-        await response.body?.cancel()
-        throw new RunnerHttpError(`Runner ${operation.kind} failed (HTTP ${response.status})`)
+        let detail: unknown
+        try {
+          detail = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(await readBounded(response, 8 * 1024)))
+        } catch {
+          /* Unknown or oversized bodies retain status-only classification. */
+        }
+        throw runnerError(operation, response.status, detail)
       }
       const body = await readBounded(response, operation.kind === 'download' ? RUNNER_ARCHIVE_LIMIT : RUNNER_JSON_LIMIT)
       const hint = response.headers.get('x-boxlite-source-is-dir')
       return { body, ...(hint === 'true' || hint === 'false' ? { sourceIsDirectory: hint === 'true' } : {}) }
     } catch (error) {
-      const uncertain = dispatched && request.method !== 'GET'
+      // Readiness and admission failures belong to the service error policy.
+      if (!dispatched && error instanceof HttpException) throw error
+      const uncertain = dispatched && request?.method !== 'GET'
       if (error instanceof RunnerHttpError) {
         if (uncertain && !knownFailure) {
-          throw new RunnerHttpError(`${error.message}. The operation may have started. Its outcome is unknown.`)
+          const message = `${error.message}. The operation may have started. Its outcome is unknown.`
+          throw new RunnerHttpError(message, {
+            source: 'runner',
+            operation: operation.kind,
+            code: 'interrupted',
+            message,
+            outcome: 'unknown',
+          })
         }
-        throw error
+        throw error.failure
+          ? error
+          : new RunnerHttpError(error.message, {
+              source: 'runner',
+              operation: operation.kind,
+              code: 'runner_error',
+              message: error.message,
+            })
       }
-      throw new RunnerHttpError(
-        uncertain
-          ? `Runner ${operation.kind} interrupted; the operation may have started. Its outcome is unknown.`
-          : `Runner ${operation.kind} unavailable or interrupted`,
-      )
+      const message = uncertain
+        ? `Runner ${operation.kind} interrupted; the operation may have started. Its outcome is unknown.`
+        : `Runner ${operation.kind} unavailable or interrupted`
+      throw new RunnerHttpError(message, {
+        source: 'runner',
+        operation: operation.kind,
+        code: 'interrupted',
+        message,
+        ...(uncertain ? { outcome: 'unknown' as const } : {}),
+      })
     } finally {
       if (timeout) clearTimeout(timeout)
       signal?.removeEventListener('abort', cancel)

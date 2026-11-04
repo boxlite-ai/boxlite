@@ -88,7 +88,7 @@ describe('MCP image tools', () => {
     expect(result.tools.map((tool: { name: string }) => tool.name).sort()).toEqual([...NAMES].sort())
     for (const tool of result.tools) {
       expect(tool.inputSchema.additionalProperties).toBe(false)
-      expect(tool.outputSchema.additionalProperties).toBe(false)
+      expect(tool.outputSchema.anyOf[0].additionalProperties).toBe(false)
       expect(tool.annotations.destructiveHint).toBe(tool.name.startsWith('delete_'))
     }
   })

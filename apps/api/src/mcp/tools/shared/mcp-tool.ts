@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { HttpException, type Type, ValidationPipe } from '@nestjs/common'
+import { type Type, ValidationPipe } from '@nestjs/common'
 import {
   McpServer,
   type CallToolResult,
@@ -12,9 +12,9 @@ import {
   type ToolCallback,
 } from '@modelcontextprotocol/server'
 import * as z from 'zod'
-
-/** Only deliberate, payload-free messages may cross the tool error boundary. */
-export class McpToolError extends Error {}
+import { errorOutputSchema, errorResult, McpToolError } from '../../errors/tool-error'
+import { serviceError } from '../../errors/service-error'
+export { McpToolError } from '../../errors/tool-error'
 
 export function assertMcpActive(signal?: AbortSignal): void {
   if (signal?.aborted) throw new McpToolError('Tool call cancelled before the operation started')
@@ -36,29 +36,29 @@ export function registerMcpTool<I extends z.ZodType, O extends z.ZodType>(
   const callback = async (args: z.output<I>, context: ServerContext): Promise<CallToolResult> => {
     try {
       assertMcpActive(context.mcpReq.signal)
-      const result = config.outputSchema.parse(await handler(args, context))
+      const value = await handler(args, context)
+      const parsed = config.outputSchema.safeParse(value)
+      if (!parsed.success) {
+        throw new McpToolError('Tool operation failed', {
+          source: 'mcp',
+          operation: name,
+          status: 500,
+          code: 'internal_error',
+          message: 'Tool operation failed',
+        })
+      }
+      const result = parsed.data
       return { content: [{ type: 'text', text: JSON.stringify(result) }], structuredContent: result }
     } catch (error) {
-      return { isError: true, content: [{ type: 'text', text: safeToolError(error) }] }
+      return errorResult(serviceError(error, name))
     }
   }
   // The SDK's conditional callback type also permits absent schemas; ours always has one.
-  server.registerTool(name, config, callback as ToolCallback<I>)
-}
-
-export function safeToolError(error: unknown): string {
-  if (error instanceof McpToolError) return error.message
-  if (error instanceof HttpException) {
-    const status = error.getStatus()
-    if (status === 400 || status === 422) return 'Invalid tool request'
-    if (status === 401 || status === 403) return 'Operation not permitted'
-    if (status === 404) return 'Resource not found or not accessible'
-    if (status === 409) return 'Resource conflicts with this operation'
-    if (status === 408 || status === 504) return 'Operation timed out; its outcome may be uncertain'
-    if (status === 501) return 'Operation is unavailable in this deployment'
-    if (status === 503) return 'Service temporarily unavailable'
-  }
-  return 'Tool operation failed'
+  server.registerTool(
+    name,
+    { ...config, outputSchema: z.union([config.outputSchema, errorOutputSchema]) },
+    callback as ToolCallback<I>,
+  )
 }
 
 /** Reuse REST's transformations and nested validators after strict tool parsing. */

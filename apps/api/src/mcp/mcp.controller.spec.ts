@@ -33,6 +33,7 @@ import { NetworkTools } from './tools/box/network-tools'
 import { McpExecutionTools } from './tools/execution/execution-tools'
 import { McpFileTools } from './tools/files/file-tools'
 import { McpMetricsTools } from './tools/metrics/metrics-tools'
+import { OrganizationTools } from './tools/organization/organization-tools'
 import { AuthenticatedRateLimitGuard } from '../common/guards/authenticated-rate-limit.guard'
 
 const PROTOCOL = '2026-07-28'
@@ -77,6 +78,7 @@ describe('McpController', () => {
         { provide: McpExecutionTools, useValue: { register: jest.fn() } },
         { provide: McpFileTools, useValue: { register: jest.fn() } },
         { provide: McpMetricsTools, useValue: { register: jest.fn() } },
+        { provide: OrganizationTools, useValue: { register: jest.fn() } },
         {
           provide: TypedConfigService,
           useValue: { get: (key: string) => (key === 'mcp.resourceUrl' ? RESOURCE : undefined) },
@@ -228,7 +230,7 @@ describe('McpController', () => {
     expect(body.result.tools[0].inputSchema.required).toEqual(['organization_id'])
     expect(body.result.tools[0].annotations.readOnlyHint).toBe(true)
     expect(body.result.tools[0].annotations.destructiveHint).toBe(false)
-    expect(body.result.tools[0].outputSchema).toEqual(
+    expect(body.result.tools[0].outputSchema.anyOf[0]).toEqual(
       expect.objectContaining({
         type: 'array',
         items: expect.objectContaining({
@@ -287,7 +289,9 @@ describe('McpController', () => {
 
     expect(body.result.isError).toBe(true)
     expect(body.result.content[0].text).toBe('Organization not found or not accessible')
-    expect(body.result).not.toHaveProperty('structuredContent')
+    expect(body.result.structuredContent.error).toEqual(
+      expect.objectContaining({ source: 'mcp', operation: 'list_boxes' }),
+    )
     expect(findMembership).toHaveBeenCalledWith(FOREIGN_ORG, CALLER.userId)
     expect(findAllDeprecated).not.toHaveBeenCalled()
   })
@@ -372,8 +376,15 @@ describe('McpController', () => {
         required: ['result'],
         properties: {
           result: expect.objectContaining({
-            type: 'array',
-            items: expect.objectContaining({ required: expect.arrayContaining(['box_id', 'status', 'memory_mib']) }),
+            anyOf: expect.arrayContaining([
+              expect.objectContaining({
+                type: 'array',
+                items: expect.objectContaining({
+                  required: expect.arrayContaining(['box_id', 'status', 'memory_mib']),
+                }),
+              }),
+              expect.objectContaining({ type: 'object', required: ['error'] }),
+            ]),
           }),
         },
       }),
@@ -413,7 +424,9 @@ describe('McpController', () => {
     const denied = await legacyReply(await callBoxes(FOREIGN_ORG))
     expect(denied.isError).toBe(true)
     expect(denied.content[0].text).toBe('Organization not found or not accessible')
-    expect(denied).not.toHaveProperty('structuredContent')
+    expect(denied.structuredContent.result.error).toEqual(
+      expect.objectContaining({ source: 'mcp', operation: 'list_boxes' }),
+    )
     expect(findMembership).toHaveBeenLastCalledWith(FOREIGN_ORG, CALLER.userId)
     expect(findAllDeprecated).not.toHaveBeenCalled()
 

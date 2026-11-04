@@ -37,7 +37,7 @@ describe('McpMetricsTools HTTP observation', () => {
       destructiveHint: false,
       openWorldHint: false,
     })
-    const fields = body.result.tools[0].outputSchema.properties
+    const fields = body.result.tools[0].outputSchema.anyOf[0].properties
     expect(fields).not.toHaveProperty('create_duration_ms')
     expect(fields).not.toHaveProperty('boot_timing')
   })
@@ -87,7 +87,7 @@ describe('McpMetricsTools HTTP observation', () => {
       const body = await harness.call('get_box_metrics', scope)
       expect(body.result.isError).toBe(true)
       expect(body.result.content[0].text).toBe('Invalid Runner metrics response')
-      expect(body.result).not.toHaveProperty('structuredContent')
+      expect(body.result.structuredContent.error.source).toBe('runner')
       expect(JSON.stringify(body)).not.toContain('runner-secret')
     },
   )

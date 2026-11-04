@@ -136,7 +136,7 @@ describe('McpFileTools HTTP tar boundary', () => {
     download(archive, false)
     const result = await harness.call('download_files', scope)
     expect(result.result.isError).toBe(true)
-    expect(result.result).not.toHaveProperty('structuredContent')
+    expect(result.result.structuredContent.error.source).toBe('mcp')
   })
 
   it('refuses directory source metadata even when its archive happens to contain one regular file', async () => {

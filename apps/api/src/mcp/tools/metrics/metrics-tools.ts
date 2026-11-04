@@ -9,7 +9,7 @@ import * as z from 'zod'
 import type { AuthContext } from '../../../common/interfaces/auth-context.interface'
 import { McpToolAccess } from '../shared/mcp-tool-access'
 import { McpToolError, organizationInput, readOnlyAnnotations, registerMcpTool } from '../shared/mcp-tool'
-import { McpRunnerHttp, RunnerHttpError } from '../../runner/runner-http'
+import { McpRunnerHttp } from '../../runner/runner-http'
 
 const counter = z.number().int().nonnegative()
 const metrics = z.object({
@@ -52,17 +52,16 @@ export class McpMetricsTools {
       },
       async (args, context) => {
         const auth = await this.access.organization(caller, args.organization_id, [], context.mcpReq.signal)
-        let body: Buffer
-        try {
-          body = (await this.runner.execute(auth, args.box_id, { kind: 'metrics' }, context.mcpReq.signal)).body
-        } catch (error) {
-          if (error instanceof RunnerHttpError) throw new McpToolError(error.message)
-          throw error
-        }
+        const { body } = await this.runner.execute(auth, args.box_id, { kind: 'metrics' }, context.mcpReq.signal)
         try {
           return metrics.parse(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(body)))
         } catch {
-          throw new McpToolError('Invalid Runner metrics response')
+          throw new McpToolError('Invalid Runner metrics response', {
+            source: 'runner',
+            operation: 'metrics',
+            code: 'invalid_response',
+            message: 'Invalid Runner metrics response',
+          })
         }
       },
     )

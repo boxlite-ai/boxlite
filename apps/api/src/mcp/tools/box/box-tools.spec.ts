@@ -97,8 +97,8 @@ describe('MCP Box tools', () => {
     expect(result.tools.map((tool: { name: string }) => tool.name).sort()).toEqual([...NAMES].sort())
     for (const tool of result.tools) {
       expect(tool.inputSchema.additionalProperties).toBe(false)
-      if (tool.name === 'list_boxes') expect(tool.outputSchema.type).toBe('array')
-      else expect(tool.outputSchema.additionalProperties).toBe(false)
+      if (tool.name === 'list_boxes') expect(tool.outputSchema.anyOf[0].type).toBe('array')
+      else expect(tool.outputSchema.anyOf[0].additionalProperties).toBe(false)
       expect(tool.annotations.destructiveHint).toBe(['delete_box', 'stop_box'].includes(tool.name))
     }
   })

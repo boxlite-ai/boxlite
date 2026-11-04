@@ -47,6 +47,52 @@ Every registered tool advertises `inputSchema` and `outputSchema`. The catalog
 test exercises the assembled endpoint and checks all 32 registrations; schema
 placement does not change the public tool contract.
 
+## Tool failures
+
+Tool execution failures return `isError: true` and `structuredContent: {error: ...}`.
+The first text block contains the public message; the second contains serialized
+error JSON for clients that consume only text. Every output schema accepts either
+its existing success value or the strict error envelope. This is an intentional
+extension of the advertised result contract; successful payloads keep their shape.
+
+Errors identify `source` (`service`, `runner`, or `mcp`), `operation`, `code`, and
+`message`. `status` describes the underlying exception or Runner response, not the
+outer MCP HTTP status. Recognized Runner file envelopes also supply `type`; public
+service exceptions can supply `retry_after_seconds`. An interrupted mutation or an
+invalid execution-start reply, or a service readiness timeout supplies
+`outcome: "unknown"` and must not be replayed
+automatically. An HTTP failure alone does not prove that no partial writes occurred.
+
+The service adapter projects deliberate public 4xx exception messages, business
+codes, and retry timing. Resource-denial messages retain the generic admission
+wording; unknown exceptions and unclassified server failures hide their details.
+Known unsupported and unavailable business exceptions retain public classification.
+Validation of a tool's own success output reports an MCP internal error.
+
+Typed service exceptions raised while resolving a Box or waiting for auto-resume
+keep their service classification before any Runner request is dispatched. This
+includes readiness timeout status, public cause, retry timing, and the unknown
+lifecycle outcome; an unissued Runner operation does not cancel an earlier resume.
+
+The Runner adapter bounds error bodies to 8 KiB and handles file error objects
+separately from execution and metrics string errors. Known file codes/types and
+execution messages are classified per operation. Recognized mount refusals return
+staging guidance. Arbitrary response messages, unknown payloads, and internal details
+are not forwarded; they retain safe operation/status fallback text. Neither adapter
+copies stacks, causes, credentials, or arbitrary response fields.
+
+For example, a service quota failure keeps `source: "service"`,
+`operation: "create_box"`, `status: 429`, `code: "resource_exhausted"`, and its public
+count/limit message. A file mount refusal uses `source: "runner"`,
+`operation: "upload"`, `status: 400`, `code: "unsupported"`, and a controlled message
+explaining how to stage the file and use `exec_box`.
+
+Legacy array tools project structured errors as `{result: {error: ...}}`, just as
+their successful arrays project as `{result: [...]}`. Legacy object tools and modern
+tools use the natural `{error: ...}` shape. The serialized error text always carries
+the natural object. Protocol and authentication failures remain outside this tool
+execution contract.
+
 REST capability flags describe the hosted API, including private tunnels and
 per-execution user selection. The MCP MVP keeps public-only tunnel preparation
 and its existing execution input. New REST operations for SSH, tunnel revocation,

@@ -25,7 +25,7 @@ describe('MCP hosted capability tool', () => {
     expect(result.tools[0].annotations).toEqual(
       expect.objectContaining({ readOnlyHint: true, destructiveHint: false, openWorldHint: false }),
     )
-    expect(result.tools[0].outputSchema.properties.capabilities.additionalProperties).toBe(false)
+    expect(result.tools[0].outputSchema.anyOf[0].properties.capabilities.additionalProperties).toBe(false)
   })
   it('shares exact public REST capability values in structured and legacy text results', async () => {
     const { result } = await harness.call('get_config', {})

@@ -187,7 +187,7 @@ describe('McpExecutionTools HTTP calls', () => {
       expect(body.result.isError).toBe(true)
       expect(body.result.content[0].text).toContain('may have started')
       expect(JSON.stringify(body)).not.toContain('runner-secret')
-      expect(body.result).not.toHaveProperty('structuredContent')
+      expect(body.result.structuredContent.error.source).toBe('runner')
       expect(requests).toHaveLength(1)
     },
   )

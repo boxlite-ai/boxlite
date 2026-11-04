@@ -17,7 +17,7 @@ import {
   McpToolError,
   registerMcpTool,
 } from '../shared/mcp-tool'
-import { McpRunnerHttp, RunnerHttpError, type RunnerOperation } from '../../runner/runner-http'
+import { McpRunnerHttp, type RunnerOperation } from '../../runner/runner-http'
 
 const text = z
   .string()
@@ -184,12 +184,7 @@ export class McpExecutionTools {
   ) {
     const permissions = operation.kind === 'status' ? [] : [OrganizationResourcePermission.WRITE_BOXES]
     const auth = await this.access.organization(caller, scope.organization_id, permissions, signal)
-    try {
-      return await this.runner.execute(auth, scope.box_id, operation, signal)
-    } catch (error) {
-      if (error instanceof RunnerHttpError) throw new McpToolError(error.message)
-      throw error
-    }
+    return this.runner.execute(auth, scope.box_id, operation, signal)
   }
 }
 
@@ -197,10 +192,15 @@ function parseReply<T extends z.ZodType>(body: Buffer, schema: T, effectful: boo
   try {
     return schema.parse(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(body)))
   } catch {
-    throw new McpToolError(
-      effectful
-        ? 'Invalid Runner response; the operation may have started. Its outcome is unknown.'
-        : 'Invalid Runner execution response',
-    )
+    const message = effectful
+      ? 'Invalid Runner response; the operation may have started. Its outcome is unknown.'
+      : 'Invalid Runner execution response'
+    throw new McpToolError(message, {
+      source: 'runner',
+      operation: effectful ? 'exec' : 'status',
+      code: 'invalid_response',
+      message,
+      ...(effectful ? { outcome: 'unknown' as const } : {}),
+    })
   }
 }

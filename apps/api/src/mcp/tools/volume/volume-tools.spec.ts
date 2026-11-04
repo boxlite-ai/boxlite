@@ -118,7 +118,7 @@ describe('MCP volume tools', () => {
     ])
     for (const tool of result.tools) {
       expect(tool.inputSchema.additionalProperties).toBe(false)
-      expect(tool.outputSchema.additionalProperties).toBe(false)
+      expect(tool.outputSchema.anyOf[0].additionalProperties).toBe(false)
       expect(tool.annotations.openWorldHint).toBe(false)
     }
   })
@@ -130,7 +130,7 @@ describe('MCP volume tools', () => {
       const args = name.includes('get') || name.includes('delete') ? { volume_id: RESOURCE_ID } : {}
       const { result } = await harness.call(name, { organization_id: FOREIGN_ORGANIZATION_ID, ...args })
       expect(result.isError).toBe(true)
-      expect(result.structuredContent).toBeUndefined()
+      expect(result.structuredContent.error.source).toBe('mcp')
       expect(fixture.organizations.findOne).not.toHaveBeenCalled()
       for (const operation of Object.values(volumes)) expect(operation).not.toHaveBeenCalled()
     },

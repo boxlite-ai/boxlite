@@ -65,7 +65,7 @@ describe('MCP registry tools', () => {
     expect(result.tools.map((tool: { name: string }) => tool.name).sort()).toEqual([...NAMES].sort())
     for (const tool of result.tools) {
       expect(tool.inputSchema.additionalProperties).toBe(false)
-      expect(tool.outputSchema.additionalProperties).toBe(false)
+      expect(tool.outputSchema.anyOf[0].additionalProperties).toBe(false)
       expect(JSON.stringify(tool.outputSchema)).not.toContain('password')
       expect(JSON.stringify(tool.outputSchema)).not.toContain('secretVersion')
     }
@@ -138,7 +138,7 @@ describe('MCP registry tools', () => {
     registries.create.mockRejectedValue(new Error(PASSWORD + ' private-secret-store-version'))
     const body = await harness.call('create_registry', REQUEST)
     expect(body.result.content[0].text).toBe('Tool operation failed')
-    expect(body.result.structuredContent).toBeUndefined()
+    expect(body.result.structuredContent.error.source).toBe('service')
     expect(JSON.stringify(body)).not.toContain(PASSWORD)
     expect(JSON.stringify(fixture.auditService.updateLog.mock.calls)).not.toContain(PASSWORD)
   })

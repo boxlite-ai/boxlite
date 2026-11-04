@@ -9,14 +9,8 @@ import * as z from 'zod'
 import type { AuthContext } from '../../../common/interfaces/auth-context.interface'
 import { OrganizationResourcePermission } from '../../../organization/enums/organization-resource-permission.enum'
 import { McpToolAccess } from '../shared/mcp-tool-access'
-import {
-  completedOutput,
-  McpToolError,
-  mutationAnnotations,
-  organizationInput,
-  registerMcpTool,
-} from '../shared/mcp-tool'
-import { McpRunnerHttp, RunnerHttpError, RUNNER_ARCHIVE_LIMIT, type RunnerOperation } from '../../runner/runner-http'
+import { completedOutput, mutationAnnotations, organizationInput, registerMcpTool } from '../shared/mcp-tool'
+import { McpRunnerHttp, RUNNER_ARCHIVE_LIMIT, type RunnerOperation } from '../../runner/runner-http'
 import { archiveTextContent, archiveTextFile, decodeBase64Archive, TEXT_FILE_LIMIT } from './file-content'
 
 const path = z
@@ -126,11 +120,6 @@ export class McpFileTools {
       [OrganizationResourcePermission.WRITE_BOXES],
       signal,
     )
-    try {
-      return await this.runner.execute(auth, input.box_id, operation, signal)
-    } catch (error) {
-      if (error instanceof RunnerHttpError) throw new McpToolError(error.message)
-      throw error
-    }
+    return this.runner.execute(auth, input.box_id, operation, signal)
   }
 }
