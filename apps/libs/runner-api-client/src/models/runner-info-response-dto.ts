@@ -24,5 +24,6 @@ export interface RunnerInfoResponseDTO {
     'appVersion'?: string;
     'metrics'?: RunnerMetrics;
     'serviceHealth'?: Array<RunnerServiceInfo>;
+    'supportsPrivileged'?: boolean;
 }
 

@@ -6,6 +6,17 @@
 import { RunnerAdapterV0 } from './runnerAdapter.v0'
 
 describe('RunnerAdapterV0 createBox', () => {
+  it.each([false, true])('forwards persisted guest privilege %s to the runner', async (privileged) => {
+    const adapter = new RunnerAdapterV0()
+    await adapter.init({ id: 'runner-1', apiUrl: 'http://runner.invalid', supportsPrivileged: true } as any)
+    const create = jest.fn().mockResolvedValue({ data: { daemonVersion: '1.0' } })
+    ;(adapter as any).boxApiClient = { create }
+
+    await adapter.createBox({ id: 'box-1', image: 'base', privileged } as any, 'base')
+
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({ privileged }))
+  })
+
   // The runner body carries the row's outbound policy as is; the Daytona-era
   // networkBlockAll / networkAllowList pair is gone from the wire.
   it('sends the outbound policy as the enabled flag and entries', async () => {
@@ -106,6 +117,47 @@ describe('RunnerAdapterV0 createBox', () => {
         secrets: [{ name: 'openai', value: 'sk-test' }],
       }),
     )
+  })
+})
+
+describe('RunnerAdapterV0 recoverBox', () => {
+  it.each([false, true])('forwards persisted guest privilege %s to the recover request', async (privileged) => {
+    const adapter = new RunnerAdapterV0()
+    await adapter.init({ id: 'runner-1', apiUrl: 'http://runner.invalid', supportsPrivileged: true } as any)
+    const recover = jest.fn().mockResolvedValue(undefined)
+    ;(adapter as any).boxApiClient = { recover }
+
+    await adapter.recoverBox({ id: 'box-1', privileged } as any)
+
+    expect(recover).toHaveBeenCalledWith('box-1', expect.objectContaining({ privileged }))
+  })
+})
+
+describe('RunnerAdapterV0 privilege support', () => {
+  it.each([undefined, false])(
+    'rejects privileged create and recovery when runner support is %s',
+    async (supportsPrivileged) => {
+      const adapter = new RunnerAdapterV0()
+      await adapter.init({ id: 'runner-1', apiUrl: 'http://runner.invalid', supportsPrivileged } as any)
+      const create = jest.fn().mockResolvedValue({ data: {} })
+      const recover = jest.fn().mockResolvedValue(undefined)
+      ;(adapter as any).boxApiClient = { create, recover }
+
+      const box = { id: 'box-1', privileged: true } as any
+      await expect(adapter.createBox(box, 'base')).rejects.toThrow('does not support privileged')
+      await expect(adapter.recoverBox(box)).rejects.toThrow('does not support privileged')
+      expect(create).not.toHaveBeenCalled()
+      expect(recover).not.toHaveBeenCalled()
+    },
+  )
+
+  it('preserves the capability returned by runner info', async () => {
+    const adapter = new RunnerAdapterV0()
+    ;(adapter as any).runnerApiClient = {
+      runnerInfo: jest.fn().mockResolvedValue({ data: { supportsPrivileged: true } }),
+    }
+
+    expect(await adapter.runnerInfo()).toMatchObject({ supportsPrivileged: true })
   })
 })
 

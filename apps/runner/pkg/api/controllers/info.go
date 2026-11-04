@@ -8,6 +8,7 @@ import (
 	"net/http"
 
 	"github.com/boxlite-ai/runner/internal"
+	"github.com/boxlite-ai/runner/internal/metrics"
 	"github.com/boxlite-ai/runner/pkg/api/dto"
 	"github.com/boxlite-ai/runner/pkg/models"
 	"github.com/boxlite-ai/runner/pkg/runner"
@@ -38,22 +39,25 @@ func RunnerInfo(ctx *gin.Context) {
 
 	servicesInfo := runnerInstance.InspectRunnerServices(ctx.Request.Context())
 
-	response := dto.RunnerInfoResponseDTO{
+	ctx.JSON(http.StatusOK, runnerInfoResponse(metrics, servicesInfo))
+}
+
+func runnerInfoResponse(collected *metrics.Metrics, servicesInfo []models.RunnerServiceInfo) dto.RunnerInfoResponseDTO {
+	return dto.RunnerInfoResponseDTO{
 		ServiceHealth: mapRunnerServiceInfoToDTO(servicesInfo),
 		Metrics: &dto.RunnerMetrics{
-			CurrentCpuLoadAverage:        float64(metrics.CPULoadAverage),
-			CurrentCpuUsagePercentage:    float64(metrics.CPUUsagePercentage),
-			CurrentMemoryUsagePercentage: float64(metrics.MemoryUsagePercentage),
-			CurrentDiskUsagePercentage:   float64(metrics.DiskUsagePercentage),
-			CurrentAllocatedCpu:          float64(metrics.AllocatedCPU),
-			CurrentAllocatedMemoryGiB:    float64(metrics.AllocatedMemoryGiB),
-			CurrentAllocatedDiskGiB:      float64(metrics.AllocatedDiskGiB),
-			CurrentStartedBoxes:          int64(metrics.StartedBoxCount),
+			CurrentCpuLoadAverage:        float64(collected.CPULoadAverage),
+			CurrentCpuUsagePercentage:    float64(collected.CPUUsagePercentage),
+			CurrentMemoryUsagePercentage: float64(collected.MemoryUsagePercentage),
+			CurrentDiskUsagePercentage:   float64(collected.DiskUsagePercentage),
+			CurrentAllocatedCpu:          float64(collected.AllocatedCPU),
+			CurrentAllocatedMemoryGiB:    float64(collected.AllocatedMemoryGiB),
+			CurrentAllocatedDiskGiB:      float64(collected.AllocatedDiskGiB),
+			CurrentStartedBoxes:          int64(collected.StartedBoxCount),
 		},
-		AppVersion: internal.Version,
+		AppVersion:         internal.Version,
+		SupportsPrivileged: true,
 	}
-
-	ctx.JSON(http.StatusOK, response)
 }
 
 func mapRunnerServiceInfoToDTO(servicesInfo []models.RunnerServiceInfo) []*dto.RunnerServiceInfo {

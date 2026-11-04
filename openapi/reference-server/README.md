@@ -3,6 +3,10 @@
 Reference implementation of the [BoxLite Box API](../box.openapi.yaml).
 Use this to validate client implementations against the spec.
 
+Box responses include the native SDK's persisted `privileged` mode when known.
+REST clients use it to verify named `get_or_create` reuse; a missing value is
+unknown and cannot establish a match with either requested mode.
+
 **Not production-ready** — no persistence, single-tenant.
 
 ## Setup

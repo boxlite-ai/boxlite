@@ -388,6 +388,8 @@ pub(crate) struct PyBoxInfo {
     #[pyo3(get)]
     pub(crate) memory_mib: u32,
     #[pyo3(get)]
+    pub(crate) privileged: Option<bool>,
+    #[pyo3(get)]
     pub(crate) network: Option<PyNetworkInfo>,
     #[pyo3(get)]
     pub(crate) auto_stop: u32,
@@ -415,6 +417,7 @@ impl PyBoxInfo {
             "image": self.image,
             "cpus": self.cpus,
             "memory_mib": self.memory_mib,
+            "privileged": self.privileged,
             "network": network,
             "auto_stop": self.auto_stop,
             "auto_delete": self.auto_delete,
@@ -451,6 +454,7 @@ impl From<BoxInfo> for PyBoxInfo {
             image: info.image,
             cpus: info.cpus,
             memory_mib: info.memory_mib,
+            privileged: info.privileged,
             network: info.network.map(PyNetworkInfo::from),
             auto_stop: info.auto_stop,
             auto_delete: info.auto_delete,
@@ -484,6 +488,7 @@ mod tests {
             image: "alpine:latest".to_string(),
             cpus: 2,
             memory_mib: 512,
+            privileged: None,
             network,
             labels: HashMap::new(),
             auto_stop: 0,
@@ -495,6 +500,27 @@ mod tests {
             last_activity_at: None,
             resolved_image: None,
         }
+    }
+
+    #[test]
+    fn privileged_reuse_python_info_exposes_known_and_unknown_mode() {
+        use pyo3::prelude::*;
+
+        Python::initialize();
+        Python::attach(|py| {
+            for privileged in [Some(false), Some(true), None] {
+                let mut metadata = serde_json::to_value(core_info(None)).unwrap();
+                metadata["privileged"] = serde_json::to_value(privileged).unwrap();
+                let info: BoxInfo = serde_json::from_value(metadata).unwrap();
+                let bound = Py::new(py, PyBoxInfo::from(info)).unwrap();
+                let reported = bound
+                    .getattr(py, "privileged")
+                    .unwrap()
+                    .extract::<Option<bool>>(py)
+                    .unwrap();
+                assert_eq!(reported, privileged);
+            }
+        });
     }
 
     // 0 is a real exit code — it is what separates a command that succeeded

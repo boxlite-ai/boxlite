@@ -8,6 +8,34 @@ import { ResourceType } from '../enums/resource-type.enum'
 import { RunnerAdapterV2 } from './runnerAdapter.v2'
 
 describe('RunnerAdapterV2 createBox', () => {
+  it.each([false, true])('forwards persisted guest privilege %s to the create job', async (privileged) => {
+    const jobService = { createJob: jest.fn().mockResolvedValue(undefined) } as any
+    const adapter = new RunnerAdapterV2({} as any, {} as any, jobService)
+    await adapter.init({ id: 'runner-1', supportsPrivileged: true } as any)
+
+    await adapter.createBox({ id: 'box-1', image: 'base', privileged } as any, 'base')
+
+    expect(jobService.createJob).toHaveBeenCalledWith(
+      null,
+      JobType.CREATE_BOX,
+      'runner-1',
+      ResourceType.BOX,
+      'box-1',
+      expect.objectContaining({ privileged }),
+    )
+  })
+
+  it.each([undefined, false])('rejects privileged create when runner support is %s', async (supportsPrivileged) => {
+    const jobService = { createJob: jest.fn().mockResolvedValue(undefined) } as any
+    const adapter = new RunnerAdapterV2({} as any, {} as any, jobService)
+    await adapter.init({ id: 'runner-1', supportsPrivileged } as any)
+
+    await expect(adapter.createBox({ id: 'box-1', privileged: true } as any, 'base')).rejects.toThrow(
+      'does not support privileged',
+    )
+    expect(jobService.createJob).not.toHaveBeenCalled()
+  })
+
   it('passes secrets through to the CREATE_BOX job payload', async () => {
     const jobService = { createJob: jest.fn().mockResolvedValue(undefined) } as any
     const adapter = new RunnerAdapterV2({} as any, {} as any, jobService)

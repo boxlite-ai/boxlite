@@ -244,6 +244,10 @@ console.log(refreshed?.network?.publishedPorts);
 await box.stop();
 ```
 
+`info()`, `getInfo()`, and `listInfo()` expose `privileged`, the guest mode saved
+at creation. Local metadata reports `true` or `false`; a REST server that omits
+the field produces `undefined`.
+
 ### Guest SSH Control
 
 `JsBox` and `SimpleBox` expose `box.ssh` to configure, observe, and disable

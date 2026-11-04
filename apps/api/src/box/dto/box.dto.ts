@@ -182,6 +182,11 @@ export class BoxDto {
   disk: number
 
   @ApiPropertyOptional({
+    description: 'Persisted guest privilege mode; absent when an older server does not report it',
+  })
+  privileged?: boolean
+
+  @ApiPropertyOptional({
     description: 'The state of the box',
     enum: BoxState,
     enumName: 'BoxState',
@@ -374,6 +379,7 @@ export class BoxDto {
       gpu: box.gpu,
       memory: box.mem,
       disk: box.disk,
+      privileged: box.privileged,
       network: NetworkInfoResponseDto.fromBox(box),
       labels: box.labels,
       volumes: box.volumes,

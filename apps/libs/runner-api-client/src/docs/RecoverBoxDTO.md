@@ -14,6 +14,7 @@ Name | Type | Description | Notes
 **osUser** | **string** |  | [default to undefined]
 **outboundAllowNet** | **Array&lt;string&gt;** |  | [optional] [default to undefined]
 **outboundEnabled** | **boolean** | Outbound network policy. outboundEnabled is required: a request without it is rejected rather than started with a guessed policy. | [default to undefined]
+**privileged** | **boolean** |  | [optional] [default to undefined]
 **secrets** | [**Array&lt;DtoSecretDTO&gt;**](DtoSecretDTO.md) |  | [optional] [default to undefined]
 **storageQuota** | **number** |  | [optional] [default to undefined]
 **volumes** | [**Array&lt;DtoVolumeDTO&gt;**](DtoVolumeDTO.md) |  | [optional] [default to undefined]
@@ -33,6 +34,7 @@ const instance: RecoverBoxDTO = {
     osUser,
     outboundAllowNet,
     outboundEnabled,
+    privileged,
     secrets,
     storageQuota,
     volumes,

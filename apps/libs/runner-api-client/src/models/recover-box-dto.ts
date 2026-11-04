@@ -33,6 +33,7 @@ export interface RecoverBoxDTO {
      * Outbound network policy. outboundEnabled is required: a request without it is rejected rather than started with a guessed policy.
      */
     'outboundEnabled': boolean;
+    'privileged'?: boolean;
     'secrets'?: Array<DtoSecretDTO>;
     'storageQuota'?: number;
     'volumes'?: Array<DtoVolumeDTO>;

@@ -122,6 +122,7 @@ export class RunnerAdapterV0 implements RunnerAdapter {
   private readonly logger = new Logger(RunnerAdapterV0.name)
   private boxApiClient: BoxApi
   private runnerApiClient: DefaultApi
+  private runner: Runner
 
   private convertBoxState(state: EnumsBoxState): BoxState {
     switch (state) {
@@ -152,6 +153,7 @@ export class RunnerAdapterV0 implements RunnerAdapter {
     if (!runner.apiUrl) {
       throw new Error('Runner API URL is required')
     }
+    this.runner = runner
 
     const axiosInstance = axios.create({
       baseURL: runner.apiUrl,
@@ -238,6 +240,7 @@ export class RunnerAdapterV0 implements RunnerAdapter {
       serviceHealth: response.data.serviceHealth,
       metrics: response.data.metrics,
       appVersion: response.data.appVersion,
+      supportsPrivileged: response.data.supportsPrivileged,
     }
   }
 
@@ -254,6 +257,9 @@ export class RunnerAdapterV0 implements RunnerAdapter {
     image: string,
     metadata?: { [key: string]: string },
   ): Promise<StartBoxResponse | undefined> {
+    if (box.privileged && !this.runner.supportsPrivileged) {
+      throw new Error(`Runner ${this.runner.id} does not support privileged Boxes`)
+    }
     const response = await this.boxApiClient.create({
       id: box.id,
       image,
@@ -264,6 +270,7 @@ export class RunnerAdapterV0 implements RunnerAdapter {
       storageQuota: box.disk,
       env: box.env,
       runAsUser: box.runAsUser,
+      privileged: box.privileged,
       workingDir: box.workingDir,
       entrypoint: box.entrypoint,
       cmd: box.cmd,
@@ -330,6 +337,9 @@ export class RunnerAdapterV0 implements RunnerAdapter {
   }
 
   async recoverBox(box: Box): Promise<void> {
+    if (box.privileged && !this.runner.supportsPrivileged) {
+      throw new Error(`Runner ${this.runner.id} does not support privileged Boxes`)
+    }
     const recoverBoxDTO: RecoverBoxDTO = {
       osUser: box.osUser,
       cpuQuota: box.cpu,
@@ -337,6 +347,7 @@ export class RunnerAdapterV0 implements RunnerAdapter {
       memoryQuota: box.mem,
       storageQuota: box.disk,
       env: box.env,
+      privileged: box.privileged,
       secrets: box.secrets?.map((secret) => ({
         name: secret.name,
         value: secret.value,

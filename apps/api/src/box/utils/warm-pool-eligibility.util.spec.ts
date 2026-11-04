@@ -11,14 +11,16 @@ const CURATED = { isOrgOwned: false }
 describe('requiresFreshBox', () => {
   it('lets a plain request claim a warm-pool box', () => {
     expect(requiresFreshBox({}, NO_ORG_EGRESS_LIMIT, CURATED)).toBe(false)
+    expect(requiresFreshBox({ privileged: false }, NO_ORG_EGRESS_LIMIT, CURATED)).toBe(false)
   })
 
-  // These four are fixed when the container is built. A warm box is already
+  // These options are fixed when the container is built. A warm box is already
   // booted, and the pool key (warm_pool_find_idx) does not cover any of them,
   // so claiming one would return 201 with a box that ignored the request —
   // the same silent drop this change closes at the mapper.
   it.each([
     ['runAsUser', { runAsUser: '1000:1000' }],
+    ['privileged', { privileged: true }],
     ['workingDir', { workingDir: '/app' }],
     ['entrypoint', { entrypoint: ['python'] }],
     ['cmd', { cmd: ['-c', 'print(1)'] }],

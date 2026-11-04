@@ -179,7 +179,9 @@ export class BoxService {
     runnerParams: GetRunnerParams,
     persist: () => Promise<Box>,
   ): Promise<Box> {
-    const runner = await this.runnerService.getRandomAvailableRunner(runnerParams)
+    const runner = await this.runnerService.getRandomAvailableRunner(
+      box.privileged ? { ...runnerParams, requiresPrivileged: true } : runnerParams,
+    )
     box.runnerId = runner.id
     return persist()
   }
@@ -325,6 +327,7 @@ export class BoxService {
       // a default here would hand every box a USER override its image may not
       // define — which is exactly what 16d9248bb removed.
       box.runAsUser = createBoxDto.runAsUser
+      box.privileged = createBoxDto.privileged ?? false
       box.workingDir = createBoxDto.workingDir
       box.entrypoint = createBoxDto.entrypoint
       box.cmd = createBoxDto.cmd

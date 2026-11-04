@@ -13,6 +13,7 @@ Each guide walks through one task. How the underlying pieces work is in
 - [Image registry configuration](image-registry-configuration.md): pull images from private or
   mirrored registries.
 - [Guest SSH control](ssh.md): turn the in-guest SSH server on and off.
+- [Docker inside a Box](docker-in-docker.md): run Docker Engine and Compose in a privileged guest.
 
 ## Building with BoxLite
 
