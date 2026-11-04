@@ -6,6 +6,9 @@
 //! none runs. OpenCode 2.2 on a local runtime is the only implementation;
 //! unsupported operations and options fail with `Unsupported` before reaching
 //! the agent.
+//!
+//! Each implementation is one module whose agent type implements
+//! [`AgentBackend`]; `Agents::create` maps the implementation name to it.
 
 mod opencode;
 mod types;
@@ -14,12 +17,82 @@ pub use types::*;
 use std::sync::Arc;
 use std::time::Duration;
 
+use async_trait::async_trait;
+
 use crate::litebox::box_impl::BoxImpl;
 use crate::runtime::backend::{BoxBackend, BoxNetworkBackend};
 use crate::{BoxliteError, BoxliteResult};
 
 /// How often `turn.wait` re-reads native turn state.
 const TURN_POLL_INTERVAL: Duration = Duration::from_millis(500);
+
+/// One agent implementation's native protocol behind `Agent` and `AgentTurn`.
+///
+/// An operation the native interface lacks keeps its default, which fails with
+/// `Unsupported` naming the adapter before anything reaches the Box; supporting
+/// it later means overriding that method and listing it in `capabilities`.
+#[allow(
+    clippy::double_must_use,
+    reason = "async_trait generates a must-use boxed future"
+)]
+#[async_trait]
+trait AgentBackend: Send + Sync + std::fmt::Debug {
+    /// Implementation and version named in errors, such as `OpenCode 2.2`.
+    fn adapter(&self) -> &str;
+
+    /// The configuration the agent reported when this handle was obtained.
+    fn config(&self) -> &AgentConfig;
+
+    fn capabilities(&self) -> AgentCapabilities;
+
+    async fn send(&self, text: &str, options: &AgentSendOptions) -> BoxliteResult<AgentTurnState>;
+
+    async fn turn(&self, turn_id: &str) -> BoxliteResult<AgentTurnState>;
+
+    async fn events(&self, options: &AgentEventsOptions) -> BoxliteResult<AgentEventStream>;
+
+    async fn close(&self, _options: &AgentControlOptions) -> BoxliteResult<()> {
+        unsupported(self.adapter(), "agent.close")
+    }
+
+    async fn requests(&self) -> BoxliteResult<Vec<AgentRequest>> {
+        unsupported(self.adapter(), "agent.requests")
+    }
+
+    async fn respond(
+        &self,
+        _request_id: &str,
+        _response: AgentResponse,
+        _options: &AgentControlOptions,
+    ) -> BoxliteResult<AgentTurnState> {
+        unsupported(self.adapter(), "agent.respond")
+    }
+
+    fn state(&self) -> BoxliteResult<AgentState> {
+        unsupported(self.adapter(), "agent.state")
+    }
+
+    async fn turn_events(
+        &self,
+        _turn_id: &str,
+        _options: &AgentEventsOptions,
+    ) -> BoxliteResult<AgentEventStream> {
+        unsupported(self.adapter(), "turn.events")
+    }
+
+    async fn steer(
+        &self,
+        _turn_id: &str,
+        _text: &str,
+        _options: &AgentControlOptions,
+    ) -> BoxliteResult<AgentSteeringReceipt> {
+        unsupported(self.adapter(), "turn.steer")
+    }
+
+    async fn interrupt(&self, _turn_id: &str, _options: &AgentControlOptions) -> BoxliteResult<()> {
+        unsupported(self.adapter(), "turn.interrupt")
+    }
+}
 
 /// Box-owned agent namespace, obtained from [`crate::LiteBox::agents`].
 #[derive(Clone)]
@@ -40,13 +113,13 @@ impl std::fmt::Debug for Agents {
 /// Box-owned agent instance with its conversation.
 #[derive(Debug, Clone)]
 pub struct Agent {
-    session: Arc<opencode::Session>,
+    backend: Arc<dyn AgentBackend>,
 }
 
 /// One submitted task.
 #[derive(Debug, Clone)]
 pub struct AgentTurn {
-    session: Arc<opencode::Session>,
+    backend: Arc<dyn AgentBackend>,
     state: AgentTurnState,
 }
 
@@ -67,16 +140,18 @@ impl Agents {
     /// 2.2.2 already installed in the Box. Starts the Box and OpenCode's
     /// managed service on first use.
     pub async fn create(&self, agent: &str, options: AgentCreateOptions) -> BoxliteResult<Agent> {
-        if agent != opencode::IMPLEMENTATION {
-            return Err(BoxliteError::Unsupported(format!(
+        match agent {
+            opencode::IMPLEMENTATION => {
+                self.require_local_runtime()?;
+                let request = opencode::SessionRequest::new(&options)?;
+                let server = self.opencode_server().await?;
+                Ok(Agent::new(server.create_session(request).await?))
+            }
+            _ => Err(BoxliteError::Unsupported(format!(
                 "agent implementation {agent:?} is not supported; supported: {}",
                 opencode::IMPLEMENTATION
-            )));
+            ))),
         }
-        self.require_local_runtime()?;
-        let request = opencode::SessionRequest::new(&options)?;
-        let server = self.opencode_server().await?;
-        Ok(Agent::new(server.create_session(request).await?))
     }
 
     /// Look up an agent without replaying work.
@@ -116,67 +191,68 @@ impl Agents {
 }
 
 impl Agent {
-    fn new(session: opencode::Session) -> Self {
+    fn new(backend: impl AgentBackend + 'static) -> Self {
         Self {
-            session: Arc::new(session),
+            backend: Arc::new(backend),
         }
     }
 
     /// Stop admissions and close the agent loop.
-    pub async fn close(&self, _options: AgentControlOptions) -> BoxliteResult<()> {
-        unsupported("agent.close")
+    pub async fn close(&self, options: AgentControlOptions) -> BoxliteResult<()> {
+        self.backend.close(&options).await
     }
 
     /// Submit text. The default `queue` mode waits until the agent is idle.
     pub async fn send(&self, text: &str, options: AgentSendOptions) -> BoxliteResult<AgentTurn> {
-        let state = self.session.send(text, &options).await?;
+        let state = self.backend.send(text, &options).await?;
         Ok(self.turn(state))
     }
 
     /// Look up a turn without executing it.
     pub async fn get_turn(&self, turn_id: &str) -> BoxliteResult<AgentTurn> {
-        let state = self.session.turn(turn_id).await?;
+        let state = self.backend.turn(turn_id).await?;
         Ok(self.turn(state))
     }
 
     /// Open the agent's live events; events emitted before opening are not replayed.
     pub async fn events(&self, options: AgentEventsOptions) -> BoxliteResult<AgentEventStream> {
-        self.session.events(&options).await
+        self.backend.events(&options).await
     }
 
     /// Read outstanding questions and permissions.
     pub async fn requests(&self) -> BoxliteResult<Vec<AgentRequest>> {
-        unsupported("agent.requests")
+        self.backend.requests().await
     }
 
     /// Answer a typed request; a terminal question may create an answering turn.
     pub async fn respond(
         &self,
-        _request_id: &str,
-        _response: AgentResponse,
-        _options: AgentControlOptions,
+        request_id: &str,
+        response: AgentResponse,
+        options: AgentControlOptions,
     ) -> BoxliteResult<AgentTurn> {
-        unsupported("agent.respond")
+        let state = self.backend.respond(request_id, response, &options).await?;
+        Ok(self.turn(state))
     }
 
     /// Read a consistent snapshot.
     pub fn state(&self) -> BoxliteResult<AgentState> {
-        unsupported("agent.state")
+        self.backend.state()
     }
 
     /// Read the configuration the agent reported when this handle was obtained.
     pub fn config(&self) -> BoxliteResult<AgentConfig> {
-        Ok(self.session.config().clone())
+        Ok(self.backend.config().clone())
     }
 
     /// Read adapter guarantees and limits.
     pub fn capabilities(&self) -> BoxliteResult<AgentCapabilities> {
-        Ok(opencode::capabilities())
+        Ok(self.backend.capabilities())
     }
 
     fn turn(&self, state: AgentTurnState) -> AgentTurn {
         AgentTurn {
-            session: Arc::clone(&self.session),
+            backend: Arc::clone(&self.backend),
             state,
         }
     }
@@ -190,7 +266,7 @@ impl AgentTurn {
     pub async fn wait(&self, options: AgentWaitOptions) -> BoxliteResult<AgentResult> {
         let observe = async {
             loop {
-                let state = self.session.turn(&self.state.id).await?;
+                let state = self.backend.turn(&self.state.id).await?;
                 if let Some(result) = state.result {
                     return Ok(result);
                 }
@@ -217,22 +293,22 @@ impl AgentTurn {
     }
 
     /// Open this turn's view of the agent's events.
-    pub async fn events(&self, _options: AgentEventsOptions) -> BoxliteResult<AgentEventStream> {
-        unsupported("turn.events")
+    pub async fn events(&self, options: AgentEventsOptions) -> BoxliteResult<AgentEventStream> {
+        self.backend.turn_events(&self.state.id, &options).await
     }
 
     /// Steer this turn, never silently queue a new one.
     pub async fn steer(
         &self,
-        _text: &str,
-        _options: AgentControlOptions,
+        text: &str,
+        options: AgentControlOptions,
     ) -> BoxliteResult<AgentSteeringReceipt> {
-        unsupported("turn.steer")
+        self.backend.steer(&self.state.id, text, &options).await
     }
 
     /// Confirm interruption of this agent loop, not background processes in the Box.
-    pub async fn interrupt(&self, _options: AgentControlOptions) -> BoxliteResult<()> {
-        unsupported("turn.interrupt")
+    pub async fn interrupt(&self, options: AgentControlOptions) -> BoxliteResult<()> {
+        self.backend.interrupt(&self.state.id, &options).await
     }
 
     /// Read the snapshot taken when this handle was obtained.
@@ -241,10 +317,9 @@ impl AgentTurn {
     }
 }
 
-fn unsupported<T>(operation: &str) -> BoxliteResult<T> {
+fn unsupported<T>(adapter: &str, operation: &str) -> BoxliteResult<T> {
     Err(BoxliteError::Unsupported(format!(
-        "{operation} is not supported by {}",
-        opencode::ADAPTER
+        "{operation} is not supported by {adapter}"
     )))
 }
 

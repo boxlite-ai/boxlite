@@ -27,9 +27,11 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, LazyLock, PoisonError, Weak};
 use std::time::Duration;
 
+use async_trait::async_trait;
 use futures::StreamExt;
 use serde_json::{Map, Value, json};
 
+use super::AgentBackend;
 use super::{
     AgentCapabilities, AgentConfig, AgentCreateOptions, AgentEvent, AgentEventStream,
     AgentEventsOptions, AgentOutcome, AgentRequest, AgentRequestKind, AgentResult, AgentSendMode,
@@ -225,17 +227,24 @@ impl Session {
             },
         })
     }
+}
 
-    pub(super) fn config(&self) -> &AgentConfig {
+#[async_trait]
+impl AgentBackend for Session {
+    fn adapter(&self) -> &str {
+        ADAPTER
+    }
+
+    fn config(&self) -> &AgentConfig {
         &self.config
     }
 
+    fn capabilities(&self) -> AgentCapabilities {
+        capabilities()
+    }
+
     /// Durably admit `text` under a minted input ID; the snapshot reports the admission.
-    pub(super) async fn send(
-        &self,
-        text: &str,
-        options: &AgentSendOptions,
-    ) -> BoxliteResult<AgentTurnState> {
+    async fn send(&self, text: &str, options: &AgentSendOptions) -> BoxliteResult<AgentTurnState> {
         let turn_id = mint_id("msg_");
         let body = prompt_body(&turn_id, text, options)?;
         self.server
@@ -258,7 +267,7 @@ impl Session {
     /// into history, so the second read finds an input the first one missed.
     /// A turn without an outcome stays running, because the managed service
     /// resumes an interrupted turn when it boots.
-    pub(super) async fn turn(&self, turn_id: &str) -> BoxliteResult<AgentTurnState> {
+    async fn turn(&self, turn_id: &str) -> BoxliteResult<AgentTurnState> {
         if !is_message_id(turn_id) {
             return Err(self.missing_turn(turn_id));
         }
@@ -302,10 +311,7 @@ impl Session {
     /// Open this session's live events, including subagent sessions created
     /// while the stream is open. OpenCode cannot replay, so `after` is
     /// rejected and every event's cursor is `None`.
-    pub(super) async fn events(
-        &self,
-        options: &AgentEventsOptions,
-    ) -> BoxliteResult<AgentEventStream> {
+    async fn events(&self, options: &AgentEventsOptions) -> BoxliteResult<AgentEventStream> {
         if options.after.is_some() {
             return Err(BoxliteError::Unsupported(format!(
                 "agent.events after a cursor is not supported by {ADAPTER}"
@@ -319,7 +325,9 @@ impl Session {
             .await?;
         Ok(Box::pin(events))
     }
+}
 
+impl Session {
     /// The turn's input message and the history after it, oldest first. Pages
     /// are read newest-first and stop at the input, so recent turns cost one request.
     async fn history_from(&self, turn_id: &str) -> BoxliteResult<(Value, Vec<Value>)> {
@@ -811,7 +819,7 @@ impl EventFilter {
 }
 
 /// Operations this adapter performs; everything else returns `Unsupported`.
-pub(super) fn capabilities() -> AgentCapabilities {
+fn capabilities() -> AgentCapabilities {
     AgentCapabilities {
         operations: [
             "agents.create",
