@@ -517,7 +517,14 @@ fn malformed_descriptors_never_reach_guest_or_backend() {
             assert_eq!(h.used(queue), 0);
             peer.set_nonblocking(true).unwrap();
             let mut byte = [0];
-            assert_eq!(peer.read(&mut byte).unwrap(), 0);
+            match peer.read(&mut byte) {
+                Ok(0) => {}
+                // Linux resets the peer when RX closes with the frame still unread.
+                Err(e) if queue == RX && e.kind() == io::ErrorKind::ConnectionReset => {
+                    assert_eq!(peer.read(&mut byte).unwrap(), 0);
+                }
+                result => panic!("expected closed backend without output, got {result:?}"),
+            }
         }
     }
 }

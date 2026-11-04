@@ -73,3 +73,24 @@ The boundary test completes the last budgeted RX read while TX is blocked, provi
 Count added source and configuration lines after formatting, including untracked files; exclude tests, documentation, assets, and lockfiles.
 Verify that shared virtio files have no diff against the intended base.
 Real gvproxy, Linux guest execution, and whole-VM snapshots are not qualified by these tests.
+
+### Malformed-descriptor socket closure
+
+The malformed RX descriptor test sends a frame before dispatching readiness.
+`Active::process` rejects the descriptor in `collect(RX)` before reading that
+frame; error cleanup closes the stream with unread input. Linux's
+[`unix_release_sock`](https://kernel.googlesource.com/pub/scm/linux/kernel/git/torvalds/linux/+/534293368afa1a953c283310b82e4dc58309d51e/net/unix/af_unix.c#636)
+sets the peer's error to `ECONNRESET` when a stream closes with unread data.
+Thus the test's EOF-only assertion rejects valid cleanup on Linux.
+
+Accept EOF or `ConnectionReset` for this RX case, retaining EOF-only checks for
+TX. After a reset error, require a subsequent read to return EOF so the test
+still rejects queued output. Keep the existing reset, deregistration, and
+unused-ring assertions. No production behavior or shared interfaces change.
+Draining input before closing would change device behavior merely to satisfy
+the test; accepting arbitrary read errors would hide failures.
+
+On Linux x86_64, the original test failed with `ConnectionReset`; the corrected
+test passed. `make test:unit:vmm` passed 253 tests with 26 hardware tests ignored;
+`make clippy:vmm` and `make fmt:check:rust` passed. The corrected test and Rust
+format check also passed on macOS. Linux ARM64 was not rerun.
