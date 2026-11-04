@@ -35,20 +35,99 @@ boxlite-vmm
 | `vcpu` | x86_64 vCPU workers: create and configure each vCPU, hold them at a start gate, run the guest and dispatch its exits until the VM ends |
 | `chipset` | `ChipsetBuilder`, the one registry of ranges and interrupt lines, and `Chipset`, the read-only machine it builds |
 | `bus` | `Bus`, `BusRange` and `BusDevice`, and `Buses::dispatch`, which serves the MMIO and port exits of a vCPU |
-| `virtio` | The virtio common infrastructure: the synchronous device contract (`VirtioDevice`, `DeviceSpec`, `DeviceEvent`, `ActivationContext`, `EventRegistrar`, `Waker`, `WorkerControl`), the `VirtQueues` facade (dense preparation and validation, EVENT_IDX, exactly-once deferred completion, notification drain, the stored guest-memory Arc and negotiated indirect flag, and `save`/`restore` stubs that report snapshots unsupported until M8), the 4 KiB virtio-mmio transport (register file, feature negotiation, queue configuration and activation, Status=0 reset, post-activation queue-write rejection), the MMIO interrupt handle, the default snapshot methods, and the virtio workers (`VirtioWorkers` over a `WorkerRuntime`; `SharedRuntime` runs every device's events on one thread) |
+| `virtio` | The synchronous device contract, MMIO transport and interrupt handle, shared virtio workers, Unix-backed stream vsock, and `VirtQueues` facade: validation, notification drain, deferred completion and unsupported snapshot stubs |
 | `irq` | `IrqChip`, the host interrupt controller as devices see it, and `IrqLine`, one device line; HVF and KVM provide the controller, WHP (M10) only local APICs |
 | `devices` | The console queue, and on x86_64 the 8250 UART at COM1 and the i8042 reset, with `add_legacy_devices`, which adds them to the chipset |
 | `events` | `Event`, which ends the VM, `EventSender`, which also latches the stop, and `EventLoop`, the poller that waits for the first event |
 
 The x86_64 KVM boot and lifecycle are in place; the M1 devices, arm64 and HVF
-follow in M1. The virtio common infrastructure (`virtio`) is in place for M2:
-the device contract, queue adapter, MMIO transport, interrupt handle and the
-shared virtio workers are tested with test devices, and `Vm` owns them;
-production adds no virtio device yet. Real device backends, the
-BoxLite engine adapter, engine selection, and `native` feature wiring follow
-in M2.
+follow in M1. The device contract, queue adapter, MMIO transport, interrupt
+handle, shared workers and stream vsock are implemented. `Vm` owns the shared
+workers but does not attach vsock yet. The BoxLite engine adapter, engine
+selection, other virtio devices and `native` feature wiring follow in M2.
 Neither new crate depends on `boxlite-shared`, and both are unpublished while
 their interfaces are being established.
+
+## Virtio-vsock device
+
+`virtio::vsock::Vsock` implements the existing device contract on Unix hosts.
+It exposes device ID 19, an eight-byte little-endian guest CID, and RX, TX and
+event queues of up to 256 entries each. The upstream transport offers and
+negotiates `VIRTIO_F_VERSION_1`; vsock receives zero device-specific feature
+bits and records negotiation separately. CID 3 preserves the
+BoxLite guest contract, with host CID 2. Reserved CIDs are rejected.
+
+Construction takes explicit `PortMapping`s. `Listen` takes a pre-bound host
+Unix listener and a guest port; `Connect` maps a host port to a trusted Unix
+socket path. For the runtime adapter, map the gRPC listener to guest port 2695
+and the runtime's ready socket path to host port 2696. Host clients send bytes
+directly, without a CONNECT/OK handshake. The caller owns listener path cleanup;
+the device never unlinks paths. No guest-supplied path is constructed.
+
+The device registers nonblocking mio sources through `ActivationContext`.
+The transport prepares its dense `VirtQueues` facade with the negotiated
+features. Vsock requires all three queue slots ready. It drains available
+chains with `Completion::Deferred` into device-owned queues: parsed TX packets
+and writable RX/event buffer metadata. Heads are completed only after backend
+acceptance or guest-buffer delivery. Outstanding heads bound intake to the
+virtqueue capacity (at most 256 TX packets with 64 KiB payloads each); guest
+buffers cannot be recycled while the backend is stalled. The common queue
+facade is unchanged. Reset drops deferred work, while quiesce preserves it for
+resume. Each turn captures requests before completing them, so guest resubmission
+cannot extend that drain indefinitely. RX delivery requests a continuation to
+recheck backend work that may have been blocked by outgoing capacity.
+Socket readiness, guest credit updates and RX kicks resume stalled work.
+The backend caps connections at 128, pending guest-to-host data at 64 KiB per connection, and outgoing packets at
+256 with host reads of at most 4 KiB. Forwarded counters advance only for Unix
+writes that succeed. Host reads reserve guest credit until their packets are
+delivered; half-close preserves the other stream direction.
+
+Reset/drop close connections and deregister sources. Reset also discards
+queued packets and negotiated features; configured listeners can be activated
+again. Pending handshakes and half-closed connections retain bounded slots
+until peer progress or reset. Malformed queues require a device reset;
+unsupported flows and socket failures reset individual connections.
+Datagrams and seqpacket are unsupported.
+
+Vsock advertises `SnapshotSupport::Stopped`. Stop vCPUs and join the device
+worker before `quiesce`; paused callbacks perform no queue or socket work.
+`save_state` requires this pause and records a versioned CID, feature-negotiation
+flag and, for an active device, queue states. Ordinary `resume` retains streams
+and pending bytes and wakes the worker, including after a failed save.
+
+Restore into a fresh or reset device with the same CID and caller-configured
+port mappings. `RestoreContext` supplies restored RAM and new transport/worker
+resources. Format, version, flags, length, CID and required queue readiness are
+validated before changing the target. Restored devices remain paused. Active
+restore creates a fresh socket backend; after `resume`, a four-byte
+`VIRTIO_VSOCK_EVENT_TRANSPORT_RESET` on queue 2 tells the guest to close old
+streams while retaining listen sockets. Until an event buffer is available,
+normal queue and backend work waits. Host connections must reconnect; Unix
+descriptors and buffered stream bytes are not serialized.
+
+Queue `save` and `restore` still return unsupported errors. Vsock propagates
+those errors for active snapshots; inactive device round-trips work now.
+Completing the queue implementation and wiring whole-VM/transport snapshot
+orchestration remain separate work. Tests cover pause/resume, payload
+validation, queue-error propagation and reset-event delivery with prepared
+queues; they do not establish a successful active snapshot round-trip.
+
+The test harness implements `WorkerControl` and socket polling in
+`tests/vsock/worker.rs`, compiled only for unit tests. It exercises the upstream
+MMIO transport's DRIVER_OK start and Status=0 stop/join/reset behavior, including
+reactivation, queue-error interrupts and real Unix socket readiness. The test
+poller schedules continuation callbacks; the upstream shared-runtime waker only
+wakes its poller, so this harness does not qualify that production integration. Continuation
+uses the existing queue-kick callback; no production worker or new worker event
+or error type is needed for these tests.
+
+`make test:unit:vmm FILTER=vsock` exercises guest-memory queues and MMIO register
+negotiation against Unix sockets; local socket bind must be permitted.
+`Vm::new` does not attach vsock yet. Shared-runtime vsock attachment, VM resource allocation,
+public configuration, kernel enablement and real-guest AF_VSOCK qualification
+remain follow-up integration work. The
+[design study](../../docs/contributing/investigations/2026-11-02-virtio-vsock.md)
+records the ownership contract and acceptance checks.
 
 ## Guest RAM
 

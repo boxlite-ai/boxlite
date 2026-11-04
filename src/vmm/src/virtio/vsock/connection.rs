@@ -1,0 +1,214 @@
+// Copyright 2026 BoxLite Contributors
+// SPDX-License-Identifier: Apache-2.0
+
+use super::{packet::*, source::Registered};
+use mio::net::UnixStream;
+use std::{
+    collections::VecDeque,
+    io::{self, Read, Write},
+    net::Shutdown,
+};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(super) struct Key {
+    pub guest: u32,
+    pub host: u32,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum State {
+    Connecting,
+    AwaitResponse,
+    Established,
+}
+
+pub(super) struct Connection {
+    socket: Registered<UnixStream>,
+    state: State,
+    key: Key,
+    cid: u64,
+    pending: VecDeque<u8>,
+    peer_alloc: u32,
+    peer_fwd: u32,
+    tx_count: u32,
+    delivered: u32,
+    fwd_count: u32,
+    guest_shutdown: u32,
+    write_shutdown: bool,
+    host_eof: bool,
+    credit_requested: bool,
+}
+
+impl Connection {
+    pub fn new(socket: Registered<UnixStream>, state: State, key: Key, cid: u64) -> Self {
+        Self {
+            socket,
+            state,
+            key,
+            cid,
+            pending: VecDeque::new(),
+            peer_alloc: 0,
+            peer_fwd: 0,
+            tx_count: 0,
+            delivered: 0,
+            fwd_count: 0,
+            guest_shutdown: 0,
+            write_shutdown: false,
+            host_eof: false,
+            credit_requested: false,
+        }
+    }
+
+    pub fn packet(&self, op: u16, flags: u32, payload: Vec<u8>) -> Packet {
+        Packet {
+            header: Header {
+                src_cid: HOST_CID,
+                dst_cid: self.cid,
+                src_port: self.key.host,
+                dst_port: self.key.guest,
+                len: payload.len() as u32,
+                socket_type: STREAM,
+                op,
+                flags,
+                buf_alloc: BUFFER_SIZE as u32,
+                fwd_cnt: self.fwd_count,
+            },
+            payload,
+        }
+    }
+
+    pub fn delivered(&mut self, count: u32) {
+        self.delivered = self.delivered.wrapping_add(count);
+    }
+
+    pub fn receive(&mut self, packet: Packet) -> io::Result<Option<Packet>> {
+        let h = &packet.header;
+        let advanced = h.fwd_cnt.wrapping_sub(self.peer_fwd);
+        if advanced > self.delivered.wrapping_sub(self.peer_fwd) {
+            return Err(invalid("peer acknowledged unsent vsock bytes"));
+        }
+        self.peer_alloc = h.buf_alloc;
+        self.peer_fwd = h.fwd_cnt;
+        if self
+            .peer_alloc
+            .saturating_sub(self.tx_count.wrapping_sub(self.peer_fwd))
+            > 0
+        {
+            self.credit_requested = false;
+        }
+        if self.state == State::Connecting && h.op == REQUEST && h.flags == 0 && h.len == 0 {
+            return Ok(None);
+        }
+        if self.state == State::AwaitResponse && h.op == RESPONSE && h.flags == 0 && h.len == 0 {
+            self.state = State::Established;
+            return Ok(None);
+        }
+        if self.state != State::Established {
+            return Err(invalid("unexpected vsock handshake"));
+        }
+        match h.op {
+            RW if h.flags == 0 && self.guest_shutdown & SEND == 0 => {
+                if packet.payload.len() > BUFFER_SIZE - self.pending.len() {
+                    return Err(invalid("guest exceeded vsock receive credit"));
+                }
+                self.pending.extend(packet.payload);
+            }
+            SHUTDOWN if h.len == 0 && h.flags != 0 && h.flags & !(RECEIVE | SEND) == 0 => {
+                self.guest_shutdown |= h.flags;
+            }
+            CREDIT_REQUEST if h.len == 0 && h.flags == 0 => {
+                return Ok(Some(self.packet(CREDIT_UPDATE, 0, vec![])));
+            }
+            CREDIT_UPDATE if h.len == 0 && h.flags == 0 => {}
+            _ => return Err(invalid("unexpected vsock operation")),
+        }
+        Ok(None)
+    }
+
+    /// At most one bounded write and read. A full read/write asks for another turn.
+    /// Returns whether this flow is closed and whether runnable work may remain.
+    pub fn drive(&mut self, outgoing: &mut VecDeque<Packet>) -> io::Result<(bool, bool)> {
+        if self.state == State::Connecting {
+            let io = self.socket.io.lock().unwrap();
+            if let Some(error) = io.take_error()? {
+                return Err(error);
+            }
+            match io.peer_addr() {
+                Ok(_) => {}
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        io::ErrorKind::NotConnected | io::ErrorKind::WouldBlock
+                    ) =>
+                {
+                    return Ok((false, false));
+                }
+                Err(error) => return Err(error),
+            }
+            drop(io);
+            self.state = State::Established;
+            outgoing.push_back(self.packet(RESPONSE, 0, vec![]));
+        }
+        if self.state != State::Established {
+            return Ok((false, false));
+        }
+        let mut again = false;
+        let mut io = self.socket.io.lock().unwrap();
+        if !self.pending.is_empty() {
+            match io.write(self.pending.as_slices().0) {
+                Ok(0) => return Err(io::ErrorKind::WriteZero.into()),
+                Ok(count) => {
+                    self.pending.drain(..count);
+                    self.fwd_count = self.fwd_count.wrapping_add(count as u32);
+                    outgoing.push_back(self.packet(CREDIT_UPDATE, 0, vec![]));
+                    again = !self.pending.is_empty();
+                }
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => again = true,
+                Err(error) => return Err(error),
+            }
+        }
+        if self.guest_shutdown & SEND != 0 && self.pending.is_empty() && !self.write_shutdown {
+            io.shutdown(Shutdown::Write)?;
+            self.write_shutdown = true;
+        }
+        if self.guest_shutdown == (RECEIVE | SEND) && self.pending.is_empty() {
+            outgoing.push_back(self.packet(RST, 0, vec![]));
+            return Ok((true, false));
+        }
+        if self.host_eof || self.guest_shutdown & RECEIVE != 0 {
+            return Ok((false, again));
+        }
+        let credit =
+            self.peer_alloc
+                .saturating_sub(self.tx_count.wrapping_sub(self.peer_fwd)) as usize;
+        if credit == 0 {
+            if !self.credit_requested {
+                outgoing.push_back(self.packet(CREDIT_REQUEST, 0, vec![]));
+                self.credit_requested = true;
+            }
+            return Ok((false, again));
+        }
+        let mut data = vec![0; credit.min(4096)];
+        match io.read(&mut data) {
+            Ok(0) => {
+                self.host_eof = true;
+                outgoing.push_back(self.packet(SHUTDOWN, SEND, vec![]));
+            }
+            Ok(count) => {
+                data.truncate(count);
+                self.tx_count = self.tx_count.wrapping_add(count as u32);
+                outgoing.push_back(self.packet(RW, 0, data));
+                again = true;
+            }
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => again = true,
+            Err(error) => return Err(error),
+        }
+        Ok((false, again))
+    }
+}
+
+fn invalid(message: &'static str) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidData, message)
+}

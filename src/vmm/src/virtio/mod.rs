@@ -29,6 +29,9 @@ pub(crate) mod mmio;
 pub(crate) mod queue;
 pub(crate) mod worker;
 
+#[cfg(unix)]
+pub(crate) mod vsock;
+
 /// The largest number of queues a device may declare.
 pub(crate) const MAX_QUEUES: usize = 16;
 /// The largest configuration space a device may declare.
@@ -236,11 +239,16 @@ impl std::error::Error for DeviceError {}
 pub(crate) enum SnapshotError {
     /// The device does not support snapshots.
     Unsupported,
+    /// The device must be quiesced before saving its state.
+    NotQuiesced,
 }
 
 impl fmt::Display for SnapshotError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("the device does not support snapshots")
+        f.write_str(match self {
+            Self::Unsupported => "the device does not support snapshots",
+            Self::NotQuiesced => "the device must be quiesced before saving",
+        })
     }
 }
 
@@ -278,8 +286,18 @@ pub(crate) struct DeviceSnapshot {
 }
 
 /// The resources a restored device receives from the transport.
-#[derive(Clone, Copy, Debug, Default)]
-pub(crate) struct RestoreContext;
+pub(crate) struct RestoreContext {
+    /// Restored guest RAM containing the queue rings and buffers.
+    pub(crate) memory: Arc<GuestMemoryMmap>,
+    /// The restored transport's interrupt handle.
+    pub(crate) interrupt: Arc<dyn VirtioInterrupt>,
+    /// The stopped worker's backend-source registrar.
+    pub(crate) events: Arc<dyn EventRegistrar>,
+    /// The worker's poller waker.
+    pub(crate) waker: Waker,
+    /// The run thread's event sender.
+    pub(crate) sender: EventSender,
+}
 
 /// One virtio device.
 pub(crate) trait VirtioDevice: Send {

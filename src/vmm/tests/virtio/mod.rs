@@ -337,6 +337,7 @@ fn the_activation_context_registers_deregisters_and_wakes() {
 #[test]
 fn snapshot_defaults_are_unsupported() {
     let mut device = TestDevice::new();
+    let ctx = activation();
     assert!(matches!(device.quiesce(), Err(DeviceError::Unsupported(_))));
     assert_eq!(device.save_state(), Err(SnapshotError::Unsupported));
     assert!(matches!(
@@ -346,7 +347,13 @@ fn snapshot_defaults_are_unsupported() {
                 version: 1,
                 payload: Vec::new(),
             },
-            RestoreContext
+            RestoreContext {
+                memory: ctx.memory,
+                interrupt: ctx.interrupt,
+                events: ctx.events,
+                waker: ctx.waker,
+                sender: ctx.sender,
+            }
         ),
         Err(DeviceError::Unsupported(_))
     ));
