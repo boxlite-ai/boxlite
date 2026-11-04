@@ -113,9 +113,9 @@ pub struct SshStatus {
 /// rejects new operations and cancels interface acquisition and RPCs; in-progress
 /// VM initialization finishes before cancellation is returned. Operations are
 /// not retried, and timeout or cancellation does not undo a configuration the
-/// guest already applied. REST-backed handles support configure, status and
-/// disable with one HTTP request each; enable returns
-/// `Unsupported`. The SSH guide (`docs/guides/ssh.md`) owns the HTTP contract.
+/// guest already applied. REST-backed handles support all four operations
+/// with one HTTP request each. The SSH guide (`docs/guides/ssh.md`) owns the
+/// HTTP contract.
 #[derive(Clone)]
 pub struct SshHandle {
     backend: Arc<dyn BoxBackend>,

@@ -47,6 +47,10 @@ class _NativeSsh:
         self.calls.append(("configure", config))
         return "configured"
 
+    async def enable(self):
+        self.calls.append(("enable",))
+        return "enabled"
+
     async def status(self):
         self.calls.append(("status",))
         return "status"
@@ -113,13 +117,18 @@ class TestSyncSshHandle:
             ("disable",),
         ]
 
-    def test_a_failure_keeps_its_class(self, sync_box):
+    def test_enable_forwards_saved_configuration_activation(self, sync_box):
+        assert sync_box.ssh.enable() == "enabled"
+        assert sync_box._box.ssh.calls == [("enable",)]
+
+    @pytest.mark.parametrize("operation", ["status", "enable"])
+    def test_a_failure_keeps_its_class(self, sync_box, operation):
         async def refuse():
             raise NotFoundError("box is gone")
 
-        sync_box._box.ssh.status = refuse
+        setattr(sync_box._box.ssh, operation, refuse)
         with pytest.raises(NotFoundError, match="box is gone"):
-            sync_box.ssh.status()
+            getattr(sync_box.ssh, operation)()
 
 
 # ── Native classes (extension build required) ─────────────────────────────────

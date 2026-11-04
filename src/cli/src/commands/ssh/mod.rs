@@ -36,7 +36,7 @@ pub enum SshCommand {
     Setup(BoxArgs),
     /// Print guest SSH status JSON without starting the box.
     Status(BoxArgs),
-    /// Enable saved SSH configuration on a running local box; prints status JSON.
+    /// Enable saved SSH configuration on a running box; prints status JSON.
     Enable(BoxArgs),
     /// Disable guest SSH on a running box; prints status JSON.
     Disable(BoxArgs),

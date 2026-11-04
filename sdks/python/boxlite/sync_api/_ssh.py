@@ -20,6 +20,10 @@ class SyncSshHandle:
         """Replace SSH configuration; may implicitly start the box."""
         return self._owner._sync(self._owner._box.ssh.configure(config))
 
+    def enable(self) -> "SshStatus":
+        """Enable saved configuration on a running box; preserve healthy connections."""
+        return self._owner._sync(self._owner._box.ssh.enable())
+
     def status(self) -> "SshStatus":
         """Query SSH state without starting the box."""
         return self._owner._sync(self._owner._box.ssh.status())

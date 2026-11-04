@@ -82,6 +82,7 @@ const operationSignals = {
   getRuntimeMetrics: [/getruntimemetrics/, /runtime metrics/, /\/metrics\b/],
   configureSsh: [/configuressh/, /ssh\.configure\(/, /ssh configure/],
   getSshStatus: [/getsshstatus/, /ssh\.status\(/, /ssh status/],
+  enableSsh: [/enablessh/, /ssh\.enable\(/, /ssh enable/],
   disableSsh: [/disablessh/, /ssh\.disable\(/, /ssh disable/],
   getConfig: [/getconfig/, /get \/config/, /\/config\b/, /fetch.*config/],
   getCurrentPrincipal: [/getcurrentprincipal/, /\bwhoami\b/, /\/v1\/me\b/, /\/me\b/],

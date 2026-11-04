@@ -206,6 +206,15 @@ impl PySshHandle {
         })
     }
 
+    /// Enable saved configuration on a running box; preserve healthy connections.
+    fn enable<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let handle = self.handle.clone();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let status = handle.enable().await.map_err(map_err)?;
+            Ok(PySshStatus::from(status))
+        })
+    }
+
     /// Query SSH state without starting the VM or the main command.
     fn status<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let handle = self.handle.clone();

@@ -529,17 +529,13 @@ async fn setup_and_proxy_report_missing_runtime_configuration() {
 }
 
 #[tokio::test]
-async fn enable_rejects_rest_without_sending_a_control_request() {
-    let server = Server::start(vec![]).await;
-    let error = server.run(&["enable", "box-1"]).await.unwrap_err();
-    assert!(
-        matches!(
-            error.downcast_ref::<boxlite::BoxliteError>(),
-            Some(boxlite::BoxliteError::Unsupported(_))
-        ),
-        "{error}"
+async fn enable_uses_saved_configuration_over_rest() {
+    let server = Server::start(vec![(200, status(true, "0.0.0.0:2222", 5))]).await;
+    server.run(&["enable", "box-1"]).await.unwrap();
+    assert_eq!(
+        server.requests(),
+        vec![("POST".into(), "/v1/boxes/box-1/ssh/enable".into())]
     );
-    assert!(server.requests().is_empty());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -130,6 +130,10 @@ async def test_ssh_journey(runtime, tmp_path):
         for _ in range(2):
             assert not (await box.ssh.disable()).enabled
         assert not (await box.ssh.status()).enabled
+        enabled = await box.ssh.enable()
+        assert enabled.enabled
+        assert enabled.generation > intact.generation
+        assert (await box.ssh.enable()).generation == enabled.generation
     finally:
         await _dispose(runtime, box)
 
@@ -150,6 +154,8 @@ async def test_stopped_box_stays_stopped_through_status_and_disable(runtime, tmp
         _assert_disabled(await fresh.ssh.status())
         with pytest.raises(InvalidStateError):
             await fresh.ssh.disable()
+        with pytest.raises(InvalidStateError):
+            await fresh.ssh.enable()
         await _assert_not_running(fresh)
     finally:
         await _dispose(runtime, box)

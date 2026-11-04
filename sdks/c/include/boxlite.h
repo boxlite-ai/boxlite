@@ -769,6 +769,9 @@ typedef void (*CBoxSshConfigureCb)(struct CSshStatus*, CBoxliteError*, void*);
 // SSH status completion with the same ownership contract as SSH configure.
 typedef void (*CBoxSshStatusCb)(struct CSshStatus*, CBoxliteError*, void*);
 
+// SSH enable completion with the same ownership contract as SSH configure.
+typedef void (*CBoxSshEnableCb)(struct CSshStatus*, CBoxliteError*, void*);
+
 // SSH disable completion with the same ownership contract as SSH configure.
 typedef void (*CBoxSshDisableCb)(struct CSshStatus*, CBoxliteError*, void*);
 
@@ -1981,6 +1984,17 @@ enum BoxliteErrorCode boxlite_box_ssh_configure(CBoxHandle *handle,
 // [`boxlite_box_ssh_configure`].
 enum BoxliteErrorCode boxlite_box_ssh_status(CBoxHandle *handle,
                                              CBoxSshStatusCb cb,
+                                             void *user_data,
+                                             struct FFIError *out_error);
+
+// Enable saved SSH configuration on a running box without restarting a healthy
+// listener. Requires existing configuration; never starts the box.
+//
+// # Safety
+//
+// As for [`boxlite_box_ssh_status`].
+enum BoxliteErrorCode boxlite_box_ssh_enable(CBoxHandle *handle,
+                                             CBoxSshEnableCb cb,
                                              void *user_data,
                                              struct FFIError *out_error);
 

@@ -22,6 +22,16 @@ func (c *Client) SSHConfigure(ctx context.Context, boxID string, config boxlite.
 	return bx.SSH().Configure(ctx, config)
 }
 
+// SSHEnable enables saved configuration without booting the box or restarting
+// a healthy listener.
+func (c *Client) SSHEnable(ctx context.Context, boxID string) (*boxlite.SSHStatus, error) {
+	bx, err := c.runningBox(ctx, boxID)
+	if err != nil {
+		return nil, err
+	}
+	return bx.SSH().Enable(ctx)
+}
+
 // SSHStatus reports a box's guest SSH listener without starting the box.
 func (c *Client) SSHStatus(ctx context.Context, boxID string) (*boxlite.SSHStatus, error) {
 	return c.observeSSH(ctx, boxID, (*boxlite.SSH).Status)

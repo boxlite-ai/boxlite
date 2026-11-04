@@ -67,6 +67,7 @@ describe("SimpleBox.ssh", { timeout: 240_000 }, () => {
 
     expectDisabled(await box.ssh.status());
     await expect(box.ssh.disable()).rejects.toThrow(/not running/);
+    await expect(box.ssh.enable()).rejects.toThrow(/not running/);
     expectDisabled(await box.ssh.status());
 
     const info = await box.info();
@@ -93,6 +94,10 @@ describe("SimpleBox.ssh", { timeout: 240_000 }, () => {
     expectDisabled(await box.ssh.disable(), second.generation);
     expectDisabled(await box.ssh.disable(), second.generation);
     expectDisabled(await box.ssh.status(), second.generation);
+    const enabled = await box.ssh.enable();
+    expect(enabled.enabled).toBe(true);
+    expect(enabled.generation).toBeGreaterThan(second.generation);
+    expect(await box.ssh.enable()).toEqual(enabled);
   });
 
   test("rejected configuration reports no credential material", async () => {

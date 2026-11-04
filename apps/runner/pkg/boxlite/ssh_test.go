@@ -103,6 +103,10 @@ func TestIntegrationSSHOnStoppedBoxNeverStartsIt(t *testing.T) {
 		t.Fatalf("configure on a stopped box: err = %v, want ErrBoxNotRunning", err)
 	}
 
+	if _, err := client.SSHEnable(ctx, boxID); !errors.Is(err, ErrBoxNotRunning) {
+		t.Fatalf("enable on a stopped box: err = %v, want ErrBoxNotRunning", err)
+	}
+
 	client.mu.RLock()
 	_, fetched := client.boxes[boxID]
 	client.mu.RUnlock()
@@ -183,6 +187,14 @@ func TestIntegrationSSHServesTheRealClient(t *testing.T) {
 		t.Fatalf("disable status = %+v, want disabled with generation 2 kept", *status)
 	}
 	session.requireClosed(t, "disable")
+	enabled, err := client.SSHEnable(ctx, boxID)
+	if err != nil || !enabled.Enabled || enabled.Generation != 3 {
+		t.Fatalf("enable: status = %+v, err = %v", enabled, err)
+	}
+	repeated, err := client.SSHEnable(ctx, boxID)
+	if err != nil || *repeated != *enabled {
+		t.Fatalf("repeat enable: status = %+v, err = %v", repeated, err)
+	}
 }
 
 // sshTestKeys holds disposable keys: "host" for the guest, "alice" for the

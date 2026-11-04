@@ -849,8 +849,8 @@ These commands add no HTTP routes. Backend requirements differ:
 
 | Commands | Local backend | REST backend |
 |----------|---------------|--------------|
-| `configure`, `status`, `disable` | Existing SSH SDK operations | Requires SSH control; supported by `boxlite serve` |
-| `setup`, `proxy`, `enable` | CLI-managed credentials, stdio connection, and saved-configuration activation | Unsupported |
+| `configure`, `status`, `enable`, `disable` | Existing SSH SDK operations | Requires SSH control; supported by `boxlite serve` |
+| `setup`, `proxy` | CLI-managed credentials and stdio connection | Unsupported |
 | `forward` | Existing local tunnel implementation | Requires both SSH control and tunnel support; unavailable through `boxlite serve` |
 
 | Subcommand | Effect | stdout |
@@ -858,7 +858,7 @@ These commands add no HTTP routes. Backend requirements differ:
 | `configure` | Replace the complete configuration once; disconnects existing SSH clients | `SshStatus` JSON |
 | `setup` | Generate/reuse local keys and replace complete configuration with `box` on `0.0.0.0:22`; disconnects clients | Connection summary and SSH command |
 | `status` | Read state; never starts the box | `SshStatus` JSON |
-| `enable` | Enable saved configuration on a running local box; preserve healthy connections | `SshStatus` JSON |
+| `enable` | Enable saved configuration on a running box; preserve healthy connections | `SshStatus` JSON |
 | `disable` | Stop SSH on a running box; never starts the box | `SshStatus` JSON |
 | `forward` | Read status; fail if disabled; forward to the port SSH actually bound | Bound address |
 | `proxy` | Connect stdin/stdout to enabled SSH on a running local box; never starts or enables it | SSH bytes only |

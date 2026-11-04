@@ -80,6 +80,13 @@ function requireSshObservable(box: Box, boxId: string): void {
   }
 }
 
+function requireSshRunning(box: Box, boxId: string): void {
+  const state = reportedBoxState(box)
+  if (state !== BoxState.STARTED || box.desiredState !== BoxDesiredState.STARTED) {
+    throw new ConflictException(`Box ${boxId} is not running (state: ${state}); start it before enabling SSH`)
+  }
+}
+
 // Spec-first surface (openapi/box.openapi.yaml). Must stay out of the product
 // spec: @All() expands to the SEARCH verb, which OpenAPI 3.0 cannot express.
 @ApiExcludeController()
@@ -287,6 +294,27 @@ export class BoxliteProxyController {
       next,
       OBSERVATION_ONLY,
       { admit: requireSshObservable },
+    )
+  }
+
+  @Post(':boxId/ssh/enable')
+  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
+  async enableSsh(
+    @AuthContext() authContext: OrganizationAuthContext,
+    @Param('boxId') boxId: string,
+    @Req() req: Request,
+    @Res() res: Response,
+    @Next() next: NextFunction,
+  ) {
+    return this.proxyToRunner(
+      authContext,
+      boxId,
+      (runnerBoxId) => `/v1/boxes/${runnerBoxId}/ssh/enable`,
+      req,
+      res,
+      next,
+      OBSERVATION_ONLY,
+      { admit: requireSshRunning },
     )
   }
 

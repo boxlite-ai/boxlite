@@ -53,8 +53,9 @@ a running local box; healthy SSH keeps its connections. Enable without saved
 configuration fails. Enable/disable on valid idle local handles return
 `InvalidState` without starting the box or modifying saved intent; status remains
 observational. Existing SDK bindings inherit the changed disable behavior.
-REST retains its existing control routes; enable is unsupported on REST handles,
-and CLI setup/proxy reject remote backends before creating credentials.
+At the time of this investigation, enable was unsupported on REST handles.
+It is now available through `POST /ssh/enable`; see the [SSH guide](../../guides/ssh.md).
+CLI setup/proxy still reject remote backends before creating credentials.
 
 ## Validation
 

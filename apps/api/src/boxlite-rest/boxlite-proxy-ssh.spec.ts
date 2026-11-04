@@ -43,7 +43,7 @@ function makeHarness(box: Record<string, unknown>) {
     autoResume as never,
     {} as never,
   )
-  const call = (route: 'configureSsh' | 'getSshStatus' | 'disableSsh') =>
+  const call = (route: 'configureSsh' | 'enableSsh' | 'getSshStatus' | 'disableSsh') =>
     controller[route](auth, 'my-box', { url: '/ssh' } as never, {} as never, jest.fn())
   return { call, boxService, autoResume, proxyHandler }
 }
@@ -221,6 +221,32 @@ describe('BoxliteProxyController SSH routes', () => {
     )
   })
 
+  describe('enableSsh', () => {
+    it('proxies once without activity or auto-resume', async () => {
+      const { call, boxService, autoResume, proxyHandler } = makeHarness(running)
+      await call('enableSsh')
+      expect(proxyHandler).toHaveBeenCalledTimes(1)
+      expect(proxiedPath()).toBe('/v1/boxes/box-uuid/ssh/enable')
+      expect(boxService.updateLastActivityAt).not.toHaveBeenCalled()
+      expect(autoResume.ensureReady).not.toHaveBeenCalled()
+    })
+
+    it.each([
+      { state: 'stopped', desiredState: 'stopped' },
+      { state: 'stopped', desiredState: 'started' },
+      { state: 'started', desiredState: 'stopped' },
+      { state: 'started', desiredState: 'destroyed' },
+      { state: 'starting', desiredState: 'started' },
+      { state: 'error', desiredState: 'started' },
+    ])('refuses a non-running box: %j', async (box) => {
+      const { call, boxService, autoResume, proxyHandler } = makeHarness(box)
+      await expect(call('enableSsh')).rejects.toMatchObject({ status: 409 })
+      expect(proxyHandler).not.toHaveBeenCalled()
+      expect(boxService.updateLastActivityAt).not.toHaveBeenCalled()
+      expect(autoResume.ensureReady).not.toHaveBeenCalled()
+    })
+  })
+
   describe.each(['getSshStatus', 'disableSsh'] as const)('%s', (route) => {
     it.each(['started', 'stopped'])('proxies a %s box without activity or resume', async (state) => {
       const { call, boxService, autoResume, proxyHandler } = makeHarness({ state, desiredState: state })
@@ -242,7 +268,7 @@ describe('BoxliteProxyController SSH routes', () => {
     })
   })
 
-  it.each(['configureSsh', 'getSshStatus', 'disableSsh'] as const)(
+  it.each(['configureSsh', 'enableSsh', 'getSshStatus', 'disableSsh'] as const)(
     '%s answers 404 for a box outside the organization',
     async (route) => {
       const { call, boxService, proxyHandler } = makeHarness(running)
@@ -350,6 +376,9 @@ describe('SSH REST routing', () => {
         expect(response.status).toBe(200)
         expect(await response.json()).toMatchObject({ method, path: '/v1/boxes/box-uuid/ssh', ...(body && { body }) })
       }
+      const enabled = await send(ssh.app, 'POST', `${path}/enable`)
+      expect(enabled.status).toBe(200)
+      expect(await enabled.json()).toMatchObject({ method: 'POST', path: '/v1/boxes/box-uuid/ssh/enable' })
       expect(ssh.findOneByIdOrName).toHaveBeenCalledWith('my-box', 'org-1')
     },
   )
@@ -386,10 +415,11 @@ describe('SSH REST permissions', () => {
   })
 
   it.each([
-    ['POST', JSON.stringify(sshConfig)],
-    ['DELETE', undefined],
-  ])('refuses %s without write:boxes before any activity or proxying', async (method, body) => {
-    const response = await send(ssh.app, method, '/api/v1/boxes/my-box/ssh', body)
+    ['POST', JSON.stringify(sshConfig), ''],
+    ['DELETE', undefined, ''],
+    ['POST', undefined, '/enable'],
+  ])('refuses %s without write:boxes before any activity or proxying', async (method, body, suffix) => {
+    const response = await send(ssh.app, method, `/api/v1/boxes/my-box/ssh${suffix}`, body)
 
     expect(response.status).toBe(403)
     expect(ssh.findOneByIdOrName).not.toHaveBeenCalled()

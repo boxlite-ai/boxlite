@@ -223,6 +223,10 @@ impl SshStub {
                     .get(ssh_route)
                     .delete(ssh_route),
             )
+            .route(
+                &format!("/v1{prefix}/boxes/{{id}}/ssh/enable"),
+                axum::routing::post(ssh_route),
+            )
             .with_state(state.clone());
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
@@ -290,12 +294,6 @@ async fn ssh_rest_public_api_round_trips_over_the_wire() {
     let ssh = sandbox.ssh();
     drop(sandbox);
 
-    assert!(matches!(
-        ssh.enable().await,
-        Err(boxlite::BoxliteError::Unsupported(_))
-    ));
-    assert!(stub.requests().is_empty());
-
     assert_eq!(ssh.configure(full_config()).await.unwrap(), active);
     assert_eq!(ssh.status().await.unwrap(), active);
     assert_eq!(ssh.disable().await.unwrap(), disabled());
@@ -318,6 +316,65 @@ async fn ssh_rest_public_api_round_trips_over_the_wire() {
     );
     assert!(requests[1].body.is_empty(), "GET must send no body");
     assert!(requests[2].body.is_empty(), "DELETE must send no body");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ssh_enable_rest_sends_one_bodyless_request() {
+    let active = SshStatus {
+        enabled: true,
+        generation: u64::MAX,
+        ..disabled()
+    };
+    let stub = SshStub::start(vec![(200, status_json(&active))]).await;
+    let sandbox = prefixed_runtime(&stub.url)
+        .get("box-1")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(sandbox.ssh().enable().await.unwrap(), active);
+    let requests = stub.requests();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].method, "POST");
+    assert_eq!(requests[0].path, "/v1/acme/team/boxes/box-1/ssh/enable");
+    assert_eq!(
+        requests[0].authorization.as_deref(),
+        Some("Bearer ssh-stub-key")
+    );
+    assert!(requests[0].body.is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ssh_enable_serve_preserves_errors_without_activity_or_resume() {
+    for (code, expected) in [
+        ("invalid_state", StatusCode::CONFLICT),
+        ("upstream_unavailable", StatusCode::SERVICE_UNAVAILABLE),
+    ] {
+        let upstream = SshStub::local(
+            "stopped",
+            true,
+            vec![(expected.as_u16(), error_envelope(code))],
+        )
+        .await;
+        let (base, state, server) = serve_over(&upstream, Some("key")).await;
+        let url = format!("{base}/v1/boxes/{STUB_BOX_ID}/ssh/enable");
+        assert_eq!(
+            ssh_call("POST", &url, None, None).await.status(),
+            StatusCode::UNAUTHORIZED
+        );
+        assert!(upstream.requests().is_empty());
+        let response = ssh_call("POST", &url, Some("key"), None).await;
+        assert_eq!(response.status(), expected);
+        assert_eq!(
+            response.json::<serde_json::Value>().await.unwrap()["error"]["code"],
+            code
+        );
+        assert!(state.last_activity.read().await.is_empty());
+        let requests = upstream.requests();
+        assert_eq!(requests.len(), 1);
+        assert!(requests[0].path.ends_with("/ssh/enable"));
+        assert!(requests[0].body.is_empty());
+        server.abort();
+    }
 }
 
 /// A failed configure is sent exactly once: the guest restarts SSH on every

@@ -462,6 +462,35 @@ paths:
         "409":
           $ref: "#/components/responses/ConflictError"
 
+  /{prefix}/boxes/{box_id}/ssh/enable:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+      - $ref: "#/components/parameters/boxId"
+    post:
+      operationId: enableSsh
+      summary: Enable saved guest SSH configuration
+      description: |
+        Enables the saved SSH configuration on a running box. Requires existing
+        configuration; repeated calls preserve a healthy listener and its connections.
+        Never starts or resumes the box or its main command, and does not count
+        as activity. Requires write:boxes permission on hosted servers.
+      tags: [Boxes]
+      responses:
+        "200":
+          description: SSH enabled or already enabled
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SshStatus"
+        "400":
+          $ref: "#/components/responses/BadRequestError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailableError"
+
   /{prefix}/boxes/{box_id}/ssh:
     parameters:
       - $ref: "#/components/parameters/prefix"

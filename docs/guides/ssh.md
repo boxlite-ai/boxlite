@@ -30,11 +30,11 @@ SSH does not publish a host port; forward one with [`boxlite ssh forward`](#cli)
 or other network forwarding. For component diagrams and implementation details, see
 [Guest SSH architecture](../../src/guest/src/service/ssh/README.md).
 
-The Rust SDK exposes `configure`, `status`, `enable`, and `disable`.
+The SDKs expose `configure`, `status`, `enable`, and `disable`.
 Automatic credential management belongs to the CLI's [`setup`](#cli) command.
-Local `enable()` uses saved configuration, errors if none exists, and preserves
-connections when SSH is already healthy. REST-backed handles return `Unsupported`
-for enable.
+`enable()` uses saved configuration, errors if none exists, and preserves
+connections when SSH is already healthy. It requires a running box on both local
+and REST backends; it never starts or auto-resumes the box.
 
 Complete configuration remains available for custom addresses, host keys,
 accounts, and certificate authorities:
@@ -153,9 +153,14 @@ convention, `/{prefix}/boxes/{box_id}/ssh`:
 | `GET`    | Read `SshStatus`. Never starts the VM or its main command. |
 | `DELETE` | Disable SSH idempotently on a running box; returns `SshStatus`. Never starts the VM or its main command. An idle local box returns `409 invalid_state`, leaving saved state unchanged. |
 
+The separate bodyless `POST /v1/boxes/{box_id}/ssh/enable` endpoint enables
+saved configuration and returns `SshStatus`. For example, after `disable()`,
+call `enable()` to restore SSH without sending the keys again. A stopped box
+returns `409 invalid_state`; a missing configuration also returns `409 invalid_state`.
+
 The lifecycle and resume rules above also apply over HTTP. Authenticated
-`POST` requests count as AutoStop activity, including rejected configurations;
-`GET`, `HEAD`, and `DELETE` do not.
+`POST /ssh` requests count as AutoStop activity, including rejected configurations;
+`GET`, `HEAD`, `DELETE`, and `POST /ssh/enable` do not.
 
 Send JSON with the fields defined in the [OpenAPI contract](../../openapi/box.openapi.yaml).
 Unknown fields are rejected in the configuration, accounts, and CA objects.
@@ -182,10 +187,13 @@ curl -fsS -X POST "$BOXLITE_URL/v1/boxes/$BOX_ID/ssh" \
 
 ## Hosted cloud API
 
-The hosted API serves the same three operations at `/v1/boxes/{box_id}/ssh` and
+The hosted API serves configuration, status and disable at `/v1/boxes/{box_id}/ssh` and
 `/v1/{prefix}/boxes/{box_id}/ssh`, by box ID or name, within the caller's
 organization. The API checks policy and lifecycle; the box's runner validates the
-body and calls the guest once.
+body and calls the guest once. Enable uses the `/ssh/enable` suffix on both paths.
+It requires `write:boxes` and a running box, returns `409` for stopped or
+transitional states, and neither auto-resumes nor records activity. The runner
+checks the running state again before dispatch.
 
 | Method   | Permission    | Activity | Lifecycle |
 |----------|---------------|----------|-----------|
@@ -287,9 +295,11 @@ Status reports actual listener health and public host identity. Generation count
 successful starts in the current VM. Shutdown drains SSH without changing saved
 intent and rejects new mutations. The existing public operations remain:
 `configure(config)` replaces the configuration and enables SSH, `disable()` turns
-it off while retaining credentials, and `status()` observes the live listener.
+it off while retaining credentials, `enable()` activates saved configuration,
+and `status()` observes the live listener.
 The local runtime's `BoxImpl` translates complete configuration to
 `Control(enable=true, config=...)`, enable/disable to `Control(enable=true/false)`
 on an existing VM, and status to an empty `Control()` request. The CLI's setup
 builds a complete configuration and uses the same configure operation. No setup API or RPC is exposed. The portal forwards each RPC once.
-Other partial updates remain internal. REST retains its POST, DELETE and GET routes.
+Other partial updates remain internal. REST uses POST, DELETE and GET on `/ssh`,
+and a bodyless POST on `/ssh/enable`.

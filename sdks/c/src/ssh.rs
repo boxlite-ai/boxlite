@@ -1,10 +1,10 @@
 //! Guest SSH control over a box handle.
 //!
-//! All three operations follow the post-and-drain pattern: each spawns a Tokio
+//! All operations follow the post-and-drain pattern: each spawns a Tokio
 //! task that runs the Rust `SshHandle` call and posts one `RuntimeEvent`;
 //! callbacks fire later on the thread calling `boxlite_runtime_drain`. Only
-//! `configure` may implicitly start the box (core-owned policy); `status` and
-//! `disable` never start it.
+//! `configure` may implicitly start the box (core-owned policy); `status`,
+//! `enable` and `disable` never start it.
 
 use std::ffi::{CStr, CString, c_char, c_void};
 use std::os::raw::c_int;
@@ -14,7 +14,8 @@ use boxlite::{SshConfig, SshStatus};
 use crate::CBoxHandle;
 use crate::error::{BoxliteErrorCode, FFIError, null_pointer_error, write_error};
 use crate::event_queue::{
-    CBoxSshConfigureCb, CBoxSshDisableCb, CBoxSshStatusCb, OwnedFfiPtr, RuntimeEvent, push_event,
+    CBoxSshConfigureCb, CBoxSshDisableCb, CBoxSshEnableCb, CBoxSshStatusCb, OwnedFfiPtr,
+    RuntimeEvent, push_event,
 };
 
 /// A rejected configure body reports this constant, mirroring the REST
@@ -136,6 +137,23 @@ pub unsafe extern "C" fn boxlite_box_ssh_status(
     spawn_op(handle, SshOp::Status, cb, user_data, out_error)
 }
 
+/// Enable saved SSH configuration on a running box without restarting a healthy
+/// listener. Requires existing configuration; never starts the box.
+///
+/// # Safety
+///
+/// As for [`boxlite_box_ssh_status`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_box_ssh_enable(
+    handle: *mut CBoxHandle,
+    cb: CBoxSshEnableCb,
+    user_data: *mut c_void,
+    out_error: *mut FFIError,
+) -> BoxliteErrorCode {
+    let cb = crate::unwrap_cb_or_return!(cb, out_error);
+    spawn_op(handle, SshOp::Enable, cb, user_data, out_error)
+}
+
 /// Queue SSH shutdown, disconnecting clients. Repeated calls are supported and
 /// never start the box.
 ///
@@ -167,6 +185,7 @@ pub unsafe extern "C" fn boxlite_free_ssh_status(status: *mut CSshStatus) {
 /// The pending operation; `Configure` carries the parsed configuration.
 enum SshOp {
     Configure(SshConfig),
+    Enable,
     Status,
     Disable,
 }
@@ -209,8 +228,8 @@ unsafe fn spawn_configure(
     spawn_op(handle, SshOp::Configure(config), cb, user_data, out_error)
 }
 
-/// Dispatch-time callback: validated non-null at the FFI boundary. The three
-/// public typedefs share one ABI, so one alias serves `spawn_op`.
+/// Dispatch-time callback: validated non-null at the FFI boundary. The public
+/// typedefs share one ABI, so one alias serves `spawn_op`.
 pub(crate) type SshFn = extern "C" fn(*mut CSshStatus, *mut FFIError, *mut c_void);
 
 /// Validate the box handle, then run `op` on the box's Tokio runtime and post
@@ -251,6 +270,11 @@ unsafe fn spawn_op(
                     cb,
                     user_data: user_data_addr,
                     result: lite.ssh().configure(config).await.map(owned_ssh_status),
+                },
+                SshOp::Enable => RuntimeEvent::SshEnable {
+                    cb,
+                    user_data: user_data_addr,
+                    result: lite.ssh().enable().await.map(owned_ssh_status),
                 },
                 SshOp::Status => RuntimeEvent::SshStatus {
                     cb,
