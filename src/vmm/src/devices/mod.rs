@@ -3,7 +3,6 @@
 
 //! The devices behind the buses, and the platform code that adds them.
 
-#[cfg(target_arch = "x86_64")]
 pub(crate) mod balloon;
 pub(crate) mod console;
 #[cfg(target_arch = "x86_64")]
