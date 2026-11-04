@@ -60,8 +60,15 @@ impl IrqLine {
     }
 
     /// Raises an edge: sets the line, then clears it. A failed set skips the
-    /// clear; a failed clear leaves the line set, which drop then lowers.
+    /// clear; a failed clear leaves the line set, and the next pulse lowers it
+    /// before raising so the next notification still makes an edge.
     pub(crate) fn pulse(&self) -> Result<()> {
+        // A failed clear leaves the line high. Lower it first, so the raise
+        // below is an edge rather than a repeated level.
+        if self.high.load(Ordering::SeqCst) {
+            self.chip.set_line(self.line, false)?;
+            self.high.store(false, Ordering::SeqCst);
+        }
         self.chip.set_line(self.line, true)?;
         self.high.store(true, Ordering::SeqCst);
         self.chip.set_line(self.line, false)?;

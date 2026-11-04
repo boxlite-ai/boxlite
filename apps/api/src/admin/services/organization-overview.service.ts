@@ -232,6 +232,7 @@ export class AdminOrganizationOverviewService {
         updatedAt: true,
         createdAt: true,
         createdBy: true,
+        suspended: true,
       },
     })
     if (!organization) return null
@@ -296,6 +297,7 @@ export class AdminOrganizationOverviewService {
     return {
       organizationId,
       name: organization.name,
+      suspended: organization.suspended,
       ...this.registration(organization, usersById),
       members: {
         items: memberPage.flatMap((membership) => {

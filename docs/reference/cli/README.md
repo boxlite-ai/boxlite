@@ -40,6 +40,7 @@ For a quick start, see [`src/cli/README.md`](../../../src/cli/README.md).
   - [`boxlite agent`](#boxlite-agent)
   - [`boxlite serve`](#boxlite-serve)
   - [`boxlite volume`](#boxlite-volume)
+  - [`boxlite domain`](#boxlite-domain)
   - [`boxlite completion`](#boxlite-completion)
 - [Shared Flag Groups](#shared-flag-groups)
 - [Volume Mount Syntax](#volume-mount-syntax)
@@ -129,6 +130,13 @@ use `boxlite auth status --url URL` or `boxlite --url URL auth status`, not
 `boxlite auth --url URL status`. Help lists only options meaningful to that
 backend, and executing invocations reject unsupported options. Clap's `--help`
 and `--version` display actions remain terminal.
+
+Both `-h` and `--help` show command-specific `Options` before `Global options`.
+The global section contains only shared options accepted by that command.
+For example, `boxlite list -h` keeps `--all`, `--quiet`, and `--format` together,
+with `--context` and `--url` in the global section below.
+A command-specific definition, such as `auth login --url`, stays in `Options`.
+Commands without shared options omit the global section.
 
 | Flag | Scope | Env Var | Description |
 |------|-------|---------|-------------|
@@ -402,6 +410,7 @@ takes the command's exit code; `boxlite ps` shows it stopped and
 **Exit behavior:**
 
 - Default (foreground): streams stdout/stderr to the terminal, exits with the box command's exit code. If the command was killed by signal *N*, exits with `128 + N` (Unix convention, see [Exit Codes](#exit-codes)).
+- If the box's init command is missing or non-executable, startup fails: the CLI prints `Error: ...` to stderr and exits `1`. The `exec` startup-refusal statuses below do not apply to `run`.
 - `-d`/`--detach`: prints the box ID to stdout and exits `0` immediately; remove-on-stop is force-disabled in this mode so the box outlives the CLI process.
 - `--tty` with non-TTY stdin: fails with `the input device is not a TTY.`
 
@@ -435,6 +444,13 @@ separator is required (`src/cli/src/commands/exec.rs:22`, `last = true`).
 | `--detach` | `-d` | Start the command and return immediately without streaming |
 
 **Exit behavior:** Same as `boxlite run` (foreground streams + propagates exit code; detach exits `0`). After a foreground exec finishes the CLI calls `runtime.shutdown(None)` to release the box handle gracefully.
+
+For `exec`, a command the guest refuses to launch is still a completed execution:
+`127` when the executable is not found, `126` when it exists but is not
+executable. Foreground exec propagates that status. The guest's diagnostic goes
+to stderr without a TTY, or to merged stdout with `--tty`. `boxlite serve`
+returns the same execution statuses and streams over REST. Rejection of the
+box's init command during `run` remains a CLI error with exit code `1`.
 
 **Examples:**
 
@@ -1014,6 +1030,49 @@ volume after its id, which stays mountable.
 
 ---
 
+### `boxlite domain`
+
+**Synopsis:** `boxlite domain <bind|ls|unbind>`
+
+The domains your organization holds: names under the platform domain
+(`demo.apps.example`) routed to a box port. A domain is the organization's,
+not a box's. Hosted runtimes only; the embedded runtime answers "not
+supported". See [Domains](../../concepts/networking.md#domains).
+
+| Subcommand | Synopsis | Notes |
+|---|---|---|
+| `bind` | `boxlite domain bind DOMAIN --type TYPE [target options]` | `--type` is required; currently only `box`, which requires `--box BOX --port PORT` |
+| `ls` (`list`) | `boxlite domain ls [-q \| --format FORMAT]` | Every full hostname and its target (`-` while unbound); table adds the allowance footer, JSON/YAML return an array of domain rows, quiet prints full hostnames |
+| `unbind` | `boxlite domain unbind HOSTNAME` | Full hostname required; it stays with the organization |
+
+For `bind`, `DOMAIN` is an owned full hostname (`demo1.apps.example`).
+Request it first in **Dashboard → Domains** using a short name; the page shows
+the full hostname and its binding. Select the
+target with `--type`: currently only `box` is supported, with `--box` (an id
+or name) and `--port` (1–65535) required for that type. The CLI rejects missing
+or unsupported types before sending a request. Scripts using the previous
+implicit Box syntax must add `--type box`. Binding prints the target and URL.
+`unbind` accepts only a full hostname returned by `ls`; bare labels are rejected.
+`bind` never requests a name: an unowned hostname returns `404 domain_not_owned`
+and asks you to use Dashboard → Domains. Binding moves a held name from another
+box port at once; other names on the target port stay. It does not make the port
+public: the name answers once `boxlite network tunnel` has declared the port
+and the box has inbound access enabled, in either order. `unbind` stops
+routing the name;
+requests that start afterwards get `404`, and the name still counts against
+the allowance. Binding it again to a live box port does not count it twice.
+New bindings reject a Box being destroyed or already removed. Existing bindings
+survive Box deletion; deleting the owning organization releases its names.
+
+```bash
+boxlite domain bind demo1.apps.example --type box --box web-a --port 3000   # demo1.apps.example → web-a:3000
+boxlite domain bind demo1.apps.example --type box --box web-b --port 3000   # move it, same URL
+boxlite domain ls
+boxlite domain unbind demo1.apps.example
+```
+
+---
+
 ### `boxlite completion`
 
 **Synopsis:** `boxlite completion <SHELL>`
@@ -1221,19 +1280,19 @@ Image `EXPOSE` declarations remain metadata and do not open host listeners.
 ## Output formats
 
 The `--format` flag is shared across `list`, `images`, `inspect`, `stats`,
-`info`, `volume ls`, and `volume get`. Valid values come from
+`info`, `volume ls`, `volume get`, and `domain ls`. Valid values come from
 `OutputFormat::from_str` at `src/cli/src/formatter.rs:26`:
 
 | Format | Available on | Description |
 |--------|--------------|-------------|
-| `table` | `list`, `images`, `stats`, `volume ls`, `volume get` | Human-readable columnar layout |
-| `json` | `list`, `images`, `stats`, `inspect`, `info`, `volume ls`, `volume get` | Pretty-printed JSON (`serde_json::to_string_pretty`) |
-| `yaml` | `list`, `images`, `stats`, `inspect`, `info`, `volume ls`, `volume get` | YAML (`serde_yaml::to_string`) |
+| `table` | `list`, `images`, `stats`, `volume ls`, `volume get`, `domain ls` | Human-readable columnar layout |
+| `json` | `list`, `images`, `stats`, `inspect`, `info`, `volume ls`, `volume get`, `domain ls` | Pretty-printed JSON (`serde_json::to_string_pretty`) |
+| `yaml` | `list`, `images`, `stats`, `inspect`, `info`, `volume ls`, `volume get`, `domain ls` | YAML (`serde_yaml::to_string`) |
 | Go template | `inspect` only | Any `gtmpl` template, e.g. `'{{.State.Status}}'`; `{{json .Field}}` serializes a nested value |
 
 Defaults:
 
-- `list`, `images`, `stats`, `volume ls`, `volume get`: `table`
+- `list`, `images`, `stats`, `volume ls`, `volume get`, `domain ls`: `table`
 - `inspect`: `json`
 - `info`: `yaml`
 
@@ -1276,8 +1335,12 @@ For a richer treatment of the registry config (auth flows, fallbacks, mirrors), 
 | `0` | success | Command (or box command) finished successfully |
 | `1` | runtime | Any anyhow error from a CLI command — `main.rs:71` prints `Error: ...` to stderr and exits `1` |
 | `2` | clap | Invalid CLI usage (unknown flag, missing required arg, bad value) |
-| `N` (1-127) | box command | `run`/`exec` propagate the box command's exit status |
+| `N` (1-127) | box command | `run`/`exec` propagate the command's exit status |
+| `126` | exec startup refusal | Special case: the command exists but is not executable |
+| `127` | exec startup refusal | Special case: the command was not found |
 | `128 + N` | signal | `run`/`exec` exited because the box command was killed by signal *N* (e.g. `137` for `SIGKILL`, `143` for `SIGTERM`) |
+
+`126`/`127` are the only special cases: an `exec` startup refusal. Every other value keeps its usual meaning: the command's own exit status, a CLI error, or a signal.
 
 `boxlite rm`, `start`, `stop`, `restart` aggregate per-target errors and exit `1` if any target failed, after attempting all targets.
 

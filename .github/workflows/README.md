@@ -74,6 +74,8 @@ runbook](../../docs/contributing/development/e2e-local.md), [deployment](../../a
 Cloud dev E2E also requires the three-profile [identity configuration](../../apps/e2e/README.md#the-cloud-legs-ci).
 Its separate identity step verifies cross-organization isolation and same-organization
 read-only access; missing or mis-scoped credentials fail setup. Prod keeps its single-key smoke suite.
+The p1 dev suite reads `BOXLITE_E2E_DOMAIN` from repository Actions Variables
+for [subdomain acceptance](../../apps/e2e/README.md#subdomain-acceptance).
 
 ## Routine checks
 

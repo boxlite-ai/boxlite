@@ -65,6 +65,29 @@ const serviceWith = () => {
 describe('AdminOrganizationOverviewService', () => {
   afterEach(() => jest.useRealTimers())
 
+  it.each([true, false])('projects the stored suspension flag %s from the selected row', async (suspended) => {
+    const { service, organizations } = serviceWith()
+    const stored = {
+      id: 'org-1',
+      name: 'Example',
+      createdAt: new Date('2026-10-01T00:00:00Z'),
+      createdBy: 'creator-1',
+      updatedAt: new Date('2026-10-20T00:00:00Z'),
+      suspended,
+    }
+    organizations.findOne.mockImplementation(async ({ select }: { select: Record<string, boolean> }) =>
+      Object.fromEntries(Object.entries(stored).filter(([column]) => select[column])),
+    )
+
+    const result = await service.detail('org-1', { memberLimit: 50, boxLimit: 50 })
+
+    expect(result).toHaveProperty('suspended', suspended)
+    expect(organizations.findOne).toHaveBeenCalledTimes(1)
+    expect(organizations.findOne).toHaveBeenCalledWith(
+      expect.objectContaining({ select: expect.objectContaining({ suspended: true }) }),
+    )
+  })
+
   it('omits usage reads by default and reads the stored creator independently of membership', async () => {
     const { service, organizations, memberships, users, boxes, usagePeriods, activation } = serviceWith()
     organizations.findOne.mockResolvedValue({

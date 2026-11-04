@@ -108,6 +108,30 @@ impl ExecutionState {
         }
     }
 
+    /// A rejected spawn has output and an exit status, but no process or file descriptors.
+    pub(super) async fn rejected(rejection: crate::container::CommandRejection, tty: bool) -> Self {
+        let output = OutputManager::completed_with_diagnostic(rejection.message, tty).await;
+        let consumer_lease = output.consumer_lease_flag();
+        Self {
+            inner: Arc::new(Mutex::new(Inner {
+                handle: None,
+                output,
+                input_tasks: Vec::new(),
+                output_task: None,
+                timeout_task: None,
+                released: false,
+                init_health: None,
+            })),
+            exit: crate::reaper::ExitSlot::settled(
+                crate::service::exec::exec_handle::ExitStatus::Code(rejection.exit_code),
+            ),
+            process: None,
+            shutdown_managed: false,
+            consumer_lease,
+            terminal_exit: Arc::new(OnceCell::new()),
+        }
+    }
+
     /// Whether a reader is currently streaming this execution's output.
     ///
     /// Kept outside `inner` so eviction can ask while holding the registry lock,
@@ -640,8 +664,7 @@ mod release_tests {
                 modes: Vec::new(),
             },
         );
-        let state =
-            ExecutionState::new_for_test(handle, ExitSlot::settled_for_test(ExitStatus::Code(0)));
+        let state = ExecutionState::new_for_test(handle, ExitSlot::settled(ExitStatus::Code(0)));
         (
             state,
             tracked,
@@ -1001,7 +1024,7 @@ mod release_tests {
         let state = ExecutionState::new_with_init_health(
             handle,
             health,
-            ExitSlot::settled_for_test(ExitStatus::Signal(nix::sys::signal::Signal::SIGKILL)),
+            ExitSlot::settled(ExitStatus::Signal(nix::sys::signal::Signal::SIGKILL)),
             None,
         );
 

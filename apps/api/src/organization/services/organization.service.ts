@@ -51,6 +51,7 @@ import { boxLookupCacheKeyByAuthToken } from '../../box/utils/box-lookup-cache.u
 import { BoxRepository } from '../../box/repositories/box.repository'
 import { OrganizationReferralCodeDto } from '../dto/organization-referral-code.dto'
 import { OrganizationReferralCodeException } from '../../exceptions/organization-referral-code.exception'
+import { Domain } from '../../box/entities/domain.entity'
 
 const REFERRAL_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
 const REFERRAL_UNIQUE_CONSTRAINT = 'organization_referral_code_uq'
@@ -491,19 +492,27 @@ export class OrganizationService implements OnModuleInit, TrackableJobExecutions
     organization: Organization,
     force = false,
   ): Promise<void> {
-    if (!force) {
-      const defaultMembershipsCount = await entityManager.count(OrganizationUser, {
-        where: {
-          organizationId: organization.id,
-          isDefaultForUser: true,
-        },
+    await entityManager.transaction(async (manager) => {
+      // Claims lock this same row, so no new name can arrive between domain
+      // cleanup and organization removal. A failed removal restores both.
+      const current = await manager.findOne(Organization, {
+        where: { id: organization.id },
+        lock: { mode: 'pessimistic_write' },
       })
-
-      if (defaultMembershipsCount > 0) {
-        throw new ForbiddenException("Cannot delete an organization while it is a user's default organization")
+      if (!current) {
+        throw new NotFoundException(`Organization ${organization.id} not found`)
       }
-    }
-    await entityManager.remove(organization)
+      if (!force) {
+        const defaultMembershipsCount = await manager.count(OrganizationUser, {
+          where: { organizationId: organization.id, isDefaultForUser: true },
+        })
+        if (defaultMembershipsCount > 0) {
+          throw new ForbiddenException("Cannot delete an organization while it is a user's default organization")
+        }
+      }
+      await manager.delete(Domain, { organizationId: organization.id })
+      await manager.remove(current)
+    })
   }
 
   private async unsuspendDefaultForUserWithEntityManager(entityManager: EntityManager, userId: string): Promise<void> {

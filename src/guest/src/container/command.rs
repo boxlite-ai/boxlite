@@ -5,6 +5,7 @@
 
 use super::capabilities::CapabilitySet;
 use super::zygote::{self, BuildSpec};
+use super::SpawnFailure;
 use crate::service::exec::exec_handle::{ExecHandle, PtyConfig};
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use nix::unistd::Pid;
@@ -264,7 +265,7 @@ impl ContainerCommand {
     /// ```
     #[allow(dead_code)] // Public API; ContainerExecutor uses spawn_build() for two-phase locking
     pub async fn spawn(self) -> BoxliteResult<ExecHandle> {
-        match self.spawn_build().await? {
+        match self.spawn_build().await.map_err(SpawnFailure::into_error)? {
             SpawnResult::Ready(handle) => Ok(handle),
             SpawnResult::PtyPending(pending) => pending.finish(),
         }
@@ -279,7 +280,7 @@ impl ContainerCommand {
     /// Use this instead of [`spawn()`] when you need to release the container
     /// mutex between the zygote build and the PTY handshake. The build phase
     /// serializes `chdir()` in libcontainer; the PTY handshake does not need it.
-    pub(crate) async fn spawn_build(self) -> BoxliteResult<SpawnResult> {
+    pub(crate) async fn spawn_build(self) -> Result<SpawnResult, SpawnFailure> {
         if let Some(pty_config) = self.pty_config.clone() {
             self.spawn_pty_build(pty_config).await
         } else {
@@ -289,7 +290,7 @@ impl ContainerCommand {
     }
 
     /// Spawn process with pipes (standard mode).
-    async fn spawn_with_pipes(self) -> BoxliteResult<ExecHandle> {
+    async fn spawn_with_pipes(self) -> Result<ExecHandle, SpawnFailure> {
         use nix::unistd::pipe;
 
         // Create pipes for I/O
@@ -311,7 +312,7 @@ impl ContainerCommand {
             Ok(handle) => Ok(handle),
             Err(error) => {
                 terminate_process(pid);
-                Err(error)
+                Err(error.into())
             }
         }
     }
@@ -321,7 +322,7 @@ impl ContainerCommand {
     /// Creates the console socket, sends the build spec to the zygote, and
     /// returns a [`SpawnedPty`] that captures the PID + socket for later
     /// completion via [`SpawnedPty::finish()`].
-    async fn spawn_pty_build(mut self, config: PtyConfig) -> BoxliteResult<SpawnResult> {
+    async fn spawn_pty_build(mut self, config: PtyConfig) -> Result<SpawnResult, SpawnFailure> {
         use super::console_socket::ConsoleSocket;
 
         let exec_id = uuid::Uuid::new_v4().to_string();
@@ -376,7 +377,7 @@ impl ContainerCommand {
     async fn build_and_spawn(
         &self,
         pipes: Option<(OwnedFd, OwnedFd, OwnedFd)>,
-    ) -> BoxliteResult<Pid> {
+    ) -> Result<Pid, SpawnFailure> {
         let program = self.program.clone().unwrap_or_default();
         let mut container_args = vec![program.clone()];
         container_args.extend_from_slice(self.args.as_slice());
@@ -388,7 +389,8 @@ impl ContainerCommand {
         {
             return Err(BoxliteError::Config(
                 "this internal SSH workload does not support a PTY".into(),
-            ));
+            )
+            .into());
         }
 
         let (uid, gid) = self.resolve_exec_user()?;
@@ -443,7 +445,7 @@ impl ContainerCommand {
                 container_id = %self.id,
                 program = %program,
                 args = ?container_args,
-                error = %e,
+                error = ?e,
                 "zygote build failed"
             );
             e

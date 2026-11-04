@@ -22,6 +22,7 @@ function makeController() {
     {} as never,
     {} as never,
     null as never,
+    {} as never,
   )
   return { controller, redis, boxService, store }
 }

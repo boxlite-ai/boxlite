@@ -3,6 +3,17 @@
 The NestJS control-plane service. See the [apps hub](../README.md) for how it fits with the
 other services and [`API.md`](../API.md) for its interfaces.
 
+## Account deletion tests
+
+`src/user/user-deletion-memberships.spec.ts` exercises account deletion through the real services
+and event handlers. Its database double runs nested transaction callbacks with the same manager
+and supports deletion by ID or field criteria; only the outer transaction records a commit.
+The assertions check domain cleanup, preservation of shared organizations and their domains,
+and membership revocation after the outer commit. Run it from the repository root with
+`make test:apps:api TEST_FILES=user-deletion-memberships.spec.ts`.
+The double checks callback execution and row selection; the real-Postgres organization-domain
+lifecycle tests cover database rollback.
+
 ## Admin Box image
 
 `GET /api/admin/boxes` and `GET /api/admin/boxes/{id}` include `image`, the stored
@@ -73,6 +84,12 @@ consumers before producers; mixed-version traffic is not supported during activa
   adds existing UTC month-to-date usage; `include=activation` adds retained activation
   evidence. Comma-separated `include=usage,activation` selects both. Omitting `include`
   reads neither section.
+
+Admin detail also returns the stored `suspended` boolean from the same organization
+lookup. This flag does not evaluate `suspendedUntil` or establish whether Boxes have
+stopped. The response property is optional and read-only in generated clients for
+older-server compatibility; an absent flag means unknown, never false. No schema
+migration or additional query is needed.
 
 `createdAt` is organization creation time, not user signup or first Box creation. `createdBy`
 is the stored creator association, independent of current membership. Account linking

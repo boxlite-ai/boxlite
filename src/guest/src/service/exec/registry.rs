@@ -689,7 +689,7 @@ mod release_tests {
         let (stderr, _stderr_peer) = pipe().unwrap();
         let handle = ExecHandle::new(Pid::from_raw(pid), stdin, stdout, Some(stderr))
             .expect("test pipe must register with Tokio");
-        let exit = ExitSlot::settled_for_test(ExitStatus::Code(7));
+        let exit = ExitSlot::settled(ExitStatus::Code(7));
         if is_init {
             ExecutionState::new_init_session(handle, exit, None)
         } else {
@@ -704,7 +704,7 @@ mod release_tests {
         let (stderr, _stderr_peer) = pipe().unwrap();
         let handle = ExecHandle::new(Pid::from_raw(pid), stdin, stdout, Some(stderr))
             .expect("test pipe must register with Tokio");
-        let exit = ExitSlot::settled_for_test(ExitStatus::Code(7));
+        let exit = ExitSlot::settled(ExitStatus::Code(7));
         ExecutionState::new(handle, exit, None)
     }
 
@@ -851,7 +851,7 @@ mod release_tests {
         let state = ExecutionState::new_for_test(
             ExecHandle::new(Pid::from_raw(11_009), stdin, stdout, Some(stderr))
                 .expect("test pipe must register with Tokio"),
-            ExitSlot::settled_for_test(ExitStatus::Code(0)),
+            ExitSlot::settled(ExitStatus::Code(0)),
         );
         let timeout_task = tokio::spawn(std::future::pending());
         let timeout_abort = timeout_task.abort_handle();
@@ -1273,7 +1273,7 @@ mod release_tests {
         let init = ExecutionState::new_init_session(
             ExecHandle::new(leader, stdin, stdout, Some(stderr))
                 .expect("test pipes must register with Tokio"),
-            ExitSlot::settled_for_test(ExitStatus::Code(0)),
+            ExitSlot::settled(ExitStatus::Code(0)),
             crate::service::exec::process_instance::ProcessInstance::capture(leader),
         );
         let registry = ExecutionRegistry::new();
@@ -1328,11 +1328,7 @@ mod release_tests {
         let (stderr, stderr_peer) = pipe().unwrap();
         let handle = ExecHandle::new(Pid::from_raw(pid), stdin, stdout, Some(stderr))
             .expect("test pipe must register with Tokio");
-        let state = ExecutionState::new(
-            handle,
-            ExitSlot::settled_for_test(ExitStatus::Code(0)),
-            None,
-        );
+        let state = ExecutionState::new(handle, ExitSlot::settled(ExitStatus::Code(0)), None);
         (state, vec![stdin_peer, stdout_peer, stderr_peer])
     }
 

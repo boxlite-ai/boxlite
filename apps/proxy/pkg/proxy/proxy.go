@@ -172,42 +172,7 @@ func StartProxy(ctx context.Context, config *config.Config) error {
 		router.Use(proxy.browserWarningMiddleware())
 	}
 
-	router.Any("/*path", func(ctx *gin.Context) {
-		if ctx.Request.Method == "POST" && ctx.Request.URL.Path == ACCEPT_PREVIEW_PAGE_WARNING_PATH {
-			handleAcceptProxyWarning(ctx, config.ProxyProtocol == "https")
-			return
-		}
-
-		_, _, _, err := proxy.parseHost(ctx.Request.Host)
-		// if the host is not valid, we don't proxy the request
-		if err != nil {
-			switch ctx.Request.Method {
-			case "GET":
-				{
-					switch ctx.Request.URL.Path {
-					case "/login":
-						proxy.StartTunnelLogin(ctx)
-						return
-					case "/callback":
-						proxy.AuthCallback(ctx)
-						return
-					case "/health":
-						ctx.JSON(http.StatusOK, gin.H{"status": "ok", "version": internal.Version})
-						return
-					}
-				}
-			}
-
-			ctx.Error(common_errors.NewNotFoundError(errors.New("not found")))
-			return
-		}
-
-		if ctx.Request.Method == http.MethodGet && ctx.Request.URL.Path == loginCallbackPath {
-			proxy.FinishTunnelLogin(ctx)
-			return
-		}
-		common_proxy.NewProxyRequestHandler(proxy.GetProxyTarget, nil)(ctx)
-	})
+	router.Any("/*path", proxy.handleHTTP)
 
 	httpServer := &http.Server{
 		Addr:              fmt.Sprintf(":%d", config.ProxyPort),
@@ -267,6 +232,48 @@ func StartProxy(ctx context.Context, config *config.Config) error {
 
 		return <-errChan
 	}
+}
+
+// handleHTTP routes one request that is not a CONNECT. The proxy's own
+// endpoints answer only on a Host that names no box: under a platform
+// subdomain `/health` and `/callback` belong to the user's service.
+func (p *Proxy) handleHTTP(ctx *gin.Context) {
+	if ctx.Request.Method == "POST" && ctx.Request.URL.Path == ACCEPT_PREVIEW_PAGE_WARNING_PATH {
+		handleAcceptProxyWarning(ctx, p.config.ProxyProtocol == "https")
+		return
+	}
+
+	if _, isAppDomain := p.appDomainHost(ctx.Request.Host); !isAppDomain {
+		_, _, _, err := p.parseHost(ctx.Request.Host)
+		// if the host is not valid, we don't proxy the request
+		if err != nil {
+			switch ctx.Request.Method {
+			case "GET":
+				{
+					switch ctx.Request.URL.Path {
+					case "/login":
+						p.StartTunnelLogin(ctx)
+						return
+					case "/callback":
+						p.AuthCallback(ctx)
+						return
+					case "/health":
+						ctx.JSON(http.StatusOK, gin.H{"status": "ok", "version": internal.Version})
+						return
+					}
+				}
+			}
+
+			ctx.Error(common_errors.NewNotFoundError(errors.New("not found")))
+			return
+		}
+		if ctx.Request.Method == http.MethodGet && ctx.Request.URL.Path == loginCallbackPath {
+			p.FinishTunnelLogin(ctx)
+			return
+		}
+	}
+
+	common_proxy.NewProxyRequestHandler(p.GetProxyTarget, nil)(ctx)
 }
 
 func (p *Proxy) newGuestPortTransport() *http.Transport {

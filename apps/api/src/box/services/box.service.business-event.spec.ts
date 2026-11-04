@@ -39,6 +39,7 @@ function makeCreateService() {
     getValidatedOrDefaultRegion: jest.fn().mockResolvedValue({ id: 'region-1' }),
     getValidatedOrDefaultClass: jest.fn().mockReturnValue('small'),
     organizationService: { assertOrganizationIsNotSuspended: jest.fn() },
+    organizationBoxLimits: { resolve: jest.fn(async (organization) => organization) },
     redis: { exists: jest.fn().mockResolvedValue(1) },
     logger: { log: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() },
     runnerService: {

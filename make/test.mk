@@ -2,7 +2,8 @@ PHONY_TARGETS += test test\:unit\:cli test\:unit\:vmm test\:unit\:guest test\:gu
 PHONY_TARGETS += test\:integration\:vmm\:kvm test\:integration\:vmm\:elf test\:integration\:vmm\:linux _ensure-kvm _ensure-vmm-kernel test\:vmm\:boot
 PHONY_TARGETS += test\:integration\:vmm\:hvf _ensure-hvf
 PHONY_TARGETS += test\:apps\:runner
-PHONY_TARGETS += test\:apps\:proxy
+PHONY_TARGETS += test\:apps\:proxy test\:apps\:dashboard
+PHONY_TARGETS += test\:apps\:mdeploy test\:e2e\:drivers
 PHONY_TARGETS += _local-registry
 
 # Mirrors GitHub Actions strategy.fail-fast. Default false: aggregator
@@ -604,6 +605,10 @@ test\:apps\:infra: _ensure-infra-deps
 	@echo "🧪 Running infrastructure script tests..."
 	@cd apps/infra && npm test
 
+test\:apps\:mdeploy: _ensure-infra-deps
+	@cd apps/infra && npm run --silent typecheck:mdeploy
+	@cd apps/infra && npm run --silent test:mdeploy
+
 test\:apps\:infra-config: _ensure-apps-deps _ensure-infra-deps
 	@echo "🧪 Installing and type-checking the SST deployment config..."
 	@cd apps/infra && IAM_PERMISSIONS_BOUNDARY_STAGE=ci npm run sst -- install --stage ci
@@ -611,7 +616,10 @@ test\:apps\:infra-config: _ensure-apps-deps _ensure-infra-deps
 
 test\:apps\:api: _ensure-apps-deps
 	@echo "🧪 Running API unit tests..."
-	@cd apps && yarn nx run api:test --runInBand $(if $(FILTER),--testNamePattern '$(FILTER)',)
+	@cd apps && yarn nx run api:test --runInBand $(if $(TEST_FILES),--testPathPatterns '$(TEST_FILES)',) $(if $(FILTER),--testNamePattern '$(FILTER)',)
+
+test\:apps\:dashboard: _ensure-apps-deps
+	@cd apps && yarn nx run dashboard:test --run $(if $(FILTER),--testNamePattern '$(FILTER)',)
 
 test\:apps\:runner: dev\:go
 	@echo "🧪 Running runner Go tests..."
@@ -636,6 +644,10 @@ test\:rest\:e2e:
 
 test\:rest\:report:
 	@python3 scripts/test/rest/report.py
+
+# Validate acceptance-client invocation without a running cloud or VM.
+test\:e2e\:drivers:
+	@cargo test --locked -p boxlite-e2e-rust $(CARGOTEST_FILTER)
 
 # Installer-script smoke test: structural assertions on the rendered
 # install.sh (atomic replace, integrity envelope, pinned-install trust

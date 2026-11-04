@@ -13,13 +13,16 @@ describe('RunnerAdapterV0 createBox', () => {
     const create = jest.fn().mockResolvedValue({ data: { daemonVersion: '1.0' } })
     ;(adapter as any).boxApiClient = { create }
 
-    await adapter.createBox({
-      id: 'box-1',
-      image: 'base',
-      env: {},
-      outboundEnabled: false,
-      outboundAllowNet: ['api.openai.com', '10.0.0.0/8'],
-    } as any, 'base')
+    await adapter.createBox(
+      {
+        id: 'box-1',
+        image: 'base',
+        env: {},
+        outboundEnabled: false,
+        outboundAllowNet: ['api.openai.com', '10.0.0.0/8'],
+      } as any,
+      'base',
+    )
 
     expect(create).toHaveBeenCalledWith(
       expect.objectContaining({ outboundEnabled: false, outboundAllowNet: ['api.openai.com', '10.0.0.0/8'] }),

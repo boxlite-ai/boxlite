@@ -89,6 +89,10 @@ pub struct LiteBox {
 - **Formatting**: `cargo fmt` (enforced in CI)
 - **Linting**: `cargo clippy` (warnings are errors in CI)
 
+Check lint overrides with the Rust version used by [CI](../../../.github/ci-config.json);
+a cached local `stable` toolchain can be older. Use `#[expect(..., reason = "...")]`
+while the lint still fires, and remove the override when it no longer does.
+
 Run before committing:
 
 ```bash

@@ -19,6 +19,7 @@ describe('PreviewController private tunnel credential scope', () => {
       { findOne: jest.fn().mockResolvedValue({ id: 'box-org' }) } as never,
       null as never,
       null as never,
+      null as never,
     )
     return controller
   }
@@ -59,6 +60,7 @@ describe('PreviewController private tunnel credential scope', () => {
 
 describe('PreviewController public tunnel check', () => {
   const access = jest.fn()
+  const resolve = jest.fn()
   const controller = new PreviewController(
     null as never,
     null as never,
@@ -67,14 +69,50 @@ describe('PreviewController public tunnel check', () => {
     null as never,
     null as never,
     null as never,
+    { resolve } as never,
   )
 
-  beforeEach(() => access.mockReset())
+  beforeEach(() => {
+    access.mockReset()
+    resolve.mockReset()
+  })
+
+  it('keeps the domain lookup proxy-only and answers 404 for a name it will not forward', async () => {
+    expect(Reflect.getMetadata('swagger/apiExcludeEndpoint', controller.resolveDomain)).toEqual({ disable: true })
+    expect(Reflect.getMetadata('__guards__', controller.resolveDomain)).toEqual([CombinedAuthGuard, ProxyGuard])
+    resolve.mockResolvedValueOnce(null).mockResolvedValueOnce({ type: 'box', box: 'box-1', port: 3000 })
+    access.mockResolvedValue(true)
+
+    await expect(controller.resolveDomain('demo.app.test')).rejects.toBeInstanceOf(NotFoundException)
+    expect(access).not.toHaveBeenCalled()
+    await expect(controller.resolveDomain('demo.app.test')).resolves.toEqual({ boxId: 'box-1', port: 3000 })
+    expect(resolve).toHaveBeenCalledWith('demo.app.test')
+    expect(access).toHaveBeenCalledWith('box-1', 3000)
+  })
 
   it('keeps the proxy-only endpoint out of generated API clients', () => {
     expect(Reflect.getMetadata('swagger/apiExcludeEndpoint', controller.isPublicTunnelActive)).toEqual({
       disable: true,
     })
+  })
+
+  it('refuses a bound domain when its target fails public access', async () => {
+    resolve.mockResolvedValue({ type: 'box', box: 'box-1', port: 3000 })
+    access.mockResolvedValue(false)
+
+    await expect(controller.resolveDomain('demo.app.test')).rejects.toBeInstanceOf(NotFoundException)
+    expect(access).toHaveBeenCalledWith('box-1', 3000)
+  })
+
+  it('propagates domain lookup and public access failures without returning a target', async () => {
+    const failure = new Error('dependency unavailable')
+    resolve.mockRejectedValueOnce(failure)
+    await expect(controller.resolveDomain('demo.app.test')).rejects.toBe(failure)
+    expect(access).not.toHaveBeenCalled()
+
+    resolve.mockResolvedValue({ type: 'box', box: 'box-1', port: 3000 })
+    access.mockRejectedValue(failure)
+    await expect(controller.resolveDomain('demo.app.test')).rejects.toBe(failure)
   })
 
   it('accepts only an active public tunnel', async () => {
@@ -99,6 +137,7 @@ describe('PreviewController browser tunnel sessions', () => {
       null as never,
       null as never,
       users as never,
+      null as never,
     )
     await expect(controller.tunnelAccess('box-1', 3000, { userId: 'user-1' })).resolves.toMatchObject({
       id: 'tunnel-1',
@@ -140,6 +179,7 @@ describe('PreviewController ensure-ready', () => {
       null as never,
       organizationService as never,
       autoResume as never,
+      null as never,
       null as never,
     )
   })

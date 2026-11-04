@@ -63,6 +63,14 @@ mod memory;
 #[cfg(target_arch = "x86_64")]
 mod vcpu;
 #[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "Only tests exercise the virtio contract and transport until devices are wired into the machine."
+    )
+)]
+mod virtio;
+#[cfg_attr(
     not(all(target_arch = "x86_64", any(test, target_os = "linux"))),
     expect(
         dead_code,

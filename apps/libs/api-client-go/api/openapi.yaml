@@ -9207,6 +9207,7 @@ components:
         creator: "{}"
         organizationId: organizationId
         name: name
+        suspended: true
         members:
           nextCursor: nextCursor
           limit: 16.93648099017413
@@ -9274,6 +9275,11 @@ components:
           type: string
         name:
           type: string
+        suspended:
+          description: Stored organization suspension flag; does not evaluate suspendedUntil.
+            Older servers may omit it.
+          readOnly: true
+          type: boolean
         members:
           $ref: "#/components/schemas/AdminOrganizationMemberPage"
         boxes:

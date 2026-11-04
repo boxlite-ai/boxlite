@@ -30,6 +30,8 @@ type AdminOrganizationDetail struct {
 	Creator NullableAdminOrganizationCreator `json:"creator"`
 	OrganizationId string `json:"organizationId"`
 	Name string `json:"name"`
+	// Stored organization suspension flag; does not evaluate suspendedUntil. Older servers may omit it.
+	Suspended *bool `json:"suspended,omitempty"`
 	Members AdminOrganizationMemberPage `json:"members"`
 	Boxes AdminOrganizationBoxPage `json:"boxes"`
 	Impact AdminOrganizationImpact `json:"impact"`
@@ -188,6 +190,38 @@ func (o *AdminOrganizationDetail) GetNameOk() (*string, bool) {
 // SetName sets field value
 func (o *AdminOrganizationDetail) SetName(v string) {
 	o.Name = v
+}
+
+// GetSuspended returns the Suspended field value if set, zero value otherwise.
+func (o *AdminOrganizationDetail) GetSuspended() bool {
+	if o == nil || IsNil(o.Suspended) {
+		var ret bool
+		return ret
+	}
+	return *o.Suspended
+}
+
+// GetSuspendedOk returns a tuple with the Suspended field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+func (o *AdminOrganizationDetail) GetSuspendedOk() (*bool, bool) {
+	if o == nil || IsNil(o.Suspended) {
+		return nil, false
+	}
+	return o.Suspended, true
+}
+
+// HasSuspended returns a boolean if a field has been set.
+func (o *AdminOrganizationDetail) HasSuspended() bool {
+	if o != nil && !IsNil(o.Suspended) {
+		return true
+	}
+
+	return false
+}
+
+// SetSuspended gets a reference to the given bool and assigns it to the Suspended field.
+func (o *AdminOrganizationDetail) SetSuspended(v bool) {
+	o.Suspended = &v
 }
 
 // GetMembers returns the Members field value
@@ -375,6 +409,9 @@ func (o AdminOrganizationDetail) ToMap() (map[string]interface{}, error) {
 	toSerialize["creator"] = o.Creator.Get()
 	toSerialize["organizationId"] = o.OrganizationId
 	toSerialize["name"] = o.Name
+	if !IsNil(o.Suspended) {
+		toSerialize["suspended"] = o.Suspended
+	}
 	toSerialize["members"] = o.Members
 	toSerialize["boxes"] = o.Boxes
 	toSerialize["impact"] = o.Impact
@@ -441,6 +478,7 @@ func (o *AdminOrganizationDetail) UnmarshalJSON(data []byte) (err error) {
 		delete(additionalProperties, "creator")
 		delete(additionalProperties, "organizationId")
 		delete(additionalProperties, "name")
+		delete(additionalProperties, "suspended")
 		delete(additionalProperties, "members")
 		delete(additionalProperties, "boxes")
 		delete(additionalProperties, "impact")
