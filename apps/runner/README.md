@@ -644,6 +644,7 @@ the Swagger UI (development only).
 | `GET` | `/v1/boxes/:boxId/files?path=<src>` | Download tar |
 | `GET` | `/v1/boxes/:boxId/metrics` | Per-box metrics |
 | `POST` | `/v1/boxes/:boxId/ssh` | Configure guest SSH once; running boxes only |
+| `POST` | `/v1/boxes/:boxId/ssh/enable` | Enable saved guest SSH configuration on a running box; otherwise `409`; never boots |
 | `GET` | `/v1/boxes/:boxId/ssh` | Guest SSH status; never boots |
 | `DELETE` | `/v1/boxes/:boxId/ssh` | Disable guest SSH on a running box; otherwise `409`; never boots |
 
@@ -685,6 +686,15 @@ development against the Rust SDK directly, see `boxlite serve` at
 ---
 
 ## Tests
+
+SSH control boundary tests run without a VM using
+`make test:apps:runner FILTER=TestSSHControlLifecycle`. They verify that enable
+and disable reject idle boxes before fetching a handle, send one bodyless
+request per running-box call, and preserve every returned status field.
+`make test:apps:runner FILTER=TestIntegrationSSHServesTheRealClient` additionally
+requires a working VM runtime and OpenSSH: it reconnects after enable using the
+original trusted host key and account key. HTTP fixtures alone do not verify
+that the guest listener restarts.
 
 ```bash
 # All runner tests

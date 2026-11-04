@@ -736,7 +736,7 @@ runtime and its microVMs.
 </details>
 
 <details>
-<summary><b>Embedded BoxLite operations</b> · 13 routes</summary>
+<summary><b>Embedded BoxLite operations</b> · 14 routes</summary>
 
 | Method    | Path                                           | What it does                                          |
 | --------- | ---------------------------------------------- | ----------------------------------------------------- |

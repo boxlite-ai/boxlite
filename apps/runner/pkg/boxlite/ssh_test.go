@@ -185,6 +185,10 @@ func TestIntegrationSSHServesTheRealClient(t *testing.T) {
 	if err != nil || !enabled.Enabled || enabled.Generation != 3 {
 		t.Fatalf("enable: status = %+v, err = %v", enabled, err)
 	}
+	out, err = keys.ssh(ctx, port, "alice", "echo ssh-over-runner").CombinedOutput()
+	if err != nil || strings.TrimSpace(string(out)) != "ssh-over-runner" {
+		t.Fatalf("ssh after enable: err = %v, output %q", err, out)
+	}
 	repeated, err := client.SSHEnable(ctx, boxID)
 	if err != nil || *repeated != *enabled {
 		t.Fatalf("repeat enable: status = %+v, err = %v", repeated, err)

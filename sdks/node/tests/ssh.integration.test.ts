@@ -97,6 +97,9 @@ describe("SimpleBox.ssh", { timeout: 240_000 }, () => {
     const enabled = await box.ssh.enable();
     expect(enabled.enabled).toBe(true);
     expect(enabled.generation).toBeGreaterThan(second.generation);
+    expect(enabled.listenAddress).toBe(second.listenAddress);
+    expect(enabled.hostPublicKey).toBe(second.hostPublicKey);
+    expect(enabled.hostKeyFingerprint).toBe(second.hostKeyFingerprint);
     expect(await box.ssh.enable()).toEqual(enabled);
   });
 

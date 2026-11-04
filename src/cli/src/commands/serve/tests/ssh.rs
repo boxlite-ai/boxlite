@@ -484,10 +484,15 @@ async fn ssh_routes_report_a_missing_box_as_404_for_every_method() {
     let upstream = SshStub::local("running", true, Vec::new()).await;
     let (base, _state, server) = serve_over(&upstream, None).await;
 
-    for method in ["POST", "GET", "DELETE"] {
+    for (method, suffix) in [
+        ("POST", ""),
+        ("GET", ""),
+        ("DELETE", ""),
+        ("POST", "/enable"),
+    ] {
         let response = ssh_call(
             method,
-            &format!("{base}/v1/boxes/no-such-box/ssh"),
+            &format!("{base}/v1/boxes/no-such-box/ssh{suffix}"),
             None,
             Some(("application/json", &config_body())),
         )
@@ -501,6 +506,39 @@ async fn ssh_routes_report_a_missing_box_as_404_for_every_method() {
         upstream.requests().is_empty(),
         "no SSH request may reach the backend for an unknown box"
     );
+    server.abort();
+    upstream.task.abort();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ssh_enable_serve_returns_status_without_recording_activity() {
+    let active = SshStatus {
+        enabled: true,
+        generation: 7,
+        listen_address: "0.0.0.0:2222".into(),
+        host_public_key: "ssh-ed25519 host-key".into(),
+        host_key_fingerprint: "SHA256:host-fingerprint".into(),
+    };
+    let upstream = SshStub::local("running", true, vec![(200, status_json(&active))]).await;
+    let (base, state, server) = serve_over(&upstream, None).await;
+    let response = ssh_call(
+        "POST",
+        &format!("{base}/v1/boxes/{STUB_BOX_ID}/ssh/enable"),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.json::<SshStatus>().await.unwrap(), active);
+    assert!(state.last_activity.read().await.is_empty());
+    let requests = upstream.requests();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].method, "POST");
+    assert_eq!(
+        requests[0].path,
+        format!("/v1/boxes/{STUB_BOX_ID}/ssh/enable")
+    );
+    assert!(requests[0].body.is_empty());
     server.abort();
     upstream.task.abort();
 }
