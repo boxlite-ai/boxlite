@@ -400,6 +400,9 @@ size 256. Queue 2 is required only when reporting is negotiated and is never
 consumed otherwise. No quota, stats, hinting, poison or snapshot support is
 advertised. The x86_64 `0xd0000000`/GSI 5 resource record supplies both the
 chipset claim and appended `virtio_mmio.device=` command-line argument.
+`Vm::new` rejects caller `virtio_mmio.device=` parameters, including quoted
+declarations, before host allocation. Discovery is platform-owned: an earlier
+caller declaration must not bind the same window to a different guest IRQ.
 
 Before any reclaim, the entire chain must pass direction, nonzero length,
 checked address arithmetic, single-region raw-range and normal-termination

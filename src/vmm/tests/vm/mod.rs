@@ -72,6 +72,21 @@ fn invalid_configuration_fails_before_the_host_vm_exists() {
     config(MAX_VCPUS, MAX_MEMORY_MIB).validate().unwrap();
 }
 
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[test]
+fn caller_mmio_discovery_cannot_override_the_platform_interrupt() {
+    for declaration in [
+        "virtio_mmio.device=4096@0xd0000000:6",
+        "\"virtio_mmio.device=4096@0xd0000000:6\"",
+    ] {
+        let mut config = config(1, 16);
+        config.cmdline.push(' ');
+        config.cmdline.push_str(declaration);
+        let error = Vm::new(config, Box::new(io::sink())).expect_err("reserved device discovery");
+        assert!(matches!(error, Error::InvalidCommandLine(_)), "{error:?}");
+    }
+}
+
 #[test]
 fn maps_the_ram_layout_with_its_host_address_and_unmaps_on_drop() {
     let vm = bare(config(1, 16), || Ok(MockVm::new())).unwrap();

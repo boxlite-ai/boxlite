@@ -105,6 +105,17 @@ impl Vm<boxlite_hypervisor::KvmVm> {
         };
 
         config.validate()?;
+        // Device discovery belongs to the same resource record as registration.
+        // A caller's earlier declaration could bind our window to another IRQ.
+        if config.cmdline.split_ascii_whitespace().any(|token| {
+            token
+                .trim_start_matches('"')
+                .starts_with("virtio_mmio.device=")
+        }) {
+            return Err(Error::InvalidCommandLine(
+                "virtio_mmio.device is platform-owned",
+            ));
+        }
         BALLOON_MMIO.append_cmdline(&mut config.cmdline);
         config.validate()?;
 
