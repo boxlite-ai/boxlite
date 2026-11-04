@@ -49,6 +49,39 @@ impl BoxNetworkBackend for ScriptedServer {
     }
 }
 
+/// Sends `head` on its one connection, notifies `head_sent`, and then neither
+/// writes nor closes, as a server that stalls mid-response.
+struct StalledServer {
+    head: &'static str,
+    head_sent: Arc<tokio::sync::Notify>,
+}
+
+#[async_trait::async_trait]
+impl BoxNetworkBackend for StalledServer {
+    async fn tunnel(
+        &self,
+        _target: SocketAddr,
+        _options: TunnelOptions,
+    ) -> BoxliteResult<BoxTunnel> {
+        let head = self.head;
+        let head_sent = Arc::clone(&self.head_sent);
+        Ok(BoxTunnel::new(None, move || {
+            let head_sent = Arc::clone(&head_sent);
+            async move {
+                let (client, mut server) = UnixStream::pair()?;
+                tokio::spawn(async move {
+                    read_request(&mut server).await;
+                    let _ = server.write_all(head.as_bytes()).await;
+                    head_sent.notify_one();
+                    std::future::pending::<()>().await;
+                    drop(server);
+                });
+                Ok(BoxConnection::new(client))
+            }
+        }))
+    }
+}
+
 type Requests = Arc<Mutex<Vec<String>>>;
 
 fn scripted_session(responses: Vec<String>) -> (Session, Requests) {
@@ -323,6 +356,24 @@ async fn a_turn_missing_from_history_is_not_found() {
 }
 
 #[tokio::test]
+async fn an_assistant_message_id_is_not_a_turn() {
+    let page = history(vec![
+        assistant("msg_2", "done", Some("stop")),
+        user("msg_1", 10.0),
+    ]);
+    let last = ok(json!({ "data": [], "cursor": { "next": null } }));
+    let (session, _) = scripted_session(vec![empty(), page, last]);
+
+    let result = session.turn("msg_2").await;
+
+    assert!(
+        matches!(&result, Err(BoxliteError::NotFound(_))),
+        "{:?}",
+        result.map(|state| state.status)
+    );
+}
+
+#[tokio::test]
 async fn a_history_cursor_outside_base64url_never_reaches_a_request() {
     let page = ok(json!({ "data": [user("msg_9", 10.0)], "cursor": { "next": "a&order=asc" } }));
     let (session, requests) = scripted_session(vec![empty(), page]);
@@ -477,6 +528,37 @@ async fn a_later_turn_that_continues_a_subagent_waits_on_its_requests() {
 }
 
 #[tokio::test]
+async fn a_request_nested_nine_subagents_deep_blocks_the_turn_that_created_them() {
+    // OpenCode's `experimental.subagent_depth` has no maximum.
+    let page = history(vec![assistant("msg_2", "", None), user("msg_1", 10.0)]);
+    let permissions = ok(json!({ "data": [
+        { "id": "per_deep", "sessionID": "ses_c9", "action": "read", "resources": [".env"],
+          "source": { "type": "tool", "messageID": "msg_c9", "id": "call_read" } },
+    ] }));
+    let chain = (1..=9).rev().map(|level| {
+        let parent = if level == 1 {
+            "ses_test".to_owned()
+        } else {
+            format!("ses_c{}", level - 1)
+        };
+        ok(
+            json!({ "data": { "id": format!("ses_c{level}"), "parentID": parent,
+                             "time": { "created": 12.0 } } }),
+        )
+    });
+    let responses = [empty(), page, permissions, empty()]
+        .into_iter()
+        .chain(chain)
+        .collect();
+    let (session, _) = scripted_session(responses);
+
+    let state = session.turn("msg_1").await.unwrap();
+
+    assert_eq!(state.status, AgentTurnStatus::WaitingInput);
+    assert_eq!(state.requests.len(), 1, "{:?}", state.requests);
+}
+
+#[tokio::test]
 async fn malformed_native_session_ids_never_reach_a_request_path() {
     let page = history(vec![assistant("msg_2", "", None), user("msg_1", 10.0)]);
     let permissions = ok(json!({ "data": [
@@ -617,6 +699,67 @@ async fn events_end_with_an_internal_error_at_an_event_that_is_not_json() {
     assert!(
         matches!(items.as_slice(), [Err(BoxliteError::Internal(_))]),
         "{items:?}"
+    );
+}
+
+#[tokio::test]
+async fn events_before_an_invalid_event_in_the_same_chunk_are_delivered() {
+    let enqueued = json!({ "type": "session.inbox.enqueued", "data": { "sessionID": "ses_test", "inboxID": "msg_1" } });
+    let response = format!(
+        "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\n\r\ndata: {enqueued}\n\ndata: {{oops\n\n"
+    );
+    let (session, _) = scripted_session(vec![response]);
+
+    let stream = session
+        .events(&AgentEventsOptions::default())
+        .await
+        .unwrap();
+    let items: Vec<_> = stream.collect().await;
+
+    assert!(
+        matches!(
+            items.as_slice(),
+            [Ok(event), Err(BoxliteError::Internal(_))] if event.turn_id.as_deref() == Some("msg_1")
+        ),
+        "{items:?}"
+    );
+}
+
+#[tokio::test]
+async fn opening_events_times_out_when_an_error_body_stalls() {
+    let head = "HTTP/1.1 500 Internal Server Error\r\ncontent-length: 64\r\n\r\n{\"_tag\":";
+    let head_sent = Arc::new(tokio::sync::Notify::new());
+    let backend = StalledServer {
+        head,
+        head_sent: Arc::clone(&head_sent),
+    };
+    let server = Arc::new(Server::new(Arc::new(backend), "password"));
+    let info = json!({ "id": "ses_test", "model": { "providerID": "fake", "id": "model" } });
+    let session = Session::new(server, &info).unwrap();
+    let options = AgentEventsOptions::default();
+    let opening = tokio::time::timeout(Duration::from_secs(120), session.events(&options));
+    tokio::pin!(opening);
+
+    // Real time until the client has read the head; a paused clock would
+    // jump past the connect deadline while that I/O is still in flight.
+    tokio::select! {
+        _ = &mut opening => panic!("opening events returned before the head was sent"),
+        _ = head_sent.notified() => {}
+    }
+    tokio::select! {
+        _ = &mut opening => panic!("opening events returned on a partial error body"),
+        _ = tokio::time::sleep(Duration::from_millis(100)) => {}
+    }
+    // Paused time jumps to the next deadline once every task waits.
+    tokio::time::pause();
+    let opened = opening
+        .await
+        .expect("opening events hung on a stalled error body");
+
+    assert!(
+        matches!(&opened, Err(BoxliteError::Network(message)) if message.contains("timed out")),
+        "{:?}",
+        opened.map(|_| "a stream")
     );
 }
 
@@ -967,17 +1110,24 @@ fn native_ids_are_checked_before_use_in_paths() {
 #[test]
 fn event_parser_joins_split_chunks_and_bounds_events() {
     let mut parser = EventParser::default();
-    assert!(parser.push(b"data: {\"type\":\"a\"").unwrap().is_empty());
-    assert!(parser.push(b"}\n: heartbeat\n").unwrap().is_empty());
-    assert_eq!(parser.push(b"\n").unwrap(), vec![json!({ "type": "a" })]);
+    assert!(
+        parse(&mut parser, b"data: {\"type\":\"a\"")
+            .unwrap()
+            .is_empty()
+    );
+    assert!(parse(&mut parser, b"}\n: heartbeat\n").unwrap().is_empty());
     assert_eq!(
-        parser.push(b"data: [1,\ndata: 2]\r\n\r\n").unwrap(),
+        parse(&mut parser, b"\n").unwrap(),
+        vec![json!({ "type": "a" })]
+    );
+    assert_eq!(
+        parse(&mut parser, b"data: [1,\ndata: 2]\r\n\r\n").unwrap(),
         vec![json!([1, 2])]
     );
 
     let oversized = format!("data: \"{}", "x".repeat(1024 * 1024));
     assert!(matches!(
-        parser.push(oversized.as_bytes()),
+        parse(&mut parser, oversized.as_bytes()),
         Err(BoxliteError::ResourceExhausted(_))
     ));
 }
@@ -986,7 +1136,7 @@ fn event_parser_joins_split_chunks_and_bounds_events() {
 fn an_oversized_event_fails_even_when_it_completes_in_one_chunk() {
     let complete = format!("data: \"{}\"\n\n", "x".repeat(1024 * 1024));
 
-    let result = EventParser::default().push(complete.as_bytes());
+    let result = parse(&mut EventParser::default(), complete.as_bytes());
 
     assert!(
         matches!(result, Err(BoxliteError::ResourceExhausted(_))),
@@ -1002,7 +1152,7 @@ fn event_parsing_stays_linear_in_the_number_of_lines() {
     let blank_lines = vec![b'\n'; 1024 * 1024];
     let started = std::time::Instant::now();
 
-    let events = EventParser::default().push(&blank_lines).unwrap();
+    let events = parse(&mut EventParser::default(), &blank_lines).unwrap();
 
     assert!(events.is_empty());
     assert!(
@@ -1022,7 +1172,7 @@ fn event_parsing_stays_linear_when_a_line_arrives_byte_by_byte() {
     let started = std::time::Instant::now();
 
     for byte in line.as_bytes() {
-        events.extend(parser.push(std::slice::from_ref(byte)).unwrap());
+        events.extend(parse(&mut parser, std::slice::from_ref(byte)).unwrap());
     }
 
     assert_eq!(events.len(), 1);
@@ -1036,11 +1186,17 @@ fn event_parsing_stays_linear_when_a_line_arrives_byte_by_byte() {
 #[test]
 fn event_parser_fails_on_an_event_that_is_not_utf8_json() {
     for body in [&b"data: {oops\n\n"[..], b"data: \xff\n\n"] {
-        let result = EventParser::default().push(body);
+        let result = parse(&mut EventParser::default(), body);
 
         assert!(
             matches!(result, Err(BoxliteError::Internal(_))),
             "{result:?}"
         );
     }
+}
+
+/// The events one chunk completes, or the error that ends the stream.
+fn parse(parser: &mut EventParser, chunk: &[u8]) -> BoxliteResult<Vec<Value>> {
+    let mut events = Vec::new();
+    parser.push(chunk, &mut events).map(|()| events)
 }

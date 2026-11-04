@@ -87,14 +87,19 @@ impl Client {
         T: Send + 'static,
         F: FnMut(Value) -> Option<BoxliteResult<T>> + Send + 'static,
     {
-        let response = tokio::time::timeout(REQUEST_TIMEOUT, self.send(Method::GET, path, None))
+        // One deadline covers the error body too, so a stalled one cannot hang opening.
+        let opening = async {
+            let response = self.send(Method::GET, path, None).await?;
+            let status = response.status();
+            if status.is_success() {
+                return Ok(response);
+            }
+            let body = read_body(&Method::GET, path, response).await?;
+            Err(native_error(&Method::GET, path, status, &body))
+        };
+        let response = tokio::time::timeout(REQUEST_TIMEOUT, opening)
             .await
             .map_err(|_| timed_out(&Method::GET, path))??;
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = read_body(&Method::GET, path, response).await?;
-            return Err(native_error(&Method::GET, path, status, &body));
-        }
         let (sender, receiver) = mpsc::channel(EVENT_BUFFER);
         tokio::spawn(forward_events(response.into_body(), sender, keep));
         Ok(ReceiverStream::new(receiver))
@@ -202,14 +207,13 @@ async fn forward_events<T, F>(
                 Err(_) => continue,
             },
         };
-        let events = match parser.push(&chunk) {
-            Ok(events) => events,
-            Err(error) => {
-                let _ = sender.send(Err(error)).await;
-                return;
-            }
-        };
-        for item in events.into_iter().filter_map(&mut keep) {
+        let mut events = Vec::new();
+        let parsed = parser.push(&chunk, &mut events);
+        let items = events
+            .into_iter()
+            .filter_map(&mut keep)
+            .chain(parsed.err().map(Err));
+        for item in items {
             let ends = item.is_err();
             if sender.send(item).await.is_err() || ends {
                 return;
@@ -230,12 +234,15 @@ pub(super) struct EventParser {
 }
 
 impl EventParser {
+    /// Append the events `chunk` completes to `events`. On an invalid or
+    /// oversized event, the events before it stay appended, so the caller can
+    /// deliver them ahead of the error.
+    ///
     /// Each byte is searched for a line end once, however the body is split
     /// into chunks, and complete lines are read in place and dropped together,
     /// so parsing costs linear time in the bytes received.
-    pub(super) fn push(&mut self, chunk: &[u8]) -> BoxliteResult<Vec<Value>> {
+    pub(super) fn push(&mut self, chunk: &[u8], events: &mut Vec<Value>) -> BoxliteResult<()> {
         self.pending.extend_from_slice(chunk);
-        let mut events = Vec::new();
         let mut start = 0;
         while let Some(offset) = self.pending[self.searched..]
             .iter()
@@ -269,7 +276,7 @@ impl EventParser {
         if self.pending.len() + self.data.len() > MAX_EVENT_BYTES {
             return Err(oversized_event());
         }
-        Ok(events)
+        Ok(())
     }
 }
 

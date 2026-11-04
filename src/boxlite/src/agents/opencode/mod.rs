@@ -63,8 +63,10 @@ const READY_POLL_INTERVAL: Duration = Duration::from_millis(100);
 /// History page size, and how many pages `turn` reads before giving up.
 const HISTORY_PAGE: usize = 50;
 const HISTORY_MAX_PAGES: usize = 20;
-/// Deepest subagent nesting searched for a pending request's owner.
-const MAX_SUBAGENT_DEPTH: usize = 8;
+/// Deepest subagent nesting searched for a pending request's owner. OpenCode's
+/// `experimental.subagent_depth` has no maximum, so this bound only ends a
+/// chain or cycle the server in the Box makes up; lookups are cached per read.
+const MAX_SUBAGENT_DEPTH: usize = MAX_FOLLOWED_SUBAGENTS;
 /// Subagent sessions one event stream follows. The server in the Box chooses
 /// their IDs, so the followed set stays bounded.
 const MAX_FOLLOWED_SUBAGENTS: usize = 1000;
@@ -349,7 +351,8 @@ impl Session {
             let page = self.server.client.get(&path).await?;
             let messages = page["data"].as_array().cloned().unwrap_or_default();
             for message in &messages {
-                if message["id"] == turn_id {
+                // Only an input is a turn; other message IDs are not.
+                if message["id"] == turn_id && message["type"] == "user" {
                     newer.reverse();
                     return Ok((message.clone(), newer));
                 }
