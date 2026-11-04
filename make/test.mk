@@ -314,12 +314,18 @@ test\:integration\:vmm\:elf: _ensure-kvm _ensure-vmm-kernel
 	@cargo test -p boxlite-vmm --lib --no-run
 	@timeout 60s cargo test -p boxlite-vmm --lib boot::elf::tests:: -- --ignored --test-threads=1
 
+# Every ignored boot test bounds itself with its own watchdog, so the wrapper
+# must not be shorter than their sum: at most 9 x BOOT_TIMEOUT (30 s) plus
+# 3 x balloon (35 s) = 375 s, before guest boot and teardown on a loaded host.
+# A shorter wrapper kills the whole suite instead of the one test that hangs.
+VMM_BOOT_TESTS_TIMEOUT ?= 900s
+
 # Boot the real kernel on KVM and the legacy devices, on one and four vCPUs: up to its root-mount
 # panic, up to the panic when a generated init exits, and on a ttyS0 console until a generated
 # init restarts, once through the public Vm::new as the M1 smoke test.
 test\:integration\:vmm\:linux: _ensure-kvm _ensure-vmm-kernel $(VMM_BALLOON_INIT)
 	@cargo test -p boxlite-vmm --lib --no-run
-	@timeout 120s cargo test -p boxlite-vmm --lib boot::tests:: -- --ignored --test-threads=1 --nocapture
+	@timeout $(VMM_BOOT_TESTS_TIMEOUT) cargo test -p boxlite-vmm --lib boot::tests:: -- --ignored --test-threads=1 --nocapture
 
 # A host without Hypervisor.framework must fail HVF qualification, not report skipped tests as a pass.
 _ensure-hvf:
