@@ -398,6 +398,13 @@ await box.copy_out("/workspace/output.json", "/host/output.json")
 await box.stop()  # also removes the box by default
 ```
 
+**Directories land the way `docker cp` does.** Copying directory `SRC` to a `DEST` that does
+not exist creates `DEST` holding the contents of `SRC`; copying it to an existing directory
+puts it at `DEST/SRC`. Spell the source `SRC/.` to copy the contents in both cases. This holds
+in both directions for boxes on BoxLite cloud (`https://api.boxlite.ai`); the local runtime
+still puts `SRC` under a missing `DEST`. A copy writes straight into `DEST`, so one that fails
+partway keeps what it already wrote.
+
 **Ownership (`copy_in` only):** files arriving in the box are owned by its exec user (the
 image's `USER`, or the `user` you set on `BoxOptions`), so an agent running as a non-root
 user can read them without any `chmod`/`chown` of its own. Directories created to hold the
