@@ -1260,29 +1260,25 @@ impl FileSystem for PassthroughFs {
         if st.st_mode & libc::S_IFMT == libc::S_IFLNK {
             return Err(errno(libc::EOPNOTSUPP));
         }
-        // Preserve libkrun ACCESS's guest uid/gid tests, then additionally bound
-        // success by what the host effective identity can actually access.
-        for (request, owner, group, other) in [
-            (libc::R_OK as u32, 0o400, 0o040, 0o004),
-            (libc::W_OK as u32, 0o200, 0o020, 0o002),
-        ] {
-            if mask & request != 0
-                && ctx.uid != 0
-                && (st.st_uid != ctx.uid || st.st_mode & owner == 0)
-                && (st.st_gid != ctx.gid || st.st_mode & group == 0)
-                && st.st_mode & other == 0
-            {
+        // POSIX selects exactly one class: owner, else group, else other. Root
+        // bypasses the read and write bits and needs one execute bit for X_OK.
+        if ctx.uid == 0 {
+            if mask & libc::X_OK as u32 != 0 && st.st_mode & 0o111 == 0 {
+                return Err(errno(libc::EACCES));
+            }
+        } else {
+            let granted = if st.st_uid == ctx.uid {
+                (st.st_mode >> 6) & 0o7
+            } else if st.st_gid == ctx.gid {
+                (st.st_mode >> 3) & 0o7
+            } else {
+                st.st_mode & 0o7
+            };
+            if mask & !granted != 0 {
                 return Err(errno(libc::EACCES));
             }
         }
-        if mask & libc::X_OK as u32 != 0
-            && (ctx.uid != 0 || st.st_mode & 0o111 == 0)
-            && (st.st_uid != ctx.uid || st.st_mode & 0o100 == 0)
-            && (st.st_gid != ctx.gid || st.st_mode & 0o010 == 0)
-            && st.st_mode & 0o001 == 0
-        {
-            return Err(errno(libc::EACCES));
-        }
+        // Bound success by what the host effective identity can actually access.
         let path = Self::proc_name(&node.data.file)?;
         // SAFETY: this internal path addresses the pinned object, not a guest path.
         cvt(unsafe {
