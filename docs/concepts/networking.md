@@ -142,7 +142,7 @@ preview, or null when requests are unavailable.
 A new name must be lowercase letters, digits and hyphens,
 not start or end with a hyphen, not look like `<digits>-…`, and not be one of
 the platform's own names or the API's collection names (`boxes`, `images`,
-`volumes`, `domains`); names held before `min_length` rose stay bindable.
+`volumes`, `domains`, `snapshots`); names held before `min_length` rose stay bindable.
 A box in a region served by its own proxy cannot take a platform name
 (`region_not_supported`): the app domain's wildcard record points at the
 default proxy only.

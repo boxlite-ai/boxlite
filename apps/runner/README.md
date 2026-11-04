@@ -121,6 +121,11 @@ the in-process TTL caches under `pkg/cache/`.
 
 ---
 
+Snapshot job admission records each destroyed box ID before cancelling active
+disk work, so a late claimed snapshot job cannot begin against that disk.
+These refusal markers remain for the executor lifetime; memory grows with the
+number of unique destroyed IDs, and restarting the executor clears them.
+
 ## Process model
 
 `cmd/runner/main.go` brings up the process in this order:
@@ -131,8 +136,9 @@ the in-process TTL caches under `pkg/cache/`.
    boxlite-core would — `BOXLITE_HOME_DIR`, else `$BOXLITE_HOME`, else
    `.boxlite` under `$HOME` (or the passwd home when `$HOME` is unset) —
    passes it to core explicitly, and exposes it as `HomeDir()`, so the
-   rest of the runner (migration staging under `<home>/migrate`) reads the
-   same directory as the runtime.
+   rest of the runner (migration staging under `<home>/migrate`, snapshot
+   staging under `<home>/snapshot-work`) reads the same directory as the
+   runtime.
 2. **Service singletons** are constructed and stashed on the
    `runner.GetInstance(...)` global: `BoxService`, `BackupInfoCache`,
    `ArtifactErrorCache`, `metrics.Collector`. Controllers later read them
@@ -600,8 +606,35 @@ Supported job types:
 ```
 CREATE_BOX, START_BOX, STOP_BOX, DESTROY_BOX,
 EXPORT_BOX, IMPORT_BOX,
-ROLLBACK_EXPORT_BOX, ROLLBACK_IMPORT_BOX, DISCARD_EXPORTED_BOX
+ROLLBACK_EXPORT_BOX, ROLLBACK_IMPORT_BOX, DISCARD_EXPORTED_BOX,
+CREATE_SNAPSHOT, RESTORE_SNAPSHOT
 ```
+
+`CREATE_SNAPSHOT` exports a stopped box's disk and uploads the archive to the
+URI in the job's payload; `RESTORE_SNAPSHOT` downloads one and swaps it in for
+the box's disk, keeping the original if the swap fails
+([`snapshot.go`](pkg/runner/v2/executor/snapshot.go)). Archives move through
+the store the URI's scheme picks: Cloud Storage downloads create owner-only
+`0600` partial files, restrict existing partial files before writing, and retain
+that mode after rename. Cloud Storage uses `gs://`, with the host's
+service account (the GCP stack grants it object access on the snapshot bucket)
+and no runner configuration, and S3 for the rest (`AWS_DEFAULT_BUCKET`). A
+snapshot job can outlast the API's ten-minute stale-job sweep, so it reports
+`IN_PROGRESS` every two minutes to stay live. `DESTROY_BOX` cancels the box's
+snapshot job, if one is running, and waits until that operation releases the
+disk: the runtime cannot stop an export or restore it has begun. That conflicting
+destroy keeps its heartbeat, removal and terminal report independent of caller
+cancellation. Its heartbeat stops and joins before the terminal report. If native
+work never returns, removal keeps waiting; a timeout cannot make disk removal safe.
+
+If the job's staging directory cannot be cleared or created, the runner rejects
+the job before export or download and releases its box admission. After the
+filesystem problem is corrected, another snapshot job can use that box.
+
+Runner snapshot disk round-trip tests require usable virtualization and the real
+runtime: run `make test:apps:runner:integration` on a VM-capable host. The ordinary
+runner suite excludes these explicitly tagged cases and still runs the executor
+and object-storage boundary tests.
 
 After the handler returns, `updateJobStatus` reports `COMPLETED` or
 `FAILED` to the API with exponential backoff. W3C trace context is

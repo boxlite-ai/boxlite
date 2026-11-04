@@ -194,6 +194,72 @@ func (r *Runtime) Create(ctx context.Context, image string, opts ...BoxOption) (
 	}
 }
 
+// CreateFromSnapshot creates an independent cloud box from a ready snapshot.
+// It waits for startup; CPU/memory options are optional, and disk/region come
+// from the snapshot. Omit WithName to let the server generate a name.
+// Cancellation releases the eventual handle; the accepted cloud box remains.
+func (r *Runtime) CreateFromSnapshot(ctx context.Context, snapshot string, opts ...BoxOption) (*Box, error) {
+	if err := validateArchiveArgument(snapshot, "snapshot identifier", false); err != nil {
+		return nil, err
+	}
+	r.ensureDrainRunning()
+
+	cfg := &boxConfig{}
+	for _, o := range opts {
+		o(cfg)
+	}
+
+	if cfg.rootfsPath != "" {
+		return nil, &Error{Code: ErrInvalidArgument, Message: "snapshot creation cannot specify a rootfs path"}
+	}
+	cOpts, err := buildCOptions("alpine:latest", cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	ch := make(chan handleResult[*C.CBoxHandle], 1)
+	h := registerHandleForDispatch(cgo.NewHandle(ch))
+
+	cSnapshot := toCString(snapshot)
+	defer C.free(unsafe.Pointer(cSnapshot))
+	var cerr C.CBoxliteError
+	code := C.boxlite_create_box_from_snapshot(r.handle, cSnapshot, cOpts, C.cbCreateBox(), handleToPtr(h), &cerr)
+	if code != C.Ok {
+		deleteHandleForDispatch(h)
+		// boxlite_create_box_from_snapshot consumes opts on success but not on synchronous failure.
+		C.boxlite_options_free(cOpts)
+		return nil, freeError(&cerr)
+	}
+
+	select {
+	case res := <-ch:
+		if res.err != nil {
+			return nil, res.err
+		}
+		box := newBoxFromHandle(r, res.value, cfg.name)
+		name := C.boxlite_box_name(res.value)
+		if name != nil {
+			box.name = C.GoString(name)
+			freeBoxliteString(name)
+		}
+		return box, nil
+	case <-ctx.Done():
+		// The cloud has accepted creation; cancelling a local wait must not
+		// turn the eventual result into an implicit request to delete it.
+		abandonAsync(ch, h, r.closing, releaseSnapshotBoxHandle)
+		return nil, ctx.Err()
+	case <-r.closing:
+		abandonAsync(ch, h, r.closing, releaseSnapshotBoxHandle)
+		return nil, ErrRuntimeClosed
+	}
+}
+
+func releaseSnapshotBoxHandle(handle *C.CBoxHandle) {
+	if handle != nil {
+		C.boxlite_box_free(handle)
+	}
+}
+
 // GetOrCreate returns the box with the given name, creating it only if no box
 // with that name exists. Unlike Create it does not fail with "already exists"
 // when the box is already present — it adopts it. This mirrors the core

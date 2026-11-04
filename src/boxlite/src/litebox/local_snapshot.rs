@@ -119,6 +119,8 @@ impl LocalSnapshotBackend {
 
     async fn snapshot_restore(&self, name: &str) -> BoxliteResult<()> {
         validate_snapshot_name(name)?;
+        let _disk_guard = self.inner.disk_ops.lock().await;
+        let _boot_guard = self.inner.boot_restore.lock().await;
 
         // Refuse restore while the box is active — disk replacement under a running
         // VM would corrupt state and potentially lose data.
@@ -130,8 +132,6 @@ impl LocalSnapshotBackend {
                 ));
             }
         }
-
-        let _lock = self.inner.disk_ops.lock().await;
 
         let box_id = self.inner.id().as_str();
         let disks_dir = self.inner.config.box_home.join("disks");
@@ -154,7 +154,12 @@ impl LocalSnapshotBackend {
 #[async_trait::async_trait]
 impl crate::runtime::backend::SnapshotBackend for LocalSnapshotBackend {
     async fn create(&self, options: SnapshotOptions, name: &str) -> BoxliteResult<SnapshotInfo> {
-        self.snapshot_create(name, options).await
+        if name.trim().is_empty() {
+            let name = format!("snapshot-{}", crate::runtime::id::BoxIDMint::mint());
+            self.snapshot_create(&name, options).await
+        } else {
+            self.snapshot_create(name, options).await
+        }
     }
 
     async fn list(&self) -> BoxliteResult<Vec<SnapshotInfo>> {

@@ -41,6 +41,15 @@ describe('BoxAutoResumeService', () => {
     expect(redisLockProvider.unlock.mock.calls).toEqual([['box:box-1:state-change']])
   })
 
+  // A snapshot job holds the disk until it settles, which can take minutes:
+  // waiting out the 30s start timeout would only delay the same refusal.
+  it.each([BoxState.EXPORTING, BoxState.IMPORTING])('refuses a %s box at once', async (state) => {
+    const { service, waiter } = makeHarness({ id: 'box-1', state, desiredState: BoxDesiredState.STOPPED })
+
+    await expect(service.ensureReady('box-1', organization)).rejects.toThrow(`is ${state} a snapshot`)
+    expect(waiter.waitForStarted).not.toHaveBeenCalled()
+  })
+
   it('joins an in-flight Start and waits for STARTED', async () => {
     const { service, waiter } = makeHarness({
       id: 'box-1',

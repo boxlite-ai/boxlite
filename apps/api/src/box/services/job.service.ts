@@ -249,6 +249,13 @@ export class JobService {
         job.startedAt = new Date()
       }
 
+      // A runner working through a long job (a snapshot export, say) reports
+      // IN_PROGRESS again to say it is still alive. Saving an unchanged job
+      // would not touch updatedAt, which is what the stale sweep reads.
+      if (status === JobStatus.IN_PROGRESS) {
+        job.updatedAt = new Date()
+      }
+
       if (status === JobStatus.COMPLETED || status === JobStatus.FAILED) {
         job.completedAt = new Date()
       }

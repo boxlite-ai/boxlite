@@ -11,9 +11,11 @@ import { Box, BoxProgressPhase, BoxState } from '@boxlite-ai/api-client'
 import { BoxTable } from './index'
 import { type BoxTableProps } from './types'
 
+const permissions = vi.hoisted(() => ({ write: true, delete: true }))
 vi.mock('@/hooks/useSelectedOrganization', () => ({
   useSelectedOrganization: () => ({
-    authenticatedUserHasPermission: () => true,
+    authenticatedUserHasPermission: (permission: string) =>
+      permission === 'write:boxes' ? permissions.write : permissions.delete,
   }),
 }))
 
@@ -108,6 +110,34 @@ describe('BoxTable pagination controls', () => {
     root = null
     document.body.innerHTML = ''
     vi.clearAllMocks()
+    permissions.write = true
+    permissions.delete = true
+  })
+
+  it('offers Snapshot to a write-only user for an idle stopped box', async () => {
+    permissions.delete = false
+    const onCreateSnapshot = vi.fn()
+    const box = { ...makeBox('1'), desiredState: 'stopped' } as Box
+    renderBoxTable({ data: [box], onCreateSnapshot })
+    const more = getRequiredElement<HTMLButtonElement>('button[title="More"]')
+    await act(async () => more.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, button: 0 })))
+    const item = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find(
+      (element) => element.textContent === 'Snapshot',
+    )
+    expect(item).toBeDefined()
+    expect(document.querySelector('[role="menu"]')?.textContent).not.toContain('Delete')
+    await act(async () => item!.click())
+    expect(onCreateSnapshot).toHaveBeenCalledWith(box)
+  })
+
+  it.each([
+    { state: 'started', desiredState: 'started' },
+    { state: 'stopped', desiredState: 'started' },
+    { state: 'exporting', desiredState: 'stopped' },
+  ])('hides snapshot creation when a box is not idle stopped: %j', (state) => {
+    permissions.delete = false
+    renderBoxTable({ data: [{ ...makeBox('1'), ...state } as Box], onCreateSnapshot: vi.fn() })
+    expect(document.querySelector('button[title="More"]')).toBeNull()
   })
 
   function renderBoxTable(overrides: Partial<BoxTableProps> & { isPageFetching?: boolean } = {}) {

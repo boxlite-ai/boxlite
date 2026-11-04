@@ -183,6 +183,16 @@ class _TrackingRuntime:
             pass  # never mask the real return
         return box
 
+    async def create_from_snapshot(self, snapshot, options=None, name=None):
+        """Keep snapshot children bounded, sweepable and visible to the path guard."""
+        options = options if options is not None else boxlite.BoxOptions()
+        bound_box_lifetime(options)
+        box = await self._inner.create_from_snapshot(
+            snapshot, options, name=name if name is not None else e2e_box_name()
+        )
+        self._created.append((box.id, time.monotonic()))
+        return box
+
     def __getattr__(self, name):
         return getattr(self._inner, name)
 

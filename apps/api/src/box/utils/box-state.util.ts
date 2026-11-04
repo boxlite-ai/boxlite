@@ -3,9 +3,21 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { ConflictException } from '@nestjs/common'
 import { Box } from '../entities/box.entity'
 import { BoxDesiredState } from '../enums/box-desired-state.enum'
 import { BoxState } from '../enums/box-state.enum'
+import { SNAPSHOT_OPERATION_STATES } from '../constants/box.constants'
+
+/**
+ * Refuse a change to a box whose disk a snapshot job owns. Deletion is the one
+ * change such a box admits, and it does not come through here.
+ */
+export function assertNoSnapshotOperation(box: Pick<Box, 'id' | 'state'>): void {
+  if (SNAPSHOT_OPERATION_STATES.includes(box.state)) {
+    throw new ConflictException(`Box ${box.id} is ${box.state} a snapshot; it can only be deleted until that finishes`)
+  }
+}
 
 /**
  * The state a box is reported in, which is not always the state it is stored
@@ -31,6 +43,13 @@ export function reportedBoxState(box: Pick<Box, 'state' | 'desiredState'>): BoxS
       if (box.desiredState === BoxDesiredState.STARTED) {
         return BoxState.STARTING
       }
+      if (box.desiredState === BoxDesiredState.DESTROYED) {
+        return BoxState.DESTROYING
+      }
+      break
+    case BoxState.EXPORTING:
+    case BoxState.IMPORTING:
+      // Deleted mid-snapshot: the deletion is what is happening to it now.
       if (box.desiredState === BoxDesiredState.DESTROYED) {
         return BoxState.DESTROYING
       }

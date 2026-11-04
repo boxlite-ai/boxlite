@@ -125,7 +125,9 @@ pub(crate) struct BoxImpl {
     pub(crate) shutdown_token: CancellationToken,
     /// Serializes disk-mutating snapshot/clone/export operations.
     /// Prevents concurrent disk mutations (rename, delete, flatten) from racing.
-    pub(crate) disk_ops: tokio::sync::Mutex<()>,
+    pub(crate) disk_ops: Arc<tokio::sync::Mutex<()>>,
+    /// Excludes disk replacement from lazy boot, including Running attachment.
+    pub(crate) boot_restore: Arc<tokio::sync::Mutex<()>>,
     network_updates: tokio::sync::Mutex<()>,
 
     /// Event listeners (from runtime options).
@@ -185,7 +187,8 @@ impl BoxImpl {
             runtime,
             layout,
             shutdown_token,
-            disk_ops: tokio::sync::Mutex::new(()),
+            disk_ops: Arc::new(tokio::sync::Mutex::new(())),
+            boot_restore: Arc::new(tokio::sync::Mutex::new(())),
             network_updates: tokio::sync::Mutex::new(()),
             event_listeners: Vec::new(), // populated from runtime options
             live: OnceCell::new(),
@@ -1226,6 +1229,7 @@ impl BoxImpl {
         use super::BoxBuilder;
         use std::sync::Arc;
 
+        let _restore_guard = self.boot_restore.lock().await;
         let state = self.state.read().clone();
         let is_first_start = state.status == BoxStatus::Configured;
         // Reattaching to a live box: its init is already running, so mark the
@@ -1629,6 +1633,13 @@ impl crate::runtime::backend::BoxBackend for BoxImpl {
         dest: &std::path::Path,
     ) -> BoxliteResult<crate::runtime::options::BoxArchive> {
         BoxImpl::export_box(self, options, dest).await
+    }
+
+    async fn restore_from_archive(
+        &self,
+        archive: crate::runtime::options::BoxArchive,
+    ) -> BoxliteResult<()> {
+        BoxImpl::restore_from_archive(self, archive).await
     }
 
     async fn ssh_configure(&self, config: SshConfig) -> BoxliteResult<SshStatus> {

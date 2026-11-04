@@ -18,6 +18,10 @@ describe('reportedBoxState', () => {
     [BoxState.STARTED, BoxDesiredState.DESTROYED, BoxState.DESTROYING],
     [BoxState.STOPPED, BoxDesiredState.STARTED, BoxState.STARTING],
     [BoxState.STOPPED, BoxDesiredState.DESTROYED, BoxState.DESTROYING],
+    // Deleted mid-snapshot: the deletion is what the box is going through now.
+    [BoxState.EXPORTING, BoxDesiredState.DESTROYED, BoxState.DESTROYING],
+    [BoxState.IMPORTING, BoxDesiredState.DESTROYED, BoxState.DESTROYING],
+    [BoxState.EXPORTING, BoxDesiredState.STOPPED, BoxState.EXPORTING],
   ])('reports %s heading for %s as %s', (state, desiredState, expected) => {
     expect(reportedBoxState({ state, desiredState })).toBe(expected)
   })

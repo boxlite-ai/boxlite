@@ -131,11 +131,14 @@ class NativeCoveragePathsTest(unittest.TestCase):
                     "native box privilege metadata",
                     "box.ssh over a REST transport",
                     "SimpleBox.ssh over a REST transport",
+                    "snapshot scopes, generated names and startup cross the native binding",
+                    "snapshot creation rejects an explicit image and reports startup failure",
                 ):
                     self.assertRegex(suite, pattern)
                 for vm_suite in (
                     "SimpleBox.ssh",
                     "SimpleBox.ssh with an explicit main command",
+                    "snapshot / clone / export integration",
                 ):
                     self.assertNotRegex(vm_suite, pattern)
             for sdk in ("python", "node", "c"):

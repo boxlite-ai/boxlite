@@ -66,6 +66,22 @@ describe('JobService.updateJobStatus transaction boundary', () => {
     expect(jobStateHandlerService.handleJobCompletion).toHaveBeenCalledWith(job)
   })
 
+  // The stale sweep fails IN_PROGRESS jobs whose updatedAt is ten minutes old,
+  // so a long job's repeated IN_PROGRESS report has to move updatedAt, or the
+  // job is failed while its runner is still working on it.
+  it('refreshes updatedAt when a running Job reports progress again', async () => {
+    const job = makeJob(JobStatus.IN_PROGRESS)
+    job.updatedAt = new Date('2026-07-29T04:00:00.000Z')
+    const { entityManager, jobStateHandlerService, service } = makeService(job)
+
+    const before = Date.now()
+    await service.updateJobStatus(job.id, JobStatus.IN_PROGRESS)
+
+    const saved = entityManager.save.mock.calls[0][1] as Job
+    expect(saved.updatedAt.getTime()).toBeGreaterThanOrEqual(before)
+    expect(jobStateHandlerService.handleJobCompletion).not.toHaveBeenCalled()
+  })
+
   it('rejects a stale FAILED update when the locked Job was already completed by reconciliation', async () => {
     const lockedJob = makeJob(JobStatus.COMPLETED)
     const staleJob = makeJob(JobStatus.IN_PROGRESS)

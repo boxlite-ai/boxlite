@@ -257,6 +257,7 @@ export class RunnerAdapterV0 implements RunnerAdapter {
     image: string,
     metadata?: { [key: string]: string },
   ): Promise<StartBoxResponse | undefined> {
+    if (box.initialSnapshotId) throw new Error('Snapshot creation requires a job-based runner')
     if (box.privileged && !this.runner.supportsPrivileged) {
       throw new Error(`Runner ${this.runner.id} does not support privileged Boxes`)
     }

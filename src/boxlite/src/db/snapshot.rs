@@ -125,6 +125,8 @@ mod tests {
             box_id: box_id.to_string(),
             name: name.to_string(),
             created_at: chrono::Utc::now().timestamp(),
+            status: "ready".into(),
+            error: None,
             disk_info: crate::disk::DiskInfo {
                 base_path: format!("/boxes/{}/snapshots/{}/disk.qcow2", box_id, name),
                 container_disk_bytes: 10 * 1024 * 1024 * 1024,
@@ -277,6 +279,8 @@ mod tests {
             box_id: "box-99".to_string(),
             name: "roundtrip-test".to_string(),
             created_at: 1700000000,
+            status: "ready".into(),
+            error: None,
             disk_info: crate::disk::DiskInfo {
                 base_path: "/boxes/box-99/snapshots/roundtrip-test/disk.qcow2".to_string(),
                 container_disk_bytes: 42 * 1024 * 1024 * 1024,

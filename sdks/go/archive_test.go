@@ -323,6 +323,47 @@ func TestArchiveCancellationDuringPreparationPreventsNativeSubmission(t *testing
 	})
 }
 
+// A REST box has no local disk to replace, so the request must travel the
+// whole bridge — submission, completion callback, error decoding — and come
+// back as the core's Unsupported rather than as a silent success.
+func TestRestoreFromArchiveReportsUnsupportedForRestBoxes(t *testing.T) {
+	server := newArchiveExportServer(t, make(chan struct{}), make(chan struct{}))
+	t.Cleanup(server.Close)
+
+	runtime, err := NewRest(BoxliteRestOptions{URL: server.URL})
+	if err != nil {
+		t.Fatalf("NewRest: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := runtime.Close(); err != nil {
+			t.Errorf("Close runtime: %v", err)
+		}
+	})
+
+	box, err := runtime.Get(context.Background(), "source-box")
+	if err != nil {
+		t.Fatalf("Get source box: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := box.Close(); err != nil {
+			t.Errorf("Close box: %v", err)
+		}
+	})
+
+	err = box.RestoreFromArchive(context.Background(), filepath.Join(t.TempDir(), "box.boxlite"))
+	var boxliteErr *Error
+	if !errors.As(err, &boxliteErr) || boxliteErr.Code != ErrUnsupported {
+		t.Fatalf("RestoreFromArchive error = %v, want an ErrUnsupported *Error", err)
+	}
+
+	for _, path := range []string{"", "bad\x00path"} {
+		err = box.RestoreFromArchive(context.Background(), path)
+		if !errors.As(err, &boxliteErr) || boxliteErr.Code != ErrInvalidArgument {
+			t.Fatalf("RestoreFromArchive(%q) error = %v, want ErrInvalidArgument", path, err)
+		}
+	}
+}
+
 func TestArchiveImportReturnsCancellationAfterSubmission(t *testing.T) {
 	started := make(chan struct{})
 	release := make(chan struct{})

@@ -32,6 +32,8 @@ export const BoxState = {
     ARCHIVED: 'archived',
     ARCHIVING: 'archiving',
     RESIZING: 'resizing',
+    EXPORTING: 'exporting',
+    IMPORTING: 'importing',
     UNKNOWN_DEFAULT_OPEN_API: '11184809',
 } as const;
 

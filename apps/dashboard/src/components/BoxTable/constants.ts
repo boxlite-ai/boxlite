@@ -23,6 +23,8 @@ const STATE_LABEL_MAPPING: Record<BoxState, string> = {
   [BoxState.UNKNOWN_DEFAULT_OPEN_API]: 'Unknown',
   [BoxState.ARCHIVING]: 'Archiving',
   [BoxState.RESIZING]: 'Resizing',
+  [BoxState.EXPORTING]: 'Snapshotting',
+  [BoxState.IMPORTING]: 'Restoring snapshot',
 }
 
 export const STATUSES: FacetedFilterOption[] = [

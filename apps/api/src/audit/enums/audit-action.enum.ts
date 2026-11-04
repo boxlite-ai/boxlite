@@ -64,4 +64,5 @@ export enum AuditAction {
   TOOLBOX_COMPUTER_USE_START = 'toolbox_computer_use_start',
   TOOLBOX_COMPUTER_USE_STOP = 'toolbox_computer_use_stop',
   TOOLBOX_COMPUTER_USE_RESTART_PROCESS = 'toolbox_computer_use_restart_process',
+  RESTORE_SNAPSHOT = 'restore_snapshot',
 }

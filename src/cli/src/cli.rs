@@ -296,6 +296,33 @@ const VOLUME_SCOPES: &[CommandScope] = &[
         children: &[],
     },
 ];
+const SNAPSHOT_SCOPES: &[CommandScope] = &[
+    CommandScope {
+        name: "create",
+        globals: BOX_GLOBALS,
+        children: &[],
+    },
+    CommandScope {
+        name: "ls",
+        globals: BOX_GLOBALS,
+        children: &[],
+    },
+    CommandScope {
+        name: "get",
+        globals: BOX_GLOBALS,
+        children: &[],
+    },
+    CommandScope {
+        name: "rm",
+        globals: BOX_GLOBALS,
+        children: &[],
+    },
+    CommandScope {
+        name: "restore",
+        globals: BOX_GLOBALS,
+        children: &[],
+    },
+];
 const COMMAND_SCOPES: &[CommandScope] = &[
     box_command_scope("agent", AGENT_SCOPES),
     CommandScope {
@@ -397,6 +424,11 @@ const COMMAND_SCOPES: &[CommandScope] = &[
         name: "context",
         globals: AUTH_URL_GLOBALS,
         children: CONTEXT_SCOPES,
+    },
+    CommandScope {
+        name: "snapshot",
+        globals: BOX_GLOBALS,
+        children: SNAPSHOT_SCOPES,
     },
     CommandScope {
         name: "volume",
@@ -768,6 +800,8 @@ pub enum Commands {
     /// Manage named volumes on a REST server
     Volume(crate::commands::volume::VolumeArgs),
 
+    /// Capture, inspect, restore and delete disk snapshots.
+    Snapshot(crate::commands::snapshot::SnapshotArgs),
     /// Bind, list or unbind the organization's domains on a REST server
     Domain(crate::commands::domain::DomainArgs),
 

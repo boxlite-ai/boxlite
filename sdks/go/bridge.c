@@ -14,6 +14,7 @@ extern void goBoxliteOnExit(int exit_code, void *ud);
 
 extern void goBoxliteOnCreateBox(CBoxHandle *box, CBoxliteError *err, void *ud);
 extern void goBoxliteOnBoxExport(char *archive_path, CBoxliteError *err, void *ud);
+extern void goBoxliteOnBoxRestoreArchive(CBoxliteError *err, void *ud);
 extern void goBoxliteOnRuntimeImport(CBoxHandle *box, CBoxliteError *err, void *ud);
 extern void goBoxliteOnGetOrCreateBox(CBoxHandle *box, bool created, CBoxliteError *err, void *ud);
 extern void goBoxliteOnGetBox(CBoxHandle *box, CBoxliteError *err, void *ud);
@@ -60,6 +61,9 @@ CBoxExitCb cbExit(void) { return (CBoxExitCb)goBoxliteOnExit; }
 CBoxCreateBoxCb cbCreateBox(void) { return (CBoxCreateBoxCb)goBoxliteOnCreateBox; }
 CBoxExportCb cbBoxExport(void) {
     return (CBoxExportCb)goBoxliteOnBoxExport;
+}
+CBoxRestoreArchiveCb cbBoxRestoreArchive(void) {
+    return (CBoxRestoreArchiveCb)goBoxliteOnBoxRestoreArchive;
 }
 CRuntimeImportCb cbRuntimeImport(void) {
     return (CRuntimeImportCb)goBoxliteOnRuntimeImport;
@@ -109,3 +113,10 @@ CBoxSshConfigureCb cbSSHConfigure(void) { return (CBoxSshConfigureCb)goBoxliteOn
 CBoxSshStatusCb cbSSHStatus(void) { return (CBoxSshStatusCb)goBoxliteOnSSHStatus; }
 CBoxSshDisableCb cbSSHDisable(void) { return (CBoxSshDisableCb)goBoxliteOnSSHStatus; }
 CBoxSshEnableCb cbSSHEnable(void) { return (CBoxSshEnableCb)goBoxliteOnSSHStatus; }
+
+extern void goBoxliteOnSnapshotInfo(CSnapshotInfo *info, CBoxliteError *err, void *ud);
+extern void goBoxliteOnSnapshotList(CSnapshotInfoList *list, CBoxliteError *err, void *ud);
+extern void goBoxliteOnSnapshotOp(CBoxliteError *err, void *ud);
+CBoxSnapshotInfoCb cbSnapshotInfo(void) { return goBoxliteOnSnapshotInfo; }
+CBoxSnapshotListCb cbSnapshotList(void) { return goBoxliteOnSnapshotList; }
+CBoxSnapshotOpCb cbSnapshotOp(void) { return goBoxliteOnSnapshotOp; }

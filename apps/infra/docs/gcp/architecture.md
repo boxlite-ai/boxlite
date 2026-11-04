@@ -39,7 +39,7 @@ flowchart TB
    subgraph state["State and storage"]
     pg[("$ Cloud SQL<br/>PostgreSQL")]
     redis[("$ Memorystore<br/>Redis")]
-    storage[("$ Cloud Storage<br/>App objects + persistent volumes")]
+    storage[("$ Cloud Storage<br/>App objects + persistent volumes<br/>Box snapshot archives")]
    end
    subgraph observability["Observability"]
     otel["$ Cloud Run<br/>BoxLite OTel Collector"]
@@ -58,7 +58,7 @@ flowchart TB
  api -->pg
  api -->redis
  api -->|"Manage objects / volumes"|storage
- runner <-->|"Mount persistent volumes"|storage
+ runner <-->|"Mount persistent volumes<br/>Upload / download snapshots"|storage
  api -. "Validate identity" .->idp
  runner -->|"Pull images"|registry
  runner -. "Private pulls · HTTP/2<br/>not wired on hosts yet" .->regproxy
@@ -113,7 +113,7 @@ flowchart TB
   psa["Private Service Access"]
   sql[("$ Cloud SQL PostgreSQL<br/>Control-plane state<br/>Storage · configured HA / backups / PITR")]
   redis[("$ Memorystore Redis<br/>Cache · queues · realtime coordination<br/>Configured Basic / HA tier")]
-  storage[("$ Cloud Storage<br/>Application storage bucket<br/>Per-volume buckets")]
+  storage[("$ Cloud Storage<br/>Application storage bucket<br/>Per-volume buckets<br/>Snapshot archive bucket")]
  end
  backoffice["Separate BoxLite Backoffice / ClickStack<br/>Consumer VPC + PSC endpoint"]
  otlp["Organization-configured<br/>External OTLP destinations"]
@@ -133,8 +133,8 @@ flowchart TB
  api -->|"Direct VPC egress"|psa
  psa -->sql
  psa -->redis
- api -->|"Objects / volume lifecycle"|storage
- runner <-->|"gcsfuse volume mounts"|storage
+ api -->|"Objects / volume lifecycle<br/>Snapshot archive deletion"|storage
+ runner <-->|"gcsfuse volume mounts<br/>Snapshot archive transfer"|storage
  api -. "OTLP" .->collector
  proxy -. "OTLP" .->collector
  runner -. "Host + box OTLP" .->collector

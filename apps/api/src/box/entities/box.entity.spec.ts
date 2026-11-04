@@ -33,6 +33,42 @@ describe('Box entity destroy invariant', () => {
   })
 })
 
+describe('Box entity snapshot operation states', () => {
+  function boxIn(state: BoxState, desiredState: BoxDesiredState, pending: boolean): Box {
+    const box = new Box('us', 'snapshot-box')
+    box.state = state
+    box.desiredState = desiredState
+    box.pending = pending
+    return box
+  }
+
+  // A box mid-snapshot differs from its desired state on purpose. If that read
+  // as pending, every delete request (which requires !pending) would bounce.
+  it.each([BoxState.EXPORTING, BoxState.IMPORTING])('keeps a %s box idle and valid', (state) => {
+    const box = boxIn(state, BoxDesiredState.STOPPED, true)
+
+    box.assertValid()
+    box.enforceInvariants()
+
+    expect(box.pending).toBe(false)
+  })
+
+  it.each([BoxState.EXPORTING, BoxState.IMPORTING])('admits a delete of a %s box', (state) => {
+    const box = boxIn(state, BoxDesiredState.STOPPED, false)
+    Object.assign(box, Box.getSoftDeleteUpdate(box))
+
+    expect(() => box.assertValid()).not.toThrow()
+    box.enforceInvariants()
+    expect(box.pending).toBe(true)
+  })
+
+  it.each([BoxState.EXPORTING, BoxState.IMPORTING])('refuses to start a %s box', (state) => {
+    const box = boxIn(state, BoxDesiredState.STARTED, true)
+
+    expect(() => box.assertValid()).toThrow(/not in a valid state to be started/)
+  })
+})
+
 describe('Box entity secret redaction', () => {
   it('omits the secrets field from JSON.stringify output', () => {
     const box = new Box('us', 'secret-box')

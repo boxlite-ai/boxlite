@@ -87,6 +87,7 @@ help:
 	@echo "    make test:apps              - Run the apps workspace test matrix"
 	@echo "    make test:apps:api          - Run API unit tests (FILTER=<pattern>)"
 	@echo "    make test:apps:dashboard    - Run Dashboard tests (FILTER=<pattern>)"
+	@echo "    make test:apps:runner:integration - Run snapshot disk tests (requires VM)"
 	@echo "    make test:apps:proxy        - Run proxy unit tests (FILTER=<pattern>)"
 	@echo "    make test:apps:mdeploy      - Type-check and test deployment scripts"
 	@echo "    make test:e2e:drivers       - Test acceptance-client argument handling"

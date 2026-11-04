@@ -15,6 +15,7 @@ pub mod restart;
 pub mod rm;
 pub mod run;
 pub mod serve;
+pub mod snapshot;
 pub mod ssh;
 pub mod start;
 pub mod stats;

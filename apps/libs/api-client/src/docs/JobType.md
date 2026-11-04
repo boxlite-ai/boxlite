@@ -22,6 +22,10 @@ The type of the job
 
 * `DISCARD_EXPORTED_BOX` (value: `'DISCARD_EXPORTED_BOX'`)
 
+* `CREATE_SNAPSHOT` (value: `'CREATE_SNAPSHOT'`)
+
+* `RESTORE_SNAPSHOT` (value: `'RESTORE_SNAPSHOT'`)
+
 * `UNKNOWN_DEFAULT_OPEN_API` (value: `'11184809'`)
 
 [[Back to Model list]](../README.md#documentation-for-models) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to README]](../README.md)

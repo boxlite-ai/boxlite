@@ -159,6 +159,14 @@ pub(crate) trait BoxBackend: Send + Sync + Any {
 
     async fn export_box(&self, options: ExportOptions, dest: &Path) -> BoxliteResult<BoxArchive>;
 
+    /// Replace this stopped box's container disk with the one an archive
+    /// carries, keeping the box's identity and configuration.
+    async fn restore_from_archive(&self, _archive: BoxArchive) -> BoxliteResult<()> {
+        Err(BoxliteError::Unsupported(
+            "restoring a box from an archive is only supported by local runtimes".into(),
+        ))
+    }
+
     /// Replace the guest's SSH configuration (see [`crate::litebox::SshHandle`]).
     async fn ssh_configure(&self, config: SshConfig) -> BoxliteResult<SshStatus>;
 

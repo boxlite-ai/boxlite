@@ -62,7 +62,11 @@ The `serve` command has two test surfaces with different responsibilities:
   ```
 
 The [CI coverage selection](../../../make/coverage.mk) includes CLI unit
-tests and the `auth` integration target, excluding VM suites such as `ssh_rest.rs`.
+tests and the no-VM `auth`, `ssh_cloud`, `custom_kernel_rc`, and `snapshots_rest`
+integration targets, excluding VM suites such as `ssh_rest.rs`.
+Snapshot tests invoke the real CLI against loopback HTTP, checking both scopes,
+formatted output, missing resources, and force-delete
+error handling; keep this target selected when changing the coverage recipe.
 
 Authentication unit tests inspect the resolved REST endpoint and bearer
 credential without contacting the hosted API. Login resolves the server URL

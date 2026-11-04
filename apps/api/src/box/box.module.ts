@@ -60,6 +60,12 @@ import { DomainService } from './services/domain.service'
 import { TunnelService } from './services/tunnel.service'
 import { AttachTicketService } from './services/attach-ticket.service'
 import { CpuIncidentModule } from './cpu-incidents/cpu-incident.module'
+import { BoxSnapshot } from './entities/box-snapshot.entity'
+import { BoxSnapshotRestore } from './entities/box-snapshot-restore.entity'
+import { BoxSnapshotService } from './services/box-snapshot.service'
+import { BoxSnapshotSettler } from './services/box-snapshot-settler.service'
+import { SNAPSHOT_ARCHIVE_STORE, createSnapshotArchiveStore } from './stores/snapshot-archive.store'
+import { TypedConfigService } from '../config/typed-config.service'
 
 @Module({
   imports: [
@@ -78,6 +84,8 @@ import { CpuIncidentModule } from './cpu-incidents/cpu-incident.module'
       BoxLastActivity,
       BoxMigration,
       Tunnel,
+      BoxSnapshot,
+      BoxSnapshotRestore,
       Domain,
     ]),
   ],
@@ -106,6 +114,13 @@ import { CpuIncidentModule } from './cpu-incidents/cpu-incident.module'
     BoxMigrationService,
     BoxMigrationManager,
     BoxMigrationJobReceiver,
+    BoxSnapshotService,
+    BoxSnapshotSettler,
+    {
+      provide: SNAPSHOT_ARCHIVE_STORE,
+      inject: [TypedConfigService],
+      useFactory: createSnapshotArchiveStore,
+    },
     TunnelService,
     DomainService,
     AttachTicketService,
@@ -138,6 +153,7 @@ import { CpuIncidentModule } from './cpu-incidents/cpu-incident.module'
     BoxActivityService,
     BoxStateWaiterService,
     BoxAutoResumeService,
+    BoxSnapshotService,
   ],
 })
 export class BoxModule {}

@@ -12,6 +12,7 @@ use crate::runtime::options::SnapshotOptions;
 ///
 /// Obtained via `litebox.snapshot()`. Owns backend handles and can be
 /// used independently from the originating `LiteBox` borrow.
+#[derive(Clone)]
 pub struct SnapshotHandle {
     snapshot_backend: Arc<dyn SnapshotBackend>,
 }
@@ -28,6 +29,11 @@ impl SnapshotHandle {
         name: &str,
     ) -> BoxliteResult<SnapshotInfo> {
         self.snapshot_backend.create(options, name).await
+    }
+
+    /// Create a snapshot with a generated name.
+    pub async fn create_unnamed(&self, options: SnapshotOptions) -> BoxliteResult<SnapshotInfo> {
+        self.snapshot_backend.create(options, "").await
     }
 
     /// List all snapshots for this box.

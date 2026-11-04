@@ -22,14 +22,45 @@ describe('JobStateHandlerService migration job routing', () => {
     const boxMigrationJobReceiver = {
       handleJobCompletion: jest.fn().mockResolvedValue(undefined),
     } as any
+    const boxSnapshotSettler = {
+      settle: jest.fn().mockResolvedValue(undefined),
+    } as any
     return {
-      service: new JobStateHandlerService(boxRepository, redisLockProvider, boxMigrationJobReceiver, {
-        reasonFor: jest.fn(async (_box: unknown, reason: string) => reason),
-      } as any),
+      service: new JobStateHandlerService(
+        boxRepository,
+        redisLockProvider,
+        boxMigrationJobReceiver,
+        { reasonFor: jest.fn(async (_box: unknown, reason: string) => reason) } as any,
+        boxSnapshotSettler,
+      ),
       redisLockProvider,
       boxMigrationJobReceiver,
+      boxSnapshotSettler,
     }
   }
+
+  // A snapshot job is keyed by its box like a lifecycle job, but it never took
+  // the box's state-change lock, so finishing it must not release one.
+  it.each([JobType.CREATE_SNAPSHOT, JobType.RESTORE_SNAPSHOT])(
+    'hands %s to the snapshot settler and leaves the box state-change lock alone',
+    async (type) => {
+      const h = makeService()
+      const job = new Job({
+        id: 'job-3',
+        type,
+        status: JobStatus.FAILED,
+        runnerId: 'runner-1',
+        resourceType: ResourceType.BACKUP,
+        resourceId: 'box-1',
+      })
+
+      await h.service.handleJobCompletion(job)
+
+      expect(h.boxSnapshotSettler.settle).toHaveBeenCalledWith(job)
+      expect(h.boxMigrationJobReceiver.handleJobCompletion).not.toHaveBeenCalled()
+      expect(h.redisLockProvider.unlock).not.toHaveBeenCalledWith(getStateChangeLockKey('box-1'))
+    },
+  )
 
   // A migration job holds its own per-job lock and never the box's state-change
   // lock, so releasing that lock here would drop one a concurrent start or stop
@@ -91,6 +122,7 @@ describe('JobStateHandlerService failed pulls', () => {
       { unlock: jest.fn().mockResolvedValue(undefined) } as any,
       { handleJobCompletion: jest.fn() } as any,
       imagePullFailureService as any,
+      { settle: jest.fn() } as any,
     )
     return { service, boxRepository, imagePullFailureService }
   }

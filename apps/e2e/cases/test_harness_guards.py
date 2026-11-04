@@ -18,6 +18,8 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import sys
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import boxlite
 import pytest
@@ -29,6 +31,7 @@ from conftest import (
     bound_box_lifetime,
     e2e_box_name,
     with_bounded_lifetime,
+    _TrackingRuntime,
 )
 
 sys.path.insert(0, str(Path(__file__).parents[1]))
@@ -67,6 +70,22 @@ def test_lifetime_defaults_are_applied_when_the_caller_sets_neither():
     bound_box_lifetime(options)
     assert options.auto_stop == E2E_AUTO_STOP_SECONDS
     assert options.auto_delete == E2E_AUTO_DELETE_SECONDS
+
+
+@pytest.mark.asyncio
+async def test_snapshot_children_are_bounded_named_and_tracked():
+    child = SimpleNamespace(id="snapshot-child")
+    inner = SimpleNamespace(create_from_snapshot=AsyncMock(return_value=child))
+    runtime = _TrackingRuntime(inner)
+    result = await runtime.create_from_snapshot("saved")
+    assert result is child
+    args, kwargs = inner.create_from_snapshot.await_args
+    assert args[0] == "saved"
+    assert args[1].image is None
+    assert args[1].auto_stop == E2E_AUTO_STOP_SECONDS
+    assert args[1].auto_delete == E2E_AUTO_DELETE_SECONDS
+    assert kwargs["name"].startswith(E2E_BOX_NAME_PREFIX)
+    assert [identity for identity, _ in runtime._created] == [child.id]
 
 
 @pytest.mark.parametrize("field", ["auto_stop", "auto_delete"])

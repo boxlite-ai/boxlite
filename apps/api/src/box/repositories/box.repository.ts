@@ -8,6 +8,8 @@ import { DataSource, EntityManager, FindOptionsWhere, In, Not } from 'typeorm'
 import { Box } from '../entities/box.entity'
 import { BoxLastActivity } from '../entities/box-last-activity.entity'
 import { BoxMigration } from '../entities/box-migration.entity'
+import { BoxSnapshot } from '../entities/box-snapshot.entity'
+import { BoxSnapshotState } from '../enums/box-snapshot-state.enum'
 import { BoxState } from '../enums/box-state.enum'
 import { BoxDesiredState } from '../enums/box-desired-state.enum'
 import { BoxMigrationState } from '../enums/box-migration-state.enum'
@@ -32,7 +34,7 @@ import { BOX_WARM_POOL_UNASSIGNED_ORGANIZATION } from '../constants/box.constant
 
 // SQLSTATE lock_not_available — a statement waited longer than lock_timeout to
 // acquire a lock.
-const PG_LOCK_TIMEOUT_CODE = '55P03'
+export const PG_LOCK_TIMEOUT_CODE = '55P03'
 
 // Cap how long the proxy auto-start UPDATE waits to acquire the box row's
 // write lock. Concurrent start/stop/sync go through updateWhere(), which holds
@@ -147,6 +149,20 @@ export class BoxRepository extends BaseRepository<Box> {
     box.enforceInvariants()
 
     await this.withCreationAdmission(box.organizationId, maxCreatedBoxes, async (entityManager) => {
+      if (box.initialSnapshotId) {
+        const snapshot = await entityManager.findOne(BoxSnapshot, {
+          where: { id: box.initialSnapshotId, organizationId: box.organizationId },
+          lock: { mode: 'pessimistic_read' },
+        })
+        if (
+          !snapshot ||
+          snapshot.state !== BoxSnapshotState.READY ||
+          snapshot.diskGb !== box.disk ||
+          snapshot.region !== box.region
+        ) {
+          throw new ConflictException('Snapshot is no longer ready or does not match the box disk and region')
+        }
+      }
       await this.lockRegistryCredential(box, entityManager)
       await entityManager.insert(Box, box)
       await this.upsertLastActivity(entityManager, box.id, box.createdAt)
@@ -314,6 +330,8 @@ export class BoxRepository extends BaseRepository<Box> {
    * @param id - The ID of the box to update.
    * @param params.updateData - The partial data to update.
    * @param params.whereCondition - The where condition to use for the update.
+   * @param transaction - A transaction to join instead of opening one, for a
+   *   caller whose other writes must commit or roll back with the box's.
    *
    * @throws {BoxConflictError} if the box was modified by another operation
    */
@@ -323,10 +341,11 @@ export class BoxRepository extends BaseRepository<Box> {
       updateData: Partial<Box>
       whereCondition: FindOptionsWhere<Box>
     },
+    transaction?: EntityManager,
   ): Promise<Box> {
     const { updateData, whereCondition } = params
 
-    const [updatedBox, previousBox] = await this.manager.transaction(async (entityManager) => {
+    const update = async (entityManager: EntityManager) => {
       const whereClause = {
         ...whereCondition,
         id,
@@ -360,8 +379,13 @@ export class BoxRepository extends BaseRepository<Box> {
       this.invalidateLookupCacheOnUpdate(box, previousBox)
 
       return [box, previousBox] as const
-    })
+    }
 
+    // Snapshot transitions join their caller's transaction and do not count as
+    // organization activity. Ordinary writes record activity after committing.
+    if (transaction) return (await update(transaction))[0]
+
+    const [updatedBox, previousBox] = await this.manager.transaction(update)
     await this.recordOrganizationActivity(updatedBox, previousBox)
     return updatedBox
   }

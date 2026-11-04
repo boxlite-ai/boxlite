@@ -65,3 +65,7 @@ func (a *BoxliteAdapter) ExportBox(ctx context.Context, boxId, destDir string) (
 func (a *BoxliteAdapter) ImportBox(ctx context.Context, boxId, archivePath string) error {
 	return a.client.ImportBox(ctx, boxId, archivePath)
 }
+
+func (a *BoxliteAdapter) RestoreBoxFromArchive(ctx context.Context, boxId, archivePath string) error {
+	return a.client.RestoreBoxFromArchive(ctx, boxId, archivePath)
+}

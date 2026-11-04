@@ -87,8 +87,31 @@ export const gcpStorageProvider =
 
     const volumeCondition = volumeConditionFor(request.volumePrefix)
 
+    /*
+     * Box snapshots. Grants on it go to the API, which deletes archives, and to
+     * the runners, which write and read them — each as a binding on this one
+     * bucket, so neither reaches a volume bucket or the one above.
+     *
+     * Soft delete is off, as on volume buckets: a snapshot a user deletes is
+     * meant to be gone, and GCS would otherwise keep it billable for seven
+     * days. Versioning stays off for the same reason.
+     */
+    const snapshots = new gcp.storage.Bucket('Snapshots', {
+      name: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'snapshots' }),
+      project,
+      location: region.toUpperCase(),
+      uniformBucketLevelAccess: true,
+      publicAccessPrevention: 'enforced',
+      softDeletePolicy: { retentionDurationSeconds: 0 },
+    })
+
     return {
       name: bucket.name,
+      snapshots: {
+        active: true,
+        bucket: snapshots.name,
+        archivePrefix: snapshots.name.apply((name: string) => `gs://${name}/box-snapshots/`),
+      },
       binding: {
         cloud: 'gcp',
         bucketUrl: bucket.url,

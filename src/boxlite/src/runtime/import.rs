@@ -226,6 +226,107 @@ fn install_disks(temp_dir: &Path, box_home: &Path) -> BoxliteResult<()> {
     Ok(())
 }
 
+/// Where an archive's disk waits inside the box's own `disks/` directory
+/// before it replaces the live one.
+const RESTORE_STAGING_DISK: &str = "disk.qcow2.restoring";
+
+/// Replace a box's container disk with the one an archive carries.
+///
+/// The archive is extracted and checked exactly as an import checks it, but
+/// its disk lands on an existing box instead of a new one, and the manifest's
+/// options are never read: the box keeps its own configuration.
+///
+/// The disk is staged beside the live one and then renamed over it. rename(2)
+/// replaces its target atomically only within one filesystem, and the runtime's
+/// temp directory need not share the box's, so the staging file is what makes
+/// the swap a single step. The original is retained until metadata commits,
+/// so a returned commit error can roll back the disk as well.
+pub(crate) fn replace_container_disk(
+    archive_path: &Path,
+    layout: &crate::runtime::layout::FilesystemLayout,
+    disks_dir: &Path,
+) -> BoxliteResult<()> {
+    replace_container_disk_and_commit(archive_path, layout, disks_dir, || Ok(()))
+}
+
+pub(crate) fn replace_container_disk_and_commit(
+    archive_path: &Path,
+    layout: &crate::runtime::layout::FilesystemLayout,
+    disks_dir: &Path,
+    commit: impl FnOnce() -> BoxliteResult<()>,
+) -> BoxliteResult<()> {
+    let (_manifest, temp_dir) = extract_and_validate(archive_path, layout)?;
+    let extracted_container = temp_dir.path().join(disk_filenames::CONTAINER_DISK);
+    ensure_within_extraction_dir(&extracted_container, temp_dir.path())?;
+    validate_no_backing_references(&extracted_container)?;
+
+    std::fs::create_dir_all(disks_dir).map_err(|e| {
+        BoxliteError::Storage(format!(
+            "Failed to create disk directory {}: {}",
+            disks_dir.display(),
+            e
+        ))
+    })?;
+    // Keep rollback on the box's filesystem without copying the whole disk.
+    // Creating the link never removes or modifies the live original.
+    let rollback = tempfile::Builder::new()
+        .prefix(".restore-rollback-")
+        .tempdir_in(disks_dir)
+        .map_err(|e| BoxliteError::Storage(format!("Failed to prepare disk rollback: {e}")))?;
+    let container = disks_dir.join(disk_filenames::CONTAINER_DISK);
+    let original = rollback.path().join(disk_filenames::CONTAINER_DISK);
+    let had_original = match std::fs::hard_link(&container, &original) {
+        Ok(()) => true,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+        Err(error) => {
+            return Err(BoxliteError::Storage(format!(
+                "Failed to retain original container disk: {error}"
+            )));
+        }
+    };
+    let staged = disks_dir.join(RESTORE_STAGING_DISK);
+    let swapped = move_file(&extracted_container, &staged).and_then(|()| {
+        std::fs::rename(&staged, disks_dir.join(disk_filenames::CONTAINER_DISK)).map_err(|e| {
+            BoxliteError::Storage(format!(
+                "Failed to replace container disk in {}: {}",
+                disks_dir.display(),
+                e
+            ))
+        })
+    });
+    if let Err(error) = swapped {
+        let _ = std::fs::remove_file(&staged);
+        return Err(error);
+    }
+
+    if let Err(error) = commit() {
+        let restored = if had_original {
+            std::fs::rename(&original, &container)
+        } else {
+            std::fs::remove_file(&container)
+        };
+        if let Err(rollback_error) = restored {
+            // A failed compensation must not let RAII delete the only old
+            // disk. Retain it for recovery; no crash-atomicity is promised.
+            let recovery = rollback.keep();
+            return Err(BoxliteError::Storage(format!(
+                "{error}; disk rollback failed: {rollback_error}; recovery directory: {}",
+                recovery.display()
+            )));
+        }
+        return Err(error);
+    }
+
+    // Rebuilt from the shared base on the next start, as after a snapshot
+    // restore: the guest rootfs overlay holds nothing the archive restores.
+    let guest_disk = disks_dir.join(disk_filenames::GUEST_ROOTFS_DISK);
+    if guest_disk.exists() {
+        let _ = std::fs::remove_file(&guest_disk);
+    }
+
+    Ok(())
+}
+
 /// Reject an imported disk that resolves outside the extraction directory.
 ///
 /// Extraction already refuses link members, so this is the assertion rather
@@ -274,6 +375,48 @@ pub(crate) fn validate_no_backing_references(disk_path: &Path) -> BoxliteResult<
             disk_path.display()
         ))),
     }
+}
+
+/// Writes a `.boxlite` archive into `dir` whose container disk ends in
+/// `marker`, for tests of the code that restores from one. `checksum` is what
+/// the manifest claims; `None` claims the disk's real digest.
+#[cfg(test)]
+pub(crate) fn write_test_archive(
+    dir: &Path,
+    backing: Option<&str>,
+    marker: &[u8],
+    checksum: Option<&str>,
+) -> std::path::PathBuf {
+    let source = dir.join("source");
+    std::fs::create_dir_all(&source).unwrap();
+    let disk = source.join(disk_filenames::CONTAINER_DISK);
+    write_test_disk(&disk, backing, marker);
+    let manifest = ArchiveManifest {
+        version: 3,
+        box_name: None,
+        image: "alpine:latest".to_string(),
+        box_options: None,
+        guest_disk_checksum: String::new(),
+        container_disk_checksum: checksum
+            .map(str::to_string)
+            .unwrap_or_else(|| sha256_file(&disk).unwrap()),
+        exported_at: "2026-10-22T00:00:00Z".to_string(),
+    };
+    let manifest_path = source.join(MANIFEST_FILENAME);
+    std::fs::write(&manifest_path, serde_json::to_string(&manifest).unwrap()).unwrap();
+    let archive = dir.join("box.boxlite");
+    crate::litebox::archive::build_zstd_tar_archive(&archive, &manifest_path, &disk, 3).unwrap();
+    archive
+}
+
+/// Writes a standalone qcow2 image (or one naming `backing`) whose bytes end
+/// in `marker`, so a test can tell which disk ended up where.
+#[cfg(test)]
+pub(crate) fn write_test_disk(path: &Path, backing: Option<&str>, marker: &[u8]) {
+    use std::io::Write;
+    crate::disk::qcow2::write_test_qcow2(path, backing);
+    let mut file = std::fs::OpenOptions::new().append(true).open(path).unwrap();
+    file.write_all(marker).unwrap();
 }
 
 #[cfg(test)]
@@ -585,6 +728,197 @@ mod tests {
 
         let result = validate_no_backing_references(&disk);
         assert!(result.is_ok());
+    }
+
+    /// A box home holding a live container disk and guest rootfs overlay, plus
+    /// the runtime layout whose temp directory extraction uses.
+    struct RestoreFixture {
+        home: TempDir,
+        layout: crate::runtime::layout::FilesystemLayout,
+        disks_dir: std::path::PathBuf,
+    }
+
+    impl RestoreFixture {
+        fn new() -> Self {
+            let home = TempDir::new_in("/tmp").unwrap();
+            let layout = crate::runtime::layout::FilesystemLayout::new(
+                home.path().to_path_buf(),
+                crate::runtime::layout::FsLayoutConfig::with_bind_mount(),
+            );
+            std::fs::create_dir_all(layout.temp_dir()).unwrap();
+            let disks_dir = home.path().join("boxes/box-1/disks");
+            std::fs::create_dir_all(&disks_dir).unwrap();
+            write_disk(
+                &disks_dir.join(disk_filenames::CONTAINER_DISK),
+                None,
+                b"original",
+            );
+            std::fs::write(disks_dir.join(disk_filenames::GUEST_ROOTFS_DISK), b"guest").unwrap();
+            Self {
+                home,
+                layout,
+                disks_dir,
+            }
+        }
+
+        fn container_disk(&self) -> Vec<u8> {
+            std::fs::read(self.disks_dir.join(disk_filenames::CONTAINER_DISK)).unwrap()
+        }
+
+        /// An archive whose container disk ends in `marker`. `checksum` decides
+        /// what the manifest claims; `None` claims the disk's real digest.
+        fn archive(
+            &self,
+            backing: Option<&str>,
+            marker: &[u8],
+            checksum: Option<&str>,
+        ) -> std::path::PathBuf {
+            write_test_archive(self.home.path(), backing, marker, checksum)
+        }
+
+        fn assert_untouched(&self) {
+            let mut expected = Vec::new();
+            let original = self.home.path().join("expected.qcow2");
+            write_disk(&original, None, b"original");
+            expected.extend(std::fs::read(&original).unwrap());
+            assert_eq!(
+                self.container_disk(),
+                expected,
+                "the live disk must survive a failed restore"
+            );
+            assert!(
+                self.disks_dir
+                    .join(disk_filenames::GUEST_ROOTFS_DISK)
+                    .exists(),
+                "a failed restore must not drop the guest rootfs overlay"
+            );
+            assert!(
+                !self.disks_dir.join(RESTORE_STAGING_DISK).exists(),
+                "no staging file may remain"
+            );
+        }
+    }
+
+    fn write_disk(path: &Path, backing: Option<&str>, marker: &[u8]) {
+        write_test_disk(path, backing, marker);
+    }
+
+    #[test]
+    fn restore_backup_failure_leaves_original_and_guest_untouched() {
+        let fixture = RestoreFixture::new();
+        let archive = fixture.archive(None, b"restored", None);
+        let container = fixture.disks_dir.join(disk_filenames::CONTAINER_DISK);
+        std::fs::remove_file(&container).unwrap();
+        std::fs::create_dir(&container).unwrap();
+        let marker = container.join("original");
+        std::fs::write(&marker, b"original bytes").unwrap();
+        let mut committed = false;
+        let error = replace_container_disk_and_commit(
+            &archive,
+            &fixture.layout,
+            &fixture.disks_dir,
+            || {
+                committed = true;
+                Ok(())
+            },
+        )
+        .unwrap_err();
+        assert!(
+            error.to_string().contains("retain original container disk"),
+            "{error}"
+        );
+        assert!(!committed, "metadata must not run after backup failure");
+        assert_eq!(std::fs::read(marker).unwrap(), b"original bytes");
+        assert_eq!(
+            std::fs::read(fixture.disks_dir.join(disk_filenames::GUEST_ROOTFS_DISK)).unwrap(),
+            b"guest"
+        );
+        assert!(!fixture.disks_dir.join(RESTORE_STAGING_DISK).exists());
+    }
+
+    #[test]
+    fn restore_retains_original_recovery_copy_when_rollback_io_fails() {
+        let fixture = RestoreFixture::new();
+        let archive = fixture.archive(None, b"restored", None);
+        let original = fixture.container_disk();
+        let container = fixture.disks_dir.join(disk_filenames::CONTAINER_DISK);
+        let error = replace_container_disk_and_commit(
+            &archive,
+            &fixture.layout,
+            &fixture.disks_dir,
+            || {
+                assert!(fixture.container_disk().ends_with(b"restored"));
+                std::fs::remove_file(&container).unwrap();
+                std::fs::create_dir(&container).unwrap();
+                std::fs::write(container.join("obstruction"), b"occupied").unwrap();
+                Err(BoxliteError::Database("state write denied".into()))
+            },
+        )
+        .unwrap_err();
+        let message = error.to_string();
+        let recovery = message
+            .split("recovery directory: ")
+            .nth(1)
+            .expect("error names retained original");
+        assert_eq!(
+            std::fs::read(Path::new(recovery).join(disk_filenames::CONTAINER_DISK)).unwrap(),
+            original
+        );
+        assert!(message.contains("state write denied"), "{message}");
+        assert!(message.contains("disk rollback failed"), "{message}");
+        assert_eq!(
+            std::fs::read(fixture.disks_dir.join(disk_filenames::GUEST_ROOTFS_DISK)).unwrap(),
+            b"guest"
+        );
+    }
+
+    #[test]
+    fn restore_replaces_the_container_disk_and_drops_the_guest_overlay() {
+        let fixture = RestoreFixture::new();
+        let archive = fixture.archive(None, b"restored", None);
+
+        replace_container_disk(&archive, &fixture.layout, &fixture.disks_dir).unwrap();
+
+        let restored = fixture.container_disk();
+        assert!(
+            restored.ends_with(b"restored"),
+            "the archive's disk must become the box's"
+        );
+        assert!(
+            !fixture
+                .disks_dir
+                .join(disk_filenames::GUEST_ROOTFS_DISK)
+                .exists(),
+            "the guest rootfs overlay is rebuilt on the next start"
+        );
+        assert!(!fixture.disks_dir.join(RESTORE_STAGING_DISK).exists());
+    }
+
+    #[test]
+    fn restore_of_a_corrupt_archive_keeps_the_original_disk() {
+        let fixture = RestoreFixture::new();
+        let archive = fixture.archive(None, b"restored", Some("sha256:0000"));
+
+        let error = replace_container_disk(&archive, &fixture.layout, &fixture.disks_dir)
+            .expect_err("a checksum mismatch must refuse the restore");
+
+        assert!(error.to_string().contains("checksum"), "got: {error}");
+        fixture.assert_untouched();
+    }
+
+    #[test]
+    fn restore_refuses_a_disk_that_reaches_outside_the_archive() {
+        let fixture = RestoreFixture::new();
+        let archive = fixture.archive(Some("/etc/shadow"), b"restored", None);
+
+        let error = replace_container_disk(&archive, &fixture.layout, &fixture.disks_dir)
+            .expect_err("a backing reference must refuse the restore");
+
+        assert!(
+            error.to_string().contains("backing file reference"),
+            "got: {error}"
+        );
+        fixture.assert_untouched();
     }
 
     /// The backing-file scan is the import path's only disk-level security

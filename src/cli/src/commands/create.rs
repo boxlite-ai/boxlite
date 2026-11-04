@@ -16,6 +16,10 @@ pub struct CreateArgs {
     #[arg(long = "rootfs", value_name = "PATH")]
     pub rootfs: Option<String>,
 
+    /// Create a cloud box from a ready snapshot ID or name, waiting for startup.
+    #[arg(long, conflicts_with_all = ["image", "rootfs"])]
+    pub snapshot: Option<String>,
+
     #[command(flatten)]
     pub management: crate::cli::ManagementFlags,
 
@@ -60,7 +64,12 @@ pub async fn execute(args: CreateArgs, global: &GlobalFlags) -> anyhow::Result<(
     let box_options = args.to_box_options(global)?;
     let rt = global.create_runtime()?;
 
-    let litebox = rt.create(box_options, args.management.name.clone()).await?;
+    let litebox = if let Some(snapshot) = &args.snapshot {
+        rt.create_from_snapshot(snapshot, box_options, args.management.name.clone())
+            .await?
+    } else {
+        rt.create(box_options, args.management.name.clone()).await?
+    };
     println!("{}", litebox.id());
 
     Ok(())
@@ -68,6 +77,17 @@ pub async fn execute(args: CreateArgs, global: &GlobalFlags) -> anyhow::Result<(
 
 impl CreateArgs {
     fn to_box_options(&self, global: &GlobalFlags) -> anyhow::Result<BoxOptions> {
+        if self.snapshot.is_some() {
+            for value in &self.volume.volume {
+                anyhow::ensure!(
+                    matches!(
+                        crate::volumespec::parse(value)?.origin,
+                        crate::volumespec::MountOrigin::ManagedVolume(_)
+                    ),
+                    "snapshot creation accepts managed volumes only"
+                );
+            }
+        }
         self.boot.require_enabled(global.experimental_features())?;
         self.management
             .require_enabled(global.experimental_features())?;
@@ -104,10 +124,17 @@ impl CreateArgs {
     }
 
     fn rootfs_spec(&self) -> anyhow::Result<RootfsSpec> {
+        if self.snapshot.is_some() {
+            anyhow::ensure!(
+                self.image.is_none() && self.rootfs.is_none(),
+                "--snapshot conflicts with IMAGE and --rootfs"
+            );
+            return Ok(RootfsSpec::default());
+        }
         match (self.image.as_ref(), self.rootfs.as_ref()) {
             (Some(image), None) => Ok(RootfsSpec::Image(image.clone())),
             (None, Some(path)) => Ok(RootfsSpec::RootfsPath(path.clone())),
-            (None, None) => anyhow::bail!("provide IMAGE or --rootfs PATH"),
+            (None, None) => anyhow::bail!("provide IMAGE or --rootfs PATH or --snapshot SNAPSHOT"),
             (Some(_), Some(_)) => anyhow::bail!("provide either IMAGE or --rootfs PATH, not both"),
         }
     }
@@ -118,6 +145,37 @@ mod tests {
     use super::*;
     use crate::cli::{Cli, Commands};
     use clap::Parser;
+
+    #[test]
+    fn snapshot_mounts_are_validated_before_creating_anonymous_directories() {
+        let home = tempfile::tempdir().unwrap();
+        for volume in ["/data", "/tmp:/data"] {
+            let cli = Cli::try_parse_from([
+                "boxlite",
+                "--home",
+                home.path().to_str().unwrap(),
+                "--url",
+                "http://127.0.0.1:1",
+                "create",
+                "--snapshot",
+                "saved",
+                "-v",
+                volume,
+            ])
+            .unwrap();
+            let Commands::Create(args) = cli.command else {
+                panic!("expected create")
+            };
+            assert!(
+                args.to_box_options(&cli.global).is_err(),
+                "cloud snapshot must reject {volume}"
+            );
+            assert!(
+                !home.path().join("volumes").exists(),
+                "rejected mounts must leave no directories"
+            );
+        }
+    }
 
     /// `ManagementFlags::apply_to` writes the keep-on-stop sentinel before an
     /// optional deadline. `create` then sets detach without changing lifecycle

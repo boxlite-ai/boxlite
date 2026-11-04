@@ -8,6 +8,8 @@ import { OrganizationSuspendedError } from '@/api/errors'
 import { StatCard } from '@/components/ascii'
 import { CreateBoxDialog } from '@/components/Box/CreateBoxDialog'
 import { BoxTable } from '@/components/BoxTable'
+import { SnapshotCreateDialog } from '@/components/SnapshotCreateDialog'
+import { useSnapshotCapabilities } from '@/hooks/queries/useSnapshotCapabilities'
 import { Plus, Search } from '@/components/ui/icon'
 
 import {
@@ -80,6 +82,9 @@ const Boxes: React.FC = () => {
   const { selectedOrganization, authenticatedUserOrganizationMember, authenticatedUserHasPermission } =
     useSelectedOrganization()
   const [createBoxOpen, setCreateBoxOpen] = useState(false)
+  const capabilities = useSnapshotCapabilities()
+  const [snapshotSource, setSnapshotSource] = useState<{ box: Box; organizationId: string } | null>(null)
+  useEffect(() => setSnapshotSource(null), [selectedOrganization?.id])
   const [onboardingProgress, setOnboardingProgress] = useState<OnboardingProgress>(() => readOnboardingProgress(userId))
 
   const updateOnboardingProgress = useCallback(
@@ -756,6 +761,11 @@ const Boxes: React.FC = () => {
 
       <div className="mt-[14px] flex min-h-0 flex-1 flex-col">
         <BoxTable
+          onCreateSnapshot={
+            capabilities.data?.snapshots_enabled && selectedOrganization
+              ? (box) => setSnapshotSource({ box, organizationId: selectedOrganization.id })
+              : undefined
+          }
           boxIsLoading={boxIsLoading}
           boxStateIsTransitioning={boxStateIsTransitioning}
           handleStart={handleStart}
@@ -789,6 +799,13 @@ const Boxes: React.FC = () => {
         />
       </div>
 
+      {snapshotSource?.organizationId === selectedOrganization?.id && snapshotSource && (
+        <SnapshotCreateDialog
+          key={snapshotSource.organizationId}
+          box={boxesData?.items.find((box) => box.id === snapshotSource.box.id) ?? snapshotSource.box}
+          onClose={() => setSnapshotSource(null)}
+        />
+      )}
       {boxToDelete && (
         <AlertDialog
           open={showDeleteDialog}

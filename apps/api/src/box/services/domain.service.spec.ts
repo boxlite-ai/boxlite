@@ -108,6 +108,12 @@ describe('DomainService.parseSubdomain', () => {
 })
 
 describe('DomainService.claim', () => {
+  it.each(['snapshots', 'SNAPSHOTS'])('refuses the snapshot collection label %s before any write', async (name) => {
+    const { service, query } = makeService()
+    await expect(service.claim(ORG, name)).rejects.toThrow('reserved')
+    expect(query).not.toHaveBeenCalled()
+  })
+
   it('requests a short name and returns an unbound full hostname', async () => {
     const { service, query } = makeService()
     await expect(service.claim(ORG, ' Demo1 ')).resolves.toEqual({

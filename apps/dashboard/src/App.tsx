@@ -49,6 +49,7 @@ const FirstBoxWelcome = React.lazy(() => import('./components/first-run/FirstBox
 const FirstBoxQuickstart = React.lazy(() =>
   import('./components/first-run/FirstBoxOnboarding').then((m) => ({ default: m.FirstBoxQuickstart })),
 )
+const Snapshots = React.lazy(() => import('./pages/Snapshots'))
 const Images = React.lazy(() => import('./pages/ImagesPage'))
 const ImageDetails = React.lazy(() => import('./pages/ImageDetails'))
 const EmailVerify = React.lazy(() => import('./pages/EmailVerify'))
@@ -186,6 +187,7 @@ function App() {
         <Route path={getRouteSubPath(RoutePath.WELCOME)} element={<FirstBoxWelcome />} />
         <Route path={getRouteSubPath(RoutePath.QUICKSTART)} element={<FirstBoxQuickstart />} />
         <Route path={getRouteSubPath(RoutePath.VOLUMES)} element={<Volumes />} />
+        <Route path={getRouteSubPath(RoutePath.SNAPSHOTS)} element={<Snapshots />} />
         <Route path={getRouteSubPath(RoutePath.DOMAINS)} element={<Domains />} />
         <Route path={getRouteSubPath(RoutePath.IMAGES)} element={<Images tab="images" />} />
         {/* The static segment is declared before `:idOrRef`, as the API orders its routes. */}

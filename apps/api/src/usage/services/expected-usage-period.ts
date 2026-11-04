@@ -21,7 +21,13 @@ export interface BillableBox extends UsagePeriodShape {
 export type ExpectedOpenPeriod = UsagePeriodShape | null
 
 /** States that must have an open period. */
-export const BOX_STATES_WITH_OPEN_PERIOD: BoxState[] = [BoxState.STARTED, BoxState.STOPPING, BoxState.STOPPED]
+export const BOX_STATES_WITH_OPEN_PERIOD: BoxState[] = [
+  BoxState.STARTED,
+  BoxState.STOPPING,
+  BoxState.STOPPED,
+  BoxState.EXPORTING,
+  BoxState.IMPORTING,
+]
 
 /** States that must not have one — the box has stopped consuming anything. */
 export const BOX_STATES_WITHOUT_OPEN_PERIOD: BoxState[] = [
@@ -31,8 +37,17 @@ export const BOX_STATES_WITHOUT_OPEN_PERIOD: BoxState[] = [
   BoxState.DESTROYED,
 ]
 
-/** Of the states above, the ones that keep paying for disk but not compute. */
-export const BOX_STATES_BILLING_DISK_ONLY: BoxState[] = [BoxState.STOPPING, BoxState.STOPPED]
+/**
+ * Of the states above, the ones that keep paying for disk but not compute. A
+ * box mid-snapshot is a stopped box whose disk a job is reading or replacing,
+ * so it bills exactly as stopped: the period neither closes nor changes shape.
+ */
+export const BOX_STATES_BILLING_DISK_ONLY: BoxState[] = [
+  BoxState.STOPPING,
+  BoxState.STOPPED,
+  BoxState.EXPORTING,
+  BoxState.IMPORTING,
+]
 
 // Every remaining state is in neither list and bills nothing, the same answer a
 // terminal box gets: CREATING, STARTING and UNKNOWN, plus RESTORING, RESIZING

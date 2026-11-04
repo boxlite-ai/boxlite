@@ -10,13 +10,14 @@ pub(crate) mod lock;
 pub mod options;
 pub mod registries;
 pub(crate) mod signal_handler;
+pub mod snapshots;
 pub mod types;
 pub mod volumes;
 
 mod core;
 #[cfg(feature = "embedded-runtime")]
 pub(crate) mod embedded;
-mod import;
+pub(crate) mod import;
 pub(crate) mod rt_impl;
 
 pub use auth::{AuthHandle, Principal};
@@ -24,4 +25,5 @@ pub use core::BoxliteRuntime;
 pub use domains::{Domain, DomainHandle, DomainList, DomainTarget};
 pub use images::ImageHandle;
 pub use registries::{NewRegistryCredential, RegistryCredential, RegistryHandle};
+pub use snapshots::RuntimeSnapshotHandle;
 pub use volumes::VolumeHandle;

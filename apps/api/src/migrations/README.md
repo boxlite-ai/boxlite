@@ -43,6 +43,19 @@ This allows the database and API to be updated independently while maintaining c
 Note: the root folder is reserved for the pre-launch baseline only. Do not add new root migrations;
 use `pre-deploy/` or `post-deploy/` for new changes.
 
+### Integration fixtures
+
+Fixtures that build their database from selected migrations must include every
+migration adding a column mapped by their entities. TypeORM selects all mapped
+columns, even when the operation does not use the new field. For example, the
+usage ledger fixture needs `AddBoxInitialSnapshot1792972800000` when reading
+`Box`; adding only the snapshot state enum leaves its reconciliation queries
+failing on the missing `initialSnapshotId` column.
+
+With the test Postgres and Redis connection variables set, run
+`make test:apps:api TEST_FILES=usage.service.integration` after changing the Box
+schema. Keep the ledger assertions intact so schema drift remains observable.
+
 ## Developer Workflow
 
 ### 1. Make Changes to Database Entities
