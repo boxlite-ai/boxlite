@@ -341,7 +341,8 @@ struct CopyTarget {
     in_container: PathBuf,
     /// Where that path lands on the guest-side rootfs directory.
     on_rootfs: PathBuf,
-    /// Destinations of every mount the container was created with.
+    /// Destinations of every mount in the container, including those added
+    /// after creation by `Container.AddMount`.
     mounts: Vec<PathBuf>,
 }
 
@@ -829,13 +830,13 @@ impl GuestServer {
         }
     }
 
-    /// Mount destinations of the container, from the OCI spec it was created
-    /// with.
+    /// Mount destinations of the container: those of the OCI spec it was
+    /// created with, plus those `Container.AddMount` added since.
     ///
     /// Asked once per copy, by [`CopyTarget::resolve`], which then answers
     /// every later question from the list it holds. The answer costs only the
-    /// clone: `Container` resolved the list at creation, so nothing here reads
-    /// a file while holding the container's lock on the guest's async runtime.
+    /// clone: `Container` keeps the list in memory, so nothing here reads a
+    /// file while holding the container's lock on the guest's async runtime.
     #[allow(clippy::result_large_err)]
     async fn container_mounts(&self, container_id: &str) -> Result<Vec<PathBuf>, Status> {
         let container_arc = {

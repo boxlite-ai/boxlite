@@ -330,7 +330,7 @@ fn path_to_cstring(path: &Path) -> BoxliteResult<CString> {
 ///
 /// These syscalls are not yet in the nix crate, so we call them directly.
 /// Syscall numbers are stable across aarch64 and x86_64.
-mod sys {
+pub(crate) mod sys {
     use std::ffi::CStr;
     use std::io;
     use std::os::fd::{FromRawFd, OwnedFd, RawFd};
@@ -348,6 +348,8 @@ mod sys {
     pub const AT_RECURSIVE: u32 = 0x8000;
     pub const AT_EMPTY_PATH: u32 = libc::AT_EMPTY_PATH as u32;
     pub const MOVE_MOUNT_F_EMPTY_PATH: u32 = 0x00000004;
+    pub const MOVE_MOUNT_T_EMPTY_PATH: u32 = 0x00000040;
+    pub const MOUNT_ATTR_RDONLY: u64 = 0x00000001;
     pub const MOUNT_ATTR_IDMAP: u64 = 0x00100000;
 
     #[repr(C)]

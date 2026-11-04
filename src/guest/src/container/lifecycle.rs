@@ -64,7 +64,8 @@ pub struct Container {
     env: HashMap<String, String>,
     /// Resolved (uid, gid) from image USER directive, propagated to exec commands.
     user: (u32, u32),
-    /// Destinations of every mount the applied OCI spec declares.
+    /// Destinations of every mount the applied OCI spec declares, plus those
+    /// added later by `Container.AddMount`.
     mount_destinations: Vec<PathBuf>,
     /// Resolved capability set shared by init and every exec process.
     capabilities: CapabilitySet,
@@ -328,25 +329,32 @@ impl Container {
         self.user
     }
 
-    /// Destinations of every mount the container was created with.
+    /// Destinations of every mount in the container: those it was created with,
+    /// plus those `Container.AddMount` added since (see
+    /// [`Self::record_mount_destination`]).
     ///
-    /// Taken from the OCI spec that was actually applied — the same object
-    /// `config.json` was written from — so it covers the standard tmpfs/pseudo
-    /// mounts and user volumes alike and cannot drift from what the runtime
-    /// did. Callers use this to tell whether a path inside the container is
-    /// reachable through the rootfs directory: anything at or below one of
-    /// these destinations is covered by a mount in the container's own
-    /// namespace and is *not* the file a process in the box would see at that
-    /// path.
+    /// The creation mounts come from the OCI spec that was actually applied —
+    /// the same object `config.json` was written from — so they cover the
+    /// standard tmpfs/pseudo mounts and user volumes alike and cannot drift
+    /// from what the runtime did. Callers use this to tell whether a path
+    /// inside the container is reachable through the rootfs directory: anything
+    /// at or below one of these destinations is covered by a mount in the
+    /// container's own namespace and is *not* the file a process in the box
+    /// would see at that path.
     ///
-    /// Resolved once at creation, like [`Self::user`], rather than re-read per
-    /// question: the bundle is written once and never rewritten, and the
-    /// callers are RPC handlers on the guest's async runtime — which on a
-    /// single-vCPU box is a single worker thread — so a `Spec::load` here
-    /// stalled every other in-flight RPC for the length of a file read and a
-    /// deserialize.
+    /// Held in memory, like [`Self::user`], rather than re-read per question:
+    /// the bundle is written once and never rewritten, and the callers are RPC
+    /// handlers on the guest's async runtime — which on a single-vCPU box is a
+    /// single worker thread — so a `Spec::load` here stalled every other
+    /// in-flight RPC for the length of a file read and a deserialize.
     pub fn mount_destinations(&self) -> &[PathBuf] {
         &self.mount_destinations
+    }
+
+    /// Record a mount added to the running container (`Container.AddMount`),
+    /// so [`Self::mount_destinations`] still covers every mount it has.
+    pub fn record_mount_destination(&mut self, destination: PathBuf) {
+        self.mount_destinations.push(destination);
     }
 
     /// PID of the container's init process, from libcontainer state.

@@ -110,6 +110,13 @@ impl proto::Container for MockService {
             )),
         }))
     }
+
+    async fn add_mount(
+        &self,
+        _: Request<proto::ContainerAddMountRequest>,
+    ) -> Result<Response<proto::ContainerAddMountResponse>, Status> {
+        Err(Status::unimplemented("not used by these tests"))
+    }
 }
 
 struct TestHandler;

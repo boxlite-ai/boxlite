@@ -3,12 +3,15 @@
 //!
 //! Handles OCI container lifecycle (Init RPC).
 
-use std::path::Path;
+use std::path::{Component, Path, PathBuf};
 
+use crate::container::zygote::{AttachSpec, ZYGOTE};
 use crate::service::server::GuestServer;
+use crate::storage::attach::validate_destination;
 use boxlite_shared::errors::BoxliteError;
 use boxlite_shared::{
-    container_init_response, container_start_response, rootfs_init, Container as ContainerService,
+    container_init_response, container_start_response, rootfs_init, BindMount,
+    Container as ContainerService, ContainerAddMountRequest, ContainerAddMountResponse,
     ContainerInitError, ContainerInitErrorKind, ContainerInitRequest, ContainerInitResponse,
     ContainerInitSuccess, ContainerStartRequest, ContainerStartResponse, ContainerStartSuccess,
     Filesystem, RootfsInit,
@@ -40,6 +43,49 @@ fn init_error(context: &str, error: &BoxliteError) -> ContainerInitError {
     ContainerInitError {
         reason: format!("{context}: {error}"),
         kind: kind as i32,
+    }
+}
+
+/// Check a `Container.AddMount` request: a whole folder of the share, read-only,
+/// named by one plain path component so the source stays inside
+/// `containers/<id>/volumes/`, at a valid container path. Returns the folder
+/// name and the destination.
+#[allow(clippy::result_large_err)]
+fn checked_add_mount(mount: Option<BindMount>) -> Result<(String, PathBuf), Status> {
+    let mount = mount
+        .ok_or_else(|| Status::invalid_argument("Missing mount in Container.AddMount request"))?;
+    if !mount.read_only || !mount.subpath.is_empty() {
+        return Err(Status::invalid_argument(
+            "Container.AddMount attaches whole folders read-only",
+        ));
+    }
+    let one_component = matches!(
+        Path::new(&mount.volume_name)
+            .components()
+            .collect::<Vec<_>>()[..],
+        [Component::Normal(_)]
+    );
+    if !one_component {
+        return Err(Status::invalid_argument(format!(
+            "volume name must be one plain path component: {:?}",
+            mount.volume_name
+        )));
+    }
+    let destination = PathBuf::from(&mount.destination);
+    validate_destination(&destination).map_err(BoxliteError::into_validation_status)?;
+    Ok((mount.volume_name, destination))
+}
+
+/// Report a failed attach: caller mistakes stay `INVALID_ARGUMENT`; a
+/// non-empty destination, or init exiting since the running check, is
+/// `FAILED_PRECONDITION`; anything else is `INTERNAL`.
+fn add_mount_status(error: BoxliteError) -> Status {
+    match error {
+        BoxliteError::InvalidArgument(message) => Status::invalid_argument(message),
+        BoxliteError::InvalidState(message) | BoxliteError::NotFound(message) => {
+            Status::failed_precondition(message)
+        }
+        error => Status::internal(error.to_string()),
     }
 }
 
@@ -281,10 +327,9 @@ impl ContainerService for GuestServer {
             }
         }
 
-        // Convert proto BindMount to UserMount for OCI spec
-        // Construct full source path from convention: /run/boxlite/shared/containers/{id}/volumes/{name}
-        let guest_layout = boxlite_shared::layout::SharedGuestLayout::new("/run/boxlite/shared");
-        let container_layout = guest_layout.container(&container_id);
+        // Convert proto BindMount to UserMount for OCI spec. Each source is the
+        // container's volume folder in the share: <shared>/containers/{id}/volumes/{name}
+        let container_layout = self.layout.shared().container(&container_id);
 
         let user_mounts: Vec<UserMount> = init_req
             .mounts
@@ -629,6 +674,45 @@ impl ContainerService for GuestServer {
             })),
         }
     }
+
+    async fn add_mount(
+        &self,
+        request: Request<ContainerAddMountRequest>,
+    ) -> Result<Response<ContainerAddMountResponse>, Status> {
+        let request = request.into_inner();
+        let (volume_name, destination) = checked_add_mount(request.mount)?;
+
+        let container_id = request.container_id;
+        let Some(container_arc) = self.containers.lock().await.get(&container_id).cloned() else {
+            return Err(Status::not_found(format!(
+                "No such container: {container_id}"
+            )));
+        };
+        let mut container = container_arc.lock().await;
+        let target = container
+            .init_pid()
+            .filter(|_| container.is_running())
+            .ok_or_else(|| {
+                Status::failed_precondition(format!("container {container_id} is not running"))
+            })?;
+        let spec = AttachSpec {
+            source: self
+                .layout
+                .shared()
+                .container(&container_id)
+                .volume_dir(&volume_name),
+            target_pid: target.as_raw(),
+            destination: destination.clone(),
+        };
+        let zygote = ZYGOTE.get().expect("zygote not started");
+        tokio::task::spawn_blocking(move || zygote.attach_mount(spec))
+            .await
+            .map_err(|error| Status::internal(format!("attach task failed: {error}")))?
+            .map_err(add_mount_status)?;
+        info!(container_id = %container_id, destination = %destination.display(), "Attached a shared folder read-only");
+        container.record_mount_destination(destination);
+        Ok(Response::new(ContainerAddMountResponse {}))
+    }
 }
 
 impl GuestServer {
@@ -659,5 +743,76 @@ impl GuestServer {
 
         info!(container_id = %container_id, "✅ Container started successfully and ready for exec");
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tonic::Code;
+
+    fn share_folder(volume_name: &str, destination: &str) -> BindMount {
+        BindMount {
+            volume_name: volume_name.to_string(),
+            destination: destination.to_string(),
+            read_only: true,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn add_mount_accepts_a_read_only_share_folder() {
+        let (name, destination) =
+            checked_add_mount(Some(share_folder("agents", "/opt/boxlite/agents"))).unwrap();
+        assert_eq!(name, "agents");
+        assert_eq!(destination, PathBuf::from("/opt/boxlite/agents"));
+    }
+
+    #[test]
+    fn add_mount_keeps_the_source_inside_one_volume_folder() {
+        for name in ["..", "a/b", "", ".", "/agents"] {
+            let status =
+                checked_add_mount(Some(share_folder(name, "/opt/boxlite/agents"))).expect_err(name);
+            assert_eq!(status.code(), Code::InvalidArgument, "{name:?}");
+        }
+    }
+
+    #[test]
+    fn add_mount_refuses_writable_partial_missing_or_misplaced_mounts() {
+        let writable = BindMount {
+            read_only: false,
+            ..share_folder("agents", "/opt/boxlite/agents")
+        };
+        let one_file = BindMount {
+            subpath: "codex".to_string(),
+            ..share_folder("agents", "/opt/boxlite/agents")
+        };
+        let relative = share_folder("agents", "opt/boxlite/agents");
+        for request in [Some(writable), Some(one_file), Some(relative), None] {
+            let status = checked_add_mount(request).unwrap_err();
+            assert_eq!(status.code(), Code::InvalidArgument, "{}", status.message());
+        }
+    }
+
+    #[test]
+    fn attach_failures_keep_their_grpc_codes() {
+        let cases = [
+            (
+                BoxliteError::InvalidArgument("bad".into()),
+                Code::InvalidArgument,
+            ),
+            (
+                BoxliteError::InvalidState("has entries".into()),
+                Code::FailedPrecondition,
+            ),
+            (
+                BoxliteError::NotFound("init gone".into()),
+                Code::FailedPrecondition,
+            ),
+            (BoxliteError::Storage("move_mount".into()), Code::Internal),
+        ];
+        for (error, code) in cases {
+            assert_eq!(add_mount_status(error).code(), code);
+        }
     }
 }

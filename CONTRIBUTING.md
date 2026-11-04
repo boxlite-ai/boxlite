@@ -79,7 +79,7 @@ still validates the host. Linux also collects guest unit coverage. Run guest tes
 `make test:unit:guest` as a normal user. SSH tests require `unshare` and a
 working unprivileged user and mount namespace; missing or restricted namespace
 support is a test error. Nextest 0.9.116 or newer is required. Ordinary guest
-ownership tests remain outside that namespace. Vendored
+mount tests remain outside that namespace. Vendored
 dependencies, standalone tests, and test scaffolding are excluded; production guest and SDK
 paths are not ignored by Codecov. SDK language wrappers, cloud apps, and shim
 subprocess execution are separate from the Rust unit report.

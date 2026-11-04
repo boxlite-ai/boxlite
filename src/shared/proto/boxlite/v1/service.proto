@@ -22,6 +22,11 @@ service Container {
   // code die with the VM. The host sequences the two: for an ordinary boot it
   // calls Start right after Init; for a foreground `run` it attaches in between.
   rpc Start(ContainerStartRequest) returns (ContainerStartResponse);
+
+  // Bind a shared volume folder into a running container, read-only, without
+  // restarting it. The mount joins the container's own mount namespace, so
+  // every process in it sees the folder.
+  rpc AddMount(ContainerAddMountRequest) returns (ContainerAddMountResponse);
 }
 
 // Guest agent management
@@ -298,6 +303,18 @@ message ContainerInitRequest {
 message ContainerStartRequest {
   string container_id = 1;
 }
+
+// A folder for a running container, by the same convention as
+// ContainerInitRequest.mounts. Only whole folders, read-only. The destination
+// must be absent or empty, so no image content is hidden. Errors are gRPC
+// statuses: INVALID_ARGUMENT, FAILED_PRECONDITION (a non-empty destination or
+// a container that is not running), NOT_FOUND (no such container).
+message ContainerAddMountRequest {
+  string container_id = 1;
+  BindMount mount = 2;
+}
+
+message ContainerAddMountResponse {}
 
 message ContainerStartResponse {
   oneof result {
