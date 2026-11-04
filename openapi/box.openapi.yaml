@@ -1881,6 +1881,12 @@ components:
               type: boolean
               description: Whether Docker-style Linux capability add/drop policy is supported
               example: true
+            nested_virtualization_enabled:
+              type: boolean
+              description: |
+                Whether this deployment authorizes and preserves per-box nested
+                virtualization requirements. Does not guarantee user permission
+                or available host capacity. Missing means unsupported.
             max_cpus:
               type: integer
               description: Maximum allowed vCPUs per box
@@ -2231,6 +2237,11 @@ components:
             a server that predates the field; a client then reports network
             metadata as unknown rather than as any particular policy.
 
+        advanced:
+          $ref: "#/components/schemas/BoxAdvancedInfo"
+          readOnly: true
+          description: Persisted requirements; absent metadata is unknown.
+
     NetworkInfo:
       type: object
       description: |
@@ -2394,8 +2405,26 @@ components:
       description: Expert-only container options.
       additionalProperties: false
       properties:
+        nested_virtualization:
+          type: boolean
+          default: false
+          description: |
+            Require nested virtualization for this box (release candidate).
+            The server must authorize and persist this requirement; startup
+            fails when the selected host cannot provide it. Immutable after create.
         capabilities:
           $ref: "#/components/schemas/CreateContainerCapabilities"
+
+    BoxAdvancedInfo:
+      type: object
+      readOnly: true
+      description: Saved advanced requirements, without internal sandbox policy.
+      properties:
+        nested_virtualization:
+          type: boolean
+          description: |
+            Persisted nested virtualization requirement. Missing means unknown,
+            not disabled. True does not prove that an L2 guest is running.
 
     CreateContainerCapabilities:
       type: object

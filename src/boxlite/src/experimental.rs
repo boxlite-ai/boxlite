@@ -47,6 +47,21 @@ pub struct ExperimentalFeatures {
 }
 
 impl ExperimentalFeatures {
+    /// Parse SDK names individually; one element cannot enable multiple features.
+    pub fn from_names<'a>(names: impl IntoIterator<Item = &'a str>) -> BoxliteResult<Self> {
+        let names: Vec<_> = names.into_iter().collect();
+        if names
+            .iter()
+            .any(|name| name.trim().is_empty() || name.contains(',') || name.contains('\0'))
+        {
+            return Err(BoxliteError::Config(
+                "experimental feature names must be non-empty single tokens without commas or NUL"
+                    .into(),
+            ));
+        }
+        Self::parse(&names.join(","))
+    }
+
     /// Parse a comma-separated feature list.
     pub fn parse(value: &str) -> BoxliteResult<Self> {
         if value.trim().is_empty() {
@@ -139,6 +154,11 @@ impl RuntimeBuilder {
         BoxliteRuntime::new_with_experimental_features(self.options, self.features)
     }
 
+    /// Initialize the process default with the same explicit RC authorization.
+    pub fn init_default(self) -> BoxliteResult<()> {
+        BoxliteRuntime::install_default(self.build()?)
+    }
+
     /// Construct without host validation for tests that never start a VM.
     #[cfg(any(test, feature = "test-support"))]
     pub fn build_for_test(self) -> BoxliteResult<BoxliteRuntime> {
@@ -150,6 +170,31 @@ impl RuntimeBuilder {
 mod tests {
     use super::*;
     use custom_kernel::KernelOptions;
+
+    #[test]
+    fn sdk_feature_names_are_atomic_and_independently_authorized() {
+        assert_eq!(
+            ExperimentalFeatures::from_names([]).unwrap(),
+            ExperimentalFeatures::default()
+        );
+        let features =
+            ExperimentalFeatures::from_names([" nested-virtualization ", "nested-virtualization"])
+                .unwrap();
+        assert!(features.is_enabled(ExperimentalFeature::NestedVirtualization));
+        assert!(!features.is_enabled(ExperimentalFeature::CustomKernel));
+        for name in [
+            "",
+            " ",
+            "unknown",
+            "nested-virtualization,custom-kernel",
+            "nested-virtualization\0",
+        ] {
+            assert!(
+                ExperimentalFeatures::from_names([name]).is_err(),
+                "accepted {name:?}"
+            );
+        }
+    }
 
     #[test]
     fn feature_tokens_are_granular_and_trimmed() {

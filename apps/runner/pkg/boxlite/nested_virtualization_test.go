@@ -3,7 +3,8 @@
 package boxlite
 
 import (
-	"errors"
+	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -84,7 +85,29 @@ func TestNestedVirtualizationRunnerForwardsToNativeOptions(t *testing.T) {
 	var requests atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests.Add(1)
-		http.NotFound(w, r)
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/boxes/forwarding":
+			http.NotFound(w, r)
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/config":
+			_, _ = w.Write([]byte(`{"capabilities":{"nested_virtualization_enabled":true}}`))
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/boxes":
+			var request struct {
+				Advanced struct {
+					NestedVirtualization bool `json:"nested_virtualization"`
+				} `json:"advanced"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&request); err != nil || !request.Advanced.NestedVirtualization {
+				t.Errorf("Runner did not forward the native nested requirement: %v", err)
+				http.Error(w, "missing requirement", http.StatusBadRequest)
+				return
+			}
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"box_id":"forwarding","name":"forwarding","status":"configured","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z","pid":null,"image":"alpine:latest","cpus":1,"memory_mib":128,"advanced":{"nested_virtualization":true}}`))
+		default:
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+			http.NotFound(w, r)
+		}
 	}))
 	defer server.Close()
 	rt, err := sdk.NewRest(sdk.BoxliteRestOptions{URL: server.URL})
@@ -94,16 +117,16 @@ func TestNestedVirtualizationRunnerForwardsToNativeOptions(t *testing.T) {
 	defer rt.Close()
 	// The REST backend observes the real native option without requiring a
 	// hypervisor. Local-runtime authorization and persistence are tested above.
-	client := &Client{runtime: rt, nestedVirtualizationAllowed: true}
+	client := &Client{runtime: rt, nestedVirtualizationAllowed: true, logger: slog.Default(), boxes: make(map[string]*sdk.Box)}
 	_, _, err = client.Create(t.Context(), dto.CreateBoxDTO{
 		Id: "forwarding", Image: "alpine:latest", SkipStart: boolPtr(true),
 		OutboundEnabled: boolPtr(false), NestedVirtualization: true,
 	})
-	var runtimeErr *sdk.Error
-	if !errors.As(err, &runtimeErr) || runtimeErr.Code != sdk.ErrUnsupported || !strings.Contains(err.Error(), "nested virtualization") {
-		t.Fatalf("Runner must forward nesting to native REST validation: %v", err)
+	if err != nil {
+		t.Fatalf("Runner must forward nesting through the native REST request: %v", err)
 	}
-	if requests.Load() != 0 {
-		t.Fatal("native validation must reject nesting before HTTP")
+	defer client.boxes["forwarding"].Close()
+	if requests.Load() != 3 {
+		t.Fatalf("want lookup, capability check and create; got %d requests", requests.Load())
 	}
 }

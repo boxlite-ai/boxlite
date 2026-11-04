@@ -382,6 +382,7 @@ async fn serve_over(
     api_key: Option<&str>,
 ) -> (String, Arc<AppState>, tokio::task::JoinHandle<()>) {
     let state = Arc::new(AppState {
+        nested_virtualization_enabled: false,
         runtime: BoxliteRuntime::rest(boxlite::BoxliteRestOptions::new(upstream.url.clone()))
             .expect("rest runtime"),
         boxes: RwLock::new(HashMap::new()),

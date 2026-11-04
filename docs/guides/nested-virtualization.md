@@ -2,26 +2,25 @@
 
 Nested virtualization lets a workload inside a box launch hardware-accelerated
 virtual machines. It is a release-candidate feature: disabled by default,
-supported only by the local runtime, and may change without the compatibility
-guarantees of BoxLite's stable CLI and Rust API. Its CLI flag is intentionally
-omitted from normal help, shell completions, and the stable command reference.
+supported by the local runtime and compatible REST servers, and may change without the compatibility
+guarantees of BoxLite's stable APIs. The CLI keeps its experimental ENV opt-in;
+this feature does not introduce a public CLI option.
 
 The opt-in is strict. When the host cannot provide nested virtualization,
 BoxLite returns `Unsupported` instead of falling back to software emulation or
 starting without the feature.
 
-Enable only this capability for every process that creates, starts, or restarts
-the box:
+Authorize this capability in the server process:
 
 ```bash
-BOXLITE_EXPERIMENTAL=nested-virtualization boxlite run \
-  --nested-virtualization --rm alpine:latest \
-  sh -c 'test -r /dev/kvm && test -w /dev/kvm'
+BOXLITE_EXPERIMENTAL=nested-virtualization boxlite serve
 ```
 
 `BOXLITE_EXPERIMENTAL` is a comma-separated allowlist. The CLI reads it once
 before operational command dispatch and fails closed on unknown names. Enabling
 one feature does not enable any other present or future RC feature.
+This authorizes the runtime; ordinary boxes remain ordinary until their creation
+request explicitly sets `advanced.nested_virtualization: true`.
 
 For the Rust SDK, opt in explicitly when constructing the runtime. The library
 does not read `BOXLITE_EXPERIMENTAL`:
@@ -43,12 +42,29 @@ let box_ = runtime.create(options, None).await?;
 The local runtime checks the opt-in again when it consumes persisted box
 configuration, so a later CLI `start` or `restart` also needs the variable and
 an SDK process must construct its runtime with the same explicit feature. The
-REST runtime rejects nested-virtualization configuration even when the opt-in is
-present, and a REST server rejects uploaded archives that request it. The RC is
-not exposed through the Python or Node.js request APIs. The local
-[Go SDK](../../sdks/go/README.md#nested-virtualization-experimental) and
-[C SDK](../../sdks/c/README.md) expose explicit runtime authorization and advanced
-box options; they do not read the process environment.
+REST client requires explicit server support before forwarding this requirement.
+Uploaded archives requesting nesting remain unsupported over REST.
+Local C/Go callers use explicit runtime authorization and advanced box options;
+they do not read the process environment.
+
+## REST contract and saved metadata
+
+Compatible servers advertise `capabilities.nested_virtualization_enabled: true`
+through `GET /v1/config`. The SDK rechecks this declaration for each nested create,
+then sends `advanced.nested_virtualization: true`. A missing or false declaration
+refuses the request. Omitted or false box options preserve ordinary requests.
+Client environment variables cannot authorize a remote server.
+
+The server must return the saved requirement in `advanced.nested_virtualization`.
+The client rejects a missing or false confirmation and names the created box;
+it does not delete, start, retry, or downgrade that resource automatically.
+GetOrCreate refuses an existing ordinary or unknown box when true was requested.
+
+`BoxInfo.advanced` contains a safe projection of saved configuration, without
+sandbox policy. Older responses remain unknown rather than reading as false.
+A saved true value does not prove that an L2 guest has executed.
+Servers that do not advertise this contract, including Cloud before its separate
+integration, cannot accept nested requests through the SDK.
 
 ## Supported hosts
 

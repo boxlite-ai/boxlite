@@ -78,6 +78,8 @@ pub struct ServeArgs {
 
 struct AppState {
     runtime: BoxliteRuntime,
+    /// Authorization supplied to the embedded runtime at server startup.
+    nested_virtualization_enabled: bool,
     /// Cached box handles (box_id -> Arc<LiteBox>).
     boxes: RwLock<HashMap<String, Arc<LiteBox>>>,
     /// Active executions (execution_id -> ActiveExecution). Holds an
@@ -1113,6 +1115,7 @@ fn box_info_to_response(info: &BoxInfo) -> BoxResponse {
         image: info.image.clone(),
         cpus: info.cpus,
         memory_mib: info.memory_mib,
+        advanced: info.advanced.clone(),
         labels: info.labels.clone(),
         auto_stop: info.auto_stop,
         auto_delete: info.auto_delete,
@@ -1263,6 +1266,7 @@ fn build_box_options(req: &CreateBoxRequest) -> Result<BoxOptions, boxlite::Boxl
                 }
             });
             advanced.set_capabilities(capabilities)?;
+            advanced.nested_virtualization = req.advanced.nested_virtualization()?;
             advanced
         },
         // Neither deadline is forwarded; `serve` holds both and sweeps them.
@@ -1966,6 +1970,9 @@ pub async fn execute(args: ServeArgs, global: &GlobalFlags) -> anyhow::Result<()
     let runtime = global.create_runtime_with_options(options)?;
 
     let state = Arc::new(AppState {
+        nested_virtualization_enabled: global
+            .experimental_features
+            .is_enabled(boxlite::experimental::ExperimentalFeature::NestedVirtualization),
         runtime,
         boxes: RwLock::new(HashMap::new()),
         executions: RwLock::new(HashMap::new()),
@@ -2006,6 +2013,7 @@ mod tests {
     use boxlite::runtime::options::NetworkSpec;
     use std::time::Duration;
 
+    mod nested_virtualization;
     mod ssh;
 
     // --- API-key auth decision (pure; no runtime/network needed) ---
@@ -2310,12 +2318,13 @@ mod tests {
         );
     }
 
-    fn lifecycle_state() -> AppState {
+    pub(super) fn lifecycle_state() -> AppState {
         let runtime = BoxliteRuntime::rest(boxlite::BoxliteRestOptions::new(
             "http://127.0.0.1:1".to_string(),
         ))
         .expect("rest runtime");
         AppState {
+            nested_virtualization_enabled: false,
             runtime,
             boxes: RwLock::new(HashMap::new()),
             executions: RwLock::new(HashMap::new()),
@@ -3096,6 +3105,7 @@ mod tests {
         })
         .expect("local runtime");
         let state = Arc::new(AppState {
+            nested_virtualization_enabled: false,
             runtime: runtime.clone(),
             boxes: RwLock::new(HashMap::new()),
             executions: RwLock::new(HashMap::new()),
@@ -3497,6 +3507,7 @@ mod tests {
         })
         .expect("local runtime");
         let state = Arc::new(AppState {
+            nested_virtualization_enabled: false,
             runtime: local.clone(),
             boxes: RwLock::new(HashMap::new()),
             executions: RwLock::new(HashMap::new()),
@@ -3563,6 +3574,7 @@ mod tests {
     async fn reading_a_box_over_http_reports_the_deadlines_serve_holds() {
         let upstream = stub_upstream("stopped", true).await;
         let state = Arc::new(AppState {
+            nested_virtualization_enabled: false,
             runtime: BoxliteRuntime::rest(boxlite::BoxliteRestOptions::new(upstream.url.clone()))
                 .expect("rest runtime"),
             boxes: RwLock::new(HashMap::new()),
@@ -3628,6 +3640,7 @@ mod tests {
     async fn removing_a_box_by_name_forgets_the_deadline_filed_under_its_id() {
         let upstream = stub_upstream("stopped", true).await;
         let state = Arc::new(AppState {
+            nested_virtualization_enabled: false,
             runtime: BoxliteRuntime::rest(boxlite::BoxliteRestOptions::new(upstream.url.clone()))
                 .expect("rest runtime"),
             boxes: RwLock::new(HashMap::new()),
@@ -3685,6 +3698,7 @@ mod tests {
     async fn the_sweep_removes_a_box_whose_delete_deadline_has_passed() {
         let upstream = stub_upstream("stopped", true).await;
         let state = AppState {
+            nested_virtualization_enabled: false,
             runtime: BoxliteRuntime::rest(boxlite::BoxliteRestOptions::new(upstream.url.clone()))
                 .expect("rest runtime"),
             boxes: RwLock::new(HashMap::new()),
@@ -3729,6 +3743,7 @@ mod tests {
     async fn creating_a_box_over_http_files_the_deadlines_it_asked_for() {
         let upstream = stub_upstream("running", true).await;
         let state = Arc::new(AppState {
+            nested_virtualization_enabled: false,
             runtime: BoxliteRuntime::rest(boxlite::BoxliteRestOptions::new(upstream.url.clone()))
                 .expect("rest runtime"),
             boxes: RwLock::new(HashMap::new()),
@@ -3782,6 +3797,7 @@ mod tests {
     async fn activity_on_an_escaped_name_lands_under_the_name_the_sweep_reads() {
         let upstream = stub_upstream("running", true).await;
         let state = Arc::new(AppState {
+            nested_virtualization_enabled: false,
             runtime: BoxliteRuntime::rest(boxlite::BoxliteRestOptions::new(upstream.url.clone()))
                 .expect("rest runtime"),
             boxes: RwLock::new(HashMap::new()),
@@ -3844,6 +3860,7 @@ mod tests {
     async fn a_stopped_box_with_autoresume_off_refuses_the_routes_that_would_wake_it() {
         let upstream = stub_upstream("stopped", false).await;
         let state = Arc::new(AppState {
+            nested_virtualization_enabled: false,
             runtime: BoxliteRuntime::rest(boxlite::BoxliteRestOptions::new(upstream.url.clone()))
                 .expect("rest runtime"),
             boxes: RwLock::new(HashMap::new()),
@@ -3954,6 +3971,7 @@ mod tests {
     async fn a_stopped_box_with_autoresume_on_is_not_refused() {
         let upstream = stub_upstream("stopped", true).await;
         let state = Arc::new(AppState {
+            nested_virtualization_enabled: false,
             runtime: BoxliteRuntime::rest(boxlite::BoxliteRestOptions::new(upstream.url.clone()))
                 .expect("rest runtime"),
             boxes: RwLock::new(HashMap::new()),
@@ -3999,6 +4017,7 @@ mod tests {
     async fn the_sweep_stops_a_box_idle_past_its_window() {
         let upstream = stub_upstream("running", true).await;
         let state = AppState {
+            nested_virtualization_enabled: false,
             runtime: BoxliteRuntime::rest(boxlite::BoxliteRestOptions::new(upstream.url.clone()))
                 .expect("rest runtime"),
             boxes: RwLock::new(HashMap::new()),
@@ -4041,6 +4060,7 @@ mod tests {
     async fn the_sweep_leaves_a_box_still_inside_its_idle_window() {
         let upstream = stub_upstream("running", true).await;
         let state = AppState {
+            nested_virtualization_enabled: false,
             runtime: BoxliteRuntime::rest(boxlite::BoxliteRestOptions::new(upstream.url.clone()))
                 .expect("rest runtime"),
             boxes: RwLock::new(HashMap::new()),
@@ -4083,6 +4103,7 @@ mod tests {
     async fn the_sweep_leaves_a_box_whose_deadline_has_not_passed() {
         let upstream = stub_upstream("stopped", true).await;
         let state = AppState {
+            nested_virtualization_enabled: false,
             runtime: BoxliteRuntime::rest(boxlite::BoxliteRestOptions::new(upstream.url.clone()))
                 .expect("rest runtime"),
             boxes: RwLock::new(HashMap::new()),
@@ -4133,6 +4154,7 @@ mod tests {
     async fn scraping_metrics_will_not_wake_a_box_the_sweep_would_stop() {
         let upstream = stub_upstream("stopped", true).await;
         let state = Arc::new(AppState {
+            nested_virtualization_enabled: false,
             runtime: BoxliteRuntime::rest(boxlite::BoxliteRestOptions::new(upstream.url.clone()))
                 .expect("rest runtime"),
             boxes: RwLock::new(HashMap::new()),
@@ -4192,6 +4214,7 @@ mod tests {
         ))
         .expect("rest runtime");
         let state = Arc::new(AppState {
+            nested_virtualization_enabled: false,
             runtime,
             boxes: RwLock::new(HashMap::new()),
             executions: RwLock::new(HashMap::new()),
@@ -4239,6 +4262,7 @@ mod tests {
         ))
         .expect("rest runtime");
         let state = Arc::new(AppState {
+            nested_virtualization_enabled: false,
             runtime,
             boxes: RwLock::new(HashMap::new()),
             executions: RwLock::new(HashMap::new()),
@@ -4523,6 +4547,7 @@ mod tests {
         ))
         .expect("rest runtime");
         let state = AppState {
+            nested_virtualization_enabled: false,
             runtime,
             boxes: RwLock::new(HashMap::new()),
             executions: RwLock::new(HashMap::new()),

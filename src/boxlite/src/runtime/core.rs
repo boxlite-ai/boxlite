@@ -298,6 +298,10 @@ impl BoxliteRuntime {
     /// ```
     pub fn init_default_runtime(options: BoxliteOptions) -> BoxliteResult<()> {
         let runtime = Self::new(options)?;
+        Self::install_default(runtime)
+    }
+
+    pub(crate) fn install_default(runtime: Self) -> BoxliteResult<()> {
         DEFAULT_RUNTIME
             .set(runtime)
             .map_err(|_| BoxliteError::Internal(

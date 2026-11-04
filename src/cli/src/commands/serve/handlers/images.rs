@@ -189,6 +189,7 @@ mod tests {
             let _ = axum::serve(listener, upstream).await;
         });
         State(Arc::new(AppState {
+            nested_virtualization_enabled: false,
             runtime: BoxliteRuntime::rest(boxlite::BoxliteRestOptions::new(url))
                 .expect("rest runtime"),
             boxes: RwLock::new(HashMap::new()),

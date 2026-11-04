@@ -704,6 +704,13 @@ Then reload your shell or source the file.
 
 ## Environment variables
 
+For nested virtualization, `BOXLITE_EXPERIMENTAL=nested-virtualization boxlite serve`
+authorizes the server runtime and advertises protocol support in `/v1/config`.
+Clients must still request `advanced.nested_virtualization: true` per box.
+ENV alone leaves ordinary boxes unchanged; it does not authorize remote servers.
+This remains experimental, with no new public CLI flag; see the
+[RC guide](../../docs/guides/nested-virtualization.md).
+
 | Variable | Description |
 |----------|-------------|
 | `BOXLITE_HOME` | Runtime, credential, and context preference directory (default: `~/.boxlite`). Overridden by `--home`. |

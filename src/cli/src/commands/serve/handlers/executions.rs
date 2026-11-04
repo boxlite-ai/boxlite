@@ -851,6 +851,7 @@ mod tests {
         use tokio_tungstenite::tungstenite::Message as ClientMessage;
 
         let state = Arc::new(AppState {
+            nested_virtualization_enabled: false,
             runtime: BoxliteRuntime::rest(boxlite::BoxliteRestOptions::new(
                 "http://127.0.0.1:1".to_string(),
             ))
@@ -936,6 +937,7 @@ mod tests {
         tokio::task::JoinHandle<()>,
     ) {
         let state = Arc::new(AppState {
+            nested_virtualization_enabled: false,
             runtime: BoxliteRuntime::rest(boxlite::BoxliteRestOptions::new(
                 "http://127.0.0.1:1".to_string(),
             ))

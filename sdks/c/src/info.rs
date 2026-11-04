@@ -853,6 +853,7 @@ mod tests {
             image: "alpine:latest".to_string(),
             cpus: 1,
             memory_mib: 256,
+            advanced: None,
             network: None,
             labels: HashMap::new(),
             auto_stop: 0,

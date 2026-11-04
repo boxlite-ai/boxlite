@@ -578,6 +578,18 @@ impl ApiClient {
         )
     }
 
+    pub async fn require_nested_virtualization_enabled(&self) -> BoxliteResult<()> {
+        // Recheck each create: a replacement replica may no longer preserve
+        // the requirement, even when an earlier config advertised support.
+        let config = self.fetch_config().await?;
+        ensure_capability(
+            "nested virtualization",
+            config
+                .capabilities
+                .and_then(|caps| caps.nested_virtualization_enabled),
+        )
+    }
+
     async fn require_private_tunnels_enabled(&self) -> BoxliteResult<()> {
         // Like Linux capabilities: an older replica would publish the port,
         // so a cached positive response is not enough.

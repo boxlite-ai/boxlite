@@ -82,7 +82,10 @@ after creation. Both settings are required; the SDK does not read
 Pass one feature token per argument, such as
 `WithExperimentalFeatures("custom-kernel", "nested-virtualization")`;
 commas or NUL inside an individual name are rejected before runtime initialization.
-Host support is checked when the box boots; REST runtimes reject this box option.
+Host support is checked when the box boots. A REST runtime uses the same advanced
+box option without a local feature token. Its server must advertise
+`nested_virtualization_enabled` and confirm the saved requirement in its response;
+otherwise creation fails without silently downgrading the request.
 
 ### Archive Export and Import
 
@@ -345,8 +348,9 @@ cannot use KVM or Hypervisor.framework. Set
 `BOXLITE_REQUIRE_NESTED_RUNTIME_TESTS=1` to make those constructor checks mandatory;
 the Linux x86_64 CI metadata pass uses this setting after granting KVM access.
 Host-independent SDK and Runner tests also pass options through Go/C to the native
-REST backend: nesting must fail before HTTP, while clearing the flag permits a
-loopback create request. These checks verify option forwarding without a VM.
+REST backend: true requires fresh capability discovery and persisted confirmation;
+clearing the flag preserves the ordinary create request. These checks verify
+option forwarding without a VM.
 
 ## License
 

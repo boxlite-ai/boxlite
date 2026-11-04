@@ -88,12 +88,35 @@ pub(super) struct SecretSpecRequest {
 #[derive(Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub(super) struct CreateBoxAdvancedOptions {
+    /// Validate this field in the options builder so malformed nesting uses
+    /// the API's 400 envelope, without changing other JSON rejection behavior.
+    #[serde(default, deserialize_with = "deserialize_present_json")]
+    pub nested_virtualization: Option<serde_json::Value>,
     /// `None` when the wire omits `capabilities` (or sends `null`) — distinct
     /// from `Some` of an empty policy, the same distinction the core
     /// `AdvancedBoxOptions.capabilities` makes and for the same reason: an
     /// explicit empty policy conflicts with `privileged`, an unspecified one
     /// doesn't, and `archive_version_for_options` keys off which one this is.
     pub capabilities: Option<ContainerCapabilitiesRequest>,
+}
+
+fn deserialize_present_json<'de, D>(deserializer: D) -> Result<Option<serde_json::Value>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    serde_json::Value::deserialize(deserializer).map(Some)
+}
+
+impl CreateBoxAdvancedOptions {
+    pub(super) fn nested_virtualization(&self) -> Result<bool, boxlite::BoxliteError> {
+        match self.nested_virtualization.as_ref() {
+            None => Ok(false),
+            Some(serde_json::Value::Bool(enabled)) => Ok(*enabled),
+            Some(_) => Err(boxlite::BoxliteError::InvalidArgument(
+                "advanced.nested_virtualization must be a boolean".into(),
+            )),
+        }
+    }
 }
 
 #[derive(Clone, Default, Deserialize)]
@@ -162,6 +185,8 @@ pub(super) struct BoxResponse {
     pub image: String,
     pub cpus: u8,
     pub memory_mib: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub advanced: Option<boxlite::BoxAdvancedInfo>,
     pub labels: HashMap<String, String>,
     pub auto_stop: u32,
     pub auto_delete: u32,
@@ -351,6 +376,7 @@ pub(super) struct ServerConfig {
 #[derive(Serialize)]
 pub(super) struct ServerCapabilities {
     pub linux_capabilities_enabled: bool,
+    pub nested_virtualization_enabled: bool,
     pub snapshots_enabled: bool,
     pub clone_enabled: bool,
     pub export_enabled: bool,

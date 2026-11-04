@@ -253,12 +253,6 @@ impl BoxOptions {
             ));
         }
 
-        if self.advanced.nested_virtualization {
-            return Err(BoxliteError::Unsupported(
-                "nested virtualization is only supported by the local runtime".to_string(),
-            ));
-        }
-
         // Mounts. `BoxOptions::sanitize` is local-only, so
         // `VolumeSpec::validate` — the "exactly one origin" invariant that C and
         // Go callers can violate by setting the fields directly — has no other
@@ -336,10 +330,14 @@ impl RuntimeBackend for RestRuntime {
         if options.advanced.capabilities().is_some() {
             self.client.require_linux_capabilities_enabled().await?;
         }
+        if options.advanced.nested_virtualization {
+            self.client.require_nested_virtualization_enabled().await?;
+        }
 
         let req = CreateBoxRequest::from_options(&options, name);
         let resp: BoxResponse = self.client.post("/boxes", &req).await?;
         let info = resp.to_box_info()?;
+        require_nested_virtualization(&options, &info)?;
         let rest_box = Arc::new(RestBox::new(self.client.clone(), info));
         Ok(litebox_from_rest(rest_box))
     }
@@ -353,9 +351,11 @@ impl RuntimeBackend for RestRuntime {
 
         // Try to get existing box by name first
         if let Some(ref box_name) = name
-            && let Some(litebox) = self.get(box_name).await?
+            && let Some(info) = self.get_info(box_name).await?
         {
-            return Ok((litebox, false));
+            require_nested_virtualization(&options, &info)?;
+            let rest_box = Arc::new(RestBox::new(self.client.clone(), info));
+            return Ok((litebox_from_rest(rest_box), false));
         }
         // Create new box
         let litebox = self.create(options, name).await?;
@@ -446,6 +446,26 @@ impl RuntimeBackend for RestRuntime {
         Ok(litebox_from_rest(rest_box))
     }
 }
+
+fn require_nested_virtualization(options: &BoxOptions, info: &BoxInfo) -> BoxliteResult<()> {
+    if options.advanced.nested_virtualization
+        && info
+            .advanced
+            .as_ref()
+            .and_then(|advanced| advanced.nested_virtualization)
+            != Some(true)
+    {
+        return Err(BoxliteError::InvalidState(format!(
+            "Remote box {} did not confirm persisted nested virtualization; the box was left unchanged",
+            info.id,
+        )));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+#[path = "tests/nested_virtualization.rs"]
+mod nested_virtualization_tests;
 
 /// Convert REST metrics response to core RuntimeMetrics.
 fn runtime_metrics_from_response(resp: &RuntimeMetricsResponse) -> RuntimeMetrics {
@@ -898,26 +918,6 @@ mod tests {
         assert!(error.to_string().contains("local runtime"));
     }
 
-    #[tokio::test]
-    async fn create_rejects_nested_virtualization_in_rest_mode() {
-        let options = BoxliteRestOptions::new("http://localhost:1");
-        let runtime = RestRuntime::new(&options).expect("failed to create REST runtime");
-        let mut advanced = crate::runtime::advanced_options::AdvancedBoxOptions::default();
-        advanced.nested_virtualization = true;
-        let box_options = BoxOptions {
-            advanced,
-            ..Default::default()
-        };
-
-        let error = RuntimeBackend::create(&runtime, box_options, None)
-            .await
-            .err()
-            .expect("REST nested virtualization must be rejected before network I/O");
-
-        assert!(matches!(error, BoxliteError::Unsupported(_)));
-        assert!(error.to_string().contains("local runtime"));
-    }
-
     /// A host path has no meaning against a REST runtime — the server's
     /// filesystem is not the caller's. The path must not leave the client at
     /// all: it is the caller's own business, and a server-side "not found"
@@ -1196,27 +1196,6 @@ mod tests {
             .await
             .err()
             .expect("REST runtime must reject a custom kernel before lookup");
-
-        assert!(matches!(error, BoxliteError::Unsupported(_)));
-        assert!(error.to_string().contains("local runtime"));
-    }
-
-    #[tokio::test]
-    async fn get_or_create_rejects_nested_virtualization_in_rest_mode() {
-        let options = BoxliteRestOptions::new("http://localhost:1");
-        let runtime = RestRuntime::new(&options).expect("failed to create REST runtime");
-        let mut advanced = crate::runtime::advanced_options::AdvancedBoxOptions::default();
-        advanced.nested_virtualization = true;
-        let box_options = BoxOptions {
-            advanced,
-            ..Default::default()
-        };
-
-        let error =
-            RuntimeBackend::get_or_create(&runtime, box_options, Some("nested".to_string()))
-                .await
-                .err()
-                .expect("REST nested virtualization must be rejected before network I/O");
 
         assert!(matches!(error, BoxliteError::Unsupported(_)));
         assert!(error.to_string().contains("local runtime"));

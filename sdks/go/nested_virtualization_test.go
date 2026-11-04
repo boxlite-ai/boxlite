@@ -1,11 +1,12 @@
 package boxlite
 
 import (
+	"encoding/json"
 	"errors"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -68,16 +69,51 @@ func TestNestedVirtualizationSetterRejectsClosedHandles(t *testing.T) {
 
 func TestNestedVirtualizationSetterReachesNativeRESTBoundary(t *testing.T) {
 	var requests atomic.Int32
+	created := make(chan bool, 3)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Connection", "close")
+		reply := func(status int, value any) {
+			body, err := json.Marshal(value)
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			w.Header().Set("Content-Length", strconv.Itoa(len(body)))
+			w.WriteHeader(status)
+			_, _ = w.Write(body)
+		}
+		if r.Method == http.MethodGet && r.URL.Path == "/v1/config" {
+			reply(http.StatusOK, map[string]any{"capabilities": map[string]bool{"nested_virtualization_enabled": true}})
+			return
+		}
 		if r.Method != http.MethodPost || r.URL.Path != "/v1/boxes" {
 			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
 			http.NotFound(w, r)
 			return
 		}
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusCreated)
-		_, _ = io.WriteString(w, `{"box_id":"rest-box","name":"boundary","status":"configured","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z","pid":null,"image":"alpine:latest","cpus":1,"memory_mib":128}`)
+		var request struct {
+			Advanced *struct {
+				NestedVirtualization *bool `json:"nested_virtualization"`
+			} `json:"advanced"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Error(err)
+			http.Error(w, "invalid create", http.StatusBadRequest)
+			return
+		}
+		enabled := request.Advanced != nil && request.Advanced.NestedVirtualization != nil && *request.Advanced.NestedVirtualization
+		if request.Advanced != nil && request.Advanced.NestedVirtualization != nil && !enabled {
+			t.Error("explicit false must be omitted from the REST request")
+		}
+		created <- enabled
+		reply(http.StatusCreated, map[string]any{
+			"box_id": "rest-box", "name": "boundary", "status": "configured",
+			"created_at": "2026-01-01T00:00:00Z", "updated_at": "2026-01-01T00:00:00Z",
+			"pid": nil, "image": "alpine:latest", "cpus": 1, "memory_mib": 128,
+			"advanced": map[string]bool{"nested_virtualization": enabled},
+		})
 	}))
 	defer server.Close()
 	rt, err := NewRest(BoxliteRestOptions{URL: server.URL})
@@ -100,16 +136,15 @@ func TestNestedVirtualizationSetterReachesNativeRESTBoundary(t *testing.T) {
 		if box != nil {
 			box.Close()
 		}
+		wantRequests := int32(1)
 		if enabled {
-			var runtimeErr *Error
-			if !errors.As(err, &runtimeErr) || runtimeErr.Code != ErrUnsupported || !strings.Contains(err.Error(), "nested virtualization") {
-				t.Fatalf("native REST validation must reject nesting: %v", err)
-			}
-			if requests.Load() != before {
-				t.Fatal("nesting must be rejected before HTTP")
-			}
-		} else if err != nil || box == nil || requests.Load() != before+1 {
-			t.Fatalf("disabling nesting must allow native REST creation: box=%v error=%v requests=%d", box, err, requests.Load()-before)
+			wantRequests++
+		}
+		if err != nil || box == nil || requests.Load() != before+wantRequests {
+			t.Fatalf("native REST creation enabled=%v: box=%v error=%v requests=%d", enabled, box, err, requests.Load()-before)
+		}
+		if received := <-created; received != enabled {
+			t.Fatalf("native setter sent nested_virtualization=%v, want %v", received, enabled)
 		}
 	}
 }

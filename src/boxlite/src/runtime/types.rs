@@ -449,6 +449,27 @@ impl From<NetworkInfoWire> for NetworkInfo {
     }
 }
 
+/// Persisted advanced requirements, without host paths or sandbox policy.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BoxAdvancedInfo {
+    /// `None` means the producer did not report this requirement.
+    /// `Some(true)` records intent, not successful execution of an L2 guest.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_optional_bool"
+    )]
+    pub nested_virtualization: Option<bool>,
+}
+
+/// Missing is allowed, but an explicitly supplied value must be a boolean.
+pub(crate) fn deserialize_optional_bool<'de, D>(deserializer: D) -> Result<Option<bool>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    bool::deserialize(deserializer).map(Some)
+}
+
 /// Public metadata about a box (returned by list operations).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BoxInfo {
@@ -478,6 +499,10 @@ pub struct BoxInfo {
 
     /// Allocated memory in MiB.
     pub memory_mib: u32,
+
+    /// Saved requirements. Older producers may omit this projection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub advanced: Option<BoxAdvancedInfo>,
 
     /// Network configuration and current runtime publication metadata.
     ///
@@ -567,6 +592,9 @@ impl BoxInfo {
             },
             cpus: config.options.cpus.unwrap_or(DEFAULT_CPUS),
             memory_mib: config.options.memory_mib.unwrap_or(DEFAULT_MEMORY_MIB),
+            advanced: Some(BoxAdvancedInfo {
+                nested_virtualization: Some(config.options.advanced.nested_virtualization),
+            }),
             network: Some(NetworkInfo::new(
                 OutboundNetworkInfo {
                     mode: network_config.outbound.mode,
@@ -603,6 +631,7 @@ impl PartialEq for BoxInfo {
             && self.image == other.image
             && self.cpus == other.cpus
             && self.memory_mib == other.memory_mib
+            && self.advanced == other.advanced
             && self.network == other.network
             && self.labels == other.labels
             && self.auto_stop == other.auto_stop

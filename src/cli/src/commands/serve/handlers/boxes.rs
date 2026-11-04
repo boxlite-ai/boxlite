@@ -48,6 +48,12 @@ pub(in crate::commands::serve) async fn create_box(
         }
     };
 
+    if options.advanced.nested_virtualization && !state.nested_virtualization_enabled {
+        return error_from_boxlite(&boxlite::BoxliteError::Unsupported(
+            "Nested virtualization is not enabled on this server".into(),
+        ));
+    }
+
     let litebox = match state.runtime.create(options, name).await {
         Ok(b) => b,
         Err(e) => return error_from_boxlite(&e),
