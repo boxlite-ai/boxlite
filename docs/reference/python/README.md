@@ -492,7 +492,7 @@ Both `boxlite.Box` and `boxlite.SimpleBox` expose `box.network`.
 `runtime.domains.unbind(hostname)` in the sync API return the empty tuple `()`
 on success. Failures raise a `BoxliteError` subclass; `()` is not an error
 indicator. Unbinding requires the full hostname returned by `list()`, retains
-the organization's domain and quota slot, and succeeds again if that held
+the organization's domain and any platform quota slot, and succeeds again if that held
 hostname is already unbound.
 
 Creation accepts `(ip, port)` and IPv6 `(ip, port, 0, 0)` tuples. IPs must be

@@ -7,8 +7,16 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import Domains from './Domains'
 import type { DomainList, HeldDomain } from '@/api/domain-types'
 
-const state = vi.hoisted(() => ({ organizationId: 'org-1', canManage: true, list: vi.fn(), claim: vi.fn() }))
-vi.mock('@/hooks/useApi', () => ({ useApi: () => ({ listDomains: state.list, claimDomain: state.claim }) }))
+const state = vi.hoisted(() => ({
+  organizationId: 'org-1',
+  canManage: true,
+  list: vi.fn(),
+  claim: vi.fn(),
+  custom: vi.fn(),
+}))
+vi.mock('@/hooks/useApi', () => ({
+  useApi: () => ({ listDomains: state.list, claimDomain: state.claim, listCustomDomains: state.custom }),
+}))
 vi.mock('@/hooks/useSelectedOrganization', () => ({
   useSelectedOrganization: () => ({
     selectedOrganization: { id: state.organizationId },
@@ -43,6 +51,7 @@ describe('Domains page', () => {
     state.organizationId = 'org-1'
     state.canManage = true
     state.list.mockReset().mockResolvedValue(list)
+    state.custom.mockReset().mockResolvedValue({ enabled: false, subscription: 'required', domains: [] })
     state.claim
       .mockReset()
       .mockResolvedValue({ hostname: 'my-app.apps.test', url: 'https://my-app.apps.test', target: null })
@@ -96,7 +105,7 @@ describe('Domains page', () => {
       'shop-one.apps.testAppshop-app—',
       'spare.apps.testUnbound——',
     ])
-    expect(document.body.textContent).toContain('3 / 5 domains held')
+    expect(document.body.textContent).toContain('3 / 5 platform domains held')
   })
 
   it('previews a full hostname from a short name, claims it and refreshes the list', async () => {

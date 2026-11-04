@@ -20,6 +20,7 @@ import { BoxDesiredState } from '../enums/box-desired-state.enum'
 import { DOMAIN_COUNT_LIMIT_CODE, DOMAIN_NOT_OWNED_CODE, SUBDOMAIN_TOO_SHORT_CODE } from '../errors/domain.error'
 import { BoxDestroyedEvent } from '../events/box-destroyed.event'
 import { AddDomain1792972800000 } from '../../migrations/pre-deploy/1792972800000-add-domain-migration'
+import { AddCustomDomainConfig1793764800000 } from '../../migrations/pre-deploy/1793764800000-add-custom-domain-config-migration'
 import { DomainService } from './domain.service'
 import { TunnelService } from './tunnel.service'
 import { PreviewController } from '../controllers/preview.controller'
@@ -47,9 +48,15 @@ describeIfDatabase('DomainService (integration, real Postgres)', () => {
   let preview: PreviewController
   let ownsSchema = false
   let minLength = 5
+  let customEnabled = false
 
   const configService = {
-    get: (key: string) => (key === 'domain.appDomain' || key === 'domain.appHost' ? APP_DOMAIN : undefined),
+    get: (key: string) =>
+      key === 'customDomains.enabled'
+        ? customEnabled
+        : key === 'domain.appDomain' || key === 'domain.appHost'
+          ? APP_DOMAIN
+          : undefined,
     getOrThrow: (key: string) => {
       switch (key) {
         case 'domain.platformSubdomainMinLength':
@@ -92,6 +99,7 @@ describeIfDatabase('DomainService (integration, real Postgres)', () => {
     const runner = dataSource.createQueryRunner()
     try {
       await new AddDomain1792972800000().up(runner)
+      await new AddCustomDomainConfig1793764800000().up(runner)
     } finally {
       await runner.release()
     }
@@ -113,6 +121,8 @@ describeIfDatabase('DomainService (integration, real Postgres)', () => {
 
   beforeEach(async () => {
     minLength = 5
+    customEnabled = false
+    await dataSource.query(`TRUNCATE custom_domain_config, custom_domain_subscription`)
     await dataSource.query(`DELETE FROM "${schemaName}"."domain"`)
     await dataSource.query(`DELETE FROM "${schemaName}"."tunnel"`)
     await dataSource.query(`DELETE FROM "${schemaName}"."box"`)
@@ -121,6 +131,58 @@ describeIfDatabase('DomainService (integration, real Postgres)', () => {
     tunnels = new TunnelService(dataSource.getRepository(Tunnel), memoryRedis() as never)
     service = new DomainService(dataSource, regionService as never, configService as never)
     preview = createPreview(tunnels)
+  })
+
+  it('admits only ready, subscribed custom bindings while preserving fields and targets on refusal', async () => {
+    customEnabled = true
+    const box = await makeBox()
+    await dataSource.getRepository(Domain).insert({ hostname: 'app.customer.com', kind: 'custom', organizationId: ORG })
+    await expect(service.bind(box, 3000, 'app.customer.com')).rejects.toMatchObject({
+      status: 409,
+      response: { code: 'subscription_not_ready' },
+    })
+    await dataSource.query(
+      `INSERT INTO custom_domain_subscription (organization_id, eligible, valid_until) VALUES ($1, false, now() + interval '5 minutes')`,
+      [ORG],
+    )
+    await expect(service.bind(box, 3000, 'app.customer.com')).rejects.toMatchObject({
+      status: 403,
+      response: { code: 'subscription_required' },
+    })
+    await dataSource.query(`UPDATE custom_domain_subscription SET eligible = true`)
+    await expect(service.bind(box, 3000, 'app.customer.com')).rejects.toMatchObject({
+      status: 409,
+      response: { code: 'domain_not_ready' },
+    })
+    await dataSource.query(`INSERT INTO custom_domain_config (organization_id, hostname, domain_id, challenge,
+      challenge_expires_at, phase, dns_valid_until, certificate_valid_until)
+      SELECT organization_id, hostname, id, 'verified', now() + interval '1 day', 'ready', now() + interval '5 minutes', now() + interval '5 minutes'
+      FROM domain WHERE hostname = 'app.customer.com'`)
+    await setLimit(ORG, 0)
+    const target = { type: 'box', box: box.id, port: 3000 }
+    await expect(service.bind(box, 3000, 'app.customer.com')).resolves.toEqual({
+      hostname: 'app.customer.com',
+      url: 'https://app.customer.com',
+      target,
+    })
+    expect(await service.resolve('app.customer.com')).toEqual(target)
+    await dataSource.query(`UPDATE custom_domain_config SET dns_valid_until = now() - interval '1 second'`)
+    expect(await service.resolve('app.customer.com')).toBeNull()
+    await expect(service.bind(box, 4000, 'app.customer.com')).rejects.toMatchObject({ status: 409 })
+    expect((await service.listHeld(ORG)).domains[0].target).toEqual(target)
+    expect((await service.listHeld(ORG)).used).toBe(0)
+    await service.unbind(ORG, 'app.customer.com')
+    expect((await service.listHeld(ORG)).domains[0].target).toBeNull()
+  })
+
+  it('keeps legacy custom rows closed when provider configuration is disabled', async () => {
+    const box = await makeBox()
+    await dataSource
+      .getRepository(Domain)
+      .insert({ hostname: 'app.customer.com', kind: 'custom', organizationId: ORG, boxId: box.id, port: 3000 })
+    expect(await service.resolve('app.customer.com')).toBeNull()
+    await expect(service.bind(box, 4000, 'app.customer.com')).rejects.toMatchObject({ status: 409 })
+    await expect(service.bind(box, 4000, 'foreign.customer.com')).rejects.toMatchObject({ status: 404 })
   })
 
   function createPreview(tunnelService: TunnelService): PreviewController {
@@ -480,6 +542,42 @@ describeIfDatabase('DomainService (integration, real Postgres)', () => {
     expect(rejected).toHaveLength(1)
     expect(rejected[0].reason).toMatchObject({ response: { code: DOMAIN_COUNT_LIMIT_CODE } })
     expect(await heldNames(ORG)).toHaveLength(2)
+  })
+
+  it('custom allowance: excludes custom rows when concurrent platform names consume the last slot', async () => {
+    await setLimit(ORG, 1)
+    await dataSource.getRepository(Domain).insert({
+      hostname: 'app.customer.example',
+      kind: 'custom',
+      organizationId: ORG,
+    })
+
+    const outcomes = await Promise.allSettled([service.claim(ORG, 'first-name'), service.claim(ORG, 'second-name')])
+
+    expect(outcomes.filter((outcome) => outcome.status === 'fulfilled')).toHaveLength(1)
+    const rejected = outcomes.filter((outcome) => outcome.status === 'rejected') as PromiseRejectedResult[]
+    expect(rejected).toHaveLength(1)
+    expect(rejected[0].reason).toMatchObject({ response: { code: DOMAIN_COUNT_LIMIT_CODE } })
+    expect(await heldNames(ORG)).toHaveLength(2)
+  })
+
+  it.each([0, 1])('custom allowance: keeps custom rows in the list with platform limit %i', async (limit) => {
+    await setLimit(ORG, limit)
+    if (limit > 0) await service.claim(ORG, 'first-name')
+    await dataSource.getRepository(Domain).insert([
+      { hostname: 'app.customer.example', kind: 'custom', organizationId: ORG },
+      { hostname: 'other.customer.example', kind: 'custom', organizationId: ORG },
+    ])
+
+    const held = await service.listHeld(ORG)
+
+    expect(held).toMatchObject({ limit, used: limit, remaining: 0 })
+    expect(held.domains).toHaveLength(limit + 2)
+    expect(held.domains.find((domain) => domain.hostname === 'app.customer.example')).toEqual({
+      hostname: 'app.customer.example',
+      url: 'https://app.customer.example',
+      target: null,
+    })
   })
 
   it('gives a contested new name to exactly one organization', async () => {

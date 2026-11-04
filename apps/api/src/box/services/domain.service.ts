@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { Injectable, NotFoundException } from '@nestjs/common'
+import { HttpException, Injectable, NotFoundException } from '@nestjs/common'
 import { InjectDataSource } from '@nestjs/typeorm'
 import { DataSource, EntityManager } from 'typeorm'
 import { TypedConfigService } from '../../config/typed-config.service'
@@ -14,6 +14,8 @@ import { Box } from '../entities/box.entity'
 import { Domain, DomainTarget } from '../entities/domain.entity'
 import { BoxState } from '../enums/box-state.enum'
 import { BoxDesiredState } from '../enums/box-desired-state.enum'
+import { CUSTOM_DOMAIN_READY_SQL } from './custom-domain-policy'
+import { requireDomainSubscription } from './custom-domain-subscription.service'
 import {
   DomainCountLimitReachedError,
   DomainNotOwnedError,
@@ -142,7 +144,7 @@ export class DomainService {
       if (subdomain.length < minLength) {
         throw new SubdomainTooShortError(subdomain, minLength)
       }
-      const used = await manager.count(Domain, { where: { organizationId } })
+      const used = await manager.count(Domain, { where: { organizationId, kind: 'platform' } })
       if (used >= limit) {
         throw new DomainCountLimitReachedError(limit, used)
       }
@@ -165,7 +167,7 @@ export class DomainService {
   async bind(box: Box, port: number, rawDomain: string): Promise<HeldDomain> {
     const hostname = this.fullHostname(rawDomain, 'Bind')
     return this.dataSource.transaction(async (manager) => {
-      await manager.query(`SET LOCAL lock_timeout = '5s'`)
+      await this.lockOrganizationLimit(manager, box.organizationId)
       // Serialize target admission with destroy requests and physical deletion;
       // the controller's earlier Box lookup may already be stale.
       const current = await manager.findOne(Box, {
@@ -177,11 +179,27 @@ export class DomainService {
       }
       await this.assertReachableFromPlatformProxy(current)
       const [, bound]: [unknown[], number] = await manager.query(
-        `UPDATE "domain" SET "box_id" = $3, "port" = $4, "target_type" = 'box', "app_id" = NULL, "updated_at" = now()
-         WHERE "hostname" = $1 AND "organization_id" = $2`,
-        [hostname, current.organizationId, current.id, port],
+        `UPDATE "domain" AS d SET "box_id" = $3, "port" = $4, "target_type" = 'box', "app_id" = NULL, "updated_at" = now()
+         WHERE "hostname" = $1 AND "organization_id" = $2
+           AND (d.kind = 'platform' OR ($5 AND ${CUSTOM_DOMAIN_READY_SQL}))`,
+        [hostname, current.organizationId, current.id, port, !!this.configService.get('customDomains.enabled')],
       )
       if (bound === 0) {
+        const [held] = await manager.query(
+          `SELECT d.kind, s.eligible, s.valid_until > now() AS valid
+          FROM domain d LEFT JOIN custom_domain_subscription s ON s.organization_id = d.organization_id
+          WHERE d.hostname = $1 AND d.organization_id = $2`,
+          [hostname, current.organizationId],
+        )
+        if (held?.kind === 'custom') {
+          requireDomainSubscription(
+            held.eligible === false ? 'required' : held.eligible && held.valid ? 'active' : 'unavailable',
+          )
+          throw new HttpException(
+            { code: 'domain_not_ready', message: 'Complete custom domain setup in Dashboard before binding.' },
+            409,
+          )
+        }
         throw new DomainNotOwnedError(hostname)
       }
       return { hostname, url: this.urlFor(hostname), target: { type: 'box', box: current.id, port } }
@@ -216,8 +234,8 @@ export class DomainService {
     const hostname = rawHostname.trim().toLowerCase()
     const rows: StoredTarget[] = await this.dataSource.query(
       `SELECT "target_type" AS "targetType", "box_id" AS "boxId", "app_id" AS "appId", "port"
-       FROM "domain" WHERE "hostname" = $1`,
-      [hostname],
+       FROM "domain" d WHERE "hostname" = $1 AND (d.kind = 'platform' OR ($2 AND ${CUSTOM_DOMAIN_READY_SQL}))`,
+      [hostname, !!this.configService.get('customDomains.enabled')],
     )
     if (rows.length === 0) {
       return null
@@ -225,7 +243,7 @@ export class DomainService {
     return this.targetOf(rows[0])
   }
 
-  /** Every name the organization holds, bound or not, with its allowance. */
+  /** Every held name, with an allowance that counts only platform names. */
   async listHeld(organizationId: string): Promise<HeldDomains> {
     const [organization]: { limit: number }[] = await this.dataSource.query(
       `SELECT "domain_count_limit" AS "limit" FROM "organization" WHERE "id" = $1`,
@@ -234,12 +252,13 @@ export class DomainService {
     if (!organization) {
       throw new NotFoundException(`Organization ${organizationId} not found`)
     }
-    const rows: (StoredTarget & { hostname: string })[] = await this.dataSource.query(
-      `SELECT "hostname", "target_type" AS "targetType", "box_id" AS "boxId", "app_id" AS "appId", "port" FROM "domain"
+    const rows: (StoredTarget & Pick<Domain, 'hostname' | 'kind'>)[] = await this.dataSource.query(
+      `SELECT "hostname", "kind", "target_type" AS "targetType", "box_id" AS "boxId", "app_id" AS "appId", "port" FROM "domain"
          WHERE "organization_id" = $1 ORDER BY "hostname"`,
       [organizationId],
     )
     const limit = Number(organization.limit)
+    const used = rows.filter((row) => row.kind === 'platform').length
     return {
       domains: rows.map((row) => ({
         hostname: row.hostname,
@@ -247,8 +266,8 @@ export class DomainService {
         target: this.targetOf(row),
       })),
       limit,
-      used: rows.length,
-      remaining: Math.max(0, limit - rows.length),
+      used,
+      remaining: Math.max(0, limit - used),
       minLength: this.configService.getOrThrow('domain.platformSubdomainMinLength'),
       domainSuffix: this.appDomain()?.appHost ?? null,
     }

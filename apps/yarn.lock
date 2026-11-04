@@ -17147,6 +17147,7 @@ __metadata:
     fast-deep-equal: "npm:^3.1.3"
     fast-glob: "npm:^3.3.0"
     form-data: "npm:^4.0.6"
+    google-auth-library: "npm:11.1.0"
     gt-react: "npm:^10.0.8"
     gtx-cli: "npm:^2.6.24"
     http-proxy-middleware: "npm:^4.2.0"
@@ -17224,6 +17225,7 @@ __metadata:
     tailwindcss: "npm:3.4.3"
     tailwindcss-animate: "npm:^1.0.7"
     tar: "npm:^7.5.22"
+    tldts: "npm:7.0.30"
     ts-jest: "npm:29.4.1"
     ts-node: "npm:10.9.1"
     tslib: "npm:^2.8.1"
@@ -23287,7 +23289,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"google-auth-library@npm:^11.0.0":
+"google-auth-library@npm:11.1.0, google-auth-library@npm:^11.0.0":
   version: 11.1.0
   resolution: "google-auth-library@npm:11.1.0"
   dependencies:
@@ -37420,6 +37422,17 @@ __metadata:
   languageName: node
   linkType: hard
 
+"tldts@npm:7.0.30, tldts@npm:^7.0.5":
+  version: 7.0.30
+  resolution: "tldts@npm:7.0.30"
+  dependencies:
+    tldts-core: "npm:^7.0.30"
+  bin:
+    tldts: bin/cli.js
+  checksum: 10c0/c36f7b480f09128303158e4738a82426c33e8da9f77d4fb57a2d5ef5896c803d7a3c1d53ade965712f9cb4946935139b6d192a18698665556ca504493c7c265e
+  languageName: node
+  linkType: hard
+
 "tldts@npm:^6.1.32":
   version: 6.1.86
   resolution: "tldts@npm:6.1.86"
@@ -37428,17 +37441,6 @@ __metadata:
   bin:
     tldts: bin/cli.js
   checksum: 10c0/27ae7526d9d78cb97b2de3f4d102e0b4321d1ccff0648a7bb0e039ed54acbce86bacdcd9cd3c14310e519b457854e7bafbef1f529f58a1e217a737ced63f0940
-  languageName: node
-  linkType: hard
-
-"tldts@npm:^7.0.5":
-  version: 7.0.30
-  resolution: "tldts@npm:7.0.30"
-  dependencies:
-    tldts-core: "npm:^7.0.30"
-  bin:
-    tldts: bin/cli.js
-  checksum: 10c0/c36f7b480f09128303158e4738a82426c33e8da9f77d4fb57a2d5ef5896c803d7a3c1d53ade965712f9cb4946935139b6d192a18698665556ca504493c7c265e
   languageName: node
   linkType: hard
 

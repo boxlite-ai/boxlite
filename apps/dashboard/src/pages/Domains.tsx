@@ -8,6 +8,7 @@ import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { OrganizationRolePermissionsEnum } from '@boxlite-ai/api-client'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import React, { useState } from 'react'
+import CustomDomains from './CustomDomains'
 
 const SHORT_NAME = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/
 const BUTTON =
@@ -39,7 +40,7 @@ function OrganizationDomains({ organizationId, canManage }: { organizationId: st
   const canClaim = canManage && !!data?.domain_suffix && data.remaining > 0
 
   return (
-    <div className="flex h-[calc(100svh-60px)] min-h-0 flex-col px-4 pt-5 sm:px-6 lg:px-[40px] lg:pt-[26px]">
+    <div className="flex h-[calc(100svh-60px)] min-h-0 flex-col overflow-y-auto px-4 pt-5 sm:px-6 lg:px-[40px] lg:pt-[26px]">
       <div className="mb-[22px] flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="font-display text-page font-semibold text-foreground">Domains</h1>
@@ -74,14 +75,14 @@ function OrganizationDomains({ organizationId, canManage }: { organizationId: st
         data && (
           <>
             <p className="mb-4 font-mono text-xs text-muted-foreground">
-              {data.used} / {data.limit} domains held · {data.remaining} available
+              {data.used} / {data.limit} platform domains held · {data.remaining} available
             </p>
             {!data.domain_suffix && (
               <p className="mb-4 text-sm text-muted-foreground">Domain requests are unavailable on this deployment.</p>
             )}
             {data.remaining === 0 && (
               <p className="mb-4 text-sm text-muted-foreground">
-                Domain limit reached. Reuse a held domain or request a higher limit.
+                Platform domain limit reached. Reuse a held domain or request a higher limit.
               </p>
             )}
             {claimedHostname && (
@@ -122,12 +123,14 @@ function OrganizationDomains({ organizationId, canManage }: { organizationId: st
               )}
             </div>
             <p className="mt-4 font-mono text-xs text-muted-foreground">
-              Bind using the full domain in the CLI or SDK. Unbinding keeps ownership and does not free a slot.
+              Bind using the full domain in the CLI or SDK. Unbinding keeps ownership; only platform names occupy
+              allowance slots.
             </p>
           </>
         )
       )}
 
+      <CustomDomains organizationId={organizationId} canManage={canManage} held={data?.domains ?? []} />
       <Dialog
         open={open}
         onOpenChange={(next) => {

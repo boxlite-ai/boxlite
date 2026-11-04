@@ -59,7 +59,7 @@ func handleAcceptProxyWarning(ctx *gin.Context, secure bool) {
 // browserWarningMiddleware is the middleware that checks for browsers and shows warning
 func (p *Proxy) browserWarningMiddleware() gin.HandlerFunc {
 	return func(ctx *gin.Context) {
-		_, isAppDomain := p.appDomainHost(ctx.Request.Host)
+		_, isAppDomain := p.namedDomainHost(ctx.Request.Host)
 		if ctx.Request.URL.Path == loginCallbackPath && !isAppDomain {
 			ctx.Next()
 			return

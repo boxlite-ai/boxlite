@@ -34,6 +34,7 @@ help:
 	@echo "    make skillbox-image - Build SkillBox Docker image (APT_SOURCE=mirrors.aliyun.com for China)"
 	@echo "    make build:apps     - Build the apps workspace (api, dashboard, runner, libs…)"
 	@echo "    make build:apps:dashboard - Build and type-check the dashboard"
+	@echo "    make build:apps:api - Build and type-check the API"
 	@echo ""
 	@echo "  Plugins:"
 	@echo "    make plugin:boxlite:check    - Validate BoxLite plugin and package tests"

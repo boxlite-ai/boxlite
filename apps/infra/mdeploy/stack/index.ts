@@ -518,6 +518,8 @@ export const deployStack = ({
     OTEL_LOGGING_ENABLED: 'true',
     OTEL_TRACING_ENABLED: 'true',
     ...inputs.proxyEnvironment,
+    // Match the API's opt-in; every Proxy replica must use exact customer-host lookup.
+    CUSTOM_DOMAINS_ENABLED: inputs.apiEnvironment.CUSTOM_DOMAIN_GCP_PROJECT ? 'true' : 'false',
     OTEL_EXPORTER_OTLP_ENDPOINT: collector.otlpUrl,
     ...(platformDomain ? { PROXY_APP_DOMAIN: platformDomain } : {}),
   }

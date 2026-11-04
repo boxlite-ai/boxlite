@@ -14,6 +14,31 @@ and membership revocation after the outer commit. Run it from the repository roo
 The double checks callback execution and row selection; the real-Postgres organization-domain
 lifecycle tests cover database rollback.
 
+## Custom domain tests
+
+Run `make test:apps:api` against disposable PostgreSQL and Redis instances. Set
+`DB_HOST`, `DB_PORT`, `DB_USERNAME`, `DB_PASSWORD`, `DB_DATABASE`, `REDIS_HOST`
+and `REDIS_PORT`; tests create/drop schemas or databases and may flush Redis.
+Never point these variables at a deployed application's data stores.
+
+For the complete API suite, also set `ONBOARDING_TEST_DATABASE_URL` and
+`BOXLITE_TEST_REDIS_URL` to those same disposable instances. These two suites
+have separate explicit opt-ins; setting only `DB_HOST` and `REDIS_HOST` leaves
+them skipped. Use `NX_SKIP_NX_CACHE=true NX_DAEMON=false NX_ISOLATE_PLUGINS=false`
+to execute the tests rather than replay Nx output, and clear the local
+`BOXLITE_IMAGE_REGISTRY_ALLOWLIST` override when checking the suite's default policy.
+
+`TEST_FILES=custom-domain.integration.spec.ts` selects the custom-domain lifecycle
+checks. They use actual service-created records and PostgreSQL transactions to
+exercise competing organizations, expired worker leases, deletion during cloud work,
+two concurrent worker instances and 1000 ready domains. The concurrency case holds
+DNS work at a barrier to check the active and per-tick limits. The scale case drives
+ticks directly and checks that ready-domain maintenance makes no provider calls.
+DNS, TLS and Certificate Manager use controlled test doubles here, so these checks
+do not establish cloud issuance, natural renewal or production throughput. Follow
+the [GCP acceptance procedure](../infra/docs/gcp/deployment.md#customer-domain-https)
+for those boundaries.
+
 ## Admin Box image
 
 `GET /api/admin/boxes` and `GET /api/admin/boxes/{id}` include `image`, the stored

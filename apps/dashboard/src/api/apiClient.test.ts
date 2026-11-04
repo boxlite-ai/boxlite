@@ -4,6 +4,33 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 const config = { apiUrl: 'http://api.test/api' } as never
 
 describe('ApiClient domains', () => {
+  it('uses separate setup routes and unchanged portable binding fields', async () => {
+    const requests: any[] = []
+    const api = await makeClient(vi.fn(), 200, {}, requests)
+    await api.listCustomDomains('org/one')
+    await api.createCustomDomain('org/one', 'app.example.com')
+    await api.verifyCustomDomain('org/one', 'config/id')
+    await api.bindDomain('org/one', 'app.example.com', 'web', 3000)
+    await api.unbindDomain('org/one', 'app.example.com')
+    await api.deleteCustomDomain('org/one', 'config/id')
+    expect(requests.map(({ method, url, data }) => ({ method, url, data }))).toEqual([
+      { method: 'get', url: '/organizations/org%2Fone/custom-domains', data: undefined },
+      {
+        method: 'post',
+        url: '/organizations/org%2Fone/custom-domains',
+        data: JSON.stringify({ hostname: 'app.example.com' }),
+      },
+      { method: 'post', url: '/organizations/org%2Fone/custom-domains/config%2Fid/verify', data: '{}' },
+      {
+        method: 'put',
+        url: '/v1/org%2Fone/domains/app.example.com/target',
+        data: JSON.stringify({ type: 'box', box: 'web', port: 3000 }),
+      },
+      { method: 'delete', url: '/v1/org%2Fone/domains/app.example.com/target', data: undefined },
+      { method: 'delete', url: '/organizations/org%2Fone/custom-domains/config%2Fid', data: undefined },
+    ])
+    expect(requests.every((request) => request.headers.Authorization === 'Bearer tok')).toBe(true)
+  })
   it('uses authenticated organization-scoped list and short-name claim requests', async () => {
     const requests: any[] = []
     const result = { hostname: 'my-app.apps.test', url: 'https://my-app.apps.test', target: null }

@@ -12,14 +12,55 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 )
 
-// errAppDomainNotFound is an unknown, unbound or currently unreachable platform
+// errAppDomainNotFound is an unknown, unbound or currently unreachable named
 // hostname. The API folds the tunnel, inbound and box-state checks into its
 // answer, so this is the one refusal the proxy forwards as 404.
 var errAppDomainNotFound = errors.New("domain not found")
+
+var domainLabel = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
+
+// Named hosts always use exact API lookup; an unknown name never falls back to
+// interpreting its first label as a generated port/Box address.
+func (p *Proxy) namedDomainHost(host string) (string, bool) {
+	if hostname, ok := p.appDomainHost(host); ok {
+		return hostname, true
+	}
+	if p.config == nil || !p.config.CustomDomainsEnabled {
+		return "", false
+	}
+	hostname := bareHost(host)
+	proxyHost := bareHost(p.config.ProxyDomain)
+	if hostname == proxyHost || hostname == p.appDomain() || strings.HasSuffix(hostname, "."+proxyHost) || net.ParseIP(hostname) != nil || len(hostname) > 253 {
+		return "", false
+	}
+	labels := strings.Split(hostname, ".")
+	if len(labels) < 2 {
+		return "", false
+	}
+	for _, label := range labels {
+		if !domainLabel.MatchString(label) {
+			return "", false
+		}
+	}
+	return hostname, true
+}
+
+func (p *Proxy) generatedDomainHost(host string) bool {
+	if p.config == nil || p.config.ProxyDomain == "" {
+		return false
+	}
+	hostname, suffix := bareHost(host), "."+bareHost(p.config.ProxyDomain)
+	if !strings.HasSuffix(hostname, suffix) {
+		return false
+	}
+	label := strings.TrimSuffix(hostname, suffix)
+	return label != "" && !strings.Contains(label, ".")
+}
 
 // appDomain is the configured platform domain without any port: like
 // PROXY_DOMAIN, a local stack may configure `app.localhost:4000`, and the port
@@ -56,14 +97,15 @@ func (p *Proxy) appDomainHost(host string) (string, bool) {
 	return hostname, true
 }
 
-// resolveAppDomain asks the API which box port a platform hostname routes to
-// right now. Only a single label under the app domain is ever bound, so a
-// deeper name is refused here without a round trip. Not cached: a name that
-// was just released must not forward again.
+// resolveAppDomain asks the API which box port a named hostname routes to now.
+// Platform names allow one label under the app domain; customer names can be
+// deeper. Not cached: a released name must not forward again.
 func (p *Proxy) resolveAppDomain(ctx context.Context, hostname string) (string, uint16, error) {
-	label := strings.TrimSuffix(hostname, "."+p.appDomain())
-	if label == "" || strings.Contains(label, ".") {
-		return "", 0, errAppDomainNotFound
+	if _, platform := p.appDomainHost(hostname); platform {
+		label := strings.TrimSuffix(hostname, "."+p.appDomain())
+		if label == "" || strings.Contains(label, ".") {
+			return "", 0, errAppDomainNotFound
+		}
 	}
 	response, err := p.previewGet(ctx, "preview", "domains", hostname)
 	if err != nil {

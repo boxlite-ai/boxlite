@@ -209,7 +209,7 @@ organization boundaries.
 | `POST` | `/api/preview/{boxId}/tunnels/{port}/access`                            | Proxy-only active tunnel policy, token verification and browser-user revalidation; returns no token verifier. |
 | `GET`  | `/api/preview/{boxId}/tunnels/{port}/session`                            | Checks a user JWT and returns the tunnel grant and user ID for browser login. |
 | `POST` | `/api/preview/tunnel-handoff`                                          | Proxy-only issue or single-use consumption of a 30-second browser login handoff. |
-| `GET`  | `/api/preview/domains/{hostname}`                                       | Resolves a platform hostname to `{boxId, port}` for the proxy; `404` unless it may be forwarded now. |
+| `GET`  | `/api/preview/domains/{hostname}`                                       | Resolves a platform or eligible custom hostname to `{boxId, port}` for the proxy; `404` unless it may be forwarded now. |
 | `POST` | `/api/preview/{boxId}/ensure-ready`                                     | Wakes a stopped box for the proxy, by auto-resume rules. |
 | `GET`  | `/api/preview/{boxId}/access`                                           | Checks whether the caller may preview a box.          |
 
@@ -485,13 +485,35 @@ organization membership.
 | `GET`    | `/api/v1[/{prefix}]/boxes/{boxId}/metrics`                    | Returns metrics for one box without marking it active.  |
 | `POST`   | `/api/v1[/{prefix}]/boxes/{boxId}/network/tunnel?port={port}` | Prepares a tunnel with optional `isPublic` (default true); returns `uri`, `isPublic`, `token`. Private tokens are complete once, then masked. |
 | `DELETE` | `/api/v1[/{prefix}]/boxes/{boxId}/network/tunnel?port={port}` | Revokes either access mode; `204`, idempotent. |
-| `GET`    | `/api/v1[/{prefix}]/domains`                                  | Lists full hostnames, URLs, typed targets and the organization's allowance; no short `name` field. |
+| `GET`    | `/api/v1[/{prefix}]/domains`                                  | Lists all full hostnames, URLs, typed targets and the platform-only allowance; no short `name` field. |
 | `PUT`    | `/api/v1[/{prefix}]/domains/{domain}/target`                  | Routes an owned full hostname to a box port using `{"type":"box","box":"<id-or-name>","port":3000}`; replaces any existing binding without declaring the port public. |
 | `DELETE` | `/api/v1[/{prefix}]/domains/{domain}/target`                  | Requires the full held hostname; stops routing it and keeps ownership; `204`, idempotent. |
 | `PUT`    | `/api/v1[/{prefix}]/boxes/{boxId}/network/inbound`            | Enables or disables a box's inbound access.             |
 | `POST`   | `/api/v1[/{prefix}]/boxes/{boxId}/ssh`                        | Replaces guest SSH configuration once; counts as activity and may auto-resume a box. |
 | `GET`    | `/api/v1[/{prefix}]/boxes/{boxId}/ssh`                        | Reads guest SSH status without resuming the box or counting as activity. |
 | `DELETE` | `/api/v1[/{prefix}]/boxes/{boxId}/ssh`                        | Disables guest SSH without resuming the box or counting as activity. |
+
+Custom-domain bind reads persisted eligibility and readiness; it performs no DNS
+challenge. Its fields are unchanged, with new failures `403 subscription_required`,
+`409 subscription_not_ready` and `409 domain_not_ready`. Unbind keeps ownership
+and remains available after subscription expiry; only platform names occupy quota.
+
+Dashboard setup is separate from the portable API. These authenticated routes
+require organization membership and Box write permission:
+
+| Method | Path | Result |
+| --- | --- | --- |
+| GET | `/api/organizations/{organizationId}/custom-domains` | `{enabled, subscription, domains}`; subscription is `active`, `required` or `unavailable` |
+| POST | same collection | `{hostname}` creates or returns a draft, `201`; requires an active subscription |
+| GET | `…/custom-domains/{id}` | Configuration, phase, readiness, error code, challenge expiry and DNS records |
+| POST | `…/custom-domains/{id}/verify` | Schedules a check and returns configuration, `202`; provider backoff remains enforced |
+| DELETE | `…/custom-domains/{id}` | Stops access, releases ownership and schedules cloud cleanup, `204` |
+
+Each configuration has `id`, `hostname`, `phase`, `ready`, `errorCode`,
+`challengeExpiresAt` and `dnsRecords` (`name`, `type`, `value`). Challenges and
+certificate DNS records appear here, not in portable bind/list responses.
+Read, delete and unbind remain usable after subscription loss. See the
+[DNS setup guide](../docs/concepts/networking.md#bring-your-own-domain).
 
 The exec, signal, resize, files, and metrics handlers are registered as
 catch-all reverse proxies to the box's assigned runner; the methods shown are

@@ -1306,7 +1306,8 @@ paths:
       summary: List the domains the organization holds
       description: |
         Every held hostname and its Box/App target, or null while unbound,
-        with the organization's allowance. Unbound domains still occupy slots.
+        with the organization's platform-domain allowance. Unbound platform
+        domains still occupy slots; custom domains do not consume this allowance.
         `domain_suffix` is the configured platform hostname suffix, or null
         when requests are unavailable; `min_length` applies to new claims only.
       tags: [Domains]
@@ -1379,11 +1380,16 @@ paths:
         organization return `domain_not_owned` (404), directing the caller to
         Dashboard > Domains to request a domain first. Owned names remain
         bindable independently of the configured suffix, minimum, or quota.
+        Custom domains additionally require an active subscription and a ready
+        Dashboard configuration with current DNS and HTTPS verification.
+        Binding checks persisted readiness; it does not perform a DNS challenge.
         The port is not declared public: the domain answers once the tunnel is
         public and the Box allows inbound access, in either order.
         A name bound to another port moves here; other names stay in place.
         Error codes: `region_not_supported` and `app_target_not_supported` (400).
         App binding is reserved and remains unsupported.
+        Custom-domain errors: `subscription_required` (403),
+        `subscription_not_ready` and `domain_not_ready` (409).
       tags: [Domains]
       requestBody:
         required: true
@@ -1400,14 +1406,25 @@ paths:
                 $ref: "#/components/schemas/Domain"
         "400":
           $ref: "#/components/responses/BadRequestError"
+        "403":
+          description: An active organization subscription is required for custom domains
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
         "404":
           $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
     delete:
       operationId: unbindDomain
       summary: Stop routing a domain
       description: |
         Stops routing the exact full hostname, independently of the configured
-        suffix. The organization keeps the name and it still occupies a slot.
+        suffix. The organization keeps the name; platform names still occupy
+        allowance slots. Custom-domain configuration and certificates are retained,
+        and unbind is allowed after subscription expiry. Delete custom domains
+        separately in Dashboard > Domains to release ownership and clean up HTTPS.
         New requests get 404; existing connections run until they close.
         The port's own URL stays public until revokeTunnel.
         Safe to repeat for an owned name; a name not owned by the caller is 404.
@@ -3137,11 +3154,11 @@ components:
             $ref: "#/components/schemas/Domain"
         limit:
           type: integer
-          description: How many domains the organization may hold, bound or not.
+          description: How many platform domains the organization may hold, bound or not; custom domains do not consume this allowance.
           example: 1
         used:
           type: integer
-          description: How many it holds now.
+          description: How many platform domains it holds now; the domains array also includes custom domains.
           example: 1
         remaining:
           type: integer
