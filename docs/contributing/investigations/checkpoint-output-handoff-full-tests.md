@@ -248,9 +248,16 @@ exactly two files, inspection, raw import to Paused, explicit resume and the
 catalog removal call. The same run repeated the managed/raw process-continuity
 checks and completed test-box cleanup.
 
-The Go/C cloud cases were not rerun. The earlier Python async/sync results remain
-valid; the last binding fix only changes Node inspection conversion. Complete
-cross-SDK and live-cloud qualification therefore remains partial.
+The Go and C SDK round trips passed on 2026-11-04 with the same production fixes.
+Their isolated harness completed in 685 seconds (exit 0). Both SDKs passed named
+capture, catalog get/list, managed restore to Paused, resume/pause, pair export
+and inspection, raw import to Paused, explicit resume and the catalog removal
+call. The run also repeated the managed/raw process-continuity assertions and
+completed test-box cleanup. No production changes were needed.
+
+Python async/sync, Node, Go and C have now each passed the isolated cloud-protocol
+round trip. The earlier Python results remain valid; the last binding fix only
+changes Node inspection conversion. Live-cloud qualification remains incomplete.
 
 The harness uses real native/SDK and API service code, PostgreSQL, Redis and KVM,
 with test seams for identity, image resolution, placement and commerce. It does
