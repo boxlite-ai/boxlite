@@ -94,8 +94,13 @@ export class RegistriesService {
 
   async update(organizationId: string, id: string, request: UpdateRegistryCredentialDto): Promise<RegistryCredential> {
     const store = this.enabledStore()
-    let replacementVersion: string | undefined
+    if (!(await this.credentials.findOneBy({ id, organizationId }))) {
+      throw new NotFoundException(`Registry credential ${id} not found`)
+    }
+    // Secret I/O must not hold a database connection or the credential's row lock.
+    const replacementVersion = await store.put(randomUUID(), request.password)
     let previousVersion: string | undefined
+    let callbackCompleted = false
     let result: { credential: RegistryCredential; previousVersion: string }
     try {
       result = await this.credentials.manager.transaction('READ COMMITTED', async (manager) => {
@@ -104,33 +109,29 @@ export class RegistriesService {
           lock: { mode: 'pessimistic_write', onLocked: 'nowait' },
         })
         if (!credential) throw new NotFoundException(`Registry credential ${id} not found`)
+        // Another rotation may have committed while the replacement was being written.
         previousVersion = credential.secretVersion
-        // Fresh storage names work with both Secret Manager and exclusive local files.
-        replacementVersion = await store.put(randomUUID(), request.password)
-        try {
-          await manager.update(
-            RegistryCredential,
-            { id, organizationId },
-            { username: request.username, secretVersion: replacementVersion },
-          )
-        } catch (error) {
-          // The callback has not returned, so TypeORM cannot have attempted COMMIT.
-          await this.destroyQuietly(replacementVersion)
-          replacementVersion = undefined
-          throw error
-        }
+        await manager.update(
+          RegistryCredential,
+          { id, organizationId },
+          { username: request.username, secretVersion: replacementVersion },
+        )
+        callbackCompleted = true
         return {
           credential: { ...credential, username: request.username, secretVersion: replacementVersion },
           previousVersion: credential.secretVersion,
         }
       })
     } catch (error) {
-      if (replacementVersion) {
+      if (callbackCompleted) {
         // A rejected COMMIT can have succeeded remotely. Preserve both versions
         // until the stored pointer can be reconciled; never destroy a live login.
         this.logger.warn(
           `Registry credential ${id} update outcome is unknown; reconcile secrets ${previousVersion} and ${replacementVersion} before cleanup`,
         )
+      } else {
+        // TypeORM has not reached COMMIT; clean up after the transaction releases its resources.
+        await this.destroyQuietly(replacementVersion)
       }
       if ((error as { code?: string }).code === '55P03') {
         throw new ConflictException(`Registry credential ${id} is in use by another request; retry update`)

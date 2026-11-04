@@ -211,10 +211,9 @@ describeIfDatabase('Registry credential mutations (integration, real Postgres)',
     'refuses concurrent %s while rotation owns the credential',
     async (operation) => {
       const gate = barrier()
-      store.put.mockImplementation(async () => {
-        await gate.pause()
-        return 'replacement-version'
-      })
+      const subscriber = { listenTo: () => RegistryCredential, afterUpdate: gate.pause }
+      deleterDb.subscribers.push(subscriber)
+      store.put.mockResolvedValueOnce('replacement-version').mockResolvedValueOnce('contender-version')
       const updating = outcome(registries.update(organization.id, credential.id, replacement))
       try {
         await reachedBeforeCompletion(gate, updating)
@@ -224,10 +223,11 @@ describeIfDatabase('Registry credential mutations (integration, real Postgres)',
             ? competing.update(organization.id, credential.id, replacement)
             : competing.delete(organization.id, credential.id)
         await expect(request).rejects.toBeInstanceOf(ConflictException)
-        expect(store.destroy).not.toHaveBeenCalled()
+        expect(store.destroy.mock.calls).toEqual(operation === 'update' ? [['contender-version']] : [])
       } finally {
         gate.release()
         await updating
+        deleterDb.subscribers.splice(deleterDb.subscribers.indexOf(subscriber), 1)
       }
       expect((await updating).error).toBeUndefined()
       expect(await creatorDb.getRepository(RegistryCredential).findOneByOrFail({ id: credential.id })).toMatchObject({
@@ -236,18 +236,71 @@ describeIfDatabase('Registry credential mutations (integration, real Postgres)',
     },
   )
 
+  it('allows deletion during a secret write, then cleans the replacement and returns 404', async () => {
+    const gate = barrier()
+    store.put.mockImplementation(async () => {
+      await gate.pause()
+      return 'replacement-version'
+    })
+    const updating = outcome(registries.update(organization.id, credential.id, replacement))
+    try {
+      await reachedBeforeCompletion(gate, updating)
+      const competing = new RegistriesService(creatorDb.getRepository(RegistryCredential), store)
+      await expect(competing.delete(organization.id, credential.id)).resolves.toBeUndefined()
+      expect(await creatorDb.getRepository(RegistryCredential).findOneBy({ id: credential.id })).toBeNull()
+    } finally {
+      gate.release()
+      await updating
+    }
+    expect((await updating).error).toBeInstanceOf(NotFoundException)
+    expect(store.destroy.mock.calls).toEqual([[credential.secretVersion], ['replacement-version']])
+  })
+
+  it('retires the version current under lock when another rotation commits during a secret write', async () => {
+    const gate = barrier()
+    store.put
+      .mockImplementationOnce(async () => {
+        await gate.pause()
+        return 'replacement-version'
+      })
+      .mockResolvedValueOnce('intermediate-version')
+    const updating = outcome(registries.update(organization.id, credential.id, replacement))
+    try {
+      await reachedBeforeCompletion(gate, updating)
+      const competing = new RegistriesService(creatorDb.getRepository(RegistryCredential), store)
+      await expect(
+        competing.update(organization.id, credential.id, {
+          username: 'intermediate-bot',
+          password: 'intermediate-token',
+        }),
+      ).resolves.toMatchObject({ secretVersion: 'intermediate-version' })
+      expect(store.destroy.mock.calls).toEqual([[credential.secretVersion]])
+    } finally {
+      gate.release()
+      await updating
+    }
+    expect((await updating).error).toBeUndefined()
+    expect(await creatorDb.getRepository(RegistryCredential).findOneByOrFail({ id: credential.id })).toMatchObject({
+      username: replacement.username,
+      secretVersion: 'replacement-version',
+    })
+    expect(store.destroy.mock.calls).toEqual([[credential.secretVersion], ['intermediate-version']])
+  })
+
   it('refuses rotation while deletion owns the credential', async () => {
     const gate = barrier()
-    store.destroy.mockImplementation(gate.pause)
+    store.destroy.mockImplementationOnce(gate.pause)
     const deleting = outcome(registries.delete(organization.id, credential.id))
     store.put.mockClear()
+    store.put.mockResolvedValue('replacement-version')
     try {
       await reachedBeforeCompletion(gate, deleting)
       const competing = new RegistriesService(creatorDb.getRepository(RegistryCredential), store)
       await expect(competing.update(organization.id, credential.id, replacement)).rejects.toBeInstanceOf(
         ConflictException,
       )
-      expect(store.put).not.toHaveBeenCalled()
+      expect(store.put).toHaveBeenCalledWith(expect.any(String), replacement.password)
+      expect(store.destroy).toHaveBeenCalledWith('replacement-version')
     } finally {
       gate.release()
       await deleting

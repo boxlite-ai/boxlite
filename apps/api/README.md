@@ -23,11 +23,15 @@ The credential ID, registry host, repository prefix, creator and creation time r
 
 Deletion still refuses credentials selected by non-destroyed Boxes.
 
-Rotation writes a fresh secret, updates the login and secret pointer under the existing PostgreSQL credential lock, then retires the old secret after commit.
+Rotation checks organization-scoped existence, then writes a fresh secret outside any database transaction.
+A short PostgreSQL transaction locks and rechecks the credential, reads its current secret version, and updates the login and pointer.
+After acknowledged commit, rotation retires the version read under lock; no secret-store call holds the update transaction open.
 This reuses Secret Manager and exclusive local files without a migration or new IAM permissions.
 Lock contention returns 409 for retry; another organization's credential returns 404 before any secret write.
 
-Pre-commit update failures clean up the replacement and roll back the login.
+Deletion or another rotation can finish while the replacement is being written.
+A credential deleted before the locked recheck returns 404 and cleans up the replacement; a concurrent rotation retires the version current at the lock.
+Transaction-start, lock and pre-commit update failures clean up the replacement after the transaction rejects, preserving the original failure.
 An uncertain COMMIT outcome retains both secrets and emits an `update outcome is unknown` warning; reconcile the stored pointer before retiring either version.
 A failed old-secret retirement emits `Could not destroy unused registry secret`; the committed update remains successful and cleanup needs retrying.
 

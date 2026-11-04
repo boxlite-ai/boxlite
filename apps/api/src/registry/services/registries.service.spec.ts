@@ -134,8 +134,12 @@ describe('RegistriesService', () => {
 
     it('updates only the login, then retires the old secret after commit', async () => {
       const { service, credentials, store, manager, calls } = build()
-      store.put.mockResolvedValue('version-2')
+      store.put.mockImplementation(async () => {
+        calls.push('put')
+        return 'version-2'
+      })
       credentials.manager.transaction = jest.fn(async (_isolation, callback) => {
+        calls.push('begin')
         const result = await callback(manager)
         calls.push('commit')
         return result
@@ -163,23 +167,44 @@ describe('RegistriesService', () => {
         repositoryPrefix: 'acme/',
         username: 'new-bot',
       })
-      expect(calls).toEqual(['update', 'commit', 'destroy'])
+      expect(calls).toEqual(['put', 'begin', 'update', 'commit', 'destroy'])
       expect(store.destroy).toHaveBeenCalledWith('version-1')
     })
 
     it('does not touch either secret when writing the replacement fails', async () => {
-      const { service, store, manager } = build()
+      const { service, credentials, store, manager } = build()
       store.put.mockRejectedValue(new Error('Secret store unavailable'))
       await expect(service.update(ORG, 'credential-1', replacement)).rejects.toThrow('Secret store unavailable')
+      expect(credentials.manager.transaction).not.toHaveBeenCalled()
       expect(manager.update).not.toHaveBeenCalled()
       expect(store.destroy).not.toHaveBeenCalled()
     })
 
     it('cleans up only the replacement on an update failure before COMMIT', async () => {
-      const { service, store, manager } = build()
+      const { service, credentials, store, manager, calls } = build()
       store.put.mockResolvedValue('version-2')
       manager.update.mockRejectedValue(new Error('Database update failed') as never)
+      credentials.manager.transaction = jest.fn(async (_isolation, callback) => {
+        try {
+          return await callback(manager)
+        } catch (error) {
+          calls.push('rollback')
+          throw error
+        }
+      }) as never
       await expect(service.update(ORG, 'credential-1', replacement)).rejects.toThrow('Database update failed')
+      expect(store.destroy.mock.calls).toEqual([['version-2']])
+      expect(calls).toEqual(['rollback', 'destroy'])
+    })
+
+    it('cleans the replacement if the transaction cannot start', async () => {
+      const { service, credentials, store } = build()
+      store.put.mockResolvedValue('version-2')
+      credentials.manager.transaction = jest.fn().mockRejectedValue(new Error('Connection unavailable'))
+
+      await expect(service.update(ORG, 'credential-1', replacement)).rejects.toThrow('Connection unavailable')
+
+      expect(store.put).toHaveBeenCalledWith(expect.any(String), replacement.password)
       expect(store.destroy.mock.calls).toEqual([['version-2']])
     })
 
