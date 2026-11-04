@@ -19,3 +19,11 @@ Copyright 2025 Daytona Platforms, Inc. All Rights Reserved.
 
 Upstream source commit:
 f982c45a42e52c98631002c7dc1df565c44d7aac
+
+Native VMM virtio-fs attribution:
+
+src/vmm/src/virtio/fs/ includes FUSE protocol and file-operation code adapted
+from boxlite-ai/libkrun commit e12b9b3780ffa8df9f3e1797b217d13453479167,
+originally derived from the Chromium OS project's FUSE implementation.
+Copyright 2019 The Chromium OS Authors. All rights reserved.
+The applicable BSD-3-Clause terms are in src/vmm/src/virtio/fs/LICENSE.

@@ -803,12 +803,14 @@ dependencies = [
 name = "boxlite-vmm"
 version = "0.12.0"
 dependencies = [
+ "bitflags 2.11.1",
  "boxlite-hypervisor",
  "imago",
  "libc",
  "linux-loader",
  "mio 1.2.0",
  "tempfile",
+ "thiserror 2.0.18",
  "tracing",
  "virtio-queue",
  "vm-memory 0.18.0",
