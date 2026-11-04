@@ -225,12 +225,7 @@ fn connection_command(
         } else {
             proxy.push_str(&format!(" --context={}", quote(&connection.context)));
         }
-        if prefix.is_empty() {
-            // Empty flags are invalid, but an empty environment value is ignored.
-            proxy = format!("env BOXLITE_REST_PATH_PREFIX='' {proxy}");
-        } else {
-            proxy.push_str(&format!(" --path-prefix={}", quote(prefix)));
-        }
+        proxy.push_str(&format!(" --path-prefix={}", quote(prefix)));
         proxy.push_str(&format!(" ssh --proxy -- {}", quote(id)));
         format!(
             "boxlite-{}-{id}",

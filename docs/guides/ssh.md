@@ -134,6 +134,8 @@ remove that box's credential directory when no longer needed.
 The generated command preserves a named context or an explicit URL, plus the
 routing prefix, while loading credentials normally at execution time. Named
 contexts reload their saved endpoint; URL selection uses default credentials.
+An empty routing prefix is explicitly pinned with `--path-prefix=''`; adding a
+prefix to the saved context later does not change the printed command's route.
 The command does not embed API keys or access tokens. Keep
 `BOXLITE_API_KEY` available if that is your authentication source. A scoped SSH
 hostname separates remote host-key records. Local runtime configuration is
