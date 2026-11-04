@@ -41,10 +41,10 @@ pub(crate) struct Timeouts {
 
 impl Timeouts {
     /// Long enough for a slow synchronous request, short enough that a stuck
-    /// device ends the VM within seconds.
+    /// device still ends the VM within minutes.
     pub(crate) const DEFAULT: Self = Self {
-        stop: Duration::from_secs(5),
-        shutdown: Duration::from_secs(5),
+        stop: Duration::from_secs(300),
+        shutdown: Duration::from_secs(300),
     };
 }
 

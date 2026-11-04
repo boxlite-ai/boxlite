@@ -410,8 +410,8 @@ replace the shared one without changing the transport, the devices or `Vm`.
 - **Generations.** Each slot is stopped, prepared, running, halted, stopping
   or failed. `prepare` opens a generation and clears its kicks; `stop` and
   `cancel_prepare` close it with its sources, and kicks and sources never
-  reach a later generation. `stop` waits up to 5 s for the event in flight and
-  never joins the thread.
+  reach a later generation. `stop` waits up to 300 s for the event in flight
+  and never joins the thread.
 - **Kicks.** `kick(index)` sets the queue's bit and wakes the poller only when
   the bit was clear. Each pass delivers one `QueueKick` per set bit, so kicks
   that arrive before their event runs coalesce, and one that arrives during
@@ -431,7 +431,7 @@ replace the shared one without changing the transport, the devices or `Vm`.
   `stop` that outlives its timeout fails the slot too. A poll error or a
   panic of the thread itself sends `DeviceFailed(Error::VirtioWorker)`.
 - **Shutdown.** `shutdown` closes every source, wakes the thread and waits up
-  to 5 s for it to exit before it joins it. A timeout reports
+  to 300 s for it to exit before it joins it. A timeout reports
   `Error::VirtioWorker` with `TimedOut`, and a later call retries.
 
 ## Chipset
