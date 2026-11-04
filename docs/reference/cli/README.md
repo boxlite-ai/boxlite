@@ -842,7 +842,7 @@ CONFIG := --ssh-config FILE
 ```
 
 Control the guest SSH server of a local box or a REST box (`--url`/`--context`).
-Local `setup` generates and saves client and host keys; complete `configure`
+`setup` generates and saves client and host keys on the client; complete `configure`
 continues to read supplied key files.
 
 These commands add no HTTP routes. Backend requirements differ:
@@ -850,8 +850,9 @@ These commands add no HTTP routes. Backend requirements differ:
 | Commands | Local backend | REST backend |
 |----------|---------------|--------------|
 | `configure`, `status`, `disable` | Existing SSH SDK operations | Requires SSH control; supported by `boxlite serve` |
-| `setup`, `proxy`, `enable` | CLI-managed credentials, stdio connection, and saved-configuration activation | Unsupported |
-| `forward` | Existing local tunnel implementation | Requires both SSH control and tunnel support; unavailable through `boxlite serve` |
+| `setup` | CLI-managed credentials and SSH configuration | Requires SSH control; supported by `boxlite serve` and cloud contexts |
+| `enable` | Activate saved configuration | Unsupported |
+| `proxy`, `forward` | Stdio connection or local listener through the existing tunnel | Requires both SSH control and tunnel support; unavailable through `boxlite serve` |
 
 | Subcommand | Effect | stdout |
 |------------|--------|--------|
@@ -861,7 +862,7 @@ These commands add no HTTP routes. Backend requirements differ:
 | `enable` | Enable saved configuration on a running local box; preserve healthy connections | `SshStatus` JSON |
 | `disable` | Stop SSH on a running box; never starts the box | `SshStatus` JSON |
 | `forward` | Read status; fail if disabled; forward to the port SSH actually bound | Bound address |
-| `proxy` | Connect stdin/stdout to enabled SSH on a running local box; never starts or enables it | SSH bytes only |
+| `proxy` | Read status, then connect stdin/stdout to enabled SSH; never configures or enables it | SSH bytes only |
 
 Configure SSH, then execute the printed command:
 
@@ -881,12 +882,23 @@ configured identity with its own saved/generated key.
 forwarding without reconfiguring SSH.
 
 Setup requires `ssh-keygen`, accepts no key flags, and saves `client_key` and
-`host_key` in `<home>/boxes/<box-id>/ssh/` (directory 0700, private files 0600).
-The client private key stays on the host; deleting the box removes it, and
-clone/export does not transfer the managed client identity. Invalid or incomplete
-saved keys fail without regeneration. Configuration failure retains generated keys
-for retry. The command uses absolute paths, the selected context, and the box ID;
-normal SSH host-key verification remains enabled.
+`host_key` in `<home>/boxes/<box-id>/ssh/` for local boxes, or
+`<home>/ssh/remote/<scope>/<box-id>/` for REST boxes (directory 0700, private files 0600).
+The remote scope is a SHA-256 namespace of the context, effective URL and routing
+prefix; changing any of these selects separate keys. Remote home is the credential
+home (`--home` / `BOXLITE_HOME` / `~/.boxlite`), independent of local `--config`.
+The client private key stays on the host; deleting a local box removes it, while
+remote keys remain for manual cleanup. Clone/export does not transfer the managed
+client identity. Invalid or incomplete saved keys fail without regeneration.
+Configuration failure retains generated keys
+for retry. The command uses absolute paths and the canonical box ID. For REST it
+preserves the selected named context or effective URL, plus the routing prefix,
+and uses a scoped SSH hostname to separate host-key records across contexts and endpoints.
+Authentication is reloaded through the usual stored credentials / `BOXLITE_API_KEY`
+selection; bearer tokens are never included in the command. A named context reloads
+its saved endpoint; URL selection uses default credentials, matching the CLI's
+mutually exclusive context/URL options. Normal SSH host-key verification remains
+enabled. See the [cloud workflow](../../guides/ssh.md#cli).
 
 An active local proxy holds the same runtime home lock as forward. Stop it before
 another local CLI command on that home. See the [SSH guide](../../guides/ssh.md#cli)
@@ -918,17 +930,19 @@ SSH host key fingerprint: SHA256:...
 Connect: ssh -p 52811 -l LOGIN 127.0.0.1
 ```
 
-`forward` requires the guest to listen on `0.0.0.0` or the guest IP.
+`forward` and `proxy` require the guest to listen on `0.0.0.0` or the guest IP.
 Ctrl-C closes the listener and its connections, then exits 0; guest SSH stays
 configured. A forwarding failure leaves the preceding configuration unchanged.
 
 - **Local boxes:** the foreground command holds the runtime home, so other local
   commands on that home fail until Ctrl-C. Exiting the CLI stops running boxes that
   are not detached, which ends their SSH; use `boxlite create` or `run -d`.
-- **REST boxes:** forwarding uses the box's public tunnel URL for the SSH port and
-  leaves it open on exit, so anyone reaching the URL can attempt SSH logins. Withdraw it
+- **REST boxes:** proxy/forward use the box's public tunnel URL for the SSH port and
+  leave it open on exit, so anyone reaching the URL can attempt SSH logins. Withdraw it
   with `boxlite network tunnel BOX PORT --revoke`. `boxlite serve` has no tunnel
-  route, so there `forward` fails after reading SSH status.
+  route, so there `proxy` and `forward` fail after reading SSH status even though
+  `setup` succeeds. Cloud tunnels require inbound access; CLI exit does not stop
+  the remote box.
 
 ---
 

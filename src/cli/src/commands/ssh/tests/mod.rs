@@ -486,16 +486,6 @@ async fn configure_posts_the_complete_file_configuration_once() {
     assert_eq!(sent, config);
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn setup_and_proxy_reject_remote_without_requests() {
-    let server = Server::start(vec![]).await;
-    for operation in ["setup", "proxy"] {
-        let error = server.run(&[operation, "box-1"]).await.unwrap_err();
-        assert!(error.to_string().contains("local runtime"));
-    }
-    assert!(server.requests().is_empty());
-}
-
 #[tokio::test]
 async fn setup_and_proxy_report_missing_runtime_configuration() {
     let temp = tempfile::tempdir().unwrap();

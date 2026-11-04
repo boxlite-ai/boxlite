@@ -87,7 +87,7 @@ boxlite ssh setup dev
 ```
 
 `setup` takes no key options. It generates Ed25519 client and host keys under
-`<home>/boxes/<box-id>/ssh/`, with a 0700 directory and 0600 private files.
+`<home>/boxes/<box-id>/ssh/` for local boxes, with a 0700 directory and 0600 private files.
 The client private key stays on the host. Subsequent setup reuses both identities;
 corrupt, incomplete, or unsafe key files cause an error instead of replacement.
 Setup calls the existing complete configuration API, enabling `box` on
@@ -105,14 +105,43 @@ ssh -o 'IdentityFile="/boxlite-home/boxes/BOX_ID/ssh/client_key"' -o IdentitiesO
 
 The actual command includes absolute paths, the selected context, and the box ID.
 It preserves normal SSH host-key verification. `ssh-keygen` must be installed.
-The local-only `proxy` command connects stdin/stdout to the enabled guest SSH
-listener without opening a local port. Diagnostics use stderr. It requires a
-running box and enabled SSH; it never starts the box or enables SSH.
+The `proxy` command connects stdin/stdout to the enabled guest SSH listener
+without opening a local port. Diagnostics use stderr. It reads status and refuses
+disabled SSH; it never configures or enables SSH.
 
-Client credentials belong to this host's box directory: deleting the box removes
+Local client credentials belong to this host's box directory: deleting the box removes
 them, and clone/export does not transfer the CLI-managed client key. Failed guest
 configuration retains generated keys for retry. Repeated setup disconnects existing
 clients, as complete configuration does.
+
+For a cloud box, select its existing connection context:
+
+```bash
+boxlite --context cloud ssh setup dev
+# Copy and run the complete printed ssh command.
+# Explicit endpoint/routing overrides also carry into the printed command:
+boxlite --url https://api.example.com --path-prefix team ssh setup dev
+```
+
+Setup uses the context's authentication and the same URL/prefix precedence as
+other commands. It stores keys on this machine under
+`<home>/ssh/remote/<scope>/<box-id>/`, isolated by context, endpoint and routing
+prefix. Repeating setup with the same selection reuses keys, including after a
+failed configure request. Deleting a remote box leaves these files on the client;
+remove that box's credential directory when no longer needed.
+
+The generated command preserves a named context or an explicit URL, plus the
+routing prefix, while loading credentials normally at execution time. Named
+contexts reload their saved endpoint; URL selection uses default credentials.
+The command does not embed API keys or access tokens. Keep
+`BOXLITE_API_KEY` available if that is your authentication source. A scoped SSH
+hostname separates remote host-key records. Local runtime configuration is
+ignored for cloud setup, and remote CLI exit does not stop the box.
+
+Cloud proxy needs enabled SSH, server tunnel support and inbound access. Setup
+configures SSH without opening a tunnel; proxy opens the public tunnel on
+connection. `boxlite serve` supports setup but has no tunnel endpoint for proxy.
+Remote `enable` remains unsupported; run setup again to apply its saved keys.
 
 For custom credentials, keep using `boxlite ssh configure dev --ssh-config ssh.json`
 or `boxlite ssh configure dev --host-key host_key --login alice --authorized-key alice.pub`.
@@ -137,7 +166,7 @@ against the same home: the runtime holds an exclusive home lock for the connecti
   Boxes from `boxlite create` and `run -d` keep running. Setup prints this warning
   before its connection command: successful configuration alone does not mean a
   non-detached box will remain available after setup exits.
-- Over REST, forwarding opens the box's public tunnel for the SSH port and leaves it
+- Over REST, proxy/forward open the box's public tunnel for the SSH port and leave it
   open, so anyone who reaches it can attempt a login and wake a stopped box; SSH keys
   remain the access control. Close it with `boxlite network tunnel BOX PORT --revoke`.
 
@@ -210,9 +239,9 @@ differences:
 Hosted servers running an older runtime may require configuration again after a
 restart. Forwarding fails while the listener is disabled.
 
-Forwarding uses the box's [public tunnel](#cli), which needs inbound access enabled on the box. Ending
-the local `boxlite ssh forward` leaves that tunnel open; revoke it with `boxlite
-network tunnel BOX PORT --revoke`.
+Proxy and forwarding use the box's [public tunnel](#cli), which needs inbound
+access enabled on the box. Ending the local `boxlite ssh proxy` or `forward`
+leaves that tunnel open; revoke it with `boxlite network tunnel BOX PORT --revoke`.
 
 ## Guest protocol and lifecycle
 

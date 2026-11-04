@@ -32,7 +32,7 @@ pub enum SshCommand {
     /// Every accepted configuration disconnects existing SSH clients.
     Configure(ConfigureArgs),
     /// Generate or reuse local keys, configure box@0.0.0.0:22, and print an SSH command.
-    /// Replaces the complete configuration and disconnects existing clients (local only).
+    /// Replaces the complete configuration and disconnects existing clients.
     Setup(BoxArgs),
     /// Print guest SSH status JSON without starting the box.
     Status(BoxArgs),
@@ -42,7 +42,7 @@ pub enum SshCommand {
     Disable(BoxArgs),
     /// Forward a local listener to already enabled guest SSH until Ctrl-C.
     Forward(ForwardArgs),
-    /// Connect stdin/stdout to enabled guest SSH for OpenSSH ProxyCommand (local only).
+    /// Connect stdin/stdout to enabled guest SSH for OpenSSH ProxyCommand.
     Proxy(BoxArgs),
 }
 
@@ -183,13 +183,6 @@ pub async fn execute(args: SshArgs, global: &GlobalFlags) -> Result<()> {
             forward(&sandbox, &status, args.listen).await
         }
     }
-}
-
-fn require_local(global: &GlobalFlags) -> Result<()> {
-    if global.targets_rest()? {
-        bail!("SSH setup and proxy require a local runtime");
-    }
-    Ok(())
 }
 
 /// The runtime is returned so it outlives the box handle for the whole command.
