@@ -39,6 +39,72 @@ func (p passwords) Read(_ context.Context, version string) (string, error) {
 	return password, nil
 }
 
+type passwordReaderFunc func(context.Context, string) (string, error)
+
+func (f passwordReaderFunc) Read(ctx context.Context, version string) (string, error) {
+	return f(ctx, version)
+}
+
+func TestSecretRetiredDuringChallengeRefreshesCredentialOnce(t *testing.T) {
+	for _, scenario := range []struct {
+		name       string
+		unreadable bool
+		forbidden  bool
+		status     int
+		reads      int
+	}{
+		{"rotated", false, false, http.StatusOK, 2},
+		{"replacement unreadable", true, false, http.StatusServiceUnavailable, 2},
+		{"refresh forbidden", false, true, http.StatusForbidden, 1},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			const version, password = "registry-credential-rotated", "rotated-test-token"
+			upstream := newStubUpstream(t)
+			router, proxy, plane, _ := privateProxy(t, upstream)
+			available := passwords{}
+			if !scenario.unreadable {
+				available[version] = password
+			}
+			reads := 0
+			proxy.credentials.secrets = passwordReaderFunc(func(ctx context.Context, version string) (string, error) {
+				reads++
+				return available.Read(ctx, version)
+			})
+			upstream.server.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/token" && r.Header.Get("Authorization") == "" {
+					// The lookup already chose the old version; retire it during the challenge round trip.
+					plane.logins.Store(acmeOrg+" ghcr.io acme/app", version)
+					if scenario.forbidden {
+						plane.hosting.Delete(runnerKey + " " + acmeOrg)
+					}
+				}
+				upstream.serve(w, r)
+			})
+
+			response := pull(router, http.MethodGet, privatePath, runnerKey)
+
+			if response.Code != scenario.status {
+				t.Fatalf("status = %d, want %d: %s", response.Code, scenario.status, response.Body.String())
+			}
+			if reads != scenario.reads {
+				t.Errorf("secret reads = %d, want %d", reads, scenario.reads)
+			}
+			if lookups := plane.lookups.Load(); lookups != 2 {
+				t.Errorf("credential lookups = %d, want 2", lookups)
+			}
+			exchanges := tokenRequests(upstream)
+			if scenario.status == http.StatusOK {
+				want := "Basic " + base64.StdEncoding.EncodeToString([]byte("acme-bot:"+password))
+				if len(exchanges) != 1 || exchanges[0].authorization != want {
+					t.Fatalf("exchanges = %+v, want one with the replacement login", exchanges)
+				}
+			} else if len(exchanges) != 0 {
+				t.Errorf("failed refresh exchanged %d tokens", len(exchanges))
+			}
+		})
+	}
+}
+
 // clock is a time a test moves by hand.
 type clock struct{ at time.Time }
 

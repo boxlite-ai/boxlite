@@ -144,6 +144,14 @@ func (p *registryProxy) forward(
 	}
 
 	login, err := p.credentials.loginFrom(ctx, credential)
+	if errors.Is(err, ErrCredentialUnavailable) {
+		// Rotation may have retired the selected version during the challenge round trip.
+		credential, err = p.credentials.lookup(ctx, from, route.Org, route.PublishedHost, route.Upstream.Repository)
+		if err != nil {
+			return nil, false, err
+		}
+		login, err = p.credentials.loginFrom(ctx, credential)
+	}
 	if err != nil {
 		return nil, false, err
 	}

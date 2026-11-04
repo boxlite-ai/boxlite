@@ -189,6 +189,46 @@ describe('updating a credential', () => {
     expect(mocks.resetUpdate).toHaveBeenCalled()
   })
 
+  it('keeps update actions disabled after closing an in-flight update', async () => {
+    let complete!: () => void
+    mocks.update.mockReturnValueOnce(new Promise<void>((resolve) => (complete = resolve)))
+    await renderPanel()
+    act(() => button('Update')?.click())
+    await fillAndSubmit({})
+    try {
+      act(() => button('Cancel')?.click())
+      expect(mocks.resetUpdate).toHaveBeenCalled()
+      expect(button('Update')?.disabled).toBe(true)
+      open()
+      expect(button('Connect')?.disabled).toBe(true)
+    } finally {
+      await act(async () => complete())
+    }
+    expect(button('Update')?.disabled).toBe(false)
+  })
+
+  it.each(['create', 'update'] as const)('keeps a newer form open when an earlier %s completes', async (operation) => {
+    let complete!: () => void
+    mocks[operation].mockReturnValueOnce(new Promise<void>((resolve) => (complete = resolve)))
+    await renderPanel()
+    if (operation === 'create') open()
+    else act(() => button('Update')?.click())
+    await fillAndSubmit({})
+    act(() => button('Cancel')?.click())
+    open()
+    act(() => {
+      typeInto(field('registry-username'), 'next-bot')
+      typeInto(field('registry-password'), 'next-token')
+    })
+
+    await act(async () => complete())
+
+    expect(document.getElementById('registry-username')).not.toBeNull()
+    expect(field('registry-username').value).toBe('next-bot')
+    expect(field('registry-password').value).toBe('next-token')
+    expect(button('Connect')?.disabled).toBe(false)
+  })
+
   it('hides update without write permission', async () => {
     state.canWrite = false
     await renderPanel()

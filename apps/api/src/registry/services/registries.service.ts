@@ -233,8 +233,10 @@ export class RegistriesService {
   private async destroyQuietly(secretVersion: string): Promise<void> {
     try {
       await this.enabledStore().destroy(secretVersion)
-    } catch {
-      this.logger.warn(`Could not destroy unused registry secret ${secretVersion}; retry cleanup`)
+    } catch (error) {
+      this.logger.warn(
+        `Could not destroy unused registry secret ${secretVersion}; retry cleanup: ${(error as Error)?.message ?? String(error)}`,
+      )
     }
   }
 }

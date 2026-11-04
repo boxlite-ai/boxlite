@@ -41,7 +41,7 @@ import { timeAgo } from '@/lib/format'
 import { conflictBoxIds } from '@/lib/image-ref'
 import { cn } from '@/lib/utils'
 import { OrganizationRolePermissionsEnum, RegistryCredential } from '@boxlite-ai/api-client'
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 
@@ -183,6 +183,9 @@ export function RegistriesPanel() {
   const [editing, setEditing] = useState<RegistryCredential | null>(null)
   const [form, setForm] = useState(EMPTY_FORM)
   const [pendingDelete, setPendingDelete] = useState<RegistryCredential | null>(null)
+  const [saving, setSaving] = useState(false)
+  const saveInFlight = useRef(false)
+  const formSession = useRef(0)
 
   // A box's pull error links here with the host it failed on.
   useEffect(() => {
@@ -203,6 +206,7 @@ export function RegistriesPanel() {
   // Closing the dialog, saved or not, clears the form and the mutation's state,
   // which would otherwise keep the submitted variables, secret included.
   const closeForm = () => {
+    formSession.current++
     setFormOpen(false)
     setEditing(null)
     setForm(EMPTY_FORM)
@@ -216,6 +220,11 @@ export function RegistriesPanel() {
 
   const handleSave = async (event: React.FormEvent) => {
     event.preventDefault()
+    // Resetting the mutation observer clears its password but does not cancel its request.
+    if (saveInFlight.current) return
+    saveInFlight.current = true
+    setSaving(true)
+    const session = formSession.current
     try {
       if (editing) {
         await updateRegistry.mutateAsync({
@@ -226,7 +235,7 @@ export function RegistriesPanel() {
         toast.success('Credential updated', {
           description: 'New pulls use the updated login. Pulls already in progress may finish with the previous login.',
         })
-        closeForm()
+        if (session === formSession.current) closeForm()
         return
       }
       await createRegistry.mutateAsync({
@@ -241,7 +250,7 @@ export function RegistriesPanel() {
       toast.success('Connected', {
         description: `Boxes can now pull from ${scope}. The first private pull is the test: nothing here can verify the token.`,
       })
-      closeForm()
+      if (session === formSession.current) closeForm()
     } catch (error) {
       if (error instanceof BoxliteError && /already exists/.test(error.message)) {
         toast.error(`${scope} already has a credential`, {
@@ -253,6 +262,9 @@ export function RegistriesPanel() {
         error,
         editing ? `Could not update the credential for ${form.registryHost}` : `Could not connect ${form.registryHost}`,
       )
+    } finally {
+      saveInFlight.current = false
+      setSaving(false)
     }
   }
 
@@ -326,7 +338,7 @@ export function RegistriesPanel() {
                         setForm({ ...credential, password: '' })
                         setFormOpen(true)
                       }}
-                      disabled={updateRegistry.isPending || deleteRegistry.isPending}
+                      disabled={saving || updateRegistry.isPending || deleteRegistry.isPending}
                       title={`Update the credential for ${credential.registryHost}`}
                       className="px-2 py-[5px] font-mono text-label uppercase text-muted-foreground transition-colors hover:text-foreground disabled:opacity-40"
                     >
@@ -340,7 +352,7 @@ export function RegistriesPanel() {
                       aria-label={`Remove the credential for ${credential.registryHost}`}
                       type="button"
                       onClick={() => setPendingDelete(credential)}
-                      disabled={deleteRegistry.isPending || updateRegistry.isPending}
+                      disabled={saving || deleteRegistry.isPending || updateRegistry.isPending}
                       title={`Remove the credential for ${credential.registryHost}`}
                     >
                       <Trash className="size-[15px]" />
@@ -462,7 +474,7 @@ export function RegistriesPanel() {
               <Button type="button" variant="outline" onClick={closeForm}>
                 Cancel
               </Button>
-              <Button type="submit" disabled={createRegistry.isPending || updateRegistry.isPending}>
+              <Button type="submit" disabled={saving || createRegistry.isPending || updateRegistry.isPending}>
                 {editing ? 'Save changes' : 'Connect'}
               </Button>
             </DialogFooter>

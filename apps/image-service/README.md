@@ -119,9 +119,10 @@ as an additional lifetime bound; credential versions are checked before private 
 Credential rotation commits the new username/secret pointer before retiring the old secret.
 Every private pull reads current metadata before selecting a bearer; a version mismatch forces a new token exchange with the replacement login.
 This works across replicas and when old-secret retirement fails; secret payloads are read only on token misses.
-Each private manifest/blob request adds one API lookup and fails closed during control-plane lookup outages, even with a warm token.
+Normally, each private manifest/blob request adds one API lookup and fails closed during control-plane lookup outages, even with a warm token.
 Anonymous/negative lookups retain their existing TTL; upstream-issued tokens themselves are not revoked.
-Requests already in flight may finish, and a lookup racing retirement may require retrying.
+If a version is retired during an authentication challenge, the proxy refreshes authorized metadata and retries the secret read once.
+A failed refresh or second read fails the pull; in-flight requests may still need a caller retry.
 Upgrade all proxy replicas before relying on this behavior; older replicas retain the previous cache delay.
 
 Unmodified takes one deliberate act. Go's HTTP transport offers `gzip` on any

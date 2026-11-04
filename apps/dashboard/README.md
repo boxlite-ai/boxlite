@@ -386,6 +386,8 @@ It requires registry write permission, preloads the username and leaves the mask
 The registry and repository prefix stay fixed; enter a replacement secret and choose **Save changes**.
 
 Closing or completing the form clears its secret; failed submissions preserve the form for retry.
+Closing a pending save clears inputs and mutation state without cancelling the request.
+Save and row mutation actions remain disabled until it settles; an earlier completion never closes a subsequently opened form.
 
 New private pulls check the current credential version and stop reusing old-version tokens after update commits.
 Pulls already in progress may finish; the upstream token itself is not revoked.

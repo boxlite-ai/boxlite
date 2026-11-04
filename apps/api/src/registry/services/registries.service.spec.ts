@@ -217,6 +217,7 @@ describe('RegistriesService', () => {
         secretVersion: 'version-2',
       })
       expect(warn).toHaveBeenCalledWith(expect.stringContaining('version-1'))
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('Cleanup unavailable'))
       warn.mockRestore()
     })
 

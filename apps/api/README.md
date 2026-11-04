@@ -35,14 +35,15 @@ Transaction-start, lock and pre-commit update failures clean up the replacement 
 An uncertain COMMIT outcome retains both secrets and emits an `update outcome is unknown` warning; reconcile the stored pointer before retiring either version.
 A failed old-secret retirement emits `Could not destroy unused registry secret`; the committed update remains successful and cleanup needs retrying.
 
-The warning identifies a version, never its password; the API still cannot read passwords or validate them upstream.
+The warning identifies a version and the cleanup error cause, never its password; the API cannot read registry passwords or validate them upstream.
 
 Before reusing a private bearer, each proxy queries the current credential metadata and compares its secret version with the cached token's version.
 After update commits, newly started pulls reject old-version bearers even if old-secret retirement fails.
 Secret payloads are read only on authentication challenges; unchanged credentials still reuse their bearer token.
 
-Each private manifest/blob request adds one control-plane lookup; lookup failures reject the pull even when a bearer is warm.
-Requests whose lookup preceded update may finish; a secret read racing retirement may need retrying.
+Normally, each private manifest/blob request adds one control-plane lookup; lookup failures reject the pull even when a bearer is warm.
+If a secret read races retirement, the proxy refreshes authorized metadata and retries that read once before failing the pull.
+Requests whose lookup preceded update may finish; another rotation during the retry can still require a caller retry.
 The upstream token itself is not revoked, and anonymous lookup caching keeps its existing TTL.
 
 Deploy the API and proxy before the dashboard; older proxies retain the prior five-minute cache delay until upgraded.
