@@ -215,6 +215,7 @@ impl BoxBackend for RestBox {
             // Start responsive and back off to 1s: a long-running session must
             // not generate a status request every 100ms.
             let mut delay = std::time::Duration::from_millis(100);
+            let mut failures = 0u32;
             loop {
                 let response = tokio::select! {
                     _ = tx.closed() => return,
@@ -239,7 +240,9 @@ impl BoxBackend for RestBox {
                         }
                         return;
                     }
-                    Ok(_) => {}
+                    Ok(_) => {
+                        failures = 0;
+                    }
                     Err(BoxliteError::NotFound(_)) => {
                         // The server no longer retains this session; the waiter
                         // cannot observe an outcome any more.
@@ -247,12 +250,21 @@ impl BoxBackend for RestBox {
                         return;
                     }
                     Err(error) => {
-                        // A transport blip is not a process exit. Keep polling:
-                        // the server still retains the status, so giving up would
-                        // turn a short outage into a lost outcome for a caller
-                        // that never asked to stop observing. The loop ends on a
-                        // terminal status, on `NotFound` above, or when the last
-                        // receiver is dropped (the `tx.closed()` arms).
+                        // A transport blip is not a process exit. Retry with the
+                        // same backoff, then give up rather than pinning the
+                        // handle on a dead endpoint: `wait()` answers with an
+                        // explicit "no longer observable" error the caller can
+                        // act on. A single blip therefore never invents an exit,
+                        // which is what this loop has to guarantee.
+                        failures += 1;
+                        if failures >= 5 {
+                            tracing::warn!(
+                                %path,
+                                %error,
+                                "Recovered execution status unavailable; giving up"
+                            );
+                            return;
+                        }
                         tracing::warn!(
                             %path,
                             %error,
