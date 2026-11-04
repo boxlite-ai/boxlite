@@ -329,7 +329,7 @@ host runtime, the shim, and the guest agent.
   hard link itself. tar-rs's `unpack_in` would take the place from the entry's own name, so
   extraction repeats its checks: missing parents are created only inside the destination, a parent
   that resolves outside it is refused, and a hard link's target is looked up in the destination. A
-  directory streamed to a missing destination becomes it, as `docker cp` lands it: when the first
+  directory copied to a missing destination becomes it, as `docker cp` lands it: when the first
   entry is a directory `X/`, `X/a` lands as `a`. Entries are written as they are read, so a later
   entry outside `X/` fails the copy as the caller's error, keeping what was written.
 
