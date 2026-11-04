@@ -535,7 +535,6 @@ impl MmioTransport {
             event_idx,
             indirect,
             Arc::clone(&self.memory),
-            worker.requeue,
         )
         .map_err(DeviceError::from)?;
 

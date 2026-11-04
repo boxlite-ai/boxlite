@@ -392,15 +392,7 @@ fn activation(
 ) -> ActivationContext {
     let memory = Arc::new(GuestMemoryMmap::from_ranges(&[(GuestAddress(0), 0x10000)]).unwrap());
     let queues = QUEUES.iter().map(|&max| Queue::new(max).unwrap()).collect();
-    let queues = VirtQueues::prepare(
-        queues,
-        QUEUES,
-        false,
-        false,
-        Arc::clone(&memory),
-        worker.requeue,
-    )
-    .unwrap();
+    let queues = VirtQueues::prepare(queues, QUEUES, false, false, Arc::clone(&memory)).unwrap();
     ActivationContext {
         memory,
         queues,
@@ -1165,7 +1157,6 @@ impl WorkerRuntime for FakeRuntime {
         Ok(WorkerContext {
             events: Arc::new(NoRegistrar),
             waker: Arc::new(|| {}),
-            requeue: Arc::new(|_| {}),
         })
     }
 

@@ -762,26 +762,20 @@ fn a_backend_callback_can_deregister_its_own_source() {
 }
 
 #[test]
-fn stale_continuations_cannot_enter_a_reactivated_or_closed_generation() {
+fn kicks_do_not_enter_a_stopped_or_closed_generation() {
     let events = EventLoop::new().unwrap();
     let runtime = Arc::new(SharedRuntime::new(events.sender(), Timeouts::DEFAULT).unwrap());
     let device = add(&runtime, Box::new(|_| Ok(())));
-    let old = device.worker.prepare().unwrap();
-    (old.requeue)(0);
+    // A prepared generation takes kicks; a kick that arrives before `start` is
+    // therefore delivered to the first pass rather than lost.
+    device.worker.prepare().unwrap();
+    device.worker.kick(0);
     device.worker.start().unwrap();
-    (old.requeue)(1);
-    assert_eq!(next(&device).0, DeviceEvent::QueueKick(1));
+    assert_eq!(next(&device).0, DeviceEvent::QueueKick(0));
     device.worker.stop().unwrap();
-    (old.requeue)(2);
-    let fresh = device.worker.prepare().unwrap();
-    device.worker.start().unwrap();
-    (old.requeue)(3);
-    (fresh.requeue)(4);
-    assert_eq!(next(&device).0, DeviceEvent::QueueKick(4));
-    device.worker.stop().unwrap();
-    assert!(device.events.try_recv().is_err());
+    device.worker.kick(1);
     runtime.shutdown().unwrap();
-    (fresh.requeue)(0);
+    device.worker.kick(2);
     assert!(device.events.try_recv().is_err());
 }
 
@@ -948,126 +942,7 @@ fn ring_used(memory: &GuestMemoryMmap, index: u16) -> u16 {
 }
 
 #[test]
-fn real_ring_refill_continues_without_guest_kicks_after_current_pass_work() {
-    let events = EventLoop::new().unwrap();
-    let runtime = Arc::new(SharedRuntime::new(events.sender(), Timeouts::DEFAULT).unwrap());
-    let (entered_tx, entered_rx) = mpsc::channel();
-    let (release_tx, release_rx) = mpsc::channel();
-    let blocker = add(
-        &runtime,
-        Box::new(move |_| {
-            entered_tx.send(()).unwrap();
-            release_rx.recv_timeout(WAIT).unwrap();
-            Ok(())
-        }),
-    );
-    blocker.worker.prepare().unwrap();
-    blocker.worker.start().unwrap();
-    blocker.worker.kick(0);
-    entered_rx.recv_timeout(WAIT).unwrap();
-
-    let a_memory = Arc::new(GuestMemoryMmap::from_ranges(&[(GuestAddress(0), 0x10000)]).unwrap());
-    let b_memory = Arc::new(GuestMemoryMmap::from_ranges(&[(GuestAddress(0), 0x10000)]).unwrap());
-    let (observed_tx, observed_rx) = mpsc::channel();
-    let b_worker = Arc::new(Mutex::new(None::<Arc<dyn WorkerControl>>));
-    let kick_b = b_worker.clone();
-    let (refill_tx, refill_rx) = mpsc::channel();
-    let (refilled_tx, refilled_rx) = mpsc::channel();
-    let refill_memory = a_memory.clone();
-    let producer = thread::spawn(move || {
-        for head in 3..6 {
-            refill_rx.recv_timeout(WAIT).unwrap();
-            ring_publish(&refill_memory, 0, head);
-            refilled_tx.send(()).unwrap();
-        }
-    });
-    let (mut a, a_control) = ring_device(
-        &runtime,
-        "a",
-        &a_memory,
-        None,
-        Box::new(move |index, head| {
-            if index == 0 && head < 3 {
-                refill_tx.send(()).unwrap();
-                refilled_rx.recv_timeout(WAIT).unwrap();
-                if head == 0 {
-                    // This bit is new during A's callback. It must wait until
-                    // B's already-ready backend source has been delivered.
-                    kick_b.lock().unwrap().as_ref().unwrap().kick(1);
-                }
-            }
-        }),
-        observed_tx.clone(),
-    );
-    let (backend, mut backend_writer) = UnixStream::pair().unwrap();
-    let (mut b, b_control) = ring_device(
-        &runtime,
-        "b",
-        &b_memory,
-        Some(backend),
-        Box::new(|_, _| {}),
-        observed_tx,
-    );
-    *b_worker.lock().unwrap() = Some(b_control.clone());
-    ring_activate(&mut a);
-    ring_activate(&mut b);
-    for head in 0..3 {
-        ring_publish(&a_memory, 0, head);
-    }
-    ring_publish(&a_memory, 1, 0);
-    ring_publish(&b_memory, 0, 0);
-    ring_publish(&b_memory, 1, 0);
-    backend_writer.write_all(b"ready backend").unwrap();
-    a.write(0x050, &0_u32.to_le_bytes());
-    a.write(0x050, &1_u32.to_le_bytes());
-    b.write(0x050, &0_u32.to_le_bytes());
-    release_tx.send(()).unwrap();
-
-    let mut observed = Vec::new();
-    for _ in 0..10 {
-        // A one-second poll timeout cannot supply normal progress here.
-        observed.push(
-            observed_rx
-                .recv_timeout(Duration::from_millis(500))
-                .unwrap(),
-        );
-    }
-    assert_eq!(observed[0], ("a", DeviceEvent::QueueKick(0), 0));
-    assert_eq!(observed[1], ("a", DeviceEvent::QueueKick(1), 0));
-    assert_eq!(observed[2], ("b", DeviceEvent::QueueKick(0), 0));
-    assert!(matches!(
-        observed[3],
-        ("b", DeviceEvent::BackendReady(_), u16::MAX)
-    ));
-    assert_eq!(observed[4], ("a", DeviceEvent::QueueKick(0), 1));
-    assert_eq!(observed[5], ("b", DeviceEvent::QueueKick(1), 0));
-    assert_eq!(
-        observed[6..],
-        [
-            ("a", DeviceEvent::QueueKick(0), 2),
-            ("a", DeviceEvent::QueueKick(0), 3),
-            ("a", DeviceEvent::QueueKick(0), 4),
-            ("a", DeviceEvent::QueueKick(0), 5),
-        ]
-    );
-    producer.join().unwrap();
-    a_control.stop().unwrap();
-    b_control.stop().unwrap();
-    assert_eq!(ring_used(&a_memory, 0), 6);
-    assert_eq!(ring_used(&a_memory, 1), 1);
-    assert_eq!(ring_used(&b_memory, 0), 1);
-    assert_eq!(ring_used(&b_memory, 1), 1);
-    for head in 0..6 {
-        assert_eq!(
-            u32::from_le(a_memory.read_obj(GuestAddress(0x4000 + head * 4)).unwrap()),
-            head as u32
-        );
-    }
-    runtime.shutdown().unwrap();
-}
-
-#[test]
-fn real_ring_stop_finishes_only_the_admitted_chain_before_reset() {
+fn real_ring_stop_waits_for_the_running_callback_then_admits_nothing() {
     let events = EventLoop::new().unwrap();
     let runtime = Arc::new(SharedRuntime::new(events.sender(), Timeouts::DEFAULT).unwrap());
     let memory = Arc::new(GuestMemoryMmap::from_ranges(&[(GuestAddress(0), 0x10000)]).unwrap());
@@ -1107,8 +982,13 @@ fn real_ring_stop_finishes_only_the_admitted_chain_before_reset() {
     ring_publish(&memory, 0, 3);
     release_tx.send(()).unwrap();
     stop.join().unwrap().unwrap();
-    assert_eq!(observed_rx.recv_timeout(WAIT).unwrap().2, 0);
-    assert_eq!(ring_used(&memory, 0), 1);
+    // The callback that was already running drained every chain it found,
+    // including the one the guest published while the stop was waiting.
+    let observed: Vec<u16> = (0..4)
+        .map(|_| observed_rx.recv_timeout(WAIT).unwrap().2)
+        .collect();
+    assert_eq!(observed, [0, 1, 2, 3]);
+    assert_eq!(ring_used(&memory, 0), 4);
     assert!(observed_rx.try_recv().is_err());
     transport.write(0x070, &0_u32.to_le_bytes());
     memory.write_obj(0_u16, GuestAddress(0x8002)).unwrap();

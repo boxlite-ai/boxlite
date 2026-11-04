@@ -207,7 +207,6 @@ fn activation_with(events: Arc<dyn EventRegistrar>, waker: Waker) -> ActivationC
         false,
         false,
         Arc::clone(&memory),
-        Arc::new(|_| {}),
     )
     .unwrap();
     ActivationContext {

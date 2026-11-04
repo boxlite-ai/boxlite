@@ -107,8 +107,6 @@ pub(crate) struct WorkerContext {
     pub(crate) events: Arc<dyn EventRegistrar>,
     /// Wakes the workers' poller.
     pub(crate) waker: Waker,
-    /// Requeues backlog only while this generation is running.
-    pub(crate) requeue: Arc<dyn Fn(u16) + Send + Sync>,
 }
 
 /// Drives one device's generation in the [`worker::WorkerRuntime`]. The transport

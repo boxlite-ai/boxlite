@@ -112,7 +112,6 @@ fn context(
         false,
         false,
         Arc::clone(memory),
-        Arc::new(|_| {}),
     )
     .unwrap();
     ActivationContext {
@@ -760,15 +759,8 @@ fn report_hva_aliasing_control_gpa_is_rejected_before_any_reclaim() {
     queues[0]
         .try_set_desc_table_address(GuestAddress(alias_gpa))
         .unwrap();
-    ctx.queues = VirtQueues::prepare(
-        queues,
-        SPEC.queue_max,
-        false,
-        false,
-        Arc::clone(&memory),
-        Arc::new(|_| {}),
-    )
-    .unwrap();
+    ctx.queues =
+        VirtQueues::prepare(queues, SPEC.queue_max, false, false, Arc::clone(&memory)).unwrap();
     let mut balloon = VirtioBalloon::new().unwrap();
     balloon.set_features(REPORTING).unwrap();
     balloon.activate(ctx).unwrap();
@@ -812,15 +804,8 @@ fn activation_rejects_a_control_table_spanning_adjacent_regions() {
     queues[0]
         .try_set_desc_table_address(GuestAddress(RAM_LEN as u64 - 64))
         .unwrap();
-    ctx.queues = VirtQueues::prepare(
-        queues,
-        SPEC.queue_max,
-        false,
-        false,
-        Arc::clone(&memory),
-        Arc::new(|_| {}),
-    )
-    .unwrap();
+    ctx.queues =
+        VirtQueues::prepare(queues, SPEC.queue_max, false, false, Arc::clone(&memory)).unwrap();
     let mut balloon = VirtioBalloon::new().unwrap();
     balloon.set_features(REPORTING).unwrap();
     assert!(matches!(

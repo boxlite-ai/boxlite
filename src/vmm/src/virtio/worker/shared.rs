@@ -296,17 +296,15 @@ impl Shared {
     }
 
     /// Coalesces a kick under the generation admission lock.
-    fn enqueue(&self, slot: &Slot, index: u16, generation: Option<u64>) {
+    fn enqueue(&self, slot: &Slot, index: u16) {
         if usize::from(index) >= MAX_QUEUES {
             tracing::debug!(index, "ignoring a kick past the last queue");
             return;
         }
         let state = slot.lock();
-        let admitted = match generation {
-            Some(generation) => state.phase == Phase::Running && state.generation == generation,
-            None => matches!(state.phase, Phase::Prepared | Phase::Running),
-        };
-        if self.closed.load(Ordering::SeqCst) || !admitted {
+        if self.closed.load(Ordering::SeqCst)
+            || !matches!(state.phase, Phase::Prepared | Phase::Running)
+        {
             return;
         }
         let bit = 1_u32 << index;
@@ -456,18 +454,9 @@ impl WorkerRuntime for SharedRuntime {
             generation: state.generation,
         });
         let waker = Arc::clone(&self.shared.waker);
-        let shared = Arc::downgrade(&self.shared);
-        let continuation_slot = Arc::downgrade(&slot);
-        let generation = state.generation;
         Ok(WorkerContext {
             events,
             waker: Arc::new(move || wake(&waker)),
-            requeue: Arc::new(move |index| {
-                if let (Some(shared), Some(slot)) = (shared.upgrade(), continuation_slot.upgrade())
-                {
-                    shared.enqueue(&slot, index, Some(generation));
-                }
-            }),
         })
     }
 
@@ -489,7 +478,7 @@ impl WorkerRuntime for SharedRuntime {
     }
 
     fn kick(&self, slot: SlotId, index: u16) {
-        self.shared.enqueue(&self.slot(slot), index, None);
+        self.shared.enqueue(&self.slot(slot), index);
     }
 
     fn stop(&self, slot: SlotId) -> Result<(), DeviceError> {
