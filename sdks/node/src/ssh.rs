@@ -45,7 +45,7 @@ impl fmt::Debug for JsSshAccount {
             .finish()
     }
 }
-/// Complete guest SSH configuration; keys are never persisted by the runtime.
+/// Complete guest SSH configuration; credentials persist on the container disk.
 #[napi(object)]
 pub struct JsSshConfig {
     pub listen_address: String,

@@ -1,48 +1,42 @@
 use crate::service::server::GuestServer;
-use boxlite_shared::{
-    Ssh, SshConfigureRequest, SshConfigureResponse, SshDisableRequest, SshDisableResponse,
-    SshStatusRequest, SshStatusResponse,
-};
+use boxlite_shared::{Ssh, SshControlRequest, SshControlResponse};
 use tonic::{Request, Response, Status};
 
 #[tonic::async_trait]
 impl Ssh for GuestServer {
-    async fn configure(
+    async fn control(
         &self,
-        request: Request<SshConfigureRequest>,
-    ) -> Result<Response<SshConfigureResponse>, Status> {
+        request: Request<SshControlRequest>,
+    ) -> Result<Response<SshControlResponse>, Status> {
+        let request = request.into_inner();
+        if request.enable.is_none() && request.config.is_none() {
+            return Ok(Response::new(SshControlResponse {
+                status: Some(self.ssh_manager.status().await),
+            }));
+        }
         if !self.init_state.lock().await.initialized {
             return Err(Status::failed_precondition(
                 "Guest.Init must complete before SSH is configured",
             ));
         }
-        let config = request
-            .into_inner()
-            .config
-            .ok_or_else(|| Status::invalid_argument("SSH config is required"))?;
-        Ok(Response::new(SshConfigureResponse {
-            status: Some(
-                self.ssh_manager
-                    .configure(config)
-                    .await
-                    .map_err(|error| *error)?,
-            ),
-        }))
-    }
-    async fn status(
-        &self,
-        _: Request<SshStatusRequest>,
-    ) -> Result<Response<SshStatusResponse>, Status> {
-        Ok(Response::new(SshStatusResponse {
-            status: Some(self.ssh_manager.status().await),
-        }))
-    }
-    async fn disable(
-        &self,
-        _: Request<SshDisableRequest>,
-    ) -> Result<Response<SshDisableResponse>, Status> {
-        Ok(Response::new(SshDisableResponse {
-            status: Some(self.ssh_manager.disable().await.map_err(|error| *error)?),
+        if self.shutting_down.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(Status::failed_precondition("guest is shutting down"));
+        }
+        let guest = self
+            .ssh_manager
+            .guest()
+            .ok_or_else(|| Status::internal("SSH manager is not attached"))?;
+        let status = tokio::spawn(async move {
+            guest
+                .ssh_manager
+                .control(request.enable, request.config)
+                .await
+        })
+        .await
+        .map_err(|_| Status::internal("SSH operation failed"))?
+        .map_err(|error| *error)?;
+        Ok(Response::new(SshControlResponse {
+            status: Some(status),
         }))
     }
 }

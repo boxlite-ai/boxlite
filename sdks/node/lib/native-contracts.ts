@@ -555,7 +555,7 @@ export interface JsSshAccount {
   ca?: JsSshCaConfig;
 }
 
-/** Complete guest SSH configuration. Keys are never persisted by the runtime. */
+/** Complete guest SSH configuration; credentials persist on the container disk. */
 export interface JsSshConfig {
   listenAddress: string;
   hostPrivateKey: string;

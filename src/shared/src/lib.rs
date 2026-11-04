@@ -101,7 +101,7 @@ mod tests {
     #[test]
     fn ssh_configuration_legacy_fields_decode_without_config() {
         use prost::Message;
-        let decoded = super::SshConfigureRequest::decode(LEGACY_SSH_CONFIGURATION)
+        let decoded = super::SshControlRequest::decode(LEGACY_SSH_CONFIGURATION)
             .expect("legacy string fields must be ignored, not decoded as SshConfig");
         assert!(decoded.config.is_none());
     }
@@ -109,8 +109,9 @@ mod tests {
     #[test]
     fn ssh_configuration_uses_wire_tag_four() {
         use prost::Message;
-        let request = super::SshConfigureRequest {
+        let request = super::SshControlRequest {
             config: Some(super::SshConfig::default()),
+            enable: None,
         };
         assert_eq!(request.encode_to_vec(), [0x22, 0x00]);
     }
@@ -141,7 +142,7 @@ mod tests {
             [LEGACY_SSH_CONFIGURATION, current].concat(),
             [current.as_slice(), LEGACY_SSH_CONFIGURATION].concat(),
         ] {
-            let decoded = super::SshConfigureRequest::decode(wire.as_slice())
+            let decoded = super::SshControlRequest::decode(wire.as_slice())
                 .expect("new configuration must decode alongside legacy fields");
             assert_eq!(
                 decoded.config,
@@ -156,7 +157,7 @@ mod tests {
     #[test]
     fn ssh_configuration_wire_roundtrip_redacts_credentials() {
         use prost::Message;
-        let request = super::SshConfigureRequest {
+        let request = super::SshControlRequest {
             config: Some(super::SshConfig {
                 listen_address: "127.0.0.1:2222".into(),
                 host_private_key: "test-only-private-marker".into(),
@@ -169,9 +170,9 @@ mod tests {
                     }),
                 }],
             }),
+            enable: None,
         };
-        let decoded =
-            super::SshConfigureRequest::decode(request.encode_to_vec().as_slice()).unwrap();
+        let decoded = super::SshControlRequest::decode(request.encode_to_vec().as_slice()).unwrap();
         assert_eq!(request, decoded);
         let config = decoded.config.as_ref().unwrap();
         let account = &config.accounts[0];
