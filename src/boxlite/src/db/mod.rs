@@ -115,10 +115,11 @@ impl Database {
                 // Already at current version - nothing to do
             }
             Some(v) if v > schema::SCHEMA_VERSION => {
-                // Database is newer than this process - user needs to upgrade boxlite
+                // Database is newer than this process - user needs a compatible SDK.
                 return Err(BoxliteError::Database(format!(
                     "Schema version mismatch: database has v{}, process expects v{}. \
-                     Upgrade boxlite to a newer version.",
+                     Upgrade this SDK to a compatible version. Otherwise, use a new BOXLITE_HOME; \
+                     existing boxes, images, and caches will be unavailable.",
                     v,
                     schema::SCHEMA_VERSION
                 )));
@@ -347,7 +348,9 @@ mod tests {
             Err(e) => {
                 let err = e.to_string();
                 assert!(err.contains("Schema version mismatch"));
-                assert!(err.contains("Upgrade boxlite"));
+                assert!(err.contains("Upgrade this SDK to a compatible version"));
+                assert!(err.contains("use a new BOXLITE_HOME"));
+                assert!(err.contains("existing boxes, images, and caches will be unavailable"));
             }
             Ok(_) => panic!("expected error"),
         }
