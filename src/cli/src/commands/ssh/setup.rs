@@ -7,7 +7,7 @@ use std::process::{Command, Stdio};
 
 use anyhow::{Context, Result, bail};
 use boxlite::runtime::layout::{FilesystemLayout, FsLayoutConfig};
-use boxlite::{SshAccount, SshConfig};
+use boxlite::{LiteBox, SshAccount, SshConfig};
 
 use crate::cli::GlobalFlags;
 
@@ -17,6 +17,15 @@ pub(super) async fn execute(target: &str, global: &GlobalFlags) -> Result<()> {
     let home = options.home_dir.clone();
     let runtime = global.create_runtime_with_options(options)?;
     let sandbox = runtime.get(target).await?.context("No such box")?;
+    println!(
+        "{}",
+        configure(&sandbox, &home, &global.resolved_context()).await?
+    );
+    Ok(())
+}
+
+/// Apply managed credentials and describe how to connect after CLI exit.
+async fn configure(sandbox: &LiteBox, home: &Path, context: &str) -> Result<String> {
     let home = fs::canonicalize(home).context("resolve runtime home")?;
     let layout = FilesystemLayout::new(home.clone(), FsLayoutConfig::without_bind_mount());
     let directory = layout
@@ -29,16 +38,15 @@ pub(super) async fn execute(target: &str, global: &GlobalFlags) -> Result<()> {
         &home,
         sandbox.id().as_str(),
         &private_key,
-        &global.resolved_context(),
+        context,
     )?;
     let config = tokio::task::spawn_blocking(move || managed_config(&directory)).await??;
     sandbox.ssh().configure(config).await?;
-    println!(
-        "SSH is ready for box {}.\n\nPrivate key: {}\nLogin: box\nGuest address: 0.0.0.0:22\n\nCopy and run the following command to enter the box:\n\n  {command}\n",
+    Ok(format!(
+        "SSH configured for box {}.\n\nPrivate key: {}\nLogin: box\nGuest address: 0.0.0.0:22\n\nWarning: CLI exit stops non-detached boxes. The connection command requires a running detached box (created with `boxlite create` or `boxlite run -d`).\n\nCopy and run the following command to enter a running detached box:\n\n  {command}\n",
         sandbox.name().unwrap_or(sandbox.id().as_str()),
         private_key.display(),
-    );
-    Ok(())
+    ))
 }
 
 fn managed_config(directory: &Path) -> Result<SshConfig> {

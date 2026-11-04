@@ -391,10 +391,6 @@ async fn ssh_local_setup_enable_and_restart() {
             .args(["ssh", operation, &id]);
         command
     };
-    assert!(
-        !ssh("enable").output().unwrap().status.success(),
-        "enable needs saved configuration"
-    );
     let key_dir = ctx.home.join("boxes").join(&id).join("ssh");
     let client_key = key_dir.join("client_key");
     // Fail after generating the first key: no incomplete directory is published.
@@ -424,6 +420,10 @@ async fn ssh_local_setup_enable_and_restart() {
     );
     let retry_key = std::fs::read(&client_key).expect("failed configure retains credentials");
     ctx.new_cmd().args(["start", &id]).assert().success();
+    assert!(
+        !ssh("enable").output().unwrap().status.success(),
+        "enable needs saved configuration"
+    );
     let setup = || {
         let output = ssh("setup").output().unwrap();
         assert!(
@@ -578,6 +578,51 @@ async fn ssh_local_setup_enable_and_restart() {
         output_status(&ssh("status").output().unwrap(), "setup after restart").host_key_fingerprint,
         first.host_key_fingerprint
     );
+    ctx.cleanup_box(&id);
+}
+
+#[tokio::test]
+async fn ssh_setup_warns_that_non_detached_boxes_stop_on_exit() {
+    let ctx = common::boxlite();
+    let runtime = boxlite::BoxliteRuntime::new(boxlite::BoxliteOptions {
+        home_dir: ctx.home.clone(),
+        image_registries: boxlite_test_utils::test_registries(),
+        ..Default::default()
+    })
+    .unwrap();
+    let sandbox = runtime
+        .create(
+            boxlite::BoxOptions {
+                rootfs: boxlite::RootfsSpec::Image("alpine:latest".into()),
+                detach: false,
+                auto_delete: Some(0),
+                ..Default::default()
+            },
+            None,
+        )
+        .await
+        .unwrap();
+    let id = sandbox.id().to_string();
+    drop(sandbox);
+    drop(runtime);
+
+    let output = ctx.new_cmd().args(["ssh", "setup", &id]).output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let warning = stdout
+        .find("CLI exit stops non-detached boxes")
+        .expect("setup must warn that CLI exit stops non-detached boxes");
+    let command = stdout.find("  ssh ").expect("connection command");
+    assert!(
+        warning < command,
+        "warn before presenting the connection command"
+    );
+    assert!(!stdout.contains("SSH is ready"));
+    ctx.new_cmd().args(["ssh", "proxy", &id]).assert().failure();
     ctx.cleanup_box(&id);
 }
 

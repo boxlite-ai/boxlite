@@ -356,8 +356,8 @@ async fn route(
     }
 }
 
-struct Server {
-    url: String,
+pub(super) struct Server {
+    pub(super) url: String,
     state: Arc<Mutex<Stub>>,
     home: tempfile::TempDir,
     task: tokio::task::JoinHandle<()>,
@@ -370,7 +370,7 @@ impl Drop for Server {
 }
 
 impl Server {
-    async fn start(replies: Vec<(u16, String)>) -> Self {
+    pub(super) async fn start(replies: Vec<(u16, String)>) -> Self {
         let state = Arc::new(Mutex::new(Stub {
             requests: Vec::new(),
             replies: replies.into(),
@@ -415,13 +415,13 @@ impl Server {
             .collect()
     }
 
-    fn bodies(&self) -> Vec<String> {
+    pub(super) fn bodies(&self) -> Vec<String> {
         let stub = self.state.lock().unwrap();
         stub.requests.iter().map(|r| r.body.clone()).collect()
     }
 }
 
-fn status(enabled: bool, listen_address: &str, generation: u64) -> String {
+pub(super) fn status(enabled: bool, listen_address: &str, generation: u64) -> String {
     serde_json::to_string(&SshStatus {
         enabled,
         generation,
@@ -496,6 +496,52 @@ async fn setup_and_proxy_reject_remote_without_requests() {
     assert!(server.requests().is_empty());
 }
 
+#[tokio::test]
+async fn setup_and_proxy_report_missing_runtime_configuration() {
+    let temp = tempfile::tempdir().unwrap();
+    let config = temp.path().join("missing.json");
+    let home = temp.path().join("home");
+    for operation in ["setup", "proxy"] {
+        let cli = try_parse_from([
+            "boxlite",
+            "--home",
+            home.to_str().unwrap(),
+            "--config",
+            config.to_str().unwrap(),
+            "ssh",
+            operation,
+            "box-1",
+        ])
+        .unwrap();
+        let Commands::Ssh(args) = cli.command else {
+            panic!("expected SSH command")
+        };
+        let error = super::execute(args, &cli.global).await.unwrap_err();
+        assert!(
+            error.to_string().contains("Configuration file not found"),
+            "{error:#}"
+        );
+        assert!(
+            !home.join("boxes").exists(),
+            "invalid runtime configuration must not create box credentials"
+        );
+    }
+}
+
+#[tokio::test]
+async fn enable_rejects_rest_without_sending_a_control_request() {
+    let server = Server::start(vec![]).await;
+    let error = server.run(&["enable", "box-1"]).await.unwrap_err();
+    assert!(
+        matches!(
+            error.downcast_ref::<boxlite::BoxliteError>(),
+            Some(boxlite::BoxliteError::Unsupported(_))
+        ),
+        "{error}"
+    );
+    assert!(server.requests().is_empty());
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn forward_targets_the_port_status_reports() {
     let server = Server::start(vec![(200, status(true, "0.0.0.0:41234", 5))]).await;
@@ -503,6 +549,74 @@ async fn forward_targets_the_port_status_reports() {
     // The stub has no tunnel route, so preparation fails after it is sent.
     server.run(&["forward", "box-1"]).await.unwrap_err();
 
+    assert_eq!(
+        server.requests(),
+        [
+            ("GET".into(), ssh_path()),
+            (
+                "POST".into(),
+                "/v1/boxes/box-1/network/tunnel?port=41234".into()
+            ),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn forward_relays_bytes_through_the_prepared_rest_tunnel() {
+    use std::time::Duration;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let upstream = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let uri = format!("http://{}", upstream.local_addr().unwrap());
+    let server = Server::start(vec![
+        (200, status(true, "0.0.0.0:41234", 5)),
+        (200, serde_json::json!({"uri": uri}).to_string()),
+    ])
+    .await;
+    let socket = server.home.path().join("f");
+    let listen = format!("unix:{}", socket.display());
+    let args = ["forward", "box-1", "--listen", &listen];
+    let forwarding = server.run(&args);
+    tokio::pin!(forwarding);
+    tokio::time::timeout(Duration::from_secs(5), async {
+        let traffic = async {
+            tokio::join!(
+                async {
+                    while !socket.exists() {
+                        tokio::task::yield_now().await;
+                    }
+                    let mut client = tokio::net::UnixStream::connect(&socket).await.unwrap();
+                    client.write_all(&[0, 1, 128, 255]).await.unwrap();
+                    let mut reply = [0; 4];
+                    client.read_exact(&mut reply).await.unwrap();
+                    assert_eq!(reply, [255, 128, 1, 0]);
+                },
+                async {
+                    let (mut tunnel, _) = upstream.accept().await.unwrap();
+                    let mut head = Vec::new();
+                    while !head.ends_with(b"\r\n\r\n") {
+                        head.push(tunnel.read_u8().await.unwrap());
+                    }
+                    assert!(head.starts_with(b"CONNECT "));
+                    tunnel
+                        .write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n")
+                        .await
+                        .unwrap();
+                    let mut request = [0; 4];
+                    tunnel.read_exact(&mut request).await.unwrap();
+                    assert_eq!(request, [0, 1, 128, 255]);
+                    request.reverse();
+                    tunnel.write_all(&request).await.unwrap();
+                }
+            );
+        };
+        tokio::select! {
+            result = &mut forwarding => panic!("forwarding ended before the exchange: {result:?}"),
+            () = traffic => {}
+        }
+    })
+    .await
+    .expect("forwarded exchange must complete");
     assert_eq!(
         server.requests(),
         [

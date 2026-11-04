@@ -134,7 +134,9 @@ against the same home: the runtime holds an exclusive home lock for the connecti
   Ctrl-C ends only local forwarding; guest SSH stays enabled.
 - A local CLI exit stops boxes that are not detached (plain `boxlite run`, SDK
   boxes with `detach=false`). Saved SSH intent is restored when the box restarts.
-  Boxes from `boxlite create` and `run -d` keep running.
+  Boxes from `boxlite create` and `run -d` keep running. Setup prints this warning
+  before its connection command: successful configuration alone does not mean a
+  non-detached box will remain available after setup exits.
 - Over REST, forwarding opens the box's public tunnel for the SSH port and leaves it
   open, so anyone who reaches it can attempt a login and wake a stopped box; SSH keys
   remain the access control. Close it with `boxlite network tunnel BOX PORT --revoke`.

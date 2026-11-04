@@ -68,7 +68,7 @@ second-key generation failure with clean retry, nested shell/OpenSSH command
 parsing, real VM login with the printed command, wrong-key rejection, binary
 transfer, signal cleanup, saved identity reuse, and stop/start behavior.
 
-Observed results for this revision:
+Observed results for the initial implementation:
 
 | Check | Result |
 | --- | --- |
@@ -76,3 +76,32 @@ Observed results for this revision:
 | `BOXLITE_DEPS_STUB=1 make test:unit:rust FILTER=ssh` | SSH runtime/shared tests passed, including REST-enabled runtime coverage. |
 | `make test:integration:cli FILTER=ssh` | 39 passed with real runtime artifacts. |
 | `make test:integration:cli SETUP_DONE=1 FILTER=ssh_local_setup_enable_and_restart` | Enhanced journey passed: fresh box, partial generation failure, retained keys after configure failure, special paths, OpenSSH binary transfer, signal cleanup and restart. |
+
+### Setup output and unit coverage follow-up
+
+`RuntimeImpl::shutdown_sync` skips detached boxes and stops other running boxes
+(`src/boxlite/src/runtime/rt_impl.rs`). Neither `LiteBox` nor `BoxInfo` exposes
+the detach option. Setup preserves configure's startup contract and warns before
+the connection command that CLI exit stops non-detached boxes. It reports SSH
+as configured; connecting afterward requires a running detached box. This avoids
+adding runtime metadata APIs or reading the private database for a CLI message.
+
+The hosted coverage collector runs CLI unit tests, not VM integration tests
+(`make/coverage.mk`). The private relay accepts input/output factories and async
+read/write halves. Production still supplies locked process stdio and independent
+`BoxConnection::into_split` halves, with the same dedicated threads and bounded
+channels. Unit tests exercise binary transfer, backpressure, half-close, remote
+EOF with open stdin, and read/write failures. The selected-box setup helper is
+tested across a recording backend for configuration failure, credential reuse,
+and output; the command's local-only check remains at entry. A socket-backed
+REST test also verifies the forward command's successful byte relay.
+
+The SDK-created non-detached box regression failed on the missing-warning
+assertion with every non-test file restored, then passed with the fix.
+`make test:integration:cli SETUP_DONE=1 FILTER=ssh` passed all 50 tests.
+`PYO3_PYTHON="$PWD/.venv/bin/python" BOXLITE_DEPS_STUB=1 make coverage:lcov NEXTEST_PROFILE=ci`
+passed, including 354 CLI/auth tests; the explicit interpreter avoids this
+machine's missing system Python 3.9 library. Local LCOV measured 243/254 changed
+executable lines (95.67%) against merge base `4ad1423bd`: proxy 94.87%, setup
+94.57%. Codecov's uploaded result remains the merge gate. Formatting and
+`make clippy` passed.

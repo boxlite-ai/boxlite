@@ -3,8 +3,7 @@
 use std::io::{Read, Write};
 
 use anyhow::{Context, Result};
-use boxlite::BoxConnection;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::{mpsc, oneshot};
 
@@ -20,7 +19,8 @@ pub(super) async fn execute(target: &str, global: &GlobalFlags) -> Result<()> {
             let (_runtime, sandbox) = super::find_box(global, target).await?;
             let status = sandbox.ssh().status().await?;
             let connection = super::ssh_tunnel(&sandbox, &status).await?.connect().await?;
-            relay(connection).await
+            let (reader, writer) = connection.into_split();
+            relay(reader, writer, || std::io::stdin().lock(), || std::io::stdout().lock()).await
         } => result,
         _ = hangup.recv() => Ok(()),
         _ = terminate.recv() => Ok(()),
@@ -28,12 +28,18 @@ pub(super) async fn execute(target: &str, global: &GlobalFlags) -> Result<()> {
     }
 }
 
-async fn relay(connection: BoxConnection) -> Result<()> {
+/// Relay bytes with bounded buffering; stdin EOF half-closes only the upload.
+async fn relay<R: Read, W: Write>(
+    mut reader: impl AsyncRead + Unpin,
+    mut writer: impl AsyncWrite + Unpin,
+    stdin: impl FnOnce() -> R + Send + 'static,
+    stdout: impl FnOnce() -> W + Send + 'static,
+) -> Result<()> {
     // Neither stdio thread belongs to Tokio's blocking pool: a pipe held open
     // or full by the parent must not prevent runtime cleanup on cancellation.
     let (input, mut incoming) = mpsc::channel(2);
     std::thread::spawn(move || {
-        let mut stdin = std::io::stdin().lock();
+        let mut stdin = stdin();
         loop {
             let mut bytes = vec![0; 8192];
             let result = stdin.read(&mut bytes).map(|n| {
@@ -49,7 +55,7 @@ async fn relay(connection: BoxConnection) -> Result<()> {
     let (output, mut outgoing) =
         mpsc::channel::<(Vec<u8>, oneshot::Sender<std::io::Result<()>>)>(1);
     std::thread::spawn(move || {
-        let mut stdout = std::io::stdout().lock();
+        let mut stdout = stdout();
         while let Some((bytes, done)) = outgoing.blocking_recv() {
             let result = stdout.write_all(&bytes).and_then(|()| stdout.flush());
             let failed = result.is_err();
@@ -59,7 +65,6 @@ async fn relay(connection: BoxConnection) -> Result<()> {
             }
         }
     });
-    let (mut reader, mut writer) = connection.into_split();
     let upload = async {
         while let Some(bytes) = incoming.recv().await {
             let bytes = bytes.context("read SSH proxy stdin")?;
@@ -94,3 +99,7 @@ async fn relay(connection: BoxConnection) -> Result<()> {
         result = upload => { result?; download.await }
     }
 }
+
+#[cfg(test)]
+#[path = "tests/proxy.rs"]
+mod tests;
