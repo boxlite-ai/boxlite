@@ -17,10 +17,13 @@
 //! queue-configuration write, as Firecracker does. QueueNotify, InterruptACK
 //! and Status stay live, and Status=0 is the only queue-reconfiguration path.
 //!
-//! The transport never calls the worker while holding the device lock. A
-//! device failure updates the shared status and raises the configuration
-//! interrupt, or sends [`Event::DeviceFailed`] to the run thread without
-//! stopping the worker synchronously.
+//! The transport drives the device's slot in the virtio workers through
+//! [`WorkerControl`]: it prepares a generation before activation, starts it
+//! after, kicks it on QueueNotify and stops it before Status=0 resets the
+//! device. It never calls the workers while holding the device lock. A device
+//! failure updates the shared status and raises the configuration interrupt,
+//! or sends [`Event::DeviceFailed`] to the run thread without stopping the
+//! worker slot synchronously.
 
 use std::sync::{Arc, Mutex};
 
@@ -28,8 +31,8 @@ use virtio_queue::{Queue, QueueT};
 use vm_memory::GuestAddress;
 
 use super::{
-    ActivationContext, DeviceError, DeviceSpec, MAX_CONFIG_LEN, MAX_QUEUES, VirtioDevice,
-    VirtioInterrupt, WorkerControl,
+    ActivationContext, DeviceError, DeviceSpec, MAX_CONFIG_LEN, MAX_QUEUES, NEEDS_RESET,
+    VirtioDevice, VirtioInterrupt, WorkerContext, WorkerControl,
     queue::{VIRTIO_F_EVENT_IDX, VIRTIO_F_INDIRECT_DESC, VirtQueues},
 };
 use crate::{
@@ -50,8 +53,6 @@ const DRIVER: u8 = 0x2;
 const DRIVER_OK: u8 = 0x4;
 /// The driver accepted the device features.
 const FEATURES_OK: u8 = 0x8;
-/// The device needs a reset.
-const NEEDS_RESET: u8 = 0x40;
 /// The driver failed the device.
 const FAILED: u8 = 0x80;
 /// The status bits a driver may set.
@@ -90,13 +91,13 @@ const VENDOR_ID: u32 = 0;
 /// A device method result.
 type DeviceResult<T> = std::result::Result<T, DeviceError>;
 
-/// The resources a transport shares with its device and worker.
+/// The resources a transport shares with its device and the workers.
 pub(crate) struct MmioResources {
     /// The guest memory the queues address.
     pub(crate) memory: Arc<GuestMemoryMmap>,
     /// The run thread's event sender.
     pub(crate) sender: EventSender,
-    /// Starts and stops the worker.
+    /// The device's slot in the virtio workers.
     pub(crate) worker: Arc<dyn WorkerControl>,
 }
 
@@ -338,15 +339,15 @@ impl MmioTransport {
         }
     }
 
-    /// Wakes the worker for a queue notification.
+    /// Kicks the device's worker slot for a queue notification.
     fn notify(&mut self, value: u32) {
         if !self.active || self.status() & (FAILED | NEEDS_RESET) != 0 {
             tracing::debug!(value, "ignoring a queue notification before activation");
             return;
         }
-        let index = value as usize;
-        if index < self.queues.len() {
-            self.worker.kick(index as u16);
+        let index = (value & 0xffff) as u16;
+        if usize::from(index) < self.queues.len() {
+            self.worker.kick(index);
         } else {
             tracing::debug!(index, "ignoring an invalid queue notification");
         }
@@ -377,7 +378,7 @@ impl MmioTransport {
         let new = current | bits;
 
         if bits & FAILED != 0 {
-            self.interrupt.add_device_status(bits);
+            self.interrupt.update_device_status(bits, 0);
             if self.active {
                 match self.worker.stop() {
                     Ok(()) => self.active = false,
@@ -404,9 +405,19 @@ impl MmioTransport {
                 self.need_reset("driver status");
                 return;
             }
-            match self.activate() {
+            let worker = match self.worker.prepare() {
+                Ok(worker) => worker,
+                Err(error) => {
+                    self.interrupt
+                        .set_device_status((new & !DRIVER_OK) | NEEDS_RESET);
+                    self.interrupt.raise_config();
+                    self.report_worker_failure(error);
+                    return;
+                }
+            };
+            match self.activate(worker) {
                 Ok(()) => {
-                    self.interrupt.add_device_status(bits);
+                    self.interrupt.update_device_status(bits, 0);
                     self.active = true;
                     match self.worker.start() {
                         Ok(()) => {}
@@ -414,7 +425,7 @@ impl MmioTransport {
                             if let Err(cancel_error) = self.worker.cancel_prepare() {
                                 self.report_worker_failure(cancel_error);
                             }
-                            self.interrupt.add_device_status(NEEDS_RESET);
+                            self.interrupt.set_needs_reset();
                             self.interrupt.raise_config();
                             self.report_worker_failure(error);
                         }
@@ -449,7 +460,10 @@ impl MmioTransport {
             return;
         }
 
-        self.interrupt.add_device_status(bits);
+        // A worker may set NEEDS_RESET while the driver writes, so OR the
+        // driver's bits and leave the register alone when it did.
+        self.interrupt
+            .update_device_status(bits, FAILED | NEEDS_RESET);
     }
 
     /// Applies the accepted features to the device exactly once.
@@ -486,8 +500,9 @@ impl MmioTransport {
         }
     }
 
-    /// Builds the dense queue vector and activates the device.
-    fn activate(&mut self) -> DeviceResult<()> {
+    /// Builds the dense queue vector and activates the device with the
+    /// prepared `worker` generation.
+    fn activate(&mut self, worker: WorkerContext) -> DeviceResult<()> {
         let mut queues = Vec::with_capacity(self.queues.len());
         for (slot, &max_size) in self.spec.queue_max.iter().enumerate() {
             let config = self.queues[slot];
@@ -514,7 +529,6 @@ impl MmioTransport {
         }
         let event_idx = self.driver_features & VIRTIO_F_EVENT_IDX != 0;
         let indirect = self.driver_features & VIRTIO_F_INDIRECT_DESC != 0;
-        let worker = self.worker.prepare()?;
         let queues = VirtQueues::prepare(
             queues,
             self.spec.queue_max,
@@ -571,7 +585,7 @@ impl MmioTransport {
 
     /// Sets DEVICE_NEEDS_RESET and raises the configuration interrupt.
     fn need_reset(&self, reason: &'static str) {
-        self.interrupt.add_device_status(NEEDS_RESET);
+        self.interrupt.set_needs_reset();
         self.interrupt.raise_config();
         tracing::warn!(
             device = self.spec.name,

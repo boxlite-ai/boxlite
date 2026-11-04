@@ -122,12 +122,13 @@ class NativeCoveragePathsTest(unittest.TestCase):
             for argv in node_runs:
                 filters = [a for a in argv if a.startswith("FILTER=")]
                 self.assertEqual(
-                    len(filters), 1, "test:integration:node ran unfiltered: %r" % argv
+                    len(filters), 1, f"test:integration:node ran unfiltered: {argv!r}"
                 )
-                pattern = filters[0][len("FILTER="):]
+                pattern = filters[0][len("FILTER=") :]
                 for suite in (
                     "image catalog",
                     "registry logins",
+                    "native box privilege metadata",
                     "box.ssh over a REST transport",
                     "SimpleBox.ssh over a REST transport",
                 ):
@@ -156,7 +157,6 @@ class NativeCoveragePathsTest(unittest.TestCase):
 
     def test_default_target_keeps_sdk_objects_in_the_report(self):
         self.run_collector(None)
-
 
     def test_the_python_suite_runs_under_the_native_gate(self):
         self.run_collector(None, gate_required=True)

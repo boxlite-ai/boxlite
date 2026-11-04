@@ -96,13 +96,13 @@ fn with_writer(
         boot,
         |_, context| {
             let device: Arc<Mutex<dyn VirtioDevice>> = Arc::new(Mutex::new(MemoryWriter {
-                memory: context.memory,
+                memory: Arc::clone(context.memory),
                 entered,
                 release,
                 finished,
             }));
             let interrupt = Arc::new(MmioInterrupt::new(IrqLine::new(Arc::new(MockVm::new()), 5)));
-            let control = context.executor.register(device, interrupt);
+            let control = context.workers.add(device, interrupt);
             control.prepare().unwrap();
             control.start().unwrap();
             if kick {

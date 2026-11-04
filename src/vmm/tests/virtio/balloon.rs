@@ -64,8 +64,9 @@ impl VirtioInterrupt for Interrupt {
     fn set_device_status(&self, status: u8) {
         self.status.store(status, Ordering::SeqCst);
     }
-    fn add_device_status(&self, bits: u8) {
-        self.status.fetch_or(bits, Ordering::SeqCst);
+    fn set_needs_reset(&self) {
+        self.status
+            .fetch_or(crate::virtio::NEEDS_RESET, Ordering::SeqCst);
     }
 }
 

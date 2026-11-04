@@ -115,6 +115,11 @@ export class RunnerServiceHealthDto {
 
 @ApiSchema({ name: 'RunnerHealthcheck' })
 export class RunnerHealthcheckDto {
+  @ApiPropertyOptional({ description: 'Runner preserves the guest privileged creation option' })
+  @IsOptional()
+  @IsBoolean()
+  supportsPrivileged?: boolean
+
   @ApiPropertyOptional({
     description: 'Runner metrics',
     type: RunnerHealthMetricsDto,

@@ -88,6 +88,7 @@ pub(super) struct SecretSpecRequest {
 #[derive(Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub(super) struct CreateBoxAdvancedOptions {
+    pub privileged: bool,
     /// `None` when the wire omits `capabilities` (or sends `null`) — distinct
     /// from `Some` of an empty policy, the same distinction the core
     /// `AdvancedBoxOptions.capabilities` makes and for the same reason: an
@@ -162,6 +163,8 @@ pub(super) struct BoxResponse {
     pub image: String,
     pub cpus: u8,
     pub memory_mib: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub privileged: Option<bool>,
     pub labels: HashMap<String, String>,
     pub auto_stop: u32,
     pub auto_delete: u32,
@@ -351,6 +354,7 @@ pub(super) struct ServerConfig {
 #[derive(Serialize)]
 pub(super) struct ServerCapabilities {
     pub linux_capabilities_enabled: bool,
+    pub privileged_enabled: bool,
     pub snapshots_enabled: bool,
     pub clone_enabled: bool,
     pub export_enabled: bool,

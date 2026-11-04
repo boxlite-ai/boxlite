@@ -30,13 +30,16 @@ pub enum Error {
     /// A device constructor raised interrupt `line` before the chipset was
     /// built.
     LineNotArmed(u32),
-    /// A virtio device transport or worker cannot continue.
+    /// A virtio device, its transport or its worker slot cannot continue.
     VirtioDevice {
         /// The device's short name.
         device: &'static str,
         /// Why the device stopped.
         reason: &'static str,
     },
+    /// The virtio workers could not start, their poller or thread failed, or
+    /// they did not stop in time (`TimedOut`).
+    VirtioWorker(io::Error),
     /// Opening or loading the kernel image failed.
     LoadKernel { path: PathBuf, source: io::Error },
     /// Opening or loading the initramfs failed.
@@ -48,8 +51,6 @@ pub enum Error {
     },
     /// Creating the vCPU event loop failed, or waiting on it did.
     EventLoop(io::Error),
-    /// Creating or running the shared virtio executor failed.
-    VirtioExecutor(io::Error),
     /// Creating the reporting balloon failed.
     CreateBalloon(io::Error),
     /// Starting the thread that writes the guest console failed.
@@ -93,6 +94,7 @@ impl fmt::Display for Error {
             Self::VirtioDevice { device, reason } => {
                 write!(f, "virtio device {device}: {reason}")
             }
+            Self::VirtioWorker(_) => f.write_str("the virtio workers failed"),
             Self::LoadKernel { path, .. } => {
                 write!(f, "failed to load the kernel {}", path.display())
             }
@@ -103,7 +105,6 @@ impl fmt::Display for Error {
                 write!(f, "failed to write the {what} into guest RAM")
             }
             Self::EventLoop(_) => f.write_str("the VM event loop failed"),
-            Self::VirtioExecutor(_) => f.write_str("the virtio executor failed"),
             Self::CreateBalloon(_) => f.write_str("failed to create the reporting balloon"),
             Self::SpawnConsole(_) => f.write_str("failed to start the console thread"),
             Self::SpawnVcpu { vcpu, .. } => write!(f, "failed to start vCPU {vcpu}"),
@@ -134,9 +135,9 @@ impl error::Error for Error {
             | Self::WriteBootData { source, .. }
             | Self::SpawnVcpu { source, .. }
             | Self::EventLoop(source)
-            | Self::VirtioExecutor(source)
             | Self::CreateBalloon(source)
-            | Self::SpawnConsole(source) => Some(source),
+            | Self::SpawnConsole(source)
+            | Self::VirtioWorker(source) => Some(source),
             Self::Hypervisor(source) => Some(source),
         }
     }

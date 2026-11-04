@@ -14,6 +14,38 @@ and membership revocation after the outer commit. Run it from the repository roo
 The double checks callback execution and row selection; the real-Postgres organization-domain
 lifecycle tests cover database rollback.
 
+## Guest Docker privilege
+
+REST creation accepts `advanced.privileged` (default false) and advertises
+`privileged_enabled` in `/v1/config`. The option is stored on the Box and
+forwarded by both runner adapters on creation and by v0 recovery. Subsequent
+starts reuse the runtime's persisted guest settings. The
+pre-deploy migration initializes existing Boxes to false. Privileged requests
+require fresh Boxes, so a warm-pool Box cannot silently discard the requested
+guest policy.
+
+Runner v0 info and v2 health reports advertise `supportsPrivileged`. The API
+stores it with a false default and clears it when a report omits it or sends
+false. A failed v0 info read leaves the capability column untouched; a successful
+report with the field omitted still clears it. Timed-out checks recheck cancellation
+after reading the runner and before submitting a health update, so a delayed read
+cannot resume and overwrite a retry's report or emit a stale state event.
+Privileged creation and migration
+select only runners reporting support; create and v0 recovery also reject an
+unsupported target before dispatch.
+Ordinary Boxes retain the existing scheduling rules. `/v1/config` describes API
+support independently of current runner capacity. Run the pre-deploy migration
+before updating the API; each upgraded runner becomes eligible after reporting
+its capability.
+
+This enables guest capabilities and writable kernel mounts. Runner host sandbox
+settings remain independent; REST rejects host security options and explicit
+capability policies. Operators must supply a Docker-capable guest kernel as
+described in the [DinD guide](../../docs/guides/docker-in-docker.md).
+
+Migration-backed integration suites that query `Box`, including usage accounting,
+run `AddGuestPrivileged1792540800000` so their schema includes the persisted field.
+
 ## Admin Box image
 
 `GET /api/admin/boxes` and `GET /api/admin/boxes/{id}` include `image`, the stored

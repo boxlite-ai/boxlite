@@ -46,6 +46,7 @@ export interface CreateBoxDTO {
      * Outbound network policy. outboundEnabled is required: a request without it is rejected rather than started with a guessed policy.
      */
     'outboundEnabled': boolean;
+    'privileged'?: boolean;
     'regionId'?: string;
     'registry'?: RegistryDTO;
     'runAsUser'?: string;

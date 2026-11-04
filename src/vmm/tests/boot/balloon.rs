@@ -206,7 +206,7 @@ fn run_reporting_guest(enabled: bool, init_on_free: bool) {
             builder.add("balloon", |resources| {
                 resources.mmio(BALLOON_MMIO.base, MMIO_WINDOW_LEN);
                 let interrupt = Arc::new(MmioInterrupt::new(resources.line(BALLOON_MMIO.irq)));
-                let worker = context.executor.register(device.clone(), interrupt.clone());
+                let worker = context.workers.add(device.clone(), interrupt.clone());
                 MmioTransport::new(
                     device,
                     interrupt,
@@ -220,7 +220,7 @@ fn run_reporting_guest(enabled: bool, init_on_free: bool) {
             builder.add("balloon-observer", |resources| {
                 resources.pio(0x500, 12);
                 Ok(Observer {
-                    memory: context.memory,
+                    memory: Arc::clone(context.memory),
                     evidence: evidence.clone(),
                 })
             })

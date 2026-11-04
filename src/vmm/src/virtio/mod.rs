@@ -4,32 +4,39 @@
 //! The virtio device contract.
 //!
 //! One [`VirtioDevice`] owns a device's configuration, queues and backend.
-//! The transport calls configuration methods synchronously; the shared worker
-//! calls [`VirtioDevice::on_event`]. Both share `Arc<Mutex<dyn VirtioDevice>>`.
-//! A queue callback admits at most one complete chain. Synchronous device I/O
-//! may finish that chain before a generation stop barrier returns; the bound
-//! continuation schedules any backlog after other work in the current pass.
+//! The transport calls configuration methods synchronously; the [`worker`]
+//! runtime calls [`VirtioDevice::on_event`]. Both share
+//! `Arc<Mutex<dyn VirtioDevice>>`. A queue callback admits at most one complete
+//! chain. Synchronous device I/O may finish that chain before a generation stop
+//! barrier returns; the bound continuation schedules any backlog after other
+//! work in the current pass. A slow callback delays every device on the shared
+//! thread.
 //!
 //! [`VirtQueues`] validates the dense queue set and tracks deferred chains.
 //! Snapshots remain unsupported until M8. DRIVER_OK starts a generation and
 //! Status=0 stops it before resetting device state or queue configuration.
 
-use std::{fmt, sync::Arc};
+use std::{fmt, io, sync::Arc};
 
 use self::queue::VirtQueues;
 use crate::{events::EventSender, memory::GuestMemoryMmap};
 
-pub(crate) mod executor;
 pub(crate) mod interrupt;
 pub(crate) mod mmio;
 pub(crate) mod queue;
+pub(crate) mod worker;
 
 /// The largest number of queues a device may declare.
 pub(crate) const MAX_QUEUES: usize = 16;
 /// The largest configuration space a device may declare.
 pub(crate) const MAX_CONFIG_LEN: usize = 0xF00;
 
-/// A callback that wakes the worker's poller.
+/// `DEVICE_NEEDS_RESET`: the device status bit a device sets when it cannot
+/// continue until the driver resets it.
+pub(crate) const NEEDS_RESET: u8 = 0x40;
+
+/// A callback that wakes the workers' poller. It carries no event: a device
+/// that needs a later callback registers an [`EventSource`].
 pub(crate) type Waker = Arc<dyn Fn() + Send + Sync>;
 
 /// What a device offers, fixed when it is built.
@@ -58,28 +65,35 @@ pub(crate) enum SnapshotSupport {
     Stopped,
 }
 
-/// What the worker asks a device to do.
+/// What the workers ask a device to do.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum DeviceEvent {
     /// The guest notified queue `index`.
     QueueKick(u16),
-    /// A background source registered by the device is ready.
+    /// The source registered as this id became readable. Readiness is
+    /// edge-triggered: the device reads the source until it would block.
     BackendReady(SourceId),
 }
 
-/// The identity of a background event source registered with the worker.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+/// The id the workers give a registered background source.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) struct SourceId(pub(crate) u32);
 
-/// A file descriptor or similar object the worker polls.
+/// A file descriptor or similar object the workers poll.
 pub(crate) trait EventSource: Send {
-    /// The source the worker registers with its poller.
+    /// The source the workers register with their poller.
     fn as_source(&mut self) -> &mut dyn mio::event::Source;
 }
 
-/// The worker interface a device uses to register background sources.
+/// The interface a device uses to register background sources with the
+/// workers.
+///
+/// A registrar belongs to one worker generation. Once Status=0 stops that
+/// generation, or the workers shut down, their sources are closed and
+/// `register` returns [`EventError::Closed`].
 pub(crate) trait EventRegistrar: Send + Sync {
-    /// Registers `source`, reported as `BackendReady` with the returned ID.
+    /// Registers `source` for readability and returns its id; each readiness
+    /// edge reaches the device as [`DeviceEvent::BackendReady`] with that id.
     fn register(&self, source: Box<dyn EventSource>) -> Result<SourceId, EventError>;
 
     /// Retires `id` and waits for an admitted delivery on another thread.
@@ -87,34 +101,44 @@ pub(crate) trait EventRegistrar: Send + Sync {
     fn deregister(&self, id: SourceId);
 }
 
-/// Resources bound to one prepared worker generation.
+/// The handles one worker generation gives the device it activates.
 pub(crate) struct WorkerContext {
+    /// Registers background sources for this generation.
     pub(crate) events: Arc<dyn EventRegistrar>,
+    /// Wakes the workers' poller.
     pub(crate) waker: Waker,
     /// Requeues backlog only while this generation is running.
     pub(crate) requeue: Arc<dyn Fn(u16) + Send + Sync>,
 }
 
-/// Controls one device generation independently of the runtime's thread model.
+/// Drives one device's generation in the [`worker::WorkerRuntime`]. The transport
+/// calls it from a vCPU thread, never while it holds the device lock.
 pub(crate) trait WorkerControl: Send + Sync {
-    /// Opens a fresh generation before device activation.
+    /// Opens a new generation for the next activation and returns its handles.
+    /// Kicks and sources of an earlier generation never reach this one.
     fn prepare(&self) -> Result<WorkerContext, DeviceError>;
 
-    /// Starts dispatch after activation. On error no dispatch can begin.
+    /// Starts delivering the prepared generation's events. On error nothing is
+    /// delivered and the generation stays prepared until
+    /// [`cancel_prepare`](Self::cancel_prepare).
     fn start(&self) -> Result<(), DeviceError>;
 
-    /// Coalesces a notification while retaining its queue number.
+    /// Records a notification of queue `index` and wakes the workers. Kicks of
+    /// one queue that arrive before its event runs coalesce.
     fn kick(&self, index: u16);
 
-    /// Prevents dispatch and waits for in-flight calls before closing sources.
-    /// On error the device must not be reset. This never joins a shared thread.
+    /// Stops admission and waits for callbacks and registrations in flight,
+    /// then closes the generation's sources. It never joins the workers'
+    /// thread. On error the device must not be reset.
     fn stop(&self) -> Result<(), DeviceError>;
 
-    /// Closes sources from an activation that never started.
+    /// Closes a prepared generation that will not start. On error the device
+    /// and its backing must remain intact until a barrier succeeds.
     fn cancel_prepare(&self) -> Result<(), DeviceError>;
 }
 
-/// The transport's interrupt and status handle, shared with the worker.
+/// The transport's interrupt and status handle, shared with the device and
+/// the workers.
 pub(crate) trait VirtioInterrupt: Send + Sync {
     /// Raises the queue interrupt.
     fn raise(&self);
@@ -134,12 +158,11 @@ pub(crate) trait VirtioInterrupt: Send + Sync {
     /// Reads the device status register.
     fn device_status(&self) -> u8;
 
-    /// Replaces the device status while dispatch is stopped, for negotiation
-    /// and reset. Concurrent cumulative updates use [`Self::add_device_status`].
+    /// Replaces the device status register while dispatch is stopped.
     fn set_device_status(&self, status: u8);
 
-    /// Atomically adds bits without losing concurrent driver or worker updates.
-    fn add_device_status(&self, bits: u8);
+    /// Atomically sets [`NEEDS_RESET`] without clearing driver status bits.
+    fn set_needs_reset(&self);
 }
 
 /// The resources a transport gives a device when the driver activates it.
@@ -156,25 +179,11 @@ pub(crate) struct ActivationContext {
     pub(crate) queues: VirtQueues,
     /// The transport's interrupt and status handle.
     pub(crate) interrupt: Arc<dyn VirtioInterrupt>,
-    /// The worker's event registrar for backend sources; the device stores it.
+    /// The generation's registrar for backend sources; the device stores it.
     pub(crate) events: Arc<dyn EventRegistrar>,
-    /// The worker's poller waker; the device stores it.
-    #[cfg_attr(
-        test,
-        expect(
-            dead_code,
-            reason = "Reporting completes synchronously; backend devices use this wake handle."
-        )
-    )]
+    /// The workers' poller waker; the device stores it.
     pub(crate) waker: Waker,
     /// The run thread's sender for fatal device failures.
-    #[cfg_attr(
-        test,
-        expect(
-            dead_code,
-            reason = "The reporting callback returns failures to its executor."
-        )
-    )]
     pub(crate) sender: EventSender,
 }
 
@@ -231,38 +240,27 @@ impl fmt::Display for SnapshotError {
 
 impl std::error::Error for SnapshotError {}
 
-/// A device could not register or deregister a background source.
-#[derive(Debug)]
+/// A device could not register a background source.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum EventError {
-    /// The worker is shutting down.
+    /// The registrar's generation is stopped, or the workers are shutting down.
     Closed,
-    /// Registering the backend source with the host poller failed.
-    Io(std::io::Error),
+    /// The host poller refused the source.
+    Register(io::ErrorKind),
 }
 
 impl fmt::Display for EventError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Closed => f.write_str("the event worker is closed"),
-            Self::Io(error) => write!(f, "registering a backend event source: {error}"),
+            Self::Closed => f.write_str("the worker generation is closed"),
+            Self::Register(kind) => write!(f, "the poller refused the source: {kind}"),
         }
     }
 }
 
-impl std::error::Error for EventError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::Io(error) => Some(error),
-            Self::Closed => None,
-        }
-    }
-}
+impl std::error::Error for EventError {}
 
 /// A self-owned, versioned device state.
-#[cfg_attr(
-    all(test, target_arch = "x86_64"),
-    expect(dead_code, reason = "Device snapshots remain unsupported until M8.")
-)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct DeviceSnapshot {
     /// The state format identifier.
@@ -274,10 +272,6 @@ pub(crate) struct DeviceSnapshot {
 }
 
 /// The resources a restored device receives from the transport.
-#[cfg_attr(
-    all(test, target_arch = "x86_64"),
-    expect(dead_code, reason = "Device restore remains unsupported until M8.")
-)]
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct RestoreContext;
 
@@ -308,35 +302,21 @@ pub(crate) trait VirtioDevice: Send {
 
     /// Handles one worker event. `Ok(())` means this call finished; it does
     /// not mean every submitted request completed. The device uses the event
-    /// registrar and waker stored from [`ActivationContext`].
+    /// registrar and waker stored from [`ActivationContext`]. The call runs on
+    /// the workers' shared thread and must not block.
     fn on_event(&mut self, event: DeviceEvent) -> Result<(), DeviceError>;
 
     /// Stops accepting new work and drains requests the device already took.
-    #[cfg_attr(
-        test,
-        expect(
-            dead_code,
-            reason = "The existing pause contract has no transport consumer yet."
-        )
-    )]
     fn quiesce(&mut self) -> Result<(), DeviceError> {
         Err(DeviceError::Unsupported("quiesce"))
     }
 
     /// Returns a stable state; only valid after [`Self::quiesce`].
-    #[cfg_attr(
-        test,
-        expect(dead_code, reason = "Device snapshots remain unsupported until M8.")
-    )]
     fn save_state(&self) -> Result<DeviceSnapshot, SnapshotError> {
         Err(SnapshotError::Unsupported)
     }
 
     /// Restores a device built for this state.
-    #[cfg_attr(
-        test,
-        expect(dead_code, reason = "Device restore remains unsupported until M8.")
-    )]
     fn restore_state(
         &mut self,
         _state: DeviceSnapshot,
@@ -346,13 +326,6 @@ pub(crate) trait VirtioDevice: Send {
     }
 
     /// Re-arms notification sources after a pause or restore.
-    #[cfg_attr(
-        test,
-        expect(
-            dead_code,
-            reason = "The existing resume contract has no transport consumer yet."
-        )
-    )]
     fn resume(&mut self) -> Result<(), DeviceError> {
         Ok(())
     }

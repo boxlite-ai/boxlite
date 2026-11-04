@@ -818,6 +818,40 @@ describe('BoxService inbound defaults', () => {
     )
   })
 
+  it.each([
+    [undefined, false],
+    [false, false],
+    [true, true],
+  ])('persists REST guest privilege %s as %s', async (privileged, expected) => {
+    const { service, boxRepository } = makeCreateService()
+    const dto = plainToInstance(RestCreateBoxDto, {
+      name: 'docker-box',
+      image: 'docker:27.5.1-dind',
+      advanced: privileged === undefined ? undefined : { privileged },
+    })
+
+    await service.create(createBoxToCreateBox(dto), { id: 'org-1' } as any, Context.user())
+
+    expect(boxRepository.insert).toHaveBeenCalledWith(expect.objectContaining({ privileged: expected }), undefined)
+  })
+
+  it('creates a fresh privileged guest when an ordinary warm box is available', async () => {
+    const { service, boxRepository, warmPoolService } = makeCreateService({
+      redis: { exists: jest.fn().mockResolvedValue(0) },
+      imageResolverService: { resolve: jest.fn().mockResolvedValue({ ref: 'base', isOrgOwned: false }) },
+    })
+    warmPoolService.fetchWarmPoolBox.mockResolvedValue({ id: 'warm-box' } as any)
+
+    await service.create(
+      { name: 'docker-box', image: 'base', privileged: true } as any,
+      { id: 'org-1' } as any,
+      Context.user(),
+    )
+
+    expect(warmPoolService.fetchWarmPoolBox).not.toHaveBeenCalled()
+    expect(boxRepository.insert).toHaveBeenCalledWith(expect.objectContaining({ privileged: true }), undefined)
+  })
+
   it('creates a fresh box instead of claiming a warm box when secrets are present', async () => {
     const { service, boxRepository, warmPoolService } = makeCreateService()
     // Default exists=1 would skip the warm-pool branch outright; clear it so
@@ -884,12 +918,23 @@ describe('BoxService runner assignment', () => {
 
     // Drives the private assignment directly rather than through create(),
     // whose quota / region / warm-pool preamble only obscures it.
-    const assign = (name = 'box-1') => {
-      const box = { id: name, runnerId: undefined as string | undefined }
+    const assign = (name = 'box-1', privileged = false) => {
+      const box = { id: name, runnerId: undefined as string | undefined, privileged }
       return (service as any).persistOnAvailableRunner(box, { regions: ['us'] }, () => boxRepository.insert(box))
     }
     return { assign, boxRepository, runnerService, dataSource }
   }
+
+  it('requires runner privilege support when assigning a privileged Box', async () => {
+    const { assign, runnerService } = makeAssignment()
+
+    await assign('docker-box', true)
+
+    expect(runnerService.getRandomAvailableRunner).toHaveBeenCalledWith({
+      regions: ['us'],
+      requiresPrivileged: true,
+    })
+  })
 
   it('commits the box on the chosen runner without locking its row', async () => {
     const { assign, boxRepository, dataSource } = makeAssignment()

@@ -32,6 +32,7 @@ const BOX_JSON = {
   image: "alpine:latest",
   cpus: 1,
   memory_mib: 512,
+  privileged: false,
   auto_resume: true,
 };
 

@@ -17,7 +17,7 @@
 
 use std::sync::atomic::{AtomicU8, Ordering};
 
-use super::VirtioInterrupt;
+use super::{NEEDS_RESET, VirtioInterrupt};
 use crate::irq::IrqLine;
 
 /// The device used a buffer.
@@ -49,6 +49,28 @@ impl MmioInterrupt {
     pub(crate) fn reset(&self) {
         self.status.store(0, Ordering::SeqCst);
         self.device_status.store(0, Ordering::SeqCst);
+    }
+
+    /// Adds `bits` to the device status unless a bit in `blocked` is set.
+    ///
+    /// A driver status write uses this so it cannot replace the register with
+    /// a snapshot taken before a worker set [`NEEDS_RESET`] or `FAILED`.
+    pub(crate) fn update_device_status(&self, bits: u8, blocked: u8) {
+        let mut current = self.device_status.load(Ordering::SeqCst);
+        loop {
+            if current & blocked != 0 {
+                return;
+            }
+            match self.device_status.compare_exchange_weak(
+                current,
+                current | bits,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            ) {
+                Ok(_) => return,
+                Err(actual) => current = actual,
+            }
+        }
     }
 
     /// Pulses the line. A failed pulse leaves the status bit set so a later
@@ -95,8 +117,8 @@ impl VirtioInterrupt for MmioInterrupt {
         self.device_status.store(status, Ordering::SeqCst);
     }
 
-    fn add_device_status(&self, bits: u8) {
-        self.device_status.fetch_or(bits, Ordering::SeqCst);
+    fn set_needs_reset(&self) {
+        self.device_status.fetch_or(NEEDS_RESET, Ordering::SeqCst);
     }
 }
 

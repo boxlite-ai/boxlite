@@ -56,12 +56,12 @@ pub(crate) fn add_balloon(builder: &mut ChipsetBuilder, context: DeviceContext<'
     builder.add("balloon", |resources| {
         resources.mmio(BALLOON_MMIO.base, MMIO_WINDOW_LEN);
         let interrupt = Arc::new(MmioInterrupt::new(resources.line(BALLOON_MMIO.irq)));
-        let worker = context.executor.register(device.clone(), interrupt.clone());
+        let worker = context.workers.add(device.clone(), interrupt.clone());
         MmioTransport::new(
             device,
             interrupt,
             MmioResources {
-                memory: context.memory,
+                memory: Arc::clone(context.memory),
                 sender: resources.event_sender(),
                 worker,
             },

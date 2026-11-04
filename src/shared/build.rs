@@ -116,11 +116,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     GitProvenance::new(std::env::var("CARGO_MANIFEST_DIR")?.into()).emit();
 
     let mut config = tonic_build::configure()
-        .skip_debug("boxlite.v1.SshConfig")
-        .skip_debug("boxlite.v1.SshAccount")
-        .skip_debug("boxlite.v1.SshCaConfig")
         .build_server(true)
         .build_client(true);
+    for name in ["SshConfig", "SshAccount", "SshCaConfig"] {
+        let name = format!("boxlite.v1.{name}");
+        config = config
+            .type_attribute(&name, "#[derive(serde::Serialize, serde::Deserialize)]")
+            .skip_debug(&name);
+    }
 
     // proto3 optional fields require protoc >= 3.12
     // For 3.12-3.14, we need --experimental_allow_proto3_optional

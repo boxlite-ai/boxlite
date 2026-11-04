@@ -41,6 +41,11 @@ Build creates Linux AMD64 bytes and stages them in the selected cloud’s artifa
 a modified binary needs a new commit identity. Promotion copies staged bytes between compatible stages.
 The current production workflow still requires a release ref; staging a commit does not bypass that rule.
 
+The development artifact Dockerfile copies Rust workspace members explicitly, including
+`apps/e2e/sdks/rust`. When adding a workspace member, update
+[`dev-artifact.Dockerfile`](../../runner/packaging/dev-artifact.Dockerfile) as needed:
+Cargo loads every member's manifest even when building only the guest or runtime.
+
 To select a staged runner in a local deployment, set `RUNNER_ARTIFACT_SOURCE=build` and
 `RUNNER_ARTIFACT_REF=<full-sha>` alongside a valid `BOXLITE_IMAGE_TAG`, then preview with mdeploy.
 The [one-dispatch workflow](deployment.md#deploy-through-github-actions) prepares these values for you.

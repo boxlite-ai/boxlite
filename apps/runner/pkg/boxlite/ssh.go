@@ -34,11 +34,11 @@ func (c *Client) SSHDisable(ctx context.Context, boxID string) (*boxlite.SSHStat
 
 // observeSSH runs an SSH call that must never boot the box.
 //
-// SSH lives in guest memory, so a stopped or never-started box has no listener
-// and answers the disabled status from the runtime's persisted state. Fetching
-// a handle for such a box would evict and leak one per call (see evictBox). A
-// running box is asked through its handle; Status and Disable leave a handle
-// whose box has meanwhile stopped unbooted.
+// A stopped or never-started box has no live listener, regardless of saved SSH
+// intent, and reports disabled. Fetching a handle for such a box would evict
+// and leak one per call (see evictBox). A running box is asked through its
+// handle; Status and Disable leave a handle whose box has meanwhile stopped
+// unbooted.
 func (c *Client) observeSSH(
 	ctx context.Context,
 	boxID string,

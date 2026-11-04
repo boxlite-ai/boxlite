@@ -20,7 +20,8 @@ use std::{
 use mio::{Interest, Registry, Token, event::Source, unix::SourceFd};
 use vm_memory::{Bytes, GuestAddress};
 
-use super::{Executor, Phase};
+use super::{Phase, SharedRuntime, Thread};
+use crate::virtio::worker::{Timeouts, VirtioWorkers, WorkerRuntime};
 use crate::{
     bus::BusDevice,
     error::Error,
@@ -40,7 +41,7 @@ use crate::{
 const WAIT: Duration = Duration::from_secs(2);
 const SPEC: DeviceSpec = DeviceSpec {
     device_id: 1,
-    name: "executor-test",
+    name: "worker-contract-test",
     features: 0,
     config_len: 0,
     queue_max: &[8; 5],
@@ -97,7 +98,7 @@ struct RegisteredDevice {
     events: mpsc::Receiver<(DeviceEvent, thread::ThreadId)>,
 }
 
-fn add(executor: &Executor, handler: Handler) -> RegisteredDevice {
+fn add(runtime: &Arc<SharedRuntime>, handler: Handler) -> RegisteredDevice {
     let (tx, rx) = mpsc::channel();
     let device: Arc<Mutex<dyn VirtioDevice>> = Arc::new(Mutex::new(Device {
         handler,
@@ -105,7 +106,8 @@ fn add(executor: &Executor, handler: Handler) -> RegisteredDevice {
         configuration: None,
     }));
     let interrupt = Arc::new(MmioInterrupt::new(IrqLine::new(Arc::new(MockVm::new()), 5)));
-    let worker = executor.register(device.clone(), interrupt.clone());
+    let worker =
+        VirtioWorkers::with_runtime(runtime.clone()).add(device.clone(), interrupt.clone());
     RegisteredDevice {
         device,
         worker,
@@ -195,12 +197,12 @@ fn drain(stream: &mut UnixStream) {
 #[test]
 fn one_lazy_thread_coalesces_queue_bits_and_preserves_kicks_during_a_pass() {
     let events = EventLoop::new().unwrap();
-    let executor = Executor::new(events.sender()).unwrap();
+    let runtime = Arc::new(SharedRuntime::new(events.sender(), Timeouts::DEFAULT).unwrap());
     let (entered_tx, entered_rx) = mpsc::channel();
     let (release_tx, release_rx) = mpsc::channel();
     let mut first = true;
     let a = add(
-        &executor,
+        &runtime,
         Box::new(move |_| {
             if first {
                 first = false;
@@ -210,10 +212,10 @@ fn one_lazy_thread_coalesces_queue_bits_and_preserves_kicks_during_a_pass() {
             Ok(())
         }),
     );
-    let b = add(&executor, Box::new(|_| Ok(())));
+    let b = add(&runtime, Box::new(|_| Ok(())));
     a.worker.prepare().unwrap();
     b.worker.prepare().unwrap();
-    assert!(executor.runtime.thread.lock().unwrap().handle.is_none());
+    assert!(matches!(*runtime.thread.lock().unwrap(), Thread::Idle));
     a.worker.start().unwrap();
     b.worker.start().unwrap();
     a.worker.kick(2);
@@ -235,16 +237,19 @@ fn one_lazy_thread_coalesces_queue_bits_and_preserves_kicks_during_a_pass() {
     assert_eq!(next(&b), (DeviceEvent::QueueKick(3), thread));
     b.worker.stop().unwrap();
     assert!(a.events.try_recv().is_err());
-    assert!(executor.runtime.thread.lock().unwrap().handle.is_some());
-    executor.shutdown().unwrap();
-    executor.shutdown().unwrap();
-    assert!(executor.runtime.thread.lock().unwrap().handle.is_none());
+    assert!(matches!(
+        *runtime.thread.lock().unwrap(),
+        Thread::Running { .. }
+    ));
+    runtime.shutdown().unwrap();
+    runtime.shutdown().unwrap();
+    assert!(matches!(*runtime.thread.lock().unwrap(), Thread::Joined));
 }
 
 #[test]
 fn real_backend_fds_register_before_start_and_from_a_callback() {
     let events = EventLoop::new().unwrap();
-    let executor = Executor::new(events.sender()).unwrap();
+    let runtime = Arc::new(SharedRuntime::new(events.sender(), Timeouts::DEFAULT).unwrap());
     let registrar = Arc::new(Mutex::new(None::<Arc<dyn EventRegistrar>>));
     let readers = Arc::new(Mutex::new(BTreeMap::<u32, UnixStream>::new()));
     let drops = Arc::new(AtomicUsize::new(0));
@@ -255,7 +260,7 @@ fn real_backend_fds_register_before_start_and_from_a_callback() {
     let callback_readers = Arc::clone(&readers);
     let (id_tx, id_rx) = mpsc::channel();
     let device = add(
-        &executor,
+        &runtime,
         Box::new(move |event| {
             match event {
                 DeviceEvent::QueueKick(_) => {
@@ -321,14 +326,14 @@ fn real_backend_fds_register_before_start_and_from_a_callback() {
     write.write_all(b"new generation").unwrap();
     assert_eq!(next(&device).0, DeviceEvent::BackendReady(id));
     device.worker.stop().unwrap();
-    executor.shutdown().unwrap();
+    runtime.shutdown().unwrap();
 }
 
 #[test]
 fn failed_registration_rolls_back_and_cancel_closes_prepared_sources() {
     let events = EventLoop::new().unwrap();
-    let executor = Executor::new(events.sender()).unwrap();
-    let device = add(&executor, Box::new(|_| Ok(())));
+    let runtime = Arc::new(SharedRuntime::new(events.sender(), Timeouts::DEFAULT).unwrap());
+    let device = add(&runtime, Box::new(|_| Ok(())));
     let ctx = device.worker.prepare().unwrap();
     let drops = Arc::new(AtomicUsize::new(0));
     let (read, _write) = UnixStream::pair().unwrap();
@@ -336,10 +341,16 @@ fn failed_registration_rolls_back_and_cancel_closes_prepared_sources() {
     invalid.invalid = true;
     assert!(matches!(
         ctx.events.register(invalid),
-        Err(EventError::Io(_))
+        Err(EventError::Register(_))
     ));
     assert_eq!(drops.load(Ordering::SeqCst), 1);
-    assert!(executor.runtime.sources.lock().unwrap().is_empty());
+    assert!(
+        runtime.shared.slots.lock().unwrap()[0]
+            .sources
+            .lock()
+            .unwrap()
+            .is_empty()
+    );
     let (read, _write) = UnixStream::pair().unwrap();
     ctx.events.register(source(read, &drops)).unwrap();
     device.worker.cancel_prepare().unwrap();
@@ -355,14 +366,14 @@ fn failed_registration_rolls_back_and_cancel_closes_prepared_sources() {
     device.worker.kick(3);
     assert_eq!(next(&device).0, DeviceEvent::QueueKick(3));
     device.worker.stop().unwrap();
-    executor.shutdown().unwrap();
+    runtime.shutdown().unwrap();
 }
 
 #[test]
 fn stop_waits_for_a_real_registration_without_holding_the_slot_lock() {
     let events = EventLoop::new().unwrap();
-    let executor = Executor::new(events.sender()).unwrap();
-    let device = add(&executor, Box::new(|_| Ok(())));
+    let runtime = Arc::new(SharedRuntime::new(events.sender(), Timeouts::DEFAULT).unwrap());
+    let device = add(&runtime, Box::new(|_| Ok(())));
     let ctx = device.worker.prepare().unwrap();
     let drops = Arc::new(AtomicUsize::new(0));
     let (read, _write) = UnixStream::pair().unwrap();
@@ -372,8 +383,8 @@ fn stop_waits_for_a_real_registration_without_holding_the_slot_lock() {
     backend.registration_gate = Some((entered_tx, release_rx));
     let register = thread::spawn(move || ctx.events.register(backend));
     entered_rx.recv_timeout(WAIT).unwrap();
-    let slot = executor.runtime.slots.lock().unwrap()[0].clone();
-    assert_eq!(slot.state.lock().unwrap().inflight, 1);
+    let slot = runtime.shared.slots.lock().unwrap()[0].clone();
+    assert_eq!(slot.state.lock().unwrap().in_flight, 1);
     let worker = device.worker.clone();
     let (stopped_tx, stopped_rx) = mpsc::channel();
     let stop = thread::spawn(move || {
@@ -385,19 +396,19 @@ fn stop_waits_for_a_real_registration_without_holding_the_slot_lock() {
     stopped_rx.recv_timeout(WAIT).unwrap().unwrap();
     stop.join().unwrap();
     assert_eq!(drops.load(Ordering::SeqCst), 1);
-    assert!(executor.runtime.sources.lock().unwrap().is_empty());
-    executor.shutdown().unwrap();
+    assert!(slot.sources.lock().unwrap().is_empty());
+    runtime.shutdown().unwrap();
 }
 
 #[test]
 fn stop_is_a_barrier_and_a_fresh_generation_can_reactivate() {
     let events = EventLoop::new().unwrap();
-    let executor = Executor::new(events.sender()).unwrap();
+    let runtime = Arc::new(SharedRuntime::new(events.sender(), Timeouts::DEFAULT).unwrap());
     let (entered_tx, entered_rx) = mpsc::channel();
     let (release_tx, release_rx) = mpsc::channel();
     let mut first = true;
     let device = add(
-        &executor,
+        &runtime,
         Box::new(move |_| {
             if first {
                 first = false;
@@ -434,19 +445,28 @@ fn stop_is_a_barrier_and_a_fresh_generation_can_reactivate() {
     assert_eq!(next(&device).0, DeviceEvent::QueueKick(2));
     device.worker.stop().unwrap();
     assert!(device.events.try_recv().is_err());
-    executor.shutdown().unwrap();
+    runtime.shutdown().unwrap();
 }
 
 #[test]
 fn stop_timeout_does_not_release_sources_or_active_memory_and_shutdown_can_retry() {
     let events = EventLoop::new().unwrap();
-    let executor = Executor::with_timeout(events.sender(), Duration::from_millis(30)).unwrap();
+    let runtime = Arc::new(
+        SharedRuntime::new(
+            events.sender(),
+            Timeouts {
+                stop: Duration::from_millis(30),
+                shutdown: Duration::from_millis(30),
+            },
+        )
+        .unwrap(),
+    );
     let memory = Arc::new(GuestMemoryMmap::from_ranges(&[(GuestAddress(0), 0x1000)]).unwrap());
     let backing = Arc::downgrade(&memory);
     let (entered_tx, entered_rx) = mpsc::channel();
     let (release_tx, release_rx) = mpsc::channel();
     let device = add(
-        &executor,
+        &runtime,
         Box::new(move |_| {
             let _keep_backing_live = &memory;
             entered_tx.send(()).unwrap();
@@ -463,7 +483,7 @@ fn stop_timeout_does_not_release_sources_or_active_memory_and_shutdown_can_retry
     entered_rx.recv_timeout(WAIT).unwrap();
     assert!(matches!(device.worker.stop(), Err(DeviceError::Fatal(_))));
     assert_eq!(
-        executor.shutdown().unwrap_err().kind(),
+        runtime.shutdown().unwrap_err().kind(),
         io::ErrorKind::TimedOut
     );
     assert_eq!(drops.load(Ordering::SeqCst), 0);
@@ -471,17 +491,17 @@ fn stop_timeout_does_not_release_sources_or_active_memory_and_shutdown_can_retry
     device.worker.kick(1);
     release_tx.send(()).unwrap();
     assert_eq!(next(&device).0, DeviceEvent::QueueKick(0));
-    executor.shutdown().unwrap();
-    executor.shutdown().unwrap();
+    runtime.shutdown().unwrap();
+    runtime.shutdown().unwrap();
     assert_eq!(drops.load(Ordering::SeqCst), 1);
     assert!(device.events.try_recv().is_err());
     assert!(device.worker.prepare().is_err());
     assert_eq!(
-        executor.runtime.slots.lock().unwrap()[0]
+        runtime.shared.slots.lock().unwrap()[0]
             .state
             .lock()
             .unwrap()
-            .inflight,
+            .in_flight,
         0
     );
 }
@@ -489,9 +509,9 @@ fn stop_timeout_does_not_release_sources_or_active_memory_and_shutdown_can_retry
 #[test]
 fn needs_reset_updates_status_and_interrupt_then_stops_dispatch_without_a_terminal_event() {
     let mut events = EventLoop::new().unwrap();
-    let executor = Executor::new(events.sender()).unwrap();
+    let runtime = Arc::new(SharedRuntime::new(events.sender(), Timeouts::DEFAULT).unwrap());
     let device = add(
-        &executor,
+        &runtime,
         Box::new(|_| Err(DeviceError::NeedsReset("backend"))),
     );
     device.worker.prepare().unwrap();
@@ -503,16 +523,16 @@ fn needs_reset_updates_status_and_interrupt_then_stops_dispatch_without_a_termin
     assert_eq!(device.interrupt.interrupt_status() & 2, 2);
     assert_eq!(device.interrupt.config_generation(), 1);
     assert!(events.wait(Some(Duration::ZERO)).unwrap().is_none());
-    executor.shutdown().unwrap();
+    runtime.shutdown().unwrap();
 }
 
 #[test]
 fn fatal_panic_and_poison_report_one_terminal_failure_without_self_stop() {
     for mode in 0..3 {
         let mut events = EventLoop::new().unwrap();
-        let executor = Executor::new(events.sender()).unwrap();
+        let runtime = Arc::new(SharedRuntime::new(events.sender(), Timeouts::DEFAULT).unwrap());
         let device = add(
-            &executor,
+            &runtime,
             Box::new(move |_| {
                 if mode == 1 {
                     panic!("device panic");
@@ -540,15 +560,15 @@ fn fatal_panic_and_poison_report_one_terminal_failure_without_self_stop() {
         ));
         device.worker.kick(1);
         assert!(matches!(device.worker.stop(), Err(DeviceError::Fatal(_))));
-        executor.shutdown().unwrap();
+        runtime.shutdown().unwrap();
         assert!(events.wait(Some(Duration::ZERO)).unwrap().is_none());
         assert!(
-            executor.runtime.slots.lock().unwrap()[0]
+            runtime.shared.slots.lock().unwrap()[0]
                 .state
                 .lock()
                 .unwrap()
                 .phase
-                == Phase::Stopped
+                == Phase::Failed
         );
     }
 }
@@ -556,14 +576,14 @@ fn fatal_panic_and_poison_report_one_terminal_failure_without_self_stop() {
 #[test]
 fn shutdown_closes_a_prepared_generation_without_starting_a_thread() {
     let events = EventLoop::new().unwrap();
-    let executor = Executor::new(events.sender()).unwrap();
-    let device = add(&executor, Box::new(|_| Ok(())));
+    let runtime = Arc::new(SharedRuntime::new(events.sender(), Timeouts::DEFAULT).unwrap());
+    let device = add(&runtime, Box::new(|_| Ok(())));
     let ctx = device.worker.prepare().unwrap();
     let drops = Arc::new(AtomicUsize::new(0));
     let (read, mut write) = UnixStream::pair().unwrap();
     ctx.events.register(source(read, &drops)).unwrap();
     write.write_all(b"prepared readiness").unwrap();
-    executor.shutdown().unwrap();
+    runtime.shutdown().unwrap();
     assert_eq!(drops.load(Ordering::SeqCst), 1);
     assert!(device.events.try_recv().is_err());
     assert!(device.worker.start().is_err());
@@ -572,15 +592,15 @@ fn shutdown_closes_a_prepared_generation_without_starting_a_thread() {
         ctx.events.register(source(read, &drops)),
         Err(EventError::Closed)
     ));
-    assert!(executor.runtime.thread.lock().unwrap().handle.is_none());
+    assert!(matches!(*runtime.thread.lock().unwrap(), Thread::Joined));
 }
 
 #[test]
 fn unsupported_events_do_not_disable_later_dispatch() {
     let mut events = EventLoop::new().unwrap();
-    let executor = Executor::new(events.sender()).unwrap();
+    let runtime = Arc::new(SharedRuntime::new(events.sender(), Timeouts::DEFAULT).unwrap());
     let device = add(
-        &executor,
+        &runtime,
         Box::new(|_| Err(DeviceError::Unsupported("test event"))),
     );
     device.worker.prepare().unwrap();
@@ -593,17 +613,17 @@ fn unsupported_events_do_not_disable_later_dispatch() {
     assert_eq!(device.interrupt.device_status(), 0);
     assert_eq!(device.interrupt.interrupt_status(), 0);
     assert!(events.wait(Some(Duration::ZERO)).unwrap().is_none());
-    executor.shutdown().unwrap();
+    runtime.shutdown().unwrap();
 }
 
 #[test]
 fn cross_thread_deregister_waits_for_admitted_backend_delivery() {
     let events = EventLoop::new().unwrap();
-    let executor = Executor::new(events.sender()).unwrap();
+    let runtime = Arc::new(SharedRuntime::new(events.sender(), Timeouts::DEFAULT).unwrap());
     let (entered_tx, entered_rx) = mpsc::channel();
     let (release_tx, release_rx) = mpsc::channel();
     let device = add(
-        &executor,
+        &runtime,
         Box::new(move |event| {
             if let DeviceEvent::BackendReady(_) = event {
                 entered_tx.send(()).unwrap();
@@ -626,12 +646,11 @@ fn cross_thread_deregister_waits_for_admitted_backend_delivery() {
     });
     let deadline = std::time::Instant::now() + WAIT;
     loop {
-        if executor
-            .runtime
+        if runtime.shared.slots.lock().unwrap()[0]
             .sources
             .lock()
             .unwrap()
-            .get(&(id.0 as usize))
+            .get(&id)
             .unwrap()
             .retired
         {
@@ -656,11 +675,11 @@ fn cross_thread_deregister_waits_for_admitted_backend_delivery() {
 #[test]
 fn deregister_between_ready_snapshot_and_admission_cancels_delivery() {
     let events = EventLoop::new().unwrap();
-    let executor = Executor::new(events.sender()).unwrap();
+    let runtime = Arc::new(SharedRuntime::new(events.sender(), Timeouts::DEFAULT).unwrap());
     let (entered_tx, entered_rx) = mpsc::channel();
     let (release_tx, release_rx) = mpsc::channel();
     let device = add(
-        &executor,
+        &runtime,
         Box::new(move |event| {
             if let DeviceEvent::QueueKick(index @ (0 | 1)) = event {
                 entered_tx.send(index).unwrap();
@@ -682,12 +701,11 @@ fn deregister_between_ready_snapshot_and_admission_cancels_delivery() {
     assert_eq!(entered_rx.recv_timeout(WAIT).unwrap(), 1);
     // Backend readiness was snapshotted before this pass's queue callback.
     assert!(
-        !executor
-            .runtime
+        !runtime.shared.slots.lock().unwrap()[0]
             .sources
             .lock()
             .unwrap()
-            .get(&(id.0 as usize))
+            .get(&id)
             .unwrap()
             .ready
     );
@@ -705,11 +723,11 @@ fn deregister_between_ready_snapshot_and_admission_cancels_delivery() {
 #[test]
 fn a_backend_callback_can_deregister_its_own_source() {
     let events = EventLoop::new().unwrap();
-    let executor = Executor::new(events.sender()).unwrap();
+    let runtime = Arc::new(SharedRuntime::new(events.sender(), Timeouts::DEFAULT).unwrap());
     let registrar = Arc::new(Mutex::new(None::<Arc<dyn EventRegistrar>>));
     let callback_registrar = registrar.clone();
     let device = add(
-        &executor,
+        &runtime,
         Box::new(move |event| {
             if let DeviceEvent::BackendReady(id) = event {
                 callback_registrar
@@ -734,14 +752,20 @@ fn a_backend_callback_can_deregister_its_own_source() {
     assert_eq!(next(&device).0, DeviceEvent::QueueKick(2));
     device.worker.stop().unwrap();
     assert_eq!(drops.load(Ordering::SeqCst), 1);
-    assert!(executor.runtime.sources.lock().unwrap().is_empty());
+    assert!(
+        runtime.shared.slots.lock().unwrap()[0]
+            .sources
+            .lock()
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[test]
 fn stale_continuations_cannot_enter_a_reactivated_or_closed_generation() {
     let events = EventLoop::new().unwrap();
-    let executor = Executor::new(events.sender()).unwrap();
-    let device = add(&executor, Box::new(|_| Ok(())));
+    let runtime = Arc::new(SharedRuntime::new(events.sender(), Timeouts::DEFAULT).unwrap());
+    let device = add(&runtime, Box::new(|_| Ok(())));
     let old = device.worker.prepare().unwrap();
     (old.requeue)(0);
     device.worker.start().unwrap();
@@ -756,7 +780,7 @@ fn stale_continuations_cannot_enter_a_reactivated_or_closed_generation() {
     assert_eq!(next(&device).0, DeviceEvent::QueueKick(4));
     device.worker.stop().unwrap();
     assert!(device.events.try_recv().is_err());
-    executor.shutdown().unwrap();
+    runtime.shutdown().unwrap();
     (fresh.requeue)(0);
     assert!(device.events.try_recv().is_err());
 }
@@ -844,7 +868,7 @@ impl VirtioDevice for RingDevice {
 }
 
 fn ring_device(
-    executor: &Executor,
+    runtime: &Arc<SharedRuntime>,
     name: &'static str,
     memory: &Arc<GuestMemoryMmap>,
     backend: Option<UnixStream>,
@@ -859,13 +883,14 @@ fn ring_device(
         observed,
     }));
     let interrupt = Arc::new(MmioInterrupt::new(IrqLine::new(Arc::new(MockVm::new()), 5)));
-    let worker = executor.register(device.clone(), interrupt.clone());
+    let worker =
+        VirtioWorkers::with_runtime(runtime.clone()).add(device.clone(), interrupt.clone());
     let transport = MmioTransport::new(
         device,
         interrupt,
         MmioResources {
             memory: memory.clone(),
-            sender: executor.runtime.sender.clone(),
+            sender: runtime.shared.sender.clone(),
             worker: worker.clone(),
         },
     )
@@ -925,11 +950,11 @@ fn ring_used(memory: &GuestMemoryMmap, index: u16) -> u16 {
 #[test]
 fn real_ring_refill_continues_without_guest_kicks_after_current_pass_work() {
     let events = EventLoop::new().unwrap();
-    let executor = Executor::new(events.sender()).unwrap();
+    let runtime = Arc::new(SharedRuntime::new(events.sender(), Timeouts::DEFAULT).unwrap());
     let (entered_tx, entered_rx) = mpsc::channel();
     let (release_tx, release_rx) = mpsc::channel();
     let blocker = add(
-        &executor,
+        &runtime,
         Box::new(move |_| {
             entered_tx.send(()).unwrap();
             release_rx.recv_timeout(WAIT).unwrap();
@@ -957,7 +982,7 @@ fn real_ring_refill_continues_without_guest_kicks_after_current_pass_work() {
         }
     });
     let (mut a, a_control) = ring_device(
-        &executor,
+        &runtime,
         "a",
         &a_memory,
         None,
@@ -976,7 +1001,7 @@ fn real_ring_refill_continues_without_guest_kicks_after_current_pass_work() {
     );
     let (backend, mut backend_writer) = UnixStream::pair().unwrap();
     let (mut b, b_control) = ring_device(
-        &executor,
+        &runtime,
         "b",
         &b_memory,
         Some(backend),
@@ -1038,20 +1063,20 @@ fn real_ring_refill_continues_without_guest_kicks_after_current_pass_work() {
             head as u32
         );
     }
-    executor.shutdown().unwrap();
+    runtime.shutdown().unwrap();
 }
 
 #[test]
 fn real_ring_stop_finishes_only_the_admitted_chain_before_reset() {
     let events = EventLoop::new().unwrap();
-    let executor = Executor::new(events.sender()).unwrap();
+    let runtime = Arc::new(SharedRuntime::new(events.sender(), Timeouts::DEFAULT).unwrap());
     let memory = Arc::new(GuestMemoryMmap::from_ranges(&[(GuestAddress(0), 0x10000)]).unwrap());
     let (entered_tx, entered_rx) = mpsc::channel();
     let (release_tx, release_rx) = mpsc::channel();
     let (observed_tx, observed_rx) = mpsc::channel();
     let mut first = true;
     let (mut transport, worker) = ring_device(
-        &executor,
+        &runtime,
         "ring",
         &memory,
         None,
@@ -1072,7 +1097,7 @@ fn real_ring_stop_finishes_only_the_admitted_chain_before_reset() {
     entered_rx.recv_timeout(WAIT).unwrap();
     let stop_worker = worker.clone();
     let stop = thread::spawn(move || stop_worker.stop());
-    let slot = executor.runtime.slots.lock().unwrap()[0].clone();
+    let slot = runtime.shared.slots.lock().unwrap()[0].clone();
     let deadline = std::time::Instant::now() + WAIT;
     while slot.state.lock().unwrap().phase != Phase::Stopping {
         assert!(std::time::Instant::now() < deadline);
@@ -1146,7 +1171,16 @@ impl VirtioDevice for PartialActivation {
 #[test]
 fn failed_activation_keeps_device_state_when_cancelling_registration_times_out() {
     let mut events = EventLoop::new().unwrap();
-    let executor = Executor::with_timeout(events.sender(), Duration::from_millis(30)).unwrap();
+    let runtime = Arc::new(
+        SharedRuntime::new(
+            events.sender(),
+            Timeouts {
+                stop: Duration::from_millis(30),
+                shutdown: Duration::from_millis(30),
+            },
+        )
+        .unwrap(),
+    );
     let memory = Arc::new(GuestMemoryMmap::from_ranges(&[(GuestAddress(0), 0x10000)]).unwrap());
     let resets = Arc::new(AtomicUsize::new(0));
     let drops = Arc::new(AtomicUsize::new(0));
@@ -1164,7 +1198,8 @@ fn failed_activation_keeps_device_state_when_cancelling_registration_times_out()
         resets: resets.clone(),
     }));
     let interrupt = Arc::new(MmioInterrupt::new(IrqLine::new(Arc::new(MockVm::new()), 5)));
-    let worker = executor.register(device.clone(), interrupt.clone());
+    let worker =
+        VirtioWorkers::with_runtime(runtime.clone()).add(device.clone(), interrupt.clone());
     let mut transport = MmioTransport::new(
         device,
         interrupt.clone(),
@@ -1184,12 +1219,12 @@ fn failed_activation_keeps_device_state_when_cancelling_registration_times_out()
         Some(Event::DeviceFailed(_))
     ));
     assert_eq!(
-        executor.shutdown().unwrap_err().kind(),
+        runtime.shutdown().unwrap_err().kind(),
         io::ErrorKind::TimedOut
     );
     release_tx.send(()).unwrap();
     registered_rx.recv_timeout(WAIT).unwrap().unwrap();
-    executor.shutdown().unwrap();
+    runtime.shutdown().unwrap();
     assert_eq!(drops.load(Ordering::SeqCst), 1);
     assert_eq!(resets.load(Ordering::SeqCst), 0);
 }
@@ -1197,7 +1232,7 @@ fn failed_activation_keeps_device_state_when_cancelling_registration_times_out()
 #[test]
 fn configuration_callback_can_retire_a_source_queued_on_its_device_mutex() {
     let events = EventLoop::new().unwrap();
-    let executor = Executor::new(events.sender()).unwrap();
+    let runtime = Arc::new(SharedRuntime::new(events.sender(), Timeouts::DEFAULT).unwrap());
     let (locked_tx, locked_rx) = mpsc::channel();
     let (retire_tx, retire_rx) = mpsc::channel();
     let (retired_tx, retired_rx) = mpsc::channel();
@@ -1222,7 +1257,7 @@ fn configuration_callback_can_retire_a_source_queued_on_its_device_mutex() {
         })),
     }));
     let interrupt = Arc::new(MmioInterrupt::new(IrqLine::new(Arc::new(MockVm::new()), 5)));
-    let worker = executor.register(device.clone(), interrupt);
+    let worker = VirtioWorkers::with_runtime(runtime.clone()).add(device.clone(), interrupt);
     let ctx = worker.prepare().unwrap();
     let drops = Arc::new(AtomicUsize::new(0));
     let (read, mut write) = UnixStream::pair().unwrap();
@@ -1231,7 +1266,7 @@ fn configuration_callback_can_retire_a_source_queued_on_its_device_mutex() {
     worker.start().unwrap();
     let configuring = thread::spawn(move || device.lock().unwrap().write_config(0, &[1]));
     locked_rx.recv_timeout(WAIT).unwrap();
-    *executor.runtime.before_device_lock.lock().unwrap() = Some(Box::new(move || {
+    *runtime.shared.before_device_lock.lock().unwrap() = Some(Box::new(move || {
         before_lock_tx.send(()).unwrap();
         lock_rx.recv_timeout(WAIT).unwrap();
     }));
@@ -1248,7 +1283,7 @@ fn configuration_callback_can_retire_a_source_queued_on_its_device_mutex() {
     );
     configuring.join().unwrap().unwrap();
     worker.stop().unwrap();
-    executor.shutdown().unwrap();
+    runtime.shutdown().unwrap();
     assert_eq!(drops.load(Ordering::SeqCst), 1);
     assert!(event_rx.try_recv().is_err());
 }
@@ -1293,18 +1328,17 @@ impl VirtioInterrupt for StatusRaceInterrupt {
     fn set_device_status(&self, status: u8) {
         self.inner.set_device_status(status);
     }
-    fn add_device_status(&self, bits: u8) {
-        // The fixed worker pauses before its atomic update, so the concurrent
-        // driver bit is included regardless of the publication order.
+    fn set_needs_reset(&self) {
+        // Pause before the atomic update while the driver publishes FAILED.
         self.pause_update();
-        self.inner.add_device_status(bits);
+        self.inner.set_needs_reset();
     }
 }
 
 #[test]
 fn concurrent_needs_reset_preserves_driver_failed_status() {
     let events = EventLoop::new().unwrap();
-    let executor = Executor::new(events.sender()).unwrap();
+    let runtime = Arc::new(SharedRuntime::new(events.sender(), Timeouts::DEFAULT).unwrap());
     let inner = Arc::new(MmioInterrupt::new(IrqLine::new(Arc::new(MockVm::new()), 5)));
     inner.set_device_status(0x0f);
     let (entered_tx, entered_rx) = mpsc::channel();
@@ -1319,7 +1353,7 @@ fn concurrent_needs_reset_preserves_driver_failed_status() {
         events: callback_tx,
         configuration: None,
     }));
-    let worker = executor.register(device, interrupt);
+    let worker = VirtioWorkers::with_runtime(runtime.clone()).add(device, interrupt);
     worker.prepare().unwrap();
     worker.start().unwrap();
     worker.kick(0);
@@ -1333,5 +1367,5 @@ fn concurrent_needs_reset_preserves_driver_failed_status() {
         0xcf,
         "worker reset publication erased the concurrent driver FAILED bit"
     );
-    executor.shutdown().unwrap();
+    runtime.shutdown().unwrap();
 }

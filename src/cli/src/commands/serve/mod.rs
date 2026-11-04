@@ -1113,6 +1113,7 @@ fn box_info_to_response(info: &BoxInfo) -> BoxResponse {
         image: info.image.clone(),
         cpus: info.cpus,
         memory_mib: info.memory_mib,
+        privileged: info.privileged,
         labels: info.labels.clone(),
         auto_stop: info.auto_stop,
         auto_delete: info.auto_delete,
@@ -1263,6 +1264,7 @@ fn build_box_options(req: &CreateBoxRequest) -> Result<BoxOptions, boxlite::Boxl
                 }
             });
             advanced.set_capabilities(capabilities)?;
+            advanced.set_privileged(req.advanced.privileged);
             advanced
         },
         // Neither deadline is forwarded; `serve` holds both and sweeps them.
@@ -2349,6 +2351,21 @@ mod tests {
         .expect("box info")
     }
 
+    #[test]
+    fn privileged_reuse_response_preserves_known_and_unknown_mode() {
+        for privileged in [Some(false), Some(true), None] {
+            let mut metadata =
+                serde_json::to_value(info_as_the_runtime_reports_it("configured")).unwrap();
+            metadata["privileged"] = serde_json::to_value(privileged).unwrap();
+            let info = serde_json::from_value(metadata).unwrap();
+            let response = serde_json::to_value(box_info_to_response(&info)).unwrap();
+            assert_eq!(response["privileged"].as_bool(), privileged);
+            if privileged.is_none() {
+                assert!(response.get("privileged").is_none());
+            }
+        }
+    }
+
     /// Every box response must report the deadlines `serve` holds, not the
     /// zeroes it handed the runtime.
     ///
@@ -2961,6 +2978,41 @@ mod tests {
             matches!(err, boxlite::BoxliteError::InvalidArgument(ref msg) if msg.contains("either nested")),
             "unexpected error: {err}"
         );
+    }
+
+    #[test]
+    fn build_box_options_guest_privilege_preserves_host_security() {
+        for privileged in [false, true] {
+            let req: CreateBoxRequest = serde_json::from_value(serde_json::json!({
+                "image": "docker:27.5.1-dind",
+                "advanced": {"privileged": privileged}
+            }))
+            .unwrap();
+            let mut options = build_box_options(&req).unwrap();
+            assert_eq!(options.advanced.security, Default::default());
+            options.sanitize().unwrap();
+            assert_eq!(options.advanced.privileged, privileged);
+            assert!(options.advanced.capabilities().is_none());
+        }
+    }
+
+    #[test]
+    fn serve_guest_privilege_rejects_explicit_capability_overrides() {
+        for capabilities in [
+            serde_json::json!({}),
+            serde_json::json!({"drop": ["NET_RAW"]}),
+        ] {
+            let req: CreateBoxRequest = serde_json::from_value(serde_json::json!({
+                "image": "docker:27.5.1-dind",
+                "advanced": {"privileged": true, "capabilities": capabilities}
+            }))
+            .unwrap();
+            let mut options = build_box_options(&req).unwrap();
+            assert!(matches!(
+                options.sanitize(),
+                Err(boxlite::BoxliteError::InvalidArgument(_))
+            ));
+        }
     }
 
     #[test]

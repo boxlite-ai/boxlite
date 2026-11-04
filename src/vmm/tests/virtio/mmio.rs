@@ -27,8 +27,8 @@ use crate::{
     mock_vm::{Call, MockVm},
     virtio::{
         ActivationContext, DeviceError, DeviceEvent, DeviceSpec, FeatureError, SnapshotSupport,
-        VirtioDevice, VirtioInterrupt, WorkerContext, WorkerControl, executor::Executor,
-        interrupt::MmioInterrupt,
+        VirtioDevice, VirtioInterrupt, WorkerContext, WorkerControl, interrupt::MmioInterrupt,
+        worker::VirtioWorkers,
     },
 };
 
@@ -161,10 +161,12 @@ struct RecordingWorker {
     control: Arc<dyn WorkerControl>,
     prepares: AtomicUsize,
     cancels: AtomicUsize,
+    prepare_error: Mutex<Option<DeviceError>>,
     start_error: Mutex<Option<DeviceError>>,
     stop_error: Mutex<Option<DeviceError>>,
     starts: AtomicUsize,
     stops: AtomicUsize,
+    kicks: Mutex<Vec<u16>>,
 }
 
 impl RecordingWorker {
@@ -174,10 +176,12 @@ impl RecordingWorker {
             control,
             prepares: AtomicUsize::new(0),
             cancels: AtomicUsize::new(0),
+            prepare_error: Mutex::new(None),
             start_error: Mutex::new(None),
             stop_error: Mutex::new(None),
             starts: AtomicUsize::new(0),
             stops: AtomicUsize::new(0),
+            kicks: Mutex::new(Vec::new()),
         }
     }
 }
@@ -185,15 +189,21 @@ impl RecordingWorker {
 impl WorkerControl for RecordingWorker {
     fn prepare(&self) -> Result<WorkerContext, DeviceError> {
         self.prepares.fetch_add(1, Ordering::SeqCst);
-        self.control.prepare()
+        self.log.lock().unwrap().push("prepare");
+        match *self.prepare_error.lock().unwrap() {
+            Some(error) => Err(error),
+            None => self.control.prepare(),
+        }
     }
 
     fn kick(&self, index: u16) {
+        self.kicks.lock().unwrap().push(index);
         self.control.kick(index);
     }
 
     fn cancel_prepare(&self) -> Result<(), DeviceError> {
         self.cancels.fetch_add(1, Ordering::SeqCst);
+        self.log.lock().unwrap().push("cancel");
         self.control.cancel_prepare()
     }
 
@@ -223,7 +233,7 @@ struct Fixture {
     worker: Arc<RecordingWorker>,
     events: EventLoop,
     event_rx: mpsc::Receiver<DeviceEvent>,
-    _executor: Executor,
+    _workers: VirtioWorkers,
     log: Arc<Mutex<Vec<&'static str>>>,
 }
 
@@ -243,10 +253,10 @@ fn make(spec: DeviceSpec) -> Fixture {
     let interrupt = Arc::new(MmioInterrupt::new(IrqLine::new(vm, LINE)));
     let log = Arc::new(Mutex::new(Vec::new()));
     let events = EventLoop::new().unwrap();
-    let executor = Executor::new(events.sender()).unwrap();
+    let workers = VirtioWorkers::new(events.sender()).unwrap();
     let (event_tx, event_rx) = mpsc::channel();
     let (device, state) = device(spec, Arc::clone(&log), event_tx);
-    let control = executor.register(device.clone(), interrupt.clone());
+    let control = workers.add(device.clone(), interrupt.clone());
     let worker = Arc::new(RecordingWorker::new(Arc::clone(&log), control));
     let transport = MmioTransport::new(
         device,
@@ -265,7 +275,7 @@ fn make(spec: DeviceSpec) -> Fixture {
         worker,
         events,
         event_rx,
-        _executor: executor,
+        _workers: workers,
         log,
     }
 }
@@ -276,10 +286,10 @@ fn try_make(spec: DeviceSpec) -> crate::error::Result<MmioTransport> {
     let interrupt = Arc::new(MmioInterrupt::new(IrqLine::new(vm, LINE)));
     let log = Arc::new(Mutex::new(Vec::new()));
     let events = EventLoop::new().unwrap();
-    let executor = Executor::new(events.sender()).unwrap();
+    let workers = VirtioWorkers::new(events.sender()).unwrap();
     let (event_tx, _event_rx) = mpsc::channel();
     let (device, _) = device(spec, Arc::new(Mutex::new(Vec::new())), event_tx);
-    let control = executor.register(device.clone(), interrupt.clone());
+    let control = workers.add(device.clone(), interrupt.clone());
     let worker = Arc::new(RecordingWorker::new(log, control));
     MmioTransport::new(
         device,
@@ -519,7 +529,10 @@ fn activation_builds_a_dense_queue_vector() {
     assert!(!queues[1].ready);
     assert_eq!(fixture.worker.starts.load(Ordering::SeqCst), 1);
     assert_eq!(fixture.worker.prepares.load(Ordering::SeqCst), 1);
-    assert_eq!(*fixture.log.lock().unwrap(), ["activate", "start"]);
+    assert_eq!(
+        *fixture.log.lock().unwrap(),
+        ["prepare", "activate", "start"]
+    );
     assert_eq!(
         fixture.status(),
         ACKNOWLEDGE | DRIVER | FEATURES_OK | DRIVER_OK
@@ -541,6 +554,7 @@ fn activation_failure_rolls_back_and_needs_reset() {
     assert_eq!(fixture.status() & DRIVER_OK, 0);
     assert_ne!(fixture.status() & NEEDS_RESET, 0);
     assert_eq!(fixture.worker.starts.load(Ordering::SeqCst), 0);
+    assert_eq!(*fixture.log.lock().unwrap(), ["prepare", "cancel", "reset"]);
     assert_ne!(fixture.read(0x060) & 0x2, 0);
 }
 
@@ -567,6 +581,26 @@ fn a_device_activation_failure_cancels_the_generation_before_reset_and_retry() {
         DeviceEvent::QueueKick(1)
     );
     fixture.set_status(0);
+}
+
+#[test]
+fn a_prepare_failure_needs_reset_without_activating() {
+    let mut fixture = make(spec(0b111));
+    *fixture.worker.prepare_error.lock().unwrap() = Some(DeviceError::Fatal("worker"));
+    fixture.negotiate();
+    fixture.activate();
+
+    assert!(fixture.state.lock().unwrap().activation.is_none());
+    assert_eq!(*fixture.log.lock().unwrap(), ["prepare"]);
+    assert_eq!(fixture.status() & DRIVER_OK, 0);
+    assert_ne!(fixture.status() & NEEDS_RESET, 0);
+    assert_ne!(fixture.read(0x060) & 0x2, 0);
+    assert!(matches!(
+        fixture.events.wait(Some(Duration::ZERO)).unwrap(),
+        Some(Event::DeviceFailed(Error::VirtioDevice { .. }))
+    ));
+    fixture.write(0x050, 0);
+    assert!(fixture.worker.kicks.lock().unwrap().is_empty());
 }
 
 #[test]
@@ -659,7 +693,7 @@ fn status_zero_stops_the_worker_then_resets() {
     assert_eq!(fixture.state.lock().unwrap().resets, 1);
     assert_eq!(
         *fixture.log.lock().unwrap(),
-        ["activate", "start", "stop", "reset"]
+        ["prepare", "activate", "start", "stop", "reset"]
     );
     assert_eq!(fixture.read(0x0fc), 1);
     assert_eq!(fixture.read(0x034), 8);
@@ -675,6 +709,7 @@ fn status_zero_stops_the_worker_then_resets() {
 fn queue_notify_preserves_the_index_and_dispatches_only_when_active() {
     let mut fixture = make(spec(0b111));
     fixture.write(0x050, 0);
+    assert!(fixture.worker.kicks.lock().unwrap().is_empty());
     assert!(fixture.event_rx.try_recv().is_err());
 
     fixture.negotiate();
@@ -695,10 +730,26 @@ fn queue_notify_preserves_the_index_and_dispatches_only_when_active() {
             .unwrap(),
         DeviceEvent::QueueKick(1)
     );
+    fixture.write(0x050, 0x1_0000);
+    assert_eq!(
+        fixture
+            .event_rx
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap(),
+        DeviceEvent::QueueKick(0)
+    );
     fixture.write(0x050, 0x1_0001);
+    assert_eq!(
+        fixture
+            .event_rx
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap(),
+        DeviceEvent::QueueKick(1)
+    );
     fixture.write(0x050, 9);
     fixture.set_status(0);
     assert!(fixture.event_rx.try_recv().is_err());
+    assert_eq!(*fixture.worker.kicks.lock().unwrap(), [0, 1, 0, 1]);
 }
 
 #[test]
@@ -744,11 +795,18 @@ fn worker_start_failure_needs_reset_and_ends_the_vm() {
 
     assert_eq!(fixture.worker.starts.load(Ordering::SeqCst), 1);
     assert_eq!(fixture.worker.cancels.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        *fixture.log.lock().unwrap(),
+        ["prepare", "activate", "start", "cancel"]
+    );
+    assert_eq!(fixture.state.lock().unwrap().resets, 0);
     assert_ne!(fixture.status() & NEEDS_RESET, 0);
     assert!(matches!(
         fixture.events.wait(Some(Duration::ZERO)).unwrap(),
         Some(Event::DeviceFailed(Error::VirtioDevice { .. }))
     ));
+    fixture.write(0x050, 0);
+    assert!(fixture.worker.kicks.lock().unwrap().is_empty());
 }
 
 #[test]
@@ -828,9 +886,9 @@ fn a_chipset_dispatches_mmio_to_the_transport() {
     let events = EventLoop::new().unwrap();
     let memory = Arc::new(GuestMemoryMmap::from_ranges(&[(GuestAddress(0), 0x10000)]).unwrap());
     let log = Arc::new(Mutex::new(Vec::new()));
-    let executor = Executor::new(events.sender()).unwrap();
+    let workers = VirtioWorkers::new(events.sender()).unwrap();
     let (event_tx, _event_rx) = mpsc::channel();
-    let executor = &executor;
+    let workers = &workers;
     let (device, _state) = device(spec(0b111), log, event_tx);
     let interrupt_slot = Arc::new(Mutex::new(None));
     let slot = Arc::clone(&interrupt_slot);
@@ -841,7 +899,7 @@ fn a_chipset_dispatches_mmio_to_the_transport() {
             resources.mmio(BASE, MMIO_WINDOW_LEN);
             let interrupt = Arc::new(MmioInterrupt::new(resources.line(LINE)));
             *slot.lock().unwrap() = Some(Arc::clone(&interrupt));
-            let worker = executor.register(device.clone(), interrupt.clone());
+            let worker = workers.add(device.clone(), interrupt.clone());
             MmioTransport::new(
                 device,
                 interrupt,

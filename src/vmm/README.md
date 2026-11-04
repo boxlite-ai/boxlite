@@ -18,7 +18,7 @@ output reaches `console` through the
 ```text
 boxlite-vmm
 ├── boxlite-hypervisor
-├── mio (the event loop's poller)
+├── mio (the event loop's and the virtio workers' poller)
 ├── vm-memory
 ├── vm-superio (x86_64: the 8250 UART and the i8042, 0.8.2 or later)
 └── linux-loader (Linux x86_64 ELF loading and boot parameters)
@@ -35,11 +35,11 @@ boxlite-vmm
 | `vcpu` | x86_64 vCPU workers: create and configure each vCPU, hold them at a start gate, run the guest and dispatch its exits until the VM ends |
 | `chipset` | `ChipsetBuilder`, the one registry of ranges and interrupt lines, and `Chipset`, the read-only machine it builds |
 | `bus` | `Bus`, `BusRange` and `BusDevice`, and `Buses::dispatch`, which serves the MMIO and port exits of a vCPU |
-| `virtio` | The virtio common infrastructure: the synchronous device contract (`VirtioDevice`, `DeviceSpec`, `DeviceEvent`, `ActivationContext`, `EventRegistrar`, `Waker`, `WorkerControl`), the `VirtQueues` facade (dense preparation and validation, EVENT_IDX, exactly-once deferred completion, notification drain, the stored guest-memory Arc and negotiated indirect flag, and `save`/`restore` stubs that report snapshots unsupported until M8), the 4 KiB virtio-mmio transport (register file, feature negotiation, queue configuration and activation, Status=0 reset, post-activation queue-write rejection), the MMIO interrupt handle, and the default snapshot methods |
+| `virtio` | The virtio common infrastructure: the synchronous device contract (`VirtioDevice`, `DeviceSpec`, `DeviceEvent`, `ActivationContext`, `EventRegistrar`, `Waker`, `WorkerControl`), the `VirtQueues` facade (dense preparation and validation, EVENT_IDX, exactly-once deferred completion, notification drain, the stored guest-memory Arc and negotiated indirect flag, and `save`/`restore` stubs that report snapshots unsupported until M8), the 4 KiB virtio-mmio transport (register file, feature negotiation, queue configuration and activation, Status=0 reset, post-activation queue-write rejection), the MMIO interrupt handle, the default snapshot methods, and the virtio workers (`VirtioWorkers` over a `WorkerRuntime`; `SharedRuntime` runs every device's events on one thread) |
 | `irq` | `IrqChip`, the host interrupt controller as devices see it, and `IrqLine`, one device line; HVF and KVM provide the controller, WHP (M10) only local APICs |
 | `devices` | The console queue, and on x86_64 the 8250 UART at COM1 and the i8042 reset, with `add_legacy_devices`, which adds them to the chipset |
 | `devices::balloon` | Reporting-only `VirtioBalloon`: configuration, negotiation, whole-chain prevalidation and synchronous reclaim-before-used |
-| `virtio::executor` | One lazy shared poller/thread, coalesced generation-bound queue kicks, backend readiness, stop barriers and VM shutdown |
+| `virtio::worker` | One lazy shared poller/thread, coalesced generation-bound queue kicks, backend readiness, stop barriers and VM shutdown |
 | `events` | `Event`, which ends the VM, `EventSender`, which also latches the stop, and `EventLoop`, the poller that waits for the first event |
 
 The Linux x86_64 machine wires the shared virtio runtime and reporting balloon.
@@ -260,9 +260,14 @@ nothing mapped.
    `GuestShutdown` and `GuestReset` become `VmExit`, and `VcpuFailed` or
    `DeviceFailed` its error. Later events are dropped.
 
-4. Once every vCPU has joined, `run` finishes the console worker `Vm::new`
-   started, so the guest's last output reaches the sink, or is counted as
-   dropped and logged, before `run` returns.
+4. Once every vCPU has joined, `run` shuts down the
+   [virtio workers](#virtio-workers), then finishes the console worker
+   `Vm::new` started, so the guest's last output, a device's included,
+   reaches the sink, or is counted as dropped and logged, before `run`
+   returns. Workers that do not shut down turn a clean exit into
+   `Error::VirtioWorker`; an error that ended the VM stays the result. `Drop`
+   retries the shutdown and keeps the RAM registered, so `GuestRam` leaks it,
+   while the workers still run.
 
 `Vm::stop_handle` returns a `StopHandle` that sends `StopRequested` from any
 thread, even before `run` starts. A VM runs once: a second `run` fails with
@@ -367,8 +372,9 @@ through `ActivationContext`.
   interrupt.
 - **After `DRIVER_OK`.** The device owns the queues; the transport rejects and
   logs every queue-configuration write, including `QueueReady`. `QueueNotify`,
-  `InterruptACK` and `Status` stay live. `Status=0` stops the worker, resets the
-  device and clears the transport; it is the only queue-reconfiguration path.
+  `InterruptACK` and `Status` stay live. `Status=0` stops the device's worker
+  slot, resets the device and clears the transport; it is the only
+  queue-reconfiguration path.
   Linux's queue teardown may warn on a `QueueReady` readback of 1; BoxLite never
   hot-removes a virtio device.
 - **Interrupts.** `InterruptStatus` has used-buffer (0x1) and config-change
@@ -385,8 +391,49 @@ through `ActivationContext`.
   before rollback; barrier failure retains resources and takes Fatal.
 - **Errors.** `NeedsReset` sets `DEVICE_NEEDS_RESET` and raises the
   configuration interrupt; `Fatal` sends `Event::DeviceFailed` with
-  `Error::VirtioDevice` and never stops the worker synchronously. The bus stays
-  infallible.
+  `Error::VirtioDevice` and never stops the worker slot synchronously. The
+  bus stays infallible.
+
+## Virtio workers
+
+`virtio::worker::VirtioWorkers` runs every virtio device's events for one VM.
+A worker is one device's slot, with its generation, kicks and sources; which
+thread runs it is the runtime's choice. `VirtioWorkers::add` gives a transport
+the `WorkerControl` handle of its device's slot. The handle forwards to a `WorkerRuntime`, so a per-device runtime can
+replace the shared one without changing the transport, the devices or `Vm`.
+
+- **One thread.** `SharedRuntime` owns one `mio::Poll`, its one `Waker`, and
+  one `virtio-worker` thread that starts at the first `start`. Every device's
+  `on_event` runs there under the device lock. A synchronous request can block
+  other devices; the common one-chain budget bounds work count, not duration.
+- **Generations.** Each slot is stopped, prepared, running, halted, stopping
+  or failed. `prepare` opens a generation and clears its kicks; `stop` and
+  `cancel_prepare` close it with its sources, and kicks and sources never
+  reach a later generation. `stop` waits up to 300 s for the event in flight
+  and never joins the thread.
+- **Kicks.** `kick(index)` sets the queue's bit and wakes the poller only when
+  the bit was clear. Each pass delivers one `QueueKick` per set bit, so kicks
+  that arrive before their event runs coalesce, and one that arrives during
+  the event runs in the next pass. A generation-bound continuation uses the same
+  kick bitmap; all current-pass ready queues and backend events run first.
+  The poller rechecks every second if wake-up fails.
+- **Backend sources.** A device registers a source through the generation's
+  `EventRegistrar` and gets its `SourceId`; each readiness edge arrives as
+  `BackendReady(id)`, so the device reads the source until it would block. A
+  ready mark stays until it is delivered, so an edge that arrives before
+  `start` is not lost. A registrar of a closed generation returns `Closed`,
+  and registrars hold weak references, so a device never keeps its slot or
+  the guest memory alive.
+- **Failures.** `NeedsReset` from `on_event` sets `DEVICE_NEEDS_RESET`
+  atomically, raises the configuration interrupt and halts the slot until
+  `Status=0`. `Fatal`, a panic in `on_event` (caught, which poisons the
+  device lock) or a poisoned lock fails the slot and sends one
+  `DeviceFailed(Error::VirtioDevice)`; a `stop` that outlives its timeout fails
+  the slot too. A poll error or a panic of the thread itself sends
+  `DeviceFailed(Error::VirtioWorker)`.
+- **Shutdown.** `shutdown` closes every source, wakes the thread and waits up
+  to 300 s for it to exit before it joins it. A timeout reports
+  `Error::VirtioWorker` with `TimedOut`, and a later call retries.
 
 ## Reporting balloon and shared dispatch
 
@@ -480,7 +527,10 @@ devices:
   names that owner. `pio_with_offset` sets the device offset a range's first
   port reaches, for a controller whose ports are split across several ranges.
 - **Constructors.** A constructor only claims resources and builds state; a
-  device that needs a thread starts it after `build`. A line from
+  device that needs a thread starts it after `build`, and a virtio device's
+  events run on the worker thread, which starts at its first DRIVER_OK.
+  `Vm::with_backend` passes the guest memory and the workers in a
+  `DeviceContext`, which tests use to add a transport. A line from
   `Resources::line` is not armed until `build` succeeds: using it earlier
   fails with `Error::LineNotArmed` and makes no host call, so a device that a
   conflict discards never raised anything. On a conflict, every device drops

@@ -11,16 +11,17 @@ description = "Virtual machine lifecycle and device model for BoxLite"
 [dependencies]
 boxlite-hypervisor.workspace = true
 libc = "0.2"
-mio = { version = "1.2.0", default-features = false, features = ["os-poll", "net"] }
+mio = { version = "1.2.0", default-features = false, features = ["os-poll"] }
 tracing = "0.1"
 virtio-queue = "0.18.0"
 vm-memory = { version = "0.18.0", features = ["backend-mmap"] }
+
+[dev-dependencies]
+# Tests poll real pipes as virtio backend sources.
+mio = { version = "1.2.0", default-features = false, features = ["os-poll", "os-ext"] }
 
 [target.'cfg(target_arch = "x86_64")'.dependencies]
 vm-superio = "0.8.2"
 
 [target.'cfg(all(target_os = "linux", target_arch = "x86_64"))'.dependencies]
 linux-loader = { version = "0.14.0", default-features = false, features = ["elf"] }
-
-[target.'cfg(unix)'.dev-dependencies]
-mio = { version = "1.2.0", default-features = false, features = ["os-ext"] }
