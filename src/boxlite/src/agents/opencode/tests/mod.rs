@@ -450,6 +450,33 @@ async fn a_subagent_from_an_earlier_turn_does_not_block_this_one() {
 }
 
 #[tokio::test]
+async fn a_later_turn_that_continues_a_subagent_waits_on_its_requests() {
+    // The child was created during an earlier turn; this turn sends it a
+    // follow-up through `subagent` with its `sessionID`, and the child asks.
+    let mut continuing = assistant("msg_4", "", None);
+    continuing["content"] = json!([{
+        "type": "tool", "id": "call_sub", "name": "subagent",
+        "state": { "status": "running", "metadata": {},
+                   "input": { "prompt": "go on", "sessionID": "ses_child" } },
+        "time": { "created": 21.0 },
+    }]);
+    let page = history(vec![continuing, user("msg_3", 20.0)]);
+    let permissions = ok(json!({ "data": [
+        { "id": "per_child", "sessionID": "ses_child", "action": "read", "resources": [".env"],
+          "source": { "type": "tool", "messageID": "msg_c1", "id": "call_read" } },
+    ] }));
+    let earlier_child = ok(
+        json!({ "data": { "id": "ses_child", "parentID": "ses_test", "time": { "created": 5.0 } } }),
+    );
+    let (session, _) = scripted_session(vec![empty(), page, permissions, empty(), earlier_child]);
+
+    let state = session.turn("msg_3").await.unwrap();
+
+    assert_eq!(state.status, AgentTurnStatus::WaitingInput);
+    assert_eq!(state.requests.len(), 1, "{:?}", state.requests);
+}
+
+#[tokio::test]
 async fn malformed_native_session_ids_never_reach_a_request_path() {
     let page = history(vec![assistant("msg_2", "", None), user("msg_1", 10.0)]);
     let permissions = ok(json!({ "data": [

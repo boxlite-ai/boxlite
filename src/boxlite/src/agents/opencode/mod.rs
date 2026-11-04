@@ -280,6 +280,7 @@ impl Session {
                 let window = TurnWindow {
                     started: input["time"]["created"].as_f64().unwrap_or(f64::MAX),
                     next_input: observed.next_input,
+                    continued: &observed.continued,
                 };
                 let requests = self
                     .pending_requests(turn_id, &observed.steps, window)
@@ -358,12 +359,12 @@ impl Session {
     }
 
     /// Pending permissions and questions that block this turn: those naming
-    /// one of its steps, and those in subagent sessions created inside its window.
+    /// one of its steps, and those in subagent sessions the turn claims.
     async fn pending_requests(
         &self,
         turn_id: &str,
         steps: &[String],
-        window: TurnWindow,
+        window: TurnWindow<'_>,
     ) -> BoxliteResult<Vec<AgentRequest>> {
         let client = &self.server.client;
         let permissions = client.get("/api/permission/request").await?;
@@ -399,7 +400,7 @@ impl Session {
                     .as_str()
                     .is_some_and(|id| steps.iter().any(|step| step == id))
             } else {
-                owners.created_in(self, session_id, window).await?
+                owners.claimed_by(self, session_id, window).await?
             };
             if blocks_turn {
                 requests.push(kind.request(turn_id, native));
@@ -434,26 +435,30 @@ impl Session {
     }
 }
 
-/// When a turn owned the session: from its input until the next input.
+/// Which children a turn claims: those its running `subagent` calls continue,
+/// and those created while it owned the session, from its input until the
+/// next input. Stored lineage decides, not when an event arrives, so a child
+/// of an earlier turn that restarts or asks later still belongs to that turn.
 #[derive(Clone, Copy, Debug)]
-struct TurnWindow {
+struct TurnWindow<'a> {
     started: f64,
     next_input: Option<f64>,
+    continued: &'a [String],
 }
 
 /// Resolves which child session of the agent a subagent request came from,
-/// and whether that child was created inside a turn's window.
+/// and whether a turn claims that child.
 #[derive(Default)]
 struct SubagentOwners {
     sessions: HashMap<String, Value>,
 }
 
 impl SubagentOwners {
-    async fn created_in(
+    async fn claimed_by(
         &mut self,
         agent: &Session,
         session_id: &str,
-        window: TurnWindow,
+        window: TurnWindow<'_>,
     ) -> BoxliteResult<bool> {
         let mut current = session_id.to_owned();
         for _ in 0..MAX_SUBAGENT_DEPTH {
@@ -462,6 +467,9 @@ impl SubagentOwners {
                 return Ok(false);
             };
             if parent == agent.id {
+                if window.continued.contains(&current) {
+                    return Ok(true);
+                }
                 let created = info["time"]["created"].as_f64().unwrap_or(f64::MIN);
                 return Ok(created >= window.started
                     && window.next_input.is_none_or(|next| created < next));
@@ -593,6 +601,8 @@ struct Observed {
     steps: Vec<String>,
     /// Creation time of the next input that ended the turn's own output.
     next_input: Option<f64>,
+    /// Existing children its running `subagent` calls continue by `sessionID`.
+    continued: Vec<String>,
 }
 
 /// Map the history after a turn's input, oldest first, to its status.
@@ -624,6 +634,7 @@ fn observe(turn_id: &str, later: &[Value]) -> Observed {
     let mut last_finish: Option<&str> = None;
     let mut continuing = false;
     let mut next_input = None;
+    let mut continued = Vec::new();
     let mut outcome = None;
     for message in later {
         match message["type"].as_str() {
@@ -631,6 +642,9 @@ fn observe(turn_id: &str, later: &[Value]) -> Observed {
                 for part in message["content"].as_array().into_iter().flatten() {
                     if part["type"] == "text" {
                         text.push_str(part["text"].as_str().unwrap_or_default());
+                    }
+                    if let Some(child) = continued_child(part) {
+                        continued.push(child.to_owned());
                     }
                 }
                 steps.push(message["id"].as_str().unwrap_or_default().to_owned());
@@ -695,7 +709,19 @@ fn observe(turn_id: &str, later: &[Value]) -> Observed {
         result,
         steps,
         next_input,
+        continued,
     }
+}
+
+/// The child a running `subagent` call continues: OpenCode keeps a call's
+/// `input` but not its progress, so only a follow-up names its child.
+fn continued_child(part: &Value) -> Option<&str> {
+    let running_subagent = part["type"] == "tool"
+        && part["name"] == "subagent"
+        && part["state"]["status"] == "running";
+    running_subagent
+        .then(|| part["state"]["input"]["sessionID"].as_str())
+        .flatten()
 }
 
 /// A native error's message, or its JSON when it has none.

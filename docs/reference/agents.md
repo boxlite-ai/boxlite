@@ -109,7 +109,9 @@ Sessions deny reading `.env` and `.env.*` files (`.env.example` stays readable)
 and OpenCode's `question` tool. OpenCode's defaults would ask first, nobody can
 answer through BoxLite yet, and a pending ask holds every later input; denied, the
 tool call fails and the turn continues. A turn waiting on another permission, such
-as one asked in a subagent, lists it in its snapshot. Answering requests through
+as one asked in a subagent, lists it in its snapshot. A subagent's request belongs
+to the turn that created the subagent, or to a later turn that sends it a follow-up
+and is still waiting on it. Answering requests through
 BoxLite is not available yet; every other operation and option returns
 `Unsupported` before reaching OpenCode.
 
