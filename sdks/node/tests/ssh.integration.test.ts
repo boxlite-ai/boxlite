@@ -66,7 +66,7 @@ describe("SimpleBox.ssh", { timeout: 240_000 }, () => {
     box = new SimpleBox({ image: "alpine:latest", autoRemove: false });
 
     expectDisabled(await box.ssh.status());
-    expectDisabled(await box.ssh.disable());
+    await expect(box.ssh.disable()).rejects.toThrow(/not running/);
     expectDisabled(await box.ssh.status());
 
     const info = await box.info();

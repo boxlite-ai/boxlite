@@ -319,8 +319,9 @@ runtime's lifetime.
 - **Lifecycle:** `Configure` replaces the whole configuration, restarts the
   listener, and may start the box. With `WithCmd` or `WithEntrypoint`, call
   `box.Start` first or `Configure` returns `ErrInvalidState`. `Status` and
-  `Disable` never start the box; a box that is not running reports disabled
-  with generation zero. `Disable` is safe to repeat and keeps the generation.
+  `Disable` never start the box. On an idle local box, `Status` reports disabled
+  with generation zero, and `Disable` returns `ErrInvalidState`. On a running
+  box, `Disable` is safe to repeat and keeps the generation.
 - **Keys:** the guest validates keys and stores them on the container disk. A
   rejected configuration returns `ErrInvalidArgument` without echoing key
   material. `%v`, `%+v`, `%s`, and `%#v` redact keys and CA values; JSON
