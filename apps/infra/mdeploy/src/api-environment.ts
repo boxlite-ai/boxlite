@@ -58,6 +58,38 @@ const flag = (environment: Environment, key: string): boolean => {
  */
 const held = (delivered: Record<string, string>, key: string): boolean => (delivered[key]?.trim() ?? '') !== ''
 
+const CI_SECRET_KEYS = ['CI_GITHUB_APP_PRIVATE_KEY', 'CI_GITHUB_WEBHOOK_SECRET', 'CI_SECRET_ENCRYPTION_KEY']
+
+/** CI is optional; once selected, every credential must use the workload secret channel. */
+const validateCiChannels = (values: Record<string, string>, addresses: Record<string, string>): void => {
+  for (const key of ['CI_GITHUB_APP_PRIVATE_KEY_FILE', 'CI_GITHUB_WEBHOOK_SECRET_FILE'])
+    if (key in values || key in addresses)
+      throw new ApiEnvironmentError(`${key} is a self-hosted file input; hosted CI uses mstage secret refs`)
+  const webSecret = 'CI_GITHUB_APP_CLIENT_SECRET'
+  if (held(values, webSecret) || held(addresses, webSecret)) {
+    if (!held(addresses, webSecret)) throw new ApiEnvironmentError(`${webSecret} requires a mstage secret ref`)
+    if (!held(values, 'CI_GITHUB_APP_CLIENT_ID'))
+      throw new ApiEnvironmentError('CI_GITHUB_APP_CLIENT_ID is required for browser connect')
+  }
+  const client = values.CI_GITHUB_APP_CLIENT_ID,
+    slug = values.CI_GITHUB_APP_SLUG
+  if (
+    !client &&
+    !slug &&
+    !addresses.CI_GITHUB_APP_CLIENT_ID &&
+    !addresses.CI_GITHUB_APP_SLUG &&
+    !CI_SECRET_KEYS.some((key) => held(values, key) || held(addresses, key))
+  )
+    return
+  if (!client || !/^[A-Za-z0-9_.-]{1,200}$/.test(client))
+    throw new ApiEnvironmentError('CI_GITHUB_APP_CLIENT_ID is required for hosted CI')
+  if (!slug || !/^[A-Za-z0-9-]+$/.test(slug))
+    throw new ApiEnvironmentError('CI_GITHUB_APP_SLUG is required for hosted CI')
+  for (const key of CI_SECRET_KEYS)
+    if (!held(addresses, key))
+      throw new ApiEnvironmentError(`${key} requires a mstage secret ref in both api and secret groups`)
+}
+
 /**
  * The names the billing read path only means anything as a set.
  *
@@ -120,7 +152,8 @@ const oidcFrom = (environment: Environment, hosts: PublicHosts): Record<string, 
   if (management && !audience) {
     throw new ApiEnvironmentError('OIDC_MANAGEMENT_API_AUDIENCE is required when OIDC_MANAGEMENT_API_ENABLED=true')
   }
-  const passthrough = (key: string) => (optional(environment, key) ? { [key]: optional(environment, key) as string } : {})
+  const passthrough = (key: string) =>
+    optional(environment, key) ? { [key]: optional(environment, key) as string } : {}
   return {
     OIDC_ISSUER_BASE_URL: issuer,
     OIDC_AUDIENCE: optional(environment, 'OIDC_AUDIENCE') ?? 'boxlite',
@@ -273,6 +306,7 @@ export const apiEnvironmentFrom = ({
     }
   }
   const { values, addresses } = splitServiceChannels({ delivered, declaration, home })
+  validateCiChannels(values, addresses)
 
   return {
     environment: {
@@ -326,7 +360,9 @@ export const apiEnvironmentFrom = ({
       ...billingFrom(environment, delivered),
       ...statusSyncFrom(environment, delivered, stage),
       ...systemImagesFrom(environment),
-      ...(optional(environment, 'POSTHOG_HOST') ? { POSTHOG_HOST: optional(environment, 'POSTHOG_HOST') as string } : {}),
+      ...(optional(environment, 'POSTHOG_HOST')
+        ? { POSTHOG_HOST: optional(environment, 'POSTHOG_HOST') as string }
+        : {}),
       ...(optional(environment, 'SVIX_SERVER_URL')
         ? { SVIX_SERVER_URL: optional(environment, 'SVIX_SERVER_URL') as string }
         : {}),

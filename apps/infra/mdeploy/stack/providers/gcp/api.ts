@@ -179,9 +179,7 @@ const bindingsFor = ({
         ? [
             new gcp.secretmanager.SecretIamMember(`ApiCapability${index}`, {
               project,
-              secretId: capability.clickhouse.reader.passwordRef.apply((reference: string) =>
-                secretIdOf(reference),
-              ),
+              secretId: capability.clickhouse.reader.passwordRef.apply((reference: string) => secretIdOf(reference)),
               role: 'roles/secretmanager.secretAccessor',
               member: principal,
             }),
@@ -265,6 +263,7 @@ export const gcpApiProvider =
      */
     const hosts = publicHostsFor({ domain, dashboardDomain })
     const apiHost = hosts.api
+    const continuousCi = Boolean(request.environment.CI_GITHUB_APP_CLIENT_ID)
 
     /*
      * Every name this container is handed by reference, in one place.
@@ -305,9 +304,9 @@ export const gcpApiProvider =
       (name) =>
         new gcp.secretmanager.SecretIamMember(`ApiSecretAccess-${name}`, {
           project,
-          secretId: $util.output(handedOver[name] as $util.Input<string>).apply((reference: string) =>
-            secretIdOf(reference),
-          ),
+          secretId: $util
+            .output(handedOver[name] as $util.Input<string>)
+            .apply((reference: string) => secretIdOf(reference)),
           role: 'roles/secretmanager.secretAccessor',
           member: placement.serviceAccount.apply((email: string) => `serviceAccount:${email}`),
         }),
@@ -329,6 +328,7 @@ export const gcpApiProvider =
         // and reads the value held in state — so it refuses the delete half.
         // Left on, the first rename of this service costs two applies.
         deletionProtection: false,
+        ...(continuousCi ? { scaling: { minInstanceCount: 1 } } : {}),
         template: {
           serviceAccount: placement.serviceAccount,
           /*
@@ -386,6 +386,7 @@ export const gcpApiProvider =
           containers: [
             {
               image: request.image,
+              ...(continuousCi ? { resources: { cpuIdle: false } } : {}),
               ports: [{ name: 'http1', containerPort: request.port }],
               volumeMounts: [
                 { name: CLOUD_SQL_VOLUME, mountPath: `/${CLOUD_SQL_VOLUME}` },
@@ -459,7 +460,13 @@ export const gcpApiProvider =
     })
 
     const granted = request.capabilities.flatMap((capability, index) =>
-      bindingsFor({ capability, index, project, member: placement.serviceAccount, bucketName: dependencies.storage.name }),
+      bindingsFor({
+        capability,
+        index,
+        project,
+        member: placement.serviceAccount,
+        bucketName: dependencies.storage.name,
+      }),
     )
 
     /*

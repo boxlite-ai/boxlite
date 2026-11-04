@@ -5,6 +5,7 @@
  */
 
 import type { FirstRunUseCase } from '@/lib/first-run'
+import type { CiSettings, CiConnectInput, CiWebStart, CiConnectResult, CiConnectConfiguration } from './ci-types'
 import { BillingApiClient } from '@/billing-api/billingApiClient'
 import { DashboardConfig } from '@/types/DashboardConfig'
 import {
@@ -93,6 +94,43 @@ export class ApiClient {
   public async register(turnstileToken: string): Promise<User> {
     return (await this.http.post<User>('/auth/register', { turnstileToken }, { ...this.v1Config(), timeout: 30_000 }))
       .data
+  }
+  public async getCiSettings(organization: string): Promise<CiSettings> {
+    return (await this.http.get(`/v1/${encodeURIComponent(organization)}/ci/settings`, this.v1Config())).data
+  }
+  public async setCiCapacity(organization: string, maximum: number | null): Promise<CiSettings> {
+    return (
+      await this.http.patch(
+        `/v1/${encodeURIComponent(organization)}/ci/settings`,
+        { max_concurrent_jobs: maximum },
+        this.v1Config(),
+      )
+    ).data
+  }
+  public async getCiConnectConfiguration(organization: string): Promise<CiConnectConfiguration> {
+    return (await this.http.get(`/v1/${encodeURIComponent(organization)}/ci/connect/configuration`, this.v1Config()))
+      .data
+  }
+  public async startCiConnect(organization: string, input: CiConnectInput): Promise<CiWebStart> {
+    return (await this.http.post(`/v1/${encodeURIComponent(organization)}/ci/connect/web`, input, this.v1Config())).data
+  }
+  public async completeCiConnect(
+    organization: string,
+    id: string,
+    input: { code: string; state: string },
+  ): Promise<CiConnectResult> {
+    try {
+      return (
+        await this.http.post(
+          `/v1/${encodeURIComponent(organization)}/ci/connect/${encodeURIComponent(id)}/complete`,
+          input,
+          this.v1Config(),
+        )
+      ).data
+    } catch {
+      // Axios errors can retain the submitted code in request configuration.
+      throw new Error('GitHub authorization could not be completed. Restart connect.')
+    }
   }
 
   public async getOrganizationOnboarding(org: string): Promise<OrganizationOnboarding | null> {

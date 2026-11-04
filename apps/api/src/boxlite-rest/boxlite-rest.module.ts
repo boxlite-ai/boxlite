@@ -5,6 +5,18 @@
  */
 
 import { Module } from '@nestjs/common'
+import { CiWebhookController } from '../ci/ci-webhook.controller'
+import { CiWebhookService } from '../ci/ci-webhook.service'
+import { CiConnectController } from '../ci/ci-connect.controller'
+import { CiSettingsController } from '../ci/ci-settings.controller'
+import { CiSettingsService } from '../ci/ci-settings.service'
+import { CiConnectService } from '../ci/ci-connect.service'
+import { CiListenerService } from '../ci/ci-listener.service'
+import { CiNativeState } from '../ci/ci-native-state'
+import { CiNativeHost } from '../ci/ci-native-host'
+import { CiNativeWorkers } from '../ci/ci-native-workers'
+import { CiGitHubService } from '../ci/ci-github.service'
+import { CiSecretsService } from '../ci/ci-secrets.service'
 import { BoxModule } from '../box/box.module'
 import { AuthModule } from '../auth/auth.module'
 import { ApiKeyModule } from '../api-key/api-key.module'
@@ -40,6 +52,9 @@ import { AuditModule } from '../audit/audit.module'
   controllers: [
     // Canonical domain paths must precede legacy /v1/:prefix resource routes.
     BoxliteDomainController,
+    CiConnectController,
+    CiSettingsController,
+    CiWebhookController,
     BoxliteMeController,
     BoxliteConfigController,
     BoxliteBoxController,
@@ -50,7 +65,19 @@ import { AuditModule } from '../audit/audit.module'
     BoxliteMemberController,
     BoxliteInvitationController,
   ],
-  providers: [BoxliteWsProxyService, CommerceBoxLimitService],
+  providers: [
+    BoxliteWsProxyService,
+    CommerceBoxLimitService,
+    CiConnectService,
+    CiSettingsService,
+    CiNativeState,
+    CiNativeHost,
+    CiNativeWorkers,
+    CiListenerService,
+    CiGitHubService,
+    CiSecretsService,
+    CiWebhookService,
+  ],
   exports: [BoxliteWsProxyService],
 })
 export class BoxliteRestModule {}

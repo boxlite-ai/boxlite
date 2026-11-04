@@ -23,19 +23,69 @@ AWS bootstrap and mdeploy currently use different app names; read the
 
 ## Inputs
 
-| Input | Owner |
-| --- | --- |
-| App identity, build artifacts, environment groups | Committed `mstage.env.json` |
-| Cloud, region/project, registry and resource sizing | Ignored `.mstage.config.json` |
-| Domains, fleet count, secrets and feature settings | Encrypted stage environment |
-| Container identity | Invocation's `BOXLITE_IMAGE_TAG` |
-| Runner release | Workspace `Cargo.toml`, or invocation's `VERSION` |
-| Runner commit build | `RUNNER_ARTIFACT_SOURCE=build` and `RUNNER_ARTIFACT_REF=<full-sha>` |
+| Input                                               | Owner                                                               |
+| --------------------------------------------------- | ------------------------------------------------------------------- |
+| App identity, build artifacts, environment groups   | Committed `mstage.env.json`                                         |
+| Cloud, region/project, registry and resource sizing | Ignored `.mstage.config.json`                                       |
+| Domains, fleet count, secrets and feature settings  | Encrypted stage environment                                         |
+| Container identity                                  | Invocation's `BOXLITE_IMAGE_TAG`                                    |
+| Runner release                                      | Workspace `Cargo.toml`, or invocation's `VERSION`                   |
+| Runner commit build                                 | `RUNNER_ARTIFACT_SOURCE=build` and `RUNNER_ARTIFACT_REF=<full-sha>` |
 
 See [configuration](../docs/configuration.md) for writing and verifying each input.
 `BOXLITE_IMAGE_TAG` accepts a full lowercase SHA or `vX.Y.Z-<sha>` for release images.
 The environment describes the desired deployment; setting a tag does not build an artifact.
 Use [mbuild](../mbuild/README.md) and the [runner runbook](../docs/runners.md) to prepare it first.
+
+## Hosted GitHub CI Listener
+
+The API imports the shared TypeScript Listener. Configure its App identity and slug
+as ordinary mstage API settings. Configure `CI_GITHUB_APP_PRIVATE_KEY`,
+`CI_GITHUB_WEBHOOK_SECRET` and `CI_SECRET_ENCRYPTION_KEY` as secret references.
+The committed catalog already places the credentials in both the optional `api`
+consumer group and the optional `secret` marker group; no additional enable flag is needed.
+A partial CI configuration or plaintext credential channel stops deployment.
+Dashboard browser connect additionally uses optional `CI_GITHUB_APP_CLIENT_SECRET`
+as a fourth secret reference. It is the App's OAuth Client Secret, not its RSA
+private key. Device Flow and the scheduler do not require it.
+
+For a GCP stage, store reference documents rather than secret values:
+
+```bash
+npm run mstage env set -- --stage dev CI_GITHUB_APP_CLIENT_ID=YOUR_CLIENT_ID CI_GITHUB_APP_SLUG=YOUR_APP_SLUG
+npm run mstage env set -- --stage dev --json \
+  'CI_GITHUB_APP_PRIVATE_KEY={"address":"projects/PROJECT/secrets/ci-app-private-key/versions/1"}' \
+  'CI_GITHUB_WEBHOOK_SECRET={"address":"projects/PROJECT/secrets/ci-webhook/versions/1"}' \
+  'CI_SECRET_ENCRYPTION_KEY={"address":"projects/PROJECT/secrets/ci-connect-encryption/versions/1"}' \
+  'CI_GITHUB_APP_CLIENT_SECRET={"address":"projects/PROJECT/secrets/ci-oauth-client-secret/versions/1"}'
+npm run mstage env list -- --stage dev --select-group api
+```
+
+Run these commands from `apps/infra`, replacing the placeholders with existing
+secrets. The final command prints configured names. mdeploy grants the API identity
+read access to the referenced secrets and emits Cloud Run `secretKeyRef` entries;
+the PEM/HMAC/encryption values are not copied into revision configuration or passed
+to runner hosts and JIT Boxes. The encryption secret holds base64 for exactly 32
+bytes. Keep it stable across replicas while connect attempts are pending.
+
+For browser connect, add the exact `${DASHBOARD_URL}/settings/ci/callback` URL
+to the GitHub App; leave wildcard matching and OAuth-during-installation disabled.
+Apply the additive CI web-connect migration. For GCP, the API image bundles both
+API and Dashboard artifacts; one Cloud Run revision updates both surfaces.
+The Dashboard's CI tab starts authorization; merely installing the App does not
+establish BoxLite account ownership. Keep the current standalone Listener and its
+webhook active until a coordinated hosted cutover can avoid duplicate providers.
+
+Pin secret versions and deploy a new revision when rotating them. The API receives
+the resolved values at instance startup; it does not fetch Secret Manager itself.
+Cloud Run receives a service-level minimum of one instance and `cpuIdle: false`
+only when hosted CI is configured, so scheduling continues outside requests.
+This introduces idle instance costs. Other API deployments retain their defaults;
+multiple replicas still use the PostgreSQL lease to select one scheduler.
+
+See the [API configuration contract](../../api/README.md#hosted-configuration-and-deployment)
+and [Cloud Run secret delivery](https://docs.cloud.google.com/run/docs/configuring/services/secrets).
+Provider-input tests do not replace a deployed App/CI acceptance run.
 
 ## Runner convergence
 
@@ -76,13 +126,13 @@ npm run mdeploy -- --stage prod --confirm
 npm run mdeploy -- --stage dev --refresh
 ```
 
-| Intent | Effect |
-| --- | --- |
-| Default | Apply the resource graph; protected stages require `--confirm` |
-| `--diff` | Preview resource changes |
-| `--refresh` | Reconcile deployment state with the cloud; protected stages require `--confirm` |
-| `--remove --confirm` | Remove an unprotected stage; always refused for a protected stage |
-| `--local-env` | Read ambient environment instead of the encrypted stage store |
+| Intent               | Effect                                                                          |
+| -------------------- | ------------------------------------------------------------------------------- |
+| Default              | Apply the resource graph; protected stages require `--confirm`                  |
+| `--diff`             | Preview resource changes                                                        |
+| `--refresh`          | Reconcile deployment state with the cloud; protected stages require `--confirm` |
+| `--remove --confirm` | Remove an unprotected stage; always refused for a protected stage               |
+| `--local-env`        | Read ambient environment instead of the encrypted stage store                   |
 
 `--diff`, `--refresh`, and `--remove` are mutually exclusive. All intents check the selected
 stage's login requirements. `--local-env` is an explicit diagnostic override, not the ordinary

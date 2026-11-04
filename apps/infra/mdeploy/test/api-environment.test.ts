@@ -57,6 +57,146 @@ test('PostHog events use the deployed stage on both clouds', () => {
   }
 })
 
+const ciSecrets = ['CI_GITHUB_APP_PRIVATE_KEY', 'CI_GITHUB_WEBHOOK_SECRET', 'CI_SECRET_ENCRYPTION_KEY']
+const ciKeys = ['CI_GITHUB_APP_CLIENT_ID', 'CI_GITHUB_APP_SLUG', ...ciSecrets]
+const ciValues = (home: 'aws' | 'gcp'): Record<string, string> => ({
+  CI_GITHUB_APP_CLIENT_ID: 'test-client',
+  CI_GITHUB_APP_SLUG: 'example-app',
+  ...Object.fromEntries(
+    ciSecrets.map((key, index) => [
+      key,
+      JSON.stringify({
+        address:
+          home === 'gcp'
+            ? `projects/test-project/secrets/ci-${index}/versions/1`
+            : `arn:aws:secretsmanager:us-east-1:123456789012:secret:ci-${index}`,
+      }),
+    ]),
+  ),
+})
+
+test('browser connect is optional and carries its client secret only through a secret reference', () => {
+  const key = 'CI_GITHUB_APP_CLIENT_SECRET'
+  const input = {
+    ...base,
+    ...ciValues('gcp'),
+    [key]: JSON.stringify({ address: 'projects/test-project/secrets/ci-oauth/versions/1' }),
+  }
+  const result = apiEnvironmentFrom({
+    environment: input,
+    declaration: groups([...ciKeys, key], [...ciSecrets, key]),
+    region: 'us-east1',
+    stage: 'dev',
+    home: 'gcp',
+  })
+  assert.equal(result.environment[key], undefined)
+  assert.equal(result.secrets[key], 'projects/test-project/secrets/ci-oauth/versions/1')
+  assert.throws(
+    () =>
+      apiEnvironmentFrom({
+        environment: { ...input, [key]: 'CONFIDENTIAL-DO-NOT-ECHO' },
+        declaration: groups([...ciKeys, key], ciSecrets),
+        region: 'us-east1',
+        stage: 'dev',
+        home: 'gcp',
+      }),
+    (error) => {
+      assert.ok(error instanceof ApiEnvironmentError)
+      assert.ok(!error.message.includes('CONFIDENTIAL-DO-NOT-ECHO'))
+      return true
+    },
+  )
+  const declared = parseBase(
+    new URL('../../mstage.env.json', import.meta.url).pathname,
+    readFileSync(new URL('../../mstage.env.json', import.meta.url), 'utf8'),
+  )
+  assert.ok(declared.envSelectGroup.api.includes(key))
+  assert.ok(declared.envSelectGroup.secret.includes(key))
+  assert.ok(declared.envOptional.api.includes(key))
+})
+
+test('the committed catalog carries optional CI fields and marks only its credentials as references', () => {
+  const path = new URL('../../mstage.env.json', import.meta.url)
+  const declared = parseBase(path.pathname, readFileSync(path, 'utf8'))
+  for (const key of ciKeys) {
+    assert.ok(declared.envSelectGroup.api.includes(key))
+    assert.ok(declared.envOptional.api.includes(key))
+    assert.equal(declared.envSelectGroup.secret.includes(key), ciSecrets.includes(key))
+  }
+})
+
+for (const home of ['aws', 'gcp'] as const) {
+  test(`${home} delivers CI credentials only as secret references`, () => {
+    const input = ciValues(home)
+    const result = apiEnvironmentFrom({
+      environment: { ...base, ...input },
+      declaration: groups(ciKeys, ciSecrets),
+      region: 'us-east1',
+      stage: 'dev',
+      home,
+    })
+    assert.equal(result.environment.CI_GITHUB_APP_CLIENT_ID, input.CI_GITHUB_APP_CLIENT_ID)
+    assert.equal(result.environment.CI_GITHUB_APP_SLUG, input.CI_GITHUB_APP_SLUG)
+    for (const key of ciSecrets) {
+      assert.equal(result.environment[key], undefined)
+      assert.equal(result.secrets[key], JSON.parse(input[key]).address)
+    }
+  })
+}
+
+for (const key of ciSecrets) {
+  test(`hosted CI rejects plaintext ${key} without echoing it`, () => {
+    const input = { ...ciValues('aws'), [key]: 'CONFIDENTIAL-DO-NOT-ECHO' }
+    assert.throws(
+      () =>
+        assemble(
+          { ...base, ...input },
+          groups(
+            ciKeys,
+            ciSecrets.filter((k) => k !== key),
+          ),
+        ),
+      (error) => {
+        assert.ok(error instanceof ApiEnvironmentError)
+        assert.match(error.message, new RegExp(key))
+        assert.ok(!error.message.includes(input[key]))
+        return true
+      },
+    )
+  })
+}
+
+for (const key of ciKeys) {
+  test(`hosted CI refuses a partial configuration missing ${key}`, () => {
+    const input = ciValues('aws')
+    delete input[key]
+    assert.throws(
+      () =>
+        assemble(
+          { ...base, ...input },
+          groups(
+            ciKeys.filter((k) => k !== key),
+            ciSecrets.filter((k) => k !== key),
+          ),
+        ),
+      new RegExp(key),
+    )
+  })
+}
+
+test('a secret-reference client ID cannot silently leave the scheduler without background CPU', () => {
+  const key = 'CI_GITHUB_APP_CLIENT_ID'
+  assert.throws(
+    () => assemble({ ...base, [key]: ciValues('aws').CI_GITHUB_APP_PRIVATE_KEY }, groups([key], [key])),
+    /CI_GITHUB_APP_CLIENT_ID/,
+  )
+})
+
+test('hosted CI refuses standalone file inputs', () => {
+  const key = 'CI_GITHUB_APP_PRIVATE_KEY_FILE'
+  assert.throws(() => assemble({ ...base, [key]: '/private/key.pem' }, groups([key])), /self-hosted file input/)
+})
+
 test('the declared API group delivers the organization invitation lifetime on both clouds', () => {
   const path = new URL('../../mstage.env.json', import.meta.url)
   const declared = parseBase(path.pathname, readFileSync(path, 'utf8'))

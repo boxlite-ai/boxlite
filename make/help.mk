@@ -38,7 +38,11 @@ help:
 	@echo "    make build:apps     - Build the apps workspace (api, dashboard, runner, libs…)"
 	@echo "    make build:apps:api  - Build and type-check the API for production"
 	@echo "    make build:apps:dashboard - Build and type-check the dashboard"
-	@echo "    make build:apps:api - Build only the API service"
+
+	@echo "    make build:apps:api - Compile the production API"
+	@echo "    make build:apps:ci-listener - Build the shared TypeScript CI Listener core"
+	@echo "    make build:apps:github-ci-runner - Build the standalone Node CI Listener"
+	@echo "    make github-ci-runner-image - Build the local Node Listener image"
 	@echo ""
 	@echo "  Plugins:"
 	@echo "    make plugin:boxlite:check    - Validate BoxLite plugin and package tests"
@@ -96,6 +100,9 @@ help:
 	@echo "    make test:apps:api          - Run API unit tests (FILTER=<pattern>)"
 	@echo "    make test:apps:infra-local  - Test local-stack startup without VMs"
 	@echo "    make test:apps:dashboard    - Run Dashboard tests (FILTER=<pattern>)"
+
+	@echo "    make test:apps:ci-listener  - Run shared CI state contracts (optional local PostgreSQL)"
+	@echo "    make test:apps:github-ci-runner - Run standalone Listener boundary tests"
 	@echo "    make test:apps:proxy        - Run proxy unit tests (FILTER=<pattern>)"
 	@echo "    make test:apps:mdeploy      - Type-check and test deployment scripts"
 	@echo "    make test:e2e:drivers       - Test acceptance-client argument handling"

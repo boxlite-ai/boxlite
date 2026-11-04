@@ -33,6 +33,7 @@ ENV NX_SKIP_NX_CACHE=true
 COPY apps/api/ api/
 COPY apps/dashboard/ dashboard/
 
+COPY apps/libs/ci-listener/ libs/ci-listener/
 COPY apps/libs/runner-api-client/ libs/runner-api-client/
 COPY apps/libs/api-client/ libs/api-client/
 COPY apps/libs/analytics-api-client/ libs/analytics-api-client/

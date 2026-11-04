@@ -1,4 +1,4 @@
-PHONY_TARGETS += guest shim runtime vmm vmm\:boot vmm\:boot\:host cli cli\:release skillbox-image build\:apps build\:apps\:api build\:apps\:dashboard
+PHONY_TARGETS += guest shim runtime vmm vmm\:boot vmm\:boot\:host cli cli\:release skillbox-image build\:apps build\:apps\:api build\:apps\:dashboard build\:apps\:ci-listener
 
 vmm:
 	@cargo build -p boxlite-hypervisor -p boxlite-vmm
@@ -56,10 +56,25 @@ build\:apps: _ensure-apps-deps
 	@echo "✅ apps workspace built → dist/apps"
 
 build\:apps\:api: _ensure-apps-deps
-	@cd apps && yarn nx run api:build --configuration=production
+	@cd apps && yarn nx run api:build --configuration=production --nxBail=true --output-style=stream
+	@cd apps && node --check dist/apps/api/main.js
 
 build\:apps\:dashboard: _ensure-apps-deps
 	@cd apps && yarn nx run dashboard:build
+
+# Shared TypeScript core; both hosts consume this library.
+build\:apps\:ci-listener: _ensure-apps-deps
+	@cd apps && yarn nx build ci-listener --nxBail=true --output-style=stream
+	@cd apps && node libs/ci-listener/tests/package-entry.cjs dist/libs/ci-listener
+
+PHONY_TARGETS += build\:apps\:github-ci-runner
+build\:apps\:github-ci-runner: _ensure-apps-deps
+	@cd apps && yarn nx build github-ci-runner --nxBail=true --output-style=stream
+	@cd apps && node --check dist/apps/github-ci-runner/main.js
+
+PHONY_TARGETS += github-ci-runner-image
+github-ci-runner-image:
+	@docker build --platform linux/amd64 -f apps/github-ci-runner/Dockerfile -t boxlite-ci-listener:dev .
 
 # Build SkillBox container image (all-in-one AI CLI with noVNC)
 # Usage: make skillbox-image [APT_SOURCE=mirrors.aliyun.com]
