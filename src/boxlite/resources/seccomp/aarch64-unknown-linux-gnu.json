@@ -3,6 +3,304 @@
         "default_action": "trap",
         "filter_action": "allow",
         "filter": [
+            {
+                "syscall": "gettimeofday",
+                "comment": "Static glibc 2.28 uses the syscall for runtime wall-clock queries."
+            },
+            {
+                "syscall": "mmap",
+                "comment": "glibc 2.28 maps the firmware library before fixing individual segments.",
+                "args": [
+                    {"index": 3, "type": "dword", "op": "eq", "val": 2050}
+                ]
+            },
+            {"syscall": "getuid", "comment": "virtiofs detects its unprivileged host user."},
+            {"syscall": "getgid", "comment": "virtiofs detects its unprivileged host group."},
+            {
+                "syscall": "mmap",
+                "comment": "glibc 2.41 reserves anonymous space for libkrun firmware loading.",
+                "args": [
+                    {"index": 3, "type": "dword", "op": "eq", "val": 2082}
+                ]
+            },
+            {"syscall": "clone3", "comment": "glibc 2.41 creates libkrun worker threads with clone3."},
+            {"syscall": "shutdown", "comment": "libkrun closes its Unix control-channel connections."},
+            {"syscall": "accept"},
+            {"syscall": "bind"},
+            {"syscall": "capget"},
+            {"syscall": "clock_nanosleep", "comment": "libc sleep used by libkrun."},
+            {
+                "syscall": "clone",
+                "comment": "Create pthreads without creating another process.",
+                "args": [
+                    {"index": 0, "type": "dword", "op": "eq", "val": 4001536}
+                ]
+            },
+            {"syscall": "dup"},
+            {"syscall": "epoll_create1"},
+            {
+                "syscall": "fcntl",
+                "comment": "F_SETFL: configure nonblocking runtime descriptors.",
+                "args": [
+                    {"index": 1, "type": "dword", "op": "eq", "val": 4}
+                ]
+            },
+            {
+                "syscall": "fcntl",
+                "comment": "F_GETFL: query runtime descriptor flags.",
+                "args": [
+                    {"index": 1, "type": "dword", "op": "eq", "val": 3}
+                ]
+            },
+            {"syscall": "getdents64"},
+            {"syscall": "getpid"},
+            {"syscall": "gettid", "comment": "Go runtime identifies its operating-system threads."},
+            {
+                "syscall": "ioctl",
+                "comment": "KVM_GET_API_VERSION",
+                "args": [
+                    {"index": 1, "type": "dword", "op": "eq", "val": 44544}
+                ]
+            },
+            {
+                "syscall": "ioctl",
+                "comment": "KVM_CREATE_VM",
+                "args": [
+                    {"index": 1, "type": "dword", "op": "eq", "val": 44545}
+                ]
+            },
+            {
+                "syscall": "ioctl",
+                "comment": "KVM_CHECK_EXTENSION",
+                "args": [
+                    {"index": 1, "type": "dword", "op": "eq", "val": 44547}
+                ]
+            },
+            {
+                "syscall": "ioctl",
+                "comment": "KVM_GET_VCPU_MMAP_SIZE",
+                "args": [
+                    {"index": 1, "type": "dword", "op": "eq", "val": 44548}
+                ]
+            },
+            {
+                "syscall": "ioctl",
+                "comment": "KVM_CREATE_VCPU",
+                "args": [
+                    {"index": 1, "type": "dword", "op": "eq", "val": 44609}
+                ]
+            },
+            {
+                "syscall": "ioctl",
+                "comment": "KVM_SET_USER_MEMORY_REGION",
+                "args": [
+                    {"index": 1, "type": "dword", "op": "eq", "val": 1075883590}
+                ]
+            },
+            {
+                "syscall": "ioctl",
+                "comment": "KVM_ARM_PREFERRED_TARGET",
+                "args": [
+                    {"index": 1, "type": "dword", "op": "eq", "val": 2149625519}
+                ]
+            },
+            {
+                "syscall": "ioctl",
+                "comment": "KVM_CREATE_DEVICE",
+                "args": [
+                    {"index": 1, "type": "dword", "op": "eq", "val": 3222056672}
+                ]
+            },
+            {
+                "syscall": "ioctl",
+                "comment": "KVM_IOEVENTFD",
+                "args": [
+                    {"index": 1, "type": "dword", "op": "eq", "val": 1077980793}
+                ]
+            },
+            {
+                "syscall": "ioctl",
+                "comment": "KVM_IRQFD",
+                "args": [
+                    {"index": 1, "type": "dword", "op": "eq", "val": 1075883638}
+                ]
+            },
+            {
+                "syscall": "ioctl",
+                "comment": "KVM_ARM_VCPU_INIT",
+                "args": [
+                    {"index": 1, "type": "dword", "op": "eq", "val": 1075883694}
+                ]
+            },
+            {
+                "syscall": "ioctl",
+                "comment": "KVM_GET_ONE_REG",
+                "args": [
+                    {"index": 1, "type": "dword", "op": "eq", "val": 1074835115}
+                ]
+            },
+            {
+                "syscall": "ioctl",
+                "comment": "KVM_SET_ONE_REG",
+                "args": [
+                    {"index": 1, "type": "dword", "op": "eq", "val": 1074835116}
+                ]
+            },
+            {
+                "syscall": "ioctl",
+                "comment": "KVM_RUN",
+                "args": [
+                    {"index": 1, "type": "dword", "op": "eq", "val": 44672}
+                ]
+            },
+            {"syscall": "listen"},
+            {"syscall": "mkdirat"},
+            {
+                "syscall": "mmap",
+                "comment": "MAP_DROPPABLE | MAP_ANONYMOUS: Go vDSO getrandom state.",
+                "args": [
+                    {"index": 3, "type": "dword", "op": "eq", "val": 40}
+                ]
+            },
+            {
+                "syscall": "mmap",
+                "comment": "glibc allocates runtime thread stacks.",
+                "args": [
+                    {"index": 3, "type": "dword", "op": "eq", "val": 131106}
+                ]
+            },
+            {
+                "syscall": "mmap",
+                "comment": "Dynamic loader maps the libkrun firmware library.",
+                "args": [
+                    {"index": 3, "type": "dword", "op": "eq", "val": 2066}
+                ]
+            },
+            {
+                "syscall": "mmap",
+                "comment": "Anonymous private runtime allocation, optionally fixed or no-reserve.",
+                "args": [
+                    {"index": 3, "type": "dword", "op": "eq", "val": 16418}
+                ]
+            },
+            {
+                "syscall": "mprotect",
+                "comment": "Dynamic loader guard and read-only pages.",
+                "args": [
+                    {"index": 2, "type": "dword", "op": "eq", "val": 0}
+                ]
+            },
+            {
+                "syscall": "mprotect",
+                "comment": "Dynamic loader guard and read-only pages.",
+                "args": [
+                    {"index": 2, "type": "dword", "op": "eq", "val": 1}
+                ]
+            },
+            {
+                "syscall": "mprotect",
+                "comment": "PROT_READ | PROT_WRITE: commit runtime heap pages.",
+                "args": [
+                    {"index": 2, "type": "dword", "op": "eq", "val": 3}
+                ]
+            },
+            {"syscall": "nanosleep", "comment": "Go runtime thread scheduling."},
+            {"syscall": "ppoll"},
+            {
+                "syscall": "prctl",
+                "comment": "PR_SET_NAME: name libkrun worker threads.",
+                "args": [
+                    {"index": 0, "type": "dword", "op": "eq", "val": 15}
+                ]
+            },
+            {
+                "syscall": "prctl",
+                "comment": "PR_SET_VMA / PR_SET_VMA_ANON_NAME: name Go runtime mappings.",
+                "args": [
+                    {"index": 0, "type": "dword", "op": "eq", "val": 1398164801},
+                    {"index": 1, "type": "dword", "op": "eq", "val": 0}
+                ]
+            },
+            {"syscall": "pread64"},
+            {"syscall": "preadv"},
+            {
+                "syscall": "prlimit64",
+                "comment": "RLIMIT_NOFILE: libkrun adjusts its own descriptor limit.",
+                "args": [
+                    {"index": 0, "type": "dword", "op": "eq", "val": 0},
+                    {"index": 1, "type": "dword", "op": "eq", "val": 7}
+                ]
+            },
+            {
+                "syscall": "prlimit64",
+                "comment": "Query this process resource limits without changing them.",
+                "args": [
+                    {"index": 0, "type": "dword", "op": "eq", "val": 0},
+                    {"index": 2, "type": "qword", "op": "eq", "val": 0}
+                ]
+            },
+            {"syscall": "pwrite64"},
+            {"syscall": "pwritev"},
+            {
+                "syscall": "rseq",
+                "comment": "glibc registers restartable sequences when runtime threads start."
+            },
+            {
+                "syscall": "rt_sigaction",
+                "args": [
+                    {"index": 0, "type": "dword", "op": "eq", "val": 15}
+                ]
+            },
+            {
+                "syscall": "rt_sigaction",
+                "args": [
+                    {"index": 0, "type": "dword", "op": "eq", "val": 28}
+                ]
+            },
+            {
+                "syscall": "rt_sigaction",
+                "args": [
+                    {"index": 0, "type": "dword", "op": "eq", "val": 31}
+                ]
+            },
+            {
+                "syscall": "rt_sigaction",
+                "args": [
+                    {"index": 0, "type": "dword", "op": "eq", "val": 34}
+                ]
+            },
+            {"syscall": "sched_getaffinity"},
+            {"syscall": "sendto"},
+            {"syscall": "set_robust_list"},
+            {
+                "syscall": "socket",
+                "comment": "AF_UNIX / SOCK_STREAM: libkrun local control socket.",
+                "args": [
+                    {"index": 0, "type": "dword", "op": "eq", "val": 1},
+                    {"index": 1, "type": "dword", "op": "eq", "val": 1},
+                    {"index": 2, "type": "dword", "op": "eq", "val": 0}
+                ]
+            },
+            {
+                "syscall": "socketpair",
+                "comment": "AF_UNIX / SOCK_STREAM | SOCK_CLOEXEC: local control channel.",
+                "args": [
+                    {"index": 0, "type": "dword", "op": "eq", "val": 1},
+                    {"index": 1, "type": "dword", "op": "eq", "val": 524289},
+                    {"index": 2, "type": "dword", "op": "eq", "val": 0}
+                ]
+            },
+            {"syscall": "statx", "comment": "Rust filesystem metadata used by VM startup and virtiofs."},
+            {"syscall": "tgkill"},
+            {"syscall": "umask"},
+            {"syscall": "unlinkat"},
+            {
+                "syscall": "ioctl",
+                "comment": "TCGETS2: glibc 2.43 isatty probes the libkrun console descriptors.",
+                "args": [
+                    {"index": 1, "type": "dword", "op": "eq", "val": 2150388778}
+                ]
+            },
       {
         "syscall": "getxattr",
         "comment": "virtiofs xattr passthrough (e.g. dropping security.capability on write); a blocked xattr syscall SIGSYS-kills the VMM"
