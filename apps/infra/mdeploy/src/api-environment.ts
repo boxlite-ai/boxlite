@@ -368,6 +368,11 @@ export const apiEnvironmentFrom = ({
       // name, which is what the status sync's dedup prefix uses.
       ENVIRONMENT: 'production',
       POSTHOG_ENVIRONMENT: stage,
+      CLOUD_APP_PROCESS_ROLE: 'api',
+      CLOUD_APP_PUBLIC_URL: `https://${hosts.api}/api/internal/apps`,
+      ...(optional(environment, 'STACK_USER_DOMAIN')
+        ? { CLOUD_APP_DOMAIN: optional(environment, 'STACK_USER_DOMAIN') as string }
+        : {}),
       /*
        * The API applies its own schema at boot, on both clouds.
        *

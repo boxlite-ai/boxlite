@@ -89,7 +89,7 @@ an owned full hostname, such as `demo1.apps.example`; short labels and URLs are
 rejected. Request names separately in **Dashboard → Domains**, alongside Images
 and Volumes: enter a short name (`demo1`), preview its full hostname, then submit.
 The page lists every acquired hostname and its Box/port, App reference, or unbound
-state. App binding is reserved and remains unsupported.
+state. App targets bind an environment selected by id or name, defaulting to `main`.
 
 `POST /v1/domains` with `{"name":"demo1"}` acquires the full hostname without a
 binding. Repeating a request for your own name preserves its target. Binding
@@ -142,7 +142,7 @@ preview, or null when requests are unavailable.
 A new name must be lowercase letters, digits and hyphens,
 not start or end with a hyphen, not look like `<digits>-…`, and not be one of
 the platform's own names or the API's collection names (`boxes`, `images`,
-`volumes`, `domains`); names held before `min_length` rose stay bindable.
+`volumes`, `domains`, `apps`); names held before `min_length` rose stay bindable.
 A box in a region served by its own proxy cannot take a platform name
 (`region_not_supported`): the app domain's wildcard record points at the
 default proxy only.
@@ -153,10 +153,24 @@ Unbind selects the exact held hostname within the organization, independently of
 the configured platform suffix. For example, `demo.apps.example` cannot be confused
 with `demo.other.example`; case and a single trailing root dot are normalized.
 
-The target contract also reserves `{"type":"app","app":"<app reference>"}`.
-REST and SDKs can represent it, but binding an App currently returns
-`400 app_target_not_supported`: the App resource, ownership validation and routing
-are not implemented. Existing Box bindings and tunnel authorization are unchanged.
+An App target is `{"type":"app","app":"<id or name>","environment":"staging"}`.
+The environment defaults to `main`; responses carry stable App and environment IDs.
+The organization must hold the hostname, and the App and environment must belong
+there. App bindings require `write:apps`; Box bindings require `write:boxes`.
+Moving a name from one target kind to the other also requires permission for its
+existing target. Organization domain lists accept App read/write or Box write
+permission. App-scoped credentials manage aliases through their own App routes.
+
+Each App environment receives a stable default platform URL using the same domain
+allowance. Additional platform names can be requested in Domains and bound in the
+App's Domains tab. Platform wildcard DNS serves these names without a TXT check.
+Bringing an external domain is unavailable. Removing an alias retains its
+ownership and quota slot. Default App hostnames are managed by their environment
+and cannot be moved or unbound (`400 app_domain_managed`). Deleting an environment
+releases its generated default name; user-requested aliases become unbound and
+remain held by the organization. App traffic reaches the App gateway, which applies App
+access and end-user sign-in before forwarding through its private Box tunnel.
+Deleted or missing App environments do not route; their held names remain owned.
 See the [target storage contract](../contributing/architecture/platform/schema.md#domain). Removing `name` and
 extending the C target structure changes the unmerged domain API/ABI; rebuild
 C consumers and update SDK callers together.

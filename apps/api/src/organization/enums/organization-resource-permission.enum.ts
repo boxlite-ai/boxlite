@@ -54,4 +54,7 @@ export enum OrganizationResourcePermission {
   // Tenant membership, invitations and key revocation; appended to match the database enums.
   READ_MEMBERS = 'read:members',
   WRITE_MEMBERS = 'write:members',
+  READ_APPS = 'read:apps',
+  WRITE_APPS = 'write:apps',
+  DELETE_APPS = 'delete:apps',
 }

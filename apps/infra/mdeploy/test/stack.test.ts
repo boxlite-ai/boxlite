@@ -603,6 +603,7 @@ test('the API is granted exactly the capabilities its storage supports', () => {
   deployStack({ providers, config, inputs: inputs() })
   assert.deepEqual(seen.api.request.capabilities.map((capability: any) => capability.kind).sort(), [
     'list-own-bucket',
+    'manage-app-source',
     'manage-volume-buckets',
     'read-telemetry',
     'resize-runner-disks',
@@ -621,7 +622,8 @@ test('adding the resize grant does not shift the checkpoint grant an existing st
   const after = bundle({ checkpoints: true, resizeRunnerDisks: true })
   deployStack({ providers: after.providers, config, inputs: inputs() })
 
-  assert.deepEqual(kinds(after), [...kinds(before), 'resize-runner-disks'])
+  assert.equal(kinds(before).at(-1), 'manage-app-source')
+  assert.deepEqual(kinds(after), [...kinds(before).slice(0, -1), 'resize-runner-disks', 'manage-app-source'])
 })
 
 test('checkpoints are on only where storage keeps a bucket for them, for the API and the hosts alike', () => {

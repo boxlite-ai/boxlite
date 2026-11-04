@@ -16,6 +16,14 @@ export const CREATE_API_KEY_PERMISSIONS_GROUPS: { name: string; permissions: Cre
     permissions: [CreateApiKeyPermissionsEnum.WRITE_BOXES, CreateApiKeyPermissionsEnum.DELETE_BOXES],
   },
   {
+    name: 'Apps',
+    permissions: [
+      CreateApiKeyPermissionsEnum.READ_APPS,
+      CreateApiKeyPermissionsEnum.WRITE_APPS,
+      CreateApiKeyPermissionsEnum.DELETE_APPS,
+    ],
+  },
+  {
     // Write creates and deletes catalog aliases without silent replacement.
     // Using an image records it without any of these.
     name: 'Images',

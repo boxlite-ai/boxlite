@@ -82,6 +82,6 @@ import { BoxliteCheckpointController } from './boxlite-checkpoint.controller'
     CiSecretsService,
     CiWebhookService,
   ],
-  exports: [BoxliteWsProxyService],
+  exports: [BoxliteWsProxyService, CommerceBoxLimitService],
 })
 export class BoxliteRestModule {}

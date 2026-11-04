@@ -26,6 +26,7 @@ import { cn } from '@/lib/utils'
 import {
   BookOpen,
   Building2,
+  AgentApp,
   Container,
   Database,
   Layers,
@@ -67,6 +68,7 @@ interface NavItem {
 
 const PRIMARY_NAV_ITEMS: NavItem[] = [
   { label: 'Boxes', icon: <Container className="size-[18px] shrink-0" aria-hidden="true" />, path: RoutePath.BOXES },
+  { label: 'Apps', icon: <AgentApp className="size-[18px] shrink-0" aria-hidden="true" />, path: RoutePath.APPS },
   {
     label: 'Images',
     icon: <Layers className="size-[18px] shrink-0" aria-hidden="true" />,

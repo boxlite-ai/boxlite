@@ -31,6 +31,16 @@ const fixture = (home: Cloud): Record<string, string> => ({
   ),
   STACK_DOMAIN: 'example.com',
   OIDC_ISSUER_BASE_URL: 'https://auth.example.com',
+  ...Object.fromEntries(
+    ['CLOUD_APP_SESSION_SECRET', 'CLOUD_APP_IDENTITY_PRIVATE_KEY'].map((key) => [
+      key,
+      JSON.stringify({
+        address: home === 'gcp'
+          ? `projects/boxlite-dev/secrets/${key}/versions/1`
+          : `arn:aws:secretsmanager:ap-southeast-1:123456789012:secret:${key}-AbCdEf`,
+      }),
+    ]),
+  ),
   ...turnstile,
   TURNSTILE_SECRET_KEY: JSON.stringify({ address: references[home] }),
 })
@@ -46,6 +56,10 @@ for (const home of ['aws', 'gcp'] as const) {
     }
     assert.equal(secrets.TURNSTILE_SECRET_KEY, references[home])
     assert.equal(environment.TURNSTILE_SECRET_KEY, undefined)
+    for (const key of ['CLOUD_APP_SESSION_SECRET', 'CLOUD_APP_IDENTITY_PRIVATE_KEY']) {
+      assert.equal(secrets[key], JSON.parse(fixture(home)[key]!).address)
+      assert.equal(environment[key], undefined)
+    }
   })
 
   test(`${home}: optional registration settings leave defaults to the API and an absent sitekey disables delivery`, () => {

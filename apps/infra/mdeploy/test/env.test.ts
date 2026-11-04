@@ -28,6 +28,10 @@ const declaration: GroupDeclaration = {
   optional: config.envOptional,
   where: CONFIG_PATH,
 }
+const requiredAppReferences = {
+  CLOUD_APP_SESSION_SECRET: JSON.stringify({ address: 'arn:aws:ssm:us-east-1:123456789012:parameter/session' }),
+  CLOUD_APP_IDENTITY_PRIVATE_KEY: JSON.stringify({ address: 'arn:aws:ssm:us-east-1:123456789012:parameter/identity' }),
+}
 
 /** A store holding the deploy group's required keys and nothing else. */
 const minimal = {
@@ -111,6 +115,7 @@ test('a service reads its optional keys when present and boots without them when
   // to agree with the store side: a key the store was allowed to omit cannot
   // then be demanded of the deploy.
   const withoutOptional = {
+    ...requiredAppReferences,
     ADMIN_API_KEY: 'a',
     ENCRYPTION_KEY: 'b',
     ENCRYPTION_SALT: 'c',
@@ -119,9 +124,11 @@ test('a service reads its optional keys when present and boots without them when
     PROXY_API_KEY: 'f',
   }
   const bare = serviceSecretsFrom({ group: 'api', declaration, environment: withoutOptional })
-  assert.deepEqual(narrow('secret', withoutOptional), {})
+  assert.deepEqual(narrow('secret', withoutOptional), requiredAppReferences)
   assert.deepEqual(Object.keys(bare).sort(), [
     'ADMIN_API_KEY',
+    'CLOUD_APP_IDENTITY_PRIVATE_KEY',
+    'CLOUD_APP_SESSION_SECRET',
     'ENCRYPTION_KEY',
     'ENCRYPTION_SALT',
     'OIDC_CLIENT_ID',
@@ -143,6 +150,7 @@ test('the API receives the account-link secret a stage holds, and deploys withou
   // under a declaration that does not name it would deploy an API answering
   // the Action 404, with nothing in the deploy saying why.
   const required = {
+    ...requiredAppReferences,
     ADMIN_API_KEY: 'a',
     ENCRYPTION_KEY: 'b',
     ENCRYPTION_SALT: 'c',
@@ -164,7 +172,7 @@ test('the API receives the account-link secret a stage holds, and deploys withou
 test('a required service key that never arrived still stops the deploy', () => {
   assert.throws(
     () => serviceSecretsFrom({ group: 'api', declaration, environment: { ADMIN_API_KEY: 'a' } }),
-    /ENCRYPTION_KEY, ENCRYPTION_SALT, OIDC_CLIENT_ID, OTEL_COLLECTOR_API_KEY, PROXY_API_KEY must reach the deploy/,
+    /ENCRYPTION_KEY, ENCRYPTION_SALT, OIDC_CLIENT_ID, OTEL_COLLECTOR_API_KEY, PROXY_API_KEY, CLOUD_APP_SESSION_SECRET, CLOUD_APP_IDENTITY_PRIVATE_KEY must reach the deploy/,
   )
 })
 

@@ -387,6 +387,8 @@ test('a change to codecov.yml selects the suite that checks codecov.yml', () => 
 test('every test source is ignored, so a test-only change still qualifies for the empty upload', () => {
   const production = [
     '.github/workflows/test.yml',                    // runs the suites, is not one
+    'apps/api/src/cloud-app/engine/spec.ts',          // resolves an App deployment spec
+    'apps/dashboard/src/components/apps/spec.tsx',    // renders the App spec editor
     'apps/libs/api-client-go/model_inbound_network_spec.go',   // generated client model
     'apps/libs/api-client-go/model_outbound_network_spec.go',  // generated client model
     'apps/libs/api-client/src/models/inbound-network-spec.ts', // generated client model

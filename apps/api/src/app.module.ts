@@ -46,9 +46,11 @@ import { AdminModule } from './admin/admin.module'
 import { ClickHouseModule } from './clickhouse/clickhouse.module'
 import { BoxliteRestModule } from './boxlite-rest/boxlite-rest.module'
 import { McpModule } from './mcp/mcp.module'
+import { CloudAppModule } from './cloud-app/cloud-app.module'
 
 @Module({
   imports: [
+    CloudAppModule,
     LoggerModule.forRootAsync({
       useFactory: (configService: TypedConfigService) => {
         const logConfig = configService.get('log')

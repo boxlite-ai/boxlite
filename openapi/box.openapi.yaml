@@ -1481,7 +1481,7 @@ paths:
         example: demo-app.apps.example
     put:
       operationId: bindDomain
-      summary: Route an owned domain to a box port
+      summary: Route an owned domain to a Box port or App environment
       description: |
         Updates a full hostname already owned by the organization; never claims
         or expands a short name. Unknown names and names owned by another
@@ -1491,8 +1491,15 @@ paths:
         The port is not declared public: the domain answers once the tunnel is
         public and the Box allows inbound access, in either order.
         A name bound to another port moves here; other names stay in place.
-        Error codes: `region_not_supported` and `app_target_not_supported` (400).
-        App binding is reserved and remains unsupported.
+        Box targets require `write:boxes`; App targets require `write:apps`.
+        Moving a bound name to another target kind also requires write permission
+        for its existing target. An App is selected by id or name within the
+        organization, and `environment` defaults to `main`.
+        `region_not_supported` (400) refuses a Box behind another regional proxy.
+        `app_domain_managed` (400) prevents moving or unbinding an environment’s
+        generated default hostname; binding it to the same environment is idempotent.
+        App-scoped keys manage aliases through their App routes rather than this
+        organization-wide collection.
       tags: [Domains]
       requestBody:
         required: true
@@ -3431,7 +3438,7 @@ components:
           description: Null for public tunnels; complete on private creation, masked on subsequent calls.
 
     DomainTarget:
-      description: A Box port or a reserved App reference. App binding currently returns 400 app_target_not_supported.
+      description: A Box port or an App environment in the organization.
       oneOf:
         - $ref: "#/components/schemas/BoxDomainTarget"
         - $ref: "#/components/schemas/AppDomainTarget"
@@ -3465,7 +3472,7 @@ components:
     AppDomainTarget:
       type: object
       additionalProperties: false
-      description: Reserved App identity; App binding is unavailable until the App resource exists.
+      description: An App environment, resolved by id or name within the organization.
       required: [type, app]
       properties:
         type:
@@ -3476,8 +3483,14 @@ components:
           minLength: 1
           maxLength: 255
           pattern: '\S'
-          description: An opaque App reference.
+          description: The App id or name on writes; the stable App id on reads.
           example: shop
+        environment:
+          type: string
+          minLength: 1
+          maxLength: 255
+          description: The environment id or name on writes, defaulting to main; its stable id on reads.
+          example: staging
 
     Domain:
       type: object

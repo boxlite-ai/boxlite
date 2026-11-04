@@ -61,6 +61,7 @@ describe('PreviewController private tunnel credential scope', () => {
 describe('PreviewController public tunnel check', () => {
   const access = jest.fn()
   const resolve = jest.fn()
+  const resolveAppEnvironment = jest.fn()
   const controller = new PreviewController(
     null as never,
     null as never,
@@ -69,12 +70,13 @@ describe('PreviewController public tunnel check', () => {
     null as never,
     null as never,
     null as never,
-    { resolve } as never,
+    { resolve, resolveAppEnvironment } as never,
   )
 
   beforeEach(() => {
     access.mockReset()
     resolve.mockReset()
+    resolveAppEnvironment.mockReset()
   })
 
   it('keeps the domain lookup proxy-only and answers 404 for a name it will not forward', async () => {
@@ -94,6 +96,21 @@ describe('PreviewController public tunnel check', () => {
     expect(Reflect.getMetadata('swagger/apiExcludeEndpoint', controller.isPublicTunnelActive)).toEqual({
       disable: true,
     })
+  })
+
+  it('routes a live App environment through the App gateway without requiring a public Box tunnel', async () => {
+    resolve.mockResolvedValue({ type: 'app', app: 'app-1', environment: 'env-main' })
+    resolveAppEnvironment.mockResolvedValue('env-main')
+    await expect(controller.resolveDomain('demo.app.test')).resolves.toEqual({ type: 'app', environmentId: 'env-main' })
+    expect(resolveAppEnvironment).toHaveBeenCalledWith('app-1', 'env-main')
+    expect(access).not.toHaveBeenCalled()
+  })
+
+  it('refuses App domains whose environment no longer exists', async () => {
+    resolve.mockResolvedValue({ type: 'app', app: 'app-1', environment: 'env-main' })
+    resolveAppEnvironment.mockRejectedValue(new NotFoundException('App environment not found'))
+    await expect(controller.resolveDomain('demo.app.test')).rejects.toBeInstanceOf(NotFoundException)
+    expect(access).not.toHaveBeenCalled()
   })
 
   it('refuses a bound domain when its target fails public access', async () => {

@@ -113,6 +113,7 @@ describe('audit refinement contracts', () => {
           useValue: {
             claim: jest.fn().mockResolvedValue({ hostname: 'hello.example.test' }),
             bind: jest.fn().mockResolvedValue({ hostname: 'hello.example.test' }),
+            owned: jest.fn().mockResolvedValue({ target: null }),
             unbind: jest.fn(),
           },
         },
@@ -127,6 +128,7 @@ describe('audit refinement contracts', () => {
             email: 'user@example.test',
             organizationId: 'org',
             organization: { id: 'org' },
+            role: 'admin',
           }
           return true
         },
@@ -193,9 +195,15 @@ describe('audit refinement contracts', () => {
   it.each(['/v1/domains', '/v1/tenant/domains'])(
     'audits canonical domain unbinding as an update through %s',
     async (path) => {
-      const query = jest.fn().mockResolvedValue([[], 1])
+      const query = jest.fn().mockImplementation((sql: string) =>
+        Promise.resolve(sql.startsWith('UPDATE "domain"') ? [[], 1] : []),
+      )
       const domains = app.get(DomainService)
-      Object.assign(domains, { dataSource: { query }, fullHostname: (DomainService.prototype as any).fullHostname })
+      Object.assign(domains, {
+        dataSource: { transaction: (work: (manager: unknown) => Promise<unknown>) => work({ query }) },
+        fullHostname: (DomainService.prototype as any).fullHostname,
+        assertManagedDomain: (DomainService.prototype as any).assertManagedDomain,
+      })
       domains.unbind = DomainService.prototype.unbind
       const res = await fetch(base + path + '/HELLO.example.test./target', { method: 'DELETE' })
       expect(res.status).toBe(204)

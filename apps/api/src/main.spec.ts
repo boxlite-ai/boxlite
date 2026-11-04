@@ -37,6 +37,8 @@ jest.mock('./common/utils/app-mode', () => ({
   isWorkerEnabled: () => false,
 }))
 jest.mock('./boxlite-rest/boxlite-ws-proxy.service', () => ({ BoxliteWsProxyService: class {} }))
+jest.mock('./cloud-app/cloud-app.service', () => ({ CloudAppService: class {} }))
+jest.mock('./cloud-app/cloud-app-websocket', () => ({ CloudAppWebsocket: class {} }))
 jest.mock('./mcp/mcp.controller', () => ({ mcpStrategy: {} }))
 jest.mock('./mcp/mcp-auth-metadata', () => ({ MCP_ROOT_ROUTES: [] }))
 jest.mock('./mcp/mcp-body', () => ({ useApiBodyParsers: jest.fn() }))

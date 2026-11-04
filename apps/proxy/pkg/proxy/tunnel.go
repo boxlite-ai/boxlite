@@ -71,16 +71,16 @@ func (p *Proxy) handleTunnelConnect(writer http.ResponseWriter, request *http.Re
 // legacy `<port>-<box>` authority runs them here.
 func (p *Proxy) admitTunnelConnect(writer http.ResponseWriter, request *http.Request) (string, uint16, bool) {
 	if hostname, isAppDomain := p.appDomainHost(request.Host); isAppDomain {
-		boxID, port, err := p.resolveAppDomain(request.Context(), hostname)
+		target, err := p.resolveAppDomain(request.Context(), hostname)
 		switch {
-		case errors.Is(err, errAppDomainNotFound):
+		case errors.Is(err, errAppDomainNotFound), err == nil && target.Type == "app":
 			http.Error(writer, "tunnel not found", http.StatusNotFound)
 			return "", 0, false
 		case err != nil:
 			http.Error(writer, "tunnel access unavailable", http.StatusBadGateway)
 			return "", 0, false
 		}
-		return boxID, port, true
+		return target.BoxID, target.Port, true
 	}
 
 	boxID, port, err := p.tunnelTarget(request)

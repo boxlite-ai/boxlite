@@ -76,12 +76,20 @@ suffix *before* the `<port>-<id>` parse, since `3000-abc.apps.example` is a vali
 shape, drops any port and trailing DNS root dot, lowercases it, then asks `GET /api/preview/domains/{hostname}` on every
 request. The API's domain service resolves the stored box-port target; its preview controller
 then checks the target's public tunnel, inbound and box state before returning `{boxId, port}`.
-Private tunnels and other refusals return `404`, and an
+For Box targets, private tunnels and other refusals return `404`, and an
 API failure is `502` — the proxy never falls back to a stale answer or to the legacy parse. The
 lookup is not cached, so a released name stops forwarding at once; the port's access verdict keeps
-its 3-second cache. There is no sign-in on these hosts: a box with inbound disabled is a `404`, not
+its 3-second cache. There is no sign-in on Box-target hosts: a box with inbound disabled is a `404`, not
 a redirect. `/health`, `/login`, `/callback`, and `/__boxlite/auth/callback` under a platform subdomain belong to the user's service, and
 the browser warning applies as on any box host. The app domain's apex itself is not a box host.
+
+An App target resolves to `{type: "app", environmentId}`. The proxy forwards its HTTP requests
+and WebSocket upgrades to `/api/internal/apps/ingress/{environmentId}` on the platform API,
+preserving the public Host, application Authorization, cookies, query and body. Proxy identity
+uses `X-BoxLite-Proxy-Token`; incoming identity and Supervisor control headers are removed.
+The AppGateway checks the hostname binding and applies App access and end-user login before
+forwarding to its private Box tunnel. Raw CONNECT on an App hostname is refused; it cannot
+bypass the AppGateway's HTTP access policy.
 
 Domain ownership and bindings survive tunnel revocation. Binding a name does not
 publish its port, and unbinding does not revoke it. Domain lookup itself carries no

@@ -315,6 +315,7 @@ describe('Sidebar primary navigation', () => {
     const infrastructure = document.querySelector('[role="group"][aria-label="Infrastructure"]')!
     expect([...infrastructure.querySelectorAll('a')].map((link) => link.getAttribute('href'))).toEqual([
       '/dashboard/boxes',
+      '/dashboard/apps',
       '/dashboard/images',
       '/dashboard/volumes',
       '/dashboard/checkpoints',
@@ -329,6 +330,16 @@ describe('Sidebar primary navigation', () => {
     expect(applications).not.toBeNull()
     expect(applications?.querySelector('a[href="/dashboard/ci/connects"]')?.getAttribute('aria-current')).toBe('page')
     expect(applications?.textContent).toContain('Runners')
+  })
+
+  it('selects Apps immediately after Boxes in primary navigation', () => {
+    renderRoute('/dashboard/apps/demo')
+    const infrastructure = document.querySelector('[role="group"][aria-label="Infrastructure"]')!
+    const links = [...infrastructure.querySelectorAll('a')]
+    expect(links[0].getAttribute('href')).toBe('/dashboard/boxes')
+    expect(links[1].getAttribute('href')).toBe('/dashboard/apps')
+    expect(links[1].textContent).toBe('Apps')
+    expect(links[1].getAttribute('aria-current')).toBe('page')
   })
 
   it('keeps Volumes in primary navigation', () => {

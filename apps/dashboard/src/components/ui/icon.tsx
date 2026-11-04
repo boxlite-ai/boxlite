@@ -22,6 +22,7 @@ import {
   ArrowUpIcon as LucideArrowUpIcon,
   ArrowUpDownIcon as LucideArrowUpDownIcon,
   ArrowUpRight as LucideArrowUpRight,
+  AppWindow as LucideAgentApp,
   BarChart3 as LucideBarChart3,
   BoldIcon as LucideBoldIcon,
   BookOpen as LucideBookOpen,
@@ -53,6 +54,7 @@ import {
   Clipboard as LucideClipboard,
   ClipboardPaste as LucideClipboardPaste,
   Clock as LucideClock,
+  CloudUpload as LucideCloudUpload,
   Code2 as LucideCode2,
   CommandIcon as LucideCommandIcon,
   Box as LucideContainer,
@@ -70,6 +72,8 @@ import {
   EyeIcon as LucideEyeIcon,
   EyeOff as LucideEyeOff,
   FileText as LucideFileText,
+  Folder as LucideFolder,
+  GitBranch as LucideGitBranch,
   Github as LucideGithub,
   HardDrive as LucideHardDrive,
   HardDriveIcon as LucideHardDriveIcon,
@@ -78,6 +82,7 @@ import {
   Info as LucideInfo,
   InfoIcon as LucideInfoIcon,
   KeyRound as LucideKeyRound,
+  LayoutDashboard as LucideLayoutDashboard,
   LifeBuoyIcon as LucideLifeBuoyIcon,
   Link2 as LucideLink2,
   ListChecks as LucideListChecks,
@@ -296,3 +301,8 @@ export const Globe = thinIcon(LucideGlobe)
 export const Braces = thinIcon(LucideBraces)
 
 export const Layers = thinIcon(LucideLayers)
+export const CloudUpload = thinIcon(LucideCloudUpload)
+export const Folder = thinIcon(LucideFolder)
+export const LayoutDashboard = thinIcon(LucideLayoutDashboard)
+export const GitBranch = thinIcon(LucideGitBranch)
+export const AgentApp = thinIcon(LucideAgentApp)

@@ -898,3 +898,13 @@ test\:integration\:vmm\:m2\:list test\:integration\:vmm\:m3\:list:
 
 test\:integration\:vmm\:m2\:run test\:integration\:vmm\:m3\:run:
 	@cargo nextest run $(MATRIX_TEST_ARGS) --no-fail-fast --retries 0 --success-output final
+
+PHONY_TARGETS += test\:apps\:cloud-app-cli test\:apps\:cloud-app-supervisor
+
+test\:apps\:cloud-app-cli: _ensure-apps-deps
+	@$(MAKE) build:apps:cloud-app-cli
+	@cd apps/cloud-app-cli && ../node_modules/.bin/tsc -p tsconfig.json --noEmit
+	@cd apps/cloud-app-cli && TSX_TSCONFIG_PATH=tsconfig.test.json node --test --import tsx test/*.test.ts
+
+test\:apps\:cloud-app-supervisor:
+	@$(MAKE) -C apps/cloud-app-supervisor test

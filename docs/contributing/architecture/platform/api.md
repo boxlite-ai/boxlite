@@ -159,6 +159,45 @@ The [removal-release notes](../../../../apps/api/README.md#retired-cloud-operati
 
 ## Control-plane API
 
+### Cloud Apps
+
+Cloud Apps share the platform login, selected organization and API-key system. The dashboard
+entry is `/dashboard/apps`, immediately after Boxes. Management requests use
+`Authorization: Bearer <platform JWT or API key>` with `read:apps`, `write:apps`, or
+`delete:apps` permissions. A generated Agent key is bound to one App and cannot access Boxes,
+organization-wide Domains, other Apps, or key issuance. Its issuer must remain an organization member.
+
+| Method | Path | Behavior |
+| --- | --- | --- |
+| `GET`, `POST` | `/v1/{organizationId}/apps` | List or create Apps in the selected organization. Creation returns the initial Agent key and handoff prompt. |
+| `GET` | `/v1/{organizationId}/apps/{app}/view` | Dashboard projection, including environments, deployment, services, data and configuration. |
+| `GET` | `/v1/{organizationId}/apps/{app}` | CLI status; a scoped key may use `me` as the App name. |
+| `GET` | `/v1/{organizationId}/apps/{app}/whoami` | Credential scope, environments and CLI artifact location. |
+| `POST`, `PUT` | `/v1/{organizationId}/apps/{app}/uploads/...` | Upload a source manifest and missing source objects to platform object storage. |
+| `POST` | `/v1/{organizationId}/apps/{app}/envs/{env}/plan` | Compare desired manifest with current environment. |
+| `POST` | `/v1/{organizationId}/apps/{app}/envs/{env}/deployments` | Queue `deploy`, `apply` or `rollback` in PostgreSQL for the App worker. |
+| `GET` / WebSocket | `/v1/{organizationId}/apps/{app}/envs/{env}/db/connect` | PostgreSQL proxy; read-only unless `write=1` and the principal holds write permission. |
+| `GET` | `/v1/{organizationId}/cli/version` | Version and download URL of the packaged CLI. |
+| HTTP / WebSocket | `/internal/apps/ingress/{environmentId}/...` | Proxy-authenticated App ingress. Validates the hostname binding, then applies App access and end-user authentication. |
+| HTTP | `/internal/apps/sv/v1/...` | Environment-token-authenticated Supervisor callbacks and release data. |
+| HTTP | `/internal/apps/auth/...` | Organization-aware App OAuth flow; independent of the dashboard's OIDC session. |
+| `GET` | `/internal/apps/artifacts/{version}/{file}` | Public CLI, Agent instructions and Supervisor binaries bundled with the API image. |
+
+Environment domains are platform Domain resources. Both the default hostname and aliases resolve
+to an environment, which routes through the API to a private Box tunnel. Box creation and volume
+allocation use the platform services and organization limits. App metadata, deployment state,
+logs and callback status live in the platform PostgreSQL schema `cloud_app`; source content lives
+in the configured GCS/S3 bucket. Neon remains the application database provider, through its official API.
+
+API replicas only enqueue publications. A separate worker uses renewable Redis environment locks
+and persisted PostgreSQL state. Interrupted publications become failed when the next worker recovers
+the environment; users can publish again. Schedules and retention cleanup run in the worker.
+
+Deployment configuration and the dev rollout command are documented in
+[Cloud Apps configuration](../../../../apps/infra/docs/configuration.md#cloud-apps). Existing prototype data is not imported.
+
+### Existing platform routes
+
 **Service:** `apps/api` · **Base URL:** `https://api.<domain>` · **Port:** `3000` in
 deployments (`PORT` environment variable; no in-code default)
 
@@ -282,7 +321,7 @@ organization boundaries.
 | `POST` | `/preview/{boxId}/tunnels/{port}/access`                            | Proxy-only active tunnel policy, token verification and browser-user revalidation; returns no token verifier. |
 | `GET`  | `/preview/{boxId}/tunnels/{port}/session`                            | Checks a user JWT and returns the tunnel grant and user ID for browser login. |
 | `POST` | `/preview/tunnel-handoff`                                          | Proxy-only issue or single-use consumption of a 30-second browser login handoff. |
-| `GET`  | `/preview/domains/{hostname}`                                       | Resolves a platform hostname to `{boxId, port}` for the proxy; `404` unless it may be forwarded now. |
+| `GET`  | `/preview/domains/{hostname}`                                       | Resolves a platform hostname to `{boxId, port}` or `{type:"app", environmentId}` for the proxy; `404` when its target cannot route. |
 | `POST` | `/preview/{boxId}/ensure-ready`                                     | Wakes a stopped box for the proxy, by auto-resume rules. |
 | `GET`  | `/preview/{boxId}/access`                                           | Checks whether the caller may preview a box.          |
 
@@ -651,7 +690,7 @@ for storage and lifecycle details.
 | `POST`   | `/v1[/{prefix}]/boxes/{boxId}/network/tunnel?port={port}` | Prepares a tunnel with optional `isPublic` (default true); returns `uri`, `isPublic`, `token`. Private tokens are complete once, then masked. |
 | `DELETE` | `/v1[/{prefix}]/boxes/{boxId}/network/tunnel?port={port}` | Revokes either access mode; `204`, idempotent. |
 | `GET`    | `/v1[/{prefix}]/domains`                                  | Lists full hostnames, URLs, typed targets and the organization's allowance; no short `name` field. |
-| `PUT`    | `/v1[/{prefix}]/domains/{domain}/target`                  | Routes an owned full hostname to a box port using `{"type":"box","box":"<id-or-name>","port":3000}`; replaces any existing binding without declaring the port public. |
+| `PUT`    | `/v1[/{prefix}]/domains/{domain}/target`                  | Routes an owned full hostname to a Box port or App environment (`{"type":"app","app":"<id-or-name>","environment":"main"}`); does not declare Box ports public. |
 | `DELETE` | `/v1[/{prefix}]/domains/{domain}/target`                  | Requires the full held hostname; stops routing it and keeps ownership; `204`, idempotent. |
 | `PUT`    | `/v1[/{prefix}]/boxes/{boxId}/network/inbound`            | Enables or disables a box's inbound access.             |
 | `POST`   | `/v1[/{prefix}]/boxes/{boxId}/ssh`                        | Replaces guest SSH configuration once; counts as activity and may auto-resume a box. |

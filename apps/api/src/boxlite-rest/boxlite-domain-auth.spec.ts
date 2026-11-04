@@ -26,6 +26,7 @@ describe('Domain acquisition authorization', () => {
   let jwks: Server
   let issuer: string
   let claim: jest.Mock
+  let bindApp: jest.Mock
   const keys = generateKeyPairSync('rsa', { modulusLength: 2048 })
   const audience = 'domain-authorization-test'
   const organizationId = 'org-1'
@@ -84,16 +85,23 @@ describe('Domain acquisition authorization', () => {
     const config = { get: (key: string) => (key === 'proxy.apiKey' ? 'domain-proxy-key' : 30) }
     const apiKeys = {
       getApiKeyByValue: async (token: string) => {
-        if (!['domain-write-key', 'domain-read-key', 'domain-expired-key'].includes(token))
+        if (
+          !['domain-write-key', 'domain-read-key', 'domain-expired-key', 'app-write-key', 'app-scoped-key'].includes(
+            token,
+          )
+        )
           throw new UnauthorizedException()
         return {
           organizationId,
           userId: 'owner',
           name: token,
+          cloudAppId: token === 'app-scoped-key' ? 'shop' : null,
           permissions: [
-            token === 'domain-read-key'
-              ? OrganizationResourcePermission.READ_IMAGES
-              : OrganizationResourcePermission.WRITE_BOXES,
+            token.startsWith('app-')
+              ? OrganizationResourcePermission.WRITE_APPS
+              : token === 'domain-read-key'
+                ? OrganizationResourcePermission.READ_IMAGES
+                : OrganizationResourcePermission.WRITE_BOXES,
           ],
           expiresAt: token === 'domain-expired-key' ? new Date(0) : undefined,
         }
@@ -101,11 +109,35 @@ describe('Domain acquisition authorization', () => {
       updateLastUsedAt: jest.fn().mockResolvedValue(undefined),
     }
     claim = jest.fn().mockResolvedValue({ hostname: 'my-app.apps.test', url: 'https://my-app.apps.test', target: null })
+    bindApp = jest
+      .fn()
+      .mockResolvedValue({
+        hostname: 'my-app.apps.test',
+        url: 'https://my-app.apps.test',
+        target: { type: 'app', app: 'shop', environment: 'env-main' },
+      })
     const moduleRef = await Test.createTestingModule({
       imports: [PassportModule.register({ session: false })],
       controllers: [BoxliteDomainController],
       providers: [
-        { provide: DomainService, useValue: { claim } },
+        {
+          provide: DomainService,
+          useValue: {
+            claim,
+            bindApp,
+            owned: jest.fn().mockResolvedValue({ target: null }),
+            listHeld: jest
+              .fn()
+              .mockResolvedValue({
+                domains: [],
+                limit: 1,
+                used: 0,
+                remaining: 1,
+                minLength: 5,
+                domainSuffix: 'apps.test',
+              }),
+          },
+        },
         { provide: BoxService, useValue: {} },
         { provide: getRedisConnectionToken(), useValue: redis },
         { provide: OrganizationService, useValue: { findOne: async (id: string) => ({ id }) } },
@@ -121,9 +153,13 @@ describe('Domain acquisition authorization', () => {
                 assignedRoles: [
                   {
                     permissions: [
-                      userId === 'writer'
-                        ? OrganizationResourcePermission.WRITE_BOXES
-                        : OrganizationResourcePermission.READ_IMAGES,
+                      userId === 'app-writer'
+                        ? OrganizationResourcePermission.WRITE_APPS
+                        : userId === 'app-reader'
+                          ? OrganizationResourcePermission.READ_APPS
+                          : userId === 'writer'
+                            ? OrganizationResourcePermission.WRITE_BOXES
+                            : OrganizationResourcePermission.READ_IMAGES,
                     ],
                   },
                 ],
@@ -165,13 +201,20 @@ describe('Domain acquisition authorization', () => {
     if (jwks?.listening)
       await new Promise<void>((resolve, reject) => jwks.close((error) => (error ? reject(error) : resolve())))
   })
-  beforeEach(() => claim.mockClear())
+  beforeEach(() => {
+    claim.mockClear()
+    bindApp.mockClear()
+  })
 
-  async function request(path: string, token?: string): Promise<Response> {
+  async function request(
+    path: string,
+    token?: string,
+    options: { method?: string; body?: unknown } = {},
+  ): Promise<Response> {
     return fetch(`http://127.0.0.1:${(app.getHttpServer().address() as AddressInfo).port}/api${path}`, {
-      method: 'POST',
+      method: options.method ?? 'POST',
       headers: { 'content-type': 'application/json', ...(token ? { authorization: `Bearer ${token}` } : {}) },
-      body: JSON.stringify({ name: 'my-app' }),
+      body: options.method === 'GET' ? undefined : JSON.stringify(options.body ?? { name: 'my-app' }),
     })
   }
 
@@ -218,6 +261,34 @@ describe('Domain acquisition authorization', () => {
     for (const token of ['domain-write-key', jwt('writer')]) {
       expect((await request('/v1/org-other/domains', token)).status).toBe(403)
     }
+    expect(claim).not.toHaveBeenCalled()
+  })
+  it('allows App writers to claim and bind App targets but not Box targets', async () => {
+    expect((await request('/v1/org-1/domains', jwt('app-writer'))).status).toBe(201)
+    expect((await request('/v1/org-1/domains', 'app-write-key')).status).toBe(201)
+    const input = { method: 'PUT', body: { type: 'app', app: 'shop', environment: 'staging' } }
+    expect((await request('/v1/org-1/domains/my-app.apps.test/target', jwt('app-writer'), input)).status).toBe(200)
+    expect(bindApp).toHaveBeenCalledWith('org-1', 'shop', 'staging', 'my-app.apps.test')
+    expect((await request('/v1/org-1/domains/my-app.apps.test/target', jwt('writer'), input)).status).toBe(403)
+    expect(
+      (
+        await request('/v1/org-1/domains/my-app.apps.test/target', jwt('app-writer'), {
+          method: 'PUT',
+          body: { type: 'box', box: 'web', port: 3000 },
+        })
+      ).status,
+    ).toBe(403)
+    expect(bindApp).toHaveBeenCalledTimes(1)
+  })
+
+  it('allows an App reader to list domains but not claim them', async () => {
+    expect((await request('/v1/org-1/domains', jwt('app-reader'), { method: 'GET' })).status).toBe(200)
+    expect((await request('/v1/org-1/domains', jwt('app-reader'))).status).toBe(403)
+    expect(claim).not.toHaveBeenCalled()
+  })
+
+  it('refuses App-scoped keys on the organization-wide domains API', async () => {
+    expect((await request('/v1/org-1/domains', 'app-scoped-key')).status).toBe(403)
     expect(claim).not.toHaveBeenCalled()
   })
 })

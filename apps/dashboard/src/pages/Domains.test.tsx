@@ -8,7 +8,14 @@ import Domains from './Domains'
 import type { DomainList, HeldDomain } from '@/api/domain-types'
 import { MemoryRouter } from 'react-router-dom'
 
-const state = vi.hoisted(() => ({ organizationId: 'org-1', canManage: true, list: vi.fn(), claim: vi.fn() }))
+const state = vi.hoisted(() => ({
+  organizationId: 'org-1',
+  canManage: true,
+  canRead: false,
+  canWriteApps: false,
+  list: vi.fn(),
+  claim: vi.fn(),
+}))
 const feedback = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn(), copy: vi.fn() }))
 vi.mock('sonner', () => ({ toast: { success: feedback.success, error: feedback.error } }))
 vi.mock('@/lib/copy-text', () => ({ copyToClipboard: feedback.copy }))
@@ -16,7 +23,10 @@ vi.mock('@/hooks/useApi', () => ({ useApi: () => ({ listDomains: state.list, cla
 vi.mock('@/hooks/useSelectedOrganization', () => ({
   useSelectedOrganization: () => ({
     selectedOrganization: { id: state.organizationId },
-    authenticatedUserHasPermission: () => state.canManage,
+    authenticatedUserHasPermission: (permission: string) =>
+      state.canManage ||
+      (permission === 'read:apps' && state.canRead) ||
+      (permission === 'write:apps' && state.canWriteApps),
   }),
 }))
 
@@ -49,6 +59,8 @@ describe('Domains page', () => {
     feedback.copy.mockReset().mockResolvedValue(true)
     state.organizationId = 'org-1'
     state.canManage = true
+    state.canRead = false
+    state.canWriteApps = false
     state.list.mockReset().mockResolvedValue(list)
     state.claim
       .mockReset()
@@ -157,6 +169,35 @@ describe('Domains page', () => {
     expect(state.list).not.toHaveBeenCalled()
     expect(document.body.textContent).toContain('Box write permission')
     expect(document.querySelector<HTMLButtonElement>('button')?.disabled).toBe(true)
+  })
+
+  it('lets an App reader filter domains without acquiring another name', async () => {
+    state.canManage = false
+    state.canRead = true
+    await render()
+    expect(state.list).toHaveBeenCalledWith('org-1')
+    expect(document.body.textContent).toContain('shop-one.apps.test')
+    expect(document.querySelector<HTMLInputElement>('input[aria-label="Filter domains"]')?.disabled).toBe(false)
+    expect(document.querySelector<HTMLButtonElement>('button')?.disabled).toBe(true)
+    expect(state.claim).not.toHaveBeenCalled()
+  })
+
+  it('lets an App writer reserve a domain', async () => {
+    state.canManage = false
+    state.canWriteApps = true
+    await render()
+    await openForm()
+    await submit()
+    expect(state.claim).toHaveBeenCalledWith('org-1', 'my-app')
+  })
+
+  it('shows the environment of an App target', async () => {
+    state.list.mockResolvedValue({
+      ...list,
+      domains: [{ ...list.domains[1], target: { type: 'app', app: 'shop-app', environment: 'env-stage' } }],
+    })
+    await render()
+    expect(document.querySelector('tbody')?.textContent).toContain('shop-app · env-stage')
   })
 
   it('renders empty and fetch-error states', async () => {

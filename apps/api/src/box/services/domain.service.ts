@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { Injectable, NotFoundException } from '@nestjs/common'
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common'
 import { InjectDataSource } from '@nestjs/typeorm'
 import { DataSource, EntityManager } from 'typeorm'
 import { TypedConfigService } from '../../config/typed-config.service'
@@ -28,7 +28,7 @@ import {
  * The controller spec derives this list from registered routes to keep that
  * naming policy consistent when a collection is added.
  */
-export const REST_COLLECTION_NAMES: readonly string[] = ['boxes', 'checkpoints', 'domains', 'images', 'volumes']
+export const REST_COLLECTION_NAMES: readonly string[] = ['apps', 'boxes', 'checkpoints', 'domains', 'images', 'volumes']
 
 /**
  * Names under the app domain that would read as the platform's own or whose
@@ -60,7 +60,7 @@ export type HeldDomain = {
   target: DomainTarget | null
 }
 
-type StoredTarget = Pick<Domain, 'targetType' | 'boxId' | 'appId' | 'port'>
+type StoredTarget = Pick<Domain, 'targetType' | 'boxId' | 'appId' | 'port'> & { environmentId?: string | null }
 
 export type HeldDomains = {
   domains: HeldDomain[]
@@ -73,7 +73,7 @@ export type HeldDomains = {
 }
 
 /**
- * Organization-owned hostnames and their typed targets; binding supports Box ports.
+ * Organization-owned hostnames route to Box ports or App environments.
  *
  * A name and a tunnel are separate resources. Binding records which box port
  * a name routes to. Claiming separately holds the organization row lock to enforce
@@ -175,9 +175,10 @@ export class DomainService {
       if (!current || current.state === BoxState.DESTROYED || current.desiredState === BoxDesiredState.DESTROYED) {
         throw new NotFoundException(`Box ${box.id} not found`)
       }
+      await this.assertManagedDomain(manager, current.organizationId, hostname)
       await this.assertReachableFromPlatformProxy(current)
       const [, bound]: [unknown[], number] = await manager.query(
-        `UPDATE "domain" SET "box_id" = $3, "port" = $4, "target_type" = 'box', "app_id" = NULL, "updated_at" = now()
+        `UPDATE "domain" SET "box_id" = $3, "port" = $4, "target_type" = 'box', "app_id" = NULL, "environment_id" = NULL, "updated_at" = now()
          WHERE "hostname" = $1 AND "organization_id" = $2`,
         [hostname, current.organizationId, current.id, port],
       )
@@ -188,6 +189,49 @@ export class DomainService {
     })
   }
 
+  async bindApp(
+    organizationId: string,
+    appIdOrName: string,
+    environment: string,
+    rawDomain: string,
+  ): Promise<HeldDomain> {
+    const hostname = this.fullHostname(rawDomain, 'Bind')
+    return this.dataSource.transaction(async (manager) => {
+      await manager.query(`SET LOCAL lock_timeout = '5s'`)
+      const [target] = await manager.query(
+        `SELECT a.id AS app_id, e.id AS env_id FROM cloud_app.apps a
+         JOIN cloud_app.envs e ON e.app_id = a.id
+         WHERE a.org_id = $1 AND (a.id = $2 OR a.name = $2) AND a.deleted_at IS NULL
+           AND (e.id = $3 OR e.name = $3) FOR UPDATE OF a, e`,
+        [organizationId, appIdOrName, environment],
+      )
+      if (!target) throw new NotFoundException('App environment not found')
+      await this.assertManagedDomain(manager, organizationId, hostname, target.app_id, target.env_id)
+      const [, bound]: [unknown[], number] = await manager.query(
+        `UPDATE "domain" SET target_type = 'app', app_id = $3, environment_id = $4,
+         box_id = NULL, port = NULL, updated_at = now()
+         WHERE hostname = $1 AND organization_id = $2`,
+        [hostname, organizationId, target.app_id, target.env_id],
+      )
+      if (bound === 0) throw new DomainNotOwnedError(hostname)
+      return {
+        hostname,
+        url: this.urlFor(hostname),
+        target: { type: 'app', app: target.app_id, environment: target.env_id },
+      }
+    })
+  }
+
+  async resolveAppEnvironment(appId: string, environmentId: string): Promise<string> {
+    const [env] = await this.dataSource.query(
+      `SELECT e.id FROM cloud_app.envs e JOIN cloud_app.apps a ON a.id = e.app_id
+       WHERE e.id = $1 AND a.id = $2 AND a.deleted_at IS NULL`,
+      [environmentId, appId],
+    )
+    if (!env) throw new NotFoundException('App environment not found')
+    return env.id
+  }
+
   /**
    * Release an exact hostname from its target, keeping the name
    * for the organization. A name the organization does not hold is a 404; one
@@ -195,16 +239,16 @@ export class DomainService {
    */
   async unbind(organizationId: string, rawDomain: string): Promise<string> {
     const hostname = this.fullHostname(rawDomain, 'Unbind')
-    // TypeORM answers an UPDATE with [rows, rowCount]; the count says whether
-    // the organization holds the name, bound or not.
-    const [, released]: [unknown[], number] = await this.dataSource.query(
-      `UPDATE "domain" SET "box_id" = NULL, "app_id" = NULL, "port" = NULL, "updated_at" = now()
-       WHERE "hostname" = $1 AND "organization_id" = $2`,
-      [hostname, organizationId],
-    )
-    if (released === 0) {
-      throw new NotFoundException(`This organization holds no domain ${hostname}`)
-    }
+    await this.dataSource.transaction(async (manager) => {
+      await this.assertManagedDomain(manager, organizationId, hostname)
+      // TypeORM returns an UPDATE's rows and row count, including when the name was already unbound.
+      const [, released]: [unknown[], number] = await manager.query(
+        `UPDATE "domain" SET "box_id" = NULL, "app_id" = NULL, "environment_id" = NULL, "port" = NULL, "updated_at" = now()
+         WHERE "hostname" = $1 AND "organization_id" = $2`,
+        [hostname, organizationId],
+      )
+      if (released === 0) throw new NotFoundException(`This organization holds no domain ${hostname}`)
+    })
     return hostname
   }
 
@@ -216,7 +260,7 @@ export class DomainService {
   async resolve(rawHostname: string): Promise<DomainTarget | null> {
     const hostname = rawHostname.trim().toLowerCase()
     const rows: StoredTarget[] = await this.dataSource.query(
-      `SELECT "target_type" AS "targetType", "box_id" AS "boxId", "app_id" AS "appId", "port"
+      `SELECT "target_type" AS "targetType", "box_id" AS "boxId", "app_id" AS "appId", "environment_id" AS "environmentId", "port"
        FROM "domain" WHERE "hostname" = $1`,
       [hostname],
     )
@@ -224,6 +268,17 @@ export class DomainService {
       return null
     }
     return this.targetOf(rows[0])
+  }
+
+  async owned(organizationId: string, rawDomain: string): Promise<HeldDomain> {
+    const hostname = this.fullHostname(rawDomain, 'Domain lookup')
+    const rows: StoredTarget[] = await this.dataSource.query(
+      `SELECT "target_type" AS "targetType", "box_id" AS "boxId", "app_id" AS "appId", "environment_id" AS "environmentId", "port"
+       FROM "domain" WHERE "hostname" = $1 AND "organization_id" = $2`,
+      [hostname, organizationId],
+    )
+    if (!rows[0]) throw new DomainNotOwnedError(hostname)
+    return { hostname, url: this.urlFor(hostname), target: this.targetOf(rows[0]) }
   }
 
   /** Every name the organization holds, bound or not, with its allowance. */
@@ -236,7 +291,7 @@ export class DomainService {
       throw new NotFoundException(`Organization ${organizationId} not found`)
     }
     const rows: (StoredTarget & { hostname: string })[] = await this.dataSource.query(
-      `SELECT "hostname", "target_type" AS "targetType", "box_id" AS "boxId", "app_id" AS "appId", "port" FROM "domain"
+      `SELECT "hostname", "target_type" AS "targetType", "box_id" AS "boxId", "app_id" AS "appId", "environment_id" AS "environmentId", "port" FROM "domain"
          WHERE "organization_id" = $1 ORDER BY "hostname"`,
       [organizationId],
     )
@@ -267,9 +322,40 @@ export class DomainService {
     return hostname
   }
 
+  /** Default App URLs are part of environment identity; aliases remain freely rebindable. */
+  private async assertManagedDomain(
+    manager: EntityManager,
+    organizationId: string,
+    hostname: string,
+    appId?: string,
+    envId?: string,
+  ): Promise<void> {
+    const [binding] = await manager.query(
+      'SELECT target_type, app_id, environment_id FROM "domain" WHERE hostname = $1 AND organization_id = $2 FOR UPDATE',
+      [hostname, organizationId],
+    )
+    if (binding?.target_type !== 'app' || !binding.environment_id) return
+    const [environment] = await manager.query('SELECT public_url FROM cloud_app.envs WHERE id = $1 AND app_id = $2', [
+      binding.environment_id,
+      binding.app_id,
+    ])
+    if (
+      environment?.public_url &&
+      new URL(environment.public_url).hostname === hostname &&
+      (appId !== binding.app_id || envId !== binding.environment_id)
+    ) {
+      throw new BadRequestException({
+        code: 'app_domain_managed',
+        message: 'The default App domain is managed by its environment and cannot be moved or unbound',
+      })
+    }
+  }
+
   private targetOf(row: StoredTarget): DomainTarget | null {
     if (row.targetType === 'app') {
-      return row.appId === null ? null : { type: 'app', app: row.appId }
+      return row.appId === null
+        ? null
+        : { type: 'app', app: row.appId, ...(row.environmentId ? { environment: row.environmentId } : {}) }
     }
     return row.boxId === null ? null : { type: 'box', box: row.boxId, port: Number(row.port) }
   }

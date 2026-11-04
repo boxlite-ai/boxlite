@@ -476,6 +476,9 @@ export const deployStack = ({
     CHECKPOINTS_ENABLED: inputs.apiEnvironment.CHECKPOINTS_ENABLED ?? 'false',
     // Supply the archive prefix wherever storage provides the dedicated bucket.
     ...(storage.checkpoints.active ? { CHECKPOINT_ARCHIVE_PREFIX: storage.checkpoints.archivePrefix } : {}),
+    CLOUD_APP_SOURCE_BUCKET: storage.name,
+    CLOUD_APP_SOURCE_BACKEND: storage.binding.cloud === 'gcp' ? 'gcs' : 's3',
+    CLOUD_APP_SOURCE_PREFIX: 'cloud-apps',
   }
   assertOneChannelPerName({
     workload: 'API',
@@ -661,4 +664,5 @@ export const capabilitiesFor = ({
     ? ([{ kind: 'manage-checkpoint-archives', checkpoints: storage.checkpoints }] as ApiCapability[])
     : []),
   ...(resizeRunnerDisks ? ([{ kind: 'resize-runner-disks' }] as ApiCapability[]) : []),
+  { kind: 'manage-app-source', storage },
 ]

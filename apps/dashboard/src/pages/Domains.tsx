@@ -26,7 +26,15 @@ import { usePageTitle } from '@/hooks/usePageTitle'
 const SHORT_NAME = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/
 
 /** List and reserve names within one organization, preserving quota and write-permission checks. */
-function OrganizationDomains({ organizationId, canManage }: { organizationId: string; canManage: boolean }) {
+function OrganizationDomains({
+  organizationId,
+  canRead,
+  canManage,
+}: {
+  organizationId: string
+  canRead: boolean
+  canManage: boolean
+}) {
   const api = useApi()
   const queryClient = useQueryClient()
   const [open, setOpen] = useState(false)
@@ -35,7 +43,7 @@ function OrganizationDomains({ organizationId, canManage }: { organizationId: st
   const query = useQuery({
     queryKey: queryKeys.domains.list(organizationId),
     queryFn: () => api.listDomains(organizationId),
-    enabled: canManage,
+    enabled: canRead,
   })
   const claim = useMutation({
     mutationFn: (shortName: string) => api.claimDomain(organizationId, shortName),
@@ -50,7 +58,8 @@ function OrganizationDomains({ organizationId, canManage }: { organizationId: st
   const needle = filter.trim().toLowerCase()
   const rows = (data?.domains ?? []).filter((domain) => {
     const target = domain.target?.type === 'box' ? domain.target.box : domain.target?.app
-    return `${domain.hostname} ${target ?? ''}`.toLowerCase().includes(needle)
+    const environment = domain.target?.type === 'app' ? domain.target.environment : undefined
+    return `${domain.hostname} ${target ?? ''} ${environment ?? ''}`.toLowerCase().includes(needle)
   })
   const openForm = () => {
     claim.reset()
@@ -62,7 +71,7 @@ function OrganizationDomains({ organizationId, canManage }: { organizationId: st
       <div className="resource-page-header">
         <h1 className="font-display text-page font-semibold text-foreground">Domains</h1>
         <p className="mt-2 text-body leading-relaxed text-muted-foreground">
-          Manage the domains used to reach your Box services.
+          Manage the domains used to reach your Boxes and Apps.
         </p>
       </div>
 
@@ -72,9 +81,9 @@ function OrganizationDomains({ organizationId, canManage }: { organizationId: st
           value={filter}
           onChange={(value) => setFilter(value)}
           count={query.isSuccess ? rows.length : '—'}
-          disabled={!canManage || !query.isSuccess}
+          disabled={!canRead || !query.isSuccess}
         />
-        {canManage && query.isSuccess && data && (
+        {canRead && query.isSuccess && data && (
           <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-meta text-muted-foreground">
             <span className="font-mono tabular-nums">
               {data.used} / {data.limit} domains held · {data.remaining} available
@@ -92,9 +101,9 @@ function OrganizationDomains({ organizationId, canManage }: { organizationId: st
         </AsciiButton>
       </div>
 
-      {!canManage ? (
+      {!canRead ? (
         <div role="alert" className="flex flex-1 items-center justify-center text-body text-muted-foreground">
-          You need Box write permission to manage domains.
+          You need App read or Box write permission to view domains.
         </div>
       ) : query.isPending ? (
         <div role="status" className="flex flex-1 items-center justify-center text-body text-muted-foreground">
@@ -113,7 +122,7 @@ function OrganizationDomains({ organizationId, canManage }: { organizationId: st
                 <ResourceEmptyState
                   title="No Domains yet."
                   icon={<Globe className="size-6" />}
-                  description="Request a name, then connect it to your Box using the CLI or SDK."
+                  description="Request a name, then connect it to your Box or App."
                 />
               </div>
             ) : (
@@ -164,8 +173,10 @@ function OrganizationDomains({ organizationId, canManage }: { organizationId: st
                             >
                               {domain.target.box}
                             </Link>
+                          ) : domain.target?.type === 'app' ? (
+                            `${domain.target.app}${domain.target.environment ? ` · ${domain.target.environment}` : ''}`
                           ) : (
-                            (domain.target?.app ?? '—')
+                            '—'
                           )}
                         </td>
                         <td className="px-4 py-3 tabular-nums text-muted-foreground">
@@ -294,7 +305,15 @@ export default function Domains() {
     <OrganizationDomains
       key={selectedOrganization.id}
       organizationId={selectedOrganization.id}
-      canManage={authenticatedUserHasPermission(OrganizationRolePermissionsEnum.WRITE_BOXES)}
+      canRead={
+        authenticatedUserHasPermission(OrganizationRolePermissionsEnum.READ_APPS) ||
+        authenticatedUserHasPermission(OrganizationRolePermissionsEnum.WRITE_APPS) ||
+        authenticatedUserHasPermission(OrganizationRolePermissionsEnum.WRITE_BOXES)
+      }
+      canManage={
+        authenticatedUserHasPermission(OrganizationRolePermissionsEnum.WRITE_BOXES) ||
+        authenticatedUserHasPermission(OrganizationRolePermissionsEnum.WRITE_APPS)
+      }
     />
   )
 }

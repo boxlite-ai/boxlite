@@ -42,6 +42,8 @@ import { useApiBodyParsers } from './mcp/mcp-body'
 import { McpTools } from './mcp/mcp-tools'
 import { servedOperations } from './mcp/mcp-routes'
 import { CiListenerService } from './ci/ci-listener.service'
+import { CloudAppService } from './cloud-app/cloud-app.service'
+import { CloudAppWebsocket } from './cloud-app/cloud-app-websocket'
 
 // https options
 const httpsEnabled = process.env.CERT_PATH && process.env.CERT_KEY_PATH
@@ -56,6 +58,7 @@ async function bootstrap() {
   }
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {
     bufferLogs: true,
+    rawBody: true,
     httpsOptions: httpsEnabled ? httpsOptions : undefined,
     // `useApiBodyParsers` registers the parsers, so `/mcp` reads its body only
     // after authentication.
@@ -238,7 +241,20 @@ async function bootstrap() {
     // paths fall through to socket.io rather than destroying the socket out
     // from under it; everything else is unauthenticated traffic and gets
     // closed here.
+    const cloudApps = app.get(CloudAppService)
+    const cloudAppWebsocket = app.get(CloudAppWebsocket)
     httpServer.on('upgrade', (req: IncomingMessage, socket: Socket, head: Buffer) => {
+      if (cloudAppWebsocket.matches(req.url)) {
+        void cloudAppWebsocket.upgrade(req, socket, head)
+        return
+      }
+      const appIngress = /^\/api\/internal\/apps\/ingress\/([^/?]+)/.exec(req.url || '')
+      if (appIngress) {
+        void cloudApps.upgradeIngress(req, socket, head, appIngress[1]).catch(() => {
+          socket.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: 0\r\n\r\n')
+        })
+        return
+      }
       if (wsProxy.matchAttachPath(req.url)) {
         void wsProxy.upgrade(req, socket, head)
         return

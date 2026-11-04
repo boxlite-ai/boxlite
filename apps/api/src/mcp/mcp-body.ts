@@ -22,17 +22,19 @@ export const MCP_JSON_LIMIT_BYTES = 12 * 1024 * 1024
 
 /** {@link MCP_ROUTE}, matched as Express routes it: any case, with or without a trailing slash. */
 const MCP_PATH = new RegExp(`^${MCP_ROUTE}/?$`, 'i')
+const CLOUD_APP_PATH = /^\/api\/(?:internal\/apps\/ingress\/|v1\/[^/]+\/apps(?:\/|$))/i
 
 /**
  * The API's body parsers, for an app created with `bodyParser: false`: the
  * defaults Nest would register (JSON, and extended form bodies), except on
  * `/mcp`, whose body {@link McpBodyGuard} reads once the caller is
- * authenticated. Call before `app.init()`.
+ * authenticated, and Cloud App routes, whose handlers consume the original
+ * upload, webhook or visitor stream. Call before `app.init()`.
  */
 export function useApiBodyParsers(app: INestApplication): void {
   for (const parse of [json(), urlencoded({ extended: true })]) {
     app.use((req: Request, res: Response, next: NextFunction) =>
-      MCP_PATH.test(req.path) ? next() : parse(req, res, next),
+      MCP_PATH.test(req.path) || CLOUD_APP_PATH.test(req.path) ? next() : parse(req, res, next),
     )
   }
 }
