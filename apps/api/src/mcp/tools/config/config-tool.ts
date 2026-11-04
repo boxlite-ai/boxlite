@@ -17,6 +17,7 @@ export function registerConfigTool(server: McpServer): void {
       inputSchema: z.strictObject({}),
       outputSchema: z.strictObject({
         capabilities: z.strictObject({
+          privileged_enabled: z.boolean(),
           snapshots_enabled: z.boolean(),
           clone_enabled: z.boolean(),
           export_enabled: z.boolean(),

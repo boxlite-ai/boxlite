@@ -32,6 +32,7 @@ describe('MCP hosted capability tool', () => {
     expect(result.isError).toBeFalsy()
     expect(result.structuredContent).toEqual(new BoxliteConfigController().getConfig())
     expect(result.structuredContent.capabilities).toEqual({
+      privileged_enabled: true,
       snapshots_enabled: false,
       clone_enabled: false,
       export_enabled: false,
