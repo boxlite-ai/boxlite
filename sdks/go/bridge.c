@@ -103,8 +103,9 @@ CExecutionResizeCb cbExecutionResize(void) { return (CExecutionResizeCb)goBoxlit
 CTunnelForwarderWaitCb cbTunnelForwarderWait(void) { return (CTunnelForwarderWaitCb)goBoxliteOnTunnelForwarderWait; }
 CTunnelForwarderCloseCb cbTunnelForwarderClose(void) { return (CTunnelForwarderCloseCb)goBoxliteOnTunnelForwarderClose; }
 
-// All three SSH operations deliver one CSshStatus, so they share the
+// All SSH operations deliver one CSshStatus, so they share the
 // goBoxliteOnSSHStatus trampoline (cast to their distinct typedef).
 CBoxSshConfigureCb cbSSHConfigure(void) { return (CBoxSshConfigureCb)goBoxliteOnSSHStatus; }
 CBoxSshStatusCb cbSSHStatus(void) { return (CBoxSshStatusCb)goBoxliteOnSSHStatus; }
 CBoxSshDisableCb cbSSHDisable(void) { return (CBoxSshDisableCb)goBoxliteOnSSHStatus; }
+CBoxSshEnableCb cbSSHEnable(void) { return (CBoxSshEnableCb)goBoxliteOnSSHStatus; }

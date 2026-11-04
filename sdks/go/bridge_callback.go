@@ -669,7 +669,7 @@ func freeSSHStatusPayload(status **C.CSshStatus) {
 	}
 }
 
-// goBoxliteOnSSHStatus serves configure, status, and disable. The callback
+// goBoxliteOnSSHStatus serves configure, enable, status, and disable. The callback
 // owns the status, so every path frees it once: a zero or lost handle frees
 // without delivering, and a won claim copies it before checking the channel.
 //
