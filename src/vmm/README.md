@@ -473,9 +473,10 @@ checks, not consequences proved by these reply flags.
 
 Operations run under the host's existing authority, without changing credentials,
 capabilities or umask. CREATE/MKDIR/MKNOD/SYMLINK accept each uid/gid only when
-it is zero or matches the host; other identities get EPERM. ACCESS checks guest
-mode permissions and host access. SETATTR retains the source's host-authority
-semantics.
+it is zero or matches the host; other identities get EPERM. ACCESS retains
+libkrun's combined guest owner/group/other bit checks, not strict POSIX class
+precedence, then also requires access by the host effective identity. SETATTR
+retains the source's host-authority semantics.
 Read-only enforcement also covers truncating opens and metadata changes.
 Raw parent lookup is refused for every export directory; nested listings omit
 host `..`, so an anchored directory moved outside an export cannot expose its
@@ -491,7 +492,8 @@ Anchored references preserve identity only after acquisition. The backend does
 not attempt name-based error cleanup, which could unlink a host replacement.
 
 FSYNC/FSYNCDIR finish the host sync before replying and propagate errors;
-FLUSH does not promise durability. FORGET/BATCH_FORGET/DESTROY use zero reply
+FLUSH and RELEASE (including RELEASE_FLUSH) do not promise durability.
+FORGET/BATCH_FORGET/DESTROY use zero reply
 bytes but still complete the descriptor. Reset clears session state and objects
 after the caller has stopped callbacks; it keeps export roots and ID counters.
 

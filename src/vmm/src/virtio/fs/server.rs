@@ -38,7 +38,10 @@ pub enum FsError {
 pub type Result<T> = std::result::Result<T, FsError>;
 use FsError as Error;
 
+/// Maximum read/write/xattr data payload; also advertised as INIT max_write.
 const MAX_BUFFER_SIZE: u32 = 1 << 20;
+/// Additional allowance for headers and fixed fields in the complete frame
+/// bound: MAX_BUFFER_SIZE + BUFFER_HEADER_SIZE.
 const BUFFER_HEADER_SIZE: u32 = 0x1000;
 const DIRENT_PADDING: [u8; 8] = [0; 8];
 
