@@ -87,6 +87,14 @@ box option without a local feature token. Its server must advertise
 `nested_virtualization_enabled` and confirm the saved requirement in its response;
 otherwise creation fails without silently downgrading the request.
 
+`Info`, `GetInfo`, and `ListInfo` expose saved requirements through
+`info.Advanced.NestedVirtualization`. A nil `Advanced` or nested pointer means
+unknown, including an older REST server; a non-nil false means explicitly disabled.
+These reads use an additive native getter to preserve the C ABI: Info/GetInfo
+perform one additional metadata lookup, and ListInfo performs one per returned box.
+The lookup must return the same opaque ID; a name or prefix cannot substitute another box.
+The matching native library must export `boxlite_get_nested_virtualization`.
+
 ### Archive Export and Import
 
 ```go
@@ -350,7 +358,7 @@ the Linux x86_64 CI metadata pass uses this setting after granting KVM access.
 Host-independent SDK and Runner tests also pass options through Go/C to the native
 REST backend: true requires fresh capability discovery and persisted confirmation;
 clearing the flag preserves the ordinary create request. These checks verify
-option forwarding without a VM.
+option forwarding and metadata without a VM.
 
 ## License
 

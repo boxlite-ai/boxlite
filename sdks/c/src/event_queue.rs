@@ -13,7 +13,7 @@ use std::sync::{Condvar, Mutex};
 use boxlite::BoxliteError;
 
 use crate::images::{CImageDetail, CImageInfoList, CImagePullResult, CImageUsage};
-use crate::info::{CBoxInfo, CBoxInfoList};
+use crate::info::{BoxliteNestedVirtualizationState, CBoxInfo, CBoxInfoList};
 use crate::metrics::{CBoxMetrics, CRuntimeMetrics};
 use crate::registries::{CRegistryCredential, CRegistryCredentialList};
 use crate::volumes::{CVolumeInfo, CVolumeInfoList};
@@ -228,6 +228,12 @@ pub(crate) type CBoxSshDisableFn =
 /// for callback dispatch only; on failure the metadata pointer is null.
 pub type CBoxInfoCb = Option<extern "C" fn(*mut CBoxInfo, *mut crate::CBoxliteError, *mut c_void)>;
 pub(crate) type CBoxInfoFn = extern "C" fn(*mut CBoxInfo, *mut crate::CBoxliteError, *mut c_void);
+
+/// Scalar saved nesting state. Ignore state on error; the error is borrowed.
+pub type CBoxNestedVirtualizationCb =
+    Option<extern "C" fn(BoxliteNestedVirtualizationState, *mut crate::CBoxliteError, *mut c_void)>;
+pub(crate) type CBoxNestedVirtualizationFn =
+    extern "C" fn(BoxliteNestedVirtualizationState, *mut crate::CBoxliteError, *mut c_void);
 
 /// Box info list completion.
 pub type CBoxInfoListCb =
@@ -514,6 +520,11 @@ pub enum RuntimeEvent {
         cb: CBoxInfoFn,
         user_data: usize,
         result: Result<OwnedFfiPtr<CBoxInfo>, BoxliteError>,
+    },
+    NestedVirtualization {
+        cb: CBoxNestedVirtualizationFn,
+        user_data: usize,
+        result: Result<BoxliteNestedVirtualizationState, BoxliteError>,
     },
     InfoList {
         cb: CBoxInfoListFn,

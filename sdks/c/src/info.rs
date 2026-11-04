@@ -3,7 +3,7 @@
 //! All info operations are async and use the runtime's post-and-drain callback
 //! queue.
 
-use std::ffi::CString;
+use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_int, c_void};
 use std::ptr;
 
@@ -13,7 +13,9 @@ use boxlite::runtime::types::{BoxStatus, PublishedPort};
 
 use crate::box_handle::BoxHandle;
 use crate::error::{BoxliteErrorCode, FFIError, null_pointer_error, write_error};
-use crate::event_queue::{CBoxInfoCb, CBoxInfoListCb, RuntimeEvent, push_event};
+use crate::event_queue::{
+    CBoxInfoCb, CBoxInfoListCb, CBoxNestedVirtualizationCb, RuntimeEvent, push_event,
+};
 use crate::options::BoxlitePortProtocol;
 use crate::runtime::RuntimeHandle;
 use crate::{CBoxHandle, CBoxliteError, CBoxliteRuntime};
@@ -24,6 +26,128 @@ use crate::{CBoxHandle, CBoxliteError, CBoxliteRuntime};
 pub enum BoxliteNetworkMode {
     BoxliteNetworkModeEnabled = 0,
     BoxliteNetworkModeDisabled = 1,
+}
+
+/// Saved nesting requirement. Unknown is distinct from an explicit false.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum BoxliteNestedVirtualizationState {
+    #[default]
+    BoxliteNestedUnknown = 0,
+    BoxliteNestedDisabled = 1,
+    BoxliteNestedEnabled = 2,
+}
+
+fn nested_virtualization_state(info: &boxlite::BoxInfo) -> BoxliteNestedVirtualizationState {
+    match info
+        .advanced
+        .as_ref()
+        .and_then(|advanced| advanced.nested_virtualization)
+    {
+        None => BoxliteNestedVirtualizationState::BoxliteNestedUnknown,
+        Some(false) => BoxliteNestedVirtualizationState::BoxliteNestedDisabled,
+        Some(true) => BoxliteNestedVirtualizationState::BoxliteNestedEnabled,
+    }
+}
+
+/// Read saved nesting through the callback queue, without starting the box.
+/// The scalar needs no freeing; callback errors are borrowed during dispatch.
+///
+/// # Safety
+/// `handle` and `out_error` must satisfy the ordinary box-info pointer contract.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_box_nested_virtualization(
+    handle: *mut CBoxHandle,
+    cb: CBoxNestedVirtualizationCb,
+    user_data: *mut c_void,
+    out_error: *mut CBoxliteError,
+) -> BoxliteErrorCode {
+    unsafe {
+        if handle.is_null() {
+            write_error(out_error, null_pointer_error("handle"));
+            return BoxliteErrorCode::InvalidArgument;
+        }
+        let cb = crate::unwrap_cb_or_return!(cb, out_error);
+        let handle = &*handle;
+        let lite = handle.handle.clone();
+        let queue = handle.queue.clone();
+        let user_data = user_data as usize;
+        handle.tokio_rt.spawn(async move {
+            let result = lite
+                .info()
+                .await
+                .map(|info| nested_virtualization_state(&info));
+            push_event(
+                &queue,
+                RuntimeEvent::NestedVirtualization {
+                    cb,
+                    user_data,
+                    result,
+                },
+            )
+            .await;
+        });
+        BoxliteErrorCode::Ok
+    }
+}
+
+/// Read the saved requirement by opaque box ID, without allocating a box handle.
+/// Preserves the existing CBoxInfo and CBoxInfoList layouts.
+///
+/// # Safety
+/// `runtime` must be live; `id` must be a readable NUL-terminated string.
+/// `out_error` follows the ordinary box-info pointer contract.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_get_nested_virtualization(
+    runtime: *mut CBoxliteRuntime,
+    id: *const c_char,
+    cb: CBoxNestedVirtualizationCb,
+    user_data: *mut c_void,
+    out_error: *mut CBoxliteError,
+) -> BoxliteErrorCode {
+    unsafe {
+        if runtime.is_null() || id.is_null() {
+            write_error(out_error, null_pointer_error("runtime or id"));
+            return BoxliteErrorCode::InvalidArgument;
+        }
+        let id = match CStr::from_ptr(id)
+            .to_str()
+            .ok()
+            .and_then(boxlite::BoxID::parse)
+        {
+            Some(id) => id.to_string(),
+            None => {
+                write_error(
+                    out_error,
+                    BoxliteError::InvalidArgument("invalid box ID".into()),
+                );
+                return BoxliteErrorCode::InvalidArgument;
+            }
+        };
+        let cb = crate::unwrap_cb_or_return!(cb, out_error);
+        let runtime = &*runtime;
+        let core = runtime.runtime.clone();
+        let queue = runtime.queue.clone();
+        let user_data = user_data as usize;
+        runtime.tokio_rt.spawn(async move {
+            let result = core.get_info(&id).await.and_then(|info| {
+                // Core lookup accepts names and prefixes; this ABI takes exact IDs.
+                info.filter(|info| info.id.as_str() == id.as_str())
+                    .map(|info| nested_virtualization_state(&info))
+                    .ok_or_else(|| BoxliteError::NotFound(format!("Box not found: {id}")))
+            });
+            push_event(
+                &queue,
+                RuntimeEvent::NestedVirtualization {
+                    cb,
+                    user_data,
+                    result,
+                },
+            )
+            .await;
+        });
+        BoxliteErrorCode::Ok
+    }
 }
 
 /// A concrete host listener published to a guest port.

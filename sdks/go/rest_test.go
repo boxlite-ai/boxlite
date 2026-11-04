@@ -169,8 +169,10 @@ func TestRestBoxInfoFetchesCurrentMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Info: %v", err)
 	}
-	if got := requestCount.Load(); got != 2 {
-		t.Fatalf("request count: got %d, want 2", got)
+	// Get attaches once; Info reads current metadata and the additive saved-
+	// requirement getter performs one more lookup without changing CBoxInfo.
+	if got := requestCount.Load(); got != 3 {
+		t.Fatalf("request count: got %d, want 3", got)
 	}
 	if info.ID != "box1" || info.Name != "service" {
 		t.Errorf("identity: got ID=%q Name=%q", info.ID, info.Name)

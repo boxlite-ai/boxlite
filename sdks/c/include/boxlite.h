@@ -71,6 +71,13 @@ typedef enum CAgentSendMode {
   AgentSendReject = 1,
 } CAgentSendMode;
 
+// Saved nesting requirement. Unknown is distinct from an explicit false.
+typedef enum BoxliteNestedVirtualizationState {
+  BoxliteNestedUnknown = 0,
+  BoxliteNestedDisabled = 1,
+  BoxliteNestedEnabled = 2,
+} BoxliteNestedVirtualizationState;
+
 // Network mode exposed by [`CNetworkInfo`].
 typedef enum BoxliteNetworkMode {
   BoxliteNetworkModeEnabled = 0,
@@ -461,6 +468,11 @@ typedef struct CImageUsage {
 typedef void (*CBoxImageUsageCb)(struct CImageUsage*, CBoxliteError*, void*);
 
 typedef struct RegistryHandle CBoxliteRegistryHandle;
+
+// Scalar saved nesting state. Ignore state on error; the error is borrowed.
+typedef void (*CBoxNestedVirtualizationCb)(enum BoxliteNestedVirtualizationState,
+                                           CBoxliteError*,
+                                           void*);
 
 // A concrete host listener published to a guest port.
 //
@@ -1342,6 +1354,28 @@ void boxlite_free_image_pull_result(struct CImagePullResult *result);
 // `detail` must be null or a pointer handed to a `boxlite_image_get` or
 // `boxlite_image_create_alias` callback that has not already been freed.
 void boxlite_free_image_detail(struct CImageDetail *detail);
+
+// Read saved nesting through the callback queue, without starting the box.
+// The scalar needs no freeing; callback errors are borrowed during dispatch.
+//
+// # Safety
+// `handle` and `out_error` must satisfy the ordinary box-info pointer contract.
+enum BoxliteErrorCode boxlite_box_nested_virtualization(CBoxHandle *handle,
+                                                        CBoxNestedVirtualizationCb cb,
+                                                        void *user_data,
+                                                        CBoxliteError *out_error);
+
+// Read the saved requirement by opaque box ID, without allocating a box handle.
+// Preserves the existing CBoxInfo and CBoxInfoList layouts.
+//
+// # Safety
+// `runtime` must be live; `id` must be a readable NUL-terminated string.
+// `out_error` follows the ordinary box-info pointer contract.
+enum BoxliteErrorCode boxlite_get_nested_virtualization(CBoxliteRuntime *runtime,
+                                                        const char *id,
+                                                        CBoxNestedVirtualizationCb cb,
+                                                        void *user_data,
+                                                        CBoxliteError *out_error);
 
 enum BoxliteErrorCode boxlite_box_info(CBoxHandle *handle,
                                        CBoxInfoCb cb,

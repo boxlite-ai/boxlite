@@ -519,6 +519,31 @@ func goBoxliteOnInfo(info *C.CBoxInfo, errPtr *C.CBoxliteError, userData unsafe.
 	ch <- infoResult{value: &v}
 }
 
+//export goBoxliteOnNestedVirtualization
+func goBoxliteOnNestedVirtualization(state C.BoxliteNestedVirtualizationState, errPtr *C.CBoxliteError, userData unsafe.Pointer) {
+	h := ptrToHandle(userData)
+	if h == 0 || !claimHandleForDispatch(h) {
+		return
+	}
+	defer h.Delete()
+	ch, ok := h.Value().(chan nestedVirtualizationResult)
+	if !ok {
+		return
+	}
+	result := nestedVirtualizationResult{err: errorFromCError(errPtr)}
+	if result.err == nil {
+		switch state {
+		case C.BoxliteNestedUnknown:
+		case C.BoxliteNestedDisabled, C.BoxliteNestedEnabled:
+			enabled := state == C.BoxliteNestedEnabled
+			result.value = &enabled
+		default:
+			result.err = &Error{Code: ErrInternal, Message: "invalid native nested virtualization state"}
+		}
+	}
+	ch <- result
+}
+
 //export goBoxliteOnInfoList
 func goBoxliteOnInfoList(list *C.CBoxInfoList, errPtr *C.CBoxliteError, userData unsafe.Pointer) {
 	h := ptrToHandle(userData)
@@ -816,6 +841,11 @@ type infoResult struct {
 
 type infoListResult struct {
 	value []BoxInfo
+	err   error
+}
+
+type nestedVirtualizationResult struct {
+	value *bool
 	err   error
 }
 

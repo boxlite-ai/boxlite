@@ -277,6 +277,27 @@ int main() {
 }
 ```
 
+### Nested virtualization (RC)
+
+Local creation requires `boxlite_runtime_new_experimental` with the
+`nested-virtualization` token and advanced options set by
+`boxlite_advanced_options_set_nested_virtualization(advanced, 1)`.
+Attach them using `boxlite_options_set_advanced`; check every return code.
+Constructors do not read `BOXLITE_EXPERIMENTAL`.
+REST runtimes use the same per-box setter, with authorization owned by the server.
+The SDK requires fresh capability discovery and persisted true confirmation.
+
+Read saved requirements asynchronously using `boxlite_box_nested_virtualization`
+for a box handle or `boxlite_get_nested_virtualization` for an opaque box ID.
+The latter accepts exact IDs, rejecting names and prefixes. Drain the runtime queue to receive the callback.
+The callback receives `BoxliteNestedUnknown`, `BoxliteNestedDisabled`, or
+`BoxliteNestedEnabled` by value; the scalar needs no freeing and callback errors
+are borrowed only for the callback duration. Unknown includes older REST servers.
+The existing `CBoxInfo` and `CBoxInfoList` layouts are unchanged.
+Use a matching header/library exporting these additive symbols.
+Saved enabled metadata does not prove L2 execution; see the
+[RC guide](../../docs/guides/nested-virtualization.md).
+
 ### Runtime Image Management
 
 `boxlite_runtime_images()` returns the images a runtime can boot from: the

@@ -716,6 +716,24 @@ unsafe fn dispatch_event(event: RuntimeEvent) {
                 user_data,
                 result,
             } => dispatch_handle_event::<crate::CBoxInfo>(result, user_data, cb),
+            RuntimeEvent::NestedVirtualization {
+                cb,
+                user_data,
+                result,
+            } => {
+                let mut error = FFIError::default();
+                let value = match result {
+                    Ok(value) => value,
+                    Err(cause) => {
+                        error = crate::error::error_to_c_error(cause);
+                        crate::info::BoxliteNestedVirtualizationState::BoxliteNestedUnknown
+                    }
+                };
+                cb(value, &mut error, user_data as *mut c_void);
+                if !error.message.is_null() {
+                    crate::boxlite_error_free(&mut error);
+                }
+            }
             RuntimeEvent::InfoList {
                 cb,
                 user_data,

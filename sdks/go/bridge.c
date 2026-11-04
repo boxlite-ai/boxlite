@@ -38,6 +38,7 @@ extern void goBoxliteOnRegistryRemove(CBoxliteError *err, void *ud);
 
 extern void goBoxliteOnInfo(CBoxInfo *info, CBoxliteError *err, void *ud);
 extern void goBoxliteOnInfoList(CBoxInfoList *list, CBoxliteError *err, void *ud);
+extern void goBoxliteOnNestedVirtualization(BoxliteNestedVirtualizationState state, CBoxliteError *err, void *ud);
 
 extern void goBoxliteOnBoxMetrics(CBoxMetrics *m, CBoxliteError *err, void *ud);
 extern void goBoxliteOnRuntimeMetrics(CRuntimeMetrics *m, CBoxliteError *err, void *ud);
@@ -90,6 +91,7 @@ CBoxRegistryRemoveCb cbRegistryRemove(void) { return (CBoxRegistryRemoveCb)goBox
 
 CBoxInfoCb cbInfo(void) { return (CBoxInfoCb)goBoxliteOnInfo; }
 CBoxInfoListCb cbInfoList(void) { return (CBoxInfoListCb)goBoxliteOnInfoList; }
+CBoxNestedVirtualizationCb cbNestedVirtualization(void) { return (CBoxNestedVirtualizationCb)goBoxliteOnNestedVirtualization; }
 
 CBoxMetricsCb cbBoxMetrics(void) { return (CBoxMetricsCb)goBoxliteOnBoxMetrics; }
 CRuntimeMetricsCb cbRuntimeMetrics(void) { return (CRuntimeMetricsCb)goBoxliteOnRuntimeMetrics; }

@@ -72,6 +72,9 @@ type NetworkInfo struct {
 
 // BoxInfo holds information about a box.
 type BoxInfo struct {
+	// Advanced records saved requirements, not successful nested guest execution.
+	// Nil means the producer did not report these requirements.
+	Advanced   *BoxAdvancedInfo
 	ID         string
 	Name       string
 	Image      string
@@ -110,6 +113,55 @@ type BoxInfo struct {
 	ResolvedImage *ResolvedImage
 }
 
+// BoxAdvancedInfo is the safe projection of saved advanced requirements.
+type BoxAdvancedInfo struct {
+	// Nil means unknown, including responses from older REST servers.
+	NestedVirtualization *bool
+}
+
+// The additive C getter preserves CBoxInfo's public layout. Reads therefore
+// make a second metadata lookup; list reads make one lookup per returned ID.
+func (r *Runtime) readNestedVirtualization(ctx context.Context, id string) (*bool, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	r.ensureDrainRunning()
+	cID := toCString(id)
+	defer C.free(unsafe.Pointer(cID))
+	ch := make(chan nestedVirtualizationResult, 1)
+	h := registerHandleForDispatch(cgo.NewHandle(ch))
+	var cerr C.CBoxliteError
+	code := C.boxlite_get_nested_virtualization(r.handle, cID, C.cbNestedVirtualization(), handleToPtr(h), &cerr)
+	if code != C.Ok {
+		deleteHandleForDispatch(h)
+		return nil, freeError(&cerr)
+	}
+	select {
+	case result := <-ch:
+		return result.value, result.err
+	case <-ctx.Done():
+		drainAndDelete(ch, h, r.closing)
+		return nil, ctx.Err()
+	case <-r.closing:
+		drainAndDelete(ch, h, r.closing)
+		return nil, ErrRuntimeClosed
+	}
+}
+
+func (r *Runtime) populateAdvancedInfo(ctx context.Context, info *BoxInfo) error {
+	if info == nil {
+		return nil
+	}
+	nested, err := r.readNestedVirtualization(ctx, info.ID)
+	if err != nil {
+		return err
+	}
+	if nested != nil {
+		info.Advanced = &BoxAdvancedInfo{NestedVirtualization: nested}
+	}
+	return nil
+}
+
 // ResolvedImage names an image build the way its registry does.
 type ResolvedImage struct {
 	// ManifestDigest is the registry's digest for the build.
@@ -134,6 +186,9 @@ func (b *Box) Info(ctx context.Context) (*BoxInfo, error) {
 
 	select {
 	case res := <-ch:
+		if res.err == nil {
+			res.err = b.runtime.populateAdvancedInfo(ctx, res.value)
+		}
 		if res.value != nil && res.value.Name != "" && b.name == "" {
 			b.name = res.value.Name
 		}
@@ -163,6 +218,13 @@ func (r *Runtime) ListInfo(ctx context.Context) ([]BoxInfo, error) {
 
 	select {
 	case res := <-ch:
+		if res.err == nil {
+			for i := range res.value {
+				if err := r.populateAdvancedInfo(ctx, &res.value[i]); err != nil {
+					return nil, err
+				}
+			}
+		}
 		return res.value, res.err
 	case <-ctx.Done():
 		drainAndDelete(ch, h, r.closing)
@@ -192,6 +254,9 @@ func (r *Runtime) GetInfo(ctx context.Context, idOrName string) (*BoxInfo, error
 
 	select {
 	case res := <-ch:
+		if res.err == nil {
+			res.err = r.populateAdvancedInfo(ctx, res.value)
+		}
 		return res.value, res.err
 	case <-ctx.Done():
 		drainAndDelete(ch, h, r.closing)

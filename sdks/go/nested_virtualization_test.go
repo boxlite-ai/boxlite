@@ -161,6 +161,113 @@ func TestNestedVirtualizationRuntimeRejectsInvalidFeatures(t *testing.T) {
 	}
 }
 
+func TestNestedVirtualizationInfoPreservesSavedAndUnknownValues(t *testing.T) {
+	for _, stored := range []string{"unknown", "false", "true"} {
+		t.Run(stored, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				info := map[string]any{
+					"box_id": "metadata-box", "name": "named", "status": "configured",
+					"created_at": "2026-01-01T00:00:00Z", "updated_at": "2026-01-01T00:00:00Z",
+					"pid": nil, "image": "alpine:latest", "cpus": 1, "memory_mib": 128,
+				}
+				if stored != "unknown" {
+					info["advanced"] = map[string]bool{"nested_virtualization": stored == "true"}
+				}
+				var response any = info
+				switch r.URL.Path {
+				case "/v1/boxes":
+					response = map[string]any{"boxes": []any{info}}
+				case "/v1/boxes/metadata-box", "/v1/boxes/named":
+				default:
+					t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+					http.NotFound(w, r)
+					return
+				}
+				if r.Method != http.MethodGet {
+					t.Errorf("metadata must only read: %s", r.Method)
+				}
+				payload, _ := json.Marshal(response)
+				w.Header().Set("Content-Type", "application/json")
+				w.Header().Set("Content-Length", strconv.Itoa(len(payload)))
+				_, _ = w.Write(payload)
+			}))
+			defer server.Close()
+			runtime, err := NewRest(BoxliteRestOptions{URL: server.URL})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer runtime.Close()
+			info, err := runtime.GetInfo(t.Context(), "named")
+			if err != nil {
+				t.Fatal(err)
+			}
+			list, err := runtime.ListInfo(t.Context())
+			if err != nil || len(list) != 1 {
+				t.Fatalf("list: %v, %v", list, err)
+			}
+			box, err := runtime.Get(t.Context(), "named")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer box.Close()
+			fromBox, err := box.Info(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, info := range []*BoxInfo{info, &list[0], fromBox} {
+				if stored == "unknown" {
+					if info.Advanced != nil {
+						t.Fatalf("invented saved requirement: %+v", info.Advanced)
+					}
+				} else if info.Advanced == nil || info.Advanced.NestedVirtualization == nil || *info.Advanced.NestedVirtualization != (stored == "true") {
+					t.Fatalf("lost saved %s requirement: %+v", stored, info.Advanced)
+				}
+			}
+		})
+	}
+}
+
+func TestNestedVirtualizationInfoRefusesDifferentResponseID(t *testing.T) {
+	var calls atomic.Int32
+	paths := make(chan string, 2)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths <- r.URL.Path
+		count := calls.Add(1)
+		id := "original-box"
+		if count == 2 {
+			id = "other-box"
+		}
+		body, _ := json.Marshal(map[string]any{
+			"box_id": id, "status": "configured", "image": "alpine:latest", "cpus": 1, "memory_mib": 128,
+			"created_at": "2026-01-01T00:00:00Z", "updated_at": "2026-01-01T00:00:00Z",
+			"advanced": map[string]bool{"nested_virtualization": count == 2},
+		})
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Content-Length", strconv.Itoa(len(body)))
+		w.Header().Set("Connection", "close")
+		_, _ = w.Write(body)
+	}))
+	defer server.Close()
+	runtime, err := NewRest(BoxliteRestOptions{URL: server.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close()
+	info, err := runtime.GetInfo(t.Context(), "requested-name")
+	if calls.Load() != 2 {
+		t.Fatalf("metadata request count: %d", calls.Load())
+	}
+	if first, second := <-paths, <-paths; first != "/v1/boxes/requested-name" || second != "/v1/boxes/original-box" {
+		t.Fatalf("metadata selectors: %s / %s", first, second)
+	}
+	if !IsNotFound(err) {
+		t.Fatalf("the original ID must not acquire another box's metadata: info=%+v err=%v", info, err)
+	}
+	if info != nil && info.Advanced != nil {
+		t.Fatalf("other box metadata leaked: %+v", info.Advanced)
+	}
+}
+
 func TestNestedVirtualizationFeatureOptionCopiesAndReplaces(t *testing.T) {
 	features := []string{"nested-virtualization"}
 	option := WithExperimentalFeatures(features...)
