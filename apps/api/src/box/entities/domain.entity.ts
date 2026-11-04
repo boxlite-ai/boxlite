@@ -16,14 +16,16 @@ import {
 
 export type DomainKind = 'platform' | 'custom'
 export type DomainTargetType = 'box' | 'app'
-export type DomainTarget = { type: 'box'; box: string; port: number } | { type: 'app'; app: string }
+export type DomainTarget =
+  | { type: 'box'; box: string; port: number }
+  | { type: 'app'; app: string; environment?: string }
 
 /**
  * A hostname an organization holds, and its typed target.
  *
  * The hostname belongs to the organization for as long as the row exists.
  * `target_type` selects `box_id` or `app_id`; a null selected reference means
- * the hostname is held but unbound. App references are reserved for future use.
+ * the hostname is held but unbound. App bindings identify an environment explicitly.
  * A Box binding names its port independently of the tunnel's public declaration.
  * Unbinding clears both references and the port, retaining ownership. Box deletion
  * preserves the stored target. Target and organization references have no foreign
@@ -34,6 +36,7 @@ export type DomainTarget = { type: 'box'; box: string; port: number } | { type: 
 @Index('domain_organization_id_index', ['organizationId'])
 @Index('domain_target_index', ['boxId', 'port'])
 @Index('domain_app_target_index', ['appId'])
+@Index('domain_app_environment_idx', ['environmentId'], { where: '"environment_id" IS NOT NULL' })
 @Check('domain_kind', `"kind" IN ('platform', 'custom')`)
 @Check(
   'domain_target',
@@ -62,9 +65,12 @@ export class Domain {
   @Column({ name: 'target_type', type: 'character varying', default: 'box' })
   targetType: DomainTargetType
 
-  /** Reserved App identity; App binding remains disabled until its resource exists. */
+  /** The App owning the bound environment. */
   @Column({ name: 'app_id', type: 'character varying', length: 255, nullable: true })
   appId: string | null
+
+  @Column({ name: 'environment_id', type: 'text', nullable: true })
+  environmentId: string | null
 
   /** Retained after Box deletion; null for App targets or an unbound Box target. */
   @Column({ name: 'box_id', type: 'character varying', length: 12, nullable: true })

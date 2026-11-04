@@ -145,7 +145,10 @@ test('the Cloud Run API retains background CPU and adds a service-level minimum 
 
 test('API targeting includes newly configured secret grants absent from the previous state', () => {
   const { records } = capture(true)
-  const service = records.find((record) => record.type === 'gcp.cloudrunv2.Service' && record.name === 'Api')!
+  const services = records.filter(
+    (record) => record.type === 'gcp.cloudrunv2.Service' && ['Api', 'CloudAppWorker'].includes(record.name),
+  )
+  assert.deepEqual(services.map((service) => service.name).sort(), ['Api', 'CloudAppWorker'])
   const prefix = 'urn:pulumi:ci-test::boxlite::'
   const apiType = (gcpSdk.cloudrunv2.Service as any).__pulumiType
   const targets = componentTargets({
@@ -153,14 +156,16 @@ test('API targeting includes newly configured secret grants absent from the prev
     app: 'boxlite',
     stage: 'ci-test',
     environment: {},
-    resources: [{ type: apiType, urn: `${prefix}${apiType}::${service.name}` }],
+    resources: services.map((service) => ({ type: apiType, urn: `${prefix}${apiType}::${service.name}` })),
   })
   const grants = records.filter((record) => record.type === 'gcp.secretmanager.SecretIamMember')
   const grantType = (gcpSdk.secretmanager.SecretIamMember as any).__pulumiType
   assert.ok(grants.some((grant) => grant.name === 'ApiSecretAccess-CI_GITHUB_APP_PRIVATE_KEY'))
+  const secretTarget = targets.find((target) => target.endsWith('::ApiSecretAccess-*'))
+  assert.ok(secretTarget)
   for (const grant of grants) {
     const urn = `${prefix}${grantType}::${grant.name}`
-    assert.ok(urn.startsWith(targets[1]!.slice(0, -1)), `${grant.name} is outside the target scope`)
+    assert.ok(urn.startsWith(secretTarget.slice(0, -1)), `${grant.name} is outside the target scope`)
   }
 })
 

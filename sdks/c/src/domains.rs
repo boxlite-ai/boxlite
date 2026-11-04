@@ -41,7 +41,7 @@ pub enum BoxliteDomainTargetType {
 /// name and `port` a guest port. Passed in, the strings are borrowed for the
 /// call; inside a `CDomain`, they belong to it.
 ///
-/// App targets use `app` with a null `box` and zero `port`; binding is reserved.
+/// App targets use `app` with a null `box` and zero `port`, selecting the main environment.
 /// cbindgen:field-names=[type, box, port, app]
 #[repr(C)]
 pub struct CDomainTarget {

@@ -32,6 +32,22 @@ reference sent to the API.
 Volumes and Lifecycle are directly visible sections, without an Advanced disclosure.
 Their existing defaults, validation and submission behavior are unchanged.
 
+## Apps
+
+Apps sits after Boxes in the main navigation and uses the same OIDC session,
+organization switcher and resource permissions. Its management requests go to
+`/api/v1/{organizationId}/apps` through the shared `ApiClient`; the App detail
+projection is `GET /apps/{appId}/view` within that organization namespace.
+Deployments, environments, services, authentication, database, volumes,
+variables and logs remain within the selected organization and environment.
+
+App query keys include the organization. Switching organizations resets open
+forms and one-time credential dialogs; a detail page returns to the App list.
+Mutations retain their originating organization and environment, so a late
+response refreshes only that scope. Source archives, exports and previews use
+the platform bearer, and opening a private App uses a one-time browser ticket.
+No separate console login, cookie client or production mock backend is required.
+
 ## New-account email policy
 
 First-account verification is enabled by the API's `TURNSTILE_SITEKEY`. Without

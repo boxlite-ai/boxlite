@@ -1,6 +1,7 @@
 /* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
 import { CheckpointGlyph } from './CheckpointGlyph'
 import {
+  AgentApp,
   BookOpen,
   Building2,
   Container,
@@ -18,6 +19,7 @@ import './NavigationIcon.css'
 
 const GLYPHS = {
   box: Container,
+  app: AgentApp,
   images: Layers,
   volume: HardDrive,
   domain: Globe,

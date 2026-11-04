@@ -14,6 +14,10 @@ const PERMISSION_GROUPS: ReadonlyArray<readonly [string, ReadonlyArray<{ name: s
 ]
 
 describe('permission groups', () => {
+  it.each(PERMISSION_GROUPS)('offer App resource permissions immediately after Boxes in %s', (_source, groups) => {
+    const boxes = groups.findIndex((group) => group.name === 'Boxes')
+    expect(groups[boxes + 1]).toEqual({ name: 'Apps', permissions: ['read:apps', 'write:apps', 'delete:apps'] })
+  })
   /**
    * `*:templates` names the image/template subsystem removed upstream: no API
    * route enforces those scopes any more, so a group offering them grants

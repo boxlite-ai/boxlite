@@ -74,7 +74,12 @@ for (const stage of ['dev', 'prod', 'preview', 'stage']) {
   test(`platform Cloud Run discovery labels for ${stage}`, () => {
     const built = platformServices(stage)
     const services = built.filter((resource) => resource.kind === 'gcp.cloudrunv2.Service')
-    assert.deepEqual(services.map((service) => service.logical).sort(), ['Api', 'OtelCollector', 'RegistryProxy'])
+    assert.deepEqual(services.map((service) => service.logical).sort(), [
+      'Api',
+      'CloudAppWorker',
+      'OtelCollector',
+      'RegistryProxy',
+    ])
     if (process.env.DISCOVERY_RECEIPTS)
       writeFileSync(join(process.env.DISCOVERY_RECEIPTS, `platform-${stage}.json`), JSON.stringify(built, null, 2))
     for (const service of services) {
@@ -87,6 +92,7 @@ for (const stage of ['dev', 'prod', 'preview', 'stage']) {
 for (const stage of ['dev', 'prod', 'stage']) {
   for (const [logical, port, protocol] of [
     ['Api', 3000, 'http1'],
+    ['CloudAppWorker', 3000, 'http1'],
     ['OtelCollector', 4318, 'http1'],
     ['RegistryProxy', 4100, 'h2c'],
   ] as const) {
