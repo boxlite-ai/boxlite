@@ -6,6 +6,9 @@
 pub(crate) mod console;
 #[cfg(target_arch = "x86_64")]
 pub(crate) mod i8042;
+#[cfg(unix)]
+#[cfg_attr(not(test), expect(dead_code, reason = "Awaiting VM wiring"))]
+pub(crate) mod net;
 #[cfg(target_arch = "x86_64")]
 pub(crate) mod serial;
 #[cfg(target_arch = "x86_64")]

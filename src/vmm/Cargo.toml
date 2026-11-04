@@ -10,7 +10,7 @@ description = "Virtual machine lifecycle and device model for BoxLite"
 
 [dependencies]
 boxlite-hypervisor.workspace = true
-mio = { version = "1.2.0", default-features = false, features = ["os-poll"] }
+mio = { version = "1.2.0", default-features = false, features = ["os-poll", "net"] }
 tracing = "0.1"
 virtio-queue = "0.18.0"
 vm-memory = { version = "0.18.0", features = ["backend-mmap"] }
