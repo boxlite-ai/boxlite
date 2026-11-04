@@ -36,6 +36,10 @@ export interface CreateBoxDTO {
     'memoryQuota'?: number;
     'metadata'?: { [key: string]: string; };
     /**
+     * Requires explicit authorization on the Runner process; omitted means off.
+     */
+    'nestedVirtualization'?: boolean;
+    /**
      * Nullable for backward compatibility
      */
     'organizationId'?: string;
@@ -49,8 +53,6 @@ export interface CreateBoxDTO {
     'regionId'?: string;
     'registry'?: RegistryDTO;
     'runAsUser'?: string;
-    /** Request nested virtualization, subject to Runner authorization. */
-    'nestedVirtualization'?: boolean;
     'secrets'?: Array<DtoSecretDTO>;
     'skipStart'?: boolean;
     'storageQuota'?: number;

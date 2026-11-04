@@ -8,7 +8,8 @@ package models
 import "github.com/boxlite-ai/runner/pkg/models/enums"
 
 type BoxInfo struct {
-	BoxState enums.BoxState
+	NestedVirtualization *bool
+	BoxState             enums.BoxState
 	// ExitCode is how the box's main command ended, set once the runtime
 	// recorded it and nil otherwise. Stopping a box signals that command, so
 	// this also carries what the stop produced. A pointer rather than an int

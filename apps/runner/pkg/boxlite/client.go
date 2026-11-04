@@ -378,6 +378,12 @@ func (c *Client) HomeDir() string {
 	return c.homeDir
 }
 
+// NestedVirtualizationEnabled reports the feature set validated at startup.
+// It authorizes requests; it does not establish hardware availability.
+func (c *Client) NestedVirtualizationEnabled() bool {
+	return c.nestedVirtualizationAllowed
+}
+
 // Shutdown gracefully stops all running boxes in the underlying BoxLite
 // runtime. Blocks until shutdown completes or `timeout` elapses. Call this
 // BEFORE Close so VMs aren't killed mid-write on systemd SIGTERM.
@@ -692,10 +698,14 @@ func (c *Client) GetBoxInfo(ctx context.Context, boxId string) (models.BoxInfo, 
 		return models.BoxInfo{BoxState: enums.BoxStateUnknown}, err
 	}
 
-	return models.BoxInfo{
+	result := models.BoxInfo{
 		BoxState: ToBoxState(info.State),
 		ExitCode: info.ExitCode,
-	}, nil
+	}
+	if info.Advanced != nil {
+		result.NestedVirtualization = info.Advanced.NestedVirtualization
+	}
+	return result, nil
 }
 
 // StartExecution starts an interactive execution in a box.

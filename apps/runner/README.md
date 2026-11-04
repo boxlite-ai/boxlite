@@ -30,8 +30,17 @@ the flag alone does not establish hardware availability or a performance guarant
 
 Cloud stages deliver process settings through
 [`BOXLITE_RUNNER_ENV`](../infra/mdeploy/README.md#runner-process-environment).
-This Runner protocol support does not add a control-plane REST option. Upgrade
-Runners before enabling callers that send the field; older Runners ignore it.
+Upgrade Runners before enabling callers that send the field; older Runners ignore
+it. Control-plane admission has a separate gate in the [Cloud design](https://github.com/boxlite-ai/boxlite/issues/2333).
+
+`GET /info` reports `nestedVirtualizationEnabled` from the runtime configuration
+validated at startup. It is an authorization declaration, not a hardware probe.
+Box info reports `nestedVirtualization` from saved native configuration, omitting
+unknown values. Recovery accepts the same optional per-box boolean as creation
+and checks it before Destroy: authorization must still permit true, existing
+saved intent must be known and equal, and metadata read errors refuse recovery.
+Omitting the requirement cannot delete and downgrade an existing nested box.
+Ordinary recovery keeps its ordinary create request shape.
 
 Startup uses one private configuration builder to preserve the operator's feature
 allowlist alongside registry, storage and logging settings. Its tests decode the

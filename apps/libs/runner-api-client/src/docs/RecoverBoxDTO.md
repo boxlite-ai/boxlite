@@ -11,6 +11,7 @@ Name | Type | Description | Notes
 **fromVolumeId** | **string** |  | [optional] [default to undefined]
 **gpuQuota** | **number** |  | [optional] [default to undefined]
 **memoryQuota** | **number** |  | [optional] [default to undefined]
+**nestedVirtualization** | **boolean** |  | [optional] [default to undefined]
 **osUser** | **string** |  | [default to undefined]
 **outboundAllowNet** | **Array&lt;string&gt;** |  | [optional] [default to undefined]
 **outboundEnabled** | **boolean** | Outbound network policy. outboundEnabled is required: a request without it is rejected rather than started with a guessed policy. | [default to undefined]
@@ -30,6 +31,7 @@ const instance: RecoverBoxDTO = {
     fromVolumeId,
     gpuQuota,
     memoryQuota,
+    nestedVirtualization,
     osUser,
     outboundAllowNet,
     outboundEnabled,

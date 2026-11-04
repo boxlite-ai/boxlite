@@ -39,7 +39,8 @@ func RunnerInfo(ctx *gin.Context) {
 	servicesInfo := runnerInstance.InspectRunnerServices(ctx.Request.Context())
 
 	response := dto.RunnerInfoResponseDTO{
-		ServiceHealth: mapRunnerServiceInfoToDTO(servicesInfo),
+		NestedVirtualizationEnabled: runnerInstance.Boxlite.NestedVirtualizationEnabled(),
+		ServiceHealth:               mapRunnerServiceInfoToDTO(servicesInfo),
 		Metrics: &dto.RunnerMetrics{
 			CurrentCpuLoadAverage:        float64(metrics.CPULoadAverage),
 			CurrentCpuUsagePercentage:    float64(metrics.CPUUsagePercentage),

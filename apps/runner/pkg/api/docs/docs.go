@@ -626,6 +626,9 @@ const docTemplate = `{
                     "description": "ExitCode is how the box's main command ended, present once the runtime\nrecorded it: its own code when it exited, or 128 + n when a signal ended\nit. Stopping a box signals that command, so a stop is recorded here too.\nAbsence, not 0, is what says \"not recorded\": 0 is the exit code of every\ncommand that succeeded, so a reader has to tell a missing field from a\nzero one.",
                     "type": "integer"
                 },
+                "nestedVirtualization": {
+                    "type": "boolean"
+                },
                 "state": {
                     "$ref": "#/definitions/enums.BoxState"
                 }
@@ -689,6 +692,7 @@ const docTemplate = `{
                     }
                 },
                 "nestedVirtualization": {
+                    "description": "Requires explicit authorization on the Runner process; omitted means off.",
                     "type": "boolean"
                 },
                 "organizationId": {
@@ -831,6 +835,9 @@ const docTemplate = `{
                     "type": "integer",
                     "minimum": 1
                 },
+                "nestedVirtualization": {
+                    "type": "boolean"
+                },
                 "osUser": {
                     "type": "string"
                 },
@@ -890,6 +897,9 @@ const docTemplate = `{
                 },
                 "metrics": {
                     "$ref": "#/definitions/RunnerMetrics"
+                },
+                "nestedVirtualizationEnabled": {
+                    "type": "boolean"
                 },
                 "serviceHealth": {
                     "type": "array",

@@ -268,15 +268,17 @@ func Info(ctx *gin.Context) {
 	}
 
 	ctx.JSON(http.StatusOK, BoxInfoResponse{
-		State:         info.BoxState,
-		DaemonVersion: daemonVersion,
-		ExitCode:      info.ExitCode,
+		NestedVirtualization: info.NestedVirtualization,
+		State:                info.BoxState,
+		DaemonVersion:        daemonVersion,
+		ExitCode:             info.ExitCode,
 	})
 }
 
 type BoxInfoResponse struct {
-	State         enums.BoxState `json:"state"`
-	DaemonVersion *string        `json:"daemonVersion,omitempty"`
+	NestedVirtualization *bool          `json:"nestedVirtualization,omitempty"`
+	State                enums.BoxState `json:"state"`
+	DaemonVersion        *string        `json:"daemonVersion,omitempty"`
 	// ExitCode is how the box's main command ended, present once the runtime
 	// recorded it: its own code when it exited, or 128 + n when a signal ended
 	// it. Stopping a box signals that command, so a stop is recorded here too.

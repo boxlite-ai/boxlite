@@ -6,7 +6,9 @@ package boxlite
 
 import (
 	"context"
+	"fmt"
 
+	sdk "github.com/boxlite-ai/boxlite/sdks/go"
 	"github.com/boxlite-ai/runner/pkg/api/dto"
 	"github.com/containerd/errdefs"
 )
@@ -21,12 +23,27 @@ func (c *Client) RecoverBox(ctx context.Context, boxId string, recoverDto dto.Re
 	if _, err := networkSpec(createDto); err != nil {
 		return err
 	}
+	if recoverDto.NestedVirtualization && !c.nestedVirtualizationAllowed {
+		return errdefs.ErrInvalidArgument.WithMessage("nested virtualization requires BOXLITE_EXPERIMENTAL=nested-virtualization on the Runner")
+	}
+	info, err := c.runtime.GetInfo(ctx, boxId)
+	if err != nil && !sdk.IsNotFound(err) {
+		return fmt.Errorf("read box %s before recovery: %w", boxId, err)
+	}
+	if info != nil {
+		if info.Advanced == nil || info.Advanced.NestedVirtualization == nil {
+			return errdefs.ErrConflict.WithMessage(fmt.Sprintf("box %s has unknown saved nested virtualization; recovery refused", boxId))
+		}
+		if *info.Advanced.NestedVirtualization != recoverDto.NestedVirtualization {
+			return errdefs.ErrConflict.WithMessage(fmt.Sprintf("box %s nested virtualization is immutable; recovery refused", boxId))
+		}
+	}
 
 	if err := c.Destroy(ctx, boxId); err != nil {
 		c.logger.Warn("failed to destroy during recover", "error", err)
 	}
 
-	_, _, err := c.Create(ctx, createDto)
+	_, _, err = c.Create(ctx, createDto)
 	return err
 }
 
@@ -35,19 +52,20 @@ func (c *Client) RecoverBox(ctx context.Context, boxId string, recoverDto dto.Re
 // runtime: a field not copied here is silently lost on a recovered box.
 func recoverCreateDto(boxId string, recoverDto dto.RecoverBoxDTO) dto.CreateBoxDTO {
 	return dto.CreateBoxDTO{
-		Id:               boxId,
-		Image:            "alpine:latest",
-		OsUser:           recoverDto.OsUser,
-		CpuQuota:         recoverDto.CpuQuota,
-		GpuQuota:         recoverDto.GpuQuota,
-		MemoryQuota:      recoverDto.MemoryQuota,
-		StorageQuota:     recoverDto.StorageQuota,
-		Env:              recoverDto.Env,
-		Volumes:          recoverDto.Volumes,
-		Secrets:          recoverDto.Secrets,
-		OutboundEnabled:  recoverDto.OutboundEnabled,
-		OutboundAllowNet: recoverDto.OutboundAllowNet,
-		FromVolumeId:     recoverDto.FromVolumeId,
+		Id:                   boxId,
+		Image:                "alpine:latest",
+		OsUser:               recoverDto.OsUser,
+		CpuQuota:             recoverDto.CpuQuota,
+		GpuQuota:             recoverDto.GpuQuota,
+		MemoryQuota:          recoverDto.MemoryQuota,
+		StorageQuota:         recoverDto.StorageQuota,
+		Env:                  recoverDto.Env,
+		Volumes:              recoverDto.Volumes,
+		Secrets:              recoverDto.Secrets,
+		OutboundEnabled:      recoverDto.OutboundEnabled,
+		OutboundAllowNet:     recoverDto.OutboundAllowNet,
+		FromVolumeId:         recoverDto.FromVolumeId,
+		NestedVirtualization: recoverDto.NestedVirtualization,
 	}
 }
 

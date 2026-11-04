@@ -22,7 +22,8 @@ type RunnerServiceInfo struct {
 } // @name RunnerServiceInfo
 
 type RunnerInfoResponseDTO struct {
-	ServiceHealth []*RunnerServiceInfo `json:"serviceHealth,omitempty"`
-	Metrics       *RunnerMetrics       `json:"metrics,omitempty"`
-	AppVersion    string               `json:"appVersion"`
+	NestedVirtualizationEnabled bool                 `json:"nestedVirtualizationEnabled"`
+	ServiceHealth               []*RunnerServiceInfo `json:"serviceHealth,omitempty"`
+	Metrics                     *RunnerMetrics       `json:"metrics,omitempty"`
+	AppVersion                  string               `json:"appVersion"`
 } //	@name	RunnerInfoResponseDTO
