@@ -15,6 +15,7 @@ use crate::{
     error::{Error, Result},
     events::{Event, EventLoop, EventSender},
     memory::{GuestRam, ram_ranges},
+    virtio::executor::Executor,
 };
 
 /// The registers the boot vCPU starts with.
@@ -57,12 +58,17 @@ enum VmState {
     Exited,
 }
 
+/// Resources shared with device construction without copying guest RAM.
+pub(crate) struct DeviceContext<'a> {
+    pub(crate) memory: Arc<crate::memory::GuestMemoryMmap>,
+    pub(crate) executor: &'a Executor,
+}
+
 /// The guest machine on host backend `H`.
 pub struct Vm<H: HostVm> {
-    // Field order is load-bearing: devices go first, then the host VM, which
-    // releases its guest mappings, then the RAM that backs them. `Drop`
-    // unmaps the RAM anyway, since a device's interrupt line holds the host
-    // VM longer.
+    // Shutdown joins device dispatch before unregistration and backing release.
+    // A failed barrier retains the registered RAM through GuestRam's ownership.
+    executor: Executor,
     chipset: Chipset,
     /// The worker writing the guest console to the caller's sink; `run`
     /// finishes it once every vCPU has stopped. The lock only makes `Vm`
@@ -89,12 +95,18 @@ impl<H: HostVm> std::fmt::Debug for Vm<H> {
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 impl Vm<boxlite_hypervisor::KvmVm> {
-    /// Validates `config`, creates the KVM VM with the legacy devices,
-    /// registers its RAM and loads the kernel and boot data. The guest's COM1
-    /// output goes to `console` through a queue, so a slow sink never stalls
-    /// the guest.
-    pub fn new(config: VmConfig, console: Box<dyn std::io::Write + Send>) -> Result<Self> {
-        use crate::devices::{console::DEFAULT_QUEUE_BYTES, x86_64::add_legacy_devices};
+    /// Builds a KVM VM with legacy devices and the reporting balloon, registers
+    /// RAM and loads the kernel. The MMIO resource record supplies discovery.
+    /// COM1 uses a queue so a slow sink never stalls the guest.
+    pub fn new(mut config: VmConfig, console: Box<dyn std::io::Write + Send>) -> Result<Self> {
+        use crate::devices::{
+            console::DEFAULT_QUEUE_BYTES,
+            x86_64::{BALLOON_MMIO, add_balloon, add_legacy_devices},
+        };
+
+        config.validate()?;
+        BALLOON_MMIO.append_cmdline(&mut config.cmdline);
+        config.validate()?;
 
         let (writer, worker) =
             ConsoleWorker::spawn(console, DEFAULT_QUEUE_BYTES).map_err(Error::SpawnConsole)?;
@@ -102,7 +114,10 @@ impl Vm<boxlite_hypervisor::KvmVm> {
             config,
             boxlite_hypervisor::KvmVm::new,
             |ram, config| crate::boot::prepare(ram, config).map(|setup| setup.boot_regs),
-            |chipset| add_legacy_devices(chipset, writer),
+            |chipset, context| {
+                add_legacy_devices(chipset, writer)?;
+                add_balloon(chipset, context)
+            },
         )?;
         vm.console = Mutex::new(Some(worker));
         Ok(vm)
@@ -120,7 +135,7 @@ impl<H: HostVm> Vm<H> {
         config: VmConfig,
         host_vm: impl FnOnce() -> boxlite_hypervisor::Result<H>,
         boot: impl FnOnce(&GuestRam, &VmConfig) -> Result<BootRegisters>,
-        devices: impl FnOnce(&mut ChipsetBuilder) -> Result<()>,
+        devices: impl FnOnce(&mut ChipsetBuilder, DeviceContext<'_>) -> Result<()>,
     ) -> Result<Self>
     where
         H: 'static,
@@ -128,17 +143,23 @@ impl<H: HostVm> Vm<H> {
         config.validate()?;
         let events = EventLoop::new().map_err(Error::EventLoop)?;
         let sender = events.sender();
+        let executor = Executor::new(sender.clone()).map_err(Error::VirtioExecutor)?;
         // Allocating first keeps the drop order safe on every early return:
         // locals drop in reverse order, so the host VM goes before the RAM.
-        let mut ram = GuestRam::new(&ram_ranges(config.memory_mib))?;
+        let ram = GuestRam::new(&ram_ranges(config.memory_mib))?;
         let host_vm = Arc::new(host_vm()?);
         let mut chipset = ChipsetBuilder::new(host_vm.clone(), sender.clone());
-        devices(&mut chipset)?;
+        devices(
+            &mut chipset,
+            DeviceContext {
+                memory: Arc::clone(ram.memory()),
+                executor: &executor,
+            },
+        )?;
         let chipset = chipset.build()?;
-        ram.map(&*host_vm)?;
-        // From here on `Drop` unmaps the RAM if a later step fails.
         let mut vm = Self {
             chipset,
+            executor,
             console: Mutex::new(None),
             events: Mutex::new(events),
             sender,
@@ -148,6 +169,9 @@ impl<H: HostVm> Vm<H> {
             host_vm,
             ram,
         };
+        // Assemble ownership before mapping so partial registration failures
+        // also stop dispatch before any successful registrations are removed.
+        vm.ram.map(&*vm.host_vm)?;
         vm.boot_regs = boot(&vm.ram, &config)?;
         Ok(vm)
     }
@@ -220,6 +244,9 @@ impl<H: boxlite_hypervisor::X86Vm> Vm<H> {
             }
             event
         });
+        // All vCPUs have joined. Dispatch must finish before console completion
+        // and before a normal or failed run can release guest mappings.
+        let shutdown = self.executor.shutdown();
         let console = self
             .console
             .get_mut()
@@ -231,6 +258,7 @@ impl<H: boxlite_hypervisor::X86Vm> Vm<H> {
                 tracing::warn!(dropped, "dropped guest console output");
             }
         }
+        shutdown.map_err(Error::VirtioExecutor)?;
         match event.map_err(Error::EventLoop)? {
             Some(Event::StopRequested) => Ok(VmExit::StopRequested),
             Some(Event::GuestShutdown) => Ok(VmExit::GuestShutdown),
@@ -243,6 +271,10 @@ impl<H: boxlite_hypervisor::X86Vm> Vm<H> {
 
 impl<H: HostVm> Drop for Vm<H> {
     fn drop(&mut self) {
+        if let Err(error) = self.executor.shutdown() {
+            tracing::error!(%error, "retaining registered RAM after executor shutdown failed");
+            return;
+        }
         // A VM that never ran still holds its registrations. Remove them so
         // the backing can be released; `GuestRam` leaks it on failure.
         let _ = self.ram.unmap(&*self.host_vm);

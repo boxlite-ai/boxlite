@@ -28,8 +28,8 @@ use virtio_queue::{Queue, QueueT};
 use vm_memory::GuestAddress;
 
 use super::{
-    ActivationContext, DeviceError, DeviceSpec, EventRegistrar, MAX_CONFIG_LEN, MAX_QUEUES,
-    VirtioDevice, VirtioInterrupt, Waker, WorkerControl,
+    ActivationContext, DeviceError, DeviceSpec, MAX_CONFIG_LEN, MAX_QUEUES, VirtioDevice,
+    VirtioInterrupt, WorkerControl,
     queue::{VIRTIO_F_EVENT_IDX, VIRTIO_F_INDIRECT_DESC, VirtQueues},
 };
 use crate::{
@@ -94,10 +94,6 @@ type DeviceResult<T> = std::result::Result<T, DeviceError>;
 pub(crate) struct MmioResources {
     /// The guest memory the queues address.
     pub(crate) memory: Arc<GuestMemoryMmap>,
-    /// The worker's backend-source registrar.
-    pub(crate) events: Arc<dyn EventRegistrar>,
-    /// The worker's poller waker.
-    pub(crate) waker: Waker,
     /// The run thread's event sender.
     pub(crate) sender: EventSender,
     /// Starts and stops the worker.
@@ -124,8 +120,6 @@ pub(crate) struct MmioTransport {
     device: Arc<Mutex<dyn VirtioDevice>>,
     interrupt: Arc<super::interrupt::MmioInterrupt>,
     memory: Arc<GuestMemoryMmap>,
-    events: Arc<dyn EventRegistrar>,
-    waker: Waker,
     sender: EventSender,
     worker: Arc<dyn WorkerControl>,
     spec: DeviceSpec,
@@ -149,7 +143,10 @@ impl MmioTransport {
     ) -> Result<Self> {
         let spec = *device
             .lock()
-            .expect("a virtio device lock is poisoned")
+            .map_err(|_| Error::VirtioDevice {
+                device: "virtio",
+                reason: "device lock poisoned",
+            })?
             .spec();
         if spec.device_id == 0 {
             return Err(Error::VirtioDevice {
@@ -180,8 +177,6 @@ impl MmioTransport {
             device,
             interrupt,
             memory: resources.memory,
-            events: resources.events,
-            waker: resources.waker,
             sender: resources.sender,
             worker: resources.worker,
             spec,
@@ -349,9 +344,9 @@ impl MmioTransport {
             tracing::debug!(value, "ignoring a queue notification before activation");
             return;
         }
-        let index = (value & 0xffff) as usize;
+        let index = value as usize;
         if index < self.queues.len() {
-            (self.waker)();
+            self.worker.kick(index as u16);
         } else {
             tracing::debug!(index, "ignoring an invalid queue notification");
         }
@@ -382,7 +377,7 @@ impl MmioTransport {
         let new = current | bits;
 
         if bits & FAILED != 0 {
-            self.interrupt.set_device_status(new);
+            self.interrupt.add_device_status(bits);
             if self.active {
                 match self.worker.stop() {
                     Ok(()) => self.active = false,
@@ -411,23 +406,34 @@ impl MmioTransport {
             }
             match self.activate() {
                 Ok(()) => {
-                    self.interrupt.set_device_status(new);
+                    self.interrupt.add_device_status(bits);
+                    self.active = true;
                     match self.worker.start() {
-                        Ok(()) => self.active = true,
+                        Ok(()) => {}
                         Err(error) => {
-                            self.interrupt
-                                .set_device_status(self.status() | NEEDS_RESET);
+                            if let Err(cancel_error) = self.worker.cancel_prepare() {
+                                self.report_worker_failure(cancel_error);
+                            }
+                            self.interrupt.add_device_status(NEEDS_RESET);
                             self.interrupt.raise_config();
                             self.report_worker_failure(error);
                         }
                     }
                 }
                 Err(error) => {
+                    if let Err(cancel_error) = self.worker.cancel_prepare() {
+                        // An activation-time registration can still hold RAM.
+                        // Keep the device intact until a stop barrier succeeds.
+                        self.active = true;
+                        self.need_reset("virtio activation cancellation");
+                        self.report_worker_failure(cancel_error);
+                        return;
+                    }
                     let rollback = self
                         .device
                         .lock()
-                        .expect("a virtio device lock is poisoned")
-                        .reset();
+                        .map_err(|_| DeviceError::Fatal("virtio device lock poisoned"))
+                        .and_then(|mut device| device.reset());
                     if let Err(rollback_error) = rollback {
                         self.report_worker_failure(rollback_error);
                     }
@@ -443,7 +449,7 @@ impl MmioTransport {
             return;
         }
 
-        self.interrupt.set_device_status(new);
+        self.interrupt.add_device_status(bits);
     }
 
     /// Applies the accepted features to the device exactly once.
@@ -461,12 +467,14 @@ impl MmioTransport {
             return false;
         }
         let negotiated = self.driver_features & self.spec.features & !VIRTIO_F_VERSION_1;
-        match self
-            .device
-            .lock()
-            .expect("a virtio device lock is poisoned")
-            .set_features(negotiated)
-        {
+        let result = match self.device.lock() {
+            Ok(mut device) => device.set_features(negotiated),
+            Err(_) => {
+                self.send_device_failed("virtio device lock poisoned");
+                return false;
+            }
+        };
+        match result {
             Ok(()) => {
                 self.features_ok = true;
                 true
@@ -506,12 +514,14 @@ impl MmioTransport {
         }
         let event_idx = self.driver_features & VIRTIO_F_EVENT_IDX != 0;
         let indirect = self.driver_features & VIRTIO_F_INDIRECT_DESC != 0;
+        let worker = self.worker.prepare()?;
         let queues = VirtQueues::prepare(
             queues,
             self.spec.queue_max,
             event_idx,
             indirect,
             Arc::clone(&self.memory),
+            worker.requeue,
         )
         .map_err(DeviceError::from)?;
 
@@ -520,14 +530,14 @@ impl MmioTransport {
             memory: Arc::clone(&self.memory),
             queues,
             interrupt,
-            events: Arc::clone(&self.events),
-            waker: Arc::clone(&self.waker),
+            events: worker.events,
+            waker: worker.waker,
             sender: self.sender.clone(),
         };
         self.device
             .lock()
-            .expect("a virtio device lock is poisoned")
-            .activate(ctx)
+            .map_err(|_| DeviceError::Fatal("virtio device lock poisoned"))
+            .and_then(|mut device| device.activate(ctx))
     }
 
     /// Resets the device and the transport on a Status=0 write.
@@ -544,8 +554,8 @@ impl MmioTransport {
         let result = self
             .device
             .lock()
-            .expect("a virtio device lock is poisoned")
-            .reset();
+            .map_err(|_| DeviceError::Fatal("virtio device lock poisoned"))
+            .and_then(|mut device| device.reset());
         if let Err(error) = result {
             self.handle_device_error(error);
             return;
@@ -561,8 +571,7 @@ impl MmioTransport {
 
     /// Sets DEVICE_NEEDS_RESET and raises the configuration interrupt.
     fn need_reset(&self, reason: &'static str) {
-        let status = self.status() | NEEDS_RESET;
-        self.interrupt.set_device_status(status);
+        self.interrupt.add_device_status(NEEDS_RESET);
         self.interrupt.raise_config();
         tracing::warn!(
             device = self.spec.name,
@@ -618,8 +627,8 @@ impl MmioTransport {
         let result = self
             .device
             .lock()
-            .expect("a virtio device lock is poisoned")
-            .read_config(offset, data);
+            .map_err(|_| DeviceError::Fatal("virtio device lock poisoned"))
+            .and_then(|mut device| device.read_config(offset, data));
         if let Err(error) = result {
             self.handle_device_error(error);
         }
@@ -634,8 +643,8 @@ impl MmioTransport {
         let result = self
             .device
             .lock()
-            .expect("a virtio device lock is poisoned")
-            .write_config(offset, data);
+            .map_err(|_| DeviceError::Fatal("virtio device lock poisoned"))
+            .and_then(|mut device| device.write_config(offset, data));
         if let Err(error) = result {
             self.handle_device_error(error);
         }

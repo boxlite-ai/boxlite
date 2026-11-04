@@ -31,7 +31,7 @@ fn bare<H: boxlite_hypervisor::Vm + 'static>(
         config,
         host_vm,
         |_, _| Ok(BootRegisters::default()),
-        |_| Ok(()),
+        |_, _| Ok(()),
     )
 }
 
@@ -141,7 +141,7 @@ fn a_chipset_conflict_fails_before_any_ram_is_registered() {
         config(1, 16),
         || Ok(backend),
         |_, _| Ok(BootRegisters::default()),
-        |chipset| {
+        |chipset, _| {
             for name in ["first", "second"] {
                 chipset.add(name, |resources| {
                     resources.mmio(0xd000_0000, 0x1000);
@@ -536,7 +536,7 @@ mod lifecycle {
             config(2, 16),
             || Ok(backend),
             |_, _| Ok(BootRegisters::default()),
-            |chipset| {
+            |chipset, _| {
                 chipset.add("panics", |resources| {
                     resources.mmio(DEVICE, 1);
                     Ok(Panics)
@@ -605,7 +605,7 @@ mod lifecycle {
             config(1, 16),
             || Ok(backend),
             |_, _| Ok(BootRegisters::default()),
-            |chipset| {
+            |chipset, _| {
                 chipset.add("console", |resources| {
                     resources.mmio(DEVICE, 1);
                     Ok(ConsolePort(writer))
@@ -756,7 +756,7 @@ fn a_kvm_vm_runs_until_its_guest_resets() {
         config(2, 2),
         boxlite_hypervisor::KvmVm::new,
         |ram, _| Ok(flat_guest::load(ram.memory(), &program)),
-        |chipset| {
+        |chipset, _| {
             chipset.add("i8042", |resources| {
                 resources.pio(0x64, 1);
                 Ok(Reset(resources.event_sender()))
@@ -767,3 +767,6 @@ fn a_kvm_vm_runs_until_its_guest_resets() {
 
     assert_eq!(vm.run().unwrap(), VmExit::GuestReset);
 }
+
+#[path = "executor.rs"]
+mod executor;

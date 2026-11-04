@@ -71,6 +71,7 @@ codecov: coverage\:lcov
 # profile bounds each test; disabling retries preserves the first failure. Every
 # passing test is listed by name, so the CI log shows which hardware tests ran.
 coverage\:vmm\:kvm: _ensure-kvm
+	@mkdir -p target/coverage
 	@cargo llvm-cov nextest --no-report --no-tests=fail --profile ci --retries 0 --status-level pass \
 		-p boxlite-hypervisor -p boxlite-vmm --lib --run-ignored only --test-threads=1 \
 		-E 'test(vm::tests::) | test(tests::kvm::)'
@@ -78,7 +79,8 @@ coverage\:vmm\:kvm: _ensure-kvm
 
 # Add the real-kernel boots of VMM_KERNEL to the same profiles, listed the same way.
 # CI runs it only when the vmm path filter matches.
-coverage\:vmm\:boot: _ensure-kvm _ensure-vmm-kernel
+coverage\:vmm\:boot: _ensure-kvm _ensure-vmm-kernel $(VMM_BALLOON_INIT)
+	@mkdir -p target/coverage
 	@cargo llvm-cov nextest --no-report --no-tests=fail --profile ci --retries 0 --status-level pass \
 		-p boxlite-vmm --lib --run-ignored only --test-threads=1 -E 'test(boot::tests::)'
 	@cargo llvm-cov report $(COVERAGE_REPORT_ARGS) --lcov --output-path target/coverage/lcov.info

@@ -5,6 +5,7 @@
 //! activation, reset, interrupt and error paths.
 
 use std::{
+    sync::mpsc,
     sync::{
         Arc, Mutex,
         atomic::{AtomicUsize, Ordering},
@@ -25,9 +26,9 @@ use crate::{
     memory::GuestMemoryMmap,
     mock_vm::{Call, MockVm},
     virtio::{
-        ActivationContext, DeviceError, DeviceEvent, DeviceSpec, EventError, EventRegistrar,
-        EventSource, FeatureError, SnapshotSupport, SourceId, VirtioDevice, VirtioInterrupt,
-        WorkerControl, interrupt::MmioInterrupt,
+        ActivationContext, DeviceError, DeviceEvent, DeviceSpec, FeatureError, SnapshotSupport,
+        VirtioDevice, VirtioInterrupt, WorkerContext, WorkerControl, executor::Executor,
+        interrupt::MmioInterrupt,
     },
 };
 
@@ -71,17 +72,20 @@ struct TransportDevice {
     spec: DeviceSpec,
     state: Arc<Mutex<DeviceState>>,
     log: Arc<Mutex<Vec<&'static str>>>,
+    event_tx: mpsc::Sender<DeviceEvent>,
 }
 
 fn device(
     spec: DeviceSpec,
     log: Arc<Mutex<Vec<&'static str>>>,
+    event_tx: mpsc::Sender<DeviceEvent>,
 ) -> (Arc<Mutex<dyn VirtioDevice>>, Arc<Mutex<DeviceState>>) {
     let state = Arc::new(Mutex::new(DeviceState::default()));
     let device = TransportDevice {
         spec,
         state: Arc::clone(&state),
         log,
+        event_tx,
     };
     (Arc::new(Mutex::new(device)), state)
 }
@@ -147,26 +151,16 @@ impl VirtioDevice for TransportDevice {
 
     fn on_event(&mut self, event: DeviceEvent) -> Result<(), DeviceError> {
         self.state.lock().unwrap().events.push(event);
+        self.event_tx.send(event).unwrap();
         Ok(())
     }
 }
 
-struct Registrar;
-
-impl EventRegistrar for Registrar {
-    fn register(
-        &self,
-        _event: DeviceEvent,
-        _source: Box<dyn EventSource>,
-    ) -> Result<SourceId, EventError> {
-        Ok(SourceId(1))
-    }
-
-    fn deregister(&self, _id: SourceId) {}
-}
-
 struct RecordingWorker {
     log: Arc<Mutex<Vec<&'static str>>>,
+    control: Arc<dyn WorkerControl>,
+    prepares: AtomicUsize,
+    cancels: AtomicUsize,
     start_error: Mutex<Option<DeviceError>>,
     stop_error: Mutex<Option<DeviceError>>,
     starts: AtomicUsize,
@@ -174,9 +168,12 @@ struct RecordingWorker {
 }
 
 impl RecordingWorker {
-    fn new(log: Arc<Mutex<Vec<&'static str>>>) -> Self {
+    fn new(log: Arc<Mutex<Vec<&'static str>>>, control: Arc<dyn WorkerControl>) -> Self {
         Self {
             log,
+            control,
+            prepares: AtomicUsize::new(0),
+            cancels: AtomicUsize::new(0),
             start_error: Mutex::new(None),
             stop_error: Mutex::new(None),
             starts: AtomicUsize::new(0),
@@ -186,12 +183,26 @@ impl RecordingWorker {
 }
 
 impl WorkerControl for RecordingWorker {
+    fn prepare(&self) -> Result<WorkerContext, DeviceError> {
+        self.prepares.fetch_add(1, Ordering::SeqCst);
+        self.control.prepare()
+    }
+
+    fn kick(&self, index: u16) {
+        self.control.kick(index);
+    }
+
+    fn cancel_prepare(&self) -> Result<(), DeviceError> {
+        self.cancels.fetch_add(1, Ordering::SeqCst);
+        self.control.cancel_prepare()
+    }
+
     fn start(&self) -> Result<(), DeviceError> {
         self.starts.fetch_add(1, Ordering::SeqCst);
         self.log.lock().unwrap().push("start");
         match *self.start_error.lock().unwrap() {
             Some(error) => Err(error),
-            None => Ok(()),
+            None => self.control.start(),
         }
     }
 
@@ -200,7 +211,7 @@ impl WorkerControl for RecordingWorker {
         self.log.lock().unwrap().push("stop");
         match *self.stop_error.lock().unwrap() {
             Some(error) => Err(error),
-            None => Ok(()),
+            None => self.control.stop(),
         }
     }
 }
@@ -211,7 +222,8 @@ struct Fixture {
     interrupt: Arc<MmioInterrupt>,
     worker: Arc<RecordingWorker>,
     events: EventLoop,
-    waker_calls: Arc<AtomicUsize>,
+    event_rx: mpsc::Receiver<DeviceEvent>,
+    _executor: Executor,
     log: Arc<Mutex<Vec<&'static str>>>,
 }
 
@@ -230,21 +242,17 @@ fn make(spec: DeviceSpec) -> Fixture {
     let vm = Arc::new(MockVm::new());
     let interrupt = Arc::new(MmioInterrupt::new(IrqLine::new(vm, LINE)));
     let log = Arc::new(Mutex::new(Vec::new()));
-    let worker = Arc::new(RecordingWorker::new(Arc::clone(&log)));
-    let waker_calls = Arc::new(AtomicUsize::new(0));
-    let waker_calls_for_waker = Arc::clone(&waker_calls);
-    let waker = Arc::new(move || {
-        waker_calls_for_waker.fetch_add(1, Ordering::SeqCst);
-    });
     let events = EventLoop::new().unwrap();
-    let (device, state) = device(spec, Arc::clone(&log));
+    let executor = Executor::new(events.sender()).unwrap();
+    let (event_tx, event_rx) = mpsc::channel();
+    let (device, state) = device(spec, Arc::clone(&log), event_tx);
+    let control = executor.register(device.clone(), interrupt.clone());
+    let worker = Arc::new(RecordingWorker::new(Arc::clone(&log), control));
     let transport = MmioTransport::new(
         device,
         Arc::clone(&interrupt),
         MmioResources {
             memory,
-            events: Arc::new(Registrar),
-            waker,
             sender: events.sender(),
             worker: Arc::clone(&worker) as Arc<dyn WorkerControl>,
         },
@@ -256,7 +264,8 @@ fn make(spec: DeviceSpec) -> Fixture {
         interrupt,
         worker,
         events,
-        waker_calls,
+        event_rx,
+        _executor: executor,
         log,
     }
 }
@@ -266,17 +275,17 @@ fn try_make(spec: DeviceSpec) -> crate::error::Result<MmioTransport> {
     let vm = Arc::new(MockVm::new());
     let interrupt = Arc::new(MmioInterrupt::new(IrqLine::new(vm, LINE)));
     let log = Arc::new(Mutex::new(Vec::new()));
-    let worker = Arc::new(RecordingWorker::new(log));
-    let waker = Arc::new(|| {});
     let events = EventLoop::new().unwrap();
-    let (device, _) = device(spec, Arc::new(Mutex::new(Vec::new())));
+    let executor = Executor::new(events.sender()).unwrap();
+    let (event_tx, _event_rx) = mpsc::channel();
+    let (device, _) = device(spec, Arc::new(Mutex::new(Vec::new())), event_tx);
+    let control = executor.register(device.clone(), interrupt.clone());
+    let worker = Arc::new(RecordingWorker::new(log, control));
     MmioTransport::new(
         device,
         interrupt,
         MmioResources {
             memory,
-            events: Arc::new(Registrar),
-            waker,
             sender: events.sender(),
             worker,
         },
@@ -509,6 +518,7 @@ fn activation_builds_a_dense_queue_vector() {
     assert_eq!(queues[0].used, 0x9000);
     assert!(!queues[1].ready);
     assert_eq!(fixture.worker.starts.load(Ordering::SeqCst), 1);
+    assert_eq!(fixture.worker.prepares.load(Ordering::SeqCst), 1);
     assert_eq!(*fixture.log.lock().unwrap(), ["activate", "start"]);
     assert_eq!(
         fixture.status(),
@@ -532,6 +542,31 @@ fn activation_failure_rolls_back_and_needs_reset() {
     assert_ne!(fixture.status() & NEEDS_RESET, 0);
     assert_eq!(fixture.worker.starts.load(Ordering::SeqCst), 0);
     assert_ne!(fixture.read(0x060) & 0x2, 0);
+}
+
+#[test]
+fn a_device_activation_failure_cancels_the_generation_before_reset_and_retry() {
+    let mut fixture = make(spec(0b111));
+    fixture.state.lock().unwrap().activate_error = Some(DeviceError::NeedsReset("activation"));
+    fixture.negotiate();
+    fixture.activate();
+    assert_eq!(fixture.worker.prepares.load(Ordering::SeqCst), 1);
+    assert_eq!(fixture.worker.cancels.load(Ordering::SeqCst), 1);
+    assert_eq!(fixture.state.lock().unwrap().resets, 1);
+    assert_ne!(fixture.status() & NEEDS_RESET, 0);
+    fixture.set_status(0);
+    fixture.state.lock().unwrap().activate_error = None;
+    fixture.negotiate();
+    fixture.activate();
+    fixture.write(0x050, 1);
+    assert_eq!(
+        fixture
+            .event_rx
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap(),
+        DeviceEvent::QueueKick(1)
+    );
+    fixture.set_status(0);
 }
 
 #[test]
@@ -637,19 +672,33 @@ fn status_zero_stops_the_worker_then_resets() {
 }
 
 #[test]
-fn queue_notify_wakes_only_when_active() {
+fn queue_notify_preserves_the_index_and_dispatches_only_when_active() {
     let mut fixture = make(spec(0b111));
     fixture.write(0x050, 0);
-    assert_eq!(fixture.waker_calls.load(Ordering::SeqCst), 0);
+    assert!(fixture.event_rx.try_recv().is_err());
 
     fixture.negotiate();
     fixture.activate();
     fixture.write(0x050, 0);
-    assert_eq!(fixture.waker_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        fixture
+            .event_rx
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap(),
+        DeviceEvent::QueueKick(0)
+    );
+    fixture.write(0x050, 1);
+    assert_eq!(
+        fixture
+            .event_rx
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap(),
+        DeviceEvent::QueueKick(1)
+    );
     fixture.write(0x050, 0x1_0001);
-    assert_eq!(fixture.waker_calls.load(Ordering::SeqCst), 2);
     fixture.write(0x050, 9);
-    assert_eq!(fixture.waker_calls.load(Ordering::SeqCst), 2);
+    fixture.set_status(0);
+    assert!(fixture.event_rx.try_recv().is_err());
 }
 
 #[test]
@@ -694,6 +743,7 @@ fn worker_start_failure_needs_reset_and_ends_the_vm() {
     fixture.activate();
 
     assert_eq!(fixture.worker.starts.load(Ordering::SeqCst), 1);
+    assert_eq!(fixture.worker.cancels.load(Ordering::SeqCst), 1);
     assert_ne!(fixture.status() & NEEDS_RESET, 0);
     assert!(matches!(
         fixture.events.wait(Some(Duration::ZERO)).unwrap(),
@@ -778,9 +828,10 @@ fn a_chipset_dispatches_mmio_to_the_transport() {
     let events = EventLoop::new().unwrap();
     let memory = Arc::new(GuestMemoryMmap::from_ranges(&[(GuestAddress(0), 0x10000)]).unwrap());
     let log = Arc::new(Mutex::new(Vec::new()));
-    let worker = Arc::new(RecordingWorker::new(Arc::clone(&log)));
-    let (device, _state) = device(spec(0b111), log);
-    let waker = Arc::new(|| {});
+    let executor = Executor::new(events.sender()).unwrap();
+    let (event_tx, _event_rx) = mpsc::channel();
+    let executor = &executor;
+    let (device, _state) = device(spec(0b111), log, event_tx);
     let interrupt_slot = Arc::new(Mutex::new(None));
     let slot = Arc::clone(&interrupt_slot);
 
@@ -790,13 +841,12 @@ fn a_chipset_dispatches_mmio_to_the_transport() {
             resources.mmio(BASE, MMIO_WINDOW_LEN);
             let interrupt = Arc::new(MmioInterrupt::new(resources.line(LINE)));
             *slot.lock().unwrap() = Some(Arc::clone(&interrupt));
+            let worker = executor.register(device.clone(), interrupt.clone());
             MmioTransport::new(
                 device,
                 interrupt,
                 MmioResources {
                     memory,
-                    events: Arc::new(Registrar),
-                    waker,
                     sender: resources.event_sender(),
                     worker,
                 },

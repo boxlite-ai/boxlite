@@ -48,6 +48,10 @@ pub enum Error {
     },
     /// Creating the vCPU event loop failed, or waiting on it did.
     EventLoop(io::Error),
+    /// Creating or running the shared virtio executor failed.
+    VirtioExecutor(io::Error),
+    /// Creating the reporting balloon failed.
+    CreateBalloon(io::Error),
     /// Starting the thread that writes the guest console failed.
     SpawnConsole(io::Error),
     /// Starting the thread of vCPU `vcpu` failed.
@@ -99,6 +103,8 @@ impl fmt::Display for Error {
                 write!(f, "failed to write the {what} into guest RAM")
             }
             Self::EventLoop(_) => f.write_str("the VM event loop failed"),
+            Self::VirtioExecutor(_) => f.write_str("the virtio executor failed"),
+            Self::CreateBalloon(_) => f.write_str("failed to create the reporting balloon"),
             Self::SpawnConsole(_) => f.write_str("failed to start the console thread"),
             Self::SpawnVcpu { vcpu, .. } => write!(f, "failed to start vCPU {vcpu}"),
             Self::UnexpectedExit { vcpu, exit } => {
@@ -128,6 +134,8 @@ impl error::Error for Error {
             | Self::WriteBootData { source, .. }
             | Self::SpawnVcpu { source, .. }
             | Self::EventLoop(source)
+            | Self::VirtioExecutor(source)
+            | Self::CreateBalloon(source)
             | Self::SpawnConsole(source) => Some(source),
             Self::Hypervisor(source) => Some(source),
         }

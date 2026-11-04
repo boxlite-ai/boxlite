@@ -113,12 +113,23 @@ pub(crate) enum Completion {
 }
 
 /// The dense queue set one device receives on activation.
-#[derive(Debug)]
 pub(crate) struct VirtQueues {
     queues: Vec<Queue>,
     deferred: Vec<Vec<u16>>,
     memory: Arc<GuestMemoryMmap>,
     indirect: bool,
+    requeue: Arc<dyn Fn(u16) + Send + Sync>,
+}
+
+impl fmt::Debug for VirtQueues {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("VirtQueues")
+            .field("queues", &self.queues)
+            .field("deferred", &self.deferred)
+            .field("memory", &self.memory)
+            .field("indirect", &self.indirect)
+            .finish_non_exhaustive()
+    }
 }
 
 impl VirtQueues {
@@ -131,12 +142,15 @@ impl VirtQueues {
     ///
     /// The facade stores `memory` and `indirect` for later calls; the Arc is
     /// shared with the activation context, so guest RAM is not copied.
+    /// `requeue` is the prepared worker generation's continuation: it coalesces
+    /// backlog into the ordinary kick bits and wakes the shared poller.
     pub(crate) fn prepare(
         mut queues: Vec<Queue>,
         queue_max: &[u16],
         event_idx: bool,
         indirect: bool,
         memory: Arc<GuestMemoryMmap>,
+        requeue: Arc<dyn Fn(u16) + Send + Sync>,
     ) -> Result<Self, QueueError> {
         if queues.len() != queue_max.len() {
             return Err(QueueError::Count {
@@ -174,6 +188,7 @@ impl VirtQueues {
             deferred,
             memory,
             indirect,
+            requeue,
         })
     }
 
@@ -208,24 +223,31 @@ impl VirtQueues {
         self.queues.get(index).map(|queue| queue.max_size())
     }
 
-    /// Drains every chain the driver made available and reports whether the
-    /// guest should be interrupted for chains completed synchronously.
+    /// The control areas of every ready queue, including event fields even
+    /// without EVENT_IDX. Devices snapshot these before destructive I/O.
+    pub(crate) fn control_ranges(&self) -> impl Iterator<Item = (GuestAddress, usize)> + '_ {
+        self.queues
+            .iter()
+            .filter(|queue| queue.ready())
+            .flat_map(|queue| {
+                let size = usize::from(queue.size());
+                [
+                    (GuestAddress(queue.desc_table()), 16 * size),
+                    (GuestAddress(queue.avail_ring()), 6 + 2 * size),
+                    (GuestAddress(queue.used_ring()), 6 + 8 * size),
+                ]
+            })
+    }
+
+    /// Processes at most one complete chain and reports whether its synchronous
+    /// completion requires an interrupt. Backlog is requeued for a later worker
+    /// pass, including work published while this callback runs.
     ///
-    /// A stopped or unready queue is rejected before any ring access.
-    /// Notifications are disabled while draining; if `enable_notification`
-    /// reports work that arrived in the meantime, the drain repeats, so a kick
-    /// cannot be lost. `process` either completes a chain with
-    /// [`Completion::Used`] or takes it with [`Completion::Deferred`]. A
-    /// deferred chain is already consumed from the available ring but has no
-    /// used entry; the facade records its head for [`Self::complete`]. The
-    /// notification decision is resolved once per batch, after every synchronous
-    /// completion; `process` only classifies the chain, and drain writes the
-    /// used entry. An empty drain, or one that defers every chain, returns
-    /// `false`.
-    ///
-    /// The drain consumes every available chain; a device that needs to stop
-    /// early and put a chain back (rate limiting or backpressure) must not use
-    /// it.
+    /// A stopped or unready queue is rejected before ring access. Notifications
+    /// are disabled while taking a chain, then re-enabled with a pending-work
+    /// check. `process` completes with [`Completion::Used`] or takes the chain
+    /// with [`Completion::Deferred`]; the latter records its head for
+    /// [`Self::complete`]. An empty or deferred callback returns `false`.
     ///
     /// The stored `indirect` flag is the negotiated `VIRTIO_F_INDIRECT_DESC`
     /// state. When it is false, a chain containing an indirect descriptor is a
@@ -240,6 +262,7 @@ impl VirtQueues {
             deferred,
             memory,
             indirect,
+            requeue,
         } = self;
         let memory = memory.as_ref();
         let queue = queues
@@ -252,33 +275,28 @@ impl VirtQueues {
             .get_mut(index)
             .ok_or(DeviceError::NeedsReset("virtio queue"))?;
 
+        queue.disable_notification(memory).map_err(queue_error)?;
+        let desc_table = GuestAddress(queue.desc_table());
+        let size = queue.size();
         let mut completed = false;
-        loop {
-            queue.disable_notification(memory).map_err(queue_error)?;
-            let desc_table = GuestAddress(queue.desc_table());
-            let size = queue.size();
-            while let Some(chain) = queue.iter(memory).map_err(queue_error)?.next() {
-                let head = chain.head_index();
-                if !*indirect && has_indirect(memory, desc_table, size, head)? {
-                    return Err(DeviceError::NeedsReset("indirect descriptor"));
-                }
-                match process(chain)? {
-                    Completion::Used(len) => {
-                        add_used(queue, memory, head, len)?;
-                        completed = true;
-                    }
-                    Completion::Deferred => defer(deferred, size, head)?,
-                }
+        if let Some(chain) = queue.iter(memory).map_err(queue_error)?.next() {
+            let head = chain.head_index();
+            if !*indirect && has_indirect(memory, desc_table, size, head)? {
+                return Err(DeviceError::NeedsReset("indirect descriptor"));
             }
-            if !queue.enable_notification(memory).map_err(queue_error)? {
-                break;
+            match process(chain)? {
+                Completion::Used(len) => {
+                    add_used(queue, memory, head, len)?;
+                    completed = true;
+                }
+                Completion::Deferred => defer(deferred, size, head)?,
             }
         }
-        if completed {
-            queue.needs_notification(memory).map_err(queue_error)
-        } else {
-            Ok(false)
+        let notify = completed && queue.needs_notification(memory).map_err(queue_error)?;
+        if queue.enable_notification(memory).map_err(queue_error)? {
+            requeue(index as u16);
         }
+        Ok(notify)
     }
 
     /// Completes a chain that [`Self::drain`] deferred.
@@ -346,7 +364,7 @@ fn defer(deferred: &mut Vec<u16>, size: u16, head: u16) -> Result<(), DeviceErro
 
 /// Adds one used entry without resolving the notification decision.
 ///
-/// [`VirtQueues::drain`] resolves the decision once per batch;
+/// [`VirtQueues::drain`] resolves the decision for its single admitted chain;
 /// [`VirtQueues::complete`] resolves it per deferred chain.
 fn add_used(
     queue: &mut Queue,

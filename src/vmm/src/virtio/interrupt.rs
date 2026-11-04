@@ -94,6 +94,10 @@ impl VirtioInterrupt for MmioInterrupt {
     fn set_device_status(&self, status: u8) {
         self.device_status.store(status, Ordering::SeqCst);
     }
+
+    fn add_device_status(&self, bits: u8) {
+        self.device_status.fetch_or(bits, Ordering::SeqCst);
+    }
 }
 
 #[cfg(test)]

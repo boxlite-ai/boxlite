@@ -43,7 +43,7 @@ their project; their revisions are pinned under [References](#references).
 | --- | --- | --- | --- |
 | Minimum macOS | 15, using HVF's in-kernel GICv3 | `hv_gic_create` and `hv_gic_set_spi` exist from macOS 15.0 (`hv_gic.h`), so no HVF or KVM host needs an emulated interrupt controller, and libkrun already prefers the in-kernel GIC wherever the host has it | macOS 12 with a userspace GICv3, which libkrun falls back to below macOS 15 (`libkrun/src/vmm/src/builder.rs:892-894`), at about 3–4 engineer-weeks in M1 |
 | SHARED share | virtio-fs in two stages: a FUSE server core for the SHARED share in M2, full passthrough for user volumes in M3 | Every box mounts the SHARED share, and guest file copy stages through it, so the first box already needs virtio-fs | Moving container layout and file copy off the SHARED share first, which changes the guest agent before the first box boots |
-| Threads | One thread per vCPU, worker threads per device, and a poller on the thread that calls `run()` | HVF binds a vCPU to the thread that created it, and per-device workers keep a slow device, such as a blocking virtio-fs request, from stalling the others | One event loop for all devices (Firecracker), where one slow device stalls the rest; an async runtime inside the jailed shim, which complicates per-thread seccomp |
+| Threads | One thread per vCPU, one lazy shared virtio executor for M2, and the `run()` event poller | HVF keeps vCPU thread affinity; shared generation-bound dispatch avoids a thread per virtio device; one complete chain per queue callback lets other ready work run | Unbounded drain-all callbacks on a shared loop; an async runtime in the jailed shim; per-device runtime remains a future seam, not another implementation |
 | Guest firmware | None: the VMM writes the kernel and its boot data into guest RAM and starts the boot vCPU at the kernel's entry point, as libkrun, Firecracker and crosvm do | The kernel ships with BoxLite as a file, so firmware and a boot loader would only add a step before it and a second guest program to ship, pin and trust | Firmware boot with edk2 UEFI or Rust Hypervisor Firmware, which cloud-hypervisor offers for disk images that carry their own boot loader (`README.md:114-118`, `:134-137`) and which only user-supplied OS images or Secure Boot would need |
 
 macOS 12–14 keep running boxes on libkrun until M5. When M5 removes libkrun,
@@ -56,7 +56,7 @@ boxlite-shim                    one jailed process per box
 └─ engine adapter (M2)          implements Vmm and VmmInstanceImpl (src/boxlite/src/vmm/engine.rs:51-104)
    └─ boxlite_vmm::Vm           new(config), then run() → VmExit or Error
       ├─ vcpuN threads          Vcpu::run → VcpuExit → chipset dispatch → run again
-      ├─ device workers         virtqueues and host backends: disk, fs, vsock, net, console
+      ├─ virtio executor        shared queue/backend dispatch, generation stop barriers
       ├─ the run() thread       one poller: stop requests, vCPU outcomes, device failures
       └─ boxlite_hypervisor     Vm and Vcpu traits; hvf (macOS arm64), kvm (Linux) or whp (Windows, M10)
 guest
@@ -397,13 +397,15 @@ stopping the worker synchronously.
     post-DRIVER_OK queue-write rejection, Status=0 reset, and a `VirtQueues`
     facade that validates the dense queue set, applies EVENT_IDX, tracks each
     deferred chain's head so completion happens exactly once, keeps
-    `save`/`restore` as `SnapshotError::Unsupported` stubs until M8, runs the
-    disable/drain/enable notification loop, and lets a device defer a chain's
-    completion to its backend;
+    `save`/`restore` as `SnapshotError::Unsupported` until M8, processes at
+    most one complete chain per callback, re-enables notifications and
+    schedules pending work through a generation-bound continuation;
   - virtio-blk, virtio-vsock, virtio-net, virtio-console and virtio-rng;
-  - virtio-balloon with free page reporting, so the host can reclaim unused
-    guest memory as it can with libkrun today: at once on Linux, and under
-    memory pressure on macOS, where `MADV_DONTNEED` only deactivates pages;
+  - reporting-only virtio-balloon: whole-chain validation, raw GPA and aligned
+    HVA queue-control protection, inward private-anonymous reclaim before
+    used, unchanged capacity and safe reuse; Darwin `MADV_DONTNEED` may need
+    pressure. Linux x86_64, Linux arm64 and macOS arm64 real guests are all
+    completion gates; arm64 boot dependencies cannot be replaced by unit tests;
   - the virtio-fs core.
 - **M3:** virtio-fs passthrough for user volumes.
 - **M7:** virtio-mem.
@@ -425,10 +427,17 @@ stopping the worker synchronously.
     (`target/arm/hvf/hvf.c:2273-2306`). libkrun, written for a userspace GIC,
     parks until the deadline in `CNTV_CVAL_EL0`
     (`libkrun/src/hvf/src/lib.rs:705-721`).
-- **Device workers.**
-  - Each virtio device owns its worker threads.
-  - A vCPU's queue-notify write wakes the worker through an event.
-  - The worker processes the queue and raises the device's interrupt itself.
+- **Shared virtio execution.**
+  - One lazy `mio::Poll`/waker/thread dispatches generation-bound queue kicks
+    and backend events. The device owns the prepared queues and completion.
+  - Common drain handles at most one complete chain, then returns. A durable,
+    coalesced continuation admits backlog next pass after other ready work,
+    even without another guest kick. Balloon has no private scheduler.
+  - A synchronous reclaim may still block. Count bounds are not syscall-time,
+    total CPU or throughput guarantees; stop timeout is Fatal and retains RAM.
+  - Status=0 closes admission and waits for the old generation before reset.
+    VM exit and Drop stop/join before unmap. `WorkerRuntime` preserves the
+    future per-device seam without adding a second runtime in M2.
 - **The `run()` thread.**
   - It waits on one poller for stop requests, vCPU outcomes and device
     failures.
@@ -441,7 +450,7 @@ stopping the worker synchronously.
   checks the flag before each entry. The `run()` thread then:
   1. kicks and unparks every vCPU;
   2. joins the vCPU threads;
-  3. stops and joins the device workers;
+  3. stops and joins the shared virtio executor, then finishes console output;
   4. returns.
 
 ## VM lifecycle and errors

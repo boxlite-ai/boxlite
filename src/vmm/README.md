@@ -1,8 +1,8 @@
 # boxlite-vmm
 
 BoxLite's native VMM. On Linux x86_64, `Vm::new` validates the machine
-configuration, creates the KVM VM with the legacy devices, registers guest RAM
-and loads the kernel and boot data; `Vm::run` runs every vCPU until the guest powers off or resets, or a
+configuration, creates the KVM VM with legacy devices and a reporting balloon,
+registers guest RAM and loads the kernel and boot data; `Vm::run` runs every vCPU until the guest powers off or resets, or a
 `StopHandle` stops it, and returns how the VM ended (see [Lifecycle](#lifecycle)).
 `Error` wraps `boxlite_hypervisor::Error` with its cause chain intact. The
 [VMM design](../../docs/contributing/architecture/vmm/README.md) specifies the
@@ -11,7 +11,7 @@ lifecycle API, memory layout, buses, interrupts, and threads.
 `Vm`, `VmConfig`, `VmExit`, `StopHandle`, `Error` and `Result` are public, as
 are `BusKind` and `Conflict`, which `Error::ChipsetConflicts` carries; M2's
 engine adapter will consume that API and inspect the error's host cause.
-`Vm::new(config, console)` adds COM1 and the i8042, and the guest's COM1
+`Vm::new(config, console)` adds COM1, the i8042 and virtio-balloon; COM1
 output reaches `console` through the
 [console queue](#legacy-devices-and-the-console).
 
@@ -38,14 +38,15 @@ boxlite-vmm
 | `virtio` | The virtio common infrastructure: the synchronous device contract (`VirtioDevice`, `DeviceSpec`, `DeviceEvent`, `ActivationContext`, `EventRegistrar`, `Waker`, `WorkerControl`), the `VirtQueues` facade (dense preparation and validation, EVENT_IDX, exactly-once deferred completion, notification drain, the stored guest-memory Arc and negotiated indirect flag, and `save`/`restore` stubs that report snapshots unsupported until M8), the 4 KiB virtio-mmio transport (register file, feature negotiation, queue configuration and activation, Status=0 reset, post-activation queue-write rejection), the MMIO interrupt handle, and the default snapshot methods |
 | `irq` | `IrqChip`, the host interrupt controller as devices see it, and `IrqLine`, one device line; HVF and KVM provide the controller, WHP (M10) only local APICs |
 | `devices` | The console queue, and on x86_64 the 8250 UART at COM1 and the i8042 reset, with `add_legacy_devices`, which adds them to the chipset |
+| `devices::balloon` | Reporting-only `VirtioBalloon`: configuration, negotiation, whole-chain prevalidation and synchronous reclaim-before-used |
+| `virtio::executor` | One lazy shared poller/thread, coalesced generation-bound queue kicks, backend readiness, stop barriers and VM shutdown |
 | `events` | `Event`, which ends the VM, `EventSender`, which also latches the stop, and `EventLoop`, the poller that waits for the first event |
 
-The x86_64 KVM boot and lifecycle are in place; the M1 devices, arm64 and HVF
-follow in M1. The virtio common infrastructure (`virtio`) is in place for M2:
-the device contract, queue adapter, MMIO transport and interrupt handle are
-tested with a test device. Real device backends and the per-device worker
-follow, and the BoxLite engine adapter, engine selection, and `native` feature
-wiring follow in M2.
+The Linux x86_64 machine wires the shared virtio runtime and reporting balloon.
+Linux arm64 and macOS arm64 remain required M2 qualification gates, blocked by
+their boot dependencies (#1698/#2103); unit tests or x86_64 evidence do not
+qualify those platforms or complete M2. The BoxLite engine adapter, engine
+selection and `native` feature wiring are separate M2 work.
 Neither new crate depends on `boxlite-shared`, and both are unpublished while
 their interfaces are being established.
 
@@ -376,13 +377,85 @@ through `ActivationContext`.
   notification that arrived between Linux's read and acknowledgement.
   `raise_config` also bumps the configuration generation; a reset keeps it
   monotonic.
-- **Worker seam.** `WorkerControl` starts the worker after a successful
-  activation and stops it before `Status=0` resets the device. The transport is
-  not wired into `Vm` yet; step 4 provides the executor behind this seam.
+- **Worker generations.** `prepare` supplies a generation-bound registrar,
+  waker and queue continuation; `start` admits dispatch after activation.
+  QueueNotify sets a coalesced queue bit. `stop` prevents new callbacks and
+  waits for admitted callbacks/registrations before reset; only VM-wide
+  shutdown joins the shared thread. Failed activation cancellation also waits
+  before rollback; barrier failure retains resources and takes Fatal.
 - **Errors.** `NeedsReset` sets `DEVICE_NEEDS_RESET` and raises the
   configuration interrupt; `Fatal` sends `Event::DeviceFailed` with
   `Error::VirtioDevice` and never stops the worker synchronously. The bus stays
   infallible.
+
+## Reporting balloon and shared dispatch
+
+Design: [authoritative Notion specification](https://www.notion.so/4058d8d97179803fb555cd0420cb232d)
+and [tracking/registration extract #2278](https://github.com/boxlite-ai/boxlite/issues/2278).
+
+The device exposes ID 5, only reporting bit 5, and eight configuration bytes:
+read-only `num_pages=0` and guest-writable `actual`, reset to zero. Linux setup
+uses inflate/deflate queues 0/1; reporting alone is queue 2. All have maximum
+size 256. Queue 2 is required only when reporting is negotiated and is never
+consumed otherwise. No quota, stats, hinting, poison or snapshot support is
+advertised. The x86_64 `0xd0000000`/GSI 5 resource record supplies both the
+chipset claim and appended `virtio_mmio.device=` command-line argument.
+
+Before any reclaim, the entire chain must pass direction, nonzero length,
+checked address arithmetic, single-region raw-range and normal-termination
+checks. Activation caches up to nine ready-queue control GPA/HVA intervals.
+Reject raw GPA/control or inward-aligned HVA/control overlap without reclaiming
+any prefix. Duplicate and partially overlapping reports are allowed, validated
+independently and attempted in guest order; no sorting, merging or deduplication.
+The control snapshot includes both event-index fields even when EVENT_IDX is
+not negotiated. A ring at a RAM-region tail therefore also needs those two
+extra bytes in the same region; activation rejects it otherwise.
+
+The RAM owner supports only owned private-anonymous backing. It queries the real
+host page size once per device and prepares inward complete host pages before
+the first syscall. Empty interiors skip `madvise`. Every synchronous attempt
+finishes before used length zero is published; partial failures record GPA,
+raw length, aligned offset/length and errno, then continue. Used zero permits
+reuse, not released-byte accounting. There is no retry after completion, and
+Darwin's pressure-dependent `MADV_DONTNEED` is not immediate Linux discard.
+
+Common `VirtQueues::drain` processes at most one complete chain per callback.
+Its notification recheck schedules pending work through a generation-bound
+continuation, without another guest kick. The executor finishes the current
+pass's other ready work before self-continuation; stopping prevents the next
+chain, while an admitted chain may finish before the barrier succeeds. This
+bounds work count, not syscall duration, total CPU or syscall rate. A protective
+timeout is Fatal and retains mappings; it is not a latency SLA. Normal VM exit
+and Drop both stop/join before RAM unmap.
+
+Worker and driver cumulative status updates use atomic OR, so publishing
+`DEVICE_NEEDS_RESET` cannot erase a concurrent driver `FAILED` bit or vice
+versa. Backend delivery takes the device mutex before admitting a source;
+configuration code can therefore retire a queued source without waiting for
+a callback blocked on that same mutex. Admission then rechecks source liveness
+and generation. Retiring an already-admitted callback from another thread
+waits for its completion; self-retirement defers destruction until it returns.
+
+```sh
+make vmm:boot:host
+make test:unit:vmm FILTER=balloon
+make test:integration:vmm:linux
+make coverage:vmm:boot
+```
+
+Coverage targets create `target/coverage` on a fresh checkout and append to
+existing instrumented unit profiles. Use the matching toolchain's LLVM tools;
+the output is `target/coverage/lcov.info`, not a three-platform qualification.
+
+Both real-boot entry points build the freestanding `balloon_init.c` test init.
+The guest touches scratch and independent live regions, reports exact PFNs to
+a test-only observation port, unmaps scratch, verifies unchanged capacity/live
+data, reallocates/touches, and unbinds/rebinds the driver. The observer measures
+`mincore` residency and used completions; it never reclaims through that port.
+Reporting-off and `init_on_free=1` runs must retain freed backing without any
+report completion. Security settings are not weakened, and watchdog expiry
+fails. Three-platform real-guest reporting/reclaim/reuse/lifetime evidence is
+still required; these commands do not waive the arm64 prerequisites.
 
 ## Chipset
 

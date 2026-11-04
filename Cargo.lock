@@ -803,6 +803,7 @@ name = "boxlite-vmm"
 version = "0.11.0"
 dependencies = [
  "boxlite-hypervisor",
+ "libc",
  "linux-loader",
  "mio 1.2.0",
  "tracing",
