@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
+import fcntl
 import hashlib
 import json
 import os
@@ -19,7 +21,12 @@ import urllib.request
 ROOT = Path(__file__).resolve().parents[2]
 E2E = ROOT / "apps/e2e"
 STATE = Path(os.environ.get("BOXLITE_E2E_STATE_DIR", ROOT / "target/e2e")).resolve()
-PYTHON = Path(os.environ.get("E2E_PYTHON", ROOT / ".venv-e2e/bin/python"))
+# E2E_PYTHON: bare names go through PATH; relative paths are anchored at ROOT
+# because the pytest cases run with cwd=apps/e2e.
+_raw_python = os.environ.get("E2E_PYTHON")
+PYTHON = Path(_raw_python) if _raw_python else ROOT / ".venv-e2e/bin/python"
+if _raw_python and "/" in _raw_python and not PYTHON.is_absolute():
+    PYTHON = ROOT / PYTHON
 COMPOSE = E2E / "compose.yaml"
 DEPENDENCIES = json.loads((E2E / "dependencies.json").read_text())
 sys.path.insert(0, str(E2E))
@@ -428,6 +435,27 @@ def pytest(env, extra):
          "--timeout=180", "-p", "no:cacheprovider"], cwd=E2E, env=env)
 
 
+@contextlib.contextmanager
+def stack_lock(home=RUNTIME_HOME):
+    """Serialize the mutating stack commands of this checkout.
+
+    down() prunes box directories a concurrent up()/run() may have just
+    created, so up/setup/run/down hold an exclusive lock for their whole
+    lifetime. The lock lives in the runtime home shared by every state dir;
+    the kernel releases it when the holder exits or dies.
+    """
+    home.mkdir(parents=True, exist_ok=True, mode=0o700)
+    handle = (home / "stack.lock").open("a+")
+    try:
+        try:
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            raise Failure(f"another e2e stack command holds {home / 'stack.lock'}")
+        yield
+    finally:
+        handle.close()
+
+
 def up(env):
     write_files()
     build(env)
@@ -505,15 +533,17 @@ def main(argv=None):
         if args.command == "doctor":
             doctor(env)
         elif args.command == "down":
-            down(env)
+            with stack_lock():
+                down(env)
         elif args.command == "status":
             status(env)
         else:
-            up(env)
-            if args.command == "setup":
-                pytest(env, ["cases/test_path_verification.py"])
-            elif args.command == "run":
-                pytest(env, extra)
+            with stack_lock():
+                up(env)
+                if args.command == "setup":
+                    pytest(env, ["cases/test_path_verification.py"])
+                elif args.command == "run":
+                    pytest(env, extra)
         return 0
     except (Failure, OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
         print(f"[e2e] {error}", file=sys.stderr)
