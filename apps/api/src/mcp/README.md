@@ -33,7 +33,7 @@ mcp/
 │   ├── registry/         Credential metadata tools
 │   ├── shared/           Registration, authorization, and audit support
 │   └── volume/           Managed volume tools
-├── runner/               Trusted, bounded Runner HTTP adapter and its tests
+├── runner/               Trusted, bounded Runner HTTP/WebSocket adapters and tests
 ├── tests/                Shared HTTP test harnesses
 ├── mcp.module.ts         Nest providers and module imports
 ├── mcp.controller.ts     MCP HTTP transport
@@ -142,7 +142,25 @@ establish that repeating it is safe. Runner error bodies and credentials are nev
 
 This adapter has no tool registrations. Its consumers own tool schemas, representation
 conversion and result projection. It covers only the existing execution, file and Box metrics
-HTTP endpoints; streaming attachment requires a separate transport.
+HTTP endpoints. The separate WebSocket adapter is described below.
+
+## Runner WebSocket boundary
+
+`McpRunnerWebSocket.capture` adapts the existing Runner execution attachment
+endpoint without adding a Runner API or changing execution behavior.
+Callers supply an authorized organization context and validated byte/time budgets;
+the adapter resolves the Box within that organization and rechecks ownership.
+Runner addresses and credentials come only from the stored Runner record.
+
+The adapter captures bounded stdout/stderr, validates exit frames, and reports
+unknown history completeness because replay eviction and live loss are not exposed.
+It sends no stdin or execution-control messages. Redirects, compression, and retries
+are disabled; handshake, message size, reading, and connection cleanup are bounded.
+Typed readiness failures keep their service classification.
+
+Attachment claims the single connection slot and refreshes activity; it may resume
+the Box. Disconnecting starts the Runner's existing orphan grace and may eventually
+lead to execution termination. Tool callers must account for these lifecycle effects.
 
 ## Execution tools
 
