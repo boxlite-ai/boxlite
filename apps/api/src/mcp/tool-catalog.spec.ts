@@ -85,6 +85,10 @@ const excludedOperations = new Set([
   'getRuntimeMetrics',
   'attachBox',
   'attachExecution',
+  'listDomains',
+  'claimDomain',
+  'bindDomain',
+  'unbindDomain',
 ])
 
 describe('Mcp assembled tool catalog', () => {
@@ -181,14 +185,18 @@ describe('Mcp assembled tool catalog', () => {
     expect(response.status).toBe(200)
     const body = await response.json()
     const tools = body.result.tools
-    expect(tools.map((tool: { name: string }) => tool.name).sort()).toEqual(Object.values(toolByOperation).sort())
+    expect(tools.map((tool: { name: string }) => tool.name).sort()).toEqual(
+      [...Object.values(toolByOperation), 'list_organizations'].sort(),
+    )
     for (const tool of tools) {
       expect(tool.inputSchema).toEqual(expect.objectContaining({ type: 'object', additionalProperties: false }))
       expect(tool.outputSchema).toBeDefined()
       for (const hint of ['readOnlyHint', 'destructiveHint', 'openWorldHint']) {
         expect(typeof tool.annotations[hint]).toBe('boolean')
       }
-      if (tool.name !== 'get_config') expect(tool.inputSchema.required).toContain('organization_id')
+      if (tool.name !== 'get_config' && tool.name !== 'list_organizations') {
+        expect(tool.inputSchema.required).toContain('organization_id')
+      }
     }
     expect(tools.find((tool: { name: string }) => tool.name === 'list_boxes').annotations.destructiveHint).toBe(false)
     expect(tools.find((tool: { name: string }) => tool.name === 'exec_box').annotations.openWorldHint).toBe(true)

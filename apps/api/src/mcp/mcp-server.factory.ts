@@ -15,6 +15,7 @@ import { registerConfigTool } from './tools/config/config-tool'
 import { McpExecutionTools } from './tools/execution/execution-tools'
 import { McpFileTools } from './tools/files/file-tools'
 import { McpMetricsTools } from './tools/metrics/metrics-tools'
+import { OrganizationTools } from './tools/organization/organization-tools'
 
 /** The `authInfo.extra` key the controller stores the authenticated caller under. */
 export const MCP_CALLER_KEY = 'boxliteCaller'
@@ -38,6 +39,7 @@ export class McpServerFactory {
     private readonly executionTools: McpExecutionTools,
     private readonly fileTools: McpFileTools,
     private readonly metricsTools: McpMetricsTools,
+    private readonly organizationTools: OrganizationTools,
   ) {}
 
   /** The `createMcpHandler` factory. */
@@ -45,6 +47,7 @@ export class McpServerFactory {
 
   create(caller: AuthContext): McpServer {
     const server = new McpServer({ name: 'boxlite', version: '0.0.1' })
+    this.organizationTools.register(server, caller)
     this.boxTools.register(server, caller)
     this.volumeTools.register(server, caller)
     this.imageTools.register(server, caller)

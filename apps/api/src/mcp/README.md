@@ -6,6 +6,11 @@ live together under `tools/`; each feature module owns its input and output
 contracts. Only schemas shared across tools are extracted: `tools/box/box.schema.ts`
 defines Box selectors and responses for lifecycle, network, and listing tools.
 
+`OrganizationTools` lists the caller's member organizations without requiring an
+organization ID. Each result includes `id`, `name`, and `is_default`; pass an `id`
+as `organization_id` to organization-scoped tools such as `create_box`. Listing
+does not imply permission or capacity to create a Box in every organization.
+
 `BoxTools` owns all seven Box listing and lifecycle registrations, including
 `list_boxes`. The factory depends on tool groups; it performs no Box queries or
 membership lookups. Listing uses the shared organization access, cancellation,
@@ -24,6 +29,7 @@ mcp/
 │   ├── files/            Upload/download tools and archive conversion
 │   ├── image/            Catalog and alias tools
 │   ├── metrics/          Box metrics tool
+│   ├── organization/     Member organization discovery
 │   ├── registry/         Credential metadata tools
 │   ├── shared/           Registration, authorization, and audit support
 │   └── volume/           Managed volume tools
@@ -38,7 +44,7 @@ Shared harnesses under `tests/` are excluded from the application TypeScript
 build and remain compiled through the Jest test configuration.
 
 Every registered tool advertises `inputSchema` and `outputSchema`. The catalog
-test exercises the assembled endpoint and checks all 31 registrations; schema
+test exercises the assembled endpoint and checks all 32 registrations; schema
 placement does not change the public tool contract.
 
 REST capability flags describe the hosted API, including private tunnels and
