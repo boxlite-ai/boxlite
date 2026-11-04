@@ -52,8 +52,11 @@ impl StopHandle {
 /// What device constructors get besides the chipset: the guest memory a
 /// virtio device's queues address, and the workers that run its events.
 #[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "Only tests add a virtio device yet.")
+    not(any(test, all(target_os = "linux", target_arch = "x86_64"))),
+    expect(
+        dead_code,
+        reason = "Only the Linux x86_64 Vm::new adds a virtio device yet."
+    )
 )]
 pub(crate) struct DeviceContext<'a> {
     /// The guest RAM every host-side user shares.
@@ -106,20 +109,37 @@ impl<H: HostVm> std::fmt::Debug for Vm<H> {
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 impl Vm<boxlite_hypervisor::KvmVm> {
-    /// Validates `config`, creates the KVM VM with the legacy devices,
-    /// registers its RAM and loads the kernel and boot data. The guest's COM1
-    /// output goes to `console` through a queue, so a slow sink never stalls
-    /// the guest.
-    pub fn new(config: VmConfig, console: Box<dyn std::io::Write + Send>) -> Result<Self> {
-        use crate::devices::{console::DEFAULT_QUEUE_BYTES, x86_64::add_legacy_devices};
+    /// Validates `config`, creates the KVM VM with the legacy devices and one
+    /// virtio-blk device per disk, registers its RAM and loads the kernel and
+    /// boot data. Each disk takes the next virtio-mmio slot, which `Vm::new`
+    /// names on the command line; `config.cmdline` must leave room for those
+    /// arguments, about 35 bytes each, under `config::MAX_CMDLINE_BYTES`. The
+    /// guest's COM1 output goes to `console` through a queue, so a slow sink
+    /// never stalls the guest.
+    pub fn new(mut config: VmConfig, console: Box<dyn std::io::Write + Send>) -> Result<Self> {
+        use crate::{
+            devices::{console::DEFAULT_QUEUE_BYTES, x86_64::add_legacy_devices},
+            virtio::{blk, mmio},
+        };
 
+        config.validate()?;
+        let disks = config.disks.clone();
+        let mut slots = mmio::Slots::new();
+        let slots = disks
+            .iter()
+            .map(|_| slots.take())
+            .collect::<Result<Vec<_>>>()?;
+        mmio::announce(&mut config.cmdline, &slots)?;
         let (writer, worker) =
             ConsoleWorker::spawn(console, DEFAULT_QUEUE_BYTES).map_err(Error::SpawnConsole)?;
         let mut vm = Self::with_backend(
             config,
             boxlite_hypervisor::KvmVm::new,
             |ram, config| crate::boot::prepare(ram, config).map(|setup| setup.boot_regs),
-            |chipset, _| add_legacy_devices(chipset, writer),
+            |chipset, ctx| {
+                add_legacy_devices(chipset, writer)?;
+                blk::add_disks(chipset, ctx, &disks, &slots)
+            },
         )?;
         vm.console = Mutex::new(Some(worker));
         Ok(vm)

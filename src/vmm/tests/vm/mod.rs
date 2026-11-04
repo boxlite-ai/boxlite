@@ -42,6 +42,7 @@ fn config(vcpu_count: u8, memory_mib: u32) -> VmConfig {
         kernel: "vmlinux".into(),
         cmdline: "console=ttyS0".into(),
         initramfs: None,
+        disks: Vec::new(),
     }
 }
 

@@ -24,6 +24,7 @@ use std::{fmt, io, sync::Arc};
 use self::queue::VirtQueues;
 use crate::{events::EventSender, memory::GuestMemoryMmap};
 
+pub(crate) mod blk;
 pub(crate) mod interrupt;
 pub(crate) mod mmio;
 pub(crate) mod queue;

@@ -15,10 +15,11 @@ use std::{
 use boxlite_hypervisor::VcpuExit;
 use vm_memory::GuestAddress;
 
-use super::{MMIO_WINDOW_LEN, MmioResources, MmioTransport};
+use super::{MMIO_WINDOW_LEN, MmioResources, MmioTransport, Slot, Slots, announce};
 use crate::{
     bus::BusDevice,
     chipset::ChipsetBuilder,
+    config::MAX_CMDLINE_BYTES,
     error::Error,
     events::{Event, EventLoop},
     irq::IrqLine,
@@ -877,4 +878,58 @@ fn a_chipset_dispatches_mmio_to_the_transport() {
 #[test]
 fn the_transport_claims_a_four_kib_window() {
     assert_eq!(MMIO_WINDOW_LEN, 0x1000);
+}
+
+#[test]
+fn slots_hand_out_consecutive_windows_and_lines_until_exhausted() {
+    let mut slots = Slots::new();
+    for index in 0..Slots::CAPACITY {
+        let slot = slots.take().unwrap();
+        assert_eq!(slot.base, 0xd000_0000 + u64::from(index) * MMIO_WINDOW_LEN);
+        assert_eq!(slot.gsi, 5 + index);
+    }
+    assert_eq!(Slots::CAPACITY, 19);
+    assert!(matches!(slots.take(), Err(Error::VirtioSlotsExhausted)));
+    assert_eq!(
+        Error::VirtioSlotsExhausted.to_string(),
+        "no virtio-mmio slot is free"
+    );
+}
+
+#[test]
+fn a_slot_names_itself_the_way_the_kernel_parses_it() {
+    let slot = Slots::new().take().unwrap();
+    assert_eq!(slot.cmdline_arg(), "virtio_mmio.device=4K@0xd0000000:5");
+    let second = Slot {
+        base: 0xd000_1000,
+        gsi: 6,
+    };
+    assert_eq!(second.cmdline_arg(), "virtio_mmio.device=4K@0xd0001000:6");
+}
+
+#[test]
+fn announcing_appends_each_slot_within_the_command_line_budget() {
+    let mut slots = Slots::new();
+    let taken = [slots.take().unwrap(), slots.take().unwrap()];
+    let mut cmdline = String::from("console=ttyS0");
+    announce(&mut cmdline, &taken).unwrap();
+    assert_eq!(
+        cmdline,
+        "console=ttyS0 virtio_mmio.device=4K@0xd0000000:5 virtio_mmio.device=4K@0xd0001000:6"
+    );
+    let mut empty = String::new();
+    announce(&mut empty, &taken[..1]).unwrap();
+    assert_eq!(empty, "virtio_mmio.device=4K@0xd0000000:5");
+
+    let argument = taken[0].cmdline_arg();
+    let mut full = "a".repeat(MAX_CMDLINE_BYTES - argument.len() - 1);
+    assert!(matches!(
+        announce(&mut full, &taken[..1]),
+        Err(Error::InvalidCommandLine(
+            "leaves no room for the virtio device arguments"
+        ))
+    ));
+    let mut fits = "a".repeat(MAX_CMDLINE_BYTES - argument.len() - 2);
+    announce(&mut fits, &taken[..1]).unwrap();
+    assert_eq!(fits.len(), MAX_CMDLINE_BYTES - 1);
 }

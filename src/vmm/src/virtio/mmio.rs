@@ -44,6 +44,79 @@ use crate::{
 
 /// The MMIO window length a transport claims.
 pub(crate) const MMIO_WINDOW_LEN: u64 = 0x1000;
+/// Where the virtio-mmio windows start; slot `i` is `i` windows later.
+const WINDOW_START: u64 = 0xd000_0000;
+/// The interrupt lines the slots use, in order: the legacy range above COM1
+/// and below the MSI space, as Firecracker and libkrun allocate it.
+const FIRST_GSI: u32 = 5;
+const LAST_GSI: u32 = 23;
+
+/// One virtio-mmio device's window and interrupt line.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Slot {
+    /// The window base.
+    pub(crate) base: u64,
+    /// The interrupt line.
+    pub(crate) gsi: u32,
+}
+
+impl Slot {
+    /// The `virtio_mmio.device=` argument that makes the kernel probe this
+    /// slot.
+    pub(crate) fn cmdline_arg(&self) -> String {
+        format!("virtio_mmio.device=4K@{:#x}:{}", self.base, self.gsi)
+    }
+}
+
+/// Hands out the slots of one VM in order, so every virtio-mmio device gets
+/// a distinct window and line, and the command line names the same values.
+#[derive(Debug, Default)]
+pub(crate) struct Slots {
+    taken: u32,
+}
+
+impl Slots {
+    /// How many slots a VM has.
+    pub(crate) const CAPACITY: u32 = LAST_GSI - FIRST_GSI + 1;
+
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+
+    /// The next free slot.
+    pub(crate) fn take(&mut self) -> Result<Slot> {
+        if self.taken >= Self::CAPACITY {
+            return Err(Error::VirtioSlotsExhausted);
+        }
+        let index = self.taken;
+        self.taken += 1;
+        Ok(Slot {
+            base: WINDOW_START + u64::from(index) * MMIO_WINDOW_LEN,
+            gsi: FIRST_GSI + index,
+        })
+    }
+}
+
+/// Appends each slot's argument to `cmdline`, which must leave room for them
+/// under `MAX_CMDLINE_BYTES`: the kernel probes a virtio-mmio device only
+/// when the command line names it, and copies at most that many bytes.
+pub(crate) fn announce(cmdline: &mut String, slots: &[Slot]) -> Result<()> {
+    for slot in slots {
+        let argument = slot.cmdline_arg();
+        if cmdline.len() + argument.len() + usize::from(!cmdline.is_empty())
+            >= crate::config::MAX_CMDLINE_BYTES
+        {
+            return Err(Error::InvalidCommandLine(
+                "leaves no room for the virtio device arguments",
+            ));
+        }
+        if !cmdline.is_empty() {
+            cmdline.push(' ');
+        }
+        cmdline.push_str(&argument);
+    }
+    Ok(())
+}
 
 /// The driver acknowledged the device.
 const ACKNOWLEDGE: u8 = 0x1;
@@ -59,7 +132,7 @@ const FAILED: u8 = 0x80;
 const DRIVER_STATUS_BITS: u8 = ACKNOWLEDGE | DRIVER | DRIVER_OK | FEATURES_OK | FAILED;
 
 /// `VIRTIO_F_VERSION_1`: the device uses the modern virtio layout.
-const VIRTIO_F_VERSION_1: u64 = 1 << 32;
+pub(crate) const VIRTIO_F_VERSION_1: u64 = 1 << 32;
 /// `VIRTIO_F_RING_PACKED`: packed virtqueues are not implemented.
 const VIRTIO_F_RING_PACKED: u64 = 1 << 34;
 /// `VIRTIO_F_NOTIFICATION_DATA`: the transport does not decode packed
