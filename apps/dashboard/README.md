@@ -3,6 +3,46 @@
 The web console at `app.boxlite.ai`. A Vite + React app, built and tested
 through Nx as the `dashboard` project.
 
+## SSH access
+
+Open a box's **SSH** tab beside **Shell**. Setup, Enable and Disable require a
+running box and permission to write boxes. Setup opens a dialog, generates
+independent Ed25519 host/client keys in the browser, and configures login `box`
+on guest address `0.0.0.0:22` through the existing SSH REST API. It replaces any
+previous accounts and host identity and disconnects current SSH clients.
+
+Download the private key from the dialog before leaving the page. The client
+private key stays in component memory and the downloaded file; only its public
+key is sent to the server. The host private key is sent as part of the guest
+configuration. Closing and reopening the dialog preserves the current download;
+reloading, navigating away, or changing boxes/organizations discards it. A fresh
+Setup then creates new identities. Failed setup retains generated keys for a
+manual retry. Browser Ed25519 support and a secure context are required.
+
+The dialog supplies an OpenSSH command using
+`ProxyCommand=boxlite --url=… --path-prefix=… ssh --proxy -- BOX`, matching the
+cloud CLI syntax in [#2327](https://github.com/boxlite-ai/boxlite/pull/2327).
+Use a CLI build containing that change. From the download directory, run the
+displayed `chmod 600` and SSH commands; SSH starts and stops the proxy itself,
+without a separate forwarding terminal or local listening port. URL and
+organization arguments survive shell quoting and OpenSSH percent expansion;
+API credentials are loaded by the CLI, never embedded in the command.
+
+Compare the displayed host fingerprint before accepting it; a fresh Setup may
+change it. The cloud proxy requires server tunnel support and inbound access.
+It opens a public tunnel protected by SSH authentication; exiting SSH leaves
+the tunnel declaration open. The dialog also shows the command to revoke it.
+Setup itself does not open a tunnel.
+
+The connection dialog scrolls as one document. Command blocks retain their full
+height and wrap long lines, including on narrow screens; wrapping does not insert
+newlines into copied commands.
+
+Enable and Disable reuse saved credentials. SSH status errors remain visible;
+mutations are not automatically retried. Switching tabs preserves the shell.
+Mock preview simulates these actions with a clearly marked mock host fingerprint;
+it does not start an SSH server. See [the design](https://github.com/boxlite-ai/boxlite/issues/2325).
+
 ## SDK and CLI quickstart readability
 
 The walkthrough uses a dedicated `quickstart-code` type style: 14px monospaced
