@@ -117,8 +117,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut config = tonic_build::configure()
         .build_server(true)
-        .build_client(true)
-        .skip_debug("boxlite.v1.SshSetupRequest");
+        .build_client(true);
     for name in ["SshConfig", "SshAccount", "SshCaConfig"] {
         let name = format!("boxlite.v1.{name}");
         config = config

@@ -5,13 +5,17 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow, bail};
 use boxlite::{
-    BoxliteRuntime, LiteBox, SocketAddress, SshAccount, SshConfig, SshStatus, TunnelOptions,
+    BoxTunnel, BoxliteRuntime, LiteBox, SocketAddress, SshAccount, SshConfig, SshStatus,
+    TunnelOptions,
 };
 use clap::{Args, Subcommand};
 
 use crate::cli::GlobalFlags;
 use crate::commands::network::tunnel::{forward_until_interrupted, parse_socket_address};
 use crate::formatter;
+
+mod proxy;
+mod setup;
 
 #[cfg(test)]
 mod tests;
@@ -27,9 +31,9 @@ pub enum SshCommand {
     /// Replace the complete guest SSH configuration; prints status JSON.
     /// Every accepted configuration disconnects existing SSH clients.
     Configure(ConfigureArgs),
-    /// Configure box@0.0.0.0:22 with one public key and enable SSH (local only).
-    /// Reuses the saved host key or generates one; disconnects existing clients.
-    Setup(SetupArgs),
+    /// Generate or reuse local keys, configure box@0.0.0.0:22, and print an SSH command.
+    /// Replaces the complete configuration and disconnects existing clients (local only).
+    Setup(BoxArgs),
     /// Print guest SSH status JSON without starting the box.
     Status(BoxArgs),
     /// Enable saved SSH configuration on a running local box; prints status JSON.
@@ -38,6 +42,8 @@ pub enum SshCommand {
     Disable(BoxArgs),
     /// Forward a local listener to already enabled guest SSH until Ctrl-C.
     Forward(ForwardArgs),
+    /// Connect stdin/stdout to enabled guest SSH for OpenSSH ProxyCommand (local only).
+    Proxy(BoxArgs),
 }
 
 #[derive(Args, Debug)]
@@ -55,17 +61,6 @@ pub struct ConfigureArgs {
 
     #[command(flatten)]
     pub source: ConfigSource,
-}
-
-#[derive(Args, Debug)]
-pub struct SetupArgs {
-    /// Box ID or name
-    #[arg(value_name = "BOX")]
-    pub target: String,
-
-    /// File holding exactly one OpenSSH client public key
-    #[arg(long, value_name = "FILE")]
-    pub authorized_key: PathBuf,
 }
 
 #[derive(Args, Debug)]
@@ -168,11 +163,8 @@ pub async fn execute(args: SshArgs, global: &GlobalFlags) -> Result<()> {
             let (_runtime, sandbox) = find_box(global, &args.target).await?;
             print_status(&sandbox.ssh().configure(config).await?)
         }
-        SshCommand::Setup(args) => {
-            let key = read_public_key(&args.authorized_key)?;
-            let (_runtime, sandbox) = find_box(global, &args.target).await?;
-            print_status(&sandbox.ssh().setup(key).await?)
-        }
+        SshCommand::Setup(args) => setup::execute(&args.target, global).await,
+        SshCommand::Proxy(args) => proxy::execute(&args.target, global).await,
         SshCommand::Status(args) => {
             let (_runtime, sandbox) = find_box(global, &args.target).await?;
             print_status(&sandbox.ssh().status().await?)
@@ -191,6 +183,13 @@ pub async fn execute(args: SshArgs, global: &GlobalFlags) -> Result<()> {
             forward(&sandbox, &status, args.listen).await
         }
     }
+}
+
+fn require_local(global: &GlobalFlags) -> Result<()> {
+    if global.targets_rest()? {
+        bail!("SSH setup and proxy require a local runtime");
+    }
+    Ok(())
 }
 
 /// The runtime is returned so it outlives the box handle for the whole command.
@@ -228,25 +227,29 @@ fn tunnel_target(listen_address: &str) -> Result<SocketAddr> {
 /// Forward to the port SSH actually bound, which differs from the
 /// configuration when it asked for port 0.
 async fn forward(sandbox: &LiteBox, status: &SshStatus, listen: SocketAddress) -> Result<()> {
-    if !status.enabled {
-        bail!(
-            "guest SSH is disabled or the box is not running; enable it with \
-             `boxlite ssh setup`, `configure`, or `enable`"
-        );
-    }
-    let tunnel = sandbox
-        .network()
-        .tunnel(
-            tunnel_target(&status.listen_address)?,
-            TunnelOptions::default(),
-        )
-        .await?;
+    let tunnel = ssh_tunnel(sandbox, status).await?;
     forward_until_interrupted(tunnel, listen, |address| {
         eprintln!("SSH host key: {}", status.host_public_key);
         eprintln!("SSH host key fingerprint: {}", status.host_key_fingerprint);
         eprintln!("Connect: {}", connect_hint(address));
     })
     .await
+}
+
+async fn ssh_tunnel(sandbox: &LiteBox, status: &SshStatus) -> Result<BoxTunnel> {
+    if !status.enabled {
+        bail!(
+            "guest SSH is disabled or the box is not running; enable it with \
+             `boxlite ssh setup`, `configure`, or `enable`"
+        );
+    }
+    Ok(sandbox
+        .network()
+        .tunnel(
+            tunnel_target(&status.listen_address)?,
+            TunnelOptions::default(),
+        )
+        .await?)
 }
 
 /// Unix sockets get a description: quoting a path into ProxyCommand would

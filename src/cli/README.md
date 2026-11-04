@@ -222,20 +222,21 @@ for runtime support, connection lifetime and persistence.
 
 ```bash
 boxlite run -d --name dev alpine:latest tail -f /dev/null
-boxlite ssh setup dev --authorized-key ~/.ssh/id_ed25519.pub
-boxlite ssh forward dev
-# stdout: tcp://127.0.0.1:52811   stderr: host key, fingerprint, connect hint
-ssh -p 52811 -l box 127.0.0.1
+boxlite ssh setup dev
+# Copy and execute the complete ssh command printed by setup.
 ```
 
-`boxlite ssh setup` uses `box` on guest port 22 and generates a persistent host key
-on first setup. Repeated setup reuses that identity and replaces the accepted
-client key. `boxlite ssh configure` retains full configuration control. Both
-replace the configuration, disconnect existing clients, and print `SshStatus` JSON.
-Then `forward` opens a local listener until Ctrl-C, leaving the configuration and
-generation unchanged. `enable` restores saved SSH configuration; `disable` stops
-SSH while retaining credentials. Both require a running local box. Setup and
-enable are local-only; `status` and the existing complete controls also work over REST.
+`setup` generates client and host keys in the local box directory, enables `box`
+on guest port 22, and prints a command using `ssh proxy` as ProxyCommand. It takes
+no key flags and reuses both saved keys on subsequent calls. Setup replaces the
+whole guest SSH configuration, including any previously configured host key.
+`configure` retains full configuration control and prints status JSON.
+
+`proxy` forwards only stdin/stdout; `forward` remains available for a local TCP
+listener. Both require enabled SSH. `enable` restores saved SSH configuration;
+`disable` stops SSH while retaining credentials. Both require a running local box.
+Setup, proxy and enable are local-only. An active local proxy/forward holds the
+runtime home lock; stop it before issuing another local CLI command on that home.
 See [`boxlite ssh`](../../docs/reference/cli/README.md#boxlite-ssh) for flags and the
 [SSH guide](../../docs/guides/ssh.md#cli) for lifecycle rules.
 

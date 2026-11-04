@@ -4,7 +4,7 @@ SSH starts disabled when no saved configuration exists. The Rust runtime exposes
 query, or disable it, for local boxes and for REST-backed boxes served by
 `boxlite serve` ([HTTP control](#http-control-with-boxlite-serve)) or the
 [hosted cloud API](#hosted-cloud-api). Only
-`configure(config)` and local `setup(client_public_key)` follow the implicit-start policy of exec, metrics, and file
+`configure(config)` follows the implicit-start policy of exec, metrics, and file
 copying. A `Configured` or `Stopped` box using the image's default command can
 start implicitly. If `BoxOptions.cmd` or `entrypoint` explicitly sets the main
 command, configuration returns `InvalidState` in these states; call `start()`
@@ -30,26 +30,11 @@ SSH does not publish a host port; forward one with [`boxlite ssh forward`](#cli)
 or other network forwarding. For component diagrams and implementation details, see
 [Guest SSH architecture](../../src/guest/src/service/ssh/README.md).
 
-For a local box, setup needs only the client's OpenSSH public key:
-
-```rust,ignore
-let ssh = sandbox.ssh();
-ssh.setup(std::fs::read_to_string("client.pub")?).await?;
-ssh.disable().await?;
-ssh.enable().await?;
-```
-
-`setup()` replaces all authentication with one `box` login and that public key,
-without a CA, and listens on `0.0.0.0:22`. It generates an Ed25519 host key only
-when no saved configuration exists. Subsequent setup, client-key replacement,
-disable/enable, and restart retain the saved host identity, including a key
-previously supplied through complete configuration. Invalid keys or unreadable
-saved state fail without replacing the live listener. Setup disconnects existing
-clients, like complete configuration. Login `box` still executes as the container's
-configured user. `enable()` uses the saved configuration, errors if none exists,
-and preserves connections when SSH is already healthy. Setup and enable are
-currently available only in the Rust runtime and CLI with a local backend;
-REST-backed handles return `Unsupported` for these operations.
+The Rust SDK exposes `configure`, `status`, `enable`, and `disable`.
+Automatic credential management belongs to the CLI's [`setup`](#cli) command.
+Local `enable()` uses saved configuration, errors if none exists, and preserves
+connections when SSH is already healthy. REST-backed handles return `Unsupported`
+for enable.
 
 Complete configuration remains available for custom addresses, host keys,
 accounts, and certificate authorities:
@@ -88,7 +73,7 @@ applied.
 Invalidated handles return `Stopped`; drop all references to the old box and
 obtain a fresh handle with `runtime.get()`. That handle can query SSH without
 restarting the box; enable/disable require a running box. A stopped box with an
-explicit main command still requires `start()` before `configure()` or `setup()`.
+explicit main command still requires `start()` before `configure()`.
 
 ## CLI
 
@@ -96,17 +81,51 @@ explicit main command still requires `start()` before `configure()` or `setup()`
 [CLI reference](../reference/cli/README.md#boxlite-ssh) lists every flag.
 
 ```bash
-boxlite ssh configure dev --ssh-config ssh.json          # complete SshConfig; prints SshStatus
-boxlite ssh forward dev                                  # forwards 127.0.0.1:<random> to guest SSH
-boxlite ssh disable dev
-boxlite ssh enable dev                                   # local, running box; reuses saved configuration
+# Use a detached box so it survives CLI exit.
+boxlite run -d --name dev alpine:latest tail -f /dev/null
+boxlite ssh setup dev
 ```
 
-Configure SSH first, then use `forward` to open a local listener until Ctrl-C.
-For quick local setup, use `boxlite ssh setup dev --authorized-key client.pub`
-and log in as `box`. Only one public-key file is accepted.
-For one account, configuration can instead read key files with
-`boxlite ssh configure dev --host-key host_key --login alice --authorized-key alice.pub`.
+`setup` takes no key options. It generates Ed25519 client and host keys under
+`<home>/boxes/<box-id>/ssh/`, with a 0700 directory and 0600 private files.
+The client private key stays on the host. Subsequent setup reuses both identities;
+corrupt, incomplete, or unsafe key files cause an error instead of replacement.
+Setup calls the existing complete configuration API, enabling `box` on
+`0.0.0.0:22` with the generated client public key and no CA. It replaces any
+previous configuration, including a host key supplied through `configure`.
+Login `box` still executes as the container's configured user.
+
+On success, setup prints an English connection summary, the private-key path,
+login and guest address, followed by a complete command to copy and execute:
+
+```bash
+ssh -o 'IdentityFile="/boxlite-home/boxes/BOX_ID/ssh/client_key"' -o IdentitiesOnly=yes \
+  -o 'ProxyCommand=/usr/local/bin/boxlite --home /boxlite-home ssh proxy BOX_ID' box@BOX_ID
+```
+
+The actual command includes absolute paths, the selected context, and the box ID.
+It preserves normal SSH host-key verification. `ssh-keygen` must be installed.
+The local-only `proxy` command connects stdin/stdout to the enabled guest SSH
+listener without opening a local port. Diagnostics use stderr. It requires a
+running box and enabled SSH; it never starts the box or enables SSH.
+
+Client credentials belong to this host's box directory: deleting the box removes
+them, and clone/export does not transfer the CLI-managed client key. Failed guest
+configuration retains generated keys for retry. Repeated setup disconnects existing
+clients, as complete configuration does.
+
+For custom credentials, keep using `boxlite ssh configure dev --ssh-config ssh.json`
+or `boxlite ssh configure dev --host-key host_key --login alice --authorized-key alice.pub`.
+The existing listener-based workflow remains available:
+
+```bash
+boxlite ssh forward dev
+boxlite ssh disable dev
+boxlite ssh enable dev
+```
+
+Stop the foreground proxy/forward process before issuing another local CLI command
+against the same home: the runtime holds an exclusive home lock for the connection.
 
 - `configure` replaces the whole configuration once, which disconnects
   every SSH client, including those connected through another tunnel.
@@ -269,8 +288,6 @@ intent and rejects new mutations. The existing public operations remain:
 it off while retaining credentials, and `status()` observes the live listener.
 The local runtime's `BoxImpl` translates complete configuration to
 `Control(enable=true, config=...)`, enable/disable to `Control(enable=true/false)`
-on an existing VM, and status to an empty `Control()` request. Setup uses the
-separate internal `Setup` RPC so older guests return `Unimplemented` explicitly.
-The guest holds its existing control lock while loading, reusing/generating the
-host key, validating, saving, and activating setup. The portal forwards each RPC
-once. Other partial updates remain internal. REST retains its POST, DELETE and GET routes.
+on an existing VM, and status to an empty `Control()` request. The CLI's setup
+builds a complete configuration and uses the same configure operation. No setup API or RPC is exposed. The portal forwards each RPC once.
+Other partial updates remain internal. REST retains its POST, DELETE and GET routes.

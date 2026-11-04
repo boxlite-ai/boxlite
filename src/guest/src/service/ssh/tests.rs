@@ -1,7 +1,5 @@
 use super::*;
 
-mod setup;
-
 pub(super) struct ActivationGate {
     pub(super) entered: tokio::sync::Notify,
     pub(super) release: tokio::sync::Semaphore,
@@ -889,10 +887,7 @@ async fn ssh_failure_logs_and_status_redact_all_configuration_inputs() {
         let status = fixture
             .guest
             .ssh_manager
-            .control(SshUpdate::Control(SshControlRequest {
-                enable: Some(true),
-                config: Some(ssh),
-            }))
+            .control(Some(true), Some(ssh))
             .with_subscriber(subscriber)
             .await;
         assert_eq!(

@@ -27,17 +27,4 @@ impl SshInterface {
             .map_err(Box::new)?
             .into_inner())
     }
-
-    /// A separate method makes older guests reject quick setup explicitly.
-    pub(crate) async fn setup(
-        &mut self,
-        request: proto::SshSetupRequest,
-    ) -> Result<proto::SshControlResponse, Box<tonic::Status>> {
-        Ok(self
-            .client
-            .setup(request)
-            .await
-            .map_err(Box::new)?
-            .into_inner())
-    }
 }

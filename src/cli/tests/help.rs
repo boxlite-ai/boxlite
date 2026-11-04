@@ -120,6 +120,7 @@ fn command_help_ssh_only_advertises_separate_operations() {
         for name in [
             "configure",
             "setup",
+            "proxy",
             "status",
             "enable",
             "disable",

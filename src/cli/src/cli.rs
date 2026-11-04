@@ -257,6 +257,11 @@ const DOMAIN_SCOPES: &[CommandScope] = &[
 ];
 const SSH_SCOPES: &[CommandScope] = &[
     CommandScope {
+        name: "proxy",
+        globals: BOX_GLOBALS,
+        children: &[],
+    },
+    CommandScope {
         name: "setup",
         globals: BOX_GLOBALS,
         children: &[],

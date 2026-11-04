@@ -118,6 +118,7 @@ fn completion_ssh_only_contains_separate_operations(#[case] shell: &str, #[case]
     for name in [
         "configure",
         "setup",
+        "proxy",
         "status",
         "enable",
         "disable",

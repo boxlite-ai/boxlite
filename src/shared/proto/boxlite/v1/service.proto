@@ -52,8 +52,6 @@ service Ssh {
   // Apply supplied fields; absent fields retain their current desired values.
   // With neither field supplied, query live status without initialization or writes.
   rpc Control(SshControlRequest) returns (SshControlResponse);
-  // Configure and enable box@0.0.0.0:22, retaining or generating the host key.
-  rpc Setup(SshSetupRequest) returns (SshControlResponse);
 }
 
 // Command execution
@@ -226,10 +224,6 @@ message SshControlRequest {
   SshConfig config = 4;
   // Absent retains the saved switch; false stops SSH without clearing credentials.
   optional bool enable = 5;
-}
-message SshSetupRequest {
-  // Exactly one OpenSSH public key; no certificates or authorized_keys options.
-  string client_public_key = 1;
 }
 message SshControlResponse { SshStatus status = 1; }
 message SshStatus {

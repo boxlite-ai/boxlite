@@ -64,14 +64,6 @@ pub use generated::ssh_server::{Ssh, SshServer};
 // All generated types
 pub use generated::*;
 
-impl std::fmt::Debug for generated::SshSetupRequest {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("SshSetupRequest")
-            .field("client_public_key", &"[REDACTED]")
-            .finish()
-    }
-}
-
 impl std::fmt::Debug for generated::SshConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SshConfig")

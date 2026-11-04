@@ -129,7 +129,8 @@ fn subcommands_are_named_for_their_effect() {
             "status",
             "enable",
             "disable",
-            "forward"
+            "forward",
+            "proxy"
         ]
     );
     assert!(matches!(
@@ -139,42 +140,13 @@ fn subcommands_are_named_for_their_effect() {
 }
 
 #[test]
-fn setup_requires_exactly_one_public_key_file() {
-    let SshCommand::Setup(args) =
-        parse(&["setup", "dev", "--authorized-key", "client.pub"]).unwrap()
-    else {
-        panic!("expected setup");
-    };
-    assert_eq!(args.target, "dev");
-    assert_eq!(args.authorized_key, Path::new("client.pub"));
-    for args in [
-        vec!["setup", "dev"],
-        vec![
-            "setup",
-            "dev",
-            "--authorized-key",
-            "a.pub",
-            "--authorized-key",
-            "b.pub",
-        ],
-        vec![
-            "setup",
-            "dev",
-            "--authorized-key",
-            "a.pub",
-            "--login",
-            "root",
-        ],
-        vec![
-            "setup",
-            "dev",
-            "--authorized-key",
-            "a.pub",
-            "--host-key",
-            "host",
-        ],
-    ] {
-        assert!(parse(&args).is_err(), "{args:?}");
+fn setup_manages_keys_and_proxy_accepts_only_a_box() {
+    for name in ["setup", "proxy"] {
+        assert!(parse(&[name, "dev"]).is_ok());
+        assert!(parse(&[name]).is_err());
+        for flag in ["--authorized-key", "--host-key", "--login", "--listen"] {
+            assert!(parse(&[name, "dev", flag, "value"]).is_err());
+        }
     }
     assert!(matches!(
         parse(&["enable", "dev"]),
@@ -512,6 +484,16 @@ async fn configure_posts_the_complete_file_configuration_once() {
     );
     let sent: serde_json::Value = serde_json::from_str(&server.bodies()[0]).unwrap();
     assert_eq!(sent, config);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn setup_and_proxy_reject_remote_without_requests() {
+    let server = Server::start(vec![]).await;
+    for operation in ["setup", "proxy"] {
+        let error = server.run(&[operation, "box-1"]).await.unwrap_err();
+        assert!(error.to_string().contains("local runtime"));
+    }
+    assert!(server.requests().is_empty());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

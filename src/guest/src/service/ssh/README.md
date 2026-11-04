@@ -98,10 +98,6 @@ channel execution, forwarding, and shutdown through their completion points.
   `boxlite_shared::SshClient`.
 - `SshConfig` supplies the listen address, host private key, and named accounts
   with authorized keys and/or a CA plus certificate principal.
-- The local Rust/CLI `setup` operation uses a separate `Setup` RPC. Under the same
-  control lock, it loads saved state, reuses or generates the host key, and enables
-  `box` on `0.0.0.0:22` with one public key. Existing complete configuration remains
-  explicit. Setup cannot repair unreadable saved state by silently rotating identity.
 
 See [Guest SSH control](../../../../../docs/guides/ssh.md) for setup and
 [the RPC schema](../../../../shared/proto/boxlite/v1/service.proto#L51) for fields.
