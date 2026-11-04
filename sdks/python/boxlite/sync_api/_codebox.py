@@ -68,13 +68,15 @@ class SyncCodeBox(SyncSimpleBox):
             **kwargs,
         )
 
-    def run(self, code: str, timeout: int | None = None) -> str:
+    def run(self, code: str, timeout: float | None = None) -> str:
         """
         Execute Python code synchronously.
 
         Args:
             code: Python code to execute
-            timeout: Execution timeout in seconds (not yet implemented)
+            timeout: Execution timeout in seconds (default: no timeout). When it
+                expires the process is terminated and the stdout written so far is
+                returned.
 
         Returns:
             Execution stdout as a string. Use exec() directly if you need
@@ -91,7 +93,7 @@ class SyncCodeBox(SyncSimpleBox):
                 print(f"Python {sys.version}")
                 ''')
         """
-        result = self.exec("/usr/local/bin/python", "-c", code)
+        result = self.exec("/usr/local/bin/python", "-c", code, timeout=timeout)
         return result.stdout
 
     def install_package(self, package: str) -> str:
