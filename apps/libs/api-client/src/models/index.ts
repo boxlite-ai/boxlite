@@ -130,6 +130,7 @@ export * from './update-organization-member-access';
 export * from './update-organization-name';
 export * from './update-organization-role';
 export * from './update-region';
+export * from './update-registry-credential';
 export * from './usage-concurrency-point-dto';
 export * from './usage-concurrency-series-dto';
 export * from './user';

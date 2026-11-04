@@ -3,13 +3,17 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { ConflictException } from '@nestjs/common'
+import { ConflictException, NotFoundException } from '@nestjs/common'
 import { randomUUID } from 'node:crypto'
+import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { DataSource, EntityManager } from 'typeorm'
 import { IsolationLevel } from 'typeorm/driver/types/IsolationLevel'
 import { Box } from '../../box/entities/box.entity'
 import { BoxLastActivity } from '../../box/entities/box-last-activity.entity'
 import { BoxMigration } from '../../box/entities/box-migration.entity'
+import { BoxDesiredState } from '../../box/enums/box-desired-state.enum'
 import { BoxRepository } from '../../box/repositories/box.repository'
 import { BoxService } from '../../box/services/box.service'
 import { Context } from '../../common/context/context'
@@ -22,6 +26,7 @@ import { Organization } from '../../organization/entities/organization.entity'
 import { RegistryCredential } from '../entities/registry-credential.entity'
 import { RegistriesService } from './registries.service'
 import { RegistryCredentialService } from './registry-credential.service'
+import { createSecretStore } from '../stores/secret.store'
 
 const describeIfDatabase = process.env.DB_HOST ? describe : describe.skip
 const databaseName = `credential_delete_${process.pid}_${randomUUID().replaceAll('-', '')}`
@@ -60,7 +65,7 @@ async function reachedBeforeCompletion(gate: ReturnType<typeof barrier>, task: P
   ])
 }
 
-describeIfDatabase('Registry credential deletion concurrency (integration, real Postgres)', () => {
+describeIfDatabase('Registry credential mutations (integration, real Postgres)', () => {
   let creatorDb: DataSource
   let deleterDb: DataSource
   let ownsDatabase = false
@@ -158,6 +163,151 @@ describeIfDatabase('Registry credential deletion concurrency (integration, real 
       { maxCreatedBoxes },
     )
   }
+
+  const replacement = { username: 'replacement-bot', password: 'replacement-token' }
+
+  it.each([BoxDesiredState.STARTED, BoxDesiredState.STOPPED])(
+    'rotates a credential without changing its %s Box',
+    async (desiredState) => {
+      const created = await create()
+      await creatorDb.getRepository(Box).update({ id: created.id }, { desiredState })
+      const before = await creatorDb.getRepository(Box).findOneByOrFail({ id: created.id })
+      store.put.mockResolvedValue('replacement-version')
+
+      const updated = await registries.update(organization.id, credential.id, replacement)
+      const stored = await creatorDb.getRepository(RegistryCredential).findOneByOrFail({ id: credential.id })
+      expect(stored).toMatchObject({
+        id: credential.id,
+        registryHost: credential.registryHost,
+        repositoryPrefix: credential.repositoryPrefix,
+        createdBy: credential.createdBy,
+        createdAt: credential.createdAt,
+        username: replacement.username,
+        secretVersion: 'replacement-version',
+      })
+      expect(updated.username).toBe(replacement.username)
+      expect(await creatorDb.getRepository(Box).findOneByOrFail({ id: created.id })).toEqual(before)
+      const resolver = new RegistryCredentialService(
+        creatorDb.getRepository(RegistryCredential),
+        creatorDb.getRepository(Box),
+      )
+      expect(await resolver.findForRepository(organization.id, 'ghcr.io', 'acme/app')).toMatchObject({
+        username: replacement.username,
+        secretVersion: 'replacement-version',
+      })
+      expect(store.destroy).toHaveBeenCalledWith(credential.secretVersion)
+    },
+  )
+
+  it('refuses a different organization before writing a replacement', async () => {
+    store.put.mockClear()
+    await expect(registries.update(randomUUID(), credential.id, replacement)).rejects.toBeInstanceOf(NotFoundException)
+    expect(store.put).not.toHaveBeenCalled()
+    expect(store.destroy).not.toHaveBeenCalled()
+    expect(await creatorDb.getRepository(RegistryCredential).findOneByOrFail({ id: credential.id })).toEqual(credential)
+  })
+
+  it.each(['update', 'delete'] as const)(
+    'refuses concurrent %s while rotation owns the credential',
+    async (operation) => {
+      const gate = barrier()
+      store.put.mockImplementation(async () => {
+        await gate.pause()
+        return 'replacement-version'
+      })
+      const updating = outcome(registries.update(organization.id, credential.id, replacement))
+      try {
+        await reachedBeforeCompletion(gate, updating)
+        const competing = new RegistriesService(creatorDb.getRepository(RegistryCredential), store)
+        const request =
+          operation === 'update'
+            ? competing.update(organization.id, credential.id, replacement)
+            : competing.delete(organization.id, credential.id)
+        await expect(request).rejects.toBeInstanceOf(ConflictException)
+        expect(store.destroy).not.toHaveBeenCalled()
+      } finally {
+        gate.release()
+        await updating
+      }
+      expect((await updating).error).toBeUndefined()
+      expect(await creatorDb.getRepository(RegistryCredential).findOneByOrFail({ id: credential.id })).toMatchObject({
+        secretVersion: 'replacement-version',
+      })
+    },
+  )
+
+  it('refuses rotation while deletion owns the credential', async () => {
+    const gate = barrier()
+    store.destroy.mockImplementation(gate.pause)
+    const deleting = outcome(registries.delete(organization.id, credential.id))
+    store.put.mockClear()
+    try {
+      await reachedBeforeCompletion(gate, deleting)
+      const competing = new RegistriesService(creatorDb.getRepository(RegistryCredential), store)
+      await expect(competing.update(organization.id, credential.id, replacement)).rejects.toBeInstanceOf(
+        ConflictException,
+      )
+      expect(store.put).not.toHaveBeenCalled()
+    } finally {
+      gate.release()
+      await deleting
+    }
+    expect((await deleting).error).toBeUndefined()
+  })
+
+  it('rolls back the login and cleans only the replacement when updating fails before COMMIT', async () => {
+    const subscriber = {
+      listenTo: () => RegistryCredential,
+      afterUpdate: () => {
+        throw new Error('Pre-COMMIT update failure')
+      },
+    }
+    deleterDb.subscribers.push(subscriber)
+    store.put.mockResolvedValue('replacement-version')
+    try {
+      await expect(registries.update(organization.id, credential.id, replacement)).rejects.toThrow(
+        'Pre-COMMIT update failure',
+      )
+      expect(await creatorDb.getRepository(RegistryCredential).findOneByOrFail({ id: credential.id })).toEqual(
+        credential,
+      )
+      expect(store.destroy.mock.calls).toEqual([['replacement-version']])
+    } finally {
+      deleterDb.subscribers.splice(deleterDb.subscribers.indexOf(subscriber), 1)
+    }
+  })
+
+  it('retains both real secrets if the database commits but its acknowledgment is lost', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'registry-rotation-'))
+    const fileStore = createSecretStore({
+      get: (key: string) => ({ 'registrySecrets.store': 'file', 'registrySecrets.directory': directory })[key],
+    } as never)
+    const service = new RegistriesService(deleterDb.getRepository(RegistryCredential), fileStore)
+    const realCredential = await service.create(organization.id, 'test-user', {
+      registryHost: 'quay.io',
+      username: 'old-bot',
+      password: 'old-token',
+    })
+    const transaction = deleterDb.manager.transaction.bind(deleterDb.manager)
+    const spy = jest.spyOn(deleterDb.manager, 'transaction').mockImplementation(async (...args: unknown[]) => {
+      const callback = args[args.length - 1] as (manager: EntityManager) => Promise<unknown>
+      await transaction(args[0] as IsolationLevel, callback)
+      throw new Error('COMMIT acknowledgment lost')
+    })
+    try {
+      await expect(service.update(organization.id, realCredential.id, replacement)).rejects.toThrow(
+        'COMMIT acknowledgment lost',
+      )
+      const stored = await creatorDb.getRepository(RegistryCredential).findOneByOrFail({ id: realCredential.id })
+      expect(stored.username).toBe(replacement.username)
+      expect(stored.secretVersion).not.toBe(realCredential.secretVersion)
+      expect(await readFile(join(directory, stored.secretVersion), 'utf8')).toBe(replacement.password)
+      expect(await readFile(join(directory, realCredential.secretVersion), 'utf8')).toBe('old-token')
+    } finally {
+      spy.mockRestore()
+      await rm(directory, { recursive: true, force: true })
+    }
+  })
 
   it('reads credential candidates once while preserving longest-prefix dependencies', async () => {
     await registries.create(organization.id, 'test-user', {

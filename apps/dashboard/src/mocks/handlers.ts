@@ -303,7 +303,7 @@ export const handlers = [
       return HttpResponse.json(
         {
           statusCode: 409,
-          message: `A credential for ${body.registryHost}/${repositoryPrefix} already exists; remove it before adding another`,
+          message: `A credential for ${body.registryHost}/${repositoryPrefix} already exists; update it to replace the login`,
           error: 'Conflict',
         },
         { status: 409 },
@@ -320,6 +320,19 @@ export const handlers = [
     }
     MOCK_REGISTRY_CREDENTIALS.unshift(created)
     return HttpResponse.json(created, { status: 201 })
+  }),
+  http.put(`${API_URL}/images/registries/:id`, async ({ params, request }) => {
+    const credential = MOCK_REGISTRY_CREDENTIALS.find((item) => item.id === params.id)
+    if (!credential) return new HttpResponse(null, { status: 404 })
+    const body = (await request.json()) as { username: string; password: string }
+    if (!body.username || !body.password || Object.keys(body).some((key) => !['username', 'password'].includes(key))) {
+      return HttpResponse.json(
+        { message: 'A username and password are required; scope cannot change' },
+        { status: 400 },
+      )
+    }
+    credential.username = body.username
+    return HttpResponse.json(credential)
   }),
   http.delete(`${API_URL}/images/registries/:id`, ({ params }) => {
     const index = MOCK_REGISTRY_CREDENTIALS.findIndex((c) => c.id === params.id)

@@ -7,6 +7,7 @@ All URIs are relative to *http://localhost:3000*
 |[**createRegistryCredential**](#createregistrycredential) | **POST** /images/registries | Add a registry credential|
 |[**deleteRegistryCredential**](#deleteregistrycredential) | **DELETE** /images/registries/{id} | Remove a registry credential|
 |[**listRegistryCredentials**](#listregistrycredentials) | **GET** /images/registries | List registry credentials|
+|[**updateRegistryCredential**](#updateregistrycredential) | **PUT** /images/registries/{id} | Update a registry credential|
 
 # **createRegistryCredential**
 > RegistryCredential createRegistryCredential(createRegistryCredential)
@@ -167,6 +168,67 @@ const { status, data } = await apiInstance.listRegistryCredentials(
 | Status code | Description | Response headers |
 |-------------|-------------|------------------|
 |**200** |  |  -  |
+
+[[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
+
+# **updateRegistryCredential**
+> RegistryCredential updateRegistryCredential(updateRegistryCredential)
+
+Replace the username and password without changing its scope or destroying dependent Boxes.
+
+### Example
+
+```typescript
+import {
+    RegistriesApi,
+    Configuration,
+    UpdateRegistryCredential
+} from './api';
+
+const configuration = new Configuration();
+const apiInstance = new RegistriesApi(configuration);
+
+let id: string; //Credential ID
+let updateRegistryCredential: UpdateRegistryCredential; //Replacement username and password
+let xBoxLiteOrganizationID: string; //Use with JWT to specify the organization ID (optional) (default to undefined)
+
+const { status, data } = await apiInstance.updateRegistryCredential(
+    id,
+    updateRegistryCredential,
+    xBoxLiteOrganizationID
+);
+```
+
+### Parameters
+
+|Name | Type | Description  | Notes|
+|------------- | ------------- | ------------- | -------------|
+| **updateRegistryCredential** | **UpdateRegistryCredential**| Replacement username and password | |
+| **id** | [**string**] | Credential ID | |
+| **xBoxLiteOrganizationID** | [**string**] | Use with JWT to specify the organization ID | (optional) defaults to undefined|
+
+
+### Return type
+
+**RegistryCredential**
+
+### Authorization
+
+[bearer](../README.md#bearer), [oauth2](../README.md#oauth2)
+
+### HTTP request headers
+
+ - **Content-Type**: application/json
+ - **Accept**: application/json
+
+
+### HTTP response details
+| Status code | Description | Response headers |
+|-------------|-------------|------------------|
+|**200** |  |  -  |
+|**404** | No such credential in this organization |  -  |
+|**409** | Another request is using the credential; retry the update |  -  |
+|**501** | Private registries are not enabled in this deployment |  -  |
 
 [[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
 

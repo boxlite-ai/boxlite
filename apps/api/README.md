@@ -15,6 +15,39 @@ Image-preparation timeouts retain `progress` and `Retry-After`. The ID remains
 available even if the best-effort progress lookup fails. HTTP status, message,
 and synchronous SDK behavior are unchanged; a timeout is not a running Box.
 
+## Registry credential rotation
+
+`PUT /api/images/registries/{id}` replaces a stored username and password/token with `write:registries` permission.
+Both fields are required, with the same validation limits as creation; other fields are refused.
+The credential ID, registry host, repository prefix, creator and creation time remain unchanged, even while Boxes depend on it.
+
+Deletion still refuses credentials selected by non-destroyed Boxes.
+
+Rotation writes a fresh secret, updates the login and secret pointer under the existing PostgreSQL credential lock, then retires the old secret after commit.
+This reuses Secret Manager and exclusive local files without a migration or new IAM permissions.
+Lock contention returns 409 for retry; another organization's credential returns 404 before any secret write.
+
+Pre-commit update failures clean up the replacement and roll back the login.
+An uncertain COMMIT outcome retains both secrets and emits an `update outcome is unknown` warning; reconcile the stored pointer before retiring either version.
+A failed old-secret retirement emits `Could not destroy unused registry secret`; the committed update remains successful and cleanup needs retrying.
+
+The warning identifies a version, never its password; the API still cannot read passwords or validate them upstream.
+
+Before reusing a private bearer, each proxy queries the current credential metadata and compares its secret version with the cached token's version.
+After update commits, newly started pulls reject old-version bearers even if old-secret retirement fails.
+Secret payloads are read only on authentication challenges; unchanged credentials still reuse their bearer token.
+
+Each private manifest/blob request adds one control-plane lookup; lookup failures reject the pull even when a bearer is warm.
+Requests whose lookup preceded update may finish; a secret read racing retirement may need retrying.
+The upstream token itself is not revoked, and anonymous lookup caching keeps its existing TTL.
+
+Deploy the API and proxy before the dashboard; older proxies retain the prior five-minute cache delay until upgraded.
+This operation is additive to the control-plane API and does not add portable SDK methods.
+
+Run `make test:apps:api TEST_FILES='registry/'`; set the normal `DB_*` variables to include the real-PostgreSQL mutation tests.
+These cover live/stopped Boxes, organization isolation, rollback, concurrent mutations and lost COMMIT acknowledgment with real secret files.
+Design: [registry credential updates](https://github.com/boxlite-ai/boxlite/issues/2304).
+
 ## Account deletion tests
 
 `src/user/user-deletion-memberships.spec.ts` exercises account deletion through the real services

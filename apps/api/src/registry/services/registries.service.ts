@@ -17,7 +17,7 @@ import { EntityManager, Repository } from 'typeorm'
 import { Box } from '../../box/entities/box.entity'
 import { BoxDesiredState } from '../../box/enums/box-desired-state.enum'
 import { parseImageRef, upstreamRefOf } from '../../image/utils/image-ref.util'
-import { CreateRegistryCredentialDto } from '../dto/registry-credential.dto'
+import { CreateRegistryCredentialDto, UpdateRegistryCredentialDto } from '../dto/registry-credential.dto'
 import { RegistryCredential } from '../entities/registry-credential.entity'
 import { RegistryCredentialKind } from '../enums/registry-credential-kind.enum'
 import { SecretStore } from '../stores/secret.store'
@@ -32,7 +32,7 @@ const PG_UNIQUE_VIOLATION = '23505'
 /**
  * An organization's registry logins, as its members manage them.
  *
- * The password is in this process for the length of one create: from the
+ * The password is in this process for one create or update: from the
  * request body to the secret store, never onto an entity, a log line or an
  * answer. What comes back, and what can be listed, is the row, which has no
  * password to leave out.
@@ -83,13 +83,62 @@ export class RegistriesService {
         // The code names the conflict for an SDK, which would otherwise read a
         // bare 409 as a resource in the wrong state, as a delete's refusal is.
         throw new ConflictException({
-          message: `A credential for ${request.registryHost}/${repositoryPrefix} already exists; remove it before adding another`,
+          message: `A credential for ${request.registryHost}/${repositoryPrefix} already exists; update it to replace the login`,
           code: 'already_exists',
         })
       }
       throw error
     }
     return this.credentials.findOneByOrFail({ id })
+  }
+
+  async update(organizationId: string, id: string, request: UpdateRegistryCredentialDto): Promise<RegistryCredential> {
+    const store = this.enabledStore()
+    let replacementVersion: string | undefined
+    let previousVersion: string | undefined
+    let result: { credential: RegistryCredential; previousVersion: string }
+    try {
+      result = await this.credentials.manager.transaction('READ COMMITTED', async (manager) => {
+        const credential = await manager.findOne(RegistryCredential, {
+          where: { id, organizationId },
+          lock: { mode: 'pessimistic_write', onLocked: 'nowait' },
+        })
+        if (!credential) throw new NotFoundException(`Registry credential ${id} not found`)
+        previousVersion = credential.secretVersion
+        // Fresh storage names work with both Secret Manager and exclusive local files.
+        replacementVersion = await store.put(randomUUID(), request.password)
+        try {
+          await manager.update(
+            RegistryCredential,
+            { id, organizationId },
+            { username: request.username, secretVersion: replacementVersion },
+          )
+        } catch (error) {
+          // The callback has not returned, so TypeORM cannot have attempted COMMIT.
+          await this.destroyQuietly(replacementVersion)
+          replacementVersion = undefined
+          throw error
+        }
+        return {
+          credential: { ...credential, username: request.username, secretVersion: replacementVersion },
+          previousVersion: credential.secretVersion,
+        }
+      })
+    } catch (error) {
+      if (replacementVersion) {
+        // A rejected COMMIT can have succeeded remotely. Preserve both versions
+        // until the stored pointer can be reconciled; never destroy a live login.
+        this.logger.warn(
+          `Registry credential ${id} update outcome is unknown; reconcile secrets ${previousVersion} and ${replacementVersion} before cleanup`,
+        )
+      }
+      if ((error as { code?: string }).code === '55P03') {
+        throw new ConflictException(`Registry credential ${id} is in use by another request; retry update`)
+      }
+      throw error
+    }
+    await this.destroyQuietly(result.previousVersion)
+    return result.credential
   }
 
   /**
@@ -183,12 +232,8 @@ export class RegistriesService {
   private async destroyQuietly(secretVersion: string): Promise<void> {
     try {
       await this.enabledStore().destroy(secretVersion)
-    } catch (error) {
-      this.logger.warn(
-        `Could not destroy ${secretVersion} after its credential failed to save; the proxy can still read it: ${
-          (error as Error)?.message ?? String(error)
-        }`,
-      )
+    } catch {
+      this.logger.warn(`Could not destroy unused registry secret ${secretVersion}; retry cleanup`)
     }
   }
 }

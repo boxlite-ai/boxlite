@@ -252,13 +252,20 @@ omitted from those responses.
 </details>
 
 <details>
-<summary><b>Registry credentials</b> · 3 routes</summary>
+<summary><b>Registry credentials</b> · 4 routes</summary>
 
 | Method   | Path                   | What it does                                                                          |
 | -------- | ---------------------- | ------------------------------------------------------------------------------------- |
 | `GET`    | `/api/images/registries`      | Lists the organization's private registry logins, without passwords.                  |
 | `POST`   | `/api/images/registries`      | Adds a login; the password is stored where the API cannot read it and never returned. |
+| `PUT`    | `/api/images/registries/{id}` | Replaces username/password while preserving scope and dependent Boxes; requires `write:registries`. |
 | `DELETE` | `/api/images/registries/{id}` | Removes a login, unless a box still pulls through it (409 lists the boxes).           |
+
+Update requires both `username` and `password` (or token); host/prefix and other fields are rejected.
+The response is the same password-free credential as creation; missing credentials in the authenticated organization return 404.
+Concurrent mutations can return 409; retry after the other request finishes.
+
+See [rotation ordering and recovery](api/README.md#registry-credential-rotation) for secret retirement and cache limits.
 
 </details>
 

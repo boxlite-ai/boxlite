@@ -283,8 +283,7 @@ func TestOneRunnersTokenIsNotAnothersToUse(t *testing.T) {
 	upstream := newStubUpstream(t)
 	router, _, plane, _ := privateProxy(t, upstream)
 
-	// acme's runner looks the login up and buys a token with it; both are now
-	// warm, and the stranger's pull comes while they are.
+	// Acme's runner buys a token; the stranger's pull arrives while it is warm.
 	if response := pull(router, http.MethodGet, privatePath, runnerKey); response.Code != http.StatusOK {
 		t.Fatalf("GET %s = %d: %s", privatePath, response.Code, response.Body.String())
 	}
@@ -341,15 +340,12 @@ func TestAPasswordThatCannotBeReadFailsThePullAsUnavailable(t *testing.T) {
 	}
 }
 
-func TestARotatedLoginIsPresentedBeforeTheCachedAnswerExpires(t *testing.T) {
+func TestARotatedLoginIsPresentedAfterBearerExpiry(t *testing.T) {
 	upstream := newStubUpstream(t)
 	router, proxy, plane, moment := privateProxy(t, upstream)
 	pull(router, http.MethodGet, privatePath, runnerKey)
 
-	// There is no update, so rotating a password is a delete and an add: the
-	// old version is destroyed and the control plane names a new one, while
-	// this proxy still holds the answer that named the old. The token the old
-	// password bought has lapsed too, so the next pull exchanges again.
+	// After the bearer expires, authentication must use the committed replacement.
 	const rotatedVersion, rotatedPassword = "registry-credential-acme-2", "ghp_rotated-not-a-real-token"
 	plane.logins.Store(acmeOrg+" ghcr.io acme/app", rotatedVersion)
 	proxy.credentials.secrets = passwords{rotatedVersion: rotatedPassword}
@@ -367,5 +363,55 @@ func TestARotatedLoginIsPresentedBeforeTheCachedAnswerExpires(t *testing.T) {
 	}
 	if lookups := plane.lookups.Load(); lookups != 2 {
 		t.Errorf("the control plane was asked %d times, want once more after the old password went", lookups)
+	}
+}
+
+func TestRegistryRotationInvalidatesWarmTokensAcrossProxies(t *testing.T) {
+	upstream := newStubUpstream(t)
+	first, firstProxy, plane, _ := privateProxy(t, upstream)
+	second, secondProxy := testProxy(t, upstream, plane, "ghcr.io")
+	secondProxy.credentials = newCredentialFinder(plane.client(), passwords{acmeVersion: acmePassword}, time.Minute)
+	for _, router := range []*gin.Engine{first, second} {
+		if response := pull(router, http.MethodGet, privatePath, runnerKey); response.Code != http.StatusOK {
+			t.Fatalf("warm-up pull = %d", response.Code)
+		}
+	}
+	if got := len(tokenRequests(upstream)); got != 2 {
+		t.Fatalf("warm-up exchanges = %d, want one per proxy", got)
+	}
+
+	const version, password = "registry-credential-replacement", "replacement-test-token"
+	plane.logins.Store(acmeOrg+" ghcr.io acme/app", version)
+	// Retirement can fail after update commits. Both secrets remain readable,
+	// and neither proxy's bearer TTL has advanced.
+	for _, proxy := range []*registryProxy{firstProxy, secondProxy} {
+		proxy.credentials.secrets = passwords{acmeVersion: acmePassword, version: password}
+	}
+	for index, router := range []*gin.Engine{first, second} {
+		response := pull(router, http.MethodGet, privatePath, runnerKey)
+		if response.Code != http.StatusOK {
+			t.Fatalf("proxy %d after rotation = %d: %s", index, response.Code, response.Body.String())
+		}
+		exchanges := tokenRequests(upstream)
+		if len(exchanges) != 3+index {
+			t.Fatalf("proxy %d reused a pre-rotation bearer: exchanges = %d, want %d", index, len(exchanges), 3+index)
+		}
+		want := "Basic " + base64.StdEncoding.EncodeToString([]byte("acme-bot:"+password))
+		if exchanges[len(exchanges)-1].authorization != want {
+			t.Fatal("replacement exchange did not use the updated login")
+		}
+	}
+}
+
+func TestWarmPrivateTokenFailsClosedWhenVersionCannotBeChecked(t *testing.T) {
+	upstream := newStubUpstream(t)
+	router, proxy, plane, _ := privateProxy(t, upstream)
+	if response := pull(router, http.MethodGet, privatePath, runnerKey); response.Code != http.StatusOK {
+		t.Fatalf("warm-up pull = %d", response.Code)
+	}
+	proxy.credentials.api = plane.unreachable()
+	response := pull(router, http.MethodGet, privatePath, runnerKey)
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("unchecked warm bearer served a pull: status = %d, want 503", response.Code)
 	}
 }

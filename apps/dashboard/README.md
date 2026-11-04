@@ -381,13 +381,22 @@ registries are off there and offers nothing to connect.
 
 ## Registry login tests
 
+In Images → Registries, **Update** replaces a credential's username and password/token without destroying dependent Boxes.
+It requires registry write permission, preloads the username and leaves the masked secret empty.
+The registry and repository prefix stay fixed; enter a replacement secret and choose **Save changes**.
+
+Closing or completing the form clears its secret; failed submissions preserve the form for retry.
+
+New private pulls check the current credential version and stop reusing old-version tokens after update commits.
+Pulls already in progress may finish; the upstream token itself is not revoked.
+
 Registry query and mutation tests use a real QueryClient with mocked API calls.
 They verify organization isolation, refusal before sending an unscoped request,
 and invalidation after successful changes. Page tests cover confirmation and
 failed submissions, and API client tests check that removal refusals retain
 their message through the shared interceptor. Panel tests cover the masked
 secret and its cleanup on close, prefix completion, the `?connect=` link,
-duplicates, and refusals named by box.
+duplicates, updates with fixed scope, write permissions, and refusals named by box.
 
 ## Console API keys include member access
 

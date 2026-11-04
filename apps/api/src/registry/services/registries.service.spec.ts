@@ -46,6 +46,7 @@ function build({
   const manager = {
     findOne: jest.fn(async () => credentials.findOneBy()),
     delete: jest.fn(async () => credentials.delete()),
+    update: jest.fn(async () => calls.push('update')),
     getRepository: jest.fn((entity) =>
       entity === RegistryCredential ? credentials : { createQueryBuilder: () => builder },
     ),
@@ -58,7 +59,7 @@ function build({
     credentials as unknown as Repository<RegistryCredential>,
     store as unknown as SecretStore,
   )
-  return { service, credentials, store, builder, calls }
+  return { service, credentials, store, builder, calls, manager }
 }
 
 describe('RegistriesService', () => {
@@ -124,6 +125,89 @@ describe('RegistriesService', () => {
       await expect(refused).rejects.toBeInstanceOf(NotImplementedException)
       // Coded, so an SDK reads it as unsupported rather than a server fault.
       await expect(refused).rejects.toMatchObject({ response: { code: 'unsupported' } })
+      expect(store.put).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('update', () => {
+    const replacement = { username: 'new-bot', password: 'new-token' }
+
+    it('updates only the login, then retires the old secret after commit', async () => {
+      const { service, credentials, store, manager, calls } = build()
+      store.put.mockResolvedValue('version-2')
+      credentials.manager.transaction = jest.fn(async (_isolation, callback) => {
+        const result = await callback(manager)
+        calls.push('commit')
+        return result
+      }) as never
+
+      const updated = await service.update(ORG, 'credential-1', replacement)
+
+      expect(manager.findOne).toHaveBeenCalledWith(RegistryCredential, {
+        where: { id: 'credential-1', organizationId: ORG },
+        lock: { mode: 'pessimistic_write', onLocked: 'nowait' },
+      })
+      expect(store.put).toHaveBeenCalledWith(expect.any(String), replacement.password)
+      expect((store.put.mock.calls[0] as unknown as [string])[0]).not.toBe('credential-1')
+      expect(manager.update).toHaveBeenCalledWith(
+        RegistryCredential,
+        { id: 'credential-1', organizationId: ORG },
+        {
+          username: 'new-bot',
+          secretVersion: 'version-2',
+        },
+      )
+      expect(updated).toMatchObject({
+        id: 'credential-1',
+        registryHost: 'ghcr.io',
+        repositoryPrefix: 'acme/',
+        username: 'new-bot',
+      })
+      expect(calls).toEqual(['update', 'commit', 'destroy'])
+      expect(store.destroy).toHaveBeenCalledWith('version-1')
+    })
+
+    it('does not touch either secret when writing the replacement fails', async () => {
+      const { service, store, manager } = build()
+      store.put.mockRejectedValue(new Error('Secret store unavailable'))
+      await expect(service.update(ORG, 'credential-1', replacement)).rejects.toThrow('Secret store unavailable')
+      expect(manager.update).not.toHaveBeenCalled()
+      expect(store.destroy).not.toHaveBeenCalled()
+    })
+
+    it('cleans up only the replacement on an update failure before COMMIT', async () => {
+      const { service, store, manager } = build()
+      store.put.mockResolvedValue('version-2')
+      manager.update.mockRejectedValue(new Error('Database update failed') as never)
+      await expect(service.update(ORG, 'credential-1', replacement)).rejects.toThrow('Database update failed')
+      expect(store.destroy.mock.calls).toEqual([['version-2']])
+    })
+
+    it('keeps the committed result when retiring the old secret fails', async () => {
+      const { service, store } = build()
+      store.put.mockResolvedValue('version-2')
+      store.destroy.mockRejectedValue(new Error('Cleanup unavailable'))
+      const warn = jest.spyOn((service as any).logger, 'warn').mockImplementation()
+      await expect(service.update(ORG, 'credential-1', replacement)).resolves.toMatchObject({
+        secretVersion: 'version-2',
+      })
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('version-1'))
+      warn.mockRestore()
+    })
+
+    it('preserves the original failure if replacement cleanup also fails', async () => {
+      const { service, store, manager } = build()
+      store.put.mockResolvedValue('version-2')
+      manager.update.mockRejectedValue(new Error('Database update failed') as never)
+      store.destroy.mockRejectedValue(new Error('Cleanup unavailable'))
+      await expect(service.update(ORG, 'credential-1', replacement)).rejects.toThrow('Database update failed')
+      expect(store.destroy.mock.calls).toEqual([['version-2']])
+    })
+
+    it('refuses rotation when private registries are disabled', async () => {
+      delete process.env.REGISTRY_PROXY_HOST
+      const { service, store } = build()
+      await expect(service.update(ORG, 'credential-1', replacement)).rejects.toBeInstanceOf(NotImplementedException)
       expect(store.put).not.toHaveBeenCalled()
     })
   })
