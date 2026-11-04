@@ -303,7 +303,9 @@ pub(crate) trait VirtioDevice: Send {
     /// Handles one worker event. `Ok(())` means this call finished; it does
     /// not mean every submitted request completed. The device uses the event
     /// registrar and waker stored from [`ActivationContext`]. The call runs on
-    /// the workers' shared thread and must not block.
+    /// the workers' shared thread, so a callback that blocks or performs slow
+    /// synchronous I/O (the balloon's `madvise`, for example) delays every
+    /// other device on that thread; see the one-chain budget in [`worker`].
     fn on_event(&mut self, event: DeviceEvent) -> Result<(), DeviceError>;
 
     /// Stops accepting new work and drains requests the device already took.

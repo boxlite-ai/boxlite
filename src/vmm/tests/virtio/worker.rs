@@ -303,16 +303,7 @@ impl Rig {
     }
 
     fn device(&self, name: &'static str, hook: Hook) -> Dev {
-        let seen = Arc::new(Seen::default());
-        let device = Arc::new(Mutex::new(Probe {
-            spec: spec(name),
-            seen: Arc::clone(&seen),
-            hook,
-            ctx: None,
-            activations: VecDeque::new(),
-            resets: 0,
-            quiesces: 0,
-        }));
+        let (device, seen) = probe(name, hook);
         let interrupt = Arc::new(MmioInterrupt::new(IrqLine::new(Arc::new(MockVm::new()), 5)));
         let shared: Arc<Mutex<dyn VirtioDevice>> = device.clone();
         let worker = self
@@ -340,6 +331,47 @@ impl Rig {
         let event = self.events.wait(Some(Duration::ZERO)).unwrap();
         assert!(event.is_none(), "unexpected event: {event:?}");
     }
+}
+
+/// A `Probe` and the record of the events it sees.
+fn probe(name: &'static str, hook: Hook) -> (Arc<Mutex<Probe>>, Arc<Seen>) {
+    let seen = Arc::new(Seen::default());
+    let device = Arc::new(Mutex::new(Probe {
+        spec: spec(name),
+        seen: Arc::clone(&seen),
+        hook,
+        ctx: None,
+        activations: VecDeque::new(),
+        resets: 0,
+        quiesces: 0,
+    }));
+    (device, seen)
+}
+
+/// Adds a device whose lock a panicking thread poisoned: building the VM must
+/// not panic, and the dispatch path is what fails such a device afterwards.
+#[test]
+fn adding_a_device_with_a_poisoned_lock_does_not_panic() {
+    let mut rig = Rig::new();
+    let (device, _seen) = probe("poisoned", Box::new(|_, _| Ok(())));
+    let shared: Arc<Mutex<dyn VirtioDevice>> = device.clone();
+    assert!(
+        thread::spawn(move || {
+            let _guard = shared.lock().unwrap();
+            panic!("poison the device lock");
+        })
+        .join()
+        .is_err(),
+        "the spawned thread must have panicked"
+    );
+    assert!(device.lock().is_err(), "the lock must be poisoned");
+
+    let interrupt = Arc::new(MmioInterrupt::new(IrqLine::new(Arc::new(MockVm::new()), 5)));
+    let poisoned: Arc<Mutex<dyn VirtioDevice>> = device;
+    let worker = rig.workers.add(poisoned, interrupt);
+    assert!(worker.prepare().is_ok(), "a prepared generation");
+    assert!(worker.cancel_prepare().is_ok());
+    assert!(rig.events.wait(Some(Duration::ZERO)).unwrap().is_none());
 }
 
 fn spec(name: &'static str) -> DeviceSpec {

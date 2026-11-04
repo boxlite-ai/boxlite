@@ -72,6 +72,11 @@ enum VmState {
 }
 
 /// The guest machine on host backend `H`.
+///
+/// Field order is load-bearing: the chipset and the workers go before the host
+/// VM, whose guest mappings the RAM is registered in, and the RAM goes last.
+/// `Drop` still unmaps explicitly, since a device's interrupt line holds the
+/// host VM longer.
 pub struct Vm<H: HostVm> {
     chipset: Chipset,
     /// Runs every virtio device's events on one thread; `run` and `Drop` shut

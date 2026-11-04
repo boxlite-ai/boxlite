@@ -106,11 +106,14 @@ impl VirtioWorkers {
         device: Arc<Mutex<dyn VirtioDevice>>,
         interrupt: Arc<dyn VirtioInterrupt>,
     ) -> Arc<dyn WorkerControl> {
-        let name = device
-            .lock()
-            .expect("a virtio device lock is poisoned")
-            .spec()
-            .name;
+        // The caller built this mutex immediately before, so nothing has held it
+        // across a panic; recovering the guard keeps VM construction from
+        // panicking if that ever changes. A device that panics later is failed
+        // by the dispatch path instead, as `MmioTransport` fails it.
+        let name = match device.lock() {
+            Ok(device) => device.spec().name,
+            Err(poisoned) => poisoned.into_inner().spec().name,
+        };
         let slot = self.runtime.add(name, device, interrupt);
         Arc::new(DeviceHandle {
             runtime: Arc::clone(&self.runtime),
