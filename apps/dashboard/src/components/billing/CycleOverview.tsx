@@ -79,7 +79,7 @@ export function CycleOverview({
   return (
     <section>
       <SectionTitle title={TITLE[mode.kind]} />
-      <Panel>
+      <Panel className="border-0">
         <div className="flex flex-wrap items-center gap-4 px-[22px] py-5">
           <div className="flex items-center gap-3">
             {/* The section heading above already says this is the active
@@ -162,7 +162,7 @@ function ScheduledChangeNote({
   }
 
   return (
-    <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border px-[22px] py-4">
+    <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border/40 px-[22px] py-4">
       <PanelNote>{scheduled.text}</PanelNote>
       {organizationId && (
         <AsciiButton
@@ -178,7 +178,7 @@ function ScheduledChangeNote({
   )
 }
 
-const FIGURES = 'grid grid-cols-2 gap-5 border-t border-border px-[22px] py-5 sm:flex sm:flex-row sm:gap-14'
+const FIGURES = 'grid grid-cols-2 gap-5 border-t border-border/40 px-[22px] py-5 sm:flex sm:flex-row sm:gap-14'
 
 function PlanFigures({ plan, wallet }: { plan: OrganizationPlan; wallet: OrganizationWallet }) {
   return (
@@ -211,7 +211,7 @@ function FreeTrialFigures({
         />
         <Metric label="Wallet balance" value={formatAmount(wallet.ongoingBalanceCents)} sub="used after credits" />
       </div>
-      <div className="border-t border-border px-[22px] py-4">
+      <div className="border-t border-border/40 px-[22px] py-4">
         <div className="flex items-center gap-4 font-mono text-[12px]">
           <span className="w-[100px] shrink-0 uppercase tracking-[0.5px] text-muted-foreground">Credits used</span>
           <span className="w-[140px] shrink-0 tabular-nums text-foreground">
@@ -258,7 +258,7 @@ function UnsubscribedNote({
       : `Usage is charged to your wallet at the published rates${fromRate}.`
 
   return (
-    <div className="border-t border-border px-[22px] py-4">
+    <div className="border-t border-border/40 px-[22px] py-4">
       <PanelNote>
         {howItIsCharged} A plan adds included quota at a lower effective rate.
         {plansAnchorId && (

@@ -101,7 +101,7 @@ export function UsageSection() {
                 />
               }
             />
-            <Panel>
+            <Panel className="border-0">
               {aggregatedError ? (
                 <Empty className="py-12">
                   <EmptyHeader>
@@ -146,7 +146,7 @@ export function UsageSection() {
 
           <section>
             <SectionTitle title="Per-Box Usage" count={boxesUsage?.length ? `${boxesUsage.length} boxes` : undefined} />
-            <Panel>
+            <Panel className="border-0">
               {boxesError ? (
                 <Empty className="py-12">
                   <EmptyHeader>

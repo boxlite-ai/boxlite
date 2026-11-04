@@ -26,8 +26,7 @@ const CUSTOM_PLAN_CONTACT_URL =
 // to `flex-1` the leftover height collected in the middle of the short cards
 // instead, so no two rows lined up and each card carried ~100px of nothing.
 const CARD_BADGE_ROW = 'mb-4 flex h-[18px] items-center justify-between gap-3'
-const CARD_BADGE =
-  'border border-border px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-[1px] text-muted-foreground'
+const CARD_BADGE = 'bg-muted px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-[1px] text-muted-foreground'
 const CARD_PRICE_BAND = 'mb-4 flex h-[64px] flex-col justify-start'
 
 function SpecRow({ label, value }: { label: string; value: string }) {
@@ -55,8 +54,8 @@ function PlanCard({
 
   return (
     <div
-      className={`flex flex-col border bg-card px-[22px] py-5 transition-transform hover:-translate-y-0.5 ${
-        isActive ? 'border-foreground/45' : 'border-border hover:border-foreground/25'
+      className={`flex flex-col border-t-2 bg-card px-[22px] py-5 transition-colors ${
+        isActive ? 'border-foreground/45' : 'border-transparent hover:bg-muted/50'
       }`}
     >
       <div className={CARD_BADGE_ROW}>
@@ -73,7 +72,7 @@ function PlanCard({
         </span>
       </div>
 
-      <div className="mb-5 divide-y divide-border/40">
+      <div className="mb-5">
         <SpecRow
           label="Quota"
           value={plan.includedQuotaCents != null ? formatWholeDollars(plan.includedQuotaCents) : 'Unlimited'}
@@ -104,13 +103,12 @@ function PlanCard({
 
 /**
  * The open-ended plan belongs beside the fixed catalogue, and reads like one:
- * a plain border, with "by request" carrying the difference. A dashed border
- * would have said something else — elsewhere in the console dashes mean an
- * isolation boundary or a placeholder.
+ * the same quiet surface, with "by request" carrying the difference.
+ * Reserve the visible top rule for the current plan.
  */
 export function CustomPlanCard() {
   return (
-    <div className="flex flex-col border border-border bg-card px-[22px] py-5 transition-colors hover:border-foreground/25">
+    <div className="flex flex-col border-t-2 border-transparent bg-card px-[22px] py-5 transition-colors hover:bg-muted/50">
       <div className={CARD_BADGE_ROW}>
         <span className="font-mono text-[10px] uppercase tracking-[1.5px] text-muted-foreground">
           <span style={{ color: BRAND }}>▸</span> Custom
@@ -125,7 +123,7 @@ export function CustomPlanCard() {
         </p>
       </div>
 
-      <div className="mb-5 divide-y divide-border/40">
+      <div className="mb-5">
         <SpecRow label="Quota" value="—" />
         <SpecRow label="Concurrency" value="—" />
       </div>
@@ -145,7 +143,7 @@ export function PlanCardsSkeleton({ count = 3 }: { count?: number }) {
   return (
     <div className="grid grid-cols-1 gap-[14px] md:grid-cols-2 xl:grid-cols-4">
       {Array.from({ length: count }).map((_, i) => (
-        <div key={i} className="flex flex-col gap-3 border border-border bg-card px-[22px] py-5">
+        <div key={i} className="flex flex-col gap-3 bg-card px-[22px] py-5">
           <Skeleton className="h-3 w-20" />
           <Skeleton className="h-7 w-16" />
           <Skeleton className="h-[132px] w-full" />

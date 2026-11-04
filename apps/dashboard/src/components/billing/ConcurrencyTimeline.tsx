@@ -61,7 +61,7 @@ export function ConcurrencyTimeline() {
           ) : undefined
         }
       />
-      <Panel>
+      <Panel className="border-0">
         {query.isError ? (
           <Empty className="py-12">
             <EmptyHeader>

@@ -603,7 +603,7 @@ export const CreateBoxDialog = ({
   }, [open, selectedOrganization?.id, refreshLimits])
   const createBoxMutation = useCreateBoxMutation()
   const { data: availableVolumes = [] } = useVolumesQuery()
-  const { data: catalogImages = [] } = useImagesQuery()
+  const { data: catalogImages = [], isPlaceholderData: imagesArePlaceholder } = useImagesQuery()
 
   // Only confirmed effective limits constrain input; the server validates unknown limits on creation.
   const limits = resolvePerBoxLimits(confirmedLimits)
@@ -617,6 +617,7 @@ export const CreateBoxDialog = ({
 
   const [name, setName] = useState('')
   const [imageRef, setImageRef] = useState('')
+  const imageSelectionPendingRef = useRef(false)
   const [cpu, setCpu] = useState(initialCpu)
   const [memory, setMemory] = useState(initialMemory)
   const [disk, setDisk] = useState(initialDisk)
@@ -647,6 +648,7 @@ export const CreateBoxDialog = ({
 
     setName('')
     setImageRef(prefillImage ?? '')
+    imageSelectionPendingRef.current = prefillImage == null
     setCpu(initialCpu)
     setMemory(initialMemory)
     setDisk(initialDisk)
@@ -698,6 +700,22 @@ export const CreateBoxDialog = ({
       })),
     [catalogImages],
   )
+  const firstImageRef = imageSuggestions[0]?.ref
+
+  useEffect(() => {
+    if (!open || !selectedOrganization?.id || imagesArePlaceholder || !firstImageRef) return
+    if (!imageSelectionPendingRef.current) return
+
+    // Initialize once after the catalog arrives; refetches must not change
+    // the image the user is about to create a box from.
+    imageSelectionPendingRef.current = false
+    setImageRef(firstImageRef)
+  }, [open, selectedOrganization?.id, imagesArePlaceholder, firstImageRef])
+
+  const chooseImage = (ref: string) => {
+    imageSelectionPendingRef.current = false
+    setImageRef(ref)
+  }
 
   const nameValid = !name || NAME_REGEX.test(name)
 
@@ -749,9 +767,8 @@ export const CreateBoxDialog = ({
     try {
       const box = await createBoxMutation.mutateAsync({
         name: name.trim() || undefined,
-        // Left out when blank so the API picks its own default. Sending a
-        // reference copied from here instead would pin the console to whichever
-        // curated image was current when this shipped.
+        // Clearing the selection or an unavailable catalog leaves the API
+        // responsible for choosing its default.
         image: imageRef.trim() || undefined,
         network: { mode: 'enabled' },
         resources: { cpu, memory, disk },
@@ -820,7 +837,7 @@ export const CreateBoxDialog = ({
               <div className="flex items-stretch border border-border bg-card focus-within:border-brand">
                 <input
                   value={imageRef}
-                  onChange={(e) => setImageRef(e.target.value)}
+                  onChange={(e) => chooseImage(e.target.value)}
                   placeholder="Default image"
                   aria-label="Image reference"
                   className="w-full min-w-0 border-0 bg-transparent px-[13px] py-[11px] font-mono text-body text-foreground outline-none placeholder:text-muted-foreground"
@@ -843,7 +860,7 @@ export const CreateBoxDialog = ({
                         <DropdownMenuItem
                           key={suggestion.ref}
                           className={cn('cursor-pointer', suggestion.ref === imageRef && 'text-brand')}
-                          onClick={() => setImageRef(suggestion.ref)}
+                          onClick={() => chooseImage(suggestion.ref)}
                         >
                           {suggestion.ref}
                         </DropdownMenuItem>

@@ -376,7 +376,7 @@ export function WalletSection() {
     <div className="flex flex-col gap-8">
       {isBillingLoading && (
         <div className="flex flex-col gap-8">
-          <div className="flex flex-col gap-4 border border-border bg-card p-[22px]">
+          <div className="flex flex-col gap-4 bg-card p-[22px]">
             <Skeleton className="h-5 w-full max-w-sm" />
             <div className="flex items-center gap-2">
               <Skeleton className="h-10 flex-1" />
@@ -385,7 +385,7 @@ export function WalletSection() {
             <Skeleton className="h-10" />
             <Skeleton className="h-10" />
           </div>
-          <div className="flex flex-col gap-4 border border-border bg-card p-[22px]">
+          <div className="flex flex-col gap-4 bg-card p-[22px]">
             <Skeleton className="h-5 w-full max-w-sm" />
             <div className="flex items-center gap-2">
               <Skeleton className="h-10 flex-1" />
@@ -410,7 +410,7 @@ export function WalletSection() {
 
           <section>
             <SectionTitle title="Wallet Balance" />
-            <Panel className="px-[22px] py-5">
+            <Panel className="border-0 px-[22px] py-5">
               <div className="flex items-baseline gap-3">
                 <span className="font-mono text-[30px] font-semibold leading-none tracking-tight tabular-nums text-foreground">
                   {formatAmount(wallet.ongoingBalanceCents)}
@@ -454,7 +454,7 @@ export function WalletSection() {
                 ) : null}
               </div>
 
-              <div className="my-5 h-px bg-border" />
+              <div className="my-6 h-px bg-border/40" />
 
               {/* Add funds — presets, custom amount and the action all on one row */}
               <span className="font-mono text-[10px] uppercase tracking-[1.5px] text-muted-foreground">Add funds</span>
@@ -464,6 +464,12 @@ export function WalletSection() {
                     <AsciiChip
                       key={amount}
                       selected={selectedPreset === amount}
+                      aria-pressed={selectedPreset === amount}
+                      className={
+                        selectedPreset === amount
+                          ? 'border-transparent bg-accent underline underline-offset-4'
+                          : 'border-transparent bg-card hover:bg-accent'
+                      }
                       onClick={() => {
                         setSelectedPreset(amount)
                         setOneTimeTopUpAmount(undefined)
@@ -539,7 +545,7 @@ export function WalletSection() {
                   labelled: hiding it is why nobody knew it existed, and it is
                   also the only thing that arms the low-balance warning. */}
               <>
-                <div className="my-5 h-px bg-border" />
+                <div className="my-6 h-px bg-border/40" />
 
                 <button
                   type="button"
@@ -652,7 +658,7 @@ export function WalletSection() {
 
               {user?.profile.email_verified && (
                 <>
-                  <div className="my-5 h-px bg-border" />
+                  <div className="my-6 h-px bg-border/40" />
 
                   {/* A one-shot action with no state to summarise, so it gets a
                       link rather than a settings row — the checkout convention. */}

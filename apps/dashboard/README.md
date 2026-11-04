@@ -101,6 +101,21 @@ cost paid on every table change. Search belongs to the table that owns the data;
 actions belong to the row. If an action is hard to reach, fix the page.
 
 
+## Billing surfaces and selection
+
+Billing groups content with card backgrounds rather than repeated outer borders.
+The overview, usage, wallet, payment-method, loading and error panels use local
+`Panel` overrides; other console pages keep the shared component's border.
+Plan cards retain a top rule for the current plan and remove internal row rules.
+Subtle separators still divide distinct sections, and ledger rows keep their
+existing rules.
+
+Top-up presets show selection with a filled accent background, an underline and
+`aria-pressed`. Custom-amount inputs keep their outlines and focus treatment.
+Overview/Usage/Wallet, billing-history and Chart/List selectors keep their
+existing segmented tabs. Payment actions and pricing calculations are unchanged.
+See the [before/after screenshots](../../docs/contributing/investigations/2026-11-03-dashboard-defaults.md#screenshots).
+
 ## Two histories of the same thing go on tabs, not on top of each other
 
 Invoices and credit activity both answer "where did my money go", so stacking
@@ -199,6 +214,15 @@ configuration; otherwise it opens the shared create dialog with the image filled
 in. Matching a template does not change an image's ownership or removability.
 System images remain non-removable and do not count against the organization's
 image limit; usage comes from the separate usage API, not the displayed row count.
+
+The generic "New Box" dialog selects the first image in its suggestion list once
+the current organization's catalog is available. It follows the API order and
+the same short-name/alias mapping as the dropdown. A reference supplied by an
+Images row takes priority. Typing, choosing another image, or clearing the field
+prevents later catalog responses from replacing that choice. Reopening starts a
+new selection; placeholder data from a previous organization is never used to
+initialize it. An empty or unavailable catalog leaves the field optional, so an
+empty submission still uses the backend's default image.
 
 A new organization with the default system-image configuration sees `base`,
 `python`, and `node`, with zero organization image slots used. The operator may
