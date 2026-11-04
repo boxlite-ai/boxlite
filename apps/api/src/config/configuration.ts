@@ -478,6 +478,7 @@ const configuration = {
     environment: process.env.POSTHOG_ENVIRONMENT,
   },
   oidc: {
+    authenticationTimeClaim: process.env.OIDC_AUTHENTICATION_TIME_CLAIM?.trim() || undefined,
     clientId: process.env.OIDC_CLIENT_ID || process.env.OID_CLIENT_ID,
     issuer: process.env.OIDC_ISSUER_BASE_URL || process.env.OID_ISSUER_BASE_URL,
     publicIssuer: process.env.PUBLIC_OIDC_DOMAIN,
@@ -726,6 +727,9 @@ const configuration = {
   },
   admin: {
     apiKey: process.env.ADMIN_API_KEY,
+  },
+  emailPolicy: {
+    readApiKey: process.env.EMAIL_POLICY_READ_API_KEY,
   },
   skipUserEmailVerification: process.env.SKIP_USER_EMAIL_VERIFICATION === 'true',
   // Whether a newly created non-default organization starts suspended until a

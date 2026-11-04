@@ -7,6 +7,7 @@ import { Redis } from 'ioredis'
 import { LoginEventRecorder } from './login-event.recorder'
 import { recordBusinessEvent } from '../common/utils/business-event.util'
 import { Context } from '../common/context/context'
+import { ConfigService } from '@nestjs/config'
 
 jest.mock('../common/utils/business-event.util', () => ({
   recordBusinessEvent: jest.fn(),
@@ -78,5 +79,47 @@ describe('LoginEventRecorder.recordFirstUse', () => {
 
     expect(redis.set).not.toHaveBeenCalled()
     expect(recordBusinessEvent).not.toHaveBeenCalled()
+  })
+
+  it('records trusted authentication time independently of refreshed token issuance', async () => {
+    const seen = new Set<string>()
+    const redis = {
+      set: jest.fn(async (key: string) => {
+        if (seen.has(key)) return null
+        seen.add(key)
+        return 'OK'
+      }),
+    }
+    const recorder = new LoginEventRecorder(
+      redis as unknown as Redis,
+      new ConfigService({ oidc: { authenticationTimeClaim: 'auth_time' } }),
+    )
+    const authTime = NOW_SECONDS - 1000
+    await recorder.recordFirstUse('user-1', { iat: NOW_SECONDS - 100, exp: NOW_SECONDS + 3600, auth_time: authTime })
+    await recorder.recordFirstUse('user-1', { iat: NOW_SECONDS - 10, exp: NOW_SECONDS + 7200, auth_time: authTime })
+    const genuine = jest.mocked(recordBusinessEvent).mock.calls.filter(([event]) => event.name === 'user.login.genuine')
+    expect(genuine).toEqual([
+      [
+        {
+          name: 'user.login.genuine',
+          outcome: 'success',
+          correlationId: 'user-1',
+          ctx: Context.user(),
+          occurredAt: new Date(authTime * 1000).toISOString(),
+        },
+      ],
+    ])
+  })
+
+  it('never substitutes issuance for missing or invalid configured authentication evidence', async () => {
+    const redis = { set: jest.fn(async () => 'OK') }
+    const recorder = new LoginEventRecorder(
+      redis as unknown as Redis,
+      new ConfigService({ oidc: { authenticationTimeClaim: 'auth_time' } }),
+    )
+    for (const auth_time of [undefined, '1700000000', NOW_SECONDS + 1, -1, 1.5]) {
+      await recorder.recordFirstUse('user-1', { iat: NOW_SECONDS, exp: NOW_SECONDS + 3600, auth_time })
+    }
+    expect(jest.mocked(recordBusinessEvent).mock.calls.every(([event]) => event.name === 'user.login')).toBe(true)
   })
 })

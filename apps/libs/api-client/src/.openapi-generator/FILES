@@ -37,6 +37,7 @@ docs/AdminComponentVersionCount.md
 docs/AdminCreateRunner.md
 docs/AdminJobOverview.md
 docs/AdminJobOverviewPage.md
+docs/AdminListOrganizationsOverview200Response.md
 docs/AdminOrganizationActivation.md
 docs/AdminOrganizationBox.md
 docs/AdminOrganizationBoxPage.md
@@ -48,7 +49,10 @@ docs/AdminOrganizationMember.md
 docs/AdminOrganizationMemberPage.md
 docs/AdminOrganizationOverview.md
 docs/AdminOrganizationOverviewPage.md
+docs/AdminOrganizationRegistrationPage.md
+docs/AdminOrganizationRegistrationSummary.md
 docs/AdminOrganizationUsage.md
+docs/AdminOrganizationVerifiedCreator.md
 docs/AdminRegionOverview.md
 docs/AdminRegionOverviewPage.md
 docs/AdminRunner.md
@@ -198,6 +202,7 @@ models/admin-component-version-count.ts
 models/admin-create-runner.ts
 models/admin-job-overview-page.ts
 models/admin-job-overview.ts
+models/admin-list-organizations-overview200-response.ts
 models/admin-organization-activation.ts
 models/admin-organization-box-page.ts
 models/admin-organization-box.ts
@@ -209,7 +214,10 @@ models/admin-organization-member-page.ts
 models/admin-organization-member.ts
 models/admin-organization-overview-page.ts
 models/admin-organization-overview.ts
+models/admin-organization-registration-page.ts
+models/admin-organization-registration-summary.ts
 models/admin-organization-usage.ts
+models/admin-organization-verified-creator.ts
 models/admin-region-overview-page.ts
 models/admin-region-overview.ts
 models/admin-runner.ts

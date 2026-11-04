@@ -3984,12 +3984,43 @@ paths:
         schema:
           type: string
         style: form
+      - description: Count every retained Box state; omit to keep the existing active-state
+          count.
+        explode: true
+        in: query
+        name: boxCountScope
+        required: false
+        schema:
+          enum:
+          - all
+          type: string
+        style: form
+      - description: Exact organization UUID; avoids name search and cannot be combined
+          with q.
+        explode: true
+        in: query
+        name: organizationId
+        required: false
+        schema:
+          type: string
+        style: form
+      - description: Return registration and creator metadata without member/Box statistics.
+          Omit for the full overview; cannot combine with boxCountScope.
+        explode: true
+        in: query
+        name: projection
+        required: false
+        schema:
+          enum:
+          - registration
+          type: string
+        style: form
       responses:
         "200":
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/AdminOrganizationOverviewPage"
+                $ref: "#/components/schemas/adminListOrganizationsOverview_200_response"
           description: ""
         "400":
           description: Invalid cursor or limit
@@ -8863,7 +8894,7 @@ components:
       - observedAt
       - runners
       type: object
-    AdminOrganizationCreator:
+    AdminOrganizationVerifiedCreator:
       properties:
         userId:
           type: string
@@ -8874,6 +8905,9 @@ components:
           type: string
         displayName:
           type: string
+        emailVerified:
+          description: Current verification state from the creator account.
+          type: boolean
       required:
       - displayName
       - email
@@ -8901,7 +8935,7 @@ components:
           type: string
         creator:
           allOf:
-          - $ref: "#/components/schemas/AdminOrganizationCreator"
+          - $ref: "#/components/schemas/AdminOrganizationVerifiedCreator"
           description: Current creator identity.
           nullable: true
           type: object
@@ -8976,6 +9010,76 @@ components:
       required:
       - items
       - limit
+      type: object
+    AdminOrganizationRegistrationSummary:
+      properties:
+        createdAt:
+          description: Organization creation time.
+          format: date-time
+          type: string
+        createdBy:
+          description: Stored creator ID; account linking replaces it with the primary
+            user ID.
+          type: string
+        creator:
+          allOf:
+          - $ref: "#/components/schemas/AdminOrganizationVerifiedCreator"
+          description: Current creator identity.
+          nullable: true
+          type: object
+        organizationId:
+          type: string
+        name:
+          type: string
+        observedAt:
+          description: "Last business modification, not query time."
+          format: date-time
+          type: string
+      required:
+      - createdAt
+      - createdBy
+      - creator
+      - name
+      - observedAt
+      - organizationId
+      type: object
+    AdminOrganizationRegistrationPage:
+      properties:
+        nextCursor:
+          description: Opaque cursor for the next page
+          nullable: true
+          type: string
+        limit:
+          maximum: 200
+          minimum: 1
+          type: number
+        items:
+          items:
+            $ref: "#/components/schemas/AdminOrganizationRegistrationSummary"
+          type: array
+        observedAt:
+          format: date-time
+          nullable: true
+          type: string
+      required:
+      - items
+      - limit
+      type: object
+    AdminOrganizationCreator:
+      properties:
+        userId:
+          type: string
+        email:
+          description: "Current email, not necessarily the email at registration."
+          format: email
+          nullable: true
+          type: string
+        displayName:
+          type: string
+      required:
+      - displayName
+      - email
+      - userId
       type: object
     AdminOrganizationMember:
       example:
@@ -10109,6 +10213,10 @@ components:
       required:
       - series
       type: object
+    adminListOrganizationsOverview_200_response:
+      anyOf:
+      - $ref: "#/components/schemas/AdminOrganizationOverviewPage"
+      - $ref: "#/components/schemas/AdminOrganizationRegistrationPage"
     WebhookController_getStatus_200_response:
       example:
         enabled: true

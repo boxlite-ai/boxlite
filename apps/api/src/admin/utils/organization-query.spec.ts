@@ -7,6 +7,26 @@ import {
 } from './organization-query'
 
 describe('organization queries', () => {
+  it('validates opt-in projections and binds their cursors without changing default cursors', () => {
+    const row = { id: '00000000-0000-4000-8000-000000000001', createdAt: new Date('2026-10-01T00:00:00Z') }
+    for (const selection of [{ projection: 'registration' }, { boxCountScope: 'all' }, { organizationId: row.id }]) {
+      const query = parseRegistrationQuery(selection)
+      expect(query).toMatchObject(selection)
+      const cursor = registrationCursor(query, row)
+      expect(registrationAfter({ ...query, cursor })).toEqual({ id: row.id, createdAt: row.createdAt.toISOString() })
+      expect(() => registrationAfter({ limit: 50, cursor })).toThrow(BadRequestException)
+    }
+    for (const selection of [
+      { projection: 'unknown' },
+      { boxCountScope: 'unknown' },
+      { projection: ['registration'] },
+      { projection: 'registration', boxCountScope: 'all' },
+      { organizationId: 'not-uuid' },
+      { organizationId: row.id, q: 'search' },
+    ])
+      expect(() => parseRegistrationQuery(selection)).toThrow(BadRequestException)
+  })
+
   it.each([
     () => parseRegistrationQuery({ unknown: 'value' }),
     () => registrationAfter({ limit: 50, cursor: 'not-a-cursor!' }),

@@ -100,20 +100,36 @@ export class AdminOrganizationOverviewService {
     const organizations = await this.registrationRows(input)
     const page = organizations.slice(0, input.limit)
     const nextOrganization = organizations.length > input.limit ? page.at(-1) : undefined
-    const stats = await this.organizationStats(page.map((organization) => organization.id))
+    const stats =
+      input.projection === 'registration'
+        ? undefined
+        : await this.organizationStats(
+            page.map((organization) => organization.id),
+            input.boxCountScope,
+          )
     const creators = page.length
       ? await this.userRepository.find({
           where: { id: In([...new Set(page.map((row) => row.createdBy))]) },
-          select: { id: true, email: true, name: true },
+          select: { id: true, email: true, name: true, emailVerified: true },
         })
       : []
     const creatorsById = new Map(creators.map((user) => [user.id, user]))
     const summaries = page.map((organization) => {
-      const organizationStats = stats.get(organization.id) ?? emptyStats()
-      return {
+      const metadata = this.registration(organization, creatorsById)
+      const emailVerified = creatorsById.get(organization.createdBy)?.emailVerified
+      const registration = {
         organizationId: organization.id,
         name: organization.name,
-        ...this.registration(organization, creatorsById),
+        ...metadata,
+        creator: metadata.creator
+          ? { ...metadata.creator, ...(typeof emailVerified === 'boolean' ? { emailVerified } : {}) }
+          : null,
+        observedAt: timestamp(organization.updatedAt),
+      }
+      if (!stats) return registration
+      const organizationStats = stats.get(organization.id) ?? emptyStats()
+      return {
+        ...registration,
         memberCount: organizationStats.memberCount,
         boxCount: organizationStats.boxCount,
         impactState: impactState(organizationStats.impactedBoxCount > 0),
@@ -153,6 +169,8 @@ export class AdminOrganizationOverviewService {
         { searchId: input.query, search: escapedLike(input.query) },
       )
     if (input.createdFrom) rows.andWhere('organization."createdAt" >= :from', { from: input.createdFrom })
+    if (input.organizationId)
+      rows.andWhere('organization.id = :organizationId', { organizationId: input.organizationId })
     if (input.createdTo) rows.andWhere('organization."createdAt" < :to', { to: input.createdTo })
     if (after)
       rows.andWhere(`(${created}, organization.id) > (CAST(:createdAt AS timestamptz), CAST(:id AS uuid))`, {
@@ -176,7 +194,10 @@ export class AdminOrganizationOverviewService {
    * bounded, so the work behind it must be too: grouping by the box state enums keeps the
    * result set sized by the enum cross-product rather than by how many boxes exist.
    */
-  private async organizationStats(organizationIds: string[]): Promise<Map<string, OrganizationStats>> {
+  private async organizationStats(
+    organizationIds: string[],
+    boxCountScope?: 'all',
+  ): Promise<Map<string, OrganizationStats>> {
     const stats = new Map<string, OrganizationStats>()
     if (organizationIds.length === 0) return stats
 
@@ -213,9 +234,10 @@ export class AdminOrganizationOverviewService {
     for (const group of boxGroups) {
       const organization = statsFor(group.organizationId)
       organization.observedAt = latestDate([organization.observedAt, group.observedAt])
-      if (INACTIVE_BOX_STATES.includes(group.state)) continue
       const boxes = count(group.boxCount)
-      organization.boxCount += boxes
+      const inactive = INACTIVE_BOX_STATES.includes(group.state)
+      if (!inactive || boxCountScope === 'all') organization.boxCount += boxes
+      if (inactive) continue
       if (isImpactedBox(group)) organization.impactedBoxCount += boxes
     }
     return stats

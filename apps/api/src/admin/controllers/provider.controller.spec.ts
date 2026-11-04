@@ -10,6 +10,72 @@ import { AdminPlatformOverviewService } from '../services/platform-overview.serv
 import { AdminProviderController } from './provider.controller'
 
 describe('AdminProviderController', () => {
+  it('limits a policy reader to bounded registrations and exact-org all-state counts', async () => {
+    const list = jest.fn().mockResolvedValue({ items: [], nextCursor: null, limit: 200, observedAt: null })
+    const module = await Test.createTestingModule({
+      controllers: [AdminProviderController],
+      providers: [
+        { provide: AdminOrganizationOverviewService, useValue: { list } },
+        { provide: AdminPlatformOverviewService, useValue: { regions: jest.fn() } },
+      ],
+    })
+      .overrideGuard(CombinedAuthGuard)
+      .useValue({
+        canActivate: (context) => {
+          context.switchToHttp().getRequest().user = { role: 'email-policy-reader' }
+          return true
+        },
+      })
+      .compile()
+    const app = module.createNestApplication()
+    app.setGlobalPrefix('api')
+    await app.listen(0)
+    try {
+      const { port } = app.getHttpServer().address() as AddressInfo
+      const base = `http://127.0.0.1:${port}/api/admin`
+      const id = '00000000-0000-4000-8000-000000000001'
+      expect(
+        (
+          await fetch(
+            `${base}/organizations?projection=registration&createdFrom=2026-10-01T00:00:00Z&createdTo=2026-10-02T00:00:00Z`,
+          )
+        ).status,
+      ).toBe(200)
+      expect(list).toHaveBeenLastCalledWith(expect.objectContaining({ projection: 'registration' }))
+      expect((await fetch(`${base}/organizations?projection=registration&organizationId=${id}`)).status).toBe(200)
+      expect((await fetch(`${base}/organizations?projection=registration`)).status).toBe(403)
+      expect(
+        (
+          await fetch(
+            `${base}/organizations?projection=registration&createdFrom=2026-01-01T00:00:00Z&createdTo=2026-10-02T00:00:00Z`,
+          )
+        ).status,
+      ).toBe(403)
+      expect(
+        (
+          await fetch(
+            `${base}/organizations?projection=registration&createdFrom=2026-10-01T00:00:00Z&createdTo=2026-11-01T00:00:00Z`,
+          )
+        ).status,
+      ).toBe(200)
+      const calls = list.mock.calls.length
+      for (const query of [
+        'projection=registration&q=ab&createdFrom=2026-10-01T00:00:00Z&createdTo=2026-10-02T00:00:00Z',
+        'projection=registration&createdFrom=2026-10-01T00:00:00Z',
+        'projection=registration&createdFrom=2026-10-01T00:00:00Z&createdTo=2026-11-01T00:00:00.001Z',
+        `organizationId=${id}&boxCountScope=all&createdTo=2026-10-02T00:00:00Z`,
+      ])
+        expect((await fetch(`${base}/organizations?${query}`)).status).toBe(403)
+      expect(list).toHaveBeenCalledTimes(calls)
+      expect((await fetch(`${base}/organizations?organizationId=${id}&boxCountScope=all`)).status).toBe(200)
+      expect((await fetch(`${base}/organizations?organizationId=${id}`)).status).toBe(403)
+      expect((await fetch(`${base}/organizations?boxCountScope=all`)).status).toBe(403)
+      expect((await fetch(`${base}/regions`)).status).toBe(403)
+      expect((await fetch(`${base}/organizations/${id}`)).status).toBe(403)
+    } finally {
+      await app.close()
+    }
+  })
   it('returns 404 for an organization missing from the read projection', async () => {
     const controller = new AdminProviderController({ detail: jest.fn().mockResolvedValue(null) } as never, {} as never)
     const response = { setHeader: jest.fn() }
@@ -103,6 +169,16 @@ describe('AdminProviderController', () => {
       expect(schemas?.AdminOrganizationCreator).toMatchObject({
         properties: { email: { type: 'string', nullable: true } },
       })
+      expect(schemas?.AdminOrganizationCreator).not.toHaveProperty('properties.emailVerified')
+      expect(schemas?.AdminOrganizationDetail).toMatchObject({
+        properties: { creator: { allOf: [{ $ref: '#/components/schemas/AdminOrganizationCreator' }] } },
+      })
+      for (const name of ['AdminOrganizationOverview', 'AdminOrganizationRegistrationSummary']) {
+        const creator = (schemas?.[name] as { properties: { creator: { allOf: { $ref: string }[] } } }).properties
+          .creator
+        const creatorName = creator.allOf[0].$ref.split('/').at(-1) ?? ''
+        expect(schemas?.[creatorName]).toHaveProperty('properties.emailVerified.type', 'boolean')
+      }
       expect(schemas?.AdminOrganizationDetail).toMatchObject({
         required: expect.arrayContaining(['members', 'boxes']),
         properties: { createdAt: { type: 'string' }, activation: { nullable: true } },
@@ -117,13 +193,39 @@ describe('AdminProviderController', () => {
         spec.paths['/api/admin/organizations'].get?.parameters?.map(
           (parameter) => 'name' in parameter && parameter.name,
         ),
-      ).toEqual(['q', 'cursor', 'limit', 'createdTo', 'createdFrom'])
+      ).toEqual(['q', 'cursor', 'limit', 'createdTo', 'createdFrom', 'boxCountScope', 'organizationId', 'projection'])
       expect(
         spec.paths['/api/admin/organizations/{organizationId}'].get?.parameters?.map(
           (parameter) => 'name' in parameter && parameter.name,
         ),
       ).toEqual(['organizationId', 'memberCursor', 'boxCursor', 'sectionLimit', 'include'])
       expect(list).toHaveBeenCalledWith(expect.objectContaining({ createdFrom: '2026-10-01T00:00:00.000Z' }))
+      expect((await fetch(`${base}?projection=registration`)).status).toBe(200)
+      expect(
+        (await fetch(`${base}?projection=registration&createdFrom=2026-10-01T00:00:00Z&createdTo=2026-10-02T00:00:00Z`))
+          .status,
+      ).toBe(200)
+      expect(list).toHaveBeenLastCalledWith(expect.objectContaining({ projection: 'registration' }))
+      expect(spec.paths['/api/admin/organizations/registrations']).toBeUndefined()
+      expect(spec.paths['/api/admin/organizations'].get?.responses['200']).toMatchObject({
+        content: {
+          'application/json': {
+            schema: {
+              anyOf: [
+                { $ref: '#/components/schemas/AdminOrganizationOverviewPage' },
+                { $ref: '#/components/schemas/AdminOrganizationRegistrationPage' },
+              ],
+            },
+          },
+        },
+      })
+      expect((await fetch(`${base}?projection=registration&q=example&cursor=next&limit=20`)).status).toBe(200)
+      expect(list).toHaveBeenLastCalledWith(
+        expect.objectContaining({ projection: 'registration', query: 'example', cursor: 'next', limit: 20 }),
+      )
+      expect((await fetch(`${base}/registrations`)).status).toBe(400)
+      expect((await fetch(`${base}?boxCountScope=all`)).status).toBe(200)
+      expect(list).toHaveBeenLastCalledWith(expect.objectContaining({ boxCountScope: 'all' }))
       const id = '00000000-0000-4000-8000-000000000001'
       const missing = await fetch(`${base}/${id}`)
       expect(missing.status).toBe(404)
@@ -155,6 +257,10 @@ describe('AdminProviderController', () => {
       expect(await capability.json()).toEqual(identities)
       for (const path of [
         '?unknown=value',
+        '?projection=',
+        '?projection=unknown',
+        '?projection=registration&projection=registration',
+        '?projection=registration&boxCountScope=all',
         '?view=metadata',
         '?limit=0',
         '?createdFrom=2026-10-02T00:00:00Z&createdTo=2026-10-01T00:00:00Z',

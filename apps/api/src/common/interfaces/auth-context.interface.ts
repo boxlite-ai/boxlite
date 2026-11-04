@@ -19,7 +19,15 @@ export interface BaseAuthContext {
   role: ApiRole
 }
 
-export type ApiRole = SystemRole | 'proxy' | 'runner' | 'region-proxy' | 'otel-collector' | 'health-check' | 'billing'
+export type ApiRole =
+  | SystemRole
+  | 'proxy'
+  | 'runner'
+  | 'region-proxy'
+  | 'otel-collector'
+  | 'health-check'
+  | 'billing'
+  | 'email-policy-reader'
 
 export interface AuthContext extends BaseAuthContext {
   userId: string
@@ -52,3 +60,4 @@ export type AuthContextType =
   | OtelCollectorContext
   | HealthCheckContext
   | BillingContext
+  | { role: 'email-policy-reader' }

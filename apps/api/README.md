@@ -67,7 +67,7 @@ await this.stop(event.boxId, undefined, Context.platform(PlatformReason.ORG_SUSP
 System administrators read registration fields on the existing organization routes.
 Authenticate with `Authorization: Bearer <admin-api-key>` or an administrator JWT;
 an ordinary organization's API key does not grant system-wide access. These internal
-routes use one contract: no view selector, capability probe, or capability response header.
+routes keep the default operational projection; no capability probe or capability response header is required.
 
 Upgrade every producer instance before enabling the updated consumer. Old list cursors
 must be discarded because the default ordering now uses creation time and ID. Existing
@@ -78,6 +78,16 @@ consumers before producers; mixed-version traffic is not supported during activa
   stored `createdBy`, nullable current `creator`, member/Box counts and impact.
   `q` searches name or exact ID. `createdFrom` is inclusive and `createdTo` exclusive;
   timestamps require an offset and at most millisecond precision. `limit` is 1–200 (default 50).
+  `boxCountScope=all` counts every retained state, including destroyed and archived,
+  while preserving the existing impact calculation. Omission keeps the old count scope.
+  `organizationId=<UUID>` selects an exact primary key; it cannot combine with `q`.
+- `GET /api/admin/organizations?projection=registration` skips member/Box aggregation.
+  It returns registration/creator metadata and pagination, omitting counts and impact.
+  It supports the same date bounds, cursor/limit, admin search and exact `organizationId` selector;
+  it cannot combine with `boxCountScope`. Omit `projection` to retain the full overview.
+  OpenAPI describes both page shapes with `anyOf`; regenerated TypeScript and Go clients
+  return a union/wrapper that consumers must handle. The unshipped standalone registration
+  operation is removed. Existing HTTP default responses and detail types remain unchanged.
 - `GET /api/admin/organizations/{organizationId}` returns flat organization
   details with registration, member/Box pages and impact. A missing organization returns 404.
   `memberCursor`, `boxCursor` and `sectionLimit` page each section. Explicit `include=usage`
@@ -96,10 +106,16 @@ is the stored creator association, independent of current membership. Account li
 rewrites it to the primary user ID, so it is not an immutable historical identity.
 When a creator no longer exists and the organization survives, `creator` is null; an existing
 user without an email has `creator.email:null`. Names and email describe current identity.
+The list and registration responses include `creator.emailVerified` when the account's
+current verification state is available. The organization detail response keeps its original
+creator fields (`userId`, `email`, `displayName`) and does not query verification state.
 Pages read live data and exclude deleted organizations.
+All-state counts cover only retained rows, not lifetime successful creations: cleanup can
+remove destroyed rows and pending/failed rows can remain. `observedAt` remains the last
+business modification; consumers must measure successful-read freshness separately.
 
 List order and cursor seek both use creation time truncated to milliseconds plus
-UUID, ascending. Cursors bind `q` and date filters; changing them returns 400. Unknown
+UUID, ascending. Cursors bind `q`, date filters and opt-in projection/count scope; changing them returns 400. Default-read cursors retain their prior encoding. Unknown
 parameters (including the removed view selector), invalid dates, UUIDs, and incompatible
 cursors return `400 invalid_organization_query`. Invalid credentials return 401;
 non-admin access returns 403. Consumers may ignore additive fields but must validate
@@ -286,3 +302,20 @@ for the source evidence, concurrency model and verification boundaries.
 
 See [organization onboarding](src/organization/ONBOARDING.md) for the profile, personal prompt
 draft and idempotent handoff API contracts, migration order, and frontend integration behavior.
+
+## Retention-policy read identity and genuine logins
+
+`EMAIL_POLICY_READ_API_KEY` configures a separate machine credential of at least 32 characters.
+It authenticates as `email-policy-reader`, never as Admin or a user. Combined authentication
+allows it only `GET /api/admin/organizations`; all other paths and methods are rejected
+before user handlers. Registration reads require `projection=registration`, no `q`, and an exact org or an increasing
+window of at most 31 days. Inventory reads require `organizationId=<UUID>&boxCountScope=all` without date filters.
+No database column or user-role enum migration is involved. Provisioning the secret is separate.
+
+`OIDC_AUTHENTICATION_TIME_CLAIM` opt-in names a verified issuer claim containing the original
+positive integer authentication time in seconds. Never configure an issuance/refresh timestamp.
+`LoginEventRecorder` emits `user.login.genuine` with that time in `event.timestamp`; OTLP
+Timestamp remains log publication time. Refreshes sharing authentication time cannot create a
+later business occurrence. Missing/invalid claims emit no genuine event, with no iat fallback.
+Existing `user.login` semantics stay unchanged. This observes API token use, not every IdP login;
+Redis/log failures can omit records. Consumers must verify provider/feed readiness before R2.

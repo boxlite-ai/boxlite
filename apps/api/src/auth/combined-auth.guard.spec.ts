@@ -4,7 +4,9 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { HttpStatus, UnauthorizedException } from '@nestjs/common'
+import { Controller, Get, HttpStatus, UnauthorizedException, ExecutionContext } from '@nestjs/common'
+import { Test } from '@nestjs/testing'
+import type { AddressInfo } from 'node:net'
 import { CombinedAuthGuard } from './combined-auth.guard'
 import {
   EMAIL_VERIFICATION_REQUIRED_CODE,
@@ -12,6 +14,52 @@ import {
 } from '../exceptions/email-verification-required.exception'
 
 describe('CombinedAuthGuard.handleRequest', () => {
+  it('denies the machine reader before unscoped user handlers or writes can run', async () => {
+    const database = jest.fn()
+    @Controller()
+    class UnscopedController {
+      @Get('/api/users/me') me() {
+        database()
+        return {}
+      }
+      @Get('/api/v1/me') org() {
+        database()
+        return {}
+      }
+      @Get('/api/admin/organizations') facts() {
+        return { items: [] }
+      }
+      @Get('/api/admin/organizations/registrations') registrations() {
+        return { items: [] }
+      }
+    }
+    class PolicyGuard extends CombinedAuthGuard {
+      canActivate(context: ExecutionContext) {
+        this.handleRequest(null, { role: 'email-policy-reader' }, undefined, context)
+        return true
+      }
+    }
+    const module = await Test.createTestingModule({ controllers: [UnscopedController] }).compile()
+    const app = module.createNestApplication()
+    app.useGlobalGuards(new PolicyGuard())
+    await app.listen(0)
+    try {
+      const { port } = app.getHttpServer().address() as AddressInfo
+      for (const path of ['/api/users/me', '/api/v1/me', '/api/admin/organizations/registrations'])
+        expect((await fetch(`http://127.0.0.1:${port}${path}`)).status).toBe(403)
+      expect(database).not.toHaveBeenCalled()
+      for (const path of ['/api/admin/organizations'])
+        expect((await fetch(`http://127.0.0.1:${port}${path}`)).status).toBe(200)
+    } finally {
+      await app.close()
+    }
+    const context = {
+      switchToHttp: () => ({ getRequest: () => ({ method: 'POST', path: '/api/admin/organizations' }) }),
+    } as ExecutionContext
+    expect(() =>
+      new CombinedAuthGuard().handleRequest(null, { role: 'email-policy-reader' }, undefined, context),
+    ).toThrow()
+  })
   it('delivers an email-verification rejection to the client intact', () => {
     const guard = new CombinedAuthGuard()
     const rejection = new EmailVerificationRequiredException()

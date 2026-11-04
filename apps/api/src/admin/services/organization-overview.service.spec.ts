@@ -62,6 +62,101 @@ const serviceWith = () => {
   return { service, organizations, memberships, users, boxes, usagePeriods, activation }
 }
 
+describe('organization policy read projections', () => {
+  const organization = {
+    id: '00000000-0000-4000-8000-000000000001',
+    name: 'Example',
+    createdBy: 'creator',
+    createdAt: new Date('2026-10-01T00:00:00Z'),
+    updatedAt: new Date('2026-10-01T00:00:00Z'),
+  }
+
+  it('keeps email verification out of the organization detail response', async () => {
+    const { service, organizations, users } = serviceWith()
+    organizations.findOne.mockResolvedValue(organization)
+    users.find.mockResolvedValue([
+      { id: 'creator', email: 'creator@example.invalid', name: 'Creator', emailVerified: true },
+    ])
+
+    const detail = await service.detail(organization.id, { memberLimit: 50, boxLimit: 50 })
+
+    expect(detail?.creator).toEqual({ userId: 'creator', email: 'creator@example.invalid', displayName: 'Creator' })
+  })
+
+  it('keeps the detail user query limited to its original fields', async () => {
+    const { service, organizations, users } = serviceWith()
+    organizations.findOne.mockResolvedValue(organization)
+
+    await service.detail(organization.id, { memberLimit: 50, boxLimit: 50 })
+
+    expect(users.find).toHaveBeenCalledWith(expect.objectContaining({ select: { id: true, email: true, name: true } }))
+  })
+
+  it.each([
+    { projection: 'registration' as const, emailVerified: true },
+    { projection: 'registration' as const, emailVerified: false },
+    { projection: 'registration' as const, emailVerified: undefined },
+    { projection: undefined, emailVerified: true },
+    { projection: undefined, emailVerified: false },
+    { projection: undefined, emailVerified: undefined },
+  ])('preserves list verification for $projection / $emailVerified', async ({ projection, emailVerified }) => {
+    const { service, organizations, users } = serviceWith()
+    organizations.builder.getMany.mockResolvedValue([organization])
+    const stored = { id: 'creator', email: 'creator@example.invalid', name: 'Creator', emailVerified }
+    users.find.mockImplementation(async ({ select }) => [
+      Object.fromEntries(Object.entries(stored).filter(([key]) => select[key])),
+    ])
+
+    const page = await service.list({ limit: 200, projection })
+
+    if (emailVerified === undefined) expect(page.items[0].creator).not.toHaveProperty('emailVerified')
+    else expect(page.items[0].creator).toHaveProperty('emailVerified', emailVerified)
+  })
+
+  it('reads registration and its creator without any member or Box aggregation', async () => {
+    const { service, organizations, memberships, users, boxes } = serviceWith()
+    organizations.builder.getMany.mockResolvedValue([organization])
+    users.find.mockResolvedValue([
+      { id: 'creator', email: 'creator@example.invalid', name: 'Creator', emailVerified: true },
+    ])
+
+    const page = await service.list(Object.assign({ limit: 200 }, { projection: 'registration' as const }))
+
+    expect(memberships.createQueryBuilder).not.toHaveBeenCalled()
+    expect(boxes.createQueryBuilder).not.toHaveBeenCalled()
+    expect(page.items[0]).toMatchObject({
+      organizationId: organization.id,
+      createdAt: organization.createdAt.toISOString(),
+      createdBy: 'creator',
+      creator: { userId: 'creator', email: 'creator@example.invalid', emailVerified: true },
+    })
+    expect(page.items[0]).not.toHaveProperty('boxCount')
+    expect(page.items[0]).not.toHaveProperty('memberCount')
+    expect(page.items[0]).not.toHaveProperty('impactState')
+  })
+
+  it('counts retained destroyed and archived rows without changing impact', async () => {
+    const { service, organizations, boxes } = serviceWith()
+    organizations.builder.getMany.mockResolvedValue([organization])
+    boxes.builder.getRawMany.mockResolvedValue(
+      [BoxState.DESTROYED, BoxState.ARCHIVED].map((state) => ({
+        organizationId: organization.id,
+        state,
+        desiredState: BoxDesiredState.STARTED,
+        boxCount: '1',
+        observedAt: organization.updatedAt,
+      })),
+    )
+
+    const expanded = await service.list(Object.assign({ limit: 200 }, { boxCountScope: 'all' as const }))
+    expect(expanded.items[0]).toMatchObject({ boxCount: 2, impactState: 'not_impacted' })
+    expect((await service.list({ limit: 200 })).items[0]).toMatchObject({
+      boxCount: 0,
+      impactState: 'not_impacted',
+    })
+  })
+})
+
 describe('AdminOrganizationOverviewService', () => {
   afterEach(() => jest.useRealTimers())
 

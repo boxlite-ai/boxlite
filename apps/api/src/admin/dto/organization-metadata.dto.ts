@@ -1,4 +1,4 @@
-import { ApiProperty, ApiSchema } from '@nestjs/swagger'
+import { ApiProperty, ApiPropertyOptional, ApiSchema } from '@nestjs/swagger'
 
 @ApiSchema({ name: 'AdminOrganizationCreator' })
 class AdminOrganizationCreatorDto {
@@ -33,4 +33,20 @@ export class AdminOrganizationRegistrationDto {
     description: 'Current creator identity.',
   })
   creator: AdminOrganizationCreatorDto | null
+}
+
+@ApiSchema({ name: 'AdminOrganizationVerifiedCreator' })
+class AdminOrganizationVerifiedCreatorDto extends AdminOrganizationCreatorDto {
+  @ApiPropertyOptional({ description: 'Current verification state from the creator account.' })
+  emailVerified?: boolean
+}
+
+// List readers expose verification without expanding the existing detail contract.
+export class AdminOrganizationVerifiedRegistrationDto extends AdminOrganizationRegistrationDto {
+  @ApiProperty({
+    type: AdminOrganizationVerifiedCreatorDto,
+    nullable: true,
+    description: 'Current creator identity.',
+  })
+  declare creator: AdminOrganizationVerifiedCreatorDto | null
 }

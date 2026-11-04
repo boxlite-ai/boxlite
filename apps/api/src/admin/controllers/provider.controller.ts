@@ -7,12 +7,16 @@ import {
   Param,
   ParseUUIDPipe,
   Query,
+  Req,
+  ForbiddenException,
   Res,
   UseGuards,
 } from '@nestjs/common'
 import {
   ApiBadRequestResponse,
   ApiBearerAuth,
+  ApiExtraModels,
+  getSchemaPath,
   ApiNotFoundResponse,
   ApiOAuth2,
   ApiOkResponse,
@@ -34,6 +38,7 @@ import {
   AdminJobOverviewPageDto,
   AdminOrganizationDetailDto,
   AdminOrganizationOverviewPageDto,
+  AdminOrganizationRegistrationPageDto,
   AdminRegionOverviewDto,
   AdminRegionOverviewPageDto,
 } from '../dto/provider-overview.dto'
@@ -172,7 +177,28 @@ export class AdminProviderController {
   }
 
   @Get('organizations')
+  @RequiredApiRole([SystemRole.ADMIN, 'email-policy-reader'])
   @ApiOperation({ summary: 'List organization operational summaries', operationId: 'adminListOrganizationsOverview' })
+  @ApiQuery({
+    name: 'projection',
+    required: false,
+    enum: ['registration'],
+    description:
+      'Return registration and creator metadata without member/Box statistics. Omit for the full overview; cannot combine with boxCountScope.',
+  })
+  @ApiQuery({
+    name: 'organizationId',
+    required: false,
+    type: String,
+    description: 'Exact organization UUID; avoids name search and cannot be combined with q.',
+  })
+  @ApiQuery({
+    name: 'boxCountScope',
+    required: false,
+    type: String,
+    enum: ['all'],
+    description: 'Count every retained Box state; omit to keep the existing active-state count.',
+  })
   @ApiQuery({
     name: 'createdFrom',
     type: String,
@@ -194,13 +220,37 @@ export class AdminProviderController {
     maxLength: 200,
     description: 'Organization ID or name',
   })
-  @ApiOkResponse({ type: AdminOrganizationOverviewPageDto })
+  @ApiExtraModels(AdminOrganizationOverviewPageDto, AdminOrganizationRegistrationPageDto)
+  @ApiOkResponse({
+    schema: {
+      anyOf: [
+        { $ref: getSchemaPath(AdminOrganizationOverviewPageDto) },
+        { $ref: getSchemaPath(AdminOrganizationRegistrationPageDto) },
+      ],
+    },
+  })
   organizations(
     @Query() query: Record<string, unknown>,
     @Res({ passthrough: true }) response: Response,
-  ): Promise<AdminOrganizationOverviewPageDto> {
+    @Req() request?: { user?: { role: string } },
+  ): Promise<AdminOrganizationOverviewPageDto | AdminOrganizationRegistrationPageDto> {
+    const parsed = parseRegistrationQuery(query)
+    if (request?.user?.role === 'email-policy-reader') {
+      if (parsed.projection === 'registration') {
+        if (
+          parsed.query ||
+          (!parsed.organizationId &&
+            (!parsed.createdFrom ||
+              !parsed.createdTo ||
+              Date.parse(parsed.createdTo) - Date.parse(parsed.createdFrom) > 31 * 86_400_000))
+        )
+          throw new ForbiddenException()
+      } else if (!parsed.organizationId || parsed.boxCountScope !== 'all' || parsed.createdFrom || parsed.createdTo) {
+        throw new ForbiddenException()
+      }
+    }
     response.setHeader('Cache-Control', 'private, no-store')
-    return this.organizationsService.list(parseRegistrationQuery(query))
+    return this.organizationsService.list(parsed)
   }
 
   @Get('organizations/:organizationId')

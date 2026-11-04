@@ -52,6 +52,15 @@ describe('recordBusinessEvent', () => {
     expect(attributes).not.toHaveProperty('event.reason')
     expect(attributes).not.toHaveProperty('exception.type')
   })
+  it('preserves trusted authentication time instead of log publication time', () => {
+    recordBusinessEvent({
+      name: 'user.login.genuine',
+      outcome: 'success',
+      correlationId: 'user-1',
+      occurredAt: '2026-09-29T09:00:00.000Z',
+    })
+    expect(logSpy.mock.calls[0][1]['event.timestamp']).toBe('2026-09-29T09:00:00.000Z')
+  })
 
   it('records a user or admin actor without a reason', () => {
     recordBusinessEvent({ name: 'box.stop', outcome: 'requested', correlationId: 'box-1', ctx: Context.user() })
