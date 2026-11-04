@@ -53,11 +53,22 @@ export class McpExecutionTools {
       'exec_box',
       {
         description:
-          'Start an asynchronous command in a Box and return its execution ID. Output streaming is unavailable; do not repeat after an uncertain outcome.',
+          'Start an asynchronous command in a Box and return only its execution ID; do not repeat after an uncertain outcome.' +
+          ' The complete serialized JSON request has a default 100 KiB (102400-byte) API limit, including JSON escaping and protocol envelope; field maxima may not fit together.' +
+          ' For scripts or source exceeding inline limits, use upload_files within its 60 KiB UTF-8 text or 64 KiB complete decoded tar limit (including metadata), then execute the staged file with a short command/path.' +
+          ' Stage in a confirmed existing guest root-filesystem directory outside mounts; /workspace is not guaranteed.',
         inputSchema: z.strictObject({
           ...boxInput,
-          command: text.min(1),
-          args: z.array(text).max(256).optional(),
+          command: text
+            .min(1)
+            .describe(
+              'Executable name or path: 1-4096 Unicode code points; NUL is not allowed. No shell is added automatically.',
+            ),
+          args: z
+            .array(text)
+            .max(256)
+            .optional()
+            .describe('Up to 256 arguments, each at most 4096 Unicode code points; NUL is not allowed.'),
           env: z
             .record(
               z
@@ -68,10 +79,21 @@ export class McpExecutionTools {
               text,
             )
             .refine((env) => Object.keys(env).length <= 128)
-            .optional(),
-          timeout_seconds: z.number().finite().min(0.1).optional(),
-          working_dir: text.min(1).optional(),
-          tty: z.boolean().optional(),
+            .optional()
+            .describe(
+              'Up to 128 environment entries. Keys: 1-256 Unicode code points, excluding "=" and NUL. Values: at most 4096 Unicode code points, excluding NUL.',
+            ),
+          timeout_seconds: z
+            .number()
+            .finite()
+            .min(0.1)
+            .optional()
+            .describe('Optional execution timeout in seconds; at least 0.1 when supplied.'),
+          working_dir: text
+            .min(1)
+            .optional()
+            .describe('Guest working directory: 1-4096 Unicode code points; NUL is not allowed.'),
+          tty: z.boolean().optional().describe('Allocate a pseudo-terminal when true; enables resize_execution.'),
         }),
         outputSchema: executionOutput,
         annotations: { ...destructiveAnnotations, openWorldHint: true },

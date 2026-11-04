@@ -80,6 +80,86 @@ describe('McpExecutionTools HTTP calls', () => {
     expect(body.result.tools.find((tool) => tool.name === 'resize_execution').annotations.destructiveHint).toBe(false)
   })
 
+  it('advertises inline execution limits through the SDK input schema', async () => {
+    const body = await mcp.list()
+    const tool = body.result.tools.find((tool) => tool.name === 'exec_box')
+    expect(tool.inputSchema.properties).toMatchObject({
+      command: { description: expect.stringContaining('1-4096 Unicode code points'), maxLength: 4096 },
+      args: { description: expect.stringContaining('256 arguments'), maxItems: 256 },
+      env: { description: expect.stringContaining('128 environment entries') },
+      working_dir: { description: expect.stringContaining('1-4096 Unicode code points'), maxLength: 4096 },
+      timeout_seconds: { description: expect.stringContaining('at least 0.1'), minimum: 0.1 },
+      tty: { description: expect.stringContaining('pseudo-terminal') },
+    })
+    const { command, args, env, working_dir, tty } = tool.inputSchema.properties
+    expect(args.description).toContain('each at most 4096 Unicode code points')
+    expect(env.description).toContain('Keys: 1-256 Unicode code points, excluding "=" and NUL')
+    expect(env.description).toContain('Values: at most 4096 Unicode code points, excluding NUL')
+    for (const field of [command, args, working_dir]) expect(field.description).toContain('NUL is not allowed')
+    expect(tty.description).toContain('resize_execution')
+    expect(tool.inputSchema.required).toEqual(['organization_id', 'box_id', 'command'])
+  })
+
+  it('advertises the separate request cap and bounded file staging', async () => {
+    const body = await mcp.list()
+    const tool = body.result.tools.find((tool) => tool.name === 'exec_box')
+    expect(tool.description).toContain('return only its execution ID')
+    expect(tool.description).toContain('default 100 KiB (102400-byte) API limit')
+    expect(tool.description).toContain('including JSON escaping and protocol envelope')
+    expect(tool.description).toContain('field maxima may not fit together')
+    expect(tool.description).toContain('upload_files')
+    expect(tool.description).toContain('60 KiB UTF-8 text or 64 KiB complete decoded tar limit (including metadata)')
+    expect(tool.description).toContain('existing guest root-filesystem directory outside mounts')
+    expect(tool.description).toContain('/workspace is not guaranteed')
+    expect(tool.description).toContain('do not repeat after an uncertain outcome')
+    expect(tool.description).not.toContain('Output streaming is unavailable')
+  })
+
+  it.each([
+    ['command', { command: '\u{1f680}'.repeat(4096) }],
+    ['argument', { args: ['\u{1f680}'.repeat(4096)] }],
+    ['environment value', { env: { VALUE: '\u{1f680}'.repeat(4096) } }],
+    ['working directory', { working_dir: '\u{1f680}'.repeat(4096) }],
+    ['argument count', { args: Array(256).fill('x') }],
+    ['environment entry count', { env: Object.fromEntries(Array.from({ length: 128 }, (_, i) => [`K${i}`, 'x'])) }],
+    ['environment key', { env: { ['\u{1f680}'.repeat(256)]: 'x' } }],
+    ['minimum timeout', { timeout_seconds: 0.1 }],
+  ])('preserves the accepted %s boundary through tools/call', async (_field, extra) => {
+    const input = { command: 'true', ...extra }
+    const body = await mcp.call('exec_box', { ...scope, ...input })
+    expect(body.result.structuredContent).toEqual({ execution_id: 'exec-1' })
+    expect(requests).toHaveLength(1)
+    expect(JSON.parse(requests[0].body.toString())).toEqual(input)
+  })
+
+  it('leaves omitted execution options absent in the Runner request', async () => {
+    const body = await mcp.call('exec_box', { ...scope, command: 'true' })
+    expect(body.result.structuredContent).toEqual({ execution_id: 'exec-1' })
+    expect(requests).toHaveLength(1)
+    expect(JSON.parse(requests[0].body.toString())).toEqual({ command: 'true' })
+  })
+
+  it.each([
+    ['command code points', { command: '\u{1f680}'.repeat(4097) }],
+    ['argument code points', { args: ['\u{1f680}'.repeat(4097)] }],
+    ['environment value code points', { env: { VALUE: '\u{1f680}'.repeat(4097) } }],
+    ['working directory code points', { working_dir: '\u{1f680}'.repeat(4097) }],
+    ['argument count', { args: Array(257).fill('x') }],
+    ['environment entry count', { env: Object.fromEntries(Array.from({ length: 129 }, (_, i) => [`K${i}`, 'x'])) }],
+    ['environment key code points', { env: { ['\u{1f680}'.repeat(257)]: 'x' } }],
+    ['command NUL', { command: 'bad\0command' }],
+    ['argument NUL', { args: ['bad\0argument'] }],
+    ['environment key NUL', { env: { ['BAD\0KEY']: 'x' } }],
+    ['environment value NUL', { env: { VALUE: 'bad\0value' } }],
+    ['working directory NUL', { working_dir: '/bad\0path' }],
+    ['timeout below minimum', { timeout_seconds: 0.09 }],
+  ])('rejects %s before authorization and network', async (_field, extra) => {
+    const body = await mcp.call('exec_box', { ...scope, command: 'true', ...extra })
+    expect(body.error ?? body.result.isError).toBeTruthy()
+    expect(fixture.memberships.findOne).not.toHaveBeenCalled()
+    expect(requests).toHaveLength(0)
+  })
+
   it('starts asynchronous exec through the scoped adapter and projects the advertised response', async () => {
     respond = (response) => response.end(JSON.stringify({ execution_id: 'exec-1', secret: 'not-public' }))
     const input = {

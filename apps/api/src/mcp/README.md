@@ -164,11 +164,11 @@ lead to execution termination. Tool callers must account for these lifecycle eff
 
 ## Execution tools
 
-`exec_box` starts an asynchronous command and returns `execution_id`.
+`exec_box` starts an asynchronous command and returns only `execution_id`.
 Commands can contact external systems under the Box network policy, so execution is
 annotated as an open-world operation.
-`get_execution` returns state, optional exit code and diagnostics; command output requires
-the separate streaming transport, which these tools do not implement.
+`get_execution` returns state, optional exit code and diagnostics; its response does not
+include stdout or stderr.
 
 `kill_execution` uses DELETE and removes the Runner registry entry.
 `signal_execution` accepts only signals 1, 2, 3, 6, 10, 12, 15 and 28; SIGKILL uses
@@ -182,6 +182,28 @@ before authorization or network access.
 
 Responses project only implemented fields. Malformed or oversized execution-start
 responses report an uncertain outcome because the command may already be running.
+
+### Execution input limits
+
+`tools/list` describes these existing limits alongside the `exec_box` arguments.
+String lengths count Unicode code points, so a non-BMP character counts once.
+
+| Input | Limit |
+| --- | --- |
+| `command`, `working_dir` | 1-4096 code points; no NUL |
+| `args` | At most 256 arguments, each at most 4096 code points; no NUL |
+| `env` | At most 128 entries; keys have 1-256 code points, excluding `=` and NUL; values have at most 4096 code points, excluding NUL |
+| `timeout_seconds` | At least 0.1 seconds when supplied |
+| `tty` | `true` allocates a pseudo-terminal and enables `resize_execution` |
+
+The complete serialized JSON request also has a default 100 KiB (102400-byte) API
+limit, including JSON escaping and the protocol envelope. Per-field maxima may not
+fit together, and the API can reject an oversized request before tool validation.
+
+For longer scripts or source, use `upload_files`, then execute the staged file with
+a short command and guest path. Uploads remain bounded at 60 KiB of UTF-8 text or
+64 KiB for a complete decoded tar, including metadata. Stage files in a confirmed
+existing guest root-filesystem directory outside mounts; `/workspace` is not guaranteed.
 
 ## File transfer tools
 
