@@ -248,3 +248,6 @@ target/
 # Stage coordinates name somebody's cloud account, so they are per checkout.
 # The committed half is mstage.env.json; .mstage.config.example.json is the template.
 .mstage.config.json
+
+# Local API-owned Listener executable
+/apps/bin/ci-listener

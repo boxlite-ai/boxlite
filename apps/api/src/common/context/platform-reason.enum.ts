@@ -10,4 +10,5 @@ export enum PlatformReason {
   ORG_SUSPENSION = 'org_suspension',
   WARM_POOL = 'warm_pool',
   BOOTSTRAP = 'bootstrap',
+  CI_RUNNER = 'ci_runner',
 }

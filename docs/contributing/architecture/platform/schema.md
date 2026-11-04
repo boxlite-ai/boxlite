@@ -20,10 +20,69 @@ The model is implementation-grounded:
   ClickHouse queries in
   [`box-telemetry`](../../../../apps/api/src/box-telemetry/services/box-telemetry.service.ts).
 
-`apps/api` is the only application that owns a database. The Go services —
+`apps/api` owns the control-plane PostgreSQL database. The standalone CI Listener
+uses a private SQLite store for the same controller records. The Go services —
 [`runner`](../../../../apps/runner/) and [`proxy`](../../../../apps/proxy/) — hold no persistence: neither
 imports an ORM, `database/sql`, or an embedded store. Runner state reaches the
 control plane through `runner` telemetry columns, `job` results and CPU incident reports.
+
+## Experimental CI authorization state
+
+The SQL-owned tables below are created by
+[`1793664000000-add-ci-connect-migration.ts`](api/src/migrations/pre-deploy/1793664000000-add-ci-connect-migration.ts)
+and accessed by `CiConnectService`; they have no TypeORM entity mapping.
+
+| Table                     | Stored state                                                                                                                                                | Enforced boundaries                                                                                                                       |
+| ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `ci_installation_binding` | Stable GitHub host/App/installation/account IDs, BoxLite organization, actor, public/follow policy, provisioning state and generation                       | UUID primary key; unique host/App/installation; positive GitHub IDs; account/state checks; organization FK with cascade                   |
+| `ci_connect_attempt`      | Initiating user/org, account and policy, grant flow, encrypted device code or web PKCE verifier, OAuth state hash, expiry, poll/claim lease, result binding | UUID primary key; state/positive interval checks; organization FK with cascade; binding FK; partial expiry index for remaining ciphertext |
+
+Device ciphertext uses AES-256-GCM with transaction/user/organization AAD. Completion,
+cancellation and terminal failure clear it. Expired ciphertext is removed when another
+attempt starts. Binding ownership is committed only after live GitHub authorization;
+failed authorization cannot reserve an installation.
+
+Organization deletion cascades these authorization-only rows. Execution history is
+separate and has no cascade foreign keys: revocation must not erase original cleanup
+identity or uncertain resource allocations.
+
+Migration [`1793700000000-add-ci-listener-state-migration.ts`](api/src/migrations/pre-deploy/1793700000000-add-ci-listener-state-migration.ts)
+adds one shared controller table, `ci_listener_state`:
+
+| Columns / keys                           | Stored state                                     | Enforcement                                                    |
+| ---------------------------------------- | ------------------------------------------------ | -------------------------------------------------------------- |
+| `(namespace, record_key)`                | App-scoped record identity                       | Composite primary key; C ordering for record keys              |
+| `record_version`, `schema_version`       | UUID CAS revision and payload schema             | Required; positive schema version                              |
+| `owner_epoch`, `owner_id`, `lease_until` | Execution owner metadata for the `@owner` record | Current payload/lease validated by the shared storage contract |
+| `payload`, `updated_at`                  | JSON facts and actual database update clock      | Required JSONB and timestamptz                                 |
+
+The native API namespace is `ci:<App client ID>`. `@anchor` and `@owner` are permanent
+initialization roots. `backend/native` fixes the configured App; `catalog/scopes`
+indexes immutable `scope/<digest>` records. `worker/<allocation-id>` contains the
+original job identity, resource phases/IDs, one external operation intent and quota
+ownership. `box-native/<allocation-id>` stores the platform-confirmed Box ID and
+JIT delivery claim. Those ledger writes commit in the Box creation transaction.
+
+`receipt/<delivery UUID>`, `notice/<installation>/<job>` and
+`wake/<installation>/<repository>` form the durable inbox. Repository ID zero is an
+installation discovery hint. Shared inbox writes atomically commit receipts, notices
+and wakes under live binding authorization. UUID CAS revisions prevent stale settlement
+and delete/recreate ABA. Receipts currently remain stored; automatic pruning is pending.
+
+`replay/progress` stores App delivery scan checkpoints, cursor hashes and cooldowns;
+`replay/item/<GUID>` stores exact decimal delivery IDs, target metadata and retry
+intents. A leased bounded scan reads these records without treating a page as a
+complete allocation snapshot. Page records commit before their checkpoint, and
+successful GUID observations cannot be reopened by older failed attempts. Replay
+metadata has a three-day retention window; unconfirmed expiry reports a gap and
+never removes a notice or releases allocation quota. These records select no
+tenant and create no connect binding. Business receipts remain retained.
+
+No GitHub token, JIT configuration, App private key or BoxLite API Key is stored in
+these controller payloads. Historical scopes and uncertain effects survive binding
+and organization deletion. Unknown effects retain capacity rather than being retried
+or erased. The standalone host implements the same record contract in private
+`listener.sqlite` and its WAL/SHM sidecar files.
 
 ## Overview
 
@@ -168,12 +227,12 @@ Four correctness properties are enforced by the database rather than by
 application locking. The per-box Redis locks are advisory and expire, so an
 interleaved pair of handlers could otherwise violate all four.
 
-| Index                                          | Table               | Definition                                              |
-| ---------------------------------------------- | ------------------- | ------------------------------------------------------- |
-| `box_usage_periods_one_open_period_per_box_idx` | `box_usage_periods` | unique `("boxId")` where `"endAt" IS NULL`              |
-| `IDX_UNIQUE_INCOMPLETE_JOB`                    | `job`               | unique `("resourceType","resourceId","runnerId")` where `"completedAt" IS NULL` |
-| `organization_user_default_user_unique`        | `organization_user` | unique `("userId")` where `"isDefaultForUser" = true`   |
-| `image_org_name_active_unique`                 | `image`             | unique `("organizationId","name")` where `"deletedAt" IS NULL` |
+| Index                                           | Table               | Definition                                                                      |
+| ----------------------------------------------- | ------------------- | ------------------------------------------------------------------------------- |
+| `box_usage_periods_one_open_period_per_box_idx` | `box_usage_periods` | unique `("boxId")` where `"endAt" IS NULL`                                      |
+| `IDX_UNIQUE_INCOMPLETE_JOB`                     | `job`               | unique `("resourceType","resourceId","runnerId")` where `"completedAt" IS NULL` |
+| `organization_user_default_user_unique`         | `organization_user` | unique `("userId")` where `"isDefaultForUser" = true`                           |
+| `image_org_name_active_unique`                  | `image`             | unique `("organizationId","name")` where `"deletedAt" IS NULL`                  |
 
 ## Tenancy, access and audit
 
@@ -217,10 +276,10 @@ outside the Box transaction; an organization without a recorded Box has no row. 
 deletion cascades to its facts; Box deletion does not. The API reads it only when activation
 is selected with include=activation on the existing organization detail.
 
-| Column | Type | Notes |
-| --- | --- | --- |
-| `organizationId` | `uuid` | primary key; FK to organization with `ON DELETE CASCADE` |
-| `lastBoxCreatedAt` | `timestamptz` | nullable; maximum retained creation or warm-pool claim |
+| Column              | Type          | Notes                                                        |
+| ------------------- | ------------- | ------------------------------------------------------------ |
+| `organizationId`    | `uuid`        | primary key; FK to organization with `ON DELETE CASCADE`     |
+| `lastBoxCreatedAt`  | `timestamptz` | nullable; maximum retained creation or warm-pool claim       |
 | `lastBoxModifiedAt` | `timestamptz` | nullable; maximum successful-start or accepted-deletion time |
 
 The [activation design](../../investigations/organization-activation-facts.md)
@@ -230,29 +289,29 @@ describes the optimistic update, migration locking, backfill and uncertainty.
 
 Identity, keyed by the subject the IdP issues rather than a generated uuid.
 
-| Column | Type | Notes |
-| ------ | ---- | ----- |
-| `id` | `character varying` | primary key |
-| `name` | `character varying` | |
-| `email` | `character varying` | default `''` |
-| `emailVerified` | `boolean` | default `false` |
-| `role` | `enum` | `admin` \| `user`, default `user` |
-| `publicKeys` | `simple-json` | |
-| `keyPair` | `simple-json` | nullable; deprecated — written on user creation, read by nothing since the SSH gateway was removed |
-| `createdAt` | `timestamptz` | |
+| Column          | Type                | Notes                                                                                              |
+| --------------- | ------------------- | -------------------------------------------------------------------------------------------------- |
+| `id`            | `character varying` | primary key                                                                                        |
+| `name`          | `character varying` |                                                                                                    |
+| `email`         | `character varying` | default `''`                                                                                       |
+| `emailVerified` | `boolean`           | default `false`                                                                                    |
+| `role`          | `enum`              | `admin` \| `user`, default `user`                                                                  |
+| `publicKeys`    | `simple-json`       |                                                                                                    |
+| `keyPair`       | `simple-json`       | nullable; deprecated — written on user creation, read by nothing since the SSH gateway was removed |
+| `createdAt`     | `timestamptz`       |                                                                                                    |
 
 ### `organization_user`
 
 Membership. The composite primary key means a user joins an organization at
 most once.
 
-| Column | Type | Notes |
-| ------ | ---- | ----- |
-| `organizationId` | `uuid` | primary key, FK → `organization.id` |
-| `userId` | `character varying` | primary key |
-| `role` | `enum` | `owner` \| `member`, default `member` |
-| `isDefaultForUser` | `boolean` | default `false` |
-| `createdAt` / `updatedAt` | `timestamptz` | |
+| Column                    | Type                | Notes                                 |
+| ------------------------- | ------------------- | ------------------------------------- |
+| `organizationId`          | `uuid`              | primary key, FK → `organization.id`   |
+| `userId`                  | `character varying` | primary key                           |
+| `role`                    | `enum`              | `owner` \| `member`, default `member` |
+| `isDefaultForUser`        | `boolean`           | default `false`                       |
+| `createdAt` / `updatedAt` | `timestamptz`       |                                       |
 
 **Partial unique:** one `isDefaultForUser = true` row per `userId`.
 
@@ -261,25 +320,25 @@ most once.
 A named permission bundle. Rows with `isGlobal` have a null `organizationId`
 and are shared by all tenants.
 
-| Column | Type | Notes |
-| ------ | ---- | ----- |
-| `id` | `uuid` | primary key |
-| `name` | `character varying` | |
-| `description` | `character varying` | |
-| `permissions` | `enum[]` | `OrganizationResourcePermission` |
-| `isGlobal` | `boolean` | default `false` |
-| `organizationId` | `uuid` | nullable, FK → `organization.id` |
-| `createdAt` / `updatedAt` | `timestamptz` | |
+| Column                    | Type                | Notes                            |
+| ------------------------- | ------------------- | -------------------------------- |
+| `id`                      | `uuid`              | primary key                      |
+| `name`                    | `character varying` |                                  |
+| `description`             | `character varying` |                                  |
+| `permissions`             | `enum[]`            | `OrganizationResourcePermission` |
+| `isGlobal`                | `boolean`           | default `false`                  |
+| `organizationId`          | `uuid`              | nullable, FK → `organization.id` |
+| `createdAt` / `updatedAt` | `timestamptz`       |                                  |
 
 ### `organization_role_assignment`
 
 Join table: which roles a member holds.
 
-| Column | Type | Notes |
-| ------ | ---- | ----- |
-| `organizationId` | `uuid` | primary key, FK → `organization_user` |
-| `userId` | `character varying` | primary key, FK → `organization_user` |
-| `roleId` | `uuid` | primary key, FK → `organization_role.id` |
+| Column           | Type                | Notes                                    |
+| ---------------- | ------------------- | ---------------------------------------- |
+| `organizationId` | `uuid`              | primary key, FK → `organization_user`    |
+| `userId`         | `character varying` | primary key, FK → `organization_user`    |
+| `roleId`         | `uuid`              | primary key, FK → `organization_role.id` |
 
 The member-side FK cascades. `roleId` is `NO ACTION`, so a role that is still
 assigned cannot be deleted — it has to be unassigned first.
@@ -288,26 +347,26 @@ assigned cannot be deleted — it has to be unassigned first.
 
 A pending membership, addressed by email rather than by user id.
 
-| Column | Type | Notes |
-| ------ | ---- | ----- |
-| `id` | `uuid` | primary key |
-| `organizationId` | `uuid` | FK → `organization.id` |
-| `email` | `character varying` | |
-| `invitedBy` | `character varying` | default `''` |
-| `role` | `enum` | `owner` \| `member`, default `member` |
-| `status` | `enum` | default `pending` |
-| `expiresAt` | `timestamptz` | |
-| `createdAt` / `updatedAt` | `timestamptz` | |
+| Column                    | Type                | Notes                                 |
+| ------------------------- | ------------------- | ------------------------------------- |
+| `id`                      | `uuid`              | primary key                           |
+| `organizationId`          | `uuid`              | FK → `organization.id`                |
+| `email`                   | `character varying` |                                       |
+| `invitedBy`               | `character varying` | default `''`                          |
+| `role`                    | `enum`              | `owner` \| `member`, default `member` |
+| `status`                  | `enum`              | default `pending`                     |
+| `expiresAt`               | `timestamptz`       |                                       |
+| `createdAt` / `updatedAt` | `timestamptz`       |                                       |
 
 ### `organization_role_assignment_invitation`
 
 Join table: the roles an invitee will hold once the invitation is accepted.
 Same cascade asymmetry as `organization_role_assignment`.
 
-| Column | Type | Notes |
-| ------ | ---- | ----- |
+| Column         | Type   | Notes                                          |
+| -------------- | ------ | ---------------------------------------------- |
 | `invitationId` | `uuid` | primary key, FK → `organization_invitation.id` |
-| `roleId` | `uuid` | primary key, FK → `organization_role.id` |
+| `roleId`       | `uuid` | primary key, FK → `organization_role.id`       |
 
 ### `api_key`
 
@@ -326,18 +385,18 @@ and its other members' keys remain; the existing fallback-owner rule still appli
 Removal events capture membership identifiers before deleting the entity,
 because TypeORM clears its primary columns during removal.
 
-| Column | Type | Notes |
-| ------ | ---- | ----- |
-| `organizationId` | `uuid` | primary key |
-| `userId` | `character varying` | primary key |
-| `name` | `character varying` | primary key |
-| `keyHash` | `character varying` | unique, default `''` |
-| `keyPrefix` | `character varying` | default `''` |
-| `keySuffix` | `character varying` | default `''` |
-| `permissions` | `enum[]` | `OrganizationResourcePermission` |
-| `createdAt` | `timestamp` | |
-| `lastUsedAt` | `timestamp` | nullable |
-| `expiresAt` | `timestamp` | nullable |
+| Column           | Type                | Notes                            |
+| ---------------- | ------------------- | -------------------------------- |
+| `organizationId` | `uuid`              | primary key                      |
+| `userId`         | `character varying` | primary key                      |
+| `name`           | `character varying` | primary key                      |
+| `keyHash`        | `character varying` | unique, default `''`             |
+| `keyPrefix`      | `character varying` | default `''`                     |
+| `keySuffix`      | `character varying` | default `''`                     |
+| `permissions`    | `enum[]`            | `OrganizationResourcePermission` |
+| `createdAt`      | `timestamp`         |                                  |
+| `lastUsedAt`     | `timestamp`         | nullable                         |
+| `expiresAt`      | `timestamp`         | nullable                         |
 
 **Index:** `api_key_org_user_idx (organizationId, userId)`.
 
@@ -347,22 +406,22 @@ Append-only action record. The target is a polymorphic, untyped string pair —
 deliberately not a foreign key, so an entry survives deletion of what it
 describes.
 
-| Column | Type | Notes |
-| ------ | ---- | ----- |
-| `id` | `uuid` | primary key |
-| `actorId` | `character varying` | |
-| `actorEmail` | `character varying` | default `''` |
-| `organizationId` | `character varying` | nullable |
-| `action` | `character varying` | |
-| `targetType` | `character varying` | nullable |
-| `targetId` | `character varying` | nullable |
-| `statusCode` | `integer` | nullable |
-| `errorMessage` | `character varying` | nullable |
-| `ipAddress` | `character varying` | nullable |
-| `userAgent` | `text` | nullable |
-| `source` | `character varying` | nullable |
-| `metadata` | `jsonb` | nullable |
-| `createdAt` | `timestamptz` | |
+| Column           | Type                | Notes        |
+| ---------------- | ------------------- | ------------ |
+| `id`             | `uuid`              | primary key  |
+| `actorId`        | `character varying` |              |
+| `actorEmail`     | `character varying` | default `''` |
+| `organizationId` | `character varying` | nullable     |
+| `action`         | `character varying` |              |
+| `targetType`     | `character varying` | nullable     |
+| `targetId`       | `character varying` | nullable     |
+| `statusCode`     | `integer`           | nullable     |
+| `errorMessage`   | `character varying` | nullable     |
+| `ipAddress`      | `character varying` | nullable     |
+| `userAgent`      | `text`              | nullable     |
+| `source`         | `character varying` | nullable     |
+| `metadata`       | `jsonb`             | nullable     |
+| `createdAt`      | `timestamptz`       |              |
 
 **Indexes:** `(createdAt)` · `(organizationId, createdAt)`.
 
@@ -371,13 +430,13 @@ describes.
 Tracks provisioning of the organization's Svix application, with its own retry
 counter and last error.
 
-| Column | Type | Notes |
-| ------ | ---- | ----- |
-| `organizationId` | `character varying` | primary key |
-| `svixApplicationId` | `character varying` | nullable |
-| `lastError` | `text` | nullable |
-| `retryCount` | `integer` | default `0` |
-| `createdAt` / `updatedAt` | `timestamptz` | |
+| Column                    | Type                | Notes       |
+| ------------------------- | ------------------- | ----------- |
+| `organizationId`          | `character varying` | primary key |
+| `svixApplicationId`       | `character varying` | nullable    |
+| `lastError`               | `text`              | nullable    |
+| `retryCount`              | `integer`           | default `0` |
+| `createdAt` / `updatedAt` | `timestamptz`       |             |
 
 ## Fleet
 
@@ -393,39 +452,39 @@ index instead of a scan. `enforceInvariants()` on the entity re-derives
 `pending` on every write, and nulls `runnerId` once a box reaches `destroyed`
 or `archived`.
 
-| Column | Type | Notes |
-| ------ | ---- | ----- |
-| `id` | `character varying(12)` | primary key |
-| `organizationId` | `uuid` | |
-| `name` | `character varying` | unique per organization |
-| `region` | `character varying` | holds `region.id` |
-| `image` | `character varying` | nullable |
-| `imageIsOrgOwned` | `boolean` | nullable; false for the operator's curated set. Null means the row predates the column, and the reader falls back to matching `image` against the curated set as it stands now — which is what every row used to do, and why the column exists |
-| `runnerId` | `uuid` | nullable |
-| `prevRunnerId` | `uuid` | nullable; the runner to revert to if reassignment fails |
-| `class` | `enum` | `small` \| `medium` \| `large`, default `small` |
-| `state` | `enum` | 13 values, default `unknown` |
-| `desiredState` | `enum` | `started` \| `stopped` \| `destroyed` \| `resized` |
-| `pending` | `boolean` | default `false` |
-| `recoverable` | `boolean` | default `false` |
-| `errorReason` | `character varying` | nullable |
-| `cpu` | `integer` | default `2` |
-| `gpu` | `integer` | default `0` |
-| `mem` | `integer` | default `4` |
-| `disk` | `integer` | default `10` |
-| `autoStop` | `integer` | seconds, default `900`; `0` disables |
-| `autoDelete` | `integer` | default `0` = disabled |
-| `autoResume` | `boolean` | default `true` |
-| `osUser` | `character varying` | |
-| `env` | `jsonb` | default `{}` |
-| `labels` | `jsonb` | nullable |
-| `volumes` | `jsonb` | array of `{ volumeId, mountPath }` |
-| `inboundEnabled` | `boolean` | default `false`; `true` lets the proxy serve exposed services under each tunnel's access policy (public: no sign-in; private: tunnel token or member) |
-| `outboundEnabled` | `boolean` | default `true`; `false` blocks all egress |
-| `outboundAllowNet` | `text[]` | nullable egress allowlist (hosts, wildcards, IPv4, CIDRs); null = full egress |
-| `authToken` | `character varying` | `nanoid(32)`, lowercased |
-| `daemonVersion` | `character varying` | nullable |
-| `createdAt` / `updatedAt` | `timestamptz` | |
+| Column                    | Type                    | Notes                                                                                                                                                                                                                                          |
+| ------------------------- | ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `id`                      | `character varying(12)` | primary key                                                                                                                                                                                                                                    |
+| `organizationId`          | `uuid`                  |                                                                                                                                                                                                                                                |
+| `name`                    | `character varying`     | unique per organization                                                                                                                                                                                                                        |
+| `region`                  | `character varying`     | holds `region.id`                                                                                                                                                                                                                              |
+| `image`                   | `character varying`     | nullable                                                                                                                                                                                                                                       |
+| `imageIsOrgOwned`         | `boolean`               | nullable; false for the operator's curated set. Null means the row predates the column, and the reader falls back to matching `image` against the curated set as it stands now — which is what every row used to do, and why the column exists |
+| `runnerId`                | `uuid`                  | nullable                                                                                                                                                                                                                                       |
+| `prevRunnerId`            | `uuid`                  | nullable; the runner to revert to if reassignment fails                                                                                                                                                                                        |
+| `class`                   | `enum`                  | `small` \| `medium` \| `large`, default `small`                                                                                                                                                                                                |
+| `state`                   | `enum`                  | 13 values, default `unknown`                                                                                                                                                                                                                   |
+| `desiredState`            | `enum`                  | `started` \| `stopped` \| `destroyed` \| `resized`                                                                                                                                                                                             |
+| `pending`                 | `boolean`               | default `false`                                                                                                                                                                                                                                |
+| `recoverable`             | `boolean`               | default `false`                                                                                                                                                                                                                                |
+| `errorReason`             | `character varying`     | nullable                                                                                                                                                                                                                                       |
+| `cpu`                     | `integer`               | default `2`                                                                                                                                                                                                                                    |
+| `gpu`                     | `integer`               | default `0`                                                                                                                                                                                                                                    |
+| `mem`                     | `integer`               | default `4`                                                                                                                                                                                                                                    |
+| `disk`                    | `integer`               | default `10`                                                                                                                                                                                                                                   |
+| `autoStop`                | `integer`               | seconds, default `900`; `0` disables                                                                                                                                                                                                           |
+| `autoDelete`              | `integer`               | default `0` = disabled                                                                                                                                                                                                                         |
+| `autoResume`              | `boolean`               | default `true`                                                                                                                                                                                                                                 |
+| `osUser`                  | `character varying`     |                                                                                                                                                                                                                                                |
+| `env`                     | `jsonb`                 | default `{}`                                                                                                                                                                                                                                   |
+| `labels`                  | `jsonb`                 | nullable                                                                                                                                                                                                                                       |
+| `volumes`                 | `jsonb`                 | array of `{ volumeId, mountPath }`                                                                                                                                                                                                             |
+| `inboundEnabled`          | `boolean`               | default `false`; `true` lets the proxy serve exposed services under each tunnel's access policy (public: no sign-in; private: tunnel token or member)                                                                                          |
+| `outboundEnabled`         | `boolean`               | default `true`; `false` blocks all egress                                                                                                                                                                                                      |
+| `outboundAllowNet`        | `text[]`                | nullable egress allowlist (hosts, wildcards, IPv4, CIDRs); null = full egress                                                                                                                                                                  |
+| `authToken`               | `character varying`     | `nanoid(32)`, lowercased                                                                                                                                                                                                                       |
+| `daemonVersion`           | `character varying`     | nullable                                                                                                                                                                                                                                       |
+| `createdAt` / `updatedAt` | `timestamptz`           |                                                                                                                                                                                                                                                |
 
 The network policy columns store the `/v1` NetworkSpec's `enabled` / `disabled`
 modes as booleans (`true` = `enabled`); the API converts `mode` strings at its
@@ -453,38 +512,38 @@ A host machine. Roughly half the columns are live telemetry the scheduler
 reads to place boxes: declared capacity, current load, current allocation, and
 a derived availability score.
 
-| Column | Type | Notes |
-| ------ | ---- | ----- |
-| `id` | `uuid` | primary key |
-| `name` | `character varying` | unique per region |
-| `region` | `character varying` | holds `region.id` |
-| `domain` | `character varying` | nullable |
-| `apiUrl` | `character varying` | nullable; required when `apiVersion` is `0` |
-| `proxyUrl` | `character varying` | nullable; falls back to `apiUrl` |
-| `apiKey` | `character varying` | |
-| `state` | `enum` | `initializing` \| `ready` \| `disabled` \| `decommissioned` \| `unresponsive` |
-| `class` | `enum` | default `small` |
-| `cpu` | `double precision` | declared capacity |
-| `memoryGiB` | `double precision` | declared capacity |
-| `diskGiB` | `double precision` | declared capacity; each heartbeat overwrites it with the size of the filesystem holding the runner's BoxLite home |
-| `gpu` | `integer` | nullable |
-| `gpuType` | `character varying` | nullable |
-| `currentCpuLoadAverage` | `double precision` | |
-| `currentCpuUsagePercentage` | `double precision` | |
-| `currentMemoryUsagePercentage` | `double precision` | |
-| `currentDiskUsagePercentage` | `double precision` | use of that filesystem (`df` Use%) |
-| `currentAllocatedCpu` | `double precision` | |
-| `currentAllocatedMemoryGiB` | `double precision` | |
-| `currentAllocatedDiskGiB` | `double precision` | used GiB on that filesystem (`df` Used), not a sum of box sizes |
-| `currentStartedBoxes` | `integer` | |
-| `availabilityScore` | `integer` | |
-| `unschedulable` | `boolean` | default `false` |
-| `draining` | `boolean` | default `false` |
-| `appVersion` | `character varying` | default `v0.0.0-dev` |
-| `apiVersion` | `character varying` | default `0` |
-| `serviceHealth` | `jsonb` | nullable |
-| `lastChecked` | `timestamptz` | nullable |
-| `createdAt` / `updatedAt` | `timestamptz` | |
+| Column                         | Type                | Notes                                                                                                             |
+| ------------------------------ | ------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `id`                           | `uuid`              | primary key                                                                                                       |
+| `name`                         | `character varying` | unique per region                                                                                                 |
+| `region`                       | `character varying` | holds `region.id`                                                                                                 |
+| `domain`                       | `character varying` | nullable                                                                                                          |
+| `apiUrl`                       | `character varying` | nullable; required when `apiVersion` is `0`                                                                       |
+| `proxyUrl`                     | `character varying` | nullable; falls back to `apiUrl`                                                                                  |
+| `apiKey`                       | `character varying` |                                                                                                                   |
+| `state`                        | `enum`              | `initializing` \| `ready` \| `disabled` \| `decommissioned` \| `unresponsive`                                     |
+| `class`                        | `enum`              | default `small`                                                                                                   |
+| `cpu`                          | `double precision`  | declared capacity                                                                                                 |
+| `memoryGiB`                    | `double precision`  | declared capacity                                                                                                 |
+| `diskGiB`                      | `double precision`  | declared capacity; each heartbeat overwrites it with the size of the filesystem holding the runner's BoxLite home |
+| `gpu`                          | `integer`           | nullable                                                                                                          |
+| `gpuType`                      | `character varying` | nullable                                                                                                          |
+| `currentCpuLoadAverage`        | `double precision`  |                                                                                                                   |
+| `currentCpuUsagePercentage`    | `double precision`  |                                                                                                                   |
+| `currentMemoryUsagePercentage` | `double precision`  |                                                                                                                   |
+| `currentDiskUsagePercentage`   | `double precision`  | use of that filesystem (`df` Use%)                                                                                |
+| `currentAllocatedCpu`          | `double precision`  |                                                                                                                   |
+| `currentAllocatedMemoryGiB`    | `double precision`  |                                                                                                                   |
+| `currentAllocatedDiskGiB`      | `double precision`  | used GiB on that filesystem (`df` Used), not a sum of box sizes                                                   |
+| `currentStartedBoxes`          | `integer`           |                                                                                                                   |
+| `availabilityScore`            | `integer`           |                                                                                                                   |
+| `unschedulable`                | `boolean`           | default `false`                                                                                                   |
+| `draining`                     | `boolean`           | default `false`                                                                                                   |
+| `appVersion`                   | `character varying` | default `v0.0.0-dev`                                                                                              |
+| `apiVersion`                   | `character varying` | default `0`                                                                                                       |
+| `serviceHealth`                | `jsonb`             | nullable                                                                                                          |
+| `lastChecked`                  | `timestamptz`       | nullable                                                                                                          |
+| `createdAt` / `updatedAt`      | `timestamptz`       |                                                                                                                   |
 
 **Unique:** `(region, name)`. **Index:**
 `(state, unschedulable, region)` — the placement query.
@@ -495,18 +554,18 @@ Immutable evidence from each two-minute capture after a runner's five-minute CPU
 saturation trigger. Captures repeat while high CPU observations continue. Created by the additive
 `1793232000000-add-runner-cpu-incidents` pre-deploy migration.
 
-| Column | Type | Notes |
-| ------ | ---- | ----- |
-| `id` | `bigint identity` | primary key; exposed as a decimal string |
-| `runnerId` / `eventId` | `uuid` | unique pair; runner identity comes from authentication |
-| `highCpuSince` | `timestamptz` | start of the continuously observed high-load interval |
-| `windowStartedAt` / `windowEndedAt` | `timestamptz` | actual attribution window; at least two minutes |
-| `runnerCpuPercent` | `double precision` | host-wide percent at trigger, greater than 80 and at most 100 |
-| `boxId` | `varchar(128)` | business box ID of largest observed consumer; nullable |
-| `image` | `text` | winner's exact `BoxInfo.Image` string from its last successful sample; null for no winner or older reports; empty string is preserved |
-| `cpuSeconds` | `double precision` | cumulative measured CPU time, all cores; zero iff box ID is null |
-| `samplingComplete` | `boolean` | false for missing samples, lifecycle changes or counter resets |
-| `receivedAt` | `timestamptz` | server receipt time |
+| Column                              | Type               | Notes                                                                                                                                 |
+| ----------------------------------- | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `id`                                | `bigint identity`  | primary key; exposed as a decimal string                                                                                              |
+| `runnerId` / `eventId`              | `uuid`             | unique pair; runner identity comes from authentication                                                                                |
+| `highCpuSince`                      | `timestamptz`      | start of the continuously observed high-load interval                                                                                 |
+| `windowStartedAt` / `windowEndedAt` | `timestamptz`      | actual attribution window; at least two minutes                                                                                       |
+| `runnerCpuPercent`                  | `double precision` | host-wide percent at trigger, greater than 80 and at most 100                                                                         |
+| `boxId`                             | `varchar(128)`     | business box ID of largest observed consumer; nullable                                                                                |
+| `image`                             | `text`             | winner's exact `BoxInfo.Image` string from its last successful sample; null for no winner or older reports; empty string is preserved |
+| `cpuSeconds`                        | `double precision` | cumulative measured CPU time, all cores; zero iff box ID is null                                                                      |
+| `samplingComplete`                  | `boolean`          | false for missing samples, lifecycle changes or counter resets                                                                        |
+| `receivedAt`                        | `timestamptz`      | server receipt time                                                                                                                   |
 
 Indexes on `(runnerId,id)` and `windowEndedAt` support runner and capture-completion
 time-range filters. No foreign-key cascade or automatic retention job: evidence
@@ -559,17 +618,17 @@ the persisted JSONB arrays.
 A placement domain. Two check constraints keep type and ownership consistent,
 and the entity repeats them as a `@BeforeInsert`/`@BeforeUpdate` guard.
 
-| Column | Type | Notes |
-| ------ | ---- | ----- |
-| `id` | `character varying` | primary key; `<name>_<nanoid(4)>` when not supplied |
-| `name` | `character varying` | |
-| `organizationId` | `uuid` | nullable |
-| `regionType` | `enum` | `shared` \| `dedicated` \| `custom` |
-| `enforceQuotas` | `boolean` | default `true` |
-| `proxyUrl` | `character varying` | nullable |
-| `toolboxProxyUrl` | `character varying` | nullable; defaults to `proxyUrl` |
-| `proxyApiKeyHash` | `character varying` | nullable |
-| `createdAt` / `updatedAt` | `timestamptz` | |
+| Column                    | Type                | Notes                                               |
+| ------------------------- | ------------------- | --------------------------------------------------- |
+| `id`                      | `character varying` | primary key; `<name>_<nanoid(4)>` when not supplied |
+| `name`                    | `character varying` |                                                     |
+| `organizationId`          | `uuid`              | nullable                                            |
+| `regionType`              | `enum`              | `shared` \| `dedicated` \| `custom`                 |
+| `enforceQuotas`           | `boolean`           | default `true`                                      |
+| `proxyUrl`                | `character varying` | nullable                                            |
+| `toolboxProxyUrl`         | `character varying` | nullable; defaults to `proxyUrl`                    |
+| `proxyApiKeyHash`         | `character varying` | nullable                                            |
+| `createdAt` / `updatedAt` | `timestamptz`       |                                                     |
 
 **Checks:** `region_not_shared` — a shared region may not belong to an
 organization; `region_not_custom` — a custom region must.
@@ -583,15 +642,15 @@ null.
 Persistent storage, backed one-to-one by an object-store bucket whose name is
 derived from the row id (`boxlite-volume-<id>`).
 
-| Column | Type | Notes |
-| ------ | ---- | ----- |
-| `id` | `uuid` | primary key |
-| `organizationId` | `uuid` | nullable |
-| `name` | `character varying` | unique per organization |
-| `state` | `enum` | 7 values, default `pending_create` |
-| `errorReason` | `character varying` | nullable |
-| `lastUsedAt` | `timestamp` | nullable |
-| `createdAt` / `updatedAt` | `timestamptz` | |
+| Column                    | Type                | Notes                              |
+| ------------------------- | ------------------- | ---------------------------------- |
+| `id`                      | `uuid`              | primary key                        |
+| `organizationId`          | `uuid`              | nullable                           |
+| `name`                    | `character varying` | unique per organization            |
+| `state`                   | `enum`              | 7 values, default `pending_create` |
+| `errorReason`             | `character varying` | nullable                           |
+| `lastUsedAt`              | `timestamp`         | nullable                           |
+| `createdAt` / `updatedAt` | `timestamptz`       |                                    |
 
 Attachment lives in `box.volumes`, so attaching or detaching a volume never
 writes to this table.
@@ -604,14 +663,14 @@ env-driven, and the catalog endpoints union them in at read time. `GET /images`,
 `GET /images/usage`, `GET /images/:idOrRef` and `DELETE /images/:idOrRef` read
 these tables; nothing but a box reaching STARTED writes them.
 
-| Column | Type | Notes |
-| ------ | ---- | ----- |
-| `id` | `uuid` | primary key |
-| `organizationId` | `uuid` | not null — there is no shared row |
-| `name` | `character varying(255)` | upstream repository path, e.g. `docker.io/library/python` |
-| `lastUsedAt` | `timestamptz` | nullable |
-| `deletedAt` | `timestamptz` | nullable — soft delete |
-| `createdAt` / `updatedAt` | `timestamptz` | |
+| Column                    | Type                     | Notes                                                     |
+| ------------------------- | ------------------------ | --------------------------------------------------------- |
+| `id`                      | `uuid`                   | primary key                                               |
+| `organizationId`          | `uuid`                   | not null — there is no shared row                         |
+| `name`                    | `character varying(255)` | upstream repository path, e.g. `docker.io/library/python` |
+| `lastUsedAt`              | `timestamptz`            | nullable                                                  |
+| `deletedAt`               | `timestamptz`            | nullable — soft delete                                    |
+| `createdAt` / `updatedAt` | `timestamptz`            |                                                           |
 
 Uniqueness is a partial index rather than a table constraint, so a soft-deleted
 name can be used again; `image_org_lastused_index` serves the count the
@@ -627,19 +686,19 @@ succeeds, so there is no pending state to go stale — a failed pull is recorded
 on the box that attempted it. The one thing a failed pull writes here is
 `upstreamMissingAt`, on a build the registry no longer has.
 
-| Column | Type | Notes |
-| ------ | ---- | ----- |
-| `id` | `uuid` | primary key |
-| `imageId` | `uuid` | → `image.id`, cascade delete |
-| `digest` | `character varying(71)` | OCI manifest digest, unique per image |
-| `sizeBytes` | `bigint` | sum of the declared layer sizes |
-| `state` | `enum` | `ready` \| `deleted`, default `ready` |
-| `sourceKind` | `enum` | `pull` |
-| `sourceSpec` | `jsonb` | `{ sourceRef }` — what the user typed |
-| `storageRef` | `text` | where to fetch the bytes from |
-| `lastUsedAt` | `timestamptz` | nullable; when a box last started from this build |
-| `upstreamMissingAt` | `timestamptz` | nullable; when a pull first failed with the registry's `MANIFEST_UNKNOWN` or `NAME_UNKNOWN`. A mark, not a state: never cleared, and the version stays usable on runners that cached it |
-| `createdAt` | `timestamptz` | |
+| Column              | Type                    | Notes                                                                                                                                                                                   |
+| ------------------- | ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `id`                | `uuid`                  | primary key                                                                                                                                                                             |
+| `imageId`           | `uuid`                  | → `image.id`, cascade delete                                                                                                                                                            |
+| `digest`            | `character varying(71)` | OCI manifest digest, unique per image                                                                                                                                                   |
+| `sizeBytes`         | `bigint`                | sum of the declared layer sizes                                                                                                                                                         |
+| `state`             | `enum`                  | `ready` \| `deleted`, default `ready`                                                                                                                                                   |
+| `sourceKind`        | `enum`                  | `pull`                                                                                                                                                                                  |
+| `sourceSpec`        | `jsonb`                 | `{ sourceRef }` — what the user typed                                                                                                                                                   |
+| `storageRef`        | `text`                  | where to fetch the bytes from                                                                                                                                                           |
+| `lastUsedAt`        | `timestamptz`           | nullable; when a box last started from this build                                                                                                                                       |
+| `upstreamMissingAt` | `timestamptz`           | nullable; when a pull first failed with the registry's `MANIFEST_UNKNOWN` or `NAME_UNKNOWN`. A mark, not a state: never cleared, and the version stays usable on runners that cached it |
+| `createdAt`         | `timestamptz`           |                                                                                                                                                                                         |
 
 The digest is unique per image, not per organization: the same public image
 reached through two upstream paths is normal usage.
@@ -659,13 +718,13 @@ deleting the alias and creating it again. Picking up where a tag points upstream
 is `DELETE /images/:idOrRef` followed by using the reference again, which brings
 the name back as a fresh entry.
 
-| Column | Type | Notes |
-| ------ | ---- | ----- |
-| `id` | `uuid` | primary key |
-| `imageId` | `uuid` | → `image.id`, cascade delete |
-| `name` | `character varying(128)` | unique per image |
-| `versionId` | `uuid` | → `image_version.id`, **restrict** delete |
-| `updatedAt` | `timestamptz` | |
+| Column      | Type                     | Notes                                     |
+| ----------- | ------------------------ | ----------------------------------------- |
+| `id`        | `uuid`                   | primary key                               |
+| `imageId`   | `uuid`                   | → `image.id`, cascade delete              |
+| `name`      | `character varying(128)` | unique per image                          |
+| `versionId` | `uuid`                   | → `image_version.id`, **restrict** delete |
+| `updatedAt` | `timestamptz`            |                                           |
 
 `versionId` restricts rather than cascades: a version an alias still names must not
 disappear underneath it. Postgres does not index a foreign key on its own, and
@@ -678,15 +737,15 @@ Alias registration history. A row is written when a pull seeds an alias or
 an explicit creation succeeds, and is never updated. The history of an image is
 this table read newest first.
 
-| Column | Type | Notes |
-| ------ | ---- | ----- |
-| `id` | `uuid` | primary key |
-| `imageId` | `uuid` | → `image.id`, cascade delete |
-| `tagName` | `character varying(128)` | |
-| `fromVersionId` | `uuid` | nullable; → `image_version.id`, **restrict** delete. Null for alias creation |
-| `toVersionId` | `uuid` | → `image_version.id`, **restrict** delete |
-| `actorId` | `character varying` | nullable; the identity provider subject of whoever created it. Null when a pull seeded the alias |
-| `createdAt` | `timestamptz` | default `clock_timestamp()` |
+| Column          | Type                     | Notes                                                                                            |
+| --------------- | ------------------------ | ------------------------------------------------------------------------------------------------ |
+| `id`            | `uuid`                   | primary key                                                                                      |
+| `imageId`       | `uuid`                   | → `image.id`, cascade delete                                                                     |
+| `tagName`       | `character varying(128)` |                                                                                                  |
+| `fromVersionId` | `uuid`                   | nullable; → `image_version.id`, **restrict** delete. Null for alias creation                     |
+| `toVersionId`   | `uuid`                   | → `image_version.id`, **restrict** delete                                                        |
+| `actorId`       | `character varying`      | nullable; the identity provider subject of whoever created it. Null when a pull seeded the alias |
+| `createdAt`     | `timestamptz`            | default `clock_timestamp()`                                                                      |
 
 `createdAt` is the moment the row is written, not the start of its transaction:
 registration writes use the time the row is inserted, so concurrent creations
@@ -699,17 +758,17 @@ A login an organization registered for a private registry. The password is in
 no column: it is written to Secret Manager, which the API can write but not
 read, and the row keeps only the name of the version that holds it.
 
-| Column | Type | Notes |
-| ------ | ---- | ----- |
-| `id` | `uuid` | primary key |
-| `organizationId` | `uuid` | not null |
-| `kind` | `enum` | `basic` |
-| `registryHost` | `character varying(255)` | e.g. `ghcr.io` |
-| `repositoryPrefix` | `character varying(255)` | default `''`, the whole host |
-| `username` | `character varying(255)` | |
-| `secretVersion` | `text` | the Secret Manager version holding the password |
-| `createdBy` | `character varying` | nullable — the identity provider's subject, not a uuid |
-| `createdAt` / `updatedAt` | `timestamptz` | |
+| Column                    | Type                     | Notes                                                  |
+| ------------------------- | ------------------------ | ------------------------------------------------------ |
+| `id`                      | `uuid`                   | primary key                                            |
+| `organizationId`          | `uuid`                   | not null                                               |
+| `kind`                    | `enum`                   | `basic`                                                |
+| `registryHost`            | `character varying(255)` | e.g. `ghcr.io`                                         |
+| `repositoryPrefix`        | `character varying(255)` | default `''`, the whole host                           |
+| `username`                | `character varying(255)` |                                                        |
+| `secretVersion`           | `text`                   | the Secret Manager version holding the password        |
+| `createdBy`               | `character varying`      | nullable — the identity provider's subject, not a uuid |
+| `createdAt` / `updatedAt` | `timestamptz`            |                                                        |
 
 `registry_credential_org_host_prefix_unique` allows one credential per host and
 prefix in an organization; its leading columns also serve the lookup by
@@ -722,22 +781,22 @@ whole path segments, `''` or ending in `/`, so `acme/` cannot match
 A unit of work handed to exactly one runner. Optimistic-locked through
 `version`; the target resource is polymorphic.
 
-| Column | Type | Notes |
-| ------ | ---- | ----- |
-| `id` | `uuid` | primary key |
-| `version` | `integer` | TypeORM `@VersionColumn` |
-| `type` | `character varying` | 9 values; see below |
-| `status` | `enum` | `PENDING` \| `IN_PROGRESS` \| `COMPLETED` \| `FAILED` |
-| `runnerId` | `character varying` | |
-| `resourceType` | `enum` | `BOX` \| `ARTIFACT` \| `BACKUP` |
-| `resourceId` | `character varying` | |
-| `payload` | `character varying` | nullable; JSON text |
-| `resultMetadata` | `character varying` | nullable; JSON text |
-| `traceContext` | `jsonb` | nullable |
-| `errorMessage` | `text` | nullable |
-| `startedAt` | `timestamptz` | nullable |
-| `completedAt` | `timestamptz` | nullable |
-| `createdAt` / `updatedAt` | `timestamptz` | |
+| Column                    | Type                | Notes                                                 |
+| ------------------------- | ------------------- | ----------------------------------------------------- |
+| `id`                      | `uuid`              | primary key                                           |
+| `version`                 | `integer`           | TypeORM `@VersionColumn`                              |
+| `type`                    | `character varying` | 9 values; see below                                   |
+| `status`                  | `enum`              | `PENDING` \| `IN_PROGRESS` \| `COMPLETED` \| `FAILED` |
+| `runnerId`                | `character varying` |                                                       |
+| `resourceType`            | `enum`              | `BOX` \| `ARTIFACT` \| `BACKUP`                       |
+| `resourceId`              | `character varying` |                                                       |
+| `payload`                 | `character varying` | nullable; JSON text                                   |
+| `resultMetadata`          | `character varying` | nullable; JSON text                                   |
+| `traceContext`            | `jsonb`             | nullable                                              |
+| `errorMessage`            | `text`              | nullable                                              |
+| `startedAt`               | `timestamptz`       | nullable                                              |
+| `completedAt`             | `timestamptz`       | nullable                                              |
+| `createdAt` / `updatedAt` | `timestamptz`       |                                                       |
 
 Job types: `CREATE_BOX`, `START_BOX`, `STOP_BOX`, `DESTROY_BOX`, `EXPORT_BOX`,
 `IMPORT_BOX`, `ROLLBACK_EXPORT_BOX`, `ROLLBACK_IMPORT_BOX`,
@@ -752,19 +811,19 @@ Job types: `CREATE_BOX`, `START_BOX`, `STOP_BOX`, `DESTROY_BOX`, `EXPORT_BOX`,
 
 ### `box_migration`
 
-A box in flight between runners, one row per box being moved. The row *is* the
+A box in flight between runners, one row per box being moved. The row _is_ the
 migration: it appears when the marker claims a parked box and is deleted once
 the box is no longer migrating, so "not migrating" has a single representation
 and the table stays the size of the work in flight rather than the size of the
 fleet.
 
-| Column | Type | Notes |
-| ------ | ---- | ----- |
-| `boxId` | `character varying` | primary key, FK → `box.id` |
-| `state` | `enum` | `pending_export` \| `pending_import` \| `pending_discard_exported` \| `pending_rollback` \| `completed` |
-| `arcPath` | `character varying` | default `''`; object key of the archive, empty means none to reclaim |
-| `runnerId` | `uuid` | nullable; the migration's second runner |
-| `updatedAt` | `timestamptz` | a copy of `box.updatedAt` |
+| Column      | Type                | Notes                                                                                                   |
+| ----------- | ------------------- | ------------------------------------------------------------------------------------------------------- |
+| `boxId`     | `character varying` | primary key, FK → `box.id`                                                                              |
+| `state`     | `enum`              | `pending_export` \| `pending_import` \| `pending_discard_exported` \| `pending_rollback` \| `completed` |
+| `arcPath`   | `character varying` | default `''`; object key of the archive, empty means none to reclaim                                    |
+| `runnerId`  | `uuid`              | nullable; the migration's second runner                                                                 |
+| `updatedAt` | `timestamptz`       | a copy of `box.updatedAt`                                                                               |
 
 `updatedAt` is the interlock. Every migration step copies `box.updatedAt`
 while holding the box row, so equality reads as "nothing outside the migration
@@ -780,17 +839,17 @@ copy and fail the comparison it exists for.
 One access declaration per box port, public or private. A private tunnel stores
 only its token's hash and a display mask; the full token is returned once.
 
-| Column | Type | Notes |
-| ------ | ---- | ----- |
-| `id` | `uuid` | primary key |
-| `box_id` | `character varying(12)` | FK → `box.id`, cascades on hard deletion |
-| `port` | `integer` | 1–65535 |
-| `access_mode` | `character varying` | `public` or `private` |
-| `token_hash` | `character varying` | null for public; non-null for private |
-| `token_mask` | `character varying` | nullable; display mask of a private token |
-| `auth_generation` | `integer` | default `1`; incremented on revoke and on redeclaring after revoke, invalidating browser sessions |
-| `created_at` | `timestamptz` | creation time |
-| `revoked_at` | `timestamptz` | null while active |
+| Column            | Type                    | Notes                                                                                             |
+| ----------------- | ----------------------- | ------------------------------------------------------------------------------------------------- |
+| `id`              | `uuid`                  | primary key                                                                                       |
+| `box_id`          | `character varying(12)` | FK → `box.id`, cascades on hard deletion                                                          |
+| `port`            | `integer`               | 1–65535                                                                                           |
+| `access_mode`     | `character varying`     | `public` or `private`                                                                             |
+| `token_hash`      | `character varying`     | null for public; non-null for private                                                             |
+| `token_mask`      | `character varying`     | nullable; display mask of a private token                                                         |
+| `auth_generation` | `integer`               | default `1`; incremented on revoke and on redeclaring after revoke, invalidating browser sessions |
+| `created_at`      | `timestamptz`           | creation time                                                                                     |
+| `revoked_at`      | `timestamptz`           | null while active                                                                                 |
 
 **Unique:** `(box_id, port)`. Repeating an authorized tunnel request keeps the
 declaration active. `DELETE …/network/tunnel?port={port}` sets `revoked_at`;
@@ -861,29 +920,29 @@ Heartbeat timestamp, one row per box, in its own table. Writing it therefore
 never touches `box.updatedAt` — the column the migration interlock compares
 against.
 
-| Column | Type | Notes |
-| ------ | ---- | ----- |
-| `boxId` | `character varying` | primary key, FK → `box.id` |
-| `lastActivityAt` | `timestamptz` | nullable |
+| Column           | Type                | Notes                      |
+| ---------------- | ------------------- | -------------------------- |
+| `boxId`          | `character varying` | primary key, FK → `box.id` |
+| `lastActivityAt` | `timestamptz`       | nullable                   |
 
 ### `warm_pool`
 
 Pre-started capacity. The table holds no box id: a request is matched against
 the pool by shape, which is why one index covers every shape column at once.
 
-| Column | Type | Notes |
-| ------ | ---- | ----- |
-| `id` | `uuid` | primary key |
-| `pool` | `integer` | target pool size |
-| `image` | `character varying` | |
-| `target` | `character varying` | |
-| `class` | `enum` | default `small` |
-| `cpu` / `mem` / `disk` / `gpu` | `integer` | |
-| `gpuType` | `character varying` | |
-| `osUser` | `character varying` | |
-| `env` | `simple-json` | default `{}` |
-| `errorReason` | `character varying` | nullable |
-| `createdAt` / `updatedAt` | `timestamptz` | |
+| Column                         | Type                | Notes            |
+| ------------------------------ | ------------------- | ---------------- |
+| `id`                           | `uuid`              | primary key      |
+| `pool`                         | `integer`           | target pool size |
+| `image`                        | `character varying` |                  |
+| `target`                       | `character varying` |                  |
+| `class`                        | `enum`              | default `small`  |
+| `cpu` / `mem` / `disk` / `gpu` | `integer`           |                  |
+| `gpuType`                      | `character varying` |                  |
+| `osUser`                       | `character varying` |                  |
+| `env`                          | `simple-json`       | default `{}`     |
+| `errorReason`                  | `character varying` | nullable         |
+| `createdAt` / `updatedAt`      | `timestamptz`       |                  |
 
 **Index:** `warm_pool_find_idx (image, target, class, cpu, mem, disk, gpu, osUser, env)`.
 
@@ -899,15 +958,15 @@ rolled-back archive.
 Open intervals — the hot table. One row per box currently accruing usage,
 closed and moved to the archive on stop, resize, or destroy.
 
-| Column | Type | Notes |
-| ------ | ---- | ----- |
-| `id` | `uuid` | primary key |
-| `boxId` | `character varying` | |
-| `organizationId` | `character varying` | denormalized to keep billing queries single-table |
-| `startAt` | `timestamptz` | |
-| `endAt` | `timestamptz` | nullable; null means the period is open |
-| `cpu` / `gpu` / `mem` / `disk` | `double precision` | |
-| `region` | `character varying` | |
+| Column                         | Type                | Notes                                             |
+| ------------------------------ | ------------------- | ------------------------------------------------- |
+| `id`                           | `uuid`              | primary key                                       |
+| `boxId`                        | `character varying` |                                                   |
+| `organizationId`               | `character varying` | denormalized to keep billing queries single-table |
+| `startAt`                      | `timestamptz`       |                                                   |
+| `endAt`                        | `timestamptz`       | nullable; null means the period is open           |
+| `cpu` / `gpu` / `mem` / `disk` | `double precision`  |                                                   |
+| `region`                       | `character varying` |                                                   |
 
 **Partial unique:** `(boxId)` where `endAt IS NULL`.
 **Indexes:** `(boxId, endAt)`; `(organizationId, startAt) INCLUDE (boxId, endAt)`
@@ -918,14 +977,14 @@ for compute-bearing periods.
 Column-for-column duplicate of `box_usage_periods` holding only closed
 periods, so the live table stays small. `endAt` is `NOT NULL` here.
 
-| Column | Type | Notes |
-| ------ | ---- | ----- |
-| `id` | `uuid` | primary key |
-| `boxId` | `character varying` | |
-| `organizationId` | `character varying` | |
-| `startAt` / `endAt` | `timestamptz` | both non-null |
-| `cpu` / `gpu` / `mem` / `disk` | `double precision` | |
-| `region` | `character varying` | |
+| Column                         | Type                | Notes         |
+| ------------------------------ | ------------------- | ------------- |
+| `id`                           | `uuid`              | primary key   |
+| `boxId`                        | `character varying` |               |
+| `organizationId`               | `character varying` |               |
+| `startAt` / `endAt`            | `timestamptz`       | both non-null |
+| `cpu` / `gpu` / `mem` / `disk` | `double precision`  |               |
+| `region`                       | `character varying` |               |
 
 **Index:** `(organizationId, endAt) INCLUDE (boxId, startAt)` for
 compute-bearing periods.
@@ -937,15 +996,15 @@ rather than as a watermark: neither usage table has a monotonic column, and
 adding one would not help, because Postgres sequences can commit out of order
 and a `seq > cursor` reader would silently skip rows.
 
-| Column | Type | Notes |
-| ------ | ---- | ----- |
-| `eventKey` | `character varying` | primary key; deterministic identity of the usage fact |
-| `payload` | `jsonb` | the exact message, built once at enqueue |
-| `status` | `character varying(16)` | `pending` \| `delivered` \| `blocked` |
-| `attempts` | `integer` | default `0` |
-| `availableAt` | `timestamptz` | retry backoff *and* claim visibility timeout |
-| `deliveredAt` | `timestamptz` | nullable |
-| `lastError` | `text` | nullable |
+| Column        | Type                    | Notes                                                 |
+| ------------- | ----------------------- | ----------------------------------------------------- |
+| `eventKey`    | `character varying`     | primary key; deterministic identity of the usage fact |
+| `payload`     | `jsonb`                 | the exact message, built once at enqueue              |
+| `status`      | `character varying(16)` | `pending` \| `delivered` \| `blocked`                 |
+| `attempts`    | `integer`               | default `0`                                           |
+| `availableAt` | `timestamptz`           | retry backoff _and_ claim visibility timeout          |
+| `deliveredAt` | `timestamptz`           | nullable                                              |
+| `lastError`   | `text`                  | nullable                                              |
 
 There is deliberately no `delivering` status. A status that a crashed worker
 can leave behind strands the row forever, which loses usage silently — the one
@@ -976,13 +1035,13 @@ them are declared `character varying`. A foreign key cannot be added across
 that gap without a cast, so the drift and the missing constraint reinforce
 each other, and any join between these tables needs an explicit cast today.
 
-| Column | Declared | References | Target type |
-| ------ | -------- | ---------- | ----------- |
-| `audit_log.organizationId` | `character varying` | `organization.id` | `uuid` |
-| `webhook_initialization.organizationId` | `character varying` | `organization.id` | `uuid` |
-| `box_usage_periods.organizationId` | `character varying` | `organization.id` | `uuid` |
-| `box_usage_periods_archive.organizationId` | `character varying` | `organization.id` | `uuid` |
-| `job.runnerId` | `character varying` | `runner.id` | `uuid` |
+| Column                                     | Declared            | References        | Target type |
+| ------------------------------------------ | ------------------- | ----------------- | ----------- |
+| `audit_log.organizationId`                 | `character varying` | `organization.id` | `uuid`      |
+| `webhook_initialization.organizationId`    | `character varying` | `organization.id` | `uuid`      |
+| `box_usage_periods.organizationId`         | `character varying` | `organization.id` | `uuid`      |
+| `box_usage_periods_archive.organizationId` | `character varying` | `organization.id` | `uuid`      |
+| `job.runnerId`                             | `character varying` | `runner.id`       | `uuid`      |
 
 The other eight organization-referencing columns — on `box`, `volume`,
 `region`, `api_key`, `organization_user`,
@@ -996,3 +1055,11 @@ The other eight organization-referencing columns — on `box`, `volume`,
 endpoint, and read by nothing; the entity marks it and the
 `UserSSHKeyPair` interface deprecated, pending removal along with the
 endpoint.
+
+### CI Listener execution history
+
+Execution history is stored in the shared `ci_listener_state` records described
+above, independently of current binding/organization rows. Original scope, Box/runner
+IDs and pending effects remain available for cleanup after authorization changes.
+The current PostgreSQL owner/epoch fences execution writes; admission additionally
+requires the live binding and current owner/admin. Deleting history is not cleanup.

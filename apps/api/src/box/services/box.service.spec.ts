@@ -396,6 +396,29 @@ describe('BoxService inbound defaults', () => {
     return { service, boxRepository, runnerService, warmPoolService }
   }
 
+  it('CI platform ownership forces fresh creation and forwards the transaction callback', async () => {
+    const { service, boxRepository, warmPoolService } = makeCreateService({
+      imageResolverService: { resolve: jest.fn().mockResolvedValue({ ref: 'ubuntu:22.04', isOrgOwned: false }) },
+    })
+    warmPoolService.fetchWarmPoolBox.mockRejectedValue(new Error('Warm assignment cannot record this ownership'))
+    const transaction = { query: jest.fn() }
+    const onPersist = jest.fn(async (_tx, _box) => undefined)
+    boxRepository.insert.mockImplementation(async (box, _limit, callback) => {
+      await callback(transaction, box)
+      return box
+    })
+    const result = await service.create({ image: 'ubuntu:22.04', name: 'ci-native' }, activeOrg, Context.user(), {
+      maxCreatedBoxes: 7,
+      onPersist,
+    })
+    expect(warmPoolService.fetchWarmPoolBox).not.toHaveBeenCalled()
+    expect(onPersist).toHaveBeenCalledWith(
+      transaction,
+      expect.objectContaining({ id: result.id, organizationId: activeOrg.id }),
+    )
+    expect(boxRepository.insert).toHaveBeenCalledWith(expect.objectContaining({ id: result.id }), 7, onPersist)
+  })
+
   /**
    * Two collaborators now stand between the request and the box: admission
    * decides whether this image may be used at all, and the resolver decides

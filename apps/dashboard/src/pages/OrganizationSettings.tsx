@@ -17,6 +17,7 @@ import { useCopyToClipboard } from 'usehooks-ts'
 import { useSearchParams } from 'react-router-dom'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import OrganizationMembers from './OrganizationMembers'
+import OrganizationCi from './OrganizationCi'
 
 const DEFAULT_ORGANIZATION_DISPLAY_NAME = 'Default Organization'
 
@@ -135,7 +136,7 @@ const OrganizationGeneral: React.FC = () => {
 const OrganizationSettings: React.FC = () => {
   const { selectedOrganization } = useSelectedOrganization()
   const [searchParams, setSearchParams] = useSearchParams()
-  const tab = searchParams.get('tab') === 'member' ? 'member' : 'general'
+  const tab = ['member', 'ci'].includes(searchParams.get('tab') || '') ? searchParams.get('tab')! : 'general'
 
   if (!selectedOrganization) return null
 
@@ -149,7 +150,7 @@ const OrganizationSettings: React.FC = () => {
         value={tab}
         onValueChange={(value) => {
           const next = new URLSearchParams(searchParams)
-          if (value === 'member') next.set('tab', 'member')
+          if (value === 'member' || value === 'ci') next.set('tab', value)
           else next.delete('tab')
           setSearchParams(next)
         }}
@@ -158,12 +159,16 @@ const OrganizationSettings: React.FC = () => {
         <TabsList variant="segmented" aria-label="Organization settings">
           <TabsTrigger value="general">General</TabsTrigger>
           <TabsTrigger value="member">Member</TabsTrigger>
+          <TabsTrigger value="ci">CI</TabsTrigger>
         </TabsList>
         <TabsContent value="general" className="pt-6">
           <OrganizationGeneral key={selectedOrganization.id} />
         </TabsContent>
         <TabsContent value="member" className="pt-6">
           <OrganizationMembers key={selectedOrganization.id} />
+        </TabsContent>
+        <TabsContent value="ci" className="pt-6">
+          <OrganizationCi key={selectedOrganization.id} />
         </TabsContent>
       </Tabs>
     </div>
