@@ -39,6 +39,18 @@ do not establish cloud issuance, natural renewal or production throughput. Follo
 the [GCP acceptance procedure](../infra/docs/gcp/deployment.md#customer-domain-https)
 for those boundaries.
 
+`TEST_FILES=custom-domain-subscription.integration.spec.ts` exercises the real Redis
+eligibility cache with controlled Commerce responses: one-day maximum lifetime,
+paid-cycle expiry, non-sliding reads, short denial/error retries, API clock skew,
+bounded cache failures, and stale refresh owners. Set `BOXLITE_TEST_REDIS_URL`
+explicitly. Subscription state has no dedicated SQL table. The domain lifecycle
+tests cover expiry while waiting for an organization lock; domain routing tests
+use worker-produced readiness to check expiry and renewal without losing the target.
+Bind checks readiness against the current database clock after waiting for row locks,
+so a transaction started before expiry cannot use its earlier timestamp to rebind.
+The routing regression holds the organization lock across the worker grant's deadline
+and verifies that the waiting bind is refused and the original target survives renewal.
+
 ## Admin Box image
 
 `GET /api/admin/boxes` and `GET /api/admin/boxes/{id}` include `image`, the stored

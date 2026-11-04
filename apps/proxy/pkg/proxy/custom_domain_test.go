@@ -4,25 +4,36 @@
 package proxy
 
 import (
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
+	"github.com/boxlite-ai/proxy/cmd/proxy/config"
 	"github.com/gin-gonic/gin"
 )
+
+func TestCustomDomainsKeepGeneratedNamespace(t *testing.T) {
+	for _, namespace := range []string{"proxy.boxlite.test", "localhost:4000"} {
+		t.Run(namespace, func(t *testing.T) {
+			proxy := &Proxy{config: &config.Config{ProxyDomain: namespace}}
+			host := "3000-AbCdEf123456." + namespace
+			port, box, _, err := proxy.parseHost(host)
+			if err != nil || port != 3000 || box != "AbCdEf123456" {
+				t.Fatalf("generated host rejected: port=%d box=%q error=%v", port, box, err)
+			}
+			if _, _, _, err := proxy.parseHost("3000-AbCdEf123456.customer.com"); err == nil {
+				t.Fatal("customer host bypassed exact lookup")
+			}
+		})
+	}
+}
 
 func TestCustomDomainNeverFallsBackToGeneratedTunnel(t *testing.T) {
 	for _, method := range []string{http.MethodGet, http.MethodConnect} {
 		for _, host := range []string{"app.customer.com", "3000-AbCdEf123456.customer.com"} {
 			t.Run(method+"/"+host, func(t *testing.T) {
 				proxy, asked := newAppDomainProxy(t, http.StatusNotFound)
-				// JSON also works against the old configuration type, so this regression
-				// reaches the routing assertion when every production change is reverted.
-				if err := json.Unmarshal([]byte(`{"ProxyDomain":"proxy.boxlite.test","CustomDomainsEnabled":true}`), proxy.config); err != nil {
-					t.Fatal(err)
-				}
 				recorder := httptest.NewRecorder()
 				request := httptest.NewRequest(method, "https://"+host+"/health", nil)
 				request.Host = host
@@ -46,9 +57,6 @@ func TestCustomDomainNeverFallsBackToGeneratedTunnel(t *testing.T) {
 func TestCustomDomainUsesExactResolvedTarget(t *testing.T) {
 	for _, websocket := range []bool{false, true} {
 		proxy, asked := newAppDomainProxy(t, http.StatusOK)
-		if err := json.Unmarshal([]byte(`{"ProxyDomain":"proxy.boxlite.test","CustomDomainsEnabled":true}`), proxy.config); err != nil {
-			t.Fatal(err)
-		}
 		request := httptest.NewRequest(http.MethodGet, "https://a.b.customer.com/health?x=1", nil)
 		request.Header.Set(platformAuthorizationHeader, "Bearer platform-key")
 		if websocket {

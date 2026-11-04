@@ -5,16 +5,6 @@ export class AddCustomDomainConfig1793764800000 implements MigrationInterface {
 
   async up(runner: QueryRunner): Promise<void> {
     await runner.query(`
-      CREATE TABLE "custom_domain_subscription" (
-        "organization_id" uuid PRIMARY KEY,
-        "eligible" boolean,
-        "valid_until" timestamptz NOT NULL DEFAULT '-infinity',
-        "checked_at" timestamptz,
-        "refresh_owner" uuid,
-        "refresh_until" timestamptz NOT NULL DEFAULT '-infinity'
-      )
-    `)
-    await runner.query(`
       CREATE TABLE "custom_domain_config" (
         "id" uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
         "organization_id" uuid NOT NULL,
@@ -49,6 +39,5 @@ export class AddCustomDomainConfig1793764800000 implements MigrationInterface {
 
   async down(runner: QueryRunner): Promise<void> {
     await runner.query(`DROP TABLE "custom_domain_config"`)
-    await runner.query(`DROP TABLE "custom_domain_subscription"`)
   }
 }

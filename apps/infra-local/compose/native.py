@@ -292,6 +292,7 @@ def _components(p: _Paths) -> dict[str, _Component]:
             {
                 "PROXY_PORT": str(PORT_PROXY),
                 "PROXY_PROTOCOL": "http",
+                "PROXY_DOMAIN": f"localhost:{PORT_PROXY}",
                 "PROXY_API_KEY": "boxlite-proxy-key",
                 # Same value the API mints named-tunnel URLs with (apps/api/.env);
                 # the proxy routes `<name>.app.localhost` through the API's lookup.

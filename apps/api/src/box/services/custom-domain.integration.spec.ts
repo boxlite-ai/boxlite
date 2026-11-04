@@ -68,14 +68,9 @@ describeWithDatabase('custom domain lifecycle (real Postgres)', () => {
   beforeEach(async () => {
     jest.clearAllMocks()
     settings.enabled = true
-    await db.query(`TRUNCATE domain, custom_domain_config, custom_domain_subscription, organization`)
+    await db.query(`TRUNCATE domain, custom_domain_config, organization`)
     await db.query(`INSERT INTO organization (id) VALUES ($1), ($2)`, [org, other])
-    await db.query(
-      `INSERT INTO custom_domain_subscription (organization_id, eligible, valid_until)
-      VALUES ($1, true, now() + interval '5 minutes'), ($2, true, now() + interval '5 minutes')`,
-      [org, other],
-    )
-    subscription.refresh.mockResolvedValue('active')
+    subscription.refresh.mockResolvedValue({ status: 'active', expiresAt: Date.now() + 86_400_000 })
     dns.verify.mockResolvedValue(undefined)
     dns.verifyTls.mockResolvedValue(new Date(Date.now() + 3_600_000).toISOString())
     provider.reconcile.mockImplementation(async (row: CustomDomainRow) => ({
@@ -84,6 +79,81 @@ describeWithDatabase('custom domain lifecycle (real Postgres)', () => {
       expires: new Date(Date.now() + 3_600_000).toISOString(),
       cleaned: !!row.deleted_at,
     }))
+  })
+
+  it('creates only durable domain configuration, without a subscription table', async () => {
+    expect(
+      await db.query(
+        `SELECT table_name FROM information_schema.tables
+      WHERE table_schema = $1 AND table_name LIKE 'custom_domain_%' ORDER BY table_name`,
+        [schema],
+      ),
+    ).toEqual([{ table_name: 'custom_domain_config' }])
+  })
+
+  it('checks the subscription deadline after waiting for the organization lock', async () => {
+    const expiresAt = Date.now() + 2_000
+    subscription.refresh.mockResolvedValue({ status: 'active', expiresAt })
+    const draft = await domains.create(org, 'locked.example.com')
+    const blocker = db.createQueryRunner()
+    await blocker.connect()
+    await blocker.startTransaction()
+    const [{ pid }] = await blocker.query(`SELECT pg_backend_pid() AS pid`)
+    await blocker.query(`SELECT id FROM organization WHERE id = $1 FOR UPDATE`, [org])
+    const pending = worker.reconcileDue()
+    try {
+      const deadline = Date.now() + 1_500
+      let waiting = false
+      while (Date.now() < deadline) {
+        const [row] = await db.query(
+          `SELECT EXISTS (
+          SELECT 1 FROM pg_stat_activity WHERE $1::int = ANY(pg_blocking_pids(pid))
+        ) AS waiting`,
+          [pid],
+        )
+        if (row.waiting) {
+          waiting = true
+          break
+        }
+        await new Promise((resolve) => setTimeout(resolve, 10))
+      }
+      expect(waiting).toBe(true)
+      await blocker.query(`SELECT pg_sleep(GREATEST(0, extract(epoch FROM ($1::timestamptz - clock_timestamp()))))`, [
+        new Date(expiresAt),
+      ])
+    } finally {
+      await blocker.commitTransaction()
+      await blocker.release()
+      await pending
+    }
+    expect(await db.query(`SELECT * FROM domain`)).toEqual([])
+    expect(provider.reconcile).not.toHaveBeenCalled()
+    expect(await domains.get(org, draft.id)).toMatchObject({ ready: false, errorCode: 'subscription_not_ready' })
+  })
+
+  it('revokes readiness on denial while keeping deletion and cleanup available', async () => {
+    const draft = await domains.create(org, 'denied.example.com')
+    await worker.reconcileDue()
+    expect(await domains.get(org, draft.id)).toMatchObject({ ready: true })
+    subscription.refresh.mockResolvedValue({ status: 'required', expiresAt: Date.now() + 30_000 })
+    await db.query(`UPDATE custom_domain_config SET next_check_at = now()`)
+    await worker.reconcileDue()
+    expect(await domains.get(org, draft.id)).toMatchObject({ ready: false, errorCode: 'subscription_required' })
+    expect((await domains.list(org)).subscription).toBe('required')
+    await domains.delete(org, draft.id)
+    subscription.refresh.mockClear()
+    await worker.reconcileDue()
+    expect(subscription.refresh).not.toHaveBeenCalled()
+    expect(provider.reconcile.mock.calls.at(-1)[0].deleted_at).not.toBeNull()
+  })
+
+  it('cannot acquire ownership for an organization removed after its eligibility was cached', async () => {
+    await domains.create(org, 'removed.example.com')
+    await db.query(`DELETE FROM organization WHERE id = $1`, [org])
+    await worker.reconcileDue()
+    expect(await db.query(`SELECT * FROM domain`)).toEqual([])
+    expect(provider.reconcile).not.toHaveBeenCalled()
+    await expect(domains.create(org, 'another.example.com')).rejects.toMatchObject({ status: 404 })
   })
 
   it('deduplicates drafts within an organization without reserving the global hostname', async () => {
@@ -102,7 +172,7 @@ describeWithDatabase('custom domain lifecycle (real Postgres)', () => {
   })
 
   it('denies free organizations and disabled deployments before inserting a draft', async () => {
-    subscription.refresh.mockResolvedValue('required')
+    subscription.refresh.mockResolvedValue({ status: 'required', expiresAt: Date.now() + 30_000 })
     await expect(domains.create(org, 'app.example.com')).rejects.toMatchObject({ status: 403 })
     settings.enabled = false
     await expect(domains.create(org, 'app.example.com')).rejects.toMatchObject({ status: 503 })
@@ -270,7 +340,7 @@ describeWithDatabase('custom domain lifecycle (real Postgres)', () => {
     })
     const pending = worker.reconcileDue()
     await began
-    // This is the state published by a confirmed subscription denial.
+    // A stale worker must not publish after losing its configuration lease.
     await db.query(`UPDATE custom_domain_config SET lease_owner = NULL, dns_valid_until = '-infinity'`)
     finish()
     await pending

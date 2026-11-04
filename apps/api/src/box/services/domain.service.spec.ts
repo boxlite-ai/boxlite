@@ -79,7 +79,12 @@ function makeService(
     get: jest.fn((key: string) => config[key]),
     getOrThrow: jest.fn((key: string) => config[key]),
   }
-  const service = new DomainService(dataSource as never, regionService as never, configService as never)
+  const service = new DomainService(
+    dataSource as never,
+    regionService as never,
+    configService as never,
+    { read: jest.fn().mockResolvedValue({ status: 'unavailable', expiresAt: 0 }) } as never,
+  )
   return { service, manager, query }
 }
 

@@ -30,7 +30,7 @@ func (p *Proxy) namedDomainHost(host string) (string, bool) {
 	if hostname, ok := p.appDomainHost(host); ok {
 		return hostname, true
 	}
-	if p.config == nil || !p.config.CustomDomainsEnabled {
+	if p.config == nil {
 		return "", false
 	}
 	hostname := bareHost(host)

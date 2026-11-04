@@ -160,16 +160,20 @@ allowance does not limit this flow, even when it is zero or full.
 4. Keep all records in place; BoxLite checks ownership and traffic DNS, requests a Google-managed certificate, and checks HTTPS at the proxy entry.
 5. When the domain is **Ready**, bind a Box port in Dashboard or with the existing CLI/SDK bind operation; the public-tunnel and inbound rules above still apply.
 
-Bind does not perform DNS challenges: it reads the saved subscription, DNS and
-HTTPS readiness. A known custom domain returns `403 subscription_required` when
+Bind does not perform DNS challenges: it reads saved DNS and HTTPS readiness,
+whose deadline is also bounded by subscription eligibility. A known custom domain returns `403 subscription_required` when
 subscription is required, or `409 subscription_not_ready` / `domain_not_ready`
 when its eligibility or setup is not ready. Request and response fields are unchanged.
 
 Actual subscription expiry suspends new binds and new requests while retaining
 the configuration, target and certificate. Cancelling renewal during a still-paid
-period does not suspend access. Eligibility and DNS/TLS checks have leases of at
-most five minutes; an outage never extends the old lease. Existing connections
-are not forcibly disconnected. Recovery requires fresh checks.
+period does not suspend access. Eligibility is cached in Redis for at most one day,
+ending sooner at the paid-cycle deadline. Early suspension can therefore take up
+to one day to appear; known cycle expiry stops new access at that deadline.
+Denied eligibility and lookup failures are cached for 30 seconds so a purchase
+can be recognized without waiting a day. DNS/TLS readiness lasts at most five
+minutes and never beyond the eligibility deadline; an outage cannot extend it.
+Existing connections are not forcibly disconnected. Recovery requires fresh DNS/TLS checks.
 
 **Unbind** keeps the domain and HTTPS configuration. **Delete configuration** in
 Dashboard releases ownership and stops new requests, then cleans up cloud resources

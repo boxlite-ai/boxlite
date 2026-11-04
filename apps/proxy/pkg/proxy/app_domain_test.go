@@ -50,7 +50,7 @@ func newAppDomainProxy(t *testing.T, lookupStatus int) (*Proxy, *[]string) {
 	}
 	return &Proxy{
 		apiclient:                  apiclient.NewAPIClient(clientConfig),
-		config:                     &config.Config{ProxyAppDomain: appDomain, ProxyProtocol: "https"},
+		config:                     &config.Config{ProxyDomain: "proxy.boxlite.test", ProxyAppDomain: appDomain, ProxyProtocol: "https"},
 		boxInboundCache:            common_cache.NewMapCache[bool](ctx),
 		boxAuthKeyValidCache:       common_cache.NewMapCache[bool](ctx),
 		boxRunnerCache:             common_cache.NewMapCache[RunnerInfo](ctx),
