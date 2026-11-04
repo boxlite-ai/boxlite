@@ -21,6 +21,7 @@ struct Recording {
     disabled: bool,
     missing: bool,
     tunnel_error: bool,
+    lifecycle_error: bool,
 }
 
 struct Cloud {
@@ -58,12 +59,21 @@ async fn route(
     if state.missing || (uri.path().ends_with("/network/tunnel") && state.tunnel_error) {
         return StatusCode::NOT_FOUND.into_response();
     }
-    let reply = if uri.path().ends_with("/ssh") {
-        if method == Method::POST {
+    let reply = if uri.path().ends_with("/ssh") || uri.path().ends_with("/ssh/enable") {
+        if state.lifecycle_error && (method == Method::DELETE || uri.path().ends_with("/enable")) {
+            return (StatusCode::CONFLICT, "box must be running").into_response();
+        }
+        if uri.path().ends_with("/enable") {
+            state.disabled = false;
+        } else if method == Method::DELETE {
+            state.disabled = true;
+        }
+        if method == Method::POST && uri.path().ends_with("/ssh") {
             state.configs.push(serde_json::from_slice(&body).unwrap());
             if state.configure_error {
                 return (StatusCode::CONFLICT, "configuration refused").into_response();
             }
+            state.disabled = false;
         }
         json!({"enabled": !state.disabled, "listen_address": "0.0.0.0:2222",
             "host_public_key": "ssh-ed25519 HOST", "host_key_fingerprint": "SHA256:host",
@@ -168,7 +178,7 @@ fn cli(home: &Path) -> Command {
 fn setup(home: &Path, flags: &[&str]) -> String {
     let output = cli(home)
         .args(flags)
-        .args(["ssh", "setup", "dev"])
+        .args(["ssh", "dev"])
         .assert()
         .success()
         .get_output()
@@ -186,6 +196,90 @@ fn key_path(summary: &str) -> PathBuf {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cloud_control_options_preserve_context_authentication_and_saved_configuration() {
+    let cloud = Cloud::start(false).await;
+    let home = tempfile::tempdir().unwrap();
+    cloud.save_context(home.path(), "cloud", "team");
+    setup(home.path(), &[]);
+    let config = cloud.state.lock().unwrap().configs[0].clone();
+    let path = home.path().join("ssh.json");
+    std::fs::write(&path, serde_json::to_vec(&config).unwrap()).unwrap();
+    let output = cli(home.path())
+        .args([
+            "ssh",
+            "dev",
+            "--configure",
+            "--ssh-config",
+            path.to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    assert_eq!(
+        serde_json::from_slice::<Value>(&output).unwrap()["host_key_fingerprint"],
+        "SHA256:host"
+    );
+    cloud.state.lock().unwrap().requests.clear();
+    for (operation, enabled) in [
+        ("--disable", false),
+        ("--status", false),
+        ("--enable", true),
+        ("--status", true),
+    ] {
+        let output = cli(home.path())
+            .args(["ssh", "dev", operation])
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        let status: Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(status["enabled"], enabled);
+        assert_eq!(status["host_key_fingerprint"], "SHA256:host");
+    }
+    {
+        let mut state = cloud.state.lock().unwrap();
+        assert_eq!(state.configs, [config.clone(), config]);
+        let controls: Vec<_> = state
+            .requests
+            .iter()
+            .filter(|(_, path, _)| path.contains("/ssh"))
+            .map(|(method, path, auth)| (method.as_str(), path.as_str(), auth.as_str()))
+            .collect();
+        assert_eq!(
+            controls,
+            [
+                ("DELETE", "/v1/team/boxes/-remote/ssh", "Bearer stored-key"),
+                ("GET", "/v1/team/boxes/-remote/ssh", "Bearer stored-key"),
+                (
+                    "POST",
+                    "/v1/team/boxes/-remote/ssh/enable",
+                    "Bearer stored-key"
+                ),
+                ("GET", "/v1/team/boxes/-remote/ssh", "Bearer stored-key"),
+            ]
+        );
+        state.lifecycle_error = true;
+        state.requests.clear();
+    }
+    for operation in ["--enable", "--disable"] {
+        cli(home.path())
+            .args(["ssh", "dev", operation])
+            .assert()
+            .failure()
+            .stdout(predicates::str::is_empty())
+            .stderr(predicates::str::contains("box must be running"));
+    }
+    assert_eq!(
+        cloud.state.lock().unwrap().requests.len(),
+        4,
+        "one lookup and one control request, without retries"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn cloud_setup_reuses_keys_and_generated_command_preserves_routing() {
     let cloud = Cloud::start(false).await;
     let home = tempfile::tempdir().unwrap();
@@ -200,6 +294,7 @@ async fn cloud_setup_reuses_keys_and_generated_command_preserves_routing() {
     assert!(!home.path().join("boxes").exists());
     assert!(!first.contains("CLI exit stops"));
     assert!(!first.contains("stored-key"));
+    assert!(first.contains("SSH host key fingerprint: SHA256:host"));
     let configs = cloud.state.lock().unwrap().configs.clone();
     assert_eq!(configs.len(), 2);
     assert_eq!(configs[0], configs[1]);
@@ -259,7 +354,7 @@ async fn cloud_proxy_relays_binary_data_with_stored_context_and_environment_key(
     let bytes: Vec<u8> = (0..131_072).map(|n| n as u8).collect();
     let output = cli(home.path())
         .env("BOXLITE_API_KEY", "environment-key")
-        .args(["ssh", "proxy", "dev"])
+        .args(["ssh", "--proxy", "dev"])
         .write_stdin(bytes.clone())
         .assert()
         .success()
@@ -286,6 +381,85 @@ async fn cloud_proxy_relays_binary_data_with_stored_context_and_environment_key(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cloud_tunnel_option_forwards_bytes_and_reports_server_fingerprint() {
+    use std::process::Stdio;
+    use tokio::io::{AsyncBufReadExt, BufReader};
+
+    let cloud = Cloud::start(true).await;
+    let home = tempfile::tempdir().unwrap();
+    cloud.save_context(home.path(), "cloud", "team");
+    let mut command = tokio::process::Command::new(assert_cmd::cargo::cargo_bin!("boxlite"));
+    command.env("BOXLITE_HOME", home.path());
+    for name in [
+        "BOXLITE_CONTEXT",
+        "BOXLITE_PROFILE",
+        "BOXLITE_REST_URL",
+        "BOXLITE_REST_PATH_PREFIX",
+        "BOXLITE_API_KEY",
+        "BOXLITE_LOG_FILE",
+    ] {
+        command.env_remove(name);
+    }
+    let mut child = command
+        .args(["ssh", "dev", "--tunnel"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(10), async {
+        let mut stdout = BufReader::new(child.stdout.take().unwrap());
+        let mut address = String::new();
+        stdout.read_line(&mut address).await.unwrap();
+        let mut client =
+            tokio::net::TcpStream::connect(address.trim().strip_prefix("tcp://").unwrap())
+                .await
+                .unwrap();
+        client.write_all(&[0, 1, 128, 255]).await.unwrap();
+        client.shutdown().await.unwrap();
+        let mut response = Vec::new();
+        client.read_to_end(&mut response).await.unwrap();
+        assert_eq!(response, [255, 128, 1, 0]);
+        nix::sys::signal::kill(
+            nix::unistd::Pid::from_raw(child.id().unwrap() as i32),
+            nix::sys::signal::Signal::SIGINT,
+        )
+        .unwrap();
+        assert!(child.wait().await.unwrap().success());
+        let mut diagnostics = String::new();
+        child
+            .stderr
+            .take()
+            .unwrap()
+            .read_to_string(&mut diagnostics)
+            .await
+            .unwrap();
+        assert!(
+            diagnostics.contains("SSH host key fingerprint: SHA256:host"),
+            "{diagnostics}"
+        );
+    })
+    .await
+    .expect("cloud tunnel exchange and shutdown must complete");
+    let state = cloud.state.lock().unwrap();
+    assert!(state.configs.is_empty(), "tunneling must not configure SSH");
+    assert!(
+        state
+            .requests
+            .iter()
+            .any(|(method, path, auth)| method == Method::POST
+                && path == "/v1/team/boxes/-remote/network/tunnel?port=2222"
+                && auth == "Bearer stored-key")
+    );
+    assert!(
+        state
+            .connect
+            .to_ascii_lowercase()
+            .contains("x-boxlite-authorization: bearer stored-key")
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn cloud_setup_isolates_context_endpoint_and_prefix_and_retains_failed_keys() {
     let cloud = Cloud::start(false).await;
     let other = Cloud::start(false).await;
@@ -293,7 +467,7 @@ async fn cloud_setup_isolates_context_endpoint_and_prefix_and_retains_failed_key
     cloud.save_context(home.path(), "cloud", "team");
     cloud.state.lock().unwrap().configure_error = true;
     cli(home.path())
-        .args(["ssh", "setup", "dev"])
+        .args(["ssh", "dev"])
         .assert()
         .failure()
         .stdout(predicates::str::is_empty())
@@ -335,13 +509,7 @@ async fn cloud_setup_uses_new_credential_home_and_ignores_local_config() {
             .env("BOXLITE_REST_URL", &cloud.url)
             .env("BOXLITE_REST_PATH_PREFIX", prefix)
             .env("BOXLITE_API_KEY", "environment-key")
-            .args([
-                "--config",
-                "/missing/local-config.json",
-                "ssh",
-                "setup",
-                "dev",
-            ])
+            .args(["--config", "/missing/local-config.json", "ssh", "dev"])
             .assert()
             .success()
             .get_output()
@@ -401,7 +569,7 @@ async fn cloud_setup_and_proxy_use_stored_oidc_bearer() {
     let summary = setup(home.path(), &["--context", "cloud"]);
     assert!(!summary.contains("oidc-token"));
     cli(home.path())
-        .args(["--context", "cloud", "ssh", "proxy", "dev"])
+        .args(["--context", "cloud", "ssh", "--proxy", "dev"])
         .write_stdin("hello")
         .assert()
         .success()
@@ -428,7 +596,7 @@ async fn cloud_proxy_reports_disabled_missing_and_unsupported_without_configurin
     cloud.save_context(home.path(), "cloud", "team");
     cloud.state.lock().unwrap().disabled = true;
     cli(home.path())
-        .args(["ssh", "proxy", "dev"])
+        .args(["ssh", "--proxy", "dev"])
         .assert()
         .failure()
         .stdout(predicates::str::is_empty())
@@ -440,15 +608,15 @@ async fn cloud_proxy_reports_disabled_missing_and_unsupported_without_configurin
         state.tunnel_error = true;
     }
     cli(home.path())
-        .args(["ssh", "proxy", "dev"])
+        .args(["ssh", "--proxy", "dev"])
         .assert()
         .failure()
         .stdout(predicates::str::is_empty())
         .stderr(predicates::str::contains("not found"));
     cloud.state.lock().unwrap().missing = true;
-    for operation in ["setup", "proxy"] {
+    for options in [vec!["ssh", "dev"], vec!["ssh", "--proxy", "dev"]] {
         cli(home.path())
-            .args(["ssh", operation, "dev"])
+            .args(options)
             .assert()
             .failure()
             .stdout(predicates::str::is_empty())

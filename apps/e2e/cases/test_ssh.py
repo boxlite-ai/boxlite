@@ -1,7 +1,7 @@
 """REST E2E coverage for guest SSH through the hosted API and runner.
 
 The Python SDK configures SSH (`POST /v1/{prefix}/boxes/{id}/ssh`), the CLI's
-`boxlite ssh forward` opens the box's public tunnel to the guest listener, and
+`boxlite ssh --tunnel` opens the box's public tunnel to the guest listener, and
 the OpenSSH client logs in through the CLI's local port.
 """
 

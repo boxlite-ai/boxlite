@@ -255,43 +255,6 @@ const DOMAIN_SCOPES: &[CommandScope] = &[
         children: &[],
     },
 ];
-const SSH_SCOPES: &[CommandScope] = &[
-    CommandScope {
-        name: "proxy",
-        globals: BOX_GLOBALS,
-        children: &[],
-    },
-    CommandScope {
-        name: "setup",
-        globals: BOX_GLOBALS,
-        children: &[],
-    },
-    CommandScope {
-        name: "enable",
-        globals: BOX_GLOBALS,
-        children: &[],
-    },
-    CommandScope {
-        name: "configure",
-        globals: BOX_GLOBALS,
-        children: &[],
-    },
-    CommandScope {
-        name: "status",
-        globals: BOX_GLOBALS,
-        children: &[],
-    },
-    CommandScope {
-        name: "disable",
-        globals: BOX_GLOBALS,
-        children: &[],
-    },
-    CommandScope {
-        name: "forward",
-        globals: BOX_GLOBALS,
-        children: &[],
-    },
-];
 const fn box_command_scope(name: &'static str, children: &'static [CommandScope]) -> CommandScope {
     CommandScope {
         name,
@@ -418,7 +381,7 @@ const COMMAND_SCOPES: &[CommandScope] = &[
     CommandScope {
         name: "ssh",
         globals: BOX_GLOBALS,
-        children: SSH_SCOPES,
+        children: &[],
     },
     CommandScope {
         name: "serve",
@@ -784,7 +747,13 @@ pub enum Commands {
     /// Manage box networking
     Network(crate::commands::network::NetworkArgs),
 
-    /// Set up, configure, inspect, enable, disable, or forward to guest SSH
+    /// Set up guest SSH and print a connection command
+    ///
+    /// With no operation option, generate or reuse client and host keys,
+    /// enable box on guest port 22, and print the server fingerprint and SSH command.
+    /// Setup replaces the complete configuration and disconnects existing clients.
+    /// Use --configure, --status, --enable, --disable, --tunnel, or --proxy
+    /// for another operation. All operations support local and cloud contexts.
     Ssh(crate::commands::ssh::SshArgs),
 
     /// Agent instances and turns

@@ -92,16 +92,18 @@ async fn configure(
         connection,
     )?;
     let config = tokio::task::spawn_blocking(move || managed_config(&directory)).await??;
-    sandbox.ssh().configure(config).await?;
+    let status = sandbox.ssh().configure(config).await?;
     let guidance = if connection.rest.is_some() {
         "The connection requires enabled guest SSH and server tunnel support with inbound access. Proxy opens a public tunnel that remains open after exit.\n\nCopy and run the following command to enter the box:"
     } else {
         "Warning: CLI exit stops non-detached boxes. The connection command requires a running detached box (created with `boxlite create` or `boxlite run -d`).\n\nCopy and run the following command to enter a running detached box:"
     };
     Ok(format!(
-        "SSH configured for box {}.\n\nPrivate key: {}\nLogin: box\nGuest address: 0.0.0.0:22\n\n{guidance}\n\n  {command}\n",
+        "SSH configured for box {}.\n\nPrivate key: {}\nLogin: box\nGuest address: {}\nSSH host key fingerprint: {}\n\n{guidance}\n\n  {command}\n",
         sandbox.name().unwrap_or(sandbox.id().as_str()),
         private_key.display(),
+        status.listen_address,
+        status.host_key_fingerprint,
     ))
 }
 
@@ -229,14 +231,14 @@ fn connection_command(
         } else {
             proxy.push_str(&format!(" --path-prefix={}", quote(prefix)));
         }
-        proxy.push_str(&format!(" ssh proxy -- {}", quote(id)));
+        proxy.push_str(&format!(" ssh --proxy -- {}", quote(id)));
         format!(
             "boxlite-{}-{id}",
             connection.remote_scope()?.context("missing remote scope")?
         )
     } else {
         proxy.push_str(&format!(
-            " --context {} ssh proxy {}",
+            " --context {} ssh --proxy -- {}",
             quote(&connection.context),
             quote(id)
         ));

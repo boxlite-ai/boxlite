@@ -12,17 +12,17 @@ use axum::response::{IntoResponse, Response};
 use boxlite::SshStatus;
 use clap::error::ErrorKind;
 
-use super::{SshCommand, tunnel_target};
+use super::{SshArgs, tunnel_target};
 use crate::cli::{Commands, try_parse_from};
 
 const SECRET: &str = "sentinel-private-key-material";
 
-fn parse(args: &[&str]) -> Result<SshCommand, clap::Error> {
+fn parse(args: &[&str]) -> Result<SshArgs, clap::Error> {
     let cli = try_parse_from(["boxlite", "ssh"].iter().chain(args))?;
     let Commands::Ssh(ssh) = cli.command else {
         panic!("expected the ssh command");
     };
-    Ok(ssh.command)
+    Ok(ssh)
 }
 
 fn write(dir: &Path, name: &str, contents: &str) -> String {
@@ -32,10 +32,9 @@ fn write(dir: &Path, name: &str, contents: &str) -> String {
 }
 
 fn load(args: &[&str]) -> anyhow::Result<boxlite::SshConfig> {
-    match parse(args).expect("parse") {
-        SshCommand::Configure(configure) => configure.source.load(),
-        other => panic!("no configuration source in {other:?}"),
-    }
+    let args = parse(args).expect("parse");
+    assert!(args.configure);
+    args.source.load()
 }
 
 // ============================================================================
@@ -59,7 +58,7 @@ fn configure_accepts_configuration_options() {
             "0.0.0.0:0",
         ],
     ] {
-        let args = [vec!["configure", "box"], options].concat();
+        let args = [vec!["--configure", "box"], options].concat();
         let parsed = parse(&args);
         assert!(parsed.is_ok(), "{args:?}: {parsed:?}");
     }
@@ -70,7 +69,7 @@ fn removed_combined_command_is_not_an_alias() {
     for name in ["configure-and-forward", "run"] {
         let parsed = parse(&[name, "box", "--ssh-config", "c.json"]);
         assert!(parsed.is_err(), "removed command was accepted: {parsed:?}");
-        assert_eq!(parsed.unwrap_err().kind(), ErrorKind::InvalidSubcommand);
+        assert_eq!(parsed.unwrap_err().kind(), ErrorKind::UnknownArgument);
     }
 }
 
@@ -83,11 +82,11 @@ fn top_level_run_still_accepts_a_box_command() {
 
 #[test]
 fn configuration_sources_are_required_and_exclusive() {
-    let missing = parse(&["configure", "box"]).unwrap_err();
+    let missing = parse(&["--configure", "box"]).unwrap_err();
     assert_eq!(missing.kind(), ErrorKind::MissingRequiredArgument);
 
     let mixed = parse(&[
-        "configure",
+        "--configure",
         "box",
         "--ssh-config",
         "c.json",
@@ -102,75 +101,121 @@ fn configuration_sources_are_required_and_exclusive() {
     assert_eq!(mixed.kind(), ErrorKind::ArgumentConflict);
 
     for flag in ["--guest-listen", "--login"] {
-        let error = parse(&["configure", "box", "--ssh-config", "c.json", flag, "x"]).unwrap_err();
+        let error =
+            parse(&["--configure", "box", "--ssh-config", "c.json", flag, "x"]).unwrap_err();
         assert_eq!(error.kind(), ErrorKind::ArgumentConflict, "{flag}");
     }
 
-    let incomplete = parse(&["configure", "box", "--host-key", "h", "--login", "a"]).unwrap_err();
+    let incomplete = parse(&["--configure", "box", "--host-key", "h", "--login", "a"]).unwrap_err();
     assert_eq!(incomplete.kind(), ErrorKind::MissingRequiredArgument);
 
-    let orphan = parse(&["configure", "box", "--login", "a"]).unwrap_err();
+    let orphan = parse(&["--configure", "box", "--login", "a"]).unwrap_err();
     assert_eq!(orphan.kind(), ErrorKind::MissingRequiredArgument);
 }
 
 #[test]
-fn subcommands_are_named_for_their_effect() {
+fn operations_are_options_and_setup_is_the_default() {
     let names: Vec<String> = crate::cli::command()
         .find_subcommand("ssh")
         .expect("ssh command")
         .get_subcommands()
         .map(|command| command.get_name().to_string())
         .collect();
-    assert_eq!(
-        names,
-        [
-            "configure",
-            "setup",
-            "status",
-            "enable",
-            "disable",
-            "forward",
-            "proxy"
-        ]
-    );
-    assert!(matches!(
-        parse(&["forward", "box"]),
-        Ok(SshCommand::Forward(_))
-    ));
+    assert!(names.is_empty());
+    for target in [
+        "dev",
+        "setup",
+        "configure",
+        "enable",
+        "status",
+        "proxy",
+        "forward",
+    ] {
+        let args = parse(&[target]).unwrap();
+        assert_eq!(args.target, target);
+        assert!(
+            !(args.configure
+                || args.status
+                || args.enable
+                || args.disable
+                || args.tunnel
+                || args.proxy)
+        );
+    }
+    assert!(parse(&[]).is_err());
+    assert!(parse(&["--tunnel", "box"]).unwrap().tunnel);
+    assert!(parse(&["box", "--enable"]).unwrap().enable);
 }
 
 #[test]
-fn setup_manages_keys_and_proxy_accepts_only_a_box() {
-    for name in ["setup", "proxy"] {
-        assert!(parse(&[name, "dev"]).is_ok());
-        assert!(parse(&[name]).is_err());
-        for flag in ["--authorized-key", "--host-key", "--login", "--listen"] {
-            assert!(parse(&[name, "dev", flag, "value"]).is_err());
+fn operation_options_are_exclusive_and_require_a_box() {
+    let operations = [
+        "--configure",
+        "--status",
+        "--enable",
+        "--disable",
+        "--tunnel",
+        "--proxy",
+    ];
+    for (index, operation) in operations.iter().enumerate() {
+        assert!(parse(&[operation]).is_err());
+        for other in &operations[index + 1..] {
+            assert_eq!(
+                parse(&["dev", operation, other]).unwrap_err().kind(),
+                ErrorKind::ArgumentConflict
+            );
         }
     }
-    assert!(matches!(
-        parse(&["enable", "dev"]),
-        Ok(SshCommand::Enable(_))
-    ));
+}
+
+#[test]
+fn configuration_and_listener_options_are_scoped_to_their_operation() {
+    for operation in [
+        None,
+        Some("--status"),
+        Some("--enable"),
+        Some("--disable"),
+        Some("--proxy"),
+        Some("--tunnel"),
+    ] {
+        for (flag, value) in [
+            ("--ssh-config", "missing.json"),
+            ("--host-key", "missing"),
+            ("--login", "box"),
+            ("--authorized-key", "missing.pub"),
+            ("--guest-listen", "0.0.0.0:22"),
+        ] {
+            let mut args = vec!["dev", flag, value];
+            args.extend(operation);
+            assert!(parse(&args).is_err(), "{args:?}");
+        }
+    }
+    for operation in [
+        None,
+        Some("--configure"),
+        Some("--status"),
+        Some("--enable"),
+        Some("--disable"),
+        Some("--proxy"),
+    ] {
+        let mut args = vec!["dev", "--listen", "127.0.0.1:2222"];
+        args.extend(operation);
+        assert!(parse(&args).is_err(), "{args:?}");
+    }
 }
 
 #[test]
 fn forward_accepts_listeners_and_defaults_to_ephemeral_loopback() {
-    let SshCommand::Forward(forward) = parse(&["forward", "box"]).unwrap() else {
-        panic!("expected forward");
-    };
+    let forward = parse(&["--tunnel", "box"]).unwrap();
     assert_eq!(forward.listen.to_string(), "tcp://127.0.0.1:0");
 
     for listen in ["unix:/tmp/s", "127.0.0.1:2222"] {
-        let SshCommand::Forward(forward) = parse(&["forward", "box", "--listen", listen]).unwrap()
-        else {
-            panic!("expected forward");
-        };
+        let forward = parse(&["--tunnel", "box", "--listen", listen]).unwrap();
         let address = forward.listen.to_string();
         assert_eq!(address.strip_prefix("tcp://").unwrap_or(&address), listen);
     }
 
-    let relative = parse(&["forward", "box", "--listen", "unix:relative"]).unwrap_err();
+    let relative = parse(&["--tunnel", "box", "--listen", "unix:relative"]).unwrap_err();
     assert_eq!(relative.kind(), ErrorKind::ValueValidation);
 }
 
@@ -186,7 +231,7 @@ fn flag_mode_builds_one_account_from_key_files() {
     let second = write(dir.path(), "b.pub", "ssh-ed25519 BBBB second");
 
     let config = load(&[
-        "configure",
+        "--configure",
         "box",
         "--host-key",
         &host,
@@ -217,7 +262,7 @@ fn an_authorized_key_file_holds_exactly_one_key() {
     for contents in ["ssh-ed25519 A\nssh-ed25519 B\n", "\n  \n"] {
         let keys = write(dir.path(), "keys.pub", contents);
         let error = load(&[
-            "configure",
+            "--configure",
             "box",
             "--host-key",
             &host,
@@ -251,7 +296,7 @@ fn json_mode_loads_several_accounts_and_cas() {
         .to_string(),
     );
 
-    let config = load(&["configure", "box", "--ssh-config", &path]).unwrap();
+    let config = load(&["--configure", "box", "--ssh-config", &path]).unwrap();
 
     assert_eq!(config.listen_address, "0.0.0.0:0");
     assert_eq!(config.accounts.len(), 2);
@@ -278,7 +323,7 @@ fn json_errors_never_echo_file_contents() {
     ];
     for contents in cases {
         let path = write(dir.path(), "ssh.json", &contents);
-        let error = load(&["configure", "box", "--ssh-config", &path]).unwrap_err();
+        let error = load(&["--configure", "box", "--ssh-config", &path]).unwrap_err();
         let message = format!("{error:#} {error:?}");
         assert!(!message.contains(SECRET), "{message}");
         assert!(
@@ -444,8 +489,8 @@ async fn status_and_disable_send_one_request_each() {
     ])
     .await;
 
-    server.run(&["status", "box-1"]).await.unwrap();
-    server.run(&["disable", "box-1"]).await.unwrap();
+    server.run(&["--status", "box-1"]).await.unwrap();
+    server.run(&["--disable", "box-1"]).await.unwrap();
 
     assert_eq!(
         server.requests(),
@@ -472,7 +517,7 @@ async fn configure_posts_the_complete_file_configuration_once() {
     .await;
 
     let error = server
-        .run(&["configure", "box-1", "--ssh-config", &path])
+        .run(&["--configure", "box-1", "--ssh-config", &path])
         .await
         .unwrap_err();
 
@@ -491,17 +536,18 @@ async fn setup_and_proxy_report_missing_runtime_configuration() {
     let temp = tempfile::tempdir().unwrap();
     let config = temp.path().join("missing.json");
     let home = temp.path().join("home");
-    for operation in ["setup", "proxy"] {
-        let cli = try_parse_from([
-            "boxlite",
-            "--home",
-            home.to_str().unwrap(),
-            "--config",
-            config.to_str().unwrap(),
-            "ssh",
-            operation,
-            "box-1",
-        ])
+    for options in [vec!["ssh", "box-1"], vec!["ssh", "--proxy", "box-1"]] {
+        let cli = try_parse_from(
+            [
+                "boxlite",
+                "--home",
+                home.to_str().unwrap(),
+                "--config",
+                config.to_str().unwrap(),
+            ]
+            .into_iter()
+            .chain(options),
+        )
         .unwrap();
         let Commands::Ssh(args) = cli.command else {
             panic!("expected SSH command")
@@ -521,7 +567,7 @@ async fn setup_and_proxy_report_missing_runtime_configuration() {
 #[tokio::test]
 async fn enable_uses_saved_configuration_over_rest() {
     let server = Server::start(vec![(200, status(true, "0.0.0.0:2222", 5))]).await;
-    server.run(&["enable", "box-1"]).await.unwrap();
+    server.run(&["--enable", "box-1"]).await.unwrap();
     assert_eq!(
         server.requests(),
         vec![("POST".into(), "/v1/boxes/box-1/ssh/enable".into())]
@@ -533,7 +579,7 @@ async fn forward_targets_the_port_status_reports() {
     let server = Server::start(vec![(200, status(true, "0.0.0.0:41234", 5))]).await;
 
     // The stub has no tunnel route, so preparation fails after it is sent.
-    server.run(&["forward", "box-1"]).await.unwrap_err();
+    server.run(&["--tunnel", "box-1"]).await.unwrap_err();
 
     assert_eq!(
         server.requests(),
@@ -561,7 +607,7 @@ async fn forward_relays_bytes_through_the_prepared_rest_tunnel() {
     .await;
     let socket = server.home.path().join("f");
     let listen = format!("unix:{}", socket.display());
-    let args = ["forward", "box-1", "--listen", &listen];
+    let args = ["--tunnel", "box-1", "--listen", &listen];
     let forwarding = server.run(&args);
     tokio::pin!(forwarding);
     tokio::time::timeout(Duration::from_secs(5), async {
@@ -624,7 +670,7 @@ async fn forward_refuses_disabled_or_unreachable_ssh_before_tunneling() {
     ] {
         let server = Server::start(vec![(200, reply)]).await;
 
-        server.run(&["forward", "box-1"]).await.unwrap_err();
+        server.run(&["--tunnel", "box-1"]).await.unwrap_err();
 
         assert_eq!(server.requests(), [("GET".into(), ssh_path())]);
     }

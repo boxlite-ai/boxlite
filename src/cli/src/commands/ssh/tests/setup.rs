@@ -64,6 +64,7 @@ async fn setup_applies_managed_credentials_and_only_reports_success_after_config
         public_key(&directory.join("client_key")).unwrap()
     );
     assert!(output.contains("SSH configured for box box-1"));
+    assert!(output.contains("SSH host key fingerprint: SHA256:host"));
     assert!(output.contains("CLI exit stops non-detached boxes"));
     assert!(output.contains("running detached box"));
     assert!(output.contains("  ssh "));
@@ -167,7 +168,8 @@ fn generated_command_preserves_arguments_through_shell_and_openssh() {
             "--context",
             context,
             "ssh",
-            "proxy",
+            "--proxy",
+            "--",
             "testbox"
         ]
     );
