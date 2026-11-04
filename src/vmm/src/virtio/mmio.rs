@@ -144,10 +144,7 @@ impl MmioTransport {
     ) -> Result<Self> {
         let spec = *device
             .lock()
-            .map_err(|_| Error::VirtioDevice {
-                device: "virtio",
-                reason: "device lock poisoned",
-            })?
+            .expect("a virtio device lock is poisoned")
             .spec();
         if spec.device_id == 0 {
             return Err(Error::VirtioDevice {
@@ -417,34 +414,25 @@ impl MmioTransport {
             };
             match self.activate(worker) {
                 Ok(()) => {
-                    self.interrupt.update_device_status(bits, 0);
-                    self.active = true;
+                    self.interrupt.set_device_status(new);
                     match self.worker.start() {
-                        Ok(()) => {}
+                        Ok(()) => self.active = true,
                         Err(error) => {
-                            if let Err(cancel_error) = self.worker.cancel_prepare() {
-                                self.report_worker_failure(cancel_error);
-                            }
-                            self.interrupt.set_needs_reset();
+                            self.worker.cancel_prepare();
+                            self.interrupt
+                                .set_device_status(self.status() | NEEDS_RESET);
                             self.interrupt.raise_config();
                             self.report_worker_failure(error);
                         }
                     }
                 }
                 Err(error) => {
-                    if let Err(cancel_error) = self.worker.cancel_prepare() {
-                        // An activation-time registration can still hold RAM.
-                        // Keep the device intact until a stop barrier succeeds.
-                        self.active = true;
-                        self.need_reset("virtio activation cancellation");
-                        self.report_worker_failure(cancel_error);
-                        return;
-                    }
+                    self.worker.cancel_prepare();
                     let rollback = self
                         .device
                         .lock()
-                        .map_err(|_| DeviceError::Fatal("virtio device lock poisoned"))
-                        .and_then(|mut device| device.reset());
+                        .expect("a virtio device lock is poisoned")
+                        .reset();
                     if let Err(rollback_error) = rollback {
                         self.report_worker_failure(rollback_error);
                     }
@@ -481,14 +469,12 @@ impl MmioTransport {
             return false;
         }
         let negotiated = self.driver_features & self.spec.features & !VIRTIO_F_VERSION_1;
-        let result = match self.device.lock() {
-            Ok(mut device) => device.set_features(negotiated),
-            Err(_) => {
-                self.send_device_failed("virtio device lock poisoned");
-                return false;
-            }
-        };
-        match result {
+        match self
+            .device
+            .lock()
+            .expect("a virtio device lock is poisoned")
+            .set_features(negotiated)
+        {
             Ok(()) => {
                 self.features_ok = true;
                 true
@@ -549,8 +535,8 @@ impl MmioTransport {
         };
         self.device
             .lock()
-            .map_err(|_| DeviceError::Fatal("virtio device lock poisoned"))
-            .and_then(|mut device| device.activate(ctx))
+            .expect("a virtio device lock is poisoned")
+            .activate(ctx)
     }
 
     /// Resets the device and the transport on a Status=0 write.
@@ -567,8 +553,8 @@ impl MmioTransport {
         let result = self
             .device
             .lock()
-            .map_err(|_| DeviceError::Fatal("virtio device lock poisoned"))
-            .and_then(|mut device| device.reset());
+            .expect("a virtio device lock is poisoned")
+            .reset();
         if let Err(error) = result {
             self.handle_device_error(error);
             return;
@@ -640,8 +626,8 @@ impl MmioTransport {
         let result = self
             .device
             .lock()
-            .map_err(|_| DeviceError::Fatal("virtio device lock poisoned"))
-            .and_then(|mut device| device.read_config(offset, data));
+            .expect("a virtio device lock is poisoned")
+            .read_config(offset, data);
         if let Err(error) = result {
             self.handle_device_error(error);
         }
@@ -656,8 +642,8 @@ impl MmioTransport {
         let result = self
             .device
             .lock()
-            .map_err(|_| DeviceError::Fatal("virtio device lock poisoned"))
-            .and_then(|mut device| device.write_config(offset, data));
+            .expect("a virtio device lock is poisoned")
+            .write_config(offset, data);
         if let Err(error) = result {
             self.handle_device_error(error);
         }

@@ -72,12 +72,11 @@ enum VmState {
 }
 
 /// The guest machine on host backend `H`.
-///
-/// Field order is load-bearing: the chipset and the workers go before the host
-/// VM, whose guest mappings the RAM is registered in, and the RAM goes last.
-/// `Drop` still unmaps explicitly, since a device's interrupt line holds the
-/// host VM longer.
 pub struct Vm<H: HostVm> {
+    // Field order is load-bearing: devices go first, then the host VM, which
+    // releases its guest mappings, then the RAM that backs them. `Drop`
+    // unmaps the RAM anyway, since a device's interrupt line holds the host
+    // VM longer.
     chipset: Chipset,
     /// Runs every virtio device's events on one thread; `run` and `Drop` shut
     /// them down before the RAM is released.
@@ -107,18 +106,18 @@ impl<H: HostVm> std::fmt::Debug for Vm<H> {
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 impl Vm<boxlite_hypervisor::KvmVm> {
-    /// Builds a KVM VM with legacy devices and the reporting balloon, registers
-    /// RAM and loads the kernel. The MMIO resource record supplies discovery.
-    /// COM1 uses a queue so a slow sink never stalls the guest.
+    /// Validates `config`, creates the KVM VM with the legacy devices,
+    /// registers its RAM and loads the kernel and boot data. The guest's COM1
+    /// output goes to `console` through a queue, so a slow sink never stalls
+    /// the guest.
     pub fn new(mut config: VmConfig, console: Box<dyn std::io::Write + Send>) -> Result<Self> {
         use crate::devices::{
             console::DEFAULT_QUEUE_BYTES,
             x86_64::{BALLOON_MMIO, add_balloon, add_legacy_devices},
         };
 
-        config.validate()?;
-        // Device discovery belongs to the same resource record as registration.
-        // A caller's earlier declaration could bind our window to another IRQ.
+        // Discovery must come from the record that registers the window, so a
+        // caller declaration cannot bind it to another guest IRQ.
         if config.cmdline.split_ascii_whitespace().any(|token| {
             token
                 .trim_start_matches('"')
@@ -129,7 +128,6 @@ impl Vm<boxlite_hypervisor::KvmVm> {
             ));
         }
         BALLOON_MMIO.append_cmdline(&mut config.cmdline);
-        config.validate()?;
 
         let (writer, worker) =
             ConsoleWorker::spawn(console, DEFAULT_QUEUE_BYTES).map_err(Error::SpawnConsole)?;
@@ -169,7 +167,7 @@ impl<H: HostVm> Vm<H> {
         let sender = events.sender();
         // Allocating first keeps the drop order safe on every early return:
         // locals drop in reverse order, so the host VM goes before the RAM.
-        let ram = GuestRam::new(&ram_ranges(config.memory_mib))?;
+        let mut ram = GuestRam::new(&ram_ranges(config.memory_mib))?;
         let host_vm = Arc::new(host_vm()?);
         // No worker thread starts before a virtio device activates, so an
         // early return leaves nothing running.
@@ -183,6 +181,8 @@ impl<H: HostVm> Vm<H> {
             },
         )?;
         let chipset = chipset.build()?;
+        ram.map(&*host_vm)?;
+        // From here on `Drop` unmaps the RAM if a later step fails.
         let mut vm = Self {
             chipset,
             workers,
@@ -195,9 +195,6 @@ impl<H: HostVm> Vm<H> {
             host_vm,
             ram,
         };
-        // Assemble ownership before mapping so partial registration failures
-        // also stop dispatch before any successful registrations are removed.
-        vm.ram.map(&*vm.host_vm)?;
         vm.boot_regs = boot(&vm.ram, &config)?;
         Ok(vm)
     }

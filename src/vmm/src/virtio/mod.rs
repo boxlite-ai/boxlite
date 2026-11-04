@@ -4,17 +4,20 @@
 //! The virtio device contract.
 //!
 //! One [`VirtioDevice`] owns a device's configuration, queues and backend.
-//! The transport calls configuration methods synchronously; the [`worker`]
-//! runtime calls [`VirtioDevice::on_event`]. Both share
-//! `Arc<Mutex<dyn VirtioDevice>>`. A queue callback admits at most one complete
-//! chain. Synchronous device I/O may finish that chain before a generation stop
-//! barrier returns; the bound continuation schedules any backlog after other
-//! work in the current pass. A slow callback delays every device on the shared
-//! thread.
+//! The transport calls the configuration methods synchronously; the virtio
+//! [`worker`] runtime calls [`VirtioDevice::on_event`]. The transport and the
+//! workers share the device through `Arc<Mutex<dyn VirtioDevice>>`. Every
+//! device's events run on the workers' single thread under the device lock, so
+//! `on_event` must not block: a blocking call stalls every other device.
 //!
-//! [`VirtQueues`] validates the dense queue set and tracks deferred chains.
-//! Snapshots remain unsupported until M8. DRIVER_OK starts a generation and
-//! Status=0 stops it before resetting device state or queue configuration.
+//! A device processes the descriptors available in its queues; the virtqueue
+//! size bounds one event call. The [`VirtQueues`] facade prepares and validates
+//! the queue set, tracks deferred chains and runs the notification drain;
+//! `save` and `restore` return [`SnapshotError::Unsupported`] until M8. Through
+//! [`WorkerControl`] the transport prepares a worker generation before
+//! DRIVER_OK, starts it after activation, kicks it on QueueNotify and stops it
+//! before Status=0 resets the device, and it rejects queue-configuration writes
+//! after DRIVER_OK. Every device needs the methods here first.
 
 use std::{fmt, io, sync::Arc};
 
@@ -76,7 +79,7 @@ pub(crate) enum DeviceEvent {
 }
 
 /// The id the workers give a registered background source.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct SourceId(pub(crate) u32);
 
 /// A file descriptor or similar object the workers poll.
@@ -93,11 +96,11 @@ pub(crate) trait EventSource: Send {
 /// `register` returns [`EventError::Closed`].
 pub(crate) trait EventRegistrar: Send + Sync {
     /// Registers `source` for readability and returns its id; each readiness
-    /// edge reaches the device as [`DeviceEvent::BackendReady`] with that id.
+    /// edge then reaches the device as [`DeviceEvent::BackendReady`] with that
+    /// id.
     fn register(&self, source: Box<dyn EventSource>) -> Result<SourceId, EventError>;
 
-    /// Retires `id` and waits for an admitted delivery on another thread.
-    /// A callback may retire its own source without waiting for itself.
+    /// Stops reporting `id` and drops its source; an unknown id is ignored.
     fn deregister(&self, id: SourceId);
 }
 
@@ -109,8 +112,8 @@ pub(crate) struct WorkerContext {
     pub(crate) waker: Waker,
 }
 
-/// Drives one device's generation in the [`worker::WorkerRuntime`]. The transport
-/// calls it from a vCPU thread, never while it holds the device lock.
+/// Drives one device's worker generation in the [`WorkerRuntime`]. The transport calls
+/// it from a vCPU thread, never while it holds the device lock.
 pub(crate) trait WorkerControl: Send + Sync {
     /// Opens a new generation for the next activation and returns its handles.
     /// Kicks and sources of an earlier generation never reach this one.
@@ -121,18 +124,17 @@ pub(crate) trait WorkerControl: Send + Sync {
     /// [`cancel_prepare`](Self::cancel_prepare).
     fn start(&self) -> Result<(), DeviceError>;
 
-    /// Records a notification of queue `index` and wakes the workers. Kicks of
-    /// one queue that arrive before its event runs coalesce.
+    /// Records a notification of queue `index` and wakes the workers. It never
+    /// blocks; kicks of one queue that arrive before its event runs coalesce.
     fn kick(&self, index: u16);
 
-    /// Stops admission and waits for callbacks and registrations in flight,
-    /// then closes the generation's sources. It never joins the workers'
-    /// thread. On error the device must not be reset.
+    /// Stops the generation: waits for an event in flight, then closes the
+    /// generation's sources. It never joins the workers' thread. On error the
+    /// device must not be reset.
     fn stop(&self) -> Result<(), DeviceError>;
 
-    /// Closes a prepared generation that will not start. On error the device
-    /// and its backing must remain intact until a barrier succeeds.
-    fn cancel_prepare(&self) -> Result<(), DeviceError>;
+    /// Closes a prepared generation that will not start.
+    fn cancel_prepare(&self);
 }
 
 /// The transport's interrupt and status handle, shared with the device and
@@ -156,10 +158,16 @@ pub(crate) trait VirtioInterrupt: Send + Sync {
     /// Reads the device status register.
     fn device_status(&self) -> u8;
 
-    /// Replaces the device status register while dispatch is stopped.
+    /// Replaces the device status register.
+    ///
+    /// The transport uses this before the device starts and to roll back a
+    /// failed activation; the worker uses [`Self::set_needs_reset`].
     fn set_device_status(&self, status: u8);
 
-    /// Atomically sets [`NEEDS_RESET`] without clearing driver status bits.
+    /// Sets [`NEEDS_RESET`] without clearing a bit a driver wrote.
+    ///
+    /// The worker calls this while a driver may write the status register, so
+    /// an implementation must not replace the register with a stale value.
     fn set_needs_reset(&self);
 }
 
@@ -301,9 +309,7 @@ pub(crate) trait VirtioDevice: Send {
     /// Handles one worker event. `Ok(())` means this call finished; it does
     /// not mean every submitted request completed. The device uses the event
     /// registrar and waker stored from [`ActivationContext`]. The call runs on
-    /// the workers' shared thread, so a callback that blocks or performs slow
-    /// synchronous I/O (the balloon's `madvise`, for example) delays every
-    /// other device on that thread; see the one-chain budget in [`worker`].
+    /// the workers' shared thread and must not block.
     fn on_event(&mut self, event: DeviceEvent) -> Result<(), DeviceError>;
 
     /// Stops accepting new work and drains requests the device already took.

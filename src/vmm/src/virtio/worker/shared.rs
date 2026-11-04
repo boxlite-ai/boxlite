@@ -16,14 +16,14 @@
 //! edge-triggered, so a ready mark stays until its event is delivered or the
 //! source closes: an edge that arrives before the device starts is not lost.
 //!
-//! `stop` closes admission and waits for callbacks and host registrations, then
-//! retires the generation's sources. It never joins the shared thread. Slot
-//! locks are never held across device code or host registration. Registrars and
-//! continuations hold weak references, so devices cannot keep their own slots
-//! and guest memory alive through those handles.
+//! `stop` takes only the slot's lock and waits on its condition variable for
+//! the event in flight; it never waits for the thread, which only
+//! [`SharedRuntime::shutdown`] joins. Registrars hold weak references, so a
+//! device that keeps its registrar does not keep its slot, and with it the
+//! device and the guest memory, alive.
 
 use std::{
-    collections::BTreeMap,
+    collections::HashMap,
     io,
     panic::{self, AssertUnwindSafe},
     sync::{
@@ -32,7 +32,6 @@ use std::{
         mpsc::{self, RecvTimeoutError},
     },
     thread::{self, JoinHandle},
-    time::Instant,
 };
 
 use mio::{Events, Interest, Poll, Registry, Token};
@@ -84,23 +83,26 @@ struct Registered {
     source: Box<dyn EventSource>,
     /// The poller reported readiness that has not been delivered yet.
     ready: bool,
-    retired: bool,
-    delivering: Option<thread::ThreadId>,
 }
 
 /// A slot's state, behind its lock.
 struct SlotState {
     phase: Phase,
     generation: u64,
-    /// Admitted callbacks and host registrations that have not returned.
-    in_flight: usize,
+    /// `on_event` runs for this slot.
+    in_flight: bool,
     next_source: u32,
+    sources: HashMap<SourceId, Registered>,
 }
 
 impl SlotState {
     /// Whether `generation` is open for registrations.
     fn is_open(&self, generation: u64) -> bool {
-        self.generation == generation && matches!(self.phase, Phase::Prepared | Phase::Running)
+        self.generation == generation
+            && matches!(
+                self.phase,
+                Phase::Prepared | Phase::Running | Phase::Halted | Phase::Stopping
+            )
     }
 }
 
@@ -131,8 +133,6 @@ struct Slot {
     /// One bit per kicked queue, taken by the next pass.
     kicks: AtomicU32,
     state: Mutex<SlotState>,
-    sources: Mutex<BTreeMap<SourceId, Registered>>,
-    sources_idle: Condvar,
     /// Signalled when the event in flight returns.
     idle: Condvar,
 }
@@ -142,79 +142,37 @@ impl Slot {
         lock(&self.state)
     }
 
-    /// Drops sources only after the generation's admission barrier is idle.
-    fn close_sources(&self, registry: &Registry) {
-        for (_, mut registered) in std::mem::take(&mut *lock(&self.sources)) {
-            if !registered.retired
-                && let Err(error) = registry.deregister(registered.source.as_source())
-            {
+    /// Ends the open generation: drops its kicks, deregisters and drops its
+    /// sources, and moves to `phase`.
+    fn close(&self, state: &mut SlotState, registry: &Registry, phase: Phase) {
+        state.phase = phase;
+        self.kicks.store(0, Ordering::SeqCst);
+        for (_, mut registered) in state.sources.drain() {
+            if let Err(error) = registry.deregister(registered.source.as_source()) {
                 tracing::debug!(device = self.name, %error, "deregistering a virtio source failed");
             }
         }
     }
 
-    fn wait_idle(&self, deadline: Instant) -> io::Result<()> {
-        let mut state = self.lock();
-        while state.in_flight != 0 {
-            let remaining = deadline
-                .checked_duration_since(Instant::now())
-                .ok_or_else(|| {
-                    io::Error::new(
-                        io::ErrorKind::TimedOut,
-                        "a virtio worker did not stop in time",
-                    )
-                })?;
-            state = self
-                .idle
-                .wait_timeout(state, remaining)
-                .unwrap_or_else(PoisonError::into_inner)
-                .0;
-        }
-        Ok(())
-    }
-
-    fn finish_source(&self, id: SourceId) {
-        let mut sources = lock(&self.sources);
-        if let Some(registered) = sources.get_mut(&id) {
-            registered.delivering = None;
-            if registered.retired {
-                sources.remove(&id);
-            }
-        }
-        self.sources_idle.notify_all();
-    }
-
     /// Claims the slot for one event of `generation`, from `source` if set.
-    fn begin(&self, shared: &Shared, generation: u64, source: Option<SourceId>) -> Begin {
-        let mut sources = source.map(|_| lock(&self.sources));
+    fn begin(&self, generation: u64, source: Option<SourceId>) -> Begin {
         let mut state = self.lock();
-        if shared.closed.load(Ordering::SeqCst)
-            || state.phase != Phase::Running
-            || state.generation != generation
-        {
+        if state.phase != Phase::Running || state.generation != generation {
             return Begin::Stopped;
         }
-        if let (Some(id), Some(sources)) = (source, sources.as_mut()) {
-            match sources.get_mut(&id) {
-                Some(registered) if !registered.retired => {
-                    registered.delivering = Some(thread::current().id());
-                }
+        if let Some(id) = source {
+            match state.sources.get_mut(&id) {
+                Some(registered) if registered.ready => registered.ready = false,
                 _ => return Begin::SourceGone,
             }
         }
-        state.in_flight += 1;
+        state.in_flight = true;
         Begin::Deliver
     }
 
     /// Releases the slot after one event of `generation` and applies the
     /// device's result. Returns whether the slot takes more events this pass.
-    fn end(
-        &self,
-        shared: &Shared,
-        generation: u64,
-        source: Option<SourceId>,
-        result: Result<(), DeviceError>,
-    ) -> bool {
+    fn end(&self, shared: &Shared, generation: u64, result: Result<(), DeviceError>) -> bool {
         // The status bit is set while the event still counts as in flight, so
         // a `stop` waiting for it, and the device reset after that, come later.
         if let Err(DeviceError::NeedsReset(reason)) = result {
@@ -222,11 +180,8 @@ impl Slot {
             self.interrupt.set_needs_reset();
             self.interrupt.raise_config();
         }
-        if let Some(id) = source {
-            self.finish_source(id);
-        }
         let mut state = self.lock();
-        state.in_flight -= 1;
+        state.in_flight = false;
         let current = state.generation == generation;
         let mut failed = None;
         match result {
@@ -245,8 +200,7 @@ impl Slot {
             }
             Err(DeviceError::Fatal(reason)) => {
                 if current && state.phase != Phase::Failed {
-                    state.phase = Phase::Failed;
-                    self.kicks.store(0, Ordering::SeqCst);
+                    self.close(&mut state, &shared.registry, Phase::Failed);
                     failed = Some(reason);
                 }
             }
@@ -265,16 +219,6 @@ impl Slot {
     }
 }
 
-/// A registration remains admitted until insertion or rollback is complete.
-struct Registration<'a>(&'a Slot);
-
-impl Drop for Registration<'_> {
-    fn drop(&mut self) {
-        self.0.lock().in_flight -= 1;
-        self.0.idle.notify_all();
-    }
-}
-
 /// What the runtime, its thread and its registrars share.
 struct Shared {
     registry: Registry,
@@ -286,33 +230,11 @@ struct Shared {
     slots: Mutex<Vec<Arc<Slot>>>,
     /// The poller, until the thread takes it.
     poll: Mutex<Option<Poll>>,
-    #[cfg(test)]
-    before_device_lock: Mutex<Option<Box<dyn FnOnce() + Send>>>,
 }
 
 impl Shared {
     fn slots(&self) -> Vec<Arc<Slot>> {
         lock(&self.slots).clone()
-    }
-
-    /// Coalesces a kick under the generation admission lock.
-    fn enqueue(&self, slot: &Slot, index: u16) {
-        if usize::from(index) >= MAX_QUEUES {
-            tracing::debug!(index, "ignoring a kick past the last queue");
-            return;
-        }
-        let state = slot.lock();
-        if self.closed.load(Ordering::SeqCst)
-            || !matches!(state.phase, Phase::Prepared | Phase::Running)
-        {
-            return;
-        }
-        let bit = 1_u32 << index;
-        let notify = slot.kicks.fetch_or(bit, Ordering::SeqCst) & bit == 0;
-        drop(state);
-        if notify {
-            wake(&self.waker);
-        }
     }
 }
 
@@ -351,8 +273,6 @@ impl SharedRuntime {
                 closed: AtomicBool::new(false),
                 slots: Mutex::new(Vec::new()),
                 poll: Mutex::new(Some(poll)),
-                #[cfg(test)]
-                before_device_lock: Mutex::new(None),
             }),
             thread: Mutex::new(Thread::Idle),
         })
@@ -420,11 +340,10 @@ impl WorkerRuntime for SharedRuntime {
             state: Mutex::new(SlotState {
                 phase: Phase::Stopped,
                 generation: 0,
-                in_flight: 0,
+                in_flight: false,
                 next_source: 0,
+                sources: HashMap::new(),
             }),
-            sources: Mutex::new(BTreeMap::new()),
-            sources_idle: Condvar::new(),
             idle: Condvar::new(),
         }));
         SlotId(id)
@@ -442,11 +361,8 @@ impl WorkerRuntime for SharedRuntime {
             Phase::Failed => return Err(FAILED),
             _ => return Err(DeviceError::Fatal("virtio worker is already open")),
         }
-        state.generation = state
-            .generation
-            .checked_add(1)
-            .ok_or(DeviceError::Fatal("virtio worker generation exhausted"))?;
         state.phase = Phase::Prepared;
+        state.generation += 1;
         slot.kicks.store(0, Ordering::SeqCst);
         let events = Arc::new(Registrar {
             shared: Arc::downgrade(&self.shared),
@@ -478,7 +394,14 @@ impl WorkerRuntime for SharedRuntime {
     }
 
     fn kick(&self, slot: SlotId, index: u16) {
-        self.shared.enqueue(&self.slot(slot), index);
+        if usize::from(index) >= MAX_QUEUES {
+            tracing::debug!(index, "ignoring a kick past the last queue");
+            return;
+        }
+        let bit = 1_u32 << index;
+        if self.slot(slot).kicks.fetch_or(bit, Ordering::SeqCst) & bit == 0 {
+            wake(&self.shared.waker);
+        }
     }
 
     fn stop(&self, slot: SlotId) -> Result<(), DeviceError> {
@@ -487,81 +410,53 @@ impl WorkerRuntime for SharedRuntime {
         match state.phase {
             Phase::Stopped => return Ok(()),
             Phase::Failed => return Err(FAILED),
-            _ => state.phase = Phase::Stopping,
+            Phase::Prepared | Phase::Halted => {
+                slot.close(&mut state, &self.shared.registry, Phase::Stopped);
+                return Ok(());
+            }
+            Phase::Running | Phase::Stopping => state.phase = Phase::Stopping,
         }
-        slot.kicks.store(0, Ordering::SeqCst);
-        drop(state);
-        if slot
-            .wait_idle(Instant::now() + self.shared.timeouts.stop)
-            .is_err()
-        {
-            slot.lock().phase = Phase::Failed;
+        let (mut state, wait) = slot
+            .idle
+            .wait_timeout_while(state, self.shared.timeouts.stop, |state| state.in_flight)
+            .unwrap_or_else(PoisonError::into_inner);
+        if wait.timed_out() {
+            tracing::warn!(
+                device = slot.name,
+                "a virtio device event outlived the stop timeout"
+            );
+            slot.close(&mut state, &self.shared.registry, Phase::Failed);
             return Err(DeviceError::Fatal("virtio worker stop timed out"));
         }
-        if slot.lock().phase == Phase::Failed {
+        if state.phase == Phase::Failed {
             return Err(FAILED);
         }
-        // Admission stays closed through source destruction.
-        slot.close_sources(&self.shared.registry);
-        slot.lock().phase = Phase::Stopped;
+        slot.close(&mut state, &self.shared.registry, Phase::Stopped);
         Ok(())
     }
 
-    fn cancel_prepare(&self, slot: SlotId) -> Result<(), DeviceError> {
+    fn cancel_prepare(&self, slot: SlotId) {
         let slot = self.slot(slot);
         let mut state = slot.lock();
-        if !matches!(state.phase, Phase::Prepared | Phase::Failed) {
-            return Ok(());
+        if state.phase == Phase::Prepared {
+            slot.close(&mut state, &self.shared.registry, Phase::Stopped);
         }
-        let failed = state.phase == Phase::Failed;
-        if !failed {
-            state.phase = Phase::Stopping;
-        }
-        slot.kicks.store(0, Ordering::SeqCst);
-        drop(state);
-        if slot
-            .wait_idle(Instant::now() + self.shared.timeouts.stop)
-            .is_err()
-        {
-            slot.lock().phase = Phase::Failed;
-            return Err(DeviceError::Fatal("virtio prepare cancellation timed out"));
-        }
-        slot.close_sources(&self.shared.registry);
-        slot.lock().phase = if failed {
-            Phase::Failed
-        } else {
-            Phase::Stopped
-        };
-        Ok(())
     }
 
     fn shutdown(&self) -> io::Result<()> {
         let mut thread = lock(&self.thread);
         self.shared.closed.store(true, Ordering::SeqCst);
-        let deadline = Instant::now() + self.shared.timeouts.shutdown;
-        let slots = self.shared.slots();
-        for slot in &slots {
+        for slot in self.shared.slots() {
             let mut state = slot.lock();
             if state.phase != Phase::Failed {
-                state.phase = Phase::Stopping;
-            }
-            slot.kicks.store(0, Ordering::SeqCst);
-        }
-        wake(&self.shared.waker);
-        for slot in &slots {
-            slot.wait_idle(deadline)?;
-            slot.close_sources(&self.shared.registry);
-            let mut state = slot.lock();
-            if state.phase != Phase::Failed {
-                state.phase = Phase::Stopped;
+                slot.close(&mut state, &self.shared.registry, Phase::Stopped);
             }
         }
         match std::mem::replace(&mut *thread, Thread::Joined) {
             Thread::Idle | Thread::Joined => Ok(()),
             Thread::Running { handle, exited } => {
                 wake(&self.shared.waker);
-                let remaining = deadline.saturating_duration_since(Instant::now());
-                match exited.recv_timeout(remaining) {
+                match exited.recv_timeout(self.shared.timeouts.shutdown) {
                     Err(RecvTimeoutError::Timeout) => {
                         *thread = Thread::Running { handle, exited };
                         Err(io::Error::new(
@@ -599,48 +494,32 @@ struct Registrar {
 }
 
 impl EventRegistrar for Registrar {
-    fn register(&self, source: Box<dyn EventSource>) -> Result<SourceId, EventError> {
+    fn register(&self, mut source: Box<dyn EventSource>) -> Result<SourceId, EventError> {
         let (Some(shared), Some(slot)) = (self.shared.upgrade(), self.slot.upgrade()) else {
             return Err(EventError::Closed);
         };
-        let id = {
-            let mut state = slot.lock();
-            if shared.closed.load(Ordering::SeqCst) || !state.is_open(self.generation) {
-                return Err(EventError::Closed);
-            }
-            let id = SourceId(state.next_source);
-            state.next_source =
-                id.0.checked_add(1)
-                    .ok_or(EventError::Register(io::ErrorKind::OutOfMemory))?;
-            state.in_flight += 1;
-            id
-        };
-        let _registration = Registration(&slot);
-        // Insert before registering, so an immediate readiness edge cannot
-        // race ahead of its source. No slot lock spans host registration.
-        let mut sources = lock(&slot.sources);
-        sources.insert(
+        let mut state = slot.lock();
+        if !state.is_open(self.generation) {
+            return Err(EventError::Closed);
+        }
+        let id = SourceId(state.next_source);
+        state.next_source =
+            id.0.checked_add(1)
+                .ok_or(EventError::Register(io::ErrorKind::OutOfMemory))?;
+        // The slot lock is held across both steps, so the thread marks the
+        // readiness only once the entry exists, and a refused source leaves
+        // nothing behind.
+        shared
+            .registry
+            .register(source.as_source(), token(slot.id, id), Interest::READABLE)
+            .map_err(|error| EventError::Register(error.kind()))?;
+        state.sources.insert(
             id,
             Registered {
                 source,
                 ready: false,
-                retired: false,
-                delivering: None,
             },
         );
-        let result = shared.registry.register(
-            sources
-                .get_mut(&id)
-                .expect("the inserted source")
-                .source
-                .as_source(),
-            token(slot.id, id),
-            Interest::READABLE,
-        );
-        if let Err(error) = result {
-            sources.remove(&id);
-            return Err(EventError::Register(error.kind()));
-        }
         Ok(id)
     }
 
@@ -648,36 +527,15 @@ impl EventRegistrar for Registrar {
         let (Some(shared), Some(slot)) = (self.shared.upgrade(), self.slot.upgrade()) else {
             return;
         };
-        // Source retirement and callback admission use the same lock. A
-        // configuration callback already holds the device lock; dispatch
-        // takes that lock before admission, so retirement cannot invert it.
-        let mut sources = lock(&slot.sources);
-        if slot.lock().generation != self.generation {
+        let mut state = slot.lock();
+        if !state.is_open(self.generation) {
             return;
         }
-        let Some(registered) = sources.get_mut(&id) else {
-            return;
-        };
-        if !registered.retired {
-            registered.retired = true;
-            if let Err(error) = shared.registry.deregister(registered.source.as_source()) {
-                tracing::debug!(device = slot.name, %error, "deregistering a virtio source failed");
-            }
+        if let Some(mut registered) = state.sources.remove(&id)
+            && let Err(error) = shared.registry.deregister(registered.source.as_source())
+        {
+            tracing::debug!(device = slot.name, %error, "deregistering a virtio source failed");
         }
-        let caller = thread::current().id();
-        while let Some(registered) = sources.get(&id) {
-            match registered.delivering {
-                Some(owner) if owner == caller => return,
-                Some(_) => {
-                    sources = slot
-                        .sources_idle
-                        .wait(sources)
-                        .unwrap_or_else(PoisonError::into_inner)
-                }
-                None => break,
-            }
-        }
-        sources.remove(&id);
     }
 }
 
@@ -717,8 +575,10 @@ fn run(shared: &Shared) {
     shared.closed.store(true, Ordering::SeqCst);
     for slot in shared.slots() {
         let mut state = slot.lock();
-        state.phase = Phase::Failed;
-        slot.kicks.store(0, Ordering::SeqCst);
+        state.in_flight = false;
+        if state.phase != Phase::Failed {
+            slot.close(&mut state, &shared.registry, Phase::Failed);
+        }
         drop(state);
         slot.idle.notify_all();
     }
@@ -733,9 +593,6 @@ fn serve(shared: &Shared) -> io::Result<()> {
         .take()
         .ok_or_else(|| io::Error::other("the virtio workers poller is gone"))?;
     let mut events = Events::with_capacity(EVENT_CAPACITY);
-    let mut slots = Vec::new();
-    let mut pending = Vec::new();
-    let mut ready = Vec::new();
     loop {
         // The recheck finds kicks whose wake-up failed.
         match poll.poll(&mut events, Some(RECHECK)) {
@@ -746,62 +603,69 @@ fn serve(shared: &Shared) -> io::Result<()> {
         if shared.closed.load(Ordering::SeqCst) {
             return Ok(());
         }
-        {
-            let current = lock(&shared.slots);
-            slots.extend(current[slots.len()..].iter().cloned());
-            pending.resize(slots.len(), (0, 0));
-        }
+        let slots = shared.slots();
         for event in &events {
             if event.token() == WAKE {
                 continue;
             }
             let (index, id) = source_of(event.token());
             if let Some(slot) = slots.get(index)
-                && let Some(registered) = lock(&slot.sources).get_mut(&id)
+                && let Some(registered) = slot.lock().sources.get_mut(&id)
             {
                 registered.ready = true;
             }
         }
-        ready.clear();
-        // Snapshot all work before calling a device. Continuations cannot
-        // overtake another queue or backend source ready in this pass.
-        for (index, (slot, pending)) in slots.iter().zip(&mut pending).enumerate() {
-            let mut sources = lock(&slot.sources);
-            let state = slot.lock();
-            *pending = (state.generation, 0);
-            if state.phase == Phase::Running {
-                pending.1 = slot.kicks.swap(0, Ordering::SeqCst);
-                for (&id, registered) in sources.iter_mut() {
-                    if registered.ready && !registered.retired {
-                        ready.push((index, state.generation, id));
-                        registered.ready = false;
-                    }
-                }
+        for slot in &slots {
+            if shared.closed.load(Ordering::SeqCst) {
+                return Ok(());
             }
+            serve_slot(shared, slot);
         }
-        for (slot, &(generation, kicks)) in slots.iter().zip(&pending) {
-            for index in 0..MAX_QUEUES as u16 {
-                if kicks & (1_u32 << index) != 0
-                    && !dispatch(
-                        shared,
-                        slot,
-                        generation,
-                        DeviceEvent::QueueKick(index),
-                        None,
-                    )
-                {
-                    break;
-                }
-            }
+    }
+}
+
+/// Delivers one slot's kicks, then its ready sources, while it keeps running.
+fn serve_slot(shared: &Shared, slot: &Slot) {
+    let (generation, kicks, ready) = {
+        let state = slot.lock();
+        if state.phase != Phase::Running {
+            return;
         }
-        for &(index, generation, id) in &ready {
-            dispatch(
-                shared,
-                &slots[index],
-                generation,
-                DeviceEvent::BackendReady(id),
-                Some(id),
-            );
+        let mut ready: Vec<SourceId> = state
+            .sources
+            .iter()
+            .filter(|(_, registered)| registered.ready)
+            .map(|(&id, _)| id)
+            .collect();
+        ready.sort_unstable_by_key(|id| id.0);
+        // Taken under the lock, so the kicks belong to this generation.
+        (
+            state.generation,
+            slot.kicks.swap(0, Ordering::SeqCst),
+            ready,
+        )
+    };
+    let queues = (0..MAX_QUEUES as u16).filter(|&index| kicks & (1_u32 << index) != 0);
+    for index in queues {
+        if !dispatch(
+            shared,
+            slot,
+            generation,
+            DeviceEvent::QueueKick(index),
+            None,
+        ) {
+            return;
+        }
+    }
+    for id in ready {
+        if !dispatch(
+            shared,
+            slot,
+            generation,
+            DeviceEvent::BackendReady(id),
+            Some(id),
+        ) {
+            return;
         }
     }
 }
@@ -815,10 +679,6 @@ fn dispatch(
     event: DeviceEvent,
     source: Option<SourceId>,
 ) -> bool {
-    #[cfg(test)]
-    if let Some(gate) = lock(&shared.before_device_lock).take() {
-        gate();
-    }
     // The device lock is taken inside `catch_unwind`, so a panic in `on_event`
     // unwinds through the guard and poisons it.
     let caught = panic::catch_unwind(AssertUnwindSafe(|| {
@@ -826,7 +686,7 @@ fn dispatch(
             Ok(device) => (device, false),
             Err(error) => (error.into_inner(), true),
         };
-        match slot.begin(shared, generation, source) {
+        match slot.begin(generation, source) {
             Begin::Deliver if poisoned => {
                 Delivery::Ran(Err(DeviceError::Fatal("device lock is poisoned")))
             }
@@ -836,17 +696,12 @@ fn dispatch(
         }
     }));
     match caught {
-        Ok(Delivery::Ran(result)) => slot.end(shared, generation, source, result),
+        Ok(Delivery::Ran(result)) => slot.end(shared, generation, result),
         Ok(Delivery::Skipped { more }) => more,
         Err(_) => slot.end(
             shared,
             generation,
-            source,
             Err(DeviceError::Fatal("on_event panicked")),
         ),
     }
 }
-
-#[cfg(all(test, unix))]
-#[path = "../../../tests/virtio/executor.rs"]
-mod tests;

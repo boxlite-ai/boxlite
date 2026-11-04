@@ -72,7 +72,7 @@ pub(crate) trait WorkerRuntime: Send + Sync {
     fn stop(&self, slot: SlotId) -> Result<(), DeviceError>;
 
     /// [`WorkerControl::cancel_prepare`] for `slot`.
-    fn cancel_prepare(&self, slot: SlotId) -> Result<(), DeviceError>;
+    fn cancel_prepare(&self, slot: SlotId);
 
     /// Stops delivering events, closes every source and joins the runtime's
     /// threads. Nothing opens afterwards. A call after a success does nothing;
@@ -106,14 +106,11 @@ impl VirtioWorkers {
         device: Arc<Mutex<dyn VirtioDevice>>,
         interrupt: Arc<dyn VirtioInterrupt>,
     ) -> Arc<dyn WorkerControl> {
-        // The caller built this mutex immediately before, so nothing has held it
-        // across a panic; recovering the guard keeps VM construction from
-        // panicking if that ever changes. A device that panics later is failed
-        // by the dispatch path instead, as `MmioTransport` fails it.
-        let name = match device.lock() {
-            Ok(device) => device.spec().name,
-            Err(poisoned) => poisoned.into_inner().spec().name,
-        };
+        let name = device
+            .lock()
+            .expect("a virtio device lock is poisoned")
+            .spec()
+            .name;
         let slot = self.runtime.add(name, device, interrupt);
         Arc::new(DeviceHandle {
             runtime: Arc::clone(&self.runtime),
@@ -151,8 +148,8 @@ impl WorkerControl for DeviceHandle {
         self.runtime.stop(self.slot)
     }
 
-    fn cancel_prepare(&self) -> Result<(), DeviceError> {
-        self.runtime.cancel_prepare(self.slot)
+    fn cancel_prepare(&self) {
+        self.runtime.cancel_prepare(self.slot);
     }
 }
 

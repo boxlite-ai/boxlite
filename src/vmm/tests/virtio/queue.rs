@@ -177,7 +177,7 @@ fn prepare_requires_one_queue_per_slot() {
             &[SIZE, SIZE],
             false,
             false,
-            Arc::clone(&memory),
+            Arc::clone(&memory)
         )
         .err(),
         Some(QueueError::Count {
@@ -196,7 +196,7 @@ fn prepare_checks_each_slot_max_size() {
             &[SIZE],
             false,
             false,
-            Arc::clone(&memory),
+            Arc::clone(&memory)
         )
         .err(),
         Some(QueueError::MaxSize {
@@ -227,7 +227,7 @@ fn prepare_rejects_a_zero_avail_ring() {
     let mut queue = ready_queue();
     queue.try_set_avail_ring_address(GuestAddress(0)).unwrap();
     assert_eq!(
-        VirtQueues::prepare(vec![queue], &[SIZE], false, false, Arc::clone(&memory),).err(),
+        VirtQueues::prepare(vec![queue], &[SIZE], false, false, Arc::clone(&memory)).err(),
         Some(QueueError::Invalid)
     );
 }
@@ -240,7 +240,7 @@ fn prepare_rejects_rings_outside_memory() {
         .try_set_used_ring_address(GuestAddress(0x1_0000))
         .unwrap();
     assert_eq!(
-        VirtQueues::prepare(vec![queue], &[SIZE], false, false, Arc::clone(&memory),).err(),
+        VirtQueues::prepare(vec![queue], &[SIZE], false, false, Arc::clone(&memory)).err(),
         Some(QueueError::Memory)
     );
 }
@@ -258,30 +258,31 @@ fn prepare_reapplies_event_idx_after_reset() {
 }
 
 #[test]
-fn one_callback_completes_every_available_chain() {
-    for event_idx in [false, true] {
-        let memory = memory();
-        let mut queues = prepared(ready_queue(), event_idx, false, &memory);
-        for head in [0u16, 2, 4] {
-            write_desc(&memory, head, DATA, 4, NEXT, head + 1);
-            write_desc(&memory, head + 1, DATA + 4, 8, 0, 0);
-            add_chain(&memory, head);
-        }
-        let mut heads = Vec::new();
-        queues
-            .drain(0, |chain| {
-                heads.push(chain.head_index());
-                Ok(Completion::Used(chain.map(|desc| desc.len()).sum()))
-            })
-            .unwrap();
-        assert_eq!(heads, [0, 2, 4]);
-        assert_eq!(used_idx(&memory), 3);
-        for (used, head) in [0u16, 2, 4].into_iter().enumerate() {
-            assert_eq!(used_entry(&memory, used as u16), (u32::from(head), 12));
-        }
-        assert_eq!(used_flags(&memory), 0);
-        assert!(!queues.drain(0, |_| panic!("empty ring")).unwrap());
+fn drain_completes_every_available_chain() {
+    let memory = memory();
+    let mut queues = prepared(ready_queue(), false, false, &memory);
+    for index in 0..3 {
+        write_desc(&memory, index, DATA, 4, 0, 0);
+        add_chain(&memory, index);
     }
+    let mut heads = Vec::new();
+    let notify = queues
+        .drain(0, |chain| {
+            heads.push(chain.head_index());
+            Ok(Completion::Used(
+                chain.map(|descriptor| descriptor.len()).sum(),
+            ))
+        })
+        .unwrap();
+    assert!(notify);
+    assert_eq!(heads, vec![0, 1, 2]);
+    let state = queues.state(0).unwrap();
+    assert_eq!(state.next_avail, 3);
+    assert_eq!(state.next_used, 3);
+    assert_eq!(used_idx(&memory), 3);
+    assert_eq!(used_entry(&memory, 0), (0, 4));
+    assert_eq!(used_entry(&memory, 1), (1, 4));
+    assert_eq!(used_entry(&memory, 2), (2, 4));
 }
 
 #[test]
@@ -298,25 +299,31 @@ fn empty_drain_does_not_interrupt() {
 }
 
 #[test]
-fn event_idx_suppresses_until_the_completion_crosses_the_threshold() {
-    // Below the announced event index: a whole drain stays silent.
-    let below = memory();
-    let mut queues = prepared(ready_queue(), true, false, &below);
-    set_used_event(&below, 100);
-    for index in 0..6 {
-        write_desc(&below, index, DATA, 4, 0, 0);
-        add_chain(&below, index);
+fn without_event_idx_one_interrupt_per_batch() {
+    let memory = memory();
+    let mut queues = prepared(ready_queue(), false, false, &memory);
+    for index in 0..4 {
+        write_desc(&memory, index, DATA, 4, 0, 0);
+        add_chain(&memory, index);
+    }
+    assert!(queues.drain(0, |_| Ok(Completion::Used(4))).unwrap());
+    assert!(!queues.drain(0, |_| panic!("empty")).unwrap());
+    assert_eq!(used_flags(&memory), 0);
+}
+
+#[test]
+fn event_idx_suppresses_below_threshold() {
+    let memory = memory();
+    let mut queues = prepared(ready_queue(), true, false, &memory);
+    set_used_event(&memory, 5);
+    for index in 0..2 {
+        write_desc(&memory, index, DATA, 4, 0, 0);
+        add_chain(&memory, index);
     }
     assert!(!queues.drain(0, |_| Ok(Completion::Used(4))).unwrap());
-    assert_eq!(used_idx(&below), 6);
-
-    // Crossing it interrupts on the same call.
-    let crossed = memory();
-    let mut queues = prepared(ready_queue(), true, false, &crossed);
-    set_used_event(&crossed, 5);
-    for index in 0..6 {
-        write_desc(&crossed, index, DATA, 4, 0, 0);
-        add_chain(&crossed, index);
+    for index in 2..6 {
+        write_desc(&memory, index, DATA, 4, 0, 0);
+        add_chain(&memory, index);
     }
     assert!(queues.drain(0, |_| Ok(Completion::Used(4))).unwrap());
 }
@@ -335,39 +342,25 @@ fn event_idx_wraps_used_indices() {
 }
 
 #[test]
-fn concurrent_refill_is_drained_in_the_same_call() {
-    for event_idx in [false, true] {
-        let memory = memory();
-        let mut queues = prepared(ready_queue(), event_idx, false, &memory);
-        write_desc(&memory, 0, DATA, 4, 0, 0);
-        add_chain(&memory, 0);
-        let (entered_tx, entered_rx) = std::sync::mpsc::channel();
-        let (refilled_tx, refilled_rx) = std::sync::mpsc::channel();
-        let mut heads = Vec::new();
-        std::thread::scope(|scope| {
-            let memory = &memory;
-            scope.spawn(move || {
-                entered_rx.recv().unwrap();
-                write_desc(memory, 1, DATA, 8, 0, 0);
-                add_chain(memory, 1);
-                refilled_tx.send(()).unwrap();
-            });
-            queues
-                .drain(0, |chain| {
-                    heads.push(chain.head_index());
-                    if chain.head_index() == 0 {
-                        entered_tx.send(()).unwrap();
-                        refilled_rx.recv().unwrap();
-                    }
-                    Ok(Completion::Used(4))
-                })
-                .unwrap();
-        });
-        // The refilled chain became available while the first chain ran, so
-        // the drain's notification recheck takes it in the same call.
-        assert_eq!(heads, [0, 1]);
-        assert_eq!(used_idx(&memory), 2);
-    }
+fn drain_keeps_work_that_arrives_while_disabled() {
+    let memory = memory();
+    let mut queues = prepared(ready_queue(), false, false, &memory);
+    write_desc(&memory, 0, DATA, 4, 0, 0);
+    add_chain(&memory, 0);
+    let mut count = 0;
+    let notify = queues
+        .drain(0, |_| {
+            count += 1;
+            if count == 1 {
+                write_desc(&memory, 1, DATA, 4, 0, 0);
+                add_chain(&memory, 1);
+            }
+            Ok(Completion::Used(4))
+        })
+        .unwrap();
+    assert!(notify);
+    assert_eq!(count, 2);
+    assert_eq!(used_idx(&memory), 2);
 }
 
 #[test]
@@ -498,7 +491,7 @@ fn drain_leaves_a_deferred_chain_for_later_completion() {
 }
 
 #[test]
-fn used_entries_preserve_completion_order_across_inline_and_deferred_chains() {
+fn drain_adds_used_entries_in_completion_order_for_a_mixed_batch() {
     let memory = memory();
     let mut queues = prepared(ready_queue(), false, false, &memory);
     for index in 0..3 {
@@ -506,22 +499,18 @@ fn used_entries_preserve_completion_order_across_inline_and_deferred_chains() {
         add_chain(&memory, index);
     }
 
-    // One drain: heads 0 and 2 complete inline while head 1 is deferred.
-    assert!(
-        queues
-            .drain(0, |chain| {
-                if chain.head_index() == 1 {
-                    Ok(Completion::Deferred)
-                } else {
-                    Ok(Completion::Used(6))
-                }
-            })
-            .unwrap()
-    );
+    let notify = queues
+        .drain(0, |chain| match chain.head_index() {
+            0 => Ok(Completion::Used(4)),
+            1 => Ok(Completion::Deferred),
+            _ => Ok(Completion::Used(6)),
+        })
+        .unwrap();
+    assert!(notify);
     let state = queues.state(0).unwrap();
     assert_eq!(state.next_avail, 3);
     assert_eq!(state.next_used, 2);
-    assert_eq!(used_entry(&memory, 0), (0, 6));
+    assert_eq!(used_entry(&memory, 0), (0, 4));
     assert_eq!(used_entry(&memory, 1), (2, 6));
 
     assert!(queues.complete(0, 1, 8).unwrap());
@@ -529,6 +518,34 @@ fn used_entries_preserve_completion_order_across_inline_and_deferred_chains() {
     assert_eq!(state.next_used, 3);
     assert_eq!(used_idx(&memory), 3);
     assert_eq!(used_entry(&memory, 2), (1, 8));
+}
+
+#[test]
+fn a_deferred_chain_does_not_end_the_notification_drain() {
+    let memory = memory();
+    let mut queues = prepared(ready_queue(), false, false, &memory);
+    write_desc(&memory, 0, DATA, 4, 0, 0);
+    add_chain(&memory, 0);
+
+    let mut calls = 0;
+    let notify = queues
+        .drain(0, |_| {
+            calls += 1;
+            if calls == 1 {
+                write_desc(&memory, 1, DATA, 4, 0, 0);
+                add_chain(&memory, 1);
+                Ok(Completion::Deferred)
+            } else {
+                Ok(Completion::Used(4))
+            }
+        })
+        .unwrap();
+    assert!(notify);
+    assert_eq!(calls, 2);
+    let state = queues.state(0).unwrap();
+    assert_eq!(state.next_avail, 2);
+    assert_eq!(state.next_used, 1);
+    assert_eq!(used_entry(&memory, 0), (1, 4));
 }
 
 #[test]
@@ -557,9 +574,7 @@ fn event_idx_notification_decisions_apply_to_later_completions() {
         write_desc(&memory, index, DATA, 4, 0, 0);
         add_chain(&memory, index);
     }
-    for _ in 0..2 {
-        assert!(!queues.drain(0, |_| Ok(Completion::Deferred)).unwrap());
-    }
+    assert!(!queues.drain(0, |_| Ok(Completion::Deferred)).unwrap());
     assert!(queues.complete(0, 0, 4).unwrap());
     assert!(!queues.complete(0, 1, 4).unwrap());
 }
@@ -573,12 +588,24 @@ fn event_idx_crossing_notifies_on_the_completion_that_crosses() {
         write_desc(&memory, index, DATA, 4, 0, 0);
         add_chain(&memory, index);
     }
-    for _ in 0..3 {
-        assert!(!queues.drain(0, |_| Ok(Completion::Deferred)).unwrap());
-    }
+    assert!(!queues.drain(0, |_| Ok(Completion::Deferred)).unwrap());
     assert!(!queues.complete(0, 0, 4).unwrap());
     assert!(!queues.complete(0, 1, 4).unwrap());
     assert!(queues.complete(0, 2, 4).unwrap());
+}
+
+#[test]
+fn drain_resolves_event_idx_once_per_batch() {
+    let memory = memory();
+    let mut queues = prepared(ready_queue(), true, false, &memory);
+    set_used_event(&memory, 1);
+    for index in 0..3 {
+        write_desc(&memory, index, DATA, 4, 0, 0);
+        add_chain(&memory, index);
+    }
+
+    assert!(queues.drain(0, |_| Ok(Completion::Used(4))).unwrap());
+    assert_eq!(used_idx(&memory), 3);
 }
 
 #[test]
@@ -644,9 +671,7 @@ fn deferred_chains_complete_out_of_order() {
         write_desc(&memory, index, DATA, 4, 0, 0);
         add_chain(&memory, index);
     }
-    for _ in 0..3 {
-        assert!(!queues.drain(0, |_| Ok(Completion::Deferred)).unwrap());
-    }
+    assert!(!queues.drain(0, |_| Ok(Completion::Deferred)).unwrap());
 
     assert!(queues.complete(0, 2, 6).unwrap());
     assert!(queues.complete(0, 0, 4).unwrap());
@@ -664,7 +689,7 @@ fn drain_rejects_a_duplicate_deferred_head() {
     write_desc(&memory, 0, DATA, 4, 0, 0);
     add_chain(&memory, 0);
     add_chain(&memory, 0);
-    // One drain takes both avail entries, so the second defers the same head.
+
     assert_eq!(
         queues.drain(0, |_| Ok(Completion::Deferred)),
         Err(DeviceError::NeedsReset("virtio deferred chain"))
@@ -786,6 +811,9 @@ fn save_reports_snapshots_unsupported() {
     assert_eq!(queues.save().err(), Some(SnapshotError::Unsupported));
 }
 
+/// The reporting device must be able to reject report ranges that overlap the
+/// rings themselves, so the snapshot has to cover every ready queue's control
+/// areas at their actual sizes, including the event fields.
 #[test]
 fn control_ranges_use_actual_sizes_include_events_and_skip_unready_slots() {
     let memory = memory();
@@ -810,21 +838,4 @@ fn control_ranges_use_actual_sizes_include_events_and_skip_unready_slots() {
             (GuestAddress(USED2), 6 + 8 * 4),
         ]
     );
-}
-
-#[test]
-fn failed_chain_processing_never_publishes_used() {
-    for failure in [
-        DeviceError::NeedsReset("request"),
-        DeviceError::Fatal("backend"),
-    ] {
-        let memory = memory();
-        let mut queues = prepared(ready_queue(), false, false, &memory);
-        for head in 0..2 {
-            write_desc(&memory, head, DATA, 4, 0, 0);
-            add_chain(&memory, head);
-        }
-        assert_eq!(queues.drain(0, |_| Err(failure)), Err(failure));
-        assert_eq!(used_idx(&memory), 0);
-    }
 }

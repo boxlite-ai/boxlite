@@ -1,7 +1,9 @@
 // Copyright 2026 BoxLite Contributors
 // SPDX-License-Identifier: Apache-2.0
 
-//! The device contract, its error presentation and queue facade.
+//! The virtio device contract: object safety, feature delivery, synchronous
+//! configuration, activation, reset, event delivery and the default snapshot
+//! methods.
 
 use std::{
     io,
