@@ -1,13 +1,13 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import test from 'node:test'
-import { output } from '@pulumi/pulumi'
+import { all, output } from '@pulumi/pulumi'
 import { awsApiProvider } from '../stack/providers/aws/api.ts'
 import { denyPublicInternalRoutes } from '../stack/providers/aws/internal-route-policy.ts'
 
 test('AWS API synthesis attaches the deny policy to the service ALB', () => {
   const globals = globalThis as any
-  const previous = { aws: globals.aws, sst: globals.sst, $app: globals.$app }
+  const previous = { aws: globals.aws, sst: globals.sst, $app: globals.$app, $util: globals.$util }
   const resources = new Map<string, any>()
   class Resource {
     arn = output('generated-acl-arn')
@@ -30,6 +30,7 @@ test('AWS API synthesis attaches the deny policy to the service ALB', () => {
   }
   try {
     globals.$app = { stage: 'dev' }
+    globals.$util = { all, output }
     globals.aws = {
       wafv2: { WebAcl: Resource, WebAclAssociation: Resource },
       iam: { Role: Resource, RolePolicy: Resource },

@@ -196,12 +196,13 @@ It is the public rollout entrypoint; the internal CLI receives the same `compone
 
 | Selection | GCP deployment scope |
 | --- | --- |
-| `api` | Existing Cloud Run `Api` service and API Secret Manager read grants; image/env changes create a new revision |
+| `api` | Existing Cloud Run `Api` and `CloudAppWorker` services and API Secret Manager read grants; image/env changes create new revisions |
 | `runner` | Existing Runner OS Policy assignments and artifact-read grant; retains canary-before-fleet rollout and waits |
 | `api+runner` (default) | Full infrastructure graph, including shared resources and topology changes |
 
 AWS/SST supports only `api+runner`; individual API/Runner selection fails before artifact preparation.
 GCP scoped updates require an existing workload and do not bootstrap a new stack.
+The first Cloud Apps deployment requires `api+runner` to create its worker and source-storage grants.
 Runner selection refuses changed host counts, labels or policy membership; reconcile those through a full deployment.
 Component routing handles each selection explicitly and checks exhaustiveness at compile time.
 Adding a scoped component requires its own target mapping; unknown runtime selections are rejected.

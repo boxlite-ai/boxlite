@@ -6,7 +6,7 @@ use pyo3::prelude::*;
 
 use crate::util::map_err;
 
-/// A Box port or a reserved App reference. App binding is not yet supported.
+/// A Box port or a hosted App's main environment.
 #[pyclass(name = "DomainTarget")]
 #[derive(Clone)]
 pub(crate) struct PyDomainTarget {
