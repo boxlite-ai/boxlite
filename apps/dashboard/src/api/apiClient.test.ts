@@ -3,6 +3,69 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const config = { apiUrl: 'http://api.test/api' } as never
 
+describe('ApiClient cloud Apps', () => {
+  it('scopes requests to the organization and uses the current platform bearer for reads, writes and downloads', async () => {
+    const requests: any[] = []
+    const api = await makeClient(vi.fn(), 200, {}, requests)
+    const apps = api.cloudApps('org/one')
+    await apps.get('/apps')
+    api.setAccessToken('renewed-token')
+    await apps.post('/apps/demo/restart', {}, { params: { env: 'staging' } })
+    await apps.get('/apps/demo/database/export', { responseType: 'blob' })
+    expect(
+      requests.map(({ method, url, baseURL, headers, responseType }) => ({
+        method,
+        url,
+        baseURL,
+        auth: headers.Authorization,
+        responseType,
+      })),
+    ).toEqual([
+      {
+        method: 'get',
+        url: '/v1/org%2Fone/apps',
+        baseURL: 'http://api.test/api',
+        auth: 'Bearer tok',
+        responseType: undefined,
+      },
+      {
+        method: 'post',
+        url: '/v1/org%2Fone/apps/demo/restart',
+        baseURL: 'http://api.test/api',
+        auth: 'Bearer renewed-token',
+        responseType: undefined,
+      },
+      {
+        method: 'get',
+        url: '/v1/org%2Fone/apps/demo/database/export',
+        baseURL: 'http://api.test/api',
+        auth: 'Bearer renewed-token',
+        responseType: 'blob',
+      },
+    ])
+    expect(requests.every((request) => !request.withCredentials && !request.headers['X-BoxLite-Console'])).toBe(true)
+  })
+
+  it('refuses an unscoped App request before it reaches the transport', async () => {
+    const requests: unknown[] = []
+    const api = await makeClient(vi.fn(), 200, {}, requests)
+    expect(() => api.cloudApps('').get('/apps')).toThrow('No organization selected')
+    expect(requests).toHaveLength(0)
+  })
+
+  it('preserves App error codes through the shared interceptor', async () => {
+    const api = await makeClient(vi.fn(), 409, {
+      error: { code: 'deploying', message: 'A deployment is already running' },
+    })
+    const error = await api
+      .cloudApps('org-1')
+      .post('/apps/demo/restart')
+      .catch((failure) => failure)
+    expect(error.message).toBe('A deployment is already running')
+    expect(error.code).toBe('deploying')
+  })
+})
+
 describe('ApiClient domains', () => {
   it('uses authenticated organization-scoped list and short-name claim requests', async () => {
     const requests: any[] = []

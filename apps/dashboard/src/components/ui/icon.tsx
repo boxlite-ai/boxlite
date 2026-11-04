@@ -172,3 +172,9 @@ export const XCircleIcon = makeIcon('close-box')
 
 export const Globe = makeIcon('globe')
 export const Braces = makeIcon('code')
+
+export const CloudUpload = makeIcon('cloud-upload')
+export const Folder = makeIcon('folder')
+export const LayoutDashboard = makeIcon('dashboard')
+export const GitBranch = makeIcon('git-branch')
+export const AgentApp = makeIcon('ai-app-mac')

@@ -777,22 +777,23 @@ name the port independently of its tunnel, and several hostnames can share a por
 | `kind` | `character varying` | `platform` (a subdomain of the app domain) or `custom` (reserved for owned domains) |
 | `organization_id` | `uuid` | holder; no FK, like `box.organization_id` |
 | `target_type` | `character varying` | `box` (default) or `app`; selects which reference is meaningful |
-| `app_id` | `character varying(255)` | reserved App reference; nullable, nonblank when set; no App table/FK exists yet |
+| `app_id` | `character varying(255)` | stable Cloud App reference; nullable, nonblank when set; no FK |
+| `environment_id` | `text` | stable Cloud App environment reference; nullable while unbound |
 | `box_id` | `character varying(12)` | Box reference without FK; retained after Box deletion; null for App targets or unbound Box targets |
 | `port` | `integer` | the target port, 1–65535; required when `box_id` is set, ignored when it is null |
 | `created_at` / `updated_at` | `timestamptz` | |
 
 **Unique:** `hostname`, so one organization holds a name. **Index:**
-`(organization_id)`, `(box_id, port)` and `(app_id)`, not unique. **Check:** Box
+`(organization_id)`, `(box_id, port)`, `(app_id)` and non-null `(environment_id)`, not unique. **Check:** Box
 targets have no `app_id`, and a non-null `box_id` requires a valid port. App targets
 have no `box_id` or `port`. Unsupported target types and blank App references fail.
 
 Binding runs under `SELECT … FOR UPDATE` on the organization row, which is how
 the count of held names is held against `organization.domain_count_limit`; it
 does not touch `tunnel`. Binding a name held for another of the organization's
-ports sets the Box type/reference/port, clears `app_id`, and leaves other names on
+ports sets the Box type/reference/port, clears `app_id` and `environment_id`, and leaves other names on
 that port alone. Unbinding (by full hostname, `DELETE /api/v1/domains/{hostname}/target`)
-clears both target references and port, retaining the target type and the row.
+clears the target references, environment and port, retaining the target type and the row.
 Destroying a Box and later deleting its database row preserve `box_id` and `port`.
 Lists and target resolution continue to return that stored target until explicit
 unbind or rebind. The REST binding endpoint validates the live Box and its
@@ -802,8 +803,9 @@ is declared again. Held names, including unbound names and bindings to deleted
 Boxes, still count against the limit and can be rebound only by their organization.
 
 `DomainService.resolve` reads the stored target independently of port publication.
-`PreviewController.resolveDomain` accepts only Box targets and then applies
-`TunnelService.isPublicAccessAllowed` before returning a routable target to the proxy. This keeps domain ownership and
+`PreviewController.resolveDomain` applies `TunnelService.isPublicAccessAllowed` to
+Box targets. App targets resolve their stored environment against a live App and
+return its stable environment ID for the App gateway. This keeps domain ownership and
 binding separate from tunnel policy while preserving the same public-access,
 inbound and box-state checks. A stored target may therefore resolve internally
 while its preview endpoint returns 404. Destroy requests first update the desired
@@ -811,11 +813,11 @@ Box state; preview refusal follows the actual-state check and its existing
 three-second access cache. Destroyed or missing Boxes fail that check even when
 the domain retains their ID and port.
 
-App storage and the tagged REST/SDK representation are reserved for future App
-resources. App binding returns `400 app_target_not_supported` before any Box lookup
-or write. Persisted App references can be listed and unbound, but cannot forward
-traffic. App integration must add existence/organization checks, routing and the
-App deletion policy before enabling writes.
+App binding locks the App and environment rows, checks organization ownership and
+records both stable IDs. Default App environment URLs and additional aliases use
+this table and the same domain allowance. A deleted App or missing environment
+returns 404 from preview resolution while ownership remains stored. App gateway
+access and end-user identity checks run after domain resolution.
 
 ### `box_last_activity`
 

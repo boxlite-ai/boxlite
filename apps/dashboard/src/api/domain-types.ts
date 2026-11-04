@@ -4,7 +4,7 @@
 export interface HeldDomain {
   hostname: string
   url: string
-  target: { type: 'box'; box: string; port: number } | { type: 'app'; app: string } | null
+  target: { type: 'box'; box: string; port: number } | { type: 'app'; app: string; environment?: string } | null
 }
 
 export interface DomainList {

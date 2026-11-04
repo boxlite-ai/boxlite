@@ -31,6 +31,9 @@ import type { IncomingMessage } from 'http'
 import type { Socket } from 'net'
 import { Logger as PinoLogger, LoggerErrorInterceptor } from 'nestjs-pino'
 import { BoxliteWsProxyService } from './boxlite-rest/boxlite-ws-proxy.service'
+import { CloudAppService } from './cloud-app/cloud-app.service'
+import { CloudAppWebsocket } from './cloud-app/cloud-app-websocket'
+import { json, urlencoded } from 'express'
 
 // https options
 const httpsEnabled = process.env.CERT_PATH && process.env.CERT_KEY_PATH
@@ -45,9 +48,19 @@ async function bootstrap() {
   }
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {
     bufferLogs: true,
+    rawBody: true,
+    bodyParser: false,
     httpsOptions: httpsEnabled ? httpsOptions : undefined,
   })
   app.useLogger(app.get(PinoLogger))
+  const jsonParser = json()
+  const formParser = urlencoded({ extended: true })
+  app.use((req, res, next) => {
+    // App uploads, webhooks and visitor traffic are parsed by their own handlers.
+    // Passing them through preserves signatures and streams without Nest's JSON size limit.
+    if (/^\/api\/(?:internal\/apps\/ingress\/|v1\/[^/]+\/apps(?:\/|\?|$))/.test(req.url)) return next()
+    jsonParser(req, res, (error) => (error ? next(error) : formParser(req, res, next)))
+  })
   app.flushLogs()
   // Pin CORS to known first-party origins rather than reflecting any origin.
   // With `credentials: true`, `origin: true` would let any site make
@@ -206,7 +219,20 @@ async function bootstrap() {
     // from under it; everything else is unauthenticated traffic and gets
     // closed here.
     const wsProxy = app.get(BoxliteWsProxyService)
+    const cloudApps = app.get(CloudAppService)
+    const cloudAppWebsocket = app.get(CloudAppWebsocket)
     httpServer.on('upgrade', (req: IncomingMessage, socket: Socket, head: Buffer) => {
+      if (cloudAppWebsocket.matches(req.url)) {
+        void cloudAppWebsocket.upgrade(req, socket, head)
+        return
+      }
+      const appIngress = /^\/api\/internal\/apps\/ingress\/([^/?]+)/.exec(req.url || '')
+      if (appIngress) {
+        void cloudApps.upgradeIngress(req, socket, head, appIngress[1]).catch(() => {
+          socket.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: 0\r\n\r\n')
+        })
+        return
+      }
       if (wsProxy.matchAttachPath(req.url)) {
         void wsProxy.upgrade(req, socket, head)
         return

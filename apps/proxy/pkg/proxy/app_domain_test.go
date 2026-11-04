@@ -293,11 +293,11 @@ func TestAppDomainLookupIsNotCached(t *testing.T) {
 	clientConfig.AddDefaultHeader("Authorization", "Bearer proxy-key")
 	proxy := &Proxy{apiclient: apiclient.NewAPIClient(clientConfig), config: &config.Config{ProxyAppDomain: appDomain}}
 
-	if _, _, err := proxy.resolveAppDomain(context.Background(), "demo.app.boxlite.test"); err != nil {
+	if _, err := proxy.resolveAppDomain(context.Background(), "demo.app.boxlite.test"); err != nil {
 		t.Fatalf("first lookup failed: %v", err)
 	}
 	status.Store(http.StatusNotFound)
-	if _, _, err := proxy.resolveAppDomain(context.Background(), "demo.app.boxlite.test"); !errors.Is(err, errAppDomainNotFound) {
+	if _, err := proxy.resolveAppDomain(context.Background(), "demo.app.boxlite.test"); !errors.Is(err, errAppDomainNotFound) {
 		t.Fatalf("second lookup after the name was released = %v, want not found", err)
 	}
 }

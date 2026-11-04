@@ -63,6 +63,21 @@ function connect(options: {
 }
 
 describe('NotificationGateway connection rooms', () => {
+  it('rejects App-scoped credentials before joining platform notification rooms', async () => {
+    const socket = connect({
+      apiKeyContext: {
+        userId: 'user-1',
+        role: SystemRole.USER,
+        organizationId: 'org-1',
+        apiKey: { cloudAppId: 'app_crm' },
+      },
+      memberships: [['org-1', 'user-1']],
+    })
+    await socket.run()
+    expect(socket.joined).toEqual([])
+    expect(socket.next).toHaveBeenCalledWith(expect.any(Error))
+  })
+
   it('does not put a JWT user into an organization room they are not a member of', async () => {
     const socket = connect({ jwtPayload: { sub: 'user-2' }, queryOrganizationId: 'org-1', memberships: [] })
 

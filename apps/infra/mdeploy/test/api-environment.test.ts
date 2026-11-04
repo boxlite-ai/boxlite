@@ -11,9 +11,90 @@ const groups = (api: string[], secret?: string[]): GroupDeclaration => ({
 })
 
 const base = { STACK_DOMAIN: 'dev.boxlite.ai', OIDC_ISSUER_BASE_URL: 'https://auth.dev.boxlite.ai' }
+const appSecretKeys = ['CLOUD_APP_SESSION_SECRET', 'CLOUD_APP_IDENTITY_PRIVATE_KEY']
+const appSecretAddresses = (home: 'aws' | 'gcp') =>
+  Object.fromEntries(
+    appSecretKeys.map((key) => [
+      key,
+      JSON.stringify({
+        address:
+          home === 'gcp'
+            ? `projects/test-cloud/secrets/${key}`
+            : `arn:aws:ssm:us-east-1:123456789012:parameter/boxlite/dev/${key}`,
+      }),
+    ]),
+  )
 
 const assemble = (environment: Record<string, string | undefined>, declaration = groups([])) =>
   apiEnvironmentFrom({ environment, declaration, region: 'ap-southeast-1', stage: 'dev', home: 'aws' })
+
+test('the stage delivers Cloud App provider credentials and runtime settings', () => {
+  const path = new URL('../../mstage.env.json', import.meta.url)
+  const declared = parseBase(path.pathname, readFileSync(path, 'utf8'))
+  const apiKeys = declared.envSelectGroup.api!
+  const optionalKeys = declared.envOptional.api!
+  const required = Object.fromEntries(
+    apiKeys.filter((key) => !optionalKeys.includes(key)).map((key) => [key, 'fixture']),
+  )
+  const settings = {
+    NEON_API_KEY: JSON.stringify({ address: 'projects/test-cloud/secrets/neon-api' }),
+    NEON_ORG_ID: 'test-neon-org',
+    NEON_REGION: 'aws-us-east-2',
+    CLOUD_APP_SESSION_SECRET: JSON.stringify({ address: 'projects/test-cloud/secrets/session' }),
+    CLOUD_APP_IDENTITY_PRIVATE_KEY: JSON.stringify({ address: 'projects/test-cloud/secrets/identity-key' }),
+    CLOUD_APP_OAUTH_CLIENTS: JSON.stringify({ address: 'projects/test-cloud/secrets/oauth' }),
+    CLOUD_APP_ARTIFACT_VERSION: '0.3.14',
+  }
+  const { environment, secrets } = apiEnvironmentFrom({
+    environment: { ...base, ...required, ...settings },
+    declaration: { groups: declared.envSelectGroup, optional: declared.envOptional, where: path.pathname },
+    region: 'us-east5',
+    stage: 'dev',
+    home: 'gcp',
+  })
+  for (const [key, value] of Object.entries(settings)) {
+    if (declared.envSelectGroup.secret?.includes(key)) {
+      assert.equal(secrets[key], JSON.parse(value).address, key)
+      assert.equal(environment[key], undefined, key)
+    } else assert.equal(environment[key], value, key)
+  }
+})
+
+test('the declared App secrets are required before a preview or rollout assembles the API', () => {
+  const path = new URL('../../mstage.env.json', import.meta.url)
+  const declared = parseBase(path.pathname, readFileSync(path, 'utf8'))
+  const declaration = { groups: declared.envSelectGroup, optional: declared.envOptional, where: path.pathname }
+  const required = Object.fromEntries(
+    declared.envSelectGroup
+      .api!.filter((key) => !declared.envOptional.api!.includes(key) && !appSecretKeys.includes(key))
+      .map((key) => [key, 'fixture']),
+  )
+  assert.throws(
+    () => assemble({ ...base, ...required }, declaration),
+    (error: Error) => {
+      assert.match(error.message, /CLOUD_APP_SESSION_SECRET/)
+      assert.match(error.message, /CLOUD_APP_IDENTITY_PRIVATE_KEY/)
+      return true
+    },
+  )
+  assert.throws(
+    () =>
+      assemble(
+        {
+          ...base,
+          ...required,
+          CLOUD_APP_SESSION_SECRET: 'plaintext-fixture',
+          CLOUD_APP_IDENTITY_PRIVATE_KEY: 'plaintext-fixture',
+        },
+        declaration,
+      ),
+    (error: Error) => {
+      assert.match(error.message, /CLOUD_APP_SESSION_SECRET/)
+      assert.ok(!error.message.includes('plaintext-fixture'))
+      return true
+    },
+  )
+})
 
 test('the declared API group delivers the organization invitation lifetime on both clouds', () => {
   const path = new URL('../../mstage.env.json', import.meta.url)
@@ -27,7 +108,7 @@ test('the declared API group delivers the organization invitation lifetime on bo
   )
   for (const home of ['aws', 'gcp'] as const) {
     const { environment } = apiEnvironmentFrom({
-      environment: { ...base, ...required, ORGANIZATION_INVITATION_TTL_SECONDS: '3600' },
+      environment: { ...base, ...required, ...appSecretAddresses(home), ORGANIZATION_INVITATION_TTL_SECONDS: '3600' },
       declaration: { groups: declared.envSelectGroup, optional: declared.envOptional, where: path.pathname },
       region: 'us-east1',
       stage: 'dev',
@@ -82,10 +163,7 @@ test('a dashboard host that is the control plane’s own is refused at the bound
    * with a resource collision, which names neither the setting nor the stage
    * that holds it.
    */
-  assert.throws(
-    () => assemble({ ...base, DASHBOARD_DOMAIN: 'api.dev.boxlite.ai' }),
-    /control plane answers/,
-  )
+  assert.throws(() => assemble({ ...base, DASHBOARD_DOMAIN: 'api.dev.boxlite.ai' }), /control plane answers/)
 })
 
 test('an issuer is required, because a placeholder would let the stack look healthy', () => {

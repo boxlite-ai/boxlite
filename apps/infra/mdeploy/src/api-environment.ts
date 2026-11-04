@@ -120,7 +120,8 @@ const oidcFrom = (environment: Environment, hosts: PublicHosts): Record<string, 
   if (management && !audience) {
     throw new ApiEnvironmentError('OIDC_MANAGEMENT_API_AUDIENCE is required when OIDC_MANAGEMENT_API_ENABLED=true')
   }
-  const passthrough = (key: string) => (optional(environment, key) ? { [key]: optional(environment, key) as string } : {})
+  const passthrough = (key: string) =>
+    optional(environment, key) ? { [key]: optional(environment, key) as string } : {}
   return {
     OIDC_ISSUER_BASE_URL: issuer,
     OIDC_AUDIENCE: optional(environment, 'OIDC_AUDIENCE') ?? 'boxlite',
@@ -269,6 +270,11 @@ export const apiEnvironmentFrom = ({
       // Constant on every deployed stage. The per-stage identity is the stage
       // name, which is what the status sync's dedup prefix uses.
       ENVIRONMENT: 'production',
+      CLOUD_APP_PROCESS_ROLE: 'api',
+      CLOUD_APP_PUBLIC_URL: `https://${hosts.api}/api/internal/apps`,
+      ...(optional(environment, 'STACK_USER_DOMAIN')
+        ? { CLOUD_APP_DOMAIN: optional(environment, 'STACK_USER_DOMAIN') as string }
+        : {}),
       /*
        * The API applies its own schema at boot, on both clouds.
        *
@@ -315,7 +321,9 @@ export const apiEnvironmentFrom = ({
       ...billingFrom(environment, delivered),
       ...statusSyncFrom(environment, delivered, stage),
       ...systemImagesFrom(environment),
-      ...(optional(environment, 'POSTHOG_HOST') ? { POSTHOG_HOST: optional(environment, 'POSTHOG_HOST') as string } : {}),
+      ...(optional(environment, 'POSTHOG_HOST')
+        ? { POSTHOG_HOST: optional(environment, 'POSTHOG_HOST') as string }
+        : {}),
       ...(optional(environment, 'SVIX_SERVER_URL')
         ? { SVIX_SERVER_URL: optional(environment, 'SVIX_SERVER_URL') as string }
         : {}),

@@ -7,12 +7,19 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import Domains from './Domains'
 import type { DomainList, HeldDomain } from '@/api/domain-types'
 
-const state = vi.hoisted(() => ({ organizationId: 'org-1', canManage: true, list: vi.fn(), claim: vi.fn() }))
+const state = vi.hoisted(() => ({
+  organizationId: 'org-1',
+  canManage: true,
+  canRead: false,
+  list: vi.fn(),
+  claim: vi.fn(),
+}))
 vi.mock('@/hooks/useApi', () => ({ useApi: () => ({ listDomains: state.list, claimDomain: state.claim }) }))
 vi.mock('@/hooks/useSelectedOrganization', () => ({
   useSelectedOrganization: () => ({
     selectedOrganization: { id: state.organizationId },
-    authenticatedUserHasPermission: () => state.canManage,
+    authenticatedUserHasPermission: (permission: string) =>
+      state.canManage || (permission === 'read:apps' && state.canRead),
   }),
 }))
 
@@ -42,6 +49,7 @@ describe('Domains page', () => {
   beforeEach(() => {
     state.organizationId = 'org-1'
     state.canManage = true
+    state.canRead = false
     state.list.mockReset().mockResolvedValue(list)
     state.claim
       .mockReset()
@@ -134,6 +142,16 @@ describe('Domains page', () => {
     expect(state.list).not.toHaveBeenCalled()
     expect(document.body.textContent).toContain('Box write permission')
     expect(document.querySelector<HTMLButtonElement>('button')?.disabled).toBe(true)
+  })
+
+  it('lets an App reader inspect domains without acquiring another name', async () => {
+    state.canManage = false
+    state.canRead = true
+    await render()
+    expect(state.list).toHaveBeenCalledWith('org-1')
+    expect(document.body.textContent).toContain('shop-one.apps.test')
+    expect(document.querySelector<HTMLButtonElement>('button')?.disabled).toBe(true)
+    expect(state.claim).not.toHaveBeenCalled()
   })
 
   it('renders empty and fetch-error states', async () => {

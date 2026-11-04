@@ -173,6 +173,18 @@ describe('BoxliteWsProxyService', () => {
     expect(jwtStrategy.verifyToken).not.toHaveBeenCalled()
   })
 
+  it('rejects App-scoped credentials at the Box websocket boundary', async () => {
+    const { service, apiKeyService } = buildAuthHarness()
+    apiKeyService.getApiKeyByValue.mockResolvedValue({
+      organizationId: 'org-1',
+      userId: 'user-1',
+      expiresAt: null,
+      cloudAppId: 'app_crm',
+      permissions: [OrganizationResourcePermission.WRITE_BOXES],
+    })
+    await expect(service.authenticate(authRequest('blk_test_app'))).resolves.toBeNull()
+  })
+
   it('authenticates JWT bearer tokens for websocket attach', async () => {
     const { service, organizationUserService, jwtStrategy } = buildAuthHarness()
     const jwt = 'eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1c2VyXzEifQ.signature'

@@ -133,6 +133,20 @@ const bindingsFor = ({
           member: principal,
         }),
       ]
+    case 'manage-app-source':
+      return [
+        new gcp.storage.BucketIAMMember(`ApiCapability${index}`, {
+          bucket: bucketName,
+          role: 'roles/storage.objectAdmin',
+          member: principal,
+          condition: {
+            title: 'cloud-app-source',
+            expression: bucketName.apply(
+              (name: string) => `resource.name.startsWith("projects/_/buckets/${name}/objects/cloud-apps/")`,
+            ),
+          },
+        }),
+      ]
     case 'manage-volume-buckets': {
       const storage = onGcp(capability.storage)
       return [
@@ -165,9 +179,7 @@ const bindingsFor = ({
         ? [
             new gcp.secretmanager.SecretIamMember(`ApiCapability${index}`, {
               project,
-              secretId: capability.clickhouse.reader.passwordRef.apply((reference: string) =>
-                secretIdOf(reference),
-              ),
+              secretId: capability.clickhouse.reader.passwordRef.apply((reference: string) => secretIdOf(reference)),
               role: 'roles/secretmanager.secretAccessor',
               member: principal,
             }),
@@ -291,108 +303,106 @@ export const gcpApiProvider =
       (name) =>
         new gcp.secretmanager.SecretIamMember(`ApiSecretAccess-${name}`, {
           project,
-          secretId: $util.output(handedOver[name] as $util.Input<string>).apply((reference: string) =>
-            secretIdOf(reference),
-          ),
+          secretId: $util
+            .output(handedOver[name] as $util.Input<string>)
+            .apply((reference: string) => secretIdOf(reference)),
           role: 'roles/secretmanager.secretAccessor',
           member: placement.serviceAccount.apply((email: string) => `serviceAccount:${email}`),
         }),
     )
 
-    const service = new gcp.cloudrunv2.Service(
-      'Api',
-      {
-        name: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'api' }),
-        project,
-        location: region,
+    const serviceArgs = {
+      name: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'api' }),
+      project,
+      location: region,
+      /*
+       * The ingress *is* the restriction. Read the note on `publicInvoker`
+       * below before widening this: the two are one decision, and a value
+       * here that admits the internet turns that binding into a public API.
+       */
+      ingress: 'INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER',
+      // A rename is a delete and a create, and the provider defaults this on
+      // and reads the value held in state — so it refuses the delete half.
+      // Left on, the first rename of this service costs two applies.
+      deletionProtection: false,
+      template: {
+        serviceAccount: placement.serviceAccount,
         /*
-         * The ingress *is* the restriction. Read the note on `publicInvoker`
-         * below before widening this: the two are one decision, and a value
-         * here that admits the internet turns that binding into a public API.
+         * The Cloud SQL proxy the platform builds in, as a volume.
+         *
+         * `cloudsql` is the only name Cloud Run takes for it — *"Cloud SQL
+         * volume must be named 'cloudsql'"* — and the mount path is the same
+         * word. Mounting is not by itself a route: the proxy's traffic rides
+         * this service's own VPC egress and the instance needs
+         * `enablePrivatePathForGoogleCloudServices`, or the socket is present
+         * and accepts nothing. Both are set; `database.ts` carries the flag.
          */
-        ingress: 'INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER',
-        // A rename is a delete and a create, and the provider defaults this on
-        // and reads the value held in state — so it refuses the delete half.
-        // Left on, the first rename of this service costs two applies.
-        deletionProtection: false,
-        template: {
-          serviceAccount: placement.serviceAccount,
-          /*
-           * The Cloud SQL proxy the platform builds in, as a volume.
-           *
-           * `cloudsql` is the only name Cloud Run takes for it — *"Cloud SQL
-           * volume must be named 'cloudsql'"* — and the mount path is the same
-           * word. Mounting is not by itself a route: the proxy's traffic rides
-           * this service's own VPC egress and the instance needs
-           * `enablePrivatePathForGoogleCloudServices`, or the socket is present
-           * and accepts nothing. Both are set; `database.ts` carries the flag.
-           */
-          volumes: [
-            {
-              name: CLOUD_SQL_VOLUME,
-              cloudSqlInstance: { instances: [onGcpDatabase(dependencies.database).connectionName] },
-            },
-            /*
-             * The cache's CA, as a file rather than a value.
-             *
-             * Memorystore signs with a certificate no image trusts and has no
-             * platform proxy to hide behind, so the certificate has to reach
-             * the container. `apps/api` builds its Redis TLS options as a bare
-             * `tls: {}` and has nowhere to put a CA — but Node reads
-             * `NODE_EXTRA_CA_CERTS` and adds what it finds to the default
-             * store, so a mounted file solves it without an application change.
-             */
-            {
-              name: CACHE_CA_VOLUME,
-              secret: {
-                secret: onGcpCache(dependencies.cache).caRef.apply((reference: string) => secretIdOf(reference)),
-                items: [{ version: 'latest', path: CACHE_CA_FILE }],
-              },
-            },
-          ],
-          /*
-           * An hour, matching `apps/api`'s own keep-alive and the AWS load
-           * balancer's idle timeout: an exec attach that idles through a pause
-           * must not be closed under it. This is the only place a Cloud Run
-           * request deadline can be set — the balancer in front refuses to hold
-           * one — and the default is five minutes.
-           */
-          timeout: '3600s',
-          /*
-           * The subnet is what gets this service to a runner. Its packets leave
-           * with no service account and no label a rule can match, so the rule
-           * that admits them names the range they come from — see
-           * `CLOUDRUN_EGRESS_CIDR`. Egress anywhere else and every `/v1/boxes/*`
-           * route times out against a healthy host.
-           */
-          vpcAccess: {
-            egress: 'PRIVATE_RANGES_ONLY',
-            networkInterfaces: [{ subnetwork: placement.egressSubnetwork }],
+        volumes: [
+          {
+            name: CLOUD_SQL_VOLUME,
+            cloudSqlInstance: { instances: [onGcpDatabase(dependencies.database).connectionName] },
           },
-          containers: [
-            {
-              image: request.image,
-              ports: [{ name: 'http1', containerPort: request.port }],
-              volumeMounts: [
-                { name: CLOUD_SQL_VOLUME, mountPath: `/${CLOUD_SQL_VOLUME}` },
-                { name: CACHE_CA_VOLUME, mountPath: dirname(CACHE_CA_PATH) },
-              ],
-              startupProbe: { httpGet: { path: '/api/health', port: request.port }, failureThreshold: 30 },
-              livenessProbe: { httpGet: { path: '/api/health', port: request.port } },
-              envs: containerEnvironment({ values: request.environment, addresses }),
+          /*
+           * The cache's CA, as a file rather than a value.
+           *
+           * Memorystore signs with a certificate no image trusts and has no
+           * platform proxy to hide behind, so the certificate has to reach
+           * the container. `apps/api` builds its Redis TLS options as a bare
+           * `tls: {}` and has nowhere to put a CA — but Node reads
+           * `NODE_EXTRA_CA_CERTS` and adds what it finds to the default
+           * store, so a mounted file solves it without an application change.
+           */
+          {
+            name: CACHE_CA_VOLUME,
+            secret: {
+              secret: onGcpCache(dependencies.cache).caRef.apply((reference: string) => secretIdOf(reference)),
+              items: [{ version: 'latest', path: CACHE_CA_FILE }],
             },
-          ],
-        },
-      },
-      {
+          },
+        ],
         /*
-         * The grants above among them. Cloud Run resolves every `secretKeyRef`
-         * while creating the revision, so a binding that lands a moment later is
-         * a binding that lands after the refusal.
+         * An hour, matching `apps/api`'s own keep-alive and the AWS load
+         * balancer's idle timeout: an exec attach that idles through a pause
+         * must not be closed under it. This is the only place a Cloud Run
+         * request deadline can be set — the balancer in front refuses to hold
+         * one — and the default is five minutes.
          */
-        dependsOn: [...dependencies.waitFor, ...readable],
+        timeout: '3600s',
+        /*
+         * The subnet is what gets this service to a runner. Its packets leave
+         * with no service account and no label a rule can match, so the rule
+         * that admits them names the range they come from — see
+         * `CLOUDRUN_EGRESS_CIDR`. Egress anywhere else and every `/v1/boxes/*`
+         * route times out against a healthy host.
+         */
+        vpcAccess: {
+          egress: 'PRIVATE_RANGES_ONLY',
+          networkInterfaces: [{ subnetwork: placement.egressSubnetwork }],
+        },
+        containers: [
+          {
+            image: request.image,
+            resources: {},
+            ports: [{ name: 'http1', containerPort: request.port }],
+            volumeMounts: [
+              { name: CLOUD_SQL_VOLUME, mountPath: `/${CLOUD_SQL_VOLUME}` },
+              { name: CACHE_CA_VOLUME, mountPath: dirname(CACHE_CA_PATH) },
+            ],
+            startupProbe: { httpGet: { path: '/api/health', port: request.port }, failureThreshold: 30 },
+            livenessProbe: { httpGet: { path: '/api/health', port: request.port } },
+            envs: containerEnvironment({ values: request.environment, addresses }),
+          },
+        ],
       },
-    )
+    }
+    const service = new gcp.cloudrunv2.Service('Api', serviceArgs, {
+      /*
+       * The grants above among them. Cloud Run resolves every `secretKeyRef`
+       * while creating the revision, so a binding that lands a moment later is
+       * a binding that lands after the refusal.
+       */
+      dependsOn: [...dependencies.waitFor, ...readable],
+    })
 
     const invokers = callers.map(
       (member, index) =>
@@ -445,7 +455,35 @@ export const gcpApiProvider =
     })
 
     const granted = request.capabilities.flatMap((capability, index) =>
-      bindingsFor({ capability, index, project, member: placement.serviceAccount, bucketName: dependencies.storage.name }),
+      bindingsFor({
+        capability,
+        index,
+        project,
+        member: placement.serviceAccount,
+        bucketName: dependencies.storage.name,
+      }),
+    )
+
+    const worker = new gcp.cloudrunv2.Service(
+      'CloudAppWorker',
+      {
+        ...serviceArgs,
+        name: instanceFor({ app: $app.name, stage: $app.stage, artifact: 'app-worker' }),
+        ingress: 'INGRESS_TRAFFIC_INTERNAL_ONLY',
+        template: {
+          ...serviceArgs.template,
+          scaling: { minInstanceCount: 1, maxInstanceCount: 1 },
+          containers: serviceArgs.template.containers.map((container) => ({
+            ...container,
+            resources: { ...container.resources, cpuIdle: false },
+            envs: containerEnvironment({
+              values: { ...request.environment, CLOUD_APP_PROCESS_ROLE: 'worker', RUN_MIGRATIONS: 'false' },
+              addresses,
+            }),
+          })),
+        },
+      },
+      { dependsOn: [service, ...dependencies.waitFor, ...readable, ...granted] },
     )
 
     /*
@@ -841,6 +879,7 @@ export const gcpApiProvider =
       metricTarget: service.name,
       ready: [
         service,
+        worker,
         ...invokers,
         publicInvoker,
         ...readable,

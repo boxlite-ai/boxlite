@@ -13,7 +13,15 @@ const SHORT_NAME = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/
 const BUTTON =
   'rounded border border-border px-3 py-2 font-mono text-xs disabled:cursor-not-allowed disabled:opacity-40'
 
-function OrganizationDomains({ organizationId, canManage }: { organizationId: string; canManage: boolean }) {
+function OrganizationDomains({
+  organizationId,
+  canRead,
+  canManage,
+}: {
+  organizationId: string
+  canRead: boolean
+  canManage: boolean
+}) {
   const api = useApi()
   const queryClient = useQueryClient()
   const [open, setOpen] = useState(false)
@@ -22,7 +30,7 @@ function OrganizationDomains({ organizationId, canManage }: { organizationId: st
   const query = useQuery({
     queryKey: queryKeys.domains.list(organizationId),
     queryFn: () => api.listDomains(organizationId),
-    enabled: canManage,
+    enabled: canRead,
   })
   const claim = useMutation({
     mutationFn: (shortName: string) => api.claimDomain(organizationId, shortName),
@@ -59,8 +67,8 @@ function OrganizationDomains({ organizationId, canManage }: { organizationId: st
         </button>
       </div>
 
-      {!canManage ? (
-        <p role="alert">You need Box write permission to manage domains.</p>
+      {!canRead ? (
+        <p role="alert">You need App read or Box write permission to view domains.</p>
       ) : query.isPending ? (
         <p role="status">Loading domains…</p>
       ) : query.isError ? (
@@ -108,7 +116,11 @@ function OrganizationDomains({ organizationId, canManage }: { organizationId: st
                         {domain.target ? (domain.target.type === 'box' ? 'Box' : 'App') : 'Unbound'}
                       </td>
                       <td className="break-all px-4 py-4">
-                        {domain.target?.type === 'box' ? domain.target.box : (domain.target?.app ?? '—')}
+                        {domain.target?.type === 'box'
+                          ? domain.target.box
+                          : domain.target?.type === 'app'
+                            ? `${domain.target.app}${domain.target.environment ? ` · ${domain.target.environment}` : ''}`
+                            : '—'}
                       </td>
                       <td className="px-4 py-4">{domain.target?.type === 'box' ? domain.target.port : '—'}</td>
                     </tr>
@@ -207,7 +219,15 @@ export default function Domains() {
     <OrganizationDomains
       key={selectedOrganization.id}
       organizationId={selectedOrganization.id}
-      canManage={authenticatedUserHasPermission(OrganizationRolePermissionsEnum.WRITE_BOXES)}
+      canRead={
+        authenticatedUserHasPermission(OrganizationRolePermissionsEnum.READ_APPS) ||
+        authenticatedUserHasPermission(OrganizationRolePermissionsEnum.WRITE_APPS) ||
+        authenticatedUserHasPermission(OrganizationRolePermissionsEnum.WRITE_BOXES)
+      }
+      canManage={
+        authenticatedUserHasPermission(OrganizationRolePermissionsEnum.WRITE_APPS) ||
+        authenticatedUserHasPermission(OrganizationRolePermissionsEnum.WRITE_BOXES)
+      }
     />
   )
 }

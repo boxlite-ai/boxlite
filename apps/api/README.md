@@ -3,6 +3,15 @@
 The NestJS control-plane service. See the [apps hub](../README.md) for how it fits with the
 other services and [`API.md`](../API.md) for its interfaces.
 
+## Build bootstrap check
+
+Run `make check:apps:api-bootstrap` to compile the API and load its production bundle with the
+public example configuration and a temporary RSA identity key. The check creates the full Nest
+module, initializes Express routes, loads the PostgreSQL WASM parser, and exports OpenAPI in an
+isolated temporary directory. It replaces the existing PostgreSQL seed and Redis subscription
+hooks for this check; it does not exercise live database or cache connections. The API image
+runs the same route and parser check against its production dependencies while building.
+
 ## Account deletion tests
 
 `src/user/user-deletion-memberships.spec.ts` exercises account deletion through the real services

@@ -14,21 +14,31 @@
 export const EMAIL_VERIFICATION_REQUIRED_CODE = 'email_verification_required'
 
 export class BoxliteError extends Error {
+  readonly code?: string
+
+  constructor(message: string, options?: ErrorOptions & { code?: string }) {
+    super(message, options)
+    this.code = options?.code
+  }
+
   public static fromError(error: Error, code?: string): BoxliteError {
     if (code === EMAIL_VERIFICATION_REQUIRED_CODE) {
       return new EmailVerificationRequiredError(error.message, {
         cause: error.cause,
+        code,
       })
     }
 
     if (String(error).includes('Organization is suspended')) {
       return new OrganizationSuspendedError(error.message, {
         cause: error.cause,
+        code,
       })
     }
 
     return new BoxliteError(error.message, {
       cause: error.cause,
+      code,
     })
   }
 

@@ -84,6 +84,24 @@ describe('Sidebar primary navigation', () => {
     expect(domainLinks.every((link) => link.textContent === 'Domains')).toBe(true)
   })
 
+  it('places Apps immediately after Boxes while retaining the existing navigation', () => {
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    act(() => {
+      root = createRoot(host)
+      root.render(
+        <MemoryRouter>
+          <Sidebar isBannerVisible={false} version="test" />
+        </MemoryRouter>,
+      )
+    })
+    const primary = [...host.querySelectorAll('header > a')]
+      .map((link) => link.textContent)
+      .filter((label) => ['Boxes', 'Apps', 'Images', 'Volumes', 'Domains', 'Billing'].includes(label ?? ''))
+    expect(primary).toEqual(['Boxes', 'Apps', 'Images', 'Volumes', 'Domains', 'Billing'])
+    expect(host.querySelector('a[href="/dashboard/apps"]')?.textContent).toBe('Apps')
+  })
+
   it('groups organization management under one profile entry', async () => {
     const host = document.createElement('div')
     document.body.appendChild(host)

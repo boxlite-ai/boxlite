@@ -276,8 +276,7 @@ On a hosted runtime the organization can route a name of its own
   keeps the name.
 
 `Domain` has `Hostname`, `URL` and `Target`; there is no short `Name`.
-`DomainTargetApp` with `App` reserves an App reference; servers currently reject
-App binding with `app_target_not_supported`.
+`DomainTargetApp` with `App` selects a hosted App's main environment.
 
 Each call is one blocking request, like `Network.Tunnel`: `ctx` is checked
 before and after waiting for another call on the same handle. Cancellation

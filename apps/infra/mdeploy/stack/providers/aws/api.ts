@@ -55,6 +55,21 @@ const grantsFor = (capability: ApiCapability): $util.Input<string>[] => {
   switch (capability.kind) {
     case 'list-own-bucket':
       return [onAws(capability.storage).listGrant]
+    case 'manage-app-source':
+      return [
+        onAws(capability.storage).bucketArn.apply((arn: string) =>
+          JSON.stringify({
+            Version: '2012-10-17',
+            Statement: [
+              {
+                Effect: 'Allow',
+                Action: ['s3:GetObject', 's3:PutObject', 's3:DeleteObject'],
+                Resource: [`${arn}/cloud-apps/*`],
+              },
+            ],
+          }),
+        ),
+      ]
     case 'manage-volume-buckets':
       return [onAws(capability.storage).lifecycleGrant]
     case 'vend-volume-credentials':
@@ -172,6 +187,40 @@ export const awsApiProvider =
       { dependsOn: dependencies.waitFor },
     )
 
+    const worker = new sst.aws.Service(
+      'CloudAppWorker',
+      {
+        cluster: host.cluster,
+        wait: true,
+        image: request.image,
+        environment: { ...request.environment, CLOUD_APP_PROCESS_ROLE: 'worker', RUN_MIGRATIONS: 'false' },
+        ssm: {
+          ...request.secrets,
+          [DATABASE_PASSWORD_VARIABLE]: dependencies.database.binding.passwordRef,
+          [CACHE_PASSWORD_VARIABLE]: dependencies.cache.binding.passwordRef,
+          ...(dependencies.clickhouse.active
+            ? { [CLICKHOUSE_PASSWORD_VARIABLE]: dependencies.clickhouse.reader.passwordRef }
+            : {}),
+        },
+        scaling: { min: 1, max: 1 },
+        transform: {
+          service: (args: any) => {
+            args.networkConfiguration = {
+              ...args.networkConfiguration,
+              subnets: placement.subnets,
+              securityGroups: [
+                ...placement.securityGroups,
+                dependencies.database.binding.clientGrant,
+                dependencies.cache.binding.clientGrant,
+              ],
+              assignPublicIp: false,
+            }
+          },
+        },
+      },
+      { dependsOn: [service, ...dependencies.waitFor] },
+    )
+
     /*
      * The role the API assumes to vend a per-organization credential.
      *
@@ -183,12 +232,16 @@ export const awsApiProvider =
      */
     const vending = new aws.iam.Role('S3AccessRole', {
       name: storage.credentialVending.roleName,
-      assumeRolePolicy: service.nodes.taskRole.arn.apply((taskRoleArn: string) =>
-        JSON.stringify({
-          Version: '2012-10-17',
-          Statement: [{ Effect: 'Allow', Principal: { AWS: taskRoleArn }, Action: 'sts:AssumeRole' }],
-        }),
-      ),
+      assumeRolePolicy: $util
+        .all([service.nodes.taskRole.arn, worker.nodes.taskRole.arn])
+        .apply(([taskRoleArn, workerRoleArn]: string[]) =>
+          JSON.stringify({
+            Version: '2012-10-17',
+            Statement: [
+              { Effect: 'Allow', Principal: { AWS: [taskRoleArn, workerRoleArn] }, Action: 'sts:AssumeRole' },
+            ],
+          }),
+        ),
     })
     // What a vended session may do at most. The per-organization session policy
     // the API attaches narrows it further; effective access is the intersection.
@@ -212,6 +265,12 @@ export const awsApiProvider =
           policy,
         }),
     )
+    const workerGrants = request.capabilities
+      .flatMap(grantsFor)
+      .map(
+        (policy, index) =>
+          new aws.iam.RolePolicy(`CloudAppWorkerCapability${index}`, { role: worker.nodes.taskRole.name, policy }),
+      )
 
     /*
      * The CDN, which serves the dashboard's static assets on its own host.
@@ -246,6 +305,6 @@ export const awsApiProvider =
       // `app/` onward. Taken from the resource rather than parsed out of a URL,
       // which is where it would quietly stop matching.
       metricTarget: service.nodes.loadBalancer.arnSuffix,
-      ready: [service, ...attached],
+      ready: [service, worker, ...attached, ...workerGrants],
     }
   }

@@ -119,6 +119,58 @@ Invalid values stop API startup. Existing invitations retain their stored deadli
 and explicit API `expiresAt` / `expires_at` values override the default. Emails show
 the exact deadline in UTC. Opening the link joins after sign-in with the invited email.
 
+## Cloud Apps
+
+Cloud Apps use the platform PostgreSQL database and organization resources. Their application
+databases use Neon. The API group declares `NEON_API_KEY`, `NEON_ORG_ID`, `NEON_REGION`,
+`NEON_PG_VERSION`, `NEON_DATABASE` and `NEON_ROLE`, plus the `CLOUD_APP_*` settings in
+`mstage.env.json`. `CLOUD_APP_SESSION_SECRET`, `CLOUD_APP_IDENTITY_PRIVATE_KEY`,
+`CLOUD_APP_OAUTH_CLIENTS` and `NEON_API_KEY` are secret references: store their values in the
+cloud secret manager and store `{"address":"projects/<project>/secrets/<name>/versions/<version>"}`
+in the GCP stage store. OAuth clients are a provider-keyed JSON object in the referenced secret.
+Every API and worker revision receives the same pinned secret versions.
+The session secret and RSA identity key references are required by the API and secret groups;
+preview and apply reject either missing key before creating a revision. Neon credentials remain
+optional for Apps that do not use a database.
+
+The deployment injects the stable API address as `CLOUD_APP_PUBLIC_URL`, the stage's user-domain
+suffix as `CLOUD_APP_DOMAIN`, and the existing storage bucket as `CLOUD_APP_SOURCE_BUCKET`.
+Source objects are stored under `cloud-apps/`; API/worker object permissions cover this prefix.
+`CLOUD_APP_SOURCE_BACKEND` selects GCS on GCP and S3 on AWS.
+
+`CloudAppWorker` uses the API image with `CLOUD_APP_PROCESS_ROLE=worker`. On GCP it has one
+Cloud Run instance with CPU available between requests and an internal-only endpoint. On AWS
+it is an ECS service with one task. The worker starts after the API, shares its database,
+cache and secret configuration, and runs with `RUN_MIGRATIONS=false`; the API role applies
+schema migrations. Deployment work, schedules and cleanup belong to the worker role.
+CPU and memory use the same provider defaults as the API; there is no separate worker sizing.
+
+Publish the API/proxy images with mbuild, inspect the dev mdeploy preview, then apply the
+reviewed commit using the shared deployment workflow. The API image includes the CLI,
+Supervisor and Agent artifacts; no standalone CP Box deployment is required.
+
+The first App deployment needs a shared random `CLOUD_APP_SESSION_SECRET` and an RSA private
+key in `CLOUD_APP_IDENTITY_PRIVATE_KEY` for RS256 end-user identity. Store both as pinned cloud
+secret references. A database-backed App also needs the official Neon API key, organization ID
+and region; an App OAuth login needs its provider client ID/secret in `CLOUD_APP_OAUTH_CLIENTS`.
+These credentials are separate from the dashboard's OIDC client. Source-bucket identity and
+permissions are supplied by mdeploy rather than an access key in the stage store.
+
+For a development branch already pushed to the repository, preview its reviewed commit through
+the existing federated CI workflow:
+
+```sh
+gh workflow run mdeploy-all.yml --ref codex/cloud-app-integration \
+  -f stage=dev -f ref=<full-commit-sha> -f components=api -f apply=false
+```
+
+CI builds API/proxy artifacts from that commit and uses the dev Environment's cloud identity.
+It cannot build an uncommitted local checkout. A local preview instead requires the gcloud CLI,
+its signed-in session and application-default credentials, plus the recovered dev stage
+declaration. `mstage env list --stage dev` prints configuration names without their values;
+use that before deciding which keys need provisioning. An unavailable credential store does
+not establish that a key is absent.
+
 ## Built-in images
 
 The curated set is the built-in `base`, `python` and `node` plus each `name=ref` entry in

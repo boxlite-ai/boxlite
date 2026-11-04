@@ -8,6 +8,7 @@ import {
   Body,
   Controller,
   Delete,
+  ForbiddenException,
   Get,
   HttpCode,
   HttpStatus,
@@ -20,8 +21,10 @@ import {
 } from '@nestjs/common'
 import { ApiExcludeController } from '@nestjs/swagger'
 import { CombinedAuthGuard } from '../auth/combined-auth.guard'
-import { OrganizationResourceActionGuard } from '../organization/guards/organization-resource-action.guard'
-import { RequiredOrganizationResourcePermissions } from '../organization/decorators/required-organization-resource-permissions.decorator'
+import {
+  OrganizationResourceActionGuard,
+  hasOrganizationResourcePermissions,
+} from '../organization/guards/organization-resource-action.guard'
 import { OrganizationResourcePermission } from '../organization/enums/organization-resource-permission.enum'
 import { AuthContext } from '../common/decorators/auth-context.decorator'
 import { OrganizationAuthContext } from '../common/interfaces/auth-context.interface'
@@ -62,8 +65,13 @@ export class BoxliteDomainController {
    * the list exists: it is how a caller finds a name to reuse.
    */
   @Get()
-  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
   async list(@AuthContext() authContext: OrganizationAuthContext): Promise<RestDomainList> {
+    this.requireAny(
+      authContext,
+      OrganizationResourcePermission.READ_APPS,
+      OrganizationResourcePermission.WRITE_APPS,
+      OrganizationResourcePermission.WRITE_BOXES,
+    )
     const held = await this.domainService.listHeld(authContext.organizationId)
     return {
       domains: held.domains,
@@ -76,34 +84,36 @@ export class BoxliteDomainController {
   }
 
   @Post()
-  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
   async claim(@AuthContext() authContext: OrganizationAuthContext, @Body() input: ClaimDomainDto): Promise<RestDomain> {
+    this.requireAny(authContext, OrganizationResourcePermission.WRITE_APPS, OrganizationResourcePermission.WRITE_BOXES)
     return this.domainService.claim(authContext.organizationId, input.name)
   }
 
   /**
-   * Route an owned full hostname to a box port. A name bound
+   * Route an owned full hostname to a Box port or App environment. A name bound
    * to another of the organization's ports moves here; other names on this
    * port stay. The port is not declared public here: the name answers once
    * `POST …/network/tunnel` has declared it and the box allows inbound access,
    * in either order.
    */
   @Put(':domain/target')
-  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
   async bind(
     @AuthContext() authContext: OrganizationAuthContext,
     @Param('domain') domain: string,
     @Body() target: DomainTargetDto,
   ): Promise<RestDomain> {
     if (target.type === 'app') {
-      throw new BadRequestException({
-        code: 'app_target_not_supported',
-        message: 'App targets are reserved; App binding is not supported yet.',
-      })
+      if (target.box !== undefined || target.port !== undefined)
+        throw new BadRequestException('An App target must not include a Box or port')
+      this.requireAny(authContext, OrganizationResourcePermission.WRITE_APPS)
+      await this.requireCurrentTargetPermission(authContext, domain)
+      return this.domainService.bindApp(authContext.organizationId, target.app!, target.environment ?? 'main', domain)
     }
-    if (target.app !== undefined) {
-      throw new BadRequestException('A Box target must not include an App reference')
+    if (target.app !== undefined || target.environment !== undefined) {
+      throw new BadRequestException('A Box target must not include an App or environment reference')
     }
+    this.requireAny(authContext, OrganizationResourcePermission.WRITE_BOXES)
+    await this.requireCurrentTargetPermission(authContext, domain)
     // findOneByIdOrName already 404s for a missing/destroyed box.
     const box = await this.boxService.findOneByIdOrName(target.box!, authContext.organizationId)
     return this.domainService.bind(box, target.port!, domain)
@@ -115,9 +125,28 @@ export class BoxliteDomainController {
    * gone. The port's public declaration is untouched.
    */
   @Delete(':domain/target')
-  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
   @HttpCode(HttpStatus.NO_CONTENT)
   async unbind(@AuthContext() authContext: OrganizationAuthContext, @Param('domain') domain: string): Promise<void> {
+    this.requireAny(authContext, OrganizationResourcePermission.WRITE_APPS, OrganizationResourcePermission.WRITE_BOXES)
+    await this.requireCurrentTargetPermission(authContext, domain)
     await this.domainService.unbind(authContext.organizationId, domain)
+  }
+
+  private requireAny(auth: OrganizationAuthContext, ...permissions: OrganizationResourcePermission[]): void {
+    if (auth.apiKey?.cloudAppId) throw new ForbiddenException('App keys manage domains through their App')
+    if (!permissions.some((permission) => hasOrganizationResourcePermissions(auth, [permission]))) {
+      throw new ForbiddenException('You do not have permission to manage this domain target')
+    }
+  }
+
+  private async requireCurrentTargetPermission(auth: OrganizationAuthContext, domain: string): Promise<void> {
+    const held = await this.domainService.owned(auth.organizationId, domain)
+    if (held.target)
+      this.requireAny(
+        auth,
+        held.target.type === 'app'
+          ? OrganizationResourcePermission.WRITE_APPS
+          : OrganizationResourcePermission.WRITE_BOXES,
+      )
   }
 }

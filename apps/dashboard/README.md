@@ -3,6 +3,22 @@
 The web console at `app.boxlite.ai`. A Vite + React app, built and tested
 through Nx as the `dashboard` project.
 
+## Apps
+
+Apps sits after Boxes in the main navigation and uses the same OIDC session,
+organization switcher and resource permissions. Its management requests go to
+`/api/v1/{organizationId}/apps` through the shared `ApiClient`; the App detail
+projection is `GET /apps/{appId}/view` within that organization namespace.
+Deployments, environments, services, authentication, database, volumes,
+variables and logs remain within the selected organization and environment.
+
+App query keys include the organization. Switching organizations resets open
+forms and one-time credential dialogs; a detail page returns to the App list.
+Mutations retain their originating organization and environment, so a late
+response refreshes only that scope. Source archives, exports and previews use
+the platform bearer, and opening a private App uses a one-time browser ticket.
+No separate console login, cookie client or production mock backend is required.
+
 ## SDK and CLI quickstart readability
 
 The walkthrough uses a dedicated `quickstart-code` type style: 14px monospaced

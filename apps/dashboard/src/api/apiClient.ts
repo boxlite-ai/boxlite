@@ -28,7 +28,7 @@ import {
   UsageApi as CoreUsageApi,
   NetworkMode,
 } from '@boxlite-ai/api-client'
-import axios, { AxiosError, AxiosInstance } from 'axios'
+import axios, { AxiosError, AxiosInstance, type AxiosRequestConfig } from 'axios'
 import { BoxliteError } from './errors'
 import type { DomainList, HeldDomain } from './domain-types'
 
@@ -180,13 +180,18 @@ export class ApiClient {
         if (error instanceof AxiosError && error.message.includes('timeout of')) {
           errorMessage = 'Operation timed out'
         } else {
-          errorMessage = error.response?.data?.message || error.response?.data || error.message || String(error)
+          errorMessage =
+            error.response?.data?.error?.message ||
+            error.response?.data?.message ||
+            error.response?.data ||
+            error.message ||
+            String(error)
         }
 
         // The envelope's machine-readable `code` is what the UI branches on; the
         // message is only for display. A rejection the API describes (say, an
         // unverified email) must not be flattened into an anonymous error here.
-        const responseCode = error?.response?.data?.code
+        const responseCode = error?.response?.data?.error?.code ?? error?.response?.data?.code
 
         throw BoxliteError.fromString(String(errorMessage), {
           cause: error instanceof Error ? error : undefined,
@@ -334,6 +339,28 @@ export class ApiClient {
 
   private v1BoxPath(organizationId: string, boxId: string, suffix: string): string {
     return `/v1/${encodeURIComponent(organizationId)}/boxes/${encodeURIComponent(boxId)}${suffix}`
+  }
+
+  /** App requests use the selected organization and the dashboard's existing bearer/session recovery. */
+  public cloudApps(organizationId: string) {
+    const request = <T>(path: string, options: AxiosRequestConfig = {}) => {
+      if (!organizationId) throw new Error('No organization selected')
+      return this.http.request<T>({
+        ...options,
+        ...this.v1Config(),
+        headers: { ...options.headers, ...this.v1Config().headers },
+        url: `/v1/${encodeURIComponent(organizationId)}${path}`,
+      })
+    }
+    return {
+      get: <T = unknown>(path: string, options?: AxiosRequestConfig) => request<T>(path, { ...options, method: 'GET' }),
+      post: <T = unknown>(path: string, data?: unknown, options?: AxiosRequestConfig) =>
+        request<T>(path, { ...options, method: 'POST', data }),
+      put: <T = unknown>(path: string, data?: unknown, options?: AxiosRequestConfig) =>
+        request<T>(path, { ...options, method: 'PUT', data }),
+      delete: <T = unknown>(path: string, options?: AxiosRequestConfig) =>
+        request<T>(path, { ...options, method: 'DELETE' }),
+    }
   }
 
   /** `/v1` is spec-first and outside the generated client; same instance, so the same 401 handling. */

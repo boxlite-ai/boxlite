@@ -5,16 +5,19 @@
 
 import { HttpStatus, RequestMethod, ValidationPipe } from '@nestjs/common'
 import { HTTP_CODE_METADATA, METHOD_METADATA, PATH_METADATA } from '@nestjs/common/constants'
-import { Reflector } from '@nestjs/core'
 import { readdirSync, readFileSync } from 'node:fs'
 import { BoxliteDomainController } from './boxlite-domain.controller'
 import { ClaimDomainDto } from './dto/claim-domain.dto'
 import { DomainTargetDto } from './dto/domain-target.dto'
-import { RequiredOrganizationResourcePermissions } from '../organization/decorators/required-organization-resource-permissions.decorator'
 import { OrganizationResourcePermission } from '../organization/enums/organization-resource-permission.enum'
 import { REST_COLLECTION_NAMES, RESERVED_PLATFORM_SUBDOMAINS } from '../box/services/domain.service'
 
-const auth = { organizationId: 'org-1', organization: { id: 'org-1' } }
+const auth = { organizationId: 'org-1', organization: { id: 'org-1' }, role: 'admin' }
+const member = (...permissions: OrganizationResourcePermission[]) => ({
+  ...auth,
+  role: 'user',
+  organizationUser: { role: 'member', assignedRoles: [{ permissions }] },
+})
 
 function makeHarness() {
   const domainService = {
@@ -39,6 +42,14 @@ function makeHarness() {
       url: 'https://demo1.app.test',
       target: { type: 'box', box: 'box-uuid', port: 3000 },
     }),
+    owned: jest.fn().mockResolvedValue({ hostname: 'demo1.app.test', url: 'https://demo1.app.test', target: null }),
+    bindApp: jest
+      .fn()
+      .mockResolvedValue({
+        hostname: 'demo1.app.test',
+        url: 'https://demo1.app.test',
+        target: { type: 'app', app: 'app-shop', environment: 'env-main' },
+      }),
     unbind: jest.fn().mockResolvedValue(undefined),
   }
   const boxService = {
@@ -62,14 +73,15 @@ describe('BoxliteDomainController', () => {
     }
   })
 
-  it('typed target contract: App binding is explicitly unsupported before Box lookup', async () => {
+  it('binds an App in its main environment without a Box lookup', async () => {
     const { controller, boxService, domainService } = makeHarness()
     await expect(
-      controller.bind(auth as never, 'demo1.app.test', { type: 'app', app: 'shop' } as never),
-    ).rejects.toMatchObject({
-      status: 400,
-      response: { code: 'app_target_not_supported' },
-    })
+      controller.bind(member(OrganizationResourcePermission.WRITE_APPS) as never, 'demo1.app.test', {
+        type: 'app',
+        app: 'shop',
+      }),
+    ).resolves.toMatchObject({ target: { type: 'app', environment: 'env-main' } })
+    expect(domainService.bindApp).toHaveBeenCalledWith('org-1', 'shop', 'main', 'demo1.app.test')
     expect(boxService.findOneByIdOrName).not.toHaveBeenCalled()
     expect(domainService.bind).not.toHaveBeenCalled()
   })
@@ -82,9 +94,14 @@ describe('BoxliteDomainController', () => {
   // Read from source: importing every controller pulls ESM-only dependencies.
   it('reserves every collection mounted under v1/:prefix as a name', () => {
     const collections = new Set<string>()
-    for (const file of readdirSync(__dirname).filter((name) => name.endsWith('.controller.ts'))) {
-      for (const [, collection] of readFileSync(`${__dirname}/${file}`, 'utf8').matchAll(/'v1\/:prefix\/([^/':]+)/g)) {
-        collections.add(collection)
+    for (const directory of [__dirname, `${__dirname}/../cloud-app`]) {
+      for (const file of readdirSync(directory).filter((name) => name.endsWith('.controller.ts'))) {
+        const source = readFileSync(`${directory}/${file}`, 'utf8')
+        for (const [, collection] of source.matchAll(/'v1\/:(?:prefix|organizationId|orgId)\/([^/':]+)/g))
+          collections.add(collection)
+        if (/@Controller\('v1\/:(?:prefix|organizationId|orgId)'\)/.test(source)) {
+          for (const [, collection] of source.matchAll(/@All\(\['([^/':]+)',/g)) collections.add(collection)
+        }
       }
     }
     expect([...collections].sort()).toEqual([...REST_COLLECTION_NAMES].sort())
@@ -93,13 +110,8 @@ describe('BoxliteDomainController', () => {
     }
   })
 
-  it('lists held names in the REST shape, unbound ones with a null target, under box write permission', async () => {
+  it('lists held names in the REST shape with a null target while unbound', async () => {
     const { controller } = makeHarness()
-    const reflector = new Reflector()
-    expect(reflector.get(RequiredOrganizationResourcePermissions, BoxliteDomainController.prototype.list)).toEqual([
-      OrganizationResourcePermission.WRITE_BOXES,
-    ])
-
     await expect(controller.list(auth as never)).resolves.toEqual({
       domains: [
         {
@@ -121,9 +133,6 @@ describe('BoxliteDomainController', () => {
     const { controller, domainService, boxService } = makeHarness()
     const handler = BoxliteDomainController.prototype.claim
     expect(Reflect.getMetadata(METHOD_METADATA, handler)).toBe(RequestMethod.POST)
-    expect(new Reflector().get(RequiredOrganizationResourcePermissions, handler)).toEqual([
-      OrganizationResourcePermission.WRITE_BOXES,
-    ])
     await expect(controller.claim(auth as never, { name: 'demo1' })).resolves.toMatchObject({
       hostname: 'demo1.app.test',
       target: null,
@@ -149,9 +158,6 @@ describe('BoxliteDomainController', () => {
     const handler = BoxliteDomainController.prototype.bind
     expect(Reflect.getMetadata(METHOD_METADATA, handler)).toBe(RequestMethod.PUT)
     expect(Reflect.getMetadata(PATH_METADATA, handler)).toBe(':domain/target')
-    expect(new Reflector().get(RequiredOrganizationResourcePermissions, handler)).toEqual([
-      OrganizationResourcePermission.WRITE_BOXES,
-    ])
 
     const result = await controller.bind(auth as never, 'demo1.app.test', { type: 'box', box: 'web-a', port: 3000 })
 
@@ -195,12 +201,71 @@ describe('BoxliteDomainController', () => {
     expect(Reflect.getMetadata(METHOD_METADATA, handler)).toBe(RequestMethod.DELETE)
     expect(Reflect.getMetadata(PATH_METADATA, handler)).toBe(':domain/target')
     expect(Reflect.getMetadata(HTTP_CODE_METADATA, handler)).toBe(HttpStatus.NO_CONTENT)
-    expect(new Reflector().get(RequiredOrganizationResourcePermissions, handler)).toEqual([
-      OrganizationResourcePermission.WRITE_BOXES,
-    ])
 
     await controller.unbind(auth as never, 'demo1.app.test')
 
     expect(domainService.unbind).toHaveBeenCalledWith('org-1', 'demo1.app.test')
+  })
+  it('uses the target kind for write permission, including a binding being replaced', async () => {
+    const { controller, domainService, boxService } = makeHarness()
+    const appWriter = member(OrganizationResourcePermission.WRITE_APPS)
+    const boxWriter = member(OrganizationResourcePermission.WRITE_BOXES)
+    await expect(
+      controller.bind(boxWriter as never, 'demo1.app.test', { type: 'app', app: 'shop' }),
+    ).rejects.toMatchObject({ status: 403 })
+    await expect(
+      controller.bind(appWriter as never, 'demo1.app.test', { type: 'box', box: 'web', port: 3000 }),
+    ).rejects.toMatchObject({ status: 403 })
+    domainService.owned.mockResolvedValue({ target: { type: 'box', box: 'web', port: 3000 } })
+    await expect(
+      controller.bind(appWriter as never, 'demo1.app.test', { type: 'app', app: 'shop' }),
+    ).rejects.toMatchObject({ status: 403 })
+    expect(domainService.bindApp).not.toHaveBeenCalled()
+    expect(boxService.findOneByIdOrName).not.toHaveBeenCalled()
+  })
+
+  it('allows App reads but keeps claims and unbinding behind their write permissions', async () => {
+    const { controller, domainService } = makeHarness()
+    await expect(controller.list(member(OrganizationResourcePermission.READ_APPS) as never)).resolves.toHaveProperty(
+      'domains',
+    )
+    await expect(
+      controller.claim(member(OrganizationResourcePermission.READ_APPS) as never, { name: 'demo1' }),
+    ).rejects.toMatchObject({ status: 403 })
+    domainService.owned.mockResolvedValue({ target: { type: 'app', app: 'app-shop', environment: 'env-main' } })
+    await expect(
+      controller.unbind(member(OrganizationResourcePermission.WRITE_BOXES) as never, 'demo1.app.test'),
+    ).rejects.toMatchObject({ status: 403 })
+    await controller.unbind(member(OrganizationResourcePermission.WRITE_APPS) as never, 'demo1.app.test')
+    expect(domainService.unbind).toHaveBeenCalledTimes(1)
+    expect(domainService.claim).not.toHaveBeenCalled()
+  })
+
+  it('keeps App-scoped keys out of organization-wide domain operations', async () => {
+    const { controller, domainService } = makeHarness()
+    const scoped = {
+      ...member(OrganizationResourcePermission.WRITE_APPS),
+      apiKey: { cloudAppId: 'shop', permissions: [OrganizationResourcePermission.WRITE_APPS] },
+    }
+    await expect(controller.claim(scoped as never, { name: 'demo1' })).rejects.toMatchObject({ status: 403 })
+    await expect(controller.list(scoped as never)).rejects.toMatchObject({ status: 403 })
+    expect(domainService.claim).not.toHaveBeenCalled()
+    expect(domainService.listHeld).not.toHaveBeenCalled()
+  })
+
+  it('validates App environment selection and refuses mixed target fields', async () => {
+    await expect(validateTarget({ type: 'app', app: 'shop', environment: 'staging' })).resolves.toBeInstanceOf(
+      DomainTargetDto,
+    )
+    await expect(validateTarget({ type: 'app', app: 'shop', environment: '' })).rejects.toMatchObject({ status: 400 })
+    const { controller, domainService } = makeHarness()
+    await expect(
+      controller.bind(auth as never, 'demo1.app.test', { type: 'app', app: 'shop', box: 'web', port: 3000 }),
+    ).rejects.toMatchObject({ status: 400 })
+    await expect(
+      controller.bind(auth as never, 'demo1.app.test', { type: 'box', box: 'web', port: 3000, environment: 'staging' }),
+    ).rejects.toMatchObject({ status: 400 })
+    expect(domainService.bind).not.toHaveBeenCalled()
+    expect(domainService.bindApp).not.toHaveBeenCalled()
   })
 })

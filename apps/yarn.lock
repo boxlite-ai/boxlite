@@ -9508,6 +9508,13 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@pgsql/types@npm:^17.6.2":
+  version: 17.6.2
+  resolution: "@pgsql/types@npm:17.6.2"
+  checksum: 10c0/4904a9732e8f5aa51319666f8ef9bd793615fb41c99fc3acf16d9d257337707fea9f8570efca5e40d4275b7ca7e8f876a942d8b419ff21d80f9fbaa0f3d3edce
+  languageName: node
+  linkType: hard
+
 "@phenomnomnominal/tsquery@npm:~5.0.1":
   version: 5.0.1
   resolution: "@phenomnomnominal/tsquery@npm:5.0.1"
@@ -13871,6 +13878,26 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@types/pg-copy-streams@npm:^1.2.5":
+  version: 1.2.5
+  resolution: "@types/pg-copy-streams@npm:1.2.5"
+  dependencies:
+    "@types/node": "npm:*"
+    "@types/pg": "npm:*"
+  checksum: 10c0/fccb3c4e3df5dd579d1c30538036450be34d586e3f8531be0f8876d72751193ce8fc779a26f4b7a314539e3dbb0d8fb9a0d61c85da96b8fced43e127fa87d1c8
+  languageName: node
+  linkType: hard
+
+"@types/pg-cursor@npm:^2.7.2":
+  version: 2.7.2
+  resolution: "@types/pg-cursor@npm:2.7.2"
+  dependencies:
+    "@types/node": "npm:*"
+    "@types/pg": "npm:*"
+  checksum: 10c0/16ed70a86ff67823a2cfdddfe5cc1a8109abdafc671209e9da093c2c24aa523d61fc05cbad1ea23636af38d7815e702bb8b0967512c7a8cb249d030cefcaf3f4
+  languageName: node
+  linkType: hard
+
 "@types/pg-pool@npm:2.0.6":
   version: 2.0.6
   resolution: "@types/pg-pool@npm:2.0.6"
@@ -14111,6 +14138,15 @@ __metadata:
   version: 2.0.6
   resolution: "@types/statuses@npm:2.0.6"
   checksum: 10c0/dd88c220b0e2c6315686289525fd61472d2204d2e4bef4941acfb76bda01d3066f749ac74782aab5b537a45314fcd7d6261eefa40b6ec872691f5803adaa608d
+  languageName: node
+  linkType: hard
+
+"@types/tar-stream@npm:^3.1.4":
+  version: 3.1.5
+  resolution: "@types/tar-stream@npm:3.1.5"
+  dependencies:
+    "@types/node": "npm:*"
+  checksum: 10c0/15fb31e5641892e8a9b85663879fdbe000bfd5d6fd91ce67fec98859bfea702d43e1cb9a0793e9b65006ddb86556248eab0672190abfa86910aabed67db93cf8
   languageName: node
   linkType: hard
 
@@ -17099,11 +17135,14 @@ __metadata:
     "@types/nodemailer": "npm:^6.4.17"
     "@types/passport-http-bearer": "npm:^1.0.41"
     "@types/passport-jwt": "npm:^4.0.1"
+    "@types/pg-copy-streams": "npm:^1.2.5"
+    "@types/pg-cursor": "npm:^2.7.2"
     "@types/react": "npm:19.0.0"
     "@types/react-dom": "npm:19.0.0"
     "@types/react-instantsearch-dom": "npm:^6.12.9"
     "@types/shell-quote": "npm:^1.7.5"
     "@types/tar": "npm:^6.1.13"
+    "@types/tar-stream": "npm:^3.1.4"
     "@vitejs/plugin-react": "npm:^4.2.0"
     "@vitest/coverage-v8": "npm:^4.1.8"
     "@vitest/ui": "npm:^1.3.1"
@@ -17128,6 +17167,7 @@ __metadata:
     class-variance-authority: "npm:^0.7.1"
     cmdk: "npm:^1.1.1"
     cookie-parser: "npm:^1.4.7"
+    croner: "npm:^9.1.0"
     date-fns: "npm:^4.1.0"
     dockerode: "npm:^4.0.4"
     dotenv: "npm:^17.0.1"
@@ -17149,8 +17189,10 @@ __metadata:
     form-data: "npm:^4.0.6"
     gt-react: "npm:^10.0.8"
     gtx-cli: "npm:^2.6.24"
+    hono: "npm:^4.10.0"
     http-proxy-middleware: "npm:^4.2.0"
     husky: "npm:^9.1.7"
+    ignore: "npm:^7.0.0"
     ioredis: "npm:^5.5.0"
     isomorphic-ws: "npm:^5.0.0"
     jest: "npm:30.0.5"
@@ -17162,6 +17204,7 @@ __metadata:
     jsonc-eslint-parser: "npm:^2.1.0"
     jwks-rsa: "npm:^3.1.0"
     kafkajs: "npm:^2.2.4"
+    libpg-query: "npm:17.7.3"
     lint-staged: "npm:^15.5.0"
     lucide-react: "npm:0.561.0"
     markdownlint-cli2: "npm:^0.17.2"
@@ -17181,10 +17224,13 @@ __metadata:
     path-browserify-win32: "npm:^2.0.1"
     pathe: "npm:^2.0.3"
     pg: "npm:^8.13.3"
+    pg-copy-streams: "npm:^7.0.0"
+    pg-cursor: "npm:^2.22.1"
     pg-query-stream: "npm:^4.10.3"
     pino: "npm:^9.13.1"
     pino-http: "npm:^10.5.0"
     pino-pretty: "npm:^13.1.2"
+    playwright-core: "npm:1.62.1"
     postcss: "npm:8.5.18"
     posthog-js: "npm:^1.217.6"
     posthog-node: "npm:^4.10.1"
@@ -17210,6 +17256,7 @@ __metadata:
     semver: "npm:^7.7.2"
     sharp: "npm:^0.35.5"
     shell-quote: "npm:^1.11.0"
+    smol-toml: "npm:^1.4.1"
     socket.io: "npm:4.8.3"
     socket.io-client: "npm:^4.8.1"
     sonner: "npm:^1.7.4"
@@ -17224,6 +17271,7 @@ __metadata:
     tailwindcss: "npm:3.4.3"
     tailwindcss-animate: "npm:^1.0.7"
     tar: "npm:^7.5.22"
+    tar-stream: "npm:^3.1.7"
     ts-jest: "npm:29.4.1"
     ts-node: "npm:10.9.1"
     tslib: "npm:^2.8.1"
@@ -18801,6 +18849,13 @@ __metadata:
     "@types/luxon": "npm:~3.7.0"
     luxon: "npm:~3.7.0"
   checksum: 10c0/e3762fda4a9a2404ac2e54e1104a3c6c695747e14b2321bbc5531aa1192c75a319075695fcaf68b6927e0ffd877b5454f314c680f6586db1a78b2c25b76b8a32
+  languageName: node
+  linkType: hard
+
+"croner@npm:^9.1.0":
+  version: 9.1.0
+  resolution: "croner@npm:9.1.0"
+  checksum: 10c0/7debd8d171e84b2519a2adfe6a4ed6f761890da3d15239511de87f16f46ae040b1a5d89a40ad58bb89f0e4546d3a9bf093a5a65ce0484a89451d97de139ad64a
   languageName: node
   linkType: hard
 
@@ -24072,6 +24127,13 @@ __metadata:
   languageName: node
   linkType: hard
 
+"hono@npm:^4.10.0":
+  version: 4.13.14
+  resolution: "hono@npm:4.13.14"
+  checksum: 10c0/fdedcb49186e3a5eb0fff39c4fd66112718dc1a98c6df9a385f2fc4799c0e59140e3c45fbac12929d658b659d9eb9ddb9ac09161104336023c23f335668c93fd
+  languageName: node
+  linkType: hard
+
 "hosted-git-info@npm:^7.0.0":
   version: 7.0.2
   resolution: "hosted-git-info@npm:7.0.2"
@@ -24522,6 +24584,13 @@ __metadata:
   version: 5.3.2
   resolution: "ignore@npm:5.3.2"
   checksum: 10c0/f9f652c957983634ded1e7f02da3b559a0d4cc210fca3792cb67f1b153623c9c42efdc1c4121af171e295444459fc4a9201101fb041b1104a3c000bccb188337
+  languageName: node
+  linkType: hard
+
+"ignore@npm:^7.0.0":
+  version: 7.0.14
+  resolution: "ignore@npm:7.0.14"
+  checksum: 10c0/9845d63a5fd29c738b7b94bef4a304c0812453b5360f5edc0859c1428902058753dffeed0e17b9e88bf529815803ec2d31eefa9bdaea8f32154128143fae2ea9
   languageName: node
   linkType: hard
 
@@ -27211,6 +27280,15 @@ __metadata:
     prelude-ls: "npm:^1.2.1"
     type-check: "npm:~0.4.0"
   checksum: 10c0/effb03cad7c89dfa5bd4f6989364bfc79994c2042ec5966cb9b95990e2edee5cd8969ddf42616a0373ac49fac1403437deaf6e9050fbbaa3546093a59b9ac94e
+  languageName: node
+  linkType: hard
+
+"libpg-query@npm:17.7.3":
+  version: 17.7.3
+  resolution: "libpg-query@npm:17.7.3"
+  dependencies:
+    "@pgsql/types": "npm:^17.6.2"
+  checksum: 10c0/df8b37c1312272ae2facdd5cc09ccfe2ad024b893d459a9ed9fe11e083b82be871cf3c8c9ee5deef259609420c544ca1b3cdc36242d2323ff41c2dc2685abc6a
   languageName: node
   linkType: hard
 
@@ -31247,12 +31325,28 @@ __metadata:
   languageName: node
   linkType: hard
 
+"pg-copy-streams@npm:^7.0.0":
+  version: 7.0.0
+  resolution: "pg-copy-streams@npm:7.0.0"
+  checksum: 10c0/451d4919774c2a318529ed734e7f1cd33ee08f277379bfdd19cf625dd5cd5031b09bea41a07af8f42091a8642b2a5a541cee2aa234069e7e70e6a8765d1da3e6
+  languageName: node
+  linkType: hard
+
 "pg-cursor@npm:^2.19.0":
   version: 2.19.0
   resolution: "pg-cursor@npm:2.19.0"
   peerDependencies:
     pg: ^8
   checksum: 10c0/ebc2f6c130b352aa508d12ed6e87d4ef98ad4a743af9dcdd45fae5d07d87bba46cb689f1fbac8a322b9b2b5b4ac5ca029468fa479213cae48f3ade006713ec32
+  languageName: node
+  linkType: hard
+
+"pg-cursor@npm:^2.22.1":
+  version: 2.22.1
+  resolution: "pg-cursor@npm:2.22.1"
+  peerDependencies:
+    pg: ^8
+  checksum: 10c0/fb98152b01b43a5de79fb515adca26137b75ca4c96007ce7195e969c180c9922d72b1c97d9349f7213bcc1ca64d945cc15fa242c5e04eedd8c5933e31cd10e78
   languageName: node
   linkType: hard
 
@@ -31610,6 +31704,15 @@ __metadata:
     pvutils: "npm:^1.1.3"
     tslib: "npm:^2.8.1"
   checksum: 10c0/33cfab9283702782ae228bd2d4a51b1e9b2e0d6e2141207f29ee95716101ac4fe6e6821882da5f5eca28c74be3964b181b09e95cbbb757b2bd9dca918a5765fd
+  languageName: node
+  linkType: hard
+
+"playwright-core@npm:1.62.1":
+  version: 1.62.1
+  resolution: "playwright-core@npm:1.62.1"
+  bin:
+    playwright-core: cli.js
+  checksum: 10c0/a37d0f03bb73364cfd0eba704c4b3359b609c4779ae2649a88d8e2b3a29c7357dfcc58bdcf0cb68ddffdef7687abf78902c8356e89f189682c7e19be38e108f0
   languageName: node
   linkType: hard
 
@@ -35877,6 +35980,13 @@ __metadata:
   version: 1.6.1
   resolution: "smol-toml@npm:1.6.1"
   checksum: 10c0/511a78722f99c7616fdb46af708de3d7e81434b5a3d58061166da73f28bfc6cae4f0cd04683f60515b9c490cd10152fce72287c960b337419c0299cc1f0f2a22
+  languageName: node
+  linkType: hard
+
+"smol-toml@npm:^1.4.1":
+  version: 1.9.1
+  resolution: "smol-toml@npm:1.9.1"
+  checksum: 10c0/8acccf7bbc063f29405f58f5014ab39bf4eb9d7f0e000e5e3f140f7d4d6ead5696681a7c15260d1f2910213012c0af43b31a05bf94f704b0bdf39989fba08c02
   languageName: node
   linkType: hard
 

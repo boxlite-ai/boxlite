@@ -464,6 +464,9 @@ export const deployStack = ({
     // full hostnames still use the stored ownership record.
     ...(platformDomain ? { PROXY_APP_DOMAIN: platformDomain } : {}),
     S3_DEFAULT_BUCKET: storage.name,
+    CLOUD_APP_SOURCE_BUCKET: storage.name,
+    CLOUD_APP_SOURCE_BACKEND: storage.binding.cloud === 'gcp' ? 'gcs' : 's3',
+    CLOUD_APP_SOURCE_PREFIX: 'cloud-apps',
   }
   assertOneChannelPerName({
     workload: 'API',
@@ -629,6 +632,7 @@ export const capabilitiesFor = ({
   registryCredentials: RegistryCredentialStore
 }): ApiCapability[] => [
   { kind: 'list-own-bucket', storage },
+  { kind: 'manage-app-source', storage },
   { kind: 'manage-volume-buckets', storage },
   { kind: 'vend-volume-credentials', storage },
   ...(clickhouse.active ? ([{ kind: 'read-telemetry', clickhouse }] as ApiCapability[]) : []),

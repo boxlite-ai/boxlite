@@ -45,6 +45,8 @@ const Billing = React.lazy(() => import('./pages/Billing'))
 const BillingPlanChange = React.lazy(() => import('./pages/BillingPlanChange'))
 const Volumes = React.lazy(() => import('./pages/Volumes'))
 const Domains = React.lazy(() => import('./pages/Domains'))
+const Apps = React.lazy(() => import('./pages/Apps'))
+const AppDetails = React.lazy(() => import('./components/apps/AppDetails'))
 const FirstBoxWelcome = React.lazy(() => import('./components/first-run/FirstBoxWelcome'))
 const FirstBoxQuickstart = React.lazy(() =>
   import('./components/first-run/FirstBoxOnboarding').then((m) => ({ default: m.FirstBoxQuickstart })),
@@ -183,6 +185,8 @@ function App() {
         <Route index element={<Navigate to={boxesRedirect} replace />} />
         <Route path={getRouteSubPath(RoutePath.KEYS)} element={<Keys />} />
         <Route path={getRouteSubPath(RoutePath.BOXES)} element={<Boxes />} />
+        <Route path={getRouteSubPath(RoutePath.APPS)} element={<Apps />} />
+        <Route path={getRouteSubPath(RoutePath.APP_DETAILS)} element={<AppDetails />} />
         <Route path={getRouteSubPath(RoutePath.WELCOME)} element={<FirstBoxWelcome />} />
         <Route path={getRouteSubPath(RoutePath.QUICKSTART)} element={<FirstBoxQuickstart />} />
         <Route path={getRouteSubPath(RoutePath.VOLUMES)} element={<Volumes />} />

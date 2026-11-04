@@ -730,3 +730,13 @@ plugin-boxlite-force:
 
 test\:unit\:plugins: plugin-boxlite-force
 	@PYTHONDONTWRITEBYTECODE=1 $(PLUGIN_PYTHON) -m unittest discover -s tests/plugins -p 'test_*.py'
+
+PHONY_TARGETS += test\:apps\:cloud-app-cli test\:apps\:cloud-app-supervisor
+
+test\:apps\:cloud-app-cli: _ensure-apps-deps
+	@$(MAKE) build:apps:cloud-app-cli
+	@cd apps/cloud-app-cli && ../node_modules/.bin/tsc -p tsconfig.json --noEmit
+	@cd apps/cloud-app-cli && TSX_TSCONFIG_PATH=tsconfig.test.json node --test --import tsx test/*.test.ts
+
+test\:apps\:cloud-app-supervisor:
+	@$(MAKE) -C apps/cloud-app-supervisor test
