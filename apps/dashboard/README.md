@@ -10,6 +10,10 @@ running box and permission to write boxes. Setup opens a dialog, generates
 independent Ed25519 host/client keys in the browser, and configures login `box`
 on guest address `0.0.0.0:22` through the existing SSH REST API. It replaces any
 previous accounts and host identity and disconnects current SSH clients.
+Before submitting the SSH configuration, Setup enables inbound access if it is
+disabled and refreshes the box's network state. If enabling inbound fails, Setup
+stops and retains the generated key for retry. Enable and Disable do not change
+inbound access; a later SSH configuration failure does not turn inbound off.
 
 Download the private key from the dialog before leaving the page. The client
 private key stays in component memory and the downloaded file; only its public
@@ -20,12 +24,16 @@ Setup then creates new identities. Failed setup retains generated keys for a
 manual retry. Browser Ed25519 support and a secure context are required.
 
 The dialog supplies an OpenSSH command using
-`ProxyCommand=boxlite --url=… --path-prefix=… ssh --proxy -- BOX`, matching the
+`ProxyCommand=boxlite --context=YOUR_CONTEXT --path-prefix=… ssh --proxy -- BOX`, matching the
 cloud CLI syntax in [#2327](https://github.com/boxlite-ai/boxlite/pull/2327).
-Use a CLI build containing that change. From the download directory, run the
+Use a CLI build containing that change. Run `boxlite context ls` and replace
+`YOUR_CONTEXT` with a context whose endpoint matches the API address shown in
+the dialog and whose credentials can access the selected organization. The
+dashboard cannot detect local contexts and does not supply a `--url` override.
+From the download directory, run the
 displayed `chmod 600` and SSH commands; SSH starts and stops the proxy itself,
-without a separate forwarding terminal or local listening port. URL and
-organization arguments survive shell quoting and OpenSSH percent expansion;
+without a separate forwarding terminal or local listening port. The
+organization argument survives shell quoting and OpenSSH percent expansion;
 API credentials are loaded by the CLI, never embedded in the command.
 
 Compare the displayed host fingerprint before accepting it; a fresh Setup may

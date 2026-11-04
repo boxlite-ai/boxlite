@@ -1,10 +1,11 @@
 /* Copyright 2026 BoxLite AI. SPDX-License-Identifier: AGPL-3.0 */
 
 import { useEffect, useRef, useState } from 'react'
-import { Box, BoxState, OrganizationRolePermissionsEnum } from '@boxlite-ai/api-client'
+import { Box, BoxState, NetworkMode, OrganizationRolePermissionsEnum } from '@boxlite-ai/api-client'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { useApi } from '@/hooks/useApi'
+import { useUpdateBoxInboundMutation } from '@/hooks/mutations/useUpdateBoxInboundMutation'
 import { useConfig } from '@/hooks/useConfig'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { getRestApiUrl } from '@/lib/environment'
@@ -38,6 +39,7 @@ function SshControls({
   refreshSignal: number
 }) {
   const api = useApi()
+  const updateInbound = useUpdateBoxInboundMutation()
   const config = useConfig()
   const { authenticatedUserHasPermission } = useSelectedOrganization()
   const [status, setStatus] = useState<SshStatus>()
@@ -100,6 +102,16 @@ function SshControls({
         keys = await generateSshCredentials()
         if (version !== requestVersion.current) return
         setCredentials(keys)
+      }
+      if (operation === 'setup' && box.network?.inbound.mode === NetworkMode.DISABLED) {
+        try {
+          await updateInbound.mutateAsync({ boxId: box.id, mode: NetworkMode.ENABLED })
+        } catch {
+          if (version === requestVersion.current)
+            setError('Unable to enable inbound access. SSH setup stopped; your key is kept here. Retry Setup.')
+          return
+        }
+        if (version !== requestVersion.current) return
       }
       const next = await requestSsh(api, organizationId, box.id, operation, keys?.config)
       if (version !== requestVersion.current) return
@@ -189,7 +201,7 @@ function SshControls({
               <>
                 <p>
                   This replaces existing accounts and host identity, disconnecting SSH clients. A fresh setup after
-                  leaving this page generates new keys.
+                  leaving this page generates new keys. Setup also enables inbound access if it is disabled.
                 </p>
                 <Button disabled={disabled} onClick={() => void run('setup')}>
                   {pending === 'setup' ? 'Setting up…' : 'Set up SSH'}
@@ -208,11 +220,13 @@ function SshControls({
                   Host fingerprint: {status?.host_key_fingerprint || 'Enable SSH to read the host fingerprint.'}
                 </p>
                 <p>
-                  1. Use a BoxLite CLI version with cloud SSH proxy support. Log in using this organization's API key,
-                  or set <code>BOXLITE_API_KEY</code>:
+                  1. Use a BoxLite CLI version with cloud SSH proxy support. Run <code>boxlite context ls</code> to find
+                  a context for <code>{instructions.endpoint}</code> with access to this organization.
                 </p>
-                <pre className="whitespace-pre-wrap break-all bg-muted p-3 text-xs leading-6">{instructions.login}</pre>
-                <p>2. Open the folder containing the downloaded key and run:</p>
+                <p>
+                  2. Replace YOUR_CONTEXT below with that context's name. The dashboard cannot detect your local
+                  contexts. Open the folder containing the downloaded key and run:
+                </p>
                 <pre className="whitespace-pre-wrap break-all bg-muted p-3 text-xs leading-6">
                   {instructions.connect}
                 </pre>

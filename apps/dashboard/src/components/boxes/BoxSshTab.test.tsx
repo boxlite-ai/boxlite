@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
-import { Box, BoxState } from '@boxlite-ai/api-client'
+import { Box, BoxState, NetworkMode } from '@boxlite-ai/api-client'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { BoxSshTab } from './BoxSshTab'
 
@@ -10,11 +11,15 @@ const mocks = vi.hoisted(() => ({
   post: vi.fn(),
   delete: vi.fn(),
   generate: vi.fn(),
+  inbound: vi.fn(),
   organization: 'org-1',
   permitted: true,
 }))
 vi.mock('@/hooks/useApi', () => {
-  const api = { axiosInstance: { get: mocks.get, post: mocks.post, delete: mocks.delete } }
+  const api = {
+    axiosInstance: { get: mocks.get, post: mocks.post, delete: mocks.delete },
+    setBoxInboundMode: mocks.inbound,
+  }
   return { useApi: () => api }
 })
 vi.mock('@/hooks/useConfig', () => ({
@@ -46,6 +51,7 @@ const credentials = {
 let root: Root
 let host: HTMLDivElement
 let blobs: Blob[]
+let queryClient: QueryClient
 function button(label: string): HTMLButtonElement {
   const found = [...document.querySelectorAll('button')].find((b) => b.textContent === label)
   if (!found) throw new Error(`Missing button ${label}`)
@@ -54,8 +60,14 @@ function button(label: string): HTMLButtonElement {
 async function click(label: string) {
   await act(async () => button(label).click())
 }
-async function render(state = BoxState.STARTED, id = 'box-1', refreshSignal = 0) {
-  await act(async () => root.render(<BoxSshTab box={{ id, state } as Box} refreshSignal={refreshSignal} />))
+async function render(state = BoxState.STARTED, id = 'box-1', refreshSignal = 0, inbound = NetworkMode.ENABLED) {
+  await act(async () =>
+    root.render(
+      <QueryClientProvider client={queryClient}>
+        <BoxSshTab box={{ id, state, network: { inbound: { mode: inbound } } } as Box} refreshSignal={refreshSignal} />
+      </QueryClientProvider>,
+    ),
+  )
 }
 function deferred<T>() {
   let resolve!: (value: T) => void
@@ -75,6 +87,8 @@ beforeEach(() => {
   mocks.post.mockResolvedValue({ data: status })
   mocks.delete.mockResolvedValue({ data: { ...status, enabled: false } })
   mocks.generate.mockResolvedValue(credentials)
+  mocks.inbound.mockReset().mockResolvedValue(undefined)
+  queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })
   blobs = []
   vi.stubGlobal(
     'URL',
@@ -92,12 +106,53 @@ beforeEach(() => {
 })
 afterEach(() => {
   act(() => root.unmount())
+  queryClient.clear()
   host.remove()
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
 })
 
 describe('BoxSshTab', () => {
+  it('enables disabled inbound before configuring SSH', async () => {
+    const inbound = deferred<void>()
+    mocks.inbound.mockReturnValueOnce(inbound.promise)
+    await render(BoxState.STARTED, 'box-1', 0, NetworkMode.DISABLED)
+    await click('Setup')
+    expect(mocks.inbound).not.toHaveBeenCalled()
+    await click('Set up SSH')
+    expect(mocks.inbound).toHaveBeenCalledWith('org-1', 'box-1', NetworkMode.ENABLED)
+    expect(mocks.post).not.toHaveBeenCalled()
+    await act(async () => inbound.resolve())
+    expect(mocks.post).toHaveBeenCalledWith('v1/org-1/boxes/box-1/ssh', credentials.config, { timeout: 30_000 })
+    expect(document.body.textContent).toContain('SSH connection details')
+  })
+
+  it('keeps the key and stops setup when enabling inbound fails', async () => {
+    mocks.inbound.mockRejectedValueOnce(new Error('private server details'))
+    await render(BoxState.STARTED, 'box-1', 0, NetworkMode.DISABLED)
+    await click('Setup')
+    await click('Set up SSH')
+    expect(document.body.textContent).toContain('Unable to enable inbound access')
+    expect(document.body.textContent).not.toContain('private server details')
+    expect(mocks.post).not.toHaveBeenCalled()
+    expect(button('Download private key')).toBeDefined()
+    await click('Set up SSH')
+    expect(mocks.generate).toHaveBeenCalledOnce()
+    expect(mocks.post).toHaveBeenCalledOnce()
+  })
+
+  it('does not configure SSH if the box stops while enabling inbound', async () => {
+    const inbound = deferred<void>()
+    mocks.inbound.mockReturnValueOnce(inbound.promise)
+    await render(BoxState.STARTED, 'box-1', 0, NetworkMode.DISABLED)
+    await click('Setup')
+    await click('Set up SSH')
+    expect(mocks.inbound).toHaveBeenCalledOnce()
+    await render(BoxState.STOPPED)
+    await act(async () => inbound.resolve())
+    expect(mocks.post).not.toHaveBeenCalled()
+  })
+
   it('does not read SSH without a selected organization', async () => {
     mocks.organization = ''
     await render()
@@ -186,8 +241,14 @@ describe('BoxSshTab', () => {
     expect(mocks.post).not.toHaveBeenCalled()
     await click('Set up SSH')
     expect(mocks.post).toHaveBeenCalledWith('v1/org-1/boxes/box-1/ssh', credentials.config, { timeout: 30_000 })
+    expect(mocks.inbound).not.toHaveBeenCalled()
     expect(document.body.textContent).toContain('box@boxlite-box-1')
     expect(document.body.textContent).toContain('ssh --proxy --')
+    expect(document.body.textContent).toContain('--context=YOUR_CONTEXT')
+    expect(document.body.textContent).toContain('boxlite context ls')
+    expect(document.body.textContent).toContain('Replace YOUR_CONTEXT')
+    expect(document.body.textContent).toContain('https://api.example.test')
+    expect(document.body.textContent).not.toContain('--url')
     expect(document.body.textContent).not.toContain('another terminal')
     expect(document.body.textContent).toContain('SHA256:test-fingerprint')
     const download = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (
@@ -211,7 +272,7 @@ describe('BoxSshTab', () => {
   })
 
   it('enables and disables saved configuration without generating keys', async () => {
-    await render()
+    await render(BoxState.STARTED, 'box-1', 0, NetworkMode.DISABLED)
     await click('Enable')
     expect(mocks.post).toHaveBeenCalledWith('v1/org-1/boxes/box-1/ssh/enable', undefined, { timeout: 30_000 })
     expect(host.textContent).toContain('SSH enabled')
@@ -219,6 +280,7 @@ describe('BoxSshTab', () => {
     expect(mocks.delete).toHaveBeenCalledWith('v1/org-1/boxes/box-1/ssh', { timeout: 30_000 })
     expect(host.textContent).toContain('SSH disabled')
     expect(mocks.generate).not.toHaveBeenCalled()
+    expect(mocks.inbound).not.toHaveBeenCalled()
   })
 
   it('keeps credentials on failure for a manual retry and does not render server secrets', async () => {

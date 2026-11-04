@@ -129,13 +129,13 @@ export function sshConnectionInstructions(apiUrl: string, organizationId: string
   }
   const url = new URL(apiUrl, window.location.origin)
   if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) throw new Error('Invalid API URL')
-  const cli = `boxlite --url=${quote(url.href.replace(/\/$/, ''))} --path-prefix=${quote(organizationId)}`
+  const cli = `boxlite --context=YOUR_CONTEXT --path-prefix=${quote(organizationId)}`
   // OpenSSH expands percent tokens before passing ProxyCommand to a shell.
   const proxy = `${cli} ssh --proxy -- ${quote(boxId)}`.replace(/%/g, '%%')
   const filename = `boxlite-${boxId}-key`
   return {
     filename,
-    login: `boxlite auth login --url ${quote(url.href.replace(/\/$/, ''))}`,
+    endpoint: url.href.replace(/\/$/, ''),
     connect: `chmod 600 ${filename}\nssh -i ./${filename} -o IdentitiesOnly=yes -o ${quote(`ProxyCommand=${proxy}`)} box@boxlite-${boxId}`,
   }
 }

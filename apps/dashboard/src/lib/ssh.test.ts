@@ -105,7 +105,7 @@ describe('SSH connection instructions', () => {
       expect(result.error).toBeUndefined()
       expect(result.status).not.toBe(0) // The recording proxy cannot finish an SSH handshake.
       expect(readFileSync(record, 'utf8').split('\0').filter(Boolean)).toEqual([
-        `--url=${apiUrl}`,
+        '--context=YOUR_CONTEXT',
         `--path-prefix=${organization}`,
         'ssh',
         '--proxy',
@@ -118,6 +118,7 @@ describe('SSH connection instructions', () => {
     expect(commands.connect).toContain(`chmod 600 ${commands.filename}`)
     expect(commands.connect).toContain('box@boxlite-box-1')
     expect(commands.connect).not.toContain('--listen')
+    expect(commands.connect).not.toContain('--url')
     expect(commands.connect).not.toContain('StrictHostKeyChecking=no')
   })
 
