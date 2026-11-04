@@ -512,7 +512,8 @@ its console, unmaps scratch, verifies unchanged capacity/live data,
 reallocates/touches, and unbinds/rebinds the driver. The host samples `mincore`
 residency across the run against those markers and counts used completions; the
 test needs no device or kernel capability of its own. Reporting-off and
-`init_on_free=1` runs must retain freed backing without any report completion.
+`init_on_free=1` runs must complete no report; host residency is logged, not
+asserted, because the kernel can reclaim or swap anonymous RAM independently.
 Security settings are not weakened, and watchdog expiry fails. Sampled
 residency is not the exact-PFN evidence a per-page protocol would give, and
 three-platform real-guest reporting/reclaim/reuse/lifetime evidence is still

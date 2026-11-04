@@ -260,12 +260,9 @@ fn run_reporting_guest(enabled: bool, init_on_free: bool) {
             "real used-ring completions after munmap"
         );
     } else {
-        assert!(
-            evidence.resident_freed > evidence.resident_touched * 3 / 4,
-            "without reporting the freed backing stays resident: {} of {}",
-            evidence.resident_freed,
-            evidence.resident_touched
-        );
+        // Host reclaim or swap can evict guest RAM independently of the
+        // device, so residency is logged, not asserted. The device must still
+        // complete no report when reporting is disabled.
         assert_eq!(evidence.reports, 0);
     }
     eprintln!(
@@ -287,7 +284,7 @@ fn balloon_reporting_reclaims_and_reuses_guest_memory() {
 
 #[test]
 #[ignore = "requires Linux x86_64 KVM, reporting VMM_KERNEL and VMM_BALLOON_INIT"]
-fn balloon_without_reporting_keeps_freed_backing_resident() {
+fn balloon_without_reporting_produces_no_report_completions() {
     run_reporting_guest(false, false);
 }
 
