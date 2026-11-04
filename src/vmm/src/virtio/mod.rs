@@ -22,6 +22,8 @@ use std::{fmt, sync::Arc};
 use self::queue::VirtQueues;
 use crate::{events::EventSender, memory::GuestMemoryMmap};
 
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+pub(crate) mod fs;
 pub(crate) mod interrupt;
 pub(crate) mod mmio;
 pub(crate) mod queue;
