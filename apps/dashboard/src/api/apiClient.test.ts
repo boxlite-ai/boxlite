@@ -3,6 +3,45 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const config = { apiUrl: 'http://api.test/api' } as never
 
+describe('ApiClient domains', () => {
+  it('uses authenticated organization-scoped list and short-name claim requests', async () => {
+    const requests: any[] = []
+    const result = { hostname: 'my-app.apps.test', url: 'https://my-app.apps.test', target: null }
+    const api = await makeClient(vi.fn(), 201, result, requests)
+    await api.listDomains('org/one')
+    await expect(api.claimDomain('org/one', 'my-app')).resolves.toEqual(result)
+    expect(
+      requests.map(({ method, url, baseURL, data, headers }) => ({
+        method,
+        url,
+        baseURL,
+        data,
+        auth: headers.Authorization,
+      })),
+    ).toEqual([
+      {
+        method: 'get',
+        url: '/v1/org%2Fone/domains',
+        baseURL: 'http://api.test/api',
+        data: undefined,
+        auth: 'Bearer tok',
+      },
+      {
+        method: 'post',
+        url: '/v1/org%2Fone/domains',
+        baseURL: 'http://api.test/api',
+        data: JSON.stringify({ name: 'my-app' }),
+        auth: 'Bearer tok',
+      },
+    ])
+  })
+
+  it('keeps claim refusal messages through the shared interceptor', async () => {
+    const api = await makeClient(vi.fn(), 409, { message: 'my-app.apps.test is not available.' })
+    await expect(api.claimDomain('org-1', 'my-app')).rejects.toThrow('my-app.apps.test is not available.')
+  })
+})
+
 // Fresh module per test so the module-level `isHandlingUnauthorized` guard
 // doesn't leak across cases. A custom axios adapter makes every request resolve
 // to `status` with an empty body, so the response interceptor sees the 401.

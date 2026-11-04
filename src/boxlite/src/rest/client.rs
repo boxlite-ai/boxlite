@@ -293,6 +293,15 @@ impl ApiClient {
         self.send_no_content(builder).await
     }
 
+    pub async fn put<B: Serialize, T: DeserializeOwned>(
+        &self,
+        path: &str,
+        body: &B,
+    ) -> BoxliteResult<T> {
+        let builder = self.http.put(self.url(path)).json(body);
+        self.send_json(builder).await
+    }
+
     pub async fn put_no_content<B: Serialize>(&self, path: &str, body: &B) -> BoxliteResult<()> {
         self.send_no_content(self.http.put(self.url(path)).json(body))
             .await
@@ -601,6 +610,15 @@ impl ApiClient {
             )
         })?;
         ensure_capability("per-exec user", capabilities.exec_user_enabled)
+    }
+
+    pub async fn require_privileged_enabled(&self) -> BoxliteResult<()> {
+        // Recheck before every create: cached support may outlive a rollback.
+        let config = self.fetch_config().await?;
+        ensure_capability(
+            "guest privileged",
+            config.capabilities.and_then(|caps| caps.privileged_enabled),
+        )
     }
 
     pub async fn require_clone_enabled(&self) -> BoxliteResult<()> {

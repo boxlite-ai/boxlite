@@ -89,6 +89,7 @@ pub(crate) struct ServerConfig {
 #[allow(dead_code)] // Constructed via serde::Deserialize
 #[derive(Debug, Deserialize, Clone, Default)]
 pub(crate) struct ServerCapabilities {
+    pub privileged_enabled: Option<bool>,
     pub linux_capabilities_enabled: Option<bool>,
     pub snapshots_enabled: Option<bool>,
     pub clone_enabled: Option<bool>,
@@ -213,7 +214,7 @@ impl CreateBoxRequest {
             volumes,
             detach: Some(options.detach),
             tty: options.tty.then_some(true),
-            // Only the capability policy crosses the wire. Like `security`,
+            // Guest privilege and capability policy cross the wire. Like `security`,
             // `advanced.network_rate_limit` is deliberately absent: shaping is
             // done by the local gvproxy bridge and a remote server enforces its
             // own network policy, so there is no field for a client to set. The
@@ -223,11 +224,11 @@ impl CreateBoxRequest {
             // an explicitly empty policy is still explicit, and collapsing it
             // into the same shape as "never touched" would leave the server
             // unable to tell the two apart.
-            advanced: options.advanced.capabilities().map(|capabilities| {
-                CreateBoxAdvancedOptions {
-                    capabilities: capabilities.clone(),
-                }
-            }),
+            advanced: (options.advanced.privileged || options.advanced.capabilities().is_some())
+                .then(|| CreateBoxAdvancedOptions {
+                    privileged: options.advanced.privileged,
+                    capabilities: options.advanced.capabilities().cloned(),
+                }),
             // The deprecated remove-on-stop flag was never applied by the cloud
             // control-plane mapper. Keep remote defaults unchanged and only send
             // the modern lifecycle fields when callers explicitly configure them.
@@ -240,7 +241,10 @@ impl CreateBoxRequest {
 
 #[derive(Debug, Serialize)]
 pub(crate) struct CreateBoxAdvancedOptions {
-    pub capabilities: ContainerCapabilities,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub privileged: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub capabilities: Option<ContainerCapabilities>,
 }
 
 /// A mount on the wire. Only managed volumes exist here — a REST server has no
@@ -385,6 +389,9 @@ pub(crate) struct BoxResponse {
     pub image: String,
     pub cpus: u8,
     pub memory_mib: u32,
+    /// The stored guest privilege mode, unknown when an older server omits it.
+    #[serde(default)]
+    pub privileged: Option<bool>,
     #[serde(default)]
     pub labels: HashMap<String, String>,
     /// Absent while the box's main command is still running. An older server
@@ -446,6 +453,7 @@ impl BoxResponse {
             image: self.image.clone(),
             cpus: self.cpus,
             memory_mib: self.memory_mib,
+            privileged: self.privileged,
             // Local host bindings never travel over REST, so a published
             // policy arrives with `published_ports: None`; a server that
             // predates the field leaves the whole thing unknown.
@@ -1111,8 +1119,9 @@ mod tests {
 
         let req = CreateBoxRequest::from_options(&opts, None);
         let advanced = req.advanced.as_ref().expect("custom policy is serialized");
-        assert_eq!(advanced.capabilities.add, ["SYS_ADMIN"]);
-        assert_eq!(advanced.capabilities.drop, ["CAP_NET_RAW"]);
+        let capabilities = advanced.capabilities.as_ref().unwrap();
+        assert_eq!(capabilities.add, ["SYS_ADMIN"]);
+        assert_eq!(capabilities.drop, ["CAP_NET_RAW"]);
 
         let json = serde_json::to_value(&req).expect("serialize create request");
         assert_eq!(
@@ -1410,6 +1419,7 @@ mod tests {
             image: "python:3.11".to_string(),
             cpus: 2,
             memory_mib: 512,
+            privileged: None,
             labels: HashMap::new(),
             exit_code: None,
             auto_stop: 1800,
@@ -1440,6 +1450,7 @@ mod tests {
             image: "python:3.11".to_string(),
             cpus: 2,
             memory_mib: 512,
+            privileged: None,
             labels: HashMap::new(),
             exit_code: None,
             auto_stop: 1800,
@@ -1477,6 +1488,7 @@ mod tests {
             image: "alpine:latest".to_string(),
             cpus: 1,
             memory_mib: 256,
+            privileged: None,
             labels: HashMap::new(),
             exit_code: None,
             auto_stop: 900,
@@ -1507,6 +1519,7 @@ mod tests {
             image: "alpine:latest".to_string(),
             cpus: 1,
             memory_mib: 256,
+            privileged: None,
             labels: HashMap::new(),
             exit_code: None,
             auto_stop: 900,
@@ -1582,6 +1595,7 @@ mod tests {
             image: "python:3.11".to_string(),
             cpus: 2,
             memory_mib: 512,
+            privileged: None,
             labels: HashMap::new(),
             exit_code: None,
             auto_stop: 900,

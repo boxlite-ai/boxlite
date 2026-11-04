@@ -30,6 +30,7 @@ import {
 } from '@boxlite-ai/api-client'
 import axios, { AxiosError, AxiosInstance } from 'axios'
 import { BoxliteError } from './errors'
+import type { DomainList, HeldDomain } from './domain-types'
 
 // A burst of in-flight requests can all 401 at once when the access token goes
 // invalid; this in-page guard ensures at most one re-login redirect per page
@@ -270,6 +271,14 @@ export class ApiClient {
     // state, not an error, while the redirect navigates the page away. Reached
     // only on a successfully-started re-auth.
     return new Promise<never>(() => {})
+  }
+
+  public async listDomains(organizationId: string): Promise<DomainList> {
+    return (await this.http.get(`/v1/${encodeURIComponent(organizationId)}/domains`, this.v1Config())).data
+  }
+
+  public async claimDomain(organizationId: string, name: string): Promise<HeldDomain> {
+    return (await this.http.post(`/v1/${encodeURIComponent(organizationId)}/domains`, { name }, this.v1Config())).data
   }
 
   /** Sets a box's inbound mode through the `/v1` route the CLI and SDKs use. */

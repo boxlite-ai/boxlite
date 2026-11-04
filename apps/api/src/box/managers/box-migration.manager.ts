@@ -254,6 +254,7 @@ export class BoxMigrationManager implements TrackableJobExecutions, OnApplicatio
         regions: [box.region],
         boxClass: box.class,
         excludedRunnerIds: [box.runnerId],
+        ...(box.privileged ? { requiresPrivileged: true } : {}),
       })
       return {
         runnerId: target.id,

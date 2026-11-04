@@ -708,6 +708,9 @@ const docTemplate = `{
                     "description": "Outbound network policy. outboundEnabled is required: a request without\nit is rejected rather than started with a guessed policy.",
                     "type": "boolean"
                 },
+                "privileged": {
+                    "type": "boolean"
+                },
                 "regionId": {
                     "type": "string"
                 },
@@ -841,6 +844,9 @@ const docTemplate = `{
                     "description": "Outbound network policy. outboundEnabled is required: a request without\nit is rejected rather than started with a guessed policy.",
                     "type": "boolean"
                 },
+                "privileged": {
+                    "type": "boolean"
+                },
                 "secrets": {
                     "type": "array",
                     "items": {
@@ -893,6 +899,9 @@ const docTemplate = `{
                     "items": {
                         "$ref": "#/definitions/RunnerServiceInfo"
                     }
+                },
+                "supportsPrivileged": {
+                    "type": "boolean"
                 }
             }
         },

@@ -47,6 +47,8 @@ type Box struct {
 	Memory float32 `json:"memory"`
 	// The disk quota for the box
 	Disk float32 `json:"disk"`
+	// Persisted guest privilege mode; absent when an older server does not report it
+	Privileged *bool `json:"privileged,omitempty"`
 	// The state of the box
 	State *BoxState `json:"state,omitempty"`
 	// The desired state of the box
@@ -442,6 +444,38 @@ func (o *Box) GetDiskOk() (*float32, bool) {
 // SetDisk sets field value
 func (o *Box) SetDisk(v float32) {
 	o.Disk = v
+}
+
+// GetPrivileged returns the Privileged field value if set, zero value otherwise.
+func (o *Box) GetPrivileged() bool {
+	if o == nil || IsNil(o.Privileged) {
+		var ret bool
+		return ret
+	}
+	return *o.Privileged
+}
+
+// GetPrivilegedOk returns a tuple with the Privileged field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+func (o *Box) GetPrivilegedOk() (*bool, bool) {
+	if o == nil || IsNil(o.Privileged) {
+		return nil, false
+	}
+	return o.Privileged, true
+}
+
+// HasPrivileged returns a boolean if a field has been set.
+func (o *Box) HasPrivileged() bool {
+	if o != nil && !IsNil(o.Privileged) {
+		return true
+	}
+
+	return false
+}
+
+// SetPrivileged gets a reference to the given bool and assigns it to the Privileged field.
+func (o *Box) SetPrivileged(v bool) {
+	o.Privileged = &v
 }
 
 // GetState returns the State field value if set, zero value otherwise.
@@ -1010,6 +1044,9 @@ func (o Box) ToMap() (map[string]interface{}, error) {
 	toSerialize["gpu"] = o.Gpu
 	toSerialize["memory"] = o.Memory
 	toSerialize["disk"] = o.Disk
+	if !IsNil(o.Privileged) {
+		toSerialize["privileged"] = o.Privileged
+	}
 	if !IsNil(o.State) {
 		toSerialize["state"] = o.State
 	}
@@ -1126,6 +1163,7 @@ func (o *Box) UnmarshalJSON(data []byte) (err error) {
 		delete(additionalProperties, "gpu")
 		delete(additionalProperties, "memory")
 		delete(additionalProperties, "disk")
+		delete(additionalProperties, "privileged")
 		delete(additionalProperties, "state")
 		delete(additionalProperties, "desiredState")
 		delete(additionalProperties, "errorReason")

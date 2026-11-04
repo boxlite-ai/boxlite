@@ -37,6 +37,7 @@ import { InjectRedis } from '@nestjs-modules/ioredis'
 import { CombinedAuthGuard } from '../../auth/combined-auth.guard'
 import { OrganizationUserService } from '../../organization/services/organization-user.service'
 import { TunnelService } from '../services/tunnel.service'
+import { DomainService } from '../services/domain.service'
 import { ProxyGuard } from '../guards/proxy.guard'
 import { OrganizationService } from '../../organization/services/organization.service'
 import { AUTO_RESUMABLE_STATES, BoxAutoResumeService } from '../services/box-auto-resume.service'
@@ -65,6 +66,7 @@ export class PreviewController {
     private readonly organizationService: OrganizationService,
     private readonly autoResume: BoxAutoResumeService,
     private readonly users: UserService,
+    private readonly domainService: DomainService,
   ) {}
 
   @Get(':boxId/tunnels/:port')
@@ -120,6 +122,25 @@ export class PreviewController {
     if (options.grant && !options.ticket) return { ticket: await this.tunnelService.issueHandoff(options.grant) }
     if (options.ticket && !options.grant) return { grant: await this.tunnelService.consumeHandoff(options.ticket) }
     throw new BadRequestException('Expected a grant or ticket')
+  }
+
+  // The proxy asks this for every request under the platform app domain. One
+  // answer carries the target and the same access verdict as the port check
+  // above, so the proxy need not ask twice; a 404 is an unknown, unbound or
+  // currently unreachable name, and the proxy must not fall back to anything.
+  @Get('domains/:hostname')
+  @ApiExcludeEndpoint()
+  @UseGuards(CombinedAuthGuard, ProxyGuard)
+  async resolveDomain(@Param('hostname') hostname: string): Promise<{ boxId: string; port: number }> {
+    const target = await this.domainService.resolve(hostname)
+    if (
+      !target ||
+      target.type !== 'box' ||
+      !(await this.tunnelService.isPublicAccessAllowed(target.box, target.port))
+    ) {
+      throw new NotFoundException('Domain not found')
+    }
+    return { boxId: target.box, port: target.port }
   }
 
   // The preview proxy calls this when the runner refuses a guest-port dial

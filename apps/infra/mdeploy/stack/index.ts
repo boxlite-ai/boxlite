@@ -28,13 +28,14 @@ import type { Cache, CacheProvider } from './cache.ts'
 import { CACHE_PASSWORD_VARIABLE, cacheEnvironment } from './cache.ts'
 import type { ClickHouse, ClickHouseMode, ClickHouseProvider } from './clickhouse.ts'
 import { CLICKHOUSE_PASSWORD_VARIABLE, clickHouseEnvironment } from './clickhouse.ts'
-import { DEFAULT_CLICKHOUSE_RETENTION_HOURS } from '../../shared/clickhouse-retention.ts'
+import { DEFAULT_CLICKHOUSE_RETENTION_HOURS } from './clickhouse-retention.ts'
 import type { Cluster, ClusterProvider, WorkloadHost } from './cluster.ts'
 import type { Collector, CollectorProvider } from './collector.ts'
 import { COLLECTOR_API_KEY_STORE_KEY, COLLECTOR_API_KEY_VARIABLE } from './collector.ts'
 import type { Database, DatabaseProvider } from './database.ts'
 import { DATABASE_PASSWORD_VARIABLE, databaseEnvironment } from './database.ts'
 import type { Edge, EdgeProvider } from './edge.ts'
+import type { UserDomain } from './hosts.ts'
 import type { Images, ImagesRequest } from './image.ts'
 import type { Mail, MailProvider } from './mail.ts'
 import { mailEnvironment } from './mail.ts'
@@ -59,7 +60,6 @@ import type { RunnerAssignment, RunnerProvider, RunnerSlot, Runners } from './ru
 import { API_RUNNER_TOKEN_VARIABLE } from './runners.ts'
 import type { Storage, StorageProvider } from './storage.ts'
 import type { DeployConfig } from '../src/config.ts'
-
 
 /**
  * The containerised workloads the cluster places. The runner is a machine and
@@ -106,6 +106,8 @@ export type StackInputs = {
   internetEgress: boolean
   /** The verified sender domain, or null for a stage that sends no mail. */
   senderDomain: string | null
+  /** `STACK_USER_DOMAIN` and its zone: users' named apps are `<name>.<domain>`, or null for none. */
+  userDomain: UserDomain | null
   /** What each runner installs, resolved before any host exists. */
   runnerBinary: import('./runners.ts').RunnerBinary
   /** The hosts to create, and the names the control plane registers them under. */
@@ -149,6 +151,12 @@ export type StackProviders = {
    */
   api: (input: { dependencies: ApiDependencies; network: Network }) => ApiProvider
   edge: (input: { host: WorkloadHost; network: Network; dependsOn: any[] }) => EdgeProvider
+  /**
+   * Whether this cloud's edge writes the user domain's wildcard record and
+   * certificate. Asked before the API is placed, because the API must not hand
+   * out `demo.<userDomain>` URLs on a cloud whose edge serves none of them.
+   */
+  servesUserDomain: () => boolean
   /**
    * No host, like the runner: on the cloud that deploys it this is a managed
    * service rather than a cluster task, so it takes its placement from the
@@ -409,6 +417,17 @@ export const deployStack = ({
   /** What the API writes into private refs, and what a runner presents its key to. */
   const registryProxyHost = registryProxy.active ? registryProxy.url.apply(registryProxyHostOf) : null
 
+  // One answer for the API, the proxy and the edge, so a domain's URL is
+  // minted, resolved and served under the same wildcard — or not offered at all.
+  // Refused rather than dropped on a cloud that cannot serve it: a stage that
+  // sets the domain expects its users' apps to answer there.
+  if (inputs.userDomain && !providers.servesUserDomain()) {
+    throw new Error(
+      `STACK_USER_DOMAIN is ${inputs.userDomain.domain}, and this cloud's edge serves no user domain; unset it`,
+    )
+  }
+  const platformDomain = inputs.userDomain?.domain ?? null
+
   const apiEnvironment = {
     ...inputs.apiEnvironment,
     // The first host's token, which is the one row the API seeds itself. Every
@@ -440,6 +459,10 @@ export const deployStack = ({
     PROXY_DOMAIN: inputs.proxyDomain,
     PROXY_PROTOCOL: inputs.proxyProtocol,
     PROXY_TEMPLATE_URL: inputs.proxyTemplateUrl,
+    // New domain requests need the wildcard served by the edge below.
+    // Without this suffix, claims are refused; bindings of already owned
+    // full hostnames still use the stored ownership record.
+    ...(platformDomain ? { PROXY_APP_DOMAIN: platformDomain } : {}),
     S3_DEFAULT_BUCKET: storage.name,
   }
   assertOneChannelPerName({
@@ -496,6 +519,7 @@ export const deployStack = ({
     OTEL_TRACING_ENABLED: 'true',
     ...inputs.proxyEnvironment,
     OTEL_EXPORTER_OTLP_ENDPOINT: collector.otlpUrl,
+    ...(platformDomain ? { PROXY_APP_DOMAIN: platformDomain } : {}),
   }
   assertOneChannelPerName({
     workload: 'proxy',
@@ -513,6 +537,7 @@ export const deployStack = ({
   })({
     image: imageFor(images, 'proxy'),
     domain: inputs.proxyDomain,
+    userDomain: inputs.userDomain,
     protocol: inputs.proxyProtocol,
     apiUrl: api.address,
     environment: proxyEnvironment,

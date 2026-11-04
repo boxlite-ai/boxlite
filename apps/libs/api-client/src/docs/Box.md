@@ -18,6 +18,7 @@ Name | Type | Description | Notes
 **gpu** | **number** | The GPU quota for the box | [default to undefined]
 **memory** | **number** | The memory quota for the box | [default to undefined]
 **disk** | **number** | The disk quota for the box | [default to undefined]
+**privileged** | **boolean** | Persisted guest privilege mode; absent when an older server does not report it | [optional] [default to undefined]
 **state** | [**BoxState**](BoxState.md) | The state of the box | [optional] [default to undefined]
 **desiredState** | [**BoxDesiredState**](BoxDesiredState.md) | The desired state of the box | [optional] [default to undefined]
 **errorReason** | **string** | The error reason of the box | [optional] [default to undefined]
@@ -55,6 +56,7 @@ const instance: Box = {
     gpu,
     memory,
     disk,
+    privileged,
     state,
     desiredState,
     errorReason,

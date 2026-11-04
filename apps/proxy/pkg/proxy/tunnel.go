@@ -10,6 +10,7 @@ import (
 	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -31,22 +32,8 @@ func (p *Proxy) handleTunnelConnect(writer http.ResponseWriter, request *http.Re
 		http.Error(writer, "CONNECT required", http.StatusMethodNotAllowed)
 		return
 	}
-	boxID, port, err := p.tunnelTarget(request)
-	if err != nil {
-		http.Error(writer, err.Error(), http.StatusBadRequest)
-		return
-	}
-	inboundEnabled, err := p.getBoxInboundEnabled(request.Context(), boxID)
-	if err != nil {
-		http.Error(writer, "box inbound mode unavailable", http.StatusBadGateway)
-		return
-	}
-	if !*inboundEnabled {
-		http.Error(writer, "box inbound access is disabled", http.StatusForbidden)
-		return
-	}
-	if authErr := p.authorizeTunnel(writer, request, boxID, port); authErr != nil {
-		http.Error(writer, authErr.message, authErr.status)
+	boxID, port, ok := p.admitTunnelConnect(writer, request)
+	if !ok {
 		return
 	}
 
@@ -76,6 +63,45 @@ func (p *Proxy) handleTunnelConnect(writer http.ResponseWriter, request *http.Re
 	if err := common_proxy.ProxyBidirectionalStream(request.Context(), clientConn, runnerConn); err != nil {
 		slog.WarnContext(request.Context(), "tunnel stream closed with error", "box", boxID, "port", port, "error", err)
 	}
+}
+
+// admitTunnelConnect names the box port a CONNECT may open, or writes the
+// refusal and reports false. A platform subdomain is resolved by the API,
+// whose answer already applies the inbound and declaration checks; the
+// legacy `<port>-<box>` authority runs them here.
+func (p *Proxy) admitTunnelConnect(writer http.ResponseWriter, request *http.Request) (string, uint16, bool) {
+	if hostname, isAppDomain := p.appDomainHost(request.Host); isAppDomain {
+		boxID, port, err := p.resolveAppDomain(request.Context(), hostname)
+		switch {
+		case errors.Is(err, errAppDomainNotFound):
+			http.Error(writer, "tunnel not found", http.StatusNotFound)
+			return "", 0, false
+		case err != nil:
+			http.Error(writer, "tunnel access unavailable", http.StatusBadGateway)
+			return "", 0, false
+		}
+		return boxID, port, true
+	}
+
+	boxID, port, err := p.tunnelTarget(request)
+	if err != nil {
+		http.Error(writer, err.Error(), http.StatusBadRequest)
+		return "", 0, false
+	}
+	inboundEnabled, err := p.getBoxInboundEnabled(request.Context(), boxID)
+	if err != nil {
+		http.Error(writer, "box inbound mode unavailable", http.StatusBadGateway)
+		return "", 0, false
+	}
+	if !*inboundEnabled {
+		http.Error(writer, "box inbound access is disabled", http.StatusForbidden)
+		return "", 0, false
+	}
+	if authErr := p.authorizeTunnel(writer, request, boxID, port); authErr != nil {
+		http.Error(writer, authErr.message, authErr.status)
+		return "", 0, false
+	}
+	return boxID, port, true
 }
 
 func (p *Proxy) tunnelTarget(request *http.Request) (string, uint16, error) {

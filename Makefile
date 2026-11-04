@@ -10,6 +10,7 @@ include make/changes.mk
 include make/test.mk
 include make/coverage.mk
 include make/quality.mk
+include make/acceptance.mk
 
 .DEFAULT_GOAL := help
 

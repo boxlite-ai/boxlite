@@ -321,6 +321,13 @@ export class AdminOrganizationDetailDto extends AdminOrganizationRegistrationDto
   @ApiProperty()
   name: string
 
+  @ApiPropertyOptional({
+    type: Boolean,
+    readOnly: true,
+    description: 'Stored organization suspension flag; does not evaluate suspendedUntil. Older servers may omit it.',
+  })
+  suspended?: boolean
+
   @ApiProperty({ type: AdminOrganizationMemberPageDto })
   members: AdminOrganizationMemberPageDto
 

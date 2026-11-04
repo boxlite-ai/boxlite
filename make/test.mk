@@ -3,6 +3,7 @@ PHONY_TARGETS += test\:integration\:vmm\:kvm test\:integration\:vmm\:elf test\:i
 PHONY_TARGETS += test\:integration\:vmm\:hvf _ensure-hvf
 PHONY_TARGETS += test\:apps\:runner
 PHONY_TARGETS += test\:apps\:proxy test\:apps\:dashboard
+PHONY_TARGETS += test\:apps\:mdeploy test\:e2e\:drivers
 PHONY_TARGETS += _local-registry
 
 # Mirrors GitHub Actions strategy.fail-fast. Default false: aggregator
@@ -23,6 +24,8 @@ export FILTER
 export NEXTEST_FILTER_EXPR
 
 # Shared by unit-test and coverage targets; CI uses nextest's bounded CI profile.
+# Scoped to the guest invocation; Cargo passes listing and test argv to this runner.
+GUEST_RUNNER_CONFIG = --config "target.'cfg(target_os = \"linux\")'.runner = [\"$(PROJECT_ROOT)/src/guest/src/service/ssh/tests/runner.sh\"]"
 NEXTEST_PROFILE_FLAG = $(if $(NEXTEST_PROFILE),--profile $(NEXTEST_PROFILE),)
 NEXTEST_FILTER   = $(if $(NEXTEST_FILTER_EXPR),-E '$(NEXTEST_FILTER_EXPR)',$(if $(FILTER),-E 'test(~$(FILTER))',))
 NEXTEST_CLI_FILTER = $(if $(NEXTEST_FILTER_EXPR),-E '$(NEXTEST_FILTER_EXPR)',$(if $(FILTER),-E 'test(~$(FILTER))',-E 'not binary(stress_disk)'))
@@ -334,7 +337,7 @@ test\:unit\:guest:
 	fi; \
 	echo "🧪 Running guest unit tests..."; \
 	if command -v cargo-nextest >/dev/null 2>&1; then \
-		cargo nextest run --no-tests=fail -p boxlite-guest; \
+		cargo nextest run $(GUEST_RUNNER_CONFIG) --no-tests=fail $(NEXTEST_PROFILE_FLAG) -p boxlite-guest $(NEXTEST_FILTER); \
 	else \
 		cargo test -p boxlite-guest --bins -- --test-threads=1 capabilit spec::tests sysctl::tests; \
 	fi
@@ -602,6 +605,10 @@ test\:apps\:infra: _ensure-infra-deps
 	@echo "🧪 Running infrastructure script tests..."
 	@cd apps/infra && npm test
 
+test\:apps\:mdeploy: _ensure-infra-deps
+	@cd apps/infra && npm run --silent typecheck:mdeploy
+	@cd apps/infra && npm run --silent test:mdeploy
+
 test\:apps\:infra-config: _ensure-apps-deps _ensure-infra-deps
 	@echo "🧪 Installing and type-checking the SST deployment config..."
 	@cd apps/infra && IAM_PERMISSIONS_BOUNDARY_STAGE=ci npm run sst -- install --stage ci
@@ -637,6 +644,10 @@ test\:rest\:e2e:
 
 test\:rest\:report:
 	@python3 scripts/test/rest/report.py
+
+# Validate acceptance-client invocation without a running cloud or VM.
+test\:e2e\:drivers:
+	@cargo test --locked -p boxlite-e2e-rust $(CARGOTEST_FILTER)
 
 # Installer-script smoke test: structural assertions on the rendered
 # install.sh (atomic replace, integrity envelope, pinned-install trust

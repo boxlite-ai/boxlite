@@ -97,5 +97,14 @@ configuration path; the caller must supply the required inputs.
 - [`stack/index.ts`](stack/index.ts): resource composition.
 - [`sst.config.ts`](sst.config.ts) / [`pulumi/program.ts`](pulumi/program.ts): engine entrypoints.
 
+[`stack/clickhouse-retention.ts`](stack/clickhouse-retention.ts) owns the shared retention default
+and hour validation for both clouds. The legacy deployment path imports it through
+`mdeploy/clickhouse-retention`; mdeploy's own modules use relative imports within the package.
+This keeps one retention rule without a dependency from mdeploy back into its enclosing infra project.
+The lint configuration permits eager imports of this entrypoint, which has no dependencies,
+while keeping mdeploy's CLI entrypoints lazy.
+The legacy key-policy contract scans this exported configuration reader alongside the legacy source roots,
+so moving the helper preserves its check against the shared store's allowlist.
+
 Run `make test:apps:infra` from the repository root for tooling checks. A passing local test or
 preview is not live rollout proof; follow the [deployment verification](../docs/deployment.md#verify-the-result).

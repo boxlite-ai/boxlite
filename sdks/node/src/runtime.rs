@@ -5,6 +5,7 @@ use napi::bindgen_prelude::*;
 use napi_derive::napi;
 
 use crate::box_handle::JsBox;
+use crate::domains::JsDomainHandle;
 use crate::images::JsImageHandle;
 use crate::info::JsBoxInfo;
 use crate::metrics::JsRuntimeMetrics;
@@ -297,6 +298,15 @@ impl JsBoxlite {
     pub fn volumes(&self) -> Result<JsVolumeHandle> {
         let handle = self.runtime.volumes().map_err(map_err)?;
         Ok(JsVolumeHandle {
+            handle: Arc::new(handle),
+        })
+    }
+
+    /// The organization's domains (REST runtimes only).
+    #[napi(getter)]
+    pub fn domains(&self) -> Result<JsDomainHandle> {
+        let handle = self.runtime.domains().map_err(map_err)?;
+        Ok(JsDomainHandle {
             handle: Arc::new(handle),
         })
     }

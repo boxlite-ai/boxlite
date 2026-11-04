@@ -300,6 +300,10 @@ export class RunnerService {
       runnerFilter.class = params.boxClass
     }
 
+    if (params.requiresPrivileged) {
+      runnerFilter.supportsPrivileged = true
+    }
+
     const runners = await this.runnerRepository.find({
       where: runnerFilter,
     })
@@ -362,8 +366,12 @@ export class RunnerService {
       diskGiB?: number
     },
     appVersion?: string,
+    supportsPrivileged?: boolean,
+    context?: { signal?: AbortSignal; infoFailed?: boolean },
   ): Promise<void> {
     const runner = await this.findOne(runnerId)
+    // A timed-out attempt can resume here after its retry has committed.
+    context?.signal?.throwIfAborted()
     if (!runner) {
       this.logger.error(`Runner ${runnerId} not found when trying to update health`)
       return
@@ -377,6 +385,10 @@ export class RunnerService {
     const updateData: Partial<Runner> = {
       state: RunnerState.READY,
       lastChecked: new Date(),
+    }
+
+    if (!context?.infoFailed) {
+      updateData.supportsPrivileged = supportsPrivileged === true
     }
 
     if (domain) {
@@ -538,9 +550,11 @@ export class RunnerService {
                   await runnerAdapter.healthCheck(abortController.signal)
 
                   let runnerInfo: RunnerInfo | undefined
+                  let runnerInfoFailed = false
                   try {
                     runnerInfo = await runnerAdapter.runnerInfo(abortController.signal)
                   } catch (e) {
+                    runnerInfoFailed = true
                     this.logger.warn(`Failed to get runner info for runner ${runner.id}: ${e.message}`)
                   }
 
@@ -552,6 +566,8 @@ export class RunnerService {
                     runnerInfo?.serviceHealth,
                     runnerInfo?.metrics,
                     runnerInfo?.appVersion,
+                    runnerInfo?.supportsPrivileged,
+                    { signal: abortController.signal, infoFailed: runnerInfoFailed },
                   )
                 })(),
                 new Promise((_, reject) => {
@@ -981,6 +997,7 @@ export class GetRunnerParams {
   boxClass?: BoxClass
   excludedRunnerIds?: string[]
   availabilityScoreThreshold?: number
+  requiresPrivileged?: boolean
 }
 
 interface AvailabilityScoreParams {

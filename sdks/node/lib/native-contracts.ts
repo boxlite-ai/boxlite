@@ -309,6 +309,8 @@ export interface JsContainerCapabilities {
 }
 
 export interface JsAdvancedBoxOptions {
+  /** Guest privilege; does not relax the runner's sandbox. */
+  privileged?: boolean;
   capabilities?: JsContainerCapabilities;
 }
 
@@ -454,6 +456,7 @@ export interface JsBoxInfo {
   image: string;
   cpus: number;
   memoryMib: number;
+  privileged?: boolean;
   network: JsNetworkInfo | null;
   autoStop: number;
   autoDelete: number;
@@ -565,7 +568,7 @@ export interface JsSshAccount {
   ca?: JsSshCaConfig;
 }
 
-/** Complete guest SSH configuration. Keys are never persisted by the runtime. */
+/** Complete guest SSH configuration; credentials persist on the container disk. */
 export interface JsSshConfig {
   listenAddress: string;
   hostPrivateKey: string;
@@ -611,6 +614,51 @@ export interface JsNetworkHandle {
   ): Promise<NativeBoxTunnel>;
   /** Revoke the tunnel for a service port; open connections stay open. */
   revokeTunnel(port: number): Promise<void>;
+}
+
+/**
+ * A Box port or a reserved App reference. App binding is not yet supported.
+ * `box` is a box id or name when binding, the id when read.
+ */
+export type DomainTarget =
+  { type: "box"; box: string; port: number } | { type: "app"; app: string };
+
+/** One domain the organization holds and what it routes to. */
+export interface Domain {
+  hostname: string;
+  url: string;
+  /** Null while the domain is held but unbound. */
+  target: DomainTarget | null;
+}
+
+/** Every domain the organization holds, with the allowance they count against. */
+export interface DomainList {
+  domains: Domain[];
+  limit: number;
+  used: number;
+  remaining: number;
+  /** The shortest platform name a new claim may use. */
+  minLength: number;
+}
+
+/**
+ * Bind and unbind require an owned full hostname; request names in Dashboard > Domains.
+ */
+export interface DomainHandle {
+  /** Every held domain, unbound ones included, with the allowance. */
+  list(): Promise<DomainList>;
+  /**
+   * Route `domain` to `target`, requiring ownership; request names in Dashboard > Domains first. A domain bound elsewhere
+   * in the organization moves; other domains on the target port stay. The
+   * port is not made public: the domain answers once its tunnel is declared.
+   */
+  bind(domain: string, target: DomainTarget): Promise<Domain>;
+  /**
+   * Stop routing a full hostname, keeping it for the organization. Safe to repeat.
+   *
+   * @throws A native BoxLite `notFound` error for a domain the organization does not hold.
+   */
+  unbind(domain: string): Promise<void>;
 }
 
 export type SocketAddress =
@@ -707,6 +755,12 @@ export interface JsBoxlite {
   metrics(): Promise<JsRuntimeMetrics>;
   readonly images: ImageHandle;
   readonly volumes: VolumeHandle;
+  /**
+   * The organization's domains.
+   *
+   * @throws `unsupported` on a local runtime, which publishes nothing.
+   */
+  readonly domains: DomainHandle;
   /**
    * The server's registry logins.
    *

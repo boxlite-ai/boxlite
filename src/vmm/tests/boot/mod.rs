@@ -346,7 +346,7 @@ fn linux_vm(config: &VmConfig, deliver_irqs: bool, console: Console) -> LinuxVm 
             zero_page = Some(ram.memory().read_obj(address).unwrap());
             Ok(setup.boot_regs)
         },
-        |chipset| add_legacy_devices(chipset, writer),
+        |chipset, _| add_legacy_devices(chipset, writer),
     )
     .expect("create the KVM VM");
     LinuxVm {

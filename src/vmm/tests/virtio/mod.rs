@@ -22,9 +22,9 @@ use crate::{
     memory::GuestMemoryMmap,
     virtio::{
         ActivationContext, DeviceError, DeviceEvent, DeviceSnapshot, DeviceSpec, EventError,
-        EventRegistrar, EventSource, FeatureError, MAX_CONFIG_LEN, MAX_QUEUES, RestoreContext,
-        SnapshotError, SnapshotSupport, SourceId, VirtioDevice, VirtioInterrupt, Waker,
-        queue::VirtQueues,
+        EventRegistrar, EventSource, FeatureError, MAX_CONFIG_LEN, MAX_QUEUES, NEEDS_RESET,
+        RestoreContext, SnapshotError, SnapshotSupport, SourceId, VirtioDevice, VirtioInterrupt,
+        Waker, queue::VirtQueues,
     },
 };
 
@@ -136,24 +136,22 @@ impl VirtioInterrupt for TestInterrupt {
     fn set_device_status(&self, status: u8) {
         self.status.store(status, Ordering::SeqCst);
     }
+
+    fn set_needs_reset(&self) {
+        self.status.fetch_or(NEEDS_RESET, Ordering::SeqCst);
+    }
 }
 
 #[derive(Default)]
 struct TestRegistrar {
-    events: Mutex<Vec<DeviceEvent>>,
     sources: Mutex<Vec<SourceId>>,
     next: AtomicU32,
 }
 
 impl EventRegistrar for TestRegistrar {
-    fn register(
-        &self,
-        event: DeviceEvent,
-        mut source: Box<dyn EventSource>,
-    ) -> Result<SourceId, EventError> {
+    fn register(&self, mut source: Box<dyn EventSource>) -> Result<SourceId, EventError> {
         let _ = source.as_source();
         let id = SourceId(self.next.fetch_add(1, Ordering::SeqCst));
-        self.events.lock().unwrap().push(event);
         self.sources.lock().unwrap().push(id);
         Ok(id)
     }
@@ -290,11 +288,7 @@ fn activation_takes_the_context_and_reset_clears_it() {
     assert_eq!(ctx.interrupt.config_generation(), 0);
     ctx.interrupt.set_device_status(0x08);
     assert_eq!(ctx.interrupt.device_status(), 0x08);
-    assert!(
-        ctx.events
-            .register(DeviceEvent::BackendReady(SourceId(0)), Box::new(TestSource))
-            .is_ok()
-    );
+    assert!(ctx.events.register(Box::new(TestSource)).is_ok());
     (ctx.waker)();
     assert!(!ctx.sender.is_stopping());
 
@@ -332,16 +326,10 @@ fn the_activation_context_registers_deregisters_and_wakes() {
         counter.fetch_add(1, Ordering::SeqCst);
     });
     let ctx = activation_with(registrar.clone(), control);
-    let id = ctx
-        .events
-        .register(DeviceEvent::BackendReady(SourceId(9)), Box::new(TestSource))
-        .unwrap();
+    let id = ctx.events.register(Box::new(TestSource)).unwrap();
     (ctx.waker)();
     assert_eq!(calls.load(Ordering::SeqCst), 1);
-    assert_eq!(
-        *registrar.events.lock().unwrap(),
-        vec![DeviceEvent::BackendReady(SourceId(9))]
-    );
+    assert_eq!(*registrar.sources.lock().unwrap(), vec![id]);
     ctx.events.deregister(id);
     assert!(registrar.sources.lock().unwrap().is_empty());
 }
@@ -401,7 +389,14 @@ fn snapshot_and_event_errors_name_their_cause() {
         SnapshotError::Unsupported.to_string(),
         "the device does not support snapshots"
     );
-    assert_eq!(EventError::Closed.to_string(), "the event worker is closed");
+    assert_eq!(
+        EventError::Closed.to_string(),
+        "the worker generation is closed"
+    );
+    assert_eq!(
+        EventError::Register(io::ErrorKind::PermissionDenied).to_string(),
+        "the poller refused the source: permission denied"
+    );
 }
 
 #[path = "queue.rs"]

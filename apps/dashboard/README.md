@@ -355,3 +355,16 @@ values; failures show a quiet inline notice. Normal background refreshes show
 no toast or loading lock. The API's 30-second grant cache still applies, followed
 by up to one polling interval and request latency before an open dialog updates.
 See [Cloud sandbox sizes](../../docs/guides/resource-limits.md#cloud-sandbox-sizes).
+
+## Domains
+
+**Domains** is a primary navigation page alongside Images and Volumes. It lists
+the selected organization's full hostnames and Box/port, App, or unbound targets.
+Use **Request domain** to enter a short name and preview the full hostname; a
+successful request holds the name without binding it. Quota and Box write
+permission apply. Bind acquired full hostnames through the CLI or SDK; binding
+does not request names, and App binding remains reserved. Unbinding retains
+ownership and consumes the same quota slot.
+
+Run `make test:apps:dashboard` for page/client tests and
+`make build:apps:dashboard` for the production build and type check.

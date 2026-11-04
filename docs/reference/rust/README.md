@@ -321,8 +321,9 @@ These types are exported directly from `boxlite`, independently of protobuf:
 | `SshCaConfig` | `public_key: String`, `principal: String` |
 | `SshStatus` | `enabled: bool`, `generation: u64`, `listen_address: String`, `host_public_key: String`, `host_key_fingerprint: String` |
 
-Configuration fields are explicit; the runtime neither generates keys nor stores
-configuration nor publishes ports. All types are `Clone + Debug + Send + Sync`;
+Configuration fields are explicit; the guest persists credentials on the container
+disk, while the runtime neither generates keys nor publishes ports. All types are
+`Clone + Debug + Send + Sync`;
 configuration Debug output redacts credentials, and status supports `PartialEq + Eq`.
 The configuration types implement `Deserialize` but not `Serialize`;
 `SshStatus` implements `Serialize` + `Deserialize`. Unknown fields are refused in
@@ -572,6 +573,7 @@ pub struct BoxState {
 | Tunnel | `async fn tunnel(&self, target: SocketAddr, options: TunnelOptions) -> BoxliteResult<BoxTunnel>` | Prepare a one-shot tunnel to a TCP service; `target` must be localhost (`127.0.0.1:3000`) or the guest IP for now. `TunnelOptions::default()` is public, `TunnelOptions { is_public: false }` requests a private cloud tunnel |
 | Token | `BoxTunnel::token(&self) -> Option<&str>` | Full on creation, masked on later preparations; `is_public()` reports the mode |
 | Revoke | `async fn revoke_tunnel(&self, port: u16) -> BoxliteResult<()>` | Withdraw the port's tunnel; a no-op on a local box |
+| Domains | `BoxliteRuntime::domains(&self) -> BoxliteResult<DomainHandle>` | `list().await -> DomainList` returns full `hostname` values, no short `name`, and quota fields (`limit`/`used`/`remaining`/`min_length`). `target` is `None` while unbound. `bind(domain, &DomainTarget::Box { box_ref, port }).await` requires an owned full hostname; request new names in Dashboard > Domains first; `unbind(hostname).await` requires the full hostname and retains ownership. `DomainTarget::App { app_ref }` is reserved; App binding is rejected. REST only; see [Domains](../../concepts/networking.md#domains). |
 | Forward | `async fn BoxTunnel::forward(self, listen: SocketAddress) -> BoxliteResult<TunnelForwarder>` | Consume the tunnel into a TCP or Unix listener |
 | Inspect | `BoxTunnel::uri(&self) -> Option<&str>` | Read the prepared public URL; `None` for a local box |
 | Descriptor | `BoxConnection::raw_fd(&self) -> Option<RawFd>` | Borrowed fd; `None` for a remotely served connection |

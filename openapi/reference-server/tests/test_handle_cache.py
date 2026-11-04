@@ -101,11 +101,12 @@ def _make_box_info(box_id: str, *, name: str = "test-box", status: str = "create
     return SimpleNamespace(
         id=box_id,
         name=name,
-        state=SimpleNamespace(status=status, pid=12345),
+        state=SimpleNamespace(status=status, pid=12345, exit_code=None),
         created_at="2026-02-22T00:00:00+00:00",
         image="alpine:latest",
         cpus=2,
         memory_mib=512,
+        privileged=None,
     )
 
 
@@ -127,6 +128,20 @@ class _DummyRequest:
 
 
 class HandleCacheTests(unittest.IsolatedAsyncioTestCase):
+    def test_box_metadata_reports_known_privilege_and_omits_unknown(self) -> None:
+        """The response preserves the native metadata's privilege knowledge."""
+        for privileged in (False, True, None):
+            with self.subTest(privileged=privileged):
+                info = _make_box_info("box-privilege")
+                info.privileged = privileged
+
+                response = SERVER.box_info_to_dict(info)
+
+                if privileged is None:
+                    self.assertNotIn("privileged", response)
+                else:
+                    self.assertIs(response["privileged"], privileged)
+
     async def asyncSetUp(self) -> None:
         SERVER.state.runtime = None
         SERVER.state.server_config = None
@@ -271,7 +286,9 @@ class HandleCacheTests(unittest.IsolatedAsyncioTestCase):
             add=["SYS_ADMIN"],
             drop=["CAP_NET_RAW"],
         )
-        advanced_constructor.assert_called_once_with(capabilities=capabilities)
+        advanced_constructor.assert_called_once_with(
+            capabilities=capabilities, privileged=False
+        )
         constructor.assert_called_once_with(
             image="alpine:latest",
             advanced=advanced,

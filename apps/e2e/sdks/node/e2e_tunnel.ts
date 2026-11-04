@@ -69,6 +69,16 @@ async function ready(box: SimpleBox, port: number, marker: string): Promise<Buff
   }
 }
 
+async function removeCreatedBoxes(runtime: ReturnType<typeof JsBoxlite.rest>, boxes: SimpleBox[]): Promise<void> {
+  // Wait for every removal before the caller closes the runtime.
+  const results = await Promise.allSettled(
+    boxes.map(async (created) => {
+      if (created.id) await runtime.remove(created.id, true)
+    }),
+  )
+  for (const result of results) if (result.status === 'rejected') throw result.reason
+}
+
 async function main(): Promise<void> {
   const scenario = env('BOXLITE_E2E_TUNNEL_CASE', 'transport')
   assert(['transport', 'stopped', 'half-close', 'tls-shutdown', 'private', 'network'].includes(scenario))
@@ -238,13 +248,7 @@ async function main(): Promise<void> {
     console.log(`TUNNEL_CASE=${scenario}:ok`)
   } finally {
     try {
-      // All removals run even if one fails; a cleanup error still fails the case.
-      const results = await Promise.allSettled(
-        boxes.map(async (created) => {
-          if (created.id) await runtime.remove(created.id, true)
-        }),
-      )
-      for (const result of results) if (result.status === 'rejected') throw result.reason
+      await removeCreatedBoxes(runtime, boxes)
     } finally {
       runtime.close()
     }
