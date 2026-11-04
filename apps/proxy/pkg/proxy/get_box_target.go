@@ -53,7 +53,7 @@ func (p *Proxy) GetProxyTarget(ctx *gin.Context) (*common_proxy.RequestTarget, e
 	// which port it routes to, and its answer already applies the tunnel,
 	// inbound and box-state checks below. Nothing here signs a user in.
 	if hostname, ok := p.appDomainHost(ctx.Request.Host); ok {
-		boxId, targetPort, err := p.resolveAppDomain(ctx.Request.Context(), hostname)
+		target, err := p.resolveAppDomain(ctx.Request.Context(), hostname)
 		if errors.Is(err, errAppDomainNotFound) {
 			ctx.Error(common_errors.NewNotFoundError(err))
 			return nil, err
@@ -62,12 +62,15 @@ func (p *Proxy) GetProxyTarget(ctx *gin.Context) (*common_proxy.RequestTarget, e
 			ctx.Error(common_errors.NewCustomError(http.StatusBadGateway, err.Error(), "BAD_GATEWAY"))
 			return nil, err
 		}
+		if target.Type == "app" {
+			return p.appGatewayTarget(ctx, target.EnvironmentID, targetPath)
+		}
 		// Named domains admit only public tunnels. Strip the same platform
 		// credentials as the generated public URL before reaching the guest.
 		ctx.Request.Header.Del(platformAuthorizationHeader)
 		ctx.Request.Header.Del(accessTokenHeader)
 		stripPlatformCookies(ctx.Request)
-		return p.forwardToGuest(ctx, boxId, targetPort, targetPath)
+		return p.forwardToGuest(ctx, target.BoxID, target.Port, targetPath)
 	}
 
 	// Extract port and box ID from the host header.

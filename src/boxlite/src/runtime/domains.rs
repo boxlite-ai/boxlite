@@ -13,8 +13,7 @@ use crate::{BoxliteError, BoxliteResult};
 
 /// What a domain routes to. `type` on the wire names the variant.
 ///
-/// App references are reserved; current servers reject binding them until
-/// the App resource and its authorization are available.
+/// Hosted Cloud Apps accept an App reference and bind its main environment.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "lowercase")]
 #[non_exhaustive]

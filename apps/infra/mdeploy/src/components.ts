@@ -73,8 +73,9 @@ export const componentTargets = ({
   switch (components) {
     case 'api': {
       const api = existing(API, 'Api')
-      if (!api) throw fullDeployment()
-      return [api.urn, `${prefix}gcp:secretmanager/secretIamMember:SecretIamMember::ApiSecretAccess-*`]
+      const worker = existing(API, 'CloudAppWorker')
+      if (!api || !worker) throw fullDeployment()
+      return [api.urn, worker.urn, `${prefix}gcp:secretmanager/secretIamMember:SecretIamMember::ApiSecretAccess-*`]
     }
     case 'runner': {
       const fleet = runnerFleetFrom({ environment, app, stage })

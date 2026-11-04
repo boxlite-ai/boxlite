@@ -13,6 +13,14 @@ export const ORGANIZATION_ROLE_PERMISSIONS_GROUPS: { name: string; permissions: 
       permissions: [OrganizationRolePermissionsEnum.WRITE_BOXES, OrganizationRolePermissionsEnum.DELETE_BOXES],
     },
     {
+      name: 'Apps',
+      permissions: [
+        OrganizationRolePermissionsEnum.READ_APPS,
+        OrganizationRolePermissionsEnum.WRITE_APPS,
+        OrganizationRolePermissionsEnum.DELETE_APPS,
+      ],
+    },
+    {
       // Write creates and deletes aliases. An image enters the catalog by being used, so
       // creating a box records it without any of these.
       name: 'Images',

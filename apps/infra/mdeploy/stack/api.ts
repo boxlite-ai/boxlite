@@ -39,6 +39,7 @@ import type { WorkloadHost } from './cluster.ts'
  */
 export type ApiCapability =
   | { kind: 'list-own-bucket'; storage: Storage }
+  | { kind: 'manage-app-source'; storage: Storage }
   | { kind: 'manage-volume-buckets'; storage: Storage }
   | { kind: 'vend-volume-credentials'; storage: Storage }
   // Delete checkpoint archives; the runners write and read them.

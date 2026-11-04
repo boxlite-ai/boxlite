@@ -51,6 +51,7 @@ import { McpMetadataController } from './mcp-metadata.controller'
 import { setMcpOAuthScopes } from './mcp-oauth-policy'
 import { servedOperations } from './mcp-routes'
 import { McpTools } from './mcp-tools'
+import { cloudAppRequest } from '../cloud-app/cloud-app-http'
 
 // `McpDispatcher` routes attach upgrades through `BoxliteWsProxyService`, whose
 // proxy dependency ships ESM that Jest does not transform.
@@ -121,6 +122,18 @@ class EchoRoute {
   }
 }
 
+@Controller()
+class AppStreamRoute {
+  @Post([
+    'v1/:organizationId/apps',
+    'v1/:organizationId/apps/{*path}',
+    'internal/apps/ingress/:environmentId/{*path}',
+  ])
+  async receive(@Req() request: Request) {
+    return { body: await cloudAppRequest(request, 'https://app.example.test/webhook').text() }
+  }
+}
+
 @Controller('box')
 @UseGuards(CombinedAuthGuard)
 class AttachTicketRoute {
@@ -166,7 +179,7 @@ const failedAuth = { recordFailure: async () => undefined, incrementFailedAuth: 
 async function boot(): Promise<INestApplication> {
   const moduleRef = await Test.createTestingModule({
     imports: [DiscoveryModule, GlobalMiddlewareProbe],
-    controllers: [McpController, McpMetadataController, BoxRoute, AttachTicketRoute, EchoRoute],
+    controllers: [McpController, McpMetadataController, BoxRoute, AttachTicketRoute, EchoRoute, AppStreamRoute],
     providers: [
       { provide: MCP_STRATEGY, useValue: mcpStrategy },
       McpTools,
@@ -510,6 +523,18 @@ describe('/mcp', () => {
 
     expect(JSON.parse(small.text)).toEqual({ echoed: { hello: 'world' } })
     expect(large.status).toBe(413)
+  })
+
+  it.each([
+    '/api/v1/org/apps?source=dashboard',
+    '/api/v1/org/apps/shop/uploads',
+    '/api/internal/apps/ingress/env/webhook',
+  ])('preserves Cloud App JSON streams beyond the default parser limit through %s', async (path) => {
+    const payload = ` { "payload": "${'x'.repeat(200 * 1024)}" }\n`
+    const response = await post(app, path, payload, { 'content-type': 'application/json' })
+
+    expect(response.status).toBe(201)
+    expect(JSON.parse(response.text)).toEqual({ body: payload })
   })
 
   it('names no scope in the 401 challenge, so clients request scopes_supported', async () => {
