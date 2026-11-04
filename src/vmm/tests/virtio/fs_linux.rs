@@ -24,6 +24,32 @@ use crate::virtio::fs::linux::passthrough::PassthroughFs;
 
 static NEXT: AtomicU64 = AtomicU64::new(0);
 
+thread_local! {
+    static OMIT_MOUNT_ID: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+// Interpose only in the test binary, preserving real host results except for a
+// thread-local old-kernel response. Production still calls libc::statx directly.
+#[unsafe(export_name = "statx")]
+unsafe extern "C" fn host_statx(
+    dirfd: libc::c_int,
+    path: *const libc::c_char,
+    flags: libc::c_int,
+    mask: libc::c_uint,
+    out: *mut libc::statx,
+) -> libc::c_int {
+    // SAFETY: forward the libc ABI arguments unchanged to the Linux syscall.
+    let result = unsafe { libc::syscall(libc::SYS_statx, dirfd, path, flags, mask, out) };
+    if result == 0 && OMIT_MOUNT_ID.try_with(|omit| omit.get()).unwrap_or(false) {
+        // SAFETY: a successful statx initialized the caller-provided output.
+        unsafe {
+            (*out).stx_mask &= !libc::STATX_MNT_ID;
+            (*out).stx_mnt_id = 0;
+        }
+    }
+    result as libc::c_int
+}
+
 struct Directory(PathBuf);
 impl Directory {
     fn new() -> Self {
@@ -918,6 +944,143 @@ fn carried_linux_statfs_allocation_seek_copy_and_xattrs_use_real_files() {
         .unwrap();
     error(
         fs.getxattr(ctx(), source.inode, c"user.boxlite", 0),
+        libc::ENODATA,
+    );
+}
+
+#[test]
+fn missing_statx_mount_identity_rejects_construction_and_lookup() {
+    let directory = Directory::new();
+    fs::write(directory.0.join("file"), b"real host inode").unwrap();
+    let fs = directory.backend();
+    struct RestoreMask;
+    impl Drop for RestoreMask {
+        fn drop(&mut self) {
+            OMIT_MOUNT_ID.set(false);
+        }
+    }
+    let _restore = RestoreMask;
+    OMIT_MOUNT_ID.set(true);
+    let construction = PassthroughFs::new(directory.0.clone());
+    let lookup = fs.lookup(ctx(), 1, c"file");
+    OMIT_MOUNT_ID.set(false);
+    // The fault alters a real syscall result, not a test-built inode identity.
+    error(construction, libc::EOPNOTSUPP);
+    error(lookup, libc::EOPNOTSUPP);
+    let found = fs.lookup(ctx(), 1, c"file").unwrap();
+    assert_eq!(
+        found.attr.st_ino,
+        fs::metadata(directory.0.join("file")).unwrap().ino()
+    );
+}
+
+fn in_unprivileged_xattr_child() -> bool {
+    const CHILD: &str = "BOXLITE_FS_XATTR_ACCESS_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        let name = std::thread::current().name().unwrap().to_owned();
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", &name, "--nocapture"])
+            .env(CHILD, "1")
+            .status()
+            .unwrap();
+        assert!(status.success());
+        return false;
+    }
+    // Drop identity only in the isolated child so mode bits remain meaningful
+    // even under a root test runner; the parallel parent keeps its credentials.
+    if ctx().uid == 0 {
+        // SAFETY: the isolated child permanently drops its own privileges.
+        assert_eq!(unsafe { libc::setgroups(0, std::ptr::null()) }, 0);
+        // SAFETY: dropping gid before uid requires the child's current root UID.
+        assert_eq!(unsafe { libc::setgid(65534) }, 0);
+        // SAFETY: no fixture or backend exists before the permanent UID drop.
+        assert_eq!(unsafe { libc::setuid(65534) }, 0);
+    }
+    assert_ne!(ctx().uid, 0);
+    true
+}
+
+#[test]
+fn xattr_writes_on_write_only_files_preserve_reads_directories_and_symlink_safety() {
+    if !in_unprivileged_xattr_child() {
+        return;
+    }
+    let directory = Directory::new();
+    let file_path = directory.0.join("file");
+    fs::write(&file_path, b"unchanged").unwrap();
+    fs::create_dir(directory.0.join("dir")).unwrap();
+    fs::set_permissions(directory.0.join("dir"), fs::Permissions::from_mode(0o700)).unwrap();
+    std::os::unix::fs::symlink("file", directory.0.join("link")).unwrap();
+    let fs = directory.backend();
+    let inode = fs.lookup(ctx(), 1, c"file").unwrap().inode;
+    let dir = fs.lookup(ctx(), 1, c"dir").unwrap().inode;
+    let link = fs.lookup(ctx(), 1, c"link").unwrap().inode;
+    fs.setxattr(ctx(), inode, c"user.remove", b"old", 0)
+        .unwrap();
+    fs::set_permissions(&file_path, fs::Permissions::from_mode(0o200)).unwrap();
+    let set = fs.setxattr(ctx(), inode, c"user.write", b"new", 0);
+    let remove = fs.removexattr(ctx(), inode, c"user.remove");
+    error(fs.getxattr(ctx(), inode, c"user.write", 0), libc::EACCES);
+    error(fs.listxattr(ctx(), inode, 0), libc::EACCES);
+    // Both mutation paths run before the assertion, exposing either regression.
+    assert!(
+        set.is_ok() && remove.is_ok(),
+        "setxattr: {set:?}, removexattr: {remove:?}"
+    );
+    fs::set_permissions(&file_path, fs::Permissions::from_mode(0o400)).unwrap();
+    match fs.getxattr(ctx(), inode, c"user.write", 3).unwrap() {
+        GetxattrReply::Value(value) => assert_eq!(value, b"new"),
+        GetxattrReply::Count(_) => panic!("expected xattr bytes"),
+    }
+    error(fs.getxattr(ctx(), inode, c"user.remove", 0), libc::ENODATA);
+    fs.listxattr(ctx(), inode, 0).unwrap();
+    error(
+        fs.setxattr(ctx(), inode, c"user.write", b"denied", 0),
+        libc::EACCES,
+    );
+    fs.setxattr(ctx(), dir, c"user.directory", b"dir", 0)
+        .unwrap();
+    fs.removexattr(ctx(), dir, c"user.directory").unwrap();
+    error(
+        fs.setxattr(ctx(), link, c"user.write", b"bad", 0),
+        libc::EOPNOTSUPP,
+    );
+    error(fs.removexattr(ctx(), link, c"user.write"), libc::EOPNOTSUPP);
+    assert_eq!(fs::read(&file_path).unwrap(), b"unchanged");
+}
+
+#[test]
+fn xattr_writes_on_unreadable_directories_remain_bound_after_name_replacement() {
+    if !in_unprivileged_xattr_child() {
+        return;
+    }
+    let directory = Directory::new();
+    let original = directory.0.join("dir");
+    let renamed = directory.0.join("renamed");
+    fs::create_dir(&original).unwrap();
+    let fs = directory.backend();
+    let inode = fs.lookup(ctx(), 1, c"dir").unwrap().inode;
+    fs.setxattr(ctx(), inode, c"user.remove", b"old", 0)
+        .unwrap();
+    fs::rename(&original, &renamed).unwrap();
+    fs::create_dir(&original).unwrap();
+    let replacement = fs.lookup(ctx(), 1, c"dir").unwrap().inode;
+    fs::set_permissions(&renamed, fs::Permissions::from_mode(0o300)).unwrap();
+    let set = fs.setxattr(ctx(), inode, c"user.write", b"new", 0);
+    let remove = fs.removexattr(ctx(), inode, c"user.remove");
+    // Restore directory traversal for fixture cleanup even when assertions fail.
+    fs::set_permissions(&renamed, fs::Permissions::from_mode(0o700)).unwrap();
+    assert!(
+        set.is_ok() && remove.is_ok(),
+        "directory setxattr: {set:?}, removexattr: {remove:?}"
+    );
+    match fs.getxattr(ctx(), inode, c"user.write", 3).unwrap() {
+        GetxattrReply::Value(value) => assert_eq!(value, b"new"),
+        GetxattrReply::Count(_) => panic!("expected xattr bytes"),
+    }
+    error(fs.getxattr(ctx(), inode, c"user.remove", 0), libc::ENODATA);
+    error(
+        fs.getxattr(ctx(), replacement, c"user.write", 0),
         libc::ENODATA,
     );
 }

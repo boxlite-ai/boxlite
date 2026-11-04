@@ -22,6 +22,10 @@ import type { RunnerServiceHealth } from './runner-service-health';
 
 export interface RunnerHealthcheck {
     /**
+     * Runner preserves the guest privileged creation option
+     */
+    'supportsPrivileged'?: boolean;
+    /**
      * Runner metrics
      */
     'metrics'?: RunnerHealthMetrics;

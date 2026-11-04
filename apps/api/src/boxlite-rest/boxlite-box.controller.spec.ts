@@ -77,6 +77,18 @@ describe('BoxliteBoxController request validation', () => {
     expect(dto.tty).toBe(false)
   })
 
+  it('preserves guest privileged and rejects non-booleans', async () => {
+    await expect(pipe!.transform({ image: 'alpine:latest', advanced: null }, meta)).rejects.toThrow()
+    const dto = await pipe!.transform({ image: 'docker:27.5.1-dind', advanced: { privileged: true } }, meta)
+    expect(dto.advanced.privileged).toBe(true)
+    await expect(
+      pipe!.transform({ image: 'docker:27.5.1-dind', advanced: { privileged: 'true' } }, meta),
+    ).rejects.toThrow()
+    await expect(
+      pipe!.transform({ image: 'docker:27.5.1-dind', advanced: { privileged: null } }, meta),
+    ).rejects.toThrow()
+  })
+
   it('rejects an unrecognised field nested inside network', async () => {
     await expect(
       pipe!.transform({ image: 'alpine:latest', network: { outbound: { mode: 'enabled' }, bogus: 1 } }, meta),

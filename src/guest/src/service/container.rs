@@ -555,6 +555,27 @@ impl ContainerService for GuestServer {
                     .await
                     .insert(container_id.clone(), init_exit);
 
+                // Restore is owned by a task so cancellation cannot release its
+                // serialization lock while storage work is still running.
+                if let Some(guest) = self.ssh_manager.guest() {
+                    let root = shared_rootfs.clone();
+                    let result =
+                        tokio::spawn(async move { guest.ssh_manager.restore(root).await }).await;
+                    match result {
+                        Ok(Ok(())) => {}
+                        Ok(Err(error)) => tracing::warn!(
+                            %container_id,
+                            %error,
+                            "SSH state could not be restored"
+                        ),
+                        Err(error) => tracing::warn!(
+                            %container_id,
+                            reason = if error.is_panic() { "panic" } else { "cancelled" },
+                            "SSH state restore task failed"
+                        ),
+                    }
+                }
+
                 // Everything that must exist *before* the main command runs now
                 // does — the session is registered and the exit action is armed —
                 // and init has *not* run. The host calls Container.Start to run it,

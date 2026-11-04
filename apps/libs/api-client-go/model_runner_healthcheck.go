@@ -21,6 +21,8 @@ var _ MappedNullable = &RunnerHealthcheck{}
 
 // RunnerHealthcheck struct for RunnerHealthcheck
 type RunnerHealthcheck struct {
+	// Runner preserves the guest privileged creation option
+	SupportsPrivileged *bool `json:"supportsPrivileged,omitempty"`
 	// Runner metrics
 	Metrics *RunnerHealthMetrics `json:"metrics,omitempty"`
 	// Health status of individual services on the runner
@@ -54,6 +56,38 @@ func NewRunnerHealthcheck(appVersion string) *RunnerHealthcheck {
 func NewRunnerHealthcheckWithDefaults() *RunnerHealthcheck {
 	this := RunnerHealthcheck{}
 	return &this
+}
+
+// GetSupportsPrivileged returns the SupportsPrivileged field value if set, zero value otherwise.
+func (o *RunnerHealthcheck) GetSupportsPrivileged() bool {
+	if o == nil || IsNil(o.SupportsPrivileged) {
+		var ret bool
+		return ret
+	}
+	return *o.SupportsPrivileged
+}
+
+// GetSupportsPrivilegedOk returns a tuple with the SupportsPrivileged field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+func (o *RunnerHealthcheck) GetSupportsPrivilegedOk() (*bool, bool) {
+	if o == nil || IsNil(o.SupportsPrivileged) {
+		return nil, false
+	}
+	return o.SupportsPrivileged, true
+}
+
+// HasSupportsPrivileged returns a boolean if a field has been set.
+func (o *RunnerHealthcheck) HasSupportsPrivileged() bool {
+	if o != nil && !IsNil(o.SupportsPrivileged) {
+		return true
+	}
+
+	return false
+}
+
+// SetSupportsPrivileged gets a reference to the given bool and assigns it to the SupportsPrivileged field.
+func (o *RunnerHealthcheck) SetSupportsPrivileged(v bool) {
+	o.SupportsPrivileged = &v
 }
 
 // GetMetrics returns the Metrics field value if set, zero value otherwise.
@@ -250,6 +284,9 @@ func (o RunnerHealthcheck) MarshalJSON() ([]byte, error) {
 
 func (o RunnerHealthcheck) ToMap() (map[string]interface{}, error) {
 	toSerialize := map[string]interface{}{}
+	if !IsNil(o.SupportsPrivileged) {
+		toSerialize["supportsPrivileged"] = o.SupportsPrivileged
+	}
 	if !IsNil(o.Metrics) {
 		toSerialize["metrics"] = o.Metrics
 	}
@@ -309,6 +346,7 @@ func (o *RunnerHealthcheck) UnmarshalJSON(data []byte) (err error) {
 	additionalProperties := make(map[string]interface{})
 
 	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "supportsPrivileged")
 		delete(additionalProperties, "metrics")
 		delete(additionalProperties, "serviceHealth")
 		delete(additionalProperties, "domain")

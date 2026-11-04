@@ -24,6 +24,8 @@ export FILTER
 export NEXTEST_FILTER_EXPR
 
 # Shared by unit-test and coverage targets; CI uses nextest's bounded CI profile.
+# Scoped to the guest invocation; Cargo passes listing and test argv to this runner.
+GUEST_RUNNER_CONFIG = --config "target.'cfg(target_os = \"linux\")'.runner = [\"$(PROJECT_ROOT)/src/guest/src/service/ssh/tests/runner.sh\"]"
 NEXTEST_PROFILE_FLAG = $(if $(NEXTEST_PROFILE),--profile $(NEXTEST_PROFILE),)
 NEXTEST_FILTER   = $(if $(NEXTEST_FILTER_EXPR),-E '$(NEXTEST_FILTER_EXPR)',$(if $(FILTER),-E 'test(~$(FILTER))',))
 NEXTEST_CLI_FILTER = $(if $(NEXTEST_FILTER_EXPR),-E '$(NEXTEST_FILTER_EXPR)',$(if $(FILTER),-E 'test(~$(FILTER))',-E 'not binary(stress_disk)'))
@@ -335,7 +337,7 @@ test\:unit\:guest:
 	fi; \
 	echo "🧪 Running guest unit tests..."; \
 	if command -v cargo-nextest >/dev/null 2>&1; then \
-		cargo nextest run --no-tests=fail -p boxlite-guest; \
+		cargo nextest run $(GUEST_RUNNER_CONFIG) --no-tests=fail $(NEXTEST_PROFILE_FLAG) -p boxlite-guest $(NEXTEST_FILTER); \
 	else \
 		cargo test -p boxlite-guest --bins -- --test-threads=1 capabilit spec::tests sysctl::tests; \
 	fi

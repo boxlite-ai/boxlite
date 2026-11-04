@@ -43,7 +43,7 @@ their project; their revisions are pinned under [References](#references).
 | --- | --- | --- | --- |
 | Minimum macOS | 15, using HVF's in-kernel GICv3 | `hv_gic_create` and `hv_gic_set_spi` exist from macOS 15.0 (`hv_gic.h`), so no HVF or KVM host needs an emulated interrupt controller, and libkrun already prefers the in-kernel GIC wherever the host has it | macOS 12 with a userspace GICv3, which libkrun falls back to below macOS 15 (`libkrun/src/vmm/src/builder.rs:892-894`), at about 3–4 engineer-weeks in M1 |
 | SHARED share | virtio-fs in two stages: a FUSE server core for the SHARED share in M2, full passthrough for user volumes in M3 | Every box mounts the SHARED share, and guest file copy stages through it, so the first box already needs virtio-fs | Moving container layout and file copy off the SHARED share first, which changes the guest agent before the first box boots |
-| Threads | One thread per vCPU, worker threads per device, and a poller on the thread that calls `run()` | HVF binds a vCPU to the thread that created it, and per-device workers keep a slow device, such as a blocking virtio-fs request, from stalling the others | One event loop for all devices (Firecracker), where one slow device stalls the rest; an async runtime inside the jailed shim, which complicates per-thread seccomp |
+| Threads | One thread per vCPU, one virtio worker thread for every device, and a poller on the thread that calls `run()` | HVF binds a vCPU to the thread that created it. One worker thread runs every device, as Firecracker and libkrun do, and keeps the threads a per-thread seccomp profile must cover to a fixed few. A slow device, such as a blocking virtio-fs request, stalls the others; the `WorkerRuntime` seam lets per-device threads replace the shared one without changing the transport, the devices or `Vm` if M2 measurements show such stalls | Worker threads per device (Cloud Hypervisor, crosvm), kept behind that seam; an async runtime inside the jailed shim, which complicates per-thread seccomp |
 | Guest firmware | None: the VMM writes the kernel and its boot data into guest RAM and starts the boot vCPU at the kernel's entry point, as libkrun, Firecracker and crosvm do | The kernel ships with BoxLite as a file, so firmware and a boot loader would only add a step before it and a second guest program to ship, pin and trust | Firmware boot with edk2 UEFI or Rust Hypervisor Firmware, which cloud-hypervisor offers for disk images that carry their own boot loader (`README.md:114-118`, `:134-137`) and which only user-supplied OS images or Secure Boot would need |
 
 macOS 12–14 keep running boxes on libkrun until M5. When M5 removes libkrun,
@@ -56,7 +56,7 @@ boxlite-shim                    one jailed process per box
 └─ engine adapter (M2)          implements Vmm and VmmInstanceImpl (src/boxlite/src/vmm/engine.rs:51-104)
    └─ boxlite_vmm::Vm           new(config), then run() → VmExit or Error
       ├─ vcpuN threads          Vcpu::run → VcpuExit → chipset dispatch → run again
-      ├─ device workers         virtqueues and host backends: disk, fs, vsock, net, console
+      ├─ virtio-worker thread   every device's virtqueues and host backends: disk, fs, vsock, net, console
       ├─ the run() thread       one poller: stop requests, vCPU outcomes, device failures
       └─ boxlite_hypervisor     Vm and Vcpu traits; hvf (macOS arm64), kvm (Linux) or whp (Windows, M10)
 guest
@@ -124,11 +124,12 @@ HVF and KVM keep these rules; [M10](#room-for-later-milestones) covers WHP:
   - `map_memory` is `unsafe`. The caller keeps the host range mapped, backing
     nothing but that guest region, until both the guest mapping is gone
     (successful `unmap_memory`, or the VM and all its vCPUs dropped) and every
-    host-side user has stopped accessing the range. This includes device
-    workers and in-flight host I/O. A failed unmap can leave the guest mapping
-    in place, and on KVM a live vCPU keeps the VM's mappings alive. Shutdown
-    stops and joins the vCPU and device threads and drains or cancels host
-    I/O before releasing the allocation.
+    host-side user has stopped accessing the range. This includes the virtio
+    workers and in-flight host I/O. A failed unmap can leave the guest
+    mapping in place, and on KVM a live vCPU keeps the VM's mappings alive.
+    Shutdown joins the vCPU threads, shuts down the virtio workers and drains
+    or cancels host I/O before releasing the allocation; workers that do
+    not stop keep the allocation registered, and `GuestRam` leaks it.
   - The guest can change that memory at any time. VMM code uses guest-memory
     access primitives that preserve Rust's aliasing rules, not ordinary Rust
     references into guest-accessible memory. Conflicting host-side accesses
@@ -139,8 +140,8 @@ HVF and KVM keep these rules; [M10](#room-for-later-milestones) covers WHP:
     alone do not provide these guarantees.
   - Both ranges align to the host page size, which is 16 KiB on Apple silicon.
 - **Interrupt lines.** A line is a GIC SPI INTID (32 and up) on arm64 and a GSI
-  on x86_64. Devices set lines from their own threads. An edge-triggered
-  interrupt is a set followed by a clear.
+  on x86_64. Devices set lines from vCPU threads and the virtio worker
+  thread. An edge-triggered interrupt is a set followed by a clear.
 - **Errors.**
   - `boxlite_hypervisor::Error` names the failed operation and its resource
     (vCPU id, guest address, or line), and keeps the host cause as an
@@ -335,7 +336,7 @@ today.
   is counted, as on a PC bus with nothing driving it. A claimed read reaches
   the device zero-filled, so stale `kvm_run` bytes never leak to the guest.
 - **Locking.** A vCPU thread holds a device's lock for one register access and
-  hands anything that can block to the device's worker. A lock that an
+  hands queue work to the virtio workers through a kick. A lock that an
   earlier panic poisoned stops the next access too, as Firecracker and
   cloud-hypervisor do: the panic was a VMM bug, never guest input.
 
@@ -356,9 +357,12 @@ moves them into the `ActivationContext`. After DRIVER_OK every
 queue-configuration write is rejected and logged, as Firecracker does;
 QueueNotify, InterruptACK and Status stay live, and Status=0 is the only
 queue-reconfiguration path. Activation failure leaves DRIVER_OK unset, sets
-`DEVICE_NEEDS_RESET` and raises the configuration interrupt. A fatal device
-error sends `Event::DeviceFailed` through `Error::VirtioDevice` without
-stopping the worker synchronously.
+`DEVICE_NEEDS_RESET` and raises the configuration interrupt. The transport
+drives the device's slot in the virtio workers: it prepares a worker
+generation before activation, starts it after, kicks it on QueueNotify and
+stops it before Status=0 resets the device. A fatal device error sends
+`Event::DeviceFailed` through `Error::VirtioDevice` without stopping the
+worker slot synchronously.
 
 ### Interrupts
 
@@ -373,9 +377,10 @@ stopping the worker synchronously.
   always pulses; `InterruptACK` clears only the acked bits and pulses again
   while any remain, so an edge line does not lose a notification that arrived
   between Linux's read and acknowledgement.
-- **Raising an interrupt.** Devices raise their lines from their own threads
-  through the VMM's interrupt path, which calls `Vm::set_irq_line`. The host's
-  in-kernel controller wakes a vCPU waiting for it, so the VMM wakes no thread.
+- **Raising an interrupt.** Devices raise their lines from the virtio worker
+  thread through the VMM's interrupt path, which calls `Vm::set_irq_line`. The
+  host's in-kernel controller wakes a vCPU waiting for it, so the VMM wakes no
+  thread.
 - **Naming.** Devices hold an `IrqLine`, which is not `Clone`, so a device
   cannot share its line. `pulse` raises an edge and lowers a line a failed
   clear left high before raising again; `set_level` holds a level, skipping a
@@ -425,10 +430,15 @@ stopping the worker synchronously.
     (`target/arm/hvf/hvf.c:2273-2306`). libkrun, written for a userspace GIC,
     parks until the deadline in `CNTV_CVAL_EL0`
     (`libkrun/src/hvf/src/lib.rs:705-721`).
-- **Device workers.**
-  - Each virtio device owns its worker threads.
-  - A vCPU's queue-notify write wakes the worker through an event.
-  - The worker processes the queue and raises the device's interrupt itself.
+- **The virtio workers.**
+  - One `virtio-worker` thread, started at the first DRIVER_OK, runs every
+    virtio device's events, as Firecracker and libkrun run their devices.
+  - A vCPU's queue-notify write sets the queue's kick bit and wakes the
+    workers' `mio` poller; the thread calls the device's `on_event`, and
+    the device processes the queue and raises its interrupt itself.
+  - A slow `on_event` delays every other device. The `WorkerRuntime` seam
+    keeps per-device threads (Cloud Hypervisor, crosvm) a swap that leaves the
+    transport, the devices and `Vm` unchanged.
 - **The `run()` thread.**
   - It waits on one poller for stop requests, vCPU outcomes and device
     failures.
@@ -441,8 +451,8 @@ stopping the worker synchronously.
   checks the flag before each entry. The `run()` thread then:
   1. kicks and unparks every vCPU;
   2. joins the vCPU threads;
-  3. stops and joins the device workers;
-  4. returns.
+  3. shuts down the virtio workers and joins the thread;
+  4. finishes the console and returns.
 
 ## VM lifecycle and errors
 
@@ -640,7 +650,7 @@ The kernel then boots itself (Linux v6.12):
 
 - **M6, hot-plug mounts.**
   - One virtio-fs device serves every export, so a mount added at runtime is a
-    new entry in the fs worker's export table, sent to it as a message.
+    new entry in the fs device's export table, sent to it as a message.
   - No bus device, interrupt line or guest rescan is involved.
   - The jailed shim still needs access to the new host directory, for example
     as a descriptor passed from the runtime.

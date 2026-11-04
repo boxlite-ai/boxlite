@@ -81,10 +81,13 @@ impl VirtioInterrupt for Interrupt {
         0
     }
     fn set_device_status(&self, _: u8) {}
+    fn set_needs_reset(&self) {
+        panic!("direct device tests do not invoke the worker's status path")
+    }
 }
 struct Registrar;
 impl EventRegistrar for Registrar {
-    fn register(&self, _: DeviceEvent, _: Box<dyn EventSource>) -> Result<SourceId, EventError> {
+    fn register(&self, _: Box<dyn EventSource>) -> Result<SourceId, EventError> {
         panic!("synchronous fs must not register backend sources")
     }
     fn deregister(&self, _: SourceId) {
@@ -114,6 +117,9 @@ impl Guest {
         guest
     }
     fn activate(&mut self) {
+        self.activate_with_event_idx(false);
+    }
+    fn activate_with_event_idx(&mut self, event_idx: bool) {
         let queues = (0..2)
             .map(|index| {
                 let mut queue = Queue::new(SIZE).unwrap();
@@ -137,7 +143,7 @@ impl Guest {
                 queues: VirtQueues::prepare(
                     queues,
                     &[SIZE, SIZE],
-                    false,
+                    event_idx,
                     false,
                     Arc::clone(&self.memory),
                 )
@@ -788,4 +794,73 @@ fn fs_device_missing_reply_capacity_never_truncates_host_file() {
     assert_eq!(fs::read(directory.0.join("file")).unwrap(), b"retained");
     let used: u16 = guest.memory.read_obj(GuestAddress(USED[1] + 2)).unwrap();
     assert_eq!(u16::from_le(used), completed);
+}
+
+#[test]
+fn fs_device_notifies_prior_used_entries_before_a_later_descriptor_error() {
+    let directory = Directory::new();
+    for completed_first in [false, true] {
+        let mut guest = Guest::new(vec![directory.share("shared", false)]);
+        guest.init();
+        guest.interrupt.ack_interrupt(1);
+        // The second head points outside guest RAM. The first LOOKUP must
+        // already be in the used ring when request_buffers rejects it.
+        let input = payload(
+            InHeader {
+                len: (size_of::<InHeader>() + b"shared\0".len()) as u32,
+                opcode: Opcode::Lookup as u32,
+                unique: 99,
+                nodeid: ROOT_ID,
+                ..Default::default()
+            },
+            b"shared\0",
+        );
+        if completed_first {
+            guest.queue(1, 0, &input, 256);
+        }
+        guest.queue(1, 2, &input, 256);
+        guest
+            .memory
+            .write_obj(
+                Descriptor::new(0x30000, input.len() as u32, 1, 3),
+                GuestAddress(DESC[1] + 2 * 16),
+            )
+            .unwrap();
+        assert_eq!(
+            guest.device.on_event(DeviceEvent::QueueKick(1)),
+            Err(DeviceError::NeedsReset("virtio-fs request descriptors"))
+        );
+        let used: u16 = guest.memory.read_obj(GuestAddress(USED[1] + 2)).unwrap();
+        assert_eq!(u16::from_le(used), 1 + u16::from(completed_first));
+        assert_eq!(
+            guest.interrupt.interrupt_status(),
+            u8::from(completed_first)
+        );
+        if completed_first {
+            let len: u32 = guest.memory.read_obj(GuestAddress(USED[1] + 16)).unwrap();
+            assert_eq!(u32::from_le(len) as usize, 16 + size_of::<EntryOut>());
+            let reply: OutHeader = guest.memory.read_obj(GuestAddress(RESPONSE)).unwrap();
+            assert_eq!((reply.unique, reply.error), (99, 0));
+        }
+    }
+}
+
+#[test]
+fn fs_device_successful_batches_still_honor_interrupt_suppression() {
+    let directory = Directory::new();
+    let mut guest = Guest::new(vec![directory.share("shared", false)]);
+    guest.device.reset().unwrap();
+    guest.device.set_features(VIRTIO_F_EVENT_IDX).unwrap();
+    guest.activate_with_event_idx(true);
+    guest.init();
+    guest.interrupt.ack_interrupt(1);
+    // Suppress until used index 3; INIT consumed index 1, and the first
+    // LOOKUP only advances it to 2.
+    let used_event = GuestAddress(AVAIL[1] + 4 + u64::from(SIZE) * 2);
+    guest.memory.write_obj(3u16.to_le(), used_event).unwrap();
+    guest.lookup(ROOT_ID, b"shared\0");
+    assert_eq!(guest.interrupt.interrupt_status(), 0);
+    guest.memory.write_obj(2u16.to_le(), used_event).unwrap();
+    guest.lookup(ROOT_ID, b"shared\0");
+    assert_eq!(guest.interrupt.interrupt_status(), 1);
 }

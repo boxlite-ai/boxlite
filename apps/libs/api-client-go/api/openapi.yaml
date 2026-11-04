@@ -6465,6 +6465,7 @@ components:
         gpu: 0
         memory: 4
         disk: 10
+        privileged: true
         state: creating
         desiredState: destroyed
         errorReason: The box is not running
@@ -6547,6 +6548,10 @@ components:
           description: The disk quota for the box
           example: 10
           type: number
+        privileged:
+          description: Persisted guest privilege mode; absent when an older server
+            does not report it
+          type: boolean
         state:
           allOf:
           - $ref: "#/components/schemas/BoxState"
@@ -6664,6 +6669,7 @@ components:
           gpu: 0
           memory: 4
           disk: 10
+          privileged: true
           state: creating
           desiredState: destroyed
           errorReason: The box is not running
@@ -6702,6 +6708,7 @@ components:
           gpu: 0
           memory: 4
           disk: 10
+          privileged: true
           state: creating
           desiredState: destroyed
           errorReason: The box is not running
@@ -7311,6 +7318,7 @@ components:
       type: object
     RunnerHealthcheck:
       example:
+        supportsPrivileged: true
         metrics: ""
         serviceHealth:
         - serviceName: runner
@@ -7324,6 +7332,9 @@ components:
         apiUrl: http://api.boxlite.example.com:8080
         appVersion: v0.0.0-dev
       properties:
+        supportsPrivileged:
+          description: Runner preserves the guest privileged creation option
+          type: boolean
         metrics:
           allOf:
           - $ref: "#/components/schemas/RunnerHealthMetrics"

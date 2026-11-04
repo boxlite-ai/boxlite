@@ -14,7 +14,8 @@ use crate::{
     devices::console::ConsoleWorker,
     error::{Error, Result},
     events::{Event, EventLoop, EventSender},
-    memory::{GuestRam, ram_ranges},
+    memory::{GuestMemoryMmap, GuestRam, ram_ranges},
+    virtio::worker::VirtioWorkers,
 };
 
 /// The registers the boot vCPU starts with.
@@ -48,6 +49,19 @@ impl StopHandle {
     }
 }
 
+/// What device constructors get besides the chipset: the guest memory a
+/// virtio device's queues address, and the workers that run its events.
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "Only tests add a virtio device yet.")
+)]
+pub(crate) struct DeviceContext<'a> {
+    /// The guest RAM every host-side user shares.
+    pub(crate) memory: &'a Arc<GuestMemoryMmap>,
+    /// The VM's virtio workers.
+    pub(crate) workers: &'a VirtioWorkers,
+}
+
 /// Where a VM is in its life.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum VmState {
@@ -64,6 +78,9 @@ pub struct Vm<H: HostVm> {
     // unmaps the RAM anyway, since a device's interrupt line holds the host
     // VM longer.
     chipset: Chipset,
+    /// Runs every virtio device's events on one thread; `run` and `Drop` shut
+    /// them down before the RAM is released.
+    workers: VirtioWorkers,
     /// The worker writing the guest console to the caller's sink; `run`
     /// finishes it once every vCPU has stopped. The lock only makes `Vm`
     /// `Sync`; `run` reaches it through `&mut self`.
@@ -102,7 +119,7 @@ impl Vm<boxlite_hypervisor::KvmVm> {
             config,
             boxlite_hypervisor::KvmVm::new,
             |ram, config| crate::boot::prepare(ram, config).map(|setup| setup.boot_regs),
-            |chipset| add_legacy_devices(chipset, writer),
+            |chipset, _| add_legacy_devices(chipset, writer),
         )?;
         vm.console = Mutex::new(Some(worker));
         Ok(vm)
@@ -113,14 +130,15 @@ impl<H: HostVm> Vm<H> {
     /// Validates `config`, allocates the RAM layout, creates the host VM with
     /// `host_vm`, builds the chipset from the devices `devices` adds,
     /// registers every RAM range and writes the boot data with `boot`.
-    /// Invalid configuration fails before `host_vm` runs, and a chipset
-    /// conflict before any RAM is registered; tests pass a mock backend and
-    /// devices.
+    /// `devices` also gets the guest memory and the virtio workers through a
+    /// [`DeviceContext`]. Invalid configuration fails before `host_vm` runs,
+    /// and a chipset conflict before any RAM is registered; tests pass a mock
+    /// backend and devices.
     pub(crate) fn with_backend(
         config: VmConfig,
         host_vm: impl FnOnce() -> boxlite_hypervisor::Result<H>,
         boot: impl FnOnce(&GuestRam, &VmConfig) -> Result<BootRegisters>,
-        devices: impl FnOnce(&mut ChipsetBuilder) -> Result<()>,
+        devices: impl FnOnce(&mut ChipsetBuilder, DeviceContext<'_>) -> Result<()>,
     ) -> Result<Self>
     where
         H: 'static,
@@ -132,13 +150,23 @@ impl<H: HostVm> Vm<H> {
         // locals drop in reverse order, so the host VM goes before the RAM.
         let mut ram = GuestRam::new(&ram_ranges(config.memory_mib))?;
         let host_vm = Arc::new(host_vm()?);
+        // No worker thread starts before a virtio device activates, so an
+        // early return leaves nothing running.
+        let workers = VirtioWorkers::new(sender.clone()).map_err(Error::VirtioWorker)?;
         let mut chipset = ChipsetBuilder::new(host_vm.clone(), sender.clone());
-        devices(&mut chipset)?;
+        devices(
+            &mut chipset,
+            DeviceContext {
+                memory: ram.memory(),
+                workers: &workers,
+            },
+        )?;
         let chipset = chipset.build()?;
         ram.map(&*host_vm)?;
         // From here on `Drop` unmaps the RAM if a later step fails.
         let mut vm = Self {
             chipset,
+            workers,
             console: Mutex::new(None),
             events: Mutex::new(events),
             sender,
@@ -162,8 +190,10 @@ impl<H: HostVm> Vm<H> {
 #[cfg(target_arch = "x86_64")]
 impl<H: boxlite_hypervisor::X86Vm> Vm<H> {
     /// Runs every vCPU on its own thread until the first event ends the VM,
-    /// stops and joins them all, and returns how the VM ended. A VM runs
-    /// once; a second call fails with [`Error::AlreadyRan`].
+    /// stops and joins them all, shuts the virtio workers down, and returns
+    /// how the VM ended. Workers that do not shut down fail a run that
+    /// otherwise ended cleanly. A VM runs once; a second call fails with
+    /// [`Error::AlreadyRan`].
     pub fn run(&mut self) -> Result<VmExit> {
         use std::{sync::PoisonError, thread};
 
@@ -177,7 +207,7 @@ impl<H: boxlite_hypervisor::X86Vm> Vm<H> {
         self.state = VmState::Exited;
         let gate = StartGate::default();
         let kicks = Mutex::new(Vec::new());
-        let workers = Workers {
+        let vcpus = Workers {
             host_vm: &*self.host_vm,
             vcpu_count: self.vcpu_count,
             boot_regs: &self.boot_regs,
@@ -191,14 +221,14 @@ impl<H: boxlite_hypervisor::X86Vm> Vm<H> {
             .get_mut()
             .unwrap_or_else(PoisonError::into_inner);
         let event = thread::scope(|scope| {
-            for id in 0..workers.vcpu_count {
-                let workers = &workers;
+            for id in 0..vcpus.vcpu_count {
+                let vcpus = &vcpus;
                 let spawned = thread::Builder::new()
                     .name(format!("vcpu{id}"))
-                    .spawn_scoped(scope, move || workers.run(id));
+                    .spawn_scoped(scope, move || vcpus.run(id));
                 if let Err(source) = spawned {
                     let vcpu = id.into();
-                    workers
+                    vcpus
                         .sender
                         .send(Event::VcpuFailed(Error::SpawnVcpu { vcpu, source }));
                     gate.abort();
@@ -209,7 +239,7 @@ impl<H: boxlite_hypervisor::X86Vm> Vm<H> {
             if event.is_err() {
                 // Without an event the stop latch is still open; close it so
                 // the vCPUs stop and the scope can join them.
-                workers.sender.send(Event::StopRequested);
+                vcpus.sender.send(Event::StopRequested);
             }
             // Wake every vCPU still in the guest; a vCPU still being
             // configured sees the latch before its first entry.
@@ -220,6 +250,9 @@ impl<H: boxlite_hypervisor::X86Vm> Vm<H> {
             }
             event
         });
+        // No vCPU notifies a queue any more. Stop the virtio devices before the
+        // console finishes, so a device's last output still reaches the sink.
+        let shutdown = self.workers.shutdown();
         let console = self
             .console
             .get_mut()
@@ -231,18 +264,37 @@ impl<H: boxlite_hypervisor::X86Vm> Vm<H> {
                 tracing::warn!(dropped, "dropped guest console output");
             }
         }
-        match event.map_err(Error::EventLoop)? {
-            Some(Event::StopRequested) => Ok(VmExit::StopRequested),
-            Some(Event::GuestShutdown) => Ok(VmExit::GuestShutdown),
-            Some(Event::GuestReset) => Ok(VmExit::GuestReset),
-            Some(Event::VcpuFailed(error) | Event::DeviceFailed(error)) => Err(error),
-            None => unreachable!("a wait without a timeout returns an event"),
+        let ended = match event {
+            Ok(Some(Event::StopRequested)) => Ok(VmExit::StopRequested),
+            Ok(Some(Event::GuestShutdown)) => Ok(VmExit::GuestShutdown),
+            Ok(Some(Event::GuestReset)) => Ok(VmExit::GuestReset),
+            Ok(Some(Event::VcpuFailed(error) | Event::DeviceFailed(error))) => Err(error),
+            Ok(None) => unreachable!("a wait without a timeout returns an event"),
+            Err(error) => Err(Error::EventLoop(error)),
+        };
+        // The error that ended the VM stays the one the caller sees.
+        match (ended, shutdown) {
+            (ended, Ok(())) => ended,
+            (Ok(exit), Err(error)) => {
+                tracing::warn!(?exit, "the VM ended, but its virtio workers did not stop");
+                Err(error)
+            }
+            (Err(ended), Err(error)) => {
+                tracing::warn!(%error, "the virtio workers did not stop");
+                Err(ended)
+            }
         }
     }
 }
 
 impl<H: HostVm> Drop for Vm<H> {
     fn drop(&mut self) {
+        // A device event that outlived the shutdown may still touch guest
+        // RAM, so the registrations stay and `GuestRam` leaks the backing.
+        if let Err(error) = self.workers.shutdown() {
+            tracing::warn!(%error, "the virtio workers did not stop; leaking guest RAM");
+            return;
+        }
         // A VM that never ran still holds its registrations. Remove them so
         // the backing can be released; `GuestRam` leaks it on failure.
         let _ = self.ram.unmap(&*self.host_vm);

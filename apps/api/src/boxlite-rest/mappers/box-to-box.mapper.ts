@@ -26,6 +26,7 @@ export function boxToBoxResponse(box: BoxDto): BoxResponseDto {
     image: box.image || '',
     cpus: box.cpu || 1,
     memory_mib: (box.memory || 1) * 1024,
+    privileged: box.privileged,
     labels: box.labels || {},
     auto_stop: box.autoStop ?? DEFAULT_AUTO_STOP_SECONDS,
     auto_delete: box.autoDelete ?? AUTO_DELETE_DISABLED,
@@ -49,6 +50,7 @@ export function createBoxToCreateBox(dto: RestCreateBoxDto, target?: string): Cr
   // image's own USER directive stands.
   createDto.user = dto.user
   createDto.runAsUser = dto.user
+  createDto.privileged = dto.advanced?.privileged ?? false
   createDto.workingDir = dto.working_dir
   createDto.entrypoint = dto.entrypoint
   createDto.cmd = dto.cmd

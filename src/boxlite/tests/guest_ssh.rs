@@ -4,7 +4,7 @@ mod common;
 
 use boxlite::runtime::options::PortSpec;
 use boxlite::{BoxliteOptions, BoxliteRuntime, PortProtocol};
-use boxlite_shared::{SshClient, SshConfig, SshConfigureRequest, SshStatusRequest};
+use boxlite_shared::{SshClient, SshConfig, SshControlRequest};
 use std::path::Path;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
@@ -417,7 +417,8 @@ async fn guest_ssh_exec_inherits_container_default_user() {
         .join("sockets/box.sock");
     let mut ssh = SshClient::new(connect_rpc(socket).await.unwrap());
     let status = ssh
-        .configure(SshConfigureRequest {
+        .control(SshControlRequest {
+            enable: Some(true),
             config: Some(SshConfig {
                 listen_address: "0.0.0.0:2222".into(),
                 host_private_key: std::fs::read_to_string(&host_key).unwrap(),
@@ -630,7 +631,8 @@ async fn guest_ssh_accounts_share_identity_and_file_permissions() {
                 .collect(),
         };
         let status = ssh
-            .configure(SshConfigureRequest {
+            .control(SshControlRequest {
+                enable: Some(true),
                 config: Some(configuration.clone()),
             })
             .await
@@ -768,7 +770,8 @@ async fn guest_ssh_accounts_share_identity_and_file_permissions() {
         let mut invalid = configuration.clone();
         invalid.accounts.clear();
         let error = ssh
-            .configure(SshConfigureRequest {
+            .control(SshControlRequest {
+                enable: Some(true),
                 config: Some(invalid),
             })
             .await
@@ -776,7 +779,7 @@ async fn guest_ssh_accounts_share_identity_and_file_permissions() {
         assert_eq!(error.code(), tonic::Code::InvalidArgument);
         assert!(error.message().contains("accounts"));
         assert_eq!(
-            ssh.status(SshStatusRequest {})
+            ssh.control(SshControlRequest::default())
                 .await
                 .unwrap()
                 .into_inner()
@@ -795,7 +798,8 @@ async fn guest_ssh_accounts_share_identity_and_file_permissions() {
             .await;
         }
         configuration.accounts.remove(0);
-        ssh.configure(SshConfigureRequest {
+        ssh.control(SshControlRequest {
+            enable: Some(true),
             config: Some(configuration),
         })
         .await
@@ -865,7 +869,8 @@ async fn guest_ssh_rpc_exec_pty_sftp_reconnect_and_vm_restart() {
         .create(options, Some("guest-ssh".into()))
         .await
         .unwrap();
-    for _ in 0..2 {
+    let mut restored_fingerprint = None;
+    for iteration in 0..2 {
         sandbox.start().await.unwrap();
         let info = sandbox.info().await.unwrap();
         let socket = home
@@ -876,16 +881,26 @@ async fn guest_ssh_rpc_exec_pty_sftp_reconnect_and_vm_restart() {
         let channel = connect_rpc(socket.clone()).await.unwrap();
         let mut ssh = SshClient::new(channel);
         let disabled = ssh
-            .status(SshStatusRequest {})
+            .control(SshControlRequest::default())
             .await
             .unwrap()
             .into_inner()
             .status
             .unwrap();
-        assert!(!disabled.enabled, "new VM must start with SSH disabled");
-        assert_eq!(disabled.generation, 0);
+        if iteration == 0 {
+            assert!(!disabled.enabled);
+            assert_eq!(disabled.generation, 0);
+        } else {
+            assert!(disabled.enabled, "saved enabled state must be restored");
+            assert_eq!(
+                Some(&disabled.host_key_fingerprint),
+                restored_fingerprint.as_ref()
+            );
+            assert_eq!(disabled.generation, 1);
+        }
         let status = ssh
-            .configure(SshConfigureRequest {
+            .control(SshControlRequest {
+                enable: Some(true),
                 config: Some(config.clone()),
             })
             .await
@@ -893,6 +908,7 @@ async fn guest_ssh_rpc_exec_pty_sftp_reconnect_and_vm_restart() {
             .into_inner()
             .status
             .unwrap();
+        restored_fingerprint = Some(status.host_key_fingerprint.clone());
         drop(ssh);
         drop(sandbox);
         drop(runtime);
@@ -909,7 +925,7 @@ async fn guest_ssh_rpc_exec_pty_sftp_reconnect_and_vm_restart() {
         let channel = connect_rpc(socket).await.unwrap();
         let mut ssh = SshClient::new(channel);
         assert_eq!(
-            ssh.status(SshStatusRequest {})
+            ssh.control(SshControlRequest::default())
                 .await
                 .unwrap()
                 .into_inner()
@@ -1048,11 +1064,15 @@ async fn guest_ssh_rpc_exec_pty_sftp_reconnect_and_vm_restart() {
             clients.push(sftp);
             tokio::time::timeout(Duration::from_secs(15), async {
                 if disable {
-                    ssh.disable(boxlite_shared::SshDisableRequest {})
-                        .await
-                        .unwrap();
+                    ssh.control(SshControlRequest {
+                        enable: Some(false),
+                        config: None,
+                    })
+                    .await
+                    .unwrap();
                 } else {
-                    ssh.configure(SshConfigureRequest {
+                    ssh.control(SshControlRequest {
+                        enable: Some(true),
                         config: Some(config.clone()),
                     })
                     .await
@@ -1083,7 +1103,8 @@ async fn guest_ssh_rpc_exec_pty_sftp_reconnect_and_vm_restart() {
                 "SSH processes must be reaped before control returns"
             );
             if disable {
-                ssh.configure(SshConfigureRequest {
+                ssh.control(SshControlRequest {
+                    enable: Some(true),
                     config: Some(config.clone()),
                 })
                 .await
@@ -1109,7 +1130,7 @@ async fn guest_ssh_rpc_exec_pty_sftp_reconnect_and_vm_restart() {
 }
 
 /// Exercise the public API against a real SSH client: runtime reconnection preserves
-/// a live listener, invalid configuration leaves it intact, and a VM restart resets it.
+/// a live listener, invalid configuration leaves it intact, and a VM restart restores saved state.
 #[tokio::test]
 async fn runtime_ssh_control_and_recovered_handle() {
     let home = common::home::PerTestBoxHome::new();
@@ -1200,6 +1221,111 @@ async fn runtime_ssh_control_and_recovered_handle() {
         drop(sandbox);
         sandbox = runtime.get("runtime-ssh").await.unwrap().unwrap();
     }
+    runtime
+        .shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT))
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn guest_ssh_disk_copies_keep_switch_and_identity() {
+    use boxlite::{CloneOptions, ExportOptions, SnapshotOptions};
+    let home = common::home::PerTestBoxHome::new();
+    let keys = tempfile::TempDir::new_in("/tmp").unwrap();
+    let host_key = keys.path().join("host-copy");
+    let user_key = keys.path().join("user-copy");
+    generate_key(&host_key, "host").await;
+    generate_key(&user_key, "user").await;
+    let runtime = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+        ..Default::default()
+    })
+    .unwrap();
+    let mut options = common::alpine_opts();
+    options.detach = true;
+    let source = runtime
+        .create(options, Some("ssh-copy-source".into()))
+        .await
+        .unwrap();
+    source.start().await.unwrap();
+    let config = boxlite::SshConfig {
+        listen_address: "0.0.0.0:0".into(),
+        host_private_key: std::fs::read_to_string(&host_key).unwrap(),
+        accounts: vec![boxlite::SshAccount {
+            login: "root".into(),
+            authorized_keys: vec![std::fs::read_to_string(user_key.with_extension("pub")).unwrap()],
+            ca: None,
+        }],
+    };
+    let status = source.ssh().configure(config.clone()).await.unwrap();
+    let fingerprint = status.host_key_fingerprint;
+    source.stop().await.unwrap();
+    drop(source);
+    let source = runtime.get("ssh-copy-source").await.unwrap().unwrap();
+    source
+        .snapshots()
+        .create(SnapshotOptions::default(), "ssh-enabled")
+        .await
+        .unwrap();
+    let clone = source
+        .clone_box(CloneOptions::default(), Some("ssh-copy-clone".into()))
+        .await
+        .unwrap();
+    let archive_dir = tempfile::TempDir::new_in("/tmp").unwrap();
+    let archive = source
+        .export(ExportOptions::default(), archive_dir.path())
+        .await
+        .unwrap();
+    let imported = runtime
+        .import_box(archive, Some("ssh-copy-import".into()))
+        .await
+        .unwrap();
+    for copy in [clone, imported] {
+        copy.start().await.unwrap();
+        let restored = copy.ssh().status().await.unwrap();
+        assert!(restored.enabled);
+        assert_eq!(restored.host_key_fingerprint, fingerprint);
+        copy.stop().await.unwrap();
+    }
+    source.start().await.unwrap();
+    assert!(!source.ssh().disable().await.unwrap().enabled);
+    source.stop().await.unwrap();
+    drop(source);
+    let source = runtime.get("ssh-copy-source").await.unwrap().unwrap();
+    source.start().await.unwrap();
+    assert!(!source.ssh().status().await.unwrap().enabled);
+    assert_eq!(
+        source
+            .ssh()
+            .configure(config)
+            .await
+            .unwrap()
+            .host_key_fingerprint,
+        fingerprint
+    );
+    source.ssh().disable().await.unwrap();
+    source.stop().await.unwrap();
+    drop(source);
+    let source = runtime.get("ssh-copy-source").await.unwrap().unwrap();
+    source.snapshots().restore("ssh-enabled").await.unwrap();
+    source.start().await.unwrap();
+    let restored = source.ssh().status().await.unwrap();
+    assert!(restored.enabled);
+    assert_eq!(restored.host_key_fingerprint, fingerprint);
+    let corrupt = source
+        .exec(boxlite::BoxCommand::new("sh").args(["-c", "printf invalid > /etc/boxlite/ssh.cfg"]))
+        .await
+        .unwrap();
+    assert!(corrupt.wait().await.unwrap().success());
+    source.stop().await.unwrap();
+    drop(source);
+    let source = runtime.get("ssh-copy-source").await.unwrap().unwrap();
+    source.start().await.unwrap();
+    assert!(!source.ssh().status().await.unwrap().enabled);
+    let command = source.exec(boxlite::BoxCommand::new("true")).await.unwrap();
+    assert!(command.wait().await.unwrap().success());
+    source.stop().await.unwrap();
     runtime
         .shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT))
         .await

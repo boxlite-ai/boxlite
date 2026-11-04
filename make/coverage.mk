@@ -20,7 +20,7 @@ define run_unit_coverage
 	cargo llvm-cov nextest --no-report --no-tests=fail $(NEXTEST_PROFILE_FLAG) -p boxlite-cli --bins --test auth $(NEXTEST_FILTER) || rc=$$?; \
 	$(MAKE) coverage:bindings || rc=$$?; \
 	if [ "$$(uname)" = Linux ]; then \
-		cargo llvm-cov nextest --no-report --no-tests=fail $(NEXTEST_PROFILE_FLAG) -p boxlite-guest $(NEXTEST_FILTER) || rc=$$?; \
+		cargo llvm-cov nextest $(GUEST_RUNNER_CONFIG) --no-report --no-tests=fail $(NEXTEST_PROFILE_FLAG) -p boxlite-guest $(NEXTEST_FILTER) || rc=$$?; \
 	fi; \
 	exit $$rc
 endef

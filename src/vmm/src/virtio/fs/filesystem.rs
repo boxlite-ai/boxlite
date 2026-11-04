@@ -262,7 +262,10 @@ pub trait FileSystem {
     ///
     /// If this call is successful then the lookup count of the `Inode` associated with the returned
     /// `Entry` must be increased by 1.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Preserve the migrated FUSE operation signature"
+    )]
     fn mknod(
         &self,
         ctx: Context,
@@ -350,7 +353,10 @@ pub trait FileSystem {
         flags: u32,
     ) -> io::Result<(Option<Self::Handle>, OpenOptions)>;
 
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Preserve the migrated FUSE operation signature"
+    )]
     fn create(
         &self,
         ctx: Context,
@@ -378,7 +384,10 @@ pub trait FileSystem {
     /// zeroes. An exception to this rule is if the file was opened with the "direct I/O" option
     /// (`libc::O_DIRECT`), in which case the kernel will forward the return code from this method
     /// to the userspace application that made the system call.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Preserve the migrated FUSE operation signature"
+    )]
     fn read<W: io::Write + ZeroCopyWriter>(
         &self,
         ctx: Context,
@@ -410,7 +419,10 @@ pub trait FileSystem {
     /// case of error. An exception to this rule is if the file was opened with the "direct I/O"
     /// option (`libc::O_DIRECT`), in which case the kernel will forward the return code from this
     /// method to the userspace application that made the system call.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Preserve the migrated FUSE operation signature"
+    )]
     fn write<R: io::Read + ZeroCopyReader>(
         &self,
         ctx: Context,
@@ -467,7 +479,10 @@ pub trait FileSystem {
     /// `handle` are undefined.
     ///
     /// If `flush` is `true` then the contents of the file should also be flushed to disk.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Preserve the migrated FUSE operation signature"
+    )]
     fn release(
         &self,
         ctx: Context,
@@ -618,7 +633,10 @@ pub trait FileSystem {
         whence: u32,
     ) -> io::Result<u64>;
 
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Preserve the migrated FUSE operation signature"
+    )]
     fn copyfilerange(
         &self,
         ctx: Context,

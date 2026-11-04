@@ -309,6 +309,8 @@ export interface JsContainerCapabilities {
 }
 
 export interface JsAdvancedBoxOptions {
+  /** Guest privilege; does not relax the runner's sandbox. */
+  privileged?: boolean;
   capabilities?: JsContainerCapabilities;
 }
 
@@ -454,6 +456,7 @@ export interface JsBoxInfo {
   image: string;
   cpus: number;
   memoryMib: number;
+  privileged?: boolean;
   network: JsNetworkInfo | null;
   autoStop: number;
   autoDelete: number;
@@ -555,7 +558,7 @@ export interface JsSshAccount {
   ca?: JsSshCaConfig;
 }
 
-/** Complete guest SSH configuration. Keys are never persisted by the runtime. */
+/** Complete guest SSH configuration; credentials persist on the container disk. */
 export interface JsSshConfig {
   listenAddress: string;
   hostPrivateKey: string;

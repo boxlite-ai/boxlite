@@ -2011,6 +2011,10 @@ components:
               type: boolean
               description: Whether Docker-style Linux capability add/drop policy is supported
               example: true
+            privileged_enabled:
+              type: boolean
+              description: Whether privileged containers inside the guest are supported; host sandbox policy is unchanged
+              example: true
             max_cpus:
               type: integer
               description: Maximum allowed vCPUs per box
@@ -2309,6 +2313,12 @@ components:
           minimum: 128
           description: Allocated memory in MiB
           example: 512
+        privileged:
+          type: boolean
+          description: |
+            Persisted guest privilege mode. Older servers may omit this field;
+            absence means unknown, not false. Named get_or_create reuse requires
+            a reported mode equal to the requested advanced.privileged value.
         labels:
           type: object
           additionalProperties:
@@ -2524,6 +2534,10 @@ components:
       description: Expert-only container options.
       additionalProperties: false
       properties:
+        privileged:
+          type: boolean
+          default: false
+          description: Full guest capabilities and writable guest kernel mounts. Does not relax the host sandbox. Conflicts with explicit capabilities; requires privileged_enabled.
         capabilities:
           $ref: "#/components/schemas/CreateContainerCapabilities"
 
@@ -2962,7 +2976,7 @@ components:
 
     SshConfig:
       type: object
-      description: Complete replacement SSH configuration; never persisted or logged by the runtime.
+      description: Complete replacement SSH configuration; credentials persist on the container disk and are included in clones, snapshots, exports and imports. Key material is never logged.
       required: [listen_address, host_private_key, accounts]
       additionalProperties: false
       properties:

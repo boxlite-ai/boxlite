@@ -321,8 +321,9 @@ These types are exported directly from `boxlite`, independently of protobuf:
 | `SshCaConfig` | `public_key: String`, `principal: String` |
 | `SshStatus` | `enabled: bool`, `generation: u64`, `listen_address: String`, `host_public_key: String`, `host_key_fingerprint: String` |
 
-Configuration fields are explicit; the runtime neither generates keys nor stores
-configuration nor publishes ports. All types are `Clone + Debug + Send + Sync`;
+Configuration fields are explicit; the guest persists credentials on the container
+disk, while the runtime neither generates keys nor publishes ports. All types are
+`Clone + Debug + Send + Sync`;
 configuration Debug output redacts credentials, and status supports `PartialEq + Eq`.
 The configuration types implement `Deserialize` but not `Serialize`;
 `SshStatus` implements `Serialize` + `Deserialize`. Unknown fields are refused in

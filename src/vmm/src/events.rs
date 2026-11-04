@@ -48,8 +48,9 @@ pub(crate) enum Event {
 const WAKE: Token = Token(0);
 
 /// How often [`EventLoop::wait`] looks at the queue without a wake-up, so an
-/// event whose wake-up was lost ends the VM late instead of never.
-const RECHECK: Duration = Duration::from_secs(1);
+/// event whose wake-up was lost ends the VM late instead of never. The virtio
+/// workers recheck their kicks as often.
+pub(crate) const RECHECK: Duration = Duration::from_secs(1);
 
 /// Sends events to an [`EventLoop`] from any thread.
 #[derive(Clone, Debug)]

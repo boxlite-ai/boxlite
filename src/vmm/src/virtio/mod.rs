@@ -4,20 +4,22 @@
 //! The virtio device contract.
 //!
 //! One [`VirtioDevice`] owns a device's configuration, queues and backend.
-//! The transport calls the configuration methods synchronously; the worker
-//! calls [`VirtioDevice::on_event`]. The transport and worker share the device
-//! through `Arc<Mutex<dyn VirtioDevice>>`; the worker never holds the lock
-//! across blocking I/O.
+//! The transport calls the configuration methods synchronously; the virtio
+//! [`worker`] runtime calls [`VirtioDevice::on_event`]. The transport and the
+//! workers share the device through `Arc<Mutex<dyn VirtioDevice>>`. Every
+//! device's events run on the workers' single thread under the device lock, so
+//! `on_event` must not block: a blocking call stalls every other device.
 //!
 //! A device processes the descriptors available in its queues; the virtqueue
 //! size bounds one event call. The [`VirtQueues`] facade prepares and validates
 //! the queue set, tracks deferred chains and runs the notification drain;
-//! `save` and `restore` return [`SnapshotError::Unsupported`] until M8. The
-//! transport starts and stops the worker on DRIVER_OK and Status=0, and rejects
-//! queue-configuration writes after DRIVER_OK. Every device needs the methods
-//! here first.
+//! `save` and `restore` return [`SnapshotError::Unsupported`] until M8. Through
+//! [`WorkerControl`] the transport prepares a worker generation before
+//! DRIVER_OK, starts it after activation, kicks it on QueueNotify and stops it
+//! before Status=0 resets the device, and it rejects queue-configuration writes
+//! after DRIVER_OK. Every device needs the methods here first.
 
-use std::{fmt, sync::Arc};
+use std::{fmt, io, sync::Arc};
 
 use self::queue::VirtQueues;
 use crate::{events::EventSender, memory::GuestMemoryMmap};
@@ -27,13 +29,19 @@ pub(crate) mod fs;
 pub(crate) mod interrupt;
 pub(crate) mod mmio;
 pub(crate) mod queue;
+pub(crate) mod worker;
 
 /// The largest number of queues a device may declare.
 pub(crate) const MAX_QUEUES: usize = 16;
 /// The largest configuration space a device may declare.
 pub(crate) const MAX_CONFIG_LEN: usize = 0xF00;
 
-/// A callback that wakes the worker's poller.
+/// `DEVICE_NEEDS_RESET`: the device status bit a device sets when it cannot
+/// continue until the driver resets it.
+pub(crate) const NEEDS_RESET: u8 = 0x40;
+
+/// A callback that wakes the workers' poller. It carries no event: a device
+/// that needs a later callback registers an [`EventSource`].
 pub(crate) type Waker = Arc<dyn Fn() + Send + Sync>;
 
 /// What a device offers, fixed when it is built.
@@ -62,48 +70,77 @@ pub(crate) enum SnapshotSupport {
     Stopped,
 }
 
-/// What the worker asks a device to do.
+/// What the workers ask a device to do.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum DeviceEvent {
     /// The guest notified queue `index`.
     QueueKick(u16),
-    /// A background source registered by the device is ready.
+    /// The source registered as this id became readable. Readiness is
+    /// edge-triggered: the device reads the source until it would block.
     BackendReady(SourceId),
 }
 
-/// The identity of a background event source registered with the worker.
+/// The id the workers give a registered background source.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct SourceId(pub(crate) u32);
 
-/// A file descriptor or similar object the worker polls.
+/// A file descriptor or similar object the workers poll.
 pub(crate) trait EventSource: Send {
-    /// The source the worker registers with its poller.
+    /// The source the workers register with their poller.
     fn as_source(&mut self) -> &mut dyn mio::event::Source;
 }
 
-/// The worker interface a device uses to register background sources.
+/// The interface a device uses to register background sources with the
+/// workers.
+///
+/// A registrar belongs to one worker generation. Once Status=0 stops that
+/// generation, or the workers shut down, their sources are closed and
+/// `register` returns [`EventError::Closed`].
 pub(crate) trait EventRegistrar: Send + Sync {
-    /// Registers `source`, which is reported as `event`.
-    fn register(
-        &self,
-        event: DeviceEvent,
-        source: Box<dyn EventSource>,
-    ) -> Result<SourceId, EventError>;
+    /// Registers `source` for readability and returns its id; each readiness
+    /// edge then reaches the device as [`DeviceEvent::BackendReady`] with that
+    /// id.
+    fn register(&self, source: Box<dyn EventSource>) -> Result<SourceId, EventError>;
 
-    /// Stops reporting `id`.
+    /// Stops reporting `id` and drops its source; an unknown id is ignored.
     fn deregister(&self, id: SourceId);
 }
 
-/// Starts and stops the worker of one activated device.
-pub(crate) trait WorkerControl: Send + Sync {
-    /// Starts the worker. On error no worker runs.
-    fn start(&self) -> Result<(), DeviceError>;
-
-    /// Stops and joins the worker. On error the device must not be reset.
-    fn stop(&self) -> Result<(), DeviceError>;
+/// The handles one worker generation gives the device it activates.
+pub(crate) struct WorkerContext {
+    /// Registers background sources for this generation.
+    pub(crate) events: Arc<dyn EventRegistrar>,
+    /// Wakes the workers' poller.
+    pub(crate) waker: Waker,
 }
 
-/// The transport's interrupt and status handle, shared with the worker.
+/// Drives one device's worker generation in the [`WorkerRuntime`]. The transport calls
+/// it from a vCPU thread, never while it holds the device lock.
+pub(crate) trait WorkerControl: Send + Sync {
+    /// Opens a new generation for the next activation and returns its handles.
+    /// Kicks and sources of an earlier generation never reach this one.
+    fn prepare(&self) -> Result<WorkerContext, DeviceError>;
+
+    /// Starts delivering the prepared generation's events. On error nothing is
+    /// delivered and the generation stays prepared until
+    /// [`cancel_prepare`](Self::cancel_prepare).
+    fn start(&self) -> Result<(), DeviceError>;
+
+    /// Records a notification of queue `index` and wakes the workers. It never
+    /// blocks; kicks of one queue that arrive before its event runs coalesce.
+    fn kick(&self, index: u16);
+
+    /// Stops the generation: waits for an event in flight, then closes the
+    /// generation's sources. It never joins the workers' thread. On error the
+    /// device must not be reset.
+    fn stop(&self) -> Result<(), DeviceError>;
+
+    /// Closes a prepared generation that will not start.
+    fn cancel_prepare(&self);
+}
+
+/// The transport's interrupt and status handle, shared with the device and
+/// the workers.
 pub(crate) trait VirtioInterrupt: Send + Sync {
     /// Raises the queue interrupt.
     fn raise(&self);
@@ -123,9 +160,17 @@ pub(crate) trait VirtioInterrupt: Send + Sync {
     /// Reads the device status register.
     fn device_status(&self) -> u8;
 
-    /// Writes the device status register; the worker sets DEVICE_NEEDS_RESET
-    /// through this handle.
+    /// Replaces the device status register.
+    ///
+    /// The transport uses this before the device starts and to roll back a
+    /// failed activation; the worker uses [`Self::set_needs_reset`].
     fn set_device_status(&self, status: u8);
+
+    /// Sets [`NEEDS_RESET`] without clearing a bit a driver wrote.
+    ///
+    /// The worker calls this while a driver may write the status register, so
+    /// an implementation must not replace the register with a stale value.
+    fn set_needs_reset(&self);
 }
 
 /// The resources a transport gives a device when the driver activates it.
@@ -142,9 +187,9 @@ pub(crate) struct ActivationContext {
     pub(crate) queues: VirtQueues,
     /// The transport's interrupt and status handle.
     pub(crate) interrupt: Arc<dyn VirtioInterrupt>,
-    /// The worker's event registrar for backend sources; the device stores it.
+    /// The generation's registrar for backend sources; the device stores it.
     pub(crate) events: Arc<dyn EventRegistrar>,
-    /// The worker's poller waker; the device stores it.
+    /// The workers' poller waker; the device stores it.
     pub(crate) waker: Waker,
     /// The run thread's sender for fatal device failures.
     pub(crate) sender: EventSender,
@@ -203,16 +248,21 @@ impl fmt::Display for SnapshotError {
 
 impl std::error::Error for SnapshotError {}
 
-/// A device could not register or deregister a background source.
+/// A device could not register a background source.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum EventError {
-    /// The worker is shutting down.
+    /// The registrar's generation is stopped, or the workers are shutting down.
     Closed,
+    /// The host poller refused the source.
+    Register(io::ErrorKind),
 }
 
 impl fmt::Display for EventError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("the event worker is closed")
+        match self {
+            Self::Closed => f.write_str("the worker generation is closed"),
+            Self::Register(kind) => write!(f, "the poller refused the source: {kind}"),
+        }
     }
 }
 
@@ -260,7 +310,8 @@ pub(crate) trait VirtioDevice: Send {
 
     /// Handles one worker event. `Ok(())` means this call finished; it does
     /// not mean every submitted request completed. The device uses the event
-    /// registrar and waker stored from [`ActivationContext`].
+    /// registrar and waker stored from [`ActivationContext`]. The call runs on
+    /// the workers' shared thread and must not block.
     fn on_event(&mut self, event: DeviceEvent) -> Result<(), DeviceError>;
 
     /// Stops accepting new work and drains requests the device already took.
