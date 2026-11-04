@@ -317,7 +317,7 @@ export function RegistriesPanel() {
                     ? ` by ${membersById.get(credential.createdBy)}`
                     : ''}
                 </span>
-                <div className="flex items-center justify-end gap-2">
+                <div className="flex items-center justify-end gap-1">
                   {canWrite && (
                     <button
                       type="button"
@@ -328,7 +328,7 @@ export function RegistriesPanel() {
                       }}
                       disabled={updateRegistry.isPending || deleteRegistry.isPending}
                       title={`Update the credential for ${credential.registryHost}`}
-                      className="font-mono text-meta text-muted-foreground hover:text-foreground disabled:opacity-40"
+                      className="px-2 py-[5px] font-mono text-label uppercase text-muted-foreground transition-colors hover:text-foreground disabled:opacity-40"
                     >
                       Update
                     </button>
