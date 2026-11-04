@@ -19,6 +19,7 @@ import { BoxState } from '../enums/box-state.enum'
 import { BoxDesiredState } from '../enums/box-desired-state.enum'
 import { DOMAIN_COUNT_LIMIT_CODE, DOMAIN_NOT_OWNED_CODE, SUBDOMAIN_TOO_SHORT_CODE } from '../errors/domain.error'
 import { BoxDestroyedEvent } from '../events/box-destroyed.event'
+import { AddAppDomainEnvironment1793780200000 } from '../../migrations/pre-deploy/1793780200000-add-app-domain-environment-migration'
 import { AddDomain1792972800000 } from '../../migrations/pre-deploy/1792972800000-add-domain-migration'
 import { AddCustomDomainConfig1793764800000 } from '../../migrations/pre-deploy/1793764800000-add-custom-domain-config-migration'
 import { DomainService } from './domain.service'
@@ -104,6 +105,7 @@ describeIfDatabase('DomainService (integration, real Postgres)', () => {
     try {
       await new AddDomain1792972800000().up(runner)
       await new AddCustomDomainConfig1793764800000().up(runner)
+      await new AddAppDomainEnvironment1793780200000().up(runner)
       await new RequestDrivenCustomDomains1794398400000().up(runner)
     } finally {
       await runner.release()

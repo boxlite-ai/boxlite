@@ -65,11 +65,12 @@ gh workflow run mdeploy-all.yml --ref main -f stage=stage -f ref='<full-main-sha
 gh workflow run mdeploy-all.yml --ref main -f stage=stage -f ref='#123' -f components=api+runner -f apply=false
 ```
 
-Run a preview of the chosen ref first. On GCP, `components=api` deploys the API image and its existing API environment
-through a new Cloud Run revision; `components=runner` converges the binary and Runner environment through OS Policies.
+Run a preview of the chosen ref first. On GCP, `components=api` deploys the API image and environment
+to both the API and App Worker Cloud Run services; `components=runner` converges the binary and Runner environment through OS Policies.
 Both include the workload's required read grants and leave unrelated infrastructure outside the targets.
 The default `api+runner` retains full-stack deployment; AWS/SST supports only that selection for now.
 Individual selection requires existing workloads; Runner fleet changes require a full deployment.
+The first Cloud Apps deployment requires `api+runner` to create its worker and source-storage grants.
 Existing stage protection, configuration checks and per-stage queuing still apply; do not cancel a healthy apply to start another.
 
 Use the same public workflow for individual previews, after preparing the stage declaration:

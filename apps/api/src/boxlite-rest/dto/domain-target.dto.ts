@@ -3,13 +3,12 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { IsIn, IsInt, IsNotEmpty, IsString, Max, MaxLength, Min, ValidateIf } from 'class-validator'
+import { IsIn, IsInt, IsNotEmpty, IsString, IsOptional, Max, MaxLength, Min, ValidateIf } from 'class-validator'
 
 /**
  * What a domain routes to, in the box API's snake_case. `type` names the kind
- * of target and decides which fields follow. App targets are reserved and
- * binding them is explicitly refused by the controller. `box` takes a box id
- * or name, resolved the way every other box route resolves one.
+ * of target and decides which fields follow. Resources resolve by id or name
+ * within the organization; an App environment defaults to main.
  */
 export class DomainTargetDto {
   @IsIn(['box', 'app'], { message: 'type must be "box" or "app"' })
@@ -32,4 +31,10 @@ export class DomainTargetDto {
   @IsNotEmpty()
   @MaxLength(255)
   app?: string
+
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(255)
+  environment?: string
 }

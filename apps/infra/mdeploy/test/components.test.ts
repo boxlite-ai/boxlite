@@ -91,6 +91,10 @@ const apiState = (): DeployedResource[] => [
   { type: (gcpSdk.cloudrunv2.Service as any).__pulumiType, urn: `${prefix}gcp:cloudrunv2/service:Service::Api` },
   {
     type: (gcpSdk.cloudrunv2.Service as any).__pulumiType,
+    urn: `${prefix}gcp:cloudrunv2/service:Service::CloudAppWorker`,
+  },
+  {
+    type: (gcpSdk.cloudrunv2.Service as any).__pulumiType,
     urn: `${prefix}gcp:cloudrunv2/service:Service::OtelCollector`,
   },
 ]
@@ -118,6 +122,15 @@ test('an unhandled scoped component cannot select Runner targets', () => {
       }),
     /Unsupported deployment component: collector/,
   )
+})
+
+test('API-only updates target both the API and App worker without other services', () => {
+  const targets = componentTargets({ components: 'api', app, stage, resources: apiState(), environment: {} })
+  assert.deepEqual(targets, [
+    `${prefix}gcp:cloudrunv2/service:Service::Api`,
+    `${prefix}gcp:cloudrunv2/service:Service::CloudAppWorker`,
+    `${prefix}gcp:secretmanager/secretIamMember:SecretIamMember::ApiSecretAccess-*`,
+  ])
 })
 
 for (const count of [1, 2])
@@ -193,6 +206,15 @@ test('Runner-only updates refuse fleet expansion, contraction and renamed member
 test('missing, deleted and foreign-stack workloads never become empty or full target sets', () => {
   for (const resources of [
     [],
+    apiState().filter((resource) => !resource.urn.endsWith('::CloudAppWorker')),
+    apiState().map((resource) =>
+      resource.urn.endsWith('::CloudAppWorker') ? { ...resource, delete: true } : resource,
+    ),
+    apiState().map((resource) =>
+      resource.urn.endsWith('::CloudAppWorker')
+        ? { ...resource, urn: resource.urn.replace(`:${stage}::`, ':foreign::') }
+        : resource,
+    ),
     apiState().map((r) => ({ ...r, delete: true })),
     apiState().map((r) => ({ ...r, urn: r.urn.replace(`:${stage}::`, ':foreign::') })),
   ])
@@ -271,7 +293,7 @@ test('AWS adapter refuses a scoped request before identity resolution or SST spa
   await assert.rejects(target.run({ components: 'api', log: () => {} }), /AWS\/SST does not support/)
 })
 
-test('a missing scoped workload is refused before config writes or engine updates', async () => {
+test('the first App deployment requires the full graph before config writes or engine updates', async () => {
   const calls: string[] = []
   await assert.rejects(
     pulumiDeploy({
@@ -285,7 +307,9 @@ test('a missing scoped workload is refused before config writes or engine update
       lookupAuthorizations: () => assert.fail('unrelated DNS preflight ran'),
       log: () => {},
       createStackWith: async () => ({
-        exportStack: async () => ({ deployment: { resources: [] } }),
+        exportStack: async () => ({
+          deployment: { resources: apiState().filter((resource) => !resource.urn.endsWith('::CloudAppWorker')) },
+        }),
         setAllConfig: async () => {
           calls.push('config')
         },

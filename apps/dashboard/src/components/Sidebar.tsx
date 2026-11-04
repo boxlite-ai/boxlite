@@ -94,6 +94,7 @@ const PRIMARY_NAV_ITEMS: NavItem[] = [
       },
     ],
   },
+  { label: 'Apps', icon: 'app', path: RoutePath.APPS },
   {
     label: 'Images',
     icon: 'images',

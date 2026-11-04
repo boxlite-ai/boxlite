@@ -15,6 +15,9 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	common_proxy "github.com/boxlite-ai/common-go/pkg/proxy"
+	"github.com/gin-gonic/gin"
 )
 
 // errAppDomainNotFound is an unknown, unbound or currently unreachable named
@@ -80,33 +83,64 @@ func bareHost(host string) string {
 	return strings.ToLower(strings.TrimSuffix(host, "."))
 }
 
-// resolveAppDomain asks the API which box port a named hostname routes to now.
+type appDomainTarget struct {
+	Type          string `json:"type"`
+	BoxID         string `json:"boxId"`
+	Port          uint16 `json:"port"`
+	EnvironmentID string `json:"environmentId"`
+}
+
+// resolveAppDomain asks the API which resource a named hostname routes to now.
 // Both platform and customer names use exact lookup. Not cached: a released
 // name must not forward again.
-func (p *Proxy) resolveAppDomain(ctx context.Context, hostname string) (string, uint16, error) {
+func (p *Proxy) resolveAppDomain(ctx context.Context, hostname string) (appDomainTarget, error) {
 	response, err := p.previewGet(ctx, "preview", "domains", hostname)
 	if err != nil {
-		return "", 0, fmt.Errorf("resolve domain %s: %w", hostname, err)
+		return appDomainTarget{}, fmt.Errorf("resolve domain %s: %w", hostname, err)
 	}
 	defer response.Body.Close()
 	switch response.StatusCode {
 	case http.StatusOK:
-		var target struct {
-			BoxID string `json:"boxId"`
-			Port  uint16 `json:"port"`
-		}
+		var target appDomainTarget
 		if err := json.NewDecoder(io.LimitReader(response.Body, 4096)).Decode(&target); err != nil {
-			return "", 0, fmt.Errorf("resolve domain %s: malformed answer: %w", hostname, err)
+			return appDomainTarget{}, fmt.Errorf("resolve domain %s: malformed answer: %w", hostname, err)
 		}
-		if target.BoxID == "" || target.Port == 0 {
-			return "", 0, fmt.Errorf("resolve domain %s: incomplete answer", hostname)
+		if target.Type == "app" && target.EnvironmentID != "" {
+			return target, nil
 		}
-		return target.BoxID, target.Port, nil
+		if (target.Type != "" && target.Type != "box") || target.BoxID == "" || target.Port == 0 {
+			return appDomainTarget{}, fmt.Errorf("resolve domain %s: incomplete answer", hostname)
+		}
+		return target, nil
 	case http.StatusNotFound:
-		return "", 0, errAppDomainNotFound
+		return appDomainTarget{}, errAppDomainNotFound
 	default:
-		return "", 0, fmt.Errorf("resolve domain %s: API returned %d", hostname, response.StatusCode)
+		return appDomainTarget{}, fmt.Errorf("resolve domain %s: API returned %d", hostname, response.StatusCode)
 	}
+}
+
+// App traffic stays behind the API's access and end-user identity checks. Its
+// Authorization and cookies belong to the App; proxy identity uses another header.
+func (p *Proxy) appGatewayTarget(ctx *gin.Context, environmentID, escapedPath string) (*common_proxy.RequestTarget, error) {
+	base := p.apiclient.GetConfig().Servers[0].URL
+	endpoint, err := url.Parse(strings.TrimRight(base, "/") + "/internal/apps/ingress/" + url.PathEscape(environmentID) + escapedPath)
+	if err != nil {
+		return nil, fmt.Errorf("App gateway endpoint: %w", err)
+	}
+	for key := range ctx.Request.Header {
+		lower := strings.ToLower(key)
+		if strings.HasPrefix(lower, "x-boxlite-user-") || lower == "x-boxlite-identity" || lower == "x-boxlite-gateway" || lower == "x-boxlite-control" || lower == "x-boxlite-proxy-token" {
+			ctx.Request.Header.Del(key)
+		}
+	}
+	return &common_proxy.RequestTarget{
+		URL: endpoint, Host: ctx.Request.Host,
+		Headers: map[string]string{
+			"X-BoxLite-Proxy-Token": p.config.ProxyApiKey,
+			"X-Forwarded-Host":      ctx.Request.Host,
+			"X-Forwarded-Proto":     p.config.ProxyProtocol,
+		},
+	}, nil
 }
 
 // previewGet issues one authenticated GET to the API's preview routes, which
