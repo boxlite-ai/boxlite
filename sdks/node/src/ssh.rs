@@ -156,7 +156,7 @@ impl From<SshStatus> for JsSshStatus {
 /// Handle for guest SSH control on a Box.
 ///
 /// Accessed as a property: `box.ssh.configure(...)`. Creating it and calling
-/// `status`/`disable` never start the VM; only `configure` may, and the core
+/// `status`/`enable`/`disable` never start the VM; only `configure` may, and the core
 /// owns that startup policy.
 #[napi]
 pub struct JsSshHandle {
@@ -179,6 +179,16 @@ impl JsSshHandle {
     pub async fn configure(&self, config: SshConfigArg) -> Result<JsSshStatus> {
         self.handle
             .configure(config.0.into())
+            .await
+            .map_err(map_err)
+            .map(JsSshStatus::from)
+    }
+
+    /// Enable saved configuration on a running box; preserve healthy connections.
+    #[napi]
+    pub async fn enable(&self) -> Result<JsSshStatus> {
+        self.handle
+            .enable()
             .await
             .map_err(map_err)
             .map(JsSshStatus::from)

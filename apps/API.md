@@ -470,7 +470,7 @@ organization membership.
 </details>
 
 <details>
-<summary><b>Execution, files, metrics, networking, and SSH</b> · 15 routes</summary>
+<summary><b>Execution, files, metrics, networking, and SSH</b> · 16 routes</summary>
 
 | Method   | Path                                                          | What it does                                            |
 | -------- | ------------------------------------------------------------- | ------------------------------------------------------- |
@@ -490,8 +490,9 @@ organization membership.
 | `DELETE` | `/api/v1[/{prefix}]/domains/{domain}/target`                  | Requires the full held hostname; stops routing it and keeps ownership; `204`, idempotent. |
 | `PUT`    | `/api/v1[/{prefix}]/boxes/{boxId}/network/inbound`            | Enables or disables a box's inbound access.             |
 | `POST`   | `/api/v1[/{prefix}]/boxes/{boxId}/ssh`                        | Replaces guest SSH configuration once; counts as activity and may auto-resume a box. |
+| `POST`   | `/api/v1[/{prefix}]/boxes/{boxId}/ssh/enable`                 | Enables saved SSH configuration on a running box; no auto-resume or activity. |
 | `GET`    | `/api/v1[/{prefix}]/boxes/{boxId}/ssh`                        | Reads guest SSH status without resuming the box or counting as activity. |
-| `DELETE` | `/api/v1[/{prefix}]/boxes/{boxId}/ssh`                        | Disables guest SSH without resuming the box or counting as activity. |
+| `DELETE` | `/api/v1[/{prefix}]/boxes/{boxId}/ssh`                        | Disables guest SSH on a running box; otherwise `409`. No auto-resume or activity. |
 
 The exec, signal, resize, files, and metrics handlers are registered as
 catch-all reverse proxies to the box's assigned runner; the methods shown are
@@ -735,7 +736,7 @@ runtime and its microVMs.
 </details>
 
 <details>
-<summary><b>Embedded BoxLite operations</b> · 13 routes</summary>
+<summary><b>Embedded BoxLite operations</b> · 14 routes</summary>
 
 | Method    | Path                                           | What it does                                          |
 | --------- | ---------------------------------------------- | ----------------------------------------------------- |
@@ -750,8 +751,9 @@ runtime and its microVMs.
 | `GET`     | `/v1/boxes/{boxId}/metrics`                    | Returns local box metrics.                            |
 | `CONNECT` | `/v1/boxes/{boxId}/network/tunnel?port={port}` | Opens a raw bidirectional TCP tunnel to a guest port; answers `409` with code `box_not_running` for a box that is not running, which the proxy uses to wake the box. |
 | `POST`    | `/v1/boxes/{boxId}/ssh`                        | Configures guest SSH once after checking that the box is running; otherwise `409 invalid_state`. |
+| `POST`    | `/v1/boxes/{boxId}/ssh/enable`                 | Enables saved SSH configuration only while running; otherwise `409 invalid_state`. |
 | `GET`     | `/v1/boxes/{boxId}/ssh`                        | Reads guest SSH status; a stopped box answers disabled status without a handle. |
-| `DELETE`  | `/v1/boxes/{boxId}/ssh`                        | Disables guest SSH; never boots the box.              |
+| `DELETE`  | `/v1/boxes/{boxId}/ssh`                        | Disables guest SSH on a running box; otherwise `409 invalid_state`. Never boots.              |
 
 </details>
 

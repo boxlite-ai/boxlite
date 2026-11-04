@@ -217,6 +217,12 @@ pub type CBoxSshStatusCb =
 pub(crate) type CBoxSshStatusFn =
     extern "C" fn(*mut crate::ssh::CSshStatus, *mut crate::CBoxliteError, *mut c_void);
 
+/// SSH enable completion with the same ownership contract as SSH configure.
+pub type CBoxSshEnableCb =
+    Option<extern "C" fn(*mut crate::ssh::CSshStatus, *mut crate::CBoxliteError, *mut c_void)>;
+pub(crate) type CBoxSshEnableFn =
+    extern "C" fn(*mut crate::ssh::CSshStatus, *mut crate::CBoxliteError, *mut c_void);
+
 /// SSH disable completion with the same ownership contract as SSH configure.
 pub type CBoxSshDisableCb =
     Option<extern "C" fn(*mut crate::ssh::CSshStatus, *mut crate::CBoxliteError, *mut c_void)>;
@@ -502,6 +508,11 @@ pub enum RuntimeEvent {
     },
     SshStatus {
         cb: CBoxSshStatusFn,
+        user_data: usize,
+        result: Result<OwnedFfiPtr<crate::ssh::CSshStatus>, BoxliteError>,
+    },
+    SshEnable {
+        cb: CBoxSshEnableFn,
         user_data: usize,
         result: Result<OwnedFfiPtr<crate::ssh::CSshStatus>, BoxliteError>,
     },

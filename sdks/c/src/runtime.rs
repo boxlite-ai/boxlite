@@ -663,6 +663,11 @@ unsafe fn dispatch_event(event: RuntimeEvent) {
                 user_data,
                 result,
             } => dispatch_handle_event::<crate::ssh::CSshStatus>(result, user_data, cb),
+            RuntimeEvent::SshEnable {
+                cb,
+                user_data,
+                result,
+            } => dispatch_handle_event::<crate::ssh::CSshStatus>(result, user_data, cb),
             RuntimeEvent::SshDisable {
                 cb,
                 user_data,

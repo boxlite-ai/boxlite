@@ -293,15 +293,17 @@ pub struct LiteBox {
 
 `LiteBox::ssh()` returns an owned, cloneable `SshHandle` without starting the box.
 It works for local boxes and for REST-backed boxes whose server implements SSH
-control, as the local `boxlite serve` does. Only `configure()` uses the
+control, as the local `boxlite serve` does. `enable()` sends a bodyless
+`POST /ssh/enable` on REST-backed handles. `configure()` uses the
 implicit-start guard of exec, metrics, and file copying. `Configured` and
 `Stopped` boxes using image defaults can start implicitly. With an explicit
 `BoxOptions.cmd` or `entrypoint`, configuration returns `InvalidState` in these
 states; call `start()` first; on a REST server a stopped box with
-`auto_resume=false` is refused instead of resumed. `status()` and `disable()`
-never start the VM or main command: valid `Configured` and `Stopped` handles
-return disabled status with generation zero and empty address and host identity
-fields. Running handles use the existing guest, including after attach before
+`auto_resume=false` is refused instead of resumed. `status()`, `enable()` and
+`disable()` never start the VM or main command. On valid `Configured` and
+`Stopped` local handles, status returns generation zero and empty address and
+host identity fields; enable/disable return `InvalidState` without changing saved
+state. Running handles use the existing guest, including after attach before
 start or runtime recovery. Other lifecycle states return `InvalidState`. These
 observations do not prevent concurrent configuration. Deployments without SSH
 control answer `NotFound` or `Unsupported`; there is no capability negotiation.
@@ -309,6 +311,7 @@ control answer `NotFound` or `Unsupported`; there is no capability negotiation.
 | Method | Signature |
 |--------|-----------|
 | Configure | `async fn configure(&self, config: SshConfig) -> BoxliteResult<SshStatus>` |
+| Enable | `async fn enable(&self) -> BoxliteResult<SshStatus>` |
 | Query | `async fn status(&self) -> BoxliteResult<SshStatus>` |
 | Disable | `async fn disable(&self) -> BoxliteResult<SshStatus>` |
 
@@ -321,8 +324,11 @@ These types are exported directly from `boxlite`, independently of protobuf:
 | `SshCaConfig` | `public_key: String`, `principal: String` |
 | `SshStatus` | `enabled: bool`, `generation: u64`, `listen_address: String`, `host_public_key: String`, `host_key_fingerprint: String` |
 
-Configuration fields are explicit; the guest persists credentials on the container
-disk, while the runtime neither generates keys nor publishes ports. All types are
+Complete configuration fields are explicit. Configure enables SSH and disconnects
+existing clients. Enable uses saved credentials, errors when none exist, and
+preserves healthy connections. Automatic key generation is a CLI-only convenience;
+the Rust SDK has no setup method.
+The guest persists credentials on the container disk; port forwarding is separate. All types are
 `Clone + Debug + Send + Sync`;
 configuration Debug output redacts credentials, and status supports `PartialEq + Eq`.
 The configuration types implement `Deserialize` but not `Serialize`;
@@ -348,7 +354,8 @@ and gRPC status context. Missing response status is `Internal`.
 
 A REST-backed `SshHandle` sends `POST`, `GET`, and `DELETE` to
 `/v1/boxes/{box_id}/ssh` (`/{prefix}/boxes/{box_id}/ssh` with a path prefix
-set). Each call is one request — every accepted configure restarts the guest
+set), plus a bodyless `POST` to the corresponding `/ssh/enable` route.
+Each call is one request — every accepted configure restarts the guest
 listener, so neither layer retries it — and errors cross the standard
 `BoxliteError::http()` envelope (for example an upstream guest failure comes
 back as `503 upstream_unavailable`, which the client reports as `Portal`).
@@ -363,7 +370,7 @@ HTTP contract, reconfiguration, disable, and generation semantics.
 | `id` | `fn id(&self) -> &BoxID` | Get box ID |
 | `name` | `fn name(&self) -> Option<&str>` | Get optional box name |
 | `info` | `async fn info(&self) -> Result<BoxInfo>` | Get box info (no VM init) |
-| `ssh` | `fn ssh(&self) -> SshHandle` | Control SSH (local or REST-backed); only configure may implicitly start the box |
+| `ssh` | `fn ssh(&self) -> SshHandle` | Control SSH (local or REST-backed); only configure may implicitly start or resume the box |
 | `network` | `fn network(&self) -> NetworkHandle` | Get box-scoped policy and tunnel operations |
 | `start` | `async fn start(&self) -> BoxliteResult<()>` | Start the box |
 | `run` | `async fn run(&self, command: BoxCommand) -> BoxliteResult<Execution>` | Run command |

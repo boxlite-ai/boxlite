@@ -222,17 +222,28 @@ for runtime support, connection lifetime and persistence.
 
 ```bash
 boxlite run -d --name dev alpine:latest tail -f /dev/null
-boxlite ssh configure dev --host-key ./host_key --login alice \
-  --authorized-key ~/.ssh/id_ed25519.pub
-boxlite ssh forward dev
-# stdout: tcp://127.0.0.1:52811   stderr: host key, fingerprint, connect hint
-ssh -p 52811 -l alice 127.0.0.1
+boxlite ssh dev
+# Copy and execute the complete ssh command printed by setup.
 ```
 
-`boxlite ssh configure` replaces the configuration and prints `SshStatus` JSON.
-Then `forward` opens a local listener until Ctrl-C, leaving the configuration and
-generation unchanged. `status` and `disable` also print `SshStatus` JSON.
-The CLI never generates keys.
+With no operation flag, `boxlite ssh dev` generates client and host keys on this
+machine, enables `box` on guest port 22, and prints a command using `ssh --proxy` as ProxyCommand. It takes
+no key flags and reuses both saved keys on subsequent calls. Setup replaces the
+whole guest SSH configuration, including any previously configured host key.
+The summary includes the server's SSH host-key fingerprint for host verification.
+Choose one operation with `--configure`, `--status`, `--enable`, `--disable`,
+`--tunnel`, or `--proxy`; all support local boxes and cloud contexts.
+`--configure` retains full configuration control and prints status JSON.
+
+`--proxy` forwards only stdin/stdout; `--tunnel` remains available for a local TCP
+listener. Both require enabled SSH. `--enable` restores saved SSH configuration;
+`--disable` stops SSH while retaining credentials. Both require a running box.
+All SSH operations accept cloud contexts, for example
+`boxlite --context cloud ssh dev`. The printed command preserves the
+selected context or explicit URL and routing prefix; credentials are loaded normally
+when it runs. Cloud proxy requires SSH control, tunnel support and inbound access.
+An active local proxy/tunnel holds the
+runtime home lock; stop it before issuing another local CLI command on that home.
 See [`boxlite ssh`](../../docs/reference/cli/README.md#boxlite-ssh) for flags and the
 [SSH guide](../../docs/guides/ssh.md#cli) for lifecycle rules.
 
