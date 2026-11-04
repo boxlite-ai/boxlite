@@ -1062,18 +1062,20 @@ impl GlobalFlags {
     ///
     /// Uses the same context snapshot as `create_runtime`, including credentials.
     pub fn targets_rest(&self) -> anyhow::Result<bool> {
-        let stored = self.load_selected_profile()?;
-        let env_api_key = std::env::var("BOXLITE_API_KEY").ok();
-        Ok(self.resolve_rest_options(stored, env_api_key).is_some())
+        Ok(self.rest_options()?.is_some())
     }
 
-    pub fn create_runtime(&self) -> anyhow::Result<BoxliteRuntime> {
+    pub(crate) fn rest_options(&self) -> anyhow::Result<Option<BoxliteRestOptions>> {
         let stored = self.load_selected_profile()?;
         // Clap reads BOXLITE_REST_URL into `self.url`; BOXLITE_API_KEY is the
         // one credential env we still consult directly here.
         let env_api_key = std::env::var("BOXLITE_API_KEY").ok();
 
-        match self.resolve_rest_options(stored, env_api_key) {
+        Ok(self.resolve_rest_options(stored, env_api_key))
+    }
+
+    pub fn create_runtime(&self) -> anyhow::Result<BoxliteRuntime> {
+        match self.rest_options()? {
             Some(opts) => BoxliteRuntime::rest(opts).map_err(Into::into),
             None => {
                 // No URL anywhere → local runtime, unchanged behavior.
