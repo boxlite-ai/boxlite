@@ -57,14 +57,16 @@ pub struct VmConfig {
     pub cmdline: String,
     /// The uncompressed newc archive to load as the initramfs, if any.
     pub initramfs: Option<PathBuf>,
-    /// The disks, in order: disk `i` is `vd<i>`, and `Vm::new` names each
-    /// one on the command line so the kernel probes it.
+    /// The disks, in order: disk 0 is `vda`, disk 1 is `vdb`, and so on;
+    /// `Vm::new` names each one on the command line so the kernel probes it.
     pub disks: Vec<DiskConfig>,
 }
 
 impl VmConfig {
-    /// Rejects counts, sizes and command lines the layout or the kernel cannot
-    /// take, before any host call.
+    /// Rejects counts, sizes and command-line text the layout or the kernel
+    /// cannot take, before any host call. The budget for the
+    /// `virtio_mmio.device=` arguments that `devices::add_all` appends is
+    /// checked in `add_all`, after the host VM and the disk images exist.
     pub(crate) fn validate(&self) -> Result<()> {
         if !(1..=MAX_VCPUS).contains(&self.vcpu_count) {
             return Err(Error::InvalidVcpuCount(self.vcpu_count));

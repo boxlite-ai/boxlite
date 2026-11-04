@@ -44,10 +44,11 @@ The x86_64 KVM boot and lifecycle are in place; the M1 devices, arm64 and HVF
 follow in M1. The virtio common infrastructure (`virtio`) is in place for M2:
 the device contract, queue adapter, MMIO transport, interrupt handle and the
 shared virtio workers are tested with test devices, and `Vm` owns them. The
-output-only virtio console device is implemented and tested against real guest
-RAM and split virtqueues, but it is not wired into `Vm` yet; production adds
-no virtio device yet. The BoxLite engine adapter, engine selection, and
-`native` feature wiring follow in M2.
+first production device (`virtio::blk`, composed by `devices::add_all`) is
+tested with a real kernel. The output-only virtio console device is implemented
+and tested against real guest RAM and split virtqueues, but it is not wired
+into `Vm` yet. The BoxLite engine adapter, engine selection, and `native`
+feature wiring follow in M2.
 Neither new crate depends on `boxlite-shared`, and both are unpublished while
 their interfaces are being established.
 
@@ -473,7 +474,8 @@ took, and then announces that slot on the kernel command line.
   `virtio_mmio.device=4K@<base>:<gsi>` argument the kernel probes, and
   `announce` appends one per slot under the command-line budget, so the
   chipset claim and the kernel's view come from the same value. Disks take
-  slots in `VmConfig::disks` order, so disk `i` is `/dev/vd<i>`.
+  slots in `VmConfig::disks` order, so disk 0 is `/dev/vda`, disk 1 is
+  `/dev/vdb`, and so on.
 - **Configuration.** `DiskConfig { path, format: Raw | Qcow2, read_only }`;
   the format is stated, never probed from the file. A qcow2 image opens the
   backing chain its header names. At most 8 disks; `blk::add_disk` fails with
@@ -484,8 +486,9 @@ took, and then announces that slot on the kernel command line.
   header and status), `INDIRECT_DESC`; a writable disk adds `FLUSH` and
   `DISCARD`, a read-only one `RO`. `WRITE_ZEROES`, `EVENT_IDX` and multiple
   queues are not offered. The 60-byte configuration space carries the
-  capacity in sectors, `seg_max`, and the discard limits; a read past the
-  end returns zeros, and writes are refused.
+  capacity in sectors, `seg_max`, and the discard limits; one discard covers
+  at most 128 MiB, and a read past the end returns zeros, while writes are
+  refused.
 - **Backend contract.** `blk::backend::DiskBackend` is the seam a disk
   engine implements: `disk_info` once after open; `event_source` at every
   activation, registered with the worker generation when it is `Some`;
@@ -509,8 +512,9 @@ took, and then announces that slot on the kernel command line.
   says so.
 - **Writes.** With `FLUSH` negotiated, `FLUSH` flushes and syncs the image
   and writes complete when the format layer took them; without it every
-  OUT syncs before `OK`. `DISCARD` takes one 16-byte segment with no flags;
-  imago zeroes what the format cannot discard, and a qcow2 image frees the
+  OUT syncs before `OK`. `DISCARD` takes one 16-byte segment with no flags
+  and at most 128 MiB, so a conforming guest splits a larger range; imago
+  zeroes what the format cannot discard, and a qcow2 image frees the
   clusters without punching the host file.
 - **Reset.** `Status=0` stops the worker slot, then `reset` deregisters the
   backend source, fails the device with `Fatal` if a request is still in

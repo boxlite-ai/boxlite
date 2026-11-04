@@ -27,8 +27,8 @@ use virtio_queue::{
 use vm_memory::{Bytes, GuestAddress};
 
 use super::{
-    DEVICE_ID, QUEUE_MAX, QUEUE_MAXIMUM, SECTOR_SIZE, VIRTIO_BLK_F_DISCARD, VIRTIO_BLK_F_FLUSH,
-    VIRTIO_BLK_F_RO, VIRTIO_BLK_F_SEG_MAX, VIRTIO_BLK_S_IOERR, VIRTIO_BLK_S_OK,
+    DEVICE_ID, MAX_DISCARD_SECTORS, QUEUE_MAX, QUEUE_MAXIMUM, SECTOR_SIZE, VIRTIO_BLK_F_DISCARD,
+    VIRTIO_BLK_F_FLUSH, VIRTIO_BLK_F_RO, VIRTIO_BLK_F_SEG_MAX, VIRTIO_BLK_S_IOERR, VIRTIO_BLK_S_OK,
     VIRTIO_BLK_S_UNSUPP, VIRTIO_BLK_T_DISCARD, VIRTIO_BLK_T_FLUSH, VIRTIO_BLK_T_IN,
     VIRTIO_BLK_T_OUT,
     backend::{CompletedRequest, DiskBackend, DiskInfo, Request, RequestKind, SubmitOutcome},
@@ -555,7 +555,7 @@ fn configuration_reports_the_disk_info_and_pads_past_the_end() {
     assert_eq!(u32::from_le_bytes(bytes[12..16].try_into().unwrap()), 254);
     assert_eq!(
         u32::from_le_bytes(bytes[36..40].try_into().unwrap()),
-        u32::MAX
+        MAX_DISCARD_SECTORS
     );
     assert_eq!(u32::from_le_bytes(bytes[40..44].try_into().unwrap()), 1);
     assert_eq!(u32::from_le_bytes(bytes[44..48].try_into().unwrap()), 1);

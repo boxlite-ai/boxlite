@@ -7,7 +7,7 @@
 //! device does not offer stay zero at their specified offsets, so a driver
 //! sees the layout it expects from any modern device.
 
-use super::{SEG_MAX, backend::DiskInfo};
+use super::{MAX_DISCARD_SECTORS, SEG_MAX, backend::DiskInfo};
 
 /// The configuration space length, rounded up to four bytes.
 pub(crate) const CONFIG_LEN: usize = 60;
@@ -24,7 +24,7 @@ impl BlkConfig {
         let mut bytes = [0u8; CONFIG_LEN];
         put_u64(&mut bytes, 0, info.capacity_sectors);
         put_u32(&mut bytes, 12, SEG_MAX);
-        put_u32(&mut bytes, 36, u32::MAX); // max_discard_sectors
+        put_u32(&mut bytes, 36, MAX_DISCARD_SECTORS); // max_discard_sectors
         put_u32(&mut bytes, 40, 1); // max_discard_seg
         put_u32(&mut bytes, 44, info.discard_sector_alignment.max(1));
         Self { bytes }

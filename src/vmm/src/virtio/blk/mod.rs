@@ -89,6 +89,9 @@ pub(crate) const REQUEST_HEADER_LEN: usize = 16;
 /// The largest data transfer one request may carry through the bounce
 /// buffer.
 pub(crate) const MAX_REQUEST_BYTES: usize = 4 * 1024 * 1024;
+/// The largest range one discard request may cover: 128 MiB, as Firecracker
+/// bounds it; a conforming guest splits a larger range.
+pub(crate) const MAX_DISCARD_SECTORS: u32 = (128 << 20) / SECTOR_SIZE as u32;
 
 /// `VIRTIO_BLK_F_SEG_MAX`: `seg_max` is valid.
 pub(crate) const VIRTIO_BLK_F_SEG_MAX: u64 = 1 << 2;

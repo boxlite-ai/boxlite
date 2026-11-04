@@ -16,9 +16,9 @@ use virtio_queue::DescriptorChain;
 use vm_memory::{Address, Bytes, GuestAddress};
 
 use super::{
-    MAX_REQUEST_BYTES, REQUEST_HEADER_LEN, SECTOR_SIZE, VIRTIO_BLK_F_DISCARD, VIRTIO_BLK_F_FLUSH,
-    VIRTIO_BLK_S_IOERR, VIRTIO_BLK_S_UNSUPP, VIRTIO_BLK_T_DISCARD, VIRTIO_BLK_T_FLUSH,
-    VIRTIO_BLK_T_IN, VIRTIO_BLK_T_OUT,
+    MAX_DISCARD_SECTORS, MAX_REQUEST_BYTES, REQUEST_HEADER_LEN, SECTOR_SIZE, VIRTIO_BLK_F_DISCARD,
+    VIRTIO_BLK_F_FLUSH, VIRTIO_BLK_S_IOERR, VIRTIO_BLK_S_UNSUPP, VIRTIO_BLK_T_DISCARD,
+    VIRTIO_BLK_T_FLUSH, VIRTIO_BLK_T_IN, VIRTIO_BLK_T_OUT,
     backend::{DiskInfo, Request, RequestKind},
 };
 use crate::{memory::GuestMemoryMmap, virtio::DeviceError};
@@ -223,9 +223,10 @@ fn data_offset(info: &DiskInfo, sector: u64, len: usize) -> Option<u64> {
 }
 
 /// The byte range of `sectors` sectors at `sector`, when it is non-empty,
-/// aligned to the discard alignment and inside the disk.
+/// within the per-request cap, aligned to the discard alignment and inside
+/// the disk.
 fn discard_range(info: &DiskInfo, sector: u64, sectors: u32) -> Option<(u64, u64)> {
-    if sectors == 0 {
+    if sectors == 0 || sectors > MAX_DISCARD_SECTORS {
         return None;
     }
     let offset = sector.checked_mul(SECTOR_SIZE)?;
@@ -239,4 +240,24 @@ fn discard_range(info: &DiskInfo, sector: u64, sectors: u32) -> Option<(u64, u64
 
 fn capacity_bytes(info: &DiskInfo) -> u64 {
     info.capacity_sectors.saturating_mul(SECTOR_SIZE)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{SECTOR_SIZE, discard_range};
+    use crate::virtio::blk::{MAX_DISCARD_SECTORS, backend::DiskInfo};
+
+    #[test]
+    fn a_discard_stops_at_the_per_request_cap() {
+        let info = DiskInfo {
+            capacity_sectors: u64::from(MAX_DISCARD_SECTORS) * 2,
+            read_only: false,
+            discard_sector_alignment: 1,
+        };
+        assert_eq!(
+            discard_range(&info, 0, MAX_DISCARD_SECTORS),
+            Some((0, u64::from(MAX_DISCARD_SECTORS) * SECTOR_SIZE))
+        );
+        assert_eq!(discard_range(&info, 0, MAX_DISCARD_SECTORS + 1), None);
+    }
 }
