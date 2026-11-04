@@ -34,7 +34,7 @@ use crate::{
         x86_64::{COM1, COM1_GSI, add_legacy_devices},
     },
     error::Error,
-    memory::{GuestRam, ram_ranges},
+    memory::{GuestRam, ReclaimPolicy, ram_ranges},
 };
 
 mod balloon;
@@ -66,6 +66,7 @@ fn config(kernel: PathBuf, cmdline: &str) -> VmConfig {
         kernel,
         cmdline: cmdline.into(),
         initramfs: None,
+        reclaim: ReclaimPolicy::Immediate,
     }
 }
 
@@ -195,6 +196,7 @@ fn linux_config(vcpu_count: u8, cmdline: &str, initramfs: Option<PathBuf>) -> Vm
         kernel: kernel.into(),
         cmdline: cmdline.into(),
         initramfs,
+        reclaim: ReclaimPolicy::Immediate,
     };
     config.validate().unwrap();
     config

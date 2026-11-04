@@ -63,6 +63,21 @@ pub(crate) fn host_page_size() -> io::Result<usize> {
     Ok(size as usize)
 }
 
+/// How the VMM returns guest-reported free pages to the host.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ReclaimPolicy {
+    /// Discard the pages now with `MADV_DONTNEED`; a later guest access
+    /// faults in a fresh zero page.
+    #[default]
+    Immediate,
+    /// Mark the pages reclaimable with `MADV_FREE` (Linux). The kernel
+    /// discards them only under memory pressure, so a guest that reuses them
+    /// first does not fault. Linux may skip a range that covers only part of a
+    /// large folio; guest pageblock-order reports normally cover whole blocks.
+    /// Other hosts fall back to [`Self::Immediate`].
+    Lazy,
+}
+
 /// Validated metadata borrowing a live mapping, never its contents.
 #[derive(Clone, Copy)]
 pub(crate) struct ReclaimRange<'a> {
@@ -120,21 +135,27 @@ impl<'a> ReclaimRange<'a> {
         })
     }
 
-    pub(crate) fn reclaim(self) -> io::Result<()> {
+    pub(crate) fn reclaim(self, policy: ReclaimPolicy) -> io::Result<()> {
         if self.len == 0 {
             return Ok(());
         }
         let guard = self.slice.ptr_guard_mut();
+        #[cfg(target_os = "linux")]
+        let advice = match policy {
+            ReclaimPolicy::Immediate => libc::MADV_DONTNEED,
+            ReclaimPolicy::Lazy => libc::MADV_FREE,
+        };
+        #[cfg(not(target_os = "linux"))]
+        let advice = match policy {
+            ReclaimPolicy::Immediate | ReclaimPolicy::Lazy => libc::MADV_DONTNEED,
+        };
         // SAFETY: validation proved private anonymous owned backing and a
         // checked inward-aligned subrange. The borrowed volatile slice and
         // guard keep the mapping alive; no references to contents are formed.
-        let result = unsafe {
-            libc::madvise(
-                guard.as_ptr().add(self.offset).cast(),
-                self.len,
-                libc::MADV_DONTNEED,
-            )
-        };
+        // `MADV_FREE` only marks the range reclaimable; the kernel drops it
+        // under pressure, and a write before then cancels the marking.
+        let result =
+            unsafe { libc::madvise(guard.as_ptr().add(self.offset).cast(), self.len, advice) };
         if result != 0 {
             return Err(io::Error::last_os_error());
         }

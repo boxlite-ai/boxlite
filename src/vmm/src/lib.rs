@@ -74,6 +74,7 @@ mod vm;
 pub use chipset::{BusKind, Conflict};
 pub use config::VmConfig;
 pub use error::{Error, Result};
+pub use memory::ReclaimPolicy;
 pub use vm::{StopHandle, Vm, VmExit};
 
 /// A recording hypervisor backend shared by the crate's unit tests. Test

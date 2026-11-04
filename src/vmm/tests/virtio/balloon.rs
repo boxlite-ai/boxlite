@@ -125,8 +125,15 @@ fn context(
 }
 
 fn activated(memory: &Arc<GuestMemoryMmap>) -> (VirtioBalloon, Arc<Interrupt>) {
+    activated_with(memory, ReclaimPolicy::Immediate)
+}
+
+fn activated_with(
+    memory: &Arc<GuestMemoryMmap>,
+    reclaim: ReclaimPolicy,
+) -> (VirtioBalloon, Arc<Interrupt>) {
     let interrupt = Arc::new(Interrupt::default());
-    let mut balloon = VirtioBalloon::new().unwrap();
+    let mut balloon = VirtioBalloon::new(reclaim).unwrap();
     balloon.set_features(REPORTING).unwrap();
     balloon
         .activate(context(memory, [true; 3], SIZE, Arc::clone(&interrupt)))
@@ -196,9 +203,22 @@ fn resident(memory: &GuestMemoryMmap, address: u64, pages: usize) -> usize {
     residency.iter().filter(|byte| **byte & 1 != 0).count()
 }
 
+#[cfg(target_os = "linux")]
+fn lazy_free_kib() -> u64 {
+    std::fs::read_to_string("/proc/self/smaps_rollup")
+        .expect("read smaps_rollup")
+        .lines()
+        .find_map(|line| line.strip_prefix("LazyFree:"))
+        .expect("LazyFree in smaps_rollup")
+        .trim()
+        .trim_end_matches(" kB")
+        .parse()
+        .expect("LazyFree value")
+}
+
 #[test]
 fn balloon_spec_config_partial_actual_and_reset() {
-    let mut balloon = VirtioBalloon::new().unwrap();
+    let mut balloon = VirtioBalloon::new(ReclaimPolicy::Immediate).unwrap();
     assert_eq!(
         balloon.set_features(REPORTING | 1).unwrap_err().unsupported,
         1
@@ -246,7 +266,7 @@ fn balloon_activation_requires_only_negotiated_queues() {
         [true, true, false],
     ] {
         let memory = memory();
-        let mut balloon = VirtioBalloon::new().unwrap();
+        let mut balloon = VirtioBalloon::new(ReclaimPolicy::Immediate).unwrap();
         balloon.set_features(REPORTING).unwrap();
         assert!(matches!(
             balloon.activate(context(
@@ -259,7 +279,7 @@ fn balloon_activation_requires_only_negotiated_queues() {
         ));
     }
     let memory = memory();
-    let mut balloon = VirtioBalloon::new().unwrap();
+    let mut balloon = VirtioBalloon::new(ReclaimPolicy::Immediate).unwrap();
     balloon
         .activate(context(
             &memory,
@@ -274,7 +294,7 @@ fn balloon_activation_requires_only_negotiated_queues() {
 #[test]
 fn balloon_unnegotiated_reporting_never_consumes_a_ready_ring() {
     let memory = memory();
-    let mut balloon = VirtioBalloon::new().unwrap();
+    let mut balloon = VirtioBalloon::new(ReclaimPolicy::Immediate).unwrap();
     balloon
         .activate(context(
             &memory,
@@ -376,6 +396,35 @@ fn balloon_real_split_ring_reclaims_backing_then_reuses_same_capacity() {
         memory.iter().map(|region| region.len()).sum::<u64>(),
         RAM_LEN as u64
     );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn balloon_lazy_policy_marks_reported_pages_without_discarding_them() {
+    let memory = memory();
+    let (mut balloon, interrupt) = activated_with(&memory, ReclaimPolicy::Lazy);
+    let page = host_page_size().unwrap();
+    // MADV_FREE may skip a sub-folio range, so report a whole MiB.
+    let pages = (1 << 20) / page;
+    touch(&memory, DATA, pages);
+    assert_eq!(resident(&memory, DATA, pages), pages);
+    let lazy_before = lazy_free_kib();
+    write_desc(&memory, 2, 0, DATA, (pages * page) as u32, WRITE, 0);
+    submit(&memory, 2, 0);
+    balloon.on_event(DeviceEvent::QueueKick(2)).unwrap();
+    assert_eq!(read_u16(&memory, used(2) + 2), 1);
+    assert_eq!(interrupt.raised.load(Ordering::SeqCst), 1);
+    // MADV_FREE marks the range; it does not discard it now.
+    assert_eq!(resident(&memory, DATA, pages), pages);
+    assert!(
+        lazy_free_kib() > lazy_before,
+        "the report must mark its range reclaimable"
+    );
+    for index in 0..pages {
+        let address = GuestAddress(DATA + (index * page) as u64);
+        memory.write_obj(0x77u8, address).unwrap();
+        assert_eq!(memory.read_obj::<u8>(address).unwrap(), 0x77);
+    }
 }
 
 #[test]
@@ -515,7 +564,7 @@ fn balloon_silent_total_byte_overflow_does_not_reclaim_prefix() {
 #[test]
 fn balloon_maximum_chain_uses_bounded_metadata() {
     let memory = memory();
-    let mut balloon = VirtioBalloon::new().unwrap();
+    let mut balloon = VirtioBalloon::new(ReclaimPolicy::Immediate).unwrap();
     balloon.set_features(REPORTING).unwrap();
     balloon
         .activate(context(
@@ -543,7 +592,7 @@ fn balloon_guest_reuse_at_used_notification_has_no_later_reclaim() {
         reuse: Some(Arc::clone(&memory)),
         ..Interrupt::default()
     });
-    let mut balloon = VirtioBalloon::new().unwrap();
+    let mut balloon = VirtioBalloon::new(ReclaimPolicy::Immediate).unwrap();
     balloon.set_features(REPORTING).unwrap();
     balloon
         .activate(context(&memory, [true; 3], SIZE, interrupt))
@@ -578,7 +627,7 @@ fn balloon_os_reclaim_error_still_completes_without_deferred_retry() {
     assert_eq!(unsafe { libc::mlock(guard.as_ptr().cast(), page) }, 0);
     let error = ReclaimRange::new(&memory, GuestAddress(DATA), page, page)
         .unwrap()
-        .reclaim()
+        .reclaim(ReclaimPolicy::Immediate)
         .unwrap_err();
     assert_eq!(error.raw_os_error(), Some(libc::EINVAL));
     write_desc(&memory, 2, 0, DATA, page as u32, WRITE | NEXT, 1);
@@ -613,7 +662,7 @@ fn balloon_os_reclaim_error_still_completes_without_deferred_retry() {
 
 #[test]
 fn balloon_config_writes_only_actual_bytes_even_across_boundaries() {
-    let mut balloon = VirtioBalloon::new().unwrap();
+    let mut balloon = VirtioBalloon::new(ReclaimPolicy::Immediate).unwrap();
     balloon.write_config(3, &[0x11, 0x22, 0x33]).unwrap();
     balloon.write_config(7, &[0x44, 0x55]).unwrap();
     balloon.write_config(u64::MAX, &[0xff, 0xff]).unwrap();
@@ -761,7 +810,7 @@ fn report_hva_aliasing_control_gpa_is_rejected_before_any_reclaim() {
         .unwrap();
     ctx.queues =
         VirtQueues::prepare(queues, SPEC.queue_max, false, false, Arc::clone(&memory)).unwrap();
-    let mut balloon = VirtioBalloon::new().unwrap();
+    let mut balloon = VirtioBalloon::new(ReclaimPolicy::Immediate).unwrap();
     balloon.set_features(REPORTING).unwrap();
     balloon.activate(ctx).unwrap();
     touch(&memory, DATA, 2);
@@ -806,7 +855,7 @@ fn activation_rejects_a_control_table_spanning_adjacent_regions() {
         .unwrap();
     ctx.queues =
         VirtQueues::prepare(queues, SPEC.queue_max, false, false, Arc::clone(&memory)).unwrap();
-    let mut balloon = VirtioBalloon::new().unwrap();
+    let mut balloon = VirtioBalloon::new(ReclaimPolicy::Immediate).unwrap();
     balloon.set_features(REPORTING).unwrap();
     assert!(matches!(
         balloon.activate(ctx),

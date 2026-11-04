@@ -14,7 +14,7 @@ use super::{BootRegisters, Vm};
 use crate::{
     config::{MAX_VCPUS, VmConfig},
     error::Error,
-    memory::{MAX_MEMORY_MIB, RAM_START, ram_ranges},
+    memory::{MAX_MEMORY_MIB, RAM_START, ReclaimPolicy, ram_ranges},
     mock_vm::{Call, MockVm},
 };
 
@@ -42,6 +42,7 @@ fn config(vcpu_count: u8, memory_mib: u32) -> VmConfig {
         kernel: "vmlinux".into(),
         cmdline: "console=ttyS0".into(),
         initramfs: None,
+        reclaim: ReclaimPolicy::Immediate,
     }
 }
 

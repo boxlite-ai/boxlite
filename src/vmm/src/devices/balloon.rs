@@ -1,15 +1,17 @@
 // Copyright 2026 BoxLite Contributors
 // SPDX-License-Identifier: Apache-2.0
 
-//! Reporting-only balloon: the guest retains its capacity while the host drops
-//! backing for isolated free pages. No inflate/deflate target is ever requested.
+//! Reporting-only balloon: the guest retains its capacity while the host
+//! returns backing for isolated free pages. The configured [`ReclaimPolicy`]
+//! chooses immediate discard or pressure-driven reclaim. No inflate/deflate
+//! target is ever requested.
 
 use std::io;
 
 use virtio_queue::DescriptorChain;
 use vm_memory::GuestAddress;
 
-use crate::memory::{GuestMemoryMmap, ReclaimRange, host_page_size};
+use crate::memory::{GuestMemoryMmap, ReclaimPolicy, ReclaimRange, host_page_size};
 use crate::virtio::{
     ActivationContext, DeviceError, DeviceEvent, DeviceSpec, FeatureError, SnapshotSupport,
     VirtioDevice, queue::Completion,
@@ -31,17 +33,19 @@ pub(crate) struct VirtioBalloon {
     actual: u32,
     features: u64,
     page_size: usize,
+    reclaim: ReclaimPolicy,
     context: Option<ActivationContext>,
     control_ranges: [(GuestAddress, usize, usize); MAX_CONTROL_RANGES],
     control_count: usize,
 }
 
 impl VirtioBalloon {
-    pub(crate) fn new() -> io::Result<Self> {
+    pub(crate) fn new(reclaim: ReclaimPolicy) -> io::Result<Self> {
         Ok(Self {
             actual: 0,
             features: 0,
             page_size: host_page_size()?,
+            reclaim,
             context: None,
             control_ranges: [(GuestAddress(0), 0, 0); MAX_CONTROL_RANGES],
             control_count: 0,
@@ -151,8 +155,10 @@ impl VirtioDevice for VirtioBalloon {
                 let controls = &self.control_ranges[..self.control_count];
                 let memory = ctx.memory.as_ref();
                 let page_size = self.page_size;
-                ctx.queues
-                    .drain(2, |chain| report(chain, memory, controls, page_size))?
+                let reclaim = self.reclaim;
+                ctx.queues.drain(2, |chain| {
+                    report(chain, memory, controls, page_size, reclaim)
+                })?
             }
             _ => return Err(DeviceError::NeedsReset("balloon queue index")),
         };
@@ -168,6 +174,7 @@ fn report(
     memory: &GuestMemoryMmap,
     controls: &[(GuestAddress, usize, usize)],
     page_size: usize,
+    reclaim: ReclaimPolicy,
 ) -> Result<Completion, DeviceError> {
     let invalid = || DeviceError::NeedsReset("balloon report descriptor");
     let mut ranges = [None; MAX_DESCRIPTORS];
@@ -213,7 +220,7 @@ fn report(
     // used. A malicious guest can lose its own data; these guards protect this
     // device's ready queue control ranges even against HVA aliases.
     for (range, address, len) in ranges[..count].iter().flatten() {
-        if let Err(error) = range.reclaim() {
+        if let Err(error) = range.reclaim(reclaim) {
             tracing::warn!(
                 guest_addr = address.0,
                 len,
@@ -225,8 +232,10 @@ fn report(
             );
         }
     }
-    // Every syscall is finished before drain publishes used; there is no
-    // deferred work that could drop a page after the guest reuses it.
+    // Every advice syscall is finished before drain publishes used. Immediate
+    // reclaim therefore cannot drop a page after the guest reuses it. Lazy
+    // reclaim only marks the range: the kernel drops it under pressure, and a
+    // guest write before then cancels the marking.
     Ok(Completion::Used(0))
 }
 

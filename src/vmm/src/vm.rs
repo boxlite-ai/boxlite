@@ -128,6 +128,7 @@ impl Vm<boxlite_hypervisor::KvmVm> {
             ));
         }
         BALLOON_MMIO.append_cmdline(&mut config.cmdline);
+        let reclaim = config.reclaim;
 
         let (writer, worker) =
             ConsoleWorker::spawn(console, DEFAULT_QUEUE_BYTES).map_err(Error::SpawnConsole)?;
@@ -137,7 +138,7 @@ impl Vm<boxlite_hypervisor::KvmVm> {
             |ram, config| crate::boot::prepare(ram, config).map(|setup| setup.boot_regs),
             |chipset, context| {
                 add_legacy_devices(chipset, writer)?;
-                add_balloon(chipset, context)
+                add_balloon(chipset, context, reclaim)
             },
         )?;
         vm.console = Mutex::new(Some(worker));

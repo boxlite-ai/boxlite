@@ -13,6 +13,7 @@ use super::{balloon::VirtioBalloon, console::ConsoleWriter, i8042::I8042, serial
 use crate::{
     chipset::{BusKind, ChipsetBuilder},
     error::{Error, Result},
+    memory::ReclaimPolicy,
     virtio::{
         interrupt::MmioInterrupt,
         mmio::{MMIO_WINDOW_LEN, MmioResources, MmioTransport},
@@ -49,9 +50,13 @@ impl MmioSlot {
 }
 
 /// Uses the VM's RAM and shared executor; no device-private worker is created.
-pub(crate) fn add_balloon(builder: &mut ChipsetBuilder, context: DeviceContext<'_>) -> Result<()> {
+pub(crate) fn add_balloon(
+    builder: &mut ChipsetBuilder,
+    context: DeviceContext<'_>,
+    reclaim: ReclaimPolicy,
+) -> Result<()> {
     let device = Arc::new(Mutex::new(
-        VirtioBalloon::new().map_err(Error::CreateBalloon)?,
+        VirtioBalloon::new(reclaim).map_err(Error::CreateBalloon)?,
     ));
     builder.add("balloon", |resources| {
         resources.mmio(BALLOON_MMIO.base, MMIO_WINDOW_LEN);

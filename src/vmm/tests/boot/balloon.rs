@@ -9,7 +9,7 @@
 use super::*;
 use crate::{
     devices::{balloon::VirtioBalloon, x86_64::BALLOON_MMIO},
-    memory::GuestMemoryMmap,
+    memory::{GuestMemoryMmap, ReclaimPolicy},
     virtio::{
         ActivationContext, DeviceError, DeviceEvent, DeviceSpec, FeatureError, VirtioDevice,
         interrupt::MmioInterrupt,
@@ -182,7 +182,8 @@ fn run_reporting_guest(enabled: bool, init_on_free: bool) {
         |ram, config| prepare(ram, config).map(|setup| setup.boot_regs),
         |builder, context| {
             add_legacy_devices(builder, writer)?;
-            let inner = VirtioBalloon::new().map_err(Error::CreateBalloon)?;
+            let inner =
+                VirtioBalloon::new(ReclaimPolicy::Immediate).map_err(Error::CreateBalloon)?;
             let mut spec = *inner.spec();
             if !enabled && !init_on_free {
                 spec.features = 0;

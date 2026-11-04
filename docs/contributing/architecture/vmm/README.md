@@ -408,9 +408,11 @@ worker slot synchronously.
   - virtio-blk, virtio-vsock, virtio-net, virtio-console and virtio-rng;
   - reporting-only virtio-balloon: whole-chain validation, raw GPA and aligned
     HVA queue-control protection, inward private-anonymous reclaim before
-    used, unchanged capacity and safe reuse; Darwin `MADV_DONTNEED` may need
-    pressure. Linux x86_64, Linux arm64 and macOS arm64 real guests are all
-    completion gates; arm64 boot dependencies cannot be replaced by unit tests;
+    used, unchanged capacity and safe reuse; `Immediate` discards with
+    `MADV_DONTNEED`, while Linux `Lazy` marks with `MADV_FREE` so reclaim
+    follows memory pressure; Darwin `MADV_DONTNEED` may need pressure. Linux
+    x86_64, Linux arm64 and macOS arm64 real guests are all completion gates;
+    arm64 boot dependencies cannot be replaced by unit tests;
   - the virtio-fs core.
 - **M3:** virtio-fs passthrough for user volumes.
 - **M7:** virtio-mem.
@@ -438,7 +440,7 @@ worker slot synchronously.
   - Common drain handles at most one complete chain, then returns. A durable,
     coalesced continuation admits backlog next pass after other ready work,
     even without another guest kick. Balloon has no private scheduler.
-  - A synchronous reclaim may still block. Count bounds are not syscall-time,
+  - A reclaim syscall may still block. Count bounds are not syscall-time,
     total CPU or throughput guarantees; stop timeout is Fatal and retains RAM.
   - Status=0 closes admission and waits for the old generation before reset.
     VM exit and Drop stop/join before unmap. `WorkerRuntime` preserves the

@@ -274,7 +274,7 @@ fn balloon_reclaim_uses_host_addresses_and_preserves_partial_page_neighbours() {
             page,
         )
         .unwrap()
-        .reclaim()
+        .reclaim(super::ReclaimPolicy::Immediate)
         .unwrap();
         for offset in [
             aligned,

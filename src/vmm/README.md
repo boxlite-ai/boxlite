@@ -8,9 +8,10 @@ registers guest RAM and loads the kernel and boot data; `Vm::run` runs every vCP
 [VMM design](../../docs/contributing/architecture/vmm/README.md) specifies the
 lifecycle API, memory layout, buses, interrupts, and threads.
 
-`Vm`, `VmConfig`, `VmExit`, `StopHandle`, `Error` and `Result` are public, as
-are `BusKind` and `Conflict`, which `Error::ChipsetConflicts` carries; M2's
-engine adapter will consume that API and inspect the error's host cause.
+`Vm`, `VmConfig`, `ReclaimPolicy`, `VmExit`, `StopHandle`, `Error` and `Result`
+are public, as are `BusKind` and `Conflict`, which `Error::ChipsetConflicts`
+carries; M2's engine adapter will consume that API and inspect the error's host
+cause.
 `Vm::new(config, console)` adds COM1, the i8042 and virtio-balloon; COM1
 output reaches `console` through the
 [console queue](#legacy-devices-and-the-console).
@@ -28,7 +29,7 @@ boxlite-vmm
 | --- | --- |
 | `vm` | `Vm<H>`: validate the configuration, allocate and register RAM on host backend `H`, own the devices in a `Chipset`, load the boot data, and run the vCPUs until the first event; `StopHandle` and `VmExit` |
 | `boot` | Linux x86_64 boot: `prepare` loads the pinned ELF kernel through linux-loader, places an optional initramfs at the top of RAM, writes the zero page, E820 map, command line and MP table, and sets up the 64-bit entry state (GDT, identity page tables, registers) |
-| `config` | `VmConfig { vcpu_count, memory_mib, kernel, cmdline, initramfs }` and its bounds: 1..=64 vCPUs, 1..=3072 MiB, a printable-ASCII command line under 2048 bytes |
+| `config` | `VmConfig { vcpu_count, memory_mib, kernel, cmdline, initramfs, reclaim }` and its bounds: 1..=64 vCPUs, 1..=3072 MiB, a printable-ASCII command line under 2048 bytes; `reclaim` is `ReclaimPolicy::{Immediate, Lazy}` |
 | `error` | VMM errors that keep the hypervisor's cause chain, including a virtio device that cannot continue |
 | `memory` | `GuestRam`: owned guest RAM, the RAM layout, and the registration lifetime rules |
 | `cpu_features` | x86_64 guest CPUID for each vCPU and the boot MSRs |
@@ -38,7 +39,7 @@ boxlite-vmm
 | `virtio` | The virtio common infrastructure: the synchronous device contract (`VirtioDevice`, `DeviceSpec`, `DeviceEvent`, `ActivationContext`, `EventRegistrar`, `Waker`, `WorkerControl`), the `VirtQueues` facade (dense preparation and validation, EVENT_IDX, exactly-once deferred completion, notification drain, the stored guest-memory Arc and negotiated indirect flag, and `save`/`restore` stubs that report snapshots unsupported until M8), the 4 KiB virtio-mmio transport (register file, feature negotiation, queue configuration and activation, Status=0 reset, post-activation queue-write rejection), the MMIO interrupt handle, the default snapshot methods, and the virtio workers (`VirtioWorkers` over a `WorkerRuntime`; `SharedRuntime` runs every device's events on one thread) |
 | `irq` | `IrqChip`, the host interrupt controller as devices see it, and `IrqLine`, one device line; HVF and KVM provide the controller, WHP (M10) only local APICs |
 | `devices` | The console queue, and on x86_64 the 8250 UART at COM1 and the i8042 reset, with `add_legacy_devices`, which adds them to the chipset |
-| `devices::balloon` | Reporting-only `VirtioBalloon`: configuration, negotiation, whole-chain prevalidation and synchronous reclaim-before-used |
+| `devices::balloon` | Reporting-only `VirtioBalloon`: configuration, negotiation, whole-chain prevalidation and configurable immediate or lazy reclaim-before-used |
 | `virtio::worker` | One lazy shared poller/thread, coalesced generation-bound queue kicks, backend readiness, stop barriers and VM shutdown |
 | `events` | `Event`, which ends the VM, `EventSender`, which also latches the stop, and `EventLoop`, the poller that waits for the first event |
 
@@ -463,11 +464,19 @@ extra bytes in the same region; activation rejects it otherwise.
 
 The RAM owner supports only owned private-anonymous backing. It queries the real
 host page size once per device and prepares inward complete host pages before
-the first syscall. Empty interiors skip `madvise`. Every synchronous attempt
-finishes before used length zero is published; partial failures record GPA,
-raw length, aligned offset/length and errno, then continue. Used zero permits
-reuse, not released-byte accounting. There is no retry after completion, and
-Darwin's pressure-dependent `MADV_DONTNEED` is not immediate Linux discard.
+the first syscall. Empty interiors skip `madvise`. `VmConfig::reclaim` selects
+the advice. `Immediate` (the default) discards the pages with `MADV_DONTNEED`
+before used length zero is published. `Lazy` marks them with `MADV_FREE` on
+Linux, so the kernel discards them only under memory pressure and a guest that
+reuses them first does not fault; on other hosts it falls back to `Immediate`.
+With `Lazy`, used zero means the advice was applied, not that the backing is
+gone: an already-reported page that the guest never reuses may stay resident
+until pressure. Linux may skip a range that covers only part of a large folio;
+guest pageblock-order reports normally cover whole blocks. Partial failures
+record GPA, raw length, aligned offset/length and errno, then continue. Used
+zero permits reuse, not released-byte accounting. There is no retry after
+completion, and Darwin's pressure-dependent `MADV_DONTNEED` is not immediate
+Linux discard.
 
 Common `VirtQueues::drain` processes at most one complete chain per callback.
 Its notification recheck schedules pending work through a generation-bound
