@@ -143,6 +143,12 @@ heavily escaped text.
 Header/PAX/Parser conversion never reads or extracts files on the API host.
 Both tools require `WRITE_BOXES`, refresh activity and may auto-resume, matching REST.
 Guest paths at or under mounted filesystems remain unsupported by the underlying copy API.
+The tool and path descriptions name `/tmp`, `/dev/shm`, and mounted volumes explicitly.
+Choose a root-filesystem directory confirmed to exist; `/workspace` is an example,
+not a directory guaranteed by every image. To reach a mounted path, stage the file
+outside the mount and use `exec_box` to copy it between the staging and mounted paths.
+Directory downloads must not contain mounts, and upload archive entries must not
+land under mounts, even when the requested root path is outside them.
 Runner ignores `overwrite` and `follow_symlinks`; these tools reject both arguments.
 
 ## Box metrics

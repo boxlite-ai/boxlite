@@ -24,7 +24,13 @@ const path = z
   .min(1)
   .max(4096)
   .refine((value) => !value.includes('\0'))
-const scope = { ...organizationInput, box_id: path.max(256), path }
+const scope = {
+  ...organizationInput,
+  box_id: path.max(256),
+  path: path.describe(
+    'Guest root-filesystem path. Container mount paths such as /tmp, /dev/shm, and mounted volumes are unsupported. Use /workspace only after confirming it exists on the root filesystem.',
+  ),
+}
 const archiveString = z.string().max(Math.ceil(RUNNER_ARCHIVE_LIMIT / 3) * 4)
 const uploadFile = z.discriminatedUnion('format', [
   z.strictObject({ format: z.literal('utf8'), content: z.string().max(TEXT_FILE_LIMIT) }),
@@ -56,7 +62,7 @@ export class McpFileTools {
       'upload_files',
       {
         description:
-          'Upload UTF-8 single-file content or a base64 tar archive to the guest root filesystem. Limit: 60 KiB text or 64 KiB decoded tar; mounted filesystems are unsupported. Existing copy destination semantics apply.',
+          'Upload UTF-8 single-file content or a base64 tar archive to the guest root filesystem. All destination files must be outside container mounts, including /tmp, /dev/shm, and mounted volumes. Use an existing root-filesystem directory, such as /workspace when available. To write a mounted path, upload outside the mount, then use exec_box to copy the file to its final path. Limit: 60 KiB text or 64 KiB decoded tar. Existing copy destination semantics apply.',
         inputSchema: z.strictObject({ ...scope, file: uploadFile }),
         outputSchema: completedOutput,
         annotations: { ...mutationAnnotations, destructiveHint: true },
@@ -81,7 +87,7 @@ export class McpFileTools {
       'download_files',
       {
         description:
-          'Download a guest file as UTF-8 text or a base64 tar archive (64 KiB maximum). Text requires a confirmed single regular UTF-8 file within 60 KiB. Use tar_base64 for directories, binary files or older guests with unknown source shape; mounted filesystems are unsupported.',
+          'Download guest root-filesystem content as UTF-8 text or a base64 tar archive (64 KiB maximum). Paths under container mounts, including /tmp, /dev/shm, and mounted volumes, are unsupported; source directories containing mounts are also unsupported. To read a mounted path, first use exec_box to copy the file to a root-filesystem path, then download it. Text requires a confirmed single regular UTF-8 file within 60 KiB. Use tar_base64 for directories, binary files or older guests with unknown source shape.',
         inputSchema: z.strictObject({ ...scope, format: z.enum(['utf8', 'tar_base64']).default('utf8') }),
         outputSchema: z.strictObject({ file: downloadFile }),
         annotations: mutationAnnotations,
