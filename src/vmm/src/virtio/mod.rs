@@ -25,6 +25,8 @@ use self::{queue::VirtQueues, worker::VirtioWorkers};
 use crate::{events::EventSender, memory::GuestMemoryMmap};
 
 pub(crate) mod blk;
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+pub(crate) mod fs;
 pub(crate) mod interrupt;
 pub(crate) mod mmio;
 pub(crate) mod queue;
