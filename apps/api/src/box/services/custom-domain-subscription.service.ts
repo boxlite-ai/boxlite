@@ -1,12 +1,35 @@
 /* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
 
-import { HttpException, Injectable } from '@nestjs/common'
+import { InjectRedis } from '@nestjs-modules/ioredis'
+import { HttpException, Injectable, Logger } from '@nestjs/common'
 import { randomUUID } from 'node:crypto'
 import axios from 'axios'
-import { DataSource } from 'typeorm'
+import { Redis } from 'ioredis'
 import { TypedConfigService } from '../../config/typed-config.service'
 
 export type DomainSubscription = 'active' | 'required' | 'unavailable'
+export type DomainSubscriptionGrant = { status: DomainSubscription; expiresAt: number }
+
+const CACHE_TTL_MS = 86_400_000
+const RETRY_TTL_MS = 30_000
+const CACHE_PREFIX = 'commerce:custom-domain-subscription:v1:'
+
+// Compare and publish together: a timed-out refresher cannot overwrite a newer
+// result. Redis time also bounds lifetime when the API clock runs ahead.
+const PUBLISH_GRANT = `
+  if redis.call('GET', KEYS[2]) ~= ARGV[1] then return 0 end
+  local time = redis.call('TIME')
+  local now = tonumber(time[1]) * 1000 + math.floor(tonumber(time[2]) / 1000)
+  local grant = cjson.decode(ARGV[2])
+  grant.expiresAt = math.min(grant.expiresAt, now + tonumber(ARGV[3]))
+  redis.call('SET', KEYS[1], cjson.encode(grant))
+  redis.call('PEXPIREAT', KEYS[1], grant.expiresAt)
+  return 1
+`
+const RELEASE_REFRESH = `
+  if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('DEL', KEYS[1]) end
+  return 0
+`
 
 /** Interprets Commerce's effective entitlement, independently of numeric Box limits. */
 export function subscriptionExpiry(data: unknown, now: number): number | null {
@@ -26,7 +49,7 @@ export function subscriptionExpiry(data: unknown, now: number): number | null {
   }
   const end = typeof cycleTo === 'string' ? Date.parse(cycleTo) : NaN
   if (!Number.isFinite(end)) throw new Error('Invalid subscription cycle')
-  return end > now ? Math.min(end, now + 5 * 60_000) : null
+  return end > now ? Math.min(end, now + CACHE_TTL_MS) : null
 }
 
 export function requireDomainSubscription(status: DomainSubscription): void {
@@ -44,80 +67,104 @@ export function requireDomainSubscription(status: DomainSubscription): void {
 
 @Injectable()
 export class CustomDomainSubscriptionService {
+  private readonly logger = new Logger(CustomDomainSubscriptionService.name)
+
   constructor(
-    private readonly db: DataSource,
+    @InjectRedis() private readonly redis: Redis,
     private readonly config: TypedConfigService,
   ) {}
 
-  async read(organizationId: string): Promise<DomainSubscription> {
-    const [row]: { eligible: boolean | null; valid: boolean }[] = await this.db.query(
-      `SELECT eligible, valid_until > now() AS valid FROM custom_domain_subscription WHERE organization_id = $1`,
-      [organizationId],
-    )
-    if (row?.eligible === false) return 'required'
-    return row?.eligible && row.valid ? 'active' : 'unavailable'
+  /** Cache-only lookup for bind errors; never calls Commerce or renews expiry. */
+  async read(organizationId: string): Promise<DomainSubscriptionGrant> {
+    try {
+      const raw = await this.withCacheTimeout(this.redis.get(this.cacheKey(organizationId)))
+      if (raw !== null) {
+        const grant = JSON.parse(raw) as DomainSubscriptionGrant
+        if (
+          grant &&
+          ['active', 'required', 'unavailable'].includes(grant.status) &&
+          Number.isSafeInteger(grant.expiresAt) &&
+          grant.expiresAt > Date.now()
+        )
+          return { status: grant.status, expiresAt: grant.expiresAt }
+      }
+    } catch {
+      this.logger.warn(`Unable to read custom-domain subscription cache for organization ${organizationId}`)
+    }
+    return { status: 'unavailable', expiresAt: 0 }
   }
 
   /** Coalesce across API replicas; a lost or expired refresh lease cannot publish a result. */
-  async refresh(organizationId: string): Promise<DomainSubscription> {
-    await this.db.query(
-      `INSERT INTO custom_domain_subscription (organization_id)
-       SELECT id FROM organization WHERE id = $1 ON CONFLICT DO NOTHING`,
-      [organizationId],
-    )
+  async refresh(organizationId: string): Promise<DomainSubscriptionGrant> {
+    const cached = await this.read(organizationId)
+    if (cached.expiresAt > Date.now()) return cached
+    const key = this.cacheKey(organizationId)
+    const lock = `${key}:refresh`
     const owner = randomUUID()
-    const [claimed]: [unknown[], number] = await this.db.query(
-      `UPDATE custom_domain_subscription SET refresh_owner = $2, refresh_until = now() + interval '10 seconds'
-       WHERE organization_id = $1 AND refresh_until <= now()
-         AND (checked_at IS NULL OR checked_at <= now() - interval '30 seconds') RETURNING organization_id`,
-      [organizationId, owner],
-    )
-    if (claimed.length === 0) return this.read(organizationId)
     try {
-      const base = this.config.get('billingApiUrl')?.trim()
-      const token = this.config.get('usageExport.token')?.trim()
-      if (!base || !token) throw new Error('Commerce is unavailable')
-      const url = new URL(base)
-      if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) {
-        throw new Error('Invalid Commerce endpoint')
+      if (!(await this.withCacheTimeout(this.redis.set(lock, owner, 'PX', 10_000, 'NX')))) {
+        return this.read(organizationId)
       }
-      const { data } = await axios.get<unknown>(
-        `${base.replace(/\/+$/, '')}/organization/${encodeURIComponent(organizationId)}/plan`,
-        { timeout: 2_000, maxRedirects: 0, headers: { authorization: `Bearer ${token}` } },
-      )
-      const expires = subscriptionExpiry(data, Date.now())
-      await this.db.transaction(async (manager) => {
-        const [changed]: [unknown[], number] = await manager.query(
-          `UPDATE custom_domain_subscription SET eligible = $3,
-             valid_until = LEAST($4::timestamptz, now() + interval '5 minutes'), checked_at = now(),
-             refresh_owner = NULL, refresh_until = '-infinity'
-           WHERE organization_id = $1 AND refresh_owner = $2 AND refresh_until > now() RETURNING organization_id`,
-          [organizationId, owner, expires !== null, new Date(expires ?? 0)],
-        )
-        if (changed.length && expires === null) {
-          // Restoring a subscription must recheck DNS. Revoke the publication
-          // token but retain its lease deadline so in-flight cloud work drains.
-          await manager.query(
-            `UPDATE custom_domain_config SET dns_valid_until = '-infinity', next_check_at = now(), lease_owner = NULL
-            WHERE organization_id = $1 AND deleted_at IS NULL`,
-            [organizationId],
-          )
+      const completed = await this.read(organizationId)
+      if (completed.expiresAt > Date.now()) return completed
+      let grant: DomainSubscriptionGrant
+      try {
+        const base = this.config.get('billingApiUrl')?.trim()
+        const token = this.config.get('usageExport.token')?.trim()
+        if (!base || !token) throw new Error('Commerce is unavailable')
+        const url = new URL(base)
+        if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) {
+          throw new Error('Invalid Commerce endpoint')
         }
-      })
+        const { data } = await axios.get<unknown>(
+          `${base.replace(/\/+$/, '')}/organization/${encodeURIComponent(organizationId)}/plan`,
+          { timeout: 2_000, maxRedirects: 0, headers: { authorization: `Bearer ${token}` } },
+        )
+        const expiresAt = subscriptionExpiry(data, Date.now())
+        grant =
+          expiresAt === null
+            ? { status: 'required', expiresAt: Date.now() + RETRY_TTL_MS }
+            : { status: 'active', expiresAt }
+      } catch {
+        this.logger.warn(`Unable to check custom-domain subscription for organization ${organizationId}`)
+        grant = { status: 'unavailable', expiresAt: Date.now() + RETRY_TTL_MS }
+      }
+      await this.withCacheTimeout(
+        this.redis.eval(
+          PUBLISH_GRANT,
+          2,
+          key,
+          lock,
+          owner,
+          JSON.stringify(grant),
+          grant.status === 'active' ? CACHE_TTL_MS : RETRY_TTL_MS,
+        ),
+      )
     } catch {
-      // An outage never renews the prior absolute grant. Keep only its original lifetime.
-      await this.db.query(
-        `UPDATE custom_domain_subscription SET checked_at = now()
-        WHERE organization_id = $1 AND refresh_owner = $2 AND refresh_until > now()`,
-        [organizationId, owner],
-      )
+      this.logger.warn(`Unable to refresh custom-domain subscription cache for organization ${organizationId}`)
     } finally {
-      await this.db.query(
-        `UPDATE custom_domain_subscription SET refresh_owner = NULL, refresh_until = '-infinity'
-        WHERE organization_id = $1 AND refresh_owner = $2`,
-        [organizationId, owner],
-      )
+      await this.withCacheTimeout(this.redis.eval(RELEASE_REFRESH, 1, lock, owner)).catch(() => {
+        this.logger.warn(`Unable to release custom-domain subscription refresh for organization ${organizationId}`)
+      })
     }
     return this.read(organizationId)
+  }
+
+  private cacheKey(organizationId: string): string {
+    return `${CACHE_PREFIX}{${encodeURIComponent(organizationId)}}`
+  }
+
+  private async withCacheTimeout<T>(operation: Promise<T>): Promise<T> {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    try {
+      return await Promise.race([
+        operation,
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error('Subscription cache timed out')), 1_000)
+        }),
+      ])
+    } finally {
+      clearTimeout(timer)
+    }
   }
 }

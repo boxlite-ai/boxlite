@@ -2,149 +2,128 @@
 
 import { randomUUID } from 'node:crypto'
 import axios from 'axios'
-import { DataSource } from 'typeorm'
-import { AddCustomDomainConfig1793764800000 } from '../../migrations/pre-deploy/1793764800000-add-custom-domain-config-migration'
+import { Redis } from 'ioredis'
 import { CustomDomainSubscriptionService } from './custom-domain-subscription.service'
 
 jest.mock('axios')
 const get = axios.get as jest.Mock
-const describeWithDatabase = process.env.DB_HOST ? describe : describe.skip
-const org = '00000000-0000-4000-8000-000000000001'
-const schema = `custom_domain_${randomUUID().replaceAll('-', '')}`
+const describeWithRedis = process.env.BOXLITE_TEST_REDIS_URL ? describe : describe.skip
+const org = randomUUID()
+const key = `commerce:custom-domain-subscription:v1:{${org}}`
+const lock = `${key}:refresh`
 
-describeWithDatabase('custom domain subscription (real Postgres)', () => {
-  let db: DataSource
+describeWithRedis('custom domain subscription (real Redis)', () => {
+  let redis: Redis
   let service: CustomDomainSubscriptionService
+  let replica: CustomDomainSubscriptionService
   let billingEnabled = true
-  const activePlan = () => ({
-    data: {
-      plan: {
-        status: 'active',
-        entitlements: 'active',
-        cycleTo: new Date(Date.now() + 3_600_000).toISOString(),
-      },
-    },
+  const config = {
+    get: (name: string) =>
+      billingEnabled ? (name === 'billingApiUrl' ? 'https://commerce.example.test' : 'test-service-token') : undefined,
+  }
+  const activePlan = (cycleTo = Date.now() + 3 * 86_400_000) => ({
+    data: { plan: { status: 'active', entitlements: 'active', cycleTo: new Date(cycleTo).toISOString() } },
   })
 
   beforeAll(async () => {
-    db = await new DataSource({
-      type: 'postgres',
-      host: process.env.DB_HOST,
-      port: Number(process.env.DB_PORT || 5432),
-      username: process.env.DB_USERNAME,
-      password: process.env.DB_PASSWORD,
-      database: process.env.DB_DATABASE,
-      extra: { options: `-c search_path=${schema},public` },
-    }).initialize()
-    await db.query(`CREATE SCHEMA "${schema}"`)
-    await db.query(`CREATE EXTENSION IF NOT EXISTS "uuid-ossp"`)
-    await db.query(`CREATE TABLE organization (id uuid PRIMARY KEY)`)
-    const runner = db.createQueryRunner()
-    try {
-      await new AddCustomDomainConfig1793764800000().up(runner)
-    } finally {
-      await runner.release()
-    }
-    service = new CustomDomainSubscriptionService(db, {
-      get: (key: string) => {
-        if (!billingEnabled) return undefined
-        return key === 'billingApiUrl' ? 'https://commerce.example.test' : 'test-service-token'
-      },
-    } as never)
+    redis = new Redis(process.env.BOXLITE_TEST_REDIS_URL!, { lazyConnect: true, maxRetriesPerRequest: 0 })
+    await redis.connect()
+    service = new CustomDomainSubscriptionService(redis, config as never)
+    replica = new CustomDomainSubscriptionService(redis, config as never)
   })
-
-  afterAll(async () => {
-    if (!db?.isInitialized) return
-    try {
-      await db.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`)
-    } finally {
-      await db.destroy()
-    }
-  })
-
   beforeEach(async () => {
     billingEnabled = true
     get.mockReset()
-    await db.query(`TRUNCATE custom_domain_subscription, custom_domain_config, organization`)
-    await db.query(`INSERT INTO organization (id) VALUES ($1)`, [org])
+    await redis.del(key, lock)
+  })
+  afterEach(() => {
+    jest.restoreAllMocks()
+    jest.useRealTimers()
+  })
+  afterAll(async () => {
+    await redis.del(key, lock)
+    await redis.quit()
   })
 
-  it('persists a bounded grant and coalesces repeated refreshes', async () => {
+  it('shares a one-day grant without sliding expiry or repeating the existing Commerce request', async () => {
     get.mockResolvedValue(activePlan())
-    expect(await service.refresh(org)).toBe('active')
-    expect(await service.refresh(org)).toBe('active')
+    const grant = await service.refresh(org)
+    expect(grant.status).toBe('active')
+    expect(await replica.refresh(org)).toEqual(grant)
+    expect(await service.read(org)).toEqual(grant)
     expect(get).toHaveBeenCalledTimes(1)
-    expect(get).toHaveBeenCalledWith(
-      `https://commerce.example.test/organization/${org}/plan`,
-      expect.objectContaining({
-        timeout: 2000,
-        maxRedirects: 0,
-        headers: { authorization: 'Bearer test-service-token' },
-      }),
-    )
-    const [row] = await db.query(
-      `SELECT extract(epoch FROM valid_until - now()) AS seconds FROM custom_domain_subscription`,
-    )
-    expect(Number(row.seconds)).toBeGreaterThan(290)
-    expect(Number(row.seconds)).toBeLessThanOrEqual(300)
+    expect(get).toHaveBeenCalledWith(`https://commerce.example.test/organization/${org}/plan`, {
+      timeout: 2000,
+      maxRedirects: 0,
+      headers: { authorization: 'Bearer test-service-token' },
+    })
+    const ttl = await redis.pttl(key)
+    expect(ttl).toBeGreaterThan(86_395_000)
+    expect(ttl).toBeLessThanOrEqual(86_400_000)
+    expect(await redis.get(lock)).toBeNull()
   })
 
-  it('does not extend the old lease on a Commerce outage and denies after expiry', async () => {
+  it('caps the Redis lifetime at one day when the API clock is ahead', async () => {
+    jest.spyOn(Date, 'now').mockReturnValue(Date.now() + 60_000)
     get.mockResolvedValue(activePlan())
-    await service.refresh(org)
-    const [before] = await db.query(`SELECT valid_until FROM custom_domain_subscription`)
-    await db.query(`UPDATE custom_domain_subscription SET checked_at = NULL`)
+    expect((await service.refresh(org)).status).toBe('active')
+    expect(await redis.pttl(key)).toBeLessThanOrEqual(86_400_000)
+  })
+
+  it('bounds the cache by the paid cycle even when it ends before one day', async () => {
+    const end = Date.now() + 20_000
+    get.mockResolvedValue(activePlan(end))
+    expect(await service.refresh(org)).toEqual({ status: 'active', expiresAt: end })
+    expect(await redis.pttl(key)).toBeLessThanOrEqual(20_000)
+  })
+
+  it('rejects a logically expired grant even if Redis still holds the key and Commerce is down', async () => {
+    get.mockResolvedValue(activePlan())
+    const grant = await service.refresh(org)
+    jest.spyOn(Date, 'now').mockReturnValue(grant.expiresAt + 1)
+    expect(await redis.exists(key)).toBe(1)
+    expect(await service.read(org)).toEqual({ status: 'unavailable', expiresAt: 0 })
     get.mockRejectedValue(new Error('timeout'))
-    expect(await service.refresh(org)).toBe('active')
-    const [after] = await db.query(`SELECT valid_until FROM custom_domain_subscription`)
-    expect(after.valid_until).toEqual(before.valid_until)
-    await db.query(`UPDATE custom_domain_subscription SET valid_until = now() - interval '1 second', checked_at = NULL`)
-    expect(await service.refresh(org)).toBe('unavailable')
+    expect((await service.refresh(org)).status).toBe('unavailable')
   })
 
-  it('caps the grant at five database minutes when the API clock is ahead', async () => {
-    const clock = jest.spyOn(Date, 'now').mockReturnValue(Date.now() + 60_000)
-    try {
-      get.mockResolvedValue(activePlan())
-      expect(await service.refresh(org)).toBe('active')
-      const [row] = await db.query(
-        `SELECT extract(epoch FROM valid_until - checked_at) AS seconds FROM custom_domain_subscription`,
-      )
-      expect(Number(row.seconds)).toBeLessThanOrEqual(300)
-    } finally {
-      clock.mockRestore()
-    }
+  it('refreshes a denied subscription after the short retry cache expires', async () => {
+    get.mockResolvedValueOnce({ data: {} })
+    const denied = await service.refresh(org)
+    expect(denied.status).toBe('required')
+    expect(await redis.pttl(key)).toBeLessThanOrEqual(30_000)
+    expect(await replica.refresh(org)).toEqual(denied)
+    expect(get).toHaveBeenCalledTimes(1)
+    jest.spyOn(Date, 'now').mockReturnValue(denied.expiresAt + 1)
+    get.mockResolvedValueOnce(activePlan())
+    expect((await service.refresh(org)).status).toBe('active')
+    expect(get).toHaveBeenCalledTimes(2)
   })
 
-  it('ends access and invalidates DNS readiness immediately on a suspended entitlement', async () => {
-    get.mockResolvedValue(activePlan())
-    await service.refresh(org)
-    await db.query(
-      `INSERT INTO custom_domain_config (organization_id, hostname, challenge, challenge_expires_at,
-      dns_valid_until, phase) VALUES ($1, 'app.example.com', 'test-challenge', now() + interval '1 day',
-      now() + interval '5 minutes', 'ready')`,
-      [org],
-    )
-    await db.query(`UPDATE custom_domain_subscription SET checked_at = NULL`)
-    await db.query(`UPDATE custom_domain_config SET lease_owner = $1, lease_until = now() + interval '2 minutes'`, [
-      randomUUID(),
-    ])
-    get.mockResolvedValue({ data: { plan: { ...activePlan().data.plan, entitlements: 'suspended' } } })
-    expect(await service.refresh(org)).toBe('required')
-    const [config] = await db.query(`SELECT dns_valid_until > now() AS valid, lease_owner FROM custom_domain_config`)
-    expect(config.valid).toBe(false)
-    expect(config.lease_owner).toBeNull()
-    get.mockResolvedValue(activePlan())
-    await db.query(`UPDATE custom_domain_subscription SET checked_at = NULL`)
-    expect(await service.refresh(org)).toBe('active')
-    const [stillNeedsDns] = await db.query(`SELECT dns_valid_until > now() AS valid FROM custom_domain_config`)
-    expect(stillNeedsDns.valid).toBe(false)
-  })
+  it.each([null, { plan: { status: 'unknown' } }, { plan: { status: 'active', cycleTo: 'bad' } }])(
+    'does not grant access for a malformed Commerce response %j',
+    async (data) => {
+      get.mockResolvedValue({ data })
+      expect((await service.refresh(org)).status).toBe('unavailable')
+      expect(await redis.pttl(key)).toBeLessThanOrEqual(30_000)
+      await replica.refresh(org)
+      expect(get).toHaveBeenCalledTimes(1)
+    },
+  )
 
-  it('rejects a late grant from a worker whose lease expired before a newer denial', async () => {
+  it.each(['{invalid', 'null', '{"status":"active"}', '{"status":"active","expiresAt":"forever"}'])(
+    'does not trust a malformed cache entry %s',
+    async (raw) => {
+      await redis.set(key, raw)
+      expect(await service.read(org)).toEqual({ status: 'unavailable', expiresAt: 0 })
+      expect(get).not.toHaveBeenCalled()
+    },
+  )
+
+  it('coalesces concurrent cache misses across instances', async () => {
     let finish!: (value: ReturnType<typeof activePlan>) => void
     let started!: () => void
-    const startedRequest = new Promise<void>((resolve) => {
+    const began = new Promise<void>((resolve) => {
       started = resolve
     })
     get.mockImplementationOnce(() => {
@@ -153,26 +132,68 @@ describeWithDatabase('custom domain subscription (real Postgres)', () => {
         finish = resolve
       })
     })
-    const first = service.refresh(org)
-    await startedRequest
-    await db.query(`UPDATE custom_domain_subscription SET refresh_until = now() - interval '1 second'`)
-    get.mockResolvedValueOnce({ data: {} })
-    expect(await service.refresh(org)).toBe('required')
-    finish(activePlan())
-    expect(await first).toBe('required')
-    expect(await service.read(org)).toBe('required')
+    const pending = service.refresh(org)
+    await began
+    try {
+      expect((await replica.refresh(org)).status).toBe('unavailable')
+      expect(get).toHaveBeenCalledTimes(1)
+    } finally {
+      finish(activePlan())
+    }
+    const granted = await pending
+    expect(granted.status).toBe('active')
+    expect(await replica.refresh(org)).toEqual(granted)
+    expect(get).toHaveBeenCalledTimes(1)
   })
 
-  it('creates no grant for a removed organization', async () => {
-    await db.query(`DELETE FROM organization`)
-    expect(await service.refresh(org)).toBe('unavailable')
+  it('rejects a late grant whose refresh owner was replaced by a newer denial', async () => {
+    let finish!: (value: ReturnType<typeof activePlan>) => void
+    let started!: () => void
+    const began = new Promise<void>((resolve) => {
+      started = resolve
+    })
+    get.mockImplementationOnce(() => {
+      started()
+      return new Promise((resolve) => {
+        finish = resolve
+      })
+    })
+    const pending = service.refresh(org)
+    await began
+    let denied
+    try {
+      // Expire the first lease at the controlled HTTP boundary, without waiting ten seconds.
+      await redis.pexpireat(lock, 1)
+      get.mockResolvedValueOnce({ data: {} })
+      denied = await replica.refresh(org)
+      expect(denied.status).toBe('required')
+      await redis.set(lock, 'new-refresh-owner', 'PX', 10_000)
+    } finally {
+      finish(activePlan())
+    }
+    expect(await pending).toEqual(denied)
+    expect(await service.read(org)).toEqual(denied)
+    expect(await redis.get(lock)).toBe('new-refresh-owner')
+  })
+
+  it('fails closed without calling Commerce when Redis cannot coordinate a refresh', async () => {
+    jest.spyOn(redis, 'set').mockRejectedValue(new Error('Redis unavailable'))
+    expect((await service.refresh(org)).status).toBe('unavailable')
     expect(get).not.toHaveBeenCalled()
-    expect(await db.query(`SELECT * FROM custom_domain_subscription`)).toEqual([])
+  })
+
+  it('bounds a stalled cache read', async () => {
+    jest.useFakeTimers()
+    jest.spyOn(redis, 'get').mockImplementation(() => new Promise(() => {}))
+    const pending = service.read(org)
+    await jest.advanceTimersByTimeAsync(1_000)
+    expect(await pending).toEqual({ status: 'unavailable', expiresAt: 0 })
+    expect(get).not.toHaveBeenCalled()
   })
 
   it('fails closed when Commerce is not configured', async () => {
     billingEnabled = false
-    expect(await service.refresh(org)).toBe('unavailable')
+    expect((await service.refresh(org)).status).toBe('unavailable')
     expect(get).not.toHaveBeenCalled()
   })
 })

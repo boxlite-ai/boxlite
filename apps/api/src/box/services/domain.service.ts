@@ -15,7 +15,7 @@ import { Domain, DomainTarget } from '../entities/domain.entity'
 import { BoxState } from '../enums/box-state.enum'
 import { BoxDesiredState } from '../enums/box-desired-state.enum'
 import { CUSTOM_DOMAIN_READY_SQL } from './custom-domain-policy'
-import { requireDomainSubscription } from './custom-domain-subscription.service'
+import { CustomDomainSubscriptionService, requireDomainSubscription } from './custom-domain-subscription.service'
 import {
   DomainCountLimitReachedError,
   DomainNotOwnedError,
@@ -92,6 +92,7 @@ export class DomainService {
     @InjectDataSource() private readonly dataSource: DataSource,
     private readonly regionService: RegionService,
     private readonly configService: TypedConfigService,
+    private readonly subscriptions: CustomDomainSubscriptionService,
   ) {}
 
   /**
@@ -186,15 +187,12 @@ export class DomainService {
       )
       if (bound === 0) {
         const [held] = await manager.query(
-          `SELECT d.kind, s.eligible, s.valid_until > now() AS valid
-          FROM domain d LEFT JOIN custom_domain_subscription s ON s.organization_id = d.organization_id
+          `SELECT d.kind FROM domain d
           WHERE d.hostname = $1 AND d.organization_id = $2`,
           [hostname, current.organizationId],
         )
         if (held?.kind === 'custom') {
-          requireDomainSubscription(
-            held.eligible === false ? 'required' : held.eligible && held.valid ? 'active' : 'unavailable',
-          )
+          requireDomainSubscription((await this.subscriptions.read(current.organizationId)).status)
           throw new HttpException(
             { code: 'domain_not_ready', message: 'Complete custom domain setup in Dashboard before binding.' },
             409,

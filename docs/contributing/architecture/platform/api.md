@@ -667,8 +667,8 @@ Use the returned guest ID with the status, attach, signal, resize, and kill
 routes, including for the main session; terminating main can stop the box.
 Listing a stopped box returns an empty inventory and never starts it.
 
-Custom-domain bind reads persisted eligibility and readiness; it performs no DNS
-challenge. Its fields are unchanged, with new failures `403 subscription_required`,
+Custom-domain bind reads persisted readiness bounded by the subscription deadline;
+it performs no DNS challenge or Commerce lookup. Its fields are unchanged, with new failures `403 subscription_required`,
 `409 subscription_not_ready` and `409 domain_not_ready`. Unbind keeps ownership
 and remains available after subscription expiry; only platform names occupy quota.
 
@@ -686,6 +686,10 @@ require organization membership and Box write permission:
 Each configuration has `id`, `hostname`, `phase`, `ready`, `errorCode`,
 `challengeExpiresAt` and `dnsRecords` (`name`, `type`, `value`). Challenges and
 certificate DNS records appear here, not in portable bind/list responses.
+Subscription checks reuse Commerce's existing `GET /organization/{organizationId}/plan`;
+no new subscription endpoint is introduced. Active eligibility is cached in Redis
+for at most one day, shortened to `cycleTo`; denied or unavailable results last
+30 seconds. Bind only reads Redis when classifying a readiness failure.
 Read, delete and unbind remain usable after subscription loss. See the
 [DNS setup guide](../../../concepts/networking.md#bring-your-own-domain).
 

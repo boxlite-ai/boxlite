@@ -4,14 +4,14 @@ import { requireDomainSubscription, subscriptionExpiry } from './custom-domain-s
 
 describe('custom domain subscription policy', () => {
   const now = Date.parse('2026-11-04T00:00:00Z')
-  const future = new Date(now + 3_600_000).toISOString()
+  const future = new Date(now + 3 * 86_400_000).toISOString()
 
   it.each([
     { status: 'active' },
     { status: 'active', entitlements: 'active', cancelAtPeriodEnd: true },
     { status: 'past_due', entitlements: 'active' },
-  ])('grants effective paid access for %j for at most five minutes', (plan) => {
-    expect(subscriptionExpiry({ plan: { ...plan, cycleTo: future } }, now)).toBe(now + 300_000)
+  ])('grants effective paid access for %j for at most one day', (plan) => {
+    expect(subscriptionExpiry({ plan: { ...plan, cycleTo: future } }, now)).toBe(now + 86_400_000)
   })
 
   it('clips access to the paid cycle and rejects an expired cycle', () => {

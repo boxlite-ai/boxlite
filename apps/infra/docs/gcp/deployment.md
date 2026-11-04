@@ -78,9 +78,9 @@ For locks, refresh or removal, follow [shared recovery](../deployment.md#recover
 
 ## Customer domain HTTPS
 
-The feature is off until all four API settings below are present. Supply them as
+API domain onboarding requires all four settings below. Supply them as
 plain values in the stage's API environment group; do not put them only in a local
-shell or the secrets-reference channel. The proxy switch follows this API opt-in.
+shell or the secrets-reference channel.
 
 | Setting | Required value |
 | --- | --- |
@@ -96,8 +96,11 @@ The GCP provider grants the API service account a custom role for DNS authorizat
 certificate and map-entry create/get/delete/use plus operation get; it does not
 grant map mutation. With the feature enabled, Cloud Run keeps at least one instance
 and allocates CPU outside requests so the reconciliation worker continues at idle.
-This changes idle cost. Every proxy must receive `PROXY_DOMAIN` and the derived
-`CUSTOM_DOMAINS_ENABLED=true` together.
+This changes idle cost. Every proxy receives the required `PROXY_DOMAIN` namespace;
+other valid customer hosts always use exact domain lookup.
+API onboarding still requires all GCP settings above.
+IP-host `GET /health` remains available to GKE and load-balancer probes, while
+customer-host `/health` resolves to the customer's service.
 
 Before enabling, deploy the migration and compatible API/proxy versions everywhere.
 Confirm the Certificate Manager API is enabled, the map is attached, the selected
@@ -114,8 +117,8 @@ No live issuance or deployment was performed as part of the local implementation
 Resource/rate failures persist with backoff; manual retry cannot bypass provider
 capacity errors. Unbind and subscription suspension retain certificates and their
 cloud allocation; deletion frees it only after asynchronous cleanup. Keep the worker
-enabled until pending deletions drain. Roll back only to a version that understands
-custom-domain gating and platform-only quota, or disable access on both API and proxy
-first; do not remove the state tables before cloud cleanup.
+enabled until pending deletions drain. Roll back only to a version that preserves
+exact-host routing, custom-domain eligibility checks and platform-only quota;
+do not remove the state tables before cloud cleanup.
 
 Sources: [bootstrap](../../bootstrap/gcp.ts), [Pulumi entrypoint](../../mdeploy/pulumi/program.ts).

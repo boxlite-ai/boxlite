@@ -538,7 +538,6 @@ export class OrganizationService implements OnModuleInit, TrackableJobExecutions
         WHERE organization_id = $1 AND deleted_at IS NULL`,
         [organization.id],
       )
-      await manager.query(`DELETE FROM custom_domain_subscription WHERE organization_id = $1`, [organization.id])
       await manager.delete(Domain, { organizationId: organization.id })
       await manager.remove(current)
     })

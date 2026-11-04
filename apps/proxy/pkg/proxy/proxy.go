@@ -251,7 +251,11 @@ func (p *Proxy) handleHTTP(ctx *gin.Context) {
 		_, _, _, err := p.parseHost(ctx.Request.Host)
 		// if the host is not valid, we don't proxy the request
 		if err != nil {
-			if p.config.CustomDomainsEnabled && bareHost(ctx.Request.Host) != bareHost(p.config.ProxyDomain) {
+			// GKE and load-balancer probes use IP hosts. Only their read-only
+			// health path is a utility route; customer /health still resolves above.
+			hostname := bareHost(ctx.Request.Host)
+			healthProbe := ctx.Request.Method == http.MethodGet && ctx.Request.URL.Path == "/health" && net.ParseIP(hostname) != nil
+			if hostname != bareHost(p.config.ProxyDomain) && !healthProbe {
 				ctx.Error(common_errors.NewNotFoundError(errors.New("not found")))
 				return
 			}

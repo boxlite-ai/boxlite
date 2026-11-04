@@ -29,7 +29,7 @@ export class CustomDomainService {
     )
     return {
       enabled: !!this.config.get('customDomains.enabled'),
-      subscription,
+      subscription: subscription.status,
       domains: rows.map((row) => this.view(row)),
     }
   }
@@ -53,7 +53,7 @@ export class CustomDomainService {
           .map((url) => new URL(url).hostname),
       ].filter(Boolean),
     )
-    requireDomainSubscription(await this.subscriptions.refresh(organizationId))
+    requireDomainSubscription((await this.subscriptions.refresh(organizationId)).status)
     const id = await this.db.transaction(async (manager) => {
       await this.lockOrganization(manager, organizationId)
       const existing: CustomDomainRow[] = await manager.query(
@@ -83,7 +83,7 @@ export class CustomDomainService {
   async verify(organizationId: string, id: string) {
     this.requireEnabled()
     await this.owned(this.db.manager, organizationId, id)
-    requireDomainSubscription(await this.subscriptions.refresh(organizationId))
+    requireDomainSubscription((await this.subscriptions.refresh(organizationId)).status)
     await this.db.query(
       `UPDATE custom_domain_config SET next_check_at = CASE
         WHEN error_code IN ('provider_capacity_exhausted', 'provider_permission_denied', 'provider_resource_conflict')

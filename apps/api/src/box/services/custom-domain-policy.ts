@@ -30,12 +30,14 @@ export function normalizeCustomHostname(raw: unknown, reserved: string[]): strin
   return hostname
 }
 
-/** Alias d is the persisted domain. A custom row alone never grants traffic. */
+/** Alias d is the persisted domain. The worker caps DNS readiness at the subscription
+ * deadline, so this hot path needs neither a subscription table nor a Commerce call.
+ * Bind can wait on row locks; use the check time, not the transaction's frozen now(). */
 export const CUSTOM_DOMAIN_READY_SQL = `EXISTS (
-  SELECT 1 FROM custom_domain_config c JOIN custom_domain_subscription s ON s.organization_id = c.organization_id
+  SELECT 1 FROM custom_domain_config c
   WHERE c.domain_id = d.id AND c.organization_id = d.organization_id AND c.hostname = d.hostname
-    AND c.deleted_at IS NULL AND c.phase = 'ready' AND c.dns_valid_until > now()
-    AND c.certificate_valid_until > now() AND s.eligible = true AND s.valid_until > now()
+    AND c.deleted_at IS NULL AND c.phase = 'ready' AND c.dns_valid_until > clock_timestamp()
+    AND c.certificate_valid_until > clock_timestamp()
 )`
 
 export type DomainDnsRecord = { name: string; type: 'TXT' | 'CNAME'; value: string }

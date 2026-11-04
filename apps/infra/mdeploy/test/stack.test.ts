@@ -84,18 +84,17 @@ const inputs = (overrides: Partial<StackInputs> = {}): StackInputs => ({
   ...overrides,
 })
 
-test('custom domain routing follows the API opt-in rather than an independent proxy override', () => {
-  for (const enabled of [false, true]) {
+test('the proxy namespace is supplied independently of API certificate setup', () => {
+  for (const providerConfigured of [false, true]) {
     const providers = bundle()
     deployStack({
       providers: providers.providers,
       config,
       inputs: inputs({
-        apiEnvironment: enabled ? { CUSTOM_DOMAIN_GCP_PROJECT: 'customer-project' } : {},
-        proxyEnvironment: { CUSTOM_DOMAINS_ENABLED: enabled ? 'false' : 'true' },
+        apiEnvironment: providerConfigured ? { CUSTOM_DOMAIN_GCP_PROJECT: 'customer-project' } : {},
       }),
     })
-    assert.equal(providers.seen.edge.request.environment.CUSTOM_DOMAINS_ENABLED, String(enabled))
+    assert.equal(providers.seen.edge.request.environment.PROXY_DOMAIN, 'box.dev.boxlite.ai')
   }
 })
 

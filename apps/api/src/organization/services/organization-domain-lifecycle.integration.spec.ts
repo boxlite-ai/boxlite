@@ -69,6 +69,7 @@ describeIfDatabase('organization domain lifecycle (real Postgres)', () => {
         get: () => 'app.test',
         getOrThrow: (key: string) => (key === 'domain.platformSubdomainMinLength' ? 5 : 'https'),
       } as never,
+      {} as never,
     )
   })
 
@@ -82,7 +83,7 @@ describeIfDatabase('organization domain lifecycle (real Postgres)', () => {
   })
 
   beforeEach(async () => {
-    await dataSource.query(`TRUNCATE custom_domain_config, custom_domain_subscription`)
+    await dataSource.query(`TRUNCATE custom_domain_config`)
     await dataSource.query(`DELETE FROM "${schemaName}".deletion_blocker`)
     await dataSource.getRepository(Domain).clear()
     await organizations.query(`DELETE FROM "${schemaName}".organization`)

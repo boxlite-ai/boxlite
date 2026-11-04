@@ -14,7 +14,7 @@ import (
 
 func TestParseHostReturnsCanonicalPort(t *testing.T) {
 	for _, label := range []string{"3000", "03000", "003000"} {
-		port, _, _, err := (&Proxy{}).parseHost(label + "-AbCdEf123456.proxy.test")
+		port, _, _, err := (&Proxy{config: &config.Config{ProxyDomain: "proxy.test"}}).parseHost(label + "-AbCdEf123456.proxy.test")
 		if err != nil || port != 3000 {
 			t.Fatalf("parseHost(%q) port = %d, err = %v; want 3000", label, port, err)
 		}
@@ -23,8 +23,16 @@ func TestParseHostReturnsCanonicalPort(t *testing.T) {
 
 func TestParseHostRejectsOutOfRangePort(t *testing.T) {
 	for _, label := range []string{"0", "+3000", "-1", "65536"} {
-		if _, _, _, err := (&Proxy{}).parseHost(label + "-AbCdEf123456.proxy.test"); err == nil {
+		if _, _, _, err := (&Proxy{config: &config.Config{ProxyDomain: "proxy.test"}}).parseHost(label + "-AbCdEf123456.proxy.test"); err == nil {
 			t.Fatalf("parseHost accepted port label %q", label)
+		}
+	}
+}
+
+func TestParseHostRequiresNamespace(t *testing.T) {
+	for _, cfg := range []*config.Config{nil, {}} {
+		if _, _, _, err := (&Proxy{config: cfg}).parseHost("3000-AbCdEf123456.proxy.test"); err == nil {
+			t.Fatal("generated host accepted without a configured namespace")
 		}
 	}
 }
@@ -48,7 +56,7 @@ func TestPort22222RoutesToGuestLikeAnyPort(t *testing.T) {
 func TestPort22222GetsBrowserWarning(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	engine := gin.New()
-	engine.Use((&Proxy{config: &config.Config{}}).browserWarningMiddleware())
+	engine.Use((&Proxy{config: &config.Config{ProxyDomain: "proxy.test"}}).browserWarningMiddleware())
 	engine.GET("/", func(ctx *gin.Context) { ctx.Status(http.StatusNoContent) })
 	request := httptest.NewRequest(http.MethodGet, "http://022222-d-416243644566313233343536.proxy.test/", nil)
 	request.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36")

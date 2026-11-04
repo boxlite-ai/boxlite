@@ -992,7 +992,8 @@ Revoking the tunnel also preserves the target: the name answers 404 until the po
 is declared again. Held names, including unbound names and bindings to deleted
 Boxes, count against the limit only when their persisted kind is platform, and
 can be rebound only by their organization. Custom rows require a matching ready
-configuration and current subscription, DNS and certificate leases for bind/resolve.
+configuration with current DNS and certificate leases for bind/resolve. The worker
+caps DNS readiness at the subscription cache's absolute deadline.
 Legacy custom rows without a configuration fail closed. New custom ownership is
 inserted only after configuration-specific DNS proof; historical kinds are not reclassified.
 
@@ -1012,7 +1013,7 @@ or write. Persisted App references can be listed and unbound, but cannot forward
 traffic. App integration must add existence/organization checks, routing and the
 App deletion policy before enabling writes.
 
-### `custom_domain_config` and `custom_domain_subscription`
+### `custom_domain_config`
 
 The Dashboard creates per-organization drafts without reserving a global hostname.
 After DNS proof, the worker inserts `domain.kind='custom'` and saves its ID;
@@ -1024,13 +1025,22 @@ After DNS proof, the worker inserts `domain.kind='custom'` and saves its ID;
 | config: `challenge`, `challenge_expires_at`, `generation` | Random TXT proof; expired unverified drafts rotate it and advance generation |
 | config: `phase`, `dns_valid_until`, `certificate_valid_until`, `error_code` | Setup status and at-most-five-minute routing grants |
 | config: `provider_state`, `next_check_at`, `attempts`, `lease_owner`, `lease_until`, `deleted_at` | Durable cloud operations, backoff, fenced worker lease and cleanup tombstone |
-| subscription: `organization_id`, `eligible`, `valid_until`, `checked_at`, `refresh_owner`, `refresh_until` | Shared Commerce eligibility grant, bounded by the paid period and five minutes, with a separate refresh lease |
 
 Config phase is `pending_verification`, `pending_certificate_dns`, `provisioning`,
 `ready` or `deleting`. A cloud response alone cannot publish ready: the worker
 also probes the certificate through the fixed edge IPs with the customer hostname as SNI.
 Transient failures cannot extend old grants; confirmed DNS mismatches invalidate them.
-Confirmed subscription loss revokes active publication leases and DNS readiness.
+When the worker observes a denied subscription, it invalidates that configuration's
+DNS readiness. Its publication also caps readiness at the subscription deadline.
+
+Subscription status is not stored in SQL. The existing Commerce
+`GET /organization/{organizationId}/plan` supplies effective eligibility and
+`cycleTo`. Redis caches an active grant for at most one day, shortened to the paid
+cycle's end; denied or unavailable results are cached for 30 seconds. Cache reads
+never extend absolute expiry. A fenced Redis refresh lease prevents an older
+response from overwriting a newer one. Missing Redis or Commerce data cannot
+extend a grant. Early suspension can take up to the one-day cache lifetime to
+appear; known paid-cycle expiry bounds the SQL readiness even before the worker runs.
 
 Unbind retains configuration and cloud resources. Dashboard or organization deletion
 tombstones configurations and deletes ownership in one transaction. Tombstones have
@@ -1038,7 +1048,7 @@ no organization FK so cleanup survives organization deletion; cleanup deletes ma
 entry, certificate and authorization in that order. Deterministic generation IDs
 and ownership labels fence cloud operations; retained tombstones are swept daily
 to catch creates whose responses were lost. Cloud resources remain allocated until
-cleanup succeeds. The migration creates new tables without rewriting existing domains.
+cleanup succeeds. The migration creates the configuration table without rewriting existing domains.
 
 ### `box_last_activity`
 

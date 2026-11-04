@@ -22,6 +22,7 @@ import (
 	common_cache "github.com/boxlite-ai/common-go/pkg/cache"
 	common_errors "github.com/boxlite-ai/common-go/pkg/errors"
 	common_proxy "github.com/boxlite-ai/common-go/pkg/proxy"
+	"github.com/boxlite-ai/proxy/cmd/proxy/config"
 	"github.com/gin-gonic/gin"
 )
 
@@ -146,6 +147,7 @@ func newWakeTestProxy(t *testing.T, runner *fakeRunner, api *fakeAPI) *Proxy {
 	clientConfig := apiclient.NewConfiguration()
 	clientConfig.Servers[0].URL = api.server.URL
 	proxy := &Proxy{
+		config:                     &config.Config{ProxyDomain: "proxy.test"},
 		apiclient:                  apiclient.NewAPIClient(clientConfig),
 		boxRunnerCache:             runnerCache,
 		boxInboundCache:            inboundCache,

@@ -69,14 +69,19 @@ export class CustomDomainWorkerService {
 
   private async reconcile(row: CustomDomainRow) {
     try {
+      let subscriptionExpiresAt = 0
       if (!row.deleted_at) {
         const subscription = await this.subscriptions.refresh(row.organization_id)
-        if (subscription !== 'active')
-          throw new DomainSetupError(subscription === 'required' ? 'subscription_required' : 'subscription_not_ready')
+        if (subscription.status !== 'active')
+          throw new DomainSetupError(
+            subscription.status === 'required' ? 'subscription_required' : 'subscription_not_ready',
+            subscription.status === 'required',
+          )
+        subscriptionExpiresAt = subscription.expiresAt
         if (!row.domain_id && row.challenge_expires_at.getTime() <= Date.now())
           throw new DomainSetupError('challenge_expired', true)
         await this.dns.verify(row.hostname, row.challenge)
-        const admitted = await this.admit(row)
+        const admitted = await this.admit(row, subscriptionExpiresAt)
         if (!admitted) return
         row = admitted
       }
@@ -97,13 +102,23 @@ export class CustomDomainWorkerService {
       await this.db.query(
         `UPDATE custom_domain_config SET provider_state = $4,
         phase = CASE WHEN deleted_at IS NOT NULL THEN 'deleting' ELSE $5 END,
-        dns_valid_until = CASE WHEN deleted_at IS NULL THEN now() + interval '5 minutes' ELSE '-infinity' END,
+        dns_valid_until = CASE WHEN deleted_at IS NULL
+          THEN LEAST(now() + interval '5 minutes', $8::timestamptz) ELSE '-infinity' END,
         certificate_valid_until = CASE WHEN deleted_at IS NULL AND $6::timestamptz IS NOT NULL
           THEN LEAST($6::timestamptz, now() + interval '5 minutes') ELSE '-infinity' END,
         error_code = NULL, attempts = 0, updated_at = now(),
         next_check_at = now() + CASE WHEN $7 THEN interval '1 day' ELSE interval '1 minute' END
         WHERE id = $1 AND generation = $2 AND lease_owner = $3 AND lease_until > now()`,
-        [row.id, row.generation, row.lease_owner, result.state, result.phase, result.expires, result.cleaned],
+        [
+          row.id,
+          row.generation,
+          row.lease_owner,
+          result.state,
+          result.phase,
+          result.expires,
+          result.cleaned,
+          new Date(subscriptionExpiresAt),
+        ],
       )
     } catch (error) {
       const failure = error instanceof DomainSetupError ? error : new DomainSetupError('verification_unavailable')
@@ -124,7 +139,7 @@ export class CustomDomainWorkerService {
     }
   }
 
-  private async admit(row: CustomDomainRow): Promise<CustomDomainRow | undefined> {
+  private async admit(row: CustomDomainRow, subscriptionExpiresAt: number): Promise<CustomDomainRow | undefined> {
     return this.db.transaction(async (manager) => {
       await manager.query(`SET LOCAL lock_timeout = '5s'`)
       const [organization] = await manager.query(`SELECT id FROM organization WHERE id = $1 FOR UPDATE`, [
@@ -139,11 +154,11 @@ export class CustomDomainWorkerService {
       )
       if (!current) return
       const [subscription] = await manager.query(
-        `SELECT 1 FROM custom_domain_subscription
-        WHERE organization_id = $1 AND eligible = true AND valid_until > now()`,
-        [row.organization_id],
+        // now() is frozen at transaction start, possibly before waiting for the organization lock.
+        `SELECT $1::timestamptz > clock_timestamp() AS valid`,
+        [new Date(subscriptionExpiresAt)],
       )
-      if (!subscription) throw new DomainSetupError('subscription_not_ready')
+      if (!subscription.valid) throw new DomainSetupError('subscription_not_ready')
       if (!current.domain_id) {
         const [domain] = await manager.query(
           `INSERT INTO domain (hostname, kind, organization_id)

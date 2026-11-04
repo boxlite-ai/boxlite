@@ -28,10 +28,9 @@ type Config struct {
 	TunnelCookieKey string `envconfig:"TUNNEL_COOKIE_KEY"`
 	// The parent of platform subdomains, the stage's user domain. A request
 	// whose Host is one label under it is resolved through the API's domain
-	// lookup instead of the `<port>-<box>` encoding. Unset disables that path.
+	// lookup instead of the `<port>-<box>` encoding, before custom-host classification.
 	ProxyAppDomain        string             `envconfig:"PROXY_APP_DOMAIN"`
 	ProxyDomain           string             `envconfig:"PROXY_DOMAIN"`
-	CustomDomainsEnabled  bool               `envconfig:"CUSTOM_DOMAINS_ENABLED"`
 	CookieDomain          *string            `envconfig:"COOKIE_DOMAIN"`
 	TLSCertFile           string             `envconfig:"TLS_CERT_FILE"`
 	TLSKeyFile            string             `envconfig:"TLS_KEY_FILE"`
@@ -85,8 +84,8 @@ func GetConfig() (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	if config.CustomDomainsEnabled && strings.TrimSpace(config.ProxyDomain) == "" {
-		return nil, fmt.Errorf("custom domains require PROXY_DOMAIN to delimit generated tunnel hosts")
+	if strings.TrimSpace(config.ProxyDomain) == "" {
+		return nil, fmt.Errorf("PROXY_DOMAIN is required to delimit generated tunnel hosts")
 	}
 
 	if config.ProxyPort == 0 {

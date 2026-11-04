@@ -340,7 +340,7 @@ func (p *Proxy) validateAndCache(
 // parseHost returns the target port as a number, so every caller compares one
 // canonical form: a label like "03000" is port 3000.
 func (p *Proxy) parseHost(host string) (targetPort uint16, boxId string, baseHost string, err error) {
-	if p.config != nil && p.config.CustomDomainsEnabled && !p.generatedDomainHost(host) {
+	if !p.generatedDomainHost(host) {
 		return 0, "", "", errors.New("host is outside the generated tunnel namespace")
 	}
 	// Extract port and box ID from the host header

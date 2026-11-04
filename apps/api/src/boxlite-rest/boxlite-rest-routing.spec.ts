@@ -183,6 +183,7 @@ describe('BoxLite REST routing', () => {
       {
         get: () => 'app.boxlite.test',
       } as never,
+      {} as never,
     )
     await startApp(controllers, [
       { provide: BoxService, useValue: { destroy } },
