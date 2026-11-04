@@ -830,7 +830,9 @@ boxlite network tunnel mybox 3000 --revoke
 
 ```
 boxlite ssh configure BOX CONFIG
+boxlite ssh setup BOX --authorized-key FILE
 boxlite ssh status BOX
+boxlite ssh enable BOX
 boxlite ssh disable BOX
 boxlite ssh forward BOX [--listen ADDRESS]
 
@@ -839,34 +841,39 @@ CONFIG := --ssh-config FILE
 ```
 
 Control the guest SSH server of a local box or a REST box (`--url`/`--context`).
-The CLI reads keys from files and never generates or stores them.
+The CLI reads client keys from files; local `setup` asks the guest to generate
+and persist a host key when no configuration exists.
 
-These four CLI subcommands reuse existing SDK and HTTP operations; they add no
-server routes. Backend requirements differ:
+These commands add no HTTP routes. Backend requirements differ:
 
 | Commands | Local backend | REST backend |
 |----------|---------------|--------------|
 | `configure`, `status`, `disable` | Existing SSH SDK operations | Requires SSH control; supported by `boxlite serve` |
+| `setup`, `enable` | Local SSH setup and saved-configuration activation | Unsupported |
 | `forward` | Existing local tunnel implementation | Requires both SSH control and tunnel support; unavailable through `boxlite serve` |
 
 | Subcommand | Effect | stdout |
 |------------|--------|--------|
 | `configure` | Replace the complete configuration once; disconnects existing SSH clients | `SshStatus` JSON |
+| `setup` | Replace authentication with `box` and one public key on `0.0.0.0:22`; retain or generate the host key; disconnects clients | `SshStatus` JSON |
 | `status` | Read state; never starts the box | `SshStatus` JSON |
-| `disable` | Stop SSH; never starts the box | `SshStatus` JSON |
+| `enable` | Enable saved configuration on a running local box; preserve healthy connections | `SshStatus` JSON |
+| `disable` | Stop SSH on a running box; never starts the box | `SshStatus` JSON |
 | `forward` | Read status; fail if disabled; forward to the port SSH actually bound | Bound address |
 
 Configure SSH, then open forwarding until Ctrl-C:
 
 ```bash
-boxlite ssh configure dev --ssh-config ssh.json
+boxlite ssh setup dev --authorized-key client.pub
 boxlite ssh forward dev
 ```
 
-Every `configure` replaces the SSH configuration and disconnects existing clients.
+Every `configure` or `setup` replaces the SSH configuration and disconnects existing clients.
 Configuration and the enable switch persist on the container disk; restarting the
-box restores enabled SSH. Disable retains credentials; on an idle box it leaves
-saved state unchanged.
+box restores the saved enabled switch. Disable retains credentials. Local
+enable/disable reject idle boxes without changing saved state. Enable without a
+saved configuration also fails. Repeated setup, disable/enable, and restart
+reuse the saved host key; setup after complete configuration also retains that key.
 `forward` leaves the configuration and generation unchanged, so it can reopen
 forwarding without reconfiguring SSH.
 
@@ -875,15 +882,15 @@ forwarding without reconfiguring SSH.
 | `--ssh-config FILE` | Complete `SshConfig` JSON ([schema](../../guides/ssh.md#http-control-with-boxlite-serve)): several accounts, authorized keys, CAs. |
 | `--host-key FILE` | Unencrypted OpenSSH host private key. Requires `--login` and `--authorized-key`. |
 | `--login NAME` | The single login accepted for `--authorized-key`. |
-| `--authorized-key FILE` | One OpenSSH public key per file; repeatable. |
+| `--authorized-key FILE` | One OpenSSH public key per file; repeatable for `configure`, exactly one required for `setup`. |
 | `--guest-listen ADDRESS` | Guest listener for flag mode; default `0.0.0.0:2222`; port `0` lets the guest choose. |
 | `--listen ADDRESS` | `forward` only: local listener, same syntax as [`network tunnel`](#boxlite-network-tunnel); default `127.0.0.1:0`. |
 
-Configuration flags apply only to `configure`; `--ssh-config` conflicts with the
+Except for `--authorized-key`, configuration flags apply only to `configure`; `--ssh-config` conflicts with the
 flag-mode options. Configuration errors name the
-file and position but never print its contents. `configure` follows the SDK's
+file and position but never print its contents. `configure` and `setup` follow the SDK's
 startup rules: it may start a Configured or Stopped box that uses its image's default
-command. `configure` is never retried.
+command. Configuration is never retried.
 
 `forward` prints the canonical bound address to stdout, then
 the host public key, its fingerprint, and a connect hint to stderr:

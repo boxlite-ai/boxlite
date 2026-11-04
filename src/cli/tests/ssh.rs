@@ -366,6 +366,86 @@ async fn ssh_local_configure_forward_and_disable() {
     ctx.cleanup_box(&id);
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ssh_local_setup_enable_and_restart() {
+    let ctx = common::boxlite();
+    let keys = Keys::new();
+    let run = ctx
+        .new_cmd()
+        .args(["run", "-d", "alpine:latest", "sleep", "600"])
+        .output()
+        .unwrap();
+    assert!(
+        run.status.success(),
+        "{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    let id = String::from_utf8_lossy(&run.stdout).trim().to_string();
+    let ssh = |operation: &str| {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_boxlite"));
+        command
+            .arg("--home")
+            .arg(&ctx.home)
+            .args(["ssh", operation, &id]);
+        command
+    };
+    assert!(
+        !ssh("enable").output().unwrap().status.success(),
+        "enable needs saved configuration"
+    );
+    let setup = || {
+        output_status(
+            &ssh("setup")
+                .arg("--authorized-key")
+                .arg(keys.user_public())
+                .output()
+                .unwrap(),
+            "setup",
+        )
+    };
+    let first = setup();
+    assert!(first.enabled);
+    assert_eq!(first.listen_address, "0.0.0.0:22");
+    assert_eq!(
+        output_status(&ssh("enable").output().unwrap(), "repeat enable"),
+        first
+    );
+    let mut forwarder = Forwarder::spawn(ssh("forward"));
+    assert_eq!(
+        ssh_exec(
+            forwarder.address,
+            &first.host_key_fingerprint,
+            &keys.user,
+            "box",
+            "echo setup-ok"
+        )
+        .await
+        .unwrap()
+        .trim(),
+        "setup-ok"
+    );
+    assert!(forwarder.interrupt().0.success());
+    assert!(!output_status(&ssh("disable").output().unwrap(), "disable").enabled);
+    let enabled = output_status(&ssh("enable").output().unwrap(), "enable");
+    assert_eq!(enabled.host_key_fingerprint, first.host_key_fingerprint);
+    assert_eq!(enabled.generation, first.generation + 1);
+    assert_eq!(setup().host_public_key, first.host_public_key);
+
+    ctx.new_cmd().args(["stop", &id]).assert().success();
+    for operation in ["enable", "disable"] {
+        let result = ssh(operation).output().unwrap();
+        assert!(!result.status.success());
+        assert!(String::from_utf8_lossy(&result.stderr).contains("not running"));
+    }
+    assert!(!output_status(&ssh("status").output().unwrap(), "stopped status").enabled);
+    ctx.new_cmd().args(["start", &id]).assert().success();
+    let restored = output_status(&ssh("status").output().unwrap(), "restored status");
+    assert!(restored.enabled);
+    assert_eq!(restored.host_public_key, first.host_public_key);
+    assert_eq!(setup().host_key_fingerprint, first.host_key_fingerprint);
+    ctx.cleanup_box(&id);
+}
+
 /// Remove boxes even when an assertion panics; declared after `ServeChild` so
 /// it drops first, while the server can still service the removal.
 struct ServeBoxes<'a> {

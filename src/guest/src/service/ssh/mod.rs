@@ -34,6 +34,37 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
+pub(super) enum SshUpdate {
+    Control(boxlite_shared::SshControlRequest),
+    Setup(String),
+}
+
+/// Keep host identity in the guest's existing persisted configuration.
+fn setup_config(
+    client_public_key: String,
+    previous: Option<boxlite_shared::SshConfig>,
+) -> Result<boxlite_shared::SshConfig, Box<tonic::Status>> {
+    let host_private_key = match previous {
+        Some(config) => config.host_private_key,
+        None => russh::keys::PrivateKey::random(
+            &mut russh::keys::key::safe_rng(),
+            russh::keys::Algorithm::Ed25519,
+        )
+        .and_then(|key| key.to_openssh(Default::default()))
+        .map_err(|_| tonic::Status::internal("SSH host key generation failed"))?
+        .to_string(),
+    };
+    Ok(boxlite_shared::SshConfig {
+        listen_address: "0.0.0.0:22".into(),
+        host_private_key,
+        accounts: vec![boxlite_shared::SshAccount {
+            login: "box".into(),
+            authorized_keys: vec![client_public_key],
+            ca: None,
+        }],
+    })
+}
+
 /// Fully validated before any SSH listener is opened.
 struct SshConfig {
     listen_addr: SocketAddr,
@@ -138,11 +169,14 @@ impl SshManager {
         let _ = self.guest.set(Arc::downgrade(guest));
     }
 
-    pub(crate) async fn control(
+    pub(super) async fn control(
         &self,
-        enable: Option<bool>,
-        config: Option<boxlite_shared::SshConfig>,
+        update: SshUpdate,
     ) -> Result<boxlite_shared::SshStatus, Box<tonic::Status>> {
+        let (enable, config, client_public_key) = match update {
+            SshUpdate::Control(request) => (request.enable, request.config, None),
+            SshUpdate::Setup(key) => (Some(true), None, Some(key)),
+        };
         let guest = self
             .guest()
             .ok_or_else(|| tonic::Status::internal("SSH manager is not attached"))?;
@@ -160,8 +194,8 @@ impl SshManager {
         if enable == Some(false) {
             self.stop(&mut state).await?;
         }
-        let supplied = config.is_some();
-        let mut desired = if enable.is_some() && supplied {
+        let supplied = config.is_some() || client_public_key.is_some();
+        let mut desired = if enable.is_some() && config.is_some() {
             persistence::DesiredState::default()
         } else {
             let load_root = root.clone();
@@ -170,7 +204,11 @@ impl SshManager {
                 .map_err(|_| tonic::Status::internal("SSH state load failed"))?
                 .map_err(|_| tonic::Status::internal("SSH state load failed"))?
         };
-        desired.config = config.or(desired.config);
+        // Load, reuse/generate the host key, and persist under one control lock.
+        desired.config = match client_public_key {
+            Some(key) => Some(setup_config(key, desired.config)?),
+            None => config.or(desired.config),
+        };
         desired.enable = enable.unwrap_or(desired.enable);
         let parsed = desired
             .config

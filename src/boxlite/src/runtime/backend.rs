@@ -162,6 +162,20 @@ pub(crate) trait BoxBackend: Send + Sync + Any {
     /// Replace the guest's SSH configuration (see [`crate::litebox::SshHandle`]).
     async fn ssh_configure(&self, config: SshConfig) -> BoxliteResult<SshStatus>;
 
+    /// Configure one login using a guest-managed host key.
+    async fn ssh_setup(&self, _client_public_key: String) -> BoxliteResult<SshStatus> {
+        Err(BoxliteError::Unsupported(
+            "SSH quick configuration is supported only by the local backend".into(),
+        ))
+    }
+
+    /// Enable the saved SSH configuration on an existing VM.
+    async fn ssh_enable(&self) -> BoxliteResult<SshStatus> {
+        Err(BoxliteError::Unsupported(
+            "SSH enable is supported only by the local backend".into(),
+        ))
+    }
+
     /// Read the guest's SSH state without starting the box.
     async fn ssh_status(&self) -> BoxliteResult<SshStatus>;
 

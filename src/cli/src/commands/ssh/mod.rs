@@ -1,4 +1,4 @@
-//! Configure, inspect, disable, and forward to guest SSH.
+//! Configure, inspect, enable, disable, and forward to guest SSH.
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
@@ -27,9 +27,14 @@ pub enum SshCommand {
     /// Replace the complete guest SSH configuration; prints status JSON.
     /// Every accepted configuration disconnects existing SSH clients.
     Configure(ConfigureArgs),
+    /// Configure box@0.0.0.0:22 with one public key and enable SSH (local only).
+    /// Reuses the saved host key or generates one; disconnects existing clients.
+    Setup(SetupArgs),
     /// Print guest SSH status JSON without starting the box.
     Status(BoxArgs),
-    /// Disable guest SSH without starting the box; prints status JSON.
+    /// Enable saved SSH configuration on a running local box; prints status JSON.
+    Enable(BoxArgs),
+    /// Disable guest SSH on a running box; prints status JSON.
     Disable(BoxArgs),
     /// Forward a local listener to already enabled guest SSH until Ctrl-C.
     Forward(ForwardArgs),
@@ -50,6 +55,17 @@ pub struct ConfigureArgs {
 
     #[command(flatten)]
     pub source: ConfigSource,
+}
+
+#[derive(Args, Debug)]
+pub struct SetupArgs {
+    /// Box ID or name
+    #[arg(value_name = "BOX")]
+    pub target: String,
+
+    /// File holding exactly one OpenSSH client public key
+    #[arg(long, value_name = "FILE")]
+    pub authorized_key: PathBuf,
 }
 
 #[derive(Args, Debug)]
@@ -152,9 +168,18 @@ pub async fn execute(args: SshArgs, global: &GlobalFlags) -> Result<()> {
             let (_runtime, sandbox) = find_box(global, &args.target).await?;
             print_status(&sandbox.ssh().configure(config).await?)
         }
+        SshCommand::Setup(args) => {
+            let key = read_public_key(&args.authorized_key)?;
+            let (_runtime, sandbox) = find_box(global, &args.target).await?;
+            print_status(&sandbox.ssh().setup(key).await?)
+        }
         SshCommand::Status(args) => {
             let (_runtime, sandbox) = find_box(global, &args.target).await?;
             print_status(&sandbox.ssh().status().await?)
+        }
+        SshCommand::Enable(args) => {
+            let (_runtime, sandbox) = find_box(global, &args.target).await?;
+            print_status(&sandbox.ssh().enable().await?)
         }
         SshCommand::Disable(args) => {
             let (_runtime, sandbox) = find_box(global, &args.target).await?;
@@ -206,7 +231,7 @@ async fn forward(sandbox: &LiteBox, status: &SshStatus, listen: SocketAddress) -
     if !status.enabled {
         bail!(
             "guest SSH is disabled or the box is not running; enable it with \
-             `boxlite ssh configure`"
+             `boxlite ssh setup`, `configure`, or `enable`"
         );
     }
     let tunnel = sandbox

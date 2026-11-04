@@ -290,6 +290,16 @@ async fn ssh_rest_public_api_round_trips_over_the_wire() {
     let ssh = sandbox.ssh();
     drop(sandbox);
 
+    assert!(matches!(
+        ssh.setup("public key").await,
+        Err(boxlite::BoxliteError::Unsupported(_))
+    ));
+    assert!(matches!(
+        ssh.enable().await,
+        Err(boxlite::BoxliteError::Unsupported(_))
+    ));
+    assert!(stub.requests().is_empty());
+
     assert_eq!(ssh.configure(full_config()).await.unwrap(), active);
     assert_eq!(ssh.status().await.unwrap(), active);
     assert_eq!(ssh.disable().await.unwrap(), disabled());

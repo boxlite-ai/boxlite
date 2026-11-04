@@ -293,15 +293,17 @@ pub struct LiteBox {
 
 `LiteBox::ssh()` returns an owned, cloneable `SshHandle` without starting the box.
 It works for local boxes and for REST-backed boxes whose server implements SSH
-control, as the local `boxlite serve` does. Only `configure()` uses the
+control, as the local `boxlite serve` does. Local-only `setup()` and `enable()`
+return `Unsupported` on REST-backed handles. `configure()` and `setup()` use the
 implicit-start guard of exec, metrics, and file copying. `Configured` and
 `Stopped` boxes using image defaults can start implicitly. With an explicit
 `BoxOptions.cmd` or `entrypoint`, configuration returns `InvalidState` in these
 states; call `start()` first; on a REST server a stopped box with
-`auto_resume=false` is refused instead of resumed. `status()` and `disable()`
-never start the VM or main command: valid `Configured` and `Stopped` handles
-return disabled status with generation zero and empty address and host identity
-fields. Running handles use the existing guest, including after attach before
+`auto_resume=false` is refused instead of resumed. `status()`, `enable()` and
+`disable()` never start the VM or main command. On valid `Configured` and
+`Stopped` local handles, status returns generation zero and empty address and
+host identity fields; enable/disable return `InvalidState` without changing saved
+state. Running handles use the existing guest, including after attach before
 start or runtime recovery. Other lifecycle states return `InvalidState`. These
 observations do not prevent concurrent configuration. Deployments without SSH
 control answer `NotFound` or `Unsupported`; there is no capability negotiation.
@@ -309,6 +311,8 @@ control answer `NotFound` or `Unsupported`; there is no capability negotiation.
 | Method | Signature |
 |--------|-----------|
 | Configure | `async fn configure(&self, config: SshConfig) -> BoxliteResult<SshStatus>` |
+| Setup | `async fn setup(&self, client_public_key: impl Into<String>) -> BoxliteResult<SshStatus>` |
+| Enable | `async fn enable(&self) -> BoxliteResult<SshStatus>` |
 | Query | `async fn status(&self) -> BoxliteResult<SshStatus>` |
 | Disable | `async fn disable(&self) -> BoxliteResult<SshStatus>` |
 
@@ -321,8 +325,13 @@ These types are exported directly from `boxlite`, independently of protobuf:
 | `SshCaConfig` | `public_key: String`, `principal: String` |
 | `SshStatus` | `enabled: bool`, `generation: u64`, `listen_address: String`, `host_public_key: String`, `host_key_fingerprint: String` |
 
-Configuration fields are explicit; the guest persists credentials on the container
-disk, while the runtime neither generates keys nor publishes ports. All types are
+Complete configuration fields are explicit. Setup accepts one OpenSSH public key,
+uses login `box` and `0.0.0.0:22`, and replaces all accounts without a CA. The guest
+generates an Ed25519 host key only when no saved configuration exists; later
+setup calls and restarts retain it, including a key supplied by complete configuration.
+Both setup and configure enable SSH and disconnect existing clients. Enable uses
+saved credentials, errors when none exist, and preserves healthy connections.
+The guest persists credentials on the container disk; port forwarding is separate. All types are
 `Clone + Debug + Send + Sync`;
 configuration Debug output redacts credentials, and status supports `PartialEq + Eq`.
 The configuration types implement `Deserialize` but not `Serialize`;
@@ -363,7 +372,7 @@ HTTP contract, reconfiguration, disable, and generation semantics.
 | `id` | `fn id(&self) -> &BoxID` | Get box ID |
 | `name` | `fn name(&self) -> Option<&str>` | Get optional box name |
 | `info` | `async fn info(&self) -> Result<BoxInfo>` | Get box info (no VM init) |
-| `ssh` | `fn ssh(&self) -> SshHandle` | Control SSH (local or REST-backed); only configure may implicitly start the box |
+| `ssh` | `fn ssh(&self) -> SshHandle` | Control SSH; configure/setup may implicitly start a local box |
 | `network` | `fn network(&self) -> NetworkHandle` | Get box-scoped policy and tunnel operations |
 | `start` | `async fn start(&self) -> BoxliteResult<()>` | Start the box |
 | `run` | `async fn run(&self, command: BoxCommand) -> BoxliteResult<Execution>` | Run command |

@@ -14,6 +14,12 @@ const SSH_TIMEOUT: Duration = Duration::from_secs(DRAIN_TIMEOUT.as_secs() + 5);
 enum StartupPolicy {
     AllowStart,
     ExistingVmOnly,
+    RequireRunning,
+}
+
+enum SshRequest {
+    Control(proto::SshControlRequest),
+    Setup(proto::SshSetupRequest),
 }
 
 /// Complete guest SSH configuration, persisted on the container disk.
@@ -90,19 +96,19 @@ pub struct SshStatus {
 
 /// Owned SSH control handle; only configuration may implicitly start the box.
 ///
-/// `configure()` may start boxes using the image's default command. With an explicit
-/// `BoxOptions.cmd` or `entrypoint`, a Configured or Stopped box returns
+/// `configure()` and `setup()` may start boxes using the image's default command.
+/// With an explicit `BoxOptions.cmd` or `entrypoint`, a Configured or Stopped box returns
 /// `InvalidState`: call `LiteBox::start()` first. This also applies to fresh
 /// handles obtained through `runtime.get()` after stopping the box.
 ///
-/// `status()` and `disable()` never start the VM or its main command. Valid
-/// Configured or Stopped handles return disabled status with generation zero and
+/// `status()`, `enable()` and `disable()` never start the VM or its main command.
+/// On local Configured or Stopped boxes, enable/disable return `InvalidState`.
+/// Status on valid Configured or Stopped handles returns generation zero and
 /// empty address and host identity fields. Running handles use the existing guest,
 /// including after runtime recovery or attach before start. Spent handles return
 /// `Stopped`; other lifecycle states return `InvalidState`. Status is an observation
 /// at call time and does not prevent a concurrent `configure()` from enabling SSH.
-/// Disabling an idle box leaves its saved SSH state unchanged; disable it while
-/// running to persist the disabled switch.
+/// Disable while running to persist the disabled switch.
 ///
 /// For the local backend, after startup each operation has a total 15-second
 /// budget: the guest's 10-second cleanup limit plus 5 seconds for
@@ -112,8 +118,9 @@ pub struct SshStatus {
 /// rejects new operations and cancels interface acquisition and RPCs; in-progress
 /// VM initialization finishes before cancellation is returned. Operations are
 /// not retried, and timeout or cancellation does not undo a configuration the
-/// guest already applied. A REST-backed handle sends each operation as one
-/// HTTP request; the SSH guide (`docs/guides/ssh.md`) owns the HTTP contract.
+/// guest already applied. REST-backed handles support configure, status and
+/// disable with one HTTP request each; setup and enable return
+/// `Unsupported`. The SSH guide (`docs/guides/ssh.md`) owns the HTTP contract.
 #[derive(Clone)]
 pub struct SshHandle {
     backend: Arc<dyn BoxBackend>,
@@ -140,13 +147,27 @@ impl SshHandle {
         self.backend.ssh_configure(config).await
     }
 
+    /// Configure `box` on `0.0.0.0:22` with exactly one OpenSSH public key and enable SSH.
+    /// Reuse the persisted host key, or generate one on first configuration.
+    /// Replaces all accounts and disconnects clients. Local backend only;
+    /// startup follows [`SshHandle`]'s configuration policy.
+    pub async fn setup(&self, client_public_key: impl Into<String>) -> BoxliteResult<SshStatus> {
+        self.backend.ssh_setup(client_public_key.into()).await
+    }
+
+    /// Enable saved configuration without restarting a healthy SSH listener.
+    /// Requires a running local box and an existing configuration.
+    pub async fn enable(&self) -> BoxliteResult<SshStatus> {
+        self.backend.ssh_enable().await
+    }
+
     /// Query SSH state without starting the VM or container main command.
     pub async fn status(&self) -> BoxliteResult<SshStatus> {
         self.backend.ssh_status().await
     }
 
     /// Stop SSH and disconnect clients, retaining credentials. Repeated calls are supported.
-    /// Never starts the VM or container main command.
+    /// Requires a running local box; never starts the VM or container main command.
     pub async fn disable(&self) -> BoxliteResult<SshStatus> {
         self.backend.ssh_disable().await
     }
@@ -158,10 +179,31 @@ impl BoxImpl {
         self.run_ssh(
             "configure",
             StartupPolicy::AllowStart,
-            proto::SshControlRequest {
+            SshRequest::Control(proto::SshControlRequest {
                 config: Some(config_to_proto(config)),
                 enable: Some(true),
-            },
+            }),
+        )
+        .await
+    }
+
+    pub(crate) async fn ssh_setup(&self, client_public_key: String) -> BoxliteResult<SshStatus> {
+        self.run_ssh(
+            "setup",
+            StartupPolicy::AllowStart,
+            SshRequest::Setup(proto::SshSetupRequest { client_public_key }),
+        )
+        .await
+    }
+
+    pub(crate) async fn ssh_enable(&self) -> BoxliteResult<SshStatus> {
+        self.run_ssh(
+            "enable",
+            StartupPolicy::RequireRunning,
+            SshRequest::Control(proto::SshControlRequest {
+                config: None,
+                enable: Some(true),
+            }),
         )
         .await
     }
@@ -170,7 +212,7 @@ impl BoxImpl {
         self.run_ssh(
             "status",
             StartupPolicy::ExistingVmOnly,
-            proto::SshControlRequest::default(),
+            SshRequest::Control(proto::SshControlRequest::default()),
         )
         .await
     }
@@ -178,11 +220,11 @@ impl BoxImpl {
     pub(crate) async fn ssh_disable(&self) -> BoxliteResult<SshStatus> {
         self.run_ssh(
             "disable",
-            StartupPolicy::ExistingVmOnly,
-            proto::SshControlRequest {
+            StartupPolicy::RequireRunning,
+            SshRequest::Control(proto::SshControlRequest {
                 config: None,
                 enable: Some(false),
-            },
+            }),
         )
         .await
     }
@@ -193,7 +235,7 @@ impl BoxImpl {
         &self,
         name: &str,
         startup: StartupPolicy,
-        request: proto::SshControlRequest,
+        request: SshRequest,
     ) -> BoxliteResult<SshStatus> {
         let stopped =
             || BoxliteError::Stopped(format!("SSH {name}: box {} stopped", self.config.id));
@@ -202,7 +244,9 @@ impl BoxImpl {
         }
         let session = match startup {
             StartupPolicy::AllowStart => self.ssh_session().await.map(Some),
-            StartupPolicy::ExistingVmOnly => self.existing_ssh_session(),
+            StartupPolicy::ExistingVmOnly | StartupPolicy::RequireRunning => {
+                self.existing_ssh_session()
+            }
         }
         .map_err(|error| match error {
             BoxliteError::Stopped(_) => stopped(),
@@ -213,6 +257,11 @@ impl BoxImpl {
             _ = self.shutdown_token.cancelled() => Err(stopped()),
             result = tokio::time::timeout(SSH_TIMEOUT, async {
                 let Some(session) = session else {
+                    if matches!(startup, StartupPolicy::RequireRunning) {
+                        return Err(BoxliteError::InvalidState(format!(
+                            "SSH {name}: box {} is not running; start it first", self.config.id
+                        )));
+                    }
                     return Ok(SshStatus {
                         enabled: false,
                         generation: 0,
@@ -221,8 +270,11 @@ impl BoxImpl {
                         host_key_fingerprint: String::new(),
                     });
                 };
-                let response = session.ssh().await?.control(request).await
-                    .map_err(|status| map_tonic_err(name, *status))?;
+                let mut ssh = session.ssh().await?;
+                let response = match request {
+                    SshRequest::Control(request) => ssh.control(request).await,
+                    SshRequest::Setup(request) => ssh.setup(request).await,
+                }.map_err(|status| map_tonic_err(name, *status))?;
                 status_from_proto(name, response.status)
             }) => result.unwrap_or_else(|_| Err(BoxliteError::Rpc(format!(
                 "SSH {name}: timed out after {} seconds for box {}",

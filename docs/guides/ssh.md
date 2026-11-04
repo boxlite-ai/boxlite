@@ -4,18 +4,18 @@ SSH starts disabled when no saved configuration exists. The Rust runtime exposes
 query, or disable it, for local boxes and for REST-backed boxes served by
 `boxlite serve` ([HTTP control](#http-control-with-boxlite-serve)) or the
 [hosted cloud API](#hosted-cloud-api). Only
-`configure(config)` follows the implicit-start policy of exec, metrics, and file
+`configure(config)` and local `setup(client_public_key)` follow the implicit-start policy of exec, metrics, and file
 copying. A `Configured` or `Stopped` box using the image's default command can
 start implicitly. If `BoxOptions.cmd` or `entrypoint` explicitly sets the main
 command, configuration returns `InvalidState` in these states; call `start()`
 first. On a REST server, a stopped box with `auto_resume=false` is refused
 instead of resumed.
 
-`status()` and `disable()` never start the VM or container main command. Valid
-`Configured` or `Stopped` handles return disabled status with generation zero and
-empty address and host identity fields, regardless of the configured command.
-Disabling such an idle box leaves its saved SSH state unchanged. Disable SSH while
-the box is running to persist the disabled switch.
+`status()`, `enable()` and `disable()` never start the VM or container main command.
+On valid `Configured` or `Stopped` local handles, `status()` returns disabled status
+with generation zero and empty address and host identity fields. `enable()` and
+`disable()` return `InvalidState`, leaving saved state unchanged; start the box first.
+Disable SSH while the box is running to persist the disabled switch.
 Running boxes send requests to the existing guest, including after `attach()`
 before `start()` and after runtime recovery. Other lifecycle states return
 `InvalidState`. Results describe the state observed by the call; a concurrent
@@ -29,6 +29,30 @@ for language-specific control APIs.
 SSH does not publish a host port; forward one with [`boxlite ssh forward`](#cli)
 or other network forwarding. For component diagrams and implementation details, see
 [Guest SSH architecture](../../src/guest/src/service/ssh/README.md).
+
+For a local box, setup needs only the client's OpenSSH public key:
+
+```rust,ignore
+let ssh = sandbox.ssh();
+ssh.setup(std::fs::read_to_string("client.pub")?).await?;
+ssh.disable().await?;
+ssh.enable().await?;
+```
+
+`setup()` replaces all authentication with one `box` login and that public key,
+without a CA, and listens on `0.0.0.0:22`. It generates an Ed25519 host key only
+when no saved configuration exists. Subsequent setup, client-key replacement,
+disable/enable, and restart retain the saved host identity, including a key
+previously supplied through complete configuration. Invalid keys or unreadable
+saved state fail without replacing the live listener. Setup disconnects existing
+clients, like complete configuration. Login `box` still executes as the container's
+configured user. `enable()` uses the saved configuration, errors if none exists,
+and preserves connections when SSH is already healthy. Setup and enable are
+currently available only in the Rust runtime and CLI with a local backend;
+REST-backed handles return `Unsupported` for these operations.
+
+Complete configuration remains available for custom addresses, host keys,
+accounts, and certificate authorities:
 
 ```rust,ignore
 use boxlite::{SshAccount, SshConfig};
@@ -62,9 +86,9 @@ startup retains its own cancellation. Operations are not automatically retried.
 Timeout or cancellation does not undo changes the guest may already have
 applied.
 Invalidated handles return `Stopped`; drop all references to the old box and
-obtain a fresh handle with `runtime.get()`. That handle can query or disable SSH
-without restarting the box. A stopped box with an explicit main command still
-requires `start()` before `configure()`.
+obtain a fresh handle with `runtime.get()`. That handle can query SSH without
+restarting the box; enable/disable require a running box. A stopped box with an
+explicit main command still requires `start()` before `configure()` or `setup()`.
 
 ## CLI
 
@@ -75,9 +99,12 @@ requires `start()` before `configure()`.
 boxlite ssh configure dev --ssh-config ssh.json          # complete SshConfig; prints SshStatus
 boxlite ssh forward dev                                  # forwards 127.0.0.1:<random> to guest SSH
 boxlite ssh disable dev
+boxlite ssh enable dev                                   # local, running box; reuses saved configuration
 ```
 
 Configure SSH first, then use `forward` to open a local listener until Ctrl-C.
+For quick local setup, use `boxlite ssh setup dev --authorized-key client.pub`
+and log in as `box`. Only one public-key file is accepted.
 For one account, configuration can instead read key files with
 `boxlite ssh configure dev --host-key host_key --login alice --authorized-key alice.pub`.
 
@@ -103,7 +130,7 @@ convention, `/{prefix}/boxes/{box_id}/ssh`:
 |----------|----------|
 | `POST`   | Replace the complete `SshConfig` body; returns the resulting `SshStatus`. Every accepted call fully restarts the guest listener, so never retry it automatically. |
 | `GET`    | Read `SshStatus`. Never starts the VM or its main command. |
-| `DELETE` | Disable SSH idempotently; returns `SshStatus`. Never starts the VM or its main command. On an idle box, saved SSH state is unchanged. |
+| `DELETE` | Disable SSH idempotently on a running box; returns `SshStatus`. Never starts the VM or its main command. An idle local box returns `409 invalid_state`, leaving saved state unchanged. |
 
 The lifecycle and resume rules above also apply over HTTP. Authenticated
 `POST` requests count as AutoStop activity, including rejected configurations;
@@ -237,13 +264,13 @@ and the next partial update reloads the file.
 
 Status reports actual listener health and public host identity. Generation counts
 successful starts in the current VM. Shutdown drains SSH without changing saved
-intent and rejects new mutations. Public SDK signatures are unchanged:
+intent and rejects new mutations. The existing public operations remain:
 `configure(config)` replaces the configuration and enables SSH, `disable()` turns
 it off while retaining credentials, and `status()` observes the live listener.
-The local runtime's `BoxImpl` translates configuration to
-`Control(enable=true, config=...)` and disable to `Control(enable=false)` only when
-a VM exists; status sends an empty `Control()` request. It also converts replies
-and errors to SDK types. The portal's `SshInterface` exposes only `control`,
-forwarding the wire request and response without retrying. Internal partial
-updates are not exposed through SDKs. REST
-retains its POST, DELETE and GET routes.
+The local runtime's `BoxImpl` translates complete configuration to
+`Control(enable=true, config=...)`, enable/disable to `Control(enable=true/false)`
+on an existing VM, and status to an empty `Control()` request. Setup uses the
+separate internal `Setup` RPC so older guests return `Unimplemented` explicitly.
+The guest holds its existing control lock while loading, reusing/generating the
+host key, validating, saving, and activating setup. The portal forwards each RPC
+once. Other partial updates remain internal. REST retains its POST, DELETE and GET routes.

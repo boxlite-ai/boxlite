@@ -117,7 +117,14 @@ fn command_help_ssh_only_advertises_separate_operations() {
             "{help}"
         );
         assert!(!help.contains("configure-and-forward"), "{help}");
-        for name in ["configure", "status", "disable", "forward"] {
+        for name in [
+            "configure",
+            "setup",
+            "status",
+            "enable",
+            "disable",
+            "forward",
+        ] {
             assert!(
                 help.lines()
                     .any(|line| line.split_whitespace().next() == Some(name)),

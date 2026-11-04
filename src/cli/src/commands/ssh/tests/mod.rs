@@ -121,10 +121,64 @@ fn subcommands_are_named_for_their_effect() {
         .get_subcommands()
         .map(|command| command.get_name().to_string())
         .collect();
-    assert_eq!(names, ["configure", "status", "disable", "forward"]);
+    assert_eq!(
+        names,
+        [
+            "configure",
+            "setup",
+            "status",
+            "enable",
+            "disable",
+            "forward"
+        ]
+    );
     assert!(matches!(
         parse(&["forward", "box"]),
         Ok(SshCommand::Forward(_))
+    ));
+}
+
+#[test]
+fn setup_requires_exactly_one_public_key_file() {
+    let SshCommand::Setup(args) =
+        parse(&["setup", "dev", "--authorized-key", "client.pub"]).unwrap()
+    else {
+        panic!("expected setup");
+    };
+    assert_eq!(args.target, "dev");
+    assert_eq!(args.authorized_key, Path::new("client.pub"));
+    for args in [
+        vec!["setup", "dev"],
+        vec![
+            "setup",
+            "dev",
+            "--authorized-key",
+            "a.pub",
+            "--authorized-key",
+            "b.pub",
+        ],
+        vec![
+            "setup",
+            "dev",
+            "--authorized-key",
+            "a.pub",
+            "--login",
+            "root",
+        ],
+        vec![
+            "setup",
+            "dev",
+            "--authorized-key",
+            "a.pub",
+            "--host-key",
+            "host",
+        ],
+    ] {
+        assert!(parse(&args).is_err(), "{args:?}");
+    }
+    assert!(matches!(
+        parse(&["enable", "dev"]),
+        Ok(SshCommand::Enable(_))
     ));
 }
 
