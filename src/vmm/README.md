@@ -424,12 +424,13 @@ replace the shared one without changing the transport, the devices or `Vm`.
   `start` is not lost. A registrar of a closed generation returns `Closed`,
   and registrars hold weak references, so a device never keeps its slot or
   the guest memory alive.
-- **Failures.** `NeedsReset` from `on_event` sets `DEVICE_NEEDS_RESET`, raises
-  the configuration interrupt and halts the slot until `Status=0`. `Fatal`, a
-  panic in `on_event` (caught, which poisons the device lock) or a poisoned
-  lock fails the slot and sends one `DeviceFailed(Error::VirtioDevice)`; a
-  `stop` that outlives its timeout fails the slot too. A poll error or a
-  panic of the thread itself sends `DeviceFailed(Error::VirtioWorker)`.
+- **Failures.** `NeedsReset` from `on_event` sets `DEVICE_NEEDS_RESET`
+  atomically, raises the configuration interrupt and halts the slot until
+  `Status=0`. `Fatal`, a panic in `on_event` (caught, which poisons the
+  device lock) or a poisoned lock fails the slot and sends one
+  `DeviceFailed(Error::VirtioDevice)`; a `stop` that outlives its timeout fails
+  the slot too. A poll error or a panic of the thread itself sends
+  `DeviceFailed(Error::VirtioWorker)`.
 - **Shutdown.** `shutdown` closes every source, wakes the thread and waits up
   to 300 s for it to exit before it joins it. A timeout reports
   `Error::VirtioWorker` with `TimedOut`, and a later call retries.

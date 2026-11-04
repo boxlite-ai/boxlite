@@ -41,8 +41,8 @@ use crate::{
     error::Error,
     events::{Event, EventSender, RECHECK},
     virtio::{
-        DeviceError, DeviceEvent, EventError, EventRegistrar, EventSource, MAX_QUEUES, NEEDS_RESET,
-        SourceId, VirtioDevice, VirtioInterrupt, WorkerContext,
+        DeviceError, DeviceEvent, EventError, EventRegistrar, EventSource, MAX_QUEUES, SourceId,
+        VirtioDevice, VirtioInterrupt, WorkerContext,
     },
 };
 
@@ -177,8 +177,7 @@ impl Slot {
         // a `stop` waiting for it, and the device reset after that, come later.
         if let Err(DeviceError::NeedsReset(reason)) = result {
             tracing::warn!(device = self.name, reason, "virtio device needs a reset");
-            let status = self.interrupt.device_status();
-            self.interrupt.set_device_status(status | NEEDS_RESET);
+            self.interrupt.set_needs_reset();
             self.interrupt.raise_config();
         }
         let mut state = self.lock();

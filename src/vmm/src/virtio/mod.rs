@@ -158,9 +158,17 @@ pub(crate) trait VirtioInterrupt: Send + Sync {
     /// Reads the device status register.
     fn device_status(&self) -> u8;
 
-    /// Writes the device status register; the workers set
-    /// [`NEEDS_RESET`] through this handle.
+    /// Replaces the device status register.
+    ///
+    /// The transport uses this before the device starts and to roll back a
+    /// failed activation; the worker uses [`Self::set_needs_reset`].
     fn set_device_status(&self, status: u8);
+
+    /// Sets [`NEEDS_RESET`] without clearing a bit a driver wrote.
+    ///
+    /// The worker calls this while a driver may write the status register, so
+    /// an implementation must not replace the register with a stale value.
+    fn set_needs_reset(&self);
 }
 
 /// The resources a transport gives a device when the driver activates it.

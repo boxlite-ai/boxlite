@@ -13,7 +13,7 @@ use std::{
     os::fd::AsRawFd as _,
     sync::{
         Arc, Condvar, Mutex,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU8, Ordering},
         mpsc,
     },
     thread::{self, ThreadId},
@@ -230,6 +230,52 @@ impl Dev {
         let interrupt: Arc<dyn VirtioInterrupt> = self.interrupt.clone();
         let activation = activation(ctx, interrupt, self.sender.clone());
         self.device.lock().unwrap().activate(activation).unwrap();
+    }
+}
+
+/// A status handle whose `device_status` call simulates a driver write that
+/// lands after the worker's read, which the old read-modify-write dropped.
+#[derive(Default)]
+struct RaceInterrupt {
+    status: AtomicU8,
+}
+
+const DRIVER_BIT: u8 = 0x1;
+
+impl RaceInterrupt {
+    fn raw(&self) -> u8 {
+        self.status.load(Ordering::SeqCst)
+    }
+}
+
+impl VirtioInterrupt for RaceInterrupt {
+    fn raise(&self) {}
+
+    fn interrupt_status(&self) -> u8 {
+        0
+    }
+
+    fn ack_interrupt(&self, _bits: u8) {}
+
+    fn config_generation(&self) -> u8 {
+        0
+    }
+
+    fn raise_config(&self) {}
+
+    fn device_status(&self) -> u8 {
+        let seen = self.status.load(Ordering::SeqCst);
+        self.status.fetch_or(DRIVER_BIT, Ordering::SeqCst);
+        seen
+    }
+
+    fn set_device_status(&self, status: u8) {
+        self.status.store(status, Ordering::SeqCst);
+    }
+
+    fn set_needs_reset(&self) {
+        self.status
+            .fetch_or(DRIVER_BIT | NEEDS_RESET, Ordering::SeqCst);
     }
 }
 
@@ -844,6 +890,44 @@ fn needs_reset_halts_the_slot_until_status_zero() {
     dev.start();
     dev.worker.kick(1);
     assert_eq!(dev.seen.wait_for(2), [kick(0), kick(1)]);
+}
+
+#[test]
+fn a_driver_status_write_cannot_clear_needs_reset() {
+    let events = EventLoop::new().unwrap();
+    let workers = VirtioWorkers::new(events.sender()).unwrap();
+    let seen = Arc::new(Seen::default());
+    let interrupt = Arc::new(RaceInterrupt::default());
+    let device = Arc::new(Mutex::new(Probe {
+        spec: spec("race"),
+        seen: Arc::clone(&seen),
+        hook: Box::new(|_, _| Err(DeviceError::NeedsReset("race"))),
+        ctx: None,
+        activations: VecDeque::new(),
+        resets: 0,
+        quiesces: 0,
+    }));
+    let shared: Arc<Mutex<dyn VirtioDevice>> = device.clone();
+    let worker = workers.add(shared, Arc::clone(&interrupt) as Arc<dyn VirtioInterrupt>);
+    let context = worker.prepare().expect("prepare a generation");
+    let activation = activation(
+        context,
+        Arc::clone(&interrupt) as Arc<dyn VirtioInterrupt>,
+        events.sender(),
+    );
+    device.lock().unwrap().activate(activation).unwrap();
+    worker.start().expect("start the generation");
+    worker.kick(0);
+    seen.wait_for(1);
+    worker.stop().expect("stop the generation");
+
+    assert_eq!(
+        interrupt.raw() & DRIVER_BIT,
+        DRIVER_BIT,
+        "the worker overwrote the driver's status bit"
+    );
+    assert_eq!(interrupt.raw() & NEEDS_RESET, NEEDS_RESET);
+    workers.shutdown().unwrap();
 }
 
 #[test]

@@ -22,9 +22,9 @@ use crate::{
     memory::GuestMemoryMmap,
     virtio::{
         ActivationContext, DeviceError, DeviceEvent, DeviceSnapshot, DeviceSpec, EventError,
-        EventRegistrar, EventSource, FeatureError, MAX_CONFIG_LEN, MAX_QUEUES, RestoreContext,
-        SnapshotError, SnapshotSupport, SourceId, VirtioDevice, VirtioInterrupt, Waker,
-        queue::VirtQueues,
+        EventRegistrar, EventSource, FeatureError, MAX_CONFIG_LEN, MAX_QUEUES, NEEDS_RESET,
+        RestoreContext, SnapshotError, SnapshotSupport, SourceId, VirtioDevice, VirtioInterrupt,
+        Waker, queue::VirtQueues,
     },
 };
 
@@ -135,6 +135,10 @@ impl VirtioInterrupt for TestInterrupt {
 
     fn set_device_status(&self, status: u8) {
         self.status.store(status, Ordering::SeqCst);
+    }
+
+    fn set_needs_reset(&self) {
+        self.status.fetch_or(NEEDS_RESET, Ordering::SeqCst);
     }
 }
 

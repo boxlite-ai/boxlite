@@ -375,7 +375,7 @@ impl MmioTransport {
         let new = current | bits;
 
         if bits & FAILED != 0 {
-            self.interrupt.set_device_status(new);
+            self.interrupt.update_device_status(bits, 0);
             if self.active {
                 match self.worker.stop() {
                     Ok(()) => self.active = false,
@@ -448,7 +448,10 @@ impl MmioTransport {
             return;
         }
 
-        self.interrupt.set_device_status(new);
+        // A worker may set NEEDS_RESET while the driver writes, so OR the
+        // driver's bits and leave the register alone when it did.
+        self.interrupt
+            .update_device_status(bits, FAILED | NEEDS_RESET);
     }
 
     /// Applies the accepted features to the device exactly once.
@@ -567,8 +570,7 @@ impl MmioTransport {
 
     /// Sets DEVICE_NEEDS_RESET and raises the configuration interrupt.
     fn need_reset(&self, reason: &'static str) {
-        let status = self.status() | NEEDS_RESET;
-        self.interrupt.set_device_status(status);
+        self.interrupt.set_needs_reset();
         self.interrupt.raise_config();
         tracing::warn!(
             device = self.spec.name,
