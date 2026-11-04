@@ -233,7 +233,7 @@ describe('DomainService.bind', () => {
       url: 'https://demo1.other.example',
       target: { type: 'box', box: box.id, port: 3000 },
     })
-    expect(query).toHaveBeenCalledTimes(4)
+    expect(query).toHaveBeenCalledTimes(5)
     expect(query).toHaveBeenCalledWith(expect.stringContaining('WHERE "hostname" = $1 AND "organization_id" = $2'), [
       'demo1.other.example',
       ORG,
@@ -242,7 +242,8 @@ describe('DomainService.bind', () => {
       false,
       null,
     ])
-    expect(query.mock.calls[3][0]).toMatch(/^UPDATE/)
+    expect(query.mock.calls[3][0]).toMatch(/^SELECT target_type/)
+    expect(query.mock.calls[4][0]).toMatch(/^UPDATE/)
     expect(manager.count).not.toHaveBeenCalled()
   })
 
@@ -252,7 +253,24 @@ describe('DomainService.bind', () => {
       status: 404,
       response: { code: DOMAIN_NOT_OWNED_CODE, message: expect.stringContaining('Dashboard > Domains') },
     })
-    expect(query).toHaveBeenCalledTimes(5)
+    expect(query).toHaveBeenCalledTimes(6)
+  })
+
+  it('refuses replacing a default App domain with a Box binding', async () => {
+    const { service, query } = makeService()
+    query.mockImplementation((sql: string) => {
+      if (sql.includes('SELECT "domain_count_limit"')) return Promise.resolve([{ limit: 1 }])
+      if (sql.startsWith('SELECT target_type'))
+        return Promise.resolve([{ target_type: 'app', app_id: 'app-1', environment_id: 'env-main' }])
+      if (sql.startsWith('SELECT public_url'))
+        return Promise.resolve([{ public_url: 'https://demo1.app.boxlite.test' }])
+      return Promise.resolve([])
+    })
+    await expect(service.bind(makeBox(), 3000, 'demo1.app.boxlite.test')).rejects.toMatchObject({
+      status: 400,
+      response: { code: 'app_domain_managed' },
+    })
+    expect(query.mock.calls.some(([sql]) => sql.startsWith('UPDATE'))).toBe(false)
   })
 })
 

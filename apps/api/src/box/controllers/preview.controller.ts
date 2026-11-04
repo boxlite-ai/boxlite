@@ -131,8 +131,16 @@ export class PreviewController {
   @Get('domains/:hostname')
   @ApiExcludeEndpoint()
   @UseGuards(CombinedAuthGuard, ProxyGuard)
-  async resolveDomain(@Param('hostname') hostname: string): Promise<{ boxId: string; port: number }> {
+  async resolveDomain(
+    @Param('hostname') hostname: string,
+  ): Promise<{ boxId: string; port: number } | { type: 'app'; environmentId: string }> {
     const target = await this.domainService.resolve(hostname)
+    if (target?.type === 'app' && target.environment) {
+      return {
+        type: 'app',
+        environmentId: await this.domainService.resolveAppEnvironment(target.app, target.environment),
+      }
+    }
     if (
       !target ||
       target.type !== 'box' ||

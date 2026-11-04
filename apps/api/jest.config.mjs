@@ -17,6 +17,7 @@ export default {
   // from transformation, so let ts-jest down-level them.
   transformIgnorePatterns: ['/node_modules/(?!(?:uuid|nanoid)/)', '/test/disposable-email-domains\\.cjs$'],
   moduleNameMapper: {
+    '^@boxlite-ai/cloud-app-shared$': '<rootDir>/../libs/cloud-app-shared/src/index.ts',
     '^@visulima/disposable-email-domains/edge$': '<rootDir>/test/disposable-email-domains.cjs',
   },
   moduleFileExtensions: ['ts', 'js', 'html'],

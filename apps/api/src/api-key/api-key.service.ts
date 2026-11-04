@@ -56,10 +56,11 @@ export class ApiKeyService {
     ctx: Context,
     expiresAt?: Date,
     apiKeyValue?: string,
+    cloudAppId?: string,
   ): Promise<{ apiKey: ApiKey; value: string }> {
     return recordOutcomes(
       { name: 'api_key.create', organizationId, correlationId: randomUUID(), ctx },
-      () => this.persistApiKey(organizationId, userId, name, permissions, expiresAt, apiKeyValue),
+      () => this.persistApiKey(organizationId, userId, name, permissions, expiresAt, apiKeyValue, cloudAppId),
       mutationFailureType,
     )
   }
@@ -71,6 +72,7 @@ export class ApiKeyService {
     permissions: OrganizationResourcePermission[],
     expiresAt?: Date,
     apiKeyValue?: string,
+    cloudAppId?: string,
   ): Promise<{ apiKey: ApiKey; value: string }> {
     const existingKey = await this.apiKeyRepository.findOne({ where: { organizationId, userId, name } })
     if (existingKey) {
@@ -96,6 +98,7 @@ export class ApiKeyService {
       permissions,
       createdAt: new Date(),
       expiresAt,
+      cloudAppId: cloudAppId ?? null,
     })
 
     return { apiKey, value }

@@ -8,6 +8,7 @@ import { turnstileConfig } from './turnstile-config'
 import { parseFilestoreInstances } from './filestore-instances'
 import { checkpointConfig } from './checkpoint-config'
 import { customDomainConfig } from './custom-domain-config'
+import { cloudAppConfig } from './cloud-app-config'
 
 /**
  * A whole number at least 1, or a hard failure.
@@ -621,6 +622,7 @@ const configuration = {
   turnstile: turnstileConfig(),
   checkpoint: checkpointConfig(),
   customDomains: customDomainConfig(),
+  cloudApps: cloudAppConfig(),
   production: process.env.NODE_ENV === 'production',
   version: process.env.VERSION || '0.0.0-dev',
   environment: process.env.ENVIRONMENT,

@@ -39,7 +39,17 @@ import CustomDomains from './CustomDomains'
 const SHORT_NAME = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/
 
 /** List and reserve names within one organization, preserving quota and write-permission checks. */
-function OrganizationDomains({ organizationId, canManage }: { organizationId: string; canManage: boolean }) {
+function OrganizationDomains({
+  organizationId,
+  canRead,
+  canManage,
+  canManageCustom,
+}: {
+  organizationId: string
+  canRead: boolean
+  canManage: boolean
+  canManageCustom: boolean
+}) {
   const api = useApi()
   const queryClient = useQueryClient()
   const [open, setOpen] = useState(false)
@@ -48,7 +58,7 @@ function OrganizationDomains({ organizationId, canManage }: { organizationId: st
   const query = useQuery({
     queryKey: queryKeys.domains.list(organizationId),
     queryFn: () => api.listDomains(organizationId),
-    enabled: canManage,
+    enabled: canRead,
   })
   const claim = useMutation({
     mutationFn: (shortName: string) => api.claimDomain(organizationId, shortName),
@@ -64,7 +74,8 @@ function OrganizationDomains({ organizationId, canManage }: { organizationId: st
   const managedDomains = (data?.domains ?? []).filter((domain) => domain.kind === 'platform')
   const rows = managedDomains.filter((domain) => {
     const target = domain.target?.type === 'box' ? domain.target.box : domain.target?.app
-    return `${domain.hostname} ${target ?? ''}`.toLowerCase().includes(needle)
+    const environment = domain.target?.type === 'app' ? domain.target.environment : undefined
+    return `${domain.hostname} ${target ?? ''} ${environment ?? ''}`.toLowerCase().includes(needle)
   })
   const openForm = () => {
     claim.reset()
@@ -76,7 +87,7 @@ function OrganizationDomains({ organizationId, canManage }: { organizationId: st
       <div className="resource-page-header">
         <h1 className="font-display text-page font-semibold text-foreground">Domains</h1>
         <p className="mt-2 text-body leading-relaxed text-muted-foreground">
-          Manage the domains used to reach your Box services.
+          Manage the domains used to reach your Boxes and Apps.
         </p>
       </div>
 
@@ -92,7 +103,7 @@ function OrganizationDomains({ organizationId, canManage }: { organizationId: st
               value={filter}
               onChange={(value) => setFilter(value)}
               count={data ? rows.length : '—'}
-              disabled={!canManage || data === undefined}
+              disabled={!canRead || data === undefined}
             />
             <AsciiButton
               variant="primary"
@@ -102,7 +113,7 @@ function OrganizationDomains({ organizationId, canManage }: { organizationId: st
             >
               <Plus className="size-3.5" strokeWidth={2.4} /> Request domain
             </AsciiButton>
-            {canManage && query.isSuccess && data && (
+            {canRead && query.isSuccess && data && (
               <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-meta text-muted-foreground sm:col-span-2">
                 <span className="inline-flex items-center gap-2 font-mono tabular-nums">
                   <span>
@@ -122,11 +133,11 @@ function OrganizationDomains({ organizationId, canManage }: { organizationId: st
           </div>
 
           <div className="resource-content scroll-edge mt-[14px]">
-            {!canManage ? (
+            {!canRead ? (
               <ResourceEmptyState
                 title="Permission required"
                 icon={<Globe />}
-                description="You need Box write permission to manage domains."
+                description="You need App read or Box write permission to view domains."
               />
             ) : data === undefined ? (
               query.isError ? (
@@ -151,7 +162,7 @@ function OrganizationDomains({ organizationId, canManage }: { organizationId: st
                   <ResourceEmptyState
                     title="No Domains yet."
                     icon={<Globe className="size-6" />}
-                    description="Request a name, then connect it to your Box using the CLI or SDK."
+                    description="Request a name, then connect it to your Box or App."
                   />
                 ) : (
                   <div className="resource-content">
@@ -207,8 +218,10 @@ function OrganizationDomains({ organizationId, canManage }: { organizationId: st
                                 >
                                   {domain.target.box}
                                 </Link>
+                              ) : domain.target?.type === 'app' ? (
+                                `${domain.target.app}${domain.target.environment ? ` · ${domain.target.environment}` : ''}`
                               ) : (
-                                (domain.target?.app ?? '—')
+                                '—'
                               )}
                             </td>
                             <td className="px-4 py-3 font-mono tabular-nums text-muted-foreground">
@@ -245,8 +258,8 @@ function OrganizationDomains({ organizationId, canManage }: { organizationId: st
           </div>
         </TabsContent>
         <TabsContent value="custom" className="min-h-0 overflow-y-auto">
-          {canManage ? (
-            <CustomDomains organizationId={organizationId} canManage={canManage} held={data?.domains ?? []} />
+          {canManageCustom ? (
+            <CustomDomains organizationId={organizationId} canManage={canManageCustom} held={data?.domains ?? []} />
           ) : (
             <p role="alert" className="py-10 text-body text-muted-foreground">
               You need Box write permission to manage domains.
@@ -264,7 +277,7 @@ function OrganizationDomains({ organizationId, canManage }: { organizationId: st
           <DialogHeader>
             <DialogTitle>Request domain</DialogTitle>
             <DialogDescription className="mt-2 text-body leading-relaxed">
-              Reserve a third-level domain for your Box, then bind it using the CLI or SDK.
+              Reserve a third-level domain for your Box or App, then bind it using the CLI or SDK.
             </DialogDescription>
           </DialogHeader>
           <form
@@ -346,7 +359,16 @@ export default function Domains() {
     <OrganizationDomains
       key={selectedOrganization.id}
       organizationId={selectedOrganization.id}
-      canManage={authenticatedUserHasPermission(OrganizationRolePermissionsEnum.WRITE_BOXES)}
+      canRead={
+        authenticatedUserHasPermission(OrganizationRolePermissionsEnum.READ_APPS) ||
+        authenticatedUserHasPermission(OrganizationRolePermissionsEnum.WRITE_APPS) ||
+        authenticatedUserHasPermission(OrganizationRolePermissionsEnum.WRITE_BOXES)
+      }
+      canManage={
+        authenticatedUserHasPermission(OrganizationRolePermissionsEnum.WRITE_BOXES) ||
+        authenticatedUserHasPermission(OrganizationRolePermissionsEnum.WRITE_APPS)
+      }
+      canManageCustom={authenticatedUserHasPermission(OrganizationRolePermissionsEnum.WRITE_BOXES)}
     />
   )
 }
