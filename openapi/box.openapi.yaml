@@ -94,9 +94,10 @@ info:
        including the main command. Use their IDs with the existing attach and
        control endpoints to recover a session after losing a client handle.
 
-    Finished sessions disappear from the live list as soon as the guest sees
-    exit. Wait status and output may remain available in the guest's bounded
-    retention window, but this API does not promise durable execution history.
+    Finished sessions disappear from the live list once the guest reaper
+    records their exit. Wait status and output may remain available in the
+    guest's bounded retention window, but this API does not promise durable
+    execution history.
     Listing does not start or restart a box. Configured and stopped boxes
     answer `{"executions": []}`; paused boxes return an invalid-state error.
 
