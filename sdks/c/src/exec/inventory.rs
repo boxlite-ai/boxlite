@@ -3,6 +3,8 @@
 use std::ffi::CString;
 use std::os::raw::{c_char, c_int, c_void};
 
+use boxlite::BoxliteError;
+
 use crate::error::{BoxliteErrorCode, null_pointer_error, write_error};
 use crate::event_queue::{CExecutionInfoListCb, OwnedFfiPtr, RuntimeEvent, push_event};
 use crate::info::{free_raw_slice, into_raw_slice};
@@ -27,28 +29,33 @@ pub struct CExecutionInfoList {
     pub count: c_int,
 }
 
-impl From<boxlite::litebox::ExecutionInfo> for CExecutionInfo {
-    fn from(info: boxlite::litebox::ExecutionInfo) -> Self {
-        let (argv, argc) = into_raw_slice(
-            info.argv
-                .into_iter()
-                .map(|arg| {
-                    CString::new(arg)
-                        .expect("guest argv cannot contain NUL")
-                        .into_raw()
-                })
-                .collect(),
-        );
-        Self {
-            execution_id: CString::new(info.execution_id)
-                .expect("guest execution ID cannot contain NUL")
-                .into_raw(),
+impl CExecutionInfo {
+    /// Fallible because these strings come from the guest, not from the C
+    /// caller: a NUL byte in a listed argv would otherwise panic inside the
+    /// spawned task, and the callback would never fire.
+    ///
+    /// Every string is built as a `CString` and released with `into_raw` only
+    /// after the last one succeeds, so an early error frees what it allocated.
+    fn try_from_info(info: boxlite::litebox::ExecutionInfo) -> Result<Self, BoxliteError> {
+        let argv = info
+            .argv
+            .into_iter()
+            .map(|arg| {
+                CString::new(arg)
+                    .map_err(|_| BoxliteError::Internal("guest argv contains a NUL byte".into()))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let execution_id = CString::new(info.execution_id)
+            .map_err(|_| BoxliteError::Internal("guest execution ID contains a NUL byte".into()))?;
+        let (argv, argc) = into_raw_slice(argv.into_iter().map(CString::into_raw).collect());
+        Ok(Self {
+            execution_id: execution_id.into_raw(),
             argv,
             argc,
             started_at: info.started_at,
             tty: info.tty,
             is_main_session: info.is_main_session,
-        }
+        })
     }
 }
 
@@ -71,13 +78,16 @@ pub unsafe extern "C" fn boxlite_list_executions(
         let queue = handle.queue.clone();
         let user_data = user_data as usize;
         handle.tokio_rt.spawn(async move {
-            let result = lite.list_executions().await.map(|executions| {
-                let (items, count) =
-                    into_raw_slice(executions.into_iter().map(CExecutionInfo::from).collect());
-                OwnedFfiPtr::new_with(
+            let result = lite.list_executions().await.and_then(|executions| {
+                let items = executions
+                    .into_iter()
+                    .map(CExecutionInfo::try_from_info)
+                    .collect::<Result<Vec<_>, _>>()?;
+                let (items, count) = into_raw_slice(items);
+                Ok(OwnedFfiPtr::new_with(
                     Box::new(CExecutionInfoList { items, count }),
                     free_execution_info_list,
-                )
+                ))
             });
             push_event(
                 &queue,
@@ -123,7 +133,50 @@ pub(crate) unsafe fn free_execution_info_list(list: *mut CExecutionInfoList) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::CStr;
     use std::ptr;
+
+    fn info(argv: Vec<&str>) -> boxlite::litebox::ExecutionInfo {
+        boxlite::litebox::ExecutionInfo {
+            execution_id: "exec-1".to_string(),
+            argv: argv.into_iter().map(str::to_string).collect(),
+            started_at: 1,
+            tty: false,
+            is_main_session: false,
+        }
+    }
+
+    #[test]
+    fn nul_in_listed_argv_is_an_error_not_a_panic() {
+        let error = match CExecutionInfo::try_from_info(info(vec!["sh", "-c", "echo a\0b"])) {
+            Ok(_) => panic!("a NUL byte in guest argv must be rejected"),
+            Err(error) => error,
+        };
+        assert!(
+            error.to_string().contains("NUL"),
+            "error should name the NUL byte: {error}"
+        );
+    }
+
+    #[test]
+    fn listed_argv_round_trips_through_the_ffi_struct() {
+        let converted =
+            CExecutionInfo::try_from_info(info(vec!["sh", "-c", "echo hi"])).expect("convert");
+        unsafe {
+            assert_eq!(converted.argc, 3);
+            assert_eq!(
+                CStr::from_ptr(converted.execution_id).to_str().unwrap(),
+                "exec-1"
+            );
+            let arg = *converted.argv.add(2);
+            assert_eq!(CStr::from_ptr(arg).to_str().unwrap(), "echo hi");
+            let list = Box::into_raw(Box::new(CExecutionInfoList {
+                items: Box::into_raw(Box::new(converted)),
+                count: 1,
+            }));
+            boxlite_free_execution_info_list(list);
+        }
+    }
 
     #[test]
     fn list_rejects_null_box_without_scheduling() {

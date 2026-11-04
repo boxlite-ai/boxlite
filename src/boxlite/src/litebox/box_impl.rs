@@ -1367,6 +1367,20 @@ impl BoxImpl {
             let pid = record.pid;
 
             let mut state = self.state.write();
+            // An adopted box can lose its shim between the build's last live
+            // operation and this publish: the exit-only watcher armed when the
+            // box was first handed out records `Stopped` here first. Publishing
+            // `Running` over that would report a live box with a dead PID, and
+            // the watcher's cell is already taken — nothing would observe the
+            // death again. A fresh start always publishes from `Configured` or
+            // `Stopped`, so this check is adoption-only; its cleanup guard is
+            // already disarmed, so returning here does not tear the box down.
+            if adopting_running && state.status != BoxStatus::Running {
+                return Err(BoxliteError::InvalidState(format!(
+                    "Box {} stopped while it was being adopted ({})",
+                    self.config.id, state.status
+                )));
+            }
             state.set_pid(Some(pid));
             state.set_status(BoxStatus::Running);
             // A box entering Running publishes its PID, status, and `started_at`
