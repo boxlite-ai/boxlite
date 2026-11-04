@@ -26,7 +26,7 @@ boxlite-vmm
 
 | Module | Responsibility |
 | --- | --- |
-| `vm` | `Vm<H>`: validate the configuration, allocate and register RAM on host backend `H`, own the devices in a `Chipset`, load the boot data, and run the vCPUs until the first event; `StopHandle` and `VmExit` |
+| `vm` | `Vm<H>`: validate the configuration, allocate and register RAM on host backend `H`, compose the devices through `with_devices` and `devices::add_all`, load the boot data, and run the vCPUs until the first event; `with_backend` is the test seam; `StopHandle` and `VmExit` |
 | `boot` | Linux x86_64 boot: `prepare` loads the pinned ELF kernel through linux-loader, places an optional initramfs at the top of RAM, writes the zero page, E820 map, command line and MP table, and sets up the 64-bit entry state (GDT, identity page tables, registers) |
 | `config` | `VmConfig { vcpu_count, memory_mib, kernel, cmdline, initramfs, disks }` and its bounds: 1..=64 vCPUs, 1..=3072 MiB, a printable-ASCII command line under 2048 bytes, at most 8 `DiskConfig { path, format, read_only }` entries |
 | `error` | VMM errors that keep the hypervisor's cause chain, including a virtio device that cannot continue |
@@ -35,9 +35,9 @@ boxlite-vmm
 | `vcpu` | x86_64 vCPU workers: create and configure each vCPU, hold them at a start gate, run the guest and dispatch its exits until the VM ends |
 | `chipset` | `ChipsetBuilder`, the one registry of ranges and interrupt lines, and `Chipset`, the read-only machine it builds |
 | `bus` | `Bus`, `BusRange` and `BusDevice`, and `Buses::dispatch`, which serves the MMIO and port exits of a vCPU |
-| `virtio` | The virtio common infrastructure: the synchronous device contract (`VirtioDevice`, `DeviceSpec`, `DeviceEvent`, `ActivationContext`, `EventRegistrar`, `Waker`, `WorkerControl`), the `VirtQueues` facade (dense preparation and validation, EVENT_IDX, exactly-once deferred completion, notification drain, the stored guest-memory Arc and negotiated indirect flag, and `save`/`restore` stubs that report snapshots unsupported until M8), the 4 KiB virtio-mmio transport (register file, feature negotiation, queue configuration and activation, Status=0 reset, post-activation queue-write rejection), the MMIO interrupt handle, the default snapshot methods, and the virtio workers (`VirtioWorkers` over a `WorkerRuntime`; `SharedRuntime` runs every device's events on one thread) |
+| `virtio` | The virtio common infrastructure: the synchronous device contract (`VirtioDevice`, `DeviceSpec`, `DeviceEvent`, `ActivationContext`, `EventRegistrar`, `Waker`, `WorkerControl`), the `VirtQueues` facade (dense preparation and validation, EVENT_IDX, exactly-once deferred completion, notification drain, the stored guest-memory Arc and negotiated indirect flag, and `save`/`restore` stubs that report snapshots unsupported until M8), the 4 KiB virtio-mmio transport (register file, feature negotiation, queue configuration and activation, Status=0 reset, post-activation queue-write rejection), `mmio::add_device`, which attaches any device through that transport, the MMIO interrupt handle, the default snapshot methods, and the virtio workers (`VirtioWorkers` over a `WorkerRuntime`; `SharedRuntime` runs every device's events on one thread) |
 | `irq` | `IrqChip`, the host interrupt controller as devices see it, and `IrqLine`, one device line; HVF and KVM provide the controller, WHP (M10) only local APICs |
-| `devices` | The console queue and the output-only virtio console device, and on x86_64 the 8250 UART at COM1 and the i8042 reset, with `add_legacy_devices`, which adds them to the chipset |
+| `devices` | `devices::add_all`, the one composition helper (add a device type as one `add_slot_device` line), the console queue and the output-only virtio console device, and on x86_64 the 8250 UART at COM1 and the i8042 reset, with `add_legacy_devices` |
 | `events` | `Event`, which ends the VM, `EventSender`, which also latches the stop, and `EventLoop`, the poller that waits for the first event |
 
 The x86_64 KVM boot and lifecycle are in place; the M1 devices, arm64 and HVF
@@ -71,12 +71,13 @@ vm-memory and registers it with the host VM. Three rules keep the backend's
 - The backing is released only after every registration is gone. Dropping a
   `GuestRam` that may still be registered leaks the backing instead.
 
-`Vm::with_backend` runs validate, allocate, create the host VM, then map, so
-every early return drops the host VM before the RAM; `Vm`'s `Drop` unmaps as a
-backstop. Unit tests drive these paths with a recording mock backend. The
-`memory` and `vm` tests and that backend live in `tests/` and are included as
-unit-test modules, which keeps them outside the counted sources and the
-coverage denominator; `config` and `error` keep inline test modules.
+`Vm::with_devices` runs validate, allocate, create the host VM, compose the
+devices, then map, so every early return drops the host VM before the RAM;
+`Vm`'s `Drop` unmaps as a backstop. `with_backend` is the same constructor
+without the mutable configuration, for tests. The `memory` and `vm` tests and
+that backend live in `tests/` and are included as unit-test modules, which
+keeps them outside the counted sources and the coverage denominator; `config`
+and `error` keep inline test modules.
 
 ## Kernel loading
 
@@ -436,14 +437,34 @@ replace the shared one without changing the transport, the devices or `Vm`.
   to 300 s for it to exit before it joins it. A timeout reports
   `Error::VirtioWorker` with `TimedOut`, and a later call retries.
 
+## Device composition
+
+`devices::add_all` is the one place that names device types. `Vm::new` calls it
+through `Vm::with_devices`; the helper adds the legacy platform devices, then
+each configured device type in slot order, and finally announces every slot on
+the kernel command line.
+
+- **One line per device.** `add_slot_device` takes the next `Slot`, runs the
+  device's attach function, and records the slot for `announce`. Adding a
+  device type is one such line in `add_all`; a device that must keep slot 0
+  goes before the disk loop.
+- **One attach path.** `virtio::mmio::add_device` claims the window and line,
+  adds the device's worker slot and builds the `MmioTransport`; every
+  virtio-mmio device uses it, so the wiring is not copied into each device
+  module.
+- **Test seam.** `Vm::with_backend` keeps the old closure signature for tests
+  that add mock, conflict or legacy devices directly; `with_devices` hands the
+  closure the mutable `VmConfig` so `add_all` can announce slots.
+
 ## Virtio block device
 
 `virtio::blk` is the first production virtio device: one request queue over
 the [virtio-mmio transport](#virtio-mmio-transport) and the
 [virtio workers](#virtio-workers), with the image format handled by
 [imago](https://crates.io/crates/imago) (`sync` feature, so no tokio).
-`VmConfig::disks` lists the disks; `Vm::new` opens each one, takes a slot
-for it, names the slot on the kernel command line and adds the device.
+`VmConfig::disks` lists the disks; `devices::add_all` calls `blk::add_disk` for
+each one, which opens the image and attaches it in the slot `add_slot_device`
+took, and then announces that slot on the kernel command line.
 
 - **Slots.** `virtio::mmio::Slots` hands out `(window, line)` pairs in
   order: window `i` is `0xd000_0000 + i * 4 KiB`, line `i` is GSI `5 + i`,
@@ -455,8 +476,8 @@ for it, names the slot on the kernel command line and adds the device.
   slots in `VmConfig::disks` order, so disk `i` is `/dev/vd<i>`.
 - **Configuration.** `DiskConfig { path, format: Raw | Qcow2, read_only }`;
   the format is stated, never probed from the file. A qcow2 image opens the
-  backing chain its header names. At most 8 disks; `Vm::new` fails with
-  `Error::OpenDisk` for an image it cannot open and
+  backing chain its header names. At most 8 disks; `blk::add_disk` fails with
+  `Error::OpenDisk` for an image it cannot open and `add_all` fails with
   `Error::InvalidCommandLine` when the line leaves no room for the device
   arguments.
 - **Features.** `VERSION_1`, `SEG_MAX` (254: the queue size 256 minus the
@@ -466,9 +487,9 @@ for it, names the slot on the kernel command line and adds the device.
   capacity in sectors, `seg_max`, and the discard limits; a read past the
   end returns zeros, and writes are refused.
 - **Backend contract.** `blk::backend::DiskBackend` is the seam a disk
-  engine implements: `geometry` once after open; `event_source` at every
+  engine implements: `disk_info` once after open; `event_source` at every
   activation, registered with the worker generation when it is `Some`;
-  `submit(token, Request)` per parsed chain, answering `Done(Completed)`
+  `submit(token, Request)` per parsed chain, answering `Done(CompletedRequest)`
   inline or `Pending`; `completions` on each `BackendReady` edge, drained
   until empty; `flush` on reset and quiesce, with the worker stopped. A
   `Request` owns its bounce buffer, and a completion returns it with the
@@ -476,7 +497,7 @@ for it, names the slot on the kernel command line and adds the device.
 - **Request lifecycle.** On `QueueKick(0)` the device drains the queue:
   `request::parse` reads the 16-byte header and the OUT or discard payload
   from the readable descriptors and records the writable ones as the
-  `Targets` for IN data and the status byte. A chain the backend must not
+  `WriteTargets` for IN data and the status byte. A chain the backend must not
   see (wrong direction, short header, misaligned or out-of-range transfer,
   a transfer over the 4 MiB bounce limit, an unnegotiated or unknown type)
   is finished at once with `IOERR` or `UNSUPP`; a chain without a status
@@ -560,21 +581,21 @@ devices:
 - **Constructors.** A constructor only claims resources and builds state; a
   device that needs a thread starts it after `build`, and a virtio device's
   events run on the worker thread, which starts at its first DRIVER_OK.
-  `Vm::with_backend` passes the guest memory and the workers in a
-  `DeviceContext`, through which `Vm::new` adds the
-  [block devices](#virtio-block-device) and tests add a transport. A line from
-  `Resources::line` is not armed until `build` succeeds: using it earlier
-  fails with `Error::LineNotArmed` and makes no host call, so a device that a
-  conflict discards never raised anything. On a conflict, every device drops
-  without having run.
+  `Vm::with_devices` passes the guest memory, the workers and the mutable
+  configuration in a `DeviceContext`; `devices::add_all` adds the
+  [block devices](#virtio-block-device) and tests use `with_backend` to add a
+  transport. A line from `Resources::line` is not armed until `build`
+  succeeds: using it earlier fails with `Error::LineNotArmed` and makes no
+  host call, so a device that a conflict discards never raised anything. On a
+  conflict, every device drops without having run.
 - **Dispatch.** `Chipset::dispatch` hands a vCPU exit to the buses and
   returns every exit that is not MMIO or port I/O. The chipset never changes
   after the build, so every vCPU thread shares it without a lock of its own.
 
 ## Legacy devices and the console
 
-On x86_64, `devices::x86_64::add_legacy_devices`, which `Vm::new` calls,
-reserves the in-kernel PIC
+On x86_64, `devices::x86_64::add_legacy_devices`, which `devices::add_all`
+calls, reserves the in-kernel PIC
 (`0x20`, `0xA0`, `0x4D0`), PIT (`0x40`–`0x43`, `0x61`), IOAPIC and local APIC
 windows, then adds the legacy devices:
 

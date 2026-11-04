@@ -4,20 +4,20 @@
 //! The chains a backend still holds: each deferred chain's head index and
 //! result targets, by the token its request was submitted with.
 
-use super::request::Targets;
+use super::request::WriteTargets;
 
 /// One deferred chain.
 #[derive(Debug)]
-struct Entry {
+struct DeferredChain {
     token: u32,
     head: u16,
-    targets: Targets,
+    targets: WriteTargets,
 }
 
 /// The in-flight table of one activation.
 #[derive(Debug, Default)]
 pub(crate) struct Inflight {
-    entries: Vec<Entry>,
+    entries: Vec<DeferredChain>,
     next_token: u32,
 }
 
@@ -31,8 +31,8 @@ impl Inflight {
     }
 
     /// Records the chain at `head` as deferred under `token`.
-    pub(crate) fn insert(&mut self, token: u32, head: u16, targets: Targets) {
-        self.entries.push(Entry {
+    pub(crate) fn insert(&mut self, token: u32, head: u16, targets: WriteTargets) {
+        self.entries.push(DeferredChain {
             token,
             head,
             targets,
@@ -40,7 +40,7 @@ impl Inflight {
     }
 
     /// Takes the chain submitted under `token`, if the table holds it.
-    pub(crate) fn remove(&mut self, token: u32) -> Option<(u16, Targets)> {
+    pub(crate) fn remove(&mut self, token: u32) -> Option<(u16, WriteTargets)> {
         let index = self.entries.iter().position(|entry| entry.token == token)?;
         let entry = self.entries.swap_remove(index);
         Some((entry.head, entry.targets))

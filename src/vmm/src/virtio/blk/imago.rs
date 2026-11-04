@@ -13,14 +13,14 @@ use imago::{
 
 use super::{
     SECTOR_SHIFT, VIRTIO_BLK_S_IOERR, VIRTIO_BLK_S_OK,
-    backend::{Completed, DiskBackend, Geometry, Outcome, Request, RequestKind},
+    backend::{CompletedRequest, DiskBackend, DiskInfo, Request, RequestKind, SubmitOutcome},
 };
 use crate::{config::DiskFormat, virtio::EventSource};
 
 /// An image served through imago's format driver.
 pub(crate) struct ImagoBackend {
     image: FormatAccess<Box<dyn DynStorage>>,
-    geometry: Geometry,
+    disk_info: DiskInfo,
 }
 
 impl ImagoBackend {
@@ -41,18 +41,18 @@ impl ImagoBackend {
                     .open(gate)?,
             ),
         };
-        let geometry = Geometry {
+        let disk_info = DiskInfo {
             capacity_sectors: image.size() >> SECTOR_SHIFT,
             read_only,
             // imago zeroes what the format cannot discard, so any sector
             // boundary is acceptable.
             discard_sector_alignment: 1,
         };
-        Ok(Self { image, geometry })
+        Ok(Self { image, disk_info })
     }
 
     /// Runs one request to completion.
-    fn run(&mut self, kind: &mut RequestKind) -> io::Result<()> {
+    fn execute(&mut self, kind: &mut RequestKind) -> io::Result<()> {
         match kind {
             RequestKind::In { offset, buf } => self.image.read(buf.as_mut_slice(), *offset),
             RequestKind::Out { offset, buf, sync } => {
@@ -66,26 +66,26 @@ impl ImagoBackend {
 }
 
 impl DiskBackend for ImagoBackend {
-    fn geometry(&self) -> Geometry {
-        self.geometry
+    fn disk_info(&self) -> DiskInfo {
+        self.disk_info
     }
 
-    fn submit(&mut self, token: u32, mut request: Request) -> Outcome {
-        let status = match self.run(&mut request.kind) {
+    fn submit(&mut self, token: u32, mut request: Request) -> SubmitOutcome {
+        let status = match self.execute(&mut request.kind) {
             Ok(()) => VIRTIO_BLK_S_OK,
             Err(error) => {
                 tracing::debug!(%error, "block request failed");
                 VIRTIO_BLK_S_IOERR
             }
         };
-        Outcome::Done(Completed {
+        SubmitOutcome::Done(CompletedRequest {
             token,
             status,
             request,
         })
     }
 
-    fn completions(&mut self, _out: &mut Vec<Completed>) {}
+    fn completions(&mut self, _out: &mut Vec<CompletedRequest>) {}
 
     fn event_source(&mut self) -> Option<Box<dyn EventSource>> {
         None

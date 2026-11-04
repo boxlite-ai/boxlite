@@ -31,7 +31,7 @@ use super::{
     VIRTIO_BLK_F_RO, VIRTIO_BLK_F_SEG_MAX, VIRTIO_BLK_S_IOERR, VIRTIO_BLK_S_OK,
     VIRTIO_BLK_S_UNSUPP, VIRTIO_BLK_T_DISCARD, VIRTIO_BLK_T_FLUSH, VIRTIO_BLK_T_IN,
     VIRTIO_BLK_T_OUT,
-    backend::{Completed, DiskBackend, Geometry, Outcome, Request, RequestKind},
+    backend::{CompletedRequest, DiskBackend, DiskInfo, Request, RequestKind, SubmitOutcome},
     device::VirtioBlk,
     imago::ImagoBackend,
 };
@@ -184,7 +184,7 @@ impl Source for TestSource {
 #[derive(Default)]
 struct FakeState {
     pending: Vec<(u32, Request)>,
-    done: Vec<Completed>,
+    done: Vec<CompletedRequest>,
     flushes: usize,
 }
 
@@ -201,7 +201,7 @@ impl FakeState {
         if let RequestKind::In { buf, .. } = &mut request.kind {
             buf.fill(fill);
         }
-        self.done.push(Completed {
+        self.done.push(CompletedRequest {
             token,
             status,
             request,
@@ -211,21 +211,21 @@ impl FakeState {
 
 /// A backend that keeps every request until the test completes it.
 struct FakeBackend {
-    geometry: Geometry,
+    disk_info: DiskInfo,
     state: Arc<Mutex<FakeState>>,
 }
 
 impl DiskBackend for FakeBackend {
-    fn geometry(&self) -> Geometry {
-        self.geometry
+    fn disk_info(&self) -> DiskInfo {
+        self.disk_info
     }
 
-    fn submit(&mut self, token: u32, request: Request) -> Outcome {
+    fn submit(&mut self, token: u32, request: Request) -> SubmitOutcome {
         self.state.lock().unwrap().pending.push((token, request));
-        Outcome::Pending
+        SubmitOutcome::Pending
     }
 
-    fn completions(&mut self, out: &mut Vec<Completed>) {
+    fn completions(&mut self, out: &mut Vec<CompletedRequest>) {
         out.append(&mut self.state.lock().unwrap().done);
     }
 
@@ -279,7 +279,7 @@ impl Fixture {
         let path = dir.path().join("none");
         let state = Arc::new(Mutex::new(FakeState::default()));
         let backend = FakeBackend {
-            geometry: Geometry {
+            disk_info: DiskInfo {
                 capacity_sectors: IMAGE_BYTES / SECTOR_SIZE,
                 read_only: false,
                 discard_sector_alignment: 1,
@@ -545,7 +545,7 @@ fn unoffered_features_are_rejected() {
 }
 
 #[test]
-fn configuration_reports_the_geometry_and_pads_past_the_end() {
+fn configuration_reports_the_disk_info_and_pads_past_the_end() {
     let mut fixture = Fixture::raw(false);
     let bytes = fixture.config_bytes(0, CONFIG_LEN);
     assert_eq!(

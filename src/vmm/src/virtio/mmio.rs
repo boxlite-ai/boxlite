@@ -31,12 +31,14 @@ use virtio_queue::{Queue, QueueT};
 use vm_memory::GuestAddress;
 
 use super::{
-    ActivationContext, DeviceError, DeviceSpec, MAX_CONFIG_LEN, MAX_QUEUES, NEEDS_RESET,
-    VirtioDevice, VirtioInterrupt, WorkerContext, WorkerControl,
+    ActivationContext, DeviceContext, DeviceError, DeviceSpec, MAX_CONFIG_LEN, MAX_QUEUES,
+    NEEDS_RESET, VirtioDevice, VirtioInterrupt, WorkerContext, WorkerControl,
+    interrupt::MmioInterrupt,
     queue::{VIRTIO_F_EVENT_IDX, VIRTIO_F_INDIRECT_DESC, VirtQueues},
 };
 use crate::{
     bus::BusDevice,
+    chipset::ChipsetBuilder,
     error::{Error, Result},
     events::{Event, EventSender},
     memory::GuestMemoryMmap,
@@ -116,6 +118,41 @@ pub(crate) fn announce(cmdline: &mut String, slots: &[Slot]) -> Result<()> {
         cmdline.push_str(&argument);
     }
     Ok(())
+}
+
+/// Adds `device` behind a virtio-mmio transport in `slot` under the chipset
+/// name `name`, run by the VM's workers.
+#[cfg_attr(
+    not(any(test, all(target_os = "linux", target_arch = "x86_64"))),
+    expect(
+        dead_code,
+        reason = "Only the Linux x86_64 Vm::new attaches a virtio device yet."
+    )
+)]
+pub(crate) fn add_device(
+    chipset: &mut ChipsetBuilder,
+    ctx: &DeviceContext<'_>,
+    name: &'static str,
+    slot: Slot,
+    device: Arc<Mutex<dyn VirtioDevice>>,
+) -> Result<()> {
+    chipset.add(name, |resources| {
+        resources.mmio(slot.base, MMIO_WINDOW_LEN);
+        let interrupt = Arc::new(MmioInterrupt::new(resources.line(slot.gsi)));
+        let worker = ctx.workers.add(
+            Arc::clone(&device),
+            Arc::clone(&interrupt) as Arc<dyn VirtioInterrupt>,
+        );
+        MmioTransport::new(
+            device,
+            interrupt,
+            MmioResources {
+                memory: Arc::clone(ctx.memory),
+                sender: resources.event_sender(),
+                worker,
+            },
+        )
+    })
 }
 
 /// The driver acknowledged the device.

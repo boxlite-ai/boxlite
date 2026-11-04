@@ -15,7 +15,10 @@ use std::{
 use boxlite_hypervisor::VcpuExit;
 use vm_memory::GuestAddress;
 
-use super::{MMIO_WINDOW_LEN, MmioResources, MmioTransport, Slot, Slots, announce};
+use super::{
+    DeviceContext, MMIO_WINDOW_LEN, MmioResources, MmioTransport, Slot, Slots, add_device, announce,
+};
+use crate::virtio::worker::VirtioWorkers;
 use crate::{
     bus::BusDevice,
     chipset::ChipsetBuilder,
@@ -932,4 +935,39 @@ fn announcing_appends_each_slot_within_the_command_line_budget() {
     let mut fits = "a".repeat(MAX_CMDLINE_BYTES - argument.len() - 2);
     announce(&mut fits, &taken[..1]).unwrap();
     assert_eq!(fits.len(), MAX_CMDLINE_BYTES - 1);
+}
+
+#[test]
+fn add_device_puts_each_device_in_its_own_slot() {
+    let vm = Arc::new(MockVm::new());
+    let events = EventLoop::new().unwrap();
+    let memory = Arc::new(GuestMemoryMmap::from_ranges(&[(GuestAddress(0), 0x10000)]).unwrap());
+    let workers = VirtioWorkers::new(events.sender()).unwrap();
+    let ctx = DeviceContext {
+        memory: &memory,
+        workers: &workers,
+    };
+
+    let mut slots = Slots::new();
+    let taken = [slots.take().unwrap(), slots.take().unwrap()];
+    let mut builder = ChipsetBuilder::new(vm, events.sender());
+    for (name, slot) in [("virtio-a", taken[0]), ("virtio-b", taken[1])] {
+        let (device, _state) = device(spec(0b111), Arc::new(Mutex::new(Vec::new())));
+        add_device(&mut builder, &ctx, name, slot, device).unwrap();
+    }
+    let chipset = builder.build().unwrap();
+
+    for slot in taken {
+        let mut magic = [0u8; 4];
+        assert!(
+            chipset
+                .dispatch(VcpuExit::MmioRead {
+                    guest_addr: slot.base,
+                    bytes: &mut magic,
+                })
+                .is_none()
+        );
+        assert_eq!(u32::from_le_bytes(magic), 0x7472_6976);
+    }
+    workers.shutdown().unwrap();
 }

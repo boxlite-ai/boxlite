@@ -6,8 +6,8 @@
 //! A chain carries a device-readable header, data in the direction the type
 //! needs, and ends with one device-writable status byte (virtio 1.2 section
 //! 5.2.6). [`parse`] turns a chain into a [`Request`] for the backend plus the
-//! [`Targets`] its results go to, or finishes a chain the backend must not
-//! see. [`Targets::finish`] writes the data and status back and returns the
+//! [`WriteTargets`] its results go to, or finishes a chain the backend must not
+//! see. [`WriteTargets::finish`] writes the data and status back and returns the
 //! used length, including the status byte.
 
 use std::io::Read;
@@ -19,7 +19,7 @@ use super::{
     MAX_REQUEST_BYTES, REQUEST_HEADER_LEN, SECTOR_SIZE, VIRTIO_BLK_F_DISCARD, VIRTIO_BLK_F_FLUSH,
     VIRTIO_BLK_S_IOERR, VIRTIO_BLK_S_UNSUPP, VIRTIO_BLK_T_DISCARD, VIRTIO_BLK_T_FLUSH,
     VIRTIO_BLK_T_IN, VIRTIO_BLK_T_OUT,
-    backend::{Geometry, Request, RequestKind},
+    backend::{DiskInfo, Request, RequestKind},
 };
 use crate::{memory::GuestMemoryMmap, virtio::DeviceError};
 
@@ -28,23 +28,26 @@ const DISCARD_PAYLOAD_LEN: usize = 16;
 
 /// What [`parse`] made of a chain.
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) enum Parsed {
+pub(crate) enum Decoded {
     /// Finish the chain now with `status`; the backend is not involved.
-    Immediate { status: u8, targets: Targets },
+    Reject { status: u8, targets: WriteTargets },
     /// Submit `request`; its results go to `targets`.
-    Submit { request: Request, targets: Targets },
+    Submit {
+        request: Request,
+        targets: WriteTargets,
+    },
 }
 
 /// Where a request's results go: the device-writable data descriptors and
 /// the status byte that ends the chain.
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) struct Targets {
+pub(crate) struct WriteTargets {
     data: Vec<(GuestAddress, u32)>,
     data_len: usize,
     status: GuestAddress,
 }
 
-impl Targets {
+impl WriteTargets {
     /// Splits the writable descriptors into the data region and the status
     /// byte; `None` when the chain has no writable byte for the status.
     fn split(mut writable: Vec<(GuestAddress, u32)>) -> Option<Self> {
@@ -98,16 +101,16 @@ impl Targets {
     }
 }
 
-/// Parses one chain for a disk of `geometry` under the `negotiated`
+/// Parses one chain for a disk described by `info` under the `negotiated`
 /// features. A chain without a status byte is a driver error the device
 /// cannot report in-band, so it needs a reset; every other defect is
 /// reported through the status byte without touching the backend.
 pub(crate) fn parse(
     chain: DescriptorChain<&GuestMemoryMmap>,
     memory: &GuestMemoryMmap,
-    geometry: &Geometry,
+    info: &DiskInfo,
     negotiated: u64,
-) -> Result<Parsed, DeviceError> {
+) -> Result<Decoded, DeviceError> {
     let mut writable = Vec::new();
     let mut readable_after_writable = false;
     for descriptor in chain.clone() {
@@ -117,12 +120,12 @@ pub(crate) fn parse(
             readable_after_writable = true;
         }
     }
-    let targets = Targets::split(writable).ok_or(DeviceError::NeedsReset("block status"))?;
+    let targets = WriteTargets::split(writable).ok_or(DeviceError::NeedsReset("block status"))?;
     // Finishes the chain now, without the backend; `targets` moves out at
     // each return.
     macro_rules! finish {
         ($status:expr) => {
-            return Ok(Parsed::Immediate {
+            return Ok(Decoded::Reject {
                 status: $status,
                 targets,
             })
@@ -146,7 +149,7 @@ pub(crate) fn parse(
     let kind = match request_type {
         VIRTIO_BLK_T_IN => {
             let len = targets.data_len();
-            let Some(offset) = data_offset(geometry, sector, len).filter(|_| payload == 0) else {
+            let Some(offset) = data_offset(info, sector, len).filter(|_| payload == 0) else {
                 finish!(VIRTIO_BLK_S_IOERR);
             };
             RequestKind::In {
@@ -155,8 +158,8 @@ pub(crate) fn parse(
             }
         }
         VIRTIO_BLK_T_OUT => {
-            let offset = data_offset(geometry, sector, payload)
-                .filter(|_| !geometry.read_only && targets.data_len() == 0);
+            let offset = data_offset(info, sector, payload)
+                .filter(|_| !info.read_only && targets.data_len() == 0);
             let Some(offset) = offset else {
                 finish!(VIRTIO_BLK_S_IOERR);
             };
@@ -196,14 +199,14 @@ pub(crate) fn parse(
             }
             let sector = u64::from_le_bytes(bytes[..8].try_into().expect("eight bytes"));
             let sectors = u32::from_le_bytes(bytes[8..12].try_into().expect("four bytes"));
-            let Some((offset, len)) = discard_range(geometry, sector, sectors) else {
+            let Some((offset, len)) = discard_range(info, sector, sectors) else {
                 finish!(VIRTIO_BLK_S_IOERR);
             };
             RequestKind::Discard { offset, len }
         }
         _ => finish!(VIRTIO_BLK_S_UNSUPP),
     };
-    Ok(Parsed::Submit {
+    Ok(Decoded::Submit {
         request: Request { kind },
         targets,
     })
@@ -211,29 +214,29 @@ pub(crate) fn parse(
 
 /// The byte offset of `len` bytes at `sector`, when the transfer is a whole
 /// number of sectors inside the disk and within the bounce buffer limit.
-fn data_offset(geometry: &Geometry, sector: u64, len: usize) -> Option<u64> {
+fn data_offset(info: &DiskInfo, sector: u64, len: usize) -> Option<u64> {
     if len > MAX_REQUEST_BYTES || !len.is_multiple_of(SECTOR_SIZE as usize) {
         return None;
     }
     let offset = sector.checked_mul(SECTOR_SIZE)?;
-    (offset.checked_add(len as u64)? <= capacity_bytes(geometry)).then_some(offset)
+    (offset.checked_add(len as u64)? <= capacity_bytes(info)).then_some(offset)
 }
 
 /// The byte range of `sectors` sectors at `sector`, when it is non-empty,
 /// aligned to the discard alignment and inside the disk.
-fn discard_range(geometry: &Geometry, sector: u64, sectors: u32) -> Option<(u64, u64)> {
+fn discard_range(info: &DiskInfo, sector: u64, sectors: u32) -> Option<(u64, u64)> {
     if sectors == 0 {
         return None;
     }
     let offset = sector.checked_mul(SECTOR_SIZE)?;
     let len = u64::from(sectors) * SECTOR_SIZE;
-    if offset.checked_add(len)? > capacity_bytes(geometry) {
+    if offset.checked_add(len)? > capacity_bytes(info) {
         return None;
     }
-    let alignment = u64::from(geometry.discard_sector_alignment.max(1)) * SECTOR_SIZE;
+    let alignment = u64::from(info.discard_sector_alignment.max(1)) * SECTOR_SIZE;
     (offset.is_multiple_of(alignment) && len.is_multiple_of(alignment)).then_some((offset, len))
 }
 
-fn capacity_bytes(geometry: &Geometry) -> u64 {
-    geometry.capacity_sectors.saturating_mul(SECTOR_SIZE)
+fn capacity_bytes(info: &DiskInfo) -> u64 {
+    info.capacity_sectors.saturating_mul(SECTOR_SIZE)
 }

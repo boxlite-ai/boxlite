@@ -6,22 +6,20 @@
 //! [`device::VirtioBlk`] implements the [`VirtioDevice`] contract over one
 //! request queue; [`request`] parses chains; [`backend::DiskBackend`] is the
 //! seam a disk engine implements, and [`imago::ImagoBackend`] is the
-//! synchronous one. [`add_disks`] puts each configured disk behind a
+//! synchronous one. [`add_disk`] puts one configured disk behind a
 //! virtio-mmio transport in its slot, run by the VM's workers.
 
 use std::sync::{Arc, Mutex};
 
 use self::{device::VirtioBlk, imago::ImagoBackend};
 use super::{
-    VirtioDevice, VirtioInterrupt,
-    interrupt::MmioInterrupt,
-    mmio::{MMIO_WINDOW_LEN, MmioResources, MmioTransport, Slot},
+    DeviceContext, VirtioDevice,
+    mmio::{self, Slot},
 };
 use crate::{
     chipset::ChipsetBuilder,
     config::{DiskConfig, MAX_DISKS},
     error::{Error, Result},
-    vm::DeviceContext,
 };
 
 pub(crate) mod backend;
@@ -36,7 +34,7 @@ pub(crate) mod request;
     not(all(target_os = "linux", target_arch = "x86_64")),
     expect(dead_code, reason = "Only the Linux x86_64 Vm::new adds disks yet.")
 )]
-const NAMES: [&str; MAX_DISKS] = [
+const CHIPSET_NAMES: [&str; MAX_DISKS] = [
     "virtio-blk0",
     "virtio-blk1",
     "virtio-blk2",
@@ -47,50 +45,32 @@ const NAMES: [&str; MAX_DISKS] = [
     "virtio-blk7",
 ];
 
-/// Adds disk `i` of `disks` as a virtio-blk device behind a virtio-mmio
-/// transport in `slots[i]`, run by the VM's workers.
+/// Adds `disk` as a virtio-blk device behind a virtio-mmio transport in
+/// `slot`, run by the VM's workers. `index` selects the chipset name.
 #[cfg_attr(
     not(all(target_os = "linux", target_arch = "x86_64")),
     expect(dead_code, reason = "Only the Linux x86_64 Vm::new adds disks yet.")
 )]
-pub(crate) fn add_disks(
+pub(crate) fn add_disk(
     chipset: &mut ChipsetBuilder,
-    ctx: DeviceContext<'_>,
-    disks: &[DiskConfig],
-    slots: &[Slot],
+    ctx: &DeviceContext<'_>,
+    disk: &DiskConfig,
+    index: usize,
+    slot: Slot,
 ) -> Result<()> {
-    for (index, (disk, slot)) in disks.iter().zip(slots).enumerate() {
-        let name = NAMES
-            .get(index)
-            .ok_or(Error::InvalidDiskCount(disks.len()))?;
-        let backend =
-            ImagoBackend::open(&disk.path, disk.format, disk.read_only).map_err(|source| {
-                Error::OpenDisk {
-                    path: disk.path.clone(),
-                    source,
-                }
-            })?;
-        let device: Arc<Mutex<dyn VirtioDevice>> =
-            Arc::new(Mutex::new(VirtioBlk::new(Box::new(backend))));
-        chipset.add(name, |resources| {
-            resources.mmio(slot.base, MMIO_WINDOW_LEN);
-            let interrupt = Arc::new(MmioInterrupt::new(resources.line(slot.gsi)));
-            let worker = ctx.workers.add(
-                Arc::clone(&device),
-                Arc::clone(&interrupt) as Arc<dyn VirtioInterrupt>,
-            );
-            MmioTransport::new(
-                device,
-                interrupt,
-                MmioResources {
-                    memory: Arc::clone(ctx.memory),
-                    sender: resources.event_sender(),
-                    worker,
-                },
-            )
+    let name = CHIPSET_NAMES
+        .get(index)
+        .ok_or(Error::InvalidDiskCount(index + 1))?;
+    let backend =
+        ImagoBackend::open(&disk.path, disk.format, disk.read_only).map_err(|source| {
+            Error::OpenDisk {
+                path: disk.path.clone(),
+                source,
+            }
         })?;
-    }
-    Ok(())
+    let device: Arc<Mutex<dyn VirtioDevice>> =
+        Arc::new(Mutex::new(VirtioBlk::new(Box::new(backend))));
+    mmio::add_device(chipset, ctx, name, slot, device)
 }
 
 /// The virtio device ID of a block device.

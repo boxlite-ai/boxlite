@@ -33,18 +33,16 @@ use crate::{
         x86_64::add_legacy_devices,
     },
     virtio::{
-        ActivationContext, DeviceError, DeviceEvent, DeviceSpec, FeatureError, VirtioDevice,
-        VirtioInterrupt,
+        ActivationContext, DeviceContext, DeviceError, DeviceEvent, DeviceSpec, FeatureError,
+        VirtioDevice,
         blk::{
             VIRTIO_BLK_S_OK,
-            backend::{DiskBackend, Outcome, Request, RequestKind},
+            backend::{DiskBackend, Request, RequestKind, SubmitOutcome},
             device::VirtioBlk,
             imago::ImagoBackend,
         },
-        interrupt::MmioInterrupt,
-        mmio::{MMIO_WINDOW_LEN, MmioResources, MmioTransport, Slot, Slots, announce},
+        mmio::{self, Slot, Slots, announce},
     },
-    vm::DeviceContext,
 };
 
 /// The image: 1 MiB, sector 0 starts with `MAGIC` and carries one MBR
@@ -272,7 +270,7 @@ impl boxlite_hypervisor::X86Vm for LineCounter {
     }
 }
 
-/// Adds `device` behind a virtio-mmio transport in `slot`, as `add_disks`
+/// Adds `device` behind a virtio-mmio transport in `slot`, as `add_disk`
 /// does for a configured disk.
 fn add_blk(
     chipset: &mut ChipsetBuilder,
@@ -280,23 +278,7 @@ fn add_blk(
     device: Arc<Mutex<dyn VirtioDevice>>,
     slot: Slot,
 ) -> crate::Result<()> {
-    chipset.add("virtio-blk", |resources| {
-        resources.mmio(slot.base, MMIO_WINDOW_LEN);
-        let interrupt = Arc::new(MmioInterrupt::new(resources.line(slot.gsi)));
-        let worker = ctx.workers.add(
-            Arc::clone(&device),
-            Arc::clone(&interrupt) as Arc<dyn VirtioInterrupt>,
-        );
-        MmioTransport::new(
-            device,
-            interrupt,
-            MmioResources {
-                memory: Arc::clone(ctx.memory),
-                sender: resources.event_sender(),
-                worker,
-            },
-        )
-    })
+    mmio::add_device(chipset, &ctx, "virtio-blk", slot, device)
 }
 
 /// Asserts the guest reached `BOXLITE_BLK_OK` and wrote sector 1 of `image`.
@@ -484,7 +466,7 @@ fn boots_linux_with_a_qcow2_virtio_disk_over_a_backing_file() {
             buf: vec![0u8; 512],
         },
     };
-    let Outcome::Done(completed) = backend.submit(0, request) else {
+    let SubmitOutcome::Done(completed) = backend.submit(0, request) else {
         panic!("the imago backend completes inline");
     };
     assert_eq!(completed.status, VIRTIO_BLK_S_OK);

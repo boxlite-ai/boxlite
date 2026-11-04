@@ -14,8 +14,8 @@ use crate::{
     devices::console::ConsoleWorker,
     error::{Error, Result},
     events::{Event, EventLoop, EventSender},
-    memory::{GuestMemoryMmap, GuestRam, ram_ranges},
-    virtio::worker::VirtioWorkers,
+    memory::{GuestRam, ram_ranges},
+    virtio::{DeviceContext, worker::VirtioWorkers},
 };
 
 /// The registers the boot vCPU starts with.
@@ -47,22 +47,6 @@ impl StopHandle {
     pub fn stop(&self) {
         self.0.send(Event::StopRequested);
     }
-}
-
-/// What device constructors get besides the chipset: the guest memory a
-/// virtio device's queues address, and the workers that run its events.
-#[cfg_attr(
-    not(any(test, all(target_os = "linux", target_arch = "x86_64"))),
-    expect(
-        dead_code,
-        reason = "Only the Linux x86_64 Vm::new adds a virtio device yet."
-    )
-)]
-pub(crate) struct DeviceContext<'a> {
-    /// The guest RAM every host-side user shares.
-    pub(crate) memory: &'a Arc<GuestMemoryMmap>,
-    /// The VM's virtio workers.
-    pub(crate) workers: &'a VirtioWorkers,
 }
 
 /// Where a VM is in its life.
@@ -109,37 +93,24 @@ impl<H: HostVm> std::fmt::Debug for Vm<H> {
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 impl Vm<boxlite_hypervisor::KvmVm> {
-    /// Validates `config`, creates the KVM VM with the legacy devices and one
-    /// virtio-blk device per disk, registers its RAM and loads the kernel and
-    /// boot data. Each disk takes the next virtio-mmio slot, which `Vm::new`
-    /// names on the command line; `config.cmdline` must leave room for those
-    /// arguments, about 35 bytes each, under `config::MAX_CMDLINE_BYTES`. The
-    /// guest's COM1 output goes to `console` through a queue, so a slow sink
-    /// never stalls the guest.
-    pub fn new(mut config: VmConfig, console: Box<dyn std::io::Write + Send>) -> Result<Self> {
-        use crate::{
-            devices::{console::DEFAULT_QUEUE_BYTES, x86_64::add_legacy_devices},
-            virtio::{blk, mmio},
-        };
+    /// Validates `config`, spawns the console worker, and builds the KVM VM:
+    /// `devices::add_all` adds the legacy devices and one virtio-blk device
+    /// per disk, taking each disk's virtio-mmio slot and naming it on the
+    /// command line; `config.cmdline` must leave room for those arguments,
+    /// about 35 bytes each, under `config::MAX_CMDLINE_BYTES`. The guest's
+    /// COM1 output goes to `console` through a queue, so a slow sink never
+    /// stalls the guest.
+    pub fn new(config: VmConfig, console: Box<dyn std::io::Write + Send>) -> Result<Self> {
+        use crate::devices::console::DEFAULT_QUEUE_BYTES;
 
         config.validate()?;
-        let disks = config.disks.clone();
-        let mut slots = mmio::Slots::new();
-        let slots = disks
-            .iter()
-            .map(|_| slots.take())
-            .collect::<Result<Vec<_>>>()?;
-        mmio::announce(&mut config.cmdline, &slots)?;
         let (writer, worker) =
             ConsoleWorker::spawn(console, DEFAULT_QUEUE_BYTES).map_err(Error::SpawnConsole)?;
-        let mut vm = Self::with_backend(
+        let mut vm = Self::with_devices(
             config,
             boxlite_hypervisor::KvmVm::new,
             |ram, config| crate::boot::prepare(ram, config).map(|setup| setup.boot_regs),
-            |chipset, ctx| {
-                add_legacy_devices(chipset, writer)?;
-                blk::add_disks(chipset, ctx, &disks, &slots)
-            },
+            |chipset, ctx, config| crate::devices::add_all(chipset, ctx, config, writer),
         )?;
         vm.console = Mutex::new(Some(worker));
         Ok(vm)
@@ -147,13 +118,9 @@ impl Vm<boxlite_hypervisor::KvmVm> {
 }
 
 impl<H: HostVm> Vm<H> {
-    /// Validates `config`, allocates the RAM layout, creates the host VM with
-    /// `host_vm`, builds the chipset from the devices `devices` adds,
-    /// registers every RAM range and writes the boot data with `boot`.
-    /// `devices` also gets the guest memory and the virtio workers through a
-    /// [`DeviceContext`]. Invalid configuration fails before `host_vm` runs,
-    /// and a chipset conflict before any RAM is registered; tests pass a mock
-    /// backend and devices.
+    /// The low-level constructor tests use: like [`Self::with_devices`],
+    /// without the mutable configuration.
+    #[cfg(test)]
     pub(crate) fn with_backend(
         config: VmConfig,
         host_vm: impl FnOnce() -> boxlite_hypervisor::Result<H>,
@@ -163,6 +130,35 @@ impl<H: HostVm> Vm<H> {
     where
         H: 'static,
     {
+        Self::with_devices(config, host_vm, boot, |chipset, ctx, _| {
+            devices(chipset, ctx)
+        })
+    }
+
+    /// Validates `config`, allocates the RAM layout, creates the host VM with
+    /// `host_vm`, builds the chipset from the devices `devices` adds,
+    /// registers every RAM range and writes the boot data with `boot`.
+    /// `devices` also gets the guest memory, the virtio workers and the
+    /// mutable configuration. Invalid configuration fails before `host_vm`
+    /// runs, and a chipset conflict before any RAM is registered; tests pass
+    /// a mock backend and devices.
+    #[cfg_attr(
+        not(any(test, all(target_os = "linux", target_arch = "x86_64"))),
+        expect(
+            dead_code,
+            reason = "Only the Linux x86_64 Vm::new composes devices yet."
+        )
+    )]
+    pub(crate) fn with_devices(
+        config: VmConfig,
+        host_vm: impl FnOnce() -> boxlite_hypervisor::Result<H>,
+        boot: impl FnOnce(&GuestRam, &VmConfig) -> Result<BootRegisters>,
+        devices: impl FnOnce(&mut ChipsetBuilder, DeviceContext<'_>, &mut VmConfig) -> Result<()>,
+    ) -> Result<Self>
+    where
+        H: 'static,
+    {
+        let mut config = config;
         config.validate()?;
         let events = EventLoop::new().map_err(Error::EventLoop)?;
         let sender = events.sender();
@@ -180,6 +176,7 @@ impl<H: HostVm> Vm<H> {
                 memory: ram.memory(),
                 workers: &workers,
             },
+            &mut config,
         )?;
         let chipset = chipset.build()?;
         ram.map(&*host_vm)?;

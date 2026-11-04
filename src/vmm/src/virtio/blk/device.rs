@@ -7,10 +7,10 @@
 use super::{
     DEVICE_ID, QUEUE_MAXIMUM, VIRTIO_BLK_F_DISCARD, VIRTIO_BLK_F_FLUSH, VIRTIO_BLK_F_RO,
     VIRTIO_BLK_F_SEG_MAX, VIRTIO_BLK_S_OK,
-    backend::{Completed, DiskBackend, Geometry, Outcome, RequestKind},
+    backend::{CompletedRequest, DiskBackend, DiskInfo, RequestKind, SubmitOutcome},
     config::BlkConfig,
     inflight::Inflight,
-    request::{self, Parsed, Targets},
+    request::{self, Decoded, WriteTargets},
 };
 use crate::{
     memory::GuestMemoryMmap,
@@ -27,19 +27,19 @@ pub(crate) struct VirtioBlk {
     spec: DeviceSpec,
     negotiated: u64,
     config: BlkConfig,
-    geometry: Geometry,
+    disk_info: DiskInfo,
     backend: Box<dyn DiskBackend>,
-    active: Option<Active>,
+    active: Option<ActiveState>,
 }
 
 /// What the device holds between DRIVER_OK and the next reset.
-struct Active {
+struct ActiveState {
     ctx: ActivationContext,
     /// The backend's registered source, when it has one.
     source: Option<SourceId>,
     inflight: Inflight,
     /// Scratch for `completions`, kept so no event allocates.
-    completed: Vec<Completed>,
+    completed: Vec<CompletedRequest>,
 }
 
 impl VirtioBlk {
@@ -49,9 +49,9 @@ impl VirtioBlk {
     /// kick does at most the queue size times `MAX_REQUEST_BYTES` of I/O on
     /// the shared worker thread before another device runs.
     pub(crate) fn new(backend: Box<dyn DiskBackend>) -> Self {
-        let geometry = backend.geometry();
+        let disk_info = backend.disk_info();
         let mut features = VIRTIO_F_VERSION_1 | VIRTIO_BLK_F_SEG_MAX | VIRTIO_F_INDIRECT_DESC;
-        if geometry.read_only {
+        if disk_info.read_only {
             features |= VIRTIO_BLK_F_RO;
         } else {
             features |= VIRTIO_BLK_F_FLUSH | VIRTIO_BLK_F_DISCARD;
@@ -61,13 +61,13 @@ impl VirtioBlk {
                 device_id: DEVICE_ID,
                 name: "block",
                 features,
-                config_len: super::config::LEN,
+                config_len: super::config::CONFIG_LEN,
                 queue_max: QUEUE_MAXIMUM,
                 snapshot: SnapshotSupport::Unsupported,
             },
             negotiated: 0,
-            config: BlkConfig::new(&geometry),
-            geometry,
+            config: BlkConfig::new(&disk_info),
+            disk_info,
             backend,
             active: None,
         }
@@ -76,27 +76,27 @@ impl VirtioBlk {
     /// Drains the request queue: every chain is parsed and submitted, and a
     /// chain the backend keeps is deferred until its completion arrives.
     fn process_queue(&mut self) -> Result<(), DeviceError> {
-        let (negotiated, geometry) = (self.negotiated, self.geometry);
+        let (negotiated, disk_info) = (self.negotiated, self.disk_info);
         let backend = &mut *self.backend;
         let active = self
             .active
             .as_mut()
             .ok_or(DeviceError::NeedsReset("block device is not active"))?;
-        let Active { ctx, inflight, .. } = active;
+        let ActiveState { ctx, inflight, .. } = active;
         let memory = ctx.memory.as_ref();
         let notify = ctx.queues.drain(0, |chain| {
             let head = chain.head_index();
-            match request::parse(chain, memory, &geometry, negotiated)? {
-                Parsed::Immediate { status, targets } => {
+            match request::parse(chain, memory, &disk_info, negotiated)? {
+                Decoded::Reject { status, targets } => {
                     targets.finish(memory, status, None).map(Completion::Used)
                 }
-                Parsed::Submit { request, targets } => {
+                Decoded::Submit { request, targets } => {
                     let token = inflight.next_token();
                     match backend.submit(token, request) {
-                        Outcome::Done(completed) => {
-                            complete(memory, &targets, completed).map(Completion::Used)
+                        SubmitOutcome::Done(completed) => {
+                            complete_request(memory, &targets, completed).map(Completion::Used)
                         }
-                        Outcome::Pending => {
+                        SubmitOutcome::Pending => {
                             inflight.insert(token, head, targets);
                             Ok(Completion::Deferred)
                         }
@@ -120,7 +120,7 @@ impl VirtioBlk {
         if active.source != Some(id) {
             return Ok(());
         }
-        let Active {
+        let ActiveState {
             ctx,
             inflight,
             completed,
@@ -137,7 +137,7 @@ impl VirtioBlk {
                 let (head, targets) = inflight
                     .remove(done.token)
                     .ok_or(DeviceError::NeedsReset("block completion token"))?;
-                let used = complete(memory, &targets, done)?;
+                let used = complete_request(memory, &targets, done)?;
                 notify |= ctx.queues.complete(0, head, used)?;
             }
         }
@@ -150,10 +150,10 @@ impl VirtioBlk {
 
 /// Writes a finished request's results to its targets and returns the used
 /// length: the data and status of a successful read, else the status alone.
-fn complete(
+fn complete_request(
     memory: &GuestMemoryMmap,
-    targets: &Targets,
-    completed: Completed,
+    targets: &WriteTargets,
+    completed: CompletedRequest,
 ) -> Result<u32, DeviceError> {
     let data = match (&completed.request.kind, completed.status) {
         (RequestKind::In { buf, .. }, VIRTIO_BLK_S_OK) => Some(buf.as_slice()),
@@ -199,7 +199,7 @@ impl VirtioDevice for VirtioBlk {
             })?),
             None => None,
         };
-        self.active = Some(Active {
+        self.active = Some(ActiveState {
             ctx,
             source,
             inflight: Inflight::default(),
