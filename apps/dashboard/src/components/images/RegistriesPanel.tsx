@@ -331,7 +331,8 @@ export function RegistriesPanel() {
                 </span>
                 <div className="flex items-center justify-end gap-1">
                   {canWrite && (
-                    <button
+                    <AsciiButton
+                      size="sm"
                       type="button"
                       onClick={() => {
                         setEditing(credential)
@@ -340,10 +341,10 @@ export function RegistriesPanel() {
                       }}
                       disabled={saving || updateRegistry.isPending || deleteRegistry.isPending}
                       title={`Update the credential for ${credential.registryHost}`}
-                      className="px-2 py-[5px] font-mono text-label uppercase text-muted-foreground transition-colors hover:text-foreground disabled:opacity-40"
+                      className="uppercase"
                     >
                       Update
-                    </button>
+                    </AsciiButton>
                   )}
                   {canDelete && (
                     <AsciiButton

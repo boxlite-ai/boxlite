@@ -381,9 +381,11 @@ registries are off there and offers nothing to connect.
 
 ## Registry login tests
 
-In Images → Registries, **Update** replaces a credential's username and password/token without destroying dependent Boxes.
+In Images → Registries, **UPDATE** replaces a credential's username and password/token without destroying dependent Boxes.
 It requires registry write permission, preloads the username and leaves the masked secret empty.
 The registry and repository prefix stay fixed; enter a replacement secret and choose **Save changes**.
+
+The UPDATE action uses the shared small ASCII button, matching image-row actions and the adjacent removal button's height.
 
 Closing or completing the form clears its secret; failed submissions preserve the form for retry.
 Closing a pending save clears inputs and mutation state without cancelling the request.
