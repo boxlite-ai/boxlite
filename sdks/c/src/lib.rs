@@ -52,6 +52,7 @@ pub type CBoxliteRuntime = runtime::RuntimeHandle;
 pub type CCheckpointInfo = checkpoints::CCheckpointInfo;
 pub type CCheckpointList = checkpoints::CCheckpointList;
 pub type CBoxHandle = box_handle::BoxHandle;
+pub use box_handle::CBoxResources;
 pub type CBoxNetworkHandle = network::BoxNetworkHandle;
 pub type CBoxTunnelHandle = network::BoxTunnelHandle;
 pub type CTunnelForwarderHandle = network::TunnelForwarderHandle;

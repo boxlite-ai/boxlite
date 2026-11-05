@@ -276,28 +276,38 @@ processes. Both lists default to empty, preserving BoxLite's Docker-compatible
 ### `cpus: float`
 
 CPU allocation, default `1`, from `0.125` to `16` with the bundled kernel, in increments of `0.001`.
-Integers, including `2.0`, retain existing vCPU behavior without adding a bandwidth quota.
+Integers, including `2.0`, retain their online vCPU count; Linux also applies a bandwidth quota when spare vCPUs are available.
 Fractional allocations use `ceil(cpus)` guest vCPUs and a Linux aggregate CPU-time quota.
 
+New boxes are additionally bounded by the host ceiling: the smallest of the CPUs the runtime may use
+(affinity and cgroup quota) and the hypervisor's per-VM vCPU limit. The bundled
+guest kernel additionally limits new boxes to 16 vCPUs; custom kernels are not
+bound by that bundled-kernel limit. New boxes above their ceiling fail with
+`InvalidArgument`. Reusing an existing box preserves its saved allocation.
+
+**Example:**
 ```python
 cpus=0.5  # 1 guest vCPU, half a CPU of aggregate time
 cpus=1.5  # 2 guest vCPUs, 1.5 CPUs of aggregate time
-cpus=2    # 2 guest vCPUs, no additional bandwidth quota
+cpus=2    # 2 online guest vCPUs; quota also protects any spare vCPUs
 ```
 
 Fractional values require a Linux execution host and the jailer; enforcement also needs writable cgroup v2 CPU quotas.
 Local macOS execution rejects them; macOS REST clients can request them from a supporting Linux server.
-A quota-write failure is logged at error level and does not prevent startup; like best-effort cgroup membership, it can leave a running Box without enforcement.
+Without spare vCPUs, a quota-write failure is logged at error level and startup continues without enforcement.
+With spare vCPUs, quota-write failure prevents startup. Cgroup membership remains best-effort and can leave a running Box without enforcement.
 Information queries return the configured allocation.
-Configuration is fixed at creation; see [fractional CPUs](../guides/resource-limits.md#fractional-cpus-linux) for SDK mappings, reuse, REST confirmation, and archive compatibility.
+Creation options stay fixed; [online growth](../guides/resource-limits.md#online-growth) can increase the running allocation and persist it across restarts.
+See [fractional CPUs](../guides/resource-limits.md#fractional-cpus-linux) for SDK mappings, reuse, REST confirmation, and archive compatibility.
 
 ### `memory_mib: int`
 
 Memory limit in mebibytes (MiB).
 
-**Default:** 512
+**Default:** 1024
 
-**Range:** 128 to 65536 (64 GiB)
+**Range:** 1 MiB up to host memory, or the runtime cgroup `memory.max` when
+it is lower. Creating a box above that fails with `InvalidArgument`.
 
 **Example:**
 ```python

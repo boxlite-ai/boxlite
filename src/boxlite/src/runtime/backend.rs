@@ -96,6 +96,12 @@ pub(crate) trait BoxBackend: Send + Sync + Any {
 
     async fn start(&self) -> BoxliteResult<()>;
 
+    async fn resize(&self, _options: crate::ResizeOptions) -> BoxliteResult<crate::BoxResources> {
+        Err(BoxliteError::Unsupported(
+            "this backend does not support online resize".into(),
+        ))
+    }
+
     async fn exec(&self, command: BoxCommand) -> BoxliteResult<Execution>;
 
     async fn list_executions(&self) -> BoxliteResult<Vec<crate::ExecutionInfo>>;

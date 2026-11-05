@@ -46,6 +46,9 @@ pub struct ShimSpawner<'a> {
     box_id: &'a str,
     options: &'a BoxOptions,
     nested_virtualization: bool,
+    /// (online, created) vCPUs; see [`Self::with_vcpus`].
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    vcpus: Option<(u8, u8)>,
 }
 
 impl<'a> ShimSpawner<'a> {
@@ -61,23 +64,43 @@ impl<'a> ShimSpawner<'a> {
             box_id,
             options,
             nested_virtualization: false,
+            vcpus: None,
         }
+    }
+
+    /// Boot `max_cpus` vCPUs with only `cpus` online. The offline ones are
+    /// safe only behind a cgroup cap of `cpus` CPUs, so the spawn fails when
+    /// that cap cannot be set. Without spare vCPUs, fractional allocations
+    /// retain best-effort quota enforcement.
+    pub fn with_vcpus(mut self, cpus: u8, max_cpus: u8) -> Self {
+        self.vcpus = Some((cpus, max_cpus));
+        self
     }
 
     #[cfg(target_os = "linux")]
     fn apply_cpu_quota(&self) -> BoxliteResult<()> {
-        let Some(limit) = self.options.cpu_count()?.filter(|cpu| cpu.is_fractional()) else {
+        let cpus = self.options.cpus.unwrap_or(f64::from(
+            crate::runtime::constants::vm_defaults::DEFAULT_CPUS,
+        ));
+        let limit = crate::runtime::cpu_count::CpuCount::new(cpus)?;
+        let has_spares = self.vcpus.is_some_and(|(online, max)| max > online);
+        if !limit.is_fractional() && !has_spares {
             return Ok(());
-        };
+        }
         let security = &self.options.advanced.security;
         if !security.jailer_enabled {
             return Err(BoxliteError::Engine("CPU limit requires the jailer".into()));
         }
-        // Best-effort, like cgroup setup and membership: a host without a
-        // delegated CPU controller must still be able to start the Box.
         if let Err(error) =
             crate::jailer::cgroup::set_cpu_max(self.box_id, limit, &security.resource_limits)
         {
+            // A guest can bring spare vCPUs online itself, so their shared
+            // CPU budget must be enforced before it starts.
+            if has_spares {
+                return Err(BoxliteError::Engine(format!(
+                    "cannot apply CPU limit of {cpus} before starting VM: {error}"
+                )));
+            }
             tracing::error!(
                 box_id = %self.box_id,
                 cpus = limit.cores(),
@@ -299,6 +322,10 @@ mod tests {
         assert!(
             limited.apply_cpu_quota().is_ok(),
             "a failed cpu.max write must not block start"
+        );
+        assert!(
+            limited.with_vcpus(1, 2).apply_cpu_quota().is_err(),
+            "spare vCPUs require a successful cpu.max write before start"
         );
     }
 

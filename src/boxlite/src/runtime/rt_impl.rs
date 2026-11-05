@@ -6,6 +6,8 @@ use crate::litebox::{BoxManager, LiteBox, LocalSnapshotBackend, SharedBoxImpl};
 use crate::lock::{FileLockManager, LockManager};
 use crate::metrics::{RuntimeMetrics, RuntimeMetricsStorage};
 use crate::rootfs::guest::{GuestRootfs, GuestRootfsManager};
+use crate::runtime::capacity::ResourceCeiling;
+use crate::runtime::constants::vm_defaults::{DEFAULT_CPUS, DEFAULT_MEMORY_MIB};
 use crate::runtime::id::{BoxID, BoxIDMint};
 use crate::runtime::layout::{BoxFilesystemLayout, FilesystemLayout, FsLayoutConfig};
 use crate::runtime::lock::RuntimeLock;
@@ -696,7 +698,7 @@ impl RuntimeImpl {
         };
 
         if let Some(box_impl) = cached_box {
-            box_impl.refresh_network_policy()?;
+            box_impl.refresh_configuration()?;
             return Ok(Some(box_impl.info()));
         }
 
@@ -1821,6 +1823,10 @@ async fn sanitize_local_options(
     tokio::task::spawn_blocking(move || {
         let mut options = options;
         options.sanitize()?;
+        ResourceCeiling::detect_with_kernel(options.advanced.kernel.is_some()).check(
+            options.cpu_count()?.map_or(DEFAULT_CPUS, |cpu| cpu.vcpus()),
+            options.memory_mib.unwrap_or(DEFAULT_MEMORY_MIB),
+        )?;
         Ok(options)
     })
     .await
@@ -2330,6 +2336,29 @@ mod tests {
                 .to_string()
                 .contains("custom kernel must be a regular file")
         );
+    }
+
+    #[tokio::test]
+    async fn local_option_validation_rejects_sizes_above_the_host_ceiling() {
+        let features = ExperimentalFeatures::default();
+        for options in [
+            BoxOptions {
+                cpus: Some(u8::MAX),
+                ..Default::default()
+            },
+            BoxOptions {
+                memory_mib: Some(u32::MAX),
+                ..Default::default()
+            },
+        ] {
+            let error = sanitize_local_options(&features, options)
+                .await
+                .expect_err("a box larger than the host must be rejected");
+            assert!(matches!(error, BoxliteError::InvalidArgument(_)), "{error}");
+        }
+        sanitize_local_options(&features, BoxOptions::default())
+            .await
+            .unwrap();
     }
 
     #[tokio::test]

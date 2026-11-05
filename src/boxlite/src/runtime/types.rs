@@ -572,8 +572,14 @@ impl BoxInfo {
                 RootfsSpec::RootfsPath(p) => format!("rootfs:{}", p),
                 RootfsSpec::Checkpoint(c) => format!("checkpoint:{}", c),
             },
-            cpus: config.options.cpus.unwrap_or(f64::from(DEFAULT_CPUS)),
-            memory_mib: config.options.memory_mib.unwrap_or(DEFAULT_MEMORY_MIB),
+            cpus: state.resources.map_or(
+                config.options.cpus.unwrap_or(f64::from(DEFAULT_CPUS)),
+                |resources| resources.cpus,
+            ),
+            memory_mib: state.resources.map_or(
+                config.options.memory_mib.unwrap_or(DEFAULT_MEMORY_MIB),
+                |resources| resources.memory_mib,
+            ),
             privileged: Some(config.options.advanced.privileged),
             network: Some(NetworkInfo::new(
                 OutboundNetworkInfo {
