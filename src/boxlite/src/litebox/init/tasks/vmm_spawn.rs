@@ -104,20 +104,22 @@ impl PipelineTask<InitCtx> for VmmSpawnTask {
             build_config(&box_id, &inputs)
                 .await
                 .inspect_err(|e| log_task_error(&box_id, task_name, e))?;
-        let ceiling = cpu_quota_supported(&inputs.options)
-            .then(|| ResourceCeiling::detect_with_kernel(inputs.options.advanced.kernel.is_some()));
+        let ceiling = (inputs.engine_kind == VmmKind::Libkrun
+            && cpu_quota_supported(&inputs.options))
+        .then(|| ResourceCeiling::detect_with_kernel(inputs.options.advanced.kernel.is_some()));
         let resources = boot_resources(&inputs.options, inputs.resources, ceiling)?;
         instance_spec.cpus = Some(CpuCount::new(resources.cpus)?.vcpus());
         instance_spec.max_cpus = Some(resources.max_cpus);
         instance_spec.memory_mib = Some(resources.memory_mib);
         #[cfg(target_os = "linux")]
-        if inputs
-            .options
-            .advanced
-            .security
-            .resource_limits
-            .max_memory
-            .is_none()
+        if inputs.engine_kind == VmmKind::Libkrun
+            && inputs
+                .options
+                .advanced
+                .security
+                .resource_limits
+                .max_memory
+                .is_none()
         {
             let max = ResourceCeiling::detect_with_kernel(false).max_memory_mib;
             instance_spec.max_memory_mib =
@@ -553,6 +555,23 @@ mod tests {
         let resources = boot_resources(&two_cpu_options(), Some(resized), ceiling(6)).unwrap();
         assert_eq!((resources.cpus, resources.max_cpus), (4.0, 6));
         assert_eq!(resources.memory_mib, 2048);
+    }
+
+    #[test]
+    fn boot_resources_preserve_fractional_allocation_and_derive_integer_topology() {
+        for (cpus, vcpus) in [(0.125, 1), (0.5, 1), (1.5, 2)] {
+            let options = BoxOptions {
+                cpus: Some(cpus),
+                ..two_cpu_options()
+            };
+            let fixed = boot_resources(&options, None, None).unwrap();
+            assert_eq!((fixed.cpus, fixed.max_cpus), (cpus, vcpus));
+            let resources = boot_resources(&options, None, ceiling(8)).unwrap();
+            assert_eq!((resources.cpus, resources.max_cpus), (cpus, 8));
+            let restarted =
+                boot_resources(&two_cpu_options(), Some(resources), ceiling(8)).unwrap();
+            assert_eq!(restarted, resources);
+        }
     }
 
     #[test]

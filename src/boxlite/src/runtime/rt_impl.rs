@@ -2343,7 +2343,7 @@ mod tests {
         let features = ExperimentalFeatures::default();
         for options in [
             BoxOptions {
-                cpus: Some(u8::MAX),
+                cpus: Some(f64::from(u8::MAX)),
                 ..Default::default()
             },
             BoxOptions {

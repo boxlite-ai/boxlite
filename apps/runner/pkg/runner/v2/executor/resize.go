@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"time"
 
 	apiclient "github.com/boxlite-ai/boxlite/libs/api-client-go"
@@ -67,7 +68,7 @@ func (e *Executor) applyResize(ctx context.Context, job *apiclient.Job) (*dto.Bo
 	if err := e.parsePayload(job.Payload, &target); err != nil {
 		return nil, err
 	}
-	if target.Version != 1 || target.CPUs < 0.125 || target.CPUs > 255 || target.MemoryMiB == 0 {
+	if target.Version != 1 || target.CPUs < 0.125 || target.CPUs > 255 || math.Round(target.CPUs*1000)/1000 != target.CPUs || target.MemoryMiB == 0 {
 		return nil, fmt.Errorf("invalid resize job payload")
 	}
 	resizer, ok := e.backend.(backend.ResourceResizer)

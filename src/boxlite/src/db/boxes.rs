@@ -455,7 +455,7 @@ mod tests {
         let mut stale = BoxState::new();
         store.save(&config, &stale).unwrap();
         let resources = crate::litebox::BoxResources {
-            cpus: 3.0,
+            cpus: 1.5,
             memory_mib: 1536,
             max_cpus: 8,
             max_memory_mib: 1536,
@@ -466,7 +466,7 @@ mod tests {
         let (config, state) = store.load(TEST_ID_1).unwrap().unwrap();
         assert_eq!(state.resources, Some(resources));
         let info = crate::BoxInfo::new(&config, &state);
-        assert_eq!((info.cpus, info.memory_mib), (3, 1536));
+        assert_eq!((info.cpus, info.memory_mib), (1.5, 1536));
     }
 
     #[test]

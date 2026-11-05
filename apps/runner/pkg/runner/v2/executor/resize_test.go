@@ -73,6 +73,7 @@ type resizeBackend struct {
 	targets      []dto.ResizeBoxPayload
 	failure      error
 	queryFailure error
+	resources    *dto.BoxResources
 	wait         bool
 }
 
@@ -92,6 +93,9 @@ func (b *resizeBackend) ResizeResources(ctx context.Context, _ string, cpus uint
 	}
 	// Even the initial query reports mapped == target. It says nothing about
 	// whether Linux has finished plugging that RAM, so explicit apply is required.
+	if b.resources != nil {
+		return b.resources, nil
+	}
 	return &dto.BoxResources{CPUs: 4, MemoryMiB: 2048, MaxCPUs: 16, MaxMemoryMiB: 8192}, nil
 }
 
@@ -99,6 +103,28 @@ func resizeJob() *apiclient.Job {
 	job := migrateJob(apiclient.JOBTYPE_RESIZE_BOX, `{"version":1,"cpus":4,"memory_mib":2048}`)
 	job.SetClaimToken("current-claim")
 	return job
+}
+
+func TestResizeMemoryPreservesFractionalCPUAllocation(t *testing.T) {
+	for _, cpus := range []float64{0.125, 0.5, 1.5} {
+		t.Run(fmt.Sprint(cpus), func(t *testing.T) {
+			h := newHarness(t, nil)
+			b := &resizeBackend{BoxBackend: h.backend, resources: &dto.BoxResources{CPUs: cpus, MemoryMiB: 2048, MaxCPUs: 16, MaxMemoryMiB: 8192}}
+			h.executor.backend = b
+			job := migrateJob(apiclient.JOBTYPE_RESIZE_BOX, fmt.Sprintf(`{"version":1,"cpus":%g,"memory_mib":2048}`, cpus))
+			result, err := h.executor.applyResize(context.Background(), job)
+			if err != nil || result.CPUs != cpus || len(b.targets) != 1 || b.targets[0].CPUs != 0 || b.targets[0].MemoryMiB != 2048 {
+				t.Fatalf("fractional allocation changed: result=%+v targets=%+v error=%v", result, b.targets, err)
+			}
+			for _, invalid := range []float64{0, 0.1251, 2.5, 256} {
+				b.targets = nil
+				job = migrateJob(apiclient.JOBTYPE_RESIZE_BOX, fmt.Sprintf(`{"version":1,"cpus":%g,"memory_mib":2048}`, invalid))
+				if _, err := h.executor.applyResize(context.Background(), job); err == nil || len(b.targets) != 0 {
+					t.Fatalf("invalid target %g applied: targets=%+v error=%v", invalid, b.targets, err)
+				}
+			}
+		})
+	}
 }
 
 func TestResizeAlwaysAppliesExplicitTargetAndReportsClaimToken(t *testing.T) {

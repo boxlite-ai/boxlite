@@ -42,6 +42,10 @@ func TestResizeCrossesFFIAndREST(t *testing.T) {
 			_, _ = io.WriteString(w, `{"error":{"message":"cannot shrink","type":"InvalidArgumentError","code":"invalid_argument"}}`)
 			return
 		}
+		if body.CPUs == 0 {
+			_, _ = io.WriteString(w, `{"cpus":0.5,"memory_mib":512,"max_cpus":8,"max_memory_mib":4096}`)
+			return
+		}
 		_, _ = io.WriteString(w, `{"cpus":2,"memory_mib":512,"max_cpus":8,"max_memory_mib":4096}`)
 	}))
 	defer server.Close()
@@ -94,5 +98,21 @@ func TestResizeCrossesFFIAndREST(t *testing.T) {
 	}
 	if _, ok := omittedKeys["cpus"]; !ok {
 		t.Fatalf("cpus missing from resize: %s", sent)
+	}
+	for _, opts := range []ResizeOptions{{}, {MemoryMiB: 512}} {
+		got, err := box.Resize(context.Background(), opts)
+		if err != nil || got.CPUs != 0.5 || got.MemoryMiB != 512 {
+			t.Fatalf("fractional response lost across FFI: resources=%+v error=%v", got, err)
+		}
+		var body map[string]json.RawMessage
+		if err := json.Unmarshal(<-requests, &body); err != nil {
+			t.Fatal(err)
+		}
+		if _, present := body["cpus"]; present {
+			t.Fatalf("omitted CPU target was sent: %v", body)
+		}
+		if _, present := body["memory_mib"]; present != (opts.MemoryMiB != 0) {
+			t.Fatalf("memory target presence changed: %v", body)
+		}
 	}
 }

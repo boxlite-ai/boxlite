@@ -235,6 +235,43 @@ mod tests {
     use super::*;
 
     #[test]
+    fn resize_retains_fractional_cpus_when_only_memory_changes() {
+        for cpus in [0.125, 0.5, 1.5] {
+            let current = BoxResources {
+                cpus,
+                memory_mib: 512,
+                max_cpus: 4,
+                max_memory_mib: 1024,
+            };
+            assert_eq!(ResizeOptions::default().target(current).unwrap(), current);
+            let target = ResizeOptions {
+                cpus: None,
+                memory_mib: Some(640),
+            }
+            .target(current)
+            .unwrap();
+            assert_eq!((target.cpus, target.memory_mib), (cpus, 640));
+            assert_eq!(serde_json::to_value(target).unwrap()["cpus"], cpus);
+            let grown = ResizeOptions {
+                cpus: Some(2),
+                memory_mib: None,
+            }
+            .target(current)
+            .unwrap();
+            assert_eq!(grown.cpus, 2.0);
+            assert_eq!(serde_json::to_value(grown).unwrap()["cpus"], 2);
+            assert!(
+                ResizeOptions {
+                    cpus: Some(0),
+                    memory_mib: None
+                }
+                .target(current)
+                .is_err()
+            );
+        }
+    }
+
+    #[test]
     fn resize_validates_both_targets_before_applying_either() {
         let current = BoxResources {
             cpus: 2.0,

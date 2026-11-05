@@ -661,6 +661,18 @@ reject the new `RESIZE_BOX` response enum. Disable admission before
 rollback and drain all resize jobs before restoring old API binaries or schema.
 Disabling admission still permits queries and joining an existing target.
 
+`CLOUD_RESIZE_ENABLED` is declared in `apps/infra/mstage.env.json` under
+`env.selectGroup.api.optional`, so the deploy delivers it to the API container
+once a stage sets it. Set it per stage:
+
+```bash
+npm run mstage env set -- --stage dev CLOUD_RESIZE_ENABLED=true
+npm run mstage env set -- --stage prod --confirm CLOUD_RESIZE_ENABLED=true
+```
+
+Deleting the key, or setting it to anything but `true`, disables admission
+without a code change.
+
 If the branch was already deployed, the pre-deploy backfill must cover every open
 `RESIZE_BOX` job, restore Box `cpu/mem` from `payload.previous` when the old
 admission wrote the target, and reconcile the usage period to the previous shape.

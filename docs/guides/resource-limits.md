@@ -120,7 +120,7 @@ bound by that bundled-kernel limit. New boxes above their ceiling fail with
 `InvalidArgument`. Reusing an existing box preserves its saved allocation.
 Legacy boxes above 16 vCPUs still boot with a warning when using the bundled kernel.
 
-**Spare vCPUs (Linux):** so a running box can later gain CPUs, a box boots
+**Spare vCPUs (Linux/libkrun):** so a running box can later gain CPUs, a box boots
 with vCPUs up to the host ceiling but only `ceil(cpus)` online (`maxcpus=` on the
 guest kernel command line). `nproc` and `/proc/cpuinfo` show the online CPUs;
 `/sys/devices/system/cpu/present` shows the ceiling.

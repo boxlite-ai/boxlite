@@ -12,7 +12,7 @@ async fn resize_memory_grows_without_restart() {
     use boxlite::{BoxliteError, ResizeOptions};
     const BOOT_MIB: u32 = 128;
     let t = BoxTestBase::with_options(BoxOptions {
-        cpus: Some(1),
+        cpus: Some(1.0),
         memory_mib: Some(BOOT_MIB),
         ..common::alpine_opts()
     })
@@ -53,7 +53,7 @@ async fn resize_memory_grows_without_restart() {
     );
     // A fixed-memory boot must expose the same RAM as a boot with spare capacity.
     let mut fixed_options = BoxOptions {
-        cpus: Some(1),
+        cpus: Some(1.0),
         memory_mib: Some(BOOT_MIB),
         ..common::alpine_opts()
     };
@@ -156,7 +156,7 @@ async fn resize_memory_works_without_network_or_spare_cpus() {
     use boxlite::{BoxliteError, ResizeOptions};
     for jailer_enabled in [true, false] {
         let mut options = BoxOptions {
-            cpus: Some(1),
+            cpus: Some(1.0),
             memory_mib: Some(256),
             network: boxlite::runtime::options::NetworkSpec::Disabled,
             ..common::alpine_opts()
@@ -211,7 +211,7 @@ fn box_cgroup(box_id: &str) -> std::path::PathBuf {
 #[tokio::test]
 async fn resize_spare_vcpus_boot_offline_behind_a_one_cpu_quota() {
     let t = BoxTestBase::with_options(BoxOptions {
-        cpus: Some(1),
+        cpus: Some(1.0),
         ..common::alpine_opts()
     })
     .await;
@@ -237,7 +237,7 @@ async fn resize_spare_vcpus_boot_offline_behind_a_one_cpu_quota() {
 async fn resize_cpu_grows_without_restart_and_survives_recovery() {
     use boxlite::{BoxliteError, ResizeOptions};
     let t = BoxTestBase::with_options(BoxOptions {
-        cpus: Some(1),
+        cpus: Some(1.0),
         ..common::alpine_opts()
     })
     .await;
@@ -255,7 +255,7 @@ async fn resize_cpu_grows_without_restart_and_survives_recovery() {
         })
         .await
         .unwrap();
-    assert_eq!(resized.cpus, 2);
+    assert_eq!(resized.cpus, 2.0);
     assert_eq!(
         t.bx.info().await.unwrap().pid,
         initial.pid,
@@ -300,6 +300,6 @@ async fn resize_cpu_grows_without_restart_and_survives_recovery() {
     t.bx.stop().await.unwrap();
     let recovered = t.runtime.get(t.bx.id().as_str()).await.unwrap().unwrap();
     recovered.start().await.unwrap();
-    assert_eq!(recovered.info().await.unwrap().cpus, 2);
+    assert_eq!(recovered.info().await.unwrap().cpus, 2.0);
     recovered.stop().await.unwrap();
 }
