@@ -144,7 +144,7 @@ const OrganizationSettings: React.FC = () => {
       <h1 className="font-display text-2xl font-semibold leading-none tracking-tight">Organization</h1>
       <p className="mt-2 text-body leading-relaxed text-muted-foreground">
         Manage settings and members for{' '}
-        <span aria-label="Current organization">{getOrganizationDisplayName(selectedOrganization.name)}</span>.
+        <span>{getOrganizationDisplayName(selectedOrganization.name)}</span>.
       </p>
       <Tabs
         value={tab}
