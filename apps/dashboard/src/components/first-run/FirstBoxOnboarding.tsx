@@ -35,11 +35,11 @@ export function FirstBoxQuickstart() {
     },
   ]
   return (
-    <main className="mx-auto w-full max-w-[1440px] px-5 py-7 sm:px-10 lg:px-12">
+    <main className="page-container py-7">
       <div className="mb-7 flex items-center justify-between gap-4">
         <h1 className="font-display text-page font-semibold tracking-tight">Create your first Box</h1>
       </div>
-      <div className="grid w-full max-w-[1080px] gap-3 md:grid-cols-3" role="group" aria-label="Deployment method">
+      <div className="grid w-full gap-3 md:grid-cols-3" role="group" aria-label="Deployment method">
         {methods.map(({ id, title, description, Icon }) => (
           <button
             key={id}

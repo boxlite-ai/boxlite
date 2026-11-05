@@ -48,7 +48,8 @@ export class AllExceptionsFilter implements ExceptionFilter {
     let error: string
     let message: string
     let code: string | undefined
-    // The one structured field a failure may add. Forwarded rather than
+    let boxId: string | undefined
+    // Image progress is forwarded rather than
     // flattened because it is the same shape a successful box response
     // publishes, and a caller that parses one should not need a second parser.
     let progress: Record<string, unknown> | undefined
@@ -86,6 +87,8 @@ export class AllExceptionsFilter implements ExceptionFilter {
           : (responseMessage as string) || exception.message
         const responseCode = (exceptionResponse as Record<string, unknown>).code
         code = typeof responseCode === 'string' ? responseCode : undefined
+        const responseBoxId = (exceptionResponse as Record<string, unknown>).boxId
+        boxId = typeof responseBoxId === 'string' && responseBoxId.length > 0 ? responseBoxId : undefined
         const responseProgress = (exceptionResponse as Record<string, unknown>).progress
         progress =
           typeof responseProgress === 'object' && responseProgress !== null && !Array.isArray(responseProgress)
@@ -120,6 +123,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
       error,
       message,
       ...(code ? { code } : {}),
+      ...(boxId ? { boxId } : {}),
       ...(progress ? { progress } : {}),
     })
   }

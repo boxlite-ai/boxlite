@@ -66,7 +66,7 @@ mod vcpu;
     not(test),
     expect(
         dead_code,
-        reason = "The machine owns only the virtio workers; only tests add a virtio device yet."
+        reason = "The snapshot parts of the contract have no production device yet, and only Linux x86_64 adds the block device."
     )
 )]
 mod virtio;
@@ -80,7 +80,7 @@ mod virtio;
 mod vm;
 
 pub use chipset::{BusKind, Conflict};
-pub use config::VmConfig;
+pub use config::{DiskConfig, DiskFormat, VmConfig};
 pub use error::{Error, Result};
 pub use vm::{StopHandle, Vm, VmExit};
 

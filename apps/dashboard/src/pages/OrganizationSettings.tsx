@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { AsciiButton } from '@/components/ascii'
 import { useApi } from '@/hooks/useApi'
 import { useOrganizations } from '@/hooks/useOrganizations'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
@@ -91,14 +92,14 @@ const OrganizationGeneral: React.FC = () => {
             className={inputClass}
           />
           {isOwner && (
-            <button
+            <AsciiButton
+              variant="primary"
               type="button"
               onClick={handleRenameOrganization}
               disabled={!organizationNameChanged || renamingOrganization}
-              className="flex-none bg-primary px-[18px] py-[11px] text-[13px] font-semibold text-primary-foreground transition-opacity hover:opacity-85 disabled:cursor-not-allowed disabled:opacity-45"
             >
               Save
-            </button>
+            </AsciiButton>
           )}
         </div>
       </div>
@@ -139,7 +140,7 @@ const OrganizationSettings: React.FC = () => {
   if (!selectedOrganization) return null
 
   return (
-    <div className="px-4 py-6 sm:px-6 lg:px-10">
+    <div className="page-container py-6">
       <h1 className="font-display text-2xl font-semibold leading-none tracking-tight">Organization</h1>
       <p aria-label="Current organization" className="mt-2 text-sm text-muted-foreground">
         {getOrganizationDisplayName(selectedOrganization.name)}

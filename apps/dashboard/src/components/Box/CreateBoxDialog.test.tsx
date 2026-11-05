@@ -11,6 +11,7 @@ import { SelectedOrganizationProvider } from '@/providers/SelectedOrganizationPr
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { CreateBoxDialog, resolvePerBoxLimits } from './CreateBoxDialog'
+import { AsciiButton } from '@/components/ascii'
 import { toBoxApiCreateRequest, validateMountPath, validateMounts } from '@/lib/cloudBox'
 
 // Mutable org returned by the mocked hook; each test sets `state.org`.
@@ -1129,8 +1130,8 @@ describe('CreateBoxDialog trigger slot', () => {
     return [...document.querySelectorAll('*')].some((el) => el.textContent === 'Create a box for your agent')
   }
 
-  it('opens on the control the caller passes in', async () => {
-    await renderWithTrigger(<button type="button">Launch a box</button>)
+  it('opens on the supplied control and returns focus there after Cancel', async () => {
+    await renderWithTrigger(<AsciiButton type="button">Launch a box</AsciiButton>)
 
     const buttons = [...document.querySelectorAll<HTMLButtonElement>('button')]
     const trigger = buttons.find((b) => b.textContent?.trim() === 'Launch a box')
@@ -1144,6 +1145,13 @@ describe('CreateBoxDialog trigger slot', () => {
     await flush()
 
     expect(dialogIsOpen()).toBe(true)
+
+    const cancel = [...document.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent === 'Cancel')!
+    await act(async () => cancel.click())
+    await flush()
+
+    expect(dialogIsOpen()).toBe(false)
+    expect(document.activeElement).toBe(trigger)
   })
 
   it('renders no button of its own when the caller passes none', async () => {
