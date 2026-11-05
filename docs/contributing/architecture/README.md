@@ -130,9 +130,10 @@ Runs inside the Box, receives commands from host via gRPC.
 **Services:**
 
 - `Guest`: Environment initialization (mounts, rootfs, network)
-- `Container`: OCI container lifecycle management (via libcontainer). `AddMount`
-  binds a Box share folder read-only into a running container: the single-threaded
-  zygote forks a child that joins the container's mount namespace and moves an
+- `Container`: OCI container lifecycle management (via libcontainer). `Mount`
+  binds a folder of the container's share (`source`, a folder name, never a path)
+  read-only at `destination` in the running container: the single-threaded zygote
+  forks a child that joins the container's mount namespace and moves an
   `open_tree` clone there (`storage/attach.rs`). It refuses a destination that
   already has entries, so no image content is hidden.
 - `Execution`: Command execution with streaming I/O

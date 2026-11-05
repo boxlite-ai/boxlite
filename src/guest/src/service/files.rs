@@ -342,7 +342,7 @@ struct CopyTarget {
     /// Where that path lands on the guest-side rootfs directory.
     on_rootfs: PathBuf,
     /// Destinations of every mount in the container, including those added
-    /// after creation by `Container.AddMount`.
+    /// after creation by `Container.Mount`.
     mounts: Vec<PathBuf>,
 }
 
@@ -831,7 +831,7 @@ impl GuestServer {
     }
 
     /// Mount destinations of the container: those of the OCI spec it was
-    /// created with, plus those `Container.AddMount` added since.
+    /// created with, plus those `Container.Mount` added since.
     ///
     /// Asked once per copy, by [`CopyTarget::resolve`], which then answers
     /// every later question from the list it holds. The answer costs only the

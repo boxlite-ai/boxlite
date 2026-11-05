@@ -367,10 +367,10 @@ mod tests {
             }
         }
 
-        async fn add_mount(
+        async fn mount(
             &self,
-            _: Request<boxlite_shared::ContainerAddMountRequest>,
-        ) -> Result<Response<boxlite_shared::ContainerAddMountResponse>, Status> {
+            _: Request<boxlite_shared::ContainerMountRequest>,
+        ) -> Result<Response<boxlite_shared::ContainerMountResponse>, Status> {
             Err(Status::unimplemented("not used by these tests"))
         }
     }

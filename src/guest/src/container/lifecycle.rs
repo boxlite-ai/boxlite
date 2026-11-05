@@ -65,7 +65,7 @@ pub struct Container {
     /// Resolved (uid, gid) from image USER directive, propagated to exec commands.
     user: (u32, u32),
     /// Destinations of every mount the applied OCI spec declares, plus those
-    /// added later by `Container.AddMount`.
+    /// added later by `Container.Mount`.
     mount_destinations: Vec<PathBuf>,
     /// Resolved capability set shared by init and every exec process.
     capabilities: CapabilitySet,
@@ -330,7 +330,7 @@ impl Container {
     }
 
     /// Destinations of every mount in the container: those it was created with,
-    /// plus those `Container.AddMount` added since (see
+    /// plus those `Container.Mount` added since (see
     /// [`Self::record_mount_destination`]).
     ///
     /// The creation mounts come from the OCI spec that was actually applied —
@@ -351,7 +351,7 @@ impl Container {
         &self.mount_destinations
     }
 
-    /// Record a mount added to the running container (`Container.AddMount`),
+    /// Record a mount added to the running container (`Container.Mount`),
     /// so [`Self::mount_destinations`] still covers every mount it has.
     pub fn record_mount_destination(&mut self, destination: PathBuf) {
         self.mount_destinations.push(destination);
