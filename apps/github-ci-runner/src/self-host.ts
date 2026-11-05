@@ -127,8 +127,35 @@ export class SelfHost implements ListenerHost {
     }
     return true
   }
+  private async registerApplications(lease: ExecutionLease): Promise<void> {
+    if (this.config.github.kind !== 'app') throw new Error('Original App required')
+    const [root] = await this.state.read(['backend/github'])
+    const ids = [...this.applications.keys()]
+    if (
+      !root ||
+      root.schema !== 1 ||
+      !object(root.payload) ||
+      root.payload.kind !== 'app' ||
+      root.payload.issuer !== this.config.github.issuer
+    )
+      throw new Error('Original GitHub App identity unavailable')
+    const previous = root.payload.applications
+    if (
+      previous !== undefined &&
+      (!Array.isArray(previous) ||
+        new Set(previous).size !== previous.length ||
+        previous.some((id) => typeof id !== 'string' || !ids.includes(id)))
+    )
+      throw new Error('Original GitHub App identities changed')
+    if (JSON.stringify(previous) === JSON.stringify(ids)) return
+    // App configuration is execution state; ingress permits only delivery records.
+    await this.state.commit(lease, [
+      { key: root.key, expected: root.version, payload: { ...root.payload, applications: ids } },
+    ])
+  }
   async discover(lease: ExecutionLease, signal: AbortSignal, request: DiscoveryRequest): Promise<DiscoverySnapshot> {
     if (this.directory) {
+      await this.registerApplications(lease)
       const result = this.directory.step(lease, request, signal)
       this.discoveryReady = result.ready
       return result
