@@ -24,6 +24,7 @@ describe('CI connect HTTP authorization boundary', () => {
     configuration: jest.fn(),
     startWeb: jest.fn(),
     completeWeb: jest.fn(),
+    selectWeb: jest.fn(),
   }
   const settings = { get: jest.fn(), update: jest.fn() }
   const permissions = ['write:boxes', 'delete:boxes']
@@ -92,6 +93,7 @@ describe('CI connect HTTP authorization boundary', () => {
     service.configuration.mockReset().mockResolvedValue({ web_connect_available: true })
     service.startWeb.mockReset().mockResolvedValue({ status: 'pending' })
     service.completeWeb.mockReset().mockResolvedValue({ status: 'connected' })
+    service.selectWeb.mockReset().mockResolvedValue({ status: 'connected' })
     settings.get.mockReset().mockResolvedValue({ available: true, max_concurrent_jobs: null })
     settings.update.mockReset().mockResolvedValue({ available: true, max_concurrent_jobs: 2 })
   })
@@ -145,7 +147,15 @@ describe('CI connect HTTP authorization boundary', () => {
     const id = randomUUID(),
       body = { code: 'web-code', state: id + '.' + 'A'.repeat(43) }
     expect((await request('owner', `/${org}/ci/connect/configuration`, 'GET')).status).toBe(200)
-    expect((await request('owner', `/${org}/ci/connect/web`)).status).toBe(201)
+    expect(
+      (
+        await request('owner', `/${org}/ci/connect/web`, 'POST', {
+          account_type: 'User',
+          follow_installation: true,
+          allow_public_repositories: false,
+        })
+      ).status,
+    ).toBe(201)
     expect((await request('owner', `/${org}/ci/connect/${id}/complete`, 'POST', body)).status).toBe(201)
     for (const actor of ['member', 'owner-limited', 'admin-limited']) {
       expect((await request(actor, `/${org}/ci/connect/configuration`, 'GET')).status).toBe(403)
@@ -162,6 +172,32 @@ describe('CI connect HTTP authorization boundary', () => {
     expect(service.startWeb).toHaveBeenCalledTimes(1)
     expect(service.completeWeb).toHaveBeenCalledTimes(1)
     expect(service.completeWeb.mock.calls[0][0]).toMatchObject({ organizationId: org, userId: 'owner' })
+  })
+  it('guards and validates manual selection and installation callbacks separately', async () => {
+    const id = randomUUID(),
+      state = id + '.' + 'A'.repeat(43)
+    expect((await request('owner', `/${org}/ci/connect/${id}/select`, 'POST', { installation_id: 123 })).status).toBe(
+      201,
+    )
+    expect(service.selectWeb).toHaveBeenLastCalledWith(expect.objectContaining({ organizationId: org }), id, 123)
+    expect(
+      (await request('owner', `/${org}/ci/connect/${id}/installation`, 'POST', { installation_id: 123, state })).status,
+    ).toBe(201)
+    expect(service.selectWeb).toHaveBeenLastCalledWith(expect.objectContaining({ organizationId: org }), id, 123, state)
+    for (const actor of ['member', 'owner-limited', 'admin-limited'])
+      for (const route of ['select', 'installation'])
+        expect(
+          (await request(actor, `/${org}/ci/connect/${id}/${route}`, 'POST', { installation_id: 123, state })).status,
+        ).toBe(403)
+    for (const installation_id of [0, -1, 1.5, '123', Number.MAX_SAFE_INTEGER + 1])
+      expect((await request('owner', `/${org}/ci/connect/${id}/select`, 'POST', { installation_id })).status).toBe(400)
+    expect(
+      (await request('owner', `/${org}/ci/connect/${id}/installation`, 'POST', { installation_id: 123 })).status,
+    ).toBe(400)
+    expect(
+      (await request('owner', `/${org}/ci/connect/${id}/select`, 'POST', { installation_id: 123, state })).status,
+    ).toBe(400)
+    expect(service.selectWeb).toHaveBeenCalledTimes(2)
   })
   it('permits the owner and forwards only validated connect input', async () => {
     expect((await request('owner')).status).toBe(201)

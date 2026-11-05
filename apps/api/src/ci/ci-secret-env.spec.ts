@@ -50,7 +50,9 @@ describe('CI runtime secret ENV configuration', () => {
       )
     }) as typeof fetch
     try {
-      await expect(new CiGitHubService(config! as any).appSource().installation(123)).resolves.toMatchObject({
+      await expect(
+        new CiGitHubService(config! as any).forType('User').appSource().installation(123),
+      ).resolves.toMatchObject({
         id: 123,
       })
       expect(global.fetch).toHaveBeenCalledTimes(1)
@@ -63,9 +65,9 @@ describe('CI runtime secret ENV configuration', () => {
         })
         return new Response(JSON.stringify({ access_token: 'private-oauth-user-token' }))
       }) as typeof fetch
-      await expect(new CiGitHubService(config! as any).exchangeWeb('test-code', 'A'.repeat(43))).resolves.toBe(
-        'private-oauth-user-token',
-      )
+      await expect(
+        new CiGitHubService(config! as any).forType('User').exchangeWeb('test-code', 'A'.repeat(43)),
+      ).resolves.toBe('private-oauth-user-token')
     } finally {
       global.fetch = original
     }

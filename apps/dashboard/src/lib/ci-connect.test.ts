@@ -38,7 +38,7 @@ describe('CI browser callback state', () => {
     expect(window.location.pathname).toBe('/settings/ci/callback')
     expect(window.location.search).toBe('')
     expect(window.location.hash).toBe('')
-    const api = { completeCiConnect: vi.fn(async () => ({ status: 'connected' })) }
+    const api = { completeCiInstallation: vi.fn(), completeCiConnect: vi.fn(async () => ({ status: 'connected' })) }
     const first = module.completeCiRedirect(api),
       second = module.completeCiRedirect(api)
     expect(first).toBe(second)
@@ -53,7 +53,7 @@ describe('CI browser callback state', () => {
     module.captureCiCallback()
     vi.resetModules()
     const reloaded = await import('./ci-connect'),
-      api = { completeCiConnect: vi.fn() }
+      api = { completeCiInstallation: vi.fn(), completeCiConnect: vi.fn() }
     reloaded.captureCiCallback()
     await expect(reloaded.completeCiRedirect(api)).rejects.toThrow('Restart connect')
     expect(api.completeCiConnect).not.toHaveBeenCalled()
@@ -78,7 +78,7 @@ describe('CI browser callback state', () => {
       if (scenario === 'error') query.set('error', 'access_denied')
       window.history.replaceState({}, '', '/settings/ci/callback?' + query)
       module.captureCiCallback()
-      const api = { completeCiConnect: vi.fn() }
+      const api = { completeCiInstallation: vi.fn(), completeCiConnect: vi.fn() }
       await expect(module.completeCiRedirect(api)).rejects.toThrow('Restart connect')
       expect(window.location.search).toBe('')
       expect(api.completeCiConnect).not.toHaveBeenCalled()
@@ -90,6 +90,7 @@ describe('CI browser callback state', () => {
     window.history.replaceState({}, '', '/settings/ci/callback?' + new URLSearchParams({ code: 'private-code', state }))
     module.captureCiCallback()
     const api = {
+      completeCiInstallation: vi.fn(),
       completeCiConnect: vi.fn(async () => {
         throw Error('private-code private-token')
       }),
@@ -104,6 +105,36 @@ describe('CI browser callback state', () => {
     expect(() =>
       module.prepareCiRedirect(organization, { ...attempt(), authorization_url: 'https://evil.test/login' }),
     ).toThrow('Invalid GitHub authorization')
+    expect(window.sessionStorage.length).toBe(0)
+  })
+  it('keeps routing metadata for account selection and processes the installation phase once', async () => {
+    const module = await import('./ci-connect')
+    module.prepareCiRedirect(organization, attempt())
+    window.history.replaceState({}, '', '/settings/ci/callback?' + new URLSearchParams({ code: 'private-code', state }))
+    module.captureCiCallback()
+    module.captureCiCallback()
+    const api = {
+      completeCiConnect: vi.fn(async () => ({ status: 'selection_required' })),
+      completeCiInstallation: vi.fn(async () => ({ status: 'connected' })),
+    }
+    await expect(module.completeCiRedirect(api)).resolves.toMatchObject({ result: { status: 'selection_required' } })
+    expect(window.sessionStorage.getItem('boxlite.ci.connect')).not.toBeNull()
+    window.history.replaceState(
+      {},
+      '',
+      '/settings/ci/callback?' + new URLSearchParams({ installation_id: '123', setup_action: 'install', state }),
+    )
+    module.captureCiCallback()
+    const first = module.completeCiRedirect(api),
+      second = module.completeCiRedirect(api)
+    expect(first).toBe(second)
+    await expect(first).resolves.toMatchObject({ result: { status: 'connected' } })
+    expect(api.completeCiConnect).toHaveBeenCalledTimes(1)
+    expect(api.completeCiInstallation).toHaveBeenCalledExactlyOnceWith(organization, id, {
+      installation_id: 123,
+      state,
+    })
+    expect(window.location.search).toBe('')
     expect(window.sessionStorage.length).toBe(0)
   })
 })

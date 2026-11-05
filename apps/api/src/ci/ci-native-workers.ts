@@ -46,6 +46,7 @@ export class CiNativeWorkers {
       originalScope = scopeKey(scope)
     const inspect = async (tx: EntityManager, state: ListenerState, name: string, effect?: Effect) => {
       if (!/^ci-jit-[a-f0-9]{32}$/.test(name)) throw new ForbiddenException('Original CI worker required')
+      await this.store.applications(state).initialize(lease)
       const snapshot = await new ExecutionJournal(state).load(lease)
       await this.store.root(state)
       const allocation = snapshot.allocations.get('worker/' + name.slice(7))

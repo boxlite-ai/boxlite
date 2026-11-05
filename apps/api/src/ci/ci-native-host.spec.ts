@@ -29,6 +29,7 @@ integration('CI native host (Postgres binding and shared inbox)', () => {
   let beforeRepositories: () => Promise<void>
   const config = { get: (key: string) => (key === 'ci.githubClientId' ? 'test-app' : undefined) }
   const notification = (): VerifiedWebhook => ({
+    application: 'test-app',
     delivery: randomUUID(),
     event: 'workflow_job',
     digest: createHash('sha256').update('test-event').digest('hex'),
@@ -98,7 +99,23 @@ integration('CI native host (Postgres binding and shared inbox)', () => {
     await store.initialize()
     lease = (await store.state.acquire(randomUUID(), 30000))!
     const app = new GitHubAppSource({ issuer: 'test-app', privateKey: () => privateKey })
-    host = new CiNativeHost(db, store, {} as any, { appSource: () => app } as any, config as any)
+    host = new CiNativeHost(
+      db,
+      store,
+      {} as any,
+      {
+        byClientId: () => ({
+          appSource: () => app,
+          accountType: 'User',
+          secret: () => {
+            const value = config.get('ci.githubWebhookSecret')
+            if (!value) throw Error('not configured')
+            return Buffer.from(value)
+          },
+        }),
+      } as any,
+      config as any,
+    )
     requests = []
     beforeRepositories = async () => {}
     upstream = jest.spyOn(globalThis, 'fetch').mockImplementation(async (input, options) => {
@@ -154,7 +171,19 @@ integration('CI native host (Postgres binding and shared inbox)', () => {
       get: (key: string) => (key === 'ci.githubWebhookSecret' ? 'x'.repeat(32) : config.get(key)),
     }
     const app = new GitHubAppSource({ issuer: 'test-app', privateKey: () => privateKey })
-    host = new CiNativeHost(db, store, {} as any, { appSource: () => app } as any, enabled as any)
+    host = new CiNativeHost(
+      db,
+      store,
+      {} as any,
+      {
+        byClientId: () => ({
+          appSource: () => app,
+          accountType: 'User',
+          secret: () => Buffer.from(enabled.get('ci.githubWebhookSecret')!),
+        }),
+      } as any,
+      enabled as any,
+    )
     const reports = jest.spyOn(host, 'report').mockImplementation(() => {})
     const previous = upstream.getMockImplementation()!,
       guid = '00000000-0000-4000-8000-000000000001',
@@ -233,8 +262,8 @@ integration('CI native host (Postgres binding and shared inbox)', () => {
     const { key } = await enableReplay(),
       admit = store.admit.bind(store)
     let admitted = 0
-    const check = jest.spyOn(store, 'admit').mockImplementation(async (tx, scope) => {
-      await admit(tx, scope)
+    const check = jest.spyOn(store, 'admit').mockImplementation(async (tx, scope, application) => {
+      await admit(tx, scope, application)
       if (++admitted === 1) await tx.query('DELETE FROM organization_user')
     })
     try {
@@ -265,9 +294,9 @@ integration('CI native host (Postgres binding and shared inbox)', () => {
       'ci.workerImage': 'runner:test',
     }
     const runtimeConfig = { get: (key: string) => values[key] }
-    const github = { settings: () => ({ clientId: 'test-app' }) }
+    const github = { configured: () => [{ settings: () => ({ clientId: 'test-app' }) }] }
     const secondStore = new CiNativeState(db, runtimeConfig as any)
-    const secondHost = new CiNativeHost(db, secondStore, {} as any, {} as any, runtimeConfig as any)
+    const secondHost = new CiNativeHost(db, secondStore, {} as any, secondStore.registry, runtimeConfig as any)
     const first = new CiListenerService(
       store,
       host,

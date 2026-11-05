@@ -57,9 +57,9 @@ export class CiSettingsService implements CapacityProvider {
         SELECT $1,'quota/'||organization_id::text,gen_random_uuid(),1,
           jsonb_build_object('organization',organization_id::text,'maximum',NULL)
         FROM (SELECT DISTINCT organization_id FROM ci_installation_binding
-          WHERE github_host='github.com' AND app_client_id=$2) AS bindings
+          WHERE github_host='github.com' AND app_client_id=ANY($2::text[])) AS bindings
         ON CONFLICT(namespace,record_key) DO NOTHING`,
-        [this.native.namespace, this.native.app],
+        [this.native.namespace, this.native.apps],
       )
       await this.insert(tx, bootstrapKey, { app: this.native.app, version: 1 })
       await tx.query(
@@ -78,7 +78,7 @@ export class CiSettingsService implements CapacityProvider {
       `INSERT INTO ci_listener_state(namespace,record_key,record_version,schema_version,payload)
       SELECT $1,$2,$3,1,$4::jsonb WHERE NOT EXISTS
         (SELECT 1 FROM ci_installation_binding WHERE organization_id=$5
-          AND github_host='github.com' AND app_client_id=$6)
+          AND github_host='github.com' AND app_client_id=ANY($6::text[]))
       ON CONFLICT(namespace,record_key) DO NOTHING`,
       [
         this.native.namespace,
@@ -86,7 +86,7 @@ export class CiSettingsService implements CapacityProvider {
         randomUUID(),
         JSON.stringify({ organization, maximum: null }),
         organization,
-        this.native.app,
+        this.native.apps,
       ],
     )
     this.policy((await state.read([keyFor(organization)]))[0], organization)
@@ -223,8 +223,8 @@ export class CiSettingsService implements CapacityProvider {
     return tx.query(
       `SELECT id AS binding_id,account_login AS github_account,account_type,state AS listener_status,
       allow_public AS allow_public_repositories FROM ci_installation_binding
-      WHERE organization_id=$1 AND github_host='github.com' AND app_client_id=$2 ORDER BY account_login,id`,
-      [organization, this.native.app],
+      WHERE organization_id=$1 AND github_host='github.com' AND app_client_id=ANY($2::text[]) ORDER BY account_login,id`,
+      [organization, this.native.apps],
     )
   }
   private actor(actor: CiActor): CiActor {

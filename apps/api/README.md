@@ -145,7 +145,9 @@ The CI controller implements `POST /api/v1/{prefix}/ci/connect`,
 `DELETE /api/v1/{prefix}/ci/connect/{id}`. Browser connect adds
 `GET /api/v1/{prefix}/ci/connect/configuration`,
 `POST /api/v1/{prefix}/ci/connect/web`, and
-`POST /api/v1/{prefix}/ci/connect/{id}/complete`. Routes without `{prefix}` use the existing
+`POST /api/v1/{prefix}/ci/connect/{id}/complete`,
+`POST /api/v1/{prefix}/ci/connect/{id}/select`, and
+`POST /api/v1/{prefix}/ci/connect/{id}/installation`. Routes without `{prefix}` use the existing
 authenticated organization. These experimental routes are excluded from generated clients.
 
 Start accepts `github_account`, `follow_installation: true`, and
@@ -157,8 +159,9 @@ organization-admin membership and cross-checks the installation through App auth
 
 The Dashboard's Organization → CI tab uses GitHub App browser authorization with
 an independent random state and S256 PKCE. CLI connect keeps Device Flow. Browser
-start accepts the same account/public-repository policy; complete accepts only
-`code` and `state`. Five-minute attempts belong to the original BoxLite user,
+start accepts `account_type: User | Organization` and the public-repository policy;
+complete accepts only `code` and `state`. The selected type chooses the Personal
+or Organization App before authorization. Five-minute attempts belong to the original BoxLite user,
 organization and App. The API stores a state hash and encrypted verifier, claims
 an attempt once and clears the verifier before exchanging the code. An uncertain
 exchange is terminal; restart authorization instead of retrying the code.
@@ -175,10 +178,57 @@ session storage. Codes and state remain in module memory; verifier, Client Secre
 and GitHub tokens remain on the API. Lost browser state or a new login requires a
 fresh connect. Duplicate React StrictMode mounts share one completion request.
 The API verifies the original identity/state/flow/deadline before exchange and
-uses the same final binding transaction as CLI. User/refresh tokens are not stored
-or delivered to JIT Boxes.
+uses the same final binding transaction as CLI. After exchange, a user token is
+encrypted server-side until selection or the original five-minute deadline;
+refresh tokens are discarded. No GitHub user token reaches the browser or JIT Box.
 
-Postgres stores encrypted device codes or web verifiers, polling leases, expiry and installation bindings.
+After authorization, the API lists owned personal installations or organizations
+where the user is an active owner. The browser shows those accounts for explicit
+selection. `select` accepts only a numeric `installation_id`; the API freshly
+verifies it with the same original App and user token before binding. Organization
+ownership uses the paginated `/user/memberships/orgs` user endpoint, which needs
+no `Members: read` App permission. Ordinary organization members cannot connect.
+
+Both Apps use the same callback as their **Setup URL** and OAuth callback. The
+install link carries the original attempt state. `/installation` requires that
+state plus `installation_id`; it verifies current GitHub ownership and installation
+identity before automatic binding. A naked setup callback never proves authority.
+Selection, expiry, cancellation and terminal failure clear temporary token
+ciphertext. The initial code exchange is never repeated during selection.
+
+```mermaid
+sequenceDiagram
+    actor User
+    participant UI as Dashboard
+    participant API as CI Connect API
+    participant App as Selected GitHub App
+    participant DB as PostgreSQL
+    User->>UI: Choose Personal or Organization
+    UI->>API: Start web connect (BoxLite session)
+    API->>DB: Persist actor, org, App, state hash and encrypted PKCE
+    API-->>UI: Authorize URL for selected App
+    UI->>App: OAuth authorization with state and S256
+    App-->>UI: Code and state callback
+    UI->>API: Complete (code, state)
+    API->>App: Exchange code once
+    API->>DB: Persist encrypted temporary user token
+    API->>App: List installations and active owner memberships
+    API-->>UI: Verified account choices
+    alt Existing installation
+        User->>UI: Select owned account
+        UI->>API: Select installation ID
+    else New installation
+        UI->>App: Install selected App with original state
+        App-->>UI: Setup callback (installation ID, state)
+        UI->>API: Complete installation
+    end
+    API->>App: Recheck user ownership and original App installation
+    API->>DB: Recheck BoxLite owner; atomically bind and wake inventory
+    API->>DB: Clear temporary token
+    API-->>UI: Connected
+```
+
+Postgres stores encrypted device codes, web verifiers or temporary selection tokens, polling leases, expiry and installation bindings.
 A unique App/installation constraint prevents another organization from claiming the same
 installation. Completion checks cancellation, expiry and lease ownership in the binding
 transaction. Cancellation clears pending credentials; it does not revoke a completed binding.
@@ -205,7 +255,8 @@ initialization; it does not certify available CI capacity. Configuration and the
 
 ## GitHub CI webhook ingress (in development)
 
-`POST /api/v1/ci/github/webhook` accepts GitHub's signed notifications without a
+`POST /api/v1/ci/github/webhook` (Personal App) and
+`POST /api/v1/ci/github/webhook/organization` (Organization App) accept GitHub's signed notifications without a
 BoxLite API Key. Only this route uses raw bytes, capped at 1 MiB; compressed bodies
 and non-JSON content types are rejected. `CI_GITHUB_WEBHOOK_SECRET` is injected by
 the deployment platform from a secret reference. Its trimmed UTF-8 value must be
@@ -671,17 +722,38 @@ Failed, cancelled and uncertain delivery attempts retain their claim. Requests r
 redirects and have a 30-second deadline. Runner credentials stay inside the API;
 execution Boxes receive neither the App private key nor a BoxLite API Key.
 
+### Personal and Organization Apps
+
+`CiGitHubApp` shares authentication, connect verification and credential issuance
+between both hosts. Hosted `CiGitHubService` selects one instance by account type
+for new connect, and by the persisted client ID for existing work. The Personal
+App requests repository Administration: Write and Actions: Read. The Organization
+App requests organization Self-hosted runners: Write and Actions: Read, without
+repository Administration. Both retain GitHub's default Metadata: Read and
+subscribe to Workflow job events; neither needs Members: Read.
+
+Both Apps share one PostgreSQL namespace, scheduling lease and BoxLite account
+quota. Adding the Organization App does not double concurrency. Each scope has an
+immutable original App association; missing or conflicting associations deny
+execution. Original scopes are assigned to the original App once before the
+association protocol activates. Do not replace that App or remove its credentials
+while original cleanup work remains. New-connect role restrictions do not prevent
+cleanup using the original App. Delivery recovery keeps separate App checkpoints.
+
 ### Hosted configuration and deployment
 
-| Setting                                          | Hosted API behavior                                                                                                                |
-| ------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------- |
-| `CI_GITHUB_APP_CLIENT_ID` / `CI_GITHUB_APP_SLUG` | Public App identity and device authorization; required when hosted CI is enabled                                                   |
-| `CI_GITHUB_APP_CLIENT_SECRET`                    | Optional secret reference for Dashboard browser connect; opaque single-line OAuth client secret, distinct from the RSA private key |
-| `CI_GITHUB_APP_PRIVATE_KEY`                      | Secret reference resolving to a private RSA PEM, at most 64 KiB; held in API memory                                                |
-| `CI_GITHUB_WEBHOOK_SECRET`                       | Secret reference resolving to the HMAC value described above; also enables delivery recovery                                       |
-| `CI_SECRET_ENCRYPTION_KEY`                       | Secret reference resolving to a canonical base64 encoding of 32 bytes for temporary connect state                                  |
-| `CI_WORKER_CPUS` / `CI_WORKER_MEMORY_GB`         | Defaults 2 CPUs / 2 GB; 1 GB = 1024 MiB                                                                                            |
-| `CI_WORKER_IMAGE` / `CI_WORKER_GROUP_NAME`       | Defaults `ghcr.io/actions/actions-runner:latest` / `boxlite-ci-runner`                                                             |
+| Setting                                                          | Hosted API behavior                                                                                                                |
+| ---------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `CI_GITHUB_APP_CLIENT_ID` / `CI_GITHUB_APP_SLUG`                 | Personal App identity; required storage anchor when hosted CI is enabled                                                           |
+| `CI_GITHUB_APP_CLIENT_SECRET`                                    | Optional secret reference for Dashboard browser connect; opaque single-line OAuth client secret, distinct from the RSA private key |
+| `CI_GITHUB_APP_PRIVATE_KEY`                                      | Secret reference resolving to a private RSA PEM, at most 64 KiB; held in API memory                                                |
+| `CI_GITHUB_WEBHOOK_SECRET`                                       | Secret reference resolving to the HMAC value described above; also enables delivery recovery                                       |
+| `CI_GITHUB_ORG_APP_CLIENT_ID` / `CI_GITHUB_ORG_APP_SLUG`         | Optional Organization App identity, distinct from the Personal App                                                                 |
+| `CI_GITHUB_ORG_APP_PRIVATE_KEY` / `CI_GITHUB_ORG_WEBHOOK_SECRET` | Organization App private-key and HMAC secret references; required together when that App is configured                             |
+| `CI_GITHUB_ORG_APP_CLIENT_SECRET`                                | Optional Organization App OAuth secret reference for browser connect                                                               |
+| `CI_SECRET_ENCRYPTION_KEY`                                       | Secret reference resolving to a canonical base64 encoding of 32 bytes for temporary connect state                                  |
+| `CI_WORKER_CPUS` / `CI_WORKER_MEMORY_GB`                         | Defaults 2 CPUs / 2 GB; 1 GB = 1024 MiB                                                                                            |
+| `CI_WORKER_IMAGE` / `CI_WORKER_GROUP_NAME`                       | Defaults `ghcr.io/actions/actions-runner:latest` / `boxlite-ci-runner`                                                             |
 
 Hosted execution requires neither `BOXLITE_API_KEY` nor `CI_STATE_DIR`. The worker
 label is fixed to `boxlite-ci-runner`; existing BoxLite authentication remains on
@@ -705,7 +777,8 @@ costs. The database lease handles restarts and overlapping replicas; minimum ins
 do not guarantee that a process never restarts. These settings and formal hosted-App CI
 still require dev deployment acceptance.
 
-Apply `1793786400000-add-ci-web-connect-migration` before deploying the browser
+Apply `1793786400000-add-ci-web-connect-migration` and
+`1793894400000-add-ci-account-selection-migration` before deploying the browser
 connect endpoints, in addition to the existing connect/state migrations. The new
 columns expand the same attempt table; Device Flow rows default to `device`.
 Build both API and Dashboard artifacts for browser connect. On GCP, the API

@@ -28,7 +28,7 @@ export default function OrganizationCi() {
     retry: false,
   })
   const [maximum, setMaximum] = useState(''),
-    [account, setAccount] = useState(''),
+    [accountType, setAccountType] = useState<'User' | 'Organization'>('User'),
     [allowPublic, setAllowPublic] = useState(false)
   const [busy, setBusy] = useState(false),
     [message, setMessage] = useState('')
@@ -74,13 +74,17 @@ export default function OrganizationCi() {
     }
   }
   const connect = async () => {
-    if (submitting.current || !configuration.data?.web_connect_available) return
+    if (
+      submitting.current ||
+      !configuration.data?.apps.find((app) => app.account_type === accountType)?.web_connect_available
+    )
+      return
     submitting.current = true
     setBusy(true)
     setMessage('')
     try {
       const attempt = await api.startCiConnect(organization, {
-        github_account: account.trim(),
+        account_type: accountType,
         follow_installation: true,
         allow_public_repositories: allowPublic,
       })
@@ -141,14 +145,10 @@ export default function OrganizationCi() {
             <Button onClick={() => void configuration.refetch()}>Retry GitHub configuration</Button>
           </div>
         )}
-        {configuration.data && !configuration.data.web_connect_available && (
-          <p>Browser connect is not configured on this deployment.</p>
-        )}
-        {configuration.data?.installation_url && (
-          <a className="text-sm underline" href={configuration.data.installation_url} target="_blank" rel="noreferrer">
-            Install or manage GitHub App
-          </a>
-        )}
+        {configuration.data &&
+          !configuration.data.apps.find((app) => app.account_type === accountType)?.web_connect_available && (
+            <p>Browser connect is not configured on this deployment.</p>
+          )}
         <form
           onSubmit={(event) => {
             event.preventDefault()
@@ -156,19 +156,25 @@ export default function OrganizationCi() {
           }}
           className="space-y-3"
         >
-          <label className="block text-sm" htmlFor="ci-github-account">
-            GitHub account or organization
-          </label>
-          <input
-            id="ci-github-account"
-            required
-            maxLength={39}
-            pattern="[A-Za-z0-9][A-Za-z0-9-]*"
-            value={account}
-            onChange={(event) => setAccount(event.target.value)}
-            disabled={busy}
-            className={inputClass}
-          />
+          <fieldset className="space-y-2">
+            <legend className="text-sm">GitHub account type</legend>
+            {(['User', 'Organization'] as const).map((type) => (
+              <label key={type} className="flex items-center gap-2 text-sm">
+                <input
+                  type="radio"
+                  name="ci-account-type"
+                  value={type}
+                  checked={accountType === type}
+                  disabled={busy}
+                  onChange={() => setAccountType(type)}
+                />
+                {type === 'User' ? 'Personal account' : 'Organization (owner required)'}
+              </label>
+            ))}
+          </fieldset>
+          <p className="text-sm text-muted-foreground">
+            Authorize GitHub, then choose an installed account or install the App.
+          </p>
           <label className="flex items-center gap-2 text-sm">
             <input
               type="checkbox"
@@ -178,7 +184,12 @@ export default function OrganizationCi() {
             />
             Allow installed public repositories to run CI
           </label>
-          <Button type="submit" disabled={busy || !configuration.data?.web_connect_available}>
+          <Button
+            type="submit"
+            disabled={
+              busy || !configuration.data?.apps.find((app) => app.account_type === accountType)?.web_connect_available
+            }
+          >
             Connect GitHub
           </Button>
         </form>

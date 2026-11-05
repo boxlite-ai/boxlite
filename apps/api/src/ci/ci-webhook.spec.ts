@@ -9,6 +9,7 @@ import { DataSource } from 'typeorm'
 import { Listener } from '@boxlite-ai/ci-listener'
 import { CiNativeState } from './ci-native-state'
 import { CiNativeHost } from './ci-native-host'
+import { CiGitHubService } from './ci-github.service'
 import { CiWebhookService } from './ci-webhook.service'
 import { CiWebhookController } from './ci-webhook.controller'
 import { CI_WEBHOOK_PATH, installCiWebhookBodyParser } from './ci-webhook-body'
@@ -32,14 +33,17 @@ integration('CI webhook native HTTP and PostgreSQL', () => {
   })
   const sign = (body: Buffer) => 'sha256=' + createHmac('sha256', secret).update(body).digest('hex')
   const makeService = (state: CiNativeState) => {
-    const host = new CiNativeHost(db, state, {} as any, {} as any, config as any)
+    const host = new CiNativeHost(db, state, {} as any, new CiGitHubService(config as any), config as any)
     const listener = new Listener({
       state: state.state,
       host,
       worker: { image: 'runner:test', cpus: 1, memoryMiB: 512, labels: ['boxlite-ci-runner'] },
       capacity: { resolve: async () => testCapacity({ account: 1, tenant: 1 }) },
     })
-    return new CiWebhookService(listener as any, config as any)
+    return new CiWebhookService(
+      { receive: (event: any, application: string) => listener.receive({ ...event, application }) } as any,
+      config as any,
+    )
   }
   const body = () => Buffer.from(JSON.stringify(payload(), null, 2))
   const send = (raw = body(), headers: Record<string, string> = {}) =>

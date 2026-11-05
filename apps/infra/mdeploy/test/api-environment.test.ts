@@ -433,3 +433,53 @@ test('the deploy group demands only what a deploy cannot run without', () => {
     ],
   )
 })
+
+test('Organization App secrets use the workload channel with a distinct identity and the shared anchor', () => {
+  const orgSecrets = [
+    'CI_GITHUB_ORG_APP_PRIVATE_KEY',
+    'CI_GITHUB_ORG_WEBHOOK_SECRET',
+    'CI_GITHUB_ORG_APP_CLIENT_SECRET',
+  ]
+  const orgKeys = ['CI_GITHUB_ORG_APP_CLIENT_ID', 'CI_GITHUB_ORG_APP_SLUG', ...orgSecrets]
+  const values: Record<string, string> = {
+    ...ciValues('gcp'),
+    CI_GITHUB_ORG_APP_CLIENT_ID: 'org-client',
+    CI_GITHUB_ORG_APP_SLUG: 'org-app',
+    ...Object.fromEntries(
+      orgSecrets.map((key, i) => [
+        key,
+        JSON.stringify({ address: `projects/test-project/secrets/org-${i}/versions/1` }),
+      ]),
+    ),
+  }
+  const declaration = groups([...ciKeys, ...orgKeys], [...ciSecrets, ...orgSecrets])
+  const make = (input: Record<string, string>) =>
+    apiEnvironmentFrom({
+      environment: { ...base, ...input },
+      declaration,
+      home: 'gcp',
+      region: 'us-east1',
+      stage: 'dev',
+    })
+  const result = make(values)
+  for (const key of orgSecrets) {
+    assert.equal(result.environment[key], undefined)
+    assert.ok(result.secrets[key])
+  }
+  assert.throws(() => make({ ...values, CI_GITHUB_ORG_APP_CLIENT_ID: values.CI_GITHUB_APP_CLIENT_ID }), /distinct/)
+  assert.throws(
+    () => make({ ...values, CI_GITHUB_ORG_WEBHOOK_SECRET: 'do-not-echo-secret' }),
+    (error: unknown) => {
+      assert.ok(error instanceof Error)
+      assert.match(error.message, /CI_GITHUB_ORG_WEBHOOK_SECRET.*does not hold JSON/)
+      assert.ok(!error.message.includes('do-not-echo-secret'))
+      return true
+    },
+  )
+  const declared = parseBase(
+    new URL('../../mstage.env.json', import.meta.url).pathname,
+    readFileSync(new URL('../../mstage.env.json', import.meta.url), 'utf8'),
+  )
+  for (const key of orgKeys) assert.ok(declared.envSelectGroup.api.includes(key))
+  for (const key of orgSecrets) assert.ok(declared.envSelectGroup.secret.includes(key))
+})

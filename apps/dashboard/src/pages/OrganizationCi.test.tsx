@@ -31,8 +31,13 @@ describe('CI settings page', () => {
     mocks.selection.authenticatedUserOrganizationMember.role = 'owner'
     mocks.api.getCiSettings.mockResolvedValue(settings)
     mocks.api.getCiConnectConfiguration.mockResolvedValue({
-      web_connect_available: true,
-      installation_url: 'https://github.com/apps/test/installations/new',
+      apps: [
+        {
+          account_type: 'User',
+          web_connect_available: true,
+          installation_url: 'https://github.com/apps/test/installations/new',
+        },
+      ],
     })
     mocks.api.setCiCapacity.mockImplementation(async (_org, value) => ({
       ...settings,
@@ -94,7 +99,9 @@ describe('CI settings page', () => {
     expect(document.body.textContent).toContain('Only account owners')
   })
   it('preserves the server allowance when browser authorization is not configured', async () => {
-    mocks.api.getCiConnectConfiguration.mockResolvedValue({ web_connect_available: false })
+    mocks.api.getCiConnectConfiguration.mockResolvedValue({
+      apps: [{ account_type: 'User', web_connect_available: false }],
+    })
     await render()
     expect(document.querySelector<HTMLButtonElement>('section:nth-child(2) button')?.disabled).toBe(true)
     expect(document.querySelector<HTMLInputElement>('#ci-maximum')?.max).toBe('5')

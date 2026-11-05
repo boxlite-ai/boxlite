@@ -2,7 +2,7 @@
 import { Json, Listener, ListenerState } from '@boxlite-ai/ci-listener'
 import { SqliteStateDatabase } from '../../libs/ci-listener/src/state/sqlite'
 import { BoxLiteWorkers } from './boxlite-workers'
-import { loadConfig, privateFile } from './config'
+import { loadConfig } from './config'
 import { createHttp } from './http'
 import { SelfHost } from './self-host'
 import { EnvironmentCapacity } from './capacity'
@@ -26,7 +26,21 @@ async function main(): Promise<void> {
       { key: 'backend/github', payload: github },
     ])
     const [prior] = await state.read(['backend/github'])
-    if (!prior || JSON.stringify(prior.payload) !== JSON.stringify(github))
+    if (!prior) throw new Error('Original GitHub backend identity changed')
+    if (auth.kind === 'app') {
+      const root = prior.payload as { kind?: string; issuer?: string; applications?: string[] }
+      const ids = (auth.applications ?? [auth]).map((app) => app.issuer)
+      if (
+        root.kind !== 'app' ||
+        root.issuer !== auth.issuer ||
+        (root.applications ?? [auth.issuer]).some((id) => !ids.includes(id))
+      )
+        throw new Error('Original GitHub App identities changed')
+      if (JSON.stringify(root.applications) !== JSON.stringify(ids))
+        await state.ingest([
+          { key: 'backend/github', expected: prior.version, payload: { ...root, applications: ids } as Json },
+        ])
+    } else if (JSON.stringify(prior.payload) !== JSON.stringify(github))
       throw new Error('Original GitHub backend identity changed')
     host = new SelfHost(config, state, database, namespace, boxes)
     const listener = new Listener({
@@ -35,16 +49,20 @@ async function main(): Promise<void> {
       worker: config.worker,
       capacity: new EnvironmentCapacity(config.max),
     })
-    const secret = config.webhookSecretFile
-      ? Buffer.from(privateFile(config.webhookSecretFile).toString('utf8').trim())
-      : undefined
-    if (secret && secret.length < 32) throw new Error('Webhook secret requires at least 32 bytes')
-    http = createHttp(listener, host, secret)
+    const routes = new Map<string, { application: string; secret: Buffer }>()
+    if (auth.kind === 'app')
+      for (const entry of auth.applications ?? [auth]) {
+        if (!(entry.webhookSecretFile || (entry.issuer === auth.issuer && config.webhookSecretFile))) continue
+        const app = host.applications.get(entry.issuer)!
+        const path = '/v1/ci/github/webhook' + (entry.issuer === auth.issuer ? '' : '/' + entry.issuer)
+        routes.set(path, { application: app.clientId, secret: app.secret() })
+      }
+    http = createHttp(listener, host, routes)
     await new Promise<void>((resolve, reject) => {
       http!.server.once('error', reject)
       http!.server.listen(config.listen.port, config.listen.host, resolve)
     })
-    console.log(JSON.stringify({ event: 'ci-listener-started', auth: config.github.kind, webhook: !!secret }))
+    console.log(JSON.stringify({ event: 'ci-listener-started', auth: config.github.kind, webhook: routes.size > 0 }))
     await listener.run(stop.signal)
   } finally {
     stop.abort()

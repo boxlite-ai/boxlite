@@ -23,7 +23,7 @@ export class CiListenerService implements OnModuleInit, OnModuleDestroy {
   ) {}
   async onModuleInit(): Promise<void> {
     if (!this.store.app) return
-    this.github.settings()
+    for (const app of this.github.configured()) app.settings()
     await this.store.initialize()
     await this.settings.initialize()
     this.stop = new AbortController()
@@ -43,9 +43,10 @@ export class CiListenerService implements OnModuleInit, OnModuleDestroy {
       this.host.report(error, 'hosted-listener-stopped')
     })
   }
-  async receive(notification: VerifiedWebhook): Promise<'stored' | 'duplicate'> {
+  async receive(notification: VerifiedWebhook, application: string = this.store.app): Promise<'stored' | 'duplicate'> {
     if (!this.controller) throw new ServiceUnavailableException('Hosted CI Listener is not configured')
-    return this.controller.receive(notification)
+    const verified = { ...notification, application }
+    return this.controller.receive(verified)
   }
   async onModuleDestroy(): Promise<void> {
     this.stop?.abort()

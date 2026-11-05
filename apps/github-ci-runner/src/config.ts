@@ -1,8 +1,14 @@
 /* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
 import { constants, closeSync, fstatSync, openSync, readFileSync } from 'node:fs'
 import { isAbsolute } from 'node:path'
+export interface AppAuth {
+  issuer: string
+  privateKeyFile: string
+  webhookSecretFile?: string
+  accountType?: 'User' | 'Organization'
+}
 export type GitHubAuth =
-  | { kind: 'app'; issuer: string; privateKeyFile: string }
+  | ({ kind: 'app'; applications?: AppAuth[] } & AppAuth)
   | { kind: 'pat'; token: () => string; owner: string; repository: string }
 export interface SelfConfig {
   endpoint: string
@@ -39,7 +45,45 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): SelfConfig {
     configUrl = env.GITHUB_CONFIG_URL
   if (!endpoint || !apiKey) throw new Error('BOXLITE_REST_URL and BOXLITE_API_KEY are required')
   let github: GitHubAuth
-  if (issuer || privateKeyFile) {
+  if (env.CI_GITHUB_APPS_FILE) {
+    if (issuer || privateKeyFile || token || configUrl || env.CI_GITHUB_WEBHOOK_SECRET_FILE)
+      throw new Error('Choose an Apps file or the single-App/token configuration')
+    if (!isAbsolute(env.CI_GITHUB_APPS_FILE)) throw new Error('CI_GITHUB_APPS_FILE must be absolute')
+    let raw: unknown
+    try {
+      raw = JSON.parse(privateFile(env.CI_GITHUB_APPS_FILE).toString('utf8'))
+    } catch {
+      throw new Error('Apps file must contain private, valid JSON')
+    }
+    if (!Array.isArray(raw) || !raw.length || raw.length > 8) throw new Error('Apps file requires 1–8 entries')
+    const applications: AppAuth[] = raw.map((value) => {
+      if (
+        !value ||
+        typeof value !== 'object' ||
+        Array.isArray(value) ||
+        Object.keys(value).some(
+          (key) => !['client_id', 'private_key_file', 'webhook_secret_file', 'account_type'].includes(key),
+        ) ||
+        typeof value.client_id !== 'string' ||
+        !/^[A-Za-z0-9_-]{1,128}$/.test(value.client_id) ||
+        typeof value.private_key_file !== 'string' ||
+        !isAbsolute(value.private_key_file) ||
+        (value.webhook_secret_file !== undefined &&
+          (typeof value.webhook_secret_file !== 'string' || !isAbsolute(value.webhook_secret_file))) ||
+        (value.account_type !== undefined && !['User', 'Organization'].includes(value.account_type))
+      )
+        throw new Error('Invalid GitHub App entry')
+      return {
+        issuer: value.client_id,
+        privateKeyFile: value.private_key_file,
+        webhookSecretFile: value.webhook_secret_file,
+        accountType: value.account_type,
+      }
+    })
+    if (new Set(applications.map((app) => app.issuer)).size !== applications.length)
+      throw new Error('Duplicate GitHub App identity')
+    github = { kind: 'app', ...applications[0], applications }
+  } else if (issuer || privateKeyFile) {
     if (!issuer || !privateKeyFile || token || configUrl)
       throw new Error('Choose App credentials or a single-repository GITHUB_TOKEN configuration')
     github = { kind: 'app', issuer, privateKeyFile }
@@ -81,7 +125,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): SelfConfig {
     github,
     stateDir,
     listen: { host: address.hostname.replace(/^\[|\]$/g, ''), port: Number(address.port) },
-    webhookSecretFile: env.CI_GITHUB_WEBHOOK_SECRET_FILE,
+    webhookSecretFile:
+      github.kind === 'app' ? (github.webhookSecretFile ?? env.CI_GITHUB_WEBHOOK_SECRET_FILE) : undefined,
     allowPublic: allow === 'true',
     group: env.CI_WORKER_GROUP_NAME ?? 'boxlite-ci-runner',
     worker: {
