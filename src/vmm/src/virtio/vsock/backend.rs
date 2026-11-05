@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::{
+    IO_BUDGET,
     connection::{Connection, Key, State},
     packet::*,
     source::Registration,
@@ -38,6 +39,8 @@ pub(super) struct Backend {
     cid: u64,
     connections: VecDeque<(Key, Connection)>,
     ports: Range<u32>,
+    next_listener: usize,
+    listener_retry: bool,
     pub outgoing: VecDeque<Packet>,
 }
 
@@ -59,6 +62,8 @@ impl Backend {
             cid,
             connections: VecDeque::new(),
             ports: FIRST_HOST_PORT..u32::MAX,
+            next_listener: 0,
+            listener_retry: false,
             outgoing: VecDeque::new(),
         })
     }
@@ -132,15 +137,24 @@ impl Backend {
         }
     }
 
-    /// Accept once per listener and give each flow at most one bounded I/O turn.
+    /// New readiness can belong to a listener already visited in this sweep.
+    pub fn rescan(&mut self) {
+        self.listener_retry |= self.next_listener != 0;
+    }
+
+    /// Bound listener scans; each of at most 128 flows gets one read/write turn.
     pub fn drive(&mut self) -> Result<bool, DeviceError> {
-        let mut again = false;
-        for (guest, listener) in &self.mappings.listeners {
+        for _ in 0..IO_BUDGET {
+            let Some((guest, listener)) = self.mappings.listeners.get(self.next_listener) else {
+                break;
+            };
             if self.connections.len() >= MAX_CONNECTIONS || !self.can_receive() {
                 break;
             }
+            self.next_listener += 1;
             match listener.accept() {
                 Ok((socket, _)) => {
+                    self.listener_retry = true;
                     let Some(host) = self.ports.find(|p| !self.mappings.connects.contains_key(p))
                     else {
                         tracing::warn!("vsock host ports exhausted");
@@ -163,13 +177,21 @@ impl Backend {
                     self.outgoing
                         .push_back(connection.packet(REQUEST, 0, vec![]));
                     self.connections.push_back((key, connection));
-                    again = true;
                 }
                 Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
-                Err(error) if error.kind() == io::ErrorKind::Interrupted => again = true,
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => {
+                    self.listener_retry = true
+                }
                 Err(_) => return Err(DeviceError::Fatal("vsock listener accept")),
             }
         }
+        let mut again = if self.next_listener == self.mappings.listeners.len() {
+            self.next_listener = 0;
+            // An early accept may need another try after a later chunk was empty.
+            std::mem::take(&mut self.listener_retry)
+        } else {
+            self.connections.len() < MAX_CONNECTIONS && self.can_receive()
+        };
         for _ in 0..self.connections.len() {
             // A connection emits at most one write update and one read/control packet.
             if self.outgoing.len() + 2 > MAX_PENDING {

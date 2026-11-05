@@ -284,8 +284,9 @@ outside this layer.
 
 The codec uses explicit little-endian fields and rejects truncated packets or
 payloads above 64 KiB. A captured buffer owns checked descriptor metadata and
-uses the chain's total capacity: a 4096-byte chain writes a 44-byte header and
-up to 4052 stream bytes. The caller retains any unsent tail. Header-only buffers
+provides checked scatter writes. The device's receive stage owns fragmentation
+and delivery accounting: a 4096-byte chain writes a 44-byte header and
+up to 4052 stream bytes, retaining any unsent tail. Header-only buffers
 can carry controls; data returns zero bytes, while shorter headers require reset.
 Callers own nonblocking standard-library Unix streams and listeners directly.
 `Registration::stream` and `Registration::listener` clone a handle for the poller;
@@ -340,6 +341,17 @@ does not repeatedly favor one flow. Routing scans at most 128 entries; this
 removes the separate sorted map, copied key list and cursor. A reset removes
 that flow's queued packets; RECEIVE shutdown discards its queued data.
 
+Like virtio-net, each device callback has an explicit I/O budget. TX and RX each
+process at most 256 heads; listener scanning attempts at most 256 accepts. The
+128-connection limit and one read/write per connection bound stream data I/O to
+256 calls per callback. Partial listener scans retain their position and whether
+an earlier accept succeeded or was interrupted. Reaching the end schedules another
+sweep only when a retry is needed; readiness arriving mid-sweep also requests a
+full recheck, including when output pressure delays acceptance. A complete empty
+sweep stops. Capacity stalls
+wait for external progress. Budget continuations yield through a private readiness source,
+so the callback does not drain a continuously refilled socket indefinitely.
+
 The device advertises ID 19, an eight-byte read-only CID and three queues with
 maximum size 256: RX, TX and events. It requires all three queues ready and
 successful feature negotiation. It accepts no device-specific feature bits;
@@ -355,8 +367,8 @@ The current virtio-queue dependency does not implement the optional legacy
 The event queue remains untouched because migration events are unsupported.
 
 ```text
-queue/source/Continue → capture RX and TX → deliver queued RX → route TX
-                     → one bounded backend round → deliver RX → request Continue
+queue/source → process: collect → transmit → backend.drive → receive
+                       → signal private source when work can resume
 ```
 
 RX delivery fragments packets at the buffer boundary. For example, a 4096-byte
@@ -365,8 +377,18 @@ in the next chain. Each header and used length describes only that fragment;
 the tail stays ahead of later data and shutdown. Only copied payload advances
 delivered credit. Header-only RX completes with zero bytes when data waits.
 
-Activation rolls back partial registrations on failure and schedules the first
-scan through the prepared worker generation. Reset closes streams, discards
+Vsock owns a nonblocking Unix socket pair for continuation, with its reader
+registered through the existing `Registration` interface. Scheduling writes one
+byte only when no request is pending; its `BackendReady` callback consumes that
+byte. Requests made during a callback arrive on a later poll, letting other slots
+run. The registration stays fixed for the activation, avoiding per-round SourceId
+allocation. This costs two socket endpoints and one polling duplicate. Private
+callbacks do not trigger listener rescans. The common poller `Waker` remains
+unchanged and is not used to request device callbacks.
+
+Activation rolls back partial registrations on failure and signals the private
+source for the first scan; prepared readiness is retained until worker start.
+Reset closes the notification pair and streams, discards
 deferred work and requires feature negotiation again, while retaining mappings.
 Stopping the worker generation precedes reset, so callbacks cannot write old
 guest buffers after reset. Replenished RX resumes output and deferred TX;
@@ -382,12 +404,13 @@ in either ownership order, including rejected registrations. Connection tests
 also cover both handshakes, actual partial writes and WouldBlock, credit stalls,
 partial delivery acknowledgments, counter wraparound, half-close and zero-credit
 EOF ordering. Backend tests cover explicit mappings, host accepts, limits,
-fairness after output pressure, isolated resets and registration rollback.
+fairness after output pressure, budgeted listener scans and retries across empty
+scan segments, isolated resets and registration rollback.
 Device tests cover 4096/61/45-byte RX chains, deferred TX/RX ownership,
 malformed chains, activation rollback and Unsupported snapshots. MMIO tests use
 the production shared worker, including a host burst and EOF without new kicks
-or writes. `make test:unit:vmm FILTER=worker_continuation` checks coalescing,
-fairness, prepared requests and stale-generation rejection. These are local
+or writes. Vsock tests also check private notification coalescing, preparation
+and reset cleanup. These are local
 socket and guest-memory tests; real-guest qualification remains separate.
 
 ## Lifecycle
@@ -581,12 +604,6 @@ replace the shared one without changing the transport, the devices or `Vm`.
   `start` is not lost. A registrar of a closed generation returns `Closed`,
   and registrars hold weak references, so a device never keeps its slot or
   the guest memory alive.
-- **Continuation.** The device's `Waker` requests one coalesced `Continue` per
-  pass for its generation. Requests made during callbacks wait for another
-  pass, giving other slots a turn. Prepared requests wait for `start`; stop,
-  cancel and failure discard them, and stale wakers do nothing. The handle
-  holds weak slot/runtime references. A device yields before WouldBlock only
-  when it requests continuation; resource pressure waits for external progress.
 - **Failures.** `NeedsReset` from `on_event` sets `DEVICE_NEEDS_RESET`
   atomically, raises the configuration interrupt and halts the slot until
   `Status=0`. `Fatal`, a panic in `on_event` (caught, which poisons the

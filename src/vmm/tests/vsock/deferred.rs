@@ -22,6 +22,79 @@ fn stream_without_rx(path: PathBuf) -> (Harness, Header, UnixStream) {
 }
 
 #[test]
+fn listener_readiness_during_output_pressure_rechecks_the_scanned_prefix() {
+    let temp = Temp::new();
+    let mappings = (0..257)
+        .map(|port| PortMapping::Listen {
+            port,
+            listener: UnixListener::bind(temp.path(&port.to_string())).unwrap(),
+        })
+        .collect();
+    let mut h = Harness::new(mappings);
+    h.refill = false;
+    h.rx.avail = 0;
+    h.memory
+        .write_obj(0u16, GuestAddress(h.rx.base + 0x1002))
+        .unwrap();
+    // The first budgeted round leaves the scan at listener 256.
+    let ready = h.registrar.ready();
+    assert_eq!(ready.len(), 1);
+    h.device.on_event(ready[0]).unwrap();
+    for port in 0..backend::MAX_PENDING {
+        h.device
+            .active
+            .as_mut()
+            .unwrap()
+            .backend
+            .receive(Packet {
+                header: guest(REQUEST, port as u32, 9999),
+                payload: vec![],
+            })
+            .unwrap();
+    }
+    // Consume the private continuation while output is full.
+    let ready = h.registrar.ready();
+    assert_eq!(ready.len(), 1);
+    h.device.on_event(ready[0]).unwrap();
+    let _host = UnixStream::connect(temp.path("0")).unwrap();
+    let events = h.registrar.ready();
+    assert!(
+        !events.is_empty(),
+        "the new connection must produce a readiness edge"
+    );
+    for event in events {
+        h.device.on_event(event).unwrap();
+    }
+    assert!(
+        h.registrar.ready().is_empty(),
+        "output pressure must not spin"
+    );
+
+    h.rx.submit(&h.memory, &[], true, HEADER_LEN);
+    h.device.on_event(DeviceEvent::QueueKick(0)).unwrap();
+    for _ in 0..8 {
+        let ready = h.registrar.ready();
+        if ready.is_empty() {
+            break;
+        }
+        for event in ready {
+            h.device.on_event(event).unwrap();
+        }
+    }
+    assert!(
+        h.device
+            .active
+            .as_ref()
+            .unwrap()
+            .backend
+            .outgoing
+            .iter()
+            .any(|p| { p.header.op == REQUEST && p.header.dst_port == 0 }),
+        "resuming the tail lost readiness for the already-scanned listener"
+    );
+}
+
+#[test]
 fn rx_fragments_stream_to_chain_capacity_and_preserves_credit() {
     for (capacity, payload_len) in [(4096, 4096), (61, 256), (HEADER_LEN + 1, 17)] {
         let temp = Temp::new();
@@ -193,7 +266,7 @@ fn tx_intake_stalls_completion_at_capacity_and_resumes_in_order() {
         let bytes = guest(REQUEST, 1000 + u32::from(port), 999).encode();
         h.tx.submit(&h.memory, &bytes, false, bytes.len());
     }
-    let wakes = h.wakes.load(Ordering::Relaxed);
+    assert!(h.registrar.ready().is_empty());
     h.device.on_event(DeviceEvent::QueueKick(1)).unwrap();
     let state = h
         .device
@@ -214,9 +287,8 @@ fn tx_intake_stalls_completion_at_capacity_and_resumes_in_order() {
         "capacity exhaustion must withhold completion"
     );
     assert!(h.tx.take(&h.memory).is_empty());
-    assert_eq!(
-        h.wakes.load(Ordering::Relaxed),
-        wakes,
+    assert!(
+        h.registrar.ready().is_empty(),
         "stalled capacity must not spin"
     );
     // Intake already copied TX bytes. Rewriting guest buffers must not change

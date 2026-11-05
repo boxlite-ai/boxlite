@@ -17,6 +17,7 @@ use crate::virtio::{
 use backend::{Backend, Mappings};
 use buffer::Buffer;
 use packet::{HEADER_LEN, Packet};
+use source::Reschedule;
 use std::{
     collections::{HashSet, VecDeque},
     io,
@@ -25,6 +26,10 @@ use std::{
     sync::Arc,
 };
 use virtio_queue::Reader;
+
+const RX: usize = 0;
+const TX: usize = 1;
+const IO_BUDGET: usize = 256;
 
 const SPEC: DeviceSpec = DeviceSpec {
     device_id: 19,
@@ -51,6 +56,7 @@ pub(crate) struct Vsock {
 }
 
 struct Active {
+    reschedule: Reschedule,
     backend: Backend,
     ctx: ActivationContext,
     // Intake captures packets/descriptor metadata before any completion lets
@@ -148,10 +154,12 @@ impl VirtioDevice for Vsock {
             return Err(DeviceError::NeedsReset("vsock activation"));
         }
         let backend = Backend::new(self.cid, self.mappings.clone(), ctx.events.clone())?;
-        // Scan buffers published before DRIVER_OK even without a later kick.
-        // The prepared generation keeps this request until the worker starts.
-        (ctx.waker)();
+        // The prepared worker retains readiness until start, including this
+        // first scan of buffers published before DRIVER_OK without a kick.
+        let mut reschedule = Reschedule::new(ctx.events.clone())?;
+        reschedule.schedule()?;
         self.active = Some(Active {
+            reschedule,
             backend,
             ctx,
             tx: VecDeque::new(),
@@ -173,20 +181,43 @@ impl VirtioDevice for Vsock {
         let Some(active) = &mut self.active else {
             return Ok(());
         };
-        active.service()
+        if !active.reschedule.acknowledge(event)? && matches!(event, DeviceEvent::BackendReady(_)) {
+            active.backend.rescan();
+        }
+        active.process()
     }
 }
 
 impl Active {
-    fn service(&mut self) -> Result<(), DeviceError> {
+    fn process(&mut self) -> Result<(), DeviceError> {
+        self.collect()?;
+        self.transmit()?;
+        let mut again = self.backend.drive()?;
+        // RX frees output capacity for TX and socket I/O on the next round.
+        again |= self.receive()?;
+        if again {
+            self.reschedule.schedule()?;
+        }
+        Ok(())
+    }
+
+    fn collect(&mut self) -> Result<(), DeviceError> {
         // No heads complete during intake, so a refilling guest cannot turn
         // this pass into an unbounded drain. Event buffers stay available:
         // this device does not support migration or transport-reset events.
-        drain_buffers(&mut self.ctx, 0, &mut self.rx)?;
+        let pending = &mut self.rx;
+        let limit = self.ctx.queues.max_size(RX).unwrap() as usize;
+        self.ctx.queues.drain(RX, |chain| {
+            if pending.len() >= limit {
+                return Err(bad_queue());
+            }
+            pending.push_back(Buffer::new(chain)?);
+            Ok(Completion::Deferred)
+        })?;
         let pending = &mut self.tx;
         let memory = &self.ctx.memory;
-        let limit = self.ctx.queues.max_size(1).unwrap() as usize;
-        self.ctx.queues.drain(1, |chain| {
+        let limit = self.ctx.queues.max_size(TX).unwrap() as usize;
+        self.ctx.queues.drain(TX, |chain| {
             if pending.len() >= limit || chain.clone().any(|descriptor| descriptor.is_write_only())
             {
                 return Err(bad_queue());
@@ -197,20 +228,19 @@ impl Active {
             pending.push_back((head, packet));
             Ok(Completion::Deferred)
         })?;
-        self.flush_rx()?;
-        while self.backend.can_receive() {
+        Ok(())
+    }
+
+    fn transmit(&mut self) -> Result<(), DeviceError> {
+        for _ in 0..IO_BUDGET {
+            if !self.backend.can_receive() {
+                break;
+            }
             let Some((head, packet)) = self.tx.pop_front() else {
                 break;
             };
             self.backend.receive(packet)?;
-            self.complete(1, head, 0)?;
-        }
-        let mut again = self.backend.drive()?;
-        // Backend I/O may have been skipped while outgoing was full. Recheck
-        // once after RX frees capacity, even when no TX requests remain.
-        again |= self.flush_rx()?;
-        if again {
-            (self.ctx.waker)();
+            self.complete(TX, head, 0)?;
         }
         Ok(())
     }
@@ -222,47 +252,41 @@ impl Active {
         Ok(())
     }
 
-    fn flush_rx(&mut self) -> Result<bool, DeviceError> {
+    fn receive(&mut self) -> Result<bool, DeviceError> {
         let mut delivered = false;
-        while !self.rx.is_empty() && !self.backend.outgoing.is_empty() {
+        for _ in 0..IO_BUDGET {
+            if self.rx.is_empty() || self.backend.outgoing.is_empty() {
+                break;
+            }
             let buffer = self.rx.pop_front().unwrap();
             let packet = self.backend.outgoing.front_mut().unwrap();
-            let length = buffer.write_packet(&self.ctx.memory, packet)?;
-            if length == 0 {
-                self.complete(0, buffer.head, 0)?;
+            let capacity = buffer
+                .capacity
+                .checked_sub(HEADER_LEN)
+                .ok_or_else(bad_queue)?;
+            let count = packet.payload.len().min(capacity);
+            if count == 0 && !packet.payload.is_empty() {
+                self.complete(RX, buffer.head, 0)?;
                 continue;
             }
             let mut header = packet.header.clone();
-            header.len = (length - HEADER_LEN) as u32;
-            if header.len as usize == packet.payload.len() {
+            header.len = count as u32;
+            let mut bytes = header.encode().to_vec();
+            bytes.extend_from_slice(&packet.payload[..count]);
+            buffer.write(&self.ctx.memory, &bytes)?;
+            if count == packet.payload.len() {
                 self.backend.outgoing.pop_front();
             } else {
                 // Keep the tail ahead of subsequent data and shutdown packets.
-                packet.payload.drain(..header.len as usize);
+                packet.payload.drain(..count);
                 packet.header.len = packet.payload.len() as u32;
             }
             self.backend.delivered(&header);
-            self.complete(0, buffer.head, length as u32)?;
+            self.complete(RX, buffer.head, bytes.len() as u32)?;
             delivered = true;
         }
         Ok(delivered)
     }
-}
-
-fn drain_buffers(
-    ctx: &mut ActivationContext,
-    index: usize,
-    pending: &mut VecDeque<Buffer>,
-) -> Result<(), DeviceError> {
-    let limit = ctx.queues.max_size(index).unwrap() as usize;
-    ctx.queues.drain(index, |chain| {
-        if pending.len() >= limit {
-            return Err(bad_queue());
-        }
-        pending.push_back(Buffer::new(chain)?);
-        Ok(Completion::Deferred)
-    })?;
-    Ok(())
 }
 
 fn bad_queue() -> DeviceError {

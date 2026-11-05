@@ -10,9 +10,7 @@
 //!
 //! The `virtio-worker` thread starts with the first device. Each pass marks the
 //! sources the poller reported, then, for each running slot, delivers one
-//! `QueueKick` per kicked queue, one `BackendReady` per ready source and one
-//! pending `Continue` per slot. A device's waker requests that continuation;
-//! the poller's WAKE token alone never identifies a device event. The runtime
+//! `QueueKick` per kicked queue and one `BackendReady` per ready source. It
 //! calls `on_event` under the device lock inside `catch_unwind`, so a panic
 //! poisons that lock, as a panicking bus access does. Readiness is
 //! edge-triggered, so a ready mark stays until its event is delivered or the
@@ -93,8 +91,6 @@ struct SlotState {
     generation: u64,
     /// `on_event` runs for this slot.
     in_flight: bool,
-    /// Bounded device work requested another turn in this generation.
-    continuation: bool,
     next_source: u32,
     sources: HashMap<SourceId, Registered>,
 }
@@ -150,7 +146,6 @@ impl Slot {
     /// sources, and moves to `phase`.
     fn close(&self, state: &mut SlotState, registry: &Registry, phase: Phase) {
         state.phase = phase;
-        state.continuation = false;
         self.kicks.store(0, Ordering::SeqCst);
         for (_, mut registered) in state.sources.drain() {
             if let Err(error) = registry.deregister(registered.source.as_source()) {
@@ -201,7 +196,6 @@ impl Slot {
             Err(DeviceError::NeedsReset(_)) => {
                 if current && state.phase == Phase::Running {
                     state.phase = Phase::Halted;
-                    state.continuation = false;
                 }
             }
             Err(DeviceError::Fatal(reason)) => {
@@ -347,7 +341,6 @@ impl WorkerRuntime for SharedRuntime {
                 phase: Phase::Stopped,
                 generation: 0,
                 in_flight: false,
-                continuation: false,
                 next_source: 0,
                 sources: HashMap::new(),
             }),
@@ -376,10 +369,10 @@ impl WorkerRuntime for SharedRuntime {
             slot: Arc::downgrade(&slot),
             generation: state.generation,
         });
-        let continuation = Arc::clone(&events);
+        let waker = Arc::clone(&self.shared.waker);
         Ok(WorkerContext {
             events,
-            waker: Arc::new(move || continuation.schedule()),
+            waker: Arc::new(move || wake(&waker)),
         })
     }
 
@@ -500,25 +493,6 @@ struct Registrar {
     generation: u64,
 }
 
-impl Registrar {
-    fn schedule(&self) {
-        let (Some(shared), Some(slot)) = (self.shared.upgrade(), self.slot.upgrade()) else {
-            return;
-        };
-        let mut state = slot.lock();
-        if shared.closed.load(Ordering::SeqCst)
-            || state.generation != self.generation
-            || !matches!(state.phase, Phase::Prepared | Phase::Running)
-            || state.continuation
-        {
-            return;
-        }
-        state.continuation = true;
-        drop(state);
-        wake(&shared.waker);
-    }
-}
-
 impl EventRegistrar for Registrar {
     fn register(&self, mut source: Box<dyn EventSource>) -> Result<SourceId, EventError> {
         let (Some(shared), Some(slot)) = (self.shared.upgrade(), self.slot.upgrade()) else {
@@ -620,7 +594,7 @@ fn serve(shared: &Shared) -> io::Result<()> {
         .ok_or_else(|| io::Error::other("the virtio workers poller is gone"))?;
     let mut events = Events::with_capacity(EVENT_CAPACITY);
     loop {
-        // The recheck finds kicks and continuations whose wake-up failed.
+        // The recheck finds kicks whose wake-up failed.
         match poll.poll(&mut events, Some(RECHECK)) {
             Ok(()) => {}
             Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
@@ -650,10 +624,10 @@ fn serve(shared: &Shared) -> io::Result<()> {
     }
 }
 
-/// Delivers one slot's kicks, ready sources and one pending continuation.
+/// Delivers one slot's kicks, then its ready sources, while it keeps running.
 fn serve_slot(shared: &Shared, slot: &Slot) {
-    let (generation, kicks, ready, continuation) = {
-        let mut state = slot.lock();
+    let (generation, kicks, ready) = {
+        let state = slot.lock();
         if state.phase != Phase::Running {
             return;
         }
@@ -669,9 +643,6 @@ fn serve_slot(shared: &Shared, slot: &Slot) {
             state.generation,
             slot.kicks.swap(0, Ordering::SeqCst),
             ready,
-            // Take before dispatch: requests inside callbacks belong to the
-            // next pass, so a busy device cannot monopolize this thread.
-            std::mem::take(&mut state.continuation),
         )
     };
     let queues = (0..MAX_QUEUES as u16).filter(|&index| kicks & (1_u32 << index) != 0);
@@ -696,9 +667,6 @@ fn serve_slot(shared: &Shared, slot: &Slot) {
         ) {
             return;
         }
-    }
-    if continuation {
-        dispatch(shared, slot, generation, DeviceEvent::Continue, None);
     }
 }
 

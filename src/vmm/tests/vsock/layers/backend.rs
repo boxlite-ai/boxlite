@@ -48,6 +48,81 @@ fn next(backend: &mut Backend, op: u16) -> Packet {
 }
 
 #[test]
+fn listener_scan_yields_after_io_budget_and_finishes_without_spinning() {
+    let temp = Temp::new();
+    let mut mappings = Mappings::default();
+    for port in 0..257 {
+        let listener = UnixListener::bind(temp.0.join(port.to_string())).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        mappings.listeners.push((port, listener));
+    }
+    let _host = UnixStream::connect(temp.0.join("256")).unwrap();
+    let mut backend = Backend::new(3, Arc::new(mappings), Arc::new(Registrar::new())).unwrap();
+
+    assert!(backend.drive().unwrap());
+    assert!(
+        backend.outgoing.is_empty(),
+        "one round exceeded 256 accept attempts"
+    );
+    for port in 0..MAX_PENDING {
+        backend
+            .receive(Packet {
+                header: Header {
+                    src_port: port as u32,
+                    ..header(REQUEST)
+                },
+                payload: vec![],
+            })
+            .unwrap();
+    }
+    assert_eq!(backend.outgoing.len(), MAX_PENDING);
+    assert!(!backend.drive().unwrap(), "output pressure must not spin");
+    // Model the device delivering those responses; resume at the saved listener.
+    backend.outgoing.clear();
+    assert!(backend.drive().unwrap());
+    let request = backend.outgoing.pop_front().unwrap();
+    assert_eq!(request.header.op, REQUEST);
+    assert_eq!(request.header.dst_port, 256);
+    // A successful accept requests a recheck, but an empty sweep must terminate.
+    assert!(backend.drive().unwrap());
+    assert!(
+        !backend.drive().unwrap(),
+        "empty listener sweeps must not spin"
+    );
+    assert!(backend.outgoing.is_empty());
+}
+
+#[test]
+fn listener_scan_keeps_early_accept_retries_across_budget_boundaries() {
+    let temp = Temp::new();
+    let mut mappings = Mappings::default();
+    for port in 0..257 {
+        let listener = UnixListener::bind(temp.0.join(port.to_string())).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        mappings.listeners.push((port, listener));
+    }
+    let _first = UnixStream::connect(temp.0.join("0")).unwrap();
+    let _second = UnixStream::connect(temp.0.join("0")).unwrap();
+    let mut backend = Backend::new(3, Arc::new(mappings), Arc::new(Registrar::new())).unwrap();
+
+    assert!(backend.drive().unwrap());
+    assert_eq!(backend.outgoing.pop_front().unwrap().header.dst_port, 0);
+    assert!(
+        backend.drive().unwrap(),
+        "the early listener still needs a retry"
+    );
+    assert!(
+        backend.outgoing.is_empty(),
+        "the second round must finish the first sweep"
+    );
+    assert!(backend.drive().unwrap());
+    assert_eq!(backend.outgoing.pop_front().unwrap().header.dst_port, 0);
+    assert!(backend.drive().unwrap());
+    assert!(backend.drive().unwrap());
+    assert!(!backend.drive().unwrap(), "the final empty sweep must stop");
+}
+
+#[test]
 fn mapped_guest_stream_survives_unmapped_flow_and_accounts_delivery() {
     let temp = Temp::new();
     let path = temp.0.join("connect");

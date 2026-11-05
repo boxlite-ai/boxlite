@@ -42,9 +42,8 @@ pub(crate) const MAX_CONFIG_LEN: usize = 0xF00;
 /// continue until the driver resets it.
 pub(crate) const NEEDS_RESET: u8 = 0x40;
 
-/// Requests a coalesced [`DeviceEvent::Continue`] for this worker generation.
-/// Prepared requests wait for start; stopped or stale generations do nothing.
-/// A request made during a callback runs on a later worker pass.
+/// A callback that wakes the workers' poller. It carries no event: a device
+/// that needs a later callback registers an [`EventSource`].
 pub(crate) type Waker = Arc<dyn Fn() + Send + Sync>;
 
 /// What a device offers, fixed when it is built.
@@ -97,8 +96,6 @@ pub(crate) enum DeviceEvent {
     /// The source registered as this id became readable. Readiness is
     /// edge-triggered: the device reads the source until it would block.
     BackendReady(SourceId),
-    /// Continue bounded work without waiting for another queue or readiness edge.
-    Continue,
 }
 
 /// The id the workers give a registered background source.
@@ -131,7 +128,7 @@ pub(crate) trait EventRegistrar: Send + Sync {
 pub(crate) struct WorkerContext {
     /// Registers background sources for this generation.
     pub(crate) events: Arc<dyn EventRegistrar>,
-    /// Requests another callback for this generation.
+    /// Wakes the workers' poller.
     pub(crate) waker: Waker,
 }
 
@@ -210,7 +207,7 @@ pub(crate) struct ActivationContext {
     pub(crate) interrupt: Arc<dyn VirtioInterrupt>,
     /// The generation's registrar for backend sources; the device stores it.
     pub(crate) events: Arc<dyn EventRegistrar>,
-    /// Requests another callback for this generation; the device stores it.
+    /// The workers' poller waker; the device stores it.
     pub(crate) waker: Waker,
     /// The run thread's sender for fatal device failures.
     pub(crate) sender: EventSender,

@@ -25,6 +25,7 @@ use virtio_queue::{Queue, QueueT};
 use vm_memory::{Bytes, GuestAddress};
 
 mod deferred;
+mod scheduling;
 
 const SIZE: u16 = 8;
 static TEMP_ID: AtomicUsize = AtomicUsize::new(0);
@@ -468,7 +469,7 @@ fn unknown_ports_types_and_bad_credit_reset_only_the_flow() {
         header: forged,
         payload: vec![],
     });
-    assert_eq!(h.registrar.len(), 0);
+    assert_eq!(h.registrar.len(), 1); // Only the private notification remains.
     let mut header = h.guest_connect(2696);
     let (_host, _) = listener.accept().unwrap();
     header.op = CREDIT_UPDATE;
@@ -478,7 +479,7 @@ fn unknown_ports_types_and_bad_credit_reset_only_the_flow() {
         payload: vec![],
     });
     h.next(RST);
-    assert_eq!(h.registrar.len(), 0);
+    assert_eq!(h.registrar.len(), 1);
 }
 
 #[test]
@@ -552,7 +553,7 @@ fn half_close_drains_accepted_data_and_keeps_the_other_direction_open() {
         payload: vec![],
     });
     h.next(RST);
-    assert_eq!(h.registrar.len(), 0);
+    assert_eq!(h.registrar.len(), 1);
 }
 
 #[test]
@@ -567,7 +568,7 @@ fn reset_and_drop_release_sources_and_reactivation_preserves_listener() {
     let mut host = UnixStream::connect(&path).unwrap();
     bounded(&host);
     h.next(REQUEST);
-    assert_eq!(h.registrar.len(), 2);
+    assert_eq!(h.registrar.len(), 3);
     h.device.reset().unwrap();
     assert_eq!(h.registrar.len(), 0);
     let mut bytes = [0];
@@ -575,7 +576,7 @@ fn reset_and_drop_release_sources_and_reactivation_preserves_listener() {
     let ctx = h.context();
     assert!(h.device.activate(ctx).is_err()); // reset requires feature negotiation again
     h.activate();
-    assert_eq!(h.registrar.len(), 1);
+    assert_eq!(h.registrar.len(), 2);
     let registrar = h.registrar.clone();
     drop(h);
     assert_eq!(registrar.len(), 0);
@@ -595,15 +596,21 @@ fn failed_activation_deregisters_its_successful_prefix() {
     h.device.reset().unwrap();
     h.device = Vsock::new(3, mappings).unwrap();
     h.device.set_features(0).unwrap();
-    h.registrar.fail_at.store(1, Ordering::Relaxed);
-    assert!(matches!(
-        h.device.activate(h.context()),
-        Err(DeviceError::Fatal(_))
-    ));
-    assert_eq!(h.registrar.len(), 0);
+    // Reject either listener or the final private notification registration.
+    for offset in 0..3 {
+        h.registrar.fail_at.store(
+            h.registrar.next.load(Ordering::Relaxed) + offset,
+            Ordering::Relaxed,
+        );
+        assert!(matches!(
+            h.device.activate(h.context()),
+            Err(DeviceError::Fatal(_))
+        ));
+        assert_eq!(h.registrar.len(), 0);
+    }
     h.registrar.fail_at.store(u32::MAX, Ordering::Relaxed);
     h.device.activate(h.context()).unwrap();
-    assert_eq!(h.registrar.len(), 2);
+    assert_eq!(h.registrar.len(), 3);
 }
 
 #[test]
@@ -634,7 +641,7 @@ fn malformed_tx_direction_length_and_address_require_device_reset() {
             h.device.on_event(DeviceEvent::QueueKick(1)),
             Err(DeviceError::NeedsReset(_))
         ));
-        assert_eq!(h.registrar.len(), 0);
+        assert_eq!(h.registrar.len(), 1);
     }
 }
 
@@ -1064,6 +1071,32 @@ fn production_worker_drains_a_host_burst_without_more_kicks_or_writes() {
 }
 
 #[test]
+fn activation_schedules_through_private_readiness_without_public_waker() {
+    let mut h = Harness::new(vec![]);
+    assert_eq!(
+        h.wakes.load(Ordering::Relaxed),
+        0,
+        "vsock must not rely on the public poller waker for callbacks"
+    );
+    let ready = h.registrar.ready();
+    assert_eq!(
+        ready.len(),
+        1,
+        "activation must schedule a private readiness callback"
+    );
+    // A queue kick while the activation callback is pending must not add a source.
+    h.device.on_event(DeviceEvent::QueueKick(0)).unwrap();
+    assert_eq!(h.registrar.len(), 1);
+    h.device.on_event(ready[0]).unwrap();
+    assert!(
+        h.registrar.ready().is_empty(),
+        "an idle device must stop scheduling"
+    );
+    h.device.reset().unwrap();
+    assert_eq!(h.registrar.len(), 0);
+}
+
+#[test]
 fn activation_requires_three_ready_queues_and_preserves_the_active_backend() {
     let temp = Temp::new();
     let mut h = Harness::new(vec![PortMapping::Listen {
@@ -1074,7 +1107,7 @@ fn activation_requires_three_ready_queues_and_preserves_the_active_backend() {
         h.device.activate(h.context()),
         Err(DeviceError::NeedsReset(_))
     ));
-    assert_eq!(h.registrar.len(), 1);
+    assert_eq!(h.registrar.len(), 2);
     h.device.reset().unwrap();
     h.device.set_features(0).unwrap();
     for unready in 0..3 {
@@ -1109,7 +1142,7 @@ fn activation_requires_three_ready_queues_and_preserves_the_active_backend() {
         Err(DeviceError::NeedsReset(_))
     ));
     h.device.activate(h.context()).unwrap();
-    assert_eq!(h.registrar.len(), 1);
+    assert_eq!(h.registrar.len(), 2);
 }
 
 #[test]
