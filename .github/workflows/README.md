@@ -21,6 +21,9 @@ BUILD + CACHE (weekly)                  build-runtime
 RELEASE CHAIN (workflow_run)            build-c ──▶ build-go
                                                 └──▶ build-runner-binary
 
+SDK TEST BUILDS (manual dispatch)       build-go ──▶ build-c ──▶ Go SDK tests
+                                        build-runner-binary ──▶ build-c ──▶ Runner link
+
 RELEASE (release event)                 build-runtime · build-c · build-node · build-wheels
                                         mbuild-release-on-release ──▶ mbuild-release (images, dev)
                                         apps/box-images/v* tag ──▶ release-box-images
@@ -52,10 +55,10 @@ own.
 | `author-review.yml` | PR (target), issue_comment, merge_group | — | Converts unacknowledged PRs to draft, posts author instructions, and publishes `Author reviewed the PR` on the current head. Merge queues carry forward the required PR admission check |
 | `build-runtime.yml` | weekly, release, dispatch | — | Builds runtime/CLI artifacts and populates sccache together; publishes crates on release |
 | `build-c.yml` | release, dispatch, `workflow_call` | yes | C SDK archives |
-| `build-go.yml` | `workflow_run`, dispatch | — | Tests the released C archive and tags the Go module; automatic builds follow successful C SDK releases |
+| `build-go.yml` | `workflow_run`, dispatch | — | Tests the released C archive and tags the Go module on release; manual tests build a matching C archive first |
 | `build-node.yml` | release, dispatch | — | Node.js SDK, napi-rs addon and platform packages |
 | `build-wheels.yml` | release, dispatch | — | Builds Python wheels and verifies their native extension in cibuildwheel before publishing |
-| `build-runner-binary.yml` | `workflow_run`, dispatch, `workflow_call` | yes | Linux amd64 runner binary; automatic builds follow successful C SDK releases |
+| `build-runner-binary.yml` | `workflow_run`, dispatch, `workflow_call` | yes | Linux amd64 runner binary; manual builds first produce the selected commit's C archive |
 | `build-apps-api-image.yml` | dispatch, `workflow_call` | yes | The `apps/api` image: build a commit, build a release, or promote one between stages. Retained legacy AWS path |
 | `deploy-infra.yml` | dispatch | — | Builds and deploys one commit to a stage. Retained legacy AWS path |
 | `deploy-release.yml` | dispatch | — | Deploys already-published artifacts for one `X.Y.Z`. Compiles nothing. Retained legacy AWS path |
@@ -302,6 +305,18 @@ GitHub's separate managed Code Quality analysis is unchanged.
 The `analyze` job is a matrix over `actions`, `c-cpp`, `go`, `javascript-typescript`, `python` and
 `rust`. All use `build-mode: none` (source only, no compile) except `go`, whose extractor has to
 observe a real build and therefore uses `autobuild`.
+
+## Manual SDK and Runner builds
+
+Dispatching `build-runner-binary.yml` builds the selected full commit SHA's Linux x64 C SDK,
+then links the Runner against that same-run artifact. Its archive and version identity include
+the commit SHA. Dispatching `build-go.yml` builds the selected workflow ref's C SDK on all
+supported platforms, then tests each Go SDK against its matching artifact. Neither manual
+path requires a published release for the current `Cargo.toml` version.
+
+The release chain still downloads the published C archives. Reusable Runner callers retain their explicit
+`libboxlite_source` selection: `deploy-infra.yml` supplies its existing C artifact without a
+second C build. A C build failure stops its consumers; manual runs publish no releases or tags.
 
 ## Do not rename these
 
