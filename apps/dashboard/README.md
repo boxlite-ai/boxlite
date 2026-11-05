@@ -61,7 +61,8 @@ it does not start an SSH server. See [the design](https://github.com/boxlite-ai/
 
 Use `AsciiButton` from `components/ascii` for console actions. It delegates to
 `ui/button`, which owns the shared geometry, typography, focus, and disabled
-styles; raw buttons remain appropriate for navigation, tabs, and custom choices.
+styles; raw buttons remain appropriate for tabs and custom choices. Use native
+links for route navigation.
 
 | Purpose | Variant / size | Appearance |
 | --- | --- | --- |
