@@ -7,6 +7,7 @@ import { setTimeout as delay } from 'node:timers/promises'
 import { Header } from 'tar'
 import { DataSource } from 'typeorm'
 import { ConfirmedWorkerAbsent, decodeScope, ExecutionJournal, ExecutionLease, scopeKey } from '@boxlite-ai/ci-listener'
+import { WorkerPool } from '../../../libs/ci-listener/src/execution/pool'
 import { CiNativeState } from './ci-native-state'
 import { CiNativeWorkers } from './ci-native-workers'
 import { Box } from '../box/entities/box.entity'
@@ -202,6 +203,20 @@ integration('CI native workers (shared lease, actual PostgreSQL and HTTP)', () =
       delivery: 'requested',
       effect: { id: randomUUID(), kind: 'jit-deliver' },
     })
+    return value
+  }
+  async function deleting() {
+    const value = await created()
+    await db.getRepository(Box).update(value.box.box_id, {
+      state: BoxState.STOPPED,
+      desiredState: BoxDesiredState.STOPPED,
+    })
+    value.row = await journal.advance(lease, value.row.record.key, value.row.record.version, {
+      closing: true,
+      effect: { id: randomUUID(), kind: 'box-remove' },
+    })
+    jest.mocked(platform.destroy).mockImplementationOnce(BoxService.prototype.destroy.bind(platform))
+    await value.host.remove(value.config.name)
     return value
   }
   it('commits the real original Box ID with the Box row in the single shared table', async () => {
@@ -437,6 +452,55 @@ integration('CI native workers (shared lease, actual PostgreSQL and HTTP)', () =
     })
     await db.getRepository(Box).delete(box.box_id)
     await expect(unknown.host.get(unknown.config.name)).rejects.toBeInstanceOf(ConfirmedWorkerAbsent)
+  })
+  it('recognizes the original destroyed Box after production soft deletion renames it', async () => {
+    const { host, config, box } = await deleting()
+    const deleted = await platform.findOne(box.box_id, true)
+    expect(deleted.name).toMatch(new RegExp('^DESTROYED_' + config.name + '_[0-9]+$'))
+    expect(deleted).toMatchObject({ desiredState: BoxDesiredState.DESTROYED, pending: true })
+    await expect(host.get(config.name)).rejects.not.toBeInstanceOf(ConfirmedWorkerAbsent)
+    // Only the runtime's terminal confirmation proves physical absence.
+    await db.getRepository(Box).update(box.box_id, { state: BoxState.DESTROYED, pending: false })
+    await expect(host.get(config.name)).rejects.toBeInstanceOf(ConfirmedWorkerAbsent)
+  })
+  it('releases a renamed terminal worker before reserving the next job at capacity one', async () => {
+    const { host, row, box } = await deleting()
+    const capacity = testCapacity({ account: 1, tenant: 1 })
+    const nextJob = { repository: 30, run: 41, job: 60 }
+    await expect(journal.reserve(lease, scopeKey(scope()), nextJob, capacity)).resolves.toBeUndefined()
+    await db.getRepository(Box).update(box.box_id, { state: BoxState.DESTROYED, pending: false })
+    const pool = new WorkerPool(
+      journal,
+      scopeKey(scope()),
+      async () => ({ workers: host, admit: jest.fn(), job: jest.fn(), runners: jest.fn() }),
+      { image: 'runner:test', cpus: 2, memoryMiB: 2048, labels: ['boxlite-ci-runner'] },
+    )
+    try {
+      await pool.tick(lease, capacity)
+      expect((await journal.load(lease)).allocations.has(row.record.key)).toBe(false)
+      const next = await journal.reserve(lease, scopeKey(scope()), nextJob, capacity)
+      expect(next?.value.job).toEqual(nextJob)
+      expect(next?.record.key).not.toBe(row.record.key)
+    } finally {
+      await pool.close()
+    }
+  })
+  it('rejects a foreign organization even when the renamed original Box is destroyed', async () => {
+    const { host, config, box } = await deleting()
+    await db.getRepository(Box).update(box.box_id, {
+      organizationId: randomUUID(),
+      state: BoxState.DESTROYED,
+      pending: false,
+    })
+    await expect(host.get(config.name)).rejects.toThrow('ownership changed')
+    await expect(host.remove(config.name)).rejects.toThrow('ownership changed')
+    expect(platform.destroy).toHaveBeenCalledTimes(1)
+  })
+  it('rejects a renamed live Box without interpreting its name as terminal absence', async () => {
+    const { host, config, box } = await created()
+    await db.getRepository(Box).update(box.box_id, { name: 'DESTROYED_' + config.name + '_123' })
+    await expect(host.get(config.name)).rejects.toThrow('ownership changed')
+    expect(platform.destroy).not.toHaveBeenCalled()
   })
   it('requires the current journaled effect before stop or deletion', async () => {
     const { host, config } = await created()
