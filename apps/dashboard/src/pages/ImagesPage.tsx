@@ -68,7 +68,7 @@ const Images: React.FC<{ tab: ImagesTab }> = ({ tab }) => {
           <ol className="list-inside list-decimal space-y-1">
             <li>
               For a private image, connect its registry in{' '}
-              <Link to={RoutePath.IMAGE_REGISTRIES} className="text-foreground underline underline-offset-4">
+              <Link to={`${RoutePath.IMAGE_REGISTRIES}${search}`} className="text-foreground underline underline-offset-4">
                 Private registries
               </Link>
               . Public images need no credentials.

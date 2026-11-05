@@ -296,6 +296,7 @@ The Private registries tab provides credential setup. New box in the filter
 toolbar opens the existing create dialog, while row actions prefill an image.
 Quota information stays in the usage meter. The inline "How to add an image"
 control expands the registry → New box → successful start steps on demand.
+Its registry link preserves query parameters, including a suggested registry to connect.
 Feature descriptions carry definitions, and empty states give a brief next action.
 The list and usage refresh on mount and every 30 seconds in the foreground,
 since image registration may finish after the Box startup notification.
