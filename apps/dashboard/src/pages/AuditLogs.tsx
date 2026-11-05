@@ -222,11 +222,11 @@ const AuditLogs: React.FC = () => {
 
   return (
     <PageLayout>
-      <PageHeader size="full">
+      <PageHeader>
         <PageTitle>Audit Logs</PageTitle>
       </PageHeader>
 
-      <PageContent size="full">
+      <PageContent>
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
           <div className="flex gap-2 items-center">
             <DateRangePicker

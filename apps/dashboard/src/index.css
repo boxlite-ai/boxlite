@@ -2,6 +2,17 @@
 @tailwind components;
 @tailwind utilities;
 
+html {
+  /* Keep short and scrolling routes on the same horizontal grid. */
+  scrollbar-gutter: stable;
+}
+
+@layer components {
+  .page-container {
+    @apply w-full min-w-0 px-4 sm:px-6 lg:px-10;
+  }
+}
+
 /* ASCII / terminal restyle — IBM Plex Mono is loaded from Google Fonts in index.html
    (same source the design prototypes use), so the console matches them 1:1. */
 
