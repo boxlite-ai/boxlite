@@ -36,10 +36,6 @@ async function main(): Promise<void> {
         (root.applications ?? [auth.issuer]).some((id) => !ids.includes(id))
       )
         throw new Error('Original GitHub App identities changed')
-      if (JSON.stringify(root.applications) !== JSON.stringify(ids))
-        await state.ingest([
-          { key: 'backend/github', expected: prior.version, payload: { ...root, applications: ids } as Json },
-        ])
     } else if (JSON.stringify(prior.payload) !== JSON.stringify(github))
       throw new Error('Original GitHub backend identity changed')
     host = new SelfHost(config, state, database, namespace, boxes)
