@@ -116,7 +116,7 @@ impl PipelineTask<InitCtx> for VmmSpawnTask {
             .max_memory
             .is_none()
         {
-            let max = ResourceCeiling::detect().max_memory_mib;
+            let max = ResourceCeiling::detect_with_kernel(false).max_memory_mib;
             instance_spec.max_memory_mib =
                 Some(resources.memory_mib + max.saturating_sub(resources.memory_mib) / 128 * 128);
         }

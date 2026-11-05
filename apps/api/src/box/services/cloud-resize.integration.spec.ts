@@ -72,7 +72,8 @@ databaseTests('Cloud resize jobs with Postgres and Redis', () => {
     } finally {
       await runner.release()
     }
-    redis = new Redis({ host: process.env.REDIS_HOST, port: Number(process.env.REDIS_PORT) })
+    redis = new Redis({ host: process.env.REDIS_HOST, port: Number(process.env.REDIS_PORT || 6379) })
+    await redis.ping()
     repository = new BoxRepository(db, new EventEmitter2(), { invalidate: jest.fn() } as never)
     usage = new UsageService(
       db.getRepository(BoxUsagePeriod),

@@ -85,10 +85,7 @@ test("resize crosses the native binding and REST transport", async () => {
       failure = error;
     }
     expect(errorCode(failure)).toBe("invalid_argument");
-    expect(requests).toEqual([
-      { cpus: 2, memory_mib: 512 },
-      { cpus: 1 },
-    ]);
+    expect(requests).toEqual([{ cpus: 2, memory_mib: 512 }, { cpus: 1 }]);
   } finally {
     runtime.close();
     await new Promise<void>((resolve, reject) =>

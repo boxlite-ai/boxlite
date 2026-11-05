@@ -26,11 +26,6 @@ pub(crate) struct ResourceCeiling {
 }
 
 impl ResourceCeiling {
-    /// Ceiling for the current host with the bundled guest kernel.
-    pub(crate) fn detect() -> Self {
-        Self::detect_with_kernel(false)
-    }
-
     /// Ceiling for the current host. A custom kernel supplies its own vCPU
     /// limit, so the bundled kernel's cap applies only when `custom_kernel`
     /// is false.
@@ -227,7 +222,7 @@ mod tests {
 
     #[test]
     fn detect_reports_a_usable_host() {
-        let c = ResourceCeiling::detect();
+        let c = ResourceCeiling::detect_with_kernel(false);
         assert!(c.max_cpus >= 1);
         assert!(c.max_memory_mib > 0);
     }
