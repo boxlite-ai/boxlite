@@ -1,12 +1,17 @@
 // Copyright 2026 BoxLite Contributors
 // SPDX-License-Identifier: Apache-2.0
 
-use super::{packet::*, source::Registered};
-use mio::net::UnixStream;
+//! One stream flow; the caller preserves outgoing order and confirms delivered payload.
+
+use super::{packet::*, source::Registration};
+use crate::virtio::{DeviceError, EventRegistrar};
+use mio::Interest;
 use std::{
     collections::VecDeque,
     io::{self, Read, Write},
     net::Shutdown,
+    os::unix::net::UnixStream,
+    sync::Arc,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -23,7 +28,9 @@ pub(super) enum State {
 }
 
 pub(super) struct Connection {
-    socket: Registered<UnixStream>,
+    // Fields drop in declaration order: release the polling copy before the I/O socket.
+    _registration: Registration,
+    socket: UnixStream,
     state: State,
     key: Key,
     cid: u64,
@@ -37,11 +44,24 @@ pub(super) struct Connection {
     write_shutdown: bool,
     host_eof: bool,
     credit_requested: bool,
+    lookahead: Option<u8>,
 }
 
 impl Connection {
-    pub fn new(socket: Registered<UnixStream>, state: State, key: Key, cid: u64) -> Self {
-        Self {
+    /// Takes a nonblocking socket; AwaitResponse callers send `packet(REQUEST, 0, [])`.
+    pub fn new(
+        socket: UnixStream,
+        registrar: Arc<dyn EventRegistrar>,
+        state: State,
+        key: Key,
+        cid: u64,
+    ) -> Result<Self, DeviceError> {
+        Ok(Self {
+            _registration: Registration::stream(
+                &socket,
+                registrar,
+                Interest::READABLE | Interest::WRITABLE,
+            )?,
             socket,
             state,
             key,
@@ -56,7 +76,8 @@ impl Connection {
             write_shutdown: false,
             host_eof: false,
             credit_requested: false,
-        }
+            lookahead: None,
+        })
     }
 
     pub fn packet(&self, op: u16, flags: u32, payload: Vec<u8>) -> Packet {
@@ -77,6 +98,7 @@ impl Connection {
         }
     }
 
+    /// Confirm only payload actually copied to the guest, never headers or retained tails.
     pub fn delivered(&mut self, count: u32) {
         self.delivered = self.delivered.wrapping_add(count);
     }
@@ -129,11 +151,10 @@ impl Connection {
     /// Returns whether this flow is closed and whether runnable work may remain.
     pub fn drive(&mut self, outgoing: &mut VecDeque<Packet>) -> io::Result<(bool, bool)> {
         if self.state == State::Connecting {
-            let io = self.socket.io.lock().unwrap();
-            if let Some(error) = io.take_error()? {
+            if let Some(error) = self.socket.take_error()? {
                 return Err(error);
             }
-            match io.peer_addr() {
+            match self.socket.peer_addr() {
                 Ok(_) => {}
                 Err(error)
                     if matches!(
@@ -145,7 +166,6 @@ impl Connection {
                 }
                 Err(error) => return Err(error),
             }
-            drop(io);
             self.state = State::Established;
             outgoing.push_back(self.packet(RESPONSE, 0, vec![]));
         }
@@ -153,9 +173,8 @@ impl Connection {
             return Ok((false, false));
         }
         let mut again = false;
-        let mut io = self.socket.io.lock().unwrap();
         if !self.pending.is_empty() {
-            match io.write(self.pending.as_slices().0) {
+            match self.socket.write(self.pending.as_slices().0) {
                 Ok(0) => return Err(io::ErrorKind::WriteZero.into()),
                 Ok(count) => {
                     self.pending.drain(..count);
@@ -169,7 +188,7 @@ impl Connection {
             }
         }
         if self.guest_shutdown & SEND != 0 && self.pending.is_empty() && !self.write_shutdown {
-            io.shutdown(Shutdown::Write)?;
+            self.socket.shutdown(Shutdown::Write)?;
             self.write_shutdown = true;
         }
         if self.guest_shutdown == (RECEIVE | SEND) && self.pending.is_empty() {
@@ -183,18 +202,32 @@ impl Connection {
             self.peer_alloc
                 .saturating_sub(self.tx_count.wrapping_sub(self.peer_fwd)) as usize;
         if credit == 0 {
-            if !self.credit_requested {
+            // A one-byte probe distinguishes EOF from data without spending guest credit.
+            // Retain data until credit returns; do not read past it or report EOF ahead of it.
+            if self.lookahead.is_none() {
+                let mut byte = [0];
+                match self.socket.read(&mut byte) {
+                    Ok(0) => self.report_eof(outgoing),
+                    Ok(_) => self.lookahead = Some(byte[0]),
+                    Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
+                    Err(error) if error.kind() == io::ErrorKind::Interrupted => again = true,
+                    Err(error) => return Err(error),
+                }
+            }
+            if !self.host_eof && !self.credit_requested {
                 outgoing.push_back(self.packet(CREDIT_REQUEST, 0, vec![]));
                 self.credit_requested = true;
             }
             return Ok((false, again));
         }
+        if let Some(byte) = self.lookahead.take() {
+            self.tx_count = self.tx_count.wrapping_add(1);
+            outgoing.push_back(self.packet(RW, 0, vec![byte]));
+            return Ok((false, true));
+        }
         let mut data = vec![0; credit.min(4096)];
-        match io.read(&mut data) {
-            Ok(0) => {
-                self.host_eof = true;
-                outgoing.push_back(self.packet(SHUTDOWN, SEND, vec![]));
-            }
+        match self.socket.read(&mut data) {
+            Ok(0) => self.report_eof(outgoing),
             Ok(count) => {
                 data.truncate(count);
                 self.tx_count = self.tx_count.wrapping_add(count as u32);
@@ -207,8 +240,17 @@ impl Connection {
         }
         Ok((false, again))
     }
+
+    fn report_eof(&mut self, outgoing: &mut VecDeque<Packet>) {
+        self.host_eof = true;
+        outgoing.push_back(self.packet(SHUTDOWN, SEND, vec![]));
+    }
 }
 
 fn invalid(message: &'static str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message)
 }
+
+#[cfg(test)]
+#[path = "../../../tests/vsock/layers/connections.rs"]
+mod tests;

@@ -3,9 +3,6 @@
 
 //! Direct boundary tests for the independently introduced vsock layers.
 
-#[path = "layers/connections.rs"]
-mod connections;
-
 use crate::{
     memory::GuestMemoryMmap,
     virtio::{
@@ -27,14 +24,14 @@ use std::{
 use virtio_queue::{Queue, QueueT};
 use vm_memory::{Bytes, GuestAddress};
 
-struct Registrar {
+pub(super) struct Registrar {
     poll: Mutex<Poll>,
-    sources: Mutex<HashMap<SourceId, Box<dyn EventSource>>>,
+    pub(super) sources: Mutex<HashMap<SourceId, Box<dyn EventSource>>>,
     next: AtomicU32,
 }
 
 impl Registrar {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         Self {
             poll: Mutex::new(Poll::new().unwrap()),
             sources: Mutex::new(HashMap::new()),
@@ -67,7 +64,7 @@ impl EventRegistrar for Registrar {
     }
 }
 
-fn header(op: u16) -> Header {
+pub(super) fn header(op: u16) -> Header {
     Header {
         src_cid: 3,
         dst_cid: HOST_CID,

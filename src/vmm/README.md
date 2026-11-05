@@ -297,16 +297,38 @@ open until deregistration. Failed registration leaves the original socket intact
 Callers must set accepted streams nonblocking before worker use. This ownership
 change has no measured throughput claim.
 
-Each connection handles guest-initiated and host-initiated handshakes, bounded
-Unix writes, peer receive credit and independent half-close directions. Host
-reads reserve credit before delivery; a peer cannot acknowledge bytes until
-the caller marks them delivered. A blocked write retains its bytes and only
-successful writes advance the forwarded counter. A connection gets at most
-one write and one 4 KiB read per turn and reports whether more work may remain.
+Each connection owns its nonblocking stream and drops its registration before
+the stream. Guest requests receive a RESPONSE when the host socket connects;
+host-initiated flows wait for RESPONSE before exchanging bytes. Unexpected
+handshakes and operations fail the flow; routing and removal belong to the
+next layer.
+
+Pending guest writes are bounded at 64 KiB. Partial writes retain the tail,
+WouldBlock retains all pending bytes, and only successful writes advance
+`fwd_cnt`. Each turn performs at most one write and one read of up to 4 KiB,
+reporting whether runnable work may remain. The caller preserves outgoing
+packet order and leaves capacity for up to two output packets per turn.
+
+Host data reserves guest credit before entering the outgoing queue. Call
+`delivered` only for payload actually copied into guest buffers; acknowledgments
+beyond that count are rejected, including acknowledgments for retained RX tails.
+Counters wrap at 32 bits. At zero credit, a one-byte lookahead detects an empty
+socket's EOF without sending uncredited data. If it reads data, that byte waits
+for credit and precedes subsequent reads; EOF behind data waits too.
+Credit requests are coalesced until credit returns.
+
+Guest SEND shutdown drains pending writes before closing the host write half;
+guest RECEIVE stops host reads while allowing guest writes. Host EOF emits
+SHUTDOWN/SEND after queued data and leaves guest writes usable. Both guest
+shutdown flags produce RST once pending writes drain.
 
 `make test:unit:vmm FILTER=vsock` checks encoding, packet bounds, guest-memory
 scatter delivery, real Unix stream/listener readiness, and registration cleanup
-in either ownership order, including rejected registrations.
+in either ownership order, including rejected registrations. Connection tests
+also cover both handshakes, actual partial writes and WouldBlock, credit stalls,
+partial delivery acknowledgments, counter wraparound, half-close and zero-credit
+EOF ordering. These are local socket tests; real guests, backend routing,
+device/MMIO integration and snapshots remain subsequent qualification.
 
 ## Lifecycle
 
