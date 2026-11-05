@@ -12,8 +12,14 @@ projection is `GET /apps/{appId}/view` within that organization namespace.
 Deployments, environments, services, authentication, database, volumes,
 variables and logs remain within the selected organization and environment.
 
+The App overview provides setup instructions for the CLI and coding agents.
+Use an organization key from **API Keys** to sign in to the CLI, then link the
+project to the App named in the instructions. Key permissions apply across the
+organization. In **New API key**, open **Adjust permissions** and select Apps
+read and write access for the CLI. Create and revoke credentials from **API Keys**.
+
 App query keys include the organization. Switching organizations resets open
-forms and one-time credential dialogs; a detail page returns to the App list.
+forms and takes the user back from App details to the App list.
 Mutations retain their originating organization and environment, so a late
 response refreshes only that scope. Source archives, exports and previews use
 the platform bearer, and opening a private App uses a one-time browser ticket.
@@ -561,6 +567,10 @@ cannot be submitted. Permission loading and failures block creation and failures
 provide refresh. Permissions apply across the selected organization, not a single Box.
 Box reading is implicit and cannot be disabled in this form. Managing image aliases
 includes alias deletion; using an image does not automatically require catalog access.
+
+The Apps group offers independent read, write and delete access. App CLI setup uses
+read and write access. Permission labels and the key inventory summarize these grants
+with the same Apps group.
 
 Users can explicitly select **No expiration**, 90 days or one year. Existing keys
 and Quickstart defaults are unchanged. A successful creation displays the returned

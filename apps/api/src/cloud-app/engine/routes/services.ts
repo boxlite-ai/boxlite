@@ -82,7 +82,7 @@ export function serviceRoutes(ctx: Ctx) {
       env = (await ctx.store.envById(env.id))!
     }
     // No database password leaves the CP: `boxlite-app app dev` points DATABASE_URL at its local
-    // `db proxy` (owner login, through the App key) and only needs the database's name here.
+    // `db proxy` (owner login, through an organization API key) only needs the database name here.
     const { DATABASE_URL: _password, ...vars } = await ctx.resources.runtimeEnv(app, env, spec)
     return c.json({ env: vars, database: env.db_url ? { name: dbCoordinates(env.db_url).database } : null })
   })

@@ -97,12 +97,7 @@ export function consoleKit(root: Hono, ctx: Ctx): ConsoleKit {
   const appOf = async (c: Context): Promise<AppRow> => {
     const name = c.req.param('id') ?? ''
     const app = (await store.appByName(name)) ?? (await store.appById(name))
-    if (
-      !app ||
-      !canSee(viewer(c), app) ||
-      (principalStorage.getStore()?.appId && principalStorage.getStore()?.appId !== app.id)
-    )
-      throw fail('not_found_app', `no app named "${name}"`)
+    if (!app || !canSee(viewer(c), app)) throw fail('not_found_app', `no app named "${name}"`)
     return app
   }
   const envOf = async (c: Context, app: AppRow): Promise<EnvRow> => {

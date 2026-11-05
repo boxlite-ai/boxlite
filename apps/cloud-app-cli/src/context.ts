@@ -6,7 +6,7 @@ import type { Readable, Writable } from 'node:stream'
 import type { Dispatcher } from 'undici'
 import { Api } from './api.js'
 import { Output } from './output.js'
-import { savedApps, savedKey } from './credentials.js'
+import { savedKey } from './credentials.js'
 
 export interface Io {
   stdout: Writable
@@ -84,6 +84,7 @@ export async function updateLink(cwd: string, patch: Partial<Link>): Promise<Lin
 
 export interface GlobalOpts {
   json?: boolean
+  app?: string
   env?: string
   yes?: boolean
 }
@@ -96,13 +97,6 @@ export interface DestructiveBrief {
   destroys: string[]
   /** How (or whether) it can be undone. */
   undo: string
-}
-
-/** App names the key resolved to via `GET /apps/me`, per control plane + key, for this process. */
-const resolvedApps = new Map<string, string>()
-
-export function clearResolvedApps(): void {
-  resolvedApps.clear()
 }
 
 function shellQuote(arg: string): string {
@@ -122,7 +116,7 @@ export class Ctx {
   /** The argv this command was invoked with (without node/script), for "rerun with" hints. */
   readonly argv: readonly string[]
   private apiInstance: Api | undefined
-  private named: string | undefined
+  private readonly requestedApp: string | undefined
 
   constructor(run: RunOptions, opts: GlobalOpts, link: Link | null, argv: readonly string[] = [], out?: Output) {
     this.cwd = run.cwd
@@ -131,31 +125,32 @@ export class Ctx {
     this.json = opts.json === true
     this.yes = opts.yes === true
     this.link = link
+    this.requestedApp = opts.app
     this.envName = opts.env ?? link?.env ?? 'main'
     this.out = out ?? new Output(run.io, this.json)
     this.dispatcher = run.dispatcher
     this.argv = argv
   }
 
-  /** BOXLITE_API_KEY, else the key `boxlite-app login` saved for this App (credentials.ts). */
+  /** BOXLITE_API_KEY, else the key saved for the organization. */
   get apiKey(): string | undefined {
-    return this.env.BOXLITE_API_KEY || savedKey(this.env, this.apiUrl, this.app)?.key || undefined
+    return this.env.BOXLITE_API_KEY || savedKey(this.env, this.apiUrl)?.key
   }
 
   get apiUrl(): string | undefined {
-    return (
-      this.env.BOXLITE_API_URL || this.link?.api_url || savedKey(this.env, undefined, this.app)?.api_url || undefined
-    )
+    return this.env.BOXLITE_API_URL || this.link?.api_url || savedKey(this.env)?.api_url
   }
 
-  /** The App known locally (`init --app`, link.json, then BOXLITE_APP); undefined until resolved from the key. */
+  /** The explicit App or the App selected by the project link. */
   get app(): string | undefined {
-    return this.named ?? this.link?.app ?? (this.env.BOXLITE_APP || undefined)
-  }
-
-  /** A command that names the App itself (`init --app`): its saved key is the one to use. */
-  nameApp(app: string): void {
-    this.named = app
+    if (this.requestedApp && this.link && this.requestedApp !== this.link.app) {
+      throw new MicrocloudError(
+        'invalid_link',
+        `this directory is linked to ${this.link.app}, but --app selects ${this.requestedApp}`,
+        'run the command in the selected App’s project directory',
+      )
+    }
+    return this.requestedApp ?? this.link?.app ?? (this.env.BOXLITE_APP || undefined)
   }
 
   /** Spec version the local manifest is based on (0 = none yet). */
@@ -168,61 +163,42 @@ export class Ctx {
     return ['boxlite-app', ...[...this.argv, ...extra].map(shellQuote)].join(' ')
   }
 
-  /** Unscoped client: init, clone and whoami use it before an App is known. */
+  /** Organization API client with the locally selected App, when present. */
   api(): Api {
     if (this.apiInstance) return this.apiInstance
-    const key = this.apiKey
-    const saved = key ? [] : savedApps(this.env, this.env.BOXLITE_API_URL || this.link?.api_url)
-    if (!key && !this.app && saved.length > 1) {
-      throw new MicrocloudError(
-        'usage',
-        `keys of several Apps are saved (${saved.join(', ')}) and nothing here says which App`,
-        'run it in the App\'s project folder (link it once with `boxlite-app init --app <name>`), or set BOXLITE_APP=<name>; the name is the "App:" line of the App prompt',
-      )
-    }
-    if (!key)
-      throw new MicrocloudError(
-        'unauthenticated',
-        'no App key: BOXLITE_API_KEY is not set and none is saved',
-        'save the key from the App prompt once: `BOXLITE_API_URL=<url> BOXLITE_API_KEY=<key> boxlite-app login` (later shells need neither), then `boxlite-app whoami`',
-      )
     const url = this.apiUrl
     if (!url)
       throw new MicrocloudError(
         'missing_api_url',
-        'BOXLITE_API_URL is not set and .boxlite/link.json has no api_url',
-        'export BOXLITE_API_URL=https://<control plane> (from the App prompt), then `boxlite-app whoami`',
+        'no organization API URL is selected',
+        'set BOXLITE_API_URL to the organization URL from the App prompt, then `boxlite-app whoami`',
+      )
+    const key = this.apiKey
+    if (!key)
+      throw new MicrocloudError(
+        'unauthenticated',
+        'no API key for this organization: BOXLITE_API_KEY is not set and none is saved',
+        'save your organization API key with `BOXLITE_API_URL=<url> BOXLITE_API_KEY=<key> boxlite-app login`',
       )
     this.apiInstance = new Api({ baseUrl: url, key, app: this.app, env: this.envName, dispatcher: this.dispatcher })
     return this.apiInstance
   }
 
-  /**
-   * The App this command works on: link.json, then BOXLITE_APP, then the App the key belongs to
-   * (`GET /apps/me`, cached for the process). A bad key therefore fails as `unauthenticated`.
-   */
-  async appName(): Promise<string> {
-    if (this.app) return this.app
-    const api = this.api()
-    const cacheKey = `${api.baseUrl}|${this.apiKey}`
-    const cached = resolvedApps.get(cacheKey)
-    if (cached) return cached
-    const info = await api.getApp('me')
-    if (typeof info.name !== 'string' || !info.name) {
+  appName(): string {
+    const app = this.app
+    if (!app)
       throw new MicrocloudError(
-        'unauthenticated',
-        'the control plane did not say which App this key belongs to',
-        'check BOXLITE_API_KEY and BOXLITE_API_URL with `boxlite-app whoami`',
+        'not_linked',
+        'no App is selected',
+        'pass --app <name> or link the project with `boxlite-app init --app <name>`',
       )
-    }
-    resolvedApps.set(cacheKey, info.name)
-    return info.name
+    return app
   }
 
   /** Client scoped to the App and environment of this command. */
   async appApi(): Promise<Api> {
-    const name = await this.appName()
-    return this.app === name ? this.api() : this.api().scoped(name, this.envName)
+    this.appName()
+    return this.api()
   }
 
   /** Non-destructive prompt (apply): `--yes` and `--json` proceed; without a TTY the command refuses instead of hanging. */

@@ -1,4 +1,4 @@
-import { MANIFEST_FILE, MicrocloudError } from '@boxlite-ai/cloud-app-shared'
+import { MANIFEST_FILE } from '@boxlite-ai/cloud-app-shared'
 import type { Command } from 'commander'
 import { appendFile, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -100,30 +100,11 @@ async function exists(path: string): Promise<boolean> {
   }
 }
 
-async function init(ctx: Ctx, opts: { app?: string; agentsMd?: boolean }): Promise<void> {
-  if (opts.app) ctx.nameApp(opts.app)
+async function init(ctx: Ctx, opts: { agentsMd?: boolean }): Promise<void> {
+  const requested = ctx.appName()
   const api = ctx.api()
-  const requested = opts.app ?? ctx.app
-  let info
-  try {
-    info = await api.getApp(requested ?? 'me')
-  } catch (e) {
-    // Not every control plane resolves the App from the key via the `me` alias.
-    if (!requested && e instanceof MicrocloudError && e.code === 'not_found_app')
-      throw new MicrocloudError(
-        'not_found_app',
-        e.message,
-        '`boxlite-app init --app <name>` with the App name from the App prompt',
-      )
-    throw e
-  }
-  const app = typeof info.name === 'string' && info.name ? info.name : requested
-  if (!app)
-    throw new MicrocloudError(
-      'not_found_app',
-      'the control plane did not return an App name',
-      '`boxlite-app init --app <name>` with the App name from the App prompt',
-    )
+  const info = await api.getApp()
+  const app = info.name || requested
   const envInfo = info.envs?.find((e) => e.name === ctx.envName)
   const baseVersion = envInfo?.spec_version ?? envInfo?.latest_deployment?.spec_version ?? 0
 
@@ -133,7 +114,7 @@ async function init(ctx: Ctx, opts: { app?: string; agentsMd?: boolean }): Promi
   const tomlPath = join(ctx.cwd, MANIFEST_FILE)
   if (await exists(tomlPath)) unchanged.push(MANIFEST_FILE)
   else {
-    const providers = Array.isArray(info.sign_in_providers) ? (info.sign_in_providers as string[]) : undefined
+    const providers = info.sign_in_providers
     await writeFile(tomlPath, manifestSkeleton(app, providers))
     created.push(MANIFEST_FILE)
   }
@@ -186,9 +167,8 @@ export function registerInit(program: Command, make: MakeCtx): void {
       .description(
         'write boxlite.toml, .boxlite/link.json, .gitignore entries and an AGENTS.md block in the current directory (never overwrites)',
       )
-      .option('--app <name>', 'App name (default: the App the key belongs to)')
       .option('--no-agents-md', 'do not write the BoxLite block into AGENTS.md')
-      .action(async (opts: { app?: string; agentsMd?: boolean }, cmd: Command) => init(await make(cmd), opts)),
+      .action(async (opts: { agentsMd?: boolean }, cmd: Command) => init(await make(cmd), opts)),
     {
       json: '{ app, env, base_version, api_url, created: string[], unchanged: string[] }',
       exits: [2, 3, 6],

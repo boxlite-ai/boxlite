@@ -9,7 +9,7 @@ import { readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
 interface Cache {
-  /** By `<api url>|<app>|<env>`; `sig` ties the URL to the App key, so a planted file never receives the key. */
+  /** By `<api url>|<app>|<env>`; `sig` ties the URL to the organization API key, so a planted file never receives the key. */
   urls: Record<string, { url: string; sig: string }>
   sessions: Record<string, { cookie: string; email: string; expires_at: string }>
 }
@@ -30,61 +30,66 @@ async function save(cwd: string, c: Cache): Promise<void> {
   await writeFile(file(cwd), `${JSON.stringify(c, null, 2)}\n`, { mode: 0o600 })
 }
 
-export interface UrlScope {
+interface AppEnvironment {
   apiUrl: string
   app: string
   env: string
-  /** The App key: only a URL cached with it is trusted with it. */
+}
+
+export interface UrlScope extends AppEnvironment {
+  /** The organization API key: only a URL cached with it is trusted with it. */
   key: string
 }
 
-const urlId = (s: UrlScope) => `${s.apiUrl.replace(/\/+$/, '')}|${s.app}|${s.env}`
+const envId = (s: AppEnvironment) => `${s.apiUrl.replace(/\/+$/, '')}|${s.app}|${s.env}`
 const urlSig = (s: UrlScope, url: string) =>
   createHash('sha256')
-    .update(`${s.key}|${urlId(s)}|${url}`)
+    .update(`${s.key}|${envId(s)}|${url}`)
     .digest('hex')
 
 /** The environment URL cached for this control plane, App and key; anything else is a miss. */
 export async function cachedUrl(cwd: string, scope: UrlScope): Promise<string | undefined> {
-  const e = (await load(cwd)).urls[urlId(scope)]
+  const e = (await load(cwd)).urls[envId(scope)]
   return e && typeof e === 'object' && e.url && e.sig === urlSig(scope, e.url) ? e.url : undefined
 }
 
 export async function rememberUrl(cwd: string, scope: UrlScope, url: string | null): Promise<void> {
   const c = await load(cwd)
-  if (url) c.urls[urlId(scope)] = { url, sig: urlSig(scope, url) }
-  else delete c.urls[urlId(scope)]
+  if (url) c.urls[envId(scope)] = { url, sig: urlSig(scope, url) }
+  else delete c.urls[envId(scope)]
   await save(cwd, c)
 }
 
-const sessionKey = (env: string, email: string, role: string) => `${env}|${email.toLowerCase()}|${role}`
+const sessionKey = (scope: AppEnvironment, email: string, role: string) =>
+  `${envId(scope)}|${email.toLowerCase()}|${role}`
 
 /** A test session that still has more than a minute to live. */
 export async function cachedSession(
   cwd: string,
-  env: string,
+  scope: AppEnvironment,
   email: string,
   role: string,
 ): Promise<{ cookie: string; email: string; expires_at: string } | undefined> {
-  const s = (await load(cwd)).sessions[sessionKey(env, email, role)]
+  const s = (await load(cwd)).sessions[sessionKey(scope, email, role)]
   return s && Date.parse(s.expires_at) - Date.now() > 60_000 ? s : undefined
 }
 
 export async function rememberSession(
   cwd: string,
-  env: string,
+  scope: AppEnvironment,
   email: string,
   role: string,
   s: { cookie: string; email: string; expires_at: string },
 ): Promise<void> {
   const c = await load(cwd)
-  c.sessions[sessionKey(env, email, role)] = s
+  c.sessions[sessionKey(scope, email, role)] = s
   await save(cwd, c)
 }
 
 /** After test users are removed, their cached sessions are gone too. */
-export async function forgetSessions(cwd: string, env: string): Promise<void> {
+export async function forgetSessions(cwd: string, scope: AppEnvironment): Promise<void> {
   const c = await load(cwd)
-  for (const k of Object.keys(c.sessions)) if (k.startsWith(`${env}|`)) delete c.sessions[k]
+  const prefix = `${envId(scope)}|`
+  for (const k of Object.keys(c.sessions)) if (k.startsWith(prefix)) delete c.sessions[k]
   await save(cwd, c)
 }
