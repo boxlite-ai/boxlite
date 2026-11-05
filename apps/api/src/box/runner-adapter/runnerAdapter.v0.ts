@@ -241,6 +241,7 @@ export class RunnerAdapterV0 implements RunnerAdapter {
       metrics: response.data.metrics,
       appVersion: response.data.appVersion,
       supportsPrivileged: response.data.supportsPrivileged,
+      nestedVirtualizationEnabled: response.data.nestedVirtualizationEnabled,
     }
   }
 
@@ -262,6 +263,7 @@ export class RunnerAdapterV0 implements RunnerAdapter {
     }
     const response = await this.boxApiClient.create({
       id: box.id,
+      ...(box.nestedVirtualization === true ? { nestedVirtualization: true } : {}),
       image,
       osUser: box.osUser,
       cpuQuota: box.cpu,
@@ -341,6 +343,7 @@ export class RunnerAdapterV0 implements RunnerAdapter {
       throw new Error(`Runner ${this.runner.id} does not support privileged Boxes`)
     }
     const recoverBoxDTO: RecoverBoxDTO = {
+      ...(box.nestedVirtualization === true ? { nestedVirtualization: true } : {}),
       osUser: box.osUser,
       cpuQuota: box.cpu,
       gpuQuota: box.gpu,

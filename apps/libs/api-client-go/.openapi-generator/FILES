@@ -44,6 +44,7 @@ model_admin_organization_impact.go
 model_admin_organization_impact_evidence.go
 model_admin_organization_member.go
 model_admin_organization_member_page.go
+model_admin_organization_nested_virtualization.go
 model_admin_organization_overview.go
 model_admin_organization_overview_page.go
 model_admin_organization_usage.go

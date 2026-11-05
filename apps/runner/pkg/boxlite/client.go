@@ -429,6 +429,12 @@ func (c *Client) Close() error {
 	return c.runtime.Close()
 }
 
+// NestedVirtualizationEnabled reports the feature set validated at startup.
+// It authorizes requests; it does not establish hardware availability.
+func (c *Client) NestedVirtualizationEnabled() bool {
+	return c.nestedVirtualizationAllowed
+}
+
 // Create creates a new box (VM) from the given image and configuration.
 // Returns the box ID and runtime version.
 func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, string, error) {

@@ -19,6 +19,7 @@ export * from './admin-organization-impact';
 export * from './admin-organization-impact-evidence';
 export * from './admin-organization-member';
 export * from './admin-organization-member-page';
+export * from './admin-organization-nested-virtualization';
 export * from './admin-organization-overview';
 export * from './admin-organization-overview-page';
 export * from './admin-organization-usage';

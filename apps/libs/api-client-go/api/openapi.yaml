@@ -4224,6 +4224,59 @@ paths:
       summary: Query recorded resource usage with fixed snapshot pagination
       tags:
       - admin
+  /admin/organizations/{organizationId}/nested-virtualization:
+    get:
+      operationId: adminGetOrganizationNestedVirtualization
+      parameters:
+      - explode: false
+        in: path
+        name: organizationId
+        required: true
+        schema:
+          format: uuid
+          type: string
+        style: simple
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminOrganizationNestedVirtualization"
+          description: ""
+      security:
+      - bearer: []
+      summary: Read organization nesting allowlist
+      tags:
+      - admin
+    put:
+      operationId: adminSetOrganizationNestedVirtualization
+      parameters:
+      - explode: false
+        in: path
+        name: organizationId
+        required: true
+        schema:
+          format: uuid
+          type: string
+        style: simple
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AdminOrganizationNestedVirtualization"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminOrganizationNestedVirtualization"
+          description: ""
+      security:
+      - bearer: []
+      summary: Set organization nesting allowlist
+      tags:
+      - admin
   /webhooks/organizations/{organizationId}/app-portal-access:
     post:
       operationId: WebhookController_getAppPortalAccess
@@ -9607,6 +9660,17 @@ components:
       - code
       - message
       - statusCode
+      type: object
+    AdminOrganizationNestedVirtualization:
+      example:
+        enabled: true
+      properties:
+        enabled:
+          description: Allow new boxes to use nesting when their selected Runner supports
+            it.
+          type: boolean
+      required:
+      - enabled
       type: object
     WebhookAppPortalAccess:
       example:

@@ -46,6 +46,7 @@ docs/AdminOrganizationImpact.md
 docs/AdminOrganizationImpactEvidence.md
 docs/AdminOrganizationMember.md
 docs/AdminOrganizationMemberPage.md
+docs/AdminOrganizationNestedVirtualization.md
 docs/AdminOrganizationOverview.md
 docs/AdminOrganizationOverviewPage.md
 docs/AdminOrganizationUsage.md
@@ -208,6 +209,7 @@ models/admin-organization-impact-evidence.ts
 models/admin-organization-impact.ts
 models/admin-organization-member-page.ts
 models/admin-organization-member.ts
+models/admin-organization-nested-virtualization.ts
 models/admin-organization-overview-page.ts
 models/admin-organization-overview.ts
 models/admin-organization-usage.ts

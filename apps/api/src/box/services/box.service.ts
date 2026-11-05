@@ -177,13 +177,55 @@ export class BoxService {
   private async persistOnAvailableRunner(
     box: Box,
     runnerParams: GetRunnerParams,
-    persist: () => Promise<Box>,
+    persist: (runner: Runner) => Promise<Box>,
   ): Promise<Box> {
     const runner = await this.runnerService.getRandomAvailableRunner(
       box.privileged ? { ...runnerParams, requiresPrivileged: true } : runnerParams,
     )
     box.runnerId = runner.id
-    return persist()
+    return persist(runner)
+  }
+
+  private async resolveNestedVirtualization(
+    organization: Organization,
+    runner: Runner,
+    boxId: string,
+  ): Promise<boolean> {
+    if (organization.nestedVirtualizationEnabled !== true) return false
+    let reason = 'unsupported_runner_api'
+    if (runner.apiVersion === '0') {
+      const controller = new AbortController()
+      let timeout: ReturnType<typeof setTimeout>
+      try {
+        const info = await Promise.race([
+          this.runnerAdapterFactory.create(runner).then((adapter) => adapter.runnerInfo(controller.signal)),
+          new Promise<undefined>((resolve) => {
+            timeout = setTimeout(
+              () => {
+                controller.abort()
+                resolve(undefined)
+              },
+              this.configService.getOrThrow('runnerHealthTimeout') * 1000,
+            )
+          }),
+        ])
+        if (info?.nestedVirtualizationEnabled === true) return true
+        reason = controller.signal.aborted ? 'capability_timeout' : 'capability_not_confirmed'
+      } catch {
+        reason = 'capability_probe_failed'
+      } finally {
+        clearTimeout(timeout)
+      }
+    }
+    this.logger.warn({
+      event: 'box.nested_virtualization.fallback',
+      organizationId: organization.id,
+      boxId,
+      runnerId: runner.id,
+      apiVersion: runner.apiVersion,
+      reason,
+    })
+    return false
   }
 
   private assertBoxNotErrored(box: Box): void {
@@ -379,15 +421,20 @@ export class BoxService {
       // before the insert: it has no way to give a slot back, so a create its
       // own input or placement refuses must not spend one. Only the box limit
       // and a name collision, which the insert itself settles, come after it.
-      const insertedBox = await this.persistOnAvailableRunner(box, { regions: [region.id], boxClass }, async () => {
-        await this.imageAdmissionService.spendColdPullBudget(organization, resolvedImage)
-        return createBoxDto.name
-          ? this.boxRepository.insert(box, options.maxCreatedBoxes)
-          : persistWithGeneratedBoxName(box.id, (name) => {
-              box.name = name
-              return this.boxRepository.insert(box, options.maxCreatedBoxes)
-            })
-      })
+      const insertedBox = await this.persistOnAvailableRunner(
+        box,
+        { regions: [region.id], boxClass },
+        async (runner) => {
+          box.nestedVirtualization = await this.resolveNestedVirtualization(organization, runner, box.id)
+          await this.imageAdmissionService.spendColdPullBudget(organization, resolvedImage)
+          return createBoxDto.name
+            ? this.boxRepository.insert(box, options.maxCreatedBoxes)
+            : persistWithGeneratedBoxName(box.id, (name) => {
+                box.name = name
+                return this.boxRepository.insert(box, options.maxCreatedBoxes)
+              })
+        },
+      )
 
       recordBoxRequested('box.create', insertedBox.id, ctx)
 
@@ -1017,6 +1064,7 @@ export class BoxService {
     const runner = await this.runnerService.findOneOrFail(box.runnerId)
 
     if (runner.apiVersion === '2') {
+      if (box.nestedVirtualization === true) throw new BoxError('Nested boxes require a compatible V0 Runner')
       // TODO: we need "recovering" state that can be set after calling recover
       // Once in recovering, we abort further processing and let the manager/job handler take care of it
       throw new ForbiddenException('Recovering boxes with runner API version 2 is not supported')
