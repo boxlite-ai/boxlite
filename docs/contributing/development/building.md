@@ -31,16 +31,29 @@ is community-maintained, and is verified on x86_64 NixOS only.
 nix develop -c make cli
 ```
 
+Then the checks, in the same shell:
+
+```bash
+nix develop -c make fmt:check:rust clippy test:unit:vmm
+```
+
 - `flake.lock` pins nixpkgs (`nixos-26.05`), so every host gets the same gcc,
   musl, glibc, Go, and LLVM. Run `nix flake update` to move the pin.
 - Rust is not pinned by Nix: rustup follows `rust-toolchain.toml`, as on CI.
+  That file asks for `stable`, which is a channel and not a version, so rustup
+  keeps whichever `stable` it installed earlier. A stale channel reports lints
+  CI does not, on files nobody touched; run `rustup update stable` when clippy
+  disagrees with CI. Do not use `nix-shell -p`: it puts nixpkgs' own `rustc` on
+  `PATH` ahead of the rustup shim, ignores `rust-toolchain.toml`, and reports
+  lints for a compiler CI does not run.
 - musl comes from `pkgsCross.musl64` as `x86_64-linux-musl-*` and `musl-gcc` on
   `PATH`; static glibc is on `LIBRARY_PATH` only. Adding either as a shell
   package breaks dynamic host links.
 - `BOXLITE_LIBRESOLV_DIR` points `libgvproxy-sys` at a directory holding
   `libresolv.a`, for hosts without `/usr/lib/<triple>` or `/usr/lib64`.
-- CI checks it: the `nix` job in `.github/workflows/test.yml` runs this command
-  with `--ignore-environment` on Ubuntu and boots a box when build inputs
+- CI checks it: the `nix` job in `.github/workflows/test.yml` builds the CLI
+  with `--ignore-environment` on Ubuntu, then runs `fmt:check:rust`, `clippy`
+  and `test:unit:vmm` in the same shell, and boots a box when build inputs
   change. A red `nix` job does not block merge yet, but a change to build
   scripts, Make recipes, or `-sys` crates that breaks the shell should fix
   `flake.nix` too. Ubuntu has `/usr/lib`, so CI misses a regression that breaks
