@@ -197,6 +197,8 @@ preparation starts the VM and container main command as needed, including an
 explicit command, but opens no data connection. It does not configure or enable
 SSH; startup restores saved SSH configuration and enabled state. To prepare a
 new tunnel after stopping a box, obtain a fresh handle with `runtime.get()`.
+Preparation on the old handle returns `Stopped` before VM initialization, even
+if the box was stopped before its first boot.
 
 `connect()` and each forwarded client open the saved socket path without starting
 the box again or checking the previous instance's cancellation token. A tunnel

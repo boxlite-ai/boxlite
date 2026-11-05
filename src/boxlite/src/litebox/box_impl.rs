@@ -1114,6 +1114,13 @@ impl BoxImpl {
     /// `start()`). `attach` deliberately does *not* use this: it boots without
     /// running init, so a client can attach before `start()`.
     pub(super) async fn live_state(&self) -> BoxliteResult<&LiveState> {
+        // A never-booted handle can be invalidated while its live cell is empty.
+        // Reject it before ensure_booted() can initialize a VM.
+        if self.shutdown_token.is_cancelled() {
+            return Err(BoxliteError::Stopped(
+                "Handle invalidated after stop(). Use runtime.get() to get a new handle.".into(),
+            ));
+        }
         let live = self.ensure_booted().await?;
         self.ensure_container_started(live).await?;
         Ok(live)
@@ -1916,6 +1923,67 @@ mod tests {
         }
 
         (GuestSession::new(BoxTransport::tcp(address.port())), server)
+    }
+
+    /// Stop a real cold handle; trap accidental initialization before image or VM work.
+    async fn assert_stopped_tunnel_does_not_initialize(ssh: bool) {
+        let home = TempDir::new_in("/tmp").unwrap();
+        let runtime = RuntimeImpl::new_for_test(BoxliteOptions {
+            home_dir: home.path().into(),
+            image_registries: vec![],
+            ..Default::default()
+        })
+        .unwrap();
+        let sandbox = runtime
+            .create(
+                BoxOptions {
+                    auto_delete: Some(0),
+                    ..Default::default()
+                },
+                None,
+            )
+            .await
+            .unwrap();
+        sandbox.stop().await.unwrap();
+        assert_eq!(sandbox.info().await.unwrap().status, BoxStatus::Configured);
+        let box_dir = runtime.layout.boxes_dir().join(sandbox.id().as_str());
+        std::fs::write(&box_dir, b"initialization must not reach filesystem setup").unwrap();
+
+        let prepare = async |sandbox: &crate::LiteBox| {
+            if ssh {
+                sandbox.ssh().tunnel().await
+            } else {
+                sandbox
+                    .network()
+                    .tunnel("127.0.0.1:22".parse().unwrap(), TunnelOptions::default())
+                    .await
+            }
+        };
+        let error = prepare(&sandbox).await.err().expect("old handle must fail");
+        assert!(
+            matches!(error, BoxliteError::Stopped(_)),
+            "invalidated handle must fail before initialization: {error:?}"
+        );
+        let fresh = runtime.get(sandbox.id().as_str()).await.unwrap().unwrap();
+        assert_eq!(fresh.info().await.unwrap().status, BoxStatus::Configured);
+        let error = prepare(&fresh)
+            .await
+            .err()
+            .expect("filesystem trap must fail");
+        assert!(
+            matches!(&error, BoxliteError::Storage(message) if message.contains("failed to create box dir")),
+            "fresh handle must still be allowed to initialize: {error:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn ssh_tunnel_rejects_stopped_unbooted_handle_before_initialization() {
+        assert_stopped_tunnel_does_not_initialize(true).await;
+    }
+
+    #[tokio::test]
+    async fn network_tunnel_rejects_stopped_unbooted_handle_before_initialization() {
+        assert_stopped_tunnel_does_not_initialize(false).await;
     }
 
     struct StartFixture {

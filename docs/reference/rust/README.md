@@ -588,6 +588,11 @@ prepares again, so connecting cannot reopen a revoked tunnel.
 This differs from `BoxOptions.ports`, which publishes a local port for
 the lifetime of the box.
 
+Local network and SSH tunnel preparation reject an invalidated handle with
+`Stopped` before VM initialization, including a box stopped before its first
+boot. Obtain a fresh handle with `runtime.get()` to prepare a new tunnel.
+This check does not affect connections through a tunnel prepared before stop.
+
 `TunnelForwarder::local_addr()` reports the canonical bound address, while
 repeatable `wait()` and `close()` share the listener's cached terminal result.
 Dropping the final handle requests cancellation.

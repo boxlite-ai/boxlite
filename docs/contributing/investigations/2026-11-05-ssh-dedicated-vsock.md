@@ -28,6 +28,51 @@ No automatic fallback from the dedicated Rust path.
 
 ## Related work and lessons
 
+### Reject invalidated handles before implicit startup
+
+Both SSH and network tunnel preparation must reject an invalidated handle before
+initialization, including a box stopped before its first boot with `auto_delete=0`.
+Prepared tunnels retain their existing reconnection behavior. This correction
+implements the bound design's spent-handle requirement for both local transports.
+
+At `856e4b04e7de3b8c3ac0d5d80dea7cb48d9bcb29`:
+
+- `box_impl.rs:714,767` cancels the handle during `stop()` but intentionally keeps
+  never-booted boxes `Configured`. `ensure_booted()` at line 1135 only rejects an
+  initialized live cell whose VM is no longer running. An empty cell therefore
+  enters initialization despite the cancelled token.
+- SSH preparation (`ssh.rs:183`) and network preparation (`box_impl.rs:1711`)
+  both enter `live_state()`. Container startup checks cancellation only after
+  VM initialization. In contrast, `exec()` at line 457 rejects cancellation
+  before starting any live work. Adopt that early check at the shared
+  `live_state()` entry, using the existing `Stopped` error and recovery guidance.
+- Do not move the check to `ensure_booted()`: `stop()` calls that method after
+  cancellation to attach and clean up a running VM. Do not check the token in
+  prepared tunnel openers, which intentionally reconnect after a box restarts.
+
+Leaving the existing guard unchanged permits initialization through a stopped
+handle. Separate checks in the two tunnel methods would duplicate the same rule.
+The shared entry preserves completion of initialization already in progress;
+this change does not add cancellation halfway through resource acquisition.
+
+Validation plan: create a persistent unbooted box through the runtime, stop it,
+then prepare each kind of tunnel through its public handle. A regular file at
+the box-directory path makes accidental initialization fail at filesystem setup,
+before image access or VM spawn. With production unchanged, each regression must
+reach its assertion with that storage error instead of `Stopped`. With the guard,
+both must return `Stopped` and preserve `Configured`; a fresh `runtime.get()`
+handle must reach the filesystem error, proving startup remains available.
+Run existing tunnel startup/reconnection tests and Rust checks afterward.
+
+Observed: with every non-test file at `856e4b04`, both new tests failed at the
+`Stopped` assertion with `Storage("failed to create box dir: File exists (os error 17)")`
+in both feature passes. With the guard restored, both passed, including the
+fresh-handle check. `BOXLITE_DEPS_STUB=1 make test:unit:rust` then passed 1,691
+tests with 18 skipped; existing SSH startup and reconnection tests were included.
+Nextest reported one passing test as leaky. These checks exercise the startup
+boundary without a VM; no new VM integration run was performed for this fix.
+`make clippy`, `make fmt:check:rust`, and `git diff --check` passed.
+
 ### Socket cleanup and error reporting
 
 Remove stale SSH socket files through `BoxSockets::real_dir()`, while retaining
