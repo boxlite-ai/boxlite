@@ -18,12 +18,14 @@ vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }))
 
 let root: Root
 
+/** Finds a rendered action by its visible label, failing if the expected control is absent. */
 function button(label: string) {
   const element = [...document.querySelectorAll('button')].find((b) => b.textContent?.trim() === label)
   if (!element) throw new Error(`Missing button: ${label}`)
   return element
 }
 
+/** Opens the real dialog through its trigger, with permissions supplied by the scenario. */
 async function renderDialog(permissions = [CreateApiKeyPermissionsEnum.WRITE_BOXES]) {
   await act(async () => {
     root.render(
