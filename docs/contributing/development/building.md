@@ -46,6 +46,8 @@ Use `make test:unit:libkrun` on a Linux/KVM host for the memory map, virtio-mem
 device, and VMM hotplug placement tests. The target also compiles the VMM test
 fixtures, including direct boot without shared-memory devices. Use
 `make test:integration:rust FILTER=resize` for live VM growth and restart recovery.
+The resize integration suite is compiled only on Linux because it exercises KVM
+and Linux cgroups.
 `make fmt:libkrun` formats the affected vendored crates.
 
 The shim's memory control socket is host-only and uses mode `0600`. The VMM
