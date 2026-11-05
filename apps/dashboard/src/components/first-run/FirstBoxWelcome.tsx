@@ -12,6 +12,8 @@ import { RoutePath } from '@/enums/RoutePath'
 import { FIRST_RUN_USE_CASES, type FirstRunWelcome, type FirstRunUseCase } from '@/lib/first-run'
 import { getLocalStorageItem } from '@/lib/local-storage'
 import FirstBoxAtmosphere from './FirstBoxAtmosphere'
+import WelcomeJourneyArtwork from './WelcomeJourneyArtwork'
+import WelcomeCreditsStep from './WelcomeCreditsStep'
 
 const USE_CASE_ICONS = {
   'coding-agent': Code2,
@@ -54,43 +56,65 @@ export default function FirstBoxWelcome() {
     organizationName: profile.data || organizationSaved ? selectedOrganization.name : '',
     useCase: profile.data?.useCase ?? null,
     note: profile.data?.note ?? '',
-    creditGrantedAt: null,
     completedAt,
   }
   return <WelcomeForm key={`${user?.profile.sub}:${orgId}`} initial={initial} />
 }
 
 function WelcomeForm({ initial }: { initial: FirstRunWelcome }) {
-  const { welcome, action, billingEnabled } = useWelcomeOnboarding(initial)
-  const [step, setStep] = useState<'organization' | 'intent'>(welcome.organizationName ? 'intent' : 'organization')
+  const { welcome, action, complete, billingEnabled } = useWelcomeOnboarding(initial)
+  const [step, setStep] = useState<'organization' | 'intent' | 'credits'>(
+    billingEnabled && welcome.useCase ? 'credits' : welcome.organizationName ? 'intent' : 'organization',
+  )
+  const [termsAccepted, setTermsAccepted] = useState(false)
   const [name, setName] = useState(welcome.organizationName)
   const [useCase, setUseCase] = useState<FirstRunUseCase | null>(welcome.useCase)
   const [note, setNote] = useState(welcome.note)
   const [noteOpen, setNoteOpen] = useState(Boolean(welcome.note))
+  const [mainElement, setMainElement] = useState<HTMLElement | null>(null)
+  const [illustrationAnchor, setIllustrationAnchor] = useState<HTMLDivElement | null>(null)
   const error = action.isError
     ? action.error instanceof Error
       ? action.error.message
       : 'Could not save. Please try again.'
     : null
 
-  if (welcome.completedAt != null || welcome.creditGrantedAt !== null)
-    return <Navigate to={RoutePath.QUICKSTART} replace />
+  if (welcome.completedAt != null) return <Navigate to={RoutePath.QUICKSTART} replace />
+
+  const gettingCredits = step === 'credits'
 
   return (
-    <FirstBoxAtmosphere>
-      <main className="mx-auto w-full max-w-[620px] px-6 pb-12 pt-10 font-display sm:pt-16">
+    <FirstBoxAtmosphere animated={false}>
+      <WelcomeJourneyArtwork
+        step={step}
+        selection={useCase}
+        mainElement={mainElement}
+        creditsAnchor={illustrationAnchor}
+      />
+      <main
+        ref={setMainElement}
+        className={`mx-auto w-full px-6 pb-12 pt-10 font-display sm:pt-16 min-[1180px]:pt-20 ${gettingCredits ? 'max-w-[1080px] lg:pt-20' : 'max-w-[620px] min-[1180px]:max-w-[960px]'}`}
+      >
         <div
-          className="mb-8 flex items-center gap-3 font-mono text-label text-muted-foreground"
+          className={`flex items-center gap-3 font-mono text-label text-muted-foreground ${gettingCredits ? 'mb-10 lg:mb-16' : 'mb-8'} ${!gettingCredits ? 'welcome-journey-form' : ''}`}
           aria-label="Onboarding progress"
         >
           <span className={step === 'organization' ? 'text-foreground' : ''}>1 Organization</span>
           <span aria-hidden="true">/</span>
           <span className={step === 'intent' ? 'text-foreground' : ''}>2 Use case</span>
+          {billingEnabled && (
+            <>
+              <span aria-hidden="true">/</span>
+              <span className={step === 'credits' ? 'text-foreground' : ''}>3 Get credits</span>
+            </>
+          )}
         </div>
         {step === 'organization' && (
           <form
+            className="welcome-journey-form"
             onSubmit={(event) => {
               event.preventDefault()
+              if (!termsAccepted) return
               action.mutate({ type: 'organization', name }, { onSuccess: () => setStep('intent') })
             }}
           >
@@ -108,16 +132,53 @@ function WelcomeForm({ initial }: { initial: FirstRunWelcome }) {
               onChange={(event) => setName(event.target.value)}
               maxLength={60}
               required
-              placeholder="e.g. Acme or Alex’s workspace"
+              placeholder="e.g. Acme or Alex"
               autoComplete="organization"
               className="h-12 w-full border border-border bg-card px-4 text-body outline-none focus:border-foreground/50"
             />
             <p className="mt-2 font-mono text-xs text-muted-foreground">You can change this later.</p>
+            <div className="mt-6 flex items-start gap-2.5 text-sm leading-6 text-muted-foreground">
+              <input
+                id="welcome-terms"
+                type="checkbox"
+                checked={termsAccepted}
+                onChange={(event) => setTermsAccepted(event.target.checked)}
+                disabled={action.isPending}
+                aria-labelledby="welcome-terms-label"
+                className="mt-1 size-4 shrink-0 cursor-pointer accent-foreground"
+              />
+              <span id="welcome-terms-label">
+                <label htmlFor="welcome-terms" className="cursor-pointer">
+                  I agree to the{' '}
+                </label>
+                <a
+                  href="https://boxlite.ai/legal/terms"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-foreground underline underline-offset-4"
+                >
+                  Terms of Service
+                </a>
+                <label htmlFor="welcome-terms" className="cursor-pointer">
+                  {' '}
+                  and acknowledge the{' '}
+                </label>
+                <a
+                  href="https://boxlite.ai/legal/privacy"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-foreground underline underline-offset-4"
+                >
+                  Privacy Policy
+                </a>
+                .
+              </span>
+            </div>
             <AsciiButton
               type="submit"
               variant="primary"
               className="mt-8 h-11 w-full font-display"
-              disabled={!name.trim() || action.isPending}
+              disabled={!name.trim() || !termsAccepted || action.isPending}
             >
               {action.isPending ? 'Saving…' : 'Continue'}
             </AsciiButton>
@@ -125,18 +186,27 @@ function WelcomeForm({ initial }: { initial: FirstRunWelcome }) {
         )}
         {step === 'intent' && (
           <form
+            className="welcome-journey-form"
             onSubmit={(event) => {
               event.preventDefault()
-              if (useCase) action.mutate({ type: 'intent', useCase, note })
+              if (useCase)
+                action.mutate(
+                  { type: 'intent', useCase, note },
+                  {
+                    onSuccess: () => {
+                      if (billingEnabled) setStep('credits')
+                    },
+                  },
+                )
             }}
           >
             <h1 className="font-display text-page font-semibold">What are you building?</h1>
             <p className="mt-3 text-sm leading-6 text-muted-foreground">What would you like to use BoxLite for?</p>
-            <fieldset className="mt-7" disabled={action.isPending}>
+            <fieldset className="mt-5" disabled={action.isPending}>
               <legend className="sr-only">Use case</legend>
               <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
                 {FIRST_RUN_USE_CASES.filter((option) => option.id !== 'exploring').map((option) => {
-                  const Icon = USE_CASE_ICONS[option.id]
+                  const Icon = useCase === option.id ? Check : USE_CASE_ICONS[option.id]
                   return (
                     <label key={option.id} className="group relative cursor-pointer">
                       <input
@@ -153,16 +223,12 @@ function WelcomeForm({ initial }: { initial: FirstRunWelcome }) {
                           className={`size-4 shrink-0 transition-colors ${useCase === option.id ? 'text-brand' : 'text-muted-foreground group-hover:text-foreground'}`}
                         />
                         <span className="flex-1">{option.label}</span>
-                        <Check
-                          aria-hidden="true"
-                          className={`size-3.5 shrink-0 text-brand transition-opacity ${useCase === option.id ? 'opacity-100' : 'opacity-0'}`}
-                        />
                       </span>
                     </label>
                   )
                 })}
               </div>
-              <label className="mt-3 inline-flex cursor-pointer items-center gap-2 py-2">
+              <label className="mt-2 inline-flex cursor-pointer items-center gap-2 py-1.5">
                 <input
                   type="radio"
                   name="boxlite-use-case"
@@ -180,7 +246,7 @@ function WelcomeForm({ initial }: { initial: FirstRunWelcome }) {
                 />
               </label>
             </fieldset>
-            <details open={noteOpen} onToggle={(event) => setNoteOpen(event.currentTarget.open)} className="group mt-5">
+            <details open={noteOpen} onToggle={(event) => setNoteOpen(event.currentTarget.open)} className="group mt-2">
               <summary className="flex w-fit cursor-pointer list-none items-center gap-1.5 text-sm text-muted-foreground outline-offset-4 hover:text-foreground [&::-webkit-details-marker]:hidden">
                 <ChevronRight aria-hidden="true" className="size-3.5 transition-transform group-open:rotate-90" />
                 Add context <span className="ml-1 text-xs">(optional)</span>
@@ -198,7 +264,7 @@ function WelcomeForm({ initial }: { initial: FirstRunWelcome }) {
                 className="mt-3 w-full resize-y border border-border bg-card px-4 py-3 text-sm outline-none focus:border-foreground/50"
               />
             </details>
-            <div className="mt-8 flex items-center justify-between">
+            <div className="mt-5 flex items-center justify-between">
               <button
                 type="button"
                 disabled={action.isPending}
@@ -217,29 +283,26 @@ function WelcomeForm({ initial }: { initial: FirstRunWelcome }) {
                 disabled={!useCase || action.isPending}
               >
                 {action.isPending
-                  ? billingEnabled
-                    ? 'Waiting for credits…'
-                    : 'Saving…'
+                  ? 'Saving…'
                   : action.isError
                     ? 'Try again'
-                    : 'Start quickstart'}
+                    : billingEnabled
+                      ? 'Continue'
+                      : 'Start quickstart'}
               </AsciiButton>
             </div>
-            {billingEnabled && (
-              <p className="mt-3 text-right text-xs text-muted-foreground">
-                We’ll check your signup credits before opening Quickstart.
-              </p>
-            )}
-            {billingEnabled && action.isError && useCase && (
-              <button
-                type="button"
-                className="mt-3 text-sm underline"
-                onClick={() => action.mutate({ type: 'intent', useCase, note, skipCredit: true })}
-              >
-                Continue without credits
-              </button>
-            )}
           </form>
+        )}
+        {step === 'credits' && billingEnabled && (
+          <WelcomeCreditsStep
+            onContinue={complete}
+            illustrationRef={setIllustrationAnchor}
+            useCase={welcome.useCase}
+            onBack={() => {
+              action.reset()
+              setStep('intent')
+            }}
+          />
         )}
         {error && (
           <p role="alert" className="mt-4 text-xs text-destructive">

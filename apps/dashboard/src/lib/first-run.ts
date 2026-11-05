@@ -12,14 +12,14 @@ export const FIRST_RUN_USE_CASES = [
     id: 'coding-agent',
     label: 'Coding agent',
     name: 'agent-workspace',
-    description: 'A Python workspace for your coding agent.',
+    description: 'A Python Box for your coding agent.',
     tool: 'Codex',
   },
   {
     id: 'code-execution',
-    label: 'Run code safely',
+    label: 'Run tests or CI',
     name: 'python-box',
-    description: 'An isolated Python environment for running your code.',
+    description: 'An isolated environment for running tests and CI jobs.',
     tool: 'Python SDK',
   },
   {
@@ -33,7 +33,7 @@ export const FIRST_RUN_USE_CASES = [
     id: 'long-running-agent',
     label: 'Long-running agents',
     name: 'agent-workspace',
-    description: 'A workspace for continuously running agents.',
+    description: 'A Box for continuously running agents.',
     tool: 'Python SDK',
   },
   {
@@ -47,7 +47,7 @@ export const FIRST_RUN_USE_CASES = [
     id: 'reinforcement-learning',
     label: 'Reinforcement learning',
     name: 'rl-workspace',
-    description: 'A Python workspace for your reinforcement learning experiments.',
+    description: 'A Python Box for your reinforcement learning experiments.',
     tool: 'Python SDK',
   },
   EXPLORING_USE_CASE,
@@ -57,6 +57,5 @@ export interface FirstRunWelcome {
   organizationName: string
   useCase: FirstRunUseCase | null
   note: string
-  creditGrantedAt: number | null
   completedAt?: number | null
 }

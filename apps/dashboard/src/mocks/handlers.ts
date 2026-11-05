@@ -18,7 +18,7 @@ import {
   WalletTransaction,
 } from '@/billing-api'
 import { Invoice, PaginatedInvoices } from '@/billing-api/types/Invoice'
-import { PaymentUrl, SignupCreditDelivery } from '@/billing-api/types/OrganizationWallet'
+import { PaymentUrl } from '@/billing-api/types/OrganizationWallet'
 import { Plan } from '@/billing-api/types/Plan'
 import {
   BoxProgressPhase,
@@ -67,16 +67,6 @@ function quickstartHandoffDemoBox() {
       inbound: { mode: stage === 'published' ? NetworkMode.ENABLED : NetworkMode.DISABLED, allow_net: [] },
     },
   }
-}
-
-// Every signup credit reads as delivered. To watch the Wallet tab's pending
-// notice come and go, localStorage['signup-credit-pending'] = '1' answers
-// false for six seconds from the first read.
-let signupCreditFirstReadAt: number | undefined
-function signupCreditDelivered() {
-  if (globalThis.localStorage?.getItem('signup-credit-pending') !== '1') return true
-  signupCreditFirstReadAt ??= Date.now()
-  return Date.now() - signupCreditFirstReadAt >= 6_000
 }
 
 /** Boxes that block an image's removal: every one not destroyed, as the API counts them. */
@@ -948,7 +938,4 @@ export const handlers = [
       url: `https://checkout.stripe.com/pay/cs_test_${Date.now()}`,
     })
   }),
-  http.get(`${BILLING_API_URL}/organization/:organizationId/coupon/register`, () =>
-    HttpResponse.json<SignupCreditDelivery>({ delivered: signupCreditDelivered() }),
-  ),
 ]

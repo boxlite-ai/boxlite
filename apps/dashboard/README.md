@@ -180,26 +180,17 @@ entirely. They are sibling tabs now, and each is paged rather than rendered
 whole — an account with hundreds of documents must not decide how tall this page
 is.
 
-## A pending signup credit is announced only while it can still arrive
+## Card setup and promo redemption share one billing flow
 
-A new owner's wallet reads $0.00 until the signup credit is granted, so the
-Wallet tab says it is on its way: "Registration rewards are being distributed,
-please wait patiently." The billing service only reports whether the credit
-has been delivered, and "not yet" also covers a credit that never comes: one
-switched off, or an organization that does not qualify. Three rules keep the
-notice from promising money that is not coming:
+Wallet and Welcome use the same card setup operation: open a tab, request the
+organization's Checkout URL, and navigate to Stripe. Returning to Welcome or
+choosing Check card status refreshes the wallet and saved payment methods.
+A connected card allows the user to continue without waiting for reward delivery.
 
-- Only a verified owner asks, and only for their default organization. No one
-  else is granted a credit, so for anyone else "not yet" would never change.
-- Reads stop after about two minutes, 2, 4, 8, 16, 30, 30 and 30 s apart, and
-  the notice goes with them. Returning after the cached answer is dropped
-  starts a fresh window.
-- A failed read ends the wait as well, rather than polling the error.
-
-When the credit lands, the wallet and its ledger are refetched before the
-notice goes, so the balance changes as it disappears. `npm run start:mock`
-reports every credit delivered; `localStorage['signup-credit-pending'] = '1'`
-holds it back for six seconds.
+Both pages redeem coupons through `useRedeemCouponMutation`. Success invalidates
+wallet, transactions, invoices, plan, and usage so the next view reflects the
+server's result. Welcome shows the returned message and offers Quickstart;
+Explore with BoxLite is available without a card or coupon.
 
 ## A choice says what it does, and shows which one is picked
 
@@ -400,7 +391,8 @@ meantime, the console falls back to their personal organization.
 
 ## New-user onboarding
 
-The welcome flow saves organization intent before confirming signup credit delivery.
+The welcome flow saves organization intent, then offers card setup, promo redemption,
+or direct entry to Quickstart.
 [Onboarding](ONBOARDING.md) describes the dedicated Quickstart page, public image templates,
 server-backed prompt drafts, and deployment/verification requirements.
 
