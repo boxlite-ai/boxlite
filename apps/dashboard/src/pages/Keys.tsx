@@ -76,8 +76,13 @@ const Keys: React.FC = () => {
   return (
     <div className="flex h-[calc(100svh-60px)] min-h-0 flex-col px-[34px] pt-[26px] lg:px-[40px]">
       {/* header — same hierarchy as the Boxes page */}
-      <div className="mb-[22px] flex items-end justify-between">
-        <h1 className="font-display text-page font-semibold text-foreground">API Keys</h1>
+      <div className="mb-[22px] flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <h1 className="font-display text-page font-semibold text-foreground">API Keys</h1>
+          <p className="mt-2 text-body leading-relaxed text-muted-foreground">
+            Connect your apps, scripts, and SDKs to BoxLite.
+          </p>
+        </div>
         <CreateApiKeyDialog
           availablePermissions={availablePermissions}
           apiUrl={apiUrl}

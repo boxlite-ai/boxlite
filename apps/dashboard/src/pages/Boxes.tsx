@@ -706,7 +706,19 @@ const Boxes: React.FC = () => {
     <div className="flex h-[calc(100svh-60px)] min-h-0 flex-col px-4 pt-5 sm:px-6 lg:px-[40px] lg:pt-[26px]">
       {/* header */}
       <div className="mb-[18px] flex items-end justify-between lg:mb-[22px]">
-        <h1 className="font-display text-page font-semibold text-foreground">Boxes</h1>
+        <div>
+          <h1 className="font-display text-page font-semibold text-foreground">Boxes</h1>
+          <p className="mt-2 text-body leading-relaxed text-muted-foreground">
+            Create Boxes to run agentic workloads and apps in isolated environments.{' '}
+            <button
+              type="button"
+              onClick={() => navigate(RoutePath.QUICKSTART)}
+              className="ml-2 inline text-foreground underline underline-offset-4 hover:text-brand focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand"
+            >
+              First time here? Follow Quickstart →
+            </button>
+          </p>
+        </div>
       </div>
 
       {/* stat cards — a fleet instrument. With a handful of boxes the table

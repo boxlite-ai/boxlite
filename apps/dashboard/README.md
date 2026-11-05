@@ -258,11 +258,13 @@ as the API orders its routes, or it would read as an image named "registries".
 
 The API has no create for an image: one enters the catalog when a box first
 starts from it. So the Images page has no "New image" button, which would
-promise a registration step that does not exist. It says how an image arrives
-instead, as three steps across the top: connect a private registry if the image
-needs one, start a box from it, and it is listed once the box runs. The first
-is the only step a reader may have to take beforehand, so it links to Private
-registries; the second opens the box create.
+promise a registration step that does not exist. One description below the title
+explains the active tab: built-in/used images or private-registry credentials.
+The Private registries tab provides credential setup. New box in the filter
+toolbar opens the existing create dialog, while row actions prefill an image.
+Quota information stays in the usage meter. The inline "How to add an image"
+control expands the registry → New box → successful start steps on demand.
+Feature descriptions carry definitions, and empty states give a brief next action.
 
 Images lists only rows returned by the image catalog API: the organization's
 registered images and the operator-configured system images. Quickstart's
@@ -438,11 +440,22 @@ See [Cloud sandbox sizes](../../docs/guides/resource-limits.md#cloud-sandbox-siz
 
 **Domains** is a primary navigation page alongside Images and Volumes. It lists
 the selected organization's full hostnames and Box/port, App, or unbound targets.
+The filter matches hostnames and target names/IDs. Request domain lives in the
+resource toolbar; each row can copy its full hostname with explicit clipboard
+feedback. Empty, filtered-empty, permission and load-error states are distinct.
+Associated with links Box targets to their existing details page. App targets
+remain text because the console has no App details route; unbound targets show —.
+The page and request dialog use the shared console buttons and square surfaces.
 Use **Request domain** to enter a short name and preview the full hostname; a
 successful request holds the name without binding it. Quota and Box write
 permission apply. Bind acquired full hostnames through the CLI or SDK; binding
 does not request names, and App binding remains reserved. Unbinding retains
 ownership and consumes the same quota slot.
+
+Connection guidance is available in the collapsed "How to connect a domain"
+section. Successful requests clear filtering and show a reservation confirmation.
+Late results from a previous organization invalidate that organization's cache
+without showing a success notification in the current organization.
 
 Run `make test:apps:dashboard` for page/client tests and
 `make build:apps:dashboard` for the production build and type check.

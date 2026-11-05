@@ -6,8 +6,12 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import Domains from './Domains'
 import type { DomainList, HeldDomain } from '@/api/domain-types'
+import { MemoryRouter } from 'react-router-dom'
 
 const state = vi.hoisted(() => ({ organizationId: 'org-1', canManage: true, list: vi.fn(), claim: vi.fn() }))
+const feedback = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn(), copy: vi.fn() }))
+vi.mock('sonner', () => ({ toast: { success: feedback.success, error: feedback.error } }))
+vi.mock('@/lib/copy-text', () => ({ copyToClipboard: feedback.copy }))
 vi.mock('@/hooks/useApi', () => ({ useApi: () => ({ listDomains: state.list, claimDomain: state.claim }) }))
 vi.mock('@/hooks/useSelectedOrganization', () => ({
   useSelectedOrganization: () => ({
@@ -40,6 +44,9 @@ describe('Domains page', () => {
     globalThis.IS_REACT_ACT_ENVIRONMENT = true
   })
   beforeEach(() => {
+    feedback.success.mockReset()
+    feedback.error.mockReset()
+    feedback.copy.mockReset().mockResolvedValue(true)
     state.organizationId = 'org-1'
     state.canManage = true
     state.list.mockReset().mockResolvedValue(list)
@@ -66,7 +73,9 @@ describe('Domains page', () => {
     act(() =>
       root.render(
         <QueryClientProvider client={client}>
-          <Domains />
+          <MemoryRouter>
+            <Domains />
+          </MemoryRouter>
         </QueryClientProvider>,
       ),
     )
@@ -97,6 +106,10 @@ describe('Domains page', () => {
       'spare.apps.testUnbound——',
     ])
     expect(document.body.textContent).toContain('3 / 5 domains held')
+    const links = document.querySelectorAll('tbody a')
+    expect(links).toHaveLength(1)
+    expect(links[0].textContent).toBe('box-123')
+    expect(links[0].getAttribute('href')).toBe('/dashboard/boxes/box-123')
   })
 
   it('previews a full hostname from a short name, claims it and refreshes the list', async () => {
@@ -105,7 +118,7 @@ describe('Domains page', () => {
     expect(document.querySelector('[role="dialog"]')?.textContent).toContain('my-app.apps.test')
     await submit()
     expect(state.claim).toHaveBeenCalledWith('org-1', 'my-app')
-    expect(document.body.textContent).toContain('Domain acquired: my-app.apps.test')
+    expect(feedback.success).toHaveBeenCalledWith('Domain reserved', { description: 'my-app.apps.test' })
     expect(state.list).toHaveBeenCalledTimes(2)
     expect(document.querySelector('[role="dialog"]')).toBeNull()
   })
@@ -166,7 +179,46 @@ describe('Domains page', () => {
     await act(async () => resolveClaim({ hostname: 'late.apps.test', url: 'https://late.apps.test', target: null }))
     await settle()
     expect(document.body.textContent).not.toContain('late.apps.test')
+    expect(feedback.success).not.toHaveBeenCalled()
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ['domains', 'org-1', 'list'] })
     expect(state.list).toHaveBeenLastCalledWith('org-2')
+  })
+
+  it('filters by hostname and target, distinguishes no matches, and clears the filter', async () => {
+    await render()
+    const input = document.querySelector<HTMLInputElement>('input[aria-label="Filter domains"]')!
+    const type = (value: string) =>
+      act(() => {
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, value)
+        input.dispatchEvent(new Event('input', { bubbles: true }))
+      })
+    for (const value of [' WEB-ONE ', 'BOX-123']) {
+      type(value)
+      expect(document.querySelectorAll('tbody tr')).toHaveLength(1)
+      expect(document.querySelector('tbody')?.textContent).toContain('web-one.apps.test')
+    }
+    type('shop-app')
+    expect(document.querySelector('tbody')?.textContent).toContain('shop-one.apps.test')
+    type('missing')
+    expect(document.body.textContent).toContain('No domain matches')
+    expect(document.body.textContent).not.toContain('No domains yet')
+    await act(async () =>
+      [...document.querySelectorAll('button')].find((b) => b.textContent === 'Clear filter')!.click(),
+    )
+    expect(document.querySelectorAll('tbody tr')).toHaveLength(3)
+  })
+
+  it.each([true, false])('reports clipboard success=%s accurately for the selected hostname', async (copied) => {
+    feedback.copy.mockResolvedValue(copied)
+    await render()
+    await act(async () =>
+      document.querySelector<HTMLButtonElement>('button[aria-label="Copy spare.apps.test"]')!.click(),
+    )
+    expect(feedback.copy).toHaveBeenCalledWith('spare.apps.test')
+    if (copied) expect(feedback.success).toHaveBeenCalledWith('Domain copied')
+    else {
+      expect(feedback.success).not.toHaveBeenCalled()
+      expect(feedback.error).toHaveBeenCalledWith('Could not copy domain. Select the hostname and copy it manually.')
+    }
   })
 })
