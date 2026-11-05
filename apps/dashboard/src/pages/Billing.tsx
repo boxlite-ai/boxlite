@@ -94,6 +94,9 @@ function Billing() {
       <div className="page-container">
         <div className="pt-6">
           <h1 className="font-display text-2xl font-semibold leading-none tracking-tight">Billing</h1>
+          <p className="mt-2 text-body leading-relaxed text-muted-foreground">
+            Track resource usage, manage your plan, and top up your balance.
+          </p>
           <div className="mt-4 w-full empty:hidden">
             <BalanceLowBanner onGoToWallet={() => setTab('wallet')} />
           </div>

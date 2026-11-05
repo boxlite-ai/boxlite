@@ -68,19 +68,15 @@ export function ApiKeyTable({ data, loading, isLoadingKey, onRevoke }: DataTable
             <KeyRound className="size-14 text-muted-foreground opacity-70" strokeWidth={1.4} />
             <div className="mt-[22px] text-[17px] font-semibold">No API Keys yet.</div>
             <div className="mt-[18px] max-w-[440px] text-[13.5px] leading-relaxed text-muted-foreground">
-              API Keys authenticate requests made through the BoxLite SDK or CLI.
-            </div>
-            <div className="mt-1.5 text-[13.5px] text-muted-foreground">
-              Generate one and{' '}
+              Create a key to get started.{' '}
               <a
                 href="https://docs.boxlite.ai"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="font-semibold text-foreground underline decoration-brand underline-offset-2"
               >
-                check out the API Key setup guide
+                Setup guide →
               </a>
-              .
             </div>
           </div>
         ) : (

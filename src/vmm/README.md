@@ -38,7 +38,7 @@ boxlite-vmm
 | `bus` | `Bus`, `BusRange` and `BusDevice`, and `Buses::dispatch`, which serves the MMIO and port exits of a vCPU |
 | `virtio` | The virtio common infrastructure: the synchronous device contract (`VirtioDevice`, `DeviceSpec`, `DeviceEvent`, `ActivationContext`, `EventRegistrar`, `Waker`, `WorkerControl`), the `VirtQueues` facade (dense preparation and validation, EVENT_IDX, exactly-once deferred completion, notification drain, the stored guest-memory Arc and negotiated indirect flag, and `save`/`restore` stubs that report snapshots unsupported until M8), the 4 KiB virtio-mmio transport (register file, feature negotiation, queue configuration and activation, Status=0 reset, post-activation queue-write rejection), `mmio::add_device`, which attaches any device through that transport, the MMIO interrupt handle, the default snapshot methods, and the virtio workers (`VirtioWorkers` over a `WorkerRuntime`; `SharedRuntime` runs every device's events on one thread) |
 | `irq` | `IrqChip`, the host interrupt controller as devices see it, and `IrqLine`, one device line; HVF and KVM provide the controller, WHP (M10) only local APICs |
-| `devices` | `devices::add_all`, the one composition helper (add a device type as one `add_slot_device` line), the console queue and the output-only virtio console device, and on x86_64 the 8250 UART at COM1 and the i8042 reset, with `add_legacy_devices` |
+| `devices` | `devices::add_all`, the one composition helper (add a device type as one `add_slot_device` line), the console queue, internal virtio-net device, output-only virtio console device, and on x86_64 the 8250 UART at COM1 and the i8042 reset, with `add_legacy_devices` |
 | `devices::balloon` | Reporting-only `VirtioBalloon`: configuration, negotiation, whole-chain prevalidation and a `ReclaimPolicy` chosen when the device is constructed; `devices::add_all` composes it on the first slot |
 | `virtio::worker` | One lazy shared poller/thread, coalesced generation-bound queue kicks, backend readiness, stop barriers and VM shutdown |
 | `events` | `Event`, which ends the VM, `EventSender`, which also latches the stop, and `EventLoop`, the poller that waits for the first event |
@@ -57,6 +57,43 @@ those platforms or complete M2. The BoxLite engine adapter, engine selection
 and `native` feature wiring are separate M2 work.
 Neither new crate depends on `boxlite-shared`, and both are unpublished while
 their interfaces are being established.
+
+## Virtio network device
+
+`devices::net::Net::new(socket_path, mac)` implements an internal RX/TX queue
+pair over the Linux gvproxy QEMU stream. It compiles on Unix for socket tests;
+macOS gvproxy uses a different wire protocol. VM assembly and
+snapshots remain out of scope; `Vm::new` does not yet attach this device.
+
+- Device ID 1, RX queue 0, TX queue 1, up to 256 entries each; only MAC is
+  offered by Net. The unchanged transport owns VERSION_1 negotiation.
+- Guest buffers contain a modern 12-byte virtio header; the stream carries a
+  four-byte big-endian length and 14–65,549 Ethernet bytes. Offloads are rejected;
+  unknown TX flag bits and unused TX `num_buffers` are ignored. RX sets it to 1.
+- The existing `VirtQueues::drain` defers chains into bounded metadata queues;
+  `complete` returns each head exactly once. Only one packet per direction is
+  buffered. Partial socket I/O retains its offset, and an undersized RX chain
+  is returned with zero length without writing a truncated packet.
+- A Net-local socket source registers both read/write interests through the
+  unchanged `EventRegistrar`. Unix edge-triggered polling permits fixed
+  interests; a queue kick resumes RX when guest buffers become available.
+- Each direction has a 256-iteration budget. Budget exhaustion registers a new
+  socket source before removing the old one, rechecking readiness without
+  changing the worker. RX delivers a complete packet before yielding, so remaining
+  work needs socket I/O or a guest kick; WouldBlock never triggers busy retries.
+- Errors latch `NeedsReset`; error/reset/drop deregisters and closes the stream.
+  Reset discards outstanding metadata and packet buffers. A new activation needs
+  a listening backend; gvproxy accepts one stream per instance.
+
+Completion interrupts follow the unchanged queue facade. Its current dependency
+ignores the ordinary NO_INTERRUPT flag without EVENT_IDX; fixing that shared
+behavior is a separate task. Net does not claim stopped or whole-VM snapshots.
+
+Run `make test:unit:vmm` and `make clippy:vmm`. Tests exercise real Unix sockets,
+guest RAM, descriptor chains, backpressure, reset, the unchanged MMIO
+transport, and continuation on the production shared worker. They do not qualify the real gvproxy bridge or a Linux guest.
+See the [design study](../../docs/contributing/investigations/2026-11-02-vmm-virtio-net.md)
+for the scope and interface trade-offs.
 
 ## Guest RAM
 
@@ -241,6 +278,34 @@ log so far.
 The boot with every interrupt dropped and the stopped boot end in
 `StopRequested`. Every other boot must end in `GuestReset`: `panic=-1
 reboot=k` turns a panic, and the restart, into the i8042 reset.
+
+## Vsock building blocks
+
+The Unix-only `virtio::vsock` module provides the wire codec, captured writable
+guest buffers and registered Unix socket sources. The connection state machine,
+backend routing, device facade and snapshots are subsequent layers of the
+[vsock design](https://github.com/boxlite-ai/boxlite/issues/2312).
+There is no attached vsock device at this layer.
+
+The codec uses explicit little-endian fields and rejects truncated packets or
+payloads above 64 KiB. A captured buffer owns checked descriptor metadata and
+uses the chain's total capacity: a 4096-byte chain writes a 44-byte header and
+up to 4052 stream bytes. The caller retains any unsent tail. Header-only buffers
+can carry controls; data returns zero bytes, while shorter headers require reset.
+Callers own nonblocking standard-library Unix streams and listeners directly.
+`Registration::stream` and `Registration::listener` clone a handle for the poller;
+a private enum holds those two source types with their requested interests.
+Device I/O takes no socket mutex and needs no generic wrapper or explicit fd
+conversion. Each registration costs one extra file descriptor. Dropping the
+registration deregisters and closes only the polling copy, leaving caller I/O
+usable. Closing the caller's socket first is safe too; the polling copy keeps it
+open until deregistration. Failed registration leaves the original socket intact.
+Callers must set accepted streams nonblocking before worker use. This ownership
+change has no measured throughput claim.
+
+`make test:unit:vmm FILTER=vsock` checks encoding, packet bounds, guest-memory
+scatter delivery, real Unix stream/listener readiness, and registration cleanup
+in either ownership order, including rejected registrations.
 
 ## Lifecycle
 

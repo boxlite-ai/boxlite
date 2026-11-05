@@ -251,16 +251,13 @@ export function RegistriesPanel() {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="mb-[14px] flex flex-wrap items-center justify-between gap-3">
-        <p className="font-mono text-meta text-muted-foreground">
-          A credential lets your boxes pull private images. Public images need none.
-        </p>
-        {canWrite && !unsupported && (
+      {canWrite && !unsupported && (
+        <div className="mb-[14px] flex justify-end">
           <AsciiButton variant="primary" onClick={() => setAdding(true)}>
             Connect a registry
           </AsciiButton>
-        )}
-      </div>
+        </div>
+      )}
 
       <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
         {unsupported ? (
@@ -321,9 +318,7 @@ export function RegistriesPanel() {
               !isLoading &&
               credentials.length === 0 && (
                 <div className="flex flex-col items-center gap-4 py-10 text-center">
-                  <p className="font-mono text-meta text-muted-foreground">
-                    No private registry connected. Boxes can start from any public image already.
-                  </p>
+                  <p className="font-mono text-meta text-muted-foreground">No private registries connected.</p>
                   {canWrite && (
                     <AsciiButton variant="primary" onClick={() => setAdding(true)}>
                       Connect a registry
