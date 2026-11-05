@@ -722,6 +722,11 @@ mod tests {
     // Serialization tests (pure logic, no fork needed)
     // ========================================================================
 
+    mod pty_build {
+        use super::*;
+        include!("tests/pty_build.rs");
+    }
+
     fn sample_spec() -> BuildSpec {
         let mut env = HashMap::new();
         env.insert("PATH".to_string(), "/usr/bin:/bin".to_string());

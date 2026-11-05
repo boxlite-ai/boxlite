@@ -12,6 +12,9 @@ use std::time::{Duration, Instant};
 const TEST_NAME: &str = "container::command::pty_startup_tests::pty_startup_preserves_shell_modes";
 const CHILD_ENV: &str = "BOXLITE_PTY_STARTUP_CHILD";
 
+#[path = "pty_executor.rs"]
+mod executor;
+
 #[tokio::test]
 async fn pty_attachment_preserves_workload_terminal_state() {
     use nix::pty::{openpty, Winsize};

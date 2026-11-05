@@ -32,6 +32,10 @@ const DEFAULT_INIT_PTY: PtyConfig = PtyConfig {
     modes: Vec::new(),
 };
 
+#[cfg(test)]
+#[path = "tests/pty_init.rs"]
+mod pty_init_tests;
+
 /// OCI container
 ///
 /// Manages the lifecycle of an OCI-compliant container using libcontainer.

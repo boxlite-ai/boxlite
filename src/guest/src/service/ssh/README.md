@@ -251,12 +251,22 @@ SSH tests.
 
 The [PTY startup regressions](../../container/tests/pty_startup.rs) cover the
 common container execution path used by SSH proxy and ordinary forwarding.
-`make test:unit:guest FILTER=pty_startup` runs the unprivileged attachment
-test: attaching I/O must preserve the workload's termios and window size.
+`make test:unit:guest FILTER=pty_startup` runs the unprivileged attachment and
+[executor tests](../../container/tests/pty_executor.rs). A real shell reads its
+initial terminal size and modes through `PtyExecutor`; an observer separately
+checks pixel dimensions before delegation, initialization failure, pipe
+execution, and validation/environment error propagation. Each stdin-dependent
+test uses a bounded subprocess with its own PTY or nonterminal input.
+
+`make test:unit:guest FILTER=pty_` also checks init's default dimensions and
+failure cleanup, and PTY configuration across real zygote IPC. These tests run
+in the ordinary Linux Guest suite and coverage collector without root or
+cgroup setup. Failed tenant builds additionally check descriptor cleanup after
+installing either the SSH or ordinary executor.
 
 The real zygote/Youki startup test is ignored by default because it requires
 root, `unshare`, and writable cgroup v2. From a Linux root shell with Rust and
-nextest available, run both regressions with:
+nextest available, include the full startup regression with:
 
 ```sh
 make test:unit:guest FILTER=pty_startup \
@@ -271,9 +281,11 @@ unchanged without a newline. A separate process enforces a 15-second deadline
 around the real build/exec-notify/console-FD handshake; private PID and mount
 namespaces and a dedicated cgroup bound cleanup even on failure.
 
-Both regressions fail with parent-side initialization restored: attachment
-overwrites raw termios, and workloads start with `0 0` dimensions and default
-modes. These tests cover the shared Guest boundary, not an end-to-end OpenSSH
+The attachment and real-workload regressions fail with parent-side initialization
+restored: attachment overwrites raw termios, and workloads start with `0 0`
+dimensions and default modes. The ordinary executor tests do not establish the
+zygote/Youki startup handshake; that remains the privileged test's job.
+These tests cover the shared Guest boundary, not an end-to-end OpenSSH
 connection through either transport or a particular interactive shell's UI.
 
 ## Source map
