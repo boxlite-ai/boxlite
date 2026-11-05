@@ -347,6 +347,85 @@ async fn cloud_setup_reuses_keys_and_generated_command_preserves_routing() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[rstest::rstest]
+#[case("default")]
+#[case("cloud")]
+async fn cloud_setup_pins_empty_prefix_after_saved_context_changes(#[case] context: &str) {
+    let cloud = Cloud::start(false).await;
+    let home = tempfile::tempdir().unwrap();
+    cloud.save_context(home.path(), context, "");
+    let summary = setup(home.path(), &[]);
+    let command = summary
+        .lines()
+        .find_map(|line| line.strip_prefix("  ssh "))
+        .unwrap();
+    cloud.save_context(home.path(), context, "changed");
+    cloud.state.lock().unwrap().requests.clear();
+
+    let mut ssh = Command::new("/bin/sh");
+    isolated(&mut ssh, home.path());
+    ssh.env("BOXLITE_REST_PATH_PREFIX", "ambient")
+        .args([
+            "-c",
+            &format!("ssh -F /dev/null -o BatchMode=yes -o ConnectTimeout=2 {command}"),
+        ])
+        .assert()
+        .failure();
+
+    let state = cloud.state.lock().unwrap();
+    assert_eq!(state.requests.len(), 3, "lookup, SSH status, tunnel");
+    assert!(
+        state
+            .requests
+            .iter()
+            .all(|(_, path, auth)| path.starts_with("/v1/boxes/") && auth == "Bearer stored-key"),
+        "printed SSH command changed routes: {:?}",
+        state.requests
+    );
+    assert!(state.connect.starts_with("CONNECT "), "{}", state.connect);
+}
+
+#[rstest::rstest]
+#[case::inherited(None, None, "stored")]
+#[case::flag_clears(Some(""), Some("ambient"), "")]
+#[case::environment_clears(None, Some(""), "")]
+#[case::flag_overrides(Some("explicit"), Some("ambient"), "explicit")]
+#[case::environment_overrides(None, Some("ambient"), "ambient")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cloud_path_prefix_precedence(
+    #[case] flag: Option<&str>,
+    #[case] environment: Option<&str>,
+    #[case] expected: &str,
+) {
+    let cloud = Cloud::start(false).await;
+    let home = tempfile::tempdir().unwrap();
+    cloud.save_context(home.path(), "cloud", "stored");
+    let mut command = cli(home.path());
+    if let Some(prefix) = flag {
+        command.arg(format!("--path-prefix={prefix}"));
+    }
+    if let Some(prefix) = environment {
+        command.env("BOXLITE_REST_PATH_PREFIX", prefix);
+    }
+    command.args(["ssh", "--status", "dev"]).assert().success();
+    let root = if expected.is_empty() {
+        "/v1/boxes/".to_string()
+    } else {
+        format!("/v1/{expected}/boxes/")
+    };
+    let state = cloud.state.lock().unwrap();
+    assert_eq!(state.requests.len(), 2);
+    assert!(
+        state
+            .requests
+            .iter()
+            .all(|(_, path, _)| path.starts_with(&root)),
+        "unexpected routing: {:?}",
+        state.requests
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn cloud_proxy_relays_binary_data_with_stored_context_and_environment_key() {
     let cloud = Cloud::start(true).await;
     let home = tempfile::tempdir().unwrap();

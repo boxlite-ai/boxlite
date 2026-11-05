@@ -52,6 +52,14 @@ Run a preview of that release first. `components=api` or `runner` narrows artifa
 not the entire infrastructure graph. Runs queue per stage; do not cancel a healthy apply to start another.
 Image releases are published/promoted through [mbuild-release](../../../.github/workflows/mbuild-release.yml).
 
+### Caller attribution
+
+Automation callers may supply the optional string inputs `requested_by` (a public GitHub username) and
+`request_id` (an opaque operation ID). When both are present, the run title appends
+` · @<public-login> · <opaque-operation-id>`. Omitting either preserves the native run title.
+These fields provide display and correlation metadata; they do not grant reviewer authority.
+Keep email addresses and credentials out of both inputs. Existing `apply`, `confirm` and Environment approval requirements still apply.
+
 ## Retained legacy AWS deployment
 
 The [AWS deployment guide](aws/deployment.md#retained-legacy-aws-deployment) owns the retained SST path

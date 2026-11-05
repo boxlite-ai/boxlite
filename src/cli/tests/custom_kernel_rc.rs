@@ -36,7 +36,8 @@ fn unknown_rc_feature_fails_before_runtime_setup() {
         ])
         .assert()
         .failure()
-        .stderr(predicate::str::contains(
-            "unknown feature 'custom-kernal' in BOXLITE_EXPERIMENTAL",
-        ));
+        .stderr(
+            predicate::str::contains("unknown feature 'custom-kernal'")
+                .and(predicate::str::contains("BOXLITE_EXPERIMENTAL")),
+        );
 }

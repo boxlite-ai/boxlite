@@ -24,7 +24,7 @@ const Images: React.FC<{ tab: ImagesTab }> = ({ tab }) => {
   const { search } = useLocation()
 
   return (
-    <div className="flex h-[calc(100svh-60px)] min-h-0 flex-col px-4 pt-5 sm:px-6 lg:px-[40px] lg:pt-[26px]">
+    <div className="page-container flex h-[calc(100svh-60px)] min-h-0 flex-col pt-5 lg:pt-[26px]">
       <div className="mb-[18px] flex flex-wrap items-end justify-between gap-3 lg:mb-[22px]">
         <h1 className="font-display text-page font-semibold text-foreground">Images</h1>
         <Tabs

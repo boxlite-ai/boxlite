@@ -146,7 +146,7 @@ Commands without shared options omit the global section.
 | `--config PATH` | local-capable commands | — | JSON runtime config (see [Configuration File](#configuration-file)). |
 | `--url URL` | REST-capable commands | `BOXLITE_REST_URL` | Select a REST API server. |
 | `--context NAME` | REST-capable commands + `auth` + `context` | `BOXLITE_CONTEXT` | Override the saved current context. Legacy aliases: `--profile`, `BOXLITE_PROFILE`. |
-| `--path-prefix VALUE` | REST box/volume commands | `BOXLITE_REST_PATH_PREFIX` | Override the context's routing path segment. |
+| `--path-prefix VALUE` | REST box/volume commands | `BOXLITE_REST_PATH_PREFIX` | Override the context's routing path segment; an explicit empty flag or environment value clears it. |
 
 **Precedence** (from `src/cli/src/cli.rs`):
 

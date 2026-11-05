@@ -37,16 +37,17 @@ boxlite-vmm
 | `bus` | `Bus`, `BusRange` and `BusDevice`, and `Buses::dispatch`, which serves the MMIO and port exits of a vCPU |
 | `virtio` | The virtio common infrastructure: the synchronous device contract (`VirtioDevice`, `DeviceSpec`, `DeviceEvent`, `ActivationContext`, `EventRegistrar`, `Waker`, `WorkerControl`), the `VirtQueues` facade (dense preparation and validation, EVENT_IDX, exactly-once deferred completion, notification drain, the stored guest-memory Arc and negotiated indirect flag, and `save`/`restore` stubs that report snapshots unsupported until M8), the 4 KiB virtio-mmio transport (register file, feature negotiation, queue configuration and activation, Status=0 reset, post-activation queue-write rejection), the MMIO interrupt handle, the default snapshot methods, and the virtio workers (`VirtioWorkers` over a `WorkerRuntime`; `SharedRuntime` runs every device's events on one thread) |
 | `irq` | `IrqChip`, the host interrupt controller as devices see it, and `IrqLine`, one device line; HVF and KVM provide the controller, WHP (M10) only local APICs |
-| `devices` | The console queue, and on x86_64 the 8250 UART at COM1 and the i8042 reset, with `add_legacy_devices`, which adds them to the chipset |
+| `devices` | The console queue and the output-only virtio console device, and on x86_64 the 8250 UART at COM1 and the i8042 reset, with `add_legacy_devices`, which adds them to the chipset |
 | `events` | `Event`, which ends the VM, `EventSender`, which also latches the stop, and `EventLoop`, the poller that waits for the first event |
 
 The x86_64 KVM boot and lifecycle are in place; the M1 devices, arm64 and HVF
 follow in M1. The virtio common infrastructure (`virtio`) is in place for M2:
 the device contract, queue adapter, MMIO transport, interrupt handle and the
-shared virtio workers are tested with test devices, and `Vm` owns them;
-production adds no virtio device yet. Real device backends, the
-BoxLite engine adapter, engine selection, and `native` feature wiring follow
-in M2.
+shared virtio workers are tested with test devices, and `Vm` owns them. The
+output-only virtio console device is implemented and tested against real guest
+RAM and split virtqueues, but it is not wired into `Vm` yet; production adds
+no virtio device yet. The BoxLite engine adapter, engine selection, and
+`native` feature wiring follow in M2.
 Neither new crate depends on `boxlite-shared`, and both are unpublished while
 their interfaces are being established.
 
@@ -434,6 +435,41 @@ replace the shared one without changing the transport, the devices or `Vm`.
 - **Shutdown.** `shutdown` closes every source, wakes the thread and waits up
   to 300 s for it to exit before it joins it. A timeout reports
   `Error::VirtioWorker` with `TimedOut`, and a later call retries.
+
+## Virtio console
+
+`devices::virtio_console::VirtioConsole` is the output-only virtio console
+port and shares `ConsoleWriter`/`ConsoleWorker` with COM1.
+
+- **Shape.** Device ID 3, one RX and one TX queue with a maximum of 256
+  entries, a 12-byte zero configuration space, and no device feature bits;
+  the transport owns `VIRTIO_F_VERSION_1`, so only the split ring is offered.
+  Activation requires a ready TX queue. RX is left untouched: the device
+  neither reads it nor publishes used entries for it.
+- **TX.** A kick validates the whole descriptor chain from a host-side
+  snapshot before copying anything. It rejects writable descriptors,
+  non-empty ranges outside guest RAM, indirect descriptors the driver did not
+  negotiate, cycles, and a head already deferred in the batch. A zero-length
+  descriptor is valid whatever address it carries because the device never
+  reads it. Any failure is
+  `NeedsReset` and emits no prefix of that chain. Valid chain bytes are copied
+  in fixed 4 KiB chunks into the shared 64 KiB console queue; a full queue
+  drops its oldest bytes and a closed one drops new bytes, and both count the
+  loss, so a slow or broken sink never delays the guest's completion. Each accepted head is completed
+  once, in order, with used length 0; the queue facade decides whether to
+  raise the interrupt.
+- **Stop and reset.** `quiesce` stops accepting new kicks; `finish_tx` scans
+  pending TX once even without a kick, completes it, and drops the queue and
+  RAM references. The console writer stays open, so a later activation keeps
+  appending to the same `console.log`. `reset` clears activation and failed
+  state for a new `DRIVER_OK`.
+- **VM seam.** The device is exercised with real guest RAM, split virtqueues,
+  the MMIO transport and the console worker; it is not wired into `Vm` yet.
+  The callback still processes every available TX head, so a continuously
+  refilled queue is unbounded. N1 in the design closes that before the device
+  becomes the default path. A stalled sink cannot block TX, but its backlog
+  is bounded by the 64 KiB pending queue plus the batch the worker is writing,
+  so up to about 128 KiB can be outstanding.
 
 ## Chipset
 

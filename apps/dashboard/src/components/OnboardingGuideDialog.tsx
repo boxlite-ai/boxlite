@@ -649,7 +649,7 @@ function OnboardingGuideContent({
         />
       </section>
     ) : (
-      <section className="max-w-[1080px] font-mono">
+      <section className="min-w-0 font-mono">
         <div className="quickstart-sequence min-w-0">
           <section className="quickstart-step min-w-0">
             <QuickstartStepHeading title="1. Get an API key" />

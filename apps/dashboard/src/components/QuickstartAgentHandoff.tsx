@@ -412,7 +412,7 @@ Verify that the credentials are valid and authorized for this task before execut
   if (composeRequest) {
     const handedOff = copiedRequest === `${identity}:${request}`
     return (
-      <section className="max-w-[1080px] pb-8 font-display">
+      <section className="min-w-0 pb-8 font-display">
         <div className="mb-7 flex flex-wrap items-center gap-6 text-muted-foreground" aria-label="Local coding agents">
           {CODING_AGENT_MARKS.map(({ label, Mark }) => (
             <span key={label} title={label} className="inline-flex size-8 items-center justify-center">

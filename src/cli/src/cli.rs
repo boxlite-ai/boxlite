@@ -533,7 +533,7 @@ where
         ));
     }
 
-    for id in ["url", "profile", "path_prefix", "config"] {
+    for id in ["url", "profile", "config"] {
         if scope.globals.iter().any(|option| option.id() == id)
             && matches.value_source(id) == Some(ValueSource::CommandLine)
             && matches.get_one::<String>(id).is_some_and(String::is_empty)
@@ -900,7 +900,12 @@ fn without_hidden_arguments(command: Command) -> Command {
 
 pub(crate) fn experimental_features_from_env() -> boxlite::BoxliteResult<ExperimentalFeatures> {
     match std::env::var(EXPERIMENTAL_FEATURES_ENV) {
-        Ok(value) => ExperimentalFeatures::parse(&value),
+        Ok(value) => ExperimentalFeatures::parse(&value).map_err(|error| match error {
+            boxlite::BoxliteError::Config(message) => {
+                boxlite::BoxliteError::Config(format!("{EXPERIMENTAL_FEATURES_ENV}: {message}"))
+            }
+            error => error,
+        }),
         Err(std::env::VarError::NotPresent) => Ok(ExperimentalFeatures::default()),
         Err(std::env::VarError::NotUnicode(_)) => Err(boxlite::BoxliteError::Config(format!(
             "{EXPERIMENTAL_FEATURES_ENV} must contain valid UTF-8"
@@ -962,7 +967,7 @@ pub struct GlobalFlags {
     /// has scope over multiple routing values (e.g. multiple orgs on
     /// the same account). Unset → uses the stored context's
     /// path_prefix, then empty (URL skips the segment —
-    /// `/v1/boxes/...`).
+    /// `/v1/boxes/...`). An explicit empty value clears the stored prefix.
     #[arg(long = "path-prefix", global = true, env = "BOXLITE_REST_PATH_PREFIX")]
     pub path_prefix: Option<String>,
 
@@ -1111,9 +1116,9 @@ impl GlobalFlags {
         // `--path-prefix` flag (or `BOXLITE_REST_PATH_PREFIX`, both filled by
         // clap into `self.path_prefix`) overrides the profile's routing slot.
         // Leaving it alone when the flag is unset means the profile's value
-        // wins; if neither is set the URL builder skips the segment entirely
-        // (`/v1/boxes/...`, the empty-prefix single-tenant shape).
-        if let Some(path_prefix) = self.path_prefix.as_ref().filter(|s| !s.is_empty()) {
+        // wins. An explicitly empty value clears it, so the URL builder skips
+        // the segment (`/v1/boxes/...`, the single-tenant shape).
+        if let Some(path_prefix) = &self.path_prefix {
             opts.path_prefix = Some(path_prefix.clone());
         }
 
@@ -1808,7 +1813,6 @@ mod tests {
         }
 
         for args in [
-            &["boxlite", "run", "--path-prefix", "", "alpine"][..],
             &["boxlite", "run", "--profile", "", "alpine"][..],
             &["boxlite", "run", "--registry", "", "alpine"][..],
             &["boxlite", "run", "--config", "", "alpine"][..],

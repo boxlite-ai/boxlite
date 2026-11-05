@@ -171,8 +171,8 @@ export const Banner = ({
       <div className={cn(bannerVariants({ variant }))} role={role}>
         <div
           className={cn(
-            'grid grid-cols-[auto_1fr_auto_auto] grid-rows-[auto_auto] sm:grid-rows-1 items-center gap-x-2 px-4 sm:px-5 py-2 mx-auto justify-center',
-            bannerClassName,
+            'grid grid-cols-[auto_1fr_auto_auto] grid-rows-[auto_auto] sm:grid-rows-1 items-center gap-x-2 py-2 mx-auto justify-center',
+            bannerClassName ?? 'px-4 sm:px-5',
           )}
         >
           {icon || <IconComponent className="h-4 w-4 flex-shrink-0 text-current" />}

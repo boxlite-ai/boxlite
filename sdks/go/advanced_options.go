@@ -13,12 +13,15 @@ package boxlite
 
 /*
 #include "boxlite.h"
+#include <stdlib.h>
 */
 import "C"
 
 import (
 	"fmt"
 	"runtime"
+	"strings"
+	"unsafe"
 )
 
 // ContainerCapabilities is the requested Linux capability policy.
@@ -26,6 +29,24 @@ import (
 type ContainerCapabilities struct {
 	Add  []string
 	Drop []string
+}
+
+// SetKernelPath selects a local kernel file (RC). The runtime must explicitly
+// enable "custom-kernel" with WithExperimentalFeatures, including on restart.
+func (a *AdvancedBoxOptions) SetKernelPath(path string) error {
+	if a == nil || a.handle == nil {
+		return fmt.Errorf("boxlite: advanced options handle is closed")
+	}
+	if strings.IndexByte(path, 0) >= 0 {
+		return fmt.Errorf("boxlite: kernel path cannot contain NUL")
+	}
+	cPath := toCString(path)
+	defer C.free(unsafe.Pointer(cPath))
+	var cerr C.CBoxliteError
+	if C.boxlite_advanced_options_set_kernel_path(a.handle, cPath, &cerr) != C.Ok {
+		return freeError(&cerr)
+	}
+	return nil
 }
 
 // AdvancedBoxOptions is the Go-side handle for a `CAdvancedBoxOptions`.

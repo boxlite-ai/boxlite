@@ -66,10 +66,10 @@ const UserOrganizationInvitations: React.FC = () => {
 
   return (
     <PageLayout>
-      <PageHeader size="full">
+      <PageHeader>
         <PageTitle>Join organization</PageTitle>
       </PageHeader>
-      <PageContent size="full">
+      <PageContent>
         {status === 'joining' && <p role="status">Joining organization...</p>}
         {status === 'failed' && (
           <p role="alert" className="text-sm text-destructive">

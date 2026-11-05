@@ -104,7 +104,7 @@ async def test_ssh_through_cli_forwarding(rt, image, cli, keys, processes):
         assert status.enabled and status.generation == 1
         assert status.host_key_fingerprint.startswith("SHA256:")
 
-        forward = await processes(cli, "ssh", "forward", box.id, env={**os.environ, "BOXLITE_PROFILE": CLI_PROFILE})
+        forward = await processes(cli, "ssh", "--tunnel", box.id, env={**os.environ, "BOXLITE_PROFILE": CLI_PROFILE})
         bound = (await asyncio.wait_for(forward.stdout.readline(), STEP_TIMEOUT)).decode().strip()
         assert bound.startswith("tcp://127.0.0.1:"), bound
         port = int(bound.rsplit(":", 1)[1])
