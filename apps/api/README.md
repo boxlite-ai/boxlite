@@ -3,6 +3,18 @@
 The NestJS control-plane service. See the [apps hub](../README.md) for how it fits with the
 other services and [`API.md`](../API.md) for its interfaces.
 
+## Box startup timeouts
+
+REST creation persists the Box before waiting up to 30 seconds for `STARTED`.
+If the wait expires, HTTP 408 includes the existing Box's public `boxId` in the
+flat error body. The Box continues starting; clients can read its state with
+their existing organization-scoped credentials instead of repeating creation.
+The same identity accompanies other Box state-wait timeouts.
+
+Image-preparation timeouts retain `progress` and `Retry-After`. The ID remains
+available even if the best-effort progress lookup fails. HTTP status, message,
+and synchronous SDK behavior are unchanged; a timeout is not a running Box.
+
 ## Account deletion tests
 
 `src/user/user-deletion-memberships.spec.ts` exercises account deletion through the real services

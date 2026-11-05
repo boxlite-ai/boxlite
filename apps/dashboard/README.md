@@ -157,6 +157,20 @@ The `test` target is inferred by `@nx/vite` from the `test` block in
 signal CI has about this app — see [the workflows
 README](../../.github/workflows/README.md) for how its coverage is reported.
 
+## Creation can finish before startup
+
+Template creation and the ordinary create dialog share `useCreateBoxMutation`.
+The Box API creates the resource before waiting up to 30 seconds for it to
+start. A cold image pull can exceed that wait while continuing in the background.
+When HTTP 408 carries `boxId`, the dashboard reads that exact Box in the selected
+organization and opens its details. The details page polls transitioning Boxes
+every three seconds and displays their actual state, including startup errors.
+
+This path sends only one create request. It does not infer success from a name
+or an error message. A timeout without `boxId`, another error status, or a failed
+follow-up read remains an error. Deploy both API and dashboard changes for this
+handoff; older APIs do not include the structured identity.
+
 ## Finding your way around
 
 Navigation is the sidebar plus the tables. There is one route per resource, and
