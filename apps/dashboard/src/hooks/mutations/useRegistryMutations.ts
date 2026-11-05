@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { CreateRegistryCredential, RegistryCredential } from '@boxlite-ai/api-client'
+import { CreateRegistryCredential, RegistryCredential, UpdateRegistryCredential } from '@boxlite-ai/api-client'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { queryKeys } from '../queries/queryKeys'
 import { useApi } from '../useApi'
@@ -28,6 +28,28 @@ export const useCreateRegistryMutation = () => {
         throw new Error('No organization selected')
       }
       return (await registriesApi.createRegistryCredential(credential, organizationId)).data
+    },
+    onSuccess: async (_data, { organizationId }) => {
+      if (organizationId) {
+        await queryClient.invalidateQueries({ queryKey: queryKeys.registries.list(organizationId) })
+      }
+    },
+  })
+}
+
+export const useUpdateRegistryMutation = () => {
+  const { registriesApi } = useApi()
+  const queryClient = useQueryClient()
+
+  return useMutation<
+    RegistryCredential,
+    unknown,
+    { id: string; credential: UpdateRegistryCredential; organizationId?: string }
+  >({
+    gcTime: 0,
+    mutationFn: async ({ id, credential, organizationId }) => {
+      if (!organizationId) throw new Error('No organization selected')
+      return (await registriesApi.updateRegistryCredential(id, credential, organizationId)).data
     },
     onSuccess: async (_data, { organizationId }) => {
       if (organizationId) {

@@ -10,11 +10,15 @@ import { createRoot } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { queryKeys } from '../queries/queryKeys'
-import { useCreateRegistryMutation, useDeleteRegistryMutation } from './useRegistryMutations'
+import { useCreateRegistryMutation, useDeleteRegistryMutation, useUpdateRegistryMutation } from './useRegistryMutations'
 
 const PASSWORD = 'ghp_not-a-real-token'
 const credential = { registryHost: 'ghcr.io', username: 'acme-bot', password: PASSWORD }
-const api = vi.hoisted(() => ({ createRegistryCredential: vi.fn(), deleteRegistryCredential: vi.fn() }))
+const api = vi.hoisted(() => ({
+  createRegistryCredential: vi.fn(),
+  updateRegistryCredential: vi.fn(),
+  deleteRegistryCredential: vi.fn(),
+}))
 
 vi.mock('../useApi', () => ({
   useApi: () => ({
@@ -70,18 +74,21 @@ describe('registry mutations', () => {
   let client: QueryClient
   let root: ReturnType<typeof createRoot>
   let create: ReturnType<typeof useCreateRegistryMutation>
+  let update: ReturnType<typeof useUpdateRegistryMutation>
   let remove: ReturnType<typeof useDeleteRegistryMutation>
 
   beforeEach(() => {
     globalThis.IS_REACT_ACT_ENVIRONMENT = true
     vi.clearAllMocks()
     api.createRegistryCredential.mockResolvedValue({ data: { id: 'credential-1' } })
+    api.updateRegistryCredential.mockResolvedValue({ data: { id: 'credential-1' } })
     api.deleteRegistryCredential.mockResolvedValue(undefined)
     client = new QueryClient({ defaultOptions: { mutations: { retry: false } } })
     client.setQueryData(queryKeys.registries.list('org-1'), [])
     client.setQueryData(queryKeys.registries.list('org-2'), [])
     const Probe = () => {
       create = useCreateRegistryMutation()
+      update = useUpdateRegistryMutation()
       remove = useDeleteRegistryMutation()
       return null
     }
@@ -100,11 +107,22 @@ describe('registry mutations', () => {
     client.clear()
   })
 
-  it.each(['create', 'remove'])('%s refreshes only the organization that changed', async (operation) => {
+  const login = { username: 'new-bot', password: PASSWORD }
+  const request = (operation: string, organizationId?: string) =>
+    operation === 'create'
+      ? create.mutateAsync({ credential, organizationId })
+      : operation === 'update'
+        ? update.mutateAsync({ id: 'credential-1', credential: login, organizationId })
+        : remove.mutateAsync({ id: 'credential-1', organizationId })
+
+  it.each(['create', 'update', 'remove'])('%s refreshes only the organization that changed', async (operation) => {
     await act(async () => {
       if (operation === 'create') {
         expect(await create.mutateAsync({ credential, organizationId: 'org-1' })).toEqual({ id: 'credential-1' })
         expect(api.createRegistryCredential).toHaveBeenCalledWith(credential, 'org-1')
+      } else if (operation === 'update') {
+        expect(await request(operation, 'org-1')).toEqual({ id: 'credential-1' })
+        expect(api.updateRegistryCredential).toHaveBeenCalledWith('credential-1', login, 'org-1')
       } else {
         await remove.mutateAsync({ id: 'credential-1', organizationId: 'org-1' })
         expect(api.deleteRegistryCredential).toHaveBeenCalledWith('credential-1', 'org-1')
@@ -114,28 +132,57 @@ describe('registry mutations', () => {
     expect(client.getQueryState(queryKeys.registries.list('org-2'))?.isInvalidated).toBe(false)
   })
 
-  it.each(['create', 'remove'])('%s refuses a missing organization before sending a request', async (operation) => {
+  it.each(['create', 'update', 'remove'])(
+    '%s refuses a missing organization before sending a request',
+    async (operation) => {
+      await act(async () => {
+        await expect(request(operation)).rejects.toThrow('No organization selected')
+      })
+      expect(api.createRegistryCredential).not.toHaveBeenCalled()
+      expect(api.updateRegistryCredential).not.toHaveBeenCalled()
+      expect(api.deleteRegistryCredential).not.toHaveBeenCalled()
+      expect(client.getQueryState(queryKeys.registries.list('org-1'))?.isInvalidated).toBe(false)
+    },
+  )
+
+  it.each(['create', 'update', 'remove'])('%s preserves the refusal and leaves the list valid', async (operation) => {
+    const refusal = new Error('Registry request refused')
+    api.createRegistryCredential.mockRejectedValue(refusal)
+    api.updateRegistryCredential.mockRejectedValue(refusal)
+    api.deleteRegistryCredential.mockRejectedValue(refusal)
     await act(async () => {
-      const request =
-        operation === 'create' ? create.mutateAsync({ credential }) : remove.mutateAsync({ id: 'credential-1' })
-      await expect(request).rejects.toThrow('No organization selected')
+      await expect(request(operation, 'org-1')).rejects.toBe(refusal)
     })
-    expect(api.createRegistryCredential).not.toHaveBeenCalled()
-    expect(api.deleteRegistryCredential).not.toHaveBeenCalled()
     expect(client.getQueryState(queryKeys.registries.list('org-1'))?.isInvalidated).toBe(false)
   })
 
-  it.each(['create', 'remove'])('%s preserves the refusal and leaves the list valid', async (operation) => {
-    const refusal = new Error('Registry request refused')
-    api.createRegistryCredential.mockRejectedValue(refusal)
-    api.deleteRegistryCredential.mockRejectedValue(refusal)
+  it('drops the replacement secret from the mutation cache on reset and unmount', async () => {
     await act(async () => {
-      const request =
-        operation === 'create'
-          ? create.mutateAsync({ credential, organizationId: 'org-1' })
-          : remove.mutateAsync({ id: 'credential-1', organizationId: 'org-1' })
-      await expect(request).rejects.toBe(refusal)
+      await request('update', 'org-1')
     })
-    expect(client.getQueryState(queryKeys.registries.list('org-1'))?.isInvalidated).toBe(false)
+    act(() => update.reset())
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 0)))
+    expect(
+      JSON.stringify(
+        client
+          .getMutationCache()
+          .getAll()
+          .map((mutation) => mutation.state.variables),
+      ),
+    ).not.toContain(PASSWORD)
+
+    await act(async () => {
+      await request('update', 'org-1')
+    })
+    act(() => root.unmount())
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(
+      JSON.stringify(
+        client
+          .getMutationCache()
+          .getAll()
+          .map((mutation) => mutation.state.variables),
+      ),
+    ).not.toContain(PASSWORD)
   })
 })
