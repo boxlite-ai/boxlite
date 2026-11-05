@@ -1,11 +1,12 @@
 //! Online resize: spare vCPUs stay offline and capped until a resize.
 
+#![cfg(target_os = "linux")]
+
 mod common;
 
 use boxlite::BoxOptions;
 use common::box_test::BoxTestBase;
 
-#[cfg(target_os = "linux")]
 #[tokio::test]
 async fn resize_memory_grows_without_restart() {
     use boxlite::{BoxliteError, ResizeOptions};
@@ -150,7 +151,6 @@ async fn resize_memory_grows_without_restart() {
 }
 
 /// Memory growth is independent of networking and CPU cgroup delegation.
-#[cfg(target_os = "linux")]
 #[tokio::test]
 async fn resize_memory_works_without_network_or_spare_cpus() {
     use boxlite::{BoxliteError, ResizeOptions};
@@ -198,7 +198,6 @@ async fn resize_memory_works_without_network_or_spare_cpus() {
 }
 
 /// Box cgroup directory, matching the jailer's layout.
-#[cfg(target_os = "linux")]
 fn box_cgroup(box_id: &str) -> std::path::PathBuf {
     let uid = unsafe { libc::getuid() };
     let base = if uid == 0 {
@@ -209,7 +208,6 @@ fn box_cgroup(box_id: &str) -> std::path::PathBuf {
     base.join("boxlite").join(box_id)
 }
 
-#[cfg(target_os = "linux")]
 #[tokio::test]
 async fn resize_spare_vcpus_boot_offline_behind_a_one_cpu_quota() {
     let t = BoxTestBase::with_options(BoxOptions {
@@ -235,7 +233,6 @@ async fn resize_spare_vcpus_boot_offline_behind_a_one_cpu_quota() {
     assert_eq!(cpu_max.trim(), "100000 100000");
 }
 
-#[cfg(target_os = "linux")]
 #[tokio::test]
 async fn resize_cpu_grows_without_restart_and_survives_recovery() {
     use boxlite::{BoxliteError, ResizeOptions};
