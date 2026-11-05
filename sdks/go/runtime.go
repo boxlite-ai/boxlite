@@ -8,7 +8,9 @@ package boxlite
 import "C"
 import (
 	"context"
+	"fmt"
 	"runtime/cgo"
+	"strings"
 	"sync"
 	"time"
 	"unsafe"
@@ -63,10 +65,25 @@ func NewRuntime(opts ...RuntimeOption) (*Runtime, error) {
 
 	var handle *C.CBoxliteRuntime
 	var cerr C.CBoxliteError
-	code := C.boxlite_runtime_new(
+	for _, feature := range cfg.experimentalFeatures {
+		if strings.TrimSpace(feature) == "" {
+			return nil, fmt.Errorf("boxlite: experimental feature names cannot be empty")
+		}
+		if strings.IndexByte(feature, 0) >= 0 {
+			return nil, fmt.Errorf("boxlite: experimental feature names cannot contain NUL")
+		}
+		if strings.Contains(feature, ",") {
+			return nil, fmt.Errorf("boxlite: experimental feature names cannot contain commas")
+		}
+	}
+	features := strings.Join(cfg.experimentalFeatures, ",")
+	cFeatures := toCString(features)
+	defer C.free(unsafe.Pointer(cFeatures))
+	code := C.boxlite_runtime_new_experimental(
 		homeDir,
 		cImageRegistries,
 		C.int(imageRegistriesCount),
+		cFeatures,
 		&handle,
 		&cerr,
 	)

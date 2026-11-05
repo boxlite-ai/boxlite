@@ -9,5 +9,7 @@ pub(crate) mod console;
 pub(crate) mod i8042;
 #[cfg(target_arch = "x86_64")]
 pub(crate) mod serial;
+#[cfg_attr(not(test), expect(dead_code, reason = "VM wiring follows separately."))]
+pub(crate) mod virtio_console;
 #[cfg(target_arch = "x86_64")]
 pub(crate) mod x86_64;
