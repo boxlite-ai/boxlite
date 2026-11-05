@@ -14,6 +14,8 @@ pub mod guest_binary;
 pub mod guest_check;
 #[cfg(feature = "krun")]
 pub mod krun;
+#[cfg(target_os = "linux")]
+pub(crate) mod memory_control;
 pub mod registry;
 
 use crate::experimental::custom_kernel::{KernelFormat, KernelOptions};
@@ -206,8 +208,15 @@ pub struct InstanceSpec {
     #[doc(hidden)]
     #[serde(default)]
     pub nested_virtualization: bool,
+    /// vCPUs online at boot.
     pub cpus: Option<u8>,
+    /// vCPUs created at boot; those above `cpus` stay offline until the guest
+    /// brings them online. `None` creates exactly `cpus`.
+    #[serde(default)]
+    pub max_cpus: Option<u8>,
     pub memory_mib: Option<u32>,
+    #[serde(default)]
+    pub max_memory_mib: Option<u32>,
     /// Optional direct Linux boot configuration prepared inside the box before
     /// this specification is assembled.
     #[serde(default)]

@@ -5,6 +5,26 @@ use boxlite::{
 };
 use pyo3::prelude::*;
 
+#[pyclass(name = "BoxResources", get_all)]
+#[derive(Clone, Debug)]
+pub(crate) struct PyBoxResources {
+    pub cpus: u8,
+    pub memory_mib: u32,
+    pub max_cpus: u8,
+    pub max_memory_mib: u32,
+}
+
+impl From<boxlite::BoxResources> for PyBoxResources {
+    fn from(value: boxlite::BoxResources) -> Self {
+        Self {
+            cpus: value.cpus,
+            memory_mib: value.memory_mib,
+            max_cpus: value.max_cpus,
+            max_memory_mib: value.max_memory_mib,
+        }
+    }
+}
+
 fn port_protocol_to_string(protocol: PortProtocol) -> String {
     match protocol {
         PortProtocol::Tcp => "tcp",

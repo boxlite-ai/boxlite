@@ -1,4 +1,4 @@
-PHONY_TARGETS += fmt lint clippy clippy\:vmm lint\:apps fmt\:apps fmt\:check\:apps fmt\:apps\:proxy
+PHONY_TARGETS += fmt lint clippy clippy\:vmm lint\:apps fmt\:apps fmt\:check\:apps fmt\:apps\:proxy fmt\:libkrun
 
 clippy\:vmm:
 	@cargo clippy -p boxlite-hypervisor -p boxlite-vmm --all-targets -- -D warnings
@@ -48,6 +48,9 @@ fmt\:check\:all:
 fmt\:rust:
 	@echo "🔧 Formatting Rust code..."
 	@cargo fmt --all
+
+fmt\:libkrun:
+	@cargo fmt --manifest-path src/deps/libkrun-sys/vendor/libkrun/Cargo.toml -p krun-devices -p krun-vmm -p krun-arch -p libkrun
 
 fmt\:check\:rust:
 	@echo "🔍 Checking Rust formatting..."

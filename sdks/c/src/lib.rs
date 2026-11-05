@@ -49,6 +49,7 @@ pub(crate) static FREE_STR_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(()
 
 pub type CBoxliteRuntime = runtime::RuntimeHandle;
 pub type CBoxHandle = box_handle::BoxHandle;
+pub use box_handle::CBoxResources;
 pub type CBoxNetworkHandle = network::BoxNetworkHandle;
 pub type CBoxTunnelHandle = network::BoxTunnelHandle;
 pub type CTunnelForwarderHandle = network::TunnelForwarderHandle;

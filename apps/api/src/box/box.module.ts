@@ -38,6 +38,7 @@ import { ImageModule } from '../image/image.module'
 import { Region } from '../region/entities/region.entity'
 import { JobController } from './controllers/job.controller'
 import { JobService } from './services/job.service'
+import { ResizeJobService } from './services/resize-job.service'
 import { JobStateHandlerService } from './services/job-state-handler.service'
 import { Job } from './entities/job.entity'
 import { BoxLookupCacheInvalidationService } from './services/box-lookup-cache-invalidation.service'
@@ -60,6 +61,7 @@ import { DomainService } from './services/domain.service'
 import { TunnelService } from './services/tunnel.service'
 import { AttachTicketService } from './services/attach-ticket.service'
 import { CpuIncidentModule } from './cpu-incidents/cpu-incident.module'
+import { UsageModule } from '../usage/usage.module'
 
 @Module({
   imports: [
@@ -68,6 +70,7 @@ import { CpuIncidentModule } from './cpu-incidents/cpu-incident.module'
     OrganizationModule,
     RegionModule,
     ImageModule,
+    UsageModule,
     TypeOrmModule.forFeature([
       Box,
       Runner,
@@ -98,6 +101,7 @@ import { CpuIncidentModule } from './cpu-incidents/cpu-incident.module'
     BoxStopAction,
     BoxDestroyAction,
     JobService,
+    ResizeJobService,
     JobStateHandlerService,
     BoxActivityService,
     BoxExitCodeService,
@@ -125,6 +129,8 @@ import { CpuIncidentModule } from './cpu-incidents/cpu-incident.module'
     },
   ],
   exports: [
+    BoxLookupCacheInvalidationService,
+    JobService,
     BoxService,
     TunnelService,
     DomainService,
