@@ -6,7 +6,10 @@
 //! chooses immediate discard or pressure-driven reclaim. No inflate/deflate
 //! target is ever requested.
 
-use std::io;
+use std::{
+    io,
+    sync::{Arc, Mutex},
+};
 
 use virtio_queue::DescriptorChain;
 use vm_memory::GuestAddress;
@@ -40,10 +43,6 @@ pub(crate) struct VirtioBalloon {
 }
 
 impl VirtioBalloon {
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "No composition point constructs a device yet.")
-    )]
     pub(crate) fn new(reclaim: ReclaimPolicy) -> io::Result<Self> {
         Ok(Self {
             actual: 0,
@@ -55,6 +54,22 @@ impl VirtioBalloon {
             control_count: 0,
         })
     }
+}
+
+/// Adds the reporting device on `slot`, the way `blk::add_disk` adds a disk:
+/// the slot supplies the window, the interrupt line and the command-line
+/// argument, so the device names no platform resource of its own.
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+pub(crate) fn add(
+    chipset: &mut crate::chipset::ChipsetBuilder,
+    ctx: &crate::virtio::DeviceContext<'_>,
+    slot: crate::virtio::mmio::Slot,
+    reclaim: ReclaimPolicy,
+) -> crate::error::Result<()> {
+    let device: Arc<Mutex<dyn VirtioDevice>> = Arc::new(Mutex::new(
+        VirtioBalloon::new(reclaim).map_err(crate::error::Error::CreateBalloon)?,
+    ));
+    crate::virtio::mmio::add_device(chipset, ctx, SPEC.name, slot, device)
 }
 
 impl VirtioDevice for VirtioBalloon {

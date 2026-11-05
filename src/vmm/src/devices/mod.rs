@@ -21,15 +21,17 @@ use crate::{
     chipset::ChipsetBuilder,
     config::VmConfig,
     error::Result,
+    memory::ReclaimPolicy,
     virtio::{
         DeviceContext, blk,
         mmio::{self, Slot, Slots},
     },
 };
 
-/// Adds every device the configuration names, in slot order: the legacy
-/// platform devices, then one block per device type. Adding a device is one
-/// `add_slot_device` line here; [`crate::vm`] stays unchanged.
+/// Adds every device the configuration names, in slot order: the reporting
+/// balloon first, then the legacy platform devices and one block per
+/// configured disk. Adding a device is one `add_slot_device` line here;
+/// [`crate::vm`] stays unchanged.
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 pub(crate) fn add_all(
     chipset: &mut ChipsetBuilder,
@@ -41,6 +43,11 @@ pub(crate) fn add_all(
 
     let mut slots = Slots::new();
     let mut used = Vec::new();
+    // The reporting device goes first, so it keeps the design's fixed
+    // `0xd0000000`/GSI 5 window instead of following the disks.
+    add_slot_device(&mut slots, &mut used, |slot| {
+        crate::devices::balloon::add(chipset, &ctx, slot, ReclaimPolicy::default())
+    })?;
     for (index, disk) in config.disks.iter().enumerate() {
         add_slot_device(&mut slots, &mut used, |slot| {
             blk::add_disk(chipset, &ctx, disk, index, slot)

@@ -39,7 +39,7 @@ boxlite-vmm
 | `virtio` | The virtio common infrastructure: the synchronous device contract (`VirtioDevice`, `DeviceSpec`, `DeviceEvent`, `ActivationContext`, `EventRegistrar`, `Waker`, `WorkerControl`), the `VirtQueues` facade (dense preparation and validation, EVENT_IDX, exactly-once deferred completion, notification drain, the stored guest-memory Arc and negotiated indirect flag, and `save`/`restore` stubs that report snapshots unsupported until M8), the 4 KiB virtio-mmio transport (register file, feature negotiation, queue configuration and activation, Status=0 reset, post-activation queue-write rejection), `mmio::add_device`, which attaches any device through that transport, the MMIO interrupt handle, the default snapshot methods, and the virtio workers (`VirtioWorkers` over a `WorkerRuntime`; `SharedRuntime` runs every device's events on one thread) |
 | `irq` | `IrqChip`, the host interrupt controller as devices see it, and `IrqLine`, one device line; HVF and KVM provide the controller, WHP (M10) only local APICs |
 | `devices` | `devices::add_all`, the one composition helper (add a device type as one `add_slot_device` line), the console queue and the output-only virtio console device, and on x86_64 the 8250 UART at COM1 and the i8042 reset, with `add_legacy_devices` |
-| `devices::balloon` | Reporting-only `VirtioBalloon`: configuration, negotiation, whole-chain prevalidation and a `ReclaimPolicy` chosen when the device is constructed; nothing composes it into `Vm` yet |
+| `devices::balloon` | Reporting-only `VirtioBalloon`: configuration, negotiation, whole-chain prevalidation and a `ReclaimPolicy` chosen when the device is constructed; `devices::add_all` composes it on the first slot |
 | `virtio::worker` | One lazy shared poller/thread, coalesced generation-bound queue kicks, backend readiness, stop barriers and VM shutdown |
 | `events` | `Event`, which ends the VM, `EventSender`, which also latches the stop, and `EventLoop`, the poller that waits for the first event |
 
@@ -579,13 +579,10 @@ read-only `num_pages=0` and guest-writable `actual`, reset to zero. Linux setup
 uses inflate/deflate queues 0/1; reporting alone is queue 2. All have maximum
 size 256. Queue 2 is required only when reporting is negotiated and is never
 consumed otherwise. No quota, stats, hinting, poison or snapshot support is
-advertised. `Vm` does not compose the device yet: it names no balloon window,
-endpoint or command-line argument, and adding a device is becoming the one-line
-composition seam in #2332 (`devices::add_all`, `virtio::mmio::add_device`),
-where the reporting device will be one slot entry whose window and
-`virtio_mmio.device=` argument come from that slot's record. Until then the
-qualification test places the device itself on the x86_64 `0xd0000000`/GSI 5
-window the design records.
+advertised. `devices::add_all` composes the device through `balloon::add` on the
+first slot, so its window, interrupt line and `virtio_mmio.device=` argument
+come from the slot record rather than from the device: the reporting device
+lands on `0xd0000000`/GSI 5 and the disks take the slots after it.
 
 Before any reclaim, the entire chain must pass direction, nonzero length,
 checked address arithmetic, single-region raw-range and normal-termination
@@ -645,15 +642,16 @@ the output is `target/coverage/lcov.info`, not a three-platform qualification.
 Both real-boot entry points build the freestanding `balloon_init.c` test init.
 The guest touches scratch and independent live regions, announces each phase on
 its console, unmaps scratch, verifies unchanged capacity/live data,
-reallocates/touches, and unbinds/rebinds the driver. The host samples `mincore`
-residency across the run against those markers and counts used completions; the
-test needs no device or kernel capability of its own. Reporting-off and
-`init_on_free=1` runs must complete no report; host residency is logged, not
-asserted, because the kernel can reclaim or swap anonymous RAM independently.
-Security settings are not weakened, and watchdog expiry fails. Sampled
-residency is not the exact-PFN evidence a per-page protocol would give, and
-three-platform real-guest reporting/reclaim/reuse/lifetime evidence is still
-required; these commands do not waive the arm64 prerequisites.
+reallocates/touches, and unbinds/rebinds the driver. The frame comes from the
+production composition (`devices::add_all`), and the host samples `mincore`
+residency across the run against those markers, so the test needs no device or
+kernel capability of its own. Reporting must drop most of the freed scratch
+residency; the `init_on_free=1` control asserts the guest's own checks only,
+because the kernel can reclaim or swap anonymous RAM independently. Security
+settings are not weakened, and watchdog expiry fails. Sampled residency is not
+the exact-PFN evidence a per-page protocol would give, and three-platform
+real-guest reporting/reclaim/reuse/lifetime evidence is still required; these
+commands do not waive the arm64 prerequisites.
 
 ## Chipset
 
