@@ -35,6 +35,10 @@ interface DataTableProps {
 // bottom rule, hover-highlighted rows, and a plain "Showing N" footer.
 const GRID = 'grid-cols-[1.4fr_1.6fr_1.2fr_1fr_1fr_1fr_44px] gap-x-4'
 
+/**
+ * Lists API keys with a confirmation step before calling the owner's revoke handler.
+ * Per-key loading state disables revocation while its request is in flight.
+ */
 export function ApiKeyTable({ data, loading, isLoadingKey, onRevoke }: DataTableProps) {
   return (
     <div className="flex min-h-0 flex-1 flex-col">

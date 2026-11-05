@@ -47,6 +47,10 @@ type ButtonProps = React.ComponentPropsWithoutRef<'button'> &
     asChild?: boolean
   }
 
+/**
+ * Owns shared action styles while forwarding native props and the DOM ref.
+ * With asChild, Radix Slot composes them onto the supplied navigation or trigger element.
+ */
 const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(function Button(
   { className, variant, size, asChild = false, ...props },
   ref,

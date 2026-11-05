@@ -1129,7 +1129,7 @@ describe('CreateBoxDialog trigger slot', () => {
     return [...document.querySelectorAll('*')].some((el) => el.textContent === 'Create a box for your agent')
   }
 
-  it('opens on the control the caller passes in', async () => {
+  it('opens on the supplied control and returns focus there after Cancel', async () => {
     await renderWithTrigger(<button type="button">Launch a box</button>)
 
     const buttons = [...document.querySelectorAll<HTMLButtonElement>('button')]
@@ -1144,6 +1144,13 @@ describe('CreateBoxDialog trigger slot', () => {
     await flush()
 
     expect(dialogIsOpen()).toBe(true)
+
+    const cancel = [...document.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent === 'Cancel')!
+    await act(async () => cancel.click())
+    await flush()
+
+    expect(dialogIsOpen()).toBe(false)
+    expect(document.activeElement).toBe(trigger)
   })
 
   it('renders no button of its own when the caller passes none', async () => {

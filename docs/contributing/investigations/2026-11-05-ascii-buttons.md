@@ -53,7 +53,7 @@ Use existing interaction suites and browser inspection for this presentation mig
 
 Observed on the proposed branch:
 
-- `make test:apps:dashboard`: 92 files and 700 tests passed.
+- Dashboard tests with V8 coverage: 93 files and 710 tests passed.
 - `make build:apps:dashboard`: production build and four prerequisite tasks passed, including typechecking.
 - `make lint:apps`: passed with existing warnings.
 - `make fmt:check:apps`: reports 207 unchanged files; none is modified by this change. Formatting of every changed source file passed.
@@ -63,6 +63,9 @@ Observed on the proposed branch:
 The unchanged base was rendered before applying the patch, using the same mock data and viewport as the proposed branch.
 Hovering Start previously filled the button cyan; the migrated control retains a neutral surface and uses a cyan border.
 No new regression test was added for class strings; existing interaction suites and these rendered comparisons validate the presentation migration.
+The interaction suites also exercise start/stop/recover dispatch without row navigation, disabled busy controls, dialog cancellation and focus return,
+volume filtering, API-key submission/copy/close, permission-disabled submission, and manual billing navigation after verification failure.
+These tests guard preserved behavior; they do not claim to reproduce a pre-existing functional defect.
 
 ## Rendered comparisons
 

@@ -120,6 +120,10 @@ function Quota({ label, value, unit }: { label: string; value: number; unit: str
   )
 }
 
+/**
+ * Renders desktop rows and mobile cards with the same permission- and state-gated actions.
+ * Callers own mutations and pagination; action clicks stay separate from row navigation.
+ */
 export function BoxTable({
   data,
   boxIsLoading,

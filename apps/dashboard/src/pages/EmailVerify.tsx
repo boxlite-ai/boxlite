@@ -13,6 +13,10 @@ import { Check, Loader2, X } from '@/components/ui/icon'
 import { useState, useEffect, useRef } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 
+/**
+ * Verifies the URL token, selects its organization, and schedules a billing redirect.
+ * A failed verification offers a manual billing action; unmount cancels the redirect timer.
+ */
 export default function EmailVerify() {
   const { organizationId, email, token } = useParams<{
     organizationId: string
