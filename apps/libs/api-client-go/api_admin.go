@@ -158,8 +158,8 @@ type AdminAPI interface {
 	AdminListOrganizationsOverview(ctx context.Context) AdminAPIAdminListOrganizationsOverviewRequest
 
 	// AdminListOrganizationsOverviewExecute executes the request
-	//  @return AdminListOrganizationsOverview200Response
-	AdminListOrganizationsOverviewExecute(r AdminAPIAdminListOrganizationsOverviewRequest) (*AdminListOrganizationsOverview200Response, *http.Response, error)
+	//  @return AdminOrganizationOverviewPage
+	AdminListOrganizationsOverviewExecute(r AdminAPIAdminListOrganizationsOverviewRequest) (*AdminOrganizationOverviewPage, *http.Response, error)
 
 	/*
 	AdminListRegions List regions with capacity and health
@@ -1338,7 +1338,6 @@ type AdminAPIAdminListOrganizationsOverviewRequest struct {
 	createdFrom *string
 	boxCountScope *string
 	organizationId *string
-	projection *string
 }
 
 // Organization ID or name
@@ -1382,13 +1381,7 @@ func (r AdminAPIAdminListOrganizationsOverviewRequest) OrganizationId(organizati
 	return r
 }
 
-// Return registration and creator metadata without member/Box statistics. Omit for the full overview; cannot combine with boxCountScope.
-func (r AdminAPIAdminListOrganizationsOverviewRequest) Projection(projection string) AdminAPIAdminListOrganizationsOverviewRequest {
-	r.projection = &projection
-	return r
-}
-
-func (r AdminAPIAdminListOrganizationsOverviewRequest) Execute() (*AdminListOrganizationsOverview200Response, *http.Response, error) {
+func (r AdminAPIAdminListOrganizationsOverviewRequest) Execute() (*AdminOrganizationOverviewPage, *http.Response, error) {
 	return r.ApiService.AdminListOrganizationsOverviewExecute(r)
 }
 
@@ -1406,13 +1399,13 @@ func (a *AdminAPIService) AdminListOrganizationsOverview(ctx context.Context) Ad
 }
 
 // Execute executes the request
-//  @return AdminListOrganizationsOverview200Response
-func (a *AdminAPIService) AdminListOrganizationsOverviewExecute(r AdminAPIAdminListOrganizationsOverviewRequest) (*AdminListOrganizationsOverview200Response, *http.Response, error) {
+//  @return AdminOrganizationOverviewPage
+func (a *AdminAPIService) AdminListOrganizationsOverviewExecute(r AdminAPIAdminListOrganizationsOverviewRequest) (*AdminOrganizationOverviewPage, *http.Response, error) {
 	var (
 		localVarHTTPMethod   = http.MethodGet
 		localVarPostBody     interface{}
 		formFiles            []formFile
-		localVarReturnValue  *AdminListOrganizationsOverview200Response
+		localVarReturnValue  *AdminOrganizationOverviewPage
 	)
 
 	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "AdminAPIService.AdminListOrganizationsOverview")
@@ -1446,9 +1439,6 @@ func (a *AdminAPIService) AdminListOrganizationsOverviewExecute(r AdminAPIAdminL
 	}
 	if r.organizationId != nil {
 		parameterAddToHeaderOrQuery(localVarQueryParams, "organizationId", r.organizationId, "form", "")
-	}
-	if r.projection != nil {
-		parameterAddToHeaderOrQuery(localVarQueryParams, "projection", r.projection, "form", "")
 	}
 	// to determine the Content-Type header
 	localVarHTTPContentTypes := []string{}

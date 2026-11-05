@@ -15,8 +15,6 @@ import {
 import {
   ApiBadRequestResponse,
   ApiBearerAuth,
-  ApiExtraModels,
-  getSchemaPath,
   ApiNotFoundResponse,
   ApiOAuth2,
   ApiOkResponse,
@@ -38,7 +36,6 @@ import {
   AdminJobOverviewPageDto,
   AdminOrganizationDetailDto,
   AdminOrganizationOverviewPageDto,
-  AdminOrganizationRegistrationPageDto,
   AdminRegionOverviewDto,
   AdminRegionOverviewPageDto,
 } from '../dto/provider-overview.dto'
@@ -180,13 +177,6 @@ export class AdminProviderController {
   @RequiredApiRole([SystemRole.ADMIN, 'email-policy-reader'])
   @ApiOperation({ summary: 'List organization operational summaries', operationId: 'adminListOrganizationsOverview' })
   @ApiQuery({
-    name: 'projection',
-    required: false,
-    enum: ['registration'],
-    description:
-      'Return registration and creator metadata without member/Box statistics. Omit for the full overview; cannot combine with boxCountScope.',
-  })
-  @ApiQuery({
     name: 'organizationId',
     required: false,
     type: String,
@@ -220,34 +210,22 @@ export class AdminProviderController {
     maxLength: 200,
     description: 'Organization ID or name',
   })
-  @ApiExtraModels(AdminOrganizationOverviewPageDto, AdminOrganizationRegistrationPageDto)
-  @ApiOkResponse({
-    schema: {
-      anyOf: [
-        { $ref: getSchemaPath(AdminOrganizationOverviewPageDto) },
-        { $ref: getSchemaPath(AdminOrganizationRegistrationPageDto) },
-      ],
-    },
-  })
+  @ApiOkResponse({ type: AdminOrganizationOverviewPageDto })
   organizations(
     @Query() query: Record<string, unknown>,
     @Res({ passthrough: true }) response: Response,
     @Req() request?: { user?: { role: string } },
-  ): Promise<AdminOrganizationOverviewPageDto | AdminOrganizationRegistrationPageDto> {
+  ): Promise<AdminOrganizationOverviewPageDto> {
     const parsed = parseRegistrationQuery(query)
     if (request?.user?.role === 'email-policy-reader') {
-      if (parsed.projection === 'registration') {
-        if (
-          parsed.query ||
-          (!parsed.organizationId &&
-            (!parsed.createdFrom ||
-              !parsed.createdTo ||
-              Date.parse(parsed.createdTo) - Date.parse(parsed.createdFrom) > 31 * 86_400_000))
-        )
-          throw new ForbiddenException()
-      } else if (!parsed.organizationId || parsed.boxCountScope !== 'all' || parsed.createdFrom || parsed.createdTo) {
+      const exactOrganization = !!parsed.organizationId && !parsed.createdFrom && !parsed.createdTo
+      const boundedRegistrations =
+        !parsed.organizationId &&
+        !!parsed.createdFrom &&
+        !!parsed.createdTo &&
+        Date.parse(parsed.createdTo) - Date.parse(parsed.createdFrom) <= 31 * 86_400_000
+      if (parsed.query || parsed.boxCountScope !== 'all' || (!exactOrganization && !boundedRegistrations))
         throw new ForbiddenException()
-      }
     }
     response.setHeader('Cache-Control', 'private, no-store')
     return this.organizationsService.list(parsed)

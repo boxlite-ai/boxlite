@@ -100,13 +100,10 @@ export class AdminOrganizationOverviewService {
     const organizations = await this.registrationRows(input)
     const page = organizations.slice(0, input.limit)
     const nextOrganization = organizations.length > input.limit ? page.at(-1) : undefined
-    const stats =
-      input.projection === 'registration'
-        ? undefined
-        : await this.organizationStats(
-            page.map((organization) => organization.id),
-            input.boxCountScope,
-          )
+    const stats = await this.organizationStats(
+      page.map((organization) => organization.id),
+      input.boxCountScope,
+    )
     const creators = page.length
       ? await this.userRepository.find({
           where: { id: In([...new Set(page.map((row) => row.createdBy))]) },
@@ -126,7 +123,6 @@ export class AdminOrganizationOverviewService {
           : null,
         observedAt: timestamp(organization.updatedAt),
       }
-      if (!stats) return registration
       const organizationStats = stats.get(organization.id) ?? emptyStats()
       return {
         ...registration,

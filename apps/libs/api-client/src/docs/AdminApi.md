@@ -549,7 +549,7 @@ const { status, data } = await apiInstance.adminListJobsOverview(
 [[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
 
 # **adminListOrganizationsOverview**
-> AdminListOrganizationsOverview200Response adminListOrganizationsOverview()
+> AdminOrganizationOverviewPage adminListOrganizationsOverview()
 
 
 ### Example
@@ -570,7 +570,6 @@ let createdTo: string; //Exclusive RFC 3339 instant, at most milliseconds. (opti
 let createdFrom: string; //Inclusive RFC 3339 instant, at most milliseconds. (optional) (default to undefined)
 let boxCountScope: 'all'; //Count every retained Box state; omit to keep the existing active-state count. (optional) (default to undefined)
 let organizationId: string; //Exact organization UUID; avoids name search and cannot be combined with q. (optional) (default to undefined)
-let projection: 'registration'; //Return registration and creator metadata without member/Box statistics. Omit for the full overview; cannot combine with boxCountScope. (optional) (default to undefined)
 
 const { status, data } = await apiInstance.adminListOrganizationsOverview(
     q,
@@ -579,8 +578,7 @@ const { status, data } = await apiInstance.adminListOrganizationsOverview(
     createdTo,
     createdFrom,
     boxCountScope,
-    organizationId,
-    projection
+    organizationId
 );
 ```
 
@@ -595,12 +593,11 @@ const { status, data } = await apiInstance.adminListOrganizationsOverview(
 | **createdFrom** | [**string**] | Inclusive RFC 3339 instant, at most milliseconds. | (optional) defaults to undefined|
 | **boxCountScope** | [**&#39;all&#39;**] | Count every retained Box state; omit to keep the existing active-state count. | (optional) defaults to undefined|
 | **organizationId** | [**string**] | Exact organization UUID; avoids name search and cannot be combined with q. | (optional) defaults to undefined|
-| **projection** | [**&#39;registration&#39;**] | Return registration and creator metadata without member/Box statistics. Omit for the full overview; cannot combine with boxCountScope. | (optional) defaults to undefined|
 
 
 ### Return type
 
-**AdminListOrganizationsOverview200Response**
+**AdminOrganizationOverviewPage**
 
 ### Authorization
 

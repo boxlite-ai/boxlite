@@ -1,9 +1,6 @@
-import type { AdminListOrganizationsOverview200Response } from '../src/models/admin-list-organizations-overview200-response'
+import type { AdminOrganizationOverviewPage } from '../src/models/admin-organization-overview-page'
 
-// The generated response must let consumers narrow a full record without
-// pretending statistics exist on a registration-only response.
-export function boxCount(page: AdminListOrganizationsOverview200Response): number | undefined {
-  const organization = page.items[0]
-  if (organization && 'boxCount' in organization) return organization.boxCount
-  return undefined
+// Every list response includes statistics, including registration-window reads.
+export function boxCount(page: AdminOrganizationOverviewPage): number | undefined {
+  return page.items[0]?.boxCount
 }

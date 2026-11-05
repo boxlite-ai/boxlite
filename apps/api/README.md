@@ -28,12 +28,12 @@ accept this field before rolling out the added response property.
 `recordBusinessEvent` (`src/common/utils/business-event.util.ts`) writes one structured log record
 per business event; the attributes reach OTLP through nestjs-pino, where alerts query them.
 
-| Event | Recorded by | Outcomes |
-| --- | --- | --- |
-| `user.registration` | `UserService.create`, through `recordOutcomes` | requested, success, exception |
-| `user.login` | `LoginEventRecorder` | success |
-| `box.create`, `box.stop`, `box.delete` | `BoxService`, the auto-stop and auto-delete crons | requested |
-| `box.create`, `box.stop`, `box.delete` | `JobStateHandler`, when the runner job finishes | success, exception |
+| Event                                  | Recorded by                                       | Outcomes                      |
+| -------------------------------------- | ------------------------------------------------- | ----------------------------- |
+| `user.registration`                    | `UserService.create`, through `recordOutcomes`    | requested, success, exception |
+| `user.login`                           | `LoginEventRecorder`                              | success                       |
+| `box.create`, `box.stop`, `box.delete` | `BoxService`, the auto-stop and auto-delete crons | requested                     |
+| `box.create`, `box.stop`, `box.delete` | `JobStateHandler`, when the runner job finishes   | success, exception            |
 
 Box events go through `src/box/utils/box-business-event.util.ts`: the request and the outcome are
 recorded in different places, so one call cannot cover both.
@@ -51,11 +51,11 @@ return this.userService.create(createUserDto, Context.admin())
 await this.stop(event.boxId, undefined, Context.platform(PlatformReason.ORG_SUSPENSION))
 ```
 
-| Context | `actor.kind` | `event.reason` |
-| --- | --- | --- |
-| `Context.user()` | `user` | — |
-| `Context.admin()` | `admin` | — |
-| `Context.platform(reason)` | `platform` | the `PlatformReason`, such as `auto_stop` or `bootstrap` |
+| Context                    | `actor.kind` | `event.reason`                                           |
+| -------------------------- | ------------ | -------------------------------------------------------- |
+| `Context.user()`           | `user`       | —                                                        |
+| `Context.admin()`          | `admin`      | —                                                        |
+| `Context.platform(reason)` | `platform`   | the `PlatformReason`, such as `auto_stop` or `bootstrap` |
 
 - Only the platform gives a reason; user and admin contexts have none.
 - The boot-time admin seed registers as `Context.platform(PlatformReason.BOOTSTRAP)`.
@@ -81,13 +81,12 @@ consumers before producers; mixed-version traffic is not supported during activa
   `boxCountScope=all` counts every retained state, including destroyed and archived,
   while preserving the existing impact calculation. Omission keeps the old count scope.
   `organizationId=<UUID>` selects an exact primary key; it cannot combine with `q`.
-- `GET /api/admin/organizations?projection=registration` skips member/Box aggregation.
-  It returns registration/creator metadata and pagination, omitting counts and impact.
-  It supports the same date bounds, cursor/limit, admin search and exact `organizationId` selector;
-  it cannot combine with `boxCountScope`. Omit `projection` to retain the full overview.
-  OpenAPI describes both page shapes with `anyOf`; regenerated TypeScript and Go clients
-  return a union/wrapper that consumers must handle. The unshipped standalone registration
-  operation is removed. Existing HTTP default responses and detail types remain unchanged.
+  Registration collectors use the same full page with `boxCountScope=all` and date bounds.
+  Creator lookup and inventory aggregation are restricted to the page's organization IDs;
+  no separate per-organization inventory call is needed for the first observation.
+  The list always returns `AdminOrganizationOverviewPage`, including counts and impact.
+  The unshipped registration projection and response union are removed; regenerate clients
+  with this contract. The default count scope and organization detail response are unchanged.
 - `GET /api/admin/organizations/{organizationId}` returns flat organization
   details with registration, member/Box pages and impact. A missing organization returns 404.
   `memberCursor`, `boxCursor` and `sectionLimit` page each section. Explicit `include=usage`
@@ -106,7 +105,7 @@ is the stored creator association, independent of current membership. Account li
 rewrites it to the primary user ID, so it is not an immutable historical identity.
 When a creator no longer exists and the organization survives, `creator` is null; an existing
 user without an email has `creator.email:null`. Names and email describe current identity.
-The list and registration responses include `creator.emailVerified` when the account's
+The list response includes `creator.emailVerified` when the account's
 current verification state is available. The organization detail response keeps its original
 creator fields (`userId`, `email`, `displayName`) and does not query verification state.
 Pages read live data and exclude deleted organizations.
@@ -115,7 +114,7 @@ remove destroyed rows and pending/failed rows can remain. `observedAt` remains t
 business modification; consumers must measure successful-read freshness separately.
 
 List order and cursor seek both use creation time truncated to milliseconds plus
-UUID, ascending. Cursors bind `q`, date filters and opt-in projection/count scope; changing them returns 400. Default-read cursors retain their prior encoding. Unknown
+UUID, ascending. Cursors bind `q`, date filters and count scope and exact organization ID; changing them returns 400. Default-read cursors retain their prior encoding. Unknown
 parameters (including the removed view selector), invalid dates, UUIDs, and incompatible
 cursors return `400 invalid_organization_query`. Invalid credentials return 401;
 non-admin access returns 403. Consumers may ignore additive fields but must validate
@@ -308,8 +307,9 @@ draft and idempotent handoff API contracts, migration order, and frontend integr
 `EMAIL_POLICY_READ_API_KEY` configures a separate machine credential of at least 32 characters.
 It authenticates as `email-policy-reader`, never as Admin or a user. Combined authentication
 allows it only `GET /api/admin/organizations`; all other paths and methods are rejected
-before user handlers. Registration reads require `projection=registration`, no `q`, and an exact org or an increasing
-window of at most 31 days. Inventory reads require `organizationId=<UUID>&boxCountScope=all` without date filters.
+before user handlers. Every policy read requires `boxCountScope=all` and no `q`.
+Registration reads require both bounds of an increasing window of at most 31 days, without
+an organization selector. Exact-org reads require `organizationId=<UUID>` without date filters.
 No database column or user-role enum migration is involved. Provisioning the secret is separate.
 
 `OIDC_AUTHENTICATION_TIME_CLAIM` opt-in names a verified issuer claim containing the original

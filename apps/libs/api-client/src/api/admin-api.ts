@@ -34,9 +34,9 @@ import type { AdminJobOverview } from '../models';
 // @ts-ignore
 import type { AdminJobOverviewPage } from '../models';
 // @ts-ignore
-import type { AdminListOrganizationsOverview200Response } from '../models';
-// @ts-ignore
 import type { AdminOrganizationDetail } from '../models';
+// @ts-ignore
+import type { AdminOrganizationOverviewPage } from '../models';
 // @ts-ignore
 import type { AdminRegionOverview } from '../models';
 // @ts-ignore
@@ -506,13 +506,10 @@ export const AdminApiAxiosParamCreator = function (configuration?: Configuration
          * @param {string} [createdFrom] Inclusive RFC 3339 instant, at most milliseconds.
          * @param {AdminListOrganizationsOverviewBoxCountScopeEnum} [boxCountScope] Count every retained Box state; omit to keep the existing active-state count.
          * @param {string} [organizationId] Exact organization UUID; avoids name search and cannot be combined with q.
-         * @param {AdminListOrganizationsOverviewProjectionEnum} [projection] Return registration and creator metadata without member/Box statistics. Omit for the full overview; cannot combine with boxCountScope.
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        adminListOrganizationsOverview: async (q?: string, cursor?: string, limit?: number, createdTo?: string, createdFrom?: string, boxCountScope?: AdminListOrganizationsOverviewBoxCountScopeEnum | RawAxiosRequestConfig, organizationId?: string, projection?: AdminListOrganizationsOverviewProjectionEnum | RawAxiosRequestConfig, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            if (typeof projection === 'object') { options = projection; projection = undefined; }
-            if (typeof boxCountScope === 'object') { options = boxCountScope; boxCountScope = undefined; }
+        adminListOrganizationsOverview: async (q?: string, cursor?: string, limit?: number, createdTo?: string, createdFrom?: string, boxCountScope?: AdminListOrganizationsOverviewBoxCountScopeEnum, organizationId?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
             const localVarPath = `/admin/organizations`;
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
@@ -557,10 +554,6 @@ export const AdminApiAxiosParamCreator = function (configuration?: Configuration
 
             if (organizationId !== undefined) {
                 localVarQueryParameter['organizationId'] = organizationId;
-            }
-
-            if (projection !== undefined) {
-                localVarQueryParameter['projection'] = projection;
             }
 
             localVarHeaderParameter['Accept'] = 'application/json';
@@ -1052,12 +1045,11 @@ export const AdminApiFp = function(configuration?: Configuration) {
          * @param {string} [createdFrom] Inclusive RFC 3339 instant, at most milliseconds.
          * @param {AdminListOrganizationsOverviewBoxCountScopeEnum} [boxCountScope] Count every retained Box state; omit to keep the existing active-state count.
          * @param {string} [organizationId] Exact organization UUID; avoids name search and cannot be combined with q.
-         * @param {AdminListOrganizationsOverviewProjectionEnum} [projection] Return registration and creator metadata without member/Box statistics. Omit for the full overview; cannot combine with boxCountScope.
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        async adminListOrganizationsOverview(q?: string, cursor?: string, limit?: number, createdTo?: string, createdFrom?: string, boxCountScope?: AdminListOrganizationsOverviewBoxCountScopeEnum | RawAxiosRequestConfig, organizationId?: string, projection?: AdminListOrganizationsOverviewProjectionEnum | RawAxiosRequestConfig, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<AdminListOrganizationsOverview200Response>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.adminListOrganizationsOverview(q, cursor, limit, createdTo, createdFrom, boxCountScope, organizationId, projection, options);
+        async adminListOrganizationsOverview(q?: string, cursor?: string, limit?: number, createdTo?: string, createdFrom?: string, boxCountScope?: AdminListOrganizationsOverviewBoxCountScopeEnum, organizationId?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<AdminOrganizationOverviewPage>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.adminListOrganizationsOverview(q, cursor, limit, createdTo, createdFrom, boxCountScope, organizationId, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['AdminApi.adminListOrganizationsOverview']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
@@ -1280,12 +1272,11 @@ export const AdminApiFactory = function (configuration?: Configuration, basePath
          * @param {string} [createdFrom] Inclusive RFC 3339 instant, at most milliseconds.
          * @param {AdminListOrganizationsOverviewBoxCountScopeEnum} [boxCountScope] Count every retained Box state; omit to keep the existing active-state count.
          * @param {string} [organizationId] Exact organization UUID; avoids name search and cannot be combined with q.
-         * @param {AdminListOrganizationsOverviewProjectionEnum} [projection] Return registration and creator metadata without member/Box statistics. Omit for the full overview; cannot combine with boxCountScope.
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        adminListOrganizationsOverview(q?: string, cursor?: string, limit?: number, createdTo?: string, createdFrom?: string, boxCountScope?: AdminListOrganizationsOverviewBoxCountScopeEnum | RawAxiosRequestConfig, organizationId?: string, projection?: AdminListOrganizationsOverviewProjectionEnum | RawAxiosRequestConfig, options?: RawAxiosRequestConfig): AxiosPromise<AdminListOrganizationsOverview200Response> {
-            return localVarFp.adminListOrganizationsOverview(q, cursor, limit, createdTo, createdFrom, boxCountScope, organizationId, projection, options).then((request) => request(axios, basePath));
+        adminListOrganizationsOverview(q?: string, cursor?: string, limit?: number, createdTo?: string, createdFrom?: string, boxCountScope?: AdminListOrganizationsOverviewBoxCountScopeEnum, organizationId?: string, options?: RawAxiosRequestConfig): AxiosPromise<AdminOrganizationOverviewPage> {
+            return localVarFp.adminListOrganizationsOverview(q, cursor, limit, createdTo, createdFrom, boxCountScope, organizationId, options).then((request) => request(axios, basePath));
         },
         /**
          * 
@@ -1495,12 +1486,11 @@ export class AdminApi extends BaseAPI {
      * @param {string} [createdFrom] Inclusive RFC 3339 instant, at most milliseconds.
      * @param {AdminListOrganizationsOverviewBoxCountScopeEnum} [boxCountScope] Count every retained Box state; omit to keep the existing active-state count.
      * @param {string} [organizationId] Exact organization UUID; avoids name search and cannot be combined with q.
-     * @param {AdminListOrganizationsOverviewProjectionEnum} [projection] Return registration and creator metadata without member/Box statistics. Omit for the full overview; cannot combine with boxCountScope.
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
      */
-    public adminListOrganizationsOverview(q?: string, cursor?: string, limit?: number, createdTo?: string, createdFrom?: string, boxCountScope?: AdminListOrganizationsOverviewBoxCountScopeEnum | RawAxiosRequestConfig, organizationId?: string, projection?: AdminListOrganizationsOverviewProjectionEnum | RawAxiosRequestConfig, options?: RawAxiosRequestConfig) {
-        return AdminApiFp(this.configuration).adminListOrganizationsOverview(q, cursor, limit, createdTo, createdFrom, boxCountScope, organizationId, projection, options).then((request) => request(this.axios, this.basePath));
+    public adminListOrganizationsOverview(q?: string, cursor?: string, limit?: number, createdTo?: string, createdFrom?: string, boxCountScope?: AdminListOrganizationsOverviewBoxCountScopeEnum, organizationId?: string, options?: RawAxiosRequestConfig) {
+        return AdminApiFp(this.configuration).adminListOrganizationsOverview(q, cursor, limit, createdTo, createdFrom, boxCountScope, organizationId, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
@@ -1589,11 +1579,6 @@ export const AdminListOrganizationsOverviewBoxCountScopeEnum = {
     UNKNOWN_DEFAULT_OPEN_API: '11184809',
 } as const;
 export type AdminListOrganizationsOverviewBoxCountScopeEnum = typeof AdminListOrganizationsOverviewBoxCountScopeEnum[keyof typeof AdminListOrganizationsOverviewBoxCountScopeEnum];
-export const AdminListOrganizationsOverviewProjectionEnum = {
-    REGISTRATION: 'registration',
-    UNKNOWN_DEFAULT_OPEN_API: '11184809',
-} as const;
-export type AdminListOrganizationsOverviewProjectionEnum = typeof AdminListOrganizationsOverviewProjectionEnum[keyof typeof AdminListOrganizationsOverviewProjectionEnum];
 export const AdminQueryUsageGranularityEnum = {
     WINDOW: 'window',
     HOUR: 'hour',

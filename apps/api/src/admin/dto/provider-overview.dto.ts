@@ -214,27 +214,6 @@ export class AdminOrganizationOverviewDto extends AdminOrganizationVerifiedRegis
   observedAt: string
 }
 
-@ApiSchema({ name: 'AdminOrganizationRegistrationSummary' })
-export class AdminOrganizationRegistrationSummaryDto extends AdminOrganizationVerifiedRegistrationDto {
-  @ApiProperty()
-  organizationId: string
-
-  @ApiProperty()
-  name: string
-
-  @ApiProperty({ format: 'date-time', description: 'Last business modification, not query time.' })
-  observedAt: string
-}
-
-@ApiSchema({ name: 'AdminOrganizationRegistrationPage' })
-export class AdminOrganizationRegistrationPageDto extends AdminCursorPageDto {
-  @ApiProperty({ type: [AdminOrganizationRegistrationSummaryDto] })
-  items: AdminOrganizationRegistrationSummaryDto[]
-
-  @ApiPropertyOptional({ nullable: true, format: 'date-time' })
-  observedAt: string | null
-}
-
 @ApiSchema({ name: 'AdminOrganizationOverviewPage' })
 export class AdminOrganizationOverviewPageDto extends AdminCursorPageDto {
   @ApiProperty({ type: [AdminOrganizationOverviewDto] })

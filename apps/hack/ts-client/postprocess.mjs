@@ -111,54 +111,13 @@ if (existing.test(config)) {
 
 writeFileSync(configPath, config)
 
-// Generator 7.23 flattens this overlapping anyOf into the registration model,
-// erasing the full response's statistics. Keep the two actual response types.
-const organizationResponsePath = `${srcDir}/models/admin-list-organizations-overview200-response.ts`
-if (existsSync(organizationResponsePath)) {
-  const source = readFileSync(organizationResponsePath, 'utf8')
-  const headerEnd = source.indexOf(' */') + 3
-  if (
-    headerEnd < 3 ||
-    !source.includes('export interface AdminListOrganizationsOverview200Response') ||
-    !source.includes("from './admin-organization-overview-page'") ||
-    !source.includes("from './admin-organization-registration-page'")
-  )
-    throw new Error('Admin organization response generation changed; review the anyOf adapter')
-  writeFileSync(
-    organizationResponsePath,
-    `${source.slice(0, headerEnd)}\n\nimport type { AdminOrganizationOverviewPage } from './admin-organization-overview-page';\nimport type { AdminOrganizationRegistrationPage } from './admin-organization-registration-page';\n\nexport type AdminListOrganizationsOverview200Response = AdminOrganizationOverviewPage | AdminOrganizationRegistrationPage;\n`,
-  )
-  writeFileSync(
-    `${srcDir}/docs/AdminListOrganizationsOverview200Response.md`,
-    '# AdminListOrganizationsOverview200Response\n\nA union of [AdminOrganizationOverviewPage](AdminOrganizationOverviewPage.md) and [AdminOrganizationRegistrationPage](AdminOrganizationRegistrationPage.md).\n\nOmitting `projection` returns the full overview; `projection=registration` returns metadata without statistics.\n',
-  )
-}
-
-// Preserve sixth- and eighth-argument Axios options when adding opt-in org filters.
-// Normalize only at the request creator; factory, functional and class clients forward it there.
+// Preserve normalized organization documentation when regenerating its changed contract.
 const adminPath = `${srcDir}/api/admin-api.ts`
 if (existsSync(adminPath)) {
-  let admin = readFileSync(adminPath, 'utf8')
-  if (admin.includes('boxCountScope?: AdminListOrganizationsOverviewBoxCountScopeEnum')) {
-    const signature = 'boxCountScope?: AdminListOrganizationsOverviewBoxCountScopeEnum'
-    if (admin.split(signature).length - 1 !== 4)
-      throw new Error('Admin organization signature changed; review the compatibility adapter')
-    admin = admin.replaceAll(signature, `${signature} | RawAxiosRequestConfig`)
-    const projectionSignature = 'projection?: AdminListOrganizationsOverviewProjectionEnum'
-    if (admin.split(projectionSignature).length - 1 !== 4)
-      throw new Error('Admin organization projection signature changed; review the compatibility adapter')
-    admin = admin.replaceAll(projectionSignature, `${projectionSignature} | RawAxiosRequestConfig`)
-    const marker = 'const localVarPath = `/admin/organizations`;'
-    if (admin.split(marker).length - 1 !== 1) throw new Error('Admin organization request creator changed')
-    admin = admin.replace(
-      marker,
-      `if (typeof projection === 'object') { options = projection; projection = undefined; }\n            if (typeof boxCountScope === 'object') { options = boxCountScope; boxCountScope = undefined; }\n            ${marker}`,
-    )
-    admin = admin.replace(/\/\*\*[\s\S]*?\*\//g, (block) =>
-      block.includes('boxCountScope') ? block.replace(/[ \t]+$/gm, '') : block,
-    )
-    writeFileSync(adminPath, admin)
-  }
+  const admin = readFileSync(adminPath, 'utf8').replace(/\/\*\*[\s\S]*?\*\//g, (block) =>
+    block.includes('boxCountScope') ? block.replace(/[ \t]+$/gm, '') : block,
+  )
+  writeFileSync(adminPath, admin)
 }
 
 const apiDir = `${srcDir}/api`

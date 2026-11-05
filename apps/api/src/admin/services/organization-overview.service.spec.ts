@@ -62,7 +62,7 @@ const serviceWith = () => {
   return { service, organizations, memberships, users, boxes, usagePeriods, activation }
 }
 
-describe('organization policy read projections', () => {
+describe('organization policy inventory reads', () => {
   const organization = {
     id: '00000000-0000-4000-8000-000000000001',
     name: 'Example',
@@ -92,14 +92,7 @@ describe('organization policy read projections', () => {
     expect(users.find).toHaveBeenCalledWith(expect.objectContaining({ select: { id: true, email: true, name: true } }))
   })
 
-  it.each([
-    { projection: 'registration' as const, emailVerified: true },
-    { projection: 'registration' as const, emailVerified: false },
-    { projection: 'registration' as const, emailVerified: undefined },
-    { projection: undefined, emailVerified: true },
-    { projection: undefined, emailVerified: false },
-    { projection: undefined, emailVerified: undefined },
-  ])('preserves list verification for $projection / $emailVerified', async ({ projection, emailVerified }) => {
+  it.each([true, false, undefined])('preserves list verification %s', async (emailVerified) => {
     const { service, organizations, users } = serviceWith()
     organizations.builder.getMany.mockResolvedValue([organization])
     const stored = { id: 'creator', email: 'creator@example.invalid', name: 'Creator', emailVerified }
@@ -107,32 +100,32 @@ describe('organization policy read projections', () => {
       Object.fromEntries(Object.entries(stored).filter(([key]) => select[key])),
     ])
 
-    const page = await service.list({ limit: 200, projection })
+    const page = await service.list({ limit: 200, boxCountScope: 'all' })
 
     if (emailVerified === undefined) expect(page.items[0].creator).not.toHaveProperty('emailVerified')
     else expect(page.items[0].creator).toHaveProperty('emailVerified', emailVerified)
   })
 
-  it('reads registration and its creator without any member or Box aggregation', async () => {
+  it('reads registration and all-state inventory with page-scoped aggregation', async () => {
     const { service, organizations, memberships, users, boxes } = serviceWith()
     organizations.builder.getMany.mockResolvedValue([organization])
     users.find.mockResolvedValue([
       { id: 'creator', email: 'creator@example.invalid', name: 'Creator', emailVerified: true },
     ])
 
-    const page = await service.list(Object.assign({ limit: 200 }, { projection: 'registration' as const }))
+    const page = await service.list({ limit: 200, boxCountScope: 'all' })
 
-    expect(memberships.createQueryBuilder).not.toHaveBeenCalled()
-    expect(boxes.createQueryBuilder).not.toHaveBeenCalled()
+    expect(memberships.createQueryBuilder).toHaveBeenCalledTimes(1)
+    expect(boxes.createQueryBuilder).toHaveBeenCalledTimes(1)
     expect(page.items[0]).toMatchObject({
       organizationId: organization.id,
       createdAt: organization.createdAt.toISOString(),
       createdBy: 'creator',
       creator: { userId: 'creator', email: 'creator@example.invalid', emailVerified: true },
     })
-    expect(page.items[0]).not.toHaveProperty('boxCount')
-    expect(page.items[0]).not.toHaveProperty('memberCount')
-    expect(page.items[0]).not.toHaveProperty('impactState')
+    expect(page.items[0]).toHaveProperty('boxCount', 0)
+    expect(page.items[0]).toHaveProperty('memberCount', 0)
+    expect(page.items[0]).toHaveProperty('impactState', 'not_impacted')
   })
 
   it('counts retained destroyed and archived rows without changing impact', async () => {

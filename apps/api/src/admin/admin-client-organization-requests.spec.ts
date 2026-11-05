@@ -65,75 +65,36 @@ describe('generated AdminApi organization requests', () => {
     await admin.adminGetOrganizationOverview(organizationId, undefined, undefined, undefined, 'usage,activation')
     expect(sent()).toEqual({ method: 'GET', path, query: { include: 'usage,activation' } })
   })
-  it('sends opt-in registration and all-state inventory parameters without changing default requests', async () => {
+  it('sends all-state inventory with registration windows and exact organization queries', async () => {
     await admin.adminListOrganizationsOverview(
       undefined,
       undefined,
       200,
       '2026-11-03T00:00:00Z',
       '2026-11-02T00:00:00Z',
-      undefined,
-      undefined,
-      'registration',
+      'all',
     )
     expect(sent()).toEqual({
       method: 'GET',
       path: '/api/admin/organizations',
       query: {
-        projection: 'registration',
+        boxCountScope: 'all',
         limit: '200',
         createdFrom: '2026-11-02T00:00:00Z',
         createdTo: '2026-11-03T00:00:00Z',
       },
     })
     const id = '00000000-0000-4000-8000-000000000011'
-    await admin.adminListOrganizationsOverview(undefined, undefined, undefined, undefined, undefined, 'all', id)
+    await admin.adminListOrganizationsOverview(undefined, 'next', 20, undefined, undefined, 'all', id, {
+      headers: { 'X-Request-Test': 'inventory' },
+    })
+    expect(requests[0]?.headers?.['x-request-test']).toBe('inventory')
     expect(sent()).toEqual({
       method: 'GET',
       path: '/api/admin/organizations',
-      query: { boxCountScope: 'all', organizationId: id },
+      query: { boxCountScope: 'all', organizationId: id, cursor: 'next', limit: '20' },
     })
     await admin.adminListOrganizationsOverview()
     expect(sent()).toEqual({ method: 'GET', path: '/api/admin/organizations', query: {} })
-    await admin.adminListOrganizationsOverview(undefined, undefined, undefined, undefined, undefined, {
-      headers: { 'X-Compatibility-Test': 'legacy-options' },
-    })
-    expect(requests[0]?.headers?.['x-compatibility-test']).toBe('legacy-options')
-    expect(sent()).toEqual({ method: 'GET', path: '/api/admin/organizations', query: {} })
-    await admin.adminListOrganizationsOverview(
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-    )
-    expect(sent()).toEqual({ method: 'GET', path: '/api/admin/organizations', query: {} })
-    await admin.adminListOrganizationsOverview(undefined, undefined, undefined, undefined, undefined, 'all', id, {
-      headers: { 'X-Compatibility-Test': 'previous-options' },
-    })
-    expect(requests[0]?.headers?.['x-compatibility-test']).toBe('previous-options')
-    expect(sent()).toEqual({
-      method: 'GET',
-      path: '/api/admin/organizations',
-      query: { boxCountScope: 'all', organizationId: id },
-    })
-    await admin.adminListOrganizationsOverview(
-      undefined,
-      'next',
-      20,
-      undefined,
-      undefined,
-      undefined,
-      id,
-      'registration',
-    )
-    expect(sent()).toEqual({
-      method: 'GET',
-      path: '/api/admin/organizations',
-      query: { organizationId: id, cursor: 'next', limit: '20', projection: 'registration' },
-    })
   })
 })

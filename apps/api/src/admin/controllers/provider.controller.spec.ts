@@ -37,32 +37,32 @@ describe('AdminProviderController', () => {
       expect(
         (
           await fetch(
-            `${base}/organizations?projection=registration&createdFrom=2026-10-01T00:00:00Z&createdTo=2026-10-02T00:00:00Z`,
+            `${base}/organizations?boxCountScope=all&createdFrom=2026-10-01T00:00:00Z&createdTo=2026-10-02T00:00:00Z`,
           )
         ).status,
       ).toBe(200)
-      expect(list).toHaveBeenLastCalledWith(expect.objectContaining({ projection: 'registration' }))
-      expect((await fetch(`${base}/organizations?projection=registration&organizationId=${id}`)).status).toBe(200)
-      expect((await fetch(`${base}/organizations?projection=registration`)).status).toBe(403)
+      expect(list).toHaveBeenLastCalledWith(expect.objectContaining({ boxCountScope: 'all' }))
+      expect((await fetch(`${base}/organizations?boxCountScope=all&organizationId=${id}`)).status).toBe(200)
+      expect((await fetch(`${base}/organizations?boxCountScope=all`)).status).toBe(403)
       expect(
         (
           await fetch(
-            `${base}/organizations?projection=registration&createdFrom=2026-01-01T00:00:00Z&createdTo=2026-10-02T00:00:00Z`,
+            `${base}/organizations?boxCountScope=all&createdFrom=2026-01-01T00:00:00Z&createdTo=2026-10-02T00:00:00Z`,
           )
         ).status,
       ).toBe(403)
       expect(
         (
           await fetch(
-            `${base}/organizations?projection=registration&createdFrom=2026-10-01T00:00:00Z&createdTo=2026-11-01T00:00:00Z`,
+            `${base}/organizations?boxCountScope=all&createdFrom=2026-10-01T00:00:00Z&createdTo=2026-11-01T00:00:00Z`,
           )
         ).status,
       ).toBe(200)
       const calls = list.mock.calls.length
       for (const query of [
-        'projection=registration&q=ab&createdFrom=2026-10-01T00:00:00Z&createdTo=2026-10-02T00:00:00Z',
-        'projection=registration&createdFrom=2026-10-01T00:00:00Z',
-        'projection=registration&createdFrom=2026-10-01T00:00:00Z&createdTo=2026-11-01T00:00:00.001Z',
+        'boxCountScope=all&q=ab&createdFrom=2026-10-01T00:00:00Z&createdTo=2026-10-02T00:00:00Z',
+        'boxCountScope=all&createdFrom=2026-10-01T00:00:00Z',
+        'boxCountScope=all&createdFrom=2026-10-01T00:00:00Z&createdTo=2026-11-01T00:00:00.001Z',
         `organizationId=${id}&boxCountScope=all&createdTo=2026-10-02T00:00:00Z`,
       ])
         expect((await fetch(`${base}/organizations?${query}`)).status).toBe(403)
@@ -173,7 +173,7 @@ describe('AdminProviderController', () => {
       expect(schemas?.AdminOrganizationDetail).toMatchObject({
         properties: { creator: { allOf: [{ $ref: '#/components/schemas/AdminOrganizationCreator' }] } },
       })
-      for (const name of ['AdminOrganizationOverview', 'AdminOrganizationRegistrationSummary']) {
+      for (const name of ['AdminOrganizationOverview']) {
         const creator = (schemas?.[name] as { properties: { creator: { allOf: { $ref: string }[] } } }).properties
           .creator
         const creatorName = creator.allOf[0].$ref.split('/').at(-1) ?? ''
@@ -193,35 +193,21 @@ describe('AdminProviderController', () => {
         spec.paths['/api/admin/organizations'].get?.parameters?.map(
           (parameter) => 'name' in parameter && parameter.name,
         ),
-      ).toEqual(['q', 'cursor', 'limit', 'createdTo', 'createdFrom', 'boxCountScope', 'organizationId', 'projection'])
+      ).toEqual(['q', 'cursor', 'limit', 'createdTo', 'createdFrom', 'boxCountScope', 'organizationId'])
       expect(
         spec.paths['/api/admin/organizations/{organizationId}'].get?.parameters?.map(
           (parameter) => 'name' in parameter && parameter.name,
         ),
       ).toEqual(['organizationId', 'memberCursor', 'boxCursor', 'sectionLimit', 'include'])
       expect(list).toHaveBeenCalledWith(expect.objectContaining({ createdFrom: '2026-10-01T00:00:00.000Z' }))
-      expect((await fetch(`${base}?projection=registration`)).status).toBe(200)
-      expect(
-        (await fetch(`${base}?projection=registration&createdFrom=2026-10-01T00:00:00Z&createdTo=2026-10-02T00:00:00Z`))
-          .status,
-      ).toBe(200)
-      expect(list).toHaveBeenLastCalledWith(expect.objectContaining({ projection: 'registration' }))
+      expect((await fetch(`${base}?projection=registration`)).status).toBe(400)
       expect(spec.paths['/api/admin/organizations/registrations']).toBeUndefined()
       expect(spec.paths['/api/admin/organizations'].get?.responses['200']).toMatchObject({
-        content: {
-          'application/json': {
-            schema: {
-              anyOf: [
-                { $ref: '#/components/schemas/AdminOrganizationOverviewPage' },
-                { $ref: '#/components/schemas/AdminOrganizationRegistrationPage' },
-              ],
-            },
-          },
-        },
+        content: { 'application/json': { schema: { $ref: '#/components/schemas/AdminOrganizationOverviewPage' } } },
       })
-      expect((await fetch(`${base}?projection=registration&q=example&cursor=next&limit=20`)).status).toBe(200)
+      expect((await fetch(`${base}?boxCountScope=all&q=example&cursor=next&limit=20`)).status).toBe(200)
       expect(list).toHaveBeenLastCalledWith(
-        expect.objectContaining({ projection: 'registration', query: 'example', cursor: 'next', limit: 20 }),
+        expect.objectContaining({ boxCountScope: 'all', query: 'example', cursor: 'next', limit: 20 }),
       )
       expect((await fetch(`${base}/registrations`)).status).toBe(400)
       expect((await fetch(`${base}?boxCountScope=all`)).status).toBe(200)

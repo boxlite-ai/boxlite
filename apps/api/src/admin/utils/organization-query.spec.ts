@@ -7,9 +7,9 @@ import {
 } from './organization-query'
 
 describe('organization queries', () => {
-  it('validates opt-in projections and binds their cursors without changing default cursors', () => {
+  it('validates count scope and binds their cursors without changing default cursors', () => {
     const row = { id: '00000000-0000-4000-8000-000000000001', createdAt: new Date('2026-10-01T00:00:00Z') }
-    for (const selection of [{ projection: 'registration' }, { boxCountScope: 'all' }, { organizationId: row.id }]) {
+    for (const selection of [{ boxCountScope: 'all' }, { organizationId: row.id }]) {
       const query = parseRegistrationQuery(selection)
       expect(query).toMatchObject(selection)
       const cursor = registrationCursor(query, row)
@@ -17,6 +17,7 @@ describe('organization queries', () => {
       expect(() => registrationAfter({ limit: 50, cursor })).toThrow(BadRequestException)
     }
     for (const selection of [
+      { projection: 'registration' },
       { projection: 'unknown' },
       { boxCountScope: 'unknown' },
       { projection: ['registration'] },
