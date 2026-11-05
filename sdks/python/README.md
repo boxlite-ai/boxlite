@@ -291,7 +291,7 @@ Configuration options for creating a box.
     pass `False` for a private cloud tunnel. Call `forward()` for a listener;
     connections reuse the declaration and cannot undo revocation. See
     [private tunnel examples](../../docs/concepts/networking.md#private-cloud-tunnels).
-- `secrets: List[Secret]` - Host-side HTTPS secret substitution rules
+- `secrets: List[Secret]` - Secrets injected into the `Authorization` header of outbound HTTPS requests
 - `advanced: AdvancedBoxOptions | None` - Expert-only container options
   - `capabilities.add: List[str]` - Capabilities added to BoxLite's baseline
   - `capabilities.drop: List[str]` - Capabilities removed from the resulting set

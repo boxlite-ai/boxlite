@@ -790,7 +790,7 @@ pub struct BoxOptions {
     /// Inbound reachability of exposed services
     pub inbound_network: NetworkSpec,
 
-    /// Outbound HTTPS secret substitution rules
+    /// Secrets injected into a request header on outbound HTTPS requests
     pub secrets: Vec<Secret>,
 
     /// Port mappings
@@ -1078,14 +1078,15 @@ frames rather than slow the guest down. `rx_kbps` is paced the same way on both.
 
 ### Secret
 
-Outbound HTTPS secret substitution rule.
+Secret injected into a request header on outbound HTTPS requests to `hosts`.
 
 ```rust
 pub struct Secret {
     pub name: String,
     pub hosts: Vec<String>,
-    pub placeholder: String, // default: <BOXLITE_SECRET:{name}>
+    pub placeholder: String, // dummy guest value; default: <BOXLITE_SECRET:{name}>
     pub value: String,
+    pub header: Option<String>, // default: Authorization, written as `Bearer {value}`
 }
 ```
 

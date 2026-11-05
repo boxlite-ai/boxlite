@@ -82,6 +82,7 @@ fn factory_backend_carries_allowlist_and_secret_metadata_in_spec() {
         hosts: vec!["api.openai.com".to_string()],
         placeholder: "<BOXLITE_SECRET:openai>".to_string(),
         value: "sk-test-not-a-real-key".to_string(),
+        header: None,
     }];
 
     let factory: std::sync::Arc<dyn NetworkBackendFactory> = default_factory();
@@ -110,6 +111,7 @@ fn factory_backend_with_secrets_mints_ca_in_spec() {
         hosts: vec!["api.openai.com".to_string()],
         placeholder: "<BOXLITE_SECRET:openai>".to_string(),
         value: "sk-test-not-a-real-key".to_string(),
+        header: None,
     }];
 
     let factory: std::sync::Arc<dyn NetworkBackendFactory> = default_factory();

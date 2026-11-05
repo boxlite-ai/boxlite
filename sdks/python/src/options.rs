@@ -450,10 +450,10 @@ impl TryFrom<PyOutboundNetworkSpec> for NetworkSpec {
 
 /// A secret to inject into outbound HTTPS requests via MITM proxy.
 ///
-/// The guest code uses a placeholder string (e.g., ``<BOXLITE_SECRET:openai>``)
-/// in HTTP headers. The host-side proxy replaces the placeholder with the
-/// real secret value before forwarding the request. The actual secret never
-/// enters the guest VM.
+/// The host-side proxy writes the real value into the ``Authorization`` header
+/// of HTTPS requests to ``hosts``. The guest only holds a dummy placeholder
+/// (e.g., ``<BOXLITE_SECRET:openai>``); the actual secret never enters the VM
+/// unless an upstream echoes that header back.
 ///
 /// Example::
 ///
@@ -483,7 +483,7 @@ pub(crate) struct PySecret {
     #[pyo3(get, set)]
     pub(crate) hosts: Vec<String>,
 
-    /// The placeholder string that appears in guest HTTP headers.
+    /// Dummy value for the guest environment; the proxy never parses it.
     /// Defaults to ``<BOXLITE_SECRET:{name}>`` if not set explicitly.
     #[pyo3(get, set)]
     pub(crate) placeholder: Option<String>,
@@ -757,6 +757,7 @@ impl TryFrom<PyBoxOptions> for BoxOptions {
                     .placeholder
                     .unwrap_or_else(|| format!("<BOXLITE_SECRET:{}>", s.name)),
                 value: s.value,
+                header: None,
             })
             .collect();
 

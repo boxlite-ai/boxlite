@@ -501,21 +501,22 @@ pub struct BoxOptions {
 
     /// Secrets for MITM proxy injection into outbound HTTPS requests.
     ///
-    /// Each secret maps a placeholder string to a real value. When the box
-    /// makes an HTTPS request to a matching host, placeholders in request
-    /// headers and body are replaced with the actual secret value.
+    /// When the box makes an HTTPS request to a host a secret lists, the proxy
+    /// writes the real value into the secret's configured header, overwriting
+    /// any value the box sent. Nothing else in the request is touched.
     ///
-    /// The placeholder (e.g., `<BOXLITE_SECRET:openai>`) is visible to the
-    /// guest; the real value never enters the VM.
+    /// The placeholder (e.g., `<BOXLITE_SECRET:openai>`) is only a dummy value
+    /// for the guest's environment; the real value never enters the VM.
     #[serde(default)]
     pub secrets: Vec<Secret>,
 }
 
 /// A secret for MITM proxy injection.
 ///
-/// When the guest sends an HTTPS request to one of the listed hosts,
-/// the MITM proxy replaces `placeholder` with `value` in headers and body.
-/// The real `value` never enters the guest VM.
+/// When the guest sends an HTTPS request to one of the listed hosts, the MITM
+/// proxy writes `value` into the configured header. An upstream that echoes that
+/// header returns the value to the guest, so bind secrets only to trusted hosts.
+/// Otherwise the real `value` never enters the guest VM.
 #[derive(Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Secret {
     /// Human-readable name for this secret (e.g., "openai_api_key").
@@ -523,7 +524,8 @@ pub struct Secret {
     /// Hosts where this secret should be injected (e.g., ["api.openai.com"]).
     /// Supports exact match and wildcard patterns (e.g., "*.example.com").
     pub hosts: Vec<String>,
-    /// Placeholder string visible to the guest (e.g., "<BOXLITE_SECRET:openai>").
+    /// Dummy value for the guest's environment (e.g., "<BOXLITE_SECRET:openai>"),
+    /// so SDKs that require a key can start. The proxy never parses it.
     pub placeholder: String,
     /// The actual secret value (e.g., "sk-..."). Never enters the VM.
     ///
@@ -532,9 +534,17 @@ pub struct Secret {
     /// The serialized config is protected by stdin pipe (no /proc/cmdline) and
     /// DB file permissions.
     pub value: String,
+    /// Target request header to inject into (e.g. "Authorization", "x-goog-api-key").
+    /// Defaults to "Authorization" (which injects with "Bearer " prefix).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub header: Option<String>,
 }
 
 impl Secret {
+    /// Return the effective HTTP header name, defaulting to "Authorization".
+    pub fn effective_header(&self) -> &str {
+        self.header.as_deref().unwrap_or("Authorization")
+    }
     /// Environment variable key for this secret's placeholder (e.g., `BOXLITE_SECRET_OPENAI`).
     ///
     /// Sanitizes the name: replaces non-alphanumeric chars with `_`, ensures non-empty.
@@ -568,6 +578,7 @@ impl std::fmt::Debug for Secret {
             .field("name", &self.name)
             .field("hosts", &self.hosts)
             .field("placeholder", &self.placeholder)
+            .field("header", &self.header)
             .field("value", &"[REDACTED]")
             .finish()
     }
@@ -739,9 +750,102 @@ impl BoxOptions {
         Ok(())
     }
 
+    /// `(host, header)` pairs that more than one secret writes. The proxy lets
+    /// the last secret win for such a pair.
+    fn secret_header_conflicts(&self) -> Vec<(String, String)> {
+        let mut seen = std::collections::HashSet::new();
+        let mut conflicts = Vec::new();
+        for secret in &self.secrets {
+            let header = secret.effective_header().to_ascii_lowercase();
+            for host in &secret.hosts {
+                let pair = (host.to_ascii_lowercase(), header.clone());
+                if !seen.insert(pair.clone()) {
+                    conflicts.push(pair);
+                }
+            }
+        }
+        conflicts
+    }
+
+    /// Reject secrets the proxy cannot inject safely. Only a box that does not
+    /// exist yet is held to this: adopting, booting, or importing a stored box
+    /// must not fail on a secret saved before the rule.
+    pub(crate) fn validate_secrets(&self) -> BoxliteResult<()> {
+        use boxlite_shared::errors::BoxliteError;
+
+        for secret in &self.secrets {
+            let name = &secret.name;
+            if secret.hosts.is_empty() || secret.hosts.iter().any(String::is_empty) {
+                return Err(BoxliteError::InvalidArgument(format!(
+                    "secret {name:?} must list at least one host in hosts, with no empty \
+                     entry; it is injected only into requests to those hosts"
+                )));
+            }
+            if secret.placeholder.is_empty() {
+                return Err(BoxliteError::InvalidArgument(format!(
+                    "secret {name:?} has an empty placeholder; set a non-empty one such as \
+                     <BOXLITE_SECRET:{name}>"
+                )));
+            }
+
+            let effective = secret.effective_header();
+            if let Some(explicit) = &secret.header {
+                if explicit.is_empty() {
+                    return Err(BoxliteError::InvalidArgument(format!(
+                        "secret {name:?} header cannot be empty string"
+                    )));
+                }
+            }
+
+            // Must be a valid HTTP header name
+            if http::header::HeaderName::from_bytes(effective.as_bytes()).is_err() {
+                return Err(BoxliteError::InvalidArgument(format!(
+                    "secret {name:?} has invalid header name {effective:?}"
+                )));
+            }
+
+            // These headers control routing, framing, or the connection itself.
+            const FORBIDDEN_HEADERS: [&str; 9] = [
+                "host",
+                "connection",
+                "proxy-authorization",
+                "keep-alive",
+                "te",
+                "trailer",
+                "upgrade",
+                "content-length",
+                "transfer-encoding",
+            ];
+            if FORBIDDEN_HEADERS
+                .iter()
+                .any(|forbidden| effective.eq_ignore_ascii_case(forbidden))
+            {
+                return Err(BoxliteError::InvalidArgument(format!(
+                    "secret {name:?} header cannot be {effective:?}"
+                )));
+            }
+        }
+
+        if let Some((host, header)) = self.secret_header_conflicts().into_iter().next() {
+            return Err(BoxliteError::InvalidArgument(format!(
+                "conflicting secrets on host {host:?} for header {header:?}: \
+                 multiple secrets configure the same header"
+            )));
+        }
+        Ok(())
+    }
+
     /// Validate a persisted box without requiring ingestion sources to remain.
     pub(crate) fn sanitize_persisted(&self) -> BoxliteResult<()> {
         self.sanitize_common()?;
+
+        for (host, header) in self.secret_header_conflicts() {
+            tracing::warn!(
+                host,
+                header,
+                "multiple secrets configure the same header; the last one is used"
+            );
+        }
 
         if let Some(kernel) = &self.advanced.kernel {
             kernel.sanitize_persisted()?;
@@ -2870,6 +2974,7 @@ mod tests {
             hosts: vec!["api.openai.com".to_string()],
             placeholder: "<BOXLITE_SECRET:openai>".to_string(),
             value: "sk-test-super-secret-key-12345".to_string(),
+            header: None,
         }
     }
 
@@ -2897,6 +3002,7 @@ mod tests {
                 hosts: vec![],
                 placeholder: String::new(),
                 value: String::new(),
+                header: None,
             };
             assert_eq!(secret.env_key(), expected, "name={name:?}");
         }
@@ -2916,6 +3022,7 @@ mod tests {
                 hosts: vec![],
                 placeholder: String::new(),
                 value: String::new(),
+                header: None,
             };
             assert_eq!(secret.env_key(), expected, "name={name:?}");
         }
@@ -2992,6 +3099,7 @@ mod tests {
                     hosts: vec!["api.anthropic.com".to_string()],
                     placeholder: "<BOXLITE_SECRET:anthropic>".to_string(),
                     value: "sk-ant-secret".to_string(),
+                    header: None,
                 },
             ],
             ..Default::default()
@@ -3071,5 +3179,162 @@ mod tests {
             Some(Bytes::from_gib(20).as_bytes()),
             "the default 10 GiB disk gets a 20 GiB ceiling"
         );
+    }
+
+    #[test]
+    fn validate_secrets_accepts_valid_secrets() {
+        let opts = BoxOptions {
+            secrets: vec![
+                Secret {
+                    name: "openai".to_string(),
+                    hosts: vec!["api.openai.com".to_string()],
+                    placeholder: "<BOXLITE_SECRET:openai>".to_string(),
+                    value: "sk-test".to_string(),
+                    header: None,
+                },
+                Secret {
+                    name: "gemini".to_string(),
+                    hosts: vec!["generativelanguage.googleapis.com".to_string()],
+                    placeholder: "<BOXLITE_SECRET:gemini>".to_string(),
+                    value: "AIza-test".to_string(),
+                    header: Some("x-goog-api-key".to_string()),
+                },
+            ],
+            ..Default::default()
+        };
+        assert!(opts.validate_secrets().is_ok());
+    }
+
+    #[test]
+    fn validate_secrets_rejects_empty_hosts_or_empty_host_entry() {
+        let no_hosts = BoxOptions {
+            secrets: vec![Secret {
+                hosts: vec![],
+                ..test_secret()
+            }],
+            ..Default::default()
+        };
+        assert!(no_hosts.validate_secrets().is_err());
+
+        let empty_host = BoxOptions {
+            secrets: vec![Secret {
+                hosts: vec!["".to_string()],
+                ..test_secret()
+            }],
+            ..Default::default()
+        };
+        assert!(empty_host.validate_secrets().is_err());
+    }
+
+    #[test]
+    fn validate_secrets_rejects_empty_placeholder() {
+        let empty_ph = BoxOptions {
+            secrets: vec![Secret {
+                placeholder: "".to_string(),
+                ..test_secret()
+            }],
+            ..Default::default()
+        };
+        assert!(empty_ph.validate_secrets().is_err());
+    }
+
+    #[test]
+    fn validate_secrets_rejects_invalid_or_forbidden_header() {
+        for forbidden in [
+            "Host",
+            "Connection",
+            "Proxy-Authorization",
+            "keep-alive",
+            "TE",
+            "Trailer",
+            "upgrade",
+            "content-length",
+            "Transfer-Encoding",
+            "",
+        ] {
+            let opts = BoxOptions {
+                secrets: vec![Secret {
+                    header: Some(forbidden.to_string()),
+                    ..test_secret()
+                }],
+                ..Default::default()
+            };
+            let err = opts.validate_secrets().unwrap_err();
+            assert!(
+                err.to_string().contains("header"),
+                "expected header error for {forbidden:?}, got: {err}"
+            );
+        }
+
+        // Invalid characters for HTTP header name
+        let invalid_char = BoxOptions {
+            secrets: vec![Secret {
+                header: Some("Bad Header: Name".to_string()),
+                ..test_secret()
+            }],
+            ..Default::default()
+        };
+        assert!(invalid_char.validate_secrets().is_err());
+    }
+
+    #[test]
+    fn validate_secrets_rejects_conflicting_headers_on_same_host() {
+        let opts = BoxOptions {
+            secrets: vec![
+                Secret {
+                    name: "key1".to_string(),
+                    hosts: vec!["api.openai.com".to_string()],
+                    placeholder: "<BOXLITE_SECRET:key1>".to_string(),
+                    value: "v1".to_string(),
+                    header: None, // defaults to Authorization
+                },
+                Secret {
+                    name: "key2".to_string(),
+                    hosts: vec!["api.openai.com".to_string()],
+                    placeholder: "<BOXLITE_SECRET:key2>".to_string(),
+                    value: "v2".to_string(),
+                    header: Some("authorization".to_string()), // same header (case-insensitive)
+                },
+            ],
+            ..Default::default()
+        };
+        let err = opts.validate_secrets().unwrap_err();
+        assert!(
+            err.to_string().contains("conflicting secrets"),
+            "got: {err}"
+        );
+        assert!(!err.to_string().contains("v1") && !err.to_string().contains("v2"));
+
+        // A stored box from before the rule stays bootable.
+        opts.sanitize_persisted().unwrap();
+        assert_eq!(opts.secret_header_conflicts().len(), 1);
+    }
+
+    #[test]
+    fn validate_secrets_rejects_empty_hosts_but_persisted_boxes_still_load() {
+        let opts = BoxOptions {
+            secrets: vec![Secret {
+                hosts: vec![],
+                ..test_secret()
+            }],
+            ..Default::default()
+        };
+        let err = opts.validate_secrets().unwrap_err();
+        assert!(err.to_string().contains("hosts"), "got: {err}");
+        // sanitize_create also guards adoption, which must accept a stored secret.
+        opts.sanitize_create().unwrap();
+        assert!(
+            !err.to_string().contains(&test_secret().value),
+            "got: {err}"
+        );
+        opts.sanitize_persisted().unwrap();
+    }
+
+    #[test]
+    fn secret_serde_defaults_header_to_none_and_effective_to_authorization() {
+        let json = r#"{"name":"test","hosts":["api.test.com"],"placeholder":"<PH>","value":"val"}"#;
+        let secret: Secret = serde_json::from_str(json).unwrap();
+        assert_eq!(secret.header, None);
+        assert_eq!(secret.effective_header(), "Authorization");
     }
 }

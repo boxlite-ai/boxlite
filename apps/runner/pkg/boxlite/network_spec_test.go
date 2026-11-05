@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"reflect"
+	"strings"
 	"testing"
 
 	boxlite "github.com/boxlite-ai/boxlite/sdks/go"
@@ -127,6 +128,33 @@ func TestCreateRejectsMissingOutboundPolicyBeforeSideEffects(t *testing.T) {
 	_, _, err := (&Client{}).Create(t.Context(), dto.CreateBoxDTO{Id: "box-1", Image: "base"})
 	if !errdefs.IsInvalidArgument(err) {
 		t.Fatalf("Create() error = %v, want an invalid-argument error", err)
+	}
+}
+
+// A stored secret the runtime would refuse must fail recovery while the old box
+// still exists. A nil runtime would panic in Destroy.
+func TestRecoverRejectsUnrecreatableSecretsBeforeDestroy(t *testing.T) {
+	enabled := true
+	cases := map[string][]dto.SecretDTO{
+		"no hosts":   {{Name: "a", Value: "real-value"}},
+		"empty host": {{Name: "a", Value: "real-value", Hosts: []string{""}}},
+		"same host and header": {
+			{Name: "a", Value: "real-value", Hosts: []string{"api.example.com"}},
+			{Name: "b", Value: "real-value", Hosts: []string{"API.example.com"}},
+		},
+	}
+	for name, secrets := range cases {
+		t.Run(name, func(t *testing.T) {
+			err := (&Client{logger: slog.Default()}).RecoverBox(t.Context(), "box-1", dto.RecoverBoxDTO{
+				OsUser: "root", OutboundEnabled: &enabled, Secrets: secrets,
+			})
+			if !errdefs.IsInvalidArgument(err) {
+				t.Fatalf("RecoverBox() error = %v, want an invalid-argument error", err)
+			}
+			if strings.Contains(err.Error(), "real-value") {
+				t.Fatalf("error contains the secret value: %v", err)
+			}
+		})
 	}
 }
 

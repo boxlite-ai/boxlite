@@ -543,6 +543,7 @@ dependencies = [
  "fuse-backend-rs",
  "futures",
  "hex",
+ "http",
  "http-body-util",
  "hyper",
  "hyper-rustls",

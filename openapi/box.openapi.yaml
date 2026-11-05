@@ -2528,8 +2528,8 @@ components:
           items:
             $ref: "#/components/schemas/SecretSpec"
           description: |
-            Secret placeholder rules for outbound HTTPS requests.
-            Matching requests replace `placeholder` with `value` on the host side.
+            Secrets injected into a request header on outbound HTTPS requests.
+            Requests to a secret's hosts carry its value; the guest never holds it.
         detach:
           type: boolean
           description: Box survives parent process exit
@@ -2796,8 +2796,8 @@ components:
 
     SecretSpec:
       type: object
-      description: Outbound HTTPS secret substitution rule
-      required: [name, value]
+      description: Secret injected into a request header on outbound HTTPS requests to its hosts
+      required: [name, value, hosts]
       properties:
         name:
           type: string
@@ -2809,11 +2809,11 @@ components:
           type: array
           items:
             type: string
-          description: Matching hosts for this secret. Empty means no host restriction.
+          description: Matching hosts where this secret will be injected. Required, at least one host.
         placeholder:
           type: string
           description: |
-            Placeholder string visible inside the guest.
+            Dummy value for the guest environment; the proxy never parses it.
             Defaults to `<BOXLITE_SECRET:{name}>` when omitted.
 
     Snapshot:

@@ -6,6 +6,8 @@ package boxlite
 
 import (
 	"context"
+	"fmt"
+	"strings"
 
 	"github.com/boxlite-ai/runner/pkg/api/dto"
 	"github.com/containerd/errdefs"
@@ -21,6 +23,9 @@ func (c *Client) RecoverBox(ctx context.Context, boxId string, recoverDto dto.Re
 	if _, err := networkSpec(createDto); err != nil {
 		return err
 	}
+	if err := validateRecreatableSecrets(createDto.Secrets); err != nil {
+		return err
+	}
 
 	if err := c.Destroy(ctx, boxId); err != nil {
 		c.logger.Warn("failed to destroy during recover", "error", err)
@@ -28,6 +33,30 @@ func (c *Client) RecoverBox(ctx context.Context, boxId string, recoverDto dto.Re
 
 	_, _, err := c.Create(ctx, createDto)
 	return err
+}
+
+// validateRecreatableSecrets applies the runtime's create-time secret rules that
+// a secret stored before them can break. The runtime refuses such a secret when
+// recreating the box, which is too late once the old box is destroyed. Runner
+// secrets carry no header, so each one writes the default header.
+func validateRecreatableSecrets(secrets []dto.SecretDTO) error {
+	seenHosts := make(map[string]struct{})
+	for _, secret := range secrets {
+		if len(secret.Hosts) == 0 {
+			return errdefs.ErrInvalidArgument.WithMessage(fmt.Sprintf("secret %q must list at least one host", secret.Name))
+		}
+		for _, host := range secret.Hosts {
+			if host == "" {
+				return errdefs.ErrInvalidArgument.WithMessage(fmt.Sprintf("secret %q has an empty host", secret.Name))
+			}
+			key := strings.ToLower(host)
+			if _, dup := seenHosts[key]; dup {
+				return errdefs.ErrInvalidArgument.WithMessage(fmt.Sprintf("multiple secrets configure the same header on host %q", host))
+			}
+			seenHosts[key] = struct{}{}
+		}
+	}
+	return nil
 }
 
 // recoverCreateDto rebuilds the create request RecoverBox hands to Create by

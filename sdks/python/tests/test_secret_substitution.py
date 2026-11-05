@@ -13,6 +13,8 @@ Requirements:
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 import boxlite
@@ -232,13 +234,12 @@ class TestSecretIntegration:
         finally:
             sandbox.stop()
 
-    def test_secret_substitution_reaches_upstream(self, runtime):
-        """The real secret value reaches the upstream endpoint (the whole point of MITM).
+    def test_secret_header_injection_reaches_upstream(self, runtime):
+        """The proxy writes the real value only into the configured header.
 
-        Guest curls an HTTPS echo service with the placeholder in Authorization.
-        The MITM proxy substitutes the real value before it reaches the server.
-        The echo service reflects the headers back, so the guest sees the real value
-        in the response — proving substitution happened at the network boundary.
+        The guest sends the placeholder in another header. The echo service shows
+        that header unchanged and the injected Authorization header, whose echo is
+        the residual risk the secret docs warn about.
         """
         real_value = "sk-test-real-key-12345"
         secret = boxlite.Secret(
@@ -259,15 +260,13 @@ class TestSecretIntegration:
             )
         )
         try:
-            # Guest sends placeholder in header; MITM substitutes real value;
-            # httpbingo.org echoes it back in JSON response.
             execution = sandbox.exec(
                 "wget",
                 [
                     "-q",
                     "-O-",
                     "--header",
-                    "Authorization: Bearer <BOXLITE_SECRET:testkey>",
+                    "X-Probe: <BOXLITE_SECRET:testkey>",
                     "https://httpbingo.org/headers",
                 ],
             )
@@ -275,15 +274,9 @@ class TestSecretIntegration:
             result = execution.wait()
 
             assert result.exit_code == 0, f"wget failed: {stdout}"
-            # The echoed Authorization header should contain the REAL value,
-            # not the placeholder — proving MITM substitution worked.
-            assert real_value in stdout, (
-                f"Real secret not in upstream response. "
-                f"MITM substitution may not be working. Got: {stdout[:500]}"
-            )
-            assert "<BOXLITE_SECRET:testkey>" not in stdout, (
-                "Placeholder leaked to upstream — MITM did not substitute"
-            )
+            headers = json.loads(stdout)["headers"]
+            assert headers["Authorization"] == [f"Bearer {real_value}"]
+            assert headers["X-Probe"] == ["<BOXLITE_SECRET:testkey>"]
         finally:
             sandbox.stop()
 

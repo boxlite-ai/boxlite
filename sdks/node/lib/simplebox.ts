@@ -101,7 +101,7 @@ export interface SecurityOptions {
 }
 
 /**
- * Secret substitution rule for outbound HTTPS requests.
+ * Secret injected into the `Authorization` header of outbound HTTPS requests.
  */
 export interface Secret {
   /** Human-readable name for the secret. */
@@ -110,7 +110,7 @@ export interface Secret {
   /** Real secret value. Never enters the guest VM. */
   value: string;
 
-  /** Matching hosts for secret substitution. */
+  /** Hosts that receive the secret. Required at create, at least one host. */
   hosts?: string[];
 
   /** Placeholder exposed to guest code. */

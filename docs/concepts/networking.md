@@ -2,7 +2,7 @@
 
 ## TL;DR
 
-BoxLite provides isolated networking with optional outbound secret substitution.
+BoxLite provides isolated networking with optional outbound secret header injection.
 
 BoxLite supports pluggable network backends for Box connectivity.
 
@@ -30,7 +30,7 @@ Box                    gvproxy                  Internet
 - Built-in DHCP and DNS
 - Network metrics (bytes sent/received)
 
-### Secret substitution certificates
+### Secret injection certificates
 
 Each box uses a persisted, ten-year MITM CA whose private key stays on the host.
 Host certificates last at most 24 hours and renew on demand within the CA validity.

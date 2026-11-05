@@ -13,6 +13,7 @@ fn make_secret(name: &str, host: &str, value: &str) -> Secret {
         hosts: vec![host.to_string()],
         placeholder: format!("<BOXLITE_SECRET:{}>", name),
         value: value.to_string(),
+        header: None,
     }
 }
 
@@ -23,7 +24,7 @@ mod gvproxy_tests {
 
     #[test]
     fn test_secret_config_json_matches_go_expectations() {
-        // Go's gvproxy expects: {"name":"...","hosts":[...],"placeholder":"...","value":"..."}
+        // Go's gvproxy expects: {"name":"...","hosts":[...],"placeholder":"...","value":"...","header":"..."}
         let secret = make_secret("openai", "api.openai.com", "sk-test-key");
         let gvproxy_secret = GvproxySecretConfig::from(&secret);
 
@@ -38,12 +39,14 @@ mod gvproxy_tests {
             "Go expects 'placeholder' field"
         );
         assert!(obj.contains_key("value"), "Go expects 'value' field");
+        assert!(obj.contains_key("header"), "Go expects 'header' field");
 
         // Verify types
         assert!(obj["name"].is_string());
         assert!(obj["hosts"].is_array());
         assert!(obj["placeholder"].is_string());
         assert!(obj["value"].is_string());
+        assert_eq!(obj["header"], "Authorization");
 
         // Verify a full GvproxyConfig with secrets serializes correctly
         let config =

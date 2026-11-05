@@ -1221,7 +1221,7 @@ fn build_box_options(req: &CreateBoxRequest) -> Result<BoxOptions, boxlite::Boxl
     // default. The local runtime does not synthesize `<BOXLITE_SECRET:{name}>`
     // for an empty placeholder (unlike the Go SDK), so defaulting here is what
     // keeps a placeholder-less secret from silently injecting an empty env var
-    // and no MITM substitution — the same failure class POL-303 fixes on Cloud.
+    // — the same failure class POL-303 fixes on Cloud.
     let secrets: Vec<boxlite::runtime::options::Secret> = req
         .secrets
         .as_ref()
@@ -1236,6 +1236,7 @@ fn build_box_options(req: &CreateBoxRequest) -> Result<BoxOptions, boxlite::Boxl
                         .clone()
                         .filter(|p| !p.is_empty())
                         .unwrap_or_else(|| format!("<BOXLITE_SECRET:{}>", s.name)),
+                    header: None,
                 })
                 .collect()
         })
@@ -2190,7 +2191,7 @@ mod tests {
         assert_eq!(secret.value, "sk-test");
         assert_eq!(secret.hosts, vec!["api.openai.com"]);
         // Placeholder omitted on the wire: serve applies the same default the
-        // Go SDK does, so a placeholder-less secret still substitutes.
+        // Go SDK does, so a placeholder-less secret still has a dummy guest value.
         assert_eq!(secret.placeholder, "<BOXLITE_SECRET:openai>");
     }
 
