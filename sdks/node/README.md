@@ -273,6 +273,7 @@ const status = await box.ssh.configure({
 
 await box.ssh.status();
 await box.ssh.disable();
+await box.ssh.enable(); // reuse saved configuration; requires a running box
 ```
 
 See the [Node.js SSH reference](../../docs/reference/nodejs/README.md#guest-ssh-control)

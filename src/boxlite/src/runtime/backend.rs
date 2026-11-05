@@ -165,7 +165,7 @@ pub(crate) trait BoxBackend: Send + Sync + Any {
     /// Enable the saved SSH configuration on an existing VM.
     async fn ssh_enable(&self) -> BoxliteResult<SshStatus> {
         Err(BoxliteError::Unsupported(
-            "SSH enable is supported only by the local backend".into(),
+            "SSH enable is not supported by this backend".into(),
         ))
     }
 

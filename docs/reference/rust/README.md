@@ -293,8 +293,8 @@ pub struct LiteBox {
 
 `LiteBox::ssh()` returns an owned, cloneable `SshHandle` without starting the box.
 It works for local boxes and for REST-backed boxes whose server implements SSH
-control, as the local `boxlite serve` does. Local-only `enable()`
-returns `Unsupported` on REST-backed handles. `configure()` uses the
+control, as the local `boxlite serve` does. `enable()` sends a bodyless
+`POST /ssh/enable` on REST-backed handles. `configure()` uses the
 implicit-start guard of exec, metrics, and file copying. `Configured` and
 `Stopped` boxes using image defaults can start implicitly. With an explicit
 `BoxOptions.cmd` or `entrypoint`, configuration returns `InvalidState` in these
@@ -354,7 +354,8 @@ and gRPC status context. Missing response status is `Internal`.
 
 A REST-backed `SshHandle` sends `POST`, `GET`, and `DELETE` to
 `/v1/boxes/{box_id}/ssh` (`/{prefix}/boxes/{box_id}/ssh` with a path prefix
-set). Each call is one request — every accepted configure restarts the guest
+set), plus a bodyless `POST` to the corresponding `/ssh/enable` route.
+Each call is one request — every accepted configure restarts the guest
 listener, so neither layer retries it — and errors cross the standard
 `BoxliteError::http()` envelope (for example an upstream guest failure comes
 back as `503 upstream_unavailable`, which the client reports as `Portal`).

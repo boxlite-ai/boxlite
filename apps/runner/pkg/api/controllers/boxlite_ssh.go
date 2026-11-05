@@ -43,6 +43,9 @@ func BoxliteSSHConfigure(ctx *gin.Context) {
 	})
 }
 
+// BoxliteSSHEnable enables saved configuration on a running box.
+func BoxliteSSHEnable(ctx *gin.Context) { runSSH(ctx, (*boxlite.Client).SSHEnable) }
+
 // BoxliteSSHStatus reports the guest SSH listener without starting the box.
 func BoxliteSSHStatus(ctx *gin.Context) { runSSH(ctx, (*boxlite.Client).SSHStatus) }
 

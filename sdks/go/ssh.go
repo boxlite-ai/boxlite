@@ -18,7 +18,7 @@ import (
 //
 // Only Configure may start the box. With an explicit WithCmd or
 // WithEntrypoint, a box that is not running fails Configure with
-// ErrInvalidState: call Box.Start first. Status and Disable never start it.
+// ErrInvalidState: call Box.Start first. Status, Enable and Disable never start it.
 // Canceling a call returns promptly but does not undo a configuration the
 // guest has already applied.
 type SSH struct {
@@ -138,6 +138,14 @@ func (s *SSH) Configure(ctx context.Context, config SSHConfig) (*SSHStatus, erro
 	defer C.free(unsafe.Pointer(cBody))
 	return s.call(ctx, func(box *C.CBoxHandle, userData unsafe.Pointer, cerr *C.CBoxliteError) C.enum_BoxliteErrorCode {
 		return C.boxlite_box_ssh_configure(box, cBody, C.cbSSHConfigure(), userData, cerr)
+	})
+}
+
+// Enable uses saved configuration on a running box without restarting a healthy
+// listener. It requires existing configuration and never starts the box.
+func (s *SSH) Enable(ctx context.Context) (*SSHStatus, error) {
+	return s.call(ctx, func(box *C.CBoxHandle, userData unsafe.Pointer, cerr *C.CBoxliteError) C.enum_BoxliteErrorCode {
+		return C.boxlite_box_ssh_enable(box, C.cbSSHEnable(), userData, cerr)
 	})
 }
 

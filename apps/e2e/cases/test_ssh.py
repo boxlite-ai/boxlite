@@ -1,7 +1,7 @@
 """REST E2E coverage for guest SSH through the hosted API and runner.
 
 The Python SDK configures SSH (`POST /v1/{prefix}/boxes/{id}/ssh`), the CLI's
-`boxlite ssh forward` opens the box's public tunnel to the guest listener, and
+`boxlite ssh --tunnel` opens the box's public tunnel to the guest listener, and
 the OpenSSH client logs in through the CLI's local port.
 """
 
@@ -104,7 +104,7 @@ async def test_ssh_through_cli_forwarding(rt, image, cli, keys, processes):
         assert status.enabled and status.generation == 1
         assert status.host_key_fingerprint.startswith("SHA256:")
 
-        forward = await processes(cli, "ssh", "forward", box.id, env={**os.environ, "BOXLITE_PROFILE": CLI_PROFILE})
+        forward = await processes(cli, "ssh", "--tunnel", box.id, env={**os.environ, "BOXLITE_PROFILE": CLI_PROFILE})
         bound = (await asyncio.wait_for(forward.stdout.readline(), STEP_TIMEOUT)).decode().strip()
         assert bound.startswith("tcp://127.0.0.1:"), bound
         port = int(bound.rsplit(":", 1)[1])

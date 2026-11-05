@@ -247,6 +247,22 @@ class TestAsyncSshOverRest:
         ]
 
     @pytest.mark.asyncio
+    async def test_enable_is_one_bodyless_post_and_decodes_status(self, server):
+        import boxlite
+
+        url = _answered_box(server)
+        _, replies, requests = server
+        path = f"/v1/boxes/{BOX_ID}/ssh/enable"
+        replies[("POST", path)] = (200, SSH_STATUS)
+        runtime = boxlite.Boxlite.rest(boxlite.BoxliteRestOptions(url=url))
+        box = await runtime.get(BOX_ID)
+        status = await box.ssh.enable()
+        assert status.enabled is True
+        assert status.generation == NEAR_U64_MAX
+        assert requests[-1] == ("POST", path, "")
+        assert len(requests) == 2
+
+    @pytest.mark.asyncio
     async def test_disable_is_one_delete_and_returns_the_new_state(self, server):
         import boxlite
 
@@ -351,6 +367,7 @@ class TestSyncSshOverRest:
         replies[("GET", f"/v1/boxes/{BOX_ID}")] = (200, BOX)
         replies[("POST", f"/v1/boxes/{BOX_ID}/ssh")] = (200, SSH_STATUS)
         replies[("GET", f"/v1/boxes/{BOX_ID}/ssh")] = (200, SSH_STATUS)
+        replies[("POST", f"/v1/boxes/{BOX_ID}/ssh/enable")] = (200, SSH_STATUS)
         replies[("DELETE", f"/v1/boxes/{BOX_ID}/ssh")] = (
             200,
             {**SSH_STATUS, "enabled": False},
@@ -366,12 +383,14 @@ class TestSyncSshOverRest:
             assert configured.generation == NEAR_U64_MAX
             assert box.ssh.status().enabled is True
             assert box.ssh.disable().enabled is False
+            assert box.ssh.enable().generation == NEAR_U64_MAX
 
         assert [(method, path) for method, path, _ in requests] == [
             ("GET", f"/v1/boxes/{BOX_ID}"),
             ("POST", f"/v1/boxes/{BOX_ID}/ssh"),
             ("GET", f"/v1/boxes/{BOX_ID}/ssh"),
             ("DELETE", f"/v1/boxes/{BOX_ID}/ssh"),
+            ("POST", f"/v1/boxes/{BOX_ID}/ssh/enable"),
         ]
 
 
