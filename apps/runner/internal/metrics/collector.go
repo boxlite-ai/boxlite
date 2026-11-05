@@ -32,6 +32,7 @@ type CollectorConfig struct {
 	CPUUsageSnapshotInterval           time.Duration
 	AllocatedResourcesSnapshotInterval time.Duration
 	ObserveCPU                         func(time.Time, float64)
+	ObserveMemory                      func(context.Context, time.Time, float64)
 }
 
 type Collector struct {
@@ -40,7 +41,9 @@ type Collector struct {
 	boxliteHomeDir string
 	// diskUsage reads a filesystem's capacity and use; tests replace it so the
 	// path and field mapping are checked without a live, shared filesystem.
-	diskUsage func(ctx context.Context, path string) (*disk.UsageStat, error)
+	diskUsage     func(ctx context.Context, path string) (*disk.UsageStat, error)
+	memoryUsage   func(context.Context) (*mem.VirtualMemoryStat, error)
+	observeMemory func(context.Context, time.Time, float64)
 
 	cpuRing  *ring.Ring
 	cpuMutex sync.RWMutex
@@ -80,6 +83,8 @@ func NewCollector(cfg CollectorConfig) *Collector {
 		boxlite:                            cfg.Boxlite,
 		boxliteHomeDir:                     cfg.BoxliteHomeDir,
 		diskUsage:                          disk.UsageWithContext,
+		memoryUsage:                        mem.VirtualMemoryWithContext,
+		observeMemory:                      cfg.ObserveMemory,
 		cpuRing:                            ring.New(cfg.WindowSize),
 		cpuUsageSnapshotInterval:           cfg.CPUUsageSnapshotInterval,
 		allocatedResourcesSnapshotInterval: cfg.AllocatedResourcesSnapshotInterval,
@@ -117,6 +122,10 @@ func (c *Collector) Collect(ctx context.Context) (*Metrics, error) {
 }
 
 func (c *Collector) collect(ctx context.Context) (*Metrics, error) {
+	return c.collectWithMemory(ctx, nil)
+}
+
+func (c *Collector) collectWithMemory(ctx context.Context, memStats *mem.VirtualMemoryStat) (*Metrics, error) {
 	metrics := &Metrics{}
 
 	cpuCount, err := cpu.CountsWithContext(ctx, true)
@@ -140,9 +149,11 @@ func (c *Collector) collect(ctx context.Context) (*Metrics, error) {
 	}
 	metrics.CPUUsagePercentage = float32(cpuUsage)
 
-	memStats, err := mem.VirtualMemoryWithContext(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("failed to collect memory usage: %v", err)
+	if memStats == nil {
+		memStats, err = c.memoryUsage(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("failed to collect memory usage: %v", err)
+		}
 	}
 	metrics.MemoryUsagePercentage = float32(memStats.UsedPercent)
 	metrics.TotalRAMGiB = float32(memStats.Total) / (1024 * 1024 * 1024)
@@ -247,8 +258,20 @@ func (c *Collector) logResourceUsage(ctx context.Context) {
 
 func (c *Collector) logResourceSnapshot(ctx context.Context, now time.Time) {
 	bounded, cancel := context.WithTimeout(ctx, 10*time.Second)
+	// Deliver the same raw minute reading before CPU/disk collection can fail.
+	// Healthcheck and /info reads do not trigger attribution.
+	memStats, err := c.memoryUsage(bounded)
+	cancel()
+	if err != nil {
+		c.log.WarnContext(ctx, "Failed to collect memory for resource log", "error", err)
+		return
+	}
+	if c.observeMemory != nil {
+		c.observeMemory(ctx, now, memStats.UsedPercent)
+	}
+	bounded, cancel = context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	m, err := c.collect(bounded)
+	m, err := c.collectWithMemory(bounded, memStats)
 	if err != nil {
 		c.log.WarnContext(ctx, "Failed to collect runner resource log", "error", err)
 		return

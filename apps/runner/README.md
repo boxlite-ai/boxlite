@@ -584,6 +584,40 @@ ten-second timeout; other failures and queue overflow are logged and dropped.
 Restart loses pending captures/reports. Deploy the migration and API before runners.
 This feature records evidence only; it does not stop boxes or change scheduling.
 
+### Memory incident snapshots
+
+[`internal/memorymonitor`](internal/memorymonitor/) uses the existing minute
+resource sampler. Every valid host memory reading strictly above 80% immediately
+scans running Boxes and reports up to five, ordered by current memory bytes
+descending and business Box ID ascending for ties. Consecutive high minutes
+produce separate events. At or below 80%, or on an invalid host reading, no scan
+occurs. CPU's five-minute qualification and two-minute windows are unchanged.
+
+Host admission uses the same raw `gopsutil.VirtualMemory.UsedPercent` reading as
+the resource log, before rounding for health metrics. CPU/disk collection failures
+do not suppress that memory observation. `/info` and healthchecks do not trigger
+additional scans. Linux uses `memory.current` from the matching Box cgroup v2,
+including VM descendants and charged cache; swap is separate. macOS uses process
+RSS with identity checks. These accounting scopes differ, and Box totals need
+not sum to the host's used-memory value. This is evidence of large consumers,
+not proof of the cause of host pressure.
+
+Each item carries `boxId`, the snapshot's `image`, and decimal-string
+`memoryBytes`. Fewer than five readable Boxes produce a shorter array, and no
+readable Boxes produce `boxes=[]`. Zero-byte readings are retained. Failed
+enumeration, unreadable or mismatched cgroups, process identity changes, or an
+expired scan mark `samplingComplete=false`; successful observations still report.
+Reads are sequential rather than an atomic host-wide snapshot. One-minute
+sampling can miss short memory spikes.
+
+When API URL and Runner token are configured, completed snapshots enter a separate
+32-report queue for [internal ingestion](../API.md#runner-memory-incidents).
+Scans have a ten-second context deadline and do not wait for network uploads.
+Requests time out after ten seconds; network errors, 429, and 5xx retry after
+30 seconds with the original payload and event ID. Other failures and queue
+overflow are logged and dropped. Missed ticks are not replayed, and process
+restart loses queued reports. Deploy the migration and API before Runners.
+
 ### v2 job poller + executor
 
 Only spawned when `BOXLITE_API_VERSION=2`. The poller

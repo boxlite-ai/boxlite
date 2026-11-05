@@ -516,6 +516,36 @@ return at most `limit` visible rows ordered by ID, without pagination or a commi
 Each window has a distinct event ID. Image is recorded in the same insert and
 cannot change on retry; no box-table lookup or organization field is involved.
 
+### `runner_memory_incident`
+
+Immutable snapshots from minute host memory readings strictly above 80%, created
+by pre-deploy migration `1793836800000-add-runner-memory-incidents`.
+Each row contains the five largest readable running-Box usages from one immediate
+scan, or fewer if fewer are readable. No rolling window or sustained-load timer applies.
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `id` | `bigint identity` | Primary key; decimal string in responses. |
+| `runnerId` / `eventId` | `uuid` | Unique pair; Runner identity comes from authentication. |
+| `sampledAt` | `timestamptz` | Time of the host reading that triggered the scan. |
+| `runnerMemoryPercent` | `double precision` | Host percentage in `(80,100]`, enforced in the database. |
+| `boxes` | `jsonb` | Ordered array, at most five entries; array shape and length enforced in the database. |
+| `samplingComplete` | `boolean` | False when Box enumeration or any attribution read fails. |
+| `receivedAt` | `timestamptz` | Server receipt time, default `now()`. |
+
+Each `boxes` item contains `boxId`, `image`, and decimal-string `memoryBytes`.
+Ingestion validates distinct business IDs, nonnegative signed-64-bit byte values,
+and ordering by bytes descending then ID ascending. Strings preserve exact bytes
+through JSONB and JavaScript. An empty array represents no readable Boxes;
+zero-byte Boxes remain valid observations. Image strings come from the same scan,
+including empty strings. No Box-table lookup is needed.
+
+Indexes on `sampledAt` and `(runnerId,id)` support the
+[administrator query](API.md#runner-memory-incidents). A duplicate event is ignored
+atomically, preserving all original rankings. There are no resource foreign-key
+cascades or automatic retention jobs. A single JSONB snapshot keeps the bounded
+ranking atomic without a separate child table.
+
 ### `region`
 
 A placement domain. Two check constraints keep type and ownership consistent,
