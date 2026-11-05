@@ -47,11 +47,54 @@ resize through the widths above. Switch all three Quickstart methods and
 confirm that the outer edges remain fixed. Inputs and explanatory paragraphs
 can remain narrower inside the shared page width.
 
+### Repeatable browser assertion
+
+On each route above, run this in the browser console after the page has loaded.
+Repeat at 390px and 1920px, and after opening and closing the profile menu.
+It checks rendered widths and computed padding against the public layout contract;
+the component tests alone cannot check CSS geometry.
+
+```js
+(() => {
+  const padding = innerWidth >= 1024 ? 40 : innerWidth >= 640 ? 24 : 16;
+  const available = document.documentElement.getBoundingClientRect().width;
+  const containers = [...document.querySelectorAll('.page-container')];
+  if (!containers.length) throw new Error('No dashboard page container found');
+  return containers.map((element) => {
+    const rect = element.getBoundingClientRect();
+    const style = getComputedStyle(element);
+    const leftPadding = parseFloat(style.paddingLeft);
+    const rightPadding = parseFloat(style.paddingRight);
+    if (Math.abs(rect.width - available) > 1 ||
+        leftPadding !== padding || rightPadding !== padding) {
+      throw new Error('Dashboard width or padding changed');
+    }
+    return { left: rect.left + leftPadding, right: rect.right - rightPadding };
+  });
+})();
+```
+
+### Scroll-lock regression
+
+At 1920 × 600, Billing has a vertical scrollbar. Before the review fix, opening
+the profile menu changed its content right edge from 1869px to 1858px: Radix's
+scroll lock added an 11px body margin on top of the stable gutter. After the fix,
+opening and closing the menu retains the 1869px edge.
+
+The override is guarded by `@supports (scrollbar-gutter: stable)`, so browsers
+without support retain the library's compensation. Stable gutters remain
+reserved with hidden overflow, as specified in
+[CSS Overflow §4.2](https://www.w3.org/TR/css-overflow-3/#scrollbar-gutter-property).
+
 ## Automated checks
 
 `make test:apps:dashboard`, `make build:apps:dashboard` (including TypeScript),
 and `make lint:apps` passed. The existing Billing tests retain their containment
 assertions and locate the shared page container.
+Page layout integration tests exercise the real notification provider and banner
+with and without the page container, verifying that actions and dismissal remain
+usable. These interaction checks supplement the browser width measurements above;
+they do not measure CSS geometry.
 
 `make fmt:check:apps` reports the same 207 existing formatting failures on
 the unchanged baseline and the layout branch. Its output is identical;

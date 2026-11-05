@@ -64,6 +64,8 @@ It follows the Images page's full-width layout, with no maximum page width:
 16px side padding on phones, 24px from `sm`, and 40px from `lg`. Large screens
 keep the same side padding as the content expands to fill the available width.
 The root reserves scrollbar space so short and long pages share both content edges.
+When stable gutters are supported, modal scroll locks do not add another body
+margin for that same space. Browsers without support retain the lock's fallback.
 
 Apply it once to a page root, or use `PageHeader` and `PageContent`, which share
 the same rule. Keep banners, tabs, tables, and Quickstart panels aligned to

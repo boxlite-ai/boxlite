@@ -7,6 +7,13 @@ html {
   scrollbar-gutter: stable;
 }
 
+@supports (scrollbar-gutter: stable) {
+  /* Radix scroll locks must not compensate for the already reserved gutter. */
+  html body[data-scroll-locked] {
+    margin-right: 0 !important;
+  }
+}
+
 @layer components {
   .page-container {
     @apply w-full min-w-0 px-4 sm:px-6 lg:px-10;
