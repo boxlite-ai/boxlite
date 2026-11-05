@@ -740,7 +740,7 @@ jobs:
           nix develop --ignore-environment --keep HOME --keep USER \
             --keep CARGO_HOME --keep RUSTUP_HOME --keep RUSTC_WRAPPER \
             --keep CARGO_INCREMENTAL --keep SCCACHE_IGNORE_SERVER_IO_ERROR \
-            -c make cli fmt:check:rust clippy test:unit:vmm
+            -c make cli fmt:check:rust clippy test:unit:vmm test:vmm:boot
 
       # The jailer runs bwrap, which Ubuntu 24.04's AppArmor blocks without the
       # bwrap profile (docs/guides/troubleshooting.md); the runner is discarded.

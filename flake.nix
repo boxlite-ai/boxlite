@@ -15,6 +15,14 @@
       resolvDir = pkgs.runCommand "libresolv-static" { } ''
         mkdir -p $out && ln -s ${pkgs.glibc.static}/lib/libresolv.a $out/
       '';
+      # The kernel build uses Debian's target-prefixed tool names.
+      kernelTools = pkgs.runCommand "kernel-tool-aliases" { } ''
+        mkdir -p $out/bin
+        ln -s ${pkgs.gcc}/bin/gcc $out/bin/x86_64-linux-gnu-gcc
+        for tool in ar as ld nm objcopy objdump ranlib readelf strip; do
+          ln -s ${pkgs.binutils}/bin/$tool $out/bin/x86_64-linux-gnu-$tool
+        done
+      '';
       # A real musl toolchain: nixpkgs musl-gcc wraps the glibc gcc and fails on
       # -latomic_asneeded. Scripts expect x86_64-linux-musl-* and musl-gcc names.
       muslCC = pkgs.pkgsCross.musl64.stdenv.cc;
@@ -29,13 +37,13 @@
     {
       devShells.x86_64-linux.default = pkgs.mkShell {
         packages = with pkgs; [
-          rustup gcc gnumake git curl wget file pkg-config patchelf
+          rustup gcc binutils kernelTools gnumake git curl wget file pkg-config patchelf
           openssl gperf
           python3 python3Packages.pip python3Packages.pyelftools
           go
           llvm libclang
-          flex bison bc elfutils
-          meson ninja libcap
+          flex bison bc elfutils perl xz
+          meson ninja libcap libseccomp util-linux
           protobuf cmake
         ];
         LIBCLANG_PATH = "${pkgs.libclang.lib}/lib";
