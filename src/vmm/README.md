@@ -246,10 +246,20 @@ payloads above 64 KiB. A captured buffer owns checked descriptor metadata and
 uses the chain's total capacity: a 4096-byte chain writes a 44-byte header and
 up to 4052 stream bytes. The caller retains any unsent tail. Header-only buffers
 can carry controls; data returns zero bytes, while shorter headers require reset.
-Registered sources keep their poller interests and deregister on drop.
+Callers own nonblocking standard-library Unix streams and listeners directly.
+`Registration::stream` and `Registration::listener` clone a handle for the poller;
+a private enum holds those two source types with their requested interests.
+Device I/O takes no socket mutex and needs no generic wrapper or explicit fd
+conversion. Each registration costs one extra file descriptor. Dropping the
+registration deregisters and closes only the polling copy, leaving caller I/O
+usable. Closing the caller's socket first is safe too; the polling copy keeps it
+open until deregistration. Failed registration leaves the original socket intact.
+Callers must set accepted streams nonblocking before worker use. This ownership
+change has no measured throughput claim.
 
 `make test:unit:vmm FILTER=vsock` checks encoding, packet bounds, guest-memory
-scatter delivery and real Unix socket readiness and registration cleanup.
+scatter delivery, real Unix stream/listener readiness, and registration cleanup
+in either ownership order, including rejected registrations.
 
 ## Lifecycle
 

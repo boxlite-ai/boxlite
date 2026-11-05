@@ -1,37 +1,45 @@
 // Copyright 2026 BoxLite Contributors
 // SPDX-License-Identifier: Apache-2.0
 
-//! A device and the worker share a source, with registration lifetime owned here.
+//! Device-owned I/O with a duplicate polling handle and automatic deregistration.
 
 use crate::virtio::{DeviceError, EventRegistrar, EventSource, SourceId};
 use mio::{Interest, Registry, Token, event::Source};
 use std::{
     io,
-    sync::{Arc, Mutex},
+    os::unix::net::{UnixListener, UnixStream},
+    sync::Arc,
 };
 
-struct SharedSource<T> {
-    io: Arc<Mutex<T>>,
-    interests: Interest,
+enum PollSource {
+    Stream(mio::net::UnixStream, Interest),
+    Listener(mio::net::UnixListener, Interest),
 }
 
-impl<T: Source + Send + 'static> EventSource for SharedSource<T> {
+impl PollSource {
+    fn source(&mut self) -> (&mut dyn Source, Interest) {
+        match self {
+            Self::Stream(io, interests) => (io, *interests),
+            Self::Listener(io, interests) => (io, *interests),
+        }
+    }
+}
+
+impl EventSource for PollSource {
     fn as_source(&mut self) -> &mut dyn Source {
         self
     }
 }
 
-impl<T: Source> Source for SharedSource<T> {
+impl Source for PollSource {
     fn register(
         &mut self,
         registry: &Registry,
         token: Token,
         _interests: Interest,
     ) -> io::Result<()> {
-        self.io
-            .lock()
-            .unwrap()
-            .register(registry, token, self.interests)
+        let (io, interests) = self.source();
+        io.register(registry, token, interests)
     }
     fn reregister(
         &mut self,
@@ -39,40 +47,60 @@ impl<T: Source> Source for SharedSource<T> {
         token: Token,
         _interests: Interest,
     ) -> io::Result<()> {
-        self.io
-            .lock()
-            .unwrap()
-            .reregister(registry, token, self.interests)
+        let (io, interests) = self.source();
+        io.reregister(registry, token, interests)
     }
     fn deregister(&mut self, registry: &Registry) -> io::Result<()> {
-        self.io.lock().unwrap().deregister(registry)
+        self.source().0.deregister(registry)
     }
 }
 
-pub(super) struct Registered<T> {
-    pub io: Arc<Mutex<T>>,
+/// Owns a polling registration, independently of the caller's socket.
+pub(super) struct Registration {
     registrar: Arc<dyn EventRegistrar>,
     id: SourceId,
 }
 
-impl<T: Source + Send + 'static> Registered<T> {
-    pub fn new(
-        io: Arc<Mutex<T>>,
+impl Registration {
+    /// Registers a duplicate of a caller-owned nonblocking stream.
+    pub fn stream(
+        io: &UnixStream,
         registrar: Arc<dyn EventRegistrar>,
         interests: Interest,
     ) -> Result<Self, DeviceError> {
-        // A callback services the bounded device set; it need not identify one fd.
+        let copy = io
+            .try_clone()
+            .map_err(|_| DeviceError::Fatal("vsock socket duplication"))?;
+        Self::new(
+            PollSource::Stream(mio::net::UnixStream::from_std(copy), interests),
+            registrar,
+        )
+    }
+
+    /// Registers a duplicate of a caller-owned nonblocking listener.
+    pub fn listener(
+        io: &UnixListener,
+        registrar: Arc<dyn EventRegistrar>,
+        interests: Interest,
+    ) -> Result<Self, DeviceError> {
+        let copy = io
+            .try_clone()
+            .map_err(|_| DeviceError::Fatal("vsock socket duplication"))?;
+        Self::new(
+            PollSource::Listener(mio::net::UnixListener::from_std(copy), interests),
+            registrar,
+        )
+    }
+
+    fn new(source: PollSource, registrar: Arc<dyn EventRegistrar>) -> Result<Self, DeviceError> {
         let id = registrar
-            .register(Box::new(SharedSource {
-                io: io.clone(),
-                interests,
-            }))
+            .register(Box::new(source))
             .map_err(|_| DeviceError::Fatal("vsock event registration"))?;
-        Ok(Self { io, registrar, id })
+        Ok(Self { registrar, id })
     }
 }
 
-impl<T> Drop for Registered<T> {
+impl Drop for Registration {
     fn drop(&mut self) {
         self.registrar.deregister(self.id);
     }

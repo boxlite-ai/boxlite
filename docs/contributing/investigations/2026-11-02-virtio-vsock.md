@@ -47,6 +47,54 @@ runtime engine integration, address allocator or whole-VM snapshot orchestration
 
 ## How it works
 
+### Source ownership
+
+The packet-layer registration helper gives the device its own socket and the
+registrar a duplicate handle to the same socket. This removes the socket's
+`Arc<Mutex<_>>` from I/O while preserving automatic deregistration. The worker's
+device lock and event interfaces stay unchanged; throughput gains are unmeasured.
+
+The local virtio-net reference (`e3c9e1887`, `src/vmm/src/devices/net.rs`,
+`register` and `Active::drop`) duplicates a stream for polling and deregisters
+before releasing the device's stream. Adopt that ownership split. Vsock uses only
+Unix streams and listeners: connection and backend consumers at `92951914a`
+confirm those two types. Standard-library
+[`UnixStream::try_clone`](https://doc.rust-lang.org/std/os/unix/net/struct.UnixStream.html#method.try_clone)
+and [`UnixListener::try_clone`](https://doc.rust-lang.org/std/os/unix/net/struct.UnixListener.html#method.try_clone)
+both return independently owned handles to the same socket. Follow net's
+`mio::net::UnixStream::from_std` conversion for the poller's copy, with the
+corresponding listener conversion. No generic socket abstraction or explicit
+file-descriptor conversion is needed.
+
+The caller owns its nonblocking standard-library socket. `Registration::stream`
+and `Registration::listener` borrow it only to clone a polling handle. A private
+enum holds the two mio source variants with their requested interests; only
+registration operations dispatch on that enum. I/O uses the caller's concrete
+socket directly. The helper does not connect sockets or change their blocking
+mode. Callers can convert a nonblocking mio connection into a standard stream,
+as net does, and must set accepted streams nonblocking before worker use.
+
+`Registration` retains only the registrar and id. Dropping it deregisters and
+releases the polling copy, leaving the caller's socket usable. Dropping the
+socket first is also safe: the polling copy keeps it open until deregistration.
+Duplication or registration failure leaves the caller's socket intact and
+releases any polling copy. No shutdown is added. Device owners should drop the
+registration before the socket to end monitoring before closing their I/O.
+
+Keeping the shared mutex avoids an extra descriptor but locks every I/O access.
+A borrowed raw descriptor avoids duplication but cannot safely outlive its owner
+under the existing registrar contract. The chosen design instead pays one extra
+descriptor and duplication operation per registration, with no new dependency.
+
+Validation: retain the real socket readiness and cleanup test, exercise repeated
+read/write readiness and explicit writable interests, and verify both cleanup
+orders, early caller-socket closure, and registration rejection. This is an ownership refactor, not a proven
+throughput fix; no timing threshold is an acceptance criterion. Run the focused
+vsock tests, VMM unit suite, Clippy and formatting checks. Downstream stacked
+branches must migrate constructors and direct I/O access when rebased.
+
+### Integrated device
+
 1. `Vsock` owns its CID and explicit listener/connect mappings. Callers own Unix
    paths. Host CID is 2; BoxLite's guest CID 3 and ports 2695/2696 remain caller
    conventions, without adding VM configuration.

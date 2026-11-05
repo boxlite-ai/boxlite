@@ -7,13 +7,14 @@ use crate::{
     memory::GuestMemoryMmap,
     virtio::{
         DeviceError, EventError, EventRegistrar, EventSource, SourceId,
-        vsock::{buffer::Buffer, packet::*, source::Registered},
+        vsock::{buffer::Buffer, packet::*, source::Registration},
     },
 };
 use mio::{Events, Interest, Poll, Token};
 use std::{
     collections::HashMap,
     io::{Read, Write},
+    os::unix::net::{UnixListener, UnixStream},
     sync::{
         Arc, Mutex,
         atomic::{AtomicU32, Ordering},
@@ -210,15 +211,38 @@ fn captured_buffers_write_fragment_headers_and_checked_scatter_payloads() {
 #[test]
 fn registered_sources_deliver_readiness_and_release_registration() {
     let registrar = Arc::new(Registrar::new());
-    let (device, mut host) = mio::net::UnixStream::pair().unwrap();
-    let registered = Registered::new(
-        Arc::new(Mutex::new(device)),
-        registrar.clone(),
-        Interest::READABLE,
-    )
-    .unwrap();
+    let (mut device, mut host) = socket_pair();
+    let registration =
+        Registration::stream(&device, registrar.clone(), Interest::READABLE).unwrap();
     assert_eq!(registrar.sources.lock().unwrap().len(), 1);
-    host.write_all(b"ping").unwrap();
+    let mut received = [0; 4];
+    for bytes in [b"ping", b"pong"] {
+        host.write_all(bytes).unwrap();
+        assert!(poll(&registrar).iter().any(|event| event.is_readable()));
+        device.read_exact(&mut received).unwrap();
+        assert_eq!(&received, bytes);
+        assert_eq!(
+            device.read(&mut received).unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock
+        );
+    }
+    drop(registration);
+    assert!(registrar.sources.lock().unwrap().is_empty());
+    device.write_all(b"back").unwrap();
+    host.read_exact(&mut received).unwrap();
+    assert_eq!(&received, b"back");
+    drop(device);
+    assert_eq!(host.read(&mut received).unwrap(), 0);
+}
+
+fn socket_pair() -> (UnixStream, UnixStream) {
+    let (device, host) = UnixStream::pair().unwrap();
+    device.set_nonblocking(true).unwrap();
+    host.set_nonblocking(true).unwrap();
+    (device, host)
+}
+
+fn poll(registrar: &Registrar) -> Events {
     let mut events = Events::with_capacity(8);
     registrar
         .poll
@@ -226,15 +250,120 @@ fn registered_sources_deliver_readiness_and_release_registration() {
         .unwrap()
         .poll(&mut events, Some(Duration::from_secs(1)))
         .unwrap();
-    assert!(events.iter().any(|event| event.is_readable()));
-    let mut received = [0; 4];
-    registered
-        .io
-        .lock()
-        .unwrap()
-        .read_exact(&mut received)
-        .unwrap();
-    assert_eq!(&received, b"ping");
-    drop(registered);
+    events
+}
+
+#[test]
+fn registered_sources_preserve_writable_interest_on_reregistration() {
+    let registrar = Arc::new(Registrar::new());
+    let (device, _host) = socket_pair();
+    let _registration =
+        Registration::stream(&device, registrar.clone(), Interest::WRITABLE).unwrap();
+    assert!(poll(&registrar).iter().any(|event| event.is_writable()));
+    {
+        let mut sources = registrar.sources.lock().unwrap();
+        let (&id, source) = sources.iter_mut().next().unwrap();
+        source
+            .as_source()
+            .reregister(
+                registrar.poll.lock().unwrap().registry(),
+                Token(id.0 as usize),
+                Interest::READABLE,
+            )
+            .unwrap();
+    }
+    assert!(poll(&registrar).iter().any(|event| event.is_writable()));
+}
+
+#[test]
+fn registrar_cleanup_leaves_device_io_usable() {
+    let registrar = Arc::new(Registrar::new());
+    let (mut device, mut host) = socket_pair();
+    let registration =
+        Registration::stream(&device, registrar.clone(), Interest::READABLE).unwrap();
+    let id = *registrar.sources.lock().unwrap().keys().next().unwrap();
+    registrar.deregister(id);
     assert!(registrar.sources.lock().unwrap().is_empty());
+    host.write_all(b"ping").unwrap();
+    let mut received = [0; 4];
+    device.read_exact(&mut received).unwrap();
+    assert_eq!(&received, b"ping");
+    device.write_all(b"pong").unwrap();
+    host.read_exact(&mut received).unwrap();
+    assert_eq!(&received, b"pong");
+    drop(registration);
+    drop(device);
+    assert_eq!(host.read(&mut received).unwrap(), 0);
+}
+
+#[test]
+fn polling_handle_survives_caller_socket_close_until_deregistration() {
+    let registrar = Arc::new(Registrar::new());
+    let (device, mut host) = socket_pair();
+    let registration =
+        Registration::stream(&device, registrar.clone(), Interest::READABLE).unwrap();
+    drop(device);
+    assert_eq!(
+        host.read(&mut [0]).unwrap_err().kind(),
+        std::io::ErrorKind::WouldBlock
+    );
+    drop(registration);
+    assert!(registrar.sources.lock().unwrap().is_empty());
+    assert_eq!(host.read(&mut [0]).unwrap(), 0);
+}
+
+#[test]
+fn rejected_registration_releases_polling_copy_and_preserves_caller_socket() {
+    struct Closed;
+    impl EventRegistrar for Closed {
+        fn register(&self, _: Box<dyn EventSource>) -> Result<SourceId, EventError> {
+            Err(EventError::Closed)
+        }
+        fn deregister(&self, _: SourceId) {
+            panic!("a rejected registration has no id to deregister");
+        }
+    }
+    let (mut device, mut host) = socket_pair();
+    assert!(matches!(
+        Registration::stream(&device, Arc::new(Closed), Interest::READABLE),
+        Err(DeviceError::Fatal("vsock event registration"))
+    ));
+    device.write_all(b"ping").unwrap();
+    let mut received = [0; 4];
+    host.read_exact(&mut received).unwrap();
+    assert_eq!(&received, b"ping");
+    drop(device);
+    assert_eq!(host.read(&mut received).unwrap(), 0);
+}
+
+#[test]
+fn registered_listener_delivers_readiness_for_device_accept() {
+    struct SocketPath(std::path::PathBuf);
+    impl Drop for SocketPath {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+    let path = SocketPath(std::env::temp_dir().join(format!(
+        "boxlite-vsock-listener-{}.sock",
+        std::process::id()
+    )));
+    let listener = UnixListener::bind(&path.0).unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let registrar = Arc::new(Registrar::new());
+    let registration =
+        Registration::listener(&listener, registrar.clone(), Interest::READABLE).unwrap();
+    let mut host = UnixStream::connect(&path.0).unwrap();
+    host.set_read_timeout(Some(Duration::from_secs(1))).unwrap();
+    assert!(poll(&registrar).iter().any(|event| event.is_readable()));
+    let (mut device, _) = listener.accept().unwrap();
+    device.set_nonblocking(true).unwrap();
+    host.write_all(b"ping").unwrap();
+    let mut received = [0; 4];
+    device.read_exact(&mut received).unwrap();
+    assert_eq!(&received, b"ping");
+    drop(registration);
+    assert!(registrar.sources.lock().unwrap().is_empty());
+    drop(device);
+    assert_eq!(host.read(&mut received).unwrap(), 0);
 }
