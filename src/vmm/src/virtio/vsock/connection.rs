@@ -118,36 +118,31 @@ impl Connection {
         {
             self.credit_requested = false;
         }
-        if self.state == State::Connecting && h.op == REQUEST && h.flags == 0 && h.len == 0 {
-            return Ok(None);
+        if (h.op != SHUTDOWN && h.flags != 0) || (h.op != RW && h.len != 0) {
+            return Err(invalid("invalid vsock control fields"));
         }
-        if self.state == State::AwaitResponse && h.op == RESPONSE && h.flags == 0 && h.len == 0 {
-            self.state = State::Established;
-            return Ok(None);
-        }
-        if self.state != State::Established {
-            return Err(invalid("unexpected vsock handshake"));
-        }
-        match h.op {
-            RW if h.flags == 0 && self.guest_shutdown & SEND == 0 => {
+        match (self.state, h.op) {
+            (State::Connecting, REQUEST) => {}
+            (State::AwaitResponse, RESPONSE) => self.state = State::Established,
+            (State::Established, RW) if self.guest_shutdown & SEND == 0 => {
                 if packet.payload.len() > BUFFER_SIZE - self.pending.len() {
                     return Err(invalid("guest exceeded vsock receive credit"));
                 }
                 self.pending.extend(packet.payload);
             }
-            SHUTDOWN if h.len == 0 && h.flags != 0 && h.flags & !(RECEIVE | SEND) == 0 => {
+            (State::Established, SHUTDOWN) if h.flags != 0 && h.flags & !(RECEIVE | SEND) == 0 => {
                 self.guest_shutdown |= h.flags;
             }
-            CREDIT_REQUEST if h.len == 0 && h.flags == 0 => {
+            (State::Established, CREDIT_REQUEST) => {
                 return Ok(Some(self.packet(CREDIT_UPDATE, 0, vec![])));
             }
-            CREDIT_UPDATE if h.len == 0 && h.flags == 0 => {}
+            (State::Established, CREDIT_UPDATE) => {}
             _ => return Err(invalid("unexpected vsock operation")),
         }
         Ok(None)
     }
 
-    /// At most one bounded write and read. A full read/write asks for another turn.
+    /// One write/read per turn; successful reads or remaining write tails request another.
     /// Returns whether this flow is closed and whether runnable work may remain.
     pub fn drive(&mut self, outgoing: &mut VecDeque<Packet>) -> io::Result<(bool, bool)> {
         if self.state == State::Connecting {
@@ -201,49 +196,38 @@ impl Connection {
         let credit =
             self.peer_alloc
                 .saturating_sub(self.tx_count.wrapping_sub(self.peer_fwd)) as usize;
-        if credit == 0 {
-            // A one-byte probe distinguishes EOF from data without spending guest credit.
-            // Retain data until credit returns; do not read past it or report EOF ahead of it.
-            if self.lookahead.is_none() {
-                let mut byte = [0];
-                match self.socket.read(&mut byte) {
-                    Ok(0) => self.report_eof(outgoing),
-                    Ok(_) => self.lookahead = Some(byte[0]),
-                    Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
-                    Err(error) if error.kind() == io::ErrorKind::Interrupted => again = true,
-                    Err(error) => return Err(error),
-                }
-            }
-            if !self.host_eof && !self.credit_requested {
-                outgoing.push_back(self.packet(CREDIT_REQUEST, 0, vec![]));
-                self.credit_requested = true;
-            }
-            return Ok((false, again));
-        }
-        if let Some(byte) = self.lookahead.take() {
+        if credit > 0
+            && let Some(byte) = self.lookahead.take()
+        {
             self.tx_count = self.tx_count.wrapping_add(1);
             outgoing.push_back(self.packet(RW, 0, vec![byte]));
             return Ok((false, true));
         }
-        let mut data = vec![0; credit.min(4096)];
-        match self.socket.read(&mut data) {
-            Ok(0) => self.report_eof(outgoing),
-            Ok(count) => {
-                data.truncate(count);
-                self.tx_count = self.tx_count.wrapping_add(count as u32);
-                outgoing.push_back(self.packet(RW, 0, data));
-                again = true;
+        // At zero credit probe one byte; never read past retained data or send it uncredited.
+        if self.lookahead.is_none() {
+            let mut data = vec![0; credit.clamp(1, 4096)];
+            match self.socket.read(&mut data) {
+                Ok(0) => {
+                    self.host_eof = true;
+                    outgoing.push_back(self.packet(SHUTDOWN, SEND, vec![]));
+                }
+                Ok(_) if credit == 0 => self.lookahead = Some(data[0]),
+                Ok(count) => {
+                    data.truncate(count);
+                    self.tx_count = self.tx_count.wrapping_add(count as u32);
+                    outgoing.push_back(self.packet(RW, 0, data));
+                    again = true;
+                }
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => again = true,
+                Err(error) => return Err(error),
             }
-            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
-            Err(error) if error.kind() == io::ErrorKind::Interrupted => again = true,
-            Err(error) => return Err(error),
+        }
+        if credit == 0 && !self.host_eof && !self.credit_requested {
+            outgoing.push_back(self.packet(CREDIT_REQUEST, 0, vec![]));
+            self.credit_requested = true;
         }
         Ok((false, again))
-    }
-
-    fn report_eof(&mut self, outgoing: &mut VecDeque<Packet>) {
-        self.host_eof = true;
-        outgoing.push_back(self.packet(SHUTDOWN, SEND, vec![]));
     }
 }
 

@@ -3,6 +3,7 @@
 
 //! Wire packets, captured guest buffers and registered Unix sources for vsock.
 
+mod backend;
 mod buffer;
 mod connection;
 mod packet;

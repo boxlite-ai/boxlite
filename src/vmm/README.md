@@ -276,8 +276,8 @@ reboot=k` turns a panic, and the restart, into the i8042 reset.
 ## Vsock building blocks
 
 The Unix-only `virtio::vsock` module provides the wire codec, captured writable
-guest buffers, registered Unix socket sources and a stream connection state
-machine. Backend routing, the device facade and snapshots are subsequent layers
+guest buffers, registered Unix socket sources, stream connections and explicit
+Unix backend routing. The device facade and snapshots are subsequent layers
 of the [vsock design](https://github.com/boxlite-ai/boxlite/issues/2312).
 There is no attached vsock device at this layer.
 
@@ -300,8 +300,7 @@ change has no measured throughput claim.
 Each connection owns its nonblocking stream and drops its registration before
 the stream. Guest requests receive a RESPONSE when the host socket connects;
 host-initiated flows wait for RESPONSE before exchanging bytes. Unexpected
-handshakes and operations fail the flow; routing and removal belong to the
-next layer.
+handshakes and operations reset only that flow.
 
 Pending guest writes are bounded at 64 KiB. Partial writes retain the tail,
 WouldBlock retains all pending bytes, and only successful writes advance
@@ -322,13 +321,31 @@ guest RECEIVE stops host reads while allowing guest writes. Host EOF emits
 SHUTDOWN/SEND after queued data and leaves guest writes usable. Both guest
 shutdown flags produce RST once pending writes drain.
 
+The backend connects guest requests only to configured paths and accepts host
+connections only from caller-provided listeners. Mappings retain their original
+listeners across backend teardown. The backend shares immutable `Arc<Mappings>`
+and owns registrations for duplicated polling handles; I/O uses concrete std
+sockets without a mutex. Host accepts receive monotonically increasing ports from
+`1 << 30`, skipping configured connect ports; ports are not reused before reset.
+Exhausting the range closes new accepts. Non-transient listener errors remain
+fatal; descriptor-exhaustion retry scheduling is not implemented here.
+
+Limits are 128 live connections and 256 outgoing packets. Callers check
+`can_receive` before consuming a guest packet and call `drive` when output space
+returns. A deque rotates flows after each bounded I/O turn, so output pressure
+does not repeatedly favor one flow. Routing scans at most 128 entries; this
+removes the separate sorted map, copied key list and cursor. A reset removes
+that flow's queued packets; RECEIVE shutdown discards its queued data.
+
 `make test:unit:vmm FILTER=vsock` checks encoding, packet bounds, guest-memory
 scatter delivery, real Unix stream/listener readiness, and registration cleanup
 in either ownership order, including rejected registrations. Connection tests
 also cover both handshakes, actual partial writes and WouldBlock, credit stalls,
 partial delivery acknowledgments, counter wraparound, half-close and zero-credit
-EOF ordering. These are local socket tests; real guests, backend routing,
-device/MMIO integration and snapshots remain subsequent qualification.
+EOF ordering. Backend tests cover explicit mappings, host accepts, limits,
+fairness after output pressure, isolated resets and registration rollback.
+These are local socket tests; real guests, device/MMIO integration and snapshots
+remain subsequent qualification.
 
 ## Lifecycle
 
