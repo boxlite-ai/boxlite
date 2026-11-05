@@ -277,9 +277,10 @@ reboot=k` turns a panic, and the restart, into the i8042 reset.
 
 The Unix-only `virtio::vsock` module provides the wire codec, captured writable
 guest buffers, registered Unix socket sources, stream connections and explicit
-Unix backend routing. The device facade and snapshots are subsequent layers
-of the [vsock design](https://github.com/boxlite-ai/boxlite/issues/2312).
-There is no attached vsock device at this layer.
+Unix backend routing behind `Vsock`, a stream-only virtio device.
+The [vsock design](https://github.com/boxlite-ai/boxlite/issues/2312) covers this
+contract; `Vm::new` does not attach it and native-engine integration remains
+outside this layer.
 
 The codec uses explicit little-endian fields and rejects truncated packets or
 payloads above 64 KiB. A captured buffer owns checked descriptor metadata and
@@ -295,7 +296,9 @@ registration deregisters and closes only the polling copy, leaving caller I/O
 usable. Closing the caller's socket first is safe too; the polling copy keeps it
 open until deregistration. Failed registration leaves the original socket intact.
 Callers must set accepted streams nonblocking before worker use. This ownership
-change has no measured throughput claim.
+change has no measured throughput claim. Direct std I/O with duplicated mio
+polling handles relies on the Unix epoll/kqueue implementation; dependency
+upgrades must rerun readiness and production-worker continuation tests.
 
 Each connection owns its nonblocking stream and drops its registration before
 the stream. Guest requests receive a RESPONSE when the host socket connects;
@@ -337,6 +340,42 @@ does not repeatedly favor one flow. Routing scans at most 128 entries; this
 removes the separate sorted map, copied key list and cursor. A reset removes
 that flow's queued packets; RECEIVE shutdown discards its queued data.
 
+The device advertises ID 19, an eight-byte read-only CID and three queues with
+maximum size 256: RX, TX and events. It requires all three queues ready and
+successful feature negotiation. It accepts no device-specific feature bits;
+the MMIO transport supplies VERSION_1. Explicit mappings reject duplicate or
+reserved ports, invalid CIDs and invalid Unix pathnames before activation.
+
+Each callback captures RX descriptor metadata and copies TX packets before
+completing any head. No borrowed chain survives intake. TX storage is bounded
+by 256 packets of at most 64 KiB payload; RX retains at most 256 heads.
+Deferred completions use the queue facade's notification decision exactly once.
+The current virtio-queue dependency does not implement the optional legacy
+`NO_INTERRUPT` hint; this device does not offer EVENT_IDX.
+The event queue remains untouched because migration events are unsupported.
+
+```text
+queue/source/Continue → capture RX and TX → deliver queued RX → route TX
+                     → one bounded backend round → deliver RX → request Continue
+```
+
+RX delivery fragments packets at the buffer boundary. For example, a 4096-byte
+payload and 4096-byte RX chain produce 4052 payload bytes, then a 44-byte tail
+in the next chain. Each header and used length describes only that fragment;
+the tail stays ahead of later data and shutdown. Only copied payload advances
+delivered credit. Header-only RX completes with zero bytes when data waits.
+
+Activation rolls back partial registrations on failure and schedules the first
+scan through the prepared worker generation. Reset closes streams, discards
+deferred work and requires feature negotiation again, while retaining mappings.
+Stopping the worker generation precedes reset, so callbacks cannot write old
+guest buffers after reset. Replenished RX resumes output and deferred TX;
+WouldBlock, missing credit and full output do not continually self-schedule.
+
+Like virtio-net, snapshots advertise `Unsupported`: active and inactive
+`save_state` reject snapshots, and `quiesce`/`restore_state` remain unsupported.
+There is no serialization, RestoreContext extension or active-VM restore.
+
 `make test:unit:vmm FILTER=vsock` checks encoding, packet bounds, guest-memory
 scatter delivery, real Unix stream/listener readiness, and registration cleanup
 in either ownership order, including rejected registrations. Connection tests
@@ -344,8 +383,12 @@ also cover both handshakes, actual partial writes and WouldBlock, credit stalls,
 partial delivery acknowledgments, counter wraparound, half-close and zero-credit
 EOF ordering. Backend tests cover explicit mappings, host accepts, limits,
 fairness after output pressure, isolated resets and registration rollback.
-These are local socket tests; real guests, device/MMIO integration and snapshots
-remain subsequent qualification.
+Device tests cover 4096/61/45-byte RX chains, deferred TX/RX ownership,
+malformed chains, activation rollback and Unsupported snapshots. MMIO tests use
+the production shared worker, including a host burst and EOF without new kicks
+or writes. `make test:unit:vmm FILTER=worker_continuation` checks coalescing,
+fairness, prepared requests and stale-generation rejection. These are local
+socket and guest-memory tests; real-guest qualification remains separate.
 
 ## Lifecycle
 
@@ -538,6 +581,12 @@ replace the shared one without changing the transport, the devices or `Vm`.
   `start` is not lost. A registrar of a closed generation returns `Closed`,
   and registrars hold weak references, so a device never keeps its slot or
   the guest memory alive.
+- **Continuation.** The device's `Waker` requests one coalesced `Continue` per
+  pass for its generation. Requests made during callbacks wait for another
+  pass, giving other slots a turn. Prepared requests wait for `start`; stop,
+  cancel and failure discard them, and stale wakers do nothing. The handle
+  holds weak slot/runtime references. A device yields before WouldBlock only
+  when it requests continuation; resource pressure waits for external progress.
 - **Failures.** `NeedsReset` from `on_event` sets `DEVICE_NEEDS_RESET`
   atomically, raises the configuration interrupt and halts the slot until
   `Status=0`. `Fatal`, a panic in `on_event` (caught, which poisons the

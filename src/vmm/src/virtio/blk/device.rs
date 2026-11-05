@@ -232,6 +232,7 @@ impl VirtioDevice for VirtioBlk {
             DeviceEvent::QueueKick(0) => self.process_queue(),
             DeviceEvent::QueueKick(_) => Err(DeviceError::Unsupported("block queue index")),
             DeviceEvent::BackendReady(id) => self.backend_ready(id),
+            DeviceEvent::Continue => Ok(()),
         }
     }
 

@@ -481,6 +481,117 @@ fn drain(receiver: &pipe::Receiver) {
 }
 
 #[test]
+fn worker_continuation_runs_after_budget_and_yields_to_other_slots() {
+    let rig = Rig::new();
+    let other = rig.device("other", ok());
+    other.start();
+    let other_worker = other.worker.clone();
+    let other_seen = other.seen.clone();
+    let mut rounds = 0;
+    let dev = rig.device(
+        "bounded",
+        Box::new(move |ctx, event| {
+            if matches!(event, DeviceEvent::QueueKick(_)) {
+                other_worker.kick(0);
+            } else {
+                assert_eq!(
+                    other_seen.events(),
+                    [kick(0)],
+                    "continuation starved another slot"
+                );
+            }
+            rounds += 1;
+            if rounds < 4 {
+                // Requests inside one callback coalesce, but each later callback
+                // must be able to request another turn without a source edge.
+                for _ in 0..3 {
+                    (ctx.waker)();
+                }
+            }
+            Ok(())
+        }),
+    );
+    dev.start();
+    let barrier = rig.device("barrier", ok());
+    barrier.start();
+    dev.worker.kick(0);
+    let seen = dev.seen.wait_for(4);
+    barrier.worker.kick(0);
+    barrier.seen.wait_for(1);
+    dev.worker.stop().unwrap();
+    assert_eq!(
+        dev.seen.events().len(),
+        4,
+        "repeated wake requests did not coalesce"
+    );
+    assert_eq!(seen.len(), 4);
+    assert_eq!(seen[0], kick(0));
+    assert!(
+        seen[1..]
+            .iter()
+            .all(|e| !matches!(e, DeviceEvent::QueueKick(_) | DeviceEvent::BackendReady(_)))
+    );
+    rig.workers.shutdown().unwrap();
+}
+
+#[test]
+fn worker_continuation_is_coalesced_and_bound_to_the_prepared_generation() {
+    let rig = Rig::new();
+    let dev = rig.device("bounded", ok());
+    // The later slot is a barrier: observing its kick proves the earlier slot
+    // was checked in that pass, without guessing completion with a sleep.
+    let barrier = rig.device("barrier", ok());
+    barrier.start();
+    let prepared = dev.worker.prepare().unwrap();
+    let old = prepared.waker.clone();
+    old();
+    old();
+    old();
+    barrier.worker.kick(0);
+    barrier.seen.wait_for(1);
+    assert!(
+        dev.seen.events().is_empty(),
+        "prepared work ran before start"
+    );
+    dev.activate(prepared);
+    dev.worker.start().unwrap();
+    dev.seen.wait_for(1);
+    barrier.worker.kick(1);
+    barrier.seen.wait_for(2);
+    dev.worker.stop().unwrap();
+    assert_eq!(dev.seen.events().len(), 1);
+    old();
+
+    let cancelled = dev.worker.prepare().unwrap();
+    (cancelled.waker)();
+    dev.worker.cancel_prepare();
+    let current = dev.worker.prepare().unwrap();
+    let wake = current.waker.clone();
+    dev.activate(current);
+    dev.worker.start().unwrap();
+    old();
+    (cancelled.waker)();
+    barrier.worker.kick(2);
+    barrier.seen.wait_for(3);
+    assert_eq!(
+        dev.seen.events().len(),
+        1,
+        "stale or cancelled wake crossed generations"
+    );
+    wake();
+    dev.seen.wait_for(2);
+    dev.worker.stop().unwrap();
+    assert_eq!(dev.seen.events().len(), 2);
+    rig.workers.shutdown().unwrap();
+    let weak = Arc::downgrade(&dev.device);
+    drop(dev);
+    drop(barrier);
+    drop(rig);
+    assert!(weak.upgrade().is_none(), "waker retained its device slot");
+    wake();
+}
+
+#[test]
 fn a_kick_runs_on_event_on_the_worker_thread() {
     let rig = Rig::new();
     let dev = rig.device("probe", ok());
@@ -735,7 +846,7 @@ fn sources_registered_in_on_event_report_until_deregistered() {
                     ctx.events.deregister(id);
                 }
                 DeviceEvent::BackendReady(_) => drain(&device_pipe.receiver),
-                DeviceEvent::QueueKick(_) => {}
+                _ => {}
             }
             Ok(())
         }),
