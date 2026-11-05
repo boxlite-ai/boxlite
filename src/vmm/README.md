@@ -276,9 +276,9 @@ reboot=k` turns a panic, and the restart, into the i8042 reset.
 ## Vsock building blocks
 
 The Unix-only `virtio::vsock` module provides the wire codec, captured writable
-guest buffers and registered Unix socket sources. The connection state machine,
-backend routing, device facade and snapshots are subsequent layers of the
-[vsock design](https://github.com/boxlite-ai/boxlite/issues/2312).
+guest buffers, registered Unix socket sources and a stream connection state
+machine. Backend routing, the device facade and snapshots are subsequent layers
+of the [vsock design](https://github.com/boxlite-ai/boxlite/issues/2312).
 There is no attached vsock device at this layer.
 
 The codec uses explicit little-endian fields and rejects truncated packets or
@@ -296,6 +296,13 @@ usable. Closing the caller's socket first is safe too; the polling copy keeps it
 open until deregistration. Failed registration leaves the original socket intact.
 Callers must set accepted streams nonblocking before worker use. This ownership
 change has no measured throughput claim.
+
+Each connection handles guest-initiated and host-initiated handshakes, bounded
+Unix writes, peer receive credit and independent half-close directions. Host
+reads reserve credit before delivery; a peer cannot acknowledge bytes until
+the caller marks them delivered. A blocked write retains its bytes and only
+successful writes advance the forwarded counter. A connection gets at most
+one write and one 4 KiB read per turn and reports whether more work may remain.
 
 `make test:unit:vmm FILTER=vsock` checks encoding, packet bounds, guest-memory
 scatter delivery, real Unix stream/listener readiness, and registration cleanup

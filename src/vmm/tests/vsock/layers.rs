@@ -3,6 +3,9 @@
 
 //! Direct boundary tests for the independently introduced vsock layers.
 
+#[path = "layers/connections.rs"]
+mod connections;
+
 use crate::{
     memory::GuestMemoryMmap,
     virtio::{

@@ -4,6 +4,7 @@
 //! Wire packets, captured guest buffers and registered Unix sources for vsock.
 
 mod buffer;
+mod connection;
 mod packet;
 mod source;
 
