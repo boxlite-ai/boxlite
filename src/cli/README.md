@@ -200,7 +200,7 @@ use. Executing invocations reject unsupported options; Clap's `--help` and
 | `--config PATH` | local-capable commands | JSON config file path (e.g. for `home_dir` and `image_registries`). |
 | `--url URL` | REST-capable commands | Connect to a remote BoxLite REST server instead of the local runtime. Env: `BOXLITE_REST_URL`. |
 | `--context NAME` | REST-capable commands + `auth` + `context` | Override the saved current context. Env: `BOXLITE_CONTEXT`. Legacy aliases: `--profile`, `BOXLITE_PROFILE`. |
-| `--path-prefix VALUE` | REST box/volume commands | Routing-slot value for `/v1/<prefix>/...`; overrides the selected context. Env: `BOXLITE_REST_PATH_PREFIX`. |
+| `--path-prefix VALUE` | REST box/volume commands | Routing-slot value for `/v1/<prefix>/...`; overrides the selected context. `--path-prefix=''` clears it. Env: `BOXLITE_REST_PATH_PREFIX` (empty also clears). |
 
 ### Network policy updates
 
@@ -241,7 +241,9 @@ listener. Both require enabled SSH. `--enable` restores saved SSH configuration;
 All SSH operations accept cloud contexts, for example
 `boxlite --context cloud ssh dev`. The printed command preserves the
 selected context or explicit URL and routing prefix; credentials are loaded normally
-when it runs. Cloud proxy requires SSH control, tunnel support and inbound access.
+when it runs. An empty prefix is pinned with `--path-prefix=''`, so later changes
+to the saved context cannot add a routing segment to that command.
+Cloud proxy requires SSH control, tunnel support and inbound access.
 An active local proxy/tunnel holds the
 runtime home lock; stop it before issuing another local CLI command on that home.
 See [`boxlite ssh`](../../docs/reference/cli/README.md#boxlite-ssh) for flags and the
