@@ -3984,6 +3984,26 @@ paths:
         schema:
           type: string
         style: form
+      - description: Count every retained Box state; omit to keep the existing active-state
+          count.
+        explode: true
+        in: query
+        name: boxCountScope
+        required: false
+        schema:
+          enum:
+          - all
+          type: string
+        style: form
+      - description: Exact organization UUID; avoids name search and cannot be combined
+          with q.
+        explode: true
+        in: query
+        name: organizationId
+        required: false
+        schema:
+          type: string
+        style: form
       responses:
         "200":
           content:
@@ -8874,7 +8894,7 @@ components:
       - observedAt
       - runners
       type: object
-    AdminOrganizationCreator:
+    AdminOrganizationVerifiedCreator:
       properties:
         userId:
           type: string
@@ -8885,6 +8905,9 @@ components:
           type: string
         displayName:
           type: string
+        emailVerified:
+          description: Current verification state from the creator account.
+          type: boolean
       required:
       - displayName
       - email
@@ -8912,7 +8935,7 @@ components:
           type: string
         creator:
           allOf:
-          - $ref: "#/components/schemas/AdminOrganizationCreator"
+          - $ref: "#/components/schemas/AdminOrganizationVerifiedCreator"
           description: Current creator identity.
           nullable: true
           type: object
@@ -8987,6 +9010,22 @@ components:
       required:
       - items
       - limit
+      type: object
+    AdminOrganizationCreator:
+      properties:
+        userId:
+          type: string
+        email:
+          description: "Current email, not necessarily the email at registration."
+          format: email
+          nullable: true
+          type: string
+        displayName:
+          type: string
+      required:
+      - displayName
+      - email
+      - userId
       type: object
     AdminOrganizationMember:
       example:

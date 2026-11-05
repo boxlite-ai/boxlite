@@ -22,6 +22,7 @@ export * from './admin-organization-member-page';
 export * from './admin-organization-overview';
 export * from './admin-organization-overview-page';
 export * from './admin-organization-usage';
+export * from './admin-organization-verified-creator';
 export * from './admin-region-overview';
 export * from './admin-region-overview-page';
 export * from './admin-runner';

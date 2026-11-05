@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional, ApiSchema } from '@nestjs/swagger'
-import { AdminOrganizationRegistrationDto } from './organization-metadata.dto'
+import { AdminOrganizationRegistrationDto, AdminOrganizationVerifiedRegistrationDto } from './organization-metadata.dto'
 import { AdminOrganizationActivationDto } from './organization-activation.dto'
 
 type HealthState = 'critical' | 'degraded' | 'healthy' | 'unknown'
@@ -194,7 +194,7 @@ export class AdminComponentIdentitiesDto {
 }
 
 @ApiSchema({ name: 'AdminOrganizationOverview' })
-export class AdminOrganizationOverviewDto extends AdminOrganizationRegistrationDto {
+export class AdminOrganizationOverviewDto extends AdminOrganizationVerifiedRegistrationDto {
   @ApiProperty()
   organizationId: string
 

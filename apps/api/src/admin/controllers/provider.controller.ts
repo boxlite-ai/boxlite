@@ -174,6 +174,19 @@ export class AdminProviderController {
   @Get('organizations')
   @ApiOperation({ summary: 'List organization operational summaries', operationId: 'adminListOrganizationsOverview' })
   @ApiQuery({
+    name: 'organizationId',
+    required: false,
+    type: String,
+    description: 'Exact organization UUID; avoids name search and cannot be combined with q.',
+  })
+  @ApiQuery({
+    name: 'boxCountScope',
+    required: false,
+    type: String,
+    enum: ['all'],
+    description: 'Count every retained Box state; omit to keep the existing active-state count.',
+  })
+  @ApiQuery({
     name: 'createdFrom',
     type: String,
     required: false,
@@ -199,8 +212,9 @@ export class AdminProviderController {
     @Query() query: Record<string, unknown>,
     @Res({ passthrough: true }) response: Response,
   ): Promise<AdminOrganizationOverviewPageDto> {
+    const parsed = parseRegistrationQuery(query)
     response.setHeader('Cache-Control', 'private, no-store')
-    return this.organizationsService.list(parseRegistrationQuery(query))
+    return this.organizationsService.list(parsed)
   }
 
   @Get('organizations/:organizationId')

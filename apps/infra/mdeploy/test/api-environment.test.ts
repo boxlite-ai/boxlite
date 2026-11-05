@@ -82,10 +82,7 @@ test('a dashboard host that is the control plane’s own is refused at the bound
    * with a resource collision, which names neither the setting nor the stage
    * that holds it.
    */
-  assert.throws(
-    () => assemble({ ...base, DASHBOARD_DOMAIN: 'api.dev.boxlite.ai' }),
-    /control plane answers/,
-  )
+  assert.throws(() => assemble({ ...base, DASHBOARD_DOMAIN: 'api.dev.boxlite.ai' }), /control plane answers/)
 })
 
 test('an issuer is required, because a placeholder would let the stack look healthy', () => {

@@ -72,12 +72,12 @@ accept this field before rolling out the added response property.
 `recordBusinessEvent` (`src/common/utils/business-event.util.ts`) writes one structured log record
 per business event; the attributes reach OTLP through nestjs-pino, where alerts query them.
 
-| Event | Recorded by | Outcomes |
-| --- | --- | --- |
-| `user.registration` | `UserService.create`, through `recordOutcomes` | requested, success, exception |
-| `user.login` | `LoginEventRecorder` | success |
-| `box.create`, `box.stop`, `box.delete` | `BoxService`, the auto-stop and auto-delete crons | requested |
-| `box.create`, `box.stop`, `box.delete` | `JobStateHandler`, when the runner job finishes | success, exception |
+| Event                                  | Recorded by                                       | Outcomes                      |
+| -------------------------------------- | ------------------------------------------------- | ----------------------------- |
+| `user.registration`                    | `UserService.create`, through `recordOutcomes`    | requested, success, exception |
+| `user.login`                           | `LoginEventRecorder`                              | success                       |
+| `box.create`, `box.stop`, `box.delete` | `BoxService`, the auto-stop and auto-delete crons | requested                     |
+| `box.create`, `box.stop`, `box.delete` | `JobStateHandler`, when the runner job finishes   | success, exception            |
 
 Box events go through `src/box/utils/box-business-event.util.ts`: the request and the outcome are
 recorded in different places, so one call cannot cover both.
@@ -95,11 +95,11 @@ return this.userService.create(createUserDto, Context.admin())
 await this.stop(event.boxId, undefined, Context.platform(PlatformReason.ORG_SUSPENSION))
 ```
 
-| Context | `actor.kind` | `event.reason` |
-| --- | --- | --- |
-| `Context.user()` | `user` | — |
-| `Context.admin()` | `admin` | — |
-| `Context.platform(reason)` | `platform` | the `PlatformReason`, such as `auto_stop` or `bootstrap` |
+| Context                    | `actor.kind` | `event.reason`                                           |
+| -------------------------- | ------------ | -------------------------------------------------------- |
+| `Context.user()`           | `user`       | —                                                        |
+| `Context.admin()`          | `admin`      | —                                                        |
+| `Context.platform(reason)` | `platform`   | the `PlatformReason`, such as `auto_stop` or `bootstrap` |
 
 - Only the platform gives a reason; user and admin contexts have none.
 - The boot-time admin seed registers as `Context.platform(PlatformReason.BOOTSTRAP)`.
@@ -110,8 +110,7 @@ await this.stop(event.boxId, undefined, Context.platform(PlatformReason.ORG_SUSP
 
 System administrators read registration fields on the existing organization routes.
 Authenticate with `Authorization: Bearer <admin-api-key>` or an administrator JWT;
-an ordinary organization's API key does not grant system-wide access. These internal
-routes use one contract: no view selector, capability probe, or capability response header.
+an ordinary organization's API key does not grant system-wide access.
 
 Upgrade every producer instance before enabling the updated consumer. Old list cursors
 must be discarded because the default ordering now uses creation time and ID. Existing
@@ -122,6 +121,14 @@ consumers before producers; mixed-version traffic is not supported during activa
   stored `createdBy`, nullable current `creator`, member/Box counts and impact.
   `q` searches name or exact ID. `createdFrom` is inclusive and `createdTo` exclusive;
   timestamps require an offset and at most millisecond precision. `limit` is 1–200 (default 50).
+  `boxCountScope=all` counts every retained state, including destroyed and archived,
+  while impact considers only non-destroyed, non-archived Boxes. Omitting this parameter
+  excludes destroyed and archived Boxes from the count.
+  `organizationId=<UUID>` selects an exact primary key; it cannot combine with `q`.
+  Registration collectors use the same full page with `boxCountScope=all` and date bounds.
+  Creator lookup and inventory aggregation are restricted to the page's organization IDs;
+  no separate per-organization inventory call is needed for the first observation.
+  The list always returns `AdminOrganizationOverviewPage`, including counts and impact.
 - `GET /api/admin/organizations/{organizationId}` returns flat organization
   details with registration, member/Box pages and impact. A missing organization returns 404.
   `memberCursor`, `boxCursor` and `sectionLimit` page each section. Explicit `include=usage`
@@ -140,11 +147,17 @@ is the stored creator association, independent of current membership. Account li
 rewrites it to the primary user ID, so it is not an immutable historical identity.
 When a creator no longer exists and the organization survives, `creator` is null; an existing
 user without an email has `creator.email:null`. Names and email describe current identity.
+The list response includes `creator.emailVerified` when the account's
+current verification state is available. The organization detail response includes
+creator fields (`userId`, `email`, `displayName`) and does not query verification state.
 Pages read live data and exclude deleted organizations.
+All-state counts cover only retained rows, not lifetime successful creations: cleanup can
+remove destroyed rows and pending/failed rows can remain. `observedAt` remains the last
+business modification; consumers must measure successful-read freshness separately.
 
 List order and cursor seek both use creation time truncated to milliseconds plus
-UUID, ascending. Cursors bind `q` and date filters; changing them returns 400. Unknown
-parameters (including the removed view selector), invalid dates, UUIDs, and incompatible
+UUID, ascending. Cursors bind `q`, date filters and count scope and exact organization ID; changing them returns 400. Default-read cursors retain their prior encoding. Unknown
+parameters, invalid dates, UUIDs, and incompatible
 cursors return `400 invalid_organization_query`. Invalid credentials return 401;
 non-admin access returns 403. Consumers may ignore additive fields but must validate
 required fields and project their own allowed response fields.
@@ -164,7 +177,40 @@ and Box cursors independently on detail. Responses use `Cache-Control: private, 
 
 ### Generated clients
 
-Existing organization operation IDs and response models are retained. Registration fields
+The TypeScript organization-list method accepts Axios request options in the original
+sixth position or after the new filters in the eighth position. This applies to the class,
+factory, functional interface and request creator. For an initialized `admin` client:
+
+```typescript
+const options = { headers: { Authorization: `Bearer ${adminApiKey}` }, timeout: 5000 }
+// Existing callers keep their headers and other Axios options.
+await admin.adminListOrganizationsOverview(undefined, undefined, 50, undefined, undefined, options)
+// New callers can select all retained Box states and an exact organization.
+await admin.adminListOrganizationsOverview(
+  undefined,
+  undefined,
+  50,
+  undefined,
+  undefined,
+  'all',
+  organizationId,
+  options,
+)
+```
+
+Request options remain outside URL query parameters. The TypeScript generation
+postprocessor preserves both forms and fails if the expected generated signatures change.
+
+The Go client uses `AdminOrganizationCreator` and `NullableAdminOrganizationCreator`
+for both organization-list and detail models. Existing constructor and getter/setter
+signatures remain compatible. For example, a value from `NewAdminOrganizationCreator`
+can be passed directly to the overview's `SetCreator`.
+The optional `EmailVerified` field carries verification from list responses;
+`GetEmailVerifiedOk` distinguishes an absent state from `false`.
+The Go generation postprocessor preserves these model names and signatures while
+the HTTP schemas retain their separate list and detail fields.
+
+Existing organization operation IDs and top-level response models are retained. Registration fields
 are required; usage and activation remain optional, present only when selected. Query
 parameters have explicit Swagger string types; runtime validation still applies. Regenerate the committed
 clients from `apps/` with the pinned generator in `openapitools.json`:
@@ -330,3 +376,16 @@ for the source evidence, concurrency model and verification boundaries.
 
 See [organization onboarding](src/organization/ONBOARDING.md) for the profile, personal prompt
 draft and idempotent handoff API contracts, migration order, and frontend integration behavior.
+
+## Retention-policy reads and login activity
+
+Retention-policy workers reuse the existing Backoffice Admin credential for
+`GET /api/admin/organizations`. The endpoint retains its existing Admin authorization;
+no policy-specific key or role is required. Registration reads use `createdFrom`, `createdTo`
+and `boxCountScope=all`. Exact-org reads use `organizationId=<UUID>&boxCountScope=all`.
+
+R2 reuses successful `user.login` records from `LoginEventRecorder`, with the user ID in
+`correlation.id` and the observation time in `event.timestamp`. The existing recorder logs
+first API use of each newly issued token, including refreshed tokens. R2 therefore treats a
+qualifying token-use record as return activity; it does not require a new interactive login.
+No additional event or issuer-claim configuration is required. Redis/log failures can omit records.
