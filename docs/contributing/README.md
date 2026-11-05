@@ -32,9 +32,6 @@ How to build, test, and change the code.
 
 Dated root-cause analyses and design studies, newest first.
 
-- 2026-11-05 · [Deduplicated incident queries](investigations/2026-11-05-incident-query-deduplication.md): select per-Box CPU and memory maxima before applying result limits.
-- 2026-11-05 · [Fixed CPU sampling and minute peaks](investigations/2026-11-05-fixed-cpu-sampling.md): five-second host sampling, minute peak logs, and the existing healthcheck average.
-- 2026-11-05 · [Runner memory incident snapshots](investigations/2026-11-05-runner-memory-incidents.md): minute-triggered top-five attribution, ingestion, persistence, and administrator queries.
 - 2026-11-05 · [Dashboard creation after a startup timeout](investigations/2026-11-05-dashboard-create-timeout.md): follows the created Box by ID when image preparation outlasts the startup wait.
 - 2026-11-05 · [Dashboard page width](investigations/2026-11-05-dashboard-page-width.md): shared full-width dashboard layout, measurements, and checks.
 - 2026-11-05 · [ASCII action buttons](investigations/2026-11-05-ascii-buttons.md): shared console button styles, native interactions, and rendered comparisons.
