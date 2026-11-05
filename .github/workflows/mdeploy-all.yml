@@ -44,11 +44,19 @@ name: mdeploy-all
 # `resolve` writes the same thing in words, once it has read them.
 run-name: >-
   ${{ inputs.apply && 'deploy' || 'preview' }} ${{ inputs.stage }} ·
-  ${{ inputs.ref || github.sha }} · ${{ inputs.components }}
+  ${{ inputs.ref || github.sha }} · ${{ inputs.components }}${{ inputs.requested_by != '' && inputs.request_id != '' && format(' · @{0} · {1}', inputs.requested_by, inputs.request_id) || '' }}
 
 on:
   workflow_dispatch:
     inputs:
+      requested_by:
+        description: Public GitHub username of the requester
+        required: false
+        type: string
+      request_id:
+        description: Opaque request ID for run attribution
+        required: false
+        type: string
       # A choice rather than free text: this value selects the deployment
       # Environment of every job below, and an Environment carries the secrets
       # and the reviewers of the stage it names. Enforced across every workflow
