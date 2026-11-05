@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { AsciiButton } from '@/components/ascii'
 import { Panel, SegmentedBar } from '@/components/ascii'
 import { CreateBoxDialog } from '@/components/Box/CreateBoxDialog'
 import {
@@ -251,19 +252,22 @@ export function ImageCatalog() {
               <span className="font-mono text-meta text-muted-foreground">{timeAgo(image.lastUsedAt)}</span>
               <div className="flex items-center justify-end gap-1">
                 {canCreateBox && (
-                  <button
+                  <AsciiButton
+                    size="sm"
                     type="button"
                     onClick={() =>
                       image.templateId ? openTemplate(image.templateId) : setNewBoxImage(imageStartRef(image))
                     }
                     title={`New box from ${imageStartRef(image)}`}
-                    className="px-2 py-[5px] font-mono text-label uppercase text-muted-foreground transition-colors hover:text-foreground"
                   >
                     New box
-                  </button>
+                  </AsciiButton>
                 )}
                 {canDelete && !image.curated && image.id && (
-                  <button
+                  <AsciiButton
+                    variant="danger"
+                    size="icon"
+                    aria-label={`Remove ${image.name}`}
                     type="button"
                     onClick={() => setPendingRemove(image)}
                     // Radix unmounts the dialog on confirm, so this is the
@@ -271,10 +275,9 @@ export function ImageCatalog() {
                     // and re-opening from here is what would send a second DELETE.
                     disabled={deleteImage.isPending}
                     title={`Remove ${image.name}`}
-                    className="p-[5px] text-muted-foreground transition-colors hover:text-destructive disabled:opacity-40"
                   >
                     <Trash className="size-[15px]" />
-                  </button>
+                  </AsciiButton>
                 )}
               </div>
             </div>
@@ -284,13 +287,9 @@ export function ImageCatalog() {
         {rows.length === 0 && filter.trim() && (
           <div className="flex flex-col items-center gap-3 py-10 text-center font-mono text-meta text-muted-foreground">
             <span>No image matches “{filter.trim()}”</span>
-            <button
-              type="button"
-              onClick={() => setFilter('')}
-              className="border border-border px-[13px] py-[6px] text-label transition-colors hover:border-brand"
-            >
+            <AsciiButton size="sm" type="button" onClick={() => setFilter('')}>
               Clear filter
-            </button>
+            </AsciiButton>
           </div>
         )}
       </div>

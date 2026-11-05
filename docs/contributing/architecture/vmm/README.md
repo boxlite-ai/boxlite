@@ -330,6 +330,12 @@ today.
   it claims. `build` reports every conflict at once, naming the claimant and
   the owner, or returns an immutable `Chipset` that owns the devices. Devices register while
   the VM is built; M6 and M7 change the guest without adding bus devices.
+- **Composition.** `devices::add_all` is the one place that names device
+  types: it adds the legacy platform devices, then each configured device in
+  slot order through `add_slot_device`, and `virtio::mmio::add_device` claims a
+  window and line, adds the worker slot and builds the transport. Adding a
+  device type is one line in `add_all`; `Vm::with_devices` and `vm.rs` stay
+  unchanged.
 - **Dispatch.** `Chipset::dispatch` serves MMIO and port exits through the buses and returns every
   other exit to the vCPU loop. An access must lie entirely inside one range,
   as in Firecracker's bus. Any other access reads `0xFF`, drops its write and

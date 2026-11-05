@@ -58,7 +58,7 @@ mod vcpu;
     not(test),
     expect(
         dead_code,
-        reason = "Only active devices use part of the virtio contract; snapshots remain unsupported until M8."
+        reason = "The snapshot parts of the contract have no production device yet, and only Linux x86_64 adds the block device."
     )
 )]
 mod virtio;
@@ -72,7 +72,7 @@ mod virtio;
 mod vm;
 
 pub use chipset::{BusKind, Conflict};
-pub use config::VmConfig;
+pub use config::{DiskConfig, DiskFormat, VmConfig};
 pub use error::{Error, Result};
 pub use memory::ReclaimPolicy;
 pub use vm::{StopHandle, Vm, VmExit};

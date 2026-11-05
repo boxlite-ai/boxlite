@@ -5,7 +5,7 @@
  */
 
 import { OrganizationSuspendedError } from '@/api/errors'
-import { StatCard } from '@/components/ascii'
+import { AsciiButton, StatCard } from '@/components/ascii'
 import { CreateBoxDialog } from '@/components/Box/CreateBoxDialog'
 import { BoxTable } from '@/components/BoxTable'
 import { Plus, Search } from '@/components/ui/icon'
@@ -703,7 +703,7 @@ const Boxes: React.FC = () => {
   const stoppedBoxesDisplay = stoppedBoxesQuery.data != null ? stoppedBoxesQuery.data.toLocaleString('en-US') : '…'
 
   return (
-    <div className="flex h-[calc(100svh-60px)] min-h-0 flex-col px-4 pt-5 sm:px-6 lg:px-[40px] lg:pt-[26px]">
+    <div className="page-container flex h-[calc(100svh-60px)] min-h-0 flex-col pt-5 lg:pt-[26px]">
       {/* header */}
       <div className="mb-[18px] flex items-end justify-between lg:mb-[22px]">
         <h1 className="font-display text-page font-semibold text-foreground">Boxes</h1>
@@ -742,14 +742,10 @@ const Boxes: React.FC = () => {
               updateOnboardingProgress({ boxCreated: true })
             }}
           >
-            <button
-              type="button"
-              title="New Box"
-              className="inline-flex h-11 items-center justify-center gap-[7px] bg-primary px-[15px] text-body font-semibold text-primary-foreground transition-opacity hover:opacity-90 sm:h-9"
-            >
+            <AsciiButton variant="primary" className="h-11 sm:h-9" type="button" title="New Box">
               <Plus className="size-3.5" strokeWidth={2.4} />
               New Box
-            </button>
+            </AsciiButton>
           </CreateBoxDialog>
         )}
       </div>

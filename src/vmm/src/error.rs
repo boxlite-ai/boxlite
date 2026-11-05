@@ -25,6 +25,12 @@ pub enum Error {
     Hypervisor(boxlite_hypervisor::Error),
     /// The kernel command line is too long or not printable ASCII.
     InvalidCommandLine(&'static str),
+    /// More disks than `config::MAX_DISKS`.
+    InvalidDiskCount(usize),
+    /// Opening a disk image failed.
+    OpenDisk { path: PathBuf, source: io::Error },
+    /// Every virtio-mmio window and interrupt line is taken.
+    VirtioSlotsExhausted,
     /// Devices claimed resources the chipset cannot give them.
     ChipsetConflicts(Vec<crate::chipset::Conflict>),
     /// A device constructor raised interrupt `line` before the chipset was
@@ -78,6 +84,11 @@ impl fmt::Display for Error {
             Self::InvalidCommandLine(reason) => {
                 write!(f, "invalid kernel command line: {reason}")
             }
+            Self::InvalidDiskCount(count) => write!(f, "too many disks: {count}"),
+            Self::OpenDisk { path, .. } => {
+                write!(f, "failed to open the disk image {}", path.display())
+            }
+            Self::VirtioSlotsExhausted => f.write_str("no virtio-mmio slot is free"),
             Self::ChipsetConflicts(conflicts) => {
                 write!(f, "{} chipset conflict(s):", conflicts.len())?;
                 for conflict in conflicts {
@@ -123,6 +134,8 @@ impl error::Error for Error {
             Self::InvalidVcpuCount(_)
             | Self::InvalidMemorySize(_)
             | Self::InvalidCommandLine(_)
+            | Self::InvalidDiskCount(_)
+            | Self::VirtioSlotsExhausted
             | Self::ChipsetConflicts(_)
             | Self::LineNotArmed(_)
             | Self::VirtioDevice { .. }
@@ -130,6 +143,7 @@ impl error::Error for Error {
             | Self::VcpuPanicked { .. }
             | Self::AlreadyRan => None,
             Self::AllocateMemory { source, .. }
+            | Self::OpenDisk { source, .. }
             | Self::LoadKernel { source, .. }
             | Self::LoadInitramfs { source, .. }
             | Self::WriteBootData { source, .. }

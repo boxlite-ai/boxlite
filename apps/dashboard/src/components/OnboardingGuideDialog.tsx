@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { AsciiButton } from '@/components/ascii'
 import goIcon from '@/assets/go.svg'
 import pythonIcon from '@/assets/python.svg'
 import { RustIcon } from '@/assets/RustIcon'
@@ -422,13 +423,9 @@ function InterfacePicker({
 
 function PrimaryBtn({ children, onClick }: { children: React.ReactNode; onClick: () => void }) {
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="inline-flex items-center gap-2 bg-primary px-4 py-[9px] text-meta font-semibold text-primary-foreground transition-opacity hover:opacity-85"
-    >
+    <AsciiButton variant="primary" type="button" onClick={onClick}>
       {children}
-    </button>
+    </AsciiButton>
   )
 }
 
@@ -649,7 +646,7 @@ function OnboardingGuideContent({
         />
       </section>
     ) : (
-      <section className="max-w-[1080px] font-mono">
+      <section className="min-w-0 font-mono">
         <div className="quickstart-sequence min-w-0">
           <section className="quickstart-step min-w-0">
             <QuickstartStepHeading title="1. Get an API key" />

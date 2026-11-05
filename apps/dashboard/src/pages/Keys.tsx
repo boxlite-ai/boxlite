@@ -74,7 +74,7 @@ const Keys: React.FC = () => {
   )
 
   return (
-    <div className="flex h-[calc(100svh-60px)] min-h-0 flex-col px-[34px] pt-[26px] lg:px-[40px]">
+    <div className="page-container flex h-[calc(100svh-60px)] min-h-0 flex-col pt-[26px]">
       {/* header — same hierarchy as the Boxes page */}
       <div className="mb-[22px] flex items-end justify-between">
         <h1 className="font-display text-page font-semibold text-foreground">API Keys</h1>
