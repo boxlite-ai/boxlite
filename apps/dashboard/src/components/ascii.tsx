@@ -4,7 +4,8 @@
  */
 
 import { cn } from '@/lib/utils'
-import type { ComponentProps, ReactNode } from 'react'
+import { Button } from '@/components/ui/button'
+import { forwardRef, type ComponentProps, type ReactNode } from 'react'
 
 /**
  * Shared primitives for the terminal/ASCII design language.
@@ -181,32 +182,34 @@ export function Metric({ label, value, sub }: { label: string; value: ReactNode;
 }
 
 /**
- * Flat terminal button. The design language has no rounded/elevated controls, so
- * these bypass the shadcn Button rather than fighting its variants.
+ * Semantic names for the shared terminal button styles. Forward native props
+ * and refs so the same control also works as a Radix dialog/dropdown trigger.
  */
-export function AsciiButton({
-  variant = 'secondary',
-  className,
-  children,
-  type = 'button',
-  ...props
-}: ComponentProps<'button'> & { variant?: 'primary' | 'secondary' }) {
+export const AsciiButton = forwardRef<
+  HTMLButtonElement,
+  ComponentProps<'button'> & {
+    variant?: 'primary' | 'secondary' | 'danger' | 'dangerSolid'
+    size?: 'default' | 'sm' | 'icon' | 'icon-lg'
+  }
+>(function AsciiButton({ variant = 'secondary', size = 'default', type = 'button', ...props }, ref) {
   return (
-    <button
+    <Button
+      ref={ref}
       type={type}
-      className={cn(
-        'px-4 py-2 font-mono text-[12px] transition-colors disabled:cursor-not-allowed disabled:opacity-40',
+      variant={
         variant === 'primary'
-          ? 'bg-foreground font-semibold text-background transition-opacity hover:opacity-90'
-          : 'border border-border text-foreground hover:border-brand',
-        className,
-      )}
+          ? 'default'
+          : variant === 'dangerSolid'
+            ? 'destructive'
+            : variant === 'danger'
+              ? 'danger'
+              : 'outline'
+      }
+      size={size === 'icon' ? 'icon-sm' : size}
       {...props}
-    >
-      {children}
-    </button>
+    />
   )
-}
+})
 
 /** Selectable chip — used for top-up presets. */
 export function AsciiChip({

@@ -23,8 +23,8 @@ export class BoxPreparingImageTimeoutError extends RequestTimeoutException {
   /** Whole seconds, rounded up and never zero: `Retry-After` has no finer unit. */
   readonly retryAfterSeconds: number
 
-  constructor(message: string, progress: BoxProgressDto) {
-    super({ message, progress })
+  constructor(message: string, progress: BoxProgressDto, boxId?: string) {
+    super({ message, progress, ...(boxId ? { boxId } : {}) })
     this.retryAfterSeconds = Math.max(1, Math.ceil(progress.retryAfterMs / 1000))
     this.name = 'BoxPreparingImageTimeoutError'
   }

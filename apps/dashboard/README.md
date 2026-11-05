@@ -57,6 +57,31 @@ lost through an accidental close.
 Mock preview simulates these actions with a clearly marked mock host fingerprint;
 it does not start an SSH server. See [the design](https://github.com/boxlite-ai/boxlite/issues/2325).
 
+## ASCII action buttons
+
+Use `AsciiButton` from `components/ascii` for console actions. It delegates to
+`ui/button`, which owns the shared geometry, typography, focus, and disabled
+styles; raw buttons remain appropriate for tabs and custom choices. Use native
+links for route navigation.
+
+| Purpose | Variant / size | Appearance |
+| --- | --- | --- |
+| Main create or submit action | `primary` / default | 36px high, monochrome fill |
+| Row action | `secondary` / `sm` | 28px high, neutral border |
+| Icon action or overflow menu | `secondary` / `icon` | 28px square; `icon-lg` is 40px for mobile |
+| Destructive row action | `danger` / `sm` or `icon` | Red text/icon, red border on hover |
+| Final destructive confirmation | `dangerSolid` | Solid red |
+
+Keep square corners and the shared monospace font. Secondary actions use a cyan
+border with a neutral surface on hover/open; they do not turn solid cyan.
+Hover styles apply only to enabled controls. Keyboard focus uses a contrasting
+outline in both themes. Preserve larger mobile primary targets with `h-11 sm:h-9`.
+
+Import operation icons from `components/ui/icon`, whose aliases all use the
+offline pixel collection. Give icon-only actions an `aria-label`, retain helpful
+titles, and forward native props/ref through wrappers used by Radix triggers.
+Choose variants and sizes instead of copying hover, padding, or border classes.
+
 ## Page width and alignment
 
 Normal dashboard pages use the `page-container` class from `src/index.css`.
@@ -156,6 +181,20 @@ The `test` target is inferred by `@nx/vite` from the `test` block in
 `vite.config.mts`. Removing that block removes the target, and with it every
 signal CI has about this app — see [the workflows
 README](../../.github/workflows/README.md) for how its coverage is reported.
+
+## Creation can finish before startup
+
+Template creation and the ordinary create dialog share `useCreateBoxMutation`.
+The Box API creates the resource before waiting up to 30 seconds for it to
+start. A cold image pull can exceed that wait while continuing in the background.
+When HTTP 408 carries `boxId`, the dashboard reads that exact Box in the selected
+organization and opens its details. The details page polls transitioning Boxes
+every three seconds and displays their actual state, including startup errors.
+
+This path sends only one create request. It does not infer success from a name
+or an error message. A timeout without `boxId`, another error status, or a failed
+follow-up read remains an error. Deploy both API and dashboard changes for this
+handoff; older APIs do not include the structured identity.
 
 ## Finding your way around
 

@@ -5,7 +5,7 @@
  */
 
 import { VolumeGlyph, volumeGlyphState } from '@/components/VolumeGlyph'
-import { PanelNote, StatusMark } from '@/components/ascii'
+import { AsciiButton, PanelNote, StatusMark } from '@/components/ascii'
 import { CreateBoxDialog } from '@/components/Box/CreateBoxDialog'
 import {
   AlertDialog,
@@ -193,14 +193,10 @@ const Volumes: React.FC = () => {
             </div>
             <div className="flex-1" />
             {canWrite && (
-              <button
-                type="button"
-                onClick={() => setCreateOpen(true)}
-                className="inline-flex h-11 items-center justify-center gap-[7px] bg-primary px-[15px] text-[12.5px] font-semibold text-primary-foreground transition-opacity hover:opacity-85 sm:h-9"
-              >
+              <AsciiButton variant="primary" className="h-11 sm:h-9" type="button" onClick={() => setCreateOpen(true)}>
                 <Plus className="size-3.5" strokeWidth={2.4} />
                 New Volume
-              </button>
+              </AsciiButton>
             )}
           </div>
 
@@ -270,19 +266,21 @@ const Volumes: React.FC = () => {
                         (and a little harder to hit by accident that way). */}
                     <div className="flex items-center justify-end gap-[6px]">
                       {canCreateBox && volume.state === VolumeState.READY && (
-                        <button
+                        <AsciiButton
+                          size="sm"
                           type="button"
                           // The id, not the name — see the mount-row comment in
                           // CreateBoxDialog.
                           onClick={() => setBoxVolumeId(volume.id)}
                           title={`Create a box with ${volume.name} mounted`}
-                          className="whitespace-nowrap border border-border px-[9px] py-[5px] font-mono text-[11px] text-muted-foreground transition-colors hover:border-brand hover:text-foreground"
                         >
                           + Box
-                        </button>
+                        </AsciiButton>
                       )}
                       {canDelete && (
-                        <button
+                        <AsciiButton
+                          variant="danger"
+                          size="icon"
                           type="button"
                           onClick={() => {
                             setDeleteConfirmText('')
@@ -291,10 +289,9 @@ const Volumes: React.FC = () => {
                           disabled={!removable || busy[volume.id]}
                           title={removable ? 'Delete volume' : 'Only a ready or errored volume can be deleted'}
                           aria-label={`Delete ${volume.name}`}
-                          className="border border-border p-[6px] text-muted-foreground transition-colors hover:border-destructive hover:text-destructive disabled:cursor-not-allowed disabled:opacity-30"
                         >
                           <Trash className="size-[13px]" strokeWidth={2} />
-                        </button>
+                        </AsciiButton>
                       )}
                     </div>
                   </div>
@@ -305,13 +302,9 @@ const Volumes: React.FC = () => {
             {rows.length === 0 && (
               <div className="flex flex-col items-center gap-3 py-10 text-center font-mono text-[12px] text-muted-foreground">
                 <span>No volume matches “{filter.trim()}”</span>
-                <button
-                  type="button"
-                  onClick={() => setFilter('')}
-                  className="border border-border px-[13px] py-[6px] text-[11px] transition-colors hover:border-brand"
-                >
+                <AsciiButton size="sm" type="button" onClick={() => setFilter('')}>
                   Clear filter
-                </button>
+                </AsciiButton>
               </div>
             )}
           </div>
@@ -346,21 +339,17 @@ const Volumes: React.FC = () => {
             <PanelNote>Used to mount this volume into a box. It takes a few seconds to become ready.</PanelNote>
           </div>
           <div className="grid shrink-0 grid-cols-2 gap-[10px] border-t border-border px-4 py-4 sm:flex sm:justify-end sm:px-6">
-            <button
-              type="button"
-              onClick={() => setCreateOpen(false)}
-              className="border border-border px-[18px] py-[10px] text-[13px] font-medium transition-colors hover:bg-card"
-            >
+            <AsciiButton type="button" onClick={() => setCreateOpen(false)}>
               Cancel
-            </button>
-            <button
+            </AsciiButton>
+            <AsciiButton
+              variant="primary"
               type="button"
               onClick={handleCreate}
               disabled={createVolume.isPending || !newName.trim() || !nameValid}
-              className="bg-primary px-5 py-[10px] text-[13px] font-semibold text-primary-foreground transition-opacity hover:opacity-85 disabled:cursor-not-allowed disabled:opacity-50"
             >
               {createVolume.isPending ? 'Creating…' : 'Create'}
-            </button>
+            </AsciiButton>
           </div>
         </DialogContent>
       </Dialog>
@@ -443,8 +432,10 @@ const Volumes: React.FC = () => {
   )
 }
 
-// Most orgs land here with nothing. The copy answers the thing that sent them
-// looking — a box took their data with it — instead of defining the noun.
+/**
+ * Explains persistent storage before an organization has any volumes.
+ * Only members allowed to create volumes receive the creation action.
+ */
 function EmptyState({ canCreate, onCreate }: { canCreate: boolean; onCreate: () => void }) {
   return (
     <div className="flex flex-1 flex-col items-center justify-center gap-[16px] px-6 text-center">
@@ -460,14 +451,10 @@ function EmptyState({ canCreate, onCreate }: { canCreate: boolean; onCreate: () 
         outlives it.
       </p>
       {canCreate && (
-        <button
-          type="button"
-          onClick={onCreate}
-          className="mt-1 inline-flex items-center gap-[7px] bg-primary px-[15px] py-[9px] text-[12.5px] font-semibold text-primary-foreground transition-opacity hover:opacity-85"
-        >
+        <AsciiButton variant="primary" className="mt-1" type="button" onClick={onCreate}>
           <Plus className="size-3.5" strokeWidth={2.4} />
           New Volume
-        </button>
+        </AsciiButton>
       )}
     </div>
   )

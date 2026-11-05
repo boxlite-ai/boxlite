@@ -297,15 +297,17 @@ export function RegistriesPanel() {
                 </span>
                 <div className="flex items-center justify-end">
                   {canDelete && (
-                    <button
+                    <AsciiButton
+                      variant="danger"
+                      size="icon"
+                      aria-label={`Remove the credential for ${credential.registryHost}`}
                       type="button"
                       onClick={() => setPendingDelete(credential)}
                       disabled={deleteRegistry.isPending}
                       title={`Remove the credential for ${credential.registryHost}`}
-                      className="p-[5px] text-muted-foreground transition-colors hover:text-destructive disabled:opacity-40"
                     >
                       <Trash className="size-[15px]" />
-                    </button>
+                    </AsciiButton>
                   )}
                 </div>
               </div>
