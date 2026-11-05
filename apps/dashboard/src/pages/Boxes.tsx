@@ -5,7 +5,7 @@
  */
 
 import { OrganizationSuspendedError } from '@/api/errors'
-import { StatCard } from '@/components/ascii'
+import { AsciiButton, StatCard } from '@/components/ascii'
 import { CreateBoxDialog } from '@/components/Box/CreateBoxDialog'
 import { BoxTable } from '@/components/BoxTable'
 import { Plus, Search } from '@/components/ui/icon'
@@ -742,14 +742,10 @@ const Boxes: React.FC = () => {
               updateOnboardingProgress({ boxCreated: true })
             }}
           >
-            <button
-              type="button"
-              title="New Box"
-              className="inline-flex h-11 items-center justify-center gap-[7px] bg-primary px-[15px] text-body font-semibold text-primary-foreground transition-opacity hover:opacity-90 sm:h-9"
-            >
+            <AsciiButton variant="primary" className="h-11 sm:h-9" type="button" title="New Box">
               <Plus className="size-3.5" strokeWidth={2.4} />
               New Box
-            </button>
+            </AsciiButton>
           </CreateBoxDialog>
         )}
       </div>
