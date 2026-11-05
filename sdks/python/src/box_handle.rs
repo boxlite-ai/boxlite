@@ -147,6 +147,24 @@ impl PyBox {
         })
     }
 
+    /// Grow a running box without restarting its workload.
+    #[pyo3(signature = (*, cpus=None, memory_mib=None))]
+    fn resize<'py>(
+        &self,
+        py: Python<'py>,
+        cpus: Option<u8>,
+        memory_mib: Option<u32>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let handle = Arc::clone(&self.handle);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let resources = handle
+                .resize(boxlite::ResizeOptions { cpus, memory_mib })
+                .await
+                .map_err(map_err)?;
+            Ok(crate::info::PyBoxResources::from(resources))
+        })
+    }
+
     /// Start the box (initialize VM).
     fn start<'a>(&self, py: Python<'a>) -> PyResult<Bound<'a, PyAny>> {
         let handle = Arc::clone(&self.handle);

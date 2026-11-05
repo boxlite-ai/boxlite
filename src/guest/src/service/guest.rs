@@ -86,6 +86,25 @@ impl GuestService for GuestServer {
         }))
     }
 
+    async fn online_cpus(
+        &self,
+        request: Request<boxlite_shared::OnlineCpusRequest>,
+    ) -> Result<Response<boxlite_shared::OnlineCpusResponse>, Status> {
+        if !self.init_state.lock().await.initialized {
+            return Err(Status::failed_precondition("Guest.Init is required"));
+        }
+        let count = request.into_inner().count;
+        let guard = self.cpu_updates.clone().lock_owned().await;
+        tokio::task::spawn_blocking(move || {
+            let _guard = guard;
+            super::cpus::online_cpus(std::path::Path::new("/sys/devices/system/cpu"), count)
+        })
+        .await
+        .map_err(|error| Status::internal(format!("CPU hotplug task: {error}")))?
+        .map(Response::new)
+        .map_err(|status| *status)
+    }
+
     async fn shutdown(
         &self,
         _request: Request<ShutdownRequest>,

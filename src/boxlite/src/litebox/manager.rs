@@ -174,6 +174,14 @@ impl BoxManager {
         self.store.update_outbound(id.as_str(), policy)
     }
 
+    pub fn save_resources(
+        &self,
+        id: &BoxID,
+        resources: &crate::litebox::BoxResources,
+    ) -> BoxliteResult<()> {
+        self.store.update_resources(id.as_str(), resources)
+    }
+
     /// Load box state from the database.
     ///
     /// Returns the latest state from DB.

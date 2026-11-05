@@ -171,8 +171,11 @@ Number of CPU cores allocated to the box.
 
 **Default:** 1
 
-**Range:** 1 to 16 — the bundled guest kernel brings up at most 16 vCPUs, so
-create rejects larger values (see [Resource limits](../guides/resource-limits.md#cpu-configuration)).
+**Range:** 1 to the host ceiling: the smallest of the CPUs the runtime may use
+(affinity and cgroup quota) and the hypervisor's per-VM vCPU limit. The bundled
+guest kernel additionally limits new boxes to 16 vCPUs; custom kernels are not
+bound by that bundled-kernel limit. New boxes above their ceiling fail with
+`InvalidArgument`. Reusing an existing box preserves its saved allocation.
 
 **Example:**
 ```python
@@ -189,9 +192,10 @@ cpus=4  # 4 CPU cores
 
 Memory limit in mebibytes (MiB).
 
-**Default:** 512
+**Default:** 1024
 
-**Range:** 128 to 65536 (64 GiB)
+**Range:** 1 MiB up to host memory, or the runtime cgroup `memory.max` when
+it is lower. Creating a box above that fails with `InvalidArgument`.
 
 **Example:**
 ```python

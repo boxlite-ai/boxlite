@@ -11,6 +11,7 @@ pub mod list;
 pub mod logs;
 pub mod network;
 pub mod pull;
+pub mod resize;
 pub mod restart;
 pub mod rm;
 pub mod run;
