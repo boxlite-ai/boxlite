@@ -221,7 +221,10 @@ To add a new Vmm implementation:
 
 ## Host-guest communication
 
-Communication uses gRPC over transport channels, bridged via libkrun's vsock support.
+Control communication uses gRPC over transport channels, bridged via libkrun's
+vsock support. SSH data has a separate sibling `sockets/ssh.sock` mapping to
+guest vsock port 2697, independent of RPC and gvproxy. See
+[local SSH data channel](../../guides/ssh.md#local-data-channel).
 
 ### Transport flow
 

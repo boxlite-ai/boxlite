@@ -12,7 +12,7 @@ Read the [architecture overview](README.md) first. These diagrams follow its
 | Scope | Starts at | Finishes when |
 | --- | --- | --- |
 | Service generation | Successful listener start (Control or restore) | Listener and tracked SSH work have drained |
-| Connection | Accepted TCP socket | Russh session ends and connection cleanup drains |
+| Connection | Accepted TCP or host vsock socket | Russh session ends and connection cleanup drains |
 | Execution-backed channel | Shell, exec, SFTP, or direct Unix socket request | Process and output task finish, then execution resources are released |
 | Remote forwarding listener | TCP bind or container helper readiness | Listener stops and pending channel opens settle; established relays have a separate lifetime |
 
@@ -55,6 +55,17 @@ Source: [control/status/shutdown/stop](mod.rs#L142).
 
 ## 2. Connection and authentication
 
+On a vsock-booted guest, each enabled generation binds both the configured TCP
+address and vsock port 2697. Both binds must succeed before status reports enabled.
+The accept task shares connection limits and cleanup across both transports.
+It admits only host-CID peers on vsock and selects `none` authentication for
+those connections. TCP keeps key/certificate authentication.
+
+The manager spawns identification/key exchange outside its state lock; neither
+boot readiness nor a control RPC waits for a client's SSH bytes. The runtime
+opens the Unix socket without a transport preamble or waiting for SSH readiness.
+Disable and reconfiguration close both listeners and drain both connection kinds.
+
 One accepted socket gets one `SshConnection`, one child `TaskGroup`, and one
 connection permit. The accept loop can continue while that connection runs.
 
@@ -81,7 +92,7 @@ sequenceDiagram
     Note over M,R: Await session end, cancellation, or pre-auth deadline
     opt Cancellation or pre-auth deadline
         M->>R: disconnect_transport() → Handle::disconnect()
-        M->>M: Shut down TCP socket
+        M->>M: Shut down transport socket
     end
     R->>H: Drop handler as session ends
     H->>H: Cancel connection tasks and terminate bridges

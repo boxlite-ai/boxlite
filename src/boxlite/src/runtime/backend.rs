@@ -174,6 +174,13 @@ pub(crate) trait BoxBackend: Send + Sync + Any {
 
     /// Stop the guest's SSH listener without starting the box.
     async fn ssh_disable(&self) -> BoxliteResult<SshStatus>;
+
+    /// Prepare the local host-only SSH transport without starting the box.
+    async fn ssh_tunnel(&self) -> BoxliteResult<BoxTunnel> {
+        Err(BoxliteError::Unsupported(
+            "dedicated SSH transport requires a local runtime".into(),
+        ))
+    }
 }
 
 /// Backend abstraction for box network operations.

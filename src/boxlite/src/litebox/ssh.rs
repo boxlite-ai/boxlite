@@ -1,4 +1,4 @@
-//! SSH control with implicit startup restricted to configuration.
+//! SSH control and local data access; only configuration may implicitly start a box.
 
 use std::{fmt, sync::Arc, time::Duration};
 
@@ -6,6 +6,7 @@ use boxlite_shared::{self as proto, BoxliteError, BoxliteResult, constants::ssh:
 use serde::{Deserialize, Serialize};
 
 use super::box_impl::BoxImpl;
+use super::{BoxConnection, BoxTunnel};
 use crate::runtime::backend::BoxBackend;
 
 // Allow guest cleanup plus communication and scheduling overhead after startup.
@@ -89,7 +90,7 @@ pub struct SshStatus {
     pub host_key_fingerprint: String,
 }
 
-/// Owned SSH control handle; only configuration may implicitly start the box.
+/// Owned SSH handle for control and local data access; only configuration may start the box.
 ///
 /// `configure()` may start boxes using the image's default command.
 /// With an explicit `BoxOptions.cmd` or `entrypoint`, a Configured or Stopped box returns
@@ -158,10 +159,50 @@ impl SshHandle {
     pub async fn disable(&self) -> BoxliteResult<SshStatus> {
         self.backend.ssh_disable().await
     }
+
+    /// Prepare a local host-only SSH stream without starting or enabling SSH.
+    ///
+    /// Call `connect()` to open it; no SSH bytes are consumed during connection.
+    /// The guest accepts SSH `none` authentication on this transport. Forwarding
+    /// it delegates container access to everyone who can reach the listener.
+    /// Disabled SSH closes connections; REST backends return `Unsupported`.
+    pub async fn tunnel(&self) -> BoxliteResult<BoxTunnel> {
+        self.backend.ssh_tunnel().await
+    }
 }
 
 /// Local SSH control policy; `BoxBackend` forwards to these verbatim.
 impl BoxImpl {
+    pub(crate) fn ssh_tunnel(&self) -> BoxliteResult<BoxTunnel> {
+        if self.shutdown_token.is_cancelled() {
+            return Err(BoxliteError::Stopped(
+                "SSH transport: runtime stopped".into(),
+            ));
+        }
+        if self.existing_ssh_session()?.is_none() {
+            return Err(BoxliteError::InvalidState(
+                "SSH transport requires a running box".into(),
+            ));
+        }
+        let path = self.config.sockets().ssh_sock();
+        let cancel = self.shutdown_token.clone();
+        Ok(BoxTunnel::new(None, move || {
+            let path = path.clone();
+            let cancel = cancel.clone();
+            async move {
+                tokio::select! {
+                    biased;
+                    _ = cancel.cancelled() => Err(BoxliteError::Stopped("SSH transport: runtime stopped".into())),
+                    result = tokio::time::timeout(SSH_TIMEOUT, tokio::net::UnixStream::connect(&path)) => {
+                        let stream = result.map_err(|_| BoxliteError::Network("SSH socket connect timed out".into()))?
+                            .map_err(|error| BoxliteError::Network(format!("connect SSH socket {}: {error}", path.display())))?;
+                        Ok(BoxConnection::new(stream))
+                    }
+                }
+            }
+        }))
+    }
+
     pub(crate) async fn ssh_configure(&self, config: SshConfig) -> BoxliteResult<SshStatus> {
         self.run_ssh(
             "configure",

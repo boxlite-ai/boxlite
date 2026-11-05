@@ -119,6 +119,11 @@ impl BoxSockets {
         self.binding_dir().join(BOX_SOCK)
     }
 
+    /// Host-only SSH transport. Access to this socket grants container access.
+    pub fn ssh_sock(&self) -> PathBuf {
+        self.binding_dir().join("ssh.sock")
+    }
+
     /// Guest-ready notification socket (host binds the listener).
     pub fn ready_sock(&self) -> PathBuf {
         self.binding_dir().join(READY_SOCK)
@@ -333,11 +338,13 @@ mod tests {
             .join("purepath1");
         assert_eq!(s.binding_dir(), expect);
         assert_eq!(s.box_sock(), expect.join("box.sock"));
+        assert_eq!(s.ssh_sock(), expect.join("ssh.sock"));
         assert_eq!(s.ready_sock(), expect.join("ready.sock"));
         assert_eq!(s.net_backend_sock(), expect.join("net.sock"));
         assert_eq!(s.net_backend_peer_sock(), expect.join("net.sock-krun.sock"));
         for p in [
             s.box_sock(),
+            s.ssh_sock(),
             s.ready_sock(),
             s.net_backend_sock(),
             s.net_backend_peer_sock(),

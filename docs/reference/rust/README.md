@@ -314,6 +314,14 @@ control answer `NotFound` or `Unsupported`; there is no capability negotiation.
 | Enable | `async fn enable(&self) -> BoxliteResult<SshStatus>` |
 | Query | `async fn status(&self) -> BoxliteResult<SshStatus>` |
 | Disable | `async fn disable(&self) -> BoxliteResult<SshStatus>` |
+| Local data channel | `async fn tunnel(&self) -> BoxliteResult<BoxTunnel>` |
+
+`tunnel()` prepares a dedicated local SSH stream on an existing VM; it never
+starts or enables SSH. `connect()` returns a raw duplex `BoxConnection` without
+waiting for SSH identification. This ingress accepts SSH `none` authentication;
+forwarding it delegates container access to the listener's clients. REST returns
+`Unsupported`. See [local SSH data channel](../../guides/ssh.md#local-data-channel)
+for errors, closure and upgrade requirements.
 
 These types are exported directly from `boxlite`, independently of protobuf:
 

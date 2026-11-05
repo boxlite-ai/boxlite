@@ -24,6 +24,9 @@ pub mod network {
     /// Guest connects to this port to signal it's ready to serve
     /// Port 2696 = "BOXM" on phone keypad
     pub const GUEST_READY_PORT: u32 = 2696;
+
+    /// Dedicated host-only SSH byte stream, separate from control and readiness.
+    pub const GUEST_SSH_PORT: u32 = 2697;
 }
 
 /// Executor environment variable

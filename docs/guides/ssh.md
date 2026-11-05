@@ -30,7 +30,8 @@ SSH does not publish a host port; forward one with [`boxlite ssh --tunnel`](#cli
 or other network forwarding. For component diagrams and implementation details, see
 [Guest SSH architecture](../../src/guest/src/service/ssh/README.md).
 
-The SDKs expose `configure`, `status`, `enable`, and `disable`.
+The SDKs expose `configure`, `status`, `enable`, and `disable`; Rust also exposes
+the local [dedicated data channel](#local-data-channel).
 Automatic credential management belongs to the CLI's [default setup](#cli) command.
 `enable()` uses saved configuration, errors if none exists, and preserves
 connections when SSH is already healthy. It requires a running box on both local
@@ -173,6 +174,42 @@ against the same home: the runtime holds an exclusive home lock for the connecti
 - Over REST, proxy/tunnel open the box's public tunnel for the SSH port and leave it
   open, so anyone who reaches it can attempt a login and wake a stopped box; SSH keys
   remain the access control. Close it with `boxlite network tunnel BOX PORT --revoke`.
+
+## Local data channel
+
+Rust `SshHandle::tunnel()` uses `runtime ↔ ssh.sock ↔ vsock ↔ guest SSH`.
+`ssh.sock` sits in the existing per-box `sockets/` directory beside the RPC
+`box.sock`, with the same directory permissions and short-path alias mechanism.
+The guest SSH vsock port is 2697; RPC and ready notification retain 2695/2696.
+This path works with box networking disabled and with a loopback TCP SSH address.
+Preparing or connecting this channel publishes no TCP port. CLI `--proxy` and
+`--tunnel` continue using the existing network/TCP path and authentication.
+
+This channel accepts SSH `none` authentication: the client needs no user key,
+certificate, password, or configured login. Commands still run as the container
+user. SSH protocol key exchange and client host-key verification still apply.
+Existing configuration supplies the server host key and enabled state; TCP and
+REST connections retain their account authentication.
+
+Rust can prepare `let tunnel = sandbox.ssh().tunnel().await?` and open
+`let stream = tunnel.connect().await?`. Preparation neither starts the box nor
+connects a socket. `connect()` has a 15-second socket connection limit and returns
+without consuming SSH bytes; then run an SSH client over the duplex stream.
+Missing sockets return a network error, stopped handles are rejected, and runtime
+shutdown cancels pending opens. Disabled SSH refuses/closes the stream. No local
+network fallback occurs. Runtime and guest must be upgraded together and the VM
+restarted to install the new mapping. The Rust data API returns `Unsupported`
+on REST handles.
+
+Calling Rust `forward()` on this SSH tunnel explicitly delegates credential-free
+access to everyone who can reach its listener. Loopback includes other local
+users; an external bind address can expose it to other hosts. Use `connect()`
+when no local listener is needed.
+
+The existing relay supports concurrent reads/writes and write half-close, so
+write EOF still allows a final response. Local I/O failures propagate to the
+caller; guest SSH failures close the transport. Disable, reconfigure and guest
+shutdown cancel and drain dedicated sessions with the same deadlines as TCP.
 
 ## HTTP control with `boxlite serve`
 

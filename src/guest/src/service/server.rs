@@ -87,7 +87,11 @@ impl GuestServer {
     ///
     /// If `notify_uri` is provided, connects to that URI after the server
     /// is ready to serve, signaling readiness to the host.
-    pub async fn run(self, listen_uri: String, notify_uri: Option<String>) -> BoxliteResult<()> {
+    pub async fn run(
+        mut self,
+        listen_uri: String,
+        notify_uri: Option<String>,
+    ) -> BoxliteResult<()> {
         info!("Starting tonic gRPC server");
 
         // Parse the listen URI to determine transport type
@@ -101,6 +105,9 @@ impl GuestServer {
         info!("Parsed transport from URI: {:?}", transport);
 
         // Wrap self in Arc for sharing across services
+        if matches!(transport, BoxTransport::Vsock { .. }) {
+            self.ssh_manager.enable_host_transport();
+        }
         let server = Arc::new(self);
         server.ssh_manager.attach_guest(&server);
 
@@ -323,7 +330,7 @@ async fn notify_host_ready(notify_uri: Option<String>) -> BoxliteResult<()> {
     Ok(())
 }
 
-fn is_host_vsock_peer(peer: tokio_vsock::VsockAddr) -> bool {
+pub(crate) fn is_host_vsock_peer(peer: tokio_vsock::VsockAddr) -> bool {
     peer.cid() == tokio_vsock::VMADDR_CID_HOST
 }
 

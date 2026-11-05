@@ -23,15 +23,19 @@ use auth::SshAuthorizer;
 use backoff::Backoff;
 use boxlite_shared::constants::ssh::DRAIN_TIMEOUT;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
-use std::net::{Shutdown, SocketAddr};
+use nix::sys::socket::{shutdown, Shutdown};
+use std::net::SocketAddr;
+use std::os::fd::{AsFd, AsRawFd, OwnedFd};
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, OnceLock, Weak};
 use task_group::TaskGroup;
+use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpListener;
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
+use tokio_vsock::{VsockAddr, VsockListener, VMADDR_CID_ANY};
 use tracing::{debug, info, warn};
 
 /// Fully validated before any SSH listener is opened.
@@ -100,6 +104,7 @@ impl SshConfig {
 
 /// Serializes control operations and retains timed-out cleanup until it finishes.
 pub(crate) struct SshManager {
+    host_transport: bool,
     guest: OnceLock<Weak<GuestServer>>,
     state: Mutex<SshState>,
     connection_permits: Arc<tokio::sync::Semaphore>,
@@ -122,6 +127,7 @@ use tests::ActivationGate;
 impl Default for SshManager {
     fn default() -> Self {
         Self {
+            host_transport: false,
             guest: OnceLock::new(),
             state: Mutex::new(SshState::default()),
             connection_permits: Arc::new(tokio::sync::Semaphore::new(limits::MAX_CONNECTIONS)),
@@ -130,6 +136,10 @@ impl Default for SshManager {
 }
 
 impl SshManager {
+    pub(crate) fn enable_host_transport(&mut self) {
+        self.host_transport = true;
+    }
+
     pub(crate) fn guest(&self) -> Option<Arc<GuestServer>> {
         self.guest.get().and_then(Weak::upgrade)
     }
@@ -254,6 +264,18 @@ impl SshManager {
         let address = listener.local_addr().map_err(|error| {
             tonic::Status::internal(format!("failed to read SSH listener address: {error}"))
         })?;
+        let host_listener = self
+            .host_transport
+            .then(|| {
+                VsockListener::bind(VsockAddr::new(
+                    VMADDR_CID_ANY,
+                    boxlite_shared::constants::network::GUEST_SSH_PORT,
+                ))
+            })
+            .transpose()
+            .map_err(|error| {
+                tonic::Status::unavailable(format!("failed to bind SSH vsock listener: {error}"))
+            })?;
         let public = config.server.keys[0].public_key();
         let host_public_key = russh::keys::PublicKey::new(public.key_data().clone(), "")
             .to_openssh()
@@ -267,7 +289,7 @@ impl SshManager {
             host_key_fingerprint: public.fingerprint(russh::keys::HashAlg::Sha256).to_string(),
         };
         state.config = Some(config);
-        state.listener = Some(tasks.spawn(accept_loop(listener, guest)));
+        state.listener = Some(tasks.spawn(accept_loop(listener, host_listener, guest)));
         state.tasks = Some(tasks);
         info!(%address, generation = state.status.generation, "embedded SSH listener ready");
         Ok(())
@@ -341,7 +363,24 @@ impl SshManager {
             .token()
     }
 
-    async fn spawn_connection(&self, stream: tokio::net::TcpStream, peer: SocketAddr) {
+    async fn spawn_connection<S>(&self, stream: S, origin: ConnectionOrigin)
+    where
+        S: AsyncRead + AsyncWrite + AsFd + Unpin + Send + 'static,
+    {
+        let trusted_host = match origin {
+            ConnectionOrigin::Tcp(_) => false,
+            ConnectionOrigin::Vsock(peer) if crate::service::server::is_host_vsock_peer(peer) => {
+                true
+            }
+            ConnectionOrigin::Vsock(peer) => {
+                warn!(peer_cid = peer.cid(), "Rejected non-host SSH vsock peer");
+                return;
+            }
+        };
+        let peer = match origin {
+            ConnectionOrigin::Tcp(peer) => peer.to_string(),
+            ConnectionOrigin::Vsock(peer) => format!("vsock:{}:{}", peer.cid(), peer.port()),
+        };
         let state = self.state.lock().await;
         if !state.status.enabled {
             return;
@@ -367,12 +406,15 @@ impl SshManager {
             .spawn_tracked(move |cancel| async move {
                 let _permit = permit;
                 let (authenticated_tx, authenticated_rx) = tokio::sync::oneshot::channel();
-                let handler = server::SshConnection::new(
+                let mut handler = server::SshConnection::new(
                     guest,
                     authorizer,
                     authenticated_tx,
                     connection_tasks,
                 );
+                if trusted_host {
+                    handler.allow_host_access();
+                }
                 serve_connection(
                     stream,
                     peer,
@@ -386,14 +428,45 @@ impl SshManager {
     }
 }
 
-async fn accept_loop(listener: TcpListener, guest: Arc<GuestServer>) {
+#[derive(Clone, Copy)]
+enum ConnectionOrigin {
+    Tcp(SocketAddr),
+    Vsock(VsockAddr),
+}
+
+async fn accept_loop(
+    listener: TcpListener,
+    mut host_listener: Option<VsockListener>,
+    guest: Arc<GuestServer>,
+) {
     let mut backoff = Backoff::new();
     loop {
-        match listener.accept().await {
-            Ok((stream, peer)) => {
-                backoff.reset();
-                guest.ssh_manager.spawn_connection(stream, peer).await;
-            }
+        let result = tokio::select! {
+            accepted = async {
+                match &mut host_listener {
+                    Some(listener) => listener.accept().await,
+                    None => std::future::pending().await,
+                }
+            } => match accepted {
+                Ok((stream, peer)) => {
+                    guest.ssh_manager.spawn_connection(stream, ConnectionOrigin::Vsock(peer)).await;
+                    Ok(())
+                }
+                Err(error) => Err(error),
+            },
+            accepted = listener.accept() => match accepted {
+                Ok((stream, peer)) => {
+                    if let Err(error) = stream.set_nodelay(true) {
+                        debug!(%peer, %error, "failed to enable TCP_NODELAY for SSH connection");
+                    }
+                    guest.ssh_manager.spawn_connection(stream, ConnectionOrigin::Tcp(peer)).await;
+                    Ok(())
+                }
+                Err(error) => Err(error),
+            },
+        };
+        match result {
+            Ok(()) => backoff.reset(),
             Err(error) => {
                 warn!(%error, "SSH accept failed");
                 backoff.wait().await;
@@ -402,19 +475,18 @@ async fn accept_loop(listener: TcpListener, guest: Arc<GuestServer>) {
     }
 }
 
-async fn serve_connection(
-    stream: tokio::net::TcpStream,
-    peer: SocketAddr,
+async fn serve_connection<S>(
+    stream: S,
+    peer: String,
     config: Arc<russh::server::Config>,
     handler: server::SshConnection,
     authenticated: tokio::sync::oneshot::Receiver<()>,
     cancel: CancellationToken,
-) {
-    if let Err(error) = stream.set_nodelay(true) {
-        debug!(%peer, %error, "failed to enable TCP_NODELAY for SSH connection");
-    }
-    let (stream, shutdown_socket) = match socket_with_shutdown_handle(stream) {
-        Ok(sockets) => sockets,
+) where
+    S: AsyncRead + AsyncWrite + AsFd + Unpin + Send + 'static,
+{
+    let shutdown_socket = match stream.as_fd().try_clone_to_owned() {
+        Ok(socket) => socket,
         Err(error) => {
             warn!(%peer, %error, "failed to prepare SSH connection socket");
             return;
@@ -427,7 +499,7 @@ async fn serve_connection(
     let result = tokio::select! {
         biased;
         _ = cancel.cancelled() => {
-            let _ = shutdown_socket.shutdown(Shutdown::Both);
+            let _ = shutdown(shutdown_socket.as_raw_fd(), Shutdown::Both);
             return;
         }
         result = handshake => result,
@@ -445,8 +517,8 @@ async fn monitor_session(
     mut running: russh::server::RunningSession<server::SshConnection>,
     mut authenticated: tokio::sync::oneshot::Receiver<()>,
     shutdown_token: CancellationToken,
-    shutdown_socket: std::net::TcpStream,
-    peer_addr: SocketAddr,
+    shutdown_socket: OwnedFd,
+    peer_addr: String,
 ) {
     let handle = running.handle();
     tokio::select! {
@@ -497,7 +569,7 @@ async fn monitor_session(
 
 async fn disconnect_transport(
     handle: &russh::server::Handle,
-    shutdown_socket: &std::net::TcpStream,
+    shutdown_socket: &OwnedFd,
     reason: &'static str,
 ) {
     let disconnect = handle.disconnect(
@@ -506,18 +578,9 @@ async fn disconnect_transport(
         String::new(),
     );
     let _ = tokio::time::timeout(limits::DISCONNECT_GRACE_TIMEOUT, disconnect).await;
-    if let Err(error) = shutdown_socket.shutdown(Shutdown::Both) {
+    if let Err(error) = shutdown(shutdown_socket.as_raw_fd(), Shutdown::Both) {
         debug!(%error, reason, "failed to shut down SSH transport");
     }
-}
-
-fn socket_with_shutdown_handle(
-    socket: tokio::net::TcpStream,
-) -> std::io::Result<(tokio::net::TcpStream, std::net::TcpStream)> {
-    let socket = socket.into_std()?;
-    let shutdown_socket = socket.try_clone()?;
-    let socket = tokio::net::TcpStream::from_std(socket)?;
-    Ok((socket, shutdown_socket))
 }
 
 #[cfg(test)]

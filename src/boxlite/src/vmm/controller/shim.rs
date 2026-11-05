@@ -357,6 +357,18 @@ impl VmmController for ShimController {
             let _ = std::fs::remove_file(socket_path);
         }
 
+        let ssh_socket = config.sockets().ssh_sock();
+        match std::fs::remove_file(&ssh_socket) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(BoxliteError::Storage(format!(
+                    "remove stale SSH socket {}: {error}",
+                    ssh_socket.display()
+                )));
+            }
+        }
+
         // Spawn Box subprocess with piped stdio
         tracing::info!(
             engine = ?self.engine_type,

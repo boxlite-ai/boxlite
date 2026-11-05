@@ -11,6 +11,110 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
 use tokio_stream::StreamExt;
 
+#[tokio::test]
+async fn guest_ssh_dedicated_vsock_without_network_or_client_credentials() {
+    let home = common::home::PerTestBoxHome::new();
+    let keys = tempfile::TempDir::new_in("/tmp").unwrap();
+    let host_key = keys.path().join("host");
+    generate_key(&host_key, "host").await;
+    let runtime = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+        ..Default::default()
+    })
+    .unwrap();
+    let mut options = common::alpine_opts();
+    options.network = boxlite::NetworkSpec::Disabled;
+    options.user = Some("12345:12346".into());
+    let sandbox = runtime.create(options, None).await.unwrap();
+    sandbox.start().await.unwrap();
+    let status = sandbox
+        .ssh()
+        .configure(boxlite::SshConfig {
+            listen_address: "127.0.0.1:0".into(),
+            host_private_key: std::fs::read_to_string(&host_key).unwrap(),
+            accounts: vec![boxlite::SshAccount {
+                login: "tcp-only".into(),
+                authorized_keys: vec![
+                    std::fs::read_to_string(host_key.with_extension("pub")).unwrap(),
+                ],
+                ca: None,
+            }],
+        })
+        .await
+        .unwrap();
+    let forwarder = sandbox
+        .ssh()
+        .tunnel()
+        .await
+        .unwrap()
+        .forward(boxlite::SocketAddress::Tcp("127.0.0.1:0".parse().unwrap()))
+        .await
+        .unwrap();
+    let boxlite::SocketAddress::Tcp(address) = forwarder.local_addr() else {
+        panic!("expected TCP forwarder");
+    };
+    let known_hosts = keys.path().join("known_hosts");
+    std::fs::write(
+        &known_hosts,
+        format!(
+            "[127.0.0.1]:{} {}\n",
+            address.port(),
+            status.host_public_key
+        ),
+    )
+    .unwrap();
+    let mut command = client_command("ssh", Path::new("/dev/null"), &known_hosts, address.port());
+    command.args([
+        "-o",
+        "PubkeyAuthentication=no",
+        "-o",
+        "PasswordAuthentication=no",
+    ]);
+    command.args([
+        "unconfigured@127.0.0.1",
+        "id -u; id -g; printf dedicated-vsock",
+    ]);
+    assert_eq!(
+        checked_output(command).await,
+        b"12345\n12346\ndedicated-vsock"
+    );
+    assert_eq!(
+        sandbox.ssh().status().await.unwrap().generation,
+        status.generation
+    );
+    sandbox.ssh().disable().await.unwrap();
+    forwarder.close().await.unwrap();
+    drop(forwarder);
+    let id = sandbox.id().to_string();
+    sandbox.stop().await.unwrap();
+    drop(sandbox);
+    let sandbox = runtime.get(&id).await.unwrap().unwrap();
+    sandbox.start().await.unwrap();
+    assert!(!sandbox.ssh().status().await.unwrap().enabled);
+    sandbox.ssh().enable().await.unwrap();
+    let mut stream = sandbox
+        .ssh()
+        .tunnel()
+        .await
+        .unwrap()
+        .connect()
+        .await
+        .unwrap();
+    let mut banner = [0; 8];
+    tokio::time::timeout(Duration::from_secs(5), stream.read_exact(&mut banner))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(&banner, b"SSH-2.0-");
+    drop(stream);
+    sandbox.stop().await.unwrap();
+    runtime
+        .shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT))
+        .await
+        .unwrap();
+}
+
 #[derive(Clone, Copy, Debug)]
 enum SshOperation {
     Configure,

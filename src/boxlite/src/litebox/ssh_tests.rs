@@ -12,6 +12,95 @@ use boxlite_shared as proto;
 use std::sync::Mutex;
 use tonic::{Request, Response, Status};
 
+#[tokio::test]
+async fn ssh_dedicated_transport_is_lazy_duplex_and_preserves_half_close() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let fixture = fixture().await;
+    assert!(fixture.backend.live.get().unwrap().network.is_none());
+    let tunnel = fixture.ssh.tunnel().await.unwrap();
+    let listener =
+        tokio::net::UnixListener::bind(fixture.backend.config.sockets().ssh_sock()).unwrap();
+    // Neither preparation nor connect waits for the peer's SSH identification.
+    let connection = tokio::time::timeout(Duration::from_secs(2), tunnel.connect())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(fixture.mock.requests.lock().unwrap().is_empty());
+    let (mut reader, mut writer) = connection.into_split();
+    let (mut peer, _) = listener.accept().await.unwrap();
+    let uploaded = vec![0xa5; 128 * 1024];
+    let downloaded = vec![0x5a; 128 * 1024];
+    tokio::time::timeout(Duration::from_secs(5), async {
+        let client = async {
+            let mut received = Vec::new();
+            tokio::try_join!(
+                async {
+                    writer.write_all(&uploaded).await?;
+                    writer.shutdown().await.map_err(std::io::Error::other)
+                },
+                reader.read_to_end(&mut received)
+            )
+            .unwrap();
+            assert_eq!(received, downloaded);
+        };
+        let server = async {
+            let (mut read, mut write) = peer.split();
+            let mut received = Vec::new();
+            tokio::try_join!(
+                write.write_all(&downloaded),
+                read.read_to_end(&mut received)
+            )
+            .unwrap();
+            assert_eq!(received, uploaded);
+            write.shutdown().await.unwrap();
+        };
+        tokio::join!(client, server);
+    })
+    .await
+    .expect("both directions and EOF must finish");
+}
+
+#[tokio::test]
+async fn ssh_dedicated_transport_reports_missing_socket_stop_and_cancellation() {
+    let fixture = fixture().await;
+    let tunnel = fixture.ssh.tunnel().await.unwrap();
+    assert!(matches!(
+        tunnel.connect().await,
+        Err(BoxliteError::Network(_))
+    ));
+    let tunnel = fixture.ssh.tunnel().await.unwrap();
+    fixture.backend.shutdown_token.cancel();
+    assert!(matches!(
+        tunnel.connect().await,
+        Err(BoxliteError::Stopped(_))
+    ));
+    assert!(matches!(
+        fixture.ssh.tunnel().await,
+        Err(BoxliteError::Stopped(_))
+    ));
+    let fixture = fixture_with_container(false).await;
+    fixture.backend.state.write().status = BoxStatus::Stopped;
+    assert!(matches!(
+        fixture.ssh.tunnel().await,
+        Err(BoxliteError::Stopped(_))
+    ));
+    let mut state = BoxState::new();
+    state.status = BoxStatus::Stopped;
+    let cold = Arc::new(BoxImpl::new(
+        fixture.backend.config.clone(),
+        state,
+        fixture.backend.runtime.clone(),
+        fixture.backend.runtime.shutdown_token.child_token(),
+    ));
+    assert!(matches!(
+        SshHandle::new(cold.clone()).tunnel().await,
+        Err(BoxliteError::InvalidState(_))
+    ));
+    assert!(!cold.live.initialized());
+    assert!(fixture.backend.container_start.get().is_none());
+    assert!(fixture.mock.requests.lock().unwrap().is_empty());
+}
+
 #[derive(Default)]
 struct Mock {
     requests: Mutex<Vec<&'static str>>,

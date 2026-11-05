@@ -1646,6 +1646,10 @@ impl crate::runtime::backend::BoxBackend for BoxImpl {
     async fn ssh_disable(&self) -> BoxliteResult<SshStatus> {
         BoxImpl::ssh_disable(self).await
     }
+
+    async fn ssh_tunnel(&self) -> BoxliteResult<BoxTunnel> {
+        BoxImpl::ssh_tunnel(self)
+    }
 }
 
 #[async_trait::async_trait]
