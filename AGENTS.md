@@ -42,7 +42,7 @@
 - High-cohesion facade (the shared Design rule's exemplar here): [`ImageManager`](src/boxlite/src/images/manager.rs) exposes `new`/`pull`/`list`/`load_from_local` and hides `Arc<ImageStore>`, blob sources, and manifest handling.
 - Facade exception — stateless utilities: [`jailer/common/`](src/boxlite/src/jailer/common/) async-signal-safe helpers.
 
-<!-- agent-tooling:guidance:begin rev=cddc583f1ef1 sha256=351c8e96b7e2 -->
+<!-- agent-tooling:guidance:begin rev=90458f0cb02a sha256=6ec13e833313 -->
 
 > Managed by **boxlite-ai/agent-tooling** — do not edit between the markers. Change `plugins/boxlite-agent-tooling/guidance/workflow.md` there, then rerun `./.agent-tooling/install.sh` here.
 
@@ -85,13 +85,9 @@ Apply the `boxlite-design-doc` skill before implementation.
 ### Test
 
 - OpenAPI files matching `*openapi*.yaml` require the installed plugin's `guidance/api-compatibility.md`: explain breaking/default changes, recommend GitHub issue discussion, and require explicit user confirmation to skip the gate; new optional SDK parameters need local before/after request tests.
-- Classify each behavioral claim against its base contract: fixes to existing behavior retain defect proof, including through new APIs/wrappers. Mixed changes apply both standards per claim.
-- New entry points over unchanged, correct dependencies use new-contract proof; dependency reuse alone is not a fix.
 - For each test added with a fix, manually run both steps in order:
   1. Revert **every** production change: restore every non-test file to its pre-fix state; only the test remains. If API, signature, or schema changes prevent compilation or reaching the defect check, keep production reverted and add the smallest temporary test-only compatibility adapter for the old contract. The test-only compatibility adapter may adjust setup or invocation only; it must not implement the fix, alter the defect check, or become the failure signal. Run the test: it must reach the defect check and fail for the original bug. Log the failure signal (assertion, hang, panic). **Partial reverts, mental simulation, and assumed failure are cheating.** If no adapter preserves the signal, stop and report the blocker.
   2. Remove the adapter, restore all production changes, and rerun: the test must pass. Without step 1, a pass cannot prove the test catches the bug or the fix is necessary.
-- For wholly new contracts, verify base/source evidence of no equivalent prior contract; run positive, negative, and boundary tests against the implementation. Mark full-revert defect proof not applicable with a reason. New security APIs require allowed/denied checks at real security boundaries.
-- Missing APIs, compilation errors, and setup errors never reproduce a defect.
 - Test data must come from production code under test, across a boundary where behavior can fail. Asserting on a value built entirely by the test proves nothing—for example, checking a substring the test itself inserted.
 - Add or update tests when behavior changes around branching, parsing, retries, security checks, or boundaries.
 - Focus tests on the reason for the change.

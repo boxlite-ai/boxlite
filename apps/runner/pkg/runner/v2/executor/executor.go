@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -45,6 +46,8 @@ type Executor struct {
 	collector      *metrics.Collector
 	archiveStore   storage.ArchiveStore
 	migrateWorkDir string
+	// heartbeatInterval overrides the resize lease heartbeat in tests.
+	heartbeatInterval time.Duration
 }
 
 // NewExecutor creates a new job executor

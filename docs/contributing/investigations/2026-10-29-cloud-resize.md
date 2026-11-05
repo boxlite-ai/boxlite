@@ -109,16 +109,18 @@ with the complete implementation. Go and TypeScript generated clients also send 
 HTTP requests to check that ordinary job status updates omit `claimToken`, while
 resize reports include it.
 
-`make test:runner-ci:resize` uses real Python/Node SDKs and CLI against the isolated
-API/Runner/KVM stack. It grows 1 CPU/1 GiB → 2/2 → 3/2 → 4/3, blocks the completion
-period write, observes old Box/billing versus the runtime allocation, kills
-API/Runner/proxy, restarts them, and checks successful replay. Boot id and PID 1 start
-time stay unchanged; live plus archived billing intervals have contiguous boundaries.
-The harness removes its Box after success and retains failures for inspection.
+`BOXLITE_E2E_RESIZE=1 make test:rest:e2e FILTER=resize` uses the existing REST E2E
+fixtures with a resize-enabled API and Linux/KVM Runner. The Python SDK grows
+1 CPU/1 GiB to 2 CPUs/2 GiB, including cloud memory rounding; the CLI repeats and
+queries that target. Boot id and PID 1 start time stay unchanged, the guest sees
+more RAM and CPUs, and shrinking is rejected without changing the allocation.
+The fixture removes its Box in teardown.
 
-The real process-loss scenario interrupts a blocked completion before the final
-period write. APPLY lease expiry/reclaim and stale completion are covered by database
-and Go executor tests; they are not a real-KVM mid-apply crash test.
+The former branch-specific acceptance script depended on infrastructure helpers
+absent from main. Its process-kill scenario is not part of this port. Completion
+rollback, contiguous billing intervals, APPLY lease expiry/reclaim and stale
+completion are covered by database and Go executor tests; they do not establish
+real-KVM recovery from process loss during apply or completion.
 
 ## Delivery and operations
 

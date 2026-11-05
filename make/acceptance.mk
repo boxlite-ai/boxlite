@@ -1,8 +1,4 @@
 PHONY_TARGETS += kernel\:dind test\:docker\:dind fmt\:docker lint\:docker
-PHONY_TARGETS += test\:runner-ci\:resize
-
-test\:runner-ci\:resize:
-	@CLOUD_RESIZE_ENABLED=true PYTHONUNBUFFERED=1 PYTHONPATH=apps/infra-local .venv/bin/python -m compose.resize_acceptance
 
 DIND_FIRMWARE_DIR ?= $(PROJECT_ROOT)/.apps-local/firmware-dind
 DIND_BUILD_ARGS ?=

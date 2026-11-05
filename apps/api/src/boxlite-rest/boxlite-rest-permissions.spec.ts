@@ -10,6 +10,7 @@ import { RequiredOrganizationResourcePermissions } from '../organization/decorat
 import { OrganizationResourcePermission } from '../organization/enums/organization-resource-permission.enum'
 import { BoxliteBoxController } from './boxlite-box.controller'
 import { BoxliteProxyController } from './boxlite-proxy.controller'
+import { BoxliteResizeController } from './boxlite-resize.controller'
 
 // http-proxy-middleware ships ESM only and the proxy controller imports it at
 // module scope; mock it the way the routing spec does so the class can load.
@@ -67,7 +68,11 @@ function routeMethods(controller: Controller): string[] {
 }
 
 describe('REST box/proxy permission coverage (GHSA-2qqv-7cwv-mj8h)', () => {
-  const controllers: Controller[] = [BoxliteBoxController as Controller, BoxliteProxyController as Controller]
+  const controllers: Controller[] = [
+    BoxliteBoxController as Controller,
+    BoxliteProxyController as Controller,
+    BoxliteResizeController as Controller,
+  ]
   const handlers = controllers.flatMap((controller) =>
     routeMethods(controller).map((method) => [`${controller.name}.${method}`, controller, method] as const),
   )
