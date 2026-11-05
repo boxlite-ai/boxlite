@@ -9,7 +9,7 @@ import type { AccessLog } from './console-access'
 import { activityView } from './console-activity'
 import { failureView } from './console-deployment'
 import { endUserAuth } from './console-enduser'
-import { currentKey, handoffPrompt, maskKey } from './console-prompt'
+import { handoffPrompt } from './console-prompt'
 import { lastDeploy, releaseId, releaseViews, runningOf } from './console-releases'
 import type {
   AppDetailView,
@@ -332,7 +332,6 @@ export async function detailView(ctx: Ctx, access: AccessLog, app: AppRow, env: 
   const services = (await serviceViews(ctx, fresh, current ?? spec, state.services)).map((sv) =>
     state.box === 'stopped' ? asleep(sv) : sv,
   )
-  const key = await currentKey(ctx, app)
   const size = current ? BOX_SIZES[current.runtime.size] : undefined
   const attention = latest ? failureLine(latest) : undefined
 
@@ -461,14 +460,7 @@ export async function detailView(ctx: Ctx, access: AccessLog, app: AppRow, env: 
         }
       : null,
     previewAttempt: previewAttempt(fresh.id),
-    handoffPrompt: handoffPrompt(
-      ctx,
-      app.name,
-      key ? maskKey(key.last4) : '<rotate the key to get a new one>',
-      undefined,
-      fresh.name,
-    ),
-    key,
+    handoffPrompt: handoffPrompt(ctx, app.name, fresh.name),
     specVersion: spec?.version ?? null,
     auth: await endUserAuth.authStatus(ctx, app, fresh),
     domains: {

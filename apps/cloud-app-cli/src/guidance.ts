@@ -34,15 +34,17 @@ function defaultNext(err: MicrocloudError, c: ErrorContext): string {
   const help = `\`boxlite-app ${c.command} --help\``
   switch (err.code) {
     case 'unauthenticated':
-      return 'save the key from the App prompt once: `BOXLITE_API_URL=<url> BOXLITE_API_KEY=<key> boxlite-app login`, then `boxlite-app whoami`'
+      return 'save your organization API key with `BOXLITE_API_URL=<url> BOXLITE_API_KEY=<key> boxlite-app login`, then `boxlite-app whoami`'
     case 'not_found_app':
-      return '`boxlite-app whoami` shows which App this key belongs to; then `boxlite-app init --app <that name>`'
+      return 'check the App name and organization in the App prompt, then run `boxlite-app init --app <name>`'
     case 'not_found_env':
       return `\`boxlite-app app status\` lists the environments; pass --env <name>, or create it with \`boxlite-app app env create ${c.env}\``
     case 'not_found':
       return notFoundNext(err, c)
     case 'forbidden':
-      return `this App key cannot do that; \`boxlite-app whoami\` shows its scope${/main/.test(err.message) ? ', and DDL belongs in a new migration: `boxlite-app app db migration new <name>`' : ''}`
+      return /main/.test(err.message)
+        ? 'put DDL in a new migration with `boxlite-app app db migration new <name>`'
+        : 'check that the organization API key has permission for this operation'
     case 'unavailable':
       return `wait 30 s and rerun \`${c.commandLine}\` (at most 3 times); \`boxlite-app doctor\` checks the connection`
     case 'conflict':
@@ -53,7 +55,7 @@ function defaultNext(err: MicrocloudError, c: ErrorContext): string {
     case 'usage':
       return `see ${help}`
     case 'invalid_link':
-      return 'delete .boxlite/link.json and run `boxlite-app init`'
+      return 'delete .boxlite/link.json and run `boxlite-app init --app <name>`'
     case 'internal':
       // BOXLITE_DEBUG prints the stack of a CLI error; a control-plane 500 has none to print.
       return c.clientSide

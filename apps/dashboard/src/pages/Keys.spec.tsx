@@ -6,7 +6,7 @@
 
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import Keys from './Keys'
 
 const mocks = vi.hoisted(() => ({
@@ -44,7 +44,17 @@ describe('console member key defaults', () => {
 
   beforeAll(() => {
     globalThis.IS_REACT_ACT_ENVIRONMENT = true
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    )
   })
+
+  afterAll(() => vi.unstubAllGlobals())
 
   beforeEach(() => {
     vi.clearAllMocks()
@@ -57,7 +67,7 @@ describe('console member key defaults', () => {
     document.body.innerHTML = ''
   })
 
-  async function createKey() {
+  async function createKey(adjustPermissions?: () => Promise<void>) {
     const host = document.createElement('div')
     document.body.appendChild(host)
     await act(async () => {
@@ -71,6 +81,7 @@ describe('console member key defaults', () => {
       Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(name, 'automation')
       name?.dispatchEvent(new Event('input', { bubbles: true }))
     })
+    await adjustPermissions?.()
     await act(async () => {
       document
         .querySelector('#create-api-key-form')
@@ -120,6 +131,39 @@ describe('console member key defaults', () => {
     const permissions = await createKey()
 
     expect(permissions).toEqual(['write:boxes'])
+  })
+
+  it.each(['owner', 'member'])('lets an %s explicitly grant Apps access through Adjust permissions', async (role) => {
+    const appPermissions = ['read:apps', 'write:apps']
+    if (role === 'member') mocks.member = { role, assignedRoles: [{ permissions: appPermissions }] }
+
+    const permissions = await createKey(async () => {
+      if (role === 'owner') {
+        const adjust = [...document.querySelectorAll('button')].find(
+          (button) => button.textContent === 'Adjust permissions',
+        )!
+        await act(async () => adjust.click())
+        const boxes = document.querySelector<HTMLButtonElement>('[role="checkbox"][id$="-write:boxes"]')!
+        await act(async () => boxes.click())
+      }
+      const group = document.querySelector('fieldset[aria-label="Apps"]')!
+      expect(group).not.toBeNull()
+      const details = group.closest('details')!
+      await act(async () => details.querySelector('summary')!.click())
+      expect(details.open).toBe(true)
+      for (const permission of appPermissions) {
+        const checkbox = group.querySelector<HTMLButtonElement>(`[role="checkbox"][id$="-${permission}"]`)!
+        await act(async () => checkbox.click())
+      }
+      expect(document.querySelector('[role="combobox"][aria-label="Access"]')?.textContent).toBe('Custom access')
+      expect(group.querySelector('[id$="-delete:apps"]') !== null).toBe(role === 'owner')
+    })
+
+    expect([...permissions].sort()).toEqual([...appPermissions].sort())
+    const request = mocks.create.mock.calls[0] as unknown as [{ expiresAt: Date }]
+    const days = (request[0].expiresAt.getTime() - Date.now()) / 86400000
+    expect(days).toBeGreaterThan(29.99)
+    expect(days).toBeLessThanOrEqual(30)
   })
 
   it('defaults to Box operations even when member read is available', async () => {

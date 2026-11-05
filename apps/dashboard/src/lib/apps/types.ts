@@ -447,9 +447,8 @@ export interface AppDetail extends Omit<AppSummary, 'environments'> {
   metrics: AppMetrics | null
   preview: AppPreview | null
   previewAttempt: AppPreviewAttempt | null
-  /** The handoff prompt with the App key masked; the full key is shown only once. */
+  /** CLI setup instructions for this App environment. */
   handoffPrompt: string
-  key: { last4: string; createdAt: string } | null
   /** online: set in the console, wins over boxlite.toml. */
   accessSource: 'manifest' | 'online'
   specVersion: number | null
@@ -476,10 +475,9 @@ export interface CreateAppInput {
   name: string
 }
 
-/** POST /apps: the key exists in clear text only in this response. */
+/** POST /apps returns the App and its setup instructions. */
 export interface CreatedApp {
   app: AppDetail
-  key: string
   prompt: string
 }
 

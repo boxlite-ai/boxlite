@@ -45,7 +45,7 @@ export function adminSecretRoutes(ctx: Ctx) {
   return r
 }
 
-/** Mounted under /v1/apps/:app (after App-key auth). */
+/** Routes for an App selected within the authenticated organization. */
 export function appRoutes(ctx: Ctx) {
   const r = new Hono<{ Variables: Vars }>()
 
