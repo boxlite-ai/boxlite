@@ -70,6 +70,7 @@ describe('BoxStateWaiterService', () => {
     expect(error.getResponse()).toEqual({
       message: 'Timed out waiting for box box-1 to reach started',
       progress,
+      boxId: 'box-1',
     })
     expect(error.retryAfterSeconds).toBe(5)
     jest.useRealTimers()
@@ -85,6 +86,7 @@ describe('BoxStateWaiterService', () => {
     const error = await pending
     expect(error).toBeInstanceOf(RequestTimeoutException)
     expect(error).not.toBeInstanceOf(BoxPreparingImageTimeoutError)
+    expect(error.getResponse()).toMatchObject({ boxId: 'box-1' })
     jest.useRealTimers()
   })
 
@@ -104,6 +106,7 @@ describe('BoxStateWaiterService', () => {
     const error = await pending
     expect(error).toBeInstanceOf(RequestTimeoutException)
     expect(error.message).toBe('Timed out waiting for box box-1 to reach started')
+    expect(error.getResponse()).toMatchObject({ boxId: 'box-1' })
     jest.useRealTimers()
   })
 })
