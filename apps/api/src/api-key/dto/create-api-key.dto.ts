@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { IsArray, IsDate, IsEnum, IsNotEmpty, IsOptional, IsString } from 'class-validator'
+import { IsArray, IsDate, IsEnum, IsNotEmpty, IsOptional, IsString, ValidateIf } from 'class-validator'
 import { ApiProperty, ApiPropertyOptional, ApiSchema } from '@nestjs/swagger'
 import { OrganizationResourcePermission } from '../../organization/enums/organization-resource-permission.enum'
 import { Type } from 'class-transformer'
@@ -20,15 +20,16 @@ export class CreateApiKeyDto {
   @IsString()
   name: string
 
-  @ApiProperty({
-    description: 'The list of organization resource permissions explicitly assigned to the API key',
+  @ApiPropertyOptional({
+    description:
+      'Organization resource permissions. When omitted, requests all supported permissions; the caller must be allowed to grant them.',
     enum: OrganizationResourcePermission,
     isArray: true,
-    required: true,
   })
+  @ValidateIf((_object, value) => value !== undefined)
   @IsArray()
   @IsEnum(OrganizationResourcePermission, { each: true })
-  permissions: OrganizationResourcePermission[]
+  permissions?: OrganizationResourcePermission[]
 
   @ApiPropertyOptional({
     description: 'When the API key expires',

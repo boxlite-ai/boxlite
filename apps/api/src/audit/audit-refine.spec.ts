@@ -128,7 +128,8 @@ describe('audit refinement contracts', () => {
             email: 'user@example.test',
             organizationId: 'org',
             organization: { id: 'org' },
-            role: 'admin',
+            role: 'user',
+            organizationUser: { role: 'owner', assignedRoles: [] },
           }
           return true
         },

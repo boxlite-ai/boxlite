@@ -159,7 +159,7 @@ The organization must hold the hostname, and the App and environment must belong
 there. App bindings require `write:apps`; Box bindings require `write:boxes`.
 Moving a name from one target kind to the other also requires permission for its
 existing target. Organization domain lists accept App read/write or Box write
-permission. App-scoped credentials manage aliases through their own App routes.
+permission.
 
 Each App environment receives a stable default platform URL using the same domain
 allowance. Additional platform names can be requested in Domains and bound in the

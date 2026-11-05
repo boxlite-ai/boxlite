@@ -20,9 +20,9 @@ export interface CreateApiKey {
      */
     'name': string;
     /**
-     * The list of organization resource permissions explicitly assigned to the API key
+     * Organization resource permissions. When omitted, requests all supported permissions; the caller must be allowed to grant them.
      */
-    'permissions': Array<CreateApiKeyPermissionsEnum>;
+    'permissions'?: Array<CreateApiKeyPermissionsEnum>;
     /**
      * When the API key expires
      */

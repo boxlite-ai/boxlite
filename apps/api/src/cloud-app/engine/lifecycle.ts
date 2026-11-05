@@ -69,7 +69,6 @@ export async function purgeApp(ctx: Ctx, app: AppRow): Promise<void> {
     await ctx.domains.releaseEnvironment(app, env)
   }
   if (app.neon_project_id) await ctx.neon.deleteProject(app.neon_project_id)
-  for (const key of await ctx.credentials.list(app)) await ctx.credentials.revoke(app, key.id, 'worker')
   await ctx.blobs.deleteApp(app.id)
   await store.tx(async () => {
     for (const env of envs) {

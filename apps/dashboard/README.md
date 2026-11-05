@@ -12,8 +12,13 @@ projection is `GET /apps/{appId}/view` within that organization namespace.
 Deployments, environments, services, authentication, database, volumes,
 variables and logs remain within the selected organization and environment.
 
+The App overview provides setup instructions for the CLI and coding agents.
+Use an organization key from **API Keys** to sign in to the CLI, then link the
+project to the App named in the instructions. Key permissions apply across the
+organization. Create and revoke credentials from **API Keys**.
+
 App query keys include the organization. Switching organizations resets open
-forms and one-time credential dialogs; a detail page returns to the App list.
+forms and takes the user back from App details to the App list.
 Mutations retain their originating organization and environment, so a late
 response refreshes only that scope. Source archives, exports and previews use
 the platform bearer, and opening a private App uses a one-time browser ticket.
@@ -600,9 +605,10 @@ duplicates, updates with fixed scope, write permissions, and refusals named by b
 ## Console API keys include member access
 
 The key dialog creates a key with the user's available permissions. An owner's
-new key includes `read:members` and `write:members`, displayed in the Members
-permission group. A non-owner's key can include assigned member read access,
-but never member write. Existing keys receive no additional permissions.
+new key includes all organization resource permissions, including `read:members`
+and `write:members`. A non-owner's key can include assigned member read access,
+but never member write. The list labels a key **Full** when it holds every
+organization resource permission.
 
 Create restricted keys through the API or SDK by supplying an explicit
 `permissions` array; see [API key delegation and member scopes](../../docs/contributing/architecture/platform/api.md).

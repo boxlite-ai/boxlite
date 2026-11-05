@@ -1,4 +1,4 @@
-/** Console API: the App list, create/delete/restore, key rotation, Open app, environments, and env operations (visibility, restart, sleep, run a schedule). */
+/** Console API: App lifecycle, agent handoff, environments and runtime operations. */
 import type { Hono } from 'hono'
 import { z } from 'zod'
 import { environmentViews, summaryView } from '../../console-views'
@@ -7,7 +7,7 @@ import { fail } from '../../errors'
 import { deleteApp, restoreApp } from '../../lifecycle'
 import { capturePreview, previewImage } from '../../preview'
 import { createOpenTicket } from '../../proxy/gate'
-import { createApp, issueKey, listKeys, revokeKey, rotateKey } from '../../services/apps'
+import { createApp } from '../../services/apps'
 import { canSee, orgIdFor } from '../../orgs'
 import { actorOf, type ConsoleKit } from './kit'
 
@@ -24,13 +24,12 @@ export function consoleAppRoutes(api: Hono, k: ConsoleKit): void {
     )
   })
 
-  /** The credential is issued by the platform and returned once. */
   api.post('/apps', async (c) => {
     const b = await json(c, z.object({ name: z.string().trim().min(1).max(64) }))
     const v = viewer(c)
-    const { app, key } = await createApp(ctx, b.name, actorOf(v), orgIdFor(v))
+    const app = await createApp(ctx, b.name, actorOf(v), orgIdFor(v))
     const env = (await store.envByName(app.id, 'main'))!
-    return c.json({ app: await detail(app, env), key, prompt: handoffPrompt(ctx, app.name, key) }, 201)
+    return c.json({ app: await detail(app, env), prompt: handoffPrompt(ctx, app.name) }, 201)
   })
 
   /** Soft-deleted apps (PRD 3.13): kept until purge_after, restorable until then. */
@@ -95,34 +94,10 @@ export function consoleAppRoutes(api: Hono, k: ConsoleKit): void {
     return c.body(null, 204)
   })
 
-  /** One more App key next to the active ones (another agent or machine); returns its prompt once. */
-  api.post('/apps/:id/key/issue', async (c) => {
+  api.get('/apps/:id/handoff', async (c) => {
     const app = await appOf(c)
-    const key = await issueKey(ctx, app, actorOf(viewer(c)))
-    return c.json({
-      key,
-      prompt: handoffPrompt(ctx, app.name, key, undefined, (await envOf(c, app)).name),
-      last4: key.slice(-4),
-    })
-  })
-
-  /** The active App keys (last 4 characters, made, last used), for revoking one at a time. */
-  api.get('/apps/:id/keys', async (c) => c.json(await listKeys(ctx, await appOf(c))))
-
-  api.delete('/apps/:id/keys/:keyId', async (c) => {
-    await revokeKey(ctx, await appOf(c), c.req.param('keyId'), actorOf(viewer(c)))
-    return c.body(null, 204)
-  })
-
-  /** New App key; the old one stops working now. Returns the new prompt once. */
-  api.post('/apps/:id/key/rotate', async (c) => {
-    const app = await appOf(c)
-    const key = await rotateKey(ctx, app, actorOf(viewer(c)))
-    return c.json({
-      key,
-      prompt: handoffPrompt(ctx, app.name, key, undefined, (await envOf(c, app)).name),
-      last4: key.slice(-4),
-    })
+    const env = await envOf(c, app)
+    return c.json({ prompt: handoffPrompt(ctx, app.name, env.name) })
   })
 
   /**

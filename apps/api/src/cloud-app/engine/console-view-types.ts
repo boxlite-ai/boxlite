@@ -178,7 +178,6 @@ export interface AppDetailView extends Omit<AppSummaryView, 'environments'> {
   /** A new picture being taken, or why the last attempt failed (the picture above stays the old one). */
   previewAttempt: { taking: boolean; failed: { at: string; reason: string } | null } | null
   handoffPrompt: string
-  key: { last4: string; createdAt: string } | null
   accessSource: 'manifest' | 'online'
   specVersion: number | null
   auth: AuthStatusView

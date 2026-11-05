@@ -131,6 +131,10 @@ export class CloudAppService implements OnModuleInit {
   }
 
   principal(auth: OrganizationAuthContext, method: string, path: string): PlatformPrincipal {
+    const { apiKey } = auth
+    if (apiKey && apiKey.organizationId !== auth.organizationId) {
+      throw new ForbiddenException('API key belongs to another organization')
+    }
     this.organizations.assertOrganizationIsNotSuspended(auth.organization)
     const permission =
       method === 'GET' || method === 'HEAD'
@@ -138,21 +142,15 @@ export class CloudAppService implements OnModuleInit {
         : method === 'DELETE' && /^\/apps\/[^/]+\/?$/.test(path)
           ? Permission.DELETE_APPS
           : Permission.WRITE_APPS
-    if (!hasOrganizationResourcePermissions(auth, [permission])) throw new ForbiddenException('App permission required')
-    if (
-      auth.apiKey?.cloudAppId &&
-      (!/^\/apps\/[^/]+(?:\/|$)/.test(path) || path.startsWith('/apps/deleted') || /\/keys(?:\/|$)/.test(path))
-    ) {
-      throw new ForbiddenException('This credential only authorizes its App')
-    }
+    const permissions = apiKey
+      ? apiKey.permissions
+      : Object.values(Permission).filter((value) => hasOrganizationResourcePermissions(auth, [value]))
+    if (!permissions.includes(permission)) throw new ForbiddenException('App permission required')
     return {
       organizationId: auth.organizationId,
       userId: auth.userId,
-      appId: auth.apiKey?.cloudAppId || undefined,
-      actor: auth.apiKey ? `key:…${auth.apiKey.keySuffix}` : `user:${auth.userId}`,
-      permissions: Object.values(Permission).filter((permission) =>
-        hasOrganizationResourcePermissions(auth, [permission]),
-      ),
+      actor: apiKey ? `key:…${apiKey.keySuffix}` : `user:${auth.userId}`,
+      permissions,
       admin: auth.role === SystemRole.ADMIN,
       email: auth.email,
     }

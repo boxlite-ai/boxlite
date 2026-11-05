@@ -1,21 +1,20 @@
 /**
- * Saved App keys (`boxlite-app login`), so an agent hands the CLI the key once instead of exporting
+ * Saved organization API keys (`boxlite-app login`), so the user enters the key once instead of exporting
  * it in every shell: ~/.config/boxlite-app/credentials.json ($BOXLITE_CONFIG_DIR or
  * $XDG_CONFIG_HOME/boxlite-app), readable by the user only. BOXLITE_API_KEY, when set, still wins.
- * Several agents may share the file: a key is only picked for the App the folder or command names.
+ * The project link selects the organization through its API URL.
  */
 import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 export interface SavedKey {
   api_url: string
-  app: string
   key: string
   saved_at: string
 }
 
 interface CredentialsFile {
-  /** By `<api_url>|<app>`. */
+  /** By organization API URL. */
   profiles: Record<string, SavedKey>
 }
 
@@ -31,7 +30,7 @@ export function credentialsPath(env: NodeJS.ProcessEnv): string | null {
   return base ? join(base, 'credentials.json') : null
 }
 
-const id = (apiUrl: string, app: string) => `${apiUrl.replace(/\/+$/, '')}|${app}`
+const id = (apiUrl: string) => apiUrl.replace(/\/+$/, '')
 
 function read(env: NodeJS.ProcessEnv): CredentialsFile {
   const path = credentialsPath(env)
@@ -53,53 +52,32 @@ function write(env: NodeJS.ProcessEnv, f: CredentialsFile): string {
   return path
 }
 
-const matching = (f: CredentialsFile, apiUrl: string | undefined, app: string | undefined) =>
-  Object.values(f.profiles).filter(
-    (p) => (!apiUrl || id(apiUrl, p.app) === id(p.api_url, p.app)) && (!app || p.app === app),
-  )
-
-/**
- * The saved key for this App on this control plane. Without an App only a single saved key
- * qualifies: with several, guessing (say, the last login) would let one agent act on another
- * agent's App, so the caller has to name it (savedApps lists the choices).
- */
-export function savedKey(
-  env: NodeJS.ProcessEnv,
-  apiUrl: string | undefined,
-  app: string | undefined,
-): SavedKey | undefined {
+/** Without an API URL, select a profile only when one organization is saved. */
+export function savedKey(env: NodeJS.ProcessEnv, apiUrl?: string): SavedKey | undefined {
   const f = read(env)
-  if (apiUrl && app) return f.profiles[id(apiUrl, app)]
-  const candidates = matching(f, apiUrl, app)
+  if (apiUrl) return f.profiles[id(apiUrl)]
+  const candidates = Object.values(f.profiles)
   return candidates.length === 1 ? candidates[0] : undefined
-}
-
-/** The Apps with a saved key (on this control plane, when given). */
-export function savedApps(env: NodeJS.ProcessEnv, apiUrl: string | undefined): string[] {
-  return matching(read(env), apiUrl, undefined)
-    .map((p) => p.app)
-    .sort()
 }
 
 export function saveKey(env: NodeJS.ProcessEnv, k: Omit<SavedKey, 'saved_at'>): string {
   const f = read(env)
-  const pid = id(k.api_url, k.app)
-  f.profiles[pid] = { ...k, api_url: k.api_url.replace(/\/+$/, ''), saved_at: new Date().toISOString() }
+  const apiUrl = id(k.api_url)
+  f.profiles[apiUrl] = { ...k, api_url: apiUrl, saved_at: new Date().toISOString() }
   return write(env, f)
 }
 
-/** Forgets the saved key of one App (or every one); true when something was removed. */
-export function forgetKey(env: NodeJS.ProcessEnv, apiUrl: string | undefined, app: string | undefined): boolean {
+/** Forget the organization credential, or all credentials when no API URL is given. */
+export function forgetKey(env: NodeJS.ProcessEnv, apiUrl?: string): boolean {
   const f = read(env)
-  const before = Object.keys(f.profiles).length
-  if (!apiUrl && !app) {
+  if (!apiUrl) {
     const path = credentialsPath(env)
     if (path) rmSync(path, { force: true })
-    return before > 0
+    return Object.keys(f.profiles).length > 0
   }
-  for (const [pid, p] of Object.entries(f.profiles)) {
-    if ((!apiUrl || id(apiUrl, p.app) === pid) && (!app || p.app === app)) delete f.profiles[pid]
-  }
+  const profile = id(apiUrl)
+  if (!f.profiles[profile]) return false
+  delete f.profiles[profile]
   write(env, f)
-  return Object.keys(f.profiles).length < before
+  return true
 }

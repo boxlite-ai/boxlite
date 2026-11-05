@@ -1,7 +1,7 @@
 /**
  * The local end of `boxlite-app app db proxy` (and of `app dev`'s DATABASE_URL): a Postgres port on
  * 127.0.0.1 whose every connection is carried to the control plane over its own WebSocket
- * (`/apps/{app}/envs/{env}/db/connect`, App key in the Authorization header). The control plane
+ * (`/apps/{app}/envs/{env}/db/connect`, organization API key in the Authorization header). The control plane
  * answers the Postgres login itself and connects to the database; this side never sees a database
  * password, and the client may use any user name and password.
  */

@@ -257,10 +257,6 @@ describeDatabase('Cloud App management routes with PostgreSQL', () => {
       {
         store,
         credentials: {
-          issue: async () => `test-app-key-${randomUUID()}`,
-          list: async () => [],
-          revoke: async () => undefined,
-          rotate: async () => `test-app-key-${randomUUID()}`,
           authenticate: async () => null,
         },
         blobs: {
@@ -339,8 +335,11 @@ describeDatabase('Cloud App management routes with PostgreSQL', () => {
   test('create, list, detail, environment and config deployment retain their route contracts', async () => {
     const created = await request('/v1/apps', 'POST', { name: 'route-app' })
     expect(created.status).toBe(201)
-    const value = (await created.json()) as { app: { name: string }; key: string; prompt: string }
+    const value = (await created.json()) as { app: { name: string; handoffPrompt: string }; prompt: string }
     expect(value.app.name).toBe('route-app')
+    expect(value).not.toHaveProperty('key')
+    expect(value.app).not.toHaveProperty('key')
+    expect(value.app.handoffPrompt).toBe(value.prompt)
     expect(value.prompt).toContain(`https://api.example.test/api/v1/${orgA}`)
     const list = await request('/v1/apps')
     expect(list.status).toBe(200)
@@ -350,6 +349,13 @@ describeDatabase('Cloud App management routes with PostgreSQL', () => {
     expect(await detail.json()).toEqual(expect.objectContaining({ name: 'route-app' }))
     const env = await request('/v1/apps/route-app/environments', 'POST', { name: 'staging' })
     expect(env.status).toBe(201)
+    const handoff = await request('/v1/apps/route-app/handoff?env=staging')
+    expect(handoff.status).toBe(200)
+    expect(await handoff.json()).toEqual({
+      prompt: expect.stringContaining('boxlite-app init --app route-app --env staging'),
+    })
+    const removedKeyRoute = await request('/v1/apps/route-app/key/issue', 'POST')
+    expect(removedKeyRoute.status).toBe(404)
     const manifest =
       '[app]\nname="route-app"\n[runtime]\nimage="node"\n[[service]]\nname="web"\ncommand="node server.js"\nport=3000\n'
     const plan = await request('/v1/apps/route-app/envs/main/plan', 'POST', {
@@ -399,7 +405,7 @@ describeDatabase('Cloud App management routes with PostgreSQL', () => {
     expect((await waiting).phase).toBe('built')
   })
 
-  test('purging removes platform credentials, sources and App-owned rows', async () => {
+  test('purging removes sources, environment domains and App-owned rows', async () => {
     const created = await request('/v1/apps', 'POST', { name: 'purge-app' })
     expect(created.status).toBe(201)
     const app = (await store.appByName('purge-app'))!
@@ -410,15 +416,10 @@ describeDatabase('Cloud App management routes with PostgreSQL', () => {
       'secret',
       now(),
     )
-    const revoke = jest.spyOn(context.credentials, 'revoke').mockResolvedValue(undefined)
-    jest
-      .spyOn(context.credentials, 'list')
-      .mockResolvedValue([{ id: 'platform-key-id', last4: 'test', created_at: now(), last_used_at: null }])
     const deleteSource = jest.spyOn(context.blobs, 'deleteApp').mockResolvedValue(undefined)
     const releaseDomain = jest.spyOn(context.domains, 'releaseEnvironment').mockResolvedValue(undefined)
     const { purgeApp } = await import('./lifecycle')
     await purgeApp(context, app)
-    expect(revoke).toHaveBeenCalledWith(app, 'platform-key-id', 'worker')
     expect(deleteSource).toHaveBeenCalledWith(app.id)
     expect(releaseDomain).toHaveBeenCalledWith(app, expect.objectContaining({ app_id: app.id }))
     expect(await store.appById(app.id)).toBeUndefined()

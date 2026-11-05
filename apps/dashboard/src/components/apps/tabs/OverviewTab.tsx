@@ -9,7 +9,6 @@ import { appStatusOf, relTime, STATUS } from '@/lib/apps/format'
 import type { AppDetail, AppProblem, AppRelease, AppTab } from '@/lib/apps/types'
 import { toast } from 'sonner'
 import { AgentHandoffPanel } from '../AgentHandoffPanel'
-import { HandoffToAgent } from '../HandoffToAgent'
 import { LiveCard } from '../OverviewHero'
 import { copyText, Disclosure, FlatButton, PromptBlock, StatusBadge } from '../spec'
 import { TrafficPanel } from '../TrafficPanel'
@@ -161,7 +160,7 @@ export function OverviewTab({
     return (
       <div className="flex flex-col gap-8">
         <LiveElsewhere app={app} onSwitchEnv={onSwitchEnv} />
-        <HandoffToAgent app={app} />
+        <AgentHandoffPanel app={app} />
       </div>
     )
   }

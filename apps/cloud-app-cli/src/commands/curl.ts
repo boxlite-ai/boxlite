@@ -54,7 +54,7 @@ export function appUrlFor(base: string, path: string): URL {
   const root = new URL(base.endsWith('/') ? base : `${base}/`)
   if (/^https?:\/\//i.test(path)) {
     const full = new URL(path)
-    // The App key goes along with the request, so it may only ever go to the App's own URL.
+    // The organization API key goes along with the request, so it may only ever go to the App's own URL.
     if (full.origin !== root.origin || !full.pathname.startsWith(root.pathname)) {
       throw new MicrocloudError(
         'usage',
@@ -78,7 +78,7 @@ function parseHeaders(list: string[] = []): Record<string, string> {
   if (out.authorization)
     throw new MicrocloudError(
       'usage',
-      'the CLI sets Authorization itself (the App key)',
+      'the CLI sets Authorization itself (the organization API key)',
       'drop -H "Authorization: …"; use --as <email> to act as a signed-in user',
     )
   return out
@@ -95,8 +95,8 @@ async function bodyOf(ctx: Ctx, data: string | undefined): Promise<string | unde
 }
 
 /**
- * Requests a path of the deployed app, authenticated with the App key (the platform's proxy
- * accepts `Authorization: Bearer <App key>` and strips it). `--as` adds a signed-in test user.
+ * Requests a path of the deployed app, authenticated with the organization API key (the platform's proxy
+ * accepts `Authorization: Bearer <organization API key>` and strips it). `--as` adds a signed-in test user.
  * Its Accept header is the wildcard, so an anonymous request to an `[auth].protect` path gets the API answer,
  * 401 JSON; with `-H 'Accept: text/html'` it gets what a browser gets, a 302 to
  * `/.boxlite/auth/login`. Redirects are shown, never followed.
@@ -104,7 +104,7 @@ async function bodyOf(ctx: Ctx, data: string | undefined): Promise<string | unde
 async function curl(ctx: Ctx, path: string, opts: CurlOptions): Promise<void> {
   const api = await ctx.appApi()
   // The environment's URL changes only when it is recreated: cached per project, dropped on a connection failure.
-  const scope = { apiUrl: api.baseUrl, app: await ctx.appName(), env: ctx.envName, key: ctx.apiKey ?? '' }
+  const scope = { apiUrl: api.baseUrl, app: ctx.appName(), env: ctx.envName, key: ctx.apiKey ?? '' }
   let envUrl = await cachedUrl(ctx.cwd, scope)
   const urlCached = envUrl !== undefined
   if (!envUrl) {
@@ -142,13 +142,13 @@ async function curl(ctx: Ctx, path: string, opts: CurlOptions): Promise<void> {
   let sessionCached = false
   if (opts.as) {
     // A test session lasts 15 minutes: reuse it while it has more than a minute left.
-    const reuse = await cachedSession(ctx.cwd, ctx.envName, opts.as, role ?? 'user')
+    const reuse = await cachedSession(ctx.cwd, scope, opts.as, role ?? 'user')
     const s = reuse ?? (await api.createTestSession(opts.as, role))
     sessionCached = reuse !== undefined
     const fresh = s as { cookie: string; expires_at?: string; user?: { email?: string }; role?: EndUserRole }
     const email = reuse?.email ?? fresh.user?.email ?? opts.as
     if (!reuse && fresh.expires_at)
-      await rememberSession(ctx.cwd, ctx.envName, opts.as, role ?? 'user', {
+      await rememberSession(ctx.cwd, scope, opts.as, role ?? 'user', {
         cookie: fresh.cookie,
         email,
         expires_at: fresh.expires_at,
@@ -282,7 +282,7 @@ function opener(): { cmd: string; args: (url: string) => string[] } {
   return { cmd: 'xdg-open', args: (u) => [u] }
 }
 
-/** A one-time link that opens the app in a browser (never the App key in a URL); opens it on a terminal. */
+/** A one-time link that opens the app in a browser (never the organization API key in a URL); opens it on a terminal. */
 async function open(ctx: Ctx, opts: { printUrl?: boolean; as?: string; role?: string; path?: string }): Promise<void> {
   const api = await ctx.appApi()
   const role = roleOption(opts.role)
@@ -334,7 +334,7 @@ export function registerCurl(app: Command, make: MakeCtx): void {
     app
       .command('curl <path>')
       .description(
-        'request a path of the deployed app with the App key (works for private apps); --as signs in a test user; redirects are shown, not followed',
+        'request a path of the deployed app with the organization API key (works for private apps); --as signs in a test user; redirects are shown, not followed',
       )
       .option('-X, --request <method>', 'HTTP method (default GET, or POST with -d)')
       .option(

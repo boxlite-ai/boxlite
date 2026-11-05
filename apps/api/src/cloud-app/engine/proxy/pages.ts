@@ -179,7 +179,7 @@ export function gatePage(ctx: Ctx, app: AppRow, env: EnvRow, access: string, hea
     {
       code: 'unauthenticated',
       message: `${labelOf(app, env)} is ${access}`,
-      next: 'open it from the BoxLite console, or send Authorization: Bearer <App key>',
+      next: 'open it from the BoxLite console, or send an organization API key as Authorization: Bearer <key>',
     },
   )
 }
