@@ -96,7 +96,7 @@ impl VirtioDevice for Net {
             connecting,
             pending: [VecDeque::new(), VecDeque::new()],
             tx: None,
-            rx: Receive::default(),
+            rx: RxBuffer::default(),
         });
         self.failed = false;
         Ok(())
@@ -158,18 +158,18 @@ struct Chain {
     descriptors: Vec<Descriptor>,
 }
 
-struct Transmit {
+struct TxBuffer {
     head: u16,
     bytes: Vec<u8>,
     written: usize,
 }
 
-struct Receive {
+struct RxBuffer {
     bytes: Vec<u8>,
     read: usize,
 }
 
-impl Default for Receive {
+impl Default for RxBuffer {
     fn default() -> Self {
         Self {
             bytes: vec![0; 4],
@@ -178,7 +178,7 @@ impl Default for Receive {
     }
 }
 
-impl Receive {
+impl RxBuffer {
     fn complete(&self) -> bool {
         self.bytes.len() > 4 && self.read == self.bytes.len()
     }
@@ -190,8 +190,8 @@ struct Active {
     source_id: SourceId,
     connecting: bool,
     pending: [VecDeque<Chain>; 2],
-    tx: Option<Transmit>,
-    rx: Receive,
+    tx: Option<TxBuffer>,
+    rx: RxBuffer,
 }
 
 impl Drop for Active {
@@ -291,7 +291,7 @@ impl Active {
                 // Replace the header tail with QEMU length; skip the preceding eight bytes.
                 bytes[HEADER_LEN - 4..HEADER_LEN]
                     .copy_from_slice(&((len - HEADER_LEN) as u32).to_be_bytes());
-                self.tx = Some(Transmit {
+                self.tx = Some(TxBuffer {
                     head: chain.head,
                     bytes,
                     written: HEADER_LEN - 4,
@@ -358,7 +358,7 @@ impl Active {
                 if self.ctx.queues.complete(RX, chain.head, written as u32)? {
                     self.ctx.interrupt.raise();
                 }
-                self.rx = Receive::default();
+                self.rx = RxBuffer::default();
             }
         }
         self.rearm()

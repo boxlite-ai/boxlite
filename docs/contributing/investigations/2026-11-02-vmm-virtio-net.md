@@ -36,8 +36,8 @@ Drain both queues into bounded descriptor metadata: at most 256 outstanding chai
 Validate descriptor flags, direction, and guest memory before accessing packet bytes.
 Keep one packet per direction rather than copying every deferred TX packet.
 
-TX gathers one chain and retains its partial-write offset until the stream accepts the whole frame.
-RX retains prefix/body progress and one completed packet while waiting for a guest buffer.
+`TxBuffer` holds one gathered chain's bytes, head index, and partial-write offset until the stream accepts the whole frame.
+`RxBuffer` retains prefix/body progress and one completed packet while waiting for a guest buffer.
 An undersized RX chain completes with zero length and no partial guest write.
 Each completion raises the interrupt decision immediately, as the existing facade requires.
 
