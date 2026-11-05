@@ -57,6 +57,23 @@ lost through an accidental close.
 Mock preview simulates these actions with a clearly marked mock host fingerprint;
 it does not start an SSH server. See [the design](https://github.com/boxlite-ai/boxlite/issues/2325).
 
+## Page width and alignment
+
+Normal dashboard pages use the `page-container` class from `src/index.css`.
+It follows the Images page's full-width layout, with no maximum page width:
+16px side padding on phones, 24px from `sm`, and 40px from `lg`. Large screens
+keep the same side padding as the content expands to fill the available width.
+The root reserves scrollbar space so short and long pages share both content edges.
+When stable gutters are supported, modal scroll locks do not add another body
+margin for that same space. Browsers without support retain the lock's fallback.
+
+Apply it once to a page root, or use `PageHeader` and `PageContent`, which share
+the same rule. Keep banners, tabs, tables, and Quickstart panels aligned to
+those edges; do not add another page-level width or horizontal padding inside
+them. Individual inputs and explanatory text can retain readable width limits.
+The initial welcome form, dialogs, and dedicated fullscreen terminal have their
+own sizing because they are separate surfaces.
+
 ## SDK and CLI quickstart readability
 
 The walkthrough uses a dedicated `quickstart-code` type style: 14px monospaced

@@ -119,10 +119,12 @@ test('a build-mode upgrade installs the staged object, fetched with the instance
   assert.equal(upgrade.kind, 'build')
   assert.ok(script.includes(`${aws} "${object}" "$WORK/runner.tar.gz"`), 'fetches the tarball')
   assert.ok(script.includes(`${aws} "${object}.sha256"`), 'fetches the checksum sidecar')
-  assert.ok(
-    !script.includes(`curl --fail --silent --show-error --location --proto`),
-    'the artifact never comes over public HTTPS',
+  assert.doesNotMatch(
+    script,
+    /https:\/\/github\.com\/boxlite-ai\/boxlite\/releases\//,
+    'the runner artifact comes from S3',
   )
+  assert.match(script, /libkrunfw-kernel-dind-x86_64\.bin/, 'the standalone kernel is downloaded separately')
   // SSM is the only channel that reaches a host whose user-data is ignored, so the payload has
   // to be able to install the CLI it is about to use.
   // Over the live payload: the string and the fetch below both survive a `#`, so the ordering
@@ -181,9 +183,18 @@ test('the deployer supervises for longer than the payload it started can take', 
   assert.match(script, new RegExp(`--max-time ${PAYLOAD_WORST_CASE_SECONDS.awsCliInstall}`))
   assert.match(script, new RegExp(`--cli-read-timeout ${PAYLOAD_WORST_CASE_SECONDS.tarballFetch}`))
   assert.match(buildRemoteScript(releaseUpgrade()), new RegExp(`--max-time ${PAYLOAD_WORST_CASE_SECONDS.tarballFetch}`))
-  // The readiness gate is 30 attempts two seconds apart.
-  assert.match(script, /for _ in \$\(seq 1 30\); do/)
-  assert.equal(PAYLOAD_WORST_CASE_SECONDS.readinessGate, 60)
+  // Each readiness gate allows a three-second request and two-second pause per attempt.
+  assert.equal((script.match(/for _ in \$\(seq 1 30\); do/g) ?? []).length, 2)
+  assert.match(script, /wait_for_runner_kernel\(\) \{\n {2}for _ in \$\(seq 1 30\); do/)
+  assert.equal(PAYLOAD_WORST_CASE_SECONDS.readinessGate, 150)
+  assert.equal(PAYLOAD_WORST_CASE_SECONDS.kernelReadinessGate, 150)
+  assert.match(script, new RegExp(`if timeout ${PAYLOAD_WORST_CASE_SECONDS.kernelFetch} curl --fail`))
+  assert.match(
+    script,
+    new RegExp(
+      `fetch_runner_kernel\\(\\) \\{[\\s\\S]*?--connect-timeout 10 --max-time ${PAYLOAD_WORST_CASE_SECONDS.kernelFetch} `,
+    ),
+  )
 })
 
 test('a build-mode upgrade carries no version-ordering guard', () => {
@@ -251,10 +262,32 @@ test('the checksum manifest must name the tarball literally, not by pattern', ()
   assert.equal(extract(''), '', 'an empty manifest yields nothing')
 })
 
-test('buildRemoteScript leaves a still-bootstrapping host alone', () => {
-  const script = liveText('shell', buildRemoteScript(releaseUpgrade()))
-  assert.ok(script.includes('still bootstrapping'))
-  assert.ok(script.indexOf('still bootstrapping') < script.indexOf('CURRENT=$(probe_version'))
+test('legacy update probes installed runners that are enabled or active', () => {
+  const payload = buildRemoteScript(releaseUpgrade())
+  const decision = payload.indexOf('if [ "$CURRENT" = "$TARGET" ]; then')
+  assert.notEqual(decision, -1)
+  // Run through the real version probe. Both file checks see an installed executable.
+  const prefix = payload
+    .slice(0, decision)
+    .replaceAll('/usr/local/bin/boxlite-runner', '"$3"')
+    .replaceAll('/etc/systemd/system/boxlite-runner.service', '"$3"')
+  const host = `enabled=$1; active=$2
+systemctl() { if [ "$1" = is-enabled ]; then return "$enabled"; else return "$active"; fi; }
+curl() { echo '{"version":"0.1.0"}'; }
+${prefix}\n)`
+  for (const [enabled, active] of [
+    [false, true],
+    [true, false],
+    [false, false],
+  ]) {
+    const result = bash(host, [enabled ? '0' : '1', active ? '0' : '1', '/bin/sh'])
+    assert.equal(result.status, 0, result.stderr)
+    if (enabled || active) assert.match(result.stdout, /current version: 0\.1\.0/)
+    else {
+      assert.match(result.stdout, /still bootstrapping/)
+      assert.doesNotMatch(result.stdout, /current version:/)
+    }
+  }
 })
 
 test('buildRemoteScript threads ALLOW_DOWNGRADE through to the host', () => {
@@ -309,11 +342,8 @@ test('a persistent polling failure surfaces its cause, not a bare timeout', () =
 test('a stalled-but-healthy command reports the status it was stuck on', () => {
   const run = () => ({ ok: true, stdout: 'InProgress', stderr: '' })
   let sleeps = 0
-  assert.throws(
-    () => waitForTerminalStatus([], 'i-1', { run, sleep: () => (sleeps += 1) }),
-    /last status: InProgress/,
-  )
-  assert.equal(sleeps, 359, 'does not sleep after the final poll')
+  assert.throws(() => waitForTerminalStatus([], 'i-1', { run, sleep: () => (sleeps += 1) }), /last status: InProgress/)
+  assert.equal(sleeps, 479, 'does not sleep after the final poll')
 })
 
 test('a recovered transient poll error does not outlive the stall it preceded', () => {
@@ -408,20 +438,17 @@ test('runs as a script from a path that needs percent-encoding', (t) => {
   // without moving the script back out of the spaced path.
   symlinkSync(join(infraDirectory, 'node_modules'), join(root, 'node_modules'), 'dir')
 
-  const result = spawnSync(
-    process.execPath,
-    ['--import', 'tsx', join(copiedInfra, 'runner', 'update.ts'), VERSION],
-    {
+  const result = spawnSync(process.execPath, ['--import', 'tsx', join(copiedInfra, 'runner', 'update.ts'), VERSION], {
     encoding: 'utf8',
     env: { ...process.env, PATH: '/nonexistent', INSTANCE_IDS: 'i-1' },
-    },
-  )
+  })
 
   assert.equal(result.status, 1, `expected the roll to run and fail on the missing CLI:\n${result.stdout}`)
   assert.match(result.stderr, /aws` CLI is required/)
 })
 
-const bash = (script: any, args: string[] = []) => spawnSync('bash', ['-c', script, 'test', ...args], { encoding: 'utf8' })
+const bash = (script: any, args: string[] = []) =>
+  spawnSync('bash', ['-c', script, 'test', ...args], { encoding: 'utf8' })
 
 test('the generated payload is valid bash', () => {
   const check = spawnSync('bash', ['-n'], { input: buildRemoteScript(releaseUpgrade()), encoding: 'utf8' })
