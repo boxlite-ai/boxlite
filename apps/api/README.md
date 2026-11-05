@@ -66,8 +66,7 @@ await this.stop(event.boxId, undefined, Context.platform(PlatformReason.ORG_SUSP
 
 System administrators read registration fields on the existing organization routes.
 Authenticate with `Authorization: Bearer <admin-api-key>` or an administrator JWT;
-an ordinary organization's API key does not grant system-wide access. These internal
-routes keep the default operational projection; no capability probe or capability response header is required.
+an ordinary organization's API key does not grant system-wide access.
 
 Upgrade every producer instance before enabling the updated consumer. Old list cursors
 must be discarded because the default ordering now uses creation time and ID. Existing
@@ -79,14 +78,13 @@ consumers before producers; mixed-version traffic is not supported during activa
   `q` searches name or exact ID. `createdFrom` is inclusive and `createdTo` exclusive;
   timestamps require an offset and at most millisecond precision. `limit` is 1–200 (default 50).
   `boxCountScope=all` counts every retained state, including destroyed and archived,
-  while preserving the existing impact calculation. Omission keeps the old count scope.
+  while impact considers only non-destroyed, non-archived Boxes. Omitting this parameter
+  excludes destroyed and archived Boxes from the count.
   `organizationId=<UUID>` selects an exact primary key; it cannot combine with `q`.
   Registration collectors use the same full page with `boxCountScope=all` and date bounds.
   Creator lookup and inventory aggregation are restricted to the page's organization IDs;
   no separate per-organization inventory call is needed for the first observation.
   The list always returns `AdminOrganizationOverviewPage`, including counts and impact.
-  The unshipped registration projection and response union are removed; regenerate clients
-  with this contract. The default count scope and organization detail response are unchanged.
 - `GET /api/admin/organizations/{organizationId}` returns flat organization
   details with registration, member/Box pages and impact. A missing organization returns 404.
   `memberCursor`, `boxCursor` and `sectionLimit` page each section. Explicit `include=usage`
@@ -106,7 +104,7 @@ rewrites it to the primary user ID, so it is not an immutable historical identit
 When a creator no longer exists and the organization survives, `creator` is null; an existing
 user without an email has `creator.email:null`. Names and email describe current identity.
 The list response includes `creator.emailVerified` when the account's
-current verification state is available. The organization detail response keeps its original
+current verification state is available. The organization detail response includes
 creator fields (`userId`, `email`, `displayName`) and does not query verification state.
 Pages read live data and exclude deleted organizations.
 All-state counts cover only retained rows, not lifetime successful creations: cleanup can
@@ -115,7 +113,7 @@ business modification; consumers must measure successful-read freshness separate
 
 List order and cursor seek both use creation time truncated to milliseconds plus
 UUID, ascending. Cursors bind `q`, date filters and count scope and exact organization ID; changing them returns 400. Default-read cursors retain their prior encoding. Unknown
-parameters (including the removed view selector), invalid dates, UUIDs, and incompatible
+parameters, invalid dates, UUIDs, and incompatible
 cursors return `400 invalid_organization_query`. Invalid credentials return 401;
 non-admin access returns 403. Consumers may ignore additive fields but must validate
 required fields and project their own allowed response fields.
@@ -159,28 +157,14 @@ await admin.adminListOrganizationsOverview(
 Request options remain outside URL query parameters. The TypeScript generation
 postprocessor preserves both forms and fails if the expected generated signatures change.
 
-The generated Go client in `apps/libs/api-client-go` serves the control-plane
-services in this workspace. Its organization-list creator type changes from
-`AdminOrganizationCreator` to `AdminOrganizationVerifiedCreator` to expose the
-optional `EmailVerified` field. This is a Go source-breaking change, including
-the nullable wrapper, overview constructor, `GetCreator`, `GetCreatorOk`, and
-`SetCreator`; the existing in-repository services do not use these admin models.
-The organization-detail model still uses `AdminOrganizationCreator`.
-
-Callers using organization-list models must migrate these names:
-
-| Previous name                                                             | Organization-list replacement                                                             |
-| ------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
-| `AdminOrganizationCreator`                                                | `AdminOrganizationVerifiedCreator`                                                        |
-| `NullableAdminOrganizationCreator`                                        | `NullableAdminOrganizationVerifiedCreator`                                                |
-| `NewAdminOrganizationCreator` / `NewAdminOrganizationCreatorWithDefaults` | `NewAdminOrganizationVerifiedCreator` / `NewAdminOrganizationVerifiedCreatorWithDefaults` |
-| `NewNullableAdminOrganizationCreator`                                     | `NewNullableAdminOrganizationVerifiedCreator`                                             |
-
-For example, pass a value from `NewAdminOrganizationVerifiedCreator` to the
-overview's `SetCreator`, and pass the new nullable wrapper to
-`NewAdminOrganizationOverview`. Update explicit getter-result types as well.
-Use `GetEmailVerifiedOk` to distinguish an absent verification state from `false`.
-Do not apply this migration to organization-detail callers.
+The Go client uses `AdminOrganizationCreator` and `NullableAdminOrganizationCreator`
+for both organization-list and detail models. Existing constructor and getter/setter
+signatures remain compatible. For example, a value from `NewAdminOrganizationCreator`
+can be passed directly to the overview's `SetCreator`.
+The optional `EmailVerified` field carries verification from list responses;
+`GetEmailVerifiedOk` distinguishes an absent state from `false`.
+The Go generation postprocessor preserves these model names and signatures while
+the HTTP schemas retain their separate list and detail fields.
 
 Existing organization operation IDs and top-level response models are retained. Registration fields
 are required; usage and activation remain optional, present only when selected. Query

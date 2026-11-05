@@ -27,7 +27,7 @@ type AdminOrganizationOverview struct {
 	// Stored creator ID; account linking replaces it with the primary user ID.
 	CreatedBy string `json:"createdBy"`
 	// Current creator identity.
-	Creator NullableAdminOrganizationVerifiedCreator `json:"creator"`
+	Creator NullableAdminOrganizationCreator `json:"creator"`
 	OrganizationId string `json:"organizationId"`
 	Name string `json:"name"`
 	MemberCount float32 `json:"memberCount"`
@@ -43,7 +43,7 @@ type _AdminOrganizationOverview AdminOrganizationOverview
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewAdminOrganizationOverview(createdAt time.Time, createdBy string, creator NullableAdminOrganizationVerifiedCreator, organizationId string, name string, memberCount float32, boxCount float32, impactState string, observedAt time.Time) *AdminOrganizationOverview {
+func NewAdminOrganizationOverview(createdAt time.Time, createdBy string, creator NullableAdminOrganizationCreator, organizationId string, name string, memberCount float32, boxCount float32, impactState string, observedAt time.Time) *AdminOrganizationOverview {
 	this := AdminOrganizationOverview{}
 	this.CreatedAt = createdAt
 	this.CreatedBy = createdBy
@@ -114,10 +114,10 @@ func (o *AdminOrganizationOverview) SetCreatedBy(v string) {
 }
 
 // GetCreator returns the Creator field value
-// If the value is explicit nil, the zero value for AdminOrganizationVerifiedCreator will be returned
-func (o *AdminOrganizationOverview) GetCreator() AdminOrganizationVerifiedCreator {
+// If the value is explicit nil, the zero value for AdminOrganizationCreator will be returned
+func (o *AdminOrganizationOverview) GetCreator() AdminOrganizationCreator {
 	if o == nil || o.Creator.Get() == nil {
-		var ret AdminOrganizationVerifiedCreator
+		var ret AdminOrganizationCreator
 		return ret
 	}
 
@@ -127,7 +127,7 @@ func (o *AdminOrganizationOverview) GetCreator() AdminOrganizationVerifiedCreato
 // GetCreatorOk returns a tuple with the Creator field value
 // and a boolean to check if the value has been set.
 // NOTE: If the value is an explicit nil, `nil, true` will be returned
-func (o *AdminOrganizationOverview) GetCreatorOk() (*AdminOrganizationVerifiedCreator, bool) {
+func (o *AdminOrganizationOverview) GetCreatorOk() (*AdminOrganizationCreator, bool) {
 	if o == nil {
 		return nil, false
 	}
@@ -135,7 +135,7 @@ func (o *AdminOrganizationOverview) GetCreatorOk() (*AdminOrganizationVerifiedCr
 }
 
 // SetCreator sets field value
-func (o *AdminOrganizationOverview) SetCreator(v AdminOrganizationVerifiedCreator) {
+func (o *AdminOrganizationOverview) SetCreator(v AdminOrganizationCreator) {
 	o.Creator.Set(&v)
 }
 
