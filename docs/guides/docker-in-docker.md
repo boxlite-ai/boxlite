@@ -4,6 +4,11 @@ Run Docker Engine inside a privileged guest with Docker-capable firmware.
 Guest privilege enables container mounts and capabilities while retaining the
 runner's VM sandbox. Docker's data lives on the guest writable ext4 disk.
 
+Guest privilege and kernel selection are independent. Package builds retain
+ordinary firmware defaults; use the explicit build-time selection below for
+local SDK deployments. For hosted deployment, see
+[Runner kernel operations](../../apps/infra/docs/runners.md#cloud-kernel).
+
 ## Linux x86_64 firmware
 
 The [libkrunfw v5.4.0 release](https://github.com/boxlite-ai/libkrunfw/releases/tag/v5.4.0)
@@ -119,6 +124,21 @@ unique marker, execution with `--pull=never`, and a two-service Compose app.
 The Compose client requests its backend by service name and asserts HTTP 200
 and the marker. Commands, exit codes and output are retained. Successful runs
 remove their Boxes; failures retain their disks and daemon diagnostics.
+
+The Runner tests below use the pinned Linux x86_64 DinD ELF prepared above and
+optionally `BOXLITE_TEST_KERNEL_HOME`:
+
+```bash
+BOXLITE_TEST_KERNEL=/path/to/firmware-dind/libkrunfw-kernel-dind-x86_64.bin \
+  make test:apps:runner FILTER='TestIntegrationRunner(ExternalKernel|Docker)'
+```
+
+Both Runner tests log their home directories and retain failed Boxes and their
+homes, including when no home was supplied. A successful run removes only its
+own temporary home. Shutdown has a fresh deadline separate from test operations
+and Docker failure diagnostics; the log records the stop result.
+External-kernel checks use fresh Box names on every run, including with a
+persistent home. Ordinary and privileged subtests each have a five-minute budget.
 
 ## Limitations
 

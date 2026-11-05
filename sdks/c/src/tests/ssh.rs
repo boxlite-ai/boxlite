@@ -254,6 +254,12 @@ impl SshBox {
         })
     }
 
+    fn enable(&self) -> Delivery {
+        self.deliver(|user_data, error| unsafe {
+            boxlite_box_ssh_enable(self.box_handle, Some(record_status), user_data, error)
+        })
+    }
+
     fn disable(&self) -> Delivery {
         self.deliver(|user_data, error| unsafe {
             boxlite_box_ssh_disable(self.box_handle, Some(record_status), user_data, error)
@@ -325,6 +331,35 @@ fn disabled_seen() -> StatusSeen {
         host_public_key: String::new(),
         host_key_fingerprint: String::new(),
     }
+}
+
+#[test]
+fn enable_round_trips_status_and_errors_through_callback() {
+    let _counting = FREE_STR_LOCK.lock().unwrap();
+    let routes: &'static [Route] = Box::leak(Box::new([
+        BOX_RUNNING,
+        route(
+            "POST /v1/boxes/b1/ssh/enable HTTP/1.1",
+            "200 OK",
+            CONFIGURED,
+        ),
+        route(
+            "POST /v1/boxes/b1/ssh/enable HTTP/1.1",
+            "409 Conflict",
+            r#"{"error":{"code":"invalid_state","message":"box is not running"}}"#,
+        ),
+    ]));
+    let box_ssh = SshBox::on_rest_server(routes);
+    let enabled = box_ssh.enable();
+    assert_eq!(enabled.code, Some(BoxliteErrorCode::Ok));
+    assert_eq!(enabled.status, Some(configured_seen()));
+    let refused = box_ssh.enable();
+    assert_eq!(refused.code, Some(BoxliteErrorCode::InvalidState));
+    assert!(refused.status.is_none());
+    let requests = box_ssh.requests_received();
+    assert_eq!(requests.len(), 3);
+    assert_eq!(requests[1], "POST /v1/boxes/b1/ssh/enable HTTP/1.1\n");
+    assert_eq!(requests[2], requests[1]);
 }
 
 #[test]

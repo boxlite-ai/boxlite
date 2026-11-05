@@ -32,6 +32,7 @@ How to build, test, and change the code.
 
 Dated root-cause analyses and design studies, newest first.
 
+- 2026-11-04 · [CLI-managed SSH setup](investigations/ssh-quick-configuration.md): managed SSH credentials and the printed SSH connection command.
 - 2026-11-03 · [Quickstart code readability](investigations/2026-11-03-quickstart-code-readability.md): SDK/CLI code typography and unpinned installation commands.
 - 2026-11-03 · [Images catalog membership](investigations/2026-11-03-images-catalog-membership.md): keeps Quickstart recommendations out of the API-backed image list.
 - 2026-11-02 · [VMM virtio-net device](investigations/2026-11-02-vmm-virtio-net.md): guest queue framing, gvproxy stream backpressure, event contracts and device-only qualification.

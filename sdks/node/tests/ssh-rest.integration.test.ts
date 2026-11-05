@@ -173,7 +173,10 @@ beforeAll(async () => {
         res.end(JSON.stringify(BOX_JSON));
         return;
       }
-      if (req.url === `/v1/boxes/${BOX}/ssh`) {
+      if (
+        req.url === `/v1/boxes/${BOX}/ssh` ||
+        req.url === `/v1/boxes/${BOX}/ssh/enable`
+      ) {
         const reply = replies.shift();
         if (reply === undefined) {
           res.writeHead(500).end("no scripted reply left");
@@ -218,6 +221,14 @@ describe("box.ssh over a REST transport", () => {
     expect(requests[0]).toBe(`POST /v1/boxes/${BOX}/ssh`);
     expect(JSON.parse(requests[1])).toEqual(FULL_CONFIG_WIRE);
     expect(requests).toHaveLength(2);
+  });
+
+  test("enable sends no configuration and preserves the status", async () => {
+    const box = await nativeBox();
+    requests = [];
+    replies = [{ status: 200, body: wireStatus(ENABLED) }];
+    expect(await box.ssh.enable()).toEqual(ENABLED);
+    expect(requests).toEqual([`POST /v1/boxes/${BOX}/ssh/enable`, ""]);
   });
 
   test("status and disable cross the wire and decode without bodies", async () => {
