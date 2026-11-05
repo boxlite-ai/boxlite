@@ -15,9 +15,9 @@ import { OrganizationAuthContext } from '../common/interfaces/auth-context.inter
 import { RequiredOrganizationResourcePermissions } from '../organization/decorators/required-organization-resource-permissions.decorator'
 import { OrganizationResourcePermission } from '../organization/enums/organization-resource-permission.enum'
 import { OrganizationResourceActionGuard } from '../organization/guards/organization-resource-action.guard'
-import { RegistryCredential } from '../registry/entities/registry-credential.entity'
 import { RegistriesService } from '../registry/services/registries.service'
 import { CreateRegistryDto } from './dto/create-registry.dto'
+import { toRestCredential } from './mappers/registry-response.mapper'
 
 type RestRegistryCredential = {
   id: string
@@ -90,16 +90,5 @@ export class BoxliteRegistryController {
     @Param('id', ParseUUIDPipe) id: string,
   ): Promise<void> {
     await this.registries.delete(authContext.organizationId, id)
-  }
-}
-
-function toRestCredential(credential: RegistryCredential): RestRegistryCredential {
-  return {
-    id: credential.id,
-    registry_host: credential.registryHost,
-    repository_prefix: credential.repositoryPrefix,
-    username: credential.username,
-    created_by: credential.createdBy,
-    created_at: credential.createdAt.toISOString(),
   }
 }

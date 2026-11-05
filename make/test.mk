@@ -18,6 +18,7 @@ export FAIL_FAST
 # native name selector, so match semantics are per-runner (nextest/ctest/
 # go: regex, pytest -k / vitest -t: expression/substring).
 export FILTER
+export TEST_PATH
 
 # Advanced nextest-only filter expression. Use this for CI-specific exclusions
 # that cannot be expressed as a simple positive FILTER pattern.
@@ -616,7 +617,11 @@ test\:apps\:infra-config: _ensure-apps-deps _ensure-infra-deps
 
 test\:apps\:api: _ensure-apps-deps
 	@echo "🧪 Running API unit tests..."
+ifneq ($(strip $(TEST_PATH)),)
+	@cd apps && yarn jest --config api/jest.config.mjs --runInBand --testPathPatterns "$$TEST_PATH" --passWithNoTests=false $(if $(FILTER),--testNamePattern "$$FILTER",)
+else
 	@cd apps && yarn nx run api:test --runInBand $(if $(TEST_FILES),--testPathPatterns '$(TEST_FILES)',) $(if $(FILTER),--testNamePattern '$(FILTER)',)
+endif
 
 test\:apps\:dashboard: _ensure-apps-deps
 	@cd apps && yarn nx run dashboard:test --run $(if $(FILTER),--testNamePattern '$(FILTER)',)

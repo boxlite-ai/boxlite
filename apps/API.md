@@ -47,6 +47,7 @@ and private tunnels as enabled; clients check that before every private prepare.
 | ------------------------------------------------------------------------- | ---------------------------- | ------------------------------------------------------------------------------------ | ------------------------ |
 | [Control-plane API](#control-plane-api)                                   | `apps/api`                   | `/api`                                                                               | `3000`                   |
 | [Hosted BoxLite-compatible API](#hosted-boxlite-compatible-api)           | `apps/api`                   | `/api/v1`                                                                            | `3000`                   |
+| [MCP endpoint](#mcp-endpoint)                                             | `apps/api`                   | `/api/mcp`                                                                           | `3000`                   |
 | [Runner API](#runner-api)                                                 | `apps/runner`                | `/`                                                                                  | `3003`                   |
 | [Preview proxy API](#preview-proxy-api)                                   | `apps/proxy`                 | `proxy.<domain>`, `<port>-<box>.proxy.<domain>`                                      | `4000`                   |
 | [Registry proxy API](#registry-proxy-api)                                 | `apps/image-service`         | `/v2`                                                                                | `4100`                   |
@@ -696,6 +697,209 @@ Deploy the pre-deploy migration, then the API, then runners. See the
 [runner monitoring contract](runner/README.md#sustained-cpu-incidents) for sampling,
 retry and restart limitations and [the table schema](SCHEMA.md#runner_cpu_incident)
 for persistence guarantees.
+
+## MCP endpoint
+
+**Service:** `apps/api` · **Path:** `/api/mcp` · **Port:** `3000` in
+deployments (shared with the control-plane API)
+
+A stateless Model Context Protocol server over Streamable HTTP, served from
+[`mcp`](./api/src/mcp/) and excluded from the product OpenAPI document. Modern
+protocol revision `2026-07-28` carries its version and client capabilities in
+each POST's `params._meta`, mirrored in the
+`MCP-Protocol-Version`, `Mcp-Method`, and (for `tools/call`) `Mcp-Name`
+headers, and is answered with one JSON body. A header that disagrees with the
+body is refused with `400` (`-32020`). An unsupported version in a modern
+request envelope is refused with `400` and `UnsupportedProtocolVersionError`
+(`-32022`). Modern `server/discover` advertises `2026-07-28`.
+
+Legacy clients using revisions `2025-03-26`, `2025-06-18`, and `2025-11-25`
+can POST an `initialize` handshake, followed by `notifications/initialized`,
+`tools/list`, and `tools/call` at the same endpoint. The SDK serves legacy
+requests through its stateless compatibility path: request replies use
+request-scoped SSE, and notifications receive an empty `202` acknowledgement.
+Clients must accept both `application/json` and `text/event-stream`; subsequent
+POSTs carry the negotiated `MCP-Protocol-Version` header. Every POST requires
+authentication and binds its caller independently; initialization creates no
+authorization session. No `Mcp-Session-Id` is issued, GET and DELETE remain
+`405`, and the older HTTP+SSE transport is not provided.
+
+Only OAuth bearer tokens issued for this endpoint are accepted; API keys are
+not. A token must come from the API's issuer and name `MCP_RESOURCE_URL` as its
+audience (RFC 8707), so a dashboard token is refused here, and the REST API
+refuses a token issued for MCP alone; without `MCP_RESOURCE_URL` the API's own
+audience applies. The caller is mapped as the `jwt` strategy maps it. On Auth0 this needs
+an API whose identifier is `MCP_RESOURCE_URL`, with the Resource Parameter
+Compatibility Profile on so a host's `resource` parameter sets the audience. A
+request carrying an `Origin` header is refused with `403`, because MCP hosts call
+from servers and CLIs, not browsers.
+
+A request without a valid token gets `401` with an RFC 6750 challenge that
+names the endpoint's RFC 9728 metadata, so a host can find where to sign in:
+`WWW-Authenticate: Bearer error="invalid_token", error_description="…", resource_metadata="<origin>/.well-known/oauth-protected-resource/api/mcp"`.
+The body and the failed-auth throttling are those of every other `401`. The
+metadata names `MCP_RESOURCE_URL` as the `resource` and the issuer the `jwt`
+strategy accepts as the only authorization server. Neither the challenge nor
+the metadata names scopes: Auth0 refuses OIDC scopes to the strict third-party
+clients that hosts register dynamically, and organization and tool access
+comes from organization permissions, not scopes.
+
+The caller's identity comes from the access token. Tokens may carry it under
+the `https://boxlite.ai/claims/` namespace, which the Auth0 Action writes for
+the MCP audience (`email_verified`, `email`, `name`). A namespaced claim takes
+precedence over the plain one of the same name: a namespaced `email_verified`
+other than `true` fails the Auth0 database identity's email-verification check
+(`403 email_verification_required`) even beside a plain `true`, and a
+namespaced `email` or `name` that is not a string is a `401`. Tokens with
+plain claims only work as before. An older token is not changed; reconnect
+through a fresh authorization flow when it lacks the claims.
+`MCP_RESOURCE_URL` is the endpoint's public URL, such as
+`https://dev.boxlite.ai/api/mcp`, and must name the `/api/mcp` route. Without
+it the challenge carries no `resource_metadata` and the metadata route answers
+as an unknown path does.
+
+<details>
+<summary><b>Transport</b> · 3 routes</summary>
+
+| Method   | Path       | What it does                                                                    |
+| -------- | ---------- | ------------------------------------------------------------------------------- |
+| `POST`   | `/api/mcp` | Serves modern JSON requests and legacy handshake, notification, and tool POSTs. |
+| `GET`    | `/api/mcp` | Returns `405`; this stateless endpoint provides no GET stream.                  |
+| `DELETE` | `/api/mcp` | Returns `405`; there is no session to end.                                      |
+
+</details>
+
+<details>
+<summary><b>Discovery</b> · 1 route</summary>
+
+| Method | Path                                            | What it does                                                                     |
+| ------ | ----------------------------------------------- | -------------------------------------------------------------------------------- |
+| `GET`  | `/.well-known/oauth-protected-resource/api/mcp` | Returns the Protected Resource Metadata without auth, outside the `/api` prefix. |
+
+</details>
+
+<details>
+<summary><b>Service tools</b> · 23 tools</summary>
+
+| Tool                 | Arguments                                                                                | What it does                                                                            |
+| -------------------- | ---------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| `list_boxes`         | `organization_id` (UUID)                                                                 | Lists the organization's boxes, mapped as `GET /api/v1/boxes` maps them.                |
+| `list_volumes`       | `organization_id`                                                                        | Lists managed volume summaries using `READ_VOLUMES`.                                    |
+| `get_volume`         | `organization_id`, `volume_id`                                                           | Returns one owned volume using `READ_VOLUMES`.                                          |
+| `create_volume`      | `organization_id`, optional `name`                                                       | Uses `WRITE_VOLUMES`, validates the REST DTO, and waits up to 30 seconds for readiness. |
+| `delete_volume`      | `organization_id`, `volume_id`, optional `force`                                         | Uses `DELETE_VOLUMES` and checks ownership before requesting deletion.                  |
+| `list_images`        | `organization_id`                                                                        | Lists recorded catalog references with `READ_IMAGES`.                                   |
+| `get_image_usage`    | `organization_id`                                                                        | Returns image count, limit, and known bytes with `READ_IMAGES`.                         |
+| `get_image`          | `organization_id`, `image_name`                                                          | Returns catalog versions and history with `READ_IMAGES`.                                |
+| `create_image_alias` | `organization_id`, `image_name`, `alias`, `digest`                                       | Uses `WRITE_IMAGES` and the REST digest-based alias DTO.                                |
+| `delete_image_alias` | `organization_id`, `image_name`, `alias`                                                 | Uses `WRITE_IMAGES` to remove an alias.                                                 |
+| `delete_image`       | `organization_id`, `image_name`                                                          | Uses `DELETE_IMAGES` to remove an unused catalog entry.                                 |
+| `list_registries`    | `organization_id`                                                                        | Lists public credential metadata with `READ_REGISTRIES`.                                |
+| `create_registry`    | `organization_id`, `registry_host`, `username`, `password`, optional `repository_prefix` | Creates a write-only registry login with `WRITE_REGISTRIES`.                            |
+| `delete_registry`    | `organization_id`, `registry_id`                                                         | Removes an owned, unused login with `DELETE_REGISTRIES`.                                |
+| `create_box`         | `organization_id`, supported hosted create fields                                        | Creates a Box with resource permissions and Commerce admission.                         |
+| `get_box`            | `organization_id`, `box_id`                                                              | Reads one owned Box by ID or exact name.                                                |
+| `box_exists`         | `organization_id`, `box_id`                                                              | Reports whether an owned Box exists.                                                    |
+| `delete_box`         | `organization_id`, `box_id`                                                              | Accepts a Box destruction request.                                                      |
+| `start_box`          | `organization_id`, `box_id`                                                              | Starts or waits for an already-starting Box.                                            |
+| `stop_box`           | `organization_id`, `box_id`                                                              | Requests stop and reports the current lifecycle state.                                  |
+| `set_box_inbound`    | `organization_id`, `box_id`, `mode`                                                      | Changes public inbound access with `WRITE_BOXES`.                                       |
+| `prepare_tunnel`     | `organization_id`, `box_id`, `port`                                                      | Declares a public guest-port tunnel with `WRITE_BOXES`.                                 |
+| `get_config`         | No arguments                                                                             | Reads the same public hosted capabilities as `GET /api/v1/config`.                      |
+
+`get_config` is pure capability data and requires no organization selection.
+It shares its source with REST: snapshots, cloning, export, and import remain
+disabled; inbound updates, private tunnels, and per-exec user selection are enabled
+in the hosted API. The MCP tunnel tool remains public-only, and the execution tool
+does not yet expose per-exec user selection. The tool never reads deployment settings
+or organization secrets. The principal endpoint remains excluded because hosted
+`/me` does not yet report actual token grants. Snapshot, clone, export, import,
+runtime-wide metrics, and WebSocket attachment tools remain excluded because
+their hosted or HTTP JSON implementations are unavailable.
+
+Image tools scope catalog lookups to the authorized organization before
+mutation. They retain service checks for curated images, ready versions,
+duplicate aliases, and images still used by boxes. Alias and catalog deletion
+return `{ "completed": true }`; deleting catalog metadata does not erase image
+bytes from a registry or a Runner cache. All three catalog mutations are audited.
+
+Registry tools `list_registries`, `create_registry`, and `delete_registry` use
+`READ_REGISTRIES`, `WRITE_REGISTRIES`, and `DELETE_REGISTRIES`, respectively.
+Creation accepts `registry_host`, optional `repository_prefix`, `username`, and
+write-only `password`, using the REST DTO and configured upstream allowlist.
+Deletion accepts a UUID `registry_id` and verifies organization ownership before
+audit admission. Results expose only public credential metadata; passwords,
+secret-store references, and raw backend errors never appear in replies or audits.
+The service retains duplicate-login and in-use-credential checks.
+
+Box lifecycle tools add `create_box`, `get_box`, `box_exists`, `delete_box`,
+`start_box`, and `stop_box`. Box selectors accept exact names containing spaces
+and Unicode. Reads require membership and organization ownership; there is no
+`READ_BOXES` permission. Creation, start, and stop require `WRITE_BOXES`;
+deletion requires `DELETE_BOXES`. Managed mounts additionally require both
+`READ_VOLUMES` and `WRITE_VOLUMES`, and service-side ownership validation.
+
+Creation reuses the REST DTO, mapper, Commerce admission, and `Context.user()`.
+Only hosted create fields are exposed: `advanced`, `rootfs_path`, `ports`,
+`tty`, and ignored `detach` are absent and rejected. Environment and secret
+values never enter audit metadata. Create/start retain the 30-second startup
+wait, including the existing already-starting branch. Stop returns the current
+state, which may be `stopping`; deletion returns `{ "accepted": true }` while
+destruction continues asynchronously. Missing and foreign Boxes both produce
+`{ "exists": false }` from `box_exists`; backend failures remain tool errors.
+
+`set_box_inbound` accepts `organization_id`, `box_id`, and `mode` (`enabled` or
+`disabled`); `prepare_tunnel` accepts the same IDs and a guest `port` from 1 to
+65535, excluding terminal port 22222. Both require `WRITE_BOXES`, verify resource
+ownership, and advertise public interaction. Inbound updates use the existing
+audited action. Tunnel preparation records activity, preserves inbound and
+auto-resume readiness gates, then returns the service URI after declaring that
+port public. It does not wake the Box; the proxy wakes it on connection.
+Cancellation between activity/URI work and publication prevents a new public
+declaration and reports that activity may already have been recorded.
+
+Organization tools require actual membership even for administrators, then apply the
+existing organization resource-permission policy. Managed volume identifiers are
+UUIDs; a foreign resource and a missing resource receive sanitized errors.
+`force: true` accepts an already absent volume without a mutation. Volume deletion
+returns `{ "accepted": true }`; background storage deletion may still be pending.
+Volume creation and deletion create an audit record before effects, with actor,
+tool, and resource identifiers. Audit admission failures prevent mutation; outcome
+update failures do not turn completed effects into retryable failures.
+Organization tools check cancellation after membership and audit admission and
+before business work. A cancellation never rolls back an effect already started.
+
+New inputs and structured outputs are strict typed objects, with the same JSON
+in the text reply. Unexpected errors never echo backend messages or request
+payloads. The MCP HTTP boundary applies the existing authenticated rate limiter.
+Resource permissions are enforced; business OAuth scopes remain unimplemented.
+
+`list_boxes` is registered by `BoxTools` and uses the shared organization access
+check, without an additional resource read permission or a system-admin membership
+bypass. Missing and inaccessible organizations get the same `isError` reply.
+Cancellation during membership admission prevents the subsequent Box query; the
+shared tool wrapper validates results and sanitizes unexpected errors.
+
+Its input is a strict object containing only the required `organization_id` UUID;
+unknown arguments are rejected before membership or box lookups. `tools/list`
+advertises an array `outputSchema` matching the mapped REST Box response for
+modern clients, including optional activity, exit-code, and network fields.
+A modern call returns that array in `structuredContent`. The SDK adapts the
+legacy output schema to an object with a required array property `result`,
+and legacy calls return `{ "result": [...] }` in `structuredContent`.
+Both eras retain the plain JSON array in `content[0].text`, preserving existing
+text consumers. An empty organization returns `[]` in modern structured and
+both text results, and `{ "result": [] }` in legacy structured results.
+Object-shaped tools such as `get_config` retain their existing structured
+shape in both eras. Authorization errors retain their text-only `isError`
+result and do not include structured success data.
+
+`list_boxes` explicitly advertises `readOnlyHint: true`, `destructiveHint: false`,
+and `openWorldHint: false`. The operation remains read-only. Under the MCP
+annotation contract, `destructiveHint` is meaningful only when `readOnlyHint`
+is false; its explicit presence does not require a host confirmation prompt.
+
+</details>
 
 ## Runner API
 

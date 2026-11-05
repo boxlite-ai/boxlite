@@ -45,6 +45,20 @@ described in the [DinD guide](../../docs/guides/docker-in-docker.md).
 
 Migration-backed integration suites that query `Box`, including usage accounting,
 run `AddGuestPrivileged1792540800000` so their schema includes the persisted field.
+## Tests
+
+Use the API unit-test target to select files before their suites load:
+
+```sh
+make test:apps:api TEST_PATH=src/mcp FILTER=Mcp
+```
+
+`TEST_PATH` matches test file paths; `FILTER` selects test names within those files.
+A focused run calls Jest with the API configuration directly, preserving patterns
+such as `src/mcp|boxlite-volume.controller.spec` as one argument.
+A path pattern with no matching files fails rather than reporting an empty success.
+Without `TEST_PATH`, the target retains its existing API-suite selection.
+The upstream `TEST_FILES` option remains available through the Nx test target.
 
 ## Admin Box image
 
@@ -60,12 +74,12 @@ accept this field before rolling out the added response property.
 `recordBusinessEvent` (`src/common/utils/business-event.util.ts`) writes one structured log record
 per business event; the attributes reach OTLP through nestjs-pino, where alerts query them.
 
-| Event | Recorded by | Outcomes |
-| --- | --- | --- |
-| `user.registration` | `UserService.create`, through `recordOutcomes` | requested, success, exception |
-| `user.login` | `LoginEventRecorder` | success |
-| `box.create`, `box.stop`, `box.delete` | `BoxService`, the auto-stop and auto-delete crons | requested |
-| `box.create`, `box.stop`, `box.delete` | `JobStateHandler`, when the runner job finishes | success, exception |
+| Event                                  | Recorded by                                       | Outcomes                      |
+| -------------------------------------- | ------------------------------------------------- | ----------------------------- |
+| `user.registration`                    | `UserService.create`, through `recordOutcomes`    | requested, success, exception |
+| `user.login`                           | `LoginEventRecorder`                              | success                       |
+| `box.create`, `box.stop`, `box.delete` | `BoxService`, the auto-stop and auto-delete crons | requested                     |
+| `box.create`, `box.stop`, `box.delete` | `JobStateHandler`, when the runner job finishes   | success, exception            |
 
 Box events go through `src/box/utils/box-business-event.util.ts`: the request and the outcome are
 recorded in different places, so one call cannot cover both.
@@ -83,11 +97,11 @@ return this.userService.create(createUserDto, Context.admin())
 await this.stop(event.boxId, undefined, Context.platform(PlatformReason.ORG_SUSPENSION))
 ```
 
-| Context | `actor.kind` | `event.reason` |
-| --- | --- | --- |
-| `Context.user()` | `user` | — |
-| `Context.admin()` | `admin` | — |
-| `Context.platform(reason)` | `platform` | the `PlatformReason`, such as `auto_stop` or `bootstrap` |
+| Context                    | `actor.kind` | `event.reason`                                           |
+| -------------------------- | ------------ | -------------------------------------------------------- |
+| `Context.user()`           | `user`       | —                                                        |
+| `Context.admin()`          | `admin`      | —                                                        |
+| `Context.platform(reason)` | `platform`   | the `PlatformReason`, such as `auto_stop` or `bootstrap` |
 
 - Only the platform gives a reason; user and admin contexts have none.
 - The boot-time admin seed registers as `Context.platform(PlatformReason.BOOTSTRAP)`.

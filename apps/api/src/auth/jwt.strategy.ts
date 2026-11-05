@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { Injectable, Logger } from '@nestjs/common'
+import { Injectable, Logger, UnauthorizedException } from '@nestjs/common'
 import { PassportStrategy } from '@nestjs/passport'
 import { ExtractJwt, Strategy } from 'passport-jwt'
 import { passportJwtSecret } from 'jwks-rsa'
@@ -41,6 +41,36 @@ export function requireVerifiedAuth0DatabaseEmail(
   if (payload.sub?.startsWith('auth0|') && payload.email_verified !== true) {
     throw new EmailVerificationRequiredException()
   }
+}
+
+/** Where the Auth0 Action puts the identity of an MCP token (apps/infra/bootstrap/auth0/login-policy.js). */
+const IDENTITY_CLAIMS_NAMESPACE = 'https://boxlite.ai/claims'
+
+/**
+ * The verified payload with its namespaced identity claims, when present, in
+ * place of the plain `email_verified`, `email`, and `name`. A namespaced
+ * verification is `true` only when it is exactly `true`, so a false or
+ * malformed one denies even next to a plain `true`; a namespaced email or name
+ * that is not a string rejects the token. The payload itself is left unchanged.
+ */
+export function withIdentityClaims<T extends Record<string, unknown>>(payload: T): T {
+  const resolved: Record<string, unknown> = { ...payload }
+  let namespaced = false
+  const verifiedClaim = `${IDENTITY_CLAIMS_NAMESPACE}/email_verified`
+  if (Object.hasOwn(payload, verifiedClaim)) {
+    resolved.email_verified = payload[verifiedClaim] === true
+    namespaced = true
+  }
+  for (const field of ['email', 'name']) {
+    const claim = `${IDENTITY_CLAIMS_NAMESPACE}/${field}`
+    if (!Object.hasOwn(payload, claim)) continue
+    if (typeof payload[claim] !== 'string') {
+      throw new UnauthorizedException(`Invalid ${field} claim`)
+    }
+    resolved[field] = payload[claim]
+    namespaced = true
+  }
+  return namespaced ? (resolved as T) : payload
 }
 
 /**
@@ -80,7 +110,13 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     this.logger.debug('JwtStrategy initialized')
   }
 
-  async validate(request: Request, payload: any): Promise<AuthContext> {
+  /** The issuer whose tokens this strategy accepts, as tokens and the issuer's own metadata name it. */
+  get issuer(): string {
+    return this.options.issuer
+  }
+
+  async validate(request: Request, verified: any): Promise<AuthContext> {
+    const payload = withIdentityClaims(verified)
     // Keep this before JIT user creation: an already-issued unverified Auth0
     // database token must not create local state while the Auth0 Action rollout
     // is converging.
@@ -144,15 +180,17 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     }
   }
 
-  async verifyToken(token: string): Promise<JWTPayload> {
+  /** Verifies a token for the API's audience, or for another one the caller serves (the MCP endpoint). */
+  async verifyToken(token: string, audience: string = this.options.audience): Promise<JWTPayload> {
     const { payload } = await jwtVerify(token, this.JWKS, {
-      audience: this.options.audience,
+      audience,
       issuer: this.options.issuer,
       algorithms: ['RS256'],
     })
-    // Gate direct verification consumers (Socket.IO and the WebSocket proxy),
-    // which do not enter Passport's validate callback.
-    requireVerifiedAuth0DatabaseEmail(payload)
-    return payload
+    const identity = withIdentityClaims(payload)
+    // Gate direct verification consumers (Socket.IO, the WebSocket proxy, and
+    // MCP), which do not enter Passport's validate callback.
+    requireVerifiedAuth0DatabaseEmail(identity)
+    return identity
   }
 }

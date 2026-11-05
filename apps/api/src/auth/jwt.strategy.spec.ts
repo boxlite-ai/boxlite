@@ -5,7 +5,7 @@
  */
 
 import { Request } from 'express'
-import { HttpStatus } from '@nestjs/common'
+import { HttpStatus, UnauthorizedException } from '@nestjs/common'
 import * as jose from 'jose'
 import { JwtStrategy, requireVerifiedAuth0DatabaseEmail } from './jwt.strategy'
 import { UserService } from '../user/user.service'
@@ -175,5 +175,80 @@ describe('JwtStrategy.verifyToken', () => {
     } as any)
 
     await expect(strategy.verifyToken('verified-token')).resolves.toMatchObject(payload)
+  })
+})
+
+// Pinned to the literals the Auth0 Action writes (apps/infra/bootstrap/auth0/login-policy.js),
+// so a rename on either side breaks a test.
+const EMAIL_VERIFIED_CLAIM = 'https://boxlite.ai/claims/email_verified'
+const EMAIL_CLAIM = 'https://boxlite.ai/claims/email'
+const NAME_CLAIM = 'https://boxlite.ai/claims/name'
+
+describe('JwtStrategy namespaced identity claims', () => {
+  afterEach(() => jest.restoreAllMocks())
+
+  const request = () => ({ get: jest.fn().mockReturnValue(undefined) }) as unknown as Request
+
+  it('admits a verified Auth0 database identity that carries only namespaced claims', async () => {
+    const { strategy } = buildStrategy()
+    jest.spyOn(jose, 'jwtVerify').mockResolvedValue({
+      payload: { sub: 'auth0|123', [EMAIL_VERIFIED_CLAIM]: true },
+      protectedHeader: { alg: 'RS256' },
+    } as any)
+
+    await expect(strategy.verifyToken('mcp-token')).resolves.toMatchObject({ sub: 'auth0|123', email_verified: true })
+  })
+
+  it('creates the user from namespaced email, name, and verification', async () => {
+    const { strategy, userService } = buildStrategy()
+
+    await strategy.validate(request(), {
+      sub: 'auth0|123',
+      [EMAIL_VERIFIED_CLAIM]: true,
+      [EMAIL_CLAIM]: 'new@boxlite.dev',
+      [NAME_CLAIM]: 'New Person',
+    })
+
+    expect(userService.create).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'auth0|123', email: 'new@boxlite.dev', name: 'New Person', emailVerified: true }),
+      expect.anything(),
+    )
+  })
+
+  it.each([false, null, 'true', 1])(
+    'rejects namespaced verification %p even when the plain claim says true',
+    async (namespaced) => {
+      const { strategy, userService } = buildStrategy()
+      const payload = { sub: 'auth0|123', email_verified: true, [EMAIL_VERIFIED_CLAIM]: namespaced }
+      jest.spyOn(jose, 'jwtVerify').mockResolvedValue({ payload, protectedHeader: { alg: 'RS256' } } as any)
+
+      await expect(strategy.verifyToken('mcp-token')).rejects.toThrow(EmailVerificationRequiredException)
+      await expect(strategy.validate(request(), payload)).rejects.toThrow(EmailVerificationRequiredException)
+      expect(userService.findOne).not.toHaveBeenCalled()
+    },
+  )
+
+  it.each([
+    [EMAIL_CLAIM, 42],
+    [NAME_CLAIM, { first: 'New' }],
+  ])('rejects a non-string %s before touching local users', async (claim, value) => {
+    const { strategy, userService } = buildStrategy()
+
+    await expect(
+      strategy.validate(request(), { sub: 'auth0|123', [EMAIL_VERIFIED_CLAIM]: true, [claim]: value }),
+    ).rejects.toThrow(UnauthorizedException)
+    expect(userService.findOne).not.toHaveBeenCalled()
+    expect(userService.create).not.toHaveBeenCalled()
+  })
+
+  it('does not change the verified payload it was handed', async () => {
+    const { strategy } = buildStrategy()
+    const payload = { sub: 'auth0|123', [EMAIL_VERIFIED_CLAIM]: true, [EMAIL_CLAIM]: 'new@boxlite.dev' }
+    jest.spyOn(jose, 'jwtVerify').mockResolvedValue({ payload, protectedHeader: { alg: 'RS256' } } as any)
+
+    await strategy.verifyToken('mcp-token')
+    await strategy.validate(request(), payload)
+
+    expect(payload).toEqual({ sub: 'auth0|123', [EMAIL_VERIFIED_CLAIM]: true, [EMAIL_CLAIM]: 'new@boxlite.dev' })
   })
 })
