@@ -3,13 +3,19 @@
 SSH starts disabled when no saved configuration exists. The Rust runtime exposes `LiteBox::ssh()` to configure,
 query, or disable it, for local boxes and for REST-backed boxes served by
 `boxlite serve` ([HTTP control](#http-control-with-boxlite-serve)) or the
-[hosted cloud API](#hosted-cloud-api). Only
+[hosted cloud API](#hosted-cloud-api).
+
 `configure(config)` follows the implicit-start policy of exec, metrics, and file
 copying. A `Configured` or `Stopped` box using the image's default command can
 start implicitly. If `BoxOptions.cmd` or `entrypoint` explicitly sets the main
 command, configuration returns `InvalidState` in these states; call `start()`
 first. On a REST server, a stopped box with `auto_resume=false` is refused
 instead of resumed.
+
+For local Rust boxes, `tunnel()` also starts the VM and container main command as
+needed, including an explicit `cmd` or `entrypoint`. It does not configure or
+enable SSH. REST handles return `Unsupported` for this data API. See the
+[local data channel](#local-data-channel) for connection and lifecycle details.
 
 `status()`, `enable()` and `disable()` never start the VM or container main command.
 On valid `Configured` or `Stopped` local handles, `status()` returns disabled status
