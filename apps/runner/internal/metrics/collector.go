@@ -243,6 +243,24 @@ func (c *Collector) collectCPUUsageSince(since time.Time) (float64, error) {
 	return total / float64(count), nil
 }
 
+// collectCPUUsageMaxSince retains the minute log's peak independently of the
+// full-ring mean used by /info and healthchecks. Zero is a valid CPU reading.
+func (c *Collector) collectCPUUsageMaxSince(since time.Time) (float64, error) {
+	c.cpuMutex.RLock()
+	defer c.cpuMutex.RUnlock()
+	maximum := -1.0
+	c.cpuRing.Do(func(value interface{}) {
+		sample, ok := value.(CPUSnapshot)
+		if ok && !sample.timestamp.Before(since) && sample.cpuPercent > maximum {
+			maximum = sample.cpuPercent
+		}
+	})
+	if maximum < 0 {
+		return 0, errors.New("CPU metrics not yet available")
+	}
+	return maximum, nil
+}
+
 func (c *Collector) logResourceUsage(ctx context.Context) {
 	ticker := time.NewTicker(time.Minute)
 	defer ticker.Stop()
@@ -276,7 +294,7 @@ func (c *Collector) logResourceSnapshot(ctx context.Context, now time.Time) {
 		c.log.WarnContext(ctx, "Failed to collect runner resource log", "error", err)
 		return
 	}
-	cpuPercent, err := c.collectCPUUsageSince(now.Add(-time.Minute))
+	cpuPercent, err := c.collectCPUUsageMaxSince(now.Add(-time.Minute))
 	if err != nil {
 		c.log.WarnContext(ctx, "Failed to collect recent CPU usage for resource log", "error", err)
 		return

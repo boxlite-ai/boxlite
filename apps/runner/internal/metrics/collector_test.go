@@ -39,7 +39,7 @@ func newTestCollector(home string, usage disk.UsageStat, askedPath *string) *Col
 	return c
 }
 
-func TestRunnerResourceLogUsesRecentCPUAndHomeDisk(t *testing.T) {
+func TestRunnerResourceLogUsesMinuteCPUMaximumAndHomeDisk(t *testing.T) {
 	var askedPath string
 	c := newTestCollector("/boxlite-home", disk.UsageStat{Total: 400 * bytesPerGiB, Used: 100 * bytesPerGiB, UsedPercent: 25}, &askedPath)
 	var logs bytes.Buffer
@@ -55,7 +55,7 @@ func TestRunnerResourceLogUsesRecentCPUAndHomeDisk(t *testing.T) {
 	if err := json.Unmarshal(logs.Bytes(), &entry); err != nil {
 		t.Fatal(err)
 	}
-	if entry["event"] != "runner.resource.usage" || entry["cpuPercent"] != float64(60) || entry["diskPercent"] != float64(25) || entry["diskUsedGiB"] != float64(100) || entry["diskTotalGiB"] != float64(400) || askedPath != "/boxlite-home" {
+	if entry["event"] != "runner.resource.usage" || entry["cpuPercent"] != float64(80) || entry["diskPercent"] != float64(25) || entry["diskUsedGiB"] != float64(100) || entry["diskTotalGiB"] != float64(400) || askedPath != "/boxlite-home" {
 		t.Fatalf("incorrect resource log: %v, path=%s", entry, askedPath)
 	}
 	if percent, ok := entry["memoryPercent"].(float64); !ok || percent < 0 || percent > 100 {

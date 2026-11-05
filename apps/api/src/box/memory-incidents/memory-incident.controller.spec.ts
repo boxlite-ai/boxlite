@@ -73,6 +73,8 @@ describe('Memory incident HTTP contract', () => {
     { boxes: {} },
     { boxes: [null] },
     { boxes: [123] },
+    { boxes: [[]] },
+    { boxes: [[report.boxes[0]]] },
     { boxes: undefined },
     { boxes: Array.from({ length: 6 }, (_, i) => ({ ...report.boxes[0], boxId: `box-${i}` })) },
     { boxes: [report.boxes[0], report.boxes[0]] },

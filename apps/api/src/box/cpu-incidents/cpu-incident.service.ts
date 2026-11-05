@@ -50,25 +50,28 @@ export class CpuIncidentService {
     const to = new Date(query.to)
     if (!Number.isFinite(from.getTime()) || !Number.isFinite(to.getTime()) || from >= to)
       throw new BadRequestException('Invalid CPU incident time range: from must precede to')
-    const incidents = this.db.getRepository(RunnerCpuIncident)
-    const ranked = incidents
-      .createQueryBuilder('incident')
-      .select('incident.id', 'id')
-      .addSelect(
-        'ROW_NUMBER() OVER (PARTITION BY incident."boxId" ORDER BY incident."cpuSeconds" DESC, incident.id ASC)',
-        'position',
-      )
-      .where('incident."windowEndedAt" >= :from AND incident."windowEndedAt" < :to', { from, to })
-    if (query.runnerId) ranked.andWhere('incident."runnerId" = :runnerId', { runnerId: query.runnerId })
+    return this.db.transaction(async (manager) => {
+      await manager.query("SET LOCAL statement_timeout = '5s'")
+      const incidents = manager.getRepository(RunnerCpuIncident)
+      const ranked = incidents
+        .createQueryBuilder('incident')
+        .select('incident.id', 'id')
+        .addSelect(
+          'ROW_NUMBER() OVER (PARTITION BY incident."boxId" ORDER BY incident."cpuSeconds" DESC, incident.id ASC)',
+          'position',
+        )
+        .where('incident."windowEndedAt" >= :from AND incident."windowEndedAt" < :to', { from, to })
+      if (query.runnerId) ranked.andWhere('incident."runnerId" = :runnerId', { runnerId: query.runnerId })
 
-    const items = await incidents
-      .createQueryBuilder('incident')
-      .addCommonTableExpression(ranked, 'ranked')
-      .innerJoin('ranked', 'ranked', 'ranked.id = incident.id')
-      .where('ranked.position = 1 OR incident."boxId" IS NULL')
-      .orderBy('incident.id', 'ASC')
-      .limit(query.limit)
-      .getMany()
-    return { items }
+      const items = await incidents
+        .createQueryBuilder('incident')
+        .addCommonTableExpression(ranked, 'ranked')
+        .innerJoin('ranked', 'ranked', 'ranked.id = incident.id')
+        .where('ranked.position = 1 OR incident."boxId" IS NULL')
+        .orderBy('incident.id', 'ASC')
+        .limit(query.limit)
+        .getMany()
+      return { items }
+    })
   }
 }

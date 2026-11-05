@@ -17,6 +17,7 @@ import (
 type Box struct {
 	ID, RuntimeID, Image string
 	PID                  int
+	StartedAt            time.Time
 }
 
 type Usage struct {

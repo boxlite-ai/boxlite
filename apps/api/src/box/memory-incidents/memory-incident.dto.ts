@@ -8,6 +8,7 @@ import {
   IsInt,
   IsISO8601,
   IsNumber,
+  IsObject,
   IsOptional,
   IsString,
   IsUUID,
@@ -60,6 +61,7 @@ export class RunnerMemoryIncidentDto {
     description: 'Descending current bytes, then Box ID ascending; empty when none readable.',
   })
   @IsArray()
+  @IsObject({ each: true })
   @ArrayMaxSize(5)
   @ArrayUnique((box: BoxMemoryUsageDto) => box?.boxId)
   @ValidateNested({ each: true })

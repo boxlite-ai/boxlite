@@ -160,6 +160,17 @@ describeWithDatabase('Memory incident PostgreSQL persistence', () => {
     expect(items[0]).toMatchObject({ id: '9007199254740994', eventId: winner.eventId, boxes: winner.boxes })
   })
 
+  it('breaks equal-metric ties by numeric row ID across digit widths', async () => {
+    await db.query('ALTER TABLE runner_memory_incident ALTER COLUMN id RESTART WITH 9')
+    const winner = { ...report(), boxes: [{ boxId: 'a', image: 'winner', memoryBytes: '99' }] }
+    await service.record(runnerId, winner)
+    await db.query('ALTER TABLE runner_memory_incident ALTER COLUMN id RESTART WITH 10')
+    await service.record(runnerId, { ...report(), boxes: [{ boxId: 'a', image: 'tied', memoryBytes: '99' }] })
+    const { items } = await service.list({ ...range, limit: 50 })
+    expect(items).toHaveLength(1)
+    expect(items[0]).toMatchObject({ id: '9', eventId: winner.eventId })
+  })
+
   it('selects maxima only within the requested runner and time range', async () => {
     const single = (memoryBytes: string) => [{ boxId: 'a', image: '', memoryBytes }]
     await service.record(runnerId, { ...report(), boxes: single('1') })
@@ -171,6 +182,33 @@ describeWithDatabase('Memory incident PostgreSQL persistence', () => {
     expect(items).toHaveLength(1)
     expect(items[0]).toMatchObject({ eventId: winner.eventId, boxes: winner.boxes })
   })
+
+  it('cancels a blocked ranking query within five seconds and restores the session timeout', async () => {
+    const lock = db.createQueryRunner()
+    await lock.connect()
+    await lock.startTransaction()
+    await lock.query('LOCK TABLE runner_memory_incident IN ACCESS EXCLUSIVE MODE')
+    let timer: ReturnType<typeof setTimeout>
+    const result = service.list({ ...range, limit: 50 }).then(
+      () => 'completed',
+      (error) => error.code,
+    )
+    try {
+      const outcome = await Promise.race([
+        result,
+        new Promise<string>((resolve) => {
+          timer = setTimeout(() => resolve('still blocked'), 7000)
+        }),
+      ])
+      expect(outcome).toBe('57014')
+      expect(await db.query("SELECT current_setting('statement_timeout') AS timeout")).toEqual([{ timeout: '0' }])
+    } finally {
+      clearTimeout(timer)
+      await lock.rollbackTransaction()
+      await lock.release()
+      await result
+    }
+  }, 10000)
 
   it.each([
     { runnerMemoryPercent: 80 },

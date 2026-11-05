@@ -11,18 +11,53 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/shirou/gopsutil/v4/process"
 )
 
-func readMemory(ctx context.Context, box Box) (uint64, error) {
-	if box.PID <= 0 {
-		return 0, fmt.Errorf("box has no running PID")
+var readMemory = newMemoryReader("/proc", "/sys/fs/cgroup")
+
+func newMemoryReader(procRoot, cgroupRoot string) func(context.Context, Box) (uint64, error) {
+	// A canceled caller leaves at most one kernel read in flight. Keep its slot
+	// until the read finishes so repeated timeouts cannot accumulate workers.
+	slot := make(chan struct{}, 1)
+	return func(ctx context.Context, box Box) (uint64, error) {
+		if err := ctx.Err(); err != nil {
+			return 0, err
+		}
+		if box.PID <= 0 {
+			return 0, fmt.Errorf("box has no running PID")
+		}
+		if runtime.GOOS != "linux" {
+			return readProcessMemory(ctx, box.PID, box.StartedAt)
+		}
+		select {
+		case slot <- struct{}{}:
+		case <-ctx.Done():
+			return 0, ctx.Err()
+		}
+		type result struct {
+			bytes uint64
+			err   error
+		}
+		done := make(chan result, 1)
+		go func() {
+			defer func() { <-slot }()
+			bytes, err := readCgroupMemory(procRoot, cgroupRoot, box)
+			done <- result{bytes: bytes, err: err}
+		}()
+		select {
+		case value := <-done:
+			return value.bytes, value.err
+		case <-ctx.Done():
+			return 0, ctx.Err()
+		}
 	}
-	if runtime.GOOS == "linux" {
-		return readCgroupMemory("/proc", "/sys/fs/cgroup", box)
-	}
-	p, err := process.NewProcessWithContext(ctx, int32(box.PID))
+}
+
+func readProcessMemory(ctx context.Context, pid int, startedAt time.Time) (uint64, error) {
+	p, err := process.NewProcessWithContext(ctx, int32(pid))
 	if err != nil {
 		return 0, err
 	}
@@ -30,12 +65,16 @@ func readMemory(ctx context.Context, box Box) (uint64, error) {
 	if err != nil {
 		return 0, err
 	}
+	// A replacement PID may already exist before the first lookup.
+	if startedAt.IsZero() || created > startedAt.UnixMilli() {
+		return 0, fmt.Errorf("box process identity does not match start time")
+	}
 	usage, err := p.MemoryInfoWithContext(ctx)
 	if err != nil {
 		return 0, err
 	}
 	// Use a fresh reader because gopsutil caches creation time on the object.
-	current, err := process.NewProcessWithContext(ctx, int32(box.PID))
+	current, err := process.NewProcessWithContext(ctx, int32(pid))
 	if err != nil {
 		return 0, err
 	}

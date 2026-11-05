@@ -103,14 +103,15 @@ func TestMemoryIncidentPartialEmptyAndZeroReadings(t *testing.T) {
 
 func TestMemoryIncidentQueueBoundsAndCancellation(t *testing.T) {
 	m := testMonitor(nil)
+	start := time.Unix(1700000000, 0)
 	for i := 0; i < 33; i++ {
-		m.Observe(context.Background(), time.Now(), 90)
+		m.Observe(context.Background(), start.Add(time.Duration(i)*time.Minute), 90)
 	}
 	if len(m.reports) != 32 {
 		t.Fatal("unbounded report queue")
 	}
 	first := <-m.reports
-	if first.EventID == "" {
+	if first.EventID == "" || !first.SampledAt.Equal(start) {
 		t.Fatal("dropped oldest instead of newest")
 	}
 	ctx, cancel := context.WithCancel(context.Background())

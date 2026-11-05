@@ -112,6 +112,33 @@ describeWithDatabase('CPU incident PostgreSQL persistence', () => {
     expect((await service.list({ ...query, from: completed[2], to: '2026-10-29T00:08:00Z' })).items).toHaveLength(1)
   })
 
+  it('cancels a blocked ranking query within five seconds and restores the session timeout', async () => {
+    const lock = db.createQueryRunner()
+    await lock.connect()
+    await lock.startTransaction()
+    await lock.query('LOCK TABLE runner_cpu_incident IN ACCESS EXCLUSIVE MODE')
+    let timer: ReturnType<typeof setTimeout>
+    const result = service.list({ ...range, limit: 50 }).then(
+      () => 'completed',
+      (error) => error.code,
+    )
+    try {
+      const outcome = await Promise.race([
+        result,
+        new Promise<string>((resolve) => {
+          timer = setTimeout(() => resolve('still blocked'), 7000)
+        }),
+      ])
+      expect(outcome).toBe('57014')
+      expect(await db.query("SELECT current_setting('statement_timeout') AS timeout")).toEqual([{ timeout: '0' }])
+    } finally {
+      clearTimeout(timer)
+      await lock.rollbackTransaction()
+      await lock.release()
+      await result
+    }
+  }, 10000)
+
   it.each([range.from, '2026-10-28T00:00:00Z', 'invalid'])('rejects invalid range ending %s', async (to) => {
     await expect(service.list({ ...range, to, limit: 50 })).rejects.toThrow('Invalid CPU incident time range')
   })
@@ -140,6 +167,17 @@ describeWithDatabase('CPU incident PostgreSQL persistence', () => {
       { id: '4', boxId: 'another-box' },
     ])
     expect(await db.getRepository(RunnerCpuIncident).count()).toBe(4)
+  })
+
+  it('breaks equal-metric ties by numeric row ID across digit widths', async () => {
+    await db.query('ALTER TABLE runner_cpu_incident ALTER COLUMN id RESTART WITH 2')
+    const winner = { ...report(), cpuSeconds: 300, image: 'winner' }
+    await service.record(runnerId, winner)
+    await db.query('ALTER TABLE runner_cpu_incident ALTER COLUMN id RESTART WITH 10')
+    await service.record(runnerId, { ...report(), cpuSeconds: 300, image: 'tied' })
+    const { items } = await service.list({ ...range, limit: 50 })
+    expect(items).toHaveLength(1)
+    expect(items[0]).toMatchObject({ id: '2', eventId: winner.eventId })
   })
 
   it('selects maxima only within the requested runner and time range', async () => {

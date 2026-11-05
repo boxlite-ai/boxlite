@@ -16,7 +16,7 @@ import (
 
 func NewReporter(baseURL, token string, client *http.Client) (func(context.Context, Incident) (bool, error), error) {
 	base, err := url.Parse(baseURL)
-	if err != nil || base == nil || (base.Scheme != "http" && base.Scheme != "https") || base.Host == "" || base.User != nil || base.RawQuery != "" || base.Fragment != "" {
+	if err != nil || base == nil || (base.Scheme != "http" && base.Scheme != "https") || base.Host == "" || base.User != nil || base.ForceQuery || base.RawQuery != "" || base.Fragment != "" {
 		return nil, fmt.Errorf("invalid Memory incident API base URL")
 	}
 	endpoint := strings.TrimRight(base.String(), "/") + "/runners/me/memory-incidents"

@@ -665,6 +665,11 @@ curl --get "$BOXLITE_API_URL/api/admin/runner-cpu-incidents" \
 }
 ```
 
+Ranking queries have a five-second database statement timeout, including lock
+waits. A timeout fails the request without partial results. Valid time ranges
+remain unrestricted; a timed-out query can be retried with a narrower range.
+The setting is transaction-local and does not affect ingestion or pooled sessions.
+
 The range is `[from,to)` on capture completion time, not high-load start or server
 receipt time. Adjacent ranges therefore do not share boundary rows. After the time
 and optional Runner filters, each non-null `boxId` appears once, using the row
@@ -762,6 +767,9 @@ Snapshots losing all entries are omitted; originally empty snapshots remain.
 Then snapshots are ordered by ID and capped at `limit`. The limit counts snapshots,
 not individual Boxes; one snapshot can still contain up to five Boxes.
 Stored reports remain intact. Empty results are `{"items":[]}`.
+As with CPU queries, ranking has a five-second transaction-local database statement
+timeout, including lock waits. A timeout fails without partial results; retry with
+a narrower range if necessary. Ingestion and other pooled queries are unaffected.
 There is no pagination; repeated queries with the same limit do not enumerate
 additional rows. Late retries retain their original `sampledAt`, so historical
 ranges can gain records. Box deletion does not remove evidence.

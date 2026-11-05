@@ -4,11 +4,15 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 )
 
 func TestMemoryIncidentReadsWholeBoxCgroup(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("uses Linux cgroup dispatch")
+	}
 	root := t.TempDir()
 	proc, groups := filepath.Join(root, "proc"), filepath.Join(root, "groups")
 	write := func(path, body string) {
@@ -25,7 +29,7 @@ func TestMemoryIncidentReadsWholeBoxCgroup(t *testing.T) {
 	// A launcher-only value must not replace the cgroup including VM children.
 	write(filepath.Join(proc, "123/status"), "VmRSS:\t1 kB\n")
 	m := testMonitor([]Box{{ID: "business-a", RuntimeID: "runtime-a", PID: 123, Image: "image:a"}})
-	m.read = func(_ context.Context, box Box) (uint64, error) { return readCgroupMemory(proc, groups, box) }
+	m.read = newMemoryReader(proc, groups)
 	m.Observe(context.Background(), time.Now(), 90)
 	event := <-m.reports
 	if !event.SamplingComplete || len(event.Boxes) != 1 || event.Boxes[0].MemoryBytes != 4294967296 || event.Boxes[0].BoxID != "business-a" {

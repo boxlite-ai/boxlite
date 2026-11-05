@@ -191,7 +191,7 @@ func run() int {
 			result := make([]memorymonitor.Box, 0, len(boxes))
 			for _, box := range boxes {
 				if box.Running {
-					result = append(result, memorymonitor.Box{ID: box.Name, RuntimeID: box.ID, Image: box.Image, PID: box.PID})
+					result = append(result, memorymonitor.Box{ID: box.Name, RuntimeID: box.ID, Image: box.Image, PID: box.PID, StartedAt: box.StartedAt})
 				}
 			}
 			return result, nil
