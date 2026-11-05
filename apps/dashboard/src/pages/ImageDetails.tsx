@@ -377,6 +377,10 @@ const ImageDetails: React.FC = () => {
   )
 }
 
+/**
+ * Shows each pinned alias with its resolved digest and recorded pin time.
+ * Write permission gates pin/unpin actions, which stay disabled during mutations.
+ */
 function TagsSection({
   image,
   versionsById,

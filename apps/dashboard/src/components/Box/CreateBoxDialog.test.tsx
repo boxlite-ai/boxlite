@@ -11,6 +11,7 @@ import { SelectedOrganizationProvider } from '@/providers/SelectedOrganizationPr
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { CreateBoxDialog, resolvePerBoxLimits } from './CreateBoxDialog'
+import { AsciiButton } from '@/components/ascii'
 import { toBoxApiCreateRequest, validateMountPath, validateMounts } from '@/lib/cloudBox'
 
 // Mutable org returned by the mocked hook; each test sets `state.org`.
@@ -1130,7 +1131,7 @@ describe('CreateBoxDialog trigger slot', () => {
   }
 
   it('opens on the supplied control and returns focus there after Cancel', async () => {
-    await renderWithTrigger(<button type="button">Launch a box</button>)
+    await renderWithTrigger(<AsciiButton type="button">Launch a box</AsciiButton>)
 
     const buttons = [...document.querySelectorAll<HTMLButtonElement>('button')]
     const trigger = buttons.find((b) => b.textContent?.trim() === 'Launch a box')

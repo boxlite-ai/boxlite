@@ -432,8 +432,10 @@ const Volumes: React.FC = () => {
   )
 }
 
-// Most orgs land here with nothing. The copy answers the thing that sent them
-// looking — a box took their data with it — instead of defining the noun.
+/**
+ * Explains persistent storage before an organization has any volumes.
+ * Only members allowed to create volumes receive the creation action.
+ */
 function EmptyState({ canCreate, onCreate }: { canCreate: boolean; onCreate: () => void }) {
   return (
     <div className="flex flex-1 flex-col items-center justify-center gap-[16px] px-6 text-center">
