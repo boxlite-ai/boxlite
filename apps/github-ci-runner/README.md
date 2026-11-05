@@ -34,7 +34,7 @@ operators configure the App and webhook credentials described in the
 
 `connected` means the binding was saved. Listener `ready` means the catalog was
 initialized; it does not certify available capacity. The native hosted runtime
-has local integration checks but has not yet passed deployed dev CI acceptance.
+requires deployment acceptance for the configured Apps in addition to local integration checks.
 
 ## Authentication
 
@@ -126,6 +126,45 @@ To inspect configured names without printing their values:
 ```sh
 node -e 'console.log(Object.keys(process.env).filter(k => /^(CI_|GITHUB_|BOXLITE_)/.test(k)).sort().join("\n"))'
 ```
+
+### Multiple Apps in one Listener Box
+
+A single self-owned App remains the default and can cover both personal and
+organization installations. To run separate Apps in the same Listener, set only
+`CI_GITHUB_APPS_FILE` instead of the single-App fields or PAT fields. Its absolute
+path points to a private JSON file, with at most eight distinct App client IDs:
+
+```json
+[
+  {
+    "client_id": "PERSONAL_CLIENT_ID",
+    "private_key_file": "/run/secrets/personal.pem",
+    "webhook_secret_file": "/run/secrets/personal-webhook",
+    "account_type": "User"
+  },
+  {
+    "client_id": "ORG_CLIENT_ID",
+    "private_key_file": "/run/secrets/organization.pem",
+    "webhook_secret_file": "/run/secrets/organization-webhook",
+    "account_type": "Organization"
+  }
+]
+```
+
+All files require private permissions. `account_type` is optional for self-owned
+Apps; omitting it permits personal and organization installations visible to that
+App. Restricting it controls new admission, while cleanup retains the original
+App. The first entry is the permanent storage anchor; keep its client ID stable.
+Removing registered App identities is not supported by this initial configuration
+flow; keep original credentials for execution and cleanup.
+
+The first App receives `/v1/ci/github/webhook`; additional Apps receive
+`/v1/ci/github/webhook/CLIENT_ID`. Each path verifies its own secret and records
+the trusted App identity outside the webhook body. App delivery-recovery
+checkpoints are separate. All Apps share the same SQLite database, Listener,
+BoxLite principal and total `CI_WORKER_MAX`; configuring another App adds no
+second worker budget. Hosted use shares this App implementation and uses
+PostgreSQL plus the native BoxService adapter.
 
 ## Build and run
 
@@ -252,6 +291,8 @@ src/
   boxlite-workers.ts      original-ID ledger and worker REST operations
 ../libs/ci-listener/src/
   listener.ts             shared scheduling lifecycle
+  ci-gh-app.ts            one App identity, auth and connect verification
+  app-scopes.ts           immutable original App for execution and cleanup
   capacity.ts             CapacityProvider.resolve contract and policy checks
   catalog.ts              installation/repository/group directory
   credentials.ts          purpose-specific credential ownership

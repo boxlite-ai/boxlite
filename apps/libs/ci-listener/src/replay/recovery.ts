@@ -11,11 +11,9 @@ import {
   initial,
   interval,
   item,
-  itemPrefix,
   merge,
   minute,
   progress,
-  progressKey,
   ReplayItem,
   ReplayProgress,
   retention,
@@ -30,6 +28,7 @@ export interface DeliveryRecoveryOptions {
   authorize(lease: ExecutionLease, installation: number | undefined, signal: AbortSignal): Promise<boolean>
   report(error: unknown, operation: string): void
   now?: () => number
+  prefix?: string
 }
 class ScanRestart extends Error {}
 class RootDenied extends Error {}
@@ -43,6 +42,8 @@ const json = (value: unknown) => value as Json
 /** App-wide metadata recovery. Replayed notifications still enter the ordinary signed inbox. */
 export class AppDeliveryRecovery {
   private readonly now: () => number
+  private readonly progressKey: string
+  private readonly itemPrefix: string
   private task?: Promise<void>
   private stop = new AbortController()
   private leaseKey = ''
@@ -50,6 +51,10 @@ export class AppDeliveryRecovery {
   private closed = false
   constructor(private readonly options: DeliveryRecoveryOptions) {
     this.options = { ...options }
+    const prefix = options.prefix ?? 'replay/'
+    if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,149}\/$/.test(prefix)) throw new Error('Invalid App recovery prefix')
+    this.progressKey = prefix + 'progress'
+    this.itemPrefix = prefix + 'item/'
     this.now = options.now ?? Date.now
   }
   step(original: ExecutionLease, external: AbortSignal): void {
@@ -94,12 +99,12 @@ export class AppDeliveryRecovery {
     const rows = await this.options.state.commit(lease, [
       ...changes,
       {
-        key: progressKey,
+        key: this.progressKey,
         expected: checkpoint.row.version,
         payload: json(checkpoint.value),
       },
     ])
-    checkpoint.row = rows.find((row) => row.key === progressKey)!
+    checkpoint.row = rows.find((row) => row.key === this.progressKey)!
   }
   private deadline(value: ReplayProgress): number {
     return Math.max(value.notBefore, Math.min(value.scan ? this.now() : value.scanAt, value.retryAt))
@@ -108,12 +113,12 @@ export class AppDeliveryRecovery {
     let checkpoint: Checkpoint | undefined, operation: 'page' | 'retry' | undefined
     try {
       await this.root(lease, signal)
-      let [row] = await this.options.state.read([progressKey])
+      let [row] = await this.options.state.read([this.progressKey])
       if (!row)
         [row] = await this.options.state.commit(lease, [
-          { key: progressKey, expected: null, payload: json(initial(this.now())) },
+          { key: this.progressKey, expected: null, payload: json(initial(this.now())) },
         ])
-      checkpoint = { row, value: progress(row) }
+      checkpoint = { row, value: progress(row, this.progressKey.slice(0, -'progress'.length)) }
       const value = checkpoint.value,
         now = this.now()
       if (value.notBefore > now) return value.notBefore
@@ -212,13 +217,16 @@ export class AppDeliveryRecovery {
             ]
           : []
       })
-    const keys = [...new Set(candidates.map(({ delivery }) => itemPrefix + delivery.guid))]
+    const keys = [...new Set(candidates.map(({ delivery }) => this.itemPrefix + delivery.guid))]
     const previous = new Map((keys.length ? await this.options.state.read(keys) : []).map((row) => [row.key, row]))
     const values = new Map<string, ReplayItem>()
     for (const entry of candidates) {
-      const key = itemPrefix + entry.delivery.guid,
+      const key = this.itemPrefix + entry.delivery.guid,
         prior = previous.get(key)
-      values.set(key, merge(values.get(key) ?? (prior ? item(prior) : undefined), entry.delivery, entry.success))
+      values.set(
+        key,
+        merge(values.get(key) ?? (prior ? item(prior, this.itemPrefix) : undefined), entry.delivery, entry.success),
+      )
     }
     if (values.size) {
       await this.root(lease, signal)
@@ -248,8 +256,8 @@ export class AppDeliveryRecovery {
   }
   private async retry(lease: ExecutionLease, checkpoint: Checkpoint, signal: AbortSignal): Promise<void> {
     const value = checkpoint.value
-    const rows = await this.options.state.scan(lease, { prefix: itemPrefix, after: value.retryAfter, limit: 99 })
-    const decoded = rows.map((row) => ({ row, value: item(row) }))
+    const rows = await this.options.state.scan(lease, { prefix: this.itemPrefix, after: value.retryAfter, limit: 99 })
+    const decoded = rows.map((row) => ({ row, value: item(row, this.itemPrefix) }))
     const keys = decoded.filter(({ value }) => !value.done).map(({ value }) => 'receipt/' + value.delivery.guid)
     const receipts = new Map((keys.length ? await this.options.state.read(keys) : []).map((row) => [row.key, row]))
     let changes: StateChange[] = []
@@ -280,7 +288,8 @@ export class AppDeliveryRecovery {
         }
         changes.push({ key: row.key, expected: row.version })
       } else if (pending.done) {
-        if (!item(row).done) changes.push({ key: row.key, expected: row.version, payload: json(pending) })
+        if (!item(row, this.itemPrefix).done)
+          changes.push({ key: row.key, expected: row.version, payload: json(pending) })
       } else if (pending.nextAt <= this.now()) {
         if (!(await this.options.authorize({ ...lease }, pending.delivery.installation, signal))) {
           pending.nextAt = this.now() + minute

@@ -10,6 +10,7 @@ import { CiNativeState } from './ci-native-state'
 import { CiSettingsService } from './ci-settings.service'
 import { AddCiWebConnect1793786400000 } from '../migrations/pre-deploy/1793786400000-add-ci-web-connect-migration'
 import { AddCiListenerState1793700000000 } from '../migrations/pre-deploy/1793700000000-add-ci-listener-state-migration'
+import { AddCiAccountSelection1793894400000 } from '../migrations/pre-deploy/1793894400000-add-ci-account-selection-migration'
 import { Listener, ListenerInbox } from '@boxlite-ai/ci-listener'
 
 const databaseUrl = process.env.CI_CONNECT_TEST_DATABASE_URL
@@ -24,6 +25,13 @@ integration('CI connect persistence (real Postgres)', () => {
   const secrets = new CiSecretsService({ get: () => encryptionKey } as any)
   let db: DataSource, service: CiConnectService, native: CiNativeState, settings: CiSettingsService
   const github = {
+    clientId: 'app-client',
+    accountType: 'User',
+    forAccount: jest.fn(async () => github),
+    forType: jest.fn(() => github),
+    byClientId: jest.fn(() => github),
+    configured: () => [github],
+    availableInstallations: jest.fn(),
     settings: () => ({ clientId: 'app-client', installationUrl: 'https://github.com/apps/example/installations/new' }),
     startDevice: jest.fn(),
     webSettings: () => ({
@@ -62,6 +70,7 @@ integration('CI connect persistence (real Postgres)', () => {
     try {
       await new AddCiConnect1793664000000().up(runner)
       await new AddCiWebConnect1793786400000().up(runner)
+      await new AddCiAccountSelection1793894400000().up(runner)
       await new AddCiListenerState1793700000000().up(runner)
     } finally {
       await runner.release()
@@ -79,7 +88,9 @@ integration('CI connect persistence (real Postgres)', () => {
     await db.query(
       'TRUNCATE ci_connect_attempt, ci_installation_binding, ci_listener_state, "user", organization_user, api_key',
     )
-    native = new CiNativeState(db, { get: () => 'app-client' } as any)
+    native = new CiNativeState(db, {
+      get: (key: string) => (key === 'ci.githubClientId' ? 'app-client' : undefined),
+    } as any)
     await native.initialize()
     settings = new CiSettingsService(native, { resolveMaxCreatedBoxes: async () => 5 } as any)
     await settings.initialize()
@@ -97,6 +108,9 @@ integration('CI connect persistence (real Postgres)', () => {
     })
     github.pollDevice.mockReset().mockResolvedValue({ access_token: 'github-user-token' })
     github.exchangeWeb.mockReset().mockResolvedValue('github-web-user-token')
+    github.availableInstallations
+      .mockReset()
+      .mockResolvedValue([{ installationId: 123, accountId: 456, accountLogin: 'alice', accountType: 'User' }])
     github.verifyUserInstallation
       .mockReset()
       .mockResolvedValue({ installationId: 123, accountId: 456, accountLogin: 'alice', accountType: 'User' })
@@ -106,8 +120,10 @@ integration('CI connect persistence (real Postgres)', () => {
     const device = await service.start(actor, input)
     const runner = db.createQueryRunner()
     try {
+      await new AddCiAccountSelection1793894400000().down(runner)
       await new AddCiWebConnect1793786400000().down(runner)
       await new AddCiWebConnect1793786400000().up(runner)
+      await new AddCiAccountSelection1793894400000().up(runner)
       const [row] = await db.query('SELECT * FROM ci_connect_attempt WHERE id=$1', [device.id])
       expect(row).toMatchObject({ flow: 'device', oauth_state_hash: null, oauth_verifier_ciphertext: null })
       expect(row.device_ciphertext).toBeTruthy()
@@ -121,11 +137,15 @@ integration('CI connect persistence (real Postgres)', () => {
     return attempt
   }
   async function web(who = actor) {
-    const attempt = await service.startWeb(who, input)
+    const attempt = await service.startWeb(who, {
+      account_type: 'User',
+      follow_installation: true,
+      allow_public_repositories: false,
+    })
     const url = new URL(attempt.authorization_url)
     return { ...attempt, state: url.searchParams.get('state')!, challenge: url.searchParams.get('code_challenge')! }
   }
-  it('web connect persists an independent state hash and encrypted verifier, then binds exactly once', async () => {
+  it('web connect exchanges once, persists an encrypted selection token and binds only after selecting', async () => {
     const attempt = await web()
     const [stored] = await db.query('SELECT * FROM ci_connect_attempt WHERE id=$1', [attempt.id])
     expect(stored.flow).toBe('web')
@@ -149,9 +169,19 @@ integration('CI connect persistence (real Postgres)', () => {
       service.completeWeb(actor, attempt.id, { code: 'web-code', state: attempt.state }),
       service.completeWeb(actor, attempt.id, { code: 'web-code', state: attempt.state }),
     ])
-    expect(results.some((value) => value.status === 'connected')).toBe(true)
-    expect(github.exchangeWeb).toHaveBeenCalledTimes(1)
-    expect(github.verifyUserInstallation).toHaveBeenCalledWith('github-web-user-token', 'alice')
+    expect(results.some((value) => value.status === 'selection_required')).toBe(true)
+    expect(await db.query('SELECT * FROM ci_installation_binding')).toHaveLength(0)
+    expect(github.verifyUserInstallation).not.toHaveBeenCalled()
+    const [selection] = await db.query('SELECT * FROM ci_connect_attempt WHERE id=$1', [attempt.id])
+    expect(selection.oauth_token_ciphertext).toBeTruthy()
+    expect(JSON.stringify(selection)).not.toContain('github-web-user-token')
+    const selected = await Promise.all([
+      service.selectWeb(actor, attempt.id, 123),
+      service.selectWeb(actor, attempt.id, 123),
+    ])
+    expect(selected.some((value) => value.status === 'connected')).toBe(true)
+    expect(github.verifyUserInstallation).toHaveBeenCalledTimes(1)
+    expect(github.verifyUserInstallation).toHaveBeenCalledWith('github-web-user-token', 123)
     expect((await service.completeWeb(actor, attempt.id, { code: 'web-code', state: attempt.state })).status).toBe(
       'connected',
     )
@@ -226,11 +256,11 @@ integration('CI connect persistence (real Postgres)', () => {
   })
   it('web connect reports the install link without trusting a caller-supplied installation', async () => {
     const attempt = await web()
-    github.verifyUserInstallation.mockRejectedValueOnce(new CiInstallationRequired())
+    github.availableInstallations.mockResolvedValueOnce([])
     const result = await service.completeWeb(actor, attempt.id, { code: 'web-code', state: attempt.state })
     expect(result).toMatchObject({
-      status: 'installation_required',
-      installation_url: 'https://github.com/apps/example/installations/new',
+      status: 'selection_required',
+      accounts: [],
     })
     expect(await db.query('SELECT * FROM ci_installation_binding')).toHaveLength(0)
   })
@@ -240,9 +270,8 @@ integration('CI connect persistence (real Postgres)', () => {
       await db.query('DELETE FROM organization_user WHERE "organizationId"=$1', [org])
       return { installationId: 123, accountId: 456, accountLogin: 'alice', accountType: 'User' }
     })
-    expect((await service.completeWeb(actor, attempt.id, { code: 'web-code', state: attempt.state })).status).toBe(
-      'failed',
-    )
+    await service.completeWeb(actor, attempt.id, { code: 'web-code', state: attempt.state })
+    expect((await service.selectWeb(actor, attempt.id, 123)).status).toBe('failed')
     expect(await db.query('SELECT * FROM ci_installation_binding')).toHaveLength(0)
     expect(await native.state.read(['quota/' + org, 'wake/123/0'])).toEqual([])
   })
@@ -267,6 +296,54 @@ integration('CI connect persistence (real Postgres)', () => {
       'failed',
     )
     expect(github.exchangeWeb).not.toHaveBeenCalled()
+  })
+  it.each(['expired', 'cancelled', 'forged-state', 'other-actor', 'wrong-id', 'revoked'])(
+    'denies account selection at the %s boundary',
+    async (kind) => {
+      const attempt = await web()
+      await service.completeWeb(actor, attempt.id, { code: 'web-code', state: attempt.state })
+      if (kind === 'expired')
+        await db.query("UPDATE ci_connect_attempt SET expires_at=now()-interval '1 second' WHERE id=$1", [attempt.id])
+      if (kind === 'cancelled') await service.cancel(actor, attempt.id)
+      if (kind === 'revoked') await db.query('DELETE FROM organization_user')
+      if (kind === 'wrong-id')
+        github.verifyUserInstallation.mockResolvedValueOnce({
+          installationId: 999,
+          accountId: 456,
+          accountLogin: 'alice',
+          accountType: 'User',
+        })
+      if (kind === 'forged-state')
+        await expect(service.selectWeb(actor, attempt.id, 123, attempt.id + '.' + 'B'.repeat(43))).rejects.toThrow(
+          'state mismatch',
+        )
+      else if (kind === 'other-actor')
+        await expect(service.selectWeb({ ...actor, userId: 'other-owner' }, attempt.id, 123)).rejects.toThrow(
+          'not found',
+        )
+      else if (kind === 'revoked')
+        await expect(service.selectWeb(actor, attempt.id, 123)).rejects.toThrow('owner authority')
+      else expect((await service.selectWeb(actor, attempt.id, 123)).status).toBe(kind === 'wrong-id' ? 'failed' : kind)
+      expect(await db.query('SELECT * FROM ci_installation_binding')).toHaveLength(0)
+      if (['expired', 'cancelled', 'wrong-id'].includes(kind)) {
+        const [row] = await db.query('SELECT oauth_token_ciphertext FROM ci_connect_attempt WHERE id=$1', [attempt.id])
+        expect(row.oauth_token_ciphertext).toBeNull()
+      }
+      if (kind !== 'wrong-id') expect(github.verifyUserInstallation).not.toHaveBeenCalled()
+    },
+  )
+  it('auto-binds an installed account only with the original state and fresh installation verification', async () => {
+    const attempt = await web()
+    github.availableInstallations.mockResolvedValue([])
+    const result = await service.completeWeb(actor, attempt.id, { code: 'web-code', state: attempt.state })
+    expect(new URL(result.installation_url!).searchParams.get('state')).toBe(attempt.state)
+    expect(await db.query('SELECT * FROM ci_installation_binding')).toHaveLength(0)
+    expect((await service.selectWeb(actor, attempt.id, 123, attempt.state)).status).toBe('connected')
+    expect((await service.selectWeb(actor, attempt.id, 123, attempt.state)).status).toBe('connected')
+    expect(github.verifyUserInstallation).toHaveBeenCalledWith('github-web-user-token', 123)
+    expect(github.verifyUserInstallation).toHaveBeenCalledTimes(1)
+    const [stored] = await db.query('SELECT * FROM ci_connect_attempt WHERE id=$1', [attempt.id])
+    expect(stored.oauth_token_ciphertext).toBeNull()
   })
   // Version/race cases begin with an earlier installation notification. The
   // connect under test must refresh it independently of that prior producer.

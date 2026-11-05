@@ -39,6 +39,15 @@ Use [mbuild](../mbuild/README.md) and the [runner runbook](../docs/runners.md) t
 
 ## Hosted GitHub CI Listener
 
+Personal and Organization Apps use separate credentials and webhook URLs. Add
+`CI_GITHUB_ORG_APP_CLIENT_ID` and `CI_GITHUB_ORG_APP_SLUG` as ordinary settings
+for the Organization App. Its `CI_GITHUB_ORG_APP_PRIVATE_KEY`,
+`CI_GITHUB_ORG_WEBHOOK_SECRET` and optional `CI_GITHUB_ORG_APP_CLIENT_SECRET`
+use secret refs in both the `api` and `secret` groups, as the Personal App does.
+An Organization App requires the Personal App storage anchor and a distinct
+client ID. The deployment validates this configuration before infrastructure
+changes; configuring both Apps still creates one hosted Listener and one account quota.
+
 The API imports the shared TypeScript Listener. Configure its App identity and slug
 as ordinary mstage API settings. Configure `CI_GITHUB_APP_PRIVATE_KEY`,
 `CI_GITHUB_WEBHOOK_SECRET` and `CI_SECRET_ENCRYPTION_KEY` as secret references.

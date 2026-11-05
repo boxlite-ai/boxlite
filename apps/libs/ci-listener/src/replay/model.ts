@@ -76,7 +76,7 @@ export function initial(now: number): ReplayProgress {
     gaps: 0,
   }
 }
-export function item(row: StateRecord): ReplayItem {
+export function item(row: StateRecord, itemPrefix = 'replay/item/'): ReplayItem {
   const value = row.payload,
     d = object(value) ? value.delivery : undefined
   if (
@@ -116,7 +116,9 @@ export function item(row: StateRecord): ReplayItem {
     intent: value.intent as string | null,
   }
 }
-export function progress(row: StateRecord): ReplayProgress {
+export function progress(row: StateRecord, prefix = 'replay/'): ReplayProgress {
+  const progressKey = prefix + 'progress',
+    itemPrefix = prefix + 'item/'
   const v = row.payload
   if (
     !object(v) ||

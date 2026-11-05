@@ -7,7 +7,11 @@ import {
   ListenerState,
   PostgresStateDatabase,
   StateConflict,
+  ScopeApplications,
+  scopeKey,
+  StateCorrupt,
 } from '@boxlite-ai/ci-listener'
+import { CiGitHubService } from './ci-github.service'
 import { TypedConfigService } from '../config/typed-config.service'
 export type CiNativeAuthority = Pick<
   ExecutionScope,
@@ -21,6 +25,8 @@ export type CiNativeAuthority = Pick<
 export class CiNativeState {
   readonly app: string
   readonly namespace: string
+  readonly apps: string[]
+  readonly registry: CiGitHubService
   readonly state: ListenerState
   constructor(
     private readonly db: DataSource,
@@ -28,6 +34,8 @@ export class CiNativeState {
   ) {
     this.app = config.get('ci.githubClientId') || ''
     if (this.app && !/^[A-Za-z0-9_-]{1,128}$/.test(this.app)) throw new Error('Invalid hosted CI App identity')
+    this.registry = new CiGitHubService(config)
+    this.apps = [...new Set(this.registry.ids)]
     this.namespace = 'ci:' + (this.app || 'disabled')
     this.state = new ListenerState(
       new PostgresStateDatabase({
@@ -44,7 +52,23 @@ export class CiNativeState {
   async initialize(): Promise<void> {
     if (!this.app) throw new ServiceUnavailableException('Hosted CI App is not configured')
     await new ExecutionJournal(this.state).initialize([{ key: 'backend/native', payload: { app: this.app } }])
-    await this.transaction(async (_tx, state) => this.root(state))
+    await this.transaction(async (tx, state) => {
+      await tx.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', [this.namespace + ':apps'])
+      const [root] = await tx.query('SELECT * FROM ci_listener_state WHERE namespace=$1 AND record_key=$2 FOR UPDATE', [
+        this.namespace,
+        'backend/native',
+      ])
+      if (!root?.payload || root.payload.app !== this.app) throw new StateCorrupt()
+      const previous = root.payload.apps ?? [this.app]
+      if (!Array.isArray(previous) || previous.some((id: unknown) => typeof id !== 'string' || !this.apps.includes(id)))
+        throw new StateCorrupt()
+      await tx.query(
+        `UPDATE ci_listener_state SET payload=payload||jsonb_build_object('apps',$3::jsonb),
+        record_version=gen_random_uuid() WHERE namespace=$1 AND record_key=$2`,
+        [this.namespace, 'backend/native', JSON.stringify(this.apps)],
+      )
+      await this.root(state)
+    })
   }
   transaction<T>(work: (tx: EntityManager, state: ListenerState) => Promise<T>): Promise<T> {
     return this.db.transaction(async (tx) => {
@@ -66,7 +90,7 @@ export class CiNativeState {
   ): Promise<void> {
     const { installationId, accountId } = installation
     if (
-      app !== this.app ||
+      !this.apps.includes(app) ||
       !Number.isSafeInteger(installationId) ||
       installationId < 1 ||
       !Number.isSafeInteger(accountId) ||
@@ -109,11 +133,28 @@ export class CiNativeState {
       !root.payload ||
       typeof root.payload !== 'object' ||
       Array.isArray(root.payload) ||
-      root.payload.app !== this.app
+      root.payload.app !== this.app ||
+      !Array.isArray(root.payload.apps) ||
+      root.payload.apps.length !== this.apps.length ||
+      root.payload.apps.some((id) => typeof id !== 'string' || !this.apps.includes(id))
     )
       throw new ForbiddenException('Original hosted CI App identity changed')
   }
-  async admit(tx: EntityManager, scope: CiNativeAuthority): Promise<void> {
+  applications(state: ListenerState = this.state): ScopeApplications {
+    return new ScopeApplications(state, 'backend/native', this.app)
+  }
+  async application(scope: ExecutionScope, lease: import('@boxlite-ai/ci-listener').ExecutionLease): Promise<string> {
+    return this.applications().application(lease, scope)
+  }
+  async admit(tx: EntityManager, scope: CiNativeAuthority, originalApp?: string): Promise<void> {
+    const state = this.inside(tx)
+    const [mapping] = originalApp ? [] : await state.read(['app-scope/' + scopeKey(scope as ExecutionScope).slice(6)])
+    const application = originalApp ?? (mapping?.payload as { application?: string })?.application
+    if (!application || !this.apps.includes(application))
+      throw new ForbiddenException('Original CI App mapping required')
+    const app = this.registry.byClientId(application)
+    if (app.accountType !== scope.installation.account.type)
+      throw new ForbiddenException('GitHub account type does not match this App')
     const account = scope.installation.account
     const rows = await tx.query(
       `SELECT id FROM ci_installation_binding
@@ -124,7 +165,7 @@ export class CiNativeState {
       [
         scope.binding,
         scope.generation,
-        this.app,
+        application,
         scope.installation.id,
         account.id,
         account.login,

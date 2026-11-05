@@ -164,6 +164,7 @@ export class InstallationDirectory {
       binding.generation,
       binding.organization,
       binding.actor,
+      (binding as DirectoryBinding & { application?: string }).application ?? null,
       binding.installation.id,
       account.id,
       account.login.toLowerCase(),

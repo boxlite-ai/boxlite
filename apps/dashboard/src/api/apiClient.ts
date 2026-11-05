@@ -184,6 +184,33 @@ export class ApiClient {
     }
   }
 
+  public async selectCiConnect(organization: string, id: string, installation: number): Promise<CiConnectResult> {
+    return (
+      await this.http.post(
+        `/v1/${encodeURIComponent(organization)}/ci/connect/${encodeURIComponent(id)}/select`,
+        { installation_id: installation },
+        this.v1Config(),
+      )
+    ).data
+  }
+  public async completeCiInstallation(
+    organization: string,
+    id: string,
+    input: { installation_id: number; state: string },
+  ): Promise<CiConnectResult> {
+    try {
+      return (
+        await this.http.post(
+          `/v1/${encodeURIComponent(organization)}/ci/connect/${encodeURIComponent(id)}/installation`,
+          input,
+          this.v1Config(),
+        )
+      ).data
+    } catch {
+      throw new Error('GitHub installation could not be verified. Restart connect.')
+    }
+  }
+
   public async getOrganizationOnboarding(org: string): Promise<OrganizationOnboarding | null> {
     return (await this.http.get(`/organizations/${encodeURIComponent(org)}/onboarding`, this.v1Config())).data
   }

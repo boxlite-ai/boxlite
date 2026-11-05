@@ -15,6 +15,11 @@ import { CiSettingsService } from './ci-settings.service'
 import { matchesWebState, webAuthorization } from './ci-web-authorization'
 
 type Actor = { organizationId: string; userId: string; apiKey?: { keyHash: string } }
+export type WebConnectInput = {
+  account_type: 'User' | 'Organization'
+  follow_installation: true
+  allow_public_repositories: boolean
+}
 export type ConnectInput = { github_account: string; follow_installation: true; allow_public_repositories: boolean }
 type Attempt = {
   id: string
@@ -26,6 +31,7 @@ type Attempt = {
   flow: 'device' | 'web'
   oauth_state_hash: string | null
   oauth_verifier_ciphertext: string | null
+  oauth_token_ciphertext: string | null
   device_ciphertext: string | null
   state: string
   expires_at: Date
@@ -65,14 +71,15 @@ export class CiConnectService {
 
   async start(actor: Actor, input: ConnectInput) {
     this.actor(actor)
-    const settings = this.github.settings()
+    const app = await this.github.forAccount(input.github_account)
+    const settings = app.settings()
     // Erase expired credentials even when nobody polls their abandoned attempt.
     await this.query(
       this.db,
-      `UPDATE ci_connect_attempt SET state='expired',device_ciphertext=NULL,oauth_verifier_ciphertext=NULL
-      WHERE expires_at<=clock_timestamp() AND (device_ciphertext IS NOT NULL OR oauth_verifier_ciphertext IS NOT NULL)`,
+      `UPDATE ci_connect_attempt SET state='expired',device_ciphertext=NULL,oauth_verifier_ciphertext=NULL,oauth_token_ciphertext=NULL
+      WHERE expires_at<=clock_timestamp() AND (device_ciphertext IS NOT NULL OR oauth_verifier_ciphertext IS NOT NULL OR oauth_token_ciphertext IS NOT NULL)`,
     )
-    const grant = await this.github.startDevice()
+    const grant = await app.startDevice()
     const id = randomUUID()
     const expires = new Date(Date.now() + Math.min(grant.expires_in, 900) * 1000)
     const ciphertext = this.secrets.seal(
@@ -108,22 +115,30 @@ export class CiConnectService {
   }
 
   configuration() {
-    const settings = this.github.settings()
-    let webAvailable = false
-    try {
-      this.github.webSettings()
-      webAvailable = true
-    } catch {
-      /* CLI and workers remain available without web OAuth. */
+    return {
+      apps: this.github.configured().map((app) => {
+        let available = false
+        try {
+          app.webSettings()
+          available = true
+        } catch {
+          /* Device Flow can remain available. */
+        }
+        return {
+          account_type: app.accountType,
+          installation_url: app.settings().installationUrl,
+          web_connect_available: available,
+        }
+      }),
     }
-    return { installation_url: settings.installationUrl, web_connect_available: webAvailable }
   }
 
-  async startWeb(actor: Actor, input: ConnectInput) {
+  async startWeb(actor: Actor, input: WebConnectInput) {
     this.actor(actor)
     actor = { ...actor, apiKey: actor.apiKey ? { ...actor.apiKey } : undefined }
     input = { ...input }
-    const settings = this.github.webSettings()
+    const app = this.github.forType(input.account_type)
+    const settings = app.webSettings()
     const id = randomUUID(),
       authorization = webAuthorization(id)
     const expires = new Date(Date.now() + 300000)
@@ -133,8 +148,8 @@ export class CiConnectService {
     )
     await this.query(
       this.db,
-      `UPDATE ci_connect_attempt SET state='expired',device_ciphertext=NULL,oauth_verifier_ciphertext=NULL
-      WHERE expires_at<=clock_timestamp() AND (device_ciphertext IS NOT NULL OR oauth_verifier_ciphertext IS NOT NULL)`,
+      `UPDATE ci_connect_attempt SET state='expired',device_ciphertext=NULL,oauth_verifier_ciphertext=NULL,oauth_token_ciphertext=NULL
+      WHERE expires_at<=clock_timestamp() AND (device_ciphertext IS NOT NULL OR oauth_verifier_ciphertext IS NOT NULL OR oauth_token_ciphertext IS NOT NULL)`,
     )
     await this.query(
       this.db,
@@ -145,7 +160,7 @@ export class CiConnectService {
         id,
         actor.organizationId,
         actor.userId,
-        input.github_account,
+        '',
         input.allow_public_repositories,
         settings.clientId,
         authorization.stateHash,
@@ -158,7 +173,7 @@ export class CiConnectService {
       status: 'pending',
       expires_at: expires.toISOString(),
       installation_url: settings.installationUrl,
-      authorization_url: this.github.authorizeWeb(authorization.state, authorization.challenge),
+      authorization_url: app.authorizeWeb(authorization.state, authorization.challenge),
     }
   }
 
@@ -185,13 +200,19 @@ export class CiConnectService {
         await this.query(
           tx,
           `UPDATE ci_connect_attempt SET state=$2,device_ciphertext=NULL,
-          oauth_verifier_ciphertext=NULL,lease_id=NULL,lease_until=NULL WHERE id=$1`,
+          oauth_verifier_ciphertext=NULL,oauth_token_ciphertext=NULL,lease_id=NULL,lease_until=NULL WHERE id=$1`,
           [id, status],
         )
-        return { ...current, state: status, lease_id: null, oauth_verifier_ciphertext: null }
+        return {
+          ...current,
+          state: status,
+          lease_id: null,
+          oauth_verifier_ciphertext: null,
+          oauth_token_ciphertext: null,
+        }
       }
-      if (current.state === 'polling') return current
       await this.assertCurrentAuthority(tx, actor)
+      if (current.state === 'polling' || current.state === 'selecting') return current
       await this.query(
         tx,
         `UPDATE ci_connect_attempt SET state='polling',lease_id=$2,
@@ -200,14 +221,30 @@ export class CiConnectService {
       )
       return { ...current, state: 'polling', lease_id: lease }
     })
-    if (row.lease_id !== lease) return this.response(row)
+    if (row.lease_id !== lease) return this.response(row, actor, state)
     try {
-      if (row.app_client_id !== this.github.settings().clientId || !row.oauth_verifier_ciphertext)
-        throw new ForbiddenException('App configuration changed; reconnect')
+      const app = this.github.byClientId(row.app_client_id)
+      if (!row.oauth_verifier_ciphertext) throw new ForbiddenException('App configuration changed; reconnect')
       const verifier = this.secrets.open(row.oauth_verifier_ciphertext, this.aad(row) + ':web-pkce')
-      const token = await this.github.exchangeWeb(code, verifier)
-      const verified = await this.github.verifyUserInstallation(token, row.github_account)
-      await this.bind(row, lease, verified, actor)
+      const token = await app.exchangeWeb(code, verifier)
+      await this.db.transaction(async (tx) => {
+        const [current] = await this.query(
+          tx,
+          `SELECT id FROM ci_connect_attempt WHERE id=$1
+          AND state='polling' AND lease_id=$2 AND expires_at>clock_timestamp()
+          AND lease_until>clock_timestamp() FOR UPDATE`,
+          [id, lease],
+        )
+        if (!current) return
+        await this.assertCurrentAuthority(tx, actor)
+        await this.query(
+          tx,
+          `UPDATE ci_connect_attempt SET state='selecting',oauth_token_ciphertext=$3,
+          lease_id=NULL,lease_until=NULL WHERE id=$1 AND state='polling' AND lease_id=$2
+          AND expires_at>clock_timestamp() AND lease_until>clock_timestamp()`,
+          [id, lease, this.secrets.seal(token, this.aad(row) + ':web-selection')],
+        )
+      })
     } catch (error) {
       // An uncertain exchange is terminal: reusing the code can produce another remote effect.
       await this.terminal(id, lease, error instanceof CiInstallationRequired ? 'installation_required' : 'failed')
@@ -218,7 +255,67 @@ export class CiConnectService {
       [id, actor.organizationId, actor.userId],
     )
     if (!latest) throw new NotFoundException('Connect attempt not found')
-    return this.response(latest)
+    return this.response(latest, actor, state)
+  }
+
+  async selectWeb(actor: Actor, id: string, installation: number, installState?: string) {
+    this.actor(actor)
+    actor = { ...actor, apiKey: actor.apiKey ? { ...actor.apiKey } : undefined }
+    const selected = installation,
+      state = installState,
+      lease = randomUUID()
+    if (!Number.isSafeInteger(selected) || selected < 1) throw new ForbiddenException('Invalid GitHub installation')
+    const row: Attempt = await this.db.transaction(async (tx) => {
+      const [current] = await this.query(
+        tx,
+        `SELECT *,expires_at>clock_timestamp() AS live,
+        lease_until>clock_timestamp() AS lease_live FROM ci_connect_attempt
+        WHERE id=$1 AND organization_id=$2 AND user_id=$3 FOR UPDATE`,
+        [id, actor.organizationId, actor.userId],
+      )
+      if (!current) throw new NotFoundException('Connect attempt not found')
+      if (current.flow !== 'web' || (state !== undefined && !matchesWebState(id, state, current.oauth_state_hash)))
+        throw new ForbiddenException('GitHub connect state mismatch')
+      await this.assertCurrentAuthority(tx, actor)
+      if (['done', 'failed', 'expired', 'cancelled'].includes(current.state)) return current
+      if (!current.live || (current.state === 'polling' && !current.lease_live)) {
+        const status = current.live ? 'failed' : 'expired'
+        await this.query(
+          tx,
+          `UPDATE ci_connect_attempt SET state=$2,oauth_token_ciphertext=NULL,
+          oauth_verifier_ciphertext=NULL,lease_id=NULL,lease_until=NULL WHERE id=$1`,
+          [id, status],
+        )
+        return { ...current, state: status, lease_id: null, oauth_token_ciphertext: null }
+      }
+      if (current.state === 'polling') return current
+      if (current.state !== 'selecting' || !current.oauth_token_ciphertext)
+        throw new ConflictException('GitHub authorization is required before selecting an account')
+      await this.query(
+        tx,
+        `UPDATE ci_connect_attempt SET state='polling',lease_id=$2,
+        lease_until=clock_timestamp()+interval '90 seconds',oauth_token_ciphertext=NULL WHERE id=$1`,
+        [id, lease],
+      )
+      return { ...current, state: 'polling', lease_id: lease }
+    })
+    if (row.lease_id !== lease) return this.response(row, actor)
+    try {
+      const app = this.github.byClientId(row.app_client_id)
+      const token = this.secrets.open(row.oauth_token_ciphertext!, this.aad(row) + ':web-selection')
+      const verified = await app.verifyUserInstallation(token, selected)
+      if (verified.installationId !== selected) throw new ForbiddenException('Original installation changed')
+      await this.bind(row, lease, verified, actor)
+    } catch {
+      await this.terminal(id, lease, 'failed')
+    }
+    const [latest] = await this.query(
+      this.db,
+      'SELECT * FROM ci_connect_attempt WHERE id=$1 AND organization_id=$2 AND user_id=$3',
+      [id, actor.organizationId, actor.userId],
+    )
+    if (!latest) throw new NotFoundException('Connect attempt not found')
+    return this.response(latest, actor)
   }
 
   async cancel(actor: Actor, id: string) {
@@ -226,11 +323,11 @@ export class CiConnectService {
     const rows = await this.query(
       this.db,
       `UPDATE ci_connect_attempt SET state=CASE WHEN state='done' THEN state ELSE 'cancelled' END,
-      device_ciphertext=NULL,oauth_verifier_ciphertext=NULL,lease_id=NULL,lease_until=NULL WHERE id=$1 AND organization_id=$2 AND user_id=$3 RETURNING *`,
+      device_ciphertext=NULL,oauth_verifier_ciphertext=NULL,oauth_token_ciphertext=NULL,lease_id=NULL,lease_until=NULL WHERE id=$1 AND organization_id=$2 AND user_id=$3 RETURNING *`,
       [id, actor.organizationId, actor.userId],
     )
     if (!rows.length) throw new NotFoundException('Connect attempt not found')
-    return this.response(rows[0])
+    return this.response(rows[0], actor)
   }
 
   async poll(actor: Actor, id: string) {
@@ -253,7 +350,7 @@ export class CiConnectService {
         const state = current.expires_at.getTime() <= Date.now() ? 'expired' : 'failed'
         await this.query(
           tx,
-          'UPDATE ci_connect_attempt SET state=$2,device_ciphertext=NULL,oauth_verifier_ciphertext=NULL,lease_id=NULL,lease_until=NULL WHERE id=$1',
+          'UPDATE ci_connect_attempt SET state=$2,device_ciphertext=NULL,oauth_verifier_ciphertext=NULL,oauth_token_ciphertext=NULL,lease_id=NULL,lease_until=NULL WHERE id=$1',
           [id, state],
         )
         return { ...current, state, device_ciphertext: null, lease_id: null }
@@ -267,11 +364,11 @@ export class CiConnectService {
       )
       return claimed
     })
-    if (row.lease_id !== lease) return this.response(row)
+    if (row.lease_id !== lease) return this.response(row, actor)
     try {
-      if (row.app_client_id !== this.github.settings().clientId || !row.device_ciphertext)
-        throw new ForbiddenException('App configuration changed; reconnect')
-      const result = await this.github.pollDevice(this.secrets.open(row.device_ciphertext, this.aad(row)))
+      const app = this.github.byClientId(row.app_client_id)
+      if (!row.device_ciphertext) throw new ForbiddenException('App configuration changed; reconnect')
+      const result = await app.pollDevice(this.secrets.open(row.device_ciphertext, this.aad(row)))
       if (result.error === 'authorization_pending' || result.error === 'slow_down') {
         const interval = row.interval_seconds + (result.error === 'slow_down' ? 5 : 0)
         await this.query(
@@ -281,7 +378,7 @@ export class CiConnectService {
           [id, lease, interval],
         )
       } else if (typeof result.access_token === 'string' && result.access_token.length > 0) {
-        const verified = await this.github.verifyUserInstallation(result.access_token, row.github_account)
+        const verified = await app.verifyUserInstallation(result.access_token, row.github_account)
         await this.bind(row, lease, verified, actor)
       } else await this.terminal(id, lease, result.error === 'expired_token' ? 'expired' : 'failed')
     } catch (error) {
@@ -294,13 +391,13 @@ export class CiConnectService {
       [id, actor.organizationId, actor.userId],
     )
     if (!latest) throw new NotFoundException('Connect attempt not found')
-    return this.response(latest)
+    return this.response(latest, actor)
   }
 
   private terminal(id: string, lease: string, status: string) {
     return this.query(
       this.db,
-      `UPDATE ci_connect_attempt SET state=$3,device_ciphertext=NULL,oauth_verifier_ciphertext=NULL,lease_id=NULL,lease_until=NULL
+      `UPDATE ci_connect_attempt SET state=$3,device_ciphertext=NULL,oauth_verifier_ciphertext=NULL,oauth_token_ciphertext=NULL,lease_id=NULL,lease_until=NULL
       WHERE id=$1 AND state='polling' AND lease_id=$2`,
       [id, lease, status],
     )
@@ -383,7 +480,7 @@ export class CiConnectService {
       // so the final write is the authorization decision's clock-time boundary.
       const completed = await this.query(
         tx,
-        `UPDATE ci_connect_attempt SET state='done',binding_id=$2,device_ciphertext=NULL,oauth_verifier_ciphertext=NULL,lease_id=NULL,lease_until=NULL
+        `UPDATE ci_connect_attempt SET state='done',binding_id=$2,device_ciphertext=NULL,oauth_verifier_ciphertext=NULL,oauth_token_ciphertext=NULL,lease_id=NULL,lease_until=NULL
         WHERE id=$1 AND state='polling' AND lease_id=$3
         AND expires_at>clock_timestamp() AND lease_until>clock_timestamp()
         AND ($4::text IS NULL OR EXISTS (SELECT 1 FROM api_key WHERE "keyHash"=$4
@@ -394,7 +491,49 @@ export class CiConnectService {
     })
   }
 
-  private async response(row: Attempt) {
+  private async response(row: Attempt, actor: Actor, installState?: string) {
+    if (row.state === 'selecting') {
+      const current: Attempt | undefined = await this.db.transaction(async (tx) => {
+        const [value] = await this.query(
+          tx,
+          `SELECT *,expires_at>clock_timestamp() AS live FROM ci_connect_attempt
+          WHERE id=$1 AND organization_id=$2 AND user_id=$3 FOR UPDATE`,
+          [row.id, actor.organizationId, actor.userId],
+        )
+        if (!value) throw new NotFoundException('Connect attempt not found')
+        await this.assertCurrentAuthority(tx, actor)
+        if (value.state !== 'selecting') return value
+        if (!value.live) {
+          await this.query(
+            tx,
+            `UPDATE ci_connect_attempt SET state='expired',oauth_token_ciphertext=NULL WHERE id=$1`,
+            [row.id],
+          )
+          return { ...value, state: 'expired', oauth_token_ciphertext: null }
+        }
+        return value
+      })
+      if (current!.state !== 'selecting') return this.response(current!, actor)
+      if (!current!.oauth_token_ciphertext) throw new ForbiddenException('Selection credentials unavailable')
+      const app = this.github.byClientId(current!.app_client_id)
+      const token = this.secrets.open(current!.oauth_token_ciphertext, this.aad(current!) + ':web-selection')
+      const accounts = await app.availableInstallations(token)
+      const url = new URL(app.settings().installationUrl)
+      if (installState && matchesWebState(row.id, installState, current!.oauth_state_hash))
+        url.searchParams.set('state', installState)
+      return {
+        id: row.id,
+        status: 'selection_required',
+        expires_at: current!.expires_at.toISOString(),
+        installation_url: url.href,
+        accounts: accounts.map((choice) => ({
+          installation_id: choice.installationId,
+          account_id: choice.accountId,
+          github_account: choice.accountLogin,
+          account_type: choice.accountType,
+        })),
+      }
+    }
     if (row.state === 'done') {
       const [binding] = await this.query(
         this.db,
@@ -419,7 +558,7 @@ export class CiConnectService {
       expires_at: row.expires_at.toISOString(),
       ...(row.state === 'installation_required'
         ? {
-            installation_url: this.github.settings().installationUrl,
+            installation_url: this.github.byClientId(row.app_client_id).settings().installationUrl,
             reason: 'Install the App, then start connect again for a new GitHub authorization.',
           }
         : {}),

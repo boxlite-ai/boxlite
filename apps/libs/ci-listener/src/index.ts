@@ -34,3 +34,7 @@ export { ConfirmedWorkerAbsent, ConfirmedWorkerCreationRejected } from './worker
 export { ExecutionJournal } from './execution/journal'
 export { scopeKey, decodeScope } from './execution/model'
 export { jitFileArchive } from './jit-file'
+
+export { CiGitHubApp, CiGitHubAppError, CiInstallationRequired } from './ci-gh-app'
+export type { CiGitHubAppOptions, VerifiedInstallation } from './ci-gh-app'
+export { ScopeApplications } from './app-scopes'

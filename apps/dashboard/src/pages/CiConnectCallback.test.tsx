@@ -8,6 +8,8 @@ import { captureCiCallback, prepareCiRedirect } from '@/lib/ci-connect'
 import CiConnectCallback from './CiConnectCallback'
 
 const api = vi.hoisted(() => ({
+  completeCiInstallation: vi.fn(),
+  selectCiConnect: vi.fn(),
   completeCiConnect: vi.fn(async () => ({ status: 'connected', listener_status: 'provisioning' })),
 }))
 vi.mock('@/hooks/useApi', () => ({ useApi: () => api }))

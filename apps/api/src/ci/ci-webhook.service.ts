@@ -8,6 +8,7 @@ import {
 } from '@nestjs/common'
 import { verifyWebhook, WebhookError, VerifiedWebhook } from '@boxlite-ai/ci-listener'
 import { CiListenerService } from './ci-listener.service'
+import { CiGitHubService } from './ci-github.service'
 import { TypedConfigService } from '../config/typed-config.service'
 
 @Injectable()
@@ -17,24 +18,38 @@ export class CiWebhookService {
   constructor(
     private readonly listener: CiListenerService,
     private readonly config: TypedConfigService,
+    private readonly apps: CiGitHubService = new CiGitHubService(config),
   ) {}
 
-  async receive(raw: unknown, signature: string, delivery: string, event: string): Promise<void> {
+  async receive(
+    raw: unknown,
+    signature: string,
+    delivery: string,
+    event: string,
+    kind: 'User' | 'Organization' = 'User',
+  ): Promise<void> {
     // Retain the verification slot until this attempt settles; persistence
     // has a separate budget for transactions that outlive an HTTP response.
     if (this.receiving >= 32) throw new ServiceUnavailableException('CI webhook verification is busy')
     this.receiving++
     try {
-      await this.verifyAndPersist(raw, signature, delivery, event)
+      await this.verifyAndPersist(raw, signature, delivery, event, kind)
     } finally {
       this.receiving--
     }
   }
 
-  private async verifyAndPersist(raw: unknown, signature: string, delivery: string, event: string): Promise<void> {
+  private async verifyAndPersist(
+    raw: unknown,
+    signature: string,
+    delivery: string,
+    event: string,
+    kind: 'User' | 'Organization' = 'User',
+  ): Promise<void> {
     if (!Buffer.isBuffer(raw) || raw.length > 1_048_576) throw new BadRequestException('Raw webhook body required')
     if (!/^sha256=[a-f0-9]{64}$/.test(signature)) throw new UnauthorizedException('Invalid webhook signature')
-    const secret = await this.secret()
+    const app = this.apps.forType(kind)
+    const secret = app.secret()
     let notification: VerifiedWebhook | null
     try {
       notification = verifyWebhook({ raw, signature, delivery, event }, secret)
@@ -46,12 +61,10 @@ export class CiWebhookService {
       throw error
     }
     if (!notification) return
-    const app = this.config.get('ci.githubClientId')
-    if (!app) throw new ServiceUnavailableException('CI App is not configured')
     if (this.transactions >= 32) throw new ServiceUnavailableException('CI webhook persistence is busy')
     this.transactions++
     const operation = this.listener
-      .receive(notification)
+      .receive(notification, app.clientId)
       .catch((error) => {
         if (error instanceof WebhookError && error.status === 409) throw new ConflictException(error.message)
         throw new ServiceUnavailableException('CI webhook persistence unavailable')
@@ -70,15 +83,5 @@ export class CiWebhookService {
     } finally {
       clearTimeout(timeout!)
     }
-  }
-
-  private async secret(): Promise<Buffer> {
-    const value = this.config.get('ci.githubWebhookSecret')
-    if (typeof value !== 'string' || Buffer.byteLength(value) > 65536)
-      throw new ServiceUnavailableException('GitHub webhook secret unavailable')
-    const secret = Buffer.from(value.trim(), 'utf8')
-    if (secret.length < 32 || secret.length > 256)
-      throw new ServiceUnavailableException('GitHub webhook secret unavailable')
-    return secret
   }
 }

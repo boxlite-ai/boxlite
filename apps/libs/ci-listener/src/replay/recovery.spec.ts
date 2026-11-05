@@ -199,6 +199,40 @@ for (const backend of ['sqlite', 'postgres'] as const) {
       stop = new AbortController()
       recovery = make()
     }
+    it('isolates two Apps delivery checkpoints and pending items in a shared namespace', async () => {
+      await until(scanned)
+      await recovery.close()
+      const [original] = await state.read([progressKey])
+      const second = new AppDeliveryRecovery({
+        state,
+        app: () => app,
+        prefix: 'replay-other/',
+        authorize: async (current) => {
+          await new ExecutionJournal(state).load(current)
+          return true
+        },
+        report,
+        now: () => clock,
+      })
+      const deadline = Date.now() + 3500
+      try {
+        let complete = false
+        while (Date.now() < deadline) {
+          second.step(lease, stop.signal)
+          const [row] = await state.read(['replay-other/progress'])
+          if (row && !progress(row, 'replay-other/').scan && progress(row, 'replay-other/').scanAt > clock) {
+            complete = true
+            break
+          }
+          await delay(1)
+        }
+        expect(complete).toBe(true)
+        expect(await state.read([progressKey])).toEqual([original])
+        expect(await state.read(['replay-other/item/' + guid1])).toHaveLength(1)
+      } finally {
+        await second.close()
+      }
+    })
     it('does not report a retention gap on the first boot when initialization advances the clock', async () => {
       const commit = state.commit.bind(state)
       const spy = jest.spyOn(state, 'commit').mockImplementation(async (owner, changes) => {

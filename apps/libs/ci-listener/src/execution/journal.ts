@@ -87,12 +87,20 @@ export class ExecutionJournal {
       .map((row) => scopes.get(row.value.scope)!.scope)
     return { index, scopes, allocations, workers }
   }
-  async define(lease: ExecutionLease, definition: ExecutionScope): Promise<string> {
+  async define(lease: ExecutionLease, definition: ExecutionScope, application?: string): Promise<string> {
     lease = { ...lease }
     const scope = decodeScope(definition),
       key = scopeKey(scope),
       snapshot = await this.load(lease)
-    if (snapshot.scopes.has(key)) return key
+    const appKey = 'app-scope/' + key.slice(6)
+    if (application !== undefined && !/^[A-Za-z0-9_-]{1,128}$/.test(application)) throw new StateCorrupt()
+    if (snapshot.scopes.has(key)) {
+      if (application !== undefined) {
+        const [owned] = await this.state.read([appKey])
+        if (!owned || !object(owned.payload) || owned.payload.application !== application) throw new StateCorrupt()
+      }
+      return key
+    }
     if (snapshot.scopes.size >= 10000) throw new Error('Listener scope history limit reached')
     await this.state.commit(lease, [
       {
@@ -101,6 +109,7 @@ export class ExecutionJournal {
         payload: { keys: [...snapshot.scopes.keys(), key].sort() },
       },
       { key, expected: null, payload: json({ scope, active: [] }) },
+      ...(application === undefined ? [] : [{ key: appKey, expected: null, payload: { application } }]),
     ])
     return key
   }

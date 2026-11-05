@@ -780,6 +780,11 @@ const configuration = {
     githubClientSecret: process.env.CI_GITHUB_APP_CLIENT_SECRET,
     githubAppSlug: process.env.CI_GITHUB_APP_SLUG,
     githubPrivateKey: process.env.CI_GITHUB_APP_PRIVATE_KEY,
+    githubOrgClientId: process.env.CI_GITHUB_ORG_APP_CLIENT_ID,
+    githubOrgClientSecret: process.env.CI_GITHUB_ORG_APP_CLIENT_SECRET,
+    githubOrgAppSlug: process.env.CI_GITHUB_ORG_APP_SLUG,
+    githubOrgPrivateKey: process.env.CI_GITHUB_ORG_APP_PRIVATE_KEY,
+    githubOrgWebhookSecret: process.env.CI_GITHUB_ORG_WEBHOOK_SECRET,
     secretEncryptionKey: process.env.CI_SECRET_ENCRYPTION_KEY,
   },
   encryption: {

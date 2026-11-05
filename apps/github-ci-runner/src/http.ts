@@ -2,7 +2,22 @@
 import { createServer, IncomingMessage, ServerResponse } from 'node:http'
 import { Listener, verifyWebhook, WebhookError } from '@boxlite-ai/ci-listener'
 import { SelfHost } from './self-host'
-export function createHttp(listener: Listener, host: Pick<SelfHost, 'discoveryReady' | 'report'>, secret?: Buffer) {
+export function createHttp(
+  listener: Listener,
+  host: Pick<SelfHost, 'discoveryReady' | 'report'>,
+  secret?: Buffer | ReadonlyMap<string, { application: string; secret: Buffer }>,
+) {
+  const routes = new Map<string, { application?: string; secret: Buffer }>()
+  if (Buffer.isBuffer(secret)) routes.set('/v1/ci/github/webhook', { secret: Buffer.from(secret) })
+  else if (secret)
+    for (const [path, value] of secret) {
+      if (
+        !/^\/v1\/ci\/github\/webhook(?:\/[A-Za-z0-9_-]{1,128})?$/.test(path) ||
+        !/^[A-Za-z0-9_-]{1,128}$/.test(value.application)
+      )
+        throw new Error('Invalid webhook App route')
+      routes.set(path, { application: value.application, secret: Buffer.from(value.secret) })
+    }
   let active = 0
   const tasks = new Set<Promise<void>>()
   const reply = (response: ServerResponse, status: number, body: object) => {
@@ -14,8 +29,8 @@ export function createHttp(listener: Listener, host: Pick<SelfHost, 'discoveryRe
   const handle = async (request: IncomingMessage, response: ServerResponse) => {
     if (request.method === 'GET' && request.url === '/healthz')
       return reply(response, 200, { process: 'running', discovery: host.discoveryReady ? 'ready' : 'pending' })
-    if (request.method !== 'POST' || request.url !== '/v1/ci/github/webhook' || !secret)
-      return reply(response, 404, { error: 'not_found' })
+    const selected = routes.get(request.url || '')
+    if (request.method !== 'POST' || !selected) return reply(response, 404, { error: 'not_found' })
     if (active >= 16) return reply(response, 503, { error: 'ingress_busy' })
     active++
     try {
@@ -40,9 +55,10 @@ export function createHttp(listener: Listener, host: Pick<SelfHost, 'discoveryRe
           delivery: header('x-github-delivery'),
           event: header('x-github-event'),
         },
-        secret,
+        selected.secret,
       )
       if (!event) return reply(response, 202, { status: 'ignored' })
+      if (selected.application) event.application = selected.application
       reply(response, 202, { status: await listener.receive(event) })
     } catch (error) {
       reply(response, error instanceof WebhookError ? error.status : 503, {

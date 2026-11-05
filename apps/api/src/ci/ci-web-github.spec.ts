@@ -11,7 +11,7 @@ describe('CI browser GitHub transport', () => {
     dashboardUrl: 'https://console.test',
   }
   const make = (overrides = {}) =>
-    new CiGitHubService({ get: (key: string) => ({ ...values, ...overrides })[key] } as any)
+    new CiGitHubService({ get: (key: string) => ({ ...values, ...overrides })[key] } as any).forType('User')
   afterEach(() => {
     global.fetch = original
   })
@@ -85,5 +85,32 @@ describe('CI browser GitHub transport', () => {
     expect(error.getStatus()).toBe(502)
     expect(JSON.stringify(error.getResponse())).not.toContain('private-upstream-secret')
     expect(JSON.stringify(error.getResponse())).not.toContain(values['ci.githubClientSecret'])
+  })
+  it('selects Organization OAuth credentials without falling back to the Personal App', async () => {
+    const config = {
+      ...values,
+      'ci.githubOrgClientId': 'organization-client',
+      'ci.githubOrgAppSlug': 'organization-app',
+      'ci.githubOrgPrivateKey': 'not-used-by-web-transport',
+      'ci.githubOrgClientSecret': 'private-organization-oauth-secret',
+    }
+    const registry = new CiGitHubService({ get: (key: string) => config[key] } as any)
+    global.fetch = jest.fn(async (address, options) => {
+      const url = new URL(String(address))
+      if (url.pathname === '/users/team')
+        return new Response(JSON.stringify({ id: 7, login: 'team', type: 'Organization' }))
+      expect(url.href).toBe('https://github.com/login/oauth/access_token')
+      expect(JSON.parse(String(options?.body))).toMatchObject({
+        client_id: 'organization-client',
+        client_secret: config['ci.githubOrgClientSecret'],
+      })
+      return new Response(JSON.stringify({ access_token: 'private-org-user-token' }))
+    }) as typeof fetch
+    const app = await registry.forAccount('team')
+    expect(app).toBe(registry.byClientId('organization-client'))
+    expect(new URL(app.authorizeWeb('state', 'A'.repeat(43))).searchParams.get('client_id')).toBe('organization-client')
+    expect(await app.exchangeWeb('code', 'A'.repeat(43))).toBe('private-org-user-token')
+    expect(registry.byClientId('app-client')).not.toBe(app)
+    expect(() => registry.byClientId('unknown')).toThrow('no longer configured')
   })
 })

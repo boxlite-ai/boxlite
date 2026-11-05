@@ -12,7 +12,7 @@ import {
   ValidationPipe,
 } from '@nestjs/common'
 import { ApiExcludeController } from '@nestjs/swagger'
-import { Equals, IsBoolean, IsString, Matches, MaxLength } from 'class-validator'
+import { Equals, IsBoolean, IsString, Matches, MaxLength, IsIn, IsInt, Min, Max } from 'class-validator'
 import { CombinedAuthGuard } from '../auth/combined-auth.guard'
 import { AuthenticatedRateLimitGuard } from '../common/guards/authenticated-rate-limit.guard'
 import { AuthContext } from '../common/decorators/auth-context.decorator'
@@ -33,6 +33,26 @@ export class CiConnectInput {
   follow_installation: true
   @IsBoolean()
   allow_public_repositories: boolean
+}
+
+export class CiWebConnectInput {
+  @IsIn(['User', 'Organization'])
+  account_type: 'User' | 'Organization'
+  @Equals(true)
+  follow_installation: true
+  @IsBoolean()
+  allow_public_repositories: boolean
+}
+export class CiWebSelectInput {
+  @IsInt()
+  @Min(1)
+  @Max(Number.MAX_SAFE_INTEGER)
+  installation_id: number
+}
+export class CiWebInstallInput extends CiWebSelectInput {
+  @IsString()
+  @Matches(/^[a-f0-9-]{36}\.[A-Za-z0-9_-]{43}$/)
+  state: string
 }
 
 export class CiWebCompleteInput {
@@ -70,7 +90,7 @@ export class CiConnectController {
 
   @Post('web')
   @RequiredOrganizationMemberRole(OrganizationMemberRole.OWNER)
-  startWeb(@AuthContext() actor: OrganizationAuthContext, @Body() body: CiConnectInput) {
+  startWeb(@AuthContext() actor: OrganizationAuthContext, @Body() body: CiWebConnectInput) {
     return this.service.startWeb(actor, body)
   }
 
@@ -82,6 +102,25 @@ export class CiConnectController {
     @Body() body: CiWebCompleteInput,
   ) {
     return this.service.completeWeb(actor, id, body)
+  }
+
+  @Post(':id/select')
+  @RequiredOrganizationMemberRole(OrganizationMemberRole.OWNER)
+  selectWeb(
+    @AuthContext() actor: OrganizationAuthContext,
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body() body: CiWebSelectInput,
+  ) {
+    return this.service.selectWeb(actor, id, body.installation_id)
+  }
+  @Post(':id/installation')
+  @RequiredOrganizationMemberRole(OrganizationMemberRole.OWNER)
+  completeInstallation(
+    @AuthContext() actor: OrganizationAuthContext,
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body() body: CiWebInstallInput,
+  ) {
+    return this.service.selectWeb(actor, id, body.installation_id, body.state)
   }
 
   @Post(':id/poll')

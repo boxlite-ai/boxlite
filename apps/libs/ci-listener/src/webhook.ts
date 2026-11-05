@@ -78,6 +78,8 @@ export function ciWakeHint(event: string, value: unknown): WakeHint | null {
   return { installationId: body.installation.id, accountId: body.installation.account.id, repositoryId: 0, job: null }
 }
 export interface VerifiedWebhook {
+  /** Trusted host provenance; verifyWebhook never reads this field from the body. */
+  application?: string
   delivery: string
   digest: string
   event: string

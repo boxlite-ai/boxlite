@@ -113,7 +113,7 @@ integration('CI native workers (shared lease, actual PostgreSQL and HTTP)', () =
     jest.spyOn(platform, 'toBoxDtoWithExitCode').mockImplementation(async (box) => ({ ...box }) as any)
     jest.spyOn(platform, 'stop').mockResolvedValue(undefined)
     jest.spyOn(platform, 'destroy').mockResolvedValue(undefined)
-    store = new CiNativeState(db, { get: () => app } as any)
+    store = new CiNativeState(db, { get: (key: string) => (key === 'ci.githubClientId' ? app : undefined) } as any)
     workers = new CiNativeWorkers(store, platform, organizations as any, limits as any, runners as any)
     server = createServer(async (req, res) => {
       try {

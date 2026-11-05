@@ -74,7 +74,9 @@ integration('CI account settings (real Postgres)', () => {
       otherOrg,
     ])
     commerce.resolveMaxCreatedBoxes.mockReset().mockResolvedValue(5)
-    native = new CiNativeState(db, { get: () => 'test-app' } as any)
+    native = new CiNativeState(db, {
+      get: (key: string) => (key === 'ci.githubClientId' ? 'test-app' : undefined),
+    } as any)
     await native.initialize()
     settings = new CiSettingsService(native, commerce as any)
     await settings.initialize()
@@ -240,7 +242,7 @@ integration('CI account settings (real Postgres)', () => {
     await connect(org, 11, 21, 'other')
     const journal = new ExecutionJournal(native.state),
       lease = (await native.state.acquire(randomUUID(), 30000))!
-    const key = await journal.define(lease, scope())
+    const key = await native.applications().define(lease, scope(), 'test-app')
     const budget = await settings.resolve({
       scope: scope(),
       repository: 30,
@@ -269,6 +271,7 @@ integration('CI account settings (real Postgres)', () => {
   it('rejects a stale scheduling lease and a missing permanent policy', async () => {
     await connect()
     const lease = (await native.state.acquire(randomUUID(), 30000))!
+    await native.applications().define(lease, scope(), 'test-app')
     const request = { scope: scope(), repository: 30, lease, signal: new AbortController().signal }
     await expect(settings.resolve({ ...request, lease: { ...lease, epoch: lease.epoch + 1 } })).rejects.toBeInstanceOf(
       LeaseLost,
@@ -282,11 +285,12 @@ integration('CI account settings (real Postgres)', () => {
   it('returns no policy while Commerce is unavailable or the lookup is aborted', async () => {
     await connect()
     const lease = (await native.state.acquire(randomUUID(), 30000))!
+    await native.applications().define(lease, scope(), 'test-app')
     const request = { scope: scope(), repository: 30, lease, signal: new AbortController().signal }
     commerce.resolveMaxCreatedBoxes.mockRejectedValueOnce(Error('Commerce unavailable'))
     await expect(settings.resolve(request)).rejects.toThrow('Commerce unavailable')
     await expect(settings.resolve({ ...request, signal: AbortSignal.abort() })).rejects.toThrow()
-    expect((await native.state.read(['catalog/scopes']))[0].payload).toEqual({ keys: [] })
+    expect((await new ExecutionJournal(native.state).load(lease)).allocations.size).toBe(0)
   })
   it('enforces the hosted account total across installations while leaving another account independent', async () => {
     await connect()
@@ -296,6 +300,7 @@ integration('CI account settings (real Postgres)', () => {
     const lease = (await native.state.acquire(randomUUID(), 30000))!
     const journal = new ExecutionJournal(native.state)
     const reserve = async (original: ExecutionScope) => {
+      await native.applications().define(lease, original, 'test-app')
       const repository = original.runners.kind === 'repository' ? original.runners.repository.id : 0
       const policy = await settings.resolve({
         scope: original,
@@ -336,9 +341,55 @@ integration('CI account settings (real Postgres)', () => {
     expect(await reserve(await makeScope(12, otherOrg, 'other-owner', 22, 'third'))).toBeDefined()
     expect((await journal.load(lease)).workers).toHaveLength(2)
   })
+  it('keeps Personal and Organization Apps under one native namespace and one account quota', async () => {
+    await connect()
+    await connect(org, 11, 21, 'team')
+    await db.query(
+      "UPDATE ci_installation_binding SET app_client_id='org-app',account_type='Organization' WHERE installation_id=11",
+    )
+    const config = {
+      get: (key: string) => ({ 'ci.githubClientId': 'test-app', 'ci.githubOrgClientId': 'org-app' })[key],
+    }
+    native = new CiNativeState(db, config as any)
+    await native.initialize()
+    settings = new CiSettingsService(native, commerce as any)
+    await settings.initialize()
+    await settings.update(actor, 1)
+    const lease = (await native.state.acquire(randomUUID(), 30000))!,
+      journal = new ExecutionJournal(native.state)
+    const [binding] = await db.query('SELECT id FROM ci_installation_binding WHERE installation_id=11')
+    const organization: ExecutionScope = {
+      ...scope(),
+      binding: binding.id,
+      installation: { id: 11, account: { id: 21, login: 'team', type: 'Organization' } },
+      runners: {
+        kind: 'organization',
+        account: { id: 21, login: 'team' },
+        group: 9,
+        repositories: [31],
+        allowPublic: false,
+      },
+    }
+    const first = await native.applications().define(lease, scope(), 'test-app')
+    const second = await native.applications().define(lease, organization, 'org-app')
+    const reserve = async (original: ExecutionScope, key: string, repository: number) => {
+      const policy = await settings.resolve({
+        scope: original,
+        repository,
+        lease,
+        signal: new AbortController().signal,
+      })
+      return journal.reserve(lease, key, { repository, run: 40, job: repository }, policy)
+    }
+    expect(await reserve(scope(), first, 30)).toBeDefined()
+    expect(await reserve(organization, second, 31)).toBeUndefined()
+    expect((await settings.get(actor)).connections).toHaveLength(2)
+    expect((await journal.load(lease)).workers).toHaveLength(1)
+  })
   it('waits when ordinary created Boxes occupy Commerce capacity, and resumes after one is removed', async () => {
     await connect()
     const lease = (await native.state.acquire(randomUUID(), 30000))!
+    await native.applications().define(lease, scope(), 'test-app')
     const ids = Array.from({ length: 5 }, () => randomUUID())
     for (const id of ids) await db.query('INSERT INTO box VALUES($1,$2,$3)', [id, org, BoxState.STOPPED])
     expect(
@@ -355,6 +406,7 @@ integration('CI account settings (real Postgres)', () => {
     await connect()
     commerce.resolveMaxCreatedBoxes.mockResolvedValue(1)
     const lease = (await native.state.acquire(randomUUID(), 30000))!
+    await native.applications().define(lease, scope(), 'test-app')
     for (const state of [
       BoxState.ERROR,
       BoxState.DESTROYING,
