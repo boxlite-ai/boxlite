@@ -238,7 +238,7 @@ reboot=k` turns a panic, and the restart, into the i8042 reset.
 The Unix-only `virtio::vsock` module provides the wire codec, captured writable
 guest buffers and registered Unix socket sources. The connection state machine,
 backend routing, device facade and snapshots are subsequent layers of the
-[vsock design](../../docs/contributing/investigations/2026-11-02-virtio-vsock.md).
+[vsock design](https://github.com/boxlite-ai/boxlite/issues/2312).
 There is no attached vsock device at this layer.
 
 The codec uses explicit little-endian fields and rejects truncated packets or
