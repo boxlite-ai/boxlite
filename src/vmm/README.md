@@ -233,6 +233,24 @@ The boot with every interrupt dropped and the stopped boot end in
 `StopRequested`. Every other boot must end in `GuestReset`: `panic=-1
 reboot=k` turns a panic, and the restart, into the i8042 reset.
 
+## Vsock building blocks
+
+The Unix-only `virtio::vsock` module provides the wire codec, captured writable
+guest buffers and registered Unix socket sources. The connection state machine,
+backend routing, device facade and snapshots are subsequent layers of the
+[vsock design](../../docs/contributing/investigations/2026-11-02-virtio-vsock.md).
+There is no attached vsock device at this layer.
+
+The codec uses explicit little-endian fields and rejects truncated packets or
+payloads above 64 KiB. A captured buffer owns checked descriptor metadata and
+uses the chain's total capacity: a 4096-byte chain writes a 44-byte header and
+up to 4052 stream bytes. The caller retains any unsent tail. Header-only buffers
+can carry controls; data returns zero bytes, while shorter headers require reset.
+Registered sources keep their poller interests and deregister on drop.
+
+`make test:unit:vmm FILTER=vsock` checks encoding, packet bounds, guest-memory
+scatter delivery and real Unix socket readiness and registration cleanup.
+
 ## Lifecycle
 
 `Vm::run` runs on x86_64, against any backend that implements

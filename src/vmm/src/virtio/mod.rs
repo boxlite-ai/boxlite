@@ -29,6 +29,9 @@ pub(crate) mod mmio;
 pub(crate) mod queue;
 pub(crate) mod worker;
 
+#[cfg(unix)]
+pub(crate) mod vsock;
+
 /// The largest number of queues a device may declare.
 pub(crate) const MAX_QUEUES: usize = 16;
 /// The largest configuration space a device may declare.
