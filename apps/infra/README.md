@@ -24,7 +24,7 @@ Each cloud has its own architecture and operational procedures; the shared tools
 - [mdeploy](mdeploy/README.md): engine selection, inputs, intent and protection.
 - [Release runbook](docs/release.md): tag a version, publish its application images and roll it out to prod.
 - [Observability configuration](docs/clickhouse.md), [Auth0 login and branding](docs/identity-and-mail.md), and [status page](docs/status-page.md).
-- [Stable launchers](scripts/README.md) and [Auth0 assets](auth0/branding/ASSETS.md).
+- [Stable launchers](scripts/README.md) and [Auth0 assets](auth0/branding/README.md).
 
 ## Deploy an existing stack
 

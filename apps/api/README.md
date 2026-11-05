@@ -412,7 +412,7 @@ for the source evidence, concurrency model and verification boundaries.
 
 ## Onboarding persistence
 
-See [organization onboarding](src/organization/ONBOARDING.md) for the profile, personal prompt
+See [organization onboarding](onboarding.md) for the profile, personal prompt
 draft and idempotent handoff API contracts, migration order, and frontend integration behavior.
 
 ## Retention-policy reads and login activity
