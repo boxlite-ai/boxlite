@@ -86,7 +86,7 @@ async function click(text: string) {
   await act(async () => target!.click())
 }
 
-async function mount(expectedButton = 'Verify card & claim $100') {
+async function renderStep() {
   await act(async () => {
     root.render(
       <QueryClientProvider client={client}>
@@ -94,6 +94,10 @@ async function mount(expectedButton = 'Verify card & claim $100') {
       </QueryClientProvider>,
     )
   })
+}
+
+async function mount(expectedButton = 'Verify card & claim $100') {
+  await renderStep()
   await eventually(() => expect(button(expectedButton)?.disabled).toBe(false))
 }
 
@@ -140,6 +144,38 @@ it('lets a member explore without reading or changing organization billing', asy
   expect(billingApi.listAllPaymentMethods).not.toHaveBeenCalled()
   expect(billingApi.getOrganizationCheckoutUrl).not.toHaveBeenCalled()
   expect(billingApi.redeemCoupon).not.toHaveBeenCalled()
+})
+
+it('hides cached card details when the owner becomes a member', async () => {
+  billingApi.getOrganizationWallet.mockResolvedValue({ ...wallet, creditCardConnected: true })
+  billingApi.listAllPaymentMethods.mockResolvedValue([
+    { id: 'card-default', isDefault: true, details: { brand: 'visa', last4: '4242' } },
+  ])
+  await mount('Start quickstart')
+  expect(host.textContent).toContain('visa ending in 4242')
+  const walletReads = billingApi.getOrganizationWallet.mock.calls.length
+  const methodReads = billingApi.listAllPaymentMethods.mock.calls.length
+
+  membership.role = 'member'
+  await renderStep()
+  expect(host.textContent).not.toContain('visa ending in 4242')
+  expect(host.textContent).not.toContain('Card connected')
+  expect(host.textContent).toContain('Only organization owners can manage billing.')
+  expect(button('Explore with BoxLite')).toBeDefined()
+  await focusWindow()
+  expect(billingApi.getOrganizationWallet).toHaveBeenCalledTimes(walletReads)
+  expect(billingApi.listAllPaymentMethods).toHaveBeenCalledTimes(methodReads)
+})
+
+it('exposes the complete offer amount as text outside aria-hidden artwork', async () => {
+  await mount()
+  const amount = [...host.querySelectorAll('p')].find((paragraph) =>
+    [...paragraph.querySelectorAll('span')].some((span) => span.textContent?.trim() === '100'),
+  )!
+  const readableAmount = amount.cloneNode(true) as HTMLElement
+  readableAmount.querySelectorAll('[aria-hidden="true"]').forEach((node) => node.remove())
+  expect(readableAmount.textContent?.trim()).toBe('$100')
+  expect(amount.hasAttribute('aria-label')).toBe(false)
 })
 
 it('shows the existing default card instead of the first saved payment method', async () => {
@@ -222,6 +258,19 @@ it('offers a card-status retry after a failed return read without treating check
   await eventually(() => expect(host.textContent).toContain('Card connected'))
 })
 
+it('keeps focus in place when a window-focus refresh detects a connected card', async () => {
+  await mount()
+  const navigation = document.createElement('button')
+  navigation.textContent = 'Navigation'
+  host.append(navigation)
+  navigation.focus()
+  expect(document.activeElement).toBe(navigation)
+  billingApi.getOrganizationWallet.mockResolvedValue({ ...wallet, creditCardConnected: true })
+  await focusWindow()
+  await eventually(() => expect(host.textContent).toContain('Card connected'))
+  expect(document.activeElement).toBe(navigation)
+})
+
 it('requires a promo code before sending a redemption and clears the error when editing', async () => {
   await mount()
   await click('Redeem')
@@ -275,6 +324,18 @@ it('redeems the entered code and shows the server message without declaring a cr
   expect(host.textContent).not.toContain('Card connected')
   expect(button('Start quickstart')).toBeDefined()
   expect(onContinue).not.toHaveBeenCalled()
+})
+
+it('moves keyboard focus to the success heading after redeeming a promo code', async () => {
+  billingApi.redeemCoupon.mockResolvedValue('Promotion accepted for this organization.')
+  await mount()
+  await enterPromo('TeamDiscount')
+  promoInput().focus()
+  expect(document.activeElement).toBe(promoInput())
+  await act(async () => promoInput().form!.requestSubmit())
+  await eventually(() => expect(host.querySelector('h2')?.textContent).toBe('Promo code redeemed'))
+  expect(promoInput()).toBeNull()
+  expect(document.activeElement).toBe(host.querySelector('h2'))
 })
 
 it('keeps the entered promo code after a refusal and allows another submission', async () => {

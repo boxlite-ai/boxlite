@@ -1,5 +1,5 @@
 /* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
-import { useCallback, useEffect, useState, type Ref } from 'react'
+import { useCallback, useEffect, useRef, useState, type Ref } from 'react'
 import { AsciiButton } from '@/components/ascii'
 import { ArrowRightIcon, Check, CreditCardIcon, Loader2 } from '@/components/ui/icon'
 import { useConnectCard } from '@/hooks/useConnectCard'
@@ -73,7 +73,8 @@ export default function WelcomeCreditsStep({
   const [couponError, setCouponError] = useState<string | null>(null)
   const [couponMessage, setCouponMessage] = useState<string | null>(null)
   const [checkoutStarted, setCheckoutStarted] = useState(false)
-  const connected = !wallet.isError && wallet.data?.creditCardConnected === true
+  const successHeading = useRef<HTMLHeadingElement>(null)
+  const connected = isOwner && !wallet.isError && wallet.data?.creditCardConnected === true
   const ready = connected || couponMessage !== null
   const busy = connecting || redeem.isPending
   const purpose = PURPOSE[useCase ?? 'exploring']
@@ -92,6 +93,10 @@ export default function WelcomeCreditsStep({
     return () => window.removeEventListener('focus', refreshCard)
   }, [refreshCard])
 
+  useEffect(() => {
+    if (couponMessage !== null) successHeading.current?.focus()
+  }, [couponMessage])
+
   return (
     <section aria-label="Get credits" className="grid gap-9 lg:grid-cols-[1.2fr_1fr] lg:gap-16">
       <div>
@@ -109,7 +114,8 @@ export default function WelcomeCreditsStep({
         {!ready && (
           <>
             <p className="font-mono text-label text-muted-foreground">WELCOME CREDIT</p>
-            <p className="mt-5 flex items-start tracking-[-0.06em]" aria-label="$100">
+            <p className="mt-5 flex items-start tracking-[-0.06em]">
+              <span className="sr-only">$100</span>
               <span aria-hidden className="mr-1.5 mt-2 text-[32px] font-normal leading-none sm:mt-3 sm:text-[40px]">
                 $
               </span>
@@ -122,7 +128,9 @@ export default function WelcomeCreditsStep({
         )}
         {ready && (
           <>
-            <h2 className="mt-3 text-em font-medium">{couponMessage ? 'Promo code redeemed' : 'Card connected'}</h2>
+            <h2 ref={successHeading} tabIndex={-1} className="mt-3 text-em font-medium">
+              {couponMessage ? 'Promo code redeemed' : 'Card connected'}
+            </h2>
             <p className="mt-7 text-sm leading-6 text-muted-foreground">
               {couponMessage ?? 'Choose how you want to build. Your first Box is next.'}
             </p>

@@ -37,16 +37,23 @@ that confirmation is local form state. The organization API continues to save th
 
 Card setup shares Wallet's `useConnectCard` operation: open a tab on the click,
 fetch `GET /organization/{id}/checkout-url`, and navigate that tab to Stripe.
+If the browser blocks the tab, a persistent notification provides an Open Stripe
+link to the returned checkout page.
 An unsuccessful request closes the empty tab and shows the existing error toast.
 Returning to Welcome refreshes the wallet and payment methods, including data
 still inside the ordinary five-minute cache window. A connected card is confirmed
 by `creditCardConnected`; opening or closing Stripe is not confirmation.
+Card status and saved-card details are visible only to the current owner, even
+when the query cache retains data from an earlier owner session.
 
 Promo submission uses `useRedeemCouponMutation` with the entered code unchanged.
+The shared billing client encodes the code as one URL path segment, preserving
+characters such as `#`, `?`, `/`, and `%` in both Welcome and Wallet requests.
 The shared mutation refreshes wallet, transactions, invoices, plan, and usage.
 The response supplies a message, not a redemption amount; the success panel displays
-that message. Card success says Card connected. Neither success state asserts
-reward delivery. Reward processing belongs to the billing service.
+that message and receives keyboard focus after redemption. Card-status refreshes
+leave keyboard focus in place. Card success says Card connected. Neither success
+state asserts reward delivery. Reward processing belongs to the billing service.
 
 Start quickstart and Explore with BoxLite record `completedAt` under the existing
 user-and-organization storage key. Completion is independent of wallet balance.

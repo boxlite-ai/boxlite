@@ -2,7 +2,7 @@
 /* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import axios, { type InternalAxiosRequestConfig } from 'axios'
-import { act } from 'react'
+import { act, isValidElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { toast } from 'sonner'
@@ -18,7 +18,7 @@ vi.mock('./useSelectedOrganization', () => ({
     authenticatedUserOrganizationMember: { role: 'owner' },
   }),
 }))
-vi.mock('sonner', () => ({ toast: { error: vi.fn() } }))
+vi.mock('sonner', () => ({ toast: { error: vi.fn(), info: vi.fn() } }))
 
 const originalAdapter = axios.defaults.adapter
 let current: ReturnType<typeof useConnectCard>
@@ -98,6 +98,7 @@ it('opens Stripe with the selected organization checkout URL after opening a bla
   expect(checkoutWindow.close).not.toHaveBeenCalled()
   expect(current.isPending).toBe(false)
   expect(toast.error).not.toHaveBeenCalled()
+  expect(toast.info).not.toHaveBeenCalled()
 })
 
 it('closes the blank tab and reports a checkout failure', async () => {
@@ -157,5 +158,40 @@ it.each(['success', 'failure'])('settles a checkout %s when the browser blocks t
     expect(toast.error).toHaveBeenCalledWith('Failed to fetch checkout url', {
       description: expect.stringContaining('Billing unavailable'),
     })
+    expect(toast.info).not.toHaveBeenCalled()
   } else expect(toast.error).not.toHaveBeenCalled()
+})
+
+it('offers the returned Stripe link when the browser blocks the checkout tab', async () => {
+  vi.mocked(window.open).mockReturnValue(null)
+  let pending!: Promise<void>
+  await act(async () => {
+    pending = current.connectCard()
+    await Promise.resolve()
+  })
+  await act(async () => {
+    complete('https://checkout.stripe.com/c/pay/cs_test_blocked')
+    await pending
+  })
+
+  expect(toast.info).toHaveBeenCalledOnce()
+  const options = vi.mocked(toast.info).mock.calls[0][1]
+  expect(options).toMatchObject({ duration: Infinity, closeButton: true })
+  const action = options?.action
+  expect(isValidElement(action)).toBe(true)
+  if (!isValidElement(action)) throw new Error('Expected a checkout link')
+  const host = document.createElement('div')
+  const actionRoot = createRoot(host)
+  try {
+    await act(async () => actionRoot.render(action))
+    const link = host.querySelector('a')
+    expect(link?.textContent).toBe('Open Stripe')
+    expect(link?.href).toBe('https://checkout.stripe.com/c/pay/cs_test_blocked')
+    expect(link?.target).toBe('_blank')
+    expect(link?.rel).toBe('noopener noreferrer')
+  } finally {
+    await act(async () => actionRoot.unmount())
+  }
+  expect(requests).toHaveLength(1)
+  expect(toast.error).not.toHaveBeenCalled()
 })
