@@ -86,7 +86,6 @@ export class NotificationGateway extends NotificationEmitter implements OnGatewa
         const authContext = await this.apiKeyStrategy.validate(token)
 
         if (isAuthContext(authContext)) {
-          if (authContext.apiKey?.cloudAppId) return next(new UnauthorizedException())
           // Join the user room for user scoped notifications
           await socket.join(authContext.userId)
           await this.joinOrganizationRoomAsMember(socket, authContext.userId, authContext.organizationId)

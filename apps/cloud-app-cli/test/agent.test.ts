@@ -1,9 +1,7 @@
 import assert from 'node:assert/strict'
-import { after, before, beforeEach, test } from 'node:test'
+import { after, before, test } from 'node:test'
 import type { AgentContext } from '@boxlite-ai/cloud-app-shared'
-import { clearResolvedApps } from '../src/context.js'
-import { mkdtemp, stat, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { readFile, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { API, BASE_TOML, cleanup, cli, JSON_HEADERS, KEY, linkJson, mockApi, project, tempDir } from './helpers.js'
 
@@ -12,17 +10,30 @@ before(async () => {
   root = await tempDir()
 })
 after(async () => cleanup(root))
-beforeEach(() => clearResolvedApps())
-
 const NOW = new Date().toISOString()
-const WHOAMI = {
-  app: 'crm',
-  actor: `key:…${KEY.slice(-4)}`,
-  key: { last4: KEY.slice(-4), created_at: '2026-10-20T10:00:00.000Z' },
-  scope: 'app:crm',
-  environments: [{ name: 'main', status: 'live', url: 'https://cp.test/crm' }],
-  control_plane: 'https://cp.test',
-  cli: { latest_version: '0.9.0', download_url: 'https://cp.test/cli/boxlite-app.tgz' },
+const ORG_PATH = '/api/v1/org-1'
+const ORG_API = API + ORG_PATH
+const ORG_ENV = { BOXLITE_API_KEY: KEY, BOXLITE_API_URL: ORG_API }
+const IDENTITY = { sub: 'user-1', path_prefix: 'org-1' }
+const CLI_RELEASE = {
+  version: '0.9.0',
+  url: 'https://api.test/api/internal/apps/artifacts/release-1/boxlite-app.tgz',
+}
+const APP_INFO = { name: 'crm', envs: [{ name: 'main', status: 'live', url: 'https://cp.test/crm' }] }
+const orgLink = (base_version = 1) => JSON.stringify({ app: 'crm', env: 'main', base_version, api_url: ORG_API })
+
+function organizationIdentity(pool: ReturnType<typeof mockApi>['pool'], count = 1) {
+  pool
+    .intercept({ path: '/api/v1/me', method: 'GET', headers: { authorization: `Bearer ${KEY}` } })
+    .reply(200, IDENTITY, { headers: JSON_HEADERS })
+    .times(count)
+}
+
+function orgCliVersion(pool: ReturnType<typeof mockApi>['pool'], count = 1) {
+  pool
+    .intercept({ path: `${ORG_PATH}/cli/version`, method: 'GET' })
+    .reply(200, CLI_RELEASE, { headers: JSON_HEADERS })
+    .times(count)
 }
 
 function context(over: Partial<AgentContext> = {}): AgentContext {
@@ -83,55 +94,64 @@ function context(over: Partial<AgentContext> = {}): AgentContext {
   }
 }
 
-test('whoami: app, key scope, env, control plane, and a newer CLI', async () => {
-  const dir = await project(root, { '.boxlite/link.json': linkJson(1) })
+test('whoami reports the organization and the linked App independently', async () => {
+  const dir = await project(root, { '.boxlite/link.json': orgLink() })
   const { agent, pool } = mockApi()
-  pool.intercept({ path: '/apps/crm/whoami', method: 'GET' }).reply(200, WHOAMI, { headers: JSON_HEADERS }).times(2)
-  const human = await cli(['whoami'], { cwd: dir, dispatcher: agent })
+  organizationIdentity(pool, 2)
+  orgCliVersion(pool, 2)
+  pool
+    .intercept({ path: `${ORG_PATH}/apps/crm`, method: 'GET' })
+    .reply(200, APP_INFO, { headers: JSON_HEADERS })
+    .times(2)
+  const opts = { cwd: dir, dispatcher: agent, env: { BOXLITE_API_KEY: KEY } }
+  const human = await cli(['whoami'], opts)
   assert.equal(human.code, 0, human.stderr)
   assert.deepEqual(human.lines, [
-    `App crm · environment main · key …${KEY.slice(-4)} (scope: this App only)`,
-    'Control plane https://cp.test (via http://cp.test)',
+    `Organization org-1 · key …${KEY.slice(-4)}`,
+    `Control plane ${ORG_API}`,
+    'App crm · environment main',
     'Environments main live',
     'CLI 0.3.14 (latest 0.9.0)',
-    'next: update the CLI: `npm install -g https://cp.test/cli/boxlite-app.tgz`',
+    `next: update the CLI: \`npm install -g ${CLI_RELEASE.url}\``,
   ])
-  const json = JSON.parse((await cli(['whoami', '--json'], { cwd: dir, dispatcher: agent })).stdout)
+  const json = JSON.parse((await cli(['whoami', '--json'], opts)).stdout)
   assert.deepEqual(json.cli, {
     version: '0.3.14',
     latest_version: '0.9.0',
     update_available: true,
-    update_command: 'npm install -g https://cp.test/cli/boxlite-app.tgz',
+    update_command: `npm install -g ${CLI_RELEASE.url}`,
   })
-  assert.deepEqual(json.linked, { link_file: true, app: 'crm', matches_key: true })
+  assert.equal(json.organization_id, 'org-1')
+  assert.equal(json.scope, 'organization')
+  assert.deepEqual(json.linked, { link_file: true, app: 'crm' })
+  agent.assertNoPendingInterceptors()
 })
 
-test('an organization API base keeps its prefix and uses the published CLI artifact URL', async () => {
+test('whoami without an App still uses the published CLI artifact URL', async () => {
   const dir = await project(root, {})
   const { agent, pool } = mockApi()
-  const artifact = 'https://api.test/api/internal/apps/artifacts/release-1/boxlite-app.tgz'
-  pool
-    .intercept({ path: '/api/v1/org-1/apps/me/whoami', method: 'GET' })
-    .reply(200, { ...WHOAMI, cli: { latest_version: '0.9.0', download_url: artifact } }, { headers: JSON_HEADERS })
+  organizationIdentity(pool)
+  orgCliVersion(pool)
   const result = await cli(['whoami', '--json'], {
     cwd: dir,
-    env: { BOXLITE_API_KEY: KEY, BOXLITE_API_URL: API + '/api/v1/org-1' },
+    env: ORG_ENV,
     dispatcher: agent,
   })
   assert.equal(result.code, 0, result.stderr)
-  assert.equal(JSON.parse(result.stdout).cli.update_command, `npm install -g ${artifact}`)
+  const info = JSON.parse(result.stdout)
+  assert.equal(info.app, null)
+  assert.equal(info.organization_id, 'org-1')
+  assert.equal(info.cli.update_command, `npm install -g ${CLI_RELEASE.url}`)
+  agent.assertNoPendingInterceptors()
 })
 
-test('whoami flags a foreign link.json using the App scope returned by the API', async () => {
-  const dir = await project(root, {
-    '.boxlite/link.json': JSON.stringify({ app: 'other', env: 'main', base_version: 0, api_url: 'http://cp.test' }),
-  })
-  const { agent, pool } = mockApi()
-  pool.intercept({ path: '/apps/other/whoami', method: 'GET' }).reply(200, WHOAMI, { headers: JSON_HEADERS })
-  const res = await cli(['whoami'], { cwd: dir, dispatcher: agent })
-  assert.equal(res.code, 0, res.stderr)
-  assert.equal(res.lines.at(-2), 'warning: .boxlite/link.json is linked to "other", but this key belongs to "crm"')
-  assert.match(res.lines.at(-1) ?? '', /^next: use the key of other, or relink/)
+test('an explicit App cannot reuse another linked App project', async () => {
+  const dir = await project(root, { '.boxlite/link.json': orgLink() })
+  const { agent } = mockApi()
+  const res = await cli(['init', '--app', 'other', '--json'], { cwd: dir, dispatcher: agent, env: ORG_ENV })
+  assert.equal(JSON.parse(res.stderr).error.code, 'invalid_link')
+  assert.match(res.stderr, /linked to crm, but --app selects other/)
+  assert.equal(await readFile(join(dir, '.boxlite/link.json'), 'utf8'), orgLink())
 })
 
 test('docs lists topics, prints one offline, follows aliases, and filters the reference', async () => {
@@ -195,10 +215,15 @@ test('doctor runs local and online checks and ranks the problems with fixes', as
     'package.json': '{}',
     'migrations/0001_init.sql': 'create table deals (id int);',
     'migrations/0002_more.sql': 'alter table deals add column x int;',
-    '.boxlite/link.json': linkJson(2),
+    '.boxlite/link.json': orgLink(2),
   })
   const { agent, pool } = mockApi()
-  pool.intercept({ path: '/apps/crm/whoami', method: 'GET' }).reply(200, WHOAMI, { headers: JSON_HEADERS }).times(2)
+  organizationIdentity(pool, 2)
+  orgCliVersion(pool, 2)
+  pool
+    .intercept({ path: `${ORG_PATH}/apps/crm`, method: 'GET' })
+    .reply(200, APP_INFO, { headers: JSON_HEADERS })
+    .times(2)
   const failed = context({
     deployments: [
       {
@@ -221,16 +246,16 @@ test('doctor runs local and online checks and ranks the problems with fixes', as
     ],
   })
   pool
-    .intercept({ path: '/apps/crm/envs/main/context', method: 'GET' })
+    .intercept({ path: `${ORG_PATH}/apps/crm/envs/main/context`, method: 'GET' })
     .reply(200, failed, { headers: JSON_HEADERS })
     .times(2)
   const sha = (await import('node:crypto')).createHash('sha256').update('create table deals (id int);').digest('hex')
   pool
-    .intercept({ path: '/apps/crm/envs/main/db/applied', method: 'GET' })
+    .intercept({ path: `${ORG_PATH}/apps/crm/envs/main/db/applied`, method: 'GET' })
     .reply(200, [{ file: '0001_init.sql', sha256: sha, deployment: 2, applied_at: NOW }], { headers: JSON_HEADERS })
     .times(2)
   pool
-    .intercept({ path: '/apps/crm/envs/main/probe', method: 'GET' })
+    .intercept({ path: `${ORG_PATH}/apps/crm/envs/main/probe`, method: 'GET' })
     .reply(
       200,
       {
@@ -248,7 +273,8 @@ test('doctor runs local and online checks and ranks the problems with fixes', as
     )
     .times(2)
 
-  const json = await cli(['doctor', '--json'], { cwd: dir, dispatcher: agent })
+  const opts = { cwd: dir, dispatcher: agent, env: ORG_ENV }
+  const json = await cli(['doctor', '--json'], opts)
   assert.equal(json.code, 0, json.stderr)
   const report = JSON.parse(json.stdout)
   assert.equal(report.ok, false)
@@ -268,7 +294,7 @@ test('doctor runs local and online checks and ranks the problems with fixes', as
   assert.equal(checks.reachable, 'ok')
   assert.equal(checks.database, 'ok')
 
-  const human = await cli(['doctor'], { cwd: dir, dispatcher: agent })
+  const human = await cli(['doctor'], opts)
   assert.equal(human.lines[0], 'Doctor · crm/main · CLI 0.3.14')
   assert.match(
     human.lines[1] ?? '',
@@ -281,9 +307,9 @@ test('doctor with a rejected key reports it first and skips the online checks', 
   const dir = await project(root, { 'boxlite.toml': BASE_TOML, 'package-lock.json': '{}', 'package.json': '{}' })
   const { agent, pool } = mockApi()
   pool
-    .intercept({ path: '/apps/me/whoami', method: 'GET' })
-    .reply(401, { error: { code: 'unauthenticated', message: 'App key not recognised' } }, { headers: JSON_HEADERS })
-  const res = await cli(['doctor', '--json'], { cwd: dir, dispatcher: agent })
+    .intercept({ path: '/api/v1/me', method: 'GET' })
+    .reply(401, { message: 'Invalid credentials', statusCode: 401 }, { headers: JSON_HEADERS })
+  const res = await cli(['doctor', '--json'], { cwd: dir, dispatcher: agent, env: ORG_ENV })
   assert.equal(res.code, 0, res.stderr)
   const report = JSON.parse(res.stdout)
   assert.deepEqual(
@@ -294,136 +320,109 @@ test('doctor with a rejected key reports it first and skips the online checks', 
   assert.ok(report.checks.some((c: { id: string; status: string }) => c.id === 'online' && c.status === 'skipped'))
 })
 
-test('login saves the key once; later commands without BOXLITE_API_KEY use it; logout forgets it', async () => {
+test('one organization login supplies the key for multiple Apps, and logout forgets it', async () => {
   const dir = await project(root, {})
-  const config = await mkdtemp(join(tmpdir(), 'blcfg-'))
+  const config = await project(root, {})
   const { agent, pool } = mockApi()
-  pool
-    .intercept({ path: '/apps/me/whoami', method: 'GET', headers: { authorization: `Bearer ${KEY}` } })
-    .reply(200, WHOAMI, { headers: JSON_HEADERS })
-    .times(3)
+  organizationIdentity(pool, 2)
+  orgCliVersion(pool)
   const login = await cli(['login', '--json'], {
     cwd: dir,
     dispatcher: agent,
-    env: { BOXLITE_API_URL: API, BOXLITE_API_KEY: KEY, BOXLITE_CONFIG_DIR: config },
+    env: { ...ORG_ENV, BOXLITE_CONFIG_DIR: config },
   })
   assert.equal(login.code, 0, login.stderr)
   assert.ok(!login.stdout.includes(KEY), 'the key is never printed')
+  assert.equal(JSON.parse(login.stdout).organization_id, 'org-1')
   const saved = join(config, 'credentials.json')
   assert.equal((await stat(saved)).mode & 0o777, 0o600, 'readable by the user only')
+  assert.deepEqual(Object.keys(JSON.parse(await readFile(saved, 'utf8')).profiles), [ORG_API])
 
-  // A new shell: no key, no URL in the environment.
-  const later = await cli(['whoami', '--json'], { cwd: dir, dispatcher: agent, env: { BOXLITE_CONFIG_DIR: config } })
+  const opts = { cwd: dir, dispatcher: agent, env: { BOXLITE_CONFIG_DIR: config } }
+  const later = await cli(['whoami', '--json'], opts)
   assert.equal(later.code, 0, later.stderr)
-  assert.equal(JSON.parse(later.stdout).app, 'crm')
-
-  assert.equal((await cli(['logout'], { cwd: dir, dispatcher: agent, env: { BOXLITE_CONFIG_DIR: config } })).code, 0)
-  const after = await cli(['whoami', '--json'], { cwd: dir, dispatcher: agent, env: { BOXLITE_CONFIG_DIR: config } })
+  assert.equal(JSON.parse(later.stdout).app, null)
+  for (const app of ['crm', 'ledger']) {
+    pool
+      .intercept({
+        path: `${ORG_PATH}/apps/${app}/envs/main/services`,
+        method: 'GET',
+        headers: { authorization: `Bearer ${KEY}` },
+      })
+      .reply(200, [], { headers: JSON_HEADERS })
+    const services = await cli(['app', 'services', '--app', app, '--json'], opts)
+    assert.equal(services.code, 0, services.stderr)
+  }
+  assert.equal((await cli(['logout'], opts)).code, 0)
+  const after = await cli(['whoami', '--json'], { ...opts, env: { ...opts.env, BOXLITE_API_URL: ORG_API } })
   assert.equal(JSON.parse(after.stderr).error.code, 'unauthenticated', 'nothing saved any more')
+  agent.assertNoPendingInterceptors()
 })
 
-test('login rejects an App name that does not match the scope returned by the API', async () => {
+test('login rejects a key issued for another organization', async () => {
   const dir = await project(root, {})
-  const config = await mkdtemp(join(tmpdir(), 'blcfg-'))
+  const config = await project(root, {})
   const { agent, pool } = mockApi()
   pool
-    .intercept({ path: '/apps/me/whoami', method: 'GET' })
-    .reply(200, { ...WHOAMI, scope: 'app:other' }, { headers: JSON_HEADERS })
+    .intercept({ path: '/api/v1/me', method: 'GET' })
+    .reply(200, { ...IDENTITY, path_prefix: 'org-2' }, { headers: JSON_HEADERS })
   const result = await cli(['login', '--json'], {
     cwd: dir,
     dispatcher: agent,
-    env: { BOXLITE_API_URL: API, BOXLITE_API_KEY: KEY, BOXLITE_CONFIG_DIR: config },
+    env: { ...ORG_ENV, BOXLITE_CONFIG_DIR: config },
   })
   assert.equal(JSON.parse(result.stderr).error.code, 'forbidden')
   await assert.rejects(stat(join(config, 'credentials.json')), { code: 'ENOENT' })
 })
 
-test("with keys of two Apps saved, a folder that names no App never borrows the other App's key", async () => {
+test('two saved organizations require an API URL, and a project link selects the matching key', async () => {
   const dir = await project(root, {})
-  const config = await mkdtemp(join(tmpdir(), 'blcfg-'))
-  const OTHER = 'blk_live_other_0123456789abcdef'
-  const profile = (app: string, key: string) => ({ api_url: API, app, key, saved_at: '2026-10-24T00:00:00.000Z' })
-  // ledger logged in last, from another agent's session on the same machine.
-  await writeFile(
-    join(config, 'credentials.json'),
-    JSON.stringify({
-      profiles: { [`${API}|crm`]: profile('crm', KEY), [`${API}|ledger`]: profile('ledger', OTHER) },
-      last: `${API}|ledger`,
-    }),
-  )
+  const config = await project(root, {})
+  const other = 'blk_live_' + 'b'.repeat(32)
   const { agent, pool } = mockApi()
+  organizationIdentity(pool, 2)
+  orgCliVersion(pool)
   pool
-    .intercept({ path: '/apps/crm/whoami', method: 'GET', headers: { authorization: `Bearer ${KEY}` } })
-    .reply(200, WHOAMI, { headers: JSON_HEADERS })
+    .intercept({ path: '/api/v1/me', method: 'GET', headers: { authorization: `Bearer ${other}` } })
+    .reply(200, { sub: 'user-2', path_prefix: 'org-2' }, { headers: JSON_HEADERS })
   pool
-    .intercept({ path: '/apps/crm', method: 'GET', headers: { authorization: `Bearer ${KEY}` } })
-    .reply(200, { name: 'crm', envs: [{ name: 'main', status: 'new' }] }, { headers: JSON_HEADERS })
+    .intercept({ path: `${ORG_PATH}/apps/crm`, method: 'GET', headers: { authorization: `Bearer ${KEY}` } })
+    .reply(200, APP_INFO, { headers: JSON_HEADERS })
+  const opts = { cwd: dir, dispatcher: agent, env: { BOXLITE_CONFIG_DIR: config } }
+  for (const env of [ORG_ENV, { BOXLITE_API_URL: API + '/api/v1/org-2', BOXLITE_API_KEY: other }]) {
+    const login = await cli(['login'], { ...opts, env: { ...opts.env, ...env } })
+    assert.equal(login.code, 0, login.stderr)
+  }
+  const unnamed = await cli(['whoami', '--json'], opts)
+  assert.equal(JSON.parse(unnamed.stderr).error.code, 'missing_api_url')
 
-  const unnamed = await cli(['whoami', '--json'], { cwd: dir, dispatcher: agent, env: { BOXLITE_CONFIG_DIR: config } })
-  assert.equal(unnamed.code, 1, unnamed.stderr)
-  const err = JSON.parse(unnamed.stderr).error
-  assert.equal(err.code, 'usage')
-  assert.match(err.message, /crm, ledger/)
-  assert.match(err.next, /BOXLITE_APP=<name>/)
-
-  const named = await cli(['whoami', '--json'], {
-    cwd: dir,
-    dispatcher: agent,
-    env: { BOXLITE_CONFIG_DIR: config, BOXLITE_APP: 'crm' },
-  })
-  assert.equal(JSON.parse(named.stdout).app, 'crm', named.stderr)
-  const init = await cli(['init', '--app', 'crm', '--json'], {
-    cwd: dir,
-    dispatcher: agent,
-    env: { BOXLITE_CONFIG_DIR: config },
-  })
-  assert.equal(init.code, 0, init.stderr)
+  const linked = await project(root, { '.boxlite/link.json': orgLink() })
+  const named = await cli(['whoami', '--json'], { ...opts, cwd: linked })
+  assert.equal(named.code, 0, named.stderr)
+  assert.equal(JSON.parse(named.stdout).app, 'crm')
+  assert.equal(JSON.parse(named.stdout).organization_id, 'org-1')
+  agent.assertNoPendingInterceptors()
 })
 
-test('login and whoami reject a credential without the API App scope regardless of its prefix', async () => {
+test('an explicit environment key takes precedence over a saved organization key', async () => {
   const dir = await project(root, {})
-  const config = await mkdtemp(join(tmpdir(), 'blcfg-'))
-  const PLATFORM = 'blk_live_0123456789abcdef0123456789'
+  const config = await project(root, {})
+  const invalid = 'blk_live_' + 'b'.repeat(32)
   const { agent, pool } = mockApi()
+  organizationIdentity(pool)
   pool
-    .intercept({ path: '/apps/me/whoami', method: 'GET', headers: { authorization: `Bearer ${PLATFORM}` } })
-    .reply(200, { ...WHOAMI, scope: 'organization' }, { headers: JSON_HEADERS })
-    .times(3)
-
-  const none = await cli(['whoami', '--json'], {
-    cwd: dir,
-    dispatcher: agent,
-    env: { BOXLITE_API_URL: API, BOXLITE_API_KEY: PLATFORM, BOXLITE_CONFIG_DIR: config },
-  })
-  const err = JSON.parse(none.stderr).error
-  assert.equal(err.code, 'forbidden')
-  assert.match(err.message, /not scoped to one App/)
-  assert.ok(!none.stderr.includes(PLATFORM), 'the key is never printed')
-  const login = await cli(['login', '--json'], {
-    cwd: dir,
-    dispatcher: agent,
-    env: { BOXLITE_API_URL: API, BOXLITE_API_KEY: PLATFORM, BOXLITE_CONFIG_DIR: config },
-  })
-  assert.match(JSON.parse(login.stderr).error.message, /not scoped to one App/)
-  await assert.rejects(stat(join(config, 'credentials.json')), { code: 'ENOENT' })
-
-  pool.intercept({ path: '/apps/me/whoami', method: 'GET' }).reply(200, WHOAMI, { headers: JSON_HEADERS })
-  assert.equal(
-    (
-      await cli(['login'], {
-        cwd: dir,
-        dispatcher: agent,
-        env: { BOXLITE_API_URL: API, BOXLITE_API_KEY: KEY, BOXLITE_CONFIG_DIR: config },
-      })
-    ).code,
-    0,
-  )
+    .intercept({ path: '/api/v1/me', method: 'GET', headers: { authorization: `Bearer ${invalid}` } })
+    .reply(401, { statusCode: 401, message: 'Invalid credentials' }, { headers: JSON_HEADERS })
+  const opts = { cwd: dir, dispatcher: agent, env: { BOXLITE_CONFIG_DIR: config } }
+  const login = await cli(['login'], { ...opts, env: { ...opts.env, ...ORG_ENV } })
+  assert.equal(login.code, 0, login.stderr)
   const later = await cli(['whoami', '--json'], {
-    cwd: dir,
-    dispatcher: agent,
-    env: { BOXLITE_API_KEY: PLATFORM, BOXLITE_CONFIG_DIR: config },
+    ...opts,
+    env: { ...opts.env, BOXLITE_API_KEY: invalid },
   })
-  assert.equal(JSON.parse(later.stderr).error.code, 'forbidden', 'the explicit environment credential takes precedence')
+  assert.equal(JSON.parse(later.stderr).error.code, 'unauthenticated')
+  assert.ok(!later.stderr.includes(invalid))
+  agent.assertNoPendingInterceptors()
 })
 
 test('app remember, recall and forget keep notes for the next session', async () => {

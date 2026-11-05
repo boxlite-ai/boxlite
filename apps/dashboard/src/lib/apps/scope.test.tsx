@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 /* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
 
+import { AgentHandoffPanel } from '@/components/apps/AgentHandoffPanel'
 import { OrganizationScope } from '@/components/apps/OrganizationScope'
 import { DomainsTab } from '@/components/apps/tabs/DomainsTab'
 import type { AppDetail } from './types'
@@ -14,7 +15,6 @@ import { act, useState, type ReactNode } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { MemoryRouter, useLocation } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { freshPrompt } from './handoff'
 
 const state = vi.hoisted(() => ({
   organization: { id: 'org-a' } as { id: string } | null,
@@ -36,6 +36,7 @@ describe('cloud App organization isolation', () => {
   let requests: InternalAxiosRequestConfig[]
   let respond: (request: InternalAxiosRequestConfig) => Promise<AxiosResponse>
   const adapter = axios.defaults.adapter
+  const clipboard = Object.getOwnPropertyDescriptor(navigator, 'clipboard')
   const response = (request: InternalAxiosRequestConfig, data: unknown): AxiosResponse => ({
     config: request,
     data,
@@ -81,6 +82,8 @@ describe('cloud App organization isolation', () => {
     act(() => root.unmount())
     cache.clear()
     axios.defaults.adapter = adapter
+    if (clipboard) Object.defineProperty(navigator, 'clipboard', clipboard)
+    else Reflect.deleteProperty(navigator, 'clipboard')
   })
 
   it('keeps a late list response in its original organization after switching', async () => {
@@ -129,10 +132,10 @@ describe('cloud App organization isolation', () => {
   it('invalidates only the organization which began a create even if the hook switches before completion', async () => {
     let create!: ReturnType<typeof useCreateApp>
     let release: (() => void) | undefined
+    const created = { app: { id: 'new-app' }, prompt: 'boxlite-app init --app demo' }
     respond = (request) =>
       new Promise((resolve) => {
-        release = () =>
-          resolve(response(request, { app: { id: 'new-app' }, prompt: 'app scoped prompt', key: 'one-time-key' }))
+        release = () => resolve(response(request, created))
       })
     cache.setQueryData(queryKeys.apps.list('org-a'), [])
     cache.setQueryData(queryKeys.apps.list('org-b'), [])
@@ -152,13 +155,40 @@ describe('cloud App organization isolation', () => {
     render(<Create />)
     await act(async () => {
       release?.()
-      await pending
+      await expect(pending).resolves.toEqual(created)
     })
-    expect(requests[0].url).toBe('/v1/org-a/apps')
+    expect(requests.map(({ method, url }) => [method, url])).toEqual([['post', '/v1/org-a/apps']])
     expect(cache.getQueryState(queryKeys.apps.list('org-a'))?.isInvalidated).toBe(true)
     expect(cache.getQueryState(queryKeys.apps.list('org-b'))?.isInvalidated).toBe(false)
-    expect(freshPrompt('org-a', 'new-app')).toBe('app scoped prompt')
-    expect(freshPrompt('org-b', 'new-app')).toBeNull()
+  })
+
+  it.each(['draft', 'live'])('copies the %s App environment setup without issuing a key', async (status) => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
+    const prompt = 'boxlite-app init --app demo --env staging'
+    respond = async (request) =>
+      response(request, {
+        id: 'app-1',
+        name: 'demo',
+        status,
+        environment: 'staging',
+        releases: [],
+        handoffPrompt: prompt,
+      })
+    function Detail() {
+      const { data: app } = useAppQuery('app-1')
+      return app ? <AgentHandoffPanel app={app} /> : null
+    }
+    render(<Detail />, '/dashboard/apps/app-1?env=staging')
+    await settled()
+    expect(host.querySelector('a[href="/dashboard/keys"]')?.textContent).toBe('API Keys')
+    const copy = [...host.querySelectorAll('button')].find((button) => button.textContent === 'Copy')
+    expect(copy).toBeDefined()
+    act(() => copy!.click())
+    expect(writeText).toHaveBeenCalledExactlyOnceWith(prompt)
+    expect(requests.map(({ method, url, params }) => [method, url, params])).toEqual([
+      ['get', '/v1/org-a/apps/app-1/view', { env: 'staging' }],
+    ])
   })
 
   it.each(['missing organization', 'missing permission'])('does not request Apps with %s', async (reason) => {

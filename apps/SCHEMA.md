@@ -314,6 +314,12 @@ Same cascade asymmetry as `organization_role_assignment`.
 Machine credential. The name is part of the identity, so a key is addressed by
 `(organization, user, name)`; only the hash is stored.
 
+Cloud Apps use these organization credentials without adding an App scope column or index.
+The permissions enum includes `read:apps`, `write:apps` and `delete:apps`. Creating a key without
+an explicit permission list requests all supported permissions, subject to the caller's existing
+grant authority; it does not change permissions on stored keys. App deletion leaves organization
+keys intact.
+
 No foreign key ties a key to its `organization_user` row, so the application
 revokes it: removing a member, or a member leaving, deletes that member's keys
 in the organization within the same transaction as the membership

@@ -4,6 +4,8 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { ApiKeyTable } from '@/components/ApiKeyTable'
+import { CreateApiKeyPermissionsEnum, type ApiKeyList } from '@boxlite-ai/api-client'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -27,8 +29,11 @@ vi.mock('@/hooks/mutations/useCreateApiKeyMutation', () => ({
   useCreateApiKeyMutation: () => ({ mutateAsync: mocks.create }),
 }))
 vi.mock('@/hooks/useCopyToClipboard', () => ({ useCopyToClipboard: () => [null, vi.fn()] }))
-vi.mock('@/components/ApiKeyTable', () => ({ ApiKeyTable: () => null }))
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }))
+
+const fullPermissions = Object.values(CreateApiKeyPermissionsEnum).filter(
+  (permission) => permission !== CreateApiKeyPermissionsEnum.UNKNOWN_DEFAULT_OPEN_API,
+)
 
 describe('console member key defaults', () => {
   let root: Root
@@ -70,11 +75,41 @@ describe('console member key defaults', () => {
     return (mocks.create.mock.calls[0] as unknown as [{ permissions: string[] }])[0].permissions
   }
 
-  it('includes independent member read and write scopes for an owner', async () => {
+  it('submits every organization permission when an owner creates a key', async () => {
     const permissions = await createKey()
 
-    expect(permissions).toContain('read:members')
-    expect(permissions).toContain('write:members')
+    expect([...permissions].sort()).toEqual([...fullPermissions].sort())
+  })
+
+  it('labels a key missing a resource permission as restricted', async () => {
+    const fullKey = {
+      name: 'complete',
+      userId: 'owner',
+      value: '••••0001',
+      createdAt: new Date(),
+      lastUsedAt: null,
+      expiresAt: null,
+      permissions: fullPermissions,
+    } satisfies ApiKeyList
+    const restrictedKey = {
+      ...fullKey,
+      name: 'limited',
+      permissions: fullPermissions.filter((permission) => permission !== CreateApiKeyPermissionsEnum.READ_AUDIT_LOGS),
+    }
+    const host = document.createElement('div')
+    await act(async () => {
+      root = createRoot(host)
+      root.render(
+        <ApiKeyTable data={[fullKey, restrictedKey]} loading={false} isLoadingKey={() => false} onRevoke={vi.fn()} />,
+      )
+    })
+
+    expect([...host.querySelectorAll('button[aria-haspopup="dialog"]')].map((button) => button.textContent)).toEqual([
+      'Full',
+      '',
+      'Restricted',
+      '',
+    ])
   })
 
   it('includes assigned member read for a member but never member write', async () => {

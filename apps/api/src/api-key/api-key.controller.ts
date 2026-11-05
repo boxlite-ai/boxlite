@@ -60,13 +60,14 @@ export class ApiKeyController {
     @AuthContext() authContext: OrganizationAuthContext,
     @Body() createApiKeyDto: CreateApiKeyDto,
   ): Promise<ApiKeyResponseDto> {
-    this.validateRequestedApiKeyPermissions(authContext, createApiKeyDto.permissions)
+    const permissions = createApiKeyDto.permissions ?? Object.values(OrganizationResourcePermission)
+    this.validateRequestedApiKeyPermissions(authContext, permissions)
 
     const { apiKey, value } = await this.apiKeyService.createApiKey(
       authContext.organizationId,
       authContext.userId,
       createApiKeyDto.name,
-      createApiKeyDto.permissions,
+      permissions,
       createApiKeyDto.expiresAt,
     )
 

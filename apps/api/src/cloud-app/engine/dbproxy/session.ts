@@ -1,6 +1,6 @@
 /**
  * One Postgres session through `boxlite-app app db proxy`: the local client's bytes arrive over a
- * WebSocket; the CP answers the client's startup itself (any user, no password: the App key on
+ * WebSocket; the CP answers the client's startup itself (any user, no password: the organization key on
  * the WebSocket is the authentication), logs in to the App's database as the reader (default) or
  * the owner (`--write`), and from then on passes bytes both ways. Frontend messages that carry SQL
  * (simple Query, Parse) go through the SQL guard first (sqlguard.ts proxyRefusal); a refused one

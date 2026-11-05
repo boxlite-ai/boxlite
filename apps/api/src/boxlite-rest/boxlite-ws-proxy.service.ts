@@ -218,7 +218,6 @@ export class BoxliteWsProxyService {
       //    through to JWT rather than being rejected by the outer guard.
       const apiKey = await this.apiKeyService.getApiKeyByValue(token).catch(() => null)
       if (apiKey) {
-        if (apiKey.cloudAppId) return null
         if (apiKey.expiresAt && apiKey.expiresAt < new Date()) return null
         // The system role comes from the key's user, as ApiKeyStrategy resolves it
         // on the HTTP path.

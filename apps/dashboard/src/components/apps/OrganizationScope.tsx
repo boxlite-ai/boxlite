@@ -5,7 +5,7 @@ import { useAppsScope } from '@/lib/apps/client'
 import { Fragment, useEffect, useRef, type ReactNode } from 'react'
 import { Navigate, useLocation } from 'react-router-dom'
 
-/** Forms and one-time credentials belong to the organization in which they were opened. */
+/** Open forms belong to the organization in which they were started. */
 export function OrganizationScope({ children }: { children: ReactNode }) {
   const { organizationId, canRead } = useAppsScope()
   const { pathname } = useLocation()

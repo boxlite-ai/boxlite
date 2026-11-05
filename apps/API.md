@@ -84,15 +84,17 @@ enabling consumers of this contract.
 Cloud Apps share the platform login, selected organization and API-key system. The dashboard
 entry is `/dashboard/apps`, immediately after Boxes. Management requests use
 `Authorization: Bearer <platform JWT or API key>` with `read:apps`, `write:apps`, or
-`delete:apps` permissions. A generated Agent key is bound to one App and cannot access Boxes,
-organization-wide Domains, other Apps, or key issuance. Its issuer must remain an organization member.
+`delete:apps` permissions. Organization API keys can manage multiple Apps and other resources
+according to their explicit grants. Their issuer must remain an organization member. App creation
+does not issue a key; credentials are managed on the existing API Keys page.
 
 | Method | Path | Behavior |
 | --- | --- | --- |
-| `GET`, `POST` | `/api/v1/{organizationId}/apps` | List or create Apps in the selected organization. Creation returns the initial Agent key and handoff prompt. |
+| `GET`, `POST` | `/api/v1/{organizationId}/apps` | List or create Apps in the selected organization. Creation returns the App and an initialization prompt without credentials. |
 | `GET` | `/api/v1/{organizationId}/apps/{app}/view` | Dashboard projection, including environments, deployment, services, data and configuration. |
-| `GET` | `/api/v1/{organizationId}/apps/{app}` | CLI status; a scoped key may use `me` as the App name. |
-| `GET` | `/api/v1/{organizationId}/apps/{app}/whoami` | Credential scope, environments and CLI artifact location. |
+| `GET` | `/api/v1/{organizationId}/apps/{app}` | CLI status for an explicitly selected App. |
+| `GET` | `/api/v1/{organizationId}/apps/{app}/handoff` | Initialization instructions without issuing or exposing credentials. |
+| `GET` | `/api/v1/me` | Organization identity for CLI login and `whoami`; App selection is local to the CLI. |
 | `POST`, `PUT` | `/api/v1/{organizationId}/apps/{app}/uploads/...` | Upload a source manifest and missing source objects to platform object storage. |
 | `POST` | `/api/v1/{organizationId}/apps/{app}/envs/{env}/plan` | Compare desired manifest with current environment. |
 | `POST` | `/api/v1/{organizationId}/apps/{app}/envs/{env}/deployments` | Queue `deploy`, `apply` or `rollback` in PostgreSQL for the App worker. |
@@ -140,9 +142,12 @@ serves and the events it emits are catalogued below alongside its routes.
 | `DELETE` | `/api/api-keys/{name}`          | Deletes the caller's API key by name.                          |
 | `DELETE` | `/api/api-keys/{userId}/{name}` | Deletes a named API key belonging to a specified user.         |
 
-Key creation takes an explicit `permissions` array. When authenticated with an API key,
+Key creation defaults to all supported organization resource permissions when `permissions` is
+omitted. Explicit arrays, including `[]`, are preserved. Existing keys retain their grants.
+When authenticated with an API key,
 the requested permissions must be a subset of that key's permissions, including for
-owners and system admins; broader grants return 403 before a key is created.
+owners and system admins; broader grants return 403 before a key is created. Omitting permissions
+with a restricted credential therefore returns 403; supply its permitted subset instead.
 The user's existing grantability checks still apply. An owner using a user JWT
 can create a key with any supported permission.
 

@@ -1,7 +1,7 @@
 import { principalStorage } from '../platform-principal'
 /**
  * `GET /v1/apps/{app}/envs/{env}/db/connect` (WebSocket, API origin only): the CP end of
- * `boxlite-app app db proxy`. Authenticated by the App key like every /v1 route; `?write=1`
+ * `boxlite-app app db proxy`. The platform authenticates organization credentials. `?write=1`
  * logs in as the database owner, otherwise as boxlite_reader. One WebSocket carries one Postgres
  * connection (session.ts). The database password never leaves the CP.
  *
@@ -120,7 +120,7 @@ export function handleDbConnect(ctx: Ctx, req: IncomingMessage, socket: Duplex, 
         error('unauthenticated', 'platform authentication required', 'authenticate before connecting'),
       )
     const app = (await ctx.store.appByName(appName)) ?? (await ctx.store.appById(appName))
-    if (!app || app.org_id !== principal.organizationId || (principal.appId && principal.appId !== app.id))
+    if (!app || app.deleted_at || app.org_id !== principal.organizationId)
       return refuseUpgrade(socket, 404, error('not_found_app', 'App not found', 'check the selected organization'))
     const actor = principal.actor
     const env = await ctx.store.envByName(app.id, envName)

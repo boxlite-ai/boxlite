@@ -1,4 +1,4 @@
-import { All, Controller, Get, Param, Req, Res, SetMetadata, UseGuards } from '@nestjs/common'
+import { All, Controller, Get, Param, Req, Res, UseGuards } from '@nestjs/common'
 import { ApiExcludeController } from '@nestjs/swagger'
 import type { Request, Response } from 'express'
 import { CombinedAuthGuard } from '../auth/combined-auth.guard'
@@ -9,7 +9,6 @@ import { cloudAppRequest, sendCloudAppResponse } from './cloud-app-http'
 
 @Controller('v1/:organizationId')
 @ApiExcludeController()
-@SetMetadata('cloud-app-route', true)
 @UseGuards(CombinedAuthGuard, OrganizationResourceActionGuard)
 export class CloudAppController {
   constructor(private readonly apps: CloudAppService) {}
@@ -26,7 +25,7 @@ export class CloudAppController {
   @Get('cli/version')
   async cliVersion(@Req() request: Request, @Res() response: Response) {
     const auth = request.user as OrganizationAuthContext
-    const principal = this.apps.principal(auth, 'GET', '/apps/me/whoami')
+    const principal = this.apps.principal(auth, 'GET', '/apps')
     await sendCloudAppResponse(
       await this.apps.management(cloudAppRequest(request, 'http://platform.local/cli/version'), principal),
       response,

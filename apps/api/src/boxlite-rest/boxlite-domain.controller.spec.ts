@@ -43,13 +43,11 @@ function makeHarness() {
       target: { type: 'box', box: 'box-uuid', port: 3000 },
     }),
     owned: jest.fn().mockResolvedValue({ hostname: 'demo1.app.test', url: 'https://demo1.app.test', target: null }),
-    bindApp: jest
-      .fn()
-      .mockResolvedValue({
-        hostname: 'demo1.app.test',
-        url: 'https://demo1.app.test',
-        target: { type: 'app', app: 'app-shop', environment: 'env-main' },
-      }),
+    bindApp: jest.fn().mockResolvedValue({
+      hostname: 'demo1.app.test',
+      url: 'https://demo1.app.test',
+      target: { type: 'app', app: 'app-shop', environment: 'env-main' },
+    }),
     unbind: jest.fn().mockResolvedValue(undefined),
   }
   const boxService = {
@@ -241,16 +239,16 @@ describe('BoxliteDomainController', () => {
     expect(domainService.claim).not.toHaveBeenCalled()
   })
 
-  it('keeps App-scoped keys out of organization-wide domain operations', async () => {
+  it('allows organization keys to manage domains with App permissions', async () => {
     const { controller, domainService } = makeHarness()
     const scoped = {
       ...member(OrganizationResourcePermission.WRITE_APPS),
-      apiKey: { cloudAppId: 'shop', permissions: [OrganizationResourcePermission.WRITE_APPS] },
+      apiKey: { permissions: [OrganizationResourcePermission.WRITE_APPS] },
     }
-    await expect(controller.claim(scoped as never, { name: 'demo1' })).rejects.toMatchObject({ status: 403 })
-    await expect(controller.list(scoped as never)).rejects.toMatchObject({ status: 403 })
-    expect(domainService.claim).not.toHaveBeenCalled()
-    expect(domainService.listHeld).not.toHaveBeenCalled()
+    await controller.claim(scoped as never, { name: 'demo1' })
+    await controller.list(scoped as never)
+    expect(domainService.claim).toHaveBeenCalledWith(scoped.organizationId, 'demo1')
+    expect(domainService.listHeld).toHaveBeenCalledWith(scoped.organizationId)
   })
 
   it('validates App environment selection and refuses mixed target fields', async () => {

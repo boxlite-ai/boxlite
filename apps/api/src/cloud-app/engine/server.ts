@@ -4,7 +4,7 @@ import { createReadStream, existsSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { Readable } from 'node:stream'
 import { Hono } from 'hono'
-import { requireAdmin, requireAppKey, type Vars } from './auth'
+import { requireAdmin, requireApp, type Vars } from './auth'
 import { apiRateLimit } from './limits'
 import type { Config } from './config'
 import { DEFAULT_TIMING, type Ctx, type Deps, type Timing } from './ctx'
@@ -124,7 +124,7 @@ export function createServer(ctx: Ctx): Hono {
   mountConsole(app, ctx)
   // ---- admin -------------------------------------------------------------
   app.use('/v1/apps', async (c, next) => (c.req.method === 'POST' ? requireAdmin()(c, next) : next()))
-  // Deleting and restoring an App are owner actions, so they take the admin token, not the App key.
+  // Lifecycle actions inherit the organization and permission checks from the platform boundary.
   app.delete('/v1/apps/:app', requireAdmin(), async (c) => {
     const app = await ctx.store.appByNameAnyState(c.req.param('app'))
     if (!app) throw fail('not_found_app', `no app named "${c.req.param('app')}"`)
@@ -145,7 +145,7 @@ export function createServer(ctx: Ctx): Hono {
 
   // ---- CLI API -----------------------------------------------------------
   const api = new Hono<{ Variables: Vars }>()
-  api.use('*', requireAppKey(ctx.store))
+  api.use('*', requireApp(ctx.store))
   api.use('*', async (c, next) => {
     await next()
     if (c.res.status >= 400) return

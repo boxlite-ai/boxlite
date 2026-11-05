@@ -30,10 +30,10 @@ const sha = (s: string): string => createHash('sha256').update(s).digest('hex')
 test('init in a new project creates .gitignore so .env.local is never committed', async () => {
   const { agent, pool } = mockApi()
   pool
-    .intercept({ path: '/apps/me', method: 'GET' })
+    .intercept({ path: '/apps/crm', method: 'GET' })
     .reply(200, { name: 'crm', envs: [{ name: 'main', status: 'live', spec_version: 2 }] }, { headers: JSON_HEADERS })
   const dir = await project(root, {})
-  const r = await cli(['init', '--json'], { cwd: dir, dispatcher: agent })
+  const r = await cli(['init', '--app', 'crm', '--json'], { cwd: dir, dispatcher: agent })
   assert.equal(r.code, 0, r.stderr)
   assert.ok(JSON.parse(r.stdout).created.includes('.gitignore'))
   assert.equal(await readFile(join(dir, '.gitignore'), 'utf8'), '.boxlite/\n.env.local\n')
@@ -42,15 +42,12 @@ test('init in a new project creates .gitignore so .env.local is never committed'
 test('init writes boxlite.toml, link.json and .gitignore entries, and is idempotent', async () => {
   const { agent, pool } = mockApi()
   pool
-    .intercept({ path: '/apps/me', method: 'GET', headers: { authorization: `Bearer ${KEY}` } })
+    .intercept({ path: '/apps/crm', method: 'GET', headers: { authorization: `Bearer ${KEY}` } })
     .reply(200, { name: 'crm', envs: [{ name: 'main', status: 'live', spec_version: 2 }] }, { headers: JSON_HEADERS })
-  // Once linked, init resolves the App from link.json instead of `me`.
-  pool
-    .intercept({ path: '/apps/crm', method: 'GET' })
-    .reply(200, { name: 'crm', envs: [{ name: 'main', status: 'live', spec_version: 2 }] }, { headers: JSON_HEADERS })
+    .times(2)
   const dir = await project(root, { '.gitignore': 'node_modules/\n' })
 
-  const first = await cli(['init'], { cwd: dir, dispatcher: agent })
+  const first = await cli(['init', '--app', 'crm'], { cwd: dir, dispatcher: agent })
   assert.equal(first.code, 0, first.stderr)
   assert.deepEqual(first.lines, [
     `App crm · environment main · ${API}`,

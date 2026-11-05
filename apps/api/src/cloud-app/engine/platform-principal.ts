@@ -4,7 +4,6 @@ import { AsyncLocalStorage } from 'node:async_hooks'
 export interface PlatformPrincipal {
   organizationId: string
   userId: string
-  appId?: string
   actor: string
   permissions: string[]
   admin?: boolean

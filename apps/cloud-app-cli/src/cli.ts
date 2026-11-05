@@ -33,6 +33,7 @@ export function buildProgram(
     .description('BoxLite Micro-cloud: deploy and operate an App from its project directory')
     .version(VERSION)
     .option('--json', 'one JSON document on stdout on success; {"error":{code,message,next,…}} on stderr on failure')
+    .option('--app <name>', 'App to operate on (default: project link, else BOXLITE_APP)')
     .option('--env <name>', 'environment (default: .boxlite/link.json env, else main)')
     .exitOverride()
     .configureOutput({
@@ -62,8 +63,12 @@ export function buildProgram(
 export function commandPath(program: Command, argv: readonly string[]): string {
   const path: string[] = []
   let cur = program
-  for (const token of argv) {
-    if (token.startsWith('-')) continue
+  for (let index = 0; index < argv.length; index++) {
+    const token = argv[index]!
+    if (token.startsWith('-')) {
+      if (program.options.some((option) => option.long === token && option.required)) index++
+      continue
+    }
     const sub = cur.commands.find((c) => c.name() === token || c.aliases().includes(token))
     if (!sub) break
     path.push(sub.name())

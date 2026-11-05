@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { readFile, writeFile } from 'node:fs/promises'
+import { readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { after, before, test } from 'node:test'
 import {
@@ -330,7 +330,7 @@ test('app volume ls and cp in both directions', async () => {
   assert.equal(JSON.parse(both.stderr).error.code, 'usage')
 })
 
-test('app curl sends the App key to the app URL only, adds a test session with --as, and shows redirects', async () => {
+test('app curl sends the organization API key to the app URL only, adds a test session with --as, and shows redirects', async () => {
   const dir = await linked()
   const { agent, pool } = mockApi()
   const app = agent.get('https://app.test')
@@ -468,9 +468,30 @@ test('app curl reuses the environment URL and a test session that is still good'
     cookies.length >= 3 && cookies.every((c) => c === 'bxl_s=tok'),
     `every call sent the same session: ${cookies.join(', ')}`,
   )
+
+  // The directory keeps its cache when it is unlinked and pointed at a different App.
+  await rm(join(dir, '.boxlite/link.json'))
+  const ledgerEnv = '/apps/ledger/envs/main'
+  pool
+    .intercept({ path: ledgerEnv, method: 'GET' })
+    .reply(200, { name: 'main', url: 'https://ledger.app.test' }, { headers: JSON_HEADERS })
+  pool
+    .intercept({ path: `${ledgerEnv}/auth/test-sessions`, method: 'POST' })
+    .reply(201, { cookie: 'bxl_s=ledger', expires_at: later }, { headers: JSON_HEADERS })
+  agent
+    .get('https://ledger.app.test')
+    .intercept({ path: '/api/me', method: 'GET', headers: { cookie: 'bxl_s=ledger' } })
+    .reply(200, { ok: 1 }, { headers: JSON_HEADERS })
+  const switched = await cli(['app', 'curl', '/api/me', '--app', 'ledger', '--as', 'qa@example.com', '--json'], {
+    cwd: dir,
+    dispatcher: agent,
+  })
+  assert.equal(switched.code, 0, switched.stderr)
+  assert.equal(JSON.parse(switched.stdout).timing.cached.test_session, false)
+  agent.assertNoPendingInterceptors()
 })
 
-test('a cached URL the CLI did not write itself never receives the App key', async () => {
+test('a cached URL the CLI did not write itself never receives the organization API key', async () => {
   const dir = await linked()
   // A copied or edited project: the cache points elsewhere, without a signature made with this key.
   await writeFile(
@@ -561,7 +582,7 @@ test('destructive commands in --json mode without --yes return confirmation_requ
   agent.assertNoPendingInterceptors()
 })
 
-test('secrets never reach the output: App keys and database passwords are masked everywhere', async () => {
+test('secrets never reach the output: organization API keys and database passwords are masked everywhere', async () => {
   const dir = await linked()
   const { agent, pool } = mockApi()
   pool

@@ -133,7 +133,6 @@ export class BoxliteDomainController {
   }
 
   private requireAny(auth: OrganizationAuthContext, ...permissions: OrganizationResourcePermission[]): void {
-    if (auth.apiKey?.cloudAppId) throw new ForbiddenException('App keys manage domains through their App')
     if (!permissions.some((permission) => hasOrganizationResourcePermissions(auth, [permission]))) {
       throw new ForbiddenException('You do not have permission to manage this domain target')
     }

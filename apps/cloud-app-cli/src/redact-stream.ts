@@ -2,7 +2,7 @@ import { redact } from '@boxlite-ai/cloud-app-shared'
 import type { Writable } from 'node:stream'
 
 /**
- * Wraps a stream so nothing the CLI prints can carry an App key, box token or database password,
+ * Wraps a stream so nothing the CLI prints can carry an organization API key, box token or database password,
  * whatever produced it: our own lines, control-plane messages, app logs or SQL results. A proxy
  * rather than a Transform keeps writes synchronous and keeps TTY properties for readline.
  */

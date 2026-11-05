@@ -51,4 +51,25 @@ export const CREATE_API_KEY_PERMISSIONS_GROUPS: { name: string; permissions: Cre
       CreateApiKeyPermissionsEnum.DELETE_VOLUMES,
     ],
   },
+  {
+    // The API still stores these permissions for the retired template subsystem.
+    name: 'Templates (legacy)',
+    permissions: [CreateApiKeyPermissionsEnum.WRITE_TEMPLATES, CreateApiKeyPermissionsEnum.DELETE_TEMPLATES],
+  },
+  {
+    name: 'Regions',
+    permissions: [CreateApiKeyPermissionsEnum.WRITE_REGIONS, CreateApiKeyPermissionsEnum.DELETE_REGIONS],
+  },
+  {
+    name: 'Runners',
+    permissions: [
+      CreateApiKeyPermissionsEnum.READ_RUNNERS,
+      CreateApiKeyPermissionsEnum.WRITE_RUNNERS,
+      CreateApiKeyPermissionsEnum.DELETE_RUNNERS,
+    ],
+  },
+  {
+    name: 'Audit logs',
+    permissions: [CreateApiKeyPermissionsEnum.READ_AUDIT_LOGS],
+  },
 ]

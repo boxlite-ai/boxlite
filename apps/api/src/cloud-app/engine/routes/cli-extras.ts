@@ -3,7 +3,7 @@ import { z } from 'zod'
 import type { SQLInputValue } from '../db'
 import { buildAgentContext, schedulesOf, variablesOf } from '../agent-context'
 import { ackFinding, unackFinding } from '../services/acks'
-import { newId, requireAppKey, type Vars } from '../auth'
+import { newId, requireApp, type Vars } from '../auth'
 import { cliPackage } from '../cli-version'
 import type { Ctx } from '../ctx'
 import { now, type LogLine } from '../db'
@@ -11,14 +11,13 @@ import { fail } from '../errors'
 import { recordFeedback } from '../feedback'
 import { TABLES_QUERY } from '../services/db'
 import { deploymentLogs, parseSince, storedLevelsAtLeast } from '../services/logs'
-import { deploymentView, envStatus } from '../views'
+import { deploymentView } from '../views'
 import { readVolume, removeVolume, VOLUME_FILE_MAX, volumePath, writeVolume } from '../volume-files'
 import { forward } from '../proxy/forward'
 import { body, envOf, intParam, type C } from './util'
-import { appProviders } from '../enduser/config'
 
 /**
- * Endpoints for the agent-facing CLI (contracts §4.1 "CLI extras"): discovery (whoami, context,
+ * Endpoints for the agent-facing CLI (contracts §4.1 "CLI extras"): discovery (context,
  * CLI version), diagnosis (probe, log search, deployment timeline), data (applied migrations,
  * reset) and runtime views (variables, schedules, volume files).
  */
@@ -78,30 +77,7 @@ export function mountCliExtras(app: Hono, ctx: Ctx): void {
   })
 
   const r = new Hono<{ Variables: Vars }>()
-  r.use('*', requireAppKey(ctx.store))
-
-  r.get('/whoami', async (c) => {
-    const a = c.get('app')
-    const actor = c.get('actor')
-    const last4 = /^key:…(.+)$/.exec(actor)?.[1]
-    const key = last4 ? ((await ctx.credentials.list(a)).find((k) => k.last4 === last4) ?? null) : null
-    return c.json({
-      app: a.name,
-      actor,
-      key,
-      scope: `app:${a.name}`,
-      environments: await Promise.all(
-        (await ctx.store.envs(a.id)).map(async (e) => ({
-          name: e.name,
-          status: await envStatus(ctx, e),
-          url: await ctx.resources.appUrl(a.name, e.name),
-        })),
-      ),
-      control_plane: ctx.config.managementUrl,
-      sign_in_providers: await appProviders(ctx, a),
-      cli: { latest_version: await latestCli(ctx), download_url: `${ctx.config.publicUrl}/cli/boxlite-app.tgz` },
-    })
-  })
+  r.use('*', requireApp(ctx.store))
 
   /** boxlite-app feedback "<message>": the agent reports something the platform got wrong, then carries on. */
   r.post('/feedback', async (c) => {

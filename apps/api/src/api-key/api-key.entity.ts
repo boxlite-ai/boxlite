@@ -41,9 +41,6 @@ export class ApiKey {
   })
   permissions: OrganizationResourcePermission[]
 
-  @Column({ type: 'text', nullable: true })
-  cloudAppId?: string | null
-
   @Column()
   createdAt: Date
 

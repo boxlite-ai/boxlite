@@ -3,7 +3,6 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { rememberPrompt } from '@/lib/apps/handoff'
 import { useAppsScope } from '@/lib/apps/client'
 import type {
   AppActionInput,
@@ -95,7 +94,6 @@ export function useAppMutation() {
   })
 }
 
-/** Creating an App returns its key once; it lives only in the dialog that shows it. */
 export function useCreateApp() {
   const { client: appsClient, organizationId, canWrite } = useAppsScope()
   const queryClient = useQueryClient()
@@ -104,74 +102,9 @@ export function useCreateApp() {
       if (!canWrite) throw new Error('You do not have permission to change this App')
       return { organizationId }
     },
-    mutationFn: async (input: CreateAppInput) => {
-      const created = (await appsClient.post<CreatedApp>('/apps', input)).data
-      rememberPrompt(organizationId, created.app.id, created.prompt)
-      return created
-    },
+    mutationFn: async (input: CreateAppInput) => (await appsClient.post<CreatedApp>('/apps', input)).data,
     onSuccess: (_data, _input, scope) =>
       queryClient.invalidateQueries({ queryKey: queryKeys.apps.list(scope.organizationId) }),
-  })
-}
-
-/** A new App key and prompt; the old key stops working at once. */
-export function useRotateKey() {
-  const { client: appsClient, organizationId, canWrite } = useAppsScope()
-  const queryClient = useQueryClient()
-  // The prompt names the environment being viewed (other than main), so the agent works there.
-  const env = useAppEnv()
-  return useMutation({
-    onMutate: () => {
-      if (!canWrite) throw new Error('You do not have permission to change this App')
-      return { organizationId, env }
-    },
-    mutationFn: async (appId: string) => {
-      const out = (
-        await appsClient.post<{ key: string; prompt: string; last4: string }>(
-          `/apps/${encodeURIComponent(appId)}/key/rotate`,
-          undefined,
-          { params: { env } },
-        )
-      ).data
-      rememberPrompt(organizationId, appId, out.prompt)
-      return out
-    },
-    onSuccess: (_data, appId, scope) => {
-      const organizationId = scope.organizationId
-      void queryClient.invalidateQueries({ queryKey: queryKeys.apps.detail(organizationId, appId) })
-      // The active-key list (AppKeys) changes with every issued or rotated key.
-      void queryClient.invalidateQueries({ queryKey: [...queryKeys.apps.all, organizationId, 'keys', appId] })
-    },
-  })
-}
-
-/** One more App key and its prompt, next to the keys already in use (another agent or machine). */
-export function useIssueKey() {
-  const { client: appsClient, organizationId, canWrite } = useAppsScope()
-  const queryClient = useQueryClient()
-  const env = useAppEnv()
-  return useMutation({
-    onMutate: () => {
-      if (!canWrite) throw new Error('You do not have permission to change this App')
-      return { organizationId, env }
-    },
-    mutationFn: async (appId: string) => {
-      const out = (
-        await appsClient.post<{ key: string; prompt: string; last4: string }>(
-          `/apps/${encodeURIComponent(appId)}/key/issue`,
-          undefined,
-          { params: { env } },
-        )
-      ).data
-      rememberPrompt(organizationId, appId, out.prompt)
-      return out
-    },
-    onSuccess: (_data, appId, scope) => {
-      const organizationId = scope.organizationId
-      void queryClient.invalidateQueries({ queryKey: queryKeys.apps.detail(organizationId, appId) })
-      // The active-key list (AppKeys) changes with every issued or rotated key.
-      void queryClient.invalidateQueries({ queryKey: [...queryKeys.apps.all, organizationId, 'keys', appId] })
-    },
   })
 }
 

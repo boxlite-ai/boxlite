@@ -277,7 +277,8 @@ async function diff(ctx: Ctx): Promise<void> {
 
 async function migrationNew(ctx: Ctx, name: string): Promise<void> {
   const local = await localMigrations(ctx)
-  if (!local) throw new MicrocloudError('missing_manifest', 'boxlite.toml not found', 'run `boxlite-app init` first')
+  if (!local)
+    throw new MicrocloudError('missing_manifest', 'boxlite.toml not found', 'run `boxlite-app init --app <name>` first')
   if (!local.hasDatabase)
     ctx.out.note(`note: boxlite.toml has no [database] section; add it so ${local.dir} runs on deploy`)
   const file = nextMigrationName(local.files, name)
@@ -411,7 +412,7 @@ async function proxy(ctx: Ctx, opts: { port?: string; write?: boolean }): Promis
     database_url: url,
   })
   ctx.out.line(
-    `Postgres for ${app}/${ctx.envName} on 127.0.0.1:${bridge.port} (${role}; authenticated with your App key)`,
+    `Postgres for ${app}/${ctx.envName} on 127.0.0.1:${bridge.port} (${role}; authenticated with your organization API key)`,
   )
   ctx.out.line(`DATABASE_URL=${url}`)
   if (write && ctx.envName === 'main')
@@ -601,7 +602,7 @@ export function registerDb(app: Command, make: MakeCtx): void {
     db
       .command('proxy')
       .description(
-        'a local Postgres port for psql, ORMs and scripts, authenticated with the App key (read-only unless --write); no password is ever shown',
+        'a local Postgres port for psql, ORMs and scripts, authenticated with the organization API key (read-only unless --write); no password is ever shown',
       )
       .option('--port <n>', 'local port (0 = any free port)', '5432')
       .option('--write', 'log in as the database owner (DDL is still refused on main)')

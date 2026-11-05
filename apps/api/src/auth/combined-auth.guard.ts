@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { ExecutionContext, ForbiddenException, Injectable, Logger, UnauthorizedException } from '@nestjs/common'
+import { Injectable, Logger, UnauthorizedException } from '@nestjs/common'
 import { AuthGuard } from '@nestjs/passport'
 import { EmailVerificationRequiredException } from '../exceptions/email-verification-required.exception'
 
@@ -26,7 +26,7 @@ import { EmailVerificationRequiredException } from '../exceptions/email-verifica
 export class CombinedAuthGuard extends AuthGuard(['api-key', 'jwt']) {
   private readonly logger = new Logger(CombinedAuthGuard.name)
 
-  handleRequest(err: any, user: any, _info?: unknown, context?: ExecutionContext) {
+  handleRequest(err: any, user: any) {
     // Flattening this to 401 would strip the status the client branches on and re-arm its
     // stale-token recovery, bouncing an unverified user through a login that cannot help.
     if (err instanceof EmailVerificationRequiredException) {
@@ -38,9 +38,6 @@ export class CombinedAuthGuard extends AuthGuard(['api-key', 'jwt']) {
       throw new UnauthorizedException('Invalid credentials')
     }
 
-    if (user.apiKey?.cloudAppId && (!context || !Reflect.getMetadata('cloud-app-route', context.getClass()))) {
-      throw new ForbiddenException('This credential only authorizes its App')
-    }
     return user
   }
 }

@@ -39,7 +39,7 @@ export const MAX_FILE_BYTES = 50 * 1024 * 1024
 /**
  * First path segments of the API origin (and of the old prefix URLs it still redirects), so no app
  * or env may be named after one: `console` (the console's paths), `auth` (end-user sign-in), the
- * API's own roots, and `me` (`/v1/apps/me` means "the App of this key").
+ * API's own roots and platform identity routes.
  */
 export const RESERVED_NAMES: ReadonlySet<string> = new Set([
   'v1',

@@ -6,9 +6,13 @@ import { VERSION } from '../version.js'
 
 /** Reports something the platform got wrong (not the app's own bugs), then the agent carries on. */
 async function feedback(ctx: Ctx, words: string[], opts: { command?: string }): Promise<void> {
-  const out = await ctx
-    .api()
-    .feedback({ message: words.join(' '), command: opts.command, env: ctx.envName, cli_version: VERSION })
+  const api = await ctx.appApi()
+  const out = await api.feedback({
+    message: words.join(' '),
+    command: opts.command,
+    env: ctx.envName,
+    cli_version: VERSION,
+  })
   ctx.out.data(out)
   ctx.out.line(`Reported as ${out.id}. The BoxLite team reads every report.`)
   ctx.out.next('continue the user’s task with a workaround; do not wait for an answer')

@@ -330,7 +330,7 @@ async function clone(ctx: Ctx, appName: string, opts: { deployment?: string }): 
       throw new MicrocloudError(
         'not_found',
         `${appName}/${ctx.envName} has no deployed source to clone`,
-        'start a new project instead: `boxlite-app init`',
+        'start a new project with `boxlite-app init --app <name>`',
       )
     number = picked.number
   }
@@ -361,7 +361,7 @@ async function clone(ctx: Ctx, appName: string, opts: { deployment?: string }): 
 export function registerApp(program: Command, make: MakeCtx): Command {
   const app = program
     .command('app')
-    .description('inspect and operate the App (linked directory, BOXLITE_APP, or the key’s own App)')
+    .description('inspect and operate the App selected by --app, the project link or BOXLITE_APP')
 
   describe(
     app
