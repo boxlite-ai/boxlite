@@ -105,6 +105,16 @@ Product acceptance cases use the REST-mode runtime built by `conftest.py::rt`.
 `test_network_harness.py` separately checks probe failures and framing without
 creating a box; those checks are not counted as product E2E evidence.
 
+Online resize is opt-in while the API rollout flag defaults off. With
+`CLOUD_RESIZE_ENABLED=true` on the API, a Linux/KVM Runner built from this tree,
+and capacity and organization limits for at least 2 CPUs/2 GiB, run
+`BOXLITE_E2E_RESIZE=1 make test:rest:e2e FILTER=resize` from the repository root.
+`cases/test_resize.py` checks SDK growth, cloud GiB rounding, CLI retries and
+queries, unchanged guest boot/process identity, and rejection of shrinking.
+It uses the normal REST fixtures and removes its Box even after an assertion fails.
+Billing transaction and lease recovery checks live in the API and Runner component
+tests; this E2E case does not kill shared services or claim process-loss coverage.
+
 The Node tunnel driver waits for every created box's removal before closing its runtime.
 A failed removal fails the case after the other removals settle; the runtime closes even when cleanup fails.
 

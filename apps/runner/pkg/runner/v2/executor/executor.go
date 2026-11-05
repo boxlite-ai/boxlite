@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net/http"
 	"sync"
+	"time"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -50,6 +51,8 @@ type Executor struct {
 	checkpointWorkDir string
 	operationMu       sync.Mutex
 	boxOperations     map[string]*boxOperation
+	// heartbeatInterval overrides the resize lease heartbeat in tests.
+	heartbeatInterval time.Duration
 }
 
 type boxOperation struct {

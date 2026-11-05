@@ -120,7 +120,6 @@ help:
 	@echo "    make test:e2e:drivers       - Test acceptance-client argument handling"
 	@echo "    make fmt:apps:proxy         - Format the proxy Go service"
 	@echo "    make fmt:proxy              - Format the proxy package"
-	@echo "    make test:runner-ci:resize - Verify cloud resize, billing and crash recovery through SDK/CLI"
 	@echo "    make test:skill:boxlite-diagrams - Run diagram skill validator tests"
 	@echo "    make test:e2e:setup         - Prepare isolated services, current clients, fixtures and guest smoke"
 	@echo "    make test:e2e [FILTER=...]  - Run E2E cases; reuse an unchanged healthy local stack"

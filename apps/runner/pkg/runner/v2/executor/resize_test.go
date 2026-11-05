@@ -15,6 +15,12 @@ import (
 	"github.com/boxlite-ai/runner/pkg/backend"
 )
 
+func (h *harness) reports() []reportedStatus {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return append([]reportedStatus(nil), h.reported...)
+}
+
 func TestResizeClaimTokenRequestCompatibility(t *testing.T) {
 	for _, token := range []string{"", "current-claim"} {
 		t.Run("token="+token, func(t *testing.T) {

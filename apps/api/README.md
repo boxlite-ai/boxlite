@@ -673,12 +673,12 @@ with the existing metadata. A permanently lost Runner/Box needs operational
 recovery; a terminal failure leaves the old size and billing in place.
 
 Validation: `make test:apps:api` includes PostgreSQL/Redis tests when `DB_*` and
-`REDIS_*` are configured. On the isolated local stack, build with
-`make dev:runner-ci`, `make dev:node`, and `make cli`; start it with
-`CLOUD_RESIZE_ENABLED=true make test:runner-ci:infra`, then run
-`make test:runner-ci:resize`. This opt-in test kills and restarts only the isolated
-API/Runner/proxy processes, retains failures for inspection, and removes its Box
-after success. It requires KVM and the built SDKs.
+`REDIS_*` are configured. For SDK/CLI acceptance, use the existing
+[E2E stack](../e2e/README.md), enable `CLOUD_RESIZE_ENABLED=true` on the API,
+and run `BOXLITE_E2E_RESIZE=1 make test:rest:e2e FILTER=resize`.
+It requires a Linux/KVM Runner and SDK/CLI builds from this tree; it verifies
+growth without a VM restart and removes its Box during teardown. Billing rollback
+and lease recovery are covered by component tests, not by killing shared services.
 
 ## Business events
 
