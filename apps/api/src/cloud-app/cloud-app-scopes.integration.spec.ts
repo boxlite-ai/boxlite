@@ -52,7 +52,20 @@ describeWithDatabase('Cloud App permission migration (real PostgreSQL)', () => {
     }
   })
 
-  it('adds App scopes and a scoped credential column and rolls back without widening surviving credentials', async () => {
+  it('adds App permissions without changing API key columns, indexes or existing grants', async () => {
+    const columnsOfKey = () =>
+      source.query(
+        `SELECT column_name, data_type, is_nullable, column_default FROM information_schema.columns WHERE table_schema = $1 AND table_name = 'api_key' ORDER BY ordinal_position`,
+        [schema],
+      )
+    const indexesOfKey = () =>
+      source.query(
+        `SELECT indexname, indexdef FROM pg_indexes WHERE schemaname = $1 AND tablename = 'api_key' ORDER BY indexname`,
+        [schema],
+      )
+    const columnsBefore = await columnsOfKey()
+    const indexesBefore = await indexesOfKey()
+    await source.query(`INSERT INTO "${schema}".api_key (id, permissions) VALUES ('existing-key', '{write:boxes}')`)
     const migration = new AddCloudAppScopes1793780000000()
     await migration.up(runner)
     for (const name of ['api_key_permissions_enum', 'organization_role_permissions_enum']) {
@@ -62,26 +75,18 @@ describeWithDatabase('Cloud App permission migration (real PostgreSQL)', () => {
       )
       expect(labels.map((row) => row.label)).toEqual(['write:boxes', 'read:apps', 'write:apps', 'delete:apps'])
     }
-    const columns = await source.query(
-      `SELECT column_name FROM information_schema.columns WHERE table_schema = $1 AND table_name = 'api_key'`,
-      [schema],
-    )
-    expect(columns.map((row: { column_name: string }) => row.column_name)).toContain('cloudAppId')
-    await source.query(
-      `INSERT INTO "${schema}".api_key (id, permissions, "cloudAppId") VALUES ('platform-key', '{write:boxes}', NULL), ('app-key', '{read:apps,write:apps}', 'app-1')`,
-    )
-    const indexes = await source.query(
-      `SELECT indexname FROM pg_indexes WHERE schemaname = $1 AND tablename = 'api_key'`,
-      [schema],
-    )
-    expect(indexes.map((row: { indexname: string }) => row.indexname)).toContain('api_key_cloud_app_idx')
-    await migration.down(runner)
-    expect(await source.query(`SELECT id FROM "${schema}".api_key`)).toEqual([{ id: 'platform-key' }])
-    const after = await source.query(
-      `SELECT column_name FROM information_schema.columns WHERE table_schema = $1 AND table_name = 'api_key'`,
-      [schema],
-    )
-    expect(after.map((row: { column_name: string }) => row.column_name)).not.toContain('cloudAppId')
+    expect(await columnsOfKey()).toEqual(columnsBefore)
+    expect(await indexesOfKey()).toEqual(indexesBefore)
+    await source.query(`INSERT INTO "${schema}".api_key (id, permissions) VALUES ('new-key', '{read:apps,write:apps}')`)
+    await migration.down()
+    expect(
+      await source.query(`SELECT id, permissions::text AS permissions FROM "${schema}".api_key ORDER BY id`),
+    ).toEqual([
+      { id: 'existing-key', permissions: '{write:boxes}' },
+      { id: 'new-key', permissions: '{read:apps,write:apps}' },
+    ])
+    expect(await columnsOfKey()).toEqual(columnsBefore)
+    expect(await indexesOfKey()).toEqual(indexesBefore)
     const labels = await source.query(
       `SELECT e.enumlabel FROM pg_enum e JOIN pg_type t ON t.oid = e.enumtypid JOIN pg_namespace n ON n.oid = t.typnamespace WHERE n.nspname = $1 AND t.typname = 'api_key_permissions_enum'`,
       [schema],

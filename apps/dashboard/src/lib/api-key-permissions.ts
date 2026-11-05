@@ -5,6 +5,9 @@ import { CREATE_API_KEY_PERMISSIONS_GROUPS } from '@/constants/CreateApiKeyPermi
 export const API_KEY_PERMISSION_LABELS: Record<string, string> = {
   'write:boxes': 'Operate boxes',
   'delete:boxes': 'Delete boxes',
+  'read:apps': 'View Apps',
+  'write:apps': 'Manage Apps',
+  'delete:apps': 'Delete Apps',
   'read:volumes': 'View volumes',
   'write:volumes': 'Manage volumes',
   'delete:volumes': 'Delete volumes',
@@ -20,10 +23,13 @@ export const API_KEY_PERMISSION_LABELS: Record<string, string> = {
 export const API_KEY_PERMISSION_HELP: Record<string, string> = {
   'write:boxes': 'Operate boxes across this organization, including terminal access.',
   'delete:boxes': 'Allows deleting boxes in this organization.',
+  'read:apps': 'View Apps and their environments across this organization.',
+  'write:apps': 'Create and deploy Apps, and manage their environments across this organization.',
+  'delete:apps': 'Allows deleting Apps in this organization.',
   'write:images': 'Includes creating and deleting image aliases.',
   'write:members': 'Includes member and invitation management, and API key revocation.',
 }
-export const API_KEY_PERMISSION_GROUPS = ['Boxes', 'Volumes', 'Images', 'Registries', 'Members'].map(
+export const API_KEY_PERMISSION_GROUPS = ['Boxes', 'Apps', 'Volumes', 'Images', 'Registries', 'Members'].map(
   (name) => CREATE_API_KEY_PERMISSIONS_GROUPS.find((group) => group.name === name)!,
 )
 export const IMPLICIT_BOX_READ = 'Reading boxes is included and cannot be disabled here.'

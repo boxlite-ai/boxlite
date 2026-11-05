@@ -1,4 +1,4 @@
-/** The access gate of an app origin: App key or admin token, public access, or the access cookie a one-time ticket sets. */
+/** App origin access through an organization key, a public path, or a one-time ticket's cookie. */
 import { randomBytes } from 'node:crypto'
 import { bearer, safeEqual, sha256hex } from '../auth'
 import type { AppRow, EnvRow } from '../db'
@@ -16,11 +16,11 @@ import { createTestSession } from '../enduser/management'
 import type { EndUserRole } from '../enduser/role'
 
 /**
- * The access gate of an app origin, for private/org envs (security review F7, no App key in URLs):
- *   - cookie `bxl_access` (host-only), set by `/.boxlite/open?t=<ticket>`; tickets come from
- *     `POST /v1/apps/:app/envs/:env/open-ticket` (App key) or the console, live 60 s, single use;
- *   - `Authorization: Bearer bxl_app_…` of this app: passes, and the header is stripped. Another
- *     app's key → 401 without forwarding. Other Authorization headers belong to the app.
+ * Access credentials for an App environment:
+ *   - A one-time ticket from the management API sets a host-only `bxl_access` cookie.
+ *   - A valid organization key with `read:apps` grants access to its organization's Apps.
+ *     Recognized platform credentials are consumed at this boundary. Other authorization headers
+ *     belong to the App and continue through the public or cookie access checks.
  */
 
 const ACCESS_COOKIE = 'bxl_access'
@@ -31,7 +31,7 @@ const ACCESS_TTL_S = 7 * 24 * 3600
 
 // ---- access cookie and tickets --------------------------------------------------
 
-/** `<env id>.<expiry>.<hmac>`: bound to the env id, so a recycled port's old cookies open nothing. */
+/** `<env id>.<expiry>.<hmac>` binds the cookie to one environment. */
 export function signAccess(secret: string, envId: string, ttlSeconds = ACCESS_TTL_S): string {
   return signExpiring(secret, 'app-access', envId, ttlSeconds, '.')
 }
@@ -155,25 +155,22 @@ async function openWithTicket(ctx: Ctx, app: AppRow, env: EnvRow, url: URL): Pro
 async function keyGate(ctx: Ctx, app: AppRow, headers: Headers): Promise<'none' | 'ok' | Response> {
   const token = bearer(headers.get('authorization') ?? undefined)
   if (!token) return 'none'
-  // The admin token opens every app, and must never reach app code either.
-
   const credential = await ctx.credentials.authenticate(token)
   if (!credential) return 'none'
-  if (credential.appId === app.id) return 'ok'
+  if (credential.organizationId === app.org_id && credential.canReadApps) return 'ok'
   return jsonError(
     401,
     'unauthenticated',
-    `that App key does not open ${app.name}`,
-    `use the key of ${app.name}; each App key opens only its own app`,
+    'this organization API key does not grant access to the App',
+    'use an API key with read:apps from the organization that owns the App',
   )
 }
 
 type Gate = { ok: true; stripAuthorization: boolean } | { ok: false; refusal: Response | null; access: string }
 
 /**
- * The access gate of an app origin (F7), for HTTP and WebSocket alike: this app's key (or the
- * admin token) passes and is stripped; otherwise a public env, one of its `public_paths` (a
- * webhook), or the access cookie of a ticket.
+ * HTTP and WebSocket share the gate. A recognized organization key must pass its own checks
+ * before public paths or ticket cookies are considered.
  */
 export async function accessGate(ctx: Ctx, app: AppRow, env: EnvRow, headers: Headers, path: string): Promise<Gate> {
   const key = await keyGate(ctx, app, headers)

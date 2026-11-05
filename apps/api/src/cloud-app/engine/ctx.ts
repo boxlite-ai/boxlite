@@ -11,19 +11,9 @@ import type { Resources } from './resources'
 import type { Scheduler } from './scheduler'
 import type { SupervisorClient } from './supervisor'
 
-/** External systems, injected so tests can swap in fakes. */
-export interface CredentialView {
-  id: string
-  last4: string
-  created_at: string
-  last_used_at: string | null
-}
 export interface AppCredentials {
-  issue(app: import('./db').AppRow, actor: string): Promise<string>
-  list(app: import('./db').AppRow): Promise<CredentialView[]>
-  revoke(app: import('./db').AppRow, id: string, actor: string): Promise<void>
-  rotate(app: import('./db').AppRow, actor: string): Promise<string>
-  authenticate(token: string): Promise<{ appId: string; organizationId: string; actor: string } | null>
+  /** A recognized platform key is never forwarded, even if it cannot access Apps. */
+  authenticate(token: string): Promise<{ organizationId: string; canReadApps: boolean } | null>
 }
 export interface AppSourceStore {
   has(appId: string, sha: string): Promise<boolean>

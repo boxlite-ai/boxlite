@@ -4,12 +4,13 @@ Generated from the command definitions by `cli/scripts/gen-reference.ts` (CLI 0.
 
 ## Conventions
 
-- Global options on every command: `--json`, `--env <name>` (default: `.boxlite/link.json`, else `main`).
-- The App is taken from `.boxlite/link.json`, then `BOXLITE_APP`, then the App the key belongs to. Credentials: `BOXLITE_API_KEY`, `BOXLITE_API_URL`.
+- Global options on every command: `--json`, `--app <name>`, and `--env <name>`.
+- Select the App with `--app <name>`, an existing `.boxlite/link.json`, or `BOXLITE_APP`. The environment defaults to the project link, then `main`.
+- `boxlite-app login` saves the organization key by `BOXLITE_API_URL`. `BOXLITE_API_KEY` takes precedence over the saved credential.
 - `--json`: exit 0 prints exactly one JSON document on stdout. Any other exit prints nothing on stdout and one `{"error": {…}}` object on stderr. `--follow` modes stream NDJSON, one object per line.
 - Errors always carry `code`, `message` and `next` (a runnable command or a file edit), often `docs` (a `boxlite-app docs` topic) and code-specific fields.
 - Human mode ends successful commands with a `next:` line when there is an obvious next step.
-- App keys, box tokens and database passwords are masked in output (`blk_test_…abcd`, `postgresql://user:****@host`).
+- Organization keys, box tokens and database passwords are masked in output (`blk_test_…abcd`, `postgresql://user:****@host`).
 
 ## Exit codes
 
@@ -51,7 +52,6 @@ Usage: `boxlite-app init [options]`
 
 | option | description | default |
 |---|---|---|
-| `--app <name>` | App name (default: the App the key belongs to) |  |
 | `--no-agents-md` | do not write the BoxLite block into AGENTS.md |  |
 
 - Network: talks to the control plane
@@ -129,7 +129,7 @@ boxlite-app deploy --verbose
 
 ### `boxlite-app login`
 
-save the App key once so later shells need no BOXLITE_API_KEY: from BOXLITE_API_KEY, or a pipe with --stdin (never an argument)
+save the organization API key from BOXLITE_API_KEY or a pipe with --stdin
 
 Usage: `boxlite-app login [options]`
 
@@ -138,16 +138,16 @@ Usage: `boxlite-app login [options]`
 | `--stdin` | read the key from stdin |  |
 
 - Network: talks to the control plane
-- `--json`: `{ app, api_url, key_last4, saved_to }`
-- Exit codes: 0, 1, 2, 3, 6
+- `--json`: `{ organization_id, api_url, key_last4, saved_to }`
+- Exit codes: 0, 1, 2, 5, 6
 
 ```sh
-BOXLITE_API_URL=https://api.example.test/api/v1/<organization-id> BOXLITE_API_KEY=<app-key> boxlite-app login
+BOXLITE_API_URL=https://api.example.test/api/v1/<organization-id> BOXLITE_API_KEY=<organization-key> boxlite-app login
 ```
 
 ### `boxlite-app logout`
 
-forget the saved key of this App (--all: every saved key)
+forget the selected organization API key (--all: every saved key)
 
 Usage: `boxlite-app logout [options]`
 
@@ -161,13 +161,13 @@ Usage: `boxlite-app logout [options]`
 
 ### `boxlite-app whoami`
 
-the key’s App and scope, the environment, the control plane, and whether a newer CLI exists
+the organization, selected App and environment, and whether a newer CLI exists
 
 Usage: `boxlite-app whoami`
 
 - Network: talks to the control plane
-- `--json`: `{ app, env, actor, key: { last4, created_at } | null, scope, control_plane, api_url, environments: { name, status, url }[], linked: { link_file, app, matches_key }, cli: { version, latest_version, update_available, update_command } }`
-- Exit codes: 0, 1, 2, 6
+- `--json`: `{ organization_id, app: string | null, env, actor, key: { last4 }, scope, control_plane, api_url, environments: { name, status, url }[], sign_in_providers, linked: { link_file, app }, cli: { version, latest_version, update_available, update_command } }`
+- Exit codes: 0, 1, 2, 3, 5, 6
 
 ### `boxlite-app doctor`
 
@@ -329,7 +329,7 @@ boxlite-app app logs --follow --json
 
 ### `boxlite-app app curl`
 
-request a path of the deployed app with the App key (works for private apps); --as signs in a test user; redirects are shown, not followed
+request a path of the deployed app with the organization API key (works for private apps); --as signs in a test user; redirects are shown, not followed
 
 Usage: `boxlite-app app curl <path> [options]`
 
@@ -656,7 +656,7 @@ Usage: `boxlite-app app db rows <table> [options]`
 
 ### `boxlite-app app db proxy`
 
-a local Postgres port for psql, ORMs and scripts, authenticated with the App key (read-only unless --write); no password is ever shown
+a local Postgres port for psql, ORMs and scripts, authenticated with the organization API key (read-only unless --write); no password is ever shown
 
 Usage: `boxlite-app app db proxy [options]`
 

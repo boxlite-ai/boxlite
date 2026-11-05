@@ -85,17 +85,12 @@ describe('Domain acquisition authorization', () => {
     const config = { get: (key: string) => (key === 'proxy.apiKey' ? 'domain-proxy-key' : 30) }
     const apiKeys = {
       getApiKeyByValue: async (token: string) => {
-        if (
-          !['domain-write-key', 'domain-read-key', 'domain-expired-key', 'app-write-key', 'app-scoped-key'].includes(
-            token,
-          )
-        )
+        if (!['domain-write-key', 'domain-read-key', 'domain-expired-key', 'app-write-key'].includes(token))
           throw new UnauthorizedException()
         return {
           organizationId,
           userId: 'owner',
           name: token,
-          cloudAppId: token === 'app-scoped-key' ? 'shop' : null,
           permissions: [
             token.startsWith('app-')
               ? OrganizationResourcePermission.WRITE_APPS
@@ -109,13 +104,11 @@ describe('Domain acquisition authorization', () => {
       updateLastUsedAt: jest.fn().mockResolvedValue(undefined),
     }
     claim = jest.fn().mockResolvedValue({ hostname: 'my-app.apps.test', url: 'https://my-app.apps.test', target: null })
-    bindApp = jest
-      .fn()
-      .mockResolvedValue({
-        hostname: 'my-app.apps.test',
-        url: 'https://my-app.apps.test',
-        target: { type: 'app', app: 'shop', environment: 'env-main' },
-      })
+    bindApp = jest.fn().mockResolvedValue({
+      hostname: 'my-app.apps.test',
+      url: 'https://my-app.apps.test',
+      target: { type: 'app', app: 'shop', environment: 'env-main' },
+    })
     const moduleRef = await Test.createTestingModule({
       imports: [PassportModule.register({ session: false })],
       controllers: [BoxliteDomainController],
@@ -126,16 +119,14 @@ describe('Domain acquisition authorization', () => {
             claim,
             bindApp,
             owned: jest.fn().mockResolvedValue({ target: null }),
-            listHeld: jest
-              .fn()
-              .mockResolvedValue({
-                domains: [],
-                limit: 1,
-                used: 0,
-                remaining: 1,
-                minLength: 5,
-                domainSuffix: 'apps.test',
-              }),
+            listHeld: jest.fn().mockResolvedValue({
+              domains: [],
+              limit: 1,
+              used: 0,
+              remaining: 1,
+              minLength: 5,
+              domainSuffix: 'apps.test',
+            }),
           },
         },
         { provide: BoxService, useValue: {} },
@@ -284,11 +275,6 @@ describe('Domain acquisition authorization', () => {
   it('allows an App reader to list domains but not claim them', async () => {
     expect((await request('/v1/org-1/domains', jwt('app-reader'), { method: 'GET' })).status).toBe(200)
     expect((await request('/v1/org-1/domains', jwt('app-reader'))).status).toBe(403)
-    expect(claim).not.toHaveBeenCalled()
-  })
-
-  it('refuses App-scoped keys on the organization-wide domains API', async () => {
-    expect((await request('/v1/org-1/domains', 'app-scoped-key')).status).toBe(403)
     expect(claim).not.toHaveBeenCalled()
   })
 })

@@ -1507,8 +1507,6 @@ paths:
         `region_not_supported` (400) refuses a Box behind another regional proxy.
         `app_domain_managed` (400) prevents moving or unbinding an environment’s
         generated default hostname; binding it to the same environment is idempotent.
-        App-scoped keys manage aliases through their App routes rather than this
-        organization-wide collection.
         Custom-domain errors: `subscription_required` (403),
         `subscription_not_ready` and `domain_not_ready` (409).
       tags: [Domains]
