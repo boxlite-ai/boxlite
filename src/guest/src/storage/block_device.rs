@@ -72,40 +72,45 @@ impl BlockDeviceMount {
         // workloads. Access time tracking is rarely needed in container contexts.
         let mount_flags = MsFlags::MS_NOATIME | MsFlags::MS_NODIRATIME;
 
-        // Mount using nix
-        mount(
-            Some(device),
+        mount_then_finish(
             mount_point,
-            Some(fs_name),
-            mount_flags,
-            None::<&str>,
+            || {
+                mount(
+                    Some(device),
+                    mount_point,
+                    Some(fs_name),
+                    mount_flags,
+                    None::<&str>,
+                )
+                .map_err(|e| {
+                    BoxliteError::Storage(format!(
+                        "Failed to mount {} to {}: {}",
+                        device.display(),
+                        mount_point.display(),
+                        e
+                    ))
+                })
+            },
+            || {
+                // Resize filesystem if requested (expands ext4 to fill available disk space)
+                if need_resize {
+                    Self::resize_filesystem(device, filesystem)?;
+                }
+
+                tracing::info!(
+                    "Mounted block device: {} → {}",
+                    device.display(),
+                    mount_point.display()
+                );
+
+                // Log filesystem contents only when trace logging is enabled
+                if tracing::enabled!(tracing::Level::TRACE) {
+                    Self::log_filesystem_contents(mount_point)?;
+                }
+
+                Ok(())
+            },
         )
-        .map_err(|e| {
-            BoxliteError::Storage(format!(
-                "Failed to mount {} to {}: {}",
-                device.display(),
-                mount_point.display(),
-                e
-            ))
-        })?;
-
-        // Resize filesystem if requested (expands ext4 to fill available disk space)
-        if need_resize {
-            Self::resize_filesystem(device, filesystem)?;
-        }
-
-        tracing::info!(
-            "Mounted block device: {} → {}",
-            device.display(),
-            mount_point.display()
-        );
-
-        // Log filesystem contents only when trace logging is enabled
-        if tracing::enabled!(tracing::Level::TRACE) {
-            Self::log_filesystem_contents(mount_point)?;
-        }
-
-        Ok(())
     }
 
     /// Log a glance view of mounted filesystem contents (2 levels deep).
@@ -266,6 +271,82 @@ impl BlockDeviceMount {
 
         tracing::info!("Formatted {} successfully", device.display());
         Ok(())
+    }
+}
+
+// The batch owns a mount only after this helper returns successfully. Until
+// then every post-mount error must release it, including resize or diagnostics.
+fn mount_then_finish(
+    target: &Path,
+    acquire: impl FnOnce() -> BoxliteResult<()>,
+    finish: impl FnOnce() -> BoxliteResult<()>,
+) -> BoxliteResult<()> {
+    acquire()?;
+    match finish() {
+        Ok(()) => Ok(()),
+        Err(error) => match nix::mount::umount(target) {
+            Ok(()) => Err(error),
+            Err(cleanup) => Err(BoxliteError::Storage(format!(
+                "{error}; unmount {} after initialization failure: {cleanup}",
+                target.display()
+            ))),
+        },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn post_mount_failure_releases_mount() {
+        const CHILD: &str = "BOXLITE_BLOCK_MOUNT_TEST_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let status = Command::new("unshare")
+                .args(["--user", "--map-root-user", "--mount"])
+                .arg(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "storage::block_device::tests::post_mount_failure_releases_mount",
+                    "--nocapture",
+                ])
+                .env(CHILD, "1")
+                .status()
+                .unwrap();
+            assert!(status.success(), "mount namespace test failed: {status}");
+            return;
+        }
+        mount(
+            None::<&str>,
+            "/",
+            None::<&str>,
+            MsFlags::MS_REC | MsFlags::MS_PRIVATE,
+            None::<&str>,
+        )
+        .unwrap();
+        let target = tempfile::tempdir().unwrap();
+        let marker = target.path().join("underlying");
+        std::fs::write(&marker, b"underlying filesystem").unwrap();
+        let error = mount_then_finish(
+            target.path(),
+            || {
+                mount(
+                    Some("tmpfs"),
+                    target.path(),
+                    Some("tmpfs"),
+                    MsFlags::empty(),
+                    None::<&str>,
+                )
+                .map_err(|error| BoxliteError::Storage(error.to_string()))
+            },
+            || {
+                assert!(!marker.exists(), "must exercise a real mounted filesystem");
+                Err(BoxliteError::Storage("injected post-mount failure".into()))
+            },
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("injected post-mount failure"));
+        assert_eq!(std::fs::read(&marker).unwrap(), b"underlying filesystem");
     }
 }
 
