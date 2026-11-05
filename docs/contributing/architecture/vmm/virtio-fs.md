@@ -261,9 +261,13 @@ Injected `pread64` delay tests separately exercise successful reset, failed stop
 shutdown retry and RAM `Arc` retention. An expired gate watchdog fails the test.
 A concurrent producer uses four independent request/reply chains, refills only
 completed slots and stays live during reset. Reset has a separate one-second
-bound; the producer's five-second watchdog is a failure. This proves bounded
-progress for that observed workload, not a universal scheduling guarantee or
-cancellation of host syscalls. VM RAM-registration retention on failed shutdown
+bound; the producer's five-second watchdog is a failure. Initial runs passed,
+but subsequent isolated runs reproducibly timed out with transport status 15
+instead of 0. The unchanged regression therefore exposes a sustained-load stop
+failure: the shared drain can remain inside the callback while requests keep
+arriving. Earlier passes do not qualify bounded progress. Resolving this requires
+a public queue budget/continuation decision, which the current design assigns to
+common scheduling work; it cannot be solved by cancelling a host syscall. VM RAM-registration retention on failed shutdown
 remains covered by the common VM lifecycle tests, separately from fs ownership.
 
 ## Verification record
@@ -304,10 +308,10 @@ with `make vmm:boot:host BOOT_JOBS=16`; its effective configuration includes
 
 | Check on the integrated worktree | Result and boundary |
 | --- | --- |
-| `make test:unit:vmm` | 371 VMM and 16 hypervisor tests pass; 25 and 8 hardware tests are ignored by this unit target |
+| `make test:unit:vmm` | Earlier full run: 371 VMM and 16 hypervisor pass, 25 and 8 ignored. The subsequent isolated sustained-producer failure below means this is not a stable final green result |
 | `make clippy:vmm` | Passes |
 | `make test:integration:vmm:linux` with the merged-config kernel | All 15 tests pass, including upstream block boots and the three existing fs boots |
-| `make test:unit:vmm FILTER=worker_tests` | All seven production Fs/MMIO/SharedRuntime lifecycle tests pass, including kernel lease blocking, reset timeout, explicit release and concurrent four-chain replenishment |
+| `make test:unit:vmm FILTER=worker_tests` | Earlier seven-test run passed; later isolated four-chain producer runs fail reset with status 15 instead of 0. This supersedes the earlier clean lifecycle qualification. The failing assertion is retained |
 | `make test:integration:vmm:mounts` | Passes after rebuilding the static init from the final guest source; uses the merged-config kernel and cached musl libseccomp 2.6.1 through the existing build helper |
 | Construction and session fd tests | Isolated real EMFILE at root/auxiliary-fd open, later-export ENOENT rollback, populated reset/destroy/drop and recovery pass with exact fd baselines |
 
@@ -351,11 +355,29 @@ release archive builds were not run.
 
 Private mmap was checked for initial data access only; visibility of later host
 changes through an existing private mapping is not guaranteed by this direct-I/O
-contract. The producer workload establishes observed reset progress under
-concurrent replenishment, not a guarantee that the ring never empties under every
-scheduler. Full Box exit.json, copy RPC and normal lifecycle acceptance still need
+contract. The producer workload has exposed a reproducible reset timeout under
+concurrent replenishment; sustained-load shutdown remains an open blocker. Full Box exit.json, copy RPC and normal lifecycle acceptance still need
 a native engine adapter and whole-machine Guest.Init integration. BSD source attribution and packaging recipes have been checked; real release
 archive builds and inspection remain outstanding. These are open acceptance items, not passing results.
+
+## 验收编号与证据层次
+
+| 编号 | 当前证据 | 限制 |
+| --- | --- | --- |
+| F01–F05 | `fs_protocol` 的真实对象创建、属性、读写、删除/改名；Linux 后端身份矩阵 | 宿主固定身份，不切换请求凭据 |
+| F06 | 内存设备旧 nodeid/fh；真实 guest rename/unlink 后 fstat/fsync | 各层结果分开记录 |
+| F07 | 300 文件小缓冲 READDIR/PLUS、引用回收 | 不以测试自造回复为证据 |
+| F08–F10 | 真实 symlink/hardlink/xattr，跨 share EXDEV，宿主移出目录边界 | 不支持的操作保留明确 errno |
+| F11–F12 | WRITE 实际计数；真实 FSYNC/FSYNCDIR；worker FSYNC/FDATASYNC gate验证回复等待与EIO；三次FLUSH后READ及RELEASE/FORGET fd回归 | gate是注入时序，成功同步执行真实syscall；持久化不由FLUSH承诺 |
+| F13–F17 | statfs、allocation、seek、rename flags、INIT 及 unsupported 协议测试 | 未扩大到 DAX、锁或特殊文件数据访问 |
+| B01–B03 | 一个设备混合导出、同名路由、独立身份、ro 修改入口、真实 guest 组合挂载 | 正常 Box native 路径仍缺引擎适配 |
+| B04/B07/B12 | 越界/移名对象、宿主身份、独立暂存授权、两个 isolate 准备模式、rw 写穿/ro 快照/EXDEV | 未做完整 jailed native Box 验收 |
+| B05 | lookup/open/inflight 独立所有权、FORGET/PLUS、真实 fd 回收 | 编号在会话内不复用 |
+| B06 | DIRECT_IO/零超时契约；同 guest fd 协调 host rewrite；MAP_PRIVATE 初始 fault 和 MAP_SHARED ENODEV | 不保证已有 private mmap 后续修改可见 |
+| B08–B09 | 分段/方向/容量、公共冻结描述符、indirect、双队列、通知、激活/reset | 沿公共队列和 transport 边界 |
+| B10 | 真正 lease 阻塞 OPEN、其他 Fs 延迟、reset 超时/成功、注入 gate、RAM Arc通过；四链补充最终复现reset超时失败 | 当前阻塞：公共drain持续请求不能保证退出；VM注册保留还是独立通用测试 |
+| B11 | EMFILE 根/辅助 fd、第二导出失败、ENOSPC/短写注入、反复 populated reset/destroy/drop | 注入错误与真实磁盘满分别标明 |
+| B13–B14 | 配置、挂载、最小真实 guest 与旧引擎准备回归 | 完整 Box、exit.json、独立 copy RPC、双引擎运行待外部集成 |
 
 ## Source attribution
 
