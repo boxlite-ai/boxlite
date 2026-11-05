@@ -6,10 +6,7 @@
 //! chooses immediate discard or pressure-driven reclaim. No inflate/deflate
 //! target is ever requested.
 
-use std::{
-    io,
-    sync::{Arc, Mutex},
-};
+use std::io;
 
 use virtio_queue::DescriptorChain;
 use vm_memory::GuestAddress;
@@ -66,9 +63,10 @@ pub(crate) fn add(
     slot: crate::virtio::mmio::Slot,
     reclaim: ReclaimPolicy,
 ) -> crate::error::Result<()> {
-    let device: Arc<Mutex<dyn VirtioDevice>> = Arc::new(Mutex::new(
-        VirtioBalloon::new(reclaim).map_err(crate::error::Error::CreateBalloon)?,
-    ));
+    let device: std::sync::Arc<std::sync::Mutex<dyn VirtioDevice>> =
+        std::sync::Arc::new(std::sync::Mutex::new(
+            VirtioBalloon::new(reclaim).map_err(crate::error::Error::CreateBalloon)?,
+        ));
     crate::virtio::mmio::add_device(chipset, ctx, SPEC.name, slot, device)
 }
 
