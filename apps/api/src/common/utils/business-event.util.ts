@@ -7,13 +7,7 @@ import { Logger } from '@nestjs/common'
 import { getServiceType } from './app-mode'
 import { Context } from '../context/context'
 
-export type BusinessEventName =
-  | 'user.registration'
-  | 'user.login'
-  | 'user.login.genuine'
-  | 'box.create'
-  | 'box.stop'
-  | 'box.delete'
+export type BusinessEventName = 'user.registration' | 'user.login' | 'box.create' | 'box.stop' | 'box.delete'
 
 export interface BusinessEventBase {
   name: BusinessEventName
@@ -22,8 +16,6 @@ export interface BusinessEventBase {
   correlationId: string
   // Absent only on job outcome events: the runner reports after the request ends.
   ctx?: Context
-  /** Trusted business occurrence time; OTLP Timestamp still describes log publication. */
-  occurredAt?: string
 }
 
 export type BusinessEvent =
@@ -79,7 +71,7 @@ function toLogAttributes(event: BusinessEvent): Record<string, string> {
     'event.outcome': event.outcome,
     'correlation.id': event.correlationId,
     'service.type': getServiceType(),
-    'event.timestamp': event.occurredAt ?? new Date().toISOString(),
+    'event.timestamp': new Date().toISOString(),
   }
 
   if (event.ctx) {

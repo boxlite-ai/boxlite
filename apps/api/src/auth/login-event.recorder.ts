@@ -3,8 +3,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { Injectable, Logger, Optional } from '@nestjs/common'
-import { ConfigService } from '@nestjs/config'
+import { Injectable, Logger } from '@nestjs/common'
 import { InjectRedis } from '@nestjs-modules/ioredis'
 import { Redis } from 'ioredis'
 import { recordBusinessEvent } from '../common/utils/business-event.util'
@@ -14,7 +13,6 @@ import { Context } from '../common/context/context'
 export interface IssuedToken {
   iat?: number
   exp?: number
-  [claim: string]: unknown
 }
 
 /**
@@ -27,10 +25,7 @@ export interface IssuedToken {
 export class LoginEventRecorder {
   private readonly logger = new Logger(LoginEventRecorder.name)
 
-  constructor(
-    @InjectRedis() private readonly redis: Redis,
-    @Optional() private readonly config?: ConfigService,
-  ) {}
+  constructor(@InjectRedis() private readonly redis: Redis) {}
 
   async recordFirstUse(userId: string, token: IssuedToken): Promise<void> {
     const secondsUntilExpiry = (token.exp ?? 0) - Math.floor(Date.now() / 1000)
@@ -40,7 +35,6 @@ export class LoginEventRecorder {
     }
 
     try {
-      await this.recordGenuineLogin(userId, token, secondsUntilExpiry)
       const firstUse = await this.redis.set(
         `business-event:user-login:${userId}:${token.iat}`,
         '1',
@@ -58,35 +52,5 @@ export class LoginEventRecorder {
     }
 
     recordBusinessEvent({ name: 'user.login', outcome: 'success', correlationId: userId, ctx: Context.user() })
-  }
-
-  private async recordGenuineLogin(userId: string, token: IssuedToken, ttlSeconds: number): Promise<void> {
-    // JwtStrategy passes verified issuer claims. No iat fallback: refresh is not a new authentication.
-    const claim = this.config?.get<string>('oidc.authenticationTimeClaim')
-    if (!claim) return
-    const authenticatedAt = token[claim]
-    if (
-      typeof authenticatedAt !== 'number' ||
-      !Number.isSafeInteger(authenticatedAt) ||
-      authenticatedAt <= 0 ||
-      authenticatedAt > Math.floor(Date.now() / 1000) ||
-      authenticatedAt > token.iat
-    )
-      return
-    const first = await this.redis.set(
-      `business-event:genuine-login:${userId}:${authenticatedAt}`,
-      '1',
-      'EX',
-      ttlSeconds,
-      'NX',
-    )
-    if (first !== 'OK') return
-    recordBusinessEvent({
-      name: 'user.login.genuine',
-      outcome: 'success',
-      correlationId: userId,
-      ctx: Context.user(),
-      occurredAt: new Date(authenticatedAt * 1000).toISOString(),
-    })
   }
 }

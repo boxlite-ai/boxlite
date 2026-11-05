@@ -302,17 +302,15 @@ for the source evidence, concurrency model and verification boundaries.
 See [organization onboarding](src/organization/ONBOARDING.md) for the profile, personal prompt
 draft and idempotent handoff API contracts, migration order, and frontend integration behavior.
 
-## Retention-policy reads and genuine logins
+## Retention-policy reads and login activity
 
 Retention-policy workers reuse the existing Backoffice Admin credential for
 `GET /api/admin/organizations`. The endpoint retains its existing Admin authorization;
 no policy-specific key or role is required. Registration reads use `createdFrom`, `createdTo`
 and `boxCountScope=all`. Exact-org reads use `organizationId=<UUID>&boxCountScope=all`.
 
-`OIDC_AUTHENTICATION_TIME_CLAIM` opt-in names a verified issuer claim containing the original
-positive integer authentication time in seconds. Never configure an issuance/refresh timestamp.
-`LoginEventRecorder` emits `user.login.genuine` with that time in `event.timestamp`; OTLP
-Timestamp remains log publication time. Refreshes sharing authentication time cannot create a
-later business occurrence. Missing/invalid claims emit no genuine event, with no iat fallback.
-Existing `user.login` semantics stay unchanged. This observes API token use, not every IdP login;
-Redis/log failures can omit records. Consumers must verify provider/feed readiness before R2.
+R2 reuses successful `user.login` records from `LoginEventRecorder`, with the user ID in
+`correlation.id` and the observation time in `event.timestamp`. The existing recorder logs
+first API use of each newly issued token, including refreshed tokens. R2 therefore treats a
+qualifying token-use record as return activity; it does not require a new interactive login.
+No additional event or issuer-claim configuration is required. Redis/log failures can omit records.

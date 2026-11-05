@@ -15,23 +15,6 @@ const base = { STACK_DOMAIN: 'dev.boxlite.ai', OIDC_ISSUER_BASE_URL: 'https://au
 const assemble = (environment: Record<string, string | undefined>, declaration = groups([])) =>
   apiEnvironmentFrom({ environment, declaration, region: 'ap-southeast-1', stage: 'dev', home: 'aws' })
 
-test('trusted-auth claim stays an optional API setting', () => {
-  const path = new URL('../../mstage.env.json', import.meta.url)
-  const declared = parseBase(path.pathname, readFileSync(path, 'utf8'))
-  const required = Object.fromEntries(
-    declared.envSelectGroup.api.filter((key) => !declared.envOptional.api.includes(key)).map((key) => [key, 'fixture']),
-  )
-  const result = assemble(
-    {
-      ...base,
-      ...required,
-      OIDC_AUTHENTICATION_TIME_CLAIM: 'auth_time',
-    },
-    { groups: declared.envSelectGroup, optional: declared.envOptional, where: path.pathname },
-  )
-  assert.equal(result.environment.OIDC_AUTHENTICATION_TIME_CLAIM, 'auth_time')
-})
-
 test('the declared API group delivers the organization invitation lifetime on both clouds', () => {
   const path = new URL('../../mstage.env.json', import.meta.url)
   const declared = parseBase(path.pathname, readFileSync(path, 'utf8'))

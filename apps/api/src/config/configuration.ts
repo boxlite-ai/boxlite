@@ -478,7 +478,6 @@ const configuration = {
     environment: process.env.POSTHOG_ENVIRONMENT,
   },
   oidc: {
-    authenticationTimeClaim: process.env.OIDC_AUTHENTICATION_TIME_CLAIM?.trim() || undefined,
     clientId: process.env.OIDC_CLIENT_ID || process.env.OID_CLIENT_ID,
     issuer: process.env.OIDC_ISSUER_BASE_URL || process.env.OID_ISSUER_BASE_URL,
     publicIssuer: process.env.PUBLIC_OIDC_DOMAIN,
