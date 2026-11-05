@@ -58,6 +58,7 @@ pub(crate) struct BuildSpec {
     pub env: HashMap<String, String>,
     pub args: Vec<String>,
     pub ssh_workload: Option<crate::service::ssh::SshWorkload>,
+    pub pty_config: Option<crate::service::exec::exec_handle::PtyConfig>,
     pub uid: u32,
     pub gid: u32,
     pub capabilities: CapabilitySet,
@@ -364,13 +365,16 @@ fn do_build(spec: BuildSpec, fds: Option<[RawFd; 3]>) -> BuildResult {
             .validate_id()
             .map_err(|e| format!("Invalid container ID: {e}"))?;
 
-        // The image entrypoint and ordinary exec requests retain Youki's
-        // default executor. Only a typed internal SSH workload installs the
-        // direct BoxLite dispatcher in the final tenant child.
-        if let Some(workload) = spec.ssh_workload.clone() {
-            builder =
-                builder.with_executor(crate::service::ssh::BoxliteWorkloadExecutor::new(workload));
-        }
+        // Preserve the workload's validation/environment behavior while setting
+        // terminal attributes in the child before either executor can run.
+        let inner: Box<dyn libcontainer::workload::Executor> = match spec.ssh_workload.clone() {
+            Some(workload) => Box::new(crate::service::ssh::BoxliteWorkloadExecutor::new(workload)),
+            None => Box::new(libcontainer::workload::default::DefaultExecutor {}),
+        };
+        builder = builder.with_executor(super::pty::PtyExecutor {
+            inner,
+            config: spec.pty_config.clone(),
+        });
 
         if let Some((stdin, stdout, stderr)) = owned_fds {
             builder = builder
@@ -735,6 +739,7 @@ mod tests {
                 "echo hello world".to_string(),
             ],
             ssh_workload: None,
+            pty_config: None,
             uid: 1000,
             gid: 1000,
             capabilities: CapabilitySet::default(),
@@ -804,6 +809,7 @@ mod tests {
             env: HashMap::new(),
             args: vec![],
             ssh_workload: None,
+            pty_config: None,
             uid: 0,
             gid: 0,
             capabilities: CapabilitySet::default(),
@@ -963,6 +969,7 @@ mod tests {
             env,
             args,
             ssh_workload: None,
+            pty_config: None,
             uid: 65534,
             gid: 65534,
             capabilities: CapabilitySet::default(),
@@ -994,6 +1001,7 @@ mod tests {
             env,
             args: vec![],
             ssh_workload: None,
+            pty_config: None,
             uid: 0,
             gid: 0,
             capabilities: CapabilitySet::default(),
@@ -1187,6 +1195,7 @@ mod tests {
                     env: HashMap::new(),
                     args: vec!["echo".to_string()],
                     ssh_workload: None,
+                    pty_config: None,
                     uid: 0,
                     gid: 0,
                     capabilities: CapabilitySet::default(),
@@ -1229,6 +1238,7 @@ mod tests {
             env: HashMap::new(),
             args: vec!["true".to_string()],
             ssh_workload: None,
+            pty_config: None,
             uid: 0,
             gid: 0,
             capabilities: CapabilitySet::default(),
@@ -1576,6 +1586,7 @@ mod tests {
                 env: HashMap::new(),
                 args: vec!["true".to_string()],
                 ssh_workload: None,
+                pty_config: None,
                 uid: 0,
                 gid: 0,
                 capabilities: CapabilitySet::default(),

@@ -417,6 +417,12 @@ impl Container {
             // is retained for window-size ioctls, so ResizeTty reaches the main
             // command exactly as it reaches an exec.
             InitIo::Pty { master } => {
+                // Init still waits for Container.Start at this point, unlike
+                // an exec tenant whose build has already executed its workload.
+                if let Err(error) = super::pty::initialize(&master, &DEFAULT_INIT_PTY) {
+                    super::command::terminate_process(pid);
+                    return Err(error);
+                }
                 super::command::create_pty_child(pid, master, DEFAULT_INIT_PTY)?
             }
         };
