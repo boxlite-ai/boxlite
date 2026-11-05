@@ -46,6 +46,8 @@ struct Fault {
     changed: Condvar,
     write: Option<usize>,
     expired: std::sync::atomic::AtomicBool,
+    sync_error: std::sync::atomic::AtomicBool,
+    sync_result: Mutex<Option<(bool, i32)>>,
 }
 
 impl Fault {
@@ -57,6 +59,8 @@ impl Fault {
             changed: Condvar::new(),
             write,
             expired: std::sync::atomic::AtomicBool::new(false),
+            sync_error: std::sync::atomic::AtomicBool::new(false),
+            sync_result: Mutex::new(None),
         });
         *FAULT.lock().unwrap() = Some(fault.clone());
         fault
@@ -68,6 +72,20 @@ impl Fault {
             .wait_timeout_while(self.state.lock().unwrap(), WAIT, |state| !state.0)
             .unwrap();
         assert!(state.0, "Fs did not enter the injected host syscall gate");
+    }
+
+    fn wait(&self) {
+        let mut state = self.state.lock().unwrap();
+        state.0 = true;
+        self.changed.notify_all();
+        let (state, _) = self
+            .changed
+            .wait_timeout_while(state, WAIT, |state| !state.1)
+            .unwrap();
+        if !state.1 {
+            self.expired
+                .store(true, std::sync::atomic::Ordering::Release);
+        }
     }
 
     fn open(&self) {
@@ -99,22 +117,46 @@ unsafe extern "C" fn injected_pread(
     offset: i64,
 ) -> isize {
     if let Some(fault) = fault(fd) {
-        let mut state = fault.state.lock().unwrap();
-        state.0 = true;
-        fault.changed.notify_all();
-        // A watchdog releases the syscall even when the test panics.
-        let (state, _) = fault
-            .changed
-            .wait_timeout_while(state, WAIT, |state| !state.1)
-            .unwrap();
-        if !state.1 {
-            fault
-                .expired
-                .store(true, std::sync::atomic::Ordering::Release);
-        }
+        fault.wait();
     }
     // SAFETY: forward the unchanged libc ABI to the kernel.
     unsafe { libc::syscall(libc::SYS_pread64, fd, buf, count, offset) as isize }
+}
+
+fn host_sync(fd: i32, data_only: bool) -> i32 {
+    let injected = fault(fd);
+    if let Some(fault) = &injected {
+        fault.wait();
+        if fault.sync_error.load(std::sync::atomic::Ordering::Acquire) {
+            // SAFETY: errno belongs to this calling thread.
+            unsafe {
+                *libc::__errno_location() = libc::EIO;
+            }
+            *fault.sync_result.lock().unwrap() = Some((data_only, -1));
+            return -1;
+        }
+    }
+    let syscall = if data_only {
+        libc::SYS_fdatasync
+    } else {
+        libc::SYS_fsync
+    };
+    // SAFETY: forward the borrowed descriptor to the matching Linux syscall.
+    let result = unsafe { libc::syscall(syscall, fd) as i32 };
+    if let Some(fault) = injected {
+        *fault.sync_result.lock().unwrap() = Some((data_only, result));
+    }
+    result
+}
+
+#[unsafe(export_name = "fsync")]
+unsafe extern "C" fn injected_fsync(fd: i32) -> i32 {
+    host_sync(fd, false)
+}
+
+#[unsafe(export_name = "fdatasync")]
+unsafe extern "C" fn injected_fdatasync(fd: i32) -> i32 {
+    host_sync(fd, true)
 }
 
 #[unsafe(export_name = "pwrite64")]
@@ -720,6 +762,109 @@ fn concurrent_producer_replenishes_fs_queue_while_transport_resets() {
     guest.transport.read(0x070, &mut status);
     assert_eq!(status, [0; 4]);
     assert!(rig.events.wait(Some(Duration::ZERO)).unwrap().is_none());
+}
+
+#[test]
+fn fsync_reply_waits_for_host_sync_result_and_propagates_injected_eio() {
+    let _serial = SERIAL.lock().unwrap();
+    let rig = Rig::new();
+    let mut guest = rig.guest();
+    let (node, fh) = guest.open_file();
+    for data_only in [false, true] {
+        for failed in [false, true] {
+            let gate = Fault::install(&rig.path.join("file"), None);
+            gate.sync_error
+                .store(failed, std::sync::atomic::Ordering::Release);
+            guest.submit(
+                Opcode::Fsync,
+                node,
+                FsyncIn {
+                    fh,
+                    fsync_flags: u32::from(data_only),
+                    ..Default::default()
+                }
+                .as_slice(),
+            );
+            gate.entered();
+            thread::sleep(Duration::from_millis(50));
+            let used: u16 = guest.memory.read_obj(GuestAddress(USED + 0x102)).unwrap();
+            assert_eq!(
+                u16::from_le(used),
+                guest.next - 1,
+                "FSYNC replied before the host syscall completed"
+            );
+            assert_eq!(*gate.sync_result.lock().unwrap(), None);
+            gate.open();
+            let reply = guest.complete();
+            assert_eq!(
+                object::<OutHeader>(&reply).error,
+                if failed { -libc::EIO } else { 0 }
+            );
+            assert_eq!(
+                *gate.sync_result.lock().unwrap(),
+                Some((data_only, if failed { -1 } else { 0 }))
+            );
+            assert!(!gate.expired.load(std::sync::atomic::Ordering::Acquire));
+        }
+    }
+}
+
+#[test]
+fn repeated_flush_keeps_handle_readable_until_release_and_forget_close_fds() {
+    if !super::backend_tests::isolated_fd_child("BOXLITE_FS_FLUSH_CHILD") {
+        return;
+    }
+    let _serial = SERIAL.lock().unwrap();
+    let rig = Rig::new();
+    let mut guest = rig.guest();
+    let baseline = super::backend_tests::fd_count();
+    let (node, fh) = guest.open_file();
+    assert!(super::backend_tests::fd_count() > baseline);
+    // Linux can send multiple FLUSH requests for dup/close on one FUSE fh.
+    for _ in 0..3 {
+        let reply = guest.request(
+            Opcode::Flush,
+            node,
+            FlushIn {
+                fh,
+                ..Default::default()
+            }
+            .as_slice(),
+        );
+        assert_eq!(object::<OutHeader>(&reply).error, 0);
+        let reply = guest.request(
+            Opcode::Read,
+            node,
+            ReadIn {
+                fh,
+                size: 10,
+                ..Default::default()
+            }
+            .as_slice(),
+        );
+        assert_eq!(&reply[16..], b"host bytes");
+    }
+    let reply = guest.request(
+        Opcode::Release,
+        node,
+        ReleaseIn {
+            fh,
+            ..Default::default()
+        }
+        .as_slice(),
+    );
+    assert_eq!(object::<OutHeader>(&reply).error, 0);
+    // FORGET has no reply; check its real used entry rather than stale output.
+    guest.submit(Opcode::Forget, node, ForgetIn { nlookup: 1 }.as_slice());
+    guest.complete();
+    let length: u32 = guest
+        .memory
+        .read_obj(GuestAddress(
+            USED + 0x108 + u64::from((guest.next - 1) % 8) * 8,
+        ))
+        .unwrap();
+    assert_eq!(u32::from_le(length), 0);
+    assert_eq!(super::backend_tests::fd_count(), baseline);
 }
 
 #[test]
