@@ -171,7 +171,10 @@ const Volumes: React.FC = () => {
   return (
     <div className="page-container flex h-[calc(100svh-60px)] min-h-0 flex-col pt-5 lg:pt-[26px]">
       <div className="mb-[18px] flex items-end justify-between lg:mb-[22px]">
-        <h1 className="font-display text-page font-semibold text-foreground">Volumes</h1>
+        <div>
+          <h1 className="font-display text-page font-semibold text-foreground">Volumes</h1>
+          <p className="mt-2 text-body leading-relaxed text-muted-foreground">Persistent storage across your Boxes.</p>
+        </div>
       </div>
 
       {showEmpty ? (
@@ -433,7 +436,7 @@ const Volumes: React.FC = () => {
 }
 
 /**
- * Explains persistent storage before an organization has any volumes.
+ * Shows the next action before an organization has any volumes.
  * Only members allowed to create volumes receive the creation action.
  */
 function EmptyState({ canCreate, onCreate }: { canCreate: boolean; onCreate: () => void }) {
@@ -447,8 +450,7 @@ function EmptyState({ canCreate, onCreate }: { canCreate: boolean; onCreate: () 
       </div>
       <div className="font-mono text-[17px] font-semibold">No volumes yet</div>
       <p className="max-w-[420px] font-mono text-[12.5px] leading-relaxed text-muted-foreground">
-        A box loses everything on its disk when it is destroyed. A volume does not — mount one into a box and the data
-        outlives it.
+        Create a volume, then mount it when creating a Box.
       </p>
       {canCreate && (
         <AsciiButton variant="primary" className="mt-1" type="button" onClick={onCreate}>

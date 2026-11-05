@@ -47,7 +47,7 @@ import {
   newestFirst,
 } from './fixtures'
 
-const BILLING_API_URL = 'http://localhost:3000/api/billing'
+const BILLING_API_URL = `${window.location.origin}/api/billing`
 const API_URL = import.meta.env.VITE_API_URL
 
 // Quickstart's agent handoff waits for a box created after it handed the key
