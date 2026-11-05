@@ -3,8 +3,29 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { Body, Controller, Delete, Get, HttpCode, Param, ParseUUIDPipe, Post, UseGuards } from '@nestjs/common'
-import { ApiBearerAuth, ApiHeader, ApiOAuth2, ApiOperation, ApiParam, ApiResponse, ApiTags } from '@nestjs/swagger'
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  HttpCode,
+  Param,
+  ParseUUIDPipe,
+  Post,
+  Put,
+  UseGuards,
+  ValidationPipe,
+} from '@nestjs/common'
+import {
+  ApiBearerAuth,
+  ApiBody,
+  ApiHeader,
+  ApiOAuth2,
+  ApiOperation,
+  ApiParam,
+  ApiResponse,
+  ApiTags,
+} from '@nestjs/swagger'
 import { Audit, TypedRequest } from '../../audit/decorators/audit.decorator'
 import { AuditAction } from '../../audit/enums/audit-action.enum'
 import { AuditTarget } from '../../audit/enums/audit-target.enum'
@@ -16,7 +37,11 @@ import { OrganizationAuthContext } from '../../common/interfaces/auth-context.in
 import { RequiredOrganizationResourcePermissions } from '../../organization/decorators/required-organization-resource-permissions.decorator'
 import { OrganizationResourcePermission } from '../../organization/enums/organization-resource-permission.enum'
 import { OrganizationResourceActionGuard } from '../../organization/guards/organization-resource-action.guard'
-import { CreateRegistryCredentialDto, RegistryCredentialDto } from '../dto/registry-credential.dto'
+import {
+  CreateRegistryCredentialDto,
+  RegistryCredentialDto,
+  UpdateRegistryCredentialDto,
+} from '../dto/registry-credential.dto'
 import { RegistriesService } from '../services/registries.service'
 
 @ApiTags('registries')
@@ -66,6 +91,33 @@ export class RegistriesController {
   ): Promise<RegistryCredentialDto> {
     const created = await this.registries.create(authContext.organizationId, authContext.userId ?? null, request)
     return RegistryCredentialDto.from(created)
+  }
+
+  @Put(':id')
+  @ApiOperation({
+    summary: 'Update a registry credential',
+    description: 'Replace the username and password without changing its scope or destroying dependent Boxes.',
+    operationId: 'updateRegistryCredential',
+  })
+  @ApiParam({ name: 'id', type: 'string', format: 'uuid', description: 'Credential ID' })
+  @ApiBody({ type: UpdateRegistryCredentialDto, description: 'Replacement username and password' })
+  @ApiResponse({ status: 200, type: RegistryCredentialDto })
+  @ApiResponse({ status: 404, description: 'No such credential in this organization' })
+  @ApiResponse({ status: 409, description: 'Another request is using the credential; retry the update' })
+  @ApiResponse({ status: 501, description: 'Private registries are not enabled in this deployment' })
+  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_REGISTRIES])
+  @Audit({
+    action: AuditAction.UPDATE,
+    targetType: AuditTarget.REGISTRY_CREDENTIAL,
+    targetIdFromRequest: (req) => req.params.id,
+    requestMetadata: { body: (req: TypedRequest<UpdateRegistryCredentialDto>) => ({ username: req.body?.username }) },
+  })
+  async update(
+    @AuthContext() authContext: OrganizationAuthContext,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true })) request: UpdateRegistryCredentialDto,
+  ): Promise<RegistryCredentialDto> {
+    return RegistryCredentialDto.from(await this.registries.update(authContext.organizationId, id, request))
   }
 
   @Delete(':id')

@@ -16,6 +16,7 @@ describe('RegistriesController', () => {
   it.each([
     ['list', OrganizationResourcePermission.READ_REGISTRIES],
     ['create', OrganizationResourcePermission.WRITE_REGISTRIES],
+    ['update', OrganizationResourcePermission.WRITE_REGISTRIES],
     ['delete', OrganizationResourcePermission.DELETE_REGISTRIES],
   ] as const)('requires exactly its own scope on %s', (name, scope) => {
     // The guard reads this and nothing else, so a route with the wrong scope
@@ -31,5 +32,12 @@ describe('RegistriesController', () => {
 
     expect(recorded).toEqual({ registryHost: 'ghcr.io', repositoryPrefix: 'acme/', username: 'acme-bot' })
     expect(JSON.stringify(recorded)).not.toContain('ghp_x')
+  })
+
+  it('records only the username when updating a credential', () => {
+    const audit = reflector.get<AuditContext>(AUDIT_CONTEXT_KEY, route('update'))
+    expect(audit.requestMetadata?.body?.({ body: { username: 'new-bot', password: 'new-token' } } as never)).toEqual({
+      username: 'new-bot',
+    })
   })
 })

@@ -15,6 +15,44 @@ Image-preparation timeouts retain `progress` and `Retry-After`. The ID remains
 available even if the best-effort progress lookup fails. HTTP status, message,
 and synchronous SDK behavior are unchanged; a timeout is not a running Box.
 
+## Registry credential rotation
+
+`PUT /api/images/registries/{id}` replaces a stored username and password/token with `write:registries` permission.
+Both fields are required, with the same validation limits as creation; other fields are refused.
+The credential ID, registry host, repository prefix, creator and creation time remain unchanged, even while Boxes depend on it.
+
+Deletion still refuses credentials selected by non-destroyed Boxes.
+
+Rotation checks organization-scoped existence, then writes a fresh secret outside any database transaction.
+A short PostgreSQL transaction locks and rechecks the credential, reads its current secret version, and updates the login and pointer.
+After acknowledged commit, rotation retires the version read under lock; no secret-store call holds the update transaction open.
+This reuses Secret Manager and exclusive local files without a migration or new IAM permissions.
+Lock contention returns 409 for retry; another organization's credential returns 404 before any secret write.
+
+Deletion or another rotation can finish while the replacement is being written.
+A credential deleted before the locked recheck returns 404 and cleans up the replacement; a concurrent rotation retires the version current at the lock.
+Transaction-start, lock and pre-commit update failures clean up the replacement after the transaction rejects, preserving the original failure.
+An uncertain COMMIT outcome retains both secrets and emits an `update outcome is unknown` warning; reconcile the stored pointer before retiring either version.
+A failed old-secret retirement emits `Could not destroy unused registry secret`; the committed update remains successful and cleanup needs retrying.
+
+The warning identifies a version and the cleanup error cause, never its password; the API cannot read registry passwords or validate them upstream.
+
+Before reusing a private bearer, each proxy queries the current credential metadata and compares its secret version with the cached token's version.
+After update commits, newly started pulls reject old-version bearers even if old-secret retirement fails.
+Secret payloads are read only on authentication challenges; unchanged credentials still reuse their bearer token.
+
+Normally, each private manifest/blob request adds one control-plane lookup; lookup failures reject the pull even when a bearer is warm.
+If a secret read races retirement, the proxy refreshes authorized metadata and retries that read once before failing the pull.
+Requests whose lookup preceded update may finish; another rotation during the retry can still require a caller retry.
+The upstream token itself is not revoked, and anonymous lookup caching keeps its existing TTL.
+
+Deploy the API and proxy before the dashboard; older proxies retain the prior five-minute cache delay until upgraded.
+This operation is additive to the control-plane API and does not add portable SDK methods.
+
+Run `make test:apps:api TEST_FILES='registry/'`; set the normal `DB_*` variables to include the real-PostgreSQL mutation tests.
+These cover live/stopped Boxes, organization isolation, rollback, concurrent mutations and lost COMMIT acknowledgment with real secret files.
+Design: [registry credential updates](https://github.com/boxlite-ai/boxlite/issues/2304).
+
 ## Account deletion tests
 
 `src/user/user-deletion-memberships.spec.ts` exercises account deletion through the real services
@@ -374,7 +412,7 @@ for the source evidence, concurrency model and verification boundaries.
 
 ## Onboarding persistence
 
-See [organization onboarding](src/organization/ONBOARDING.md) for the profile, personal prompt
+See [organization onboarding](onboarding.md) for the profile, personal prompt
 draft and idempotent handoff API contracts, migration order, and frontend integration behavior.
 
 ## Retention-policy reads and login activity

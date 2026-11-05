@@ -6,11 +6,9 @@ import { useApi } from './useApi'
 import { useOrganizations } from './useOrganizations'
 import { useSelectedOrganization } from './useSelectedOrganization'
 import { useConfig } from './useConfig'
-import { queryKeys } from './queries/queryKeys'
 import { type FirstRunWelcome, type FirstRunUseCase } from '@/lib/first-run'
 import { LocalStorageKey } from '@/enums/LocalStorageKey'
 import { setLocalStorageItem } from '@/lib/local-storage'
-import { waitForSignupCredit } from '@/lib/signup-credit'
 
 export function useWelcomeOnboarding(initial: FirstRunWelcome) {
   const api = useApi()
@@ -23,11 +21,16 @@ export function useWelcomeOnboarding(initial: FirstRunWelcome) {
   const controller = useRef<AbortController | null>(null)
   const organizationId = selectedOrganization?.id
   useEffect(() => () => controller.current?.abort(), [organizationId])
+  const complete = () => {
+    if (!organizationId || !user?.profile.sub) return
+    const completed = { ...welcome, completedAt: Date.now() }
+    setLocalStorageItem(`boxlite:welcome:${user.profile.sub}:${organizationId}`, JSON.stringify(completed))
+    setLocalStorageItem(`${LocalStorageKey.SkipOnboardingPrefix}${user.profile.sub}`, 'true')
+    setWelcome(completed)
+  }
   const action = useMutation({
     mutationFn: async (
-      payload:
-        | { type: 'organization'; name: string }
-        | { type: 'intent'; useCase: FirstRunUseCase; note: string; skipCredit?: boolean },
+      payload: { type: 'organization'; name: string } | { type: 'intent'; useCase: FirstRunUseCase; note: string },
     ) => {
       if (!organizationId) throw new Error('Select an organization and try again.')
       controller.current?.abort()
@@ -49,30 +52,17 @@ export function useWelcomeOnboarding(initial: FirstRunWelcome) {
       }
       await api.saveOrganizationOnboarding(organizationId, { useCase: payload.useCase, note: payload.note.trim() })
       active.signal.throwIfAborted()
+      client.setQueryData(['organization-onboarding', organizationId], {
+        useCase: payload.useCase,
+        note: payload.note.trim(),
+      })
       save({ ...welcome, useCase: payload.useCase, note: payload.note.trim() })
-      if (!config.billingApiUrl || payload.skipCredit) {
+      if (!config.billingApiUrl) {
         save({ ...welcome, useCase: payload.useCase, note: payload.note.trim(), completedAt: Date.now() })
         setLocalStorageItem(`${LocalStorageKey.SkipOnboardingPrefix}${user?.profile.sub}`, 'true')
         return
       }
-      await waitForSignupCredit(
-        () => api.billingApi.getSignupCreditDelivery(organizationId, active.signal),
-        active.signal,
-      )
-      active.signal.throwIfAborted()
-      await Promise.all([
-        client.invalidateQueries({ queryKey: queryKeys.organization.wallet(organizationId) }),
-        client.invalidateQueries({ queryKey: queryKeys.billing.transactions(organizationId) }),
-      ])
-      save({
-        ...welcome,
-        useCase: payload.useCase,
-        note: payload.note.trim(),
-        creditGrantedAt: Date.now(),
-        completedAt: Date.now(),
-      })
-      setLocalStorageItem(`${LocalStorageKey.SkipOnboardingPrefix}${user?.profile.sub}`, 'true')
     },
   })
-  return { welcome, action, billingEnabled: Boolean(config.billingApiUrl) }
+  return { welcome, action, complete, billingEnabled: Boolean(config.billingApiUrl) }
 }

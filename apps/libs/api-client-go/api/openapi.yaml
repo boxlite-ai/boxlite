@@ -3287,6 +3287,57 @@ paths:
       summary: Remove a registry credential
       tags:
       - registries
+    put:
+      description: Replace the username and password without changing its scope or
+        destroying dependent Boxes.
+      operationId: updateRegistryCredential
+      parameters:
+      - description: Use with JWT to specify the organization ID
+        explode: false
+        in: header
+        name: X-BoxLite-Organization-ID
+        required: false
+        schema:
+          type: string
+        style: simple
+      - description: Credential ID
+        explode: false
+        in: path
+        name: id
+        required: true
+        schema:
+          format: uuid
+          type: string
+        style: simple
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateRegistryCredential"
+        description: Replacement username and password
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RegistryCredential"
+          description: ""
+        "404":
+          description: No such credential in this organization
+        "409":
+          description: Another request is using the credential; retry the update
+        "501":
+          description: Private registries are not enabled in this deployment
+      security:
+      - bearer: []
+      - oauth2:
+        - openid
+        - profile
+        - email
+      summary: Update a registry credential
+      tags:
+      - registries
   /images:
     get:
       description: "The organization’s images together with the operator’s curated\
@@ -7822,6 +7873,23 @@ components:
       required:
       - password
       - registryHost
+      - username
+      type: object
+    UpdateRegistryCredential:
+      example:
+        username: acme-bot
+        password: password
+      properties:
+        username:
+          description: Username the registry expects
+          example: acme-bot
+          type: string
+        password:
+          description: Password or access token. Never returned.
+          type: string
+          writeOnly: true
+      required:
+      - password
       - username
       type: object
     Image:

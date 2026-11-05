@@ -5,7 +5,7 @@
  */
 
 import { BalanceLowBanner } from '@/components/billing/BalanceLowBanner'
-import { BillingAlerts, SignupCreditBanner } from '@/components/billing/BillingAlerts'
+import { BillingAlerts } from '@/components/billing/BillingAlerts'
 import { PlanSection } from '@/components/billing/PlanSection'
 import { UsageSection } from '@/components/billing/UsageSection'
 import { WalletSection } from '@/components/billing/WalletSection'
@@ -121,9 +121,6 @@ function Billing() {
         </TabsContent>
         <TabsContent value="wallet">
           <div className={TAB_PANE}>
-            <div className="mb-8 empty:hidden">
-              <SignupCreditBanner />
-            </div>
             <WalletSection />
           </div>
         </TabsContent>

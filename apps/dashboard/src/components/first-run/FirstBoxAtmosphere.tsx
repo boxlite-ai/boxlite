@@ -117,12 +117,13 @@ function drawBoxes(ctx: CanvasRenderingContext2D, surface: Surface, time: number
   })
 }
 
-export default function FirstBoxAtmosphere({ children }: { children: ReactNode }) {
+export default function FirstBoxAtmosphere({ children, animated = true }: { children: ReactNode; animated?: boolean }) {
   const root = useRef<HTMLDivElement>(null)
   const canvas = useRef<HTMLCanvasElement>(null)
   const { resolvedTheme } = useTheme()
 
   useEffect(() => {
+    if (!animated) return
     const container = root.current
     const element = canvas.current
     const form = container?.querySelector('main')
@@ -199,11 +200,11 @@ export default function FirstBoxAtmosphere({ children }: { children: ReactNode }
       document.removeEventListener('visibilitychange', sync)
       container.removeEventListener('pointerdown', spawnBox)
     }
-  }, [resolvedTheme])
+  }, [resolvedTheme, animated])
 
   return (
     <div ref={root} className="first-box-atmosphere">
-      <canvas ref={canvas} className="first-box-atmosphere__boxes" aria-hidden="true" />
+      {animated && <canvas ref={canvas} className="first-box-atmosphere__boxes" aria-hidden="true" />}
       {children}
     </div>
   )

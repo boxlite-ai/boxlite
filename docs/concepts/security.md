@@ -59,7 +59,6 @@ let opts = BoxOptions {
 };
 ```
 
-The complete threat model is in
-[`THREAT_MODEL.md`](../../src/boxlite/src/jailer/THREAT_MODEL.md). How the jailer grants
-guest networking and host access is in
-[Jailer network permissions](../contributing/architecture/jailer-network-permissions.md).
+See the [jailer threat model](../../src/boxlite/src/jailer/README.md) for isolation boundaries,
+and [jailer network permissions](../contributing/architecture/jailer-network-permissions.md)
+for guest networking and host access.

@@ -4,7 +4,7 @@ The agent API groups Box-owned agents, submitted turns, and interaction across R
 
 ## Details
 
-`Agents` is the Box-owned collection. `agents.create("coder", options)`
+`Agents` is the Box-owned collection. `agents.create("opencode", options)`
 selects an implementation and returns an `Agent` instance; `agents.get(agent_id)`
 looks up that instance. Each agent owns its conversation and configuration;
 turns represent submitted work. The create argument selects an implementation,
@@ -30,13 +30,15 @@ and `SimpleBox`. Each SDK retains its error conventions.
 
 ### Failure contract
 
-Agent operations return an unsupported error before agent execution. Namespace
-access and data construction work; execution, queues, event delivery, configuration
+Rust on a local runtime runs the operations listed in
+[OpenCode on a local runtime](#opencode-on-a-local-runtime). Everywhere else, agent
+operations return an unsupported error before agent execution: namespace access and
+data construction work, but execution, queues, event delivery, configuration
 validation, retry deduplication and timeout handling are unavailable.
 
 | SDK | Error behavior |
 |---|---|
-| Rust | `Err(BoxliteError::Unsupported("… is not implemented"))`; no panic |
+| Rust | `Err(BoxliteError::Unsupported(…))` naming the operation or option; no panic |
 | Python | `UnsupportedError` on awaiting operations or reading a property |
 | Node.js | Rejected operation promises; synchronous getter/event errors |
 | Go | `*Error` with `Code: ErrUnsupported` and no result |
@@ -50,6 +52,82 @@ stream with an error. C clears the subscription output pointer.
 No agent or turn is returned by `create`, `get`, `send` or `respond`.
 C getters clear output pointers; callbacks are not invoked and no agent, turn,
 subscription or JSON result object is allocated.
+
+### OpenCode on a local runtime
+
+Rust on a local runtime forwards agents to OpenCode 2.2 inside the Box
+([design #2227](https://github.com/boxlite-ai/boxlite/issues/2227)). BoxLite installs
+nothing: the Box must already provide `opencode` 2.2.2 and `sh`, plus the provider
+configuration and keys OpenCode reads, such as `ANTHROPIC_API_KEY` in the Box
+environment. Another OpenCode version fails with `Unsupported` once its service
+answers, or with `Execution` when it lacks the `opencode service` commands. Remote
+runtimes and the other SDKs return `Unsupported`.
+
+```text
+agents.create("opencode") ──exec───► check OpenCode's service registration; set the
+                                     service address to 0.0.0.0:47096 when different;
+                                     read the service password
+                          ──tunnel─► GET /api/info                  (exactly 2.2.2)
+                          ──exec───► opencode service start         (only when none runs)
+                          ──tunnel─► POST /api/session              → Agent (ses_…)
+agent.send(text)          ──tunnel─► POST …/prompt, delivery queue  → AgentTurn (msg_…)
+turn.wait()               ──tunnel─► inbox, history, pending requests
+agent.events()            ──tunnel─► GET /api/event, live only
+```
+
+| Operation | Behavior |
+|---|---|
+| `agents.create` | Starts OpenCode's managed service on first use and creates a session. Only `cwd` and `config.model` (`provider/model`) are accepted |
+| `agents.get` | Reads a session by its `ses_…` ID, starting the service again after a Box restart |
+| `agent.send` | Admits the text with `queue` delivery under a BoxLite-chosen `msg_…` ID. A lost response is retried once with that ID; a second failure is a `Network` error naming the ID to read with `get_turn` |
+| `agent.get_turn`, `turn.state` | `get_turn` reads the turn now, among the newest 1,000 messages of the session (older turns, and IDs of messages that are not inputs, are `NotFound`); `turn.state` returns the snapshot taken when the handle was obtained. A turn is `queued` in the inbox; `running` or `waiting_input` until its run records an outcome; `completed`, `failed` or `cancelled` from that outcome; `unknown` when its execution was cut off and a later run took the next input |
+| `turn.wait` | Polls every 500 ms. A timeout, or an `unknown` turn, returns `InvalidState` and never interrupts |
+| `agent.events` | Live events of the session and of subagent sessions created while the stream is open; `cursor` is `None` and `after` is rejected. Events of the session itself that name an input in OpenCode's `inboxID` carry it as `turn_id`; subagent events have none. Opening the stream fails with `Network` after 30 s without a response. The stream ends with one error, after any events that arrived before it: `Network` when the native stream ends or fails, `Internal` for an event that is not UTF-8 JSON or a subagent session ID that OpenCode would not mint, `ResourceExhausted` for an event over 1 MiB or a 1,001st subagent session |
+| `agent.config`, `agent.capabilities` | The session model; the operations above, with unknown limits as `None` |
+
+BoxLite runs OpenCode's own managed service, the `opencode serve --service`
+process that `opencode service start` launches, so OpenCode's recovery applies:
+
+- **Address and password.** The service listens on `0.0.0.0:47096` so the Box
+  tunnel reaches it. OpenCode keeps that address and the service password in its
+  service configuration (mode 0600) under the Box user's home. Processes in the Box
+  running as the same user, including the agent's own tools, can read the password.
+- **Refusals.** `agents.create` and `agents.get` return `InvalidState` when OpenCode
+  remote access is on, when a service started outside BoxLite runs at another
+  address, when the service at port 47096 does not answer, or when another server
+  holds that port. BoxLite never stops or signals a process.
+- **Stale registrations.** OpenCode's service registration outlives an unclean
+  exit, and its pid can later belong to another process, which `opencode service set`
+  would signal. BoxLite deletes a registration whose pid no longer runs
+  `opencode serve --service` before it changes any setting.
+- **Recovery.** After a Box restart, the next `agents.get` starts the service again.
+  It resumes an interrupted turn, then delivers queued inputs, at least once: a
+  tool call may run twice. Background shells end cancelled. A clone of a Box with a
+  turn in flight resumes its own copy of that turn.
+
+Sessions deny reading `.env` and `.env.*` files (`.env.example` stays readable)
+and OpenCode's `question` tool. OpenCode's defaults would ask first, nobody can
+answer through BoxLite yet, and a pending ask holds every later input; denied, the
+tool call fails and the turn continues. A turn waiting on another permission, such
+as one asked in a subagent, lists it in its snapshot. A subagent's request belongs
+to the turn that created the subagent, or to a later turn that sends it a follow-up
+and is still waiting on it. Answering requests through
+BoxLite is not available yet; every other operation and option returns
+`Unsupported` before reaching OpenCode.
+
+Run [`agent_opencode.rs`](../../src/boxlite/examples/agent_opencode.rs) for a
+complete example.
+
+### Record migration (breaking change)
+
+Agent records from v0.11.0 represent values an adapter cannot know:
+
+| Field | v0.11.0 | Now |
+|---|---|---|
+| `AgentState.cursor`, `AgentTurnState.cursor`, `AgentEvent.cursor` | Required string | Optional; missing when the adapter cannot resume after it: `None` in Rust and Python, absent in TypeScript, `null` in C JSON, empty in Go |
+| `AgentCapabilities` queue, steering and retention limits | Required numbers | Optional; missing means unknown or unsupported, never zero (Go: `nil`) |
+
+No operation returned these records before, so only code that reads or builds these fields changes.
 
 ### Namespace ownership
 
@@ -89,7 +167,7 @@ TypeScript types are exported from the package; Go types use the `Agent` prefix.
 - Close, respond, steer and interrupt accept a retry key. Wait accepts an optional timeout.
 - Config includes model, reasoning, instructions, tools/MCP references, permissions, limits and output schema.
 - Requests retain their originating turn and distinguish a question from a permission request. Responses distinguish an answer from explicit permission approval/denial.
-- Agent/turn snapshots include an opaque cursor, requests and steering receipts. Results retain the turn ID, status, outcome, output, artifacts, usage and errors.
+- Agent/turn snapshots include an optional opaque cursor, requests and steering receipts; the cursor is absent when the adapter cannot resume events after it. Capability limits are optional: absent means unknown or unsupported, never zero. Results retain the turn ID, status, outcome, output, artifacts, usage and errors.
 - Unknown execution and steering states are representable. Accepted and applied steering are distinct; a question outcome is distinct from a final answer.
 
 These records define SDK data types. The
@@ -161,11 +239,11 @@ The C JSON fields use the following shapes. A question's
 | Request | `id`, `turn_id`, `kind`: either `{"type":"question","text":"…","schema":null}` or `{"type":"permission","tool":"…","arguments":{}}` |
 | Response | `{"type":"answer","text":"yes"}` with optional `data`, or `{"type":"permission","approved":false}` |
 | Steering receipt | `id`, `turn_id`, `status`: `accepted`, `applied`, `unused` or `unknown` |
-| Agent snapshot | `id`, `status`, `cursor`, nullable `active_turn_id`, `queued_turn_ids`, `requests`, `steering` |
-| Turn snapshot | `id`, `agent_id`, `status`, `cursor`, nullable `result`, `requests`, `steering` |
-| Event | `cursor`, `agent_id`, nullable `turn_id`, `kind` string, JSON `data` |
+| Agent snapshot | `id`, `status`, nullable `cursor`, nullable `active_turn_id`, `queued_turn_ids`, `requests`, `steering` |
+| Turn snapshot | `id`, `agent_id`, `status`, nullable `cursor`, nullable `result`, `requests`, `steering` |
+| Event | nullable `cursor`, `agent_id`, nullable `turn_id`, `kind` string, JSON `data` |
 | Result | `turn_id`, `status`, nullable `outcome` (`answer` or `question`), nullable `text`, JSON `data`, `artifacts` string array, nullable JSON `usage`, nullable `error` string |
-| Capabilities | `operations`, `input_kinds` string arrays; integer `max_queued_turns`, `max_pending_steering`; `idempotency_retention_seconds` number |
+| Capabilities | `operations`, `input_kinds` string arrays; nullable integer `max_queued_turns`, `max_pending_steering`; nullable `idempotency_retention_seconds` number |
 
 Agent status is `ready`, `busy`, `closing`, `closed` or `unknown`.
 Turn status is `queued`, `running`, `waiting_input`, `interrupting`,

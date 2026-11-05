@@ -48,7 +48,7 @@ class SyncAgent:
         _not_implemented("agent.get_turn")
 
     def events(self, options: AgentEventsOptions | None = None) -> Iterator[AgentEvent]:
-        """Open the agent journal after an opaque cursor."""
+        """Open the agent's events, after an opaque cursor where the adapter supports it."""
         _not_implemented("agent.events")
 
     def requests(self) -> list[AgentRequest]:

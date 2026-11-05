@@ -171,6 +171,7 @@ docs/UpdateOrganizationMemberAccess.md
 docs/UpdateOrganizationName.md
 docs/UpdateOrganizationRole.md
 docs/UpdateRegion.md
+docs/UpdateRegistryCredential.md
 docs/UsageApi.md
 docs/UsageConcurrencyPointDto.md
 docs/UsageConcurrencySeriesDto.md
@@ -320,6 +321,7 @@ models/update-organization-member-access.ts
 models/update-organization-name.ts
 models/update-organization-role.ts
 models/update-region.ts
+models/update-registry-credential.ts
 models/usage-concurrency-point-dto.ts
 models/usage-concurrency-series-dto.ts
 models/user-public-key.ts
