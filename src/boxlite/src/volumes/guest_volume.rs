@@ -8,6 +8,8 @@
 
 use std::path::{Path, PathBuf};
 
+use boxlite_shared::errors::{BoxliteError, BoxliteResult};
+
 use crate::disk::DiskFormat;
 use crate::portal::interfaces::VolumeConfig;
 use crate::vmm::{BlockDevice, BlockDevices, FsShares};
@@ -45,6 +47,15 @@ pub struct BlockDeviceEntry {
 #[allow(dead_code)]
 pub struct VmmMountConfig {
     pub fs_shares: FsShares,
+    pub block_devices: BlockDevices,
+}
+
+/// One aggregate device's exports and corresponding guest mount instructions.
+#[derive(Debug)]
+pub struct AggregateMountConfig {
+    pub device_tag: String,
+    pub exports: FsShares,
+    pub guest_mounts: Vec<VolumeConfig>,
     pub block_devices: BlockDevices,
 }
 
@@ -210,11 +221,137 @@ impl GuestVolumeManager {
         volumes
     }
 
+    /// Build matching exports and mount instructions for one aggregate device.
+    ///
+    /// Export keys preserve logical share names; legacy builders remain per-tag.
+    pub fn build_aggregate_mounts(&self, device_tag: &str) -> BoxliteResult<AggregateMountConfig> {
+        if device_tag.is_empty() || device_tag.len() > 36 || device_tag.contains('\0') {
+            return Err(BoxliteError::Storage("Invalid aggregate device tag".into()));
+        }
+        let mut names = std::collections::HashSet::new();
+        for share in &self.fs_shares {
+            if share.tag.is_empty()
+                || share.tag == "."
+                || share.tag == ".."
+                || share.tag.contains(['/', '\0'])
+                || !names.insert(&share.tag)
+            {
+                return Err(BoxliteError::Storage(format!(
+                    "Invalid or duplicate aggregate export key: {:?}",
+                    share.tag
+                )));
+            }
+        }
+        let mut mounts = self.build_guest_mounts();
+        for mount in &mut mounts {
+            if let VolumeConfig::Virtiofs {
+                tag,
+                device_tag: mount_tag,
+                export_key,
+                ..
+            } = mount
+            {
+                *mount_tag = device_tag.to_owned();
+                *export_key = tag.clone();
+            }
+        }
+        let host = self.build_vmm_config();
+        Ok(AggregateMountConfig {
+            device_tag: device_tag.to_owned(),
+            exports: host.fs_shares,
+            guest_mounts: mounts,
+            block_devices: host.block_devices,
+        })
+    }
+
     /// Generate block device ID from index (0 = vda, 1 = vdb, ...).
     fn block_id_from_index(index: u8) -> String {
         assert!(index < 26, "block device index must be < 26");
         let letter = (b'a' + index) as char;
         format!("vd{}", letter)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn aggregate_exports_and_mounts_share_one_source() {
+        let mut manager = GuestVolumeManager::new();
+        manager.add_fs_share("shared", "/host/shared".into(), None, false, None);
+        manager.add_fs_share(
+            "vol0",
+            "/host/data".into(),
+            Some("/data"),
+            true,
+            Some("container0".into()),
+        );
+        let config = manager.build_aggregate_mounts("boxlite").unwrap();
+        assert_eq!(config.device_tag, "boxlite");
+        let mounts = &config.guest_mounts;
+        for (export, mount) in config.exports.shares().iter().zip(mounts) {
+            let VolumeConfig::Virtiofs {
+                tag,
+                device_tag,
+                export_key,
+                read_only,
+                ..
+            } = mount
+            else {
+                panic!("filesystem mount")
+            };
+            assert_eq!(tag, &export.tag);
+            assert_eq!(export_key, &export.tag);
+            assert_eq!(device_tag, "boxlite");
+            assert_eq!(*read_only, export.read_only);
+        }
+        assert_eq!(mounts.len(), 2);
+        assert_eq!(
+            config.exports.shares()[0].host_path,
+            Path::new("/host/shared")
+        );
+        let VolumeConfig::Virtiofs {
+            mount_point,
+            container_id,
+            ..
+        } = &mounts[1]
+        else {
+            panic!("filesystem mount")
+        };
+        assert_eq!(mount_point, "/data");
+        assert_eq!(container_id.as_deref(), Some("container0"));
+        for mount in manager.build_guest_mounts() {
+            let VolumeConfig::Virtiofs {
+                device_tag,
+                export_key,
+                ..
+            } = mount
+            else {
+                panic!("filesystem mount")
+            };
+            assert!(device_tag.is_empty() && export_key.is_empty());
+        }
+    }
+
+    #[test]
+    fn aggregate_rejects_invalid_and_duplicate_names() {
+        for key in ["", ".", "..", "a/b", "a\0b"] {
+            let mut manager = GuestVolumeManager::new();
+            manager.add_fs_share(key, "/host".into(), None, false, None);
+            assert!(manager.build_aggregate_mounts("boxlite").is_err());
+        }
+        let mut manager = GuestVolumeManager::new();
+        manager.add_fs_share("shared", "/host".into(), None, false, None);
+        manager.add_fs_share("shared", "/other".into(), None, true, None);
+        assert!(manager.build_aggregate_mounts("boxlite").is_err());
+        for tag in ["", "a\0b", "abcdefghijklmnopqrstuvwxyz01234567890"] {
+            assert!(
+                GuestVolumeManager::new()
+                    .build_aggregate_mounts(tag)
+                    .is_err()
+            );
+        }
     }
 }
 

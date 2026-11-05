@@ -807,6 +807,8 @@ impl BoxImpl {
         // If live_state() failed (vmm_attach said Absent — shim is gone),
         // or status wasn't Running, fall through to cleanup.
 
+        self.layout.cleanup_volume_staging()?;
+
         // Clean up PID file (single source of truth)
         let pid_path = self.layout.pid_file_path();
         match std::fs::remove_file(&pid_path) {

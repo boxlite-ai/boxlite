@@ -1,6 +1,12 @@
 // Copyright 2019 The Chromium OS Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+//
+// Adapted for BoxLite from boxlite-ai/libkrun commit
+// e12b9b3780ffa8df9f3e1797b217d13453479167,
+// src/devices/src/virtio/fs/linux/passthrough.rs.
+// BoxLite modifications: anchored exports, host-identity creation, separate
+// lookup/open/request ownership, direct I/O and synchronous persistence.
 
 //! Per-share Linux backend adapted from libkrun e12b9b3. O_PATH descriptors
 //! anchor object identity; data descriptors belong to independently released
@@ -69,6 +75,9 @@ fn statx(file: &File) -> io::Result<(libc::stat64, u64)> {
     })?;
     // SAFETY: statx initialized stx; stat64 consists of integer POD fields.
     let stx = unsafe { stx.assume_init() };
+    if stx.stx_mask & libc::STATX_MNT_ID == 0 {
+        return Err(errno(libc::EOPNOTSUPP));
+    }
     let mut st = unsafe { MaybeUninit::<libc::stat64>::zeroed().assume_init() };
     st.st_dev = libc::makedev(stx.stx_dev_major, stx.stx_dev_minor);
     st.st_ino = stx.stx_ino;
@@ -473,6 +482,24 @@ impl PassthroughFs {
                 }
             })?;
         Ok((file, node))
+    }
+
+    fn xattr_path(&self, inode: u64) -> io::Result<(CString, InodeRef<'_>)> {
+        let node = self.inode(inode)?;
+        match stat(&node.data.file)?.st_mode & libc::S_IFMT {
+            libc::S_IFREG | libc::S_IFDIR => {}
+            _ => return Err(errno(libc::EOPNOTSUPP)),
+        }
+        // No data open: xattr namespace policy, not read access, authorizes
+        // mutations. Both descriptors stay pinned through path resolution.
+        // Never follow an actual guest symlink through its proc-FD entry.
+        let path = CString::new(format!(
+            "/proc/self/fd/{}/{}",
+            self.proc_self_fd.as_raw_fd(),
+            node.data.file.as_raw_fd(),
+        ))
+        .map_err(|_| errno(libc::EINVAL))?;
+        Ok((path, node))
     }
 
     fn creation_credentials(&self, ctx: Context) -> io::Result<()> {
@@ -1402,11 +1429,11 @@ impl FileSystem for PassthroughFs {
         if flags & !((libc::XATTR_CREATE | libc::XATTR_REPLACE) as u32) != 0 {
             return Err(errno(libc::EINVAL));
         }
-        let (file, _node) = self.xattr_file(inode)?;
-        // SAFETY: the descriptor, name and value remain alive for this call.
+        let (path, _node) = self.xattr_path(inode)?;
+        // SAFETY: path addresses a pinned non-symlink; name and value are valid.
         cvt(unsafe {
-            libc::fsetxattr(
-                file.as_raw_fd(),
+            libc::setxattr(
+                path.as_ptr(),
                 name.as_ptr(),
                 value.as_ptr().cast(),
                 value.len(),
@@ -1468,8 +1495,8 @@ impl FileSystem for PassthroughFs {
     }
 
     fn removexattr(&self, _ctx: Context, inode: u64, name: &CStr) -> io::Result<()> {
-        let (file, _node) = self.xattr_file(inode)?;
-        // SAFETY: the descriptor and terminated name remain alive.
-        cvt(unsafe { libc::fremovexattr(file.as_raw_fd(), name.as_ptr()) })
+        let (path, _node) = self.xattr_path(inode)?;
+        // SAFETY: path addresses a pinned non-symlink and name is terminated.
+        cvt(unsafe { libc::removexattr(path.as_ptr(), name.as_ptr()) })
     }
 }

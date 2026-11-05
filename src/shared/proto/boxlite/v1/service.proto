@@ -149,6 +149,10 @@ message Volume {
 message VirtiofsSource {
   string tag = 1;         // virtiofs tag name
   bool read_only = 2;     // read only in guest
+  // Aggregate device identity. Empty keeps the legacy per-tag mount behavior.
+  string device_tag = 3;
+  // One directory component beneath the aggregate root; tag remains the logical share name.
+  string export_key = 4;
 }
 
 // Block device volume source

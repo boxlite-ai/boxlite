@@ -120,7 +120,8 @@ impl VirtioDevice for Fs {
             .ok_or(DeviceError::NeedsReset("virtio-fs is inactive"))?;
         let server = &self.server;
         let memory = &ctx.memory;
-        let interrupt = ctx.queues.drain(usize::from(index), |chain| {
+        let mut processed = false;
+        let result = ctx.queues.drain(usize::from(index), |chain| {
             let (reader, writer) = request_buffers(memory.as_ref(), chain)
                 .map_err(|_| DeviceError::NeedsReset("virtio-fs request descriptors"))?;
             let written = server.handle_message(reader, writer).map_err(|error| {
@@ -129,11 +130,16 @@ impl VirtioDevice for Fs {
             })?;
             let written = u32::try_from(written)
                 .map_err(|_| DeviceError::NeedsReset("virtio-fs reply size"))?;
+            processed = true;
             Ok(Completion::Used(written))
-        })?;
-        if interrupt {
+        });
+        // A later malformed chain must not strand earlier used entries. On
+        // error, conservatively notify after processing a chain; drain may
+        // have failed while publishing that chain's used entry. Successful
+        // batches still honor the queue's normal notification suppression.
+        if matches!(&result, Ok(true)) || (result.is_err() && processed) {
             ctx.interrupt.raise();
         }
-        Ok(())
+        result.map(|_| ())
     }
 }

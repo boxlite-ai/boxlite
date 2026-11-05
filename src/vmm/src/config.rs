@@ -60,6 +60,25 @@ pub struct VmConfig {
     /// The disks, in order: disk 0 is `vda`, disk 1 is `vdb`, and so on;
     /// `Vm::new` names each one on the command line so the kernel probes it.
     pub disks: Vec<DiskConfig>,
+    /// Aggregate filesystem device, fixed for the lifetime of this VM.
+    pub filesystem: Option<FsConfig>,
+}
+
+/// One virtio-fs device exposing the configured host directories.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FsConfig {
+    /// The tag the guest uses when mounting this device.
+    pub tag: String,
+    /// Export keys, authorized host paths and independent read-only policies.
+    pub shares: Vec<FsShareConfig>,
+}
+
+/// One directory beneath the aggregate filesystem root.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FsShareConfig {
+    pub name: String,
+    pub path: PathBuf,
+    pub read_only: bool,
 }
 
 impl VmConfig {
@@ -108,6 +127,7 @@ mod tests {
             cmdline: "console=ttyS0".into(),
             initramfs: None,
             disks: Vec::new(),
+            filesystem: None,
         }
     }
 

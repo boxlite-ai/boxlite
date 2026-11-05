@@ -302,6 +302,10 @@ assemble_runtime() {
         echo "✓"
     fi
 
+    # The shim statically links libkrun's Chromium OS-derived virtio-fs code.
+    # Its BSD binary redistribution terms must travel with the runtime.
+    cp "$PROJECT_ROOT/src/vmm/src/virtio/fs/LICENSE" "$RUNTIME_LIBS_DIR/LICENSE-virtio-fs"
+
     print_success "Runtime directory assembled"
 }
 

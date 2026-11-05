@@ -326,8 +326,15 @@ VMM_BOOT_TESTS_TIMEOUT ?= 900s
 # init restarts, once through the public Vm::new as the M1 smoke test.
 test\:integration\:vmm\:linux: _ensure-kvm _ensure-vmm-kernel $(VMM_BALLOON_INIT)
 	@cargo test -p boxlite-vmm --lib --no-run
-	@timeout $(VMM_BOOT_TESTS_TIMEOUT) cargo test -p boxlite-vmm --lib boot::tests:: -- --ignored --test-threads=1 --nocapture
+	@timeout $(VMM_BOOT_TESTS_TIMEOUT) cargo test -p boxlite-vmm --lib boot::tests:: -- --ignored --test-threads=1 --nocapture --skip boot::tests::guest_mounts::
 
+# Exercise the production guest mount adapter inside a real initramfs guest.
+PHONY_TARGETS += test\:integration\:vmm\:mounts
+test\:integration\:vmm\:mounts: export VMM_GUEST_MOUNT_INIT := $(PROJECT_ROOT)/target/vmm/guest-mount/x86_64-unknown-linux-musl/release/boxlite-guest
+test\:integration\:vmm\:mounts: _ensure-kvm _ensure-vmm-kernel vmm\:guest-mount-init
+	@cargo test -p boxlite-vmm --lib --no-run
+	@timeout 60s cargo test -p boxlite-vmm --lib boot::tests::guest_mounts:: -- --ignored --test-threads=1
+# A host without Hypervisor.framework must fail HVF qualification, not report skipped tests as a pass.
 # A host without Hypervisor.framework must fail HVF qualification, not report skipped tests as a pass.
 _ensure-hvf:
 	@test "$$(uname -s -m)" = "Darwin arm64" || { echo "macOS arm64 is required" >&2; exit 1; }
@@ -354,7 +361,7 @@ test\:unit\:guest:
 	if command -v cargo-nextest >/dev/null 2>&1; then \
 		cargo nextest run $(GUEST_RUNNER_CONFIG) --no-tests=fail $(NEXTEST_PROFILE_FLAG) -p boxlite-guest $(NEXTEST_FILTER); \
 	else \
-		cargo test -p boxlite-guest --bins -- --test-threads=1 capabilit spec::tests sysctl::tests; \
+		cargo test -p boxlite-guest --bins -- --test-threads=1 $(if $(FILTER),$(FILTER),capabilit spec::tests sysctl::tests); \
 	fi
 
 # Keep ordinary guest mount tests unprivileged. Only explicitly ignored tests

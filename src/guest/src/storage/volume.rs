@@ -18,7 +18,7 @@ use super::virtiofs::VirtiofsMount;
 /// - SHARED → /run/boxlite/shared
 /// - LAYERS (with container_id) → /run/boxlite/shared/containers/{container_id}/layers
 /// - User volumes (with container_id) → /run/boxlite/shared/containers/{container_id}/volumes/{tag}
-fn resolve_mount_point(tag: &str, mount_point: &str, container_id: &str) -> PathBuf {
+pub(super) fn resolve_mount_point(tag: &str, mount_point: &str, container_id: &str) -> PathBuf {
     if !mount_point.is_empty() {
         return PathBuf::from(mount_point);
     }
@@ -86,9 +86,6 @@ pub fn mount_volume(vol: &Volume) -> BoxliteResult<()> {
 }
 
 /// Mount all volumes.
-pub fn mount_volumes(volumes: &[Volume]) -> BoxliteResult<()> {
-    for vol in volumes {
-        mount_volume(vol)?;
-    }
-    Ok(())
+pub fn mount_volumes(volumes: &[Volume]) -> BoxliteResult<super::aggregate::MountedVolumes> {
+    super::aggregate::mount_volumes(volumes)
 }
