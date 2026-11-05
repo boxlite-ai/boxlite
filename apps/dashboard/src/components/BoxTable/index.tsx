@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { AsciiButton } from '@/components/ascii'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { getBoxDisplayName, getBoxPublicIdLabel } from '@/lib/box-identity'
 import { BoxCube } from '@/components/BoxCube'
@@ -109,32 +110,6 @@ function CopyNameButton({ name, className }: { name: string; className?: string 
   )
 }
 
-function IconButton({
-  title,
-  onClick,
-  children,
-  className,
-  disabled,
-}: {
-  title: string
-  onClick: (e: React.MouseEvent) => void
-  children: ReactNode
-  className?: string
-  disabled?: boolean
-}) {
-  return (
-    <button
-      type="button"
-      title={title}
-      onClick={onClick}
-      disabled={disabled}
-      className={`inline-flex h-[26px] w-7 items-center justify-center border border-border text-foreground transition-colors enabled:hover:border-brand enabled:hover:bg-brand enabled:hover:text-background focus-visible:border-brand focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/35 disabled:cursor-default disabled:text-muted-foreground ${className ?? ''}`}
-    >
-      {children}
-    </button>
-  )
-}
-
 function Quota({ label, value, unit }: { label: string; value: number; unit: string }) {
   return (
     <span className="inline-flex items-baseline gap-[5px] font-mono text-[11px]">
@@ -197,7 +172,7 @@ export function BoxTable({
   const canPrev = pageIndex > 0
   const canNext = pageCount > 0 && pageIndex < pageCount - 1
 
-  const renderActions = (box: Box, buttonClassName?: string, iconClassName = 'size-[13px]') => {
+  const renderActions = (box: Box, buttonClassName?: string, iconClassName = 'size-4') => {
     const startable = isStartable(box)
     const stoppable = isStoppable(box)
     const recoverable = isRecoverable(box)
@@ -206,35 +181,56 @@ export function BoxTable({
     return (
       <>
         {writePermitted && recoverable && (
-          <IconButton title="Recover" onClick={() => handleRecover(box.id)} className={buttonClassName}>
+          <AsciiButton
+            size="icon"
+            title="Recover"
+            aria-label="Recover"
+            onClick={() => handleRecover(box.id)}
+            className={buttonClassName}
+          >
             <RotateCcw className={iconClassName} strokeWidth={1.3} />
-          </IconButton>
+          </AsciiButton>
         )}
         {writePermitted && startable && (
-          <IconButton title="Start" onClick={() => handleStart(box.id)} className={buttonClassName}>
+          <AsciiButton
+            size="icon"
+            title="Start"
+            aria-label="Start"
+            onClick={() => handleStart(box.id)}
+            className={buttonClassName}
+          >
             <Play className={iconClassName} strokeWidth={1.3} fill="currentColor" />
-          </IconButton>
+          </AsciiButton>
         )}
         {writePermitted && stoppable && (
-          <IconButton title="Stop" onClick={() => handleStop(box.id)} className={buttonClassName}>
+          <AsciiButton
+            size="icon"
+            title="Stop"
+            aria-label="Stop"
+            onClick={() => handleStop(box.id)}
+            className={buttonClassName}
+          >
             <Pause className={iconClassName} strokeWidth={1.3} fill="currentColor" />
-          </IconButton>
+          </AsciiButton>
         )}
         {writePermitted && transitioning && !startable && !stoppable && !recoverable && (
-          <IconButton title="Working…" onClick={() => undefined} disabled className={buttonClassName}>
+          <AsciiButton
+            size="icon"
+            title="Working…"
+            aria-label="Working…"
+            onClick={() => undefined}
+            disabled
+            className={buttonClassName}
+          >
             <Loader2 className={`${iconClassName} animate-spin`} strokeWidth={1.3} />
-          </IconButton>
+          </AsciiButton>
         )}
         {deletePermitted && (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <button
-                type="button"
-                title="More"
-                className={`inline-flex h-[26px] w-7 items-center justify-center border border-border text-foreground outline-none transition-colors hover:border-brand hover:bg-brand hover:text-background focus-visible:border-brand focus-visible:ring-2 focus-visible:ring-brand/35 data-[state=open]:border-brand data-[state=open]:bg-brand data-[state=open]:text-background ${buttonClassName ?? ''}`}
-              >
+              <AsciiButton size="icon" aria-label="More" className={buttonClassName} type="button" title="More">
                 <MoreHorizontal className={iconClassName} strokeWidth={1.3} />
-              </button>
+              </AsciiButton>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="min-w-[12rem]">
               <DropdownMenuItem
@@ -285,13 +281,9 @@ export function BoxTable({
               Your agent creates them through the SDK, or you can make one by hand.
             </div>
             {onOpenQuickstart && (
-              <button
-                type="button"
-                onClick={onOpenQuickstart}
-                className="mt-5 border border-border px-4 py-2 font-mono text-[12px] text-muted-foreground transition-colors hover:border-foreground/45 hover:text-foreground"
-              >
+              <AsciiButton type="button" onClick={onOpenQuickstart} className="mt-4">
                 Open Quickstart →
-              </button>
+              </AsciiButton>
             )}
           </div>
         ) : (
@@ -364,13 +356,9 @@ export function BoxTable({
               Spin up a Box with the BoxLite SDK or CLI, or hit “New Box”.
             </div>
             {onOpenQuickstart && (
-              <button
-                type="button"
-                onClick={onOpenQuickstart}
-                className="mt-4 border border-border px-4 py-2 font-mono text-[12px] text-muted-foreground transition-colors hover:border-foreground/45 hover:text-foreground"
-              >
+              <AsciiButton type="button" onClick={onOpenQuickstart} className="mt-4">
                 Open Quickstart →
-              </button>
+              </AsciiButton>
             )}
           </div>
         ) : (
@@ -509,14 +497,8 @@ function PagerButton({
   children: ReactNode
 }) {
   return (
-    <button
-      type="button"
-      title={title}
-      disabled={disabled}
-      onClick={onClick}
-      className="inline-flex size-9 items-center justify-center border border-border text-muted-foreground transition-colors enabled:hover:border-brand enabled:hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
-    >
+    <AsciiButton size="icon" className="size-9" title={title} aria-label={title} disabled={disabled} onClick={onClick}>
       {children}
-    </button>
+    </AsciiButton>
   )
 }

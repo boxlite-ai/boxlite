@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { AsciiButton } from '@/components/ascii'
 import { CREATE_API_KEY_PERMISSIONS_GROUPS } from '@/constants/CreateApiKeyPermissionsGroups'
 import { getRelativeTimeString } from '@/lib/utils'
 import { ApiKeyList, ApiKeyListPermissionsEnum } from '@boxlite-ai/api-client'
@@ -105,14 +106,16 @@ export function ApiKeyTable({ data, loading, isLoadingKey, onRevoke }: DataTable
                 <span className="flex justify-end">
                   <Dialog>
                     <DialogTrigger asChild>
-                      <button
+                      <AsciiButton
+                        variant="danger"
+                        size="icon"
+                        aria-label="Revoke key"
                         type="button"
                         title="Revoke key"
                         disabled={busy}
-                        className="inline-flex h-7 w-[30px] items-center justify-center border border-border text-muted-foreground transition-colors hover:border-destructive hover:text-destructive"
                       >
                         {busy ? <Loader2 className="size-3.5 animate-spin" /> : <Trash2 className="size-3.5" />}
-                      </button>
+                      </AsciiButton>
                     </DialogTrigger>
                     <DialogContent>
                       <DialogHeader>

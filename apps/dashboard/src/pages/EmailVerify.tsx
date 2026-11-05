@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { AsciiButton } from '@/components/ascii'
 import { Logo } from '@/assets/Logo'
 import { RoutePath } from '@/enums/RoutePath'
 import { useApi } from '@/hooks/useApi'
@@ -101,13 +102,9 @@ export default function EmailVerify() {
             </div>
             <div className="text-[16px] font-bold tracking-[-0.3px] text-destructive">Verification failed</div>
             <p className="mt-2 text-[12.5px] text-muted-foreground">{errorMessage}</p>
-            <button
-              type="button"
-              onClick={() => navigate(RoutePath.BILLING)}
-              className="mt-5 bg-primary px-5 py-[11px] text-[13px] font-semibold text-primary-foreground transition-opacity hover:opacity-85"
-            >
+            <AsciiButton variant="primary" className="mt-5" type="button" onClick={() => navigate(RoutePath.BILLING)}>
               Go to billing
-            </button>
+            </AsciiButton>
           </>
         )}
       </div>

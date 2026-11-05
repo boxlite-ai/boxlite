@@ -140,6 +140,30 @@ The `test` target is inferred by `@nx/vite` from the `test` block in
 signal CI has about this app — see [the workflows
 README](../../.github/workflows/README.md) for how its coverage is reported.
 
+## ASCII action buttons
+
+Use `AsciiButton` from `components/ascii` for console actions. It delegates to
+`ui/button`, which owns the shared geometry, typography, focus, and disabled
+styles; raw buttons remain appropriate for navigation, tabs, and custom choices.
+
+| Purpose | Variant / size | Appearance |
+| --- | --- | --- |
+| Main create or submit action | `primary` / default | 36px high, monochrome fill |
+| Row action | `secondary` / `sm` | 28px high, neutral border |
+| Icon action or overflow menu | `secondary` / `icon` | 28px square; `icon-lg` is 40px for mobile |
+| Destructive row action | `danger` / `sm` or `icon` | Red text/icon, red border on hover |
+| Final destructive confirmation | `dangerSolid` | Solid red |
+
+Keep square corners and the shared monospace font. Secondary actions use a cyan
+border with a neutral surface on hover/open; they do not turn solid cyan.
+Hover styles apply only to enabled controls. Keyboard focus uses a contrasting
+outline in both themes. Preserve larger mobile primary targets with `h-11 sm:h-9`.
+
+Import operation icons from `components/ui/icon`, whose aliases all use the
+offline pixel collection. Give icon-only actions an `aria-label`, retain helpful
+titles, and forward native props/ref through wrappers used by Radix triggers.
+Choose variants and sizes instead of copying hover, padding, or border classes.
+
 ## Finding your way around
 
 Navigation is the sidebar plus the tables. There is one route per resource, and

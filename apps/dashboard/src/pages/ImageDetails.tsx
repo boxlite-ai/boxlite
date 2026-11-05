@@ -432,14 +432,9 @@ function TagsSection({
               </span>
               <div className="flex justify-end">
                 {canWrite && (
-                  <button
-                    type="button"
-                    onClick={() => onUnpin(alias)}
-                    disabled={busy}
-                    className="px-2 py-[3px] font-mono text-label uppercase text-muted-foreground transition-colors hover:text-destructive disabled:opacity-40"
-                  >
+                  <AsciiButton variant="danger" size="sm" type="button" onClick={() => onUnpin(alias)} disabled={busy}>
                     Unpin
-                  </button>
+                  </AsciiButton>
                 )}
               </div>
             </div>
