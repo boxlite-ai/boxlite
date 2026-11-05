@@ -1,6 +1,11 @@
 // Copyright 2019 The Chromium OS Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+//
+// Adapted for BoxLite from boxlite-ai/libkrun commit
+// e12b9b3780ffa8df9f3e1797b217d13453479167, src/devices/src/virtio/fs/multikey.rs.
+// BoxLite modifications: native VMM interfaces, Linux-only operation and
+// explicit protocol validation and object ownership.
 
 //! A two-key index. The caller owns synchronization of lookup, reference counts,
 //! insertion and removal; inserting an existing identity never evicts its node.

@@ -101,6 +101,7 @@ pub(crate) struct BoxWatcher {
     box_id: BoxID,
     box_name: Option<String>,
     exit_file: std::path::PathBuf,
+    layout: crate::runtime::layout::BoxFilesystemLayout,
     removes_on_exit: bool,
     /// `None` ⇒ exit-only watcher. `Some` ⇒ also probe the guest's health.
     health: Option<HealthProbe>,
@@ -120,6 +121,7 @@ impl BoxWatcher {
             exit_file: bx
                 .layout
                 .container_exit_file(bx.config.container.id.as_str()),
+            layout: bx.layout.clone(),
             removes_on_exit: bx.config.options.removes_on_stop(),
             health,
         }
@@ -178,6 +180,9 @@ impl BoxWatcher {
     /// health-checked box) flip the last health snapshot to Unhealthy — the whole
     /// job the old exit watcher did, now the single writer of the transition.
     fn on_shim_exit(&mut self) {
+        if let Err(error) = self.layout.cleanup_volume_staging() {
+            tracing::warn!(%error, "Failed to remove stopped box volume staging");
+        }
         // The runtime is gone, so it has already torn everything down (its Drop
         // runs shutdown_sync) and there is nobody left to report to.
         let Some(runtime) = self.runtime.upgrade() else {

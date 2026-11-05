@@ -4,6 +4,7 @@
 //! - Virtiofs: Host-shared directories via virtio-fs
 //! - Block devices: Disk images attached via virtio-blk
 
+mod aggregate;
 pub mod block_device;
 #[allow(dead_code)]
 mod copy;

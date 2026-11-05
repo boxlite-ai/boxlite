@@ -43,6 +43,7 @@ fn config(vcpu_count: u8, memory_mib: u32) -> VmConfig {
         cmdline: "console=ttyS0".into(),
         initramfs: None,
         disks: Vec::new(),
+        filesystem: None,
     }
 }
 
@@ -1036,4 +1037,53 @@ fn a_kvm_vm_runs_until_its_guest_resets() {
     .unwrap();
 
     assert_eq!(vm.run().unwrap(), VmExit::GuestReset);
+}
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[test]
+fn aggregate_filesystem_is_announced_and_exposes_its_transport_config() {
+    use crate::devices::console::{ConsoleWorker, DEFAULT_QUEUE_BYTES};
+    use boxlite_hypervisor::VcpuExit;
+    let path = std::env::temp_dir().join(format!("boxlite-fs-wiring-{}", std::process::id()));
+    std::fs::create_dir(&path).unwrap();
+    let mut configuration = config(1, 2);
+    configuration.filesystem = Some(crate::FsConfig {
+        tag: "aggregate-test".into(),
+        shares: vec![crate::FsShareConfig {
+            name: "BoxLiteShared".into(),
+            path: path.clone(),
+            read_only: false,
+        }],
+    });
+    let (writer, mut console) =
+        ConsoleWorker::spawn(Box::new(io::sink()), DEFAULT_QUEUE_BYTES).unwrap();
+    let vm = Vm::with_devices(
+        configuration,
+        || Ok(MockVm::new()),
+        |_, config| {
+            assert!(
+                config
+                    .cmdline
+                    .ends_with("virtio_mmio.device=4K@0xd0000000:5")
+            );
+            Ok(BootRegisters::default())
+        },
+        |chipset, ctx, config| crate::devices::add_all(chipset, ctx, config, writer),
+    )
+    .unwrap();
+    let mut id = [0; 4];
+    vm.chipset.dispatch(VcpuExit::MmioRead {
+        guest_addr: 0xd000_0008,
+        bytes: &mut id,
+    });
+    assert_eq!(u32::from_le_bytes(id), 26);
+    let mut tag = [0; 4];
+    vm.chipset.dispatch(VcpuExit::MmioRead {
+        guest_addr: 0xd000_0100,
+        bytes: &mut tag,
+    });
+    assert_eq!(&tag, b"aggr");
+    drop(vm);
+    console.finish();
+    std::fs::remove_dir(path).unwrap();
 }

@@ -12,6 +12,7 @@ use std::sync::{
     Arc, Barrier,
     atomic::{AtomicU64, Ordering},
 };
+use std::time::Duration;
 
 use crate::virtio::fs::filesystem::{
     Context, Extensions, FileSystem, FsOptions, SetattrValid, ZeroCopyReader, ZeroCopyWriter,
@@ -371,6 +372,126 @@ fn reset_invalidates_node_and_handle_ids_but_pins_roots() {
     assert!(new_handle > old_handle);
     error(fs.getattr(ctx(), new, Some(old_handle)), libc::EBADF);
     assert_eq!(read(&fs, new, new_handle).unwrap(), b"data");
+}
+
+// Run process-wide limits and fd accounting in an isolated test process. The
+// parent watchdog kills a stuck child instead of hanging the suite.
+pub(super) fn isolated_fd_child(marker: &str) -> bool {
+    if std::env::var_os(marker).is_some() {
+        return true;
+    }
+    let name = std::thread::current().name().unwrap().to_owned();
+    let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", &name, "--nocapture"])
+        .env(marker, "1")
+        .spawn()
+        .unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(15);
+    loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            assert!(status.success(), "isolated fd test failed: {status}");
+            return false;
+        }
+        if std::time::Instant::now() >= deadline {
+            child.kill().unwrap();
+            child.wait().unwrap();
+            panic!("isolated fd test exceeded its watchdog");
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+pub(super) fn fd_count() -> usize {
+    fs::read_dir("/proc/self/fd").unwrap().count()
+}
+
+#[test]
+fn populated_sessions_return_to_fd_baseline_after_destroy_and_drop() {
+    if !isolated_fd_child("BOXLITE_FS_FD_BASELINE_CHILD") {
+        return;
+    }
+    let dir = Directory::new();
+    fs::write(dir.0.join("file"), b"retained data").unwrap();
+    let before = fd_count();
+    for _ in 0..16 {
+        let fs = dir.backend();
+        fs.init(FsOptions::empty()).unwrap();
+        let baseline = fd_count();
+        for _ in 0..8 {
+            let (rw, _, _) = roots(&fs);
+            for _ in 0..16 {
+                let inode = lookup(&fs, rw, c"file");
+                open(&fs, inode, libc::O_RDWR);
+                fs.opendir(ctx(), rw, 0).unwrap();
+            }
+            assert!(fd_count() > baseline + 16, "session was not populated");
+            fs.destroy();
+            fs.init(FsOptions::empty()).unwrap();
+            assert_eq!(fd_count(), baseline, "destroy leaked session descriptors");
+        }
+        // Drop a populated session as well as repeatedly destroyed sessions.
+        let (rw, _, _) = roots(&fs);
+        let inode = lookup(&fs, rw, c"file");
+        open(&fs, inode, libc::O_RDWR);
+        fs.opendir(ctx(), rw, 0).unwrap();
+        drop(fs);
+        assert_eq!(fd_count(), before, "backend drop leaked descriptors");
+    }
+}
+
+#[test]
+fn emfile_lookup_and_open_fail_cleanly_and_recover_in_isolated_process() {
+    if !isolated_fd_child("BOXLITE_FS_EMFILE_CHILD") {
+        return;
+    }
+    let dir = Directory::new();
+    fs::write(dir.0.join("file"), b"still accessible").unwrap();
+    fs::write(dir.0.join("unseen"), b"lookup target").unwrap();
+    let fs = dir.backend();
+    let (rw, _, _) = roots(&fs);
+    let inode = lookup(&fs, rw, c"file");
+    let baseline = fd_count();
+    let mut limit = std::mem::MaybeUninit::<libc::rlimit>::uninit();
+    // SAFETY: getrlimit initializes limit on success.
+    assert_eq!(
+        unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, limit.as_mut_ptr()) },
+        0
+    );
+    // SAFETY: getrlimit succeeded.
+    let original = unsafe { limit.assume_init() };
+    let limited = libc::rlimit {
+        rlim_cur: original.rlim_cur.min(128),
+        ..original
+    };
+    // SAFETY: only the isolated child changes its own soft fd limit.
+    assert_eq!(unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &limited) }, 0);
+    let mut held = Vec::new();
+    loop {
+        match File::open("/dev/null") {
+            Ok(file) => held.push(file),
+            Err(error) => {
+                assert_eq!(error.raw_os_error(), Some(libc::EMFILE));
+                break;
+            }
+        }
+    }
+    let failed_open = fs.open(ctx(), inode, false, libc::O_RDWR as u32);
+    let failed_lookup = fs.lookup(ctx(), rw, c"unseen");
+    drop(held);
+    // Restore before assertions and fixture teardown.
+    // SAFETY: the original soft limit did not exceed the unchanged hard limit.
+    assert_eq!(
+        unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &original) },
+        0
+    );
+    error(failed_open, libc::EMFILE);
+    error(failed_lookup, libc::EMFILE);
+    assert_eq!(fd_count(), baseline, "failed operations leaked descriptors");
+    let handle = open(&fs, inode, libc::O_RDONLY);
+    assert_eq!(read(&fs, inode, handle).unwrap(), b"still accessible");
+    let unseen = lookup(&fs, rw, c"unseen");
+    let handle = open(&fs, unseen, libc::O_RDONLY);
+    assert_eq!(read(&fs, unseen, handle).unwrap(), b"lookup target");
 }
 
 #[test]

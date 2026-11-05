@@ -17,6 +17,8 @@ pub type Result<T> = std::result::Result<T, Error>;
 pub enum Error {
     /// The vCPU count is outside `1..=config::MAX_VCPUS`.
     InvalidVcpuCount(u8),
+    /// Opening or configuring filesystem exports failed.
+    Filesystem(io::Error),
     /// The RAM size is outside `1..=memory::MAX_MEMORY_MIB`.
     InvalidMemorySize(u32),
     /// Allocating the guest RAM failed.
@@ -73,6 +75,7 @@ pub enum Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Filesystem(_) => f.write_str("failed to configure virtio-fs exports"),
             Self::InvalidVcpuCount(count) => write!(f, "invalid vCPU count: {count}"),
             Self::InvalidMemorySize(mib) => write!(f, "invalid memory size: {mib} MiB"),
             Self::AllocateMemory { bytes, .. } => {
@@ -139,7 +142,8 @@ impl error::Error for Error {
             | Self::UnexpectedExit { .. }
             | Self::VcpuPanicked { .. }
             | Self::AlreadyRan => None,
-            Self::AllocateMemory { source, .. }
+            Self::Filesystem(source)
+            | Self::AllocateMemory { source, .. }
             | Self::OpenDisk { source, .. }
             | Self::LoadKernel { source, .. }
             | Self::LoadInitramfs { source, .. }

@@ -1,6 +1,11 @@
 // Copyright 2019 The Chromium OS Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+//
+// Adapted for BoxLite from boxlite-ai/libkrun commit
+// e12b9b3780ffa8df9f3e1797b217d13453479167,
+// src/devices/src/virtio/descriptor_utils.rs.
+// BoxLite modifications: checked guest-memory views and bounded positioned I/O.
 
 //! Descriptor adapters with bounded, positioned file transfers. virtio-queue's
 //! Reader/Writer do not expose their volatile slices for positioned file I/O.

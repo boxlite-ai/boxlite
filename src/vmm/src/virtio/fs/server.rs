@@ -1,6 +1,11 @@
 // Copyright 2019 The Chromium OS Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+//
+// Adapted for BoxLite from boxlite-ai/libkrun commit
+// e12b9b3780ffa8df9f3e1797b217d13453479167, src/devices/src/virtio/fs/server.rs.
+// BoxLite modifications: native VMM interfaces, Linux-only operation and
+// explicit protocol validation and object ownership.
 
 use std::ffi::CStr;
 use std::fs::File;
@@ -1029,6 +1034,7 @@ impl<F: FileSystem + Sync> Server<F> {
             .split_at(size as usize)
             .map_err(Error::EncodeMessage)?;
 
+        let mut accepted_bytes = 0;
         let res = if plus {
             self.fs.readdirplus(
                 Context::from(in_header),
@@ -1036,7 +1042,11 @@ impl<F: FileSystem + Sync> Server<F> {
                 fh.into(),
                 size,
                 offset,
-                |d, e| add_dirent(&mut cursor, size, d, Some(e)),
+                |d, e| {
+                    let count = add_dirent(&mut cursor, size, d, Some(e))?;
+                    accepted_bytes += count;
+                    Ok(count)
+                },
             )
         } else {
             self.fs.readdir(
@@ -1049,20 +1059,28 @@ impl<F: FileSystem + Sync> Server<F> {
             )
         };
 
-        if let Err(e) = res {
-            reply_error(e, in_header.unique, w)
-        } else {
-            // Don't use `reply_ok` because we need to set a custom size length for the
-            // header.
-            let out = OutHeader {
-                len: (size_of::<OutHeader>() + cursor.bytes_written()) as u32,
-                error: 0,
-                unique: in_header.unique,
-            };
-
-            w.write_all(out.as_slice()).map_err(Error::EncodeMessage)?;
-            Ok(out.len as usize)
+        if let Err(e) = res
+            && (!plus || accepted_bytes == 0)
+        {
+            return reply_error(e, in_header.unique, w);
         }
+        // Accepted READDIRPLUS entries already own lookup references. Send
+        // their complete prefix even after a later error so the guest can
+        // FORGET them. A failing callback's partial entry is not included.
+        let payload_len = if plus {
+            accepted_bytes
+        } else {
+            cursor.bytes_written()
+        };
+        // Don't use `reply_ok` because the cursor wrote the payload separately.
+        let out = OutHeader {
+            len: (size_of::<OutHeader>() + payload_len) as u32,
+            error: 0,
+            unique: in_header.unique,
+        };
+
+        w.write_all(out.as_slice()).map_err(Error::EncodeMessage)?;
+        Ok(out.len as usize)
     }
 
     fn readdir(&self, in_header: InHeader, r: Reader, w: &mut Writer) -> Result<usize> {

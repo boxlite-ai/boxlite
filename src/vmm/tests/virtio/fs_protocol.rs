@@ -1368,3 +1368,59 @@ fn optional_kernel_requests_preserve_standard_enosys_fallback() {
     );
     assert_eq!(header(&reply).error, -libc::ENOENT);
 }
+
+#[test]
+fn readdirplus_returns_accepted_prefix_before_unlinked_directory_error() {
+    let directory = TempDir::new();
+    let server = directory.server();
+    init(&server);
+    let root = lookup(&server, ROOT_ID, b"shared\0").nodeid;
+    let (_, opened) = execute(
+        &server,
+        &request(Opcode::Opendir as u32, root, OpenIn::default().as_slice()),
+        &[256],
+    );
+    assert_eq!(header(&opened).error, 0);
+    let fh = object::<OpenOut>(&opened, 16).fh;
+    // The export and handle pin the real directory after rmdir. Synthetic
+    // dots are accepted first, then Linux getdents64 returns ENOENT for this
+    // unlinked directory. No timing, injected fake reply, or thread race.
+    fs::remove_dir(&directory.0).unwrap();
+    let read = ReadIn {
+        fh,
+        size: 1024,
+        ..Default::default()
+    };
+    let (result, reply) = execute(
+        &server,
+        &request(Opcode::Readdirplus as u32, root, read.as_slice()),
+        &[9, 1031],
+    );
+    assert_eq!(header(&reply).error, 0);
+    let record_size = size_of::<EntryOut>() + 32;
+    let reply_len = 16 + 2 * record_size;
+    assert_eq!(result.unwrap(), reply_len);
+    assert_eq!(header(&reply).len as usize, reply_len);
+    for (index, name, node) in [(0, b".".as_slice(), root), (1, b"..".as_slice(), ROOT_ID)] {
+        let start = 16 + index * record_size;
+        let entry = object::<EntryOut>(&reply, start);
+        let dirent = object::<Dirent>(&reply, start + size_of::<EntryOut>());
+        assert_eq!(entry.nodeid, node);
+        assert_eq!(dirent.ino, node);
+        assert_eq!(dirent.off, index as u64 + 1);
+        assert_eq!(dirent.namelen as usize, name.len());
+        let name_start = start + size_of::<EntryOut>() + size_of::<Dirent>();
+        assert_eq!(&reply[name_start..name_start + name.len()], name);
+    }
+    // With no accepted entries, retain the backend errno rather than an empty
+    // success. Plain READDIR retains its existing error-only behavior too.
+    for (opcode, offset) in [(Opcode::Readdirplus, 2), (Opcode::Readdir, 0)] {
+        let (result, reply) = execute(
+            &server,
+            &request(opcode as u32, root, ReadIn { offset, ..read }.as_slice()),
+            &[1040],
+        );
+        assert_eq!(result.unwrap(), 16);
+        assert_eq!(header(&reply).error, -libc::ENOENT);
+    }
+}

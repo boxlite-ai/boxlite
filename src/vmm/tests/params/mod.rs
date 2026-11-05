@@ -152,6 +152,7 @@ fn agrees_with_validate_on_command_line_limits() {
             cmdline,
             initramfs: None,
             disks: Vec::new(),
+            filesystem: None,
         };
         assert_eq!(config.validate().is_ok(), accepted, "{config:?}");
     }

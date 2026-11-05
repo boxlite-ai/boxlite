@@ -458,6 +458,24 @@ impl BoxFilesystemLayout {
         self.box_dir.join(shared_dirs::SHARED)
     }
 
+    /// Single-file exports live outside the writable SHARED namespace.
+    pub fn volume_staging_dir(&self) -> PathBuf {
+        self.box_dir.join("volume-staging")
+    }
+
+    /// Remove ephemeral single-file exports after the VM has stopped.
+    pub fn cleanup_volume_staging(&self) -> BoxliteResult<()> {
+        let directory = self.volume_staging_dir();
+        match std::fs::remove_dir_all(&directory) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(BoxliteError::Storage(format!(
+                "Remove volume staging {}: {error}",
+                directory.display()
+            ))),
+        }
+    }
+
     /// The container's exit file: shared/containers/{cid}/exit.json.
     ///
     /// Written by the guest when the box's main command exits. Distinct from
@@ -752,6 +770,31 @@ impl ImageFilesystemLayout {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn single_file_staging_is_private_and_cleanup_preserves_host_files() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("config");
+        std::fs::write(&source, b"initial").unwrap();
+        for isolate_mounts in [false, true] {
+            let layout = BoxFilesystemLayout::new(
+                directory.path().join(format!("box-{isolate_mounts}")),
+                FsLayoutConfig::with_bind_mount(),
+                isolate_mounts,
+            );
+            let staging = layout.volume_staging_dir().join("uservol0");
+            let staged =
+                crate::volumes::stage_single_file(&staging, &source, "config", false).unwrap();
+            assert!(!staged.starts_with(layout.shared_dir()));
+            assert!(!staged.starts_with(layout.mounts_dir()));
+            std::fs::write(&staged, b"guest update").unwrap();
+            assert_eq!(std::fs::read(&source).unwrap(), b"guest update");
+            layout.cleanup_volume_staging().unwrap();
+            layout.cleanup_volume_staging().unwrap();
+            assert!(!staging.exists());
+            assert_eq!(std::fs::read(&source).unwrap(), b"guest update");
+        }
+    }
 
     #[test]
     fn test_local_bundle_cache_dir_format() {

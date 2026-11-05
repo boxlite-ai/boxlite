@@ -80,7 +80,7 @@ mod virtio;
 mod vm;
 
 pub use chipset::{BusKind, Conflict};
-pub use config::{DiskConfig, DiskFormat, VmConfig};
+pub use config::{DiskConfig, DiskFormat, FsConfig, FsShareConfig, VmConfig};
 pub use error::{Error, Result};
 pub use vm::{StopHandle, Vm, VmExit};
 

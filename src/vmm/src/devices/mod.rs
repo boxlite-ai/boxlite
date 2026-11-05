@@ -24,7 +24,7 @@ use crate::{
     config::VmConfig,
     error::Result,
     virtio::{
-        DeviceContext, blk,
+        DeviceContext, blk, fs,
         mmio::{self, Slot, Slots},
     },
 };
@@ -46,6 +46,11 @@ pub(crate) fn add_all(
     for (index, disk) in config.disks.iter().enumerate() {
         add_slot_device(&mut slots, &mut used, |slot| {
             blk::add_disk(chipset, &ctx, disk, index, slot)
+        })?;
+    }
+    if let Some(filesystem) = &config.filesystem {
+        add_slot_device(&mut slots, &mut used, |slot| {
+            fs::add_filesystem(chipset, &ctx, filesystem, slot)
         })?;
     }
     // The next device is one more `add_slot_device` line here. A device that

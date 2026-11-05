@@ -665,8 +665,8 @@ queue error cannot suppress notification of earlier published completions.
 
 Regular OPEN/CREATE return `DIRECT_IO`, not host `O_DIRECT`; entry/attribute
 timeouts are zero and writeback is not negotiated. Directory handles do not
-enable data caching. Real guest visibility and mmap compatibility are PR2/3
-checks, not consequences proved by these reply flags.
+enable data caching. Linux boot tests check coordinated host rewrites through an
+open guest descriptor, reject shared mappings with ENODEV and read private mappings.
 
 Operations run under the host's existing authority, without changing credentials,
 capabilities or umask. CREATE/MKDIR/MKNOD/SYMLINK accept each uid/gid only when
@@ -690,12 +690,16 @@ these do not claim a backend operation succeeded. Other unsupported operations,
 including SYNCFS, return EOPNOTSUPP rather than a kernel-cached success.
 Implemented FSYNC/FSYNCDIR always perform host synchronization and propagate errors.
 
-This PR1 boundary is not production mounting. PR2 must reuse the common executor,
-freeze/validate descriptors in the queue layer and bound drain batches before
-production wiring. A slow synchronous filesystem call stalls every callback on
-that shared thread; a batch budget cannot cancel a blocked host syscall.
-SHARED/proto/guest/kernel/sandbox wiring is PR2; macOS and complete user-volume
-qualification are PR3. Existing libkrun mounts are unchanged.
+`VmConfig::filesystem` optionally configures one aggregate device with a mount
+tag and named `FsShareConfig` exports. `devices::add_all` attaches it after the
+disks through the same slot allocator, transport and worker runtime, preserving
+disk order and announcing every device on the kernel command line. Export setup
+errors retain their I/O cause through `Error::Filesystem`. The pinned kernel
+fragment includes both virtio-blk and FUSE/virtio-fs.
+
+A slow synchronous filesystem call stalls every callback on the shared worker;
+a batch budget cannot cancel a blocked host syscall. macOS filesystem support
+and broader user-volume qualification remain follow-ups.
 
 ```sh
 make test:unit:vmm FILTER=virtio::fs
@@ -708,8 +712,13 @@ The filesystem suite uses real files through production backends and memory
 queues: read/write/sync, host sync failure, malformed frames/descriptors, split
 transfers, large-directory pagination, credentials, per-share policy, handle
 survival and reclamation, full queues, reply-free requests and stale-session IDs.
-A separate source-level CLI smoke read host input, created and synced exit.json,
-and read its old handle after rename/unlink; it did not boot or mount a guest.
+`make test:integration:vmm:linux` boots the Linux driver to mount exports, copy
+and synchronize files, retain descriptors after rename/unlink, and check cache
+visibility and mixed read-only policies. The separate
+`make test:integration:vmm:mounts` target packages the static production guest
+mount test init supplied as `VMM_GUEST_MOUNT_INIT`. It exercises the guest volume
+adapter's failed-batch rollback, guard rollback and committed mounts, with host
+checks for writable hardlink propagation, snapshot isolation and descriptor cleanup.
 
 
 ## Chipset

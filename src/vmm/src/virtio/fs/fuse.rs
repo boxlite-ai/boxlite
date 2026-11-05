@@ -1,6 +1,11 @@
 // Copyright 2019 The Chromium OS Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+//
+// Adapted for BoxLite from boxlite-ai/libkrun commit
+// e12b9b3780ffa8df9f3e1797b217d13453479167, src/devices/src/virtio/fs/fuse.rs.
+// BoxLite modifications: native VMM interfaces, Linux-only operation and
+// explicit protocol validation and object ownership.
 
 //! Linux FUSE 7.27 wire definitions used by the synchronous non-DAX server.
 
@@ -314,7 +319,6 @@ pub struct SetattrIn {
 unsafe impl ByteValued for SetattrIn {}
 
 impl From<SetattrIn> for bindings::stat64 {
-    #[allow(clippy::useless_conversion)]
     fn from(sai: SetattrIn) -> bindings::stat64 {
         let mut out: bindings::stat64 = unsafe { mem::zeroed() };
         out.st_mode = sai.mode;
