@@ -4,7 +4,6 @@
  */
 
 import { AsciiButton, Panel, PanelNote, SectionTitle } from '@/components/ascii'
-import { BILLING_PAGE_CONTAINER } from '@/components/billing/billingLayout'
 import { PlanChangeNote, PlanComparison, planChangeSummary } from '@/components/billing/planChange'
 import { ArrowLeft, RefreshCcw } from '@/components/ui/icon'
 import { Button } from '@/components/ui/button'
@@ -193,7 +192,7 @@ function PlanChangeShell({ title = 'Change plan', children }: { title?: string; 
   const navigate = useNavigate()
 
   return (
-    <div className={BILLING_PAGE_CONTAINER}>
+    <div className="page-container">
       <div className="flex flex-col gap-6 py-6">
         <div className="flex items-center gap-3">
           <Button variant="ghost" size="icon-sm" className="shrink-0" onClick={() => navigate(RoutePath.BILLING)}>

@@ -278,7 +278,7 @@ export default function BoxDetails() {
   }
 
   return (
-    <div className="flex h-[calc(100svh-60px)] min-h-0 flex-col gap-[14px] px-4 pb-[22px] pt-4 font-mono text-[13px] sm:px-6 lg:px-[40px]">
+    <div className="page-container flex h-[calc(100svh-60px)] min-h-0 flex-col gap-[14px] pb-[22px] pt-4 font-mono text-[13px]">
       {/* breadcrumb */}
       <div className="flex flex-none items-center gap-[9px] text-[12px] text-muted-foreground">
         <button type="button" onClick={() => navigate(RoutePath.BOXES)} className="hover:text-foreground">
