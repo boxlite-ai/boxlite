@@ -4,6 +4,7 @@ import { Link } from 'react-router-dom'
 import { useApi } from '@/hooks/useApi'
 import { completeCiRedirect } from '@/lib/ci-connect'
 import { LocalStorageKey } from '@/enums/LocalStorageKey'
+import { CiAccountPicker } from '@/components/CiAccountPicker'
 import { Button } from '@/components/ui/button'
 
 export default function CiConnectCallback() {
@@ -29,7 +30,14 @@ export default function CiConnectCallback() {
     <main className="mx-auto max-w-lg space-y-5 px-6 py-20">
       <h1 className="font-display text-2xl font-semibold">Connect GitHub CI</h1>
       {!view && !failed && <p role="status">Verifying GitHub authorization…</p>}
-      {result?.status === 'connected' ? (
+      {result?.status === 'selection_required' && view ? (
+        <CiAccountPicker
+          api={api}
+          organization={view.organization}
+          result={result}
+          onResult={(result) => setView({ organization: view.organization, result })}
+        />
+      ) : result?.status === 'connected' ? (
         <>
           <p role="status">GitHub connected. Listener setup: {result.listener_status}.</p>
           <Button

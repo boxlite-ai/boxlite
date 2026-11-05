@@ -140,8 +140,8 @@ describe('Standalone App binding and HTTP ingress', () => {
     await db.close()
     rmSync(directory, { recursive: true, force: true })
   })
-  const serve = async () => {
-    http = createHttp(listener, host, secret)
+  const serve = async (routes: Parameters<typeof createHttp>[2] = secret) => {
+    http = createHttp(listener, host, routes)
     await new Promise<void>((resolve) => http!.server.listen(0, '127.0.0.1', resolve))
     const address = http.server.address()
     if (!address || typeof address === 'string') throw new Error('Missing server address')
@@ -204,8 +204,8 @@ describe('Standalone App binding and HTTP ingress', () => {
       logging.mockRestore()
     }
   })
-  const post = (input: ReturnType<typeof signed>) =>
-    fetch(base + '/v1/ci/github/webhook', {
+  const post = (input: ReturnType<typeof signed>, route = '/v1/ci/github/webhook') =>
+    fetch(base + route, {
       method: 'POST',
       body: new Uint8Array(input.raw),
       headers: {
@@ -215,8 +215,111 @@ describe('Standalone App binding and HTTP ingress', () => {
       },
     })
   const receipts = () => state.recover(lease, 1000, ['receipt/', 'notice/'])
+  it('discovers Personal and Organization Apps in one host and denies cross-App webhook delivery', async () => {
+    await host.close()
+    const secret2 = Buffer.alloc(32, 8),
+      file = join(directory, 'apps.json')
+    writeFileSync(join(directory, 'hook1'), secret, { mode: 0o600 })
+    writeFileSync(join(directory, 'hook2'), secret2, { mode: 0o600 })
+    writeFileSync(
+      file,
+      JSON.stringify([
+        {
+          client_id: 'test-client',
+          private_key_file: keyFile,
+          webhook_secret_file: join(directory, 'hook1'),
+          account_type: 'User',
+        },
+        {
+          client_id: 'org-client',
+          private_key_file: keyFile,
+          webhook_secret_file: join(directory, 'hook2'),
+          account_type: 'Organization',
+        },
+      ]),
+      { mode: 0o600 },
+    )
+    const config = loadConfig({
+      BOXLITE_REST_URL: 'https://box.test',
+      BOXLITE_API_KEY: 'private-fixture-box-key',
+      CI_GITHUB_APPS_FILE: file,
+      CI_STATE_DIR: join(directory, 'state'),
+    })
+    const previous = global.fetch
+    const installation = {
+      id: 2,
+      account: { id: 8, login: 'team', type: 'Organization' },
+      suspended_at: null,
+      permissions: { metadata: 'read', actions: 'read', organization_self_hosted_runners: 'write' },
+    }
+    const repo = { id: 31, name: 'org-repo', owner: { id: 8, login: 'team' }, private: true }
+    global.fetch = jest.fn(async (input, options) => {
+      const url = new URL(String(input)),
+        path = url.pathname,
+        auth = (options?.headers as Record<string, string> | undefined)?.Authorization || ''
+      const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status })
+      if (path === '/app/installations') {
+        const issuer = JSON.parse(Buffer.from(auth.split('.')[1], 'base64url').toString()).iss
+        if (issuer === 'org-client') return json([installation])
+      }
+      if (path === '/app/installations/2') {
+        expect(JSON.parse(Buffer.from(auth.split('.')[1], 'base64url').toString()).iss).toBe('org-client')
+        return json(installation)
+      }
+      if (path === '/app/installations/2/access_tokens')
+        return json(
+          {
+            token: 'private-org-token',
+            expires_at: new Date(Date.now() + 3600000).toISOString(),
+            permissions: JSON.parse(String(options?.body)).permissions,
+          },
+          201,
+        )
+      if (path === '/installation/repositories' && auth === 'Bearer private-org-token')
+        return json({ total_count: 1, repositories: [repo] })
+      if (path === '/orgs/team/actions/runner-groups')
+        return json({
+          total_count: 1,
+          runner_groups: [
+            {
+              id: 9,
+              name: 'boxlite-ci-runner',
+              visibility: 'selected',
+              inherited: false,
+              restricted_to_workflows: false,
+              allows_public_repositories: false,
+            },
+          ],
+        })
+      if (path === '/orgs/team/actions/runner-groups/9/repositories')
+        return json({ total_count: 1, repositories: [repo] })
+      return previous(input, options)
+    }) as typeof fetch
+    const boxes = await BoxLiteWorkers.connect(state, config.endpoint, config.apiKey())
+    host = new SelfHost(config, state, db, namespace, boxes)
+    listener = new Listener({ state, host, worker: config.worker, capacity: new EnvironmentCapacity(config.max) })
+    const view = await discover((view) => view.ready && view.scopes.length === 3)
+    const orgScope = view.scopes.find((scope) => scope.installation.id === 2)!
+    expect(orgScope.runners.kind).toBe('organization')
+    await serve(
+      new Map([
+        ['/v1/ci/github/webhook', { application: 'test-client', secret }],
+        ['/v1/ci/github/webhook/org-client', { application: 'org-client', secret: secret2 }],
+      ]),
+    )
+    const event = signed(31, 2, 8)
+    expect((await post(event, '/v1/ci/github/webhook/org-client')).status).toBe(401)
+    expect((await post(event)).status).toBe(503)
+    expect(await state.scan(lease, { prefix: 'notice/' })).toHaveLength(0)
+    event.signature = 'sha256=' + createHmac('sha256', secret2).update(event.raw).digest('hex')
+    expect((await post(event, '/v1/ci/github/webhook/org-client')).status).toBe(202)
+    const notices = await state.scan(lease, { prefix: 'notice/' })
+    expect(notices).toHaveLength(1)
+    expect(notices[0].payload).toMatchObject({ installationId: 2, repositoryId: 31 })
+  })
   async function enableReplay() {
     await host.close()
+    writeFileSync(join(directory, 'webhook-secret'), secret, { mode: 0o600 })
     const config = loadConfig({
       BOXLITE_REST_URL: 'https://box.test',
       BOXLITE_API_KEY: 'private-fixture-box-key',

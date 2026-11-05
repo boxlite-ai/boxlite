@@ -10,6 +10,7 @@ import { ListenerState, ExecutionLease } from '../state/store'
 import { SqliteStateDatabase } from '../state/sqlite'
 import { PostgresStateDatabase, postgresStateTable } from '../state/postgres'
 import { ExecutionJournal } from './journal'
+import { ScopeApplications } from '../app-scopes'
 import { ExecutionScope } from './model'
 
 const definition: ExecutionScope = {
@@ -38,7 +39,8 @@ for (const backend of ['sqlite', 'postgres'] as const) {
       lease: ExecutionLease,
       key: string,
       directory: string | undefined,
-      schema: string
+      schema: string,
+      namespace: string
     beforeEach(async () => {
       if (backend === 'sqlite') {
         directory = mkdtempSync(join(tmpdir(), 'ci-journal-'))
@@ -57,7 +59,8 @@ for (const backend of ['sqlite', 'postgres'] as const) {
         await pg.query(postgresStateTable)
         db = new PostgresStateDatabase(pg)
       }
-      state = new ListenerState(db, 'app:' + randomUUID())
+      namespace = 'app:' + randomUUID()
+      state = new ListenerState(db, namespace)
       journal = new ExecutionJournal(state)
       await journal.initialize()
       lease = (await state.acquire(randomUUID(), 300000))!
@@ -78,6 +81,84 @@ for (const backend of ['sqlite', 'postgres'] as const) {
           pg = undefined
         }
       }
+    })
+    it('pins original App provenance for legacy scopes and rejects missing mappings after activation', async () => {
+      await state.commit(lease, [{ key: 'backend/test', expected: null, payload: { app: 'personal' } }])
+      const apps = new ScopeApplications(state, 'backend/test', 'personal')
+      expect(await apps.application(lease, definition)).toBe('personal')
+      const other = { ...definition, binding: 'org-binding' }
+      const otherKey = await apps.define(lease, other, 'organization')
+      expect(await apps.application(lease, other)).toBe('organization')
+      await expect(apps.define(lease, other, 'personal')).rejects.toBeInstanceOf(StateCorrupt)
+      const [mapping] = await state.read(['app-scope/' + otherKey.slice(6)])
+      await state.commit(lease, [{ key: mapping.key, expected: mapping.version }])
+      expect(await state.read([mapping.key])).toEqual([])
+      await expect(apps.application(lease, other)).rejects.toBeInstanceOf(StateCorrupt)
+      await expect(apps.define(lease, other, 'organization')).rejects.toBeInstanceOf(StateCorrupt)
+      expect(await apps.application(lease, definition)).toBe('personal')
+    })
+    it('rolls back the scope and index when storing its App association fails', async () => {
+      await state.commit(lease, [{ key: 'backend/test', expected: null, payload: { app: 'personal' } }])
+      await new ScopeApplications(state, 'backend/test', 'personal').initialize(lease)
+      let blocked = false
+      const failing: StateDatabase = {
+        transaction: (namespace, work, mode) =>
+          db.transaction(
+            namespace,
+            (tx) =>
+              work({
+                now: () => tx.now(),
+                get: (key, lock) => tx.get(key, lock),
+                page: (after, limit, prefix) => tx.page(after, limit, prefix),
+                remove: (key, expected) => tx.remove(key, expected),
+                put: async (record, expected) => {
+                  if (record.key.startsWith('app-scope/')) {
+                    blocked = true
+                    throw Error('association storage interrupted')
+                  }
+                  return tx.put(record, expected)
+                },
+              }),
+            mode,
+          ),
+      }
+      const broken = new ScopeApplications(new ListenerState(failing, namespace), 'backend/test', 'personal')
+      const candidate = { ...definition, binding: 'new-app-scope' }
+      const before = (await journal.load(lease)).index
+      await expect(broken.define(lease, candidate, 'organization')).rejects.toThrow('association storage interrupted')
+      expect(blocked).toBe(true)
+      expect((await journal.load(lease)).index).toEqual(before)
+      expect((await journal.load(lease)).scopes.size).toBe(1)
+      expect(await state.scan(lease, { prefix: 'app-scope/' })).toHaveLength(1)
+      await new ScopeApplications(state, 'backend/test', 'personal').define(lease, candidate, 'organization')
+      expect((await journal.load(lease)).scopes.size).toBe(2)
+    })
+    it('captures a scope and lease before asynchronous App association initialization', async () => {
+      await state.commit(lease, [{ key: 'backend/test', expected: null, payload: { app: 'personal' } }])
+      const apps = new ScopeApplications(state, 'backend/test', 'personal')
+      const external = { ...lease },
+        candidate = structuredClone(definition)
+      candidate.binding = 'captured'
+      const pending = apps.define(external, candidate, 'organization')
+      external.epoch++
+      candidate.binding = 'changed'
+      await pending
+      expect(await apps.application(lease, { ...definition, binding: 'captured' })).toBe('organization')
+      await expect(apps.application(lease, candidate)).rejects.toBeInstanceOf(StateCorrupt)
+    })
+    it('reserves a single tenant budget across two Apps with atomic scope associations', async () => {
+      await state.commit(lease, [{ key: 'backend/test', expected: null, payload: { app: 'personal' } }])
+      const apps = new ScopeApplications(state, 'backend/test', 'personal')
+      await apps.initialize(lease)
+      const other = { ...definition, binding: 'other-app-binding' }
+      const otherKey = await apps.define(lease, other, 'organization')
+      const attempts = await Promise.allSettled([
+        journal.reserve(lease, key, demand, limits),
+        journal.reserve(lease, otherKey, { ...demand, job: 56 }, limits),
+      ])
+      expect(attempts.filter((result) => result.status === 'fulfilled' && result.value)).toHaveLength(1)
+      expect((await journal.load(lease)).allocations.size).toBe(1)
+      expect(await apps.application(lease, other)).toBe('organization')
     })
     it('hosted quota zero pauses new admission without an allocation intent', async () => {
       expect(await journal.reserve(lease, key, demand, testCapacity({ account: null, tenant: 0 }))).toBeUndefined()

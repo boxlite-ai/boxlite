@@ -47,7 +47,13 @@ describe('CI webhook resource bounds', () => {
 
   it('bounds concurrent verification before persistence', async () => {
     const secret = randomBytes(32).toString('hex')
-    const service = new CiWebhookService({} as any, { get: () => secret } as any)
+    const service = new CiWebhookService(
+      {} as any,
+      {
+        get: (key: string) =>
+          key === 'ci.githubClientId' ? 'client' : key === 'ci.githubWebhookSecret' ? secret : undefined,
+      } as any,
+    )
     const body = Buffer.from('{}')
     const signature = 'sha256=' + createHmac('sha256', secret).update(body).digest('hex')
     const receive = () => service.receive(body, signature, randomUUID(), 'ping')
@@ -67,7 +73,10 @@ describe('CI webhook resource bounds', () => {
     })
     const service = new CiWebhookService(
       { receive: transaction } as any,
-      { get: (key: string) => (key === 'ci.githubClientId' ? 'client' : secret) } as any,
+      {
+        get: (key: string) =>
+          key === 'ci.githubClientId' ? 'client' : key === 'ci.githubWebhookSecret' ? secret : undefined,
+      } as any,
     )
     const module = await Test.createTestingModule({
       controllers: [CiWebhookController],
@@ -121,7 +130,10 @@ describe('CI webhook resource bounds', () => {
     const secret = randomBytes(32).toString('hex')
     const service = new CiWebhookService(
       { receive: transaction } as any,
-      { get: (key: string) => (key === 'ci.githubClientId' ? 'client' : secret) } as any,
+      {
+        get: (key: string) =>
+          key === 'ci.githubClientId' ? 'client' : key === 'ci.githubWebhookSecret' ? secret : undefined,
+      } as any,
     )
     const body = Buffer.from(
       JSON.stringify({

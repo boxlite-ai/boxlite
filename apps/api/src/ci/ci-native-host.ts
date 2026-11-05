@@ -30,6 +30,7 @@ import { CiNativeWorkers } from './ci-native-workers'
 
 type Binding = {
   id: string
+  app_client_id: string
   generation: string
   installation_id: string
   account_id: string
@@ -54,9 +55,9 @@ const authority = (row: Binding): CiNativeAuthority => ({
 /** Stored connect bindings choose tenants; a webhook never supplies execution identity. */
 @Injectable()
 export class CiNativeHost implements ListenerHost {
-  readonly recovery?: AppDeliveryRecovery
+  readonly recovery?: Pick<AppDeliveryRecovery, 'step' | 'close'>
+  private readonly recoveries: AppDeliveryRecovery[] = []
   private readonly logger = new Logger(CiNativeHost.name)
-  private source?: GitHubAppSource
   private readonly pending = new Map<number, ListenerCredentials>()
   private readonly directory: InstallationDirectory
   constructor(
@@ -71,15 +72,36 @@ export class CiNativeHost implements ListenerHost {
       load: (binding, lease, signal) => this.catalog(binding, lease, signal),
       report: (error, operation) => this.report(error, operation),
     })
-    if (store.app && config.get('ci.githubWebhookSecret'))
-      this.recovery = new AppDeliveryRecovery({
-        state: store.state,
-        app: () => this.app(),
-        authorize: (lease, installation, signal) => this.replayAuthority(lease, installation, signal),
-        report: (error, operation) => this.report(error, operation),
-      })
+    for (const client of store.apps) {
+      const app = github.byClientId(client)
+      try {
+        app.secret()
+      } catch {
+        continue
+      }
+      this.recoveries.push(
+        new AppDeliveryRecovery({
+          state: store.state,
+          app: () => app.appSource(),
+          prefix: client === store.app ? 'replay/' : 'replay-' + client + '/',
+          authorize: (lease, installation, signal) => this.replayAuthority(client, lease, installation, signal),
+          report: (error, operation) => this.report(error, operation),
+        }),
+      )
+    }
+    if (this.recoveries.length)
+      this.recovery = {
+        step: (lease, signal) => {
+          for (const recovery of this.recoveries) recovery.step(lease, signal)
+        },
+        close: async () => {
+          await Promise.all(this.recoveries.map((recovery) => recovery.close()))
+        },
+      }
   }
+
   private async replayAuthority(
+    client: string,
     lease: ExecutionLease,
     installation: number | undefined,
     signal: AbortSignal,
@@ -92,20 +114,17 @@ export class CiNativeHost implements ListenerHost {
       const [row]: Binding[] = await tx.query(
         `SELECT * FROM ci_installation_binding
         WHERE github_host='github.com' AND app_client_id=$1 AND installation_id=$2 FOR SHARE`,
-        [this.store.app, installation],
+        [client, installation],
       )
       if (!row) return false
       try {
-        await this.store.admit(tx, authority(row))
+        await this.store.admit(tx, authority(row), row.app_client_id)
       } catch (error) {
         if (error instanceof ForbiddenException) return false
         throw error
       }
       return true
     })
-  }
-  private app(): GitHubAppSource {
-    return (this.source ??= this.github.appSource())
   }
   async discover(lease: ExecutionLease, signal: AbortSignal, request: DiscoveryRequest): Promise<DiscoverySnapshot> {
     return this.directory.step(lease, request, signal)
@@ -117,15 +136,16 @@ export class CiNativeHost implements ListenerHost {
     })
     const rows: Binding[] = await this.db.query(
       `SELECT * FROM ci_installation_binding
-      WHERE github_host='github.com' AND app_client_id=$1 AND follow_installation=true
+      WHERE github_host='github.com' AND app_client_id=ANY($1::text[]) AND follow_installation=true
       AND state IN ('provisioning','ready') ORDER BY organization_id,id LIMIT 10001`,
-      [this.store.app],
+      [this.store.apps],
     )
     signal.throwIfAborted()
     if (rows.length > 10000) throw new ServiceUnavailableException('CI binding capacity exceeded')
     return rows.map((row) => {
       const original = authority(row)
       return {
+        application: row.app_client_id,
         binding: original.binding,
         generation: original.generation,
         organization: original.organization,
@@ -140,6 +160,8 @@ export class CiNativeHost implements ListenerHost {
     lease: ExecutionLease,
     signal: AbortSignal,
   ): Promise<ExecutionScope[]> {
+    const client = (binding as DirectoryBinding & { application: string }).application
+    const app = this.github.byClientId(client)
     const original = { ...binding, runners: { allowPublic: binding.policy.allowPublic } },
       id = binding.installation.id,
       previous = this.pending.get(id)
@@ -150,9 +172,9 @@ export class CiNativeHost implements ListenerHost {
     await this.store.transaction(async (tx, state) => {
       await new ExecutionJournal(state).load(lease)
       await this.store.root(state)
-      await this.store.admit(tx, original)
+      await this.store.admit(tx, original, client)
     })
-    const installation = await this.app().installation(id, signal),
+    const installation = await app.appSource().installation(id, signal),
       expected = original.installation.account
     if (
       installation.suspended ||
@@ -165,7 +187,7 @@ export class CiNativeHost implements ListenerHost {
       this.store.state,
       lease,
       'catalog/' + binding.binding + '/' + binding.generation,
-      { kind: 'app', app: this.app(), installation },
+      { kind: 'app', app: app.appSource(), installation },
     )
     this.pending.set(id, provider)
     let scopes: ExecutionScope[]
@@ -176,11 +198,16 @@ export class CiNativeHost implements ListenerHost {
       this.pending.delete(id)
     }
     signal.throwIfAborted()
-    for (const scope of scopes) await new ExecutionJournal(this.store.state).define(lease, scope)
+    for (const scope of scopes)
+      await this.store.transaction(async (tx, state) => {
+        await this.store.root(state)
+        await this.store.admit(tx, original, client)
+        await this.store.applications(state).define(lease, scope, client)
+      })
     await this.store.transaction(async (tx, state) => {
       await new ExecutionJournal(state).load(lease)
       await this.store.root(state)
-      await this.store.admit(tx, original)
+      await this.store.admit(tx, original, client)
       await tx.query(
         "UPDATE ci_installation_binding SET state='ready' WHERE id=$1 AND generation=$2 AND state='provisioning'",
         [binding.binding, binding.generation],
@@ -190,11 +217,12 @@ export class CiNativeHost implements ListenerHost {
   }
   async backend(original: ExecutionScope, lease: ExecutionLease): Promise<ListenerBackend> {
     const scope = decodeScope(original)
+    const app = this.github.byClientId(await this.store.application(scope, lease))
     return new GitHubExecutionBackend(
       this.store.state,
       lease,
       scope,
-      { kind: 'app', app: this.app(), installation: { ...scope.installation, permissions: {}, suspended: false } },
+      { kind: 'app', app: app.appSource(), installation: { ...scope.installation, permissions: {}, suspended: false } },
       {
         workers: this.workers.open(scope, lease),
         authorize: async (current, operation, signal) => {
@@ -220,16 +248,18 @@ export class CiNativeHost implements ListenerHost {
           await tx.query("SET LOCAL lock_timeout='2s'")
           await this.store.root(this.store.inside(tx))
           const hint = captured.hint
+          const client = (captured as VerifiedWebhook & { application?: string }).application
+          if (!client || !this.store.apps.includes(client)) throw new ForbiddenException('Verified CI App required')
           const [row]: Binding[] = await tx.query(
             `SELECT * FROM ci_installation_binding
           WHERE github_host='github.com' AND app_client_id=$1 AND installation_id=$2 FOR SHARE`,
-            [this.store.app, hint.installationId],
+            [client, hint.installationId],
           )
           if (row && Number(row.account_id) !== hint.accountId)
             throw new ForbiddenException('Original CI account changed')
           if (hint.repositoryId !== 0) {
             if (!row) throw new ForbiddenException('CI installation is not connected')
-            await this.store.admit(tx, authority(row))
+            await this.store.admit(tx, authority(row), row.app_client_id)
           }
           return work(tx)
         }),

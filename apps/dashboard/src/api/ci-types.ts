@@ -13,7 +13,7 @@ export interface CiSettings {
   }[]
 }
 export interface CiConnectInput {
-  github_account: string
+  account_type: 'User' | 'Organization'
   follow_installation: true
   allow_public_repositories: boolean
 }
@@ -24,12 +24,19 @@ export interface CiWebStart {
   installation_url: string
 }
 export interface CiConnectResult {
+  id?: string
+  expires_at?: string
+  accounts?: {
+    installation_id: number
+    account_id: number
+    github_account: string
+    account_type: 'User' | 'Organization'
+  }[]
   status: string
   listener_status?: string
   installation_url?: string
   github_account?: string
 }
 export interface CiConnectConfiguration {
-  installation_url: string
-  web_connect_available: boolean
+  apps: { account_type: 'User' | 'Organization'; installation_url: string; web_connect_available: boolean }[]
 }

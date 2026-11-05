@@ -8,6 +8,8 @@ import {
   ExecutionLease,
   ExecutionScope,
   GitHubAppSource,
+  CiGitHubApp,
+  ScopeApplications,
   GitHubCredential,
   GitHubExecutionBackend,
   InstallationCatalog,
@@ -32,8 +34,9 @@ const object = (value: unknown): value is Record<string, unknown> =>
   !!value && typeof value === 'object' && !Array.isArray(value)
 class InstallationPending extends Error {}
 export class SelfHost implements ListenerHost {
-  readonly recovery?: AppDeliveryRecovery
-  private readonly app?: GitHubAppSource
+  readonly recovery?: Pick<AppDeliveryRecovery, 'step' | 'close'>
+  private readonly recoveries: AppDeliveryRecovery[] = []
+  readonly applications = new Map<string, CiGitHubApp>()
   private readonly pending = new Map<number, ListenerCredentials>()
   private readonly directory?: InstallationDirectory
   discoveryReady = false
@@ -46,25 +49,57 @@ export class SelfHost implements ListenerHost {
   ) {
     const auth = config.github
     if (auth.kind === 'app') {
-      this.app = new GitHubAppSource({
-        issuer: auth.issuer,
-        privateKey: () => createPrivateKey(privateFile(auth.privateKeyFile)),
-      })
+      for (const entry of auth.applications ?? [auth]) {
+        const secretFile =
+          entry.webhookSecretFile ?? (entry.issuer === auth.issuer ? config.webhookSecretFile : undefined)
+        if (this.applications.has(entry.issuer)) throw new Error('Duplicate GitHub App identity')
+        this.applications.set(
+          entry.issuer,
+          new CiGitHubApp({
+            clientId: entry.issuer,
+            accountType: entry.accountType,
+            privateKey: () => createPrivateKey(privateFile(entry.privateKeyFile)),
+            webhookSecret: secretFile ? () => Buffer.from(privateFile(secretFile).toString('utf8').trim()) : undefined,
+          }),
+        )
+      }
       this.directory = new InstallationDirectory({
         index: (lease, signal) => this.index(lease, signal),
         load: (binding, lease, signal) => this.catalog(binding, lease, signal),
         report: (error, operation) => this.report(error, operation),
       })
-      if (config.webhookSecretFile)
-        this.recovery = new AppDeliveryRecovery({
-          state,
-          app: () => this.app!,
-          authorize: (lease, installation, signal) => this.replayAuthority(lease, installation, signal),
-          report: (error, operation) => this.report(error, operation),
-        })
+      for (const app of this.applications.values()) {
+        const entry = (auth.applications ?? [auth]).find((item) => item.issuer === app.clientId)!
+        if (!(entry.webhookSecretFile || (entry.issuer === auth.issuer && config.webhookSecretFile))) continue
+        app.secret()
+        this.recoveries.push(
+          new AppDeliveryRecovery({
+            state,
+            app: () => app.appSource(),
+            prefix: app.clientId === auth.issuer ? 'replay/' : 'replay-' + app.clientId + '/',
+            authorize: (lease, installation, signal) => this.replayAuthority(app.clientId, lease, installation, signal),
+            report: (error, operation) => this.report(error, operation),
+          }),
+        )
+      }
+      if (this.recoveries.length)
+        this.recovery = {
+          step: (lease, signal) => {
+            for (const recovery of this.recoveries) recovery.step(lease, signal)
+          },
+          close: async () => {
+            await Promise.all(this.recoveries.map((recovery) => recovery.close()))
+          },
+        }
     }
   }
+  private scopes(): ScopeApplications {
+    if (this.config.github.kind !== 'app') throw new Error('Original App required')
+    return new ScopeApplications(this.state, 'backend/github', this.config.github.issuer)
+  }
+
   private async replayAuthority(
+    client: string,
     lease: ExecutionLease,
     installation: number | undefined,
     signal: AbortSignal,
@@ -82,12 +117,13 @@ export class SelfHost implements ListenerHost {
       throw new Error('Original GitHub App identity unavailable')
     if (installation !== undefined) {
       try {
-        if ((await this.app!.installation(installation, signal)).suspended) return false
+        if ((await this.applications.get(client)!.appSource().installation(installation, signal)).suspended)
+          return false
       } catch (error) {
         if (error instanceof GitHubRequestError && error.status === 404) return false
         throw error
       }
-      await this.replayAuthority(lease, undefined, signal)
+      await this.replayAuthority(client, lease, undefined, signal)
     }
     return true
   }
@@ -129,7 +165,18 @@ export class SelfHost implements ListenerHost {
     return { scopes, completed: [], ready: true, pending: false }
   }
   private async index(lease: ExecutionLease, signal: AbortSignal): Promise<DirectoryBinding[]> {
-    const installations = (await this.app!.installations(signal)).filter((installation) => !installation.suspended)
+    const applications = [...this.applications.values()]
+    const groups = await Promise.all(
+      applications.map(async (app) => ({ app, installations: await app.appSource().installations(signal) })),
+    )
+    const originalApps = new Map<number, string>()
+    const installations = groups.flatMap(({ app, installations }) =>
+      installations.filter((installation) => {
+        if (originalApps.has(installation.id)) throw new Error('Duplicate installation identity')
+        originalApps.set(installation.id, app.clientId)
+        return !installation.suspended && (!app.accountType || app.accountType === installation.account.type)
+      }),
+    )
     if (installations.length > 10000) throw new Error('Installation directory capacity exceeded')
     const [root, prior] = await this.state.read(['backend/github', 'binding/self/current'])
     if (
@@ -145,11 +192,16 @@ export class SelfHost implements ListenerHost {
     signal.throwIfAborted()
     // One complete installation/account snapshot; repository hints grant no execution capability.
     await this.state.commit(lease, [
-      { key: 'binding/self/current', expected: prior?.version ?? null, payload: { accounts } },
+      {
+        key: 'binding/self/current',
+        expected: prior?.version ?? null,
+        payload: { accounts, applications: Object.fromEntries(originalApps) },
+      },
     ])
     return installations.map((installation) => ({
       ...this.owner(),
       installation,
+      application: originalApps.get(installation.id),
       binding: 'installation:' + installation.id,
       generation: 1,
       policy: { allowPublic: this.config.allowPublic, group: this.config.group },
@@ -160,6 +212,9 @@ export class SelfHost implements ListenerHost {
     lease: ExecutionLease,
     signal: AbortSignal,
   ): Promise<ExecutionScope[]> {
+    const client = (binding as DirectoryBinding & { application: string }).application
+    const app = this.applications.get(client)
+    if (!app) throw new Error('Original App unavailable')
     const id = binding.installation.id,
       previous = this.pending.get(id)
     if (previous) {
@@ -168,12 +223,14 @@ export class SelfHost implements ListenerHost {
     }
     const provider = new ListenerCredentials(this.state, lease, 'catalog/' + id, {
       kind: 'app',
-      app: this.app!,
+      app: app.appSource(),
       installation: binding.installation,
     })
     this.pending.set(id, provider)
     try {
-      return await new InstallationCatalog(provider, binding, binding.policy).load(signal)
+      const scopes = await new InstallationCatalog(provider, binding, binding.policy).load(signal)
+      for (const scope of scopes) await this.scopes().define(lease, scope, client)
+      return scopes
     } finally {
       await provider.close()
       this.pending.delete(id)
@@ -182,8 +239,7 @@ export class SelfHost implements ListenerHost {
   private owner() {
     return { organization: this.boxes.http.principal.path_prefix, actor: this.boxes.http.principal.sub }
   }
-  private async admit(scope: ExecutionScope, signal?: AbortSignal): Promise<void> {
-    const source = this.app
+  private async admit(scope: ExecutionScope, source?: GitHubAppSource, signal?: AbortSignal): Promise<void> {
     if (source) {
       const actual = await source.installation(scope.installation.id, signal),
         expected = scope.installation.account
@@ -221,15 +277,26 @@ export class SelfHost implements ListenerHost {
   }
   async backend(scope: ExecutionScope, lease: ExecutionLease): Promise<ListenerBackend> {
     scope = decodeScope(scope)
-    const auth = this.config.github,
-      source: CredentialSource = this.app
-        ? { kind: 'app', app: this.app, installation: { ...scope.installation, permissions: {}, suspended: false } }
-        : auth.kind === 'pat' && scope.runners.kind === 'repository'
-          ? { kind: 'pat', repository: scope.runners.repository.id, token: auth.token }
-          : (() => {
-              throw new Error('Original GitHub source unavailable')
-            })()
-    const workers = this.boxes.bind(scope, lease, () => this.admit(scope))
+    const auth = this.config.github
+    const app = auth.kind === 'app' ? this.applications.get(await this.scopes().application(lease, scope)) : undefined
+    if (auth.kind === 'app' && !app) throw new Error('Original GitHub App unavailable')
+    const source: CredentialSource = app
+      ? {
+          kind: 'app',
+          app: app.appSource(),
+          installation: { ...scope.installation, permissions: {}, suspended: false },
+        }
+      : auth.kind === 'pat' && scope.runners.kind === 'repository'
+        ? { kind: 'pat', repository: scope.runners.repository.id, token: auth.token }
+        : (() => {
+            throw new Error('Original GitHub source unavailable')
+          })()
+    const admit = async (signal?: AbortSignal) => {
+      if (app?.accountType && app.accountType !== scope.installation.account.type)
+        throw new Error('GitHub App account type denied')
+      await this.admit(scope, app?.appSource(), signal)
+    }
+    const workers = this.boxes.bind(scope, lease, () => admit())
     return new GitHubExecutionBackend(
       this.state,
       lease,
@@ -238,14 +305,16 @@ export class SelfHost implements ListenerHost {
       {
         workers,
         authorize: async (original, operation, signal) => {
-          if (operation === 'admission') await this.admit(original, signal)
+          if (operation === 'admission') await admit(signal)
         },
       },
       this.config.worker.labels,
     )
   }
   async accept(notification: VerifiedWebhook): Promise<'stored' | 'duplicate'> {
-    if (!this.app) throw new Error('Webhook requires an App source')
+    const client =
+      notification.application ?? (this.applications.size === 1 ? [...this.applications.keys()][0] : undefined)
+    if (!client || !this.applications.has(client)) throw new Error('Verified webhook App required')
     const captured = {
         ...notification,
         hint: { ...notification.hint, job: notification.hint.job ? { ...notification.hint.job } : null },
@@ -266,6 +335,12 @@ export class SelfHost implements ListenerHost {
                 ? current.payload.accounts
                 : undefined
             const bound = accounts?.[String(hint.installationId)]
+            const provenance =
+              current && object(current.payload) && object(current.payload.applications)
+                ? current.payload.applications
+                : undefined
+            if (bound !== undefined && provenance?.[String(hint.installationId)] !== client)
+              throw new Error('Original webhook App changed')
             if (bound !== undefined && bound !== hint.accountId)
               throw new Error('Original installation account changed')
             if (requireBinding && hint.repositoryId !== 0 && bound === undefined)

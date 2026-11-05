@@ -9,7 +9,7 @@ export function installCiWebhookBodyParser(app: INestApplication): void {
   let receiving = 0
   const parse = raw({ type: 'application/json', limit: '1mb', inflate: false })
   app.use((req: Request, res: Response, next: NextFunction) => {
-    if (req.path !== CI_WEBHOOK_PATH || req.method !== 'POST') return next()
+    if (![CI_WEBHOOK_PATH, CI_WEBHOOK_PATH + '/organization'].includes(req.path) || req.method !== 'POST') return next()
     if (receiving >= 32) return res.status(503).set('Connection', 'close').end()
     if (!req.is('application/json')) return res.status(415).set('Connection', 'close').end()
     receiving++

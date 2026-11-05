@@ -18,4 +18,15 @@ export class CiWebhookController {
       request.get('x-github-event') || '',
     )
   }
+  @Post('organization')
+  @HttpCode(204)
+  receiveOrganization(@Req() request: Request) {
+    return this.service.receive(
+      request.body,
+      request.get('x-hub-signature-256') || '',
+      request.get('x-github-delivery') || '',
+      request.get('x-github-event') || '',
+      'Organization',
+    )
+  }
 }

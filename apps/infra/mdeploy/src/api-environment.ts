@@ -62,14 +62,31 @@ const CI_SECRET_KEYS = ['CI_GITHUB_APP_PRIVATE_KEY', 'CI_GITHUB_WEBHOOK_SECRET',
 
 /** CI is optional; once selected, every credential must use the workload secret channel. */
 const validateCiChannels = (values: Record<string, string>, addresses: Record<string, string>): void => {
-  for (const key of ['CI_GITHUB_APP_PRIVATE_KEY_FILE', 'CI_GITHUB_WEBHOOK_SECRET_FILE'])
+  for (const key of ['CI_GITHUB_APP_PRIVATE_KEY_FILE', 'CI_GITHUB_WEBHOOK_SECRET_FILE', 'CI_GITHUB_APPS_FILE'])
     if (key in values || key in addresses)
       throw new ApiEnvironmentError(`${key} is a self-hosted file input; hosted CI uses mstage secret refs`)
-  const webSecret = 'CI_GITHUB_APP_CLIENT_SECRET'
-  if (held(values, webSecret) || held(addresses, webSecret)) {
-    if (!held(addresses, webSecret)) throw new ApiEnvironmentError(`${webSecret} requires a mstage secret ref`)
+  const orgClient = 'CI_GITHUB_ORG_APP_CLIENT_ID',
+    orgSlug = 'CI_GITHUB_ORG_APP_SLUG'
+  const orgSecrets = ['CI_GITHUB_ORG_APP_PRIVATE_KEY', 'CI_GITHUB_ORG_WEBHOOK_SECRET']
+  const orgKeys = [orgClient, orgSlug, ...orgSecrets, 'CI_GITHUB_ORG_APP_CLIENT_SECRET']
+  if (orgKeys.some((key) => held(values, key) || held(addresses, key))) {
     if (!held(values, 'CI_GITHUB_APP_CLIENT_ID'))
-      throw new ApiEnvironmentError('CI_GITHUB_APP_CLIENT_ID is required for browser connect')
+      throw new ApiEnvironmentError('Personal App identity is required as the shared CI storage anchor')
+    if (!/^[A-Za-z0-9_-]{1,128}$/.test(values[orgClient] || '') || values[orgClient] === values.CI_GITHUB_APP_CLIENT_ID)
+      throw new ApiEnvironmentError('Organization App requires a distinct client ID')
+    if (!/^[A-Za-z0-9-]+$/.test(values[orgSlug] || ''))
+      throw new ApiEnvironmentError('Organization App slug is required')
+    for (const key of orgSecrets)
+      if (!held(addresses, key)) throw new ApiEnvironmentError(`${key} requires a mstage secret ref`)
+  }
+  for (const [webSecret, clientKey] of [
+    ['CI_GITHUB_APP_CLIENT_SECRET', 'CI_GITHUB_APP_CLIENT_ID'],
+    ['CI_GITHUB_ORG_APP_CLIENT_SECRET', orgClient],
+  ]) {
+    if (held(values, webSecret) || held(addresses, webSecret)) {
+      if (!held(addresses, webSecret)) throw new ApiEnvironmentError(`${webSecret} requires a mstage secret ref`)
+      if (!held(values, clientKey)) throw new ApiEnvironmentError(`${clientKey} is required for browser connect`)
+    }
   }
   const client = values.CI_GITHUB_APP_CLIENT_ID,
     slug = values.CI_GITHUB_APP_SLUG

@@ -15,6 +15,17 @@ a known HTTP denial from an outcome that may have produced a remote effect; the
 controller must persist its intent before calling a mutation. Key loading remains
 with the host.
 
+`CiGitHubApp` owns one App identity and private loaders for its signing key, OAuth
+client secret and webhook secret. Authentication and connect verification are
+shared by the hosted registry and standalone host. An optional account type
+restricts new connect/admission; original cleanup retains the original App source.
+Self-owned Apps can omit that type and serve both personal and organization accounts.
+`ScopeApplications` atomically associates each execution scope with its original
+App. Missing or conflicting associations fail closed after the one-time bootstrap.
+Multiple Apps retain one journal, scheduling lease and host capacity provider.
+`AppDeliveryRecovery.prefix` separates each App's delivery history without
+creating another execution namespace or quota.
+
 `GitHubAppSource` lists installations and issues purpose-specific credentials for
 repository discovery, Actions reads, repository runners or organization runners.
 It rechecks installation identity and permissions before issuing a token, requests
