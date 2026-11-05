@@ -60,12 +60,12 @@ ssh.disable().await?;
 
 `SshHandle` owns its backend reference and can outlive the `LiteBox` borrow.
 A fresh handle to a running VM can query SSH without calling `start()` again.
-For a local box, after startup each operation has a total 15-second budget:
+For local SSH control, after startup each operation has a total 15-second budget:
 the guest's 10-second cleanup limit plus 5 seconds for communication and
 scheduling. Obtaining the SSH interface, connection setup, queueing, and the
 RPC all consume this budget; VM and container startup time is excluded.
 Connection or queueing delays can leave less than 10 seconds for guest cleanup.
-Local runtime shutdown rejects new SSH operations and cancels interface
+Local runtime shutdown rejects new SSH control operations and cancels interface
 acquisition and RPCs. In-progress VM initialization finishes before
 cancellation is returned, so detached boxes remain recoverable; container
 startup retains its own cancellation. Operations are not automatically retried.
@@ -192,14 +192,21 @@ Existing configuration supplies the server host key and enabled state; TCP and
 REST connections retain their account authentication.
 
 Rust can prepare `let tunnel = sandbox.ssh().tunnel().await?` and open
-`let stream = tunnel.connect().await?`. Preparation neither starts the box nor
-connects a socket. `connect()` has a 15-second socket connection limit and returns
-without consuming SSH bytes; then run an SSH client over the duplex stream.
-Missing sockets return a network error, stopped handles are rejected, and runtime
-shutdown cancels pending opens. Disabled SSH refuses/closes the stream. No local
-network fallback occurs. Runtime and guest must be upgraded together and the VM
-restarted to install the new mapping. The Rust data API returns `Unsupported`
-on REST handles.
+`let stream = tunnel.connect().await?`. As with a local network tunnel,
+preparation starts the VM and container main command as needed, including an
+explicit command, but opens no data connection. It does not configure or enable
+SSH; startup restores saved SSH configuration and enabled state. To prepare a
+new tunnel after stopping a box, obtain a fresh handle with `runtime.get()`.
+
+`connect()` and each forwarded client open the saved socket path without starting
+the box again or checking the previous instance's cancellation token. A tunnel
+prepared before a stop can reach the same box after it restarts. Connections
+already open are not migrated. Missing sockets return a network error.
+`connect()` has a 15-second socket connection limit and returns without consuming
+SSH bytes; then run an SSH client over the duplex stream. Disabled SSH
+refuses/closes the stream. No local network fallback occurs. Runtime and guest
+must be upgraded together and the VM restarted to install the new mapping. The
+Rust data API returns `Unsupported` on REST handles.
 
 Calling Rust `forward()` on this SSH tunnel explicitly delegates credential-free
 access to everyone who can reach its listener. Loopback includes other local
@@ -207,9 +214,12 @@ users; an external bind address can expose it to other hosts. Use `connect()`
 when no local listener is needed.
 
 The existing relay supports concurrent reads/writes and write half-close, so
-write EOF still allows a final response. Local I/O failures propagate to the
-caller; guest SSH failures close the transport. Disable, reconfigure and guest
-shutdown cancel and drain dedicated sessions with the same deadlines as TCP.
+write EOF still allows a final response. On streams returned by `connect()`,
+local I/O failures propagate to the caller. Individual forwarded-client failures
+are logged; they do not reach `wait()` or `close()`, which report the listener's
+terminal result. Guest SSH failures close the transport. Disable, reconfigure
+and guest shutdown cancel and drain dedicated sessions with the same deadlines
+as TCP.
 
 ## HTTP control with `boxlite serve`
 

@@ -28,6 +28,75 @@ No automatic fallback from the dedicated Rust path.
 
 ## Related work and lessons
 
+### Socket cleanup and error reporting
+
+Remove stale SSH socket files through `BoxSockets::real_dir()`, while retaining
+the short alias for socket binding and connection. At `f88a8ca`,
+`src/boxlite/src/vmm/controller/shim.rs:360` removes `ssh_sock()`, which depends
+on the alias. `src/boxlite/src/net/socket_path.rs:99,123` distinguishes the real
+directory from the short binding path. Missing aliases can hide existing files
+from cleanup; unlinking the real path does not use the socket address limit.
+
+Normal startup already restores the alias in
+`src/boxlite/src/runtime/layout.rs:605`. This change covers alias loss between
+preparation and cleanup, rather than asserting that ordinary restarts fail.
+Preserve missing-file tolerance and propagation of other cleanup errors. Avoid
+adding another alias-repair step or extracting a cleanup abstraction for one file.
+
+Validate by binding and closing a real Unix socket, removing its directory
+alias, and invoking `ShimController::start()`. Place a directory at the stderr
+file path to stop before process spawn (`spawn.rs:148,217`), then assert cleanup
+removed the real file. With production
+unchanged, that assertion must fail; with the real-path removal it must pass.
+Also exercise cleanup with an existing alias and with no stale file.
+
+Correct the guide and this investigation to match
+`src/boxlite/src/litebox/network.rs:651`: stream I/O errors reach `connect()`
+callers, but individual forwarded-client errors are logged. `wait()` and
+`close()` return the listener's terminal result, not relay failures. Link this
+investigation from the contributing landing page. These documentation changes
+describe existing behavior and require no relay implementation change.
+
+### Tunnel lifecycle alignment
+
+SSH tunnel preparation follows the local network tunnel's lifecycle: start the
+VM and container main command as needed, then retain a lazy connection opener.
+Preparation does not configure or enable SSH. Connections and forwarded clients
+use the box's socket path, which may belong to a restarted instance of that box.
+
+Evidence at `f88a8ca3ffb2e9876cbc5fb3803f4c0c1a8d9bca`:
+
+- `src/boxlite/src/litebox/box_impl.rs:1704` calls `live_state()` before returning
+  a network tunnel; its opener captures the network backend without a shutdown
+  token. `live_state()` at line 1116 boots and starts the container. Its shared
+  startup path rejects spent handles and propagates startup failures.
+- `src/boxlite/src/net/gvproxy/services.rs:481` connects to the saved control
+  socket on each open, with a bounded handshake and no box-state or cancellation
+  check. `src/boxlite/src/litebox/network.rs:339` reuses that opener for every
+  forwarded client. A prepared tunnel does not restart a stopped box itself.
+- `src/boxlite/src/litebox/ssh.rs:176` instead requires an already-running box
+  and retains its shutdown token. This extra policy makes SSH preparation and
+  reconnection differ from the network tunnel despite sharing `BoxTunnel`.
+
+Reuse `live_state()` for SSH preparation and retain only the SSH path in its
+opener. Keep the 15-second socket timeout, raw-byte behavior, disabled-network
+support, and REST `Unsupported` response. Do not add instance-generation checks
+or a second startup abstraction. Keeping the old SSH policy would preserve the
+inconsistency; binding both transports to a VM generation would change the
+existing network API and prevent reconnection to the same restarted box.
+
+Validation planned before implementation:
+
+- Mock guest startup: preparing SSH must issue `Container.Start`, propagate its
+  failure, and leave SSH control untouched. The previous implementation skips it.
+- Real Unix socket boundaries: prepared connections and a forwarder must reach
+  a replacement listener after the old instance stops and its token is cancelled.
+  No listener must still produce a network error, without initiating startup.
+- Real VM: prepare SSH on a fresh box and a fresh stopped-box handle without
+  explicit `start()`, then verify execution and saved disabled SSH intent.
+- Run the regression tests with all non-test files restored to their pre-change
+  state, observe the old behavior fail, then restore the change and rerun.
+
 Working-tree baseline: `7f28cd5f295ac54f96c477141a096db590b936ed`.
 
 | Question | Evidence and decision |
@@ -66,16 +135,21 @@ Rust SshHandle
    vsock accept selects trusted `none`; TCP retains credential authentication.
    Admit and spawn under the manager lock, but never await identification or
    authentication while holding it. A silent client consumes one bounded slot.
-4. `SshHandle::tunnel()` prepares local access on an existing VM without starting
-   it or opening a connection; disabled SSH fails when used. REST backends return
+4. `SshHandle::tunnel()` starts the VM and container main command as needed through
+   the same startup path as the network tunnel, without opening a connection or
+   changing saved SSH configuration; disabled SSH fails when used. REST backends return
    Unsupported for this new local API. CLI does not use this API. Local socket
    failures never fall back to networking. `connect()` opens the Unix stream
-   under a timeout and cancellation;
+   under a 15-second timeout, without an instance cancellation check;
    it returns without consuming any SSH bytes. The caller can immediately run
    OpenSSH or `russh::client::connect_stream` and authenticate with `none`.
    A prepared tunnel can fail or receive EOF if SSH is disabled concurrently.
+   It does not start the box again when connected, but can reach the same box
+   after another operation restarts it, including through an existing forwarder.
 5. Reads and writes are independent, retaining existing bounded forwarding and
-   half-close behavior. Local I/O errors propagate to the caller; guest SSH
+   half-close behavior. Local I/O errors on `connect()` streams propagate to the
+   caller. Individual forwarded-client failures are logged and do not reach
+   `wait()` or `close()`, which report the listener's terminal result. Guest SSH
    failures are logged without credentials and close the transport. No retries.
 6. Disable/reconfigure/shutdown cancel both accepts and sessions, shut down
    duplicated socket descriptors, and drain existing task groups within the
@@ -94,8 +168,9 @@ existing credential-authenticated TCP behavior.
 
 Planned checks through make targets:
 
-- Host unit tests: disabled/stopped refusal, lazy socket connect, no handshake
-  wait, simultaneous byte transfer, half-close, missing socket, cancellation.
+- Host unit tests: preparation starts the container and propagates startup errors,
+  spent-handle refusal, lazy socket connect, no handshake wait, simultaneous byte
+  transfer, half-close, missing socket, and reconnection after instance cancellation.
 - Linux guest tests: trusted `none` succeeds without an authorized login/key;
   TCP `none` fails; trusted ingress rejects non-host CIDs; silent handshake
   does not block another connection or disable; disable drains trusted clients.
@@ -118,6 +193,37 @@ Planned checks through make targets:
 | `make runtime:debug` | Built macOS arm64 shim, Linux arm64 guest and runtime tools. |
 | `make test:integration:rust SETUP_DONE=1 FILTER=guest_ssh_dedicated_vsock_without_network_or_client_credentials` with the built runtime directory | Real macOS/libkrun VM passed: networking disabled, OpenSSH public-key/password methods disabled, unconfigured login, container UID/GID, disable, stop/reacquire/start, restored disabled intent, re-enable and SSH identification over the new mapping. |
 | `make clippy`, `make fmt:check:rust`, `git diff --check` | Passed; clippy includes Linux guest cross-target checks. |
+
+### Lifecycle alignment results
+
+With every non-test file restored to `f88a8ca`,
+`BOXLITE_DEPS_STUB=1 make test:unit:rust FILTER=ssh_dedicated_transport`
+failed all four new regression cases: preparation skipped container startup and
+its error, a prepared connection returned `Stopped` after cancellation, and a
+forwarded client never reached the replacement listener within two seconds.
+The modified real-VM test failed at initial preparation with
+`InvalidState("SSH transport requires a running box")`.
+
+With the implementation restored:
+
+- `BOXLITE_DEPS_STUB=1 make test:unit:rust FILTER=ssh`: 19 host tests passed in
+  each feature pass, plus five shared SSH tests.
+- `make test:integration:rust SETUP_DONE=1 FILTER=guest_ssh_dedicated_vsock_without_network_or_client_credentials`,
+  using the built runtime: passed on macOS/libkrun. Preparation booted the fresh
+  box and restarted a stopped box without explicit `start()`, preserved saved
+  disabled intent, and supported SSH execution with networking disabled.
+- `make clippy`, `make fmt:check:rust`, and `git diff --check`: passed.
+
+### Socket cleanup results
+
+Before the real-path fix,
+`BOXLITE_DEPS_STUB=1 make test:unit:rust FILTER=ssh_socket_cleanup_does_not_depend_on_binding_alias`
+reached the cleanup assertion and failed with
+`stale SSH socket survived cleanup: alias_present=false` in both feature passes.
+After the fix, `BOXLITE_DEPS_STUB=1 make test:unit:rust FILTER=ssh` passed all
+20 host tests in each pass, including all four alias/file combinations, plus
+five shared SSH tests. The dedicated SSH real-VM test passed again on macOS;
+`make clippy`, `make fmt:check:rust`, and `git diff --check` also passed.
 
 Linux host KVM integration was not run. Linux guest unit tests used Unix stream pairs for stream handling,
 while the macOS VM test exercised the actual Unix/vsock bridge.

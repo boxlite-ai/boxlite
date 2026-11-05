@@ -27,7 +27,7 @@ async fn guest_ssh_dedicated_vsock_without_network_or_client_credentials() {
     options.network = boxlite::NetworkSpec::Disabled;
     options.user = Some("12345:12346".into());
     let sandbox = runtime.create(options, None).await.unwrap();
-    sandbox.start().await.unwrap();
+    let tunnel = sandbox.ssh().tunnel().await.unwrap();
     let status = sandbox
         .ssh()
         .configure(boxlite::SshConfig {
@@ -43,11 +43,7 @@ async fn guest_ssh_dedicated_vsock_without_network_or_client_credentials() {
         })
         .await
         .unwrap();
-    let forwarder = sandbox
-        .ssh()
-        .tunnel()
-        .await
-        .unwrap()
+    let forwarder = tunnel
         .forward(boxlite::SocketAddress::Tcp("127.0.0.1:0".parse().unwrap()))
         .await
         .unwrap();
@@ -90,17 +86,10 @@ async fn guest_ssh_dedicated_vsock_without_network_or_client_credentials() {
     sandbox.stop().await.unwrap();
     drop(sandbox);
     let sandbox = runtime.get(&id).await.unwrap().unwrap();
-    sandbox.start().await.unwrap();
+    let tunnel = sandbox.ssh().tunnel().await.unwrap();
     assert!(!sandbox.ssh().status().await.unwrap().enabled);
     sandbox.ssh().enable().await.unwrap();
-    let mut stream = sandbox
-        .ssh()
-        .tunnel()
-        .await
-        .unwrap()
-        .connect()
-        .await
-        .unwrap();
+    let mut stream = tunnel.connect().await.unwrap();
     let mut banner = [0; 8];
     tokio::time::timeout(Duration::from_secs(5), stream.read_exact(&mut banner))
         .await

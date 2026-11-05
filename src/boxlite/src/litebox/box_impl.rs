@@ -1113,7 +1113,7 @@ impl BoxImpl {
     /// container, so this starts it (once, and safely alongside an explicit
     /// `start()`). `attach` deliberately does *not* use this: it boots without
     /// running init, so a client can attach before `start()`.
-    async fn live_state(&self) -> BoxliteResult<&LiveState> {
+    pub(super) async fn live_state(&self) -> BoxliteResult<&LiveState> {
         let live = self.ensure_booted().await?;
         self.ensure_container_started(live).await?;
         Ok(live)
@@ -1648,7 +1648,7 @@ impl crate::runtime::backend::BoxBackend for BoxImpl {
     }
 
     async fn ssh_tunnel(&self) -> BoxliteResult<BoxTunnel> {
-        BoxImpl::ssh_tunnel(self)
+        BoxImpl::ssh_tunnel(self).await
     }
 }
 

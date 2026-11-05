@@ -32,6 +32,7 @@ How to build, test, and change the code.
 
 Dated root-cause analyses and design studies, newest first.
 
+- 2026-11-05 · [Dedicated SSH transport](investigations/2026-11-05-ssh-dedicated-vsock.md): host-only SSH over Unix sockets and vsock, tunnel lifecycle, and socket cleanup.
 - 2026-11-04 · [CLI-managed SSH setup](investigations/ssh-quick-configuration.md): managed SSH credentials and the printed SSH connection command.
 - 2026-11-03 · [Quickstart code readability](investigations/2026-11-03-quickstart-code-readability.md): SDK/CLI code typography and unpinned installation commands.
 - 2026-11-03 · [Images catalog membership](investigations/2026-11-03-images-catalog-membership.md): keeps Quickstart recommendations out of the API-backed image list.

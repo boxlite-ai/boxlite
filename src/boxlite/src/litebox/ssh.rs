@@ -1,4 +1,4 @@
-//! SSH control and local data access; only configuration may implicitly start a box.
+//! SSH control and local data access; configuration and tunnels may start a box.
 
 use std::{fmt, sync::Arc, time::Duration};
 
@@ -90,12 +90,15 @@ pub struct SshStatus {
     pub host_key_fingerprint: String,
 }
 
-/// Owned SSH handle for control and local data access; only configuration may start the box.
+/// Owned SSH handle for control and local data access.
 ///
 /// `configure()` may start boxes using the image's default command.
 /// With an explicit `BoxOptions.cmd` or `entrypoint`, a Configured or Stopped box returns
 /// `InvalidState`: call `LiteBox::start()` first. This also applies to fresh
 /// handles obtained through `runtime.get()` after stopping the box.
+/// `tunnel()` follows the network tunnel's startup policy: it starts the VM and
+/// container main command as needed, including explicit commands, without changing
+/// saved SSH configuration. A spent handle must be reacquired through `runtime.get()`.
 ///
 /// `status()`, `enable()` and `disable()` never start the VM or its main command.
 /// On local Configured or Stopped boxes, enable/disable return `InvalidState`.
@@ -106,7 +109,7 @@ pub struct SshStatus {
 /// at call time and does not prevent a concurrent `configure()` from enabling SSH.
 /// Disable while running to persist the disabled switch.
 ///
-/// For the local backend, after startup each operation has a total 15-second
+/// For local control operations, after startup each operation has a total 15-second
 /// budget: the guest's 10-second cleanup limit plus 5 seconds for
 /// communication and scheduling, from interface acquisition through the RPC;
 /// VM and container startup do not. Guest `DeadlineExceeded` remains
@@ -160,9 +163,12 @@ impl SshHandle {
         self.backend.ssh_disable().await
     }
 
-    /// Prepare a local host-only SSH stream without starting or enabling SSH.
+    /// Prepare local host-only SSH access, starting the box as needed like a network tunnel.
     ///
-    /// Call `connect()` to open it; no SSH bytes are consumed during connection.
+    /// Preparation starts the VM and container main command but does not configure
+    /// or enable SSH. Call `connect()` to open it; no SSH bytes are consumed.
+    /// Prepared connections and forwarded clients do not start the box again or
+    /// check its old instance's cancellation token; they can reach a restarted box.
     /// The guest accepts SSH `none` authentication on this transport. Forwarding
     /// it delegates container access to everyone who can reach the listener.
     /// Disabled SSH closes connections; REST backends return `Unsupported`.
@@ -173,32 +179,23 @@ impl SshHandle {
 
 /// Local SSH control policy; `BoxBackend` forwards to these verbatim.
 impl BoxImpl {
-    pub(crate) fn ssh_tunnel(&self) -> BoxliteResult<BoxTunnel> {
-        if self.shutdown_token.is_cancelled() {
-            return Err(BoxliteError::Stopped(
-                "SSH transport: runtime stopped".into(),
-            ));
-        }
-        if self.existing_ssh_session()?.is_none() {
-            return Err(BoxliteError::InvalidState(
-                "SSH transport requires a running box".into(),
-            ));
-        }
+    pub(crate) async fn ssh_tunnel(&self) -> BoxliteResult<BoxTunnel> {
+        self.live_state().await?;
         let path = self.config.sockets().ssh_sock();
-        let cancel = self.shutdown_token.clone();
         Ok(BoxTunnel::new(None, move || {
             let path = path.clone();
-            let cancel = cancel.clone();
             async move {
-                tokio::select! {
-                    biased;
-                    _ = cancel.cancelled() => Err(BoxliteError::Stopped("SSH transport: runtime stopped".into())),
-                    result = tokio::time::timeout(SSH_TIMEOUT, tokio::net::UnixStream::connect(&path)) => {
-                        let stream = result.map_err(|_| BoxliteError::Network("SSH socket connect timed out".into()))?
-                            .map_err(|error| BoxliteError::Network(format!("connect SSH socket {}: {error}", path.display())))?;
-                        Ok(BoxConnection::new(stream))
-                    }
-                }
+                let stream =
+                    tokio::time::timeout(SSH_TIMEOUT, tokio::net::UnixStream::connect(&path))
+                        .await
+                        .map_err(|_| BoxliteError::Network("SSH socket connect timed out".into()))?
+                        .map_err(|error| {
+                            BoxliteError::Network(format!(
+                                "connect SSH socket {}: {error}",
+                                path.display()
+                            ))
+                        })?;
+                Ok(BoxConnection::new(stream))
             }
         }))
     }

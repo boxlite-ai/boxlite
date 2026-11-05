@@ -316,9 +316,13 @@ control answer `NotFound` or `Unsupported`; there is no capability negotiation.
 | Disable | `async fn disable(&self) -> BoxliteResult<SshStatus>` |
 | Local data channel | `async fn tunnel(&self) -> BoxliteResult<BoxTunnel>` |
 
-`tunnel()` prepares a dedicated local SSH stream on an existing VM; it never
-starts or enables SSH. `connect()` returns a raw duplex `BoxConnection` without
-waiting for SSH identification. This ingress accepts SSH `none` authentication;
+`tunnel()` starts the VM and container main command as needed, like a local
+network tunnel, and prepares dedicated SSH access without opening a data
+connection or changing saved SSH configuration. Startup restores saved enabled
+state. `connect()` returns a raw duplex `BoxConnection` without waiting for SSH
+identification. Prepared connections and forwarded clients do not start the box
+again or check the old instance's cancellation token; they may reach the same
+box after restart. This ingress accepts SSH `none` authentication;
 forwarding it delegates container access to the listener's clients. REST returns
 `Unsupported`. See [local SSH data channel](../../guides/ssh.md#local-data-channel)
 for errors, closure and upgrade requirements.
@@ -344,7 +348,7 @@ The configuration types implement `Deserialize` but not `Serialize`;
 the configuration, account, and CA objects (not in `SshStatus`), and the
 [OpenAPI schema](../../../openapi/box.openapi.yaml) owns the wire shape.
 
-For a local box, after VM and container startup each operation has a total
+For local SSH control, after VM and container startup each operation has a total
 15-second budget: the guest's 10-second cleanup limit plus 5 seconds for
 communication and scheduling. Obtaining the SSH interface, connection setup,
 queueing, and the RPC consume this same budget, so delays can leave less than

@@ -357,7 +357,7 @@ impl VmmController for ShimController {
             let _ = std::fs::remove_file(socket_path);
         }
 
-        let ssh_socket = config.sockets().ssh_sock();
+        let ssh_socket = config.sockets().real_dir().join("ssh.sock");
         match std::fs::remove_file(&ssh_socket) {
             Ok(()) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
@@ -421,6 +421,98 @@ impl VmmController for ShimController {
 mod tests {
     use super::*;
     use std::sync::{Arc, Mutex};
+
+    #[tokio::test]
+    async fn ssh_socket_cleanup_does_not_depend_on_binding_alias() {
+        use crate::rootfs::guest::{GuestRootfs, Strategy};
+        use crate::runtime::advanced_options::SecurityOptions;
+        use crate::runtime::layout::FsLayoutConfig;
+        use crate::runtime::options::BoxOptions;
+        use crate::vmm::Entrypoint;
+
+        for (alias_present, stale_socket) in
+            [(false, true), (true, true), (false, false), (true, false)]
+        {
+            let home = tempfile::TempDir::new_in("/tmp").unwrap();
+            let id = crate::BoxIDMint::mint();
+            let layout = BoxFilesystemLayout::new(
+                home.path().join("boxes").join(id.as_str()),
+                FsLayoutConfig::without_bind_mount(),
+                false,
+            );
+            layout.prepare().unwrap();
+            std::fs::create_dir(layout.stderr_file_path()).unwrap();
+            let sockets = layout.sockets();
+            let real_socket = sockets.real_dir().join("ssh.sock");
+            if stale_socket {
+                drop(std::os::unix::net::UnixListener::bind(sockets.ssh_sock()).unwrap());
+            }
+            if !alias_present {
+                sockets.remove();
+            }
+            let mut options = BoxOptions::default();
+            options.advanced.security = SecurityOptions::disabled();
+            let config = InstanceSpec {
+                engine: VmmKind::Libkrun,
+                box_id: id.to_string(),
+                security: options.advanced.security.clone(),
+                nested_virtualization: false,
+                cpus: None,
+                memory_mib: None,
+                kernel: None,
+                fs_shares: Default::default(),
+                block_devices: Default::default(),
+                guest_entrypoint: Entrypoint {
+                    executable: "/unused-guest".into(),
+                    args: vec![],
+                    env: vec![],
+                },
+                transport: boxlite_shared::BoxTransport::Unix {
+                    socket_path: sockets.box_sock(),
+                },
+                ready_transport: boxlite_shared::BoxTransport::Unix {
+                    socket_path: sockets.ready_sock(),
+                },
+                guest_rootfs: GuestRootfs {
+                    path: home.path().into(),
+                    strategy: Strategy::Direct,
+                    kernel: None,
+                    initrd: None,
+                    env: vec![],
+                },
+                network_backend_spec: None,
+                network_backend_endpoint: None,
+                disable_network: true,
+                home_dir: home.path().into(),
+                console_output: None,
+                exit_file: layout.exit_file_path(),
+                detach: true,
+            };
+            // The stderr directory stops startup after socket cleanup, before spawn.
+            let mut controller = ShimController::new(
+                std::env::current_exe().unwrap(),
+                VmmKind::Libkrun,
+                id,
+                options,
+                layout,
+            )
+            .unwrap();
+            let result = controller.start(&config).await;
+            sockets.remove();
+            let error = result
+                .err()
+                .expect("stderr directory must prevent spawning");
+            assert!(
+                matches!(&error, BoxliteError::Storage(message)
+                if message.contains("Failed to create stderr file")),
+                "unexpected startup error: {error}"
+            );
+            assert!(
+                !real_socket.exists(),
+                "stale SSH socket survived cleanup: alias_present={alias_present}"
+            );
+        }
+    }
 
     /// Captures `tracing` output into a shared byte buffer so a test can
     /// assert what was (and wasn't) written by an event emitted within
