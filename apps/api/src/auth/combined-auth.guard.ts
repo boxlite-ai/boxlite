@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { ExecutionContext, ForbiddenException, Injectable, Logger, UnauthorizedException } from '@nestjs/common'
+import { ForbiddenException, Injectable, Logger, UnauthorizedException } from '@nestjs/common'
 import { AuthGuard } from '@nestjs/passport'
 import { MCP_DELEGATION_STRATEGY } from './mcp-delegation'
 
@@ -26,7 +26,7 @@ import { MCP_DELEGATION_STRATEGY } from './mcp-delegation'
 export class CombinedAuthGuard extends AuthGuard([MCP_DELEGATION_STRATEGY, 'api-key', 'jwt']) {
   private readonly logger = new Logger(CombinedAuthGuard.name)
 
-  handleRequest(err: any, user: any, _info?: unknown, context?: ExecutionContext) {
+  handleRequest(err: any, user: any) {
     if (
       err instanceof ForbiddenException &&
       (err.getResponse() as { code?: string }).code === 'registration_required'
@@ -38,9 +38,6 @@ export class CombinedAuthGuard extends AuthGuard([MCP_DELEGATION_STRATEGY, 'api-
       throw new UnauthorizedException('Invalid credentials')
     }
 
-    if (user.apiKey?.cloudAppId && (!context || !Reflect.getMetadata('cloud-app-route', context.getClass()))) {
-      throw new ForbiddenException('This credential only authorizes its App')
-    }
     return user
   }
 }

@@ -1,5 +1,5 @@
 import { http, HttpResponse } from 'msw'
-import { ApiKeyList, CreateApiKey } from '@boxlite-ai/api-client'
+import { ApiKeyList, CreateApiKey, CreateApiKeyPermissionsEnum } from '@boxlite-ai/api-client'
 import { MOCK_ORGANIZATION, MOCK_USER } from './fixtures'
 
 const API_URL = import.meta.env.VITE_API_URL
@@ -18,7 +18,11 @@ export const apiKeyHandlers = [
     const value = `bxl_mock_${crypto.randomUUID()}`
     const key = {
       name: body.name,
-      permissions: body.permissions,
+      permissions:
+        body.permissions ??
+        Object.values(CreateApiKeyPermissionsEnum).filter(
+          (permission) => permission !== CreateApiKeyPermissionsEnum.UNKNOWN_DEFAULT_OPEN_API,
+        ),
       expiresAt: body.expiresAt ? new Date(body.expiresAt) : null,
       lastUsedAt: null,
       createdAt: new Date(),

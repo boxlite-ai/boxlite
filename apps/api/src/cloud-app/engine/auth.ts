@@ -54,19 +54,14 @@ export function requireAdmin(): MiddlewareHandler {
     await next()
   }
 }
-export function requireAppKey(store: Store): MiddlewareHandler<{ Variables: Vars }> {
+export function requireApp(store: Store): MiddlewareHandler<{ Variables: Vars }> {
   return async (c, next) => {
     const p =
       (c.env as { platformPrincipal?: PlatformPrincipal } | undefined)?.platformPrincipal ?? principalStorage.getStore()
     if (!p) throw fail('unauthenticated', 'platform authentication required')
-    let app = p.appId ? await store.appById(p.appId) : undefined
     const name = c.req.param('app')
-    if (name && name !== 'me') {
-      const requested = (await store.appByName(name)) ?? (await store.appById(name))
-      if (!requested || (p.appId && requested.id !== p.appId)) throw fail('not_found_app', 'App not found')
-      app = requested
-    }
-    if (!app || app.org_id !== p.organizationId) throw fail('not_found_app', 'App not found')
+    const app = name ? ((await store.appByName(name)) ?? (await store.appById(name))) : undefined
+    if (!app || app.deleted_at || app.org_id !== p.organizationId) throw fail('not_found_app', 'App not found')
     c.set('app', app)
     c.set('actor', p.actor)
     await next()

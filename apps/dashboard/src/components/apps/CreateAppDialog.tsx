@@ -15,8 +15,7 @@ import { FlatButton, DIALOG_FRAME } from './spec'
 
 // A new app needs only a name. What it runs, which services it has and what it
 // stores are declared by the agent in boxlite.toml. Creating it opens the app's
-// page, where the prompt for the agent waits; the App key minted with it stays
-// in this tab's memory so Copy prompt there hands over the working key.
+// page with setup instructions for the agent.
 
 function Heading({ children }: { children: string }) {
   return <div className="font-mono text-[10px] uppercase tracking-[1.2px] text-muted-foreground">{children}</div>

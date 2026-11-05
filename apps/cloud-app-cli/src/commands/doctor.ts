@@ -57,8 +57,8 @@ async function localChecks(ctx: Ctx, r: Report): Promise<Awaited<ReturnType<type
   if (!ctx.apiKey)
     r.problem('api_key', {
       severity: 'error',
-      title: 'no App key: BOXLITE_API_KEY is not set and none is saved',
-      fix: 'save the key from the App prompt once: `BOXLITE_API_URL=<url> BOXLITE_API_KEY=<key> boxlite-app login`',
+      title: 'no API key for this organization',
+      fix: 'save your organization API key with `BOXLITE_API_URL=<url> BOXLITE_API_KEY=<key> boxlite-app login`',
     })
   if (!ctx.apiUrl)
     r.problem('api_url', {
@@ -75,10 +75,10 @@ async function localChecks(ctx: Ctx, r: Report): Promise<Awaited<ReturnType<type
       r.problem('link', {
         severity: 'warn',
         title: `.boxlite/link.json points at ${ctx.link.api_url}, BOXLITE_API_URL at ${ctx.env.BOXLITE_API_URL}`,
-        fix: 'BOXLITE_API_URL wins; if the link is stale, delete .boxlite/link.json and run `boxlite-app init`',
+        fix: 'BOXLITE_API_URL wins; if the link is stale, delete .boxlite/link.json and run `boxlite-app init --app <name>`',
       })
     } else r.ok('link', `.boxlite/link.json → ${ctx.link.app}/${ctx.link.env}`)
-  } else r.skip('link', 'not linked here (the key’s App is used); `boxlite-app init` links the directory')
+  } else r.skip('link', 'this directory is not linked; `boxlite-app init --app <name>` links it')
 
   let checked: Awaited<ReturnType<typeof checkProject>> | null = null
   try {
@@ -201,24 +201,15 @@ export async function runDoctor(ctx: Ctx): Promise<DoctorReport> {
     try {
       who = await whoamiData(ctx)
       latest = who.cli.latest_version
-      r.ok('key', `key …${who.key?.last4 ?? '?'} belongs to ${who.app}`)
-      if (who.linked.matches_key === false)
-        r.problem('link', {
-          severity: 'error',
-          title: `.boxlite/link.json is linked to "${who.linked.app}", but the key belongs to "${who.app}"`,
-          fix: `use the key of ${who.linked.app}, or delete .boxlite/link.json and run \`boxlite-app init\``,
-        })
+      r.ok('key', `key …${who.key.last4} belongs to organization ${who.organization_id}`)
     } catch (e) {
       const code = e instanceof MicrocloudError ? e.code : 'internal'
       r.problem('key', {
         severity: 'error',
-        title:
-          code === 'unauthenticated'
-            ? 'the control plane does not accept BOXLITE_API_KEY'
-            : `cannot reach the control plane: ${describeError(e)}`,
+        title: code === 'unauthenticated' ? 'the control plane does not accept BOXLITE_API_KEY' : describeError(e),
         fix:
           code === 'unauthenticated'
-            ? 'save a working key: `BOXLITE_API_URL=<url> BOXLITE_API_KEY=<key> boxlite-app login` with the key from the App prompt (Copy prompt in the console issues a new one)'
+            ? 'save a working organization API key with `BOXLITE_API_URL=<url> BOXLITE_API_KEY=<key> boxlite-app login`'
             : (e instanceof MicrocloudError && e.next) || 'check BOXLITE_API_URL',
       })
     }
@@ -232,6 +223,8 @@ export async function runDoctor(ctx: Ctx): Promise<DoctorReport> {
         fix: `\`${who.cli.update_command}\``,
       })
     else r.ok('cli_version', `CLI ${VERSION}${latest ? ` (latest ${latest})` : ''}`)
+  }
+  if (who?.app) {
     const api = await ctx.appApi()
     let c: AgentContext | null = null
     try {
@@ -268,8 +261,8 @@ export async function runDoctor(ctx: Ctx): Promise<DoctorReport> {
       r.ok('access', `access ${c.access.level}${c.access.source === 'online' ? ' (online override)' : ''}`)
       await reachability(api, c, r)
     }
-  } else if (ctx.apiKey && ctx.apiUrl)
-    r.skip('online', 'online checks skipped: the control plane did not accept the key')
+  } else if (who) r.skip('online', 'no App is selected; pass --app <name> or link the project')
+  else if (ctx.apiKey && ctx.apiUrl) r.skip('online', 'online checks skipped: the control plane did not accept the key')
   else r.skip('online', 'online checks skipped: BOXLITE_API_KEY / BOXLITE_API_URL missing')
 
   const problems = rankFindings(r.problems)

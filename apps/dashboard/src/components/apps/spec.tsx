@@ -135,18 +135,7 @@ export function CopyIconButton({
 }
 
 /** A prompt to hand to the agent: a bordered code surface with one copy action. */
-/** `onCopy`: what Copy does instead of copying the shown text (e.g. a prompt shown with its key masked). */
-export function PromptBlock({
-  label,
-  text,
-  compact,
-  onCopy,
-}: {
-  label?: string
-  text: string
-  compact?: boolean
-  onCopy?: () => void
-}) {
+export function PromptBlock({ label, text, compact }: { label?: string; text: string; compact?: boolean }) {
   const [copied, setCopied] = useState(false)
   return (
     <div className="border border-border bg-[hsl(var(--code-background))]">
@@ -167,8 +156,7 @@ export function PromptBlock({
         <button
           type="button"
           onClick={() => {
-            if (onCopy) onCopy()
-            else copyText(text)
+            copyText(text)
             setCopied(true)
             setTimeout(() => setCopied(false), 1500)
           }}

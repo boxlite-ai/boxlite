@@ -216,7 +216,7 @@ export async function onlineChecks(
   const err = (rule: string, message: string) => errors.push({ file: 'boxlite.toml', rule, message })
 
   if (m.app !== ctx.appName)
-    err('app_mismatch', `boxlite.toml names app "${m.app}" but the App key belongs to "${ctx.appName}"`)
+    err('app_mismatch', `boxlite.toml names app "${m.app}" but the request targets "${ctx.appName}"`)
   if (!ctx.runtimeImages[m.runtime.image])
     err(
       'image_not_allowed',
