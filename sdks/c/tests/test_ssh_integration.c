@@ -388,8 +388,8 @@ int main(void) {
   assert_cold_disabled(&cold_status);
   printf("  ok: cold status is disabled without a VM\n");
   Seen cold_disable = ssh_call(runtime, box, 2, NULL);
-  assert_cold_disabled(&cold_disable);
-  printf("  ok: cold disable is disabled and never starts the VM\n");
+  assert(cold_disable.code == InvalidState);
+  printf("  ok: cold disable fails and never starts the VM\n");
   assert_box_never_started(runtime, box, "cold observers left the VM stopped");
   printf("  ok: cold observers left the box configured with no VM\n");
 

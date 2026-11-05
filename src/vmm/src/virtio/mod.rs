@@ -21,9 +21,10 @@
 
 use std::{fmt, io, sync::Arc};
 
-use self::queue::VirtQueues;
+use self::{queue::VirtQueues, worker::VirtioWorkers};
 use crate::{events::EventSender, memory::GuestMemoryMmap};
 
+pub(crate) mod blk;
 pub(crate) mod interrupt;
 pub(crate) mod mmio;
 pub(crate) mod queue;
@@ -69,6 +70,22 @@ pub(crate) enum SnapshotSupport {
     Unsupported,
     /// The device can be saved after it is quiesced.
     Stopped,
+}
+
+/// What a device constructor gets besides the chipset: the guest memory its
+/// queues address, and the workers that run its events.
+#[cfg_attr(
+    not(any(test, all(target_os = "linux", target_arch = "x86_64"))),
+    expect(
+        dead_code,
+        reason = "Only the Linux x86_64 Vm::new adds a virtio device yet."
+    )
+)]
+pub(crate) struct DeviceContext<'a> {
+    /// The guest RAM every host-side user shares.
+    pub(crate) memory: &'a Arc<GuestMemoryMmap>,
+    /// The VM's virtio workers.
+    pub(crate) workers: &'a VirtioWorkers,
 }
 
 /// What the workers ask a device to do.

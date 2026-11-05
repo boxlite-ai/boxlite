@@ -460,7 +460,7 @@ function validateNetworkReplacement(
 /**
  * Box-scoped guest SSH control for a SimpleBox.
  *
- * Only `configure` may start the box; `status` and `disable` never start the
+ * Only `configure` may start the box; `status`, `enable` and `disable` never start the
  * VM or its main command. Status results carry no credentials.
  */
 export class SshHandle {
@@ -471,6 +471,12 @@ export class SshHandle {
   async configure(config: SshConfig): Promise<SshStatus> {
     const box = await this.ensureBox();
     return box.ssh.configure(config);
+  }
+
+  /** Enable saved configuration on a running box; preserve healthy connections. */
+  async enable(): Promise<SshStatus> {
+    const box = await this.ensureBox();
+    return box.ssh.enable();
   }
 
   /** Query SSH state without starting the VM or its main command. */

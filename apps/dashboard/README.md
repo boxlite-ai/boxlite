@@ -3,6 +3,102 @@
 The web console at `app.boxlite.ai`. A Vite + React app, built and tested
 through Nx as the `dashboard` project.
 
+## SSH access
+
+Open a box's **SSH** tab beside **Shell**. Setup, Enable and Disable require a
+running box and permission to write boxes. Setup opens a dialog, generates
+independent Ed25519 host/client keys in the browser, and configures login `box`
+on guest address `0.0.0.0:22` through the existing SSH REST API. It replaces any
+previous accounts and host identity and disconnects current SSH clients.
+Before submitting the SSH configuration, Setup enables inbound access if it is
+disabled and refreshes the box's network state. If enabling inbound fails, Setup
+stops and retains the generated key for retry. Enable and Disable do not change
+inbound access; a later SSH configuration failure does not turn inbound off.
+
+Download the private key from the dialog before leaving the page. The client
+private key stays in component memory and the downloaded file; only its public
+key is sent to the server. The host private key is sent as part of the guest
+configuration. Closing and reopening the dialog preserves the current download;
+reloading, navigating away, or changing boxes/organizations discards it. A fresh
+Setup then creates new identities. Failed setup retains generated keys for a
+manual retry. Browser Ed25519 support and a secure context are required.
+
+The dialog supplies an OpenSSH command using
+`ProxyCommand=boxlite --path-prefix=… ssh --proxy -- BOX`, matching the
+cloud CLI syntax in [#2327](https://github.com/boxlite-ai/boxlite/pull/2327).
+Use a CLI build containing that change. The command uses the current CLI context;
+it supplies neither `--context` nor `--url`. Run `boxlite context ls` to confirm
+the current context matches the API address shown in the dialog and can access
+the selected organization. Switch with `boxlite context use` if needed.
+From the download directory, run the
+displayed `chmod 600` and SSH commands; SSH starts and stops the proxy itself,
+without a separate forwarding terminal or local listening port. The
+organization argument survives shell quoting and OpenSSH percent expansion.
+Ordinary IDs need no inner quotes; special characters remain safely quoted.
+API credentials are loaded by the CLI, never embedded in the command.
+
+Compare the displayed host fingerprint before accepting it; a fresh Setup may
+change it. The cloud proxy requires server tunnel support and inbound access.
+It opens a public tunnel protected by SSH authentication; exiting SSH leaves
+the tunnel declaration open.
+Setup itself does not open a tunnel.
+
+The connection dialog scrolls as one document. Command blocks retain their full
+height and wrap long lines, including on narrow screens; wrapping does not insert
+newlines into copied commands.
+
+Enable and Disable reuse saved credentials. SSH status errors remain visible;
+mutations are not automatically retried. Switching tabs preserves the shell.
+The SSH tests cover delayed reads and mutations completing after a refresh,
+and a box stopping during key generation: obsolete responses cannot overwrite
+the latest status, and obsolete generated credentials cannot configure the box.
+While setup is pending, the connection dialog stays open so the download is not
+lost through an accidental close.
+Mock preview simulates these actions with a clearly marked mock host fingerprint;
+it does not start an SSH server. See [the design](https://github.com/boxlite-ai/boxlite/issues/2325).
+
+## ASCII action buttons
+
+Use `AsciiButton` from `components/ascii` for console actions. It delegates to
+`ui/button`, which owns the shared geometry, typography, focus, and disabled
+styles; raw buttons remain appropriate for tabs and custom choices. Use native
+links for route navigation.
+
+| Purpose | Variant / size | Appearance |
+| --- | --- | --- |
+| Main create or submit action | `primary` / default | 36px high, monochrome fill |
+| Row action | `secondary` / `sm` | 28px high, neutral border |
+| Icon action or overflow menu | `secondary` / `icon` | 28px square; `icon-lg` is 40px for mobile |
+| Destructive row action | `danger` / `sm` or `icon` | Red text/icon, red border on hover |
+| Final destructive confirmation | `dangerSolid` | Solid red |
+
+Keep square corners and the shared monospace font. Secondary actions use a cyan
+border with a neutral surface on hover/open; they do not turn solid cyan.
+Hover styles apply only to enabled controls. Keyboard focus uses a contrasting
+outline in both themes. Preserve larger mobile primary targets with `h-11 sm:h-9`.
+
+Import operation icons from `components/ui/icon`, whose aliases all use the
+offline pixel collection. Give icon-only actions an `aria-label`, retain helpful
+titles, and forward native props/ref through wrappers used by Radix triggers.
+Choose variants and sizes instead of copying hover, padding, or border classes.
+
+## Page width and alignment
+
+Normal dashboard pages use the `page-container` class from `src/index.css`.
+It follows the Images page's full-width layout, with no maximum page width:
+16px side padding on phones, 24px from `sm`, and 40px from `lg`. Large screens
+keep the same side padding as the content expands to fill the available width.
+The root reserves scrollbar space so short and long pages share both content edges.
+When stable gutters are supported, modal scroll locks do not add another body
+margin for that same space. Browsers without support retain the lock's fallback.
+
+Apply it once to a page root, or use `PageHeader` and `PageContent`, which share
+the same rule. Keep banners, tabs, tables, and Quickstart panels aligned to
+those edges; do not add another page-level width or horizontal padding inside
+them. Individual inputs and explanatory text can retain readable width limits.
+The initial welcome form, dialogs, and dedicated fullscreen terminal have their
+own sizing because they are separate surfaces.
+
 ## SDK and CLI quickstart readability
 
 The walkthrough uses a dedicated `quickstart-code` type style: 14px monospaced
@@ -85,6 +181,20 @@ The `test` target is inferred by `@nx/vite` from the `test` block in
 `vite.config.mts`. Removing that block removes the target, and with it every
 signal CI has about this app — see [the workflows
 README](../../.github/workflows/README.md) for how its coverage is reported.
+
+## Creation can finish before startup
+
+Template creation and the ordinary create dialog share `useCreateBoxMutation`.
+The Box API creates the resource before waiting up to 30 seconds for it to
+start. A cold image pull can exceed that wait while continuing in the background.
+When HTTP 408 carries `boxId`, the dashboard reads that exact Box in the selected
+organization and opens its details. The details page polls transitioning Boxes
+every three seconds and displays their actual state, including startup errors.
+
+This path sends only one create request. It does not infer success from a name
+or an error message. A timeout without `boxId`, another error status, or a failed
+follow-up read remains an error. Deploy both API and dashboard changes for this
+handoff; older APIs do not include the structured identity.
 
 ## Finding your way around
 

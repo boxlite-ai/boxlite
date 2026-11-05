@@ -38,6 +38,7 @@ export default [
           checkDynamicDependenciesExceptions: [
             'mdeploy/hosts',
             'mdeploy/runner-binary',
+            'mdeploy/runner-kernel',
             'mdeploy/clickhouse-retention',
           ],
           depConstraints: [

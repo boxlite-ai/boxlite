@@ -572,6 +572,12 @@ impl BoxBackend for RestBox {
             .await
     }
 
+    async fn ssh_enable(&self) -> BoxliteResult<SshStatus> {
+        self.client
+            .post_empty(&format!("/boxes/{}/ssh/enable", self.box_id_str()))
+            .await
+    }
+
     async fn ssh_status(&self) -> BoxliteResult<SshStatus> {
         self.client
             .get(&format!("/boxes/{}/ssh", self.box_id_str()))

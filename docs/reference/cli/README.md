@@ -146,7 +146,7 @@ Commands without shared options omit the global section.
 | `--config PATH` | local-capable commands | — | JSON runtime config (see [Configuration File](#configuration-file)). |
 | `--url URL` | REST-capable commands | `BOXLITE_REST_URL` | Select a REST API server. |
 | `--context NAME` | REST-capable commands + `auth` + `context` | `BOXLITE_CONTEXT` | Override the saved current context. Legacy aliases: `--profile`, `BOXLITE_PROFILE`. |
-| `--path-prefix VALUE` | REST box/volume commands | `BOXLITE_REST_PATH_PREFIX` | Override the context's routing path segment. |
+| `--path-prefix VALUE` | REST box/volume commands | `BOXLITE_REST_PATH_PREFIX` | Override the context's routing path segment; an explicit empty flag or environment value clears it. |
 
 **Precedence** (from `src/cli/src/cli.rs`):
 
@@ -829,84 +829,127 @@ boxlite network tunnel mybox 3000 --revoke
 **Synopsis:**
 
 ```
-boxlite ssh configure BOX CONFIG
-boxlite ssh status BOX
-boxlite ssh disable BOX
-boxlite ssh forward BOX [--listen ADDRESS]
+boxlite ssh --configure BOX CONFIG
+boxlite ssh BOX
+boxlite ssh --status BOX
+boxlite ssh --enable BOX
+boxlite ssh --disable BOX
+boxlite ssh --tunnel BOX [--listen ADDRESS]
+boxlite ssh --proxy BOX
 
 CONFIG := --ssh-config FILE
         | --host-key FILE --login NAME --authorized-key FILE... [--guest-listen ADDRESS]
 ```
 
 Control the guest SSH server of a local box or a REST box (`--url`/`--context`).
-The CLI reads keys from files and never generates or stores them.
+With no operation option, `boxlite ssh BOX` performs managed setup and prints a
+complete command to copy and run with OpenSSH. It does not open an interactive shell.
+Choose at most one of `--configure`, `--status`, `--enable`, `--disable`,
+`--tunnel`, or `--proxy`; options may precede or follow BOX.
+These replace the former SSH subcommands: for example, `ssh enable dev` becomes
+`ssh dev --enable`, and `ssh setup dev` becomes `ssh dev`.
+Default setup generates and saves client and host keys on the client; complete `--configure`
+continues to read supplied key files.
 
-These four CLI subcommands reuse existing SDK and HTTP operations; they add no
-server routes. Backend requirements differ:
+These commands add no HTTP routes. Backend requirements differ:
 
 | Commands | Local backend | REST backend |
 |----------|---------------|--------------|
-| `configure`, `status`, `disable` | Existing SSH SDK operations | Requires SSH control; supported by `boxlite serve` |
-| `forward` | Existing local tunnel implementation | Requires both SSH control and tunnel support; unavailable through `boxlite serve` |
+| `--configure`, `--status`, `--enable`, `--disable` | Existing SSH SDK operations | Requires SSH control; supported by `boxlite serve` |
+| default setup | CLI-managed credentials and SSH configuration | Requires SSH control; supported by `boxlite serve` and cloud contexts |
+| `--proxy`, `--tunnel` | Stdio connection or local listener through the existing tunnel | Requires both SSH control and tunnel support; unavailable through `boxlite serve` |
 
-| Subcommand | Effect | stdout |
+| Operation | Effect | stdout |
 |------------|--------|--------|
-| `configure` | Replace the complete configuration once; disconnects existing SSH clients | `SshStatus` JSON |
-| `status` | Read state; never starts the box | `SshStatus` JSON |
-| `disable` | Stop SSH; never starts the box | `SshStatus` JSON |
-| `forward` | Read status; fail if disabled; forward to the port SSH actually bound | Bound address |
+| `--configure` | Replace the complete configuration once; disconnects existing SSH clients | `SshStatus` JSON |
+| default setup | Generate/reuse local keys and replace complete configuration with `box` on `0.0.0.0:22`; disconnects clients | Connection summary, server host-key fingerprint and SSH command |
+| `--status` | Read state; never starts the box | `SshStatus` JSON |
+| `--enable` | Enable saved configuration on a running box; preserve healthy connections | `SshStatus` JSON |
+| `--disable` | Stop SSH on a running box; never starts the box | `SshStatus` JSON |
+| `--tunnel` | Read status; fail if disabled; forward to the port SSH actually bound | Bound address |
+| `--proxy` | Read status, then connect stdin/stdout to enabled SSH; never configures or enables it | SSH bytes only |
 
-Configure SSH, then open forwarding until Ctrl-C:
+Configure SSH, then execute the printed command:
 
 ```bash
-boxlite ssh configure dev --ssh-config ssh.json
-boxlite ssh forward dev
+boxlite ssh dev
+# Copy the generated ssh command, including its private-key and ProxyCommand options.
 ```
 
-Every `configure` replaces the SSH configuration and disconnects existing clients.
+Custom configuration and default setup each replace the SSH configuration and disconnect existing clients.
 Configuration and the enable switch persist on the container disk; restarting the
-box restores enabled SSH. Disable retains credentials; on an idle box it leaves
-saved state unchanged.
-`forward` leaves the configuration and generation unchanged, so it can reopen
+box restores the saved enabled switch. Disable retains credentials. Local
+enable/disable reject idle boxes without changing saved state. Enable without a
+saved configuration also fails. Repeated setup, disable/enable, and restart
+reuse the CLI-managed host key. Setup after complete configuration replaces the
+configured identity with its own saved/generated key.
+`--tunnel` leaves the configuration and generation unchanged, so it can reopen
 forwarding without reconfiguring SSH.
+
+Setup requires `ssh-keygen`, accepts no key flags, and saves `client_key` and
+`host_key` in `<home>/boxes/<box-id>/ssh/` for local boxes, or
+`<home>/ssh/remote/<scope>/<box-id>/` for REST boxes (directory 0700, private files 0600).
+The remote scope is a SHA-256 namespace of the context, effective URL and routing
+prefix; changing any of these selects separate keys. Remote home is the credential
+home (`--home` / `BOXLITE_HOME` / `~/.boxlite`), independent of local `--config`.
+The client private key stays on the host; deleting a local box removes it, while
+remote keys remain for manual cleanup. Clone/export does not transfer the managed
+client identity. Invalid or incomplete saved keys fail without regeneration.
+Configuration failure retains generated keys
+for retry. The command uses absolute paths and the canonical box ID. For REST it
+preserves the selected named context or effective URL, plus the routing prefix,
+and uses a scoped SSH hostname to separate host-key records across contexts and endpoints.
+Authentication is reloaded through the usual stored credentials / `BOXLITE_API_KEY`
+selection; bearer tokens are never included in the command. A named context reloads
+its saved endpoint; URL selection uses default credentials, matching the CLI's
+mutually exclusive context/URL options. Normal SSH host-key verification remains
+enabled. See the [cloud workflow](../../guides/ssh.md#cli).
+
+An active local proxy holds the same runtime home lock as `--tunnel`. Stop it before
+another local CLI command on that home. See the [SSH guide](../../guides/ssh.md#cli)
+for the complete workflow.
 
 | Flag | Description |
 |------|-------------|
 | `--ssh-config FILE` | Complete `SshConfig` JSON ([schema](../../guides/ssh.md#http-control-with-boxlite-serve)): several accounts, authorized keys, CAs. |
 | `--host-key FILE` | Unencrypted OpenSSH host private key. Requires `--login` and `--authorized-key`. |
 | `--login NAME` | The single login accepted for `--authorized-key`. |
-| `--authorized-key FILE` | One OpenSSH public key per file; repeatable. |
+| `--authorized-key FILE` | One OpenSSH public key per file; repeatable for `--configure`. |
 | `--guest-listen ADDRESS` | Guest listener for flag mode; default `0.0.0.0:2222`; port `0` lets the guest choose. |
-| `--listen ADDRESS` | `forward` only: local listener, same syntax as [`network tunnel`](#boxlite-network-tunnel); default `127.0.0.1:0`. |
+| `--listen ADDRESS` | `--tunnel` only: local listener, same syntax as [`network tunnel`](#boxlite-network-tunnel); default `127.0.0.1:0`. |
 
-Configuration flags apply only to `configure`; `--ssh-config` conflicts with the
+Configuration flags require `--configure`; `--listen` requires `--tunnel`.
+They are rejected with incompatible operations before reading files or contacting a box.
+`--ssh-config` conflicts with the
 flag-mode options. Configuration errors name the
-file and position but never print its contents. `configure` follows the SDK's
+file and position but never print its contents. Custom configuration and default setup follow the SDK's
 startup rules: it may start a Configured or Stopped box that uses its image's default
-command. `configure` is never retried.
+command. Configuration is never retried.
 
-`forward` prints the canonical bound address to stdout, then
+`--tunnel` prints the canonical bound address to stdout, then
 the host public key, its fingerprint, and a connect hint to stderr:
 
 ```bash
-$ boxlite ssh forward dev
+$ boxlite ssh --tunnel dev
 tcp://127.0.0.1:52811
 SSH host key: ssh-ed25519 AAAAC3Nz...
 SSH host key fingerprint: SHA256:...
 Connect: ssh -p 52811 -l LOGIN 127.0.0.1
 ```
 
-`forward` requires the guest to listen on `0.0.0.0` or the guest IP.
+`--tunnel` and `--proxy` require the guest to listen on `0.0.0.0` or the guest IP.
 Ctrl-C closes the listener and its connections, then exits 0; guest SSH stays
 configured. A forwarding failure leaves the preceding configuration unchanged.
 
 - **Local boxes:** the foreground command holds the runtime home, so other local
   commands on that home fail until Ctrl-C. Exiting the CLI stops running boxes that
   are not detached, which ends their SSH; use `boxlite create` or `run -d`.
-- **REST boxes:** forwarding uses the box's public tunnel URL for the SSH port and
-  leaves it open on exit, so anyone reaching the URL can attempt SSH logins. Withdraw it
+- **REST boxes:** proxy/tunnel use the box's public tunnel URL for the SSH port and
+  leave it open on exit, so anyone reaching the URL can attempt SSH logins. Withdraw it
   with `boxlite network tunnel BOX PORT --revoke`. `boxlite serve` has no tunnel
-  route, so there `forward` fails after reading SSH status.
+  route, so there `--proxy` and `--tunnel` fail after reading SSH status even though
+  default setup succeeds. Cloud tunnels require inbound access; CLI exit does not stop
+  the remote box.
 
 ---
 

@@ -4,7 +4,6 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { BILLING_PAGE_CONTAINER } from '@/components/billing/billingLayout'
 import { BalanceLowBanner } from '@/components/billing/BalanceLowBanner'
 import { BillingAlerts, SignupCreditBanner } from '@/components/billing/BillingAlerts'
 import { PlanSection } from '@/components/billing/PlanSection'
@@ -92,7 +91,7 @@ function Billing() {
 
   return (
     <Tabs value={tab} onValueChange={setTab} className="w-full gap-0">
-      <div className={BILLING_PAGE_CONTAINER}>
+      <div className="page-container">
         <div className="pt-6">
           <h1 className="font-display text-2xl font-semibold leading-none tracking-tight">Billing</h1>
           <div className="mt-4 w-full empty:hidden">

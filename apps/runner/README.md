@@ -14,6 +14,21 @@ Cloud deployment runs on Compute Engine or EC2 with nested KVM, listening on `:3
 behind the control-plane API. See [infrastructure architecture](../infra/docs/architecture.md)
 and [runner operations](../infra/docs/runners.md).
 
+`BOXLITE_KERNEL_PATH` selects an operator-installed kernel for newly created
+Boxes. It must be an absolute readable regular file; invalid settings fail
+startup. The Runner enables the local `custom-kernel` RC capability through
+the Go/C SDK and preserves the guest privilege policy separately. An unset
+path keeps the bundled default. Cloud deployment downloads and verifies the
+file; the Runner itself performs no download. Existing Boxes retain their
+saved boot configuration. Keep `BOXLITE_KERNEL_PATH` configured while managing
+custom-kernel Boxes: clearing it removes the feature opt-in needed to restart them.
+The `--kernel` flag belongs to the local CLI; the Runner uses the environment
+variable. See [cloud kernel operations](../infra/docs/runners.md#cloud-kernel).
+
+The health response includes `custom_kernel: "supported"` to identify binaries
+that implement this setting. It describes build capability; deployment also
+checks the running process's kernel environment and listening socket.
+
 For the system-wide context (CDN, load balancers, where the runner fits in
 the request path), see [`apps/README.md`](../README.md).
 
@@ -465,8 +480,9 @@ the counters maintained in `pkg/common/` (operation counts, etc.).
 | Method | Path | Controller | Purpose |
 | --- | --- | --- | --- |
 | `POST` | `/v1/boxes/:boxId/ssh` | `BoxliteSSHConfigure` | Strict `SshConfig` parse → one `SSH().Configure` on a running box |
+| `POST` | `/v1/boxes/:boxId/ssh/enable` | `BoxliteSSHEnable` | Enable saved configuration on a running box; otherwise `409` |
 | `GET` | `/v1/boxes/:boxId/ssh` | `BoxliteSSHStatus` | `SshStatus`; stopped boxes answer disabled from persisted state |
-| `DELETE` | `/v1/boxes/:boxId/ssh` | `BoxliteSSHDisable` | Idempotent disable; never boots |
+| `DELETE` | `/v1/boxes/:boxId/ssh` | `BoxliteSSHDisable` | Disable on a running box; otherwise `409`. Repeatable while running; never boots |
 
 - **Running-state checks.** Configure on a box observed as not running answers
   `409 invalid_state`; the API resumes a box first when its policy allows. The
@@ -474,9 +490,12 @@ the counters maintained in `pkg/common/` (operation counts, etc.).
   The shared helper retains the tunnel's known race: after a runner restart,
   a fresh handle can still boot a box that exits after these checks. Preventing
   that race requires a runtime operation that cannot implicitly start a box.
-- **No handle churn.** Status and disable read a stopped or never-started box's
-  state from the runtime and answer the zero disabled status without fetching a
-  handle (see `evictBox`). Other states, such as paused, answer `409`.
+- **No handle churn.** Status reads a stopped or never-started box's state
+  and returns the zero disabled status without fetching a handle (see `evictBox`).
+  Enable and disable instead return `409 invalid_state`; they never claim a
+  saved-state change succeeded on an idle box. Other states, such as paused,
+  also answer `409`. The SDK prevents these mutations from starting a box even
+  if it stops after the runner's checks.
 - **Strict body.** The parser matches member names exactly and rejects unknown,
   case-variant, duplicate, missing, and `null` members (`ca` may be `null`).
   Every rejection is the fixed `400 invalid SSH configuration`, so private key
@@ -640,8 +659,9 @@ the Swagger UI (development only).
 | `GET` | `/v1/boxes/:boxId/files?path=<src>` | Download tar |
 | `GET` | `/v1/boxes/:boxId/metrics` | Per-box metrics |
 | `POST` | `/v1/boxes/:boxId/ssh` | Configure guest SSH once; running boxes only |
+| `POST` | `/v1/boxes/:boxId/ssh/enable` | Enable saved guest SSH configuration on a running box; otherwise `409`; never boots |
 | `GET` | `/v1/boxes/:boxId/ssh` | Guest SSH status; never boots |
-| `DELETE` | `/v1/boxes/:boxId/ssh` | Disable guest SSH; never boots |
+| `DELETE` | `/v1/boxes/:boxId/ssh` | Disable guest SSH on a running box; otherwise `409`; never boots |
 
 ---
 
@@ -681,6 +701,15 @@ development against the Rust SDK directly, see `boxlite serve` at
 ---
 
 ## Tests
+
+SSH control boundary tests run without a VM using
+`make test:apps:runner FILTER=TestSSHControlLifecycle`. They verify that enable
+and disable reject idle boxes before fetching a handle, send one bodyless
+request per running-box call, and preserve every returned status field.
+`make test:apps:runner FILTER=TestIntegrationSSHServesTheRealClient` additionally
+requires a working VM runtime and OpenSSH: it reconnects after enable using the
+original trusted host key and account key. HTTP fixtures alone do not verify
+that the guest listener restarts.
 
 ```bash
 # All runner tests

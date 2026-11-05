@@ -37,6 +37,10 @@ use crate::{
     memory::{GuestRam, ram_ranges},
 };
 
+#[cfg(target_os = "linux")]
+#[path = "virtio_blk.rs"]
+mod virtio_blk;
+
 const MEMORY_MIB: u32 = 2;
 const CMDLINE: &str = "console=ttyS0 panic=-1";
 
@@ -64,6 +68,7 @@ fn config(kernel: PathBuf, cmdline: &str) -> VmConfig {
         kernel,
         cmdline: cmdline.into(),
         initramfs: None,
+        disks: Vec::new(),
     }
 }
 
@@ -193,6 +198,7 @@ fn linux_config(vcpu_count: u8, cmdline: &str, initramfs: Option<PathBuf>) -> Vm
         kernel: kernel.into(),
         cmdline: cmdline.into(),
         initramfs,
+        disks: Vec::new(),
     };
     config.validate().unwrap();
     config

@@ -1,7 +1,8 @@
 # Test Go SDK and tag Go module for publishing.
 #
-# Downloads the prebuilt native library from GitHub Releases, then builds
-# and tests the Go SDK — validating the same workflow that end users follow.
+# Release builds download the published native library and test the Go SDK,
+# validating the same workflow that end users follow. Manual builds produce
+# the native library from the selected commit before testing its Go SDK.
 #
 # User workflow:
 #   go get github.com/boxlite-ai/boxlite/sdks/go
@@ -10,7 +11,7 @@
 #
 # Triggers:
 # - workflow_run: After a successful release C SDK build (archives are published)
-# - workflow_dispatch: Manual trigger for testing
+# - workflow_dispatch: Build and test the selected commit's C and Go SDKs together
 name: Build Go SDK
 
 on:
@@ -19,6 +20,9 @@ on:
     types: [completed]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   config:
     if: >-
@@ -26,12 +30,22 @@ jobs:
       (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'release')
     uses: ./.github/workflows/config.yml
 
+  build-c:
+    name: Build manual commit C SDK
+    if: github.event_name == 'workflow_dispatch'
+    permissions:
+      contents: write
+    uses: ./.github/workflows/build-c.yml
+    with:
+      ref: ${{ github.sha }}
+
   test:
     name: Test (${{ matrix.target }})
-    needs: config
+    needs: [config, build-c]
     if: >-
-      github.event_name != 'workflow_run' ||
-      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'release')
+      !cancelled() &&
+      needs.config.result == 'success' &&
+      (needs['build-c'].result == 'success' || needs['build-c'].result == 'skipped')
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -46,6 +60,7 @@ jobs:
           go-version: ${{ needs.config.outputs.go-version }}
 
       - name: Download prebuilt library
+        if: github.event_name != 'workflow_dispatch'
         run: |
           VERSION=$(grep '^version = ' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
           PLATFORM="${{ matrix.target }}"
@@ -54,6 +69,24 @@ jobs:
           echo "Downloading: ${URL}"
           curl -sL "${URL}" | tar xz -C /tmp/
           cp "/tmp/boxlite-c-v${VERSION}-${PLATFORM}/lib/libboxlite.a" sdks/go/
+
+      - name: Download commit libboxlite.a
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/download-artifact@v4
+        with:
+          name: c-sdk-${{ matrix.target }}
+          path: /tmp/c-sdk
+
+      - name: Extract commit libboxlite.a
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          PLATFORM: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          archive=$(find /tmp/c-sdk -maxdepth 1 -name "boxlite-c-v*-${PLATFORM}.tar.gz" -print -quit)
+          test -n "$archive"
+          tar xzf "$archive" -C /tmp/
+          cp "/tmp/$(basename "$archive" .tar.gz)/lib/libboxlite.a" sdks/go/libboxlite.a
 
       - name: Test Go SDK
         run: |

@@ -769,6 +769,9 @@ typedef void (*CBoxSshConfigureCb)(struct CSshStatus*, CBoxliteError*, void*);
 // SSH status completion with the same ownership contract as SSH configure.
 typedef void (*CBoxSshStatusCb)(struct CSshStatus*, CBoxliteError*, void*);
 
+// SSH enable completion with the same ownership contract as SSH configure.
+typedef void (*CBoxSshEnableCb)(struct CSshStatus*, CBoxliteError*, void*);
+
 // SSH disable completion with the same ownership contract as SSH configure.
 typedef void (*CBoxSshDisableCb)(struct CSshStatus*, CBoxliteError*, void*);
 
@@ -824,6 +827,12 @@ typedef void (*CBoxVolumeRemoveCb)(CBoxliteError*, void*);
 #ifdef __cplusplus
 extern "C" {
 #endif // __cplusplus
+
+// Set an absolute host kernel path (RC). The runtime must enable custom-kernel.
+// Copies the path; invalid input leaves the previous option unchanged.
+enum BoxliteErrorCode boxlite_advanced_options_set_kernel_path(CAdvancedBoxOptions *opts,
+                                                               const char *path,
+                                                               struct FFIError *out_error);
 
 // Allocate a `CAdvancedBoxOptions` initialized to `AdvancedBoxOptions::default()`
 // (secure-by-default security profile, mount isolation off, no health check).
@@ -1909,6 +1918,16 @@ enum BoxliteErrorCode boxlite_runtime_new(const char *home_dir,
                                           CBoxliteRuntime **out_runtime,
                                           CBoxliteError *out_error);
 
+// Create a local runtime with an explicit comma-separated RC feature allowlist
+// (for example, "custom-kernel"). Null enables none; unknown tokens fail.
+// Does not read BOXLITE_EXPERIMENTAL. Ownership matches boxlite_runtime_new.
+enum BoxliteErrorCode boxlite_runtime_new_experimental(const char *home_dir,
+                                                       const struct BoxliteImageRegistry *image_registries,
+                                                       int image_registries_count,
+                                                       const char *features,
+                                                       CBoxliteRuntime **out_runtime,
+                                                       CBoxliteError *out_error);
+
 enum BoxliteErrorCode boxlite_runtime_images(CBoxliteRuntime *runtime,
                                              CBoxliteImageHandle **out_handle,
                                              CBoxliteError *out_error);
@@ -1981,6 +2000,17 @@ enum BoxliteErrorCode boxlite_box_ssh_configure(CBoxHandle *handle,
 // [`boxlite_box_ssh_configure`].
 enum BoxliteErrorCode boxlite_box_ssh_status(CBoxHandle *handle,
                                              CBoxSshStatusCb cb,
+                                             void *user_data,
+                                             struct FFIError *out_error);
+
+// Enable saved SSH configuration on a running box without restarting a healthy
+// listener. Requires existing configuration; never starts the box.
+//
+// # Safety
+//
+// As for [`boxlite_box_ssh_status`].
+enum BoxliteErrorCode boxlite_box_ssh_enable(CBoxHandle *handle,
+                                             CBoxSshEnableCb cb,
                                              void *user_data,
                                              struct FFIError *out_error);
 

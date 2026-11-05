@@ -10,6 +10,8 @@ description = "Virtual machine lifecycle and device model for BoxLite"
 
 [dependencies]
 boxlite-hypervisor.workspace = true
+# The disk format layer; `sync` keeps tokio out of the crate.
+imago = { version = "0.2.6", default-features = false, features = ["sync"] }
 mio = { version = "1.2.0", default-features = false, features = ["os-poll", "net"] }
 tracing = "0.1"
 virtio-queue = "0.18.0"
@@ -18,6 +20,10 @@ vm-memory = { version = "0.18.0", features = ["backend-mmap"] }
 [dev-dependencies]
 # Tests poll real pipes as virtio backend sources.
 mio = { version = "1.2.0", default-features = false, features = ["os-poll", "os-ext"] }
+# Disk images live in temporary directories.
+tempfile = "3"
+# `MockSplitQueue` is the driver side of a queue in the block device tests.
+virtio-queue = { version = "0.18.0", features = ["test-utils"] }
 
 [target.'cfg(target_arch = "x86_64")'.dependencies]
 vm-superio = "0.8.2"
