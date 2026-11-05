@@ -1,6 +1,6 @@
 # Guest runtime
 
-The Linux guest agent receives volume instructions through the guest initialization RPC. `storage::mount_volumes` dispatches legacy volumes and mounts aggregate exports through one virtio-fs root, then binds each export at its resolved guest destination. Its guard rolls back aggregate mounts if mounting or later initialization fails; `commit` preserves them after initialization succeeds.
+The Linux guest agent receives volume instructions through the guest initialization RPC. `storage::mount_volumes` dispatches legacy volumes and mounts aggregate exports through one virtio-fs root, then binds each export at its resolved guest destination. The planner mounts aggregate roots first, then orders every destination by depth, including legacy shares and block devices. A parent binding therefore cannot hide a nested mount just created by the same batch. Its guard owns all successful mounts in the batch and rolls them back in reverse order if mounting or later initialization fails; `commit` preserves them after initialization succeeds. Before a block mount returns successfully to that batch, its helper owns cleanup: a resize or other post-mount initialization error unmounts the device and reports any cleanup failure alongside the original error.
 
 ## Native VMM mount acceptance
 

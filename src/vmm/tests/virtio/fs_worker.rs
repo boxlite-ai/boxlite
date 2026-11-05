@@ -45,6 +45,7 @@ struct Fault {
     state: Mutex<(bool, bool)>,
     changed: Condvar,
     write: Option<usize>,
+    expired: std::sync::atomic::AtomicBool,
 }
 
 impl Fault {
@@ -55,6 +56,7 @@ impl Fault {
             state: Mutex::new((false, false)),
             changed: Condvar::new(),
             write,
+            expired: std::sync::atomic::AtomicBool::new(false),
         });
         *FAULT.lock().unwrap() = Some(fault.clone());
         fault
@@ -101,10 +103,15 @@ unsafe extern "C" fn injected_pread(
         state.0 = true;
         fault.changed.notify_all();
         // A watchdog releases the syscall even when the test panics.
-        let _ = fault
+        let (state, _) = fault
             .changed
             .wait_timeout_while(state, WAIT, |state| !state.1)
             .unwrap();
+        if !state.1 {
+            fault
+                .expired
+                .store(true, std::sync::atomic::Ordering::Release);
+        }
     }
     // SAFETY: forward the unchanged libc ABI to the kernel.
     unsafe { libc::syscall(libc::SYS_pread64, fd, buf, count, offset) as isize }
@@ -278,11 +285,15 @@ impl Guest {
         self.complete()
     }
 
-    fn open_file(&mut self) -> (u64, u64) {
+    fn file_node(&mut self) -> u64 {
         let root = self.request(Opcode::Lookup, 1, b"shared\0");
         let root = object::<EntryOut>(&root[16..]).nodeid;
         let entry = self.request(Opcode::Lookup, root, b"file\0");
-        let node = object::<EntryOut>(&entry[16..]).nodeid;
+        object::<EntryOut>(&entry[16..]).nodeid
+    }
+
+    fn open_file(&mut self) -> (u64, u64) {
+        let node = self.file_node();
         let reply = self.request(
             Opcode::Open,
             node,
@@ -334,12 +345,128 @@ impl Rig {
 }
 impl Drop for Rig {
     fn drop(&mut self) {
-        if let Some(fault) = FAULT.lock().unwrap().take() {
+        let fault = FAULT.lock().unwrap().take();
+        if let Some(fault) = &fault {
             fault.open();
         }
         self.workers.shutdown().unwrap();
+        if !thread::panicking()
+            && let Some(fault) = fault
+        {
+            assert!(
+                !fault.expired.load(std::sync::atomic::Ordering::Acquire),
+                "syscall gate watchdog expired before explicit release"
+            );
+        }
         fs::remove_dir_all(&self.path).unwrap();
     }
+}
+
+#[test]
+fn host_write_lease_blocks_real_open_delays_other_device_and_times_out_reset() {
+    use std::os::fd::AsRawFd;
+    if !super::backend_tests::isolated_fd_child("BOXLITE_FS_LEASE_CHILD") {
+        return;
+    }
+    // SIGIO must be blocked before SharedRuntime creates its thread. The
+    // isolated child consumes the kernel's lease-break notification below.
+    let mut signals = std::mem::MaybeUninit::<libc::sigset_t>::uninit();
+    // SAFETY: initialize a signal set, then block it in this isolated process's
+    // only thread; subsequently created threads inherit the blocked mask.
+    unsafe {
+        libc::sigemptyset(signals.as_mut_ptr());
+        libc::sigaddset(signals.as_mut_ptr(), libc::SIGIO);
+        assert_eq!(
+            libc::pthread_sigmask(libc::SIG_BLOCK, signals.as_ptr(), std::ptr::null_mut()),
+            0
+        );
+    }
+    // SAFETY: sigemptyset initialized the set.
+    let signals = unsafe { signals.assume_init() };
+    let mut rig = Rig::new();
+    let mut guest = rig.guest();
+    let mut other = rig.guest();
+    let node = guest.file_node();
+    let lease = Arc::new(
+        fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(rig.path.join("file"))
+            .unwrap(),
+    );
+    // libtest also has a harness thread with SIGIO unblocked. Route the lease
+    // notification to this specific test thread rather than the whole process.
+    #[repr(C)]
+    struct Owner {
+        kind: libc::c_int,
+        pid: libc::pid_t,
+    }
+    let owner = Owner {
+        kind: 0, // F_OWNER_TID in Linux fcntl.h.
+        // SAFETY: gettid has no arguments or side effects.
+        pid: unsafe { libc::syscall(libc::SYS_gettid) as libc::pid_t },
+    };
+    // SAFETY: Linux F_SETOWN_EX (15) reads a valid f_owner_ex layout.
+    assert_eq!(unsafe { libc::fcntl(lease.as_raw_fd(), 15, &owner) }, 0);
+    // SAFETY: this owned regular file is writable and belongs to the current uid.
+    let result = unsafe { libc::fcntl(lease.as_raw_fd(), libc::F_SETLEASE, libc::F_WRLCK) };
+    assert_eq!(
+        result,
+        0,
+        "host filesystem must support owner file leases: {}",
+        std::io::Error::last_os_error()
+    );
+    let (release, released) = std::sync::mpsc::channel();
+    let held = lease.clone();
+    let watchdog = thread::spawn(move || {
+        // Release even if the test panics, and before the kernel lease timeout.
+        let explicit = released.recv_timeout(WAIT);
+        // SAFETY: held retains the leased file descriptor.
+        assert_eq!(
+            unsafe { libc::fcntl(held.as_raw_fd(), libc::F_SETLEASE, libc::F_UNLCK) },
+            0
+        );
+        assert!(
+            explicit.is_ok(),
+            "lease watchdog released before explicit unlock"
+        );
+    });
+    guest.submit(
+        Opcode::Open,
+        node,
+        OpenIn {
+            flags: libc::O_RDWR as u32,
+            ..Default::default()
+        }
+        .as_slice(),
+    );
+    let timeout = libc::timespec {
+        tv_sec: 5,
+        tv_nsec: 0,
+    };
+    // SAFETY: signals and timeout are initialized; no siginfo is requested.
+    assert_eq!(
+        unsafe { libc::sigtimedwait(&signals, std::ptr::null_mut(), &timeout) },
+        libc::SIGIO,
+        "kernel did not report a conflicting host open"
+    );
+    other.submit(Opcode::Lookup, 1, b"shared\0");
+    thread::sleep(Duration::from_millis(50));
+    let used: u16 = other.memory.read_obj(GuestAddress(USED + 0x102)).unwrap();
+    assert_eq!(u16::from_le(used), other.next - 1);
+    write(&mut guest.transport, 0x070, 0);
+    match rig.events.wait(Some(WAIT)).unwrap() {
+        Some(Event::DeviceFailed(crate::error::Error::VirtioDevice { device, reason })) => {
+            assert_eq!(device, "virtio-fs");
+            assert_eq!(reason, "virtio worker stop timed out");
+        }
+        event => panic!("expected real lease-blocked OPEN timeout, got {event:?}"),
+    }
+    release.send(()).unwrap();
+    watchdog.join().unwrap();
+    assert_eq!(object::<OutHeader>(&guest.complete()).error, 0);
+    assert_eq!(object::<OutHeader>(&other.complete()).error, 0);
+    rig.workers.shutdown().unwrap();
 }
 
 #[test]
@@ -522,10 +649,16 @@ fn concurrent_producer_replenishes_fs_queue_while_transport_resets() {
         let mut next = initial;
         while !producer_stop.load(Ordering::Acquire) && Instant::now() < deadline {
             let used: u16 = memory.read_obj(GuestAddress(USED + 0x102)).unwrap();
-            if u16::from_le(used) != next {
+            // Four independent two-descriptor chains fill this eight-entry
+            // descriptor table. Refill each slot only after its used entry.
+            if next.wrapping_sub(u16::from_le(used)) >= 4 {
                 thread::yield_now();
                 continue;
             }
+            let slot = next % 4;
+            let head = slot * 2;
+            let request = REQUEST + u64::from(slot) * 0x100;
+            let response = RESPONSE + u64::from(slot) * 0x100;
             let header = InHeader {
                 len: (size_of::<InHeader>() + 7) as u32,
                 opcode: Opcode::Lookup as u32,
@@ -535,21 +668,24 @@ fn concurrent_producer_replenishes_fs_queue_while_transport_resets() {
             };
             let mut input = header.as_slice().to_vec();
             input.extend_from_slice(b"shared\0");
-            memory.write_slice(&input, GuestAddress(REQUEST)).unwrap();
+            memory.write_slice(&input, GuestAddress(request)).unwrap();
             memory
                 .write_obj(
-                    Descriptor::new(REQUEST, input.len() as u32, 1, 1),
-                    GuestAddress(DESC + 0x100),
+                    Descriptor::new(request, input.len() as u32, 1, head + 1),
+                    GuestAddress(DESC + 0x100 + u64::from(head) * 16),
                 )
                 .unwrap();
             memory
                 .write_obj(
-                    Descriptor::new(RESPONSE, 4096, 2, 0),
-                    GuestAddress(DESC + 0x110),
+                    Descriptor::new(response, 256, 2, 0),
+                    GuestAddress(DESC + 0x100 + u64::from(head + 1) * 16),
                 )
                 .unwrap();
             memory
-                .write_obj(0u16, GuestAddress(AVAIL + 0x104 + u64::from(next % 8) * 2))
+                .write_obj(
+                    head.to_le(),
+                    GuestAddress(AVAIL + 0x104 + u64::from(next % 8) * 2),
+                )
                 .unwrap();
             next = next.wrapping_add(1);
             memory
@@ -558,6 +694,10 @@ fn concurrent_producer_replenishes_fs_queue_while_transport_resets() {
             worker.kick(1);
             produced.fetch_add(1, Ordering::Release);
         }
+        assert!(
+            producer_stop.load(Ordering::Acquire),
+            "producer watchdog expired before reset completed"
+        );
     });
     let deadline = Instant::now() + WAIT;
     while count.load(Ordering::Acquire) < 128 {
@@ -567,8 +707,13 @@ fn concurrent_producer_replenishes_fs_queue_while_transport_resets() {
         );
         thread::yield_now();
     }
-    // The producer remains live and may publish another head during stop/reset.
+    // Four chains can remain outstanding while reset stops the live producer.
+    let reset_started = Instant::now();
     write(&mut guest.transport, 0x070, 0);
+    assert!(
+        reset_started.elapsed() < Duration::from_secs(1),
+        "reset must finish independently of the five-second producer watchdog"
+    );
     stop.store(true, Ordering::Release);
     producer.join().unwrap();
     let mut status = [0; 4];

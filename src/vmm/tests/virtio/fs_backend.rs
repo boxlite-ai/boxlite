@@ -414,6 +414,26 @@ fn populated_sessions_return_to_fd_baseline_after_destroy_and_drop() {
     fs::write(dir.0.join("file"), b"retained data").unwrap();
     let before = fd_count();
     for _ in 0..16 {
+        let partial = AggregateFs::new(vec![
+            Share {
+                name: "valid".into(),
+                path: dir.0.clone(),
+                read_only: false,
+            },
+            Share {
+                name: "missing".into(),
+                path: dir.0.join("absent"),
+                read_only: false,
+            },
+        ]);
+        error(partial, libc::ENOENT);
+        assert_eq!(
+            fd_count(),
+            before,
+            "later export failure leaked earlier backend"
+        );
+    }
+    for _ in 0..16 {
         let fs = dir.backend();
         fs.init(FsOptions::empty()).unwrap();
         let baseline = fd_count();
@@ -477,6 +497,18 @@ fn emfile_lookup_and_open_fail_cleanly_and_recover_in_isolated_process() {
     }
     let failed_open = fs.open(ctx(), inode, false, libc::O_RDWR as u32);
     let failed_lookup = fs.lookup(ctx(), rw, c"unseen");
+    let share = || {
+        vec![Share {
+            name: "init".into(),
+            path: dir.0.clone(),
+            read_only: false,
+        }]
+    };
+    let failed_root = AggregateFs::new(share());
+    // One available descriptor lets construction open the export root, then
+    // forces the auxiliary /proc/self/fd open to fail. Its root must be closed.
+    drop(held.pop().unwrap());
+    let failed_auxiliary = AggregateFs::new(share());
     drop(held);
     // Restore before assertions and fixture teardown.
     // SAFETY: the original soft limit did not exceed the unchanged hard limit.
@@ -486,7 +518,16 @@ fn emfile_lookup_and_open_fail_cleanly_and_recover_in_isolated_process() {
     );
     error(failed_open, libc::EMFILE);
     error(failed_lookup, libc::EMFILE);
+    error(failed_root, libc::EMFILE);
+    error(failed_auxiliary, libc::EMFILE);
     assert_eq!(fd_count(), baseline, "failed operations leaked descriptors");
+    let recovered = AggregateFs::new(share()).unwrap();
+    drop(recovered);
+    assert_eq!(
+        fd_count(),
+        baseline,
+        "recovered constructor leaked descriptors"
+    );
     let handle = open(&fs, inode, libc::O_RDONLY);
     assert_eq!(read(&fs, inode, handle).unwrap(), b"still accessible");
     let unseen = lookup(&fs, rw, c"unseen");

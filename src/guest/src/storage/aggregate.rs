@@ -22,7 +22,10 @@ enum Mount {
         target: PathBuf,
         read_only: bool,
     },
-    Legacy(usize),
+    Legacy {
+        index: usize,
+        target: Option<PathBuf>,
+    },
 }
 
 fn plan(volumes: &[Volume]) -> BoxliteResult<Vec<Mount>> {
@@ -32,11 +35,21 @@ fn plan(volumes: &[Volume]) -> BoxliteResult<Vec<Mount>> {
     let mut mounts = Vec::new();
     for (index, vol) in volumes.iter().enumerate() {
         let Some(volume::Source::Virtiofs(fs)) = &vol.source else {
-            mounts.push(Mount::Legacy(index));
+            mounts.push(Mount::Legacy {
+                index,
+                target: vol.source.as_ref().map(|_| PathBuf::from(&vol.mount_point)),
+            });
             continue;
         };
         if fs.device_tag.is_empty() && fs.export_key.is_empty() {
-            mounts.push(Mount::Legacy(index));
+            mounts.push(Mount::Legacy {
+                index,
+                target: Some(resolve_mount_point(
+                    &fs.tag,
+                    &vol.mount_point,
+                    &vol.container_id,
+                )),
+            });
             continue;
         }
         if fs.device_tag.is_empty()
@@ -83,12 +96,12 @@ fn plan(volumes: &[Volume]) -> BoxliteResult<Vec<Mount>> {
             read_only: fs.read_only,
         });
     }
-    // Stable ordering preserves legacy dispatch, creates roots first, and binds
-    // parents before children so a later parent cannot hide an earlier child.
+    // Roots first, then every destination parent-first, including legacy shares
+    // and block devices nested beneath an aggregate binding.
     mounts.sort_by_key(|mount| match mount {
-        Mount::Legacy(_) => (0, 0),
-        Mount::Root { .. } => (1, 0),
-        Mount::Bind { target, .. } => (2, target.components().count()),
+        Mount::Root { .. } => (0, 0),
+        Mount::Bind { target, .. } => (1, target.components().count()),
+        Mount::Legacy { target, .. } => (1, target.as_ref().map_or(0, |p| p.components().count())),
     });
     Ok(mounts)
 }
@@ -137,7 +150,11 @@ fn execute(
         }
         match operation {
             Mount::Root { target, .. } | Mount::Bind { target, .. } => owned.push(target.as_path()),
-            Mount::Legacy(_) => {}
+            Mount::Legacy {
+                target: Some(target),
+                ..
+            } => owned.push(target.as_path()),
+            Mount::Legacy { target: None, .. } => {}
         }
     }
     Ok(owned.into_iter().map(Path::to_path_buf).collect())
@@ -156,7 +173,7 @@ pub(super) fn mount_volumes(volumes: &[Volume]) -> BoxliteResult<MountedVolumes>
                 target,
                 read_only,
             } => bind(source, target, *read_only),
-            Mount::Legacy(index) => mount_volume(&volumes[*index]),
+            Mount::Legacy { index, .. } => mount_volume(&volumes[*index]),
         },
         unmount,
     )
@@ -498,12 +515,59 @@ mod tests {
     }
 
     #[test]
+    fn aggregate_parent_precedes_nested_legacy_mount() {
+        let legacy = Volume {
+            mount_point: "/run/boxlite/shared/disk".into(),
+            container_id: String::new(),
+            source: Some(volume::Source::BlockDevice(Default::default())),
+        };
+        let mounts = plan(&[
+            legacy,
+            share(boxlite_shared::constants::mount_tags::SHARED, "shared", ""),
+        ])
+        .unwrap();
+        assert!(matches!(mounts[0], Mount::Root { .. }));
+        assert!(matches!(mounts[1], Mount::Bind { .. }));
+        assert!(matches!(mounts[2], Mount::Legacy { .. }));
+        let owned = execute(&mounts, |_| Ok(()), |_| Ok(())).unwrap();
+        assert_eq!(owned.last().unwrap(), Path::new("/run/boxlite/shared/disk"));
+        let mut failing = mounts;
+        failing.push(Mount::Legacy {
+            index: 9,
+            target: None,
+        });
+        let mut undone = Vec::new();
+        assert!(execute(
+            &failing,
+            |operation| {
+                if matches!(operation, Mount::Legacy { index: 9, .. }) {
+                    Err(BoxliteError::Storage("later mount failed".into()))
+                } else {
+                    Ok(())
+                }
+            },
+            |path| {
+                undone.push(path.to_path_buf());
+                Ok(())
+            },
+        )
+        .is_err());
+        assert_eq!(undone, owned.into_iter().rev().collect::<Vec<_>>());
+    }
+
+    #[test]
     fn legacy_mounts_keep_their_original_dispatch() {
         let mut vol = share(boxlite_shared::constants::mount_tags::SHARED, "shared", "");
         if let Some(volume::Source::Virtiofs(fs)) = &mut vol.source {
             fs.device_tag.clear();
             fs.export_key.clear();
         }
-        assert_eq!(plan(&[vol]).unwrap(), vec![Mount::Legacy(0)]);
+        assert_eq!(
+            plan(&[vol]).unwrap(),
+            vec![Mount::Legacy {
+                index: 0,
+                target: Some(PathBuf::from("/run/boxlite/shared")),
+            }]
+        );
     }
 }

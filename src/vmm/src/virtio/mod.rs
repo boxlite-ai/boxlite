@@ -8,10 +8,14 @@
 //! [`worker`] runtime calls [`VirtioDevice::on_event`]. The transport and the
 //! workers share the device through `Arc<Mutex<dyn VirtioDevice>>`. Every
 //! device's events run on the workers' single thread under the device lock, so
-//! `on_event` must not block: a blocking call stalls every other device.
+//! callbacks should return promptly: a blocking call stalls every other device.
+//! The initial virtio-fs backend performs synchronous host filesystem calls;
+//! those calls can delay every device and cause stop/shutdown to time out.
+//! Its lifecycle tests qualify that limitation; the runtime cannot cancel a
+//! host syscall already in progress.
 //!
-//! A device processes the descriptors available in its queues; the virtqueue
-//! size bounds one event call. The [`VirtQueues`] facade prepares and validates
+//! A device processes the descriptors available in its queues. A producer can
+//! replenish a queue while it drains, so queue size alone does not bound a call. The [`VirtQueues`] facade prepares and validates
 //! the queue set, tracks deferred chains and runs the notification drain;
 //! `save` and `restore` return [`SnapshotError::Unsupported`] until M8. Through
 //! [`WorkerControl`] the transport prepares a worker generation before
@@ -331,7 +335,9 @@ pub(crate) trait VirtioDevice: Send {
     /// Handles one worker event. `Ok(())` means this call finished; it does
     /// not mean every submitted request completed. The device uses the event
     /// registrar and waker stored from [`ActivationContext`]. The call runs on
-    /// the workers' shared thread and must not block.
+    /// the workers' shared thread. Keep callbacks bounded where possible;
+    /// synchronous filesystem operations currently delay this thread and may
+    /// exceed the worker's stop timeout.
     fn on_event(&mut self, event: DeviceEvent) -> Result<(), DeviceError>;
 
     /// Stops accepting new work and drains requests the device already took.
