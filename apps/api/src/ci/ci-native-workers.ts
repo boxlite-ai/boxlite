@@ -105,9 +105,11 @@ export class CiNativeWorkers {
         if (error instanceof NotFoundException) throw new ConfirmedWorkerAbsent()
         throw error
       }
-      if (box.id !== value.box || box.organizationId !== scope.organization || box.name !== name)
+      if (box.id !== value.box || box.organizationId !== scope.organization)
         throw new ForbiddenException('Original CI Box ownership changed')
+      // Platform deletion renames the tombstone; its original ID and tenant remain authoritative.
       if (box.state === BoxState.DESTROYED) throw new ConfirmedWorkerAbsent()
+      if (box.name !== name) throw new ForbiddenException('Original CI Box ownership changed')
       return box
     }
     const context = () => Context.platform(PlatformReason.CI_RUNNER)

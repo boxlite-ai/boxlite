@@ -446,6 +446,17 @@ polling of every repository. Apply the
 connect and shared-state migrations before enabling this receiver. Real hosted App
 CI and recovery acceptance are still pending.
 
+### JIT Box deletion and capacity recovery
+
+Hosted worker recovery checks the recorded Box ID and organization before
+interpreting its lifecycle state. Platform soft deletion renames the Box; a
+confirmed `DESTROYED` record for that original ID releases its physical capacity
+even after the rename. Pending deletion retains capacity until confirmation.
+Unknown IDs, conflicting ledgers, foreign organizations and renamed live Boxes
+remain denied. Confirmed Box absence makes its physical capacity available; the
+allocation remains recorded until the original runner cleanup also finishes.
+A successful CI job alone does not prove that cleanup finished.
+
 ## Admin Box image
 
 `GET /api/admin/boxes` and `GET /api/admin/boxes/{id}` include `image`, the stored
