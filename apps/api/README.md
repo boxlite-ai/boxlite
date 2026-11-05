@@ -159,7 +159,30 @@ await admin.adminListOrganizationsOverview(
 Request options remain outside URL query parameters. The TypeScript generation
 postprocessor preserves both forms and fails if the expected generated signatures change.
 
-Existing organization operation IDs and response models are retained. Registration fields
+The generated Go client in `apps/libs/api-client-go` serves the control-plane
+services in this workspace. Its organization-list creator type changes from
+`AdminOrganizationCreator` to `AdminOrganizationVerifiedCreator` to expose the
+optional `EmailVerified` field. This is a Go source-breaking change, including
+the nullable wrapper, overview constructor, `GetCreator`, `GetCreatorOk`, and
+`SetCreator`; the existing in-repository services do not use these admin models.
+The organization-detail model still uses `AdminOrganizationCreator`.
+
+Callers using organization-list models must migrate these names:
+
+| Previous name                                                             | Organization-list replacement                                                             |
+| ------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| `AdminOrganizationCreator`                                                | `AdminOrganizationVerifiedCreator`                                                        |
+| `NullableAdminOrganizationCreator`                                        | `NullableAdminOrganizationVerifiedCreator`                                                |
+| `NewAdminOrganizationCreator` / `NewAdminOrganizationCreatorWithDefaults` | `NewAdminOrganizationVerifiedCreator` / `NewAdminOrganizationVerifiedCreatorWithDefaults` |
+| `NewNullableAdminOrganizationCreator`                                     | `NewNullableAdminOrganizationVerifiedCreator`                                             |
+
+For example, pass a value from `NewAdminOrganizationVerifiedCreator` to the
+overview's `SetCreator`, and pass the new nullable wrapper to
+`NewAdminOrganizationOverview`. Update explicit getter-result types as well.
+Use `GetEmailVerifiedOk` to distinguish an absent verification state from `false`.
+Do not apply this migration to organization-detail callers.
+
+Existing organization operation IDs and top-level response models are retained. Registration fields
 are required; usage and activation remain optional, present only when selected. Query
 parameters have explicit Swagger string types; runtime validation still applies. Regenerate the committed
 clients from `apps/` with the pinned generator in `openapitools.json`:
