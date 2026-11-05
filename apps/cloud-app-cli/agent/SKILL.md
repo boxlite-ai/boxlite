@@ -1,28 +1,29 @@
 ---
 name: boxlite-app
-description: Build a complete web app from the user's one-line request and run it on BoxLite Cloud as a BoxLite App — database, file storage, login, deploys, rollback. Use when the user hands you a BoxLite App prompt with BOXLITE_API_KEY and an App name or asks to build/deploy/update an app on BoxLite.
+description: Build a web app on BoxLite Cloud with database, storage, login, deploys, and rollback. Use when the user shares a BoxLite App prompt or asks to build, deploy, or update an App.
 ---
 
 # Build an app on BoxLite Cloud
 
-The user created an **App** in the BoxLite console and pasted you its prompt. The prompt supplies the organization's `BOXLITE_API_URL`, the installable `BOXLITE_CLI_URL`, and `BOXLITE_API_KEY`, scoped to this one App. Hand the API address and key to the CLI once with `boxlite-app login`, right after installing it (§0): that is the only command the key ever appears in. Never print it back or put it in a command, file or variable afterwards.
+The App prompt supplies the organization's `BOXLITE_API_URL`, the installable `BOXLITE_CLI_URL`, the App name, and the environment. Use the organization's existing API key with Apps permissions. Keep the key in the local CLI credential store or `BOXLITE_API_KEY`.
 
-The key can only touch this App. You do not need any other BoxLite credential, Docker, Git, or a cloud account. You talk to the platform only through the `boxlite-app` CLI.
-
-Your job is finished when the app the user asked for is **live at its URL and you have verified it yourself**. The user should not need to do anything between pasting the prompt and opening the link.
+Use `boxlite-app` for platform operations and stay within the App named in the prompt. Finish when the App is live at its URL and you have verified it.
 
 ## 0. Install and orient (once per session)
 
+Use the `App:` and `Environment:` values from the prompt. Before using an existing project, check that `.boxlite/link.json` matches the App and organization API URL.
+
 ```sh
 npm install -g "<BOXLITE_CLI_URL>"
-BOXLITE_API_URL=<url> BOXLITE_API_KEY=<key> boxlite-app login   # once: saves the key (readable by you only); later shells need neither
-boxlite-app whoami            # the App this key belongs to, its environments, sign-in that works, and whether the CLI is current
-boxlite-app app context       # services, schema, migrations, variables, recent deploys and errors, and what to do next
+BOXLITE_API_URL="<url>" BOXLITE_APP="<app>" boxlite-app whoami --env "<env>"
+BOXLITE_API_URL="<url>" BOXLITE_APP="<app>" boxlite-app app context --env "<env>"
 ```
 
-`login` and `whoami` confirm the credential's App binding with the API. The key's prefix does not identify its scope. `BOXLITE_API_KEY` takes precedence over a saved key; unset it after `login` to use the saved App credential in later shells.
+If the organization has no local credential, ask the user to configure it before continuing. They can set `BOXLITE_API_KEY` locally or pipe their key into `BOXLITE_API_URL="<url>" boxlite-app login --stdin`. Login saves the key for the organization API URL. An explicit `BOXLITE_API_KEY` takes precedence over the saved key.
 
-If `context` shows a live deployment, this is an **update**: run `boxlite-app app clone <app>` into an empty directory (it downloads the code that is live; if its `next:` line says to, run `boxlite-app app pull` to pick up changes made online since), or work in the user's existing project directory if it has `.boxlite/link.json`. Then go to step 3.
+`whoami` shows the selected App, its environments, available sign-in methods, and the CLI version. Pass `--env <env>` when targeting an environment other than the one in the project link.
+
+If `context` shows a live deployment, work in the user's existing project or clone the live code into an empty directory with `BOXLITE_API_URL="<url>" boxlite-app app clone <app> --env <env>`. Run `boxlite-app app pull` if the CLI reports newer changes online. Then go to step 3.
 
 Everything the CLI can do is documented offline: `boxlite-app docs` lists the topics of this guide, and `boxlite-app docs reference [command…]` prints every command with its flags, `--json` shape and exit codes. With `--json`, a successful command prints exactly one JSON document on stdout; a failed one prints `{"error": {"code", "message", "next", …}}` on stderr. `next` is always a command to run or a file to edit.
 
@@ -34,7 +35,7 @@ Read the user's sentence and decide, before writing code:
 |---|---|---|
 | stores anything that must survive a restart (records, accounts, settings) | `[database]` + `migrations/` | Postgres. Never install a database inside the app. |
 | stores user-uploaded files or generated files | `[[volume]]` | A directory mounted into the app. Never keep uploads on local disk. |
-| has "my", "only me", per-user data, an admin, or anything private | keep `[auth]` (it is on by default) | Platform login with the providers `boxlite-app whoami` lists as working (zero setup). Remove `[auth]` only for a fully anonymous site. Sign-in does not let other people in: access is `private` by default (`org` behaves the same), so only the owner (console **Open app**) and you (the App key) get through, signed in or not. Others reach the app only once access is `public`: set it when their request says people who are not signed in may open it, otherwise ask (§6). |
+| has "my", "only me", per-user data, an admin, or anything private | keep `[auth]` (it is on by default) | Use the providers `boxlite-app whoami` lists as working. Remove `[auth]` only for a fully anonymous site. Private access uses **Open app** in the console or the CLI with an authorized organization key. Set `public` when the request says anyone with the URL may open the App. Otherwise ask (§6). |
 | runs something on a timer ("every morning", "daily digest") | `[[schedule]]` | Sends `POST <path>` (header `X-BoxLite-Schedule: <name>`) to your web service, so the handler must accept POST; it wakes the app. |
 | is only a frontend (no server logic, no database) | one `[[service]]` with `static = "dist/"` | No server needed; the platform serves the files. |
 | receives webhooks (Stripe, GitHub, …) | `public_paths = ["/webhooks/*"]` at the top of `boxlite.toml` | The app stays private; only those paths are open. Check the provider's signature in the handler; never open `/` or `/*` this way (that is `access = "public"`, which needs the user's say-so). |
@@ -42,7 +43,7 @@ Read the user's sentence and decide, before writing code:
 
 Who may open the app and what needs signing in are two separate settings; settle both now, not after the deploy:
 
-- **Access** (`access` in `boxlite.toml`): `private` (default: only the owner and you), `org`, or `public` (anyone with the URL). Signing in never gets anyone past a private app.
+- **Access** (`access` in `boxlite.toml`): `private` (default) and `org` require platform access. `public` lets anyone with the URL open the App.
 - **Sign-in** (`[auth]`, `[auth].protect`): which pages or actions need an account, once someone can open the app.
 
 If the request means other people will use it (players, customers, a team) and does not say who, ask the user in your first reply which access they want, together with anything else you need from them, so the first deploy already has it. Never set `public` without their say-so.
@@ -53,8 +54,10 @@ Pick the stack you are best at that fits in one directory. Defaults that work we
 
 ```sh
 mkdir -p <app> && cd <app>
-boxlite-app init --app <app>   # <app> is the prompt's "App:" line; writes boxlite.toml (only if missing) + .boxlite/link.json; adds its lines to an existing .gitignore and keeps a BoxLite block in AGENTS.md
+BOXLITE_API_URL="<url>" boxlite-app init --app "<app>" --env "<env>"
 ```
+
+The first `init` writes the selected App, environment, and organization API URL to `.boxlite/link.json`. It creates `boxlite.toml` when missing, updates `.gitignore`, and keeps a BoxLite block in `AGENTS.md`.
 
 Edit `boxlite.toml`. A complete example:
 
@@ -129,7 +132,7 @@ boxlite-app deploy -m "what changed"   # upload → cloud build → migrate → 
 
 - Run `check` after every edit to `boxlite.toml` or `migrations/`. Its JSON form is `boxlite-app check --json`.
 - New table or column: `boxlite-app app db migration new <name>` creates the next numbered file; `boxlite-app app db diff` shows which files are applied, pending or (never do this) edited after applying.
-- Database tools that need a real Postgres connection (psql, an ORM's studio, a seed script): `boxlite-app app db proxy` opens `127.0.0.1:5432` (`--port <n>` if that is taken) and prints the DATABASE_URL to use; it runs until Ctrl-C, so start it in the background. It is read-only; `--write` logs in as the owner (on `main` schema changes are still refused: use a migration). Any user name works and there is no password: the CLI authenticates with the App key. `app dev` starts the same proxy as the owner for the app it runs.
+- `boxlite-app app db proxy` opens `127.0.0.1:5432` and prints the `DATABASE_URL` for tools like psql or an ORM. It uses the organization key and accepts any local database username with an empty password. Use `--port <n>` if the port is taken. Start it in the background while using another tool. Connections are read-only by default. `--write` and `app dev` connect as the database owner. Use migrations for schema changes on `main`.
 - Bulk data: `boxlite-app app db export --table <t> -o t.csv` (one table as CSV) or `boxlite-app app db export --format sql -o dump.sql` (schema and data); `boxlite-app app db import rows.csv --table <t> --yes` appends a CSV whose first line names the columns, all rows or none, with a snapshot taken first. Importing changes the user's data: on `main` ask first.
 - `boxlite-app deploy --dry-run` runs check and plan and sizes the upload without deploying.
 - `deploy` streams progress (`--verbose` adds the build output) and returns only when the deployment is live or failed.
@@ -161,11 +164,11 @@ boxlite-app app curl /healthz --env qa --expect 200
 boxlite-app app curl /api/items --env qa -X POST -d '{"title":"x"}' --as qa@example.com --expect 201 --body --json
 boxlite-app app sql "select count(*) from <table>" --env qa --json
 boxlite-app app env delete qa --yes            # removes everything the checks created
-boxlite-app deploy -m "what changed"           # then main; on main, only read-only checks:
-boxlite-app app curl / --expect 200
+boxlite-app deploy --env <env> -m "what changed"
+boxlite-app app curl / --env <env> --expect 200
 ```
 
-- `app curl` only ever talks to this environment's own URL, shows redirects instead of following them, and prints status, headers and body (`--json`: `{status, ok, redirect, headers, body_json | body}`; Set-Cookie values are redacted). `--expect 200` (or `302`, `200,201`) exits 1 on any other status, so a check fails loudly; `--body` prints just the body. Do not paste the App key into curl yourself.
+- `app curl` uses the CLI's organization credential for the selected environment, including private Apps. It shows redirects and prints status, headers and body. The `--json` output includes `{status, ok, redirect, headers, body_json | body}` with Set-Cookie values redacted. `--expect 200` (or `302`, `200,201`) exits 1 on any other status. `--body` prints just the body.
 - Exercise every feature the user named, through HTTP, the way a browser would (create, list, edit, delete; upload then fetch the file; a protected page refuses an anonymous request).
 - Login-only flows: `--as qa@example.com` signs in a 15-minute test user, so your service gets that user's `X-BoxLite-User-*` headers. Without it, `boxlite-app app curl /app` on a protected page answers 401 (`app curl` does not ask for HTML); add `-H 'Accept: text/html'` to see what a browser gets, a 302 to `/.boxlite/auth/login`.
 - Anything with a screen to look at (a game, a canvas, a multi-step UI) is not verified by HTTP alone: open it in your browser tool and use it. `boxlite-app app open --print-url --as qa@example.com --path /play --json` gives a one-time link already signed in as the test user (`--role owner` for owner-only pages). Check what the user will see: layout, the flows they named, and the browser console for errors.
@@ -178,9 +181,9 @@ Before you report, keep what the next session on this App must know and cannot r
 
 One short message:
 
-- The app's permanent URL (`url` in `boxlite-app app status --json`; add `--env <name>` for a test version you hand over). Never hand over a one-time link from `app open --print-url`: it expires a minute after you create it and works once, so it is dead by the time the user reads your message. A private app opens for its owner with **Open app** in the BoxLite console, and its URL shows a page that says so; tell the user that in one sentence. Never put the App key in a link.
+- Give the App's permanent URL from `boxlite-app app status --json`. Add `--env <name>` for a test environment. For a private App, tell the user to use **Open app** in the BoxLite console. Keep credentials and one-time test links out of the handoff.
 - What you built, in their words, and what you verified (list).
-- Anything only they can decide, phrased as a question: making the app public when their request did not say who may open it (until then nobody but the owner can use it, signed in or not), having an admin add a third-party key, a custom domain.
+- Ask for decisions the user still needs to make, such as the App's public audience, a third-party key, or a custom domain.
 
 Do not mention internal steps, retries, or platform terms (Spec, Release, Box, tunnel).
 

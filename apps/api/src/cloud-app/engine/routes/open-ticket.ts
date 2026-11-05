@@ -6,7 +6,7 @@ import type { Ctx } from '../ctx'
 import { createOpenTicket } from '../proxy/gate'
 import { body, envOf } from './util'
 
-/** `/v1/apps/:app/envs/:env/open-ticket` (App key): what `boxlite-app app open` and agents use. */
+/** `/v1/apps/:app/envs/:env/open-ticket` is used by `boxlite-app app open`. */
 export function openTicketRoutes(ctx: Ctx) {
   const r = new Hono<{ Variables: Vars }>()
   r.post('/envs/:env/open-ticket', async (c) => {

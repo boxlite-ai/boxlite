@@ -26,11 +26,11 @@ export class HttpError extends Error {
  */
 const NEXT_BY_CODE: Record<string, string> = {
   unauthenticated:
-    'send the App key as `Authorization: Bearer <App key>`; `boxlite-app whoami` checks the key you have',
-  not_found_app: '`boxlite-app whoami` shows which App this key belongs to',
+    'send an organization API key as `Authorization: Bearer <key>`; `boxlite-app whoami` checks the key you have',
+  not_found_app: 'check the App name and organization; `boxlite-app init --app <name>` links the project',
   not_found_env: '`boxlite-app app status` lists the environments',
   not_found: '`boxlite-app app status` shows what this App has',
-  forbidden: '`boxlite-app whoami` shows what this App key may do',
+  forbidden: 'check the required App permissions on the organization API key',
   write_requires_flag: 'rerun with --write once you have checked the statement',
   unavailable: 'wait 30 s and rerun (at most 3 times); `boxlite-app doctor` checks the connection',
   invalid_manifest: '`boxlite-app check` lists every problem in boxlite.toml with its line',

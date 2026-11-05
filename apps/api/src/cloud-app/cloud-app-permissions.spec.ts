@@ -9,14 +9,14 @@ describe('App management organization permissions', () => {
   const service = Object.assign(Object.create(CloudAppService.prototype), {
     organizations: { assertOrganizationIsNotSuspended: jest.fn() },
   }) as CloudAppService
-  const member = (permissions: Permission[], cloudAppId?: string) =>
+  const member = (permissions: Permission[], keyPermissions?: Permission[]) =>
     ({
       userId: 'user',
       role: SystemRole.USER,
       organizationId: 'org',
       organization: {},
       organizationUser: { role: OrganizationMemberRole.MEMBER, assignedRoles: [{ permissions }] },
-      ...(cloudAppId ? { apiKey: { cloudAppId, permissions, keySuffix: 'abc' } } : {}),
+      ...(keyPermissions ? { apiKey: { organizationId: 'org', permissions: keyPermissions, keySuffix: 'abc' } } : {}),
     }) as OrganizationAuthContext
 
   it('uses existing member roles for reads, writes and App deletion', () => {
@@ -27,11 +27,25 @@ describe('App management organization permissions', () => {
     expect(service.principal(member([Permission.DELETE_APPS]), 'DELETE', '/apps/crm').userId).toBe('user')
   })
 
-  it('confines an agent credential to App routes and cannot mint more credentials', () => {
-    const agent = member([Permission.READ_APPS, Permission.WRITE_APPS], 'app_crm')
-    expect(service.principal(agent, 'GET', '/apps/me/whoami').appId).toBe('app_crm')
-    for (const path of ['/apps', '/apps/deleted', '/apps/crm/keys']) {
-      expect(() => service.principal(agent, 'POST', path)).toThrow(ForbiddenException)
+  it('uses the organization key permissions for every App in the organization', () => {
+    const permissions = [Permission.READ_APPS, Permission.WRITE_APPS, Permission.DELETE_APPS]
+    const reader = member(permissions, [Permission.READ_APPS])
+    for (const path of ['/apps', '/apps/crm', '/apps/wiki']) {
+      expect(service.principal(reader, 'GET', path)).toMatchObject({ organizationId: 'org', actor: 'key:…abc' })
     }
+    expect(() => service.principal(reader, 'POST', '/apps')).toThrow(ForbiddenException)
+    expect(() => service.principal(reader, 'DELETE', '/apps/crm')).toThrow(ForbiddenException)
+    expect(service.principal(member(permissions, [Permission.WRITE_APPS]), 'POST', '/apps').organizationId).toBe('org')
+  })
+
+  it('rejects an organization key from another organization even for an administrator', () => {
+    const key = member([], [Permission.READ_APPS])
+    const admin = { ...key, role: SystemRole.ADMIN, apiKey: { ...key.apiKey!, organizationId: 'other-org' } }
+    expect(() => service.principal(admin, 'GET', '/apps')).toThrow(ForbiddenException)
+  })
+
+  it('honors explicit key restrictions for an administrator', () => {
+    const admin = { ...member([], []), role: SystemRole.ADMIN }
+    expect(() => service.principal(admin, 'GET', '/apps')).toThrow(ForbiddenException)
   })
 })

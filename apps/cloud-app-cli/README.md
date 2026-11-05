@@ -1,12 +1,14 @@
 # Cloud App CLI
 
-`boxlite-app` deploys and operates an App through the platform API. Its handoff prompt supplies
-an organization-scoped `BOXLITE_API_URL`, an App key, and the public `BOXLITE_CLI_URL` package.
-Run `boxlite-app login` once, then use `init`, `check`, `plan`, `apply` and `deploy`.
+`boxlite-app` deploys and operates an App through the platform API. The handoff prompt provides
+the organization API URL, CLI package URL, App name, and environment. Use an existing
+organization API key with Apps permissions. `boxlite-app login` saves the key by
+`BOXLITE_API_URL`. An explicit `BOXLITE_API_KEY` takes precedence over the saved credential.
+
+Select the App with `--app <name>`, an existing `.boxlite/link.json`, or `BOXLITE_APP`.
+`boxlite-app init --app <name>` links the directory for later `check`, `plan`, `apply`, and
+`deploy` commands.
 `boxlite-app docs` includes the Agent guide and command reference offline.
-`login` and `whoami` verify the App scope returned by the API. Credentials use the platform's
-`blk_test_` or `blk_live_` format; their prefix alone does not identify the authorized App.
-An explicit `BOXLITE_API_KEY` takes precedence over a saved credential.
 
 Build and test from the repository root:
 

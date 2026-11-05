@@ -1,4 +1,3 @@
-import { Context } from '../common/context/context'
 /*
  * Copyright 2026 BoxLite AI
  * SPDX-License-Identifier: AGPL-3.0
@@ -12,6 +11,7 @@ import { getRedisConnectionToken } from '@nestjs-modules/ioredis'
 import type { AddressInfo } from 'net'
 import { CombinedAuthGuard } from '../auth/combined-auth.guard'
 import { AuthenticatedRateLimitGuard } from '../common/guards/authenticated-rate-limit.guard'
+import { Context } from '../common/context/context'
 import { OrganizationMemberRole } from '../organization/enums/organization-member-role.enum'
 import { OrganizationResourcePermission as Permission } from '../organization/enums/organization-resource-permission.enum'
 import { OrganizationResourceActionGuard } from '../organization/guards/organization-resource-action.guard'
@@ -20,6 +20,7 @@ import { OrganizationUserService } from '../organization/services/organization-u
 import { SystemRole } from '../user/enums/system-role.enum'
 import { ApiKeyController } from './api-key.controller'
 import { ApiKeyService } from './api-key.service'
+import { ApiKeysApi } from '../../../libs/api-client/src/api/api-keys-api'
 
 describe('API key authorization', () => {
   let app: INestApplication
@@ -73,7 +74,7 @@ describe('API key authorization', () => {
     }
   })
 
-  async function create(permissions: Permission[]) {
+  async function create(permissions?: Permission[] | null) {
     const address = app.getHttpServer().address() as AddressInfo
     return fetch(`http://127.0.0.1:${address.port}/api-keys`, {
       method: 'POST',
@@ -81,6 +82,79 @@ describe('API key authorization', () => {
       body: JSON.stringify({ name: 'delegated-key', permissions }),
     })
   }
+
+  it('defaults an owner JWT request to all organization permissions', async () => {
+    delete principal.apiKey
+
+    expect((await create()).status).toBe(201)
+    expect(createApiKey).toHaveBeenCalledWith(
+      'org-1',
+      'owner-1',
+      'delegated-key',
+      Object.values(Permission),
+      Context.user({ userId: 'owner-1', authMethod: 'jwt' }),
+      undefined,
+    )
+  })
+
+  it('defaults a full-permission organization key request to all permissions', async () => {
+    principal.apiKey = { organizationId: 'org-1', permissions: Object.values(Permission) }
+
+    expect((await create()).status).toBe(201)
+    expect(createApiKey).toHaveBeenCalledWith(
+      'org-1',
+      'owner-1',
+      'delegated-key',
+      Object.values(Permission),
+      Context.user({ userId: 'owner-1', authMethod: 'api_key' }),
+      undefined,
+    )
+  })
+
+  it('does not let an existing restricted key obtain all permissions by omission', async () => {
+    expect((await create()).status).toBe(403)
+    expect(createApiKey).not.toHaveBeenCalled()
+  })
+
+  it('does not let a restricted JWT member obtain all permissions by omission', async () => {
+    delete principal.apiKey
+    membership = { role: OrganizationMemberRole.MEMBER, assignedRoles: [{ permissions: [Permission.WRITE_APPS] }] }
+
+    expect((await create()).status).toBe(403)
+    expect(createApiKey).not.toHaveBeenCalled()
+  })
+
+  it('rejects null permissions instead of treating them as omitted', async () => {
+    delete principal.apiKey
+
+    expect((await create(null)).status).toBe(400)
+    expect(createApiKey).not.toHaveBeenCalled()
+  })
+
+  it('preserves explicit SDK permissions and defaults an omitted SDK field over HTTP', async () => {
+    delete principal.apiKey
+    const address = app.getHttpServer().address() as AddressInfo
+    const client = new ApiKeysApi(undefined, `http://127.0.0.1:${address.port}`)
+
+    await client.createApiKey({ name: 'explicit-client-key', permissions: [Permission.READ_APPS] })
+    expect(createApiKey).toHaveBeenLastCalledWith(
+      'org-1',
+      'owner-1',
+      'explicit-client-key',
+      [Permission.READ_APPS],
+      Context.user({ userId: 'owner-1', authMethod: 'jwt' }),
+      undefined,
+    )
+    await client.createApiKey({ name: 'default-client-key' })
+    expect(createApiKey).toHaveBeenLastCalledWith(
+      'org-1',
+      'owner-1',
+      'default-client-key',
+      Object.values(Permission),
+      Context.user({ userId: 'owner-1', authMethod: 'jwt' }),
+      undefined,
+    )
+  })
 
   it.each([SystemRole.USER, SystemRole.ADMIN])(
     'refuses scope expansion by a %s key before persistence',

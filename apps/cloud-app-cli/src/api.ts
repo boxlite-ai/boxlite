@@ -29,6 +29,7 @@ export interface EnvSummary {
 export interface AppInfo {
   name: string
   envs?: EnvSummary[]
+  sign_in_providers?: string[]
   [extra: string]: unknown
 }
 
@@ -269,7 +270,7 @@ export class Api {
       throw new MicrocloudError(
         'not_linked',
         'this directory is not linked to an App',
-        'run `boxlite-app init` here, or set BOXLITE_APP',
+        'pass --app <name> or link the project with `boxlite-app init --app <name>`',
       )
     return encodeURIComponent(this.appName)
   }
@@ -395,8 +396,8 @@ export class Api {
 
   // Apps
 
-  getApp(name = this.appName ?? 'me'): Promise<AppInfo> {
-    return this.json('GET', `/apps/${encodeURIComponent(name)}`)
+  getApp(name?: string): Promise<AppInfo> {
+    return this.json('GET', `/apps/${name ? encodeURIComponent(name) : this.app}`)
   }
 
   /** Everything about one environment (cli-extras); `app context` renders it. */
@@ -411,22 +412,32 @@ export class Api {
     env?: string
     cli_version?: string
   }): Promise<{ id: string; received_at: string; next: string }> {
-    return this.json('POST', `/apps/${encodeURIComponent(this.appName ?? 'me')}/feedback`, { body })
+    return this.json('POST', `/apps/${this.app}/feedback`, { body })
   }
 
-  async whoami(): Promise<WhoAmI> {
-    const me = await this.json<WhoAmI>('GET', `/apps/${encodeURIComponent(this.appName ?? 'me')}/whoami`)
-    if (!me.app || me.scope !== `app:${me.app}`) {
+  async whoami(): Promise<OrganizationIdentity> {
+    const url = new URL(this.baseUrl)
+    const match = /^(.*\/v1)\/([^/]+)$/.exec(url.pathname)
+    if (!match)
+      throw new MicrocloudError(
+        'missing_api_url',
+        'BOXLITE_API_URL must include /api/v1/<organization-id>',
+        'use the organization API URL from the App prompt',
+      )
+    url.pathname = match[1]!
+    const api = new Api({ baseUrl: url.href, key: this.key, dispatcher: this.dispatcher })
+    const me = await api.json<{ sub: string; path_prefix: string | null }>('GET', '/me')
+    if (!me?.sub || me.path_prefix !== match[2]) {
       throw new MicrocloudError(
         'forbidden',
-        'this credential is not scoped to one App',
-        'use the App-scoped key from the App prompt with `boxlite-app login`',
+        'the credential belongs to a different organization than BOXLITE_API_URL',
+        'use the organization API key that matches the URL, then run `boxlite-app login`',
       )
     }
-    return me
+    return { organization_id: me.path_prefix, actor: me.sub, key_last4: this.key.slice(-4) }
   }
 
-  /** `GET /cli/version` is public; a CP without it answers 404, which callers treat as "unknown". */
+  /** A missing CLI artifact answers 404, which callers treat as an unknown version. */
   async cliVersion(): Promise<CliVersion | null> {
     try {
       return await this.json<CliVersion>('GET', '/cli/version', { noRetry: true })
@@ -436,7 +447,7 @@ export class Api {
     }
   }
 
-  /** One-time sign-in link for a person (the console's "Open app"); never carries the App key. */
+  /** One-time sign-in link for a person (the console's "Open app"). */
   openTicket(
     opts: { next?: string; as?: string; role?: EndUserRole } = {},
   ): Promise<{ url: string; expires_at?: string }> {
@@ -837,15 +848,10 @@ export interface TestSession {
   user?: AuthUser
 }
 
-export interface WhoAmI {
-  app: string
+export interface OrganizationIdentity {
+  organization_id: string
   actor: string
-  key: { last4: string; created_at: string } | null
-  scope: string
-  environments: { name: string; status: string; url: string }[]
-  control_plane: string
-  sign_in_providers?: string[]
-  cli: { latest_version: string | null; download_url: string }
+  key_last4: string
 }
 
 export interface CliVersion {

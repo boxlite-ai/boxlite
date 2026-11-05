@@ -1,6 +1,5 @@
 import assert from 'node:assert/strict'
-import { after, before, beforeEach, test } from 'node:test'
-import { clearResolvedApps } from '../src/context.js'
+import { after, before, test } from 'node:test'
 import { API, cleanup, cli, JSON_HEADERS, KEY, mockApi, project, tempDir } from './helpers.js'
 
 let root: string
@@ -8,40 +7,32 @@ before(async () => {
   root = await tempDir()
 })
 after(async () => cleanup(root))
-beforeEach(() => clearResolvedApps())
 
-test('an unlinked directory with a valid key works: the App comes from GET /apps/me, once per process', async () => {
+test('App commands in an unlinked directory require an explicit App', async () => {
   const dir = await project(root, {})
-  const { agent, pool } = mockApi()
-  pool.intercept({ path: '/apps/me', method: 'GET' }).reply(200, { name: 'crm', envs: [] }, { headers: JSON_HEADERS })
-  pool
-    .intercept({ path: '/apps/crm/envs/main/services', method: 'GET' })
-    .reply(200, [{ name: 'web', state: 'running', health: 'healthy', restarts: 0 }], { headers: JSON_HEADERS })
-    .times(2)
-  const first = await cli(['app', 'services', '--json'], { cwd: dir, dispatcher: agent })
-  assert.equal(first.code, 0, first.stderr)
-  assert.deepEqual(JSON.parse(first.stdout), [{ name: 'web', state: 'running', health: 'healthy', restarts: 0 }])
-  // The second run reuses the resolved name: no second /me interceptor exists.
-  const second = await cli(['app', 'services', '--json'], { cwd: dir, dispatcher: agent })
-  assert.equal(second.code, 0, second.stderr)
-  agent.assertNoPendingInterceptors()
+  const { agent } = mockApi()
+  for (const command of [['app', 'services'], ['init']]) {
+    const result = await cli([...command, '--json'], { cwd: dir, dispatcher: agent })
+    const error = JSON.parse(result.stderr).error
+    assert.equal(error.code, 'not_linked')
+    assert.match(error.next, /boxlite-app init --app <name>/)
+  }
 })
 
-test('an unlinked directory with a bad key fails as unauthenticated (exit 2) with a next step, not not_linked', async () => {
+test('an invalid key fails as unauthenticated when an App is selected', async () => {
   const dir = await project(root, {})
   const { agent, pool } = mockApi()
-  pool.intercept({ path: '/apps/me', method: 'GET' }).reply(
+  pool.intercept({ path: '/apps/crm', method: 'GET' }).reply(
     401,
     {
       error: {
         code: 'unauthenticated',
-        message: 'App key not recognised',
-        next: 'check BOXLITE_API_KEY against the App prompt (the key is shown once, when the App is created); `boxlite-app whoami` tests it',
+        message: 'Invalid credentials',
       },
     },
     { headers: JSON_HEADERS },
   )
-  const res = await cli(['app', 'status', '--json'], {
+  const res = await cli(['app', 'status', '--app', 'crm', '--json'], {
     cwd: dir,
     dispatcher: agent,
     env: { BOXLITE_API_KEY: 'blk_test_wrongwrongwrongwrongwrong2345', BOXLITE_API_URL: API },
@@ -50,29 +41,36 @@ test('an unlinked directory with a bad key fails as unauthenticated (exit 2) wit
   assert.equal(res.stdout, '')
   const err = JSON.parse(res.stderr).error
   assert.equal(err.code, 'unauthenticated')
-  assert.equal(
-    err.next,
-    'check BOXLITE_API_KEY against the App prompt (the key is shown once, when the App is created); `boxlite-app whoami` tests it',
-  )
+  assert.match(err.next, /save your organization API key/)
   assert.doesNotMatch(res.stderr, /wrongwrong/)
 
-  const noKey = await cli(['app', 'status'], { cwd: dir, dispatcher: agent, env: { BOXLITE_API_URL: API } })
+  const noKey = await cli(['app', 'status', '--app', 'crm'], {
+    cwd: dir,
+    dispatcher: agent,
+    env: { BOXLITE_API_URL: API },
+  })
   assert.equal(noKey.code, 2)
   assert.match(
     noKey.stderr,
-    /next: save the key from the App prompt once: `BOXLITE_API_URL=<url> BOXLITE_API_KEY=<key> boxlite-app login`/,
+    /next: save your organization API key with `BOXLITE_API_URL=<url> BOXLITE_API_KEY=<key> boxlite-app login`/,
   )
 })
 
-test('BOXLITE_APP still wins over the key lookup', async () => {
+test('BOXLITE_APP selects an unlinked App and --app can override it', async () => {
   const dir = await project(root, {})
   const { agent, pool } = mockApi()
   pool.intercept({ path: '/apps/crm/envs/main/services', method: 'GET' }).reply(200, [], { headers: JSON_HEADERS })
-  const res = await cli(['app', 'services', '--json'], {
+  pool.intercept({ path: '/apps/ledger/envs/main/services', method: 'GET' }).reply(200, [], { headers: JSON_HEADERS })
+  const opts = {
     cwd: dir,
     dispatcher: agent,
     env: { BOXLITE_API_KEY: KEY, BOXLITE_API_URL: API, BOXLITE_APP: 'crm' },
-  })
+  }
+  const res = await cli(['app', 'services', '--json'], opts)
   assert.equal(res.code, 0, res.stderr)
+  const explicit = await cli(['--app', 'ledger', 'app', 'services', '--json'], opts)
+  assert.equal(explicit.code, 0, explicit.stderr)
+  const unknown = await cli(['--app', 'ledger', 'app', 'services', '--unknown', '--json'], opts)
+  assert.match(JSON.parse(unknown.stderr).error.next, /boxlite-app app services --help/)
   agent.assertNoPendingInterceptors()
 })

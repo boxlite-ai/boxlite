@@ -97,7 +97,7 @@ async function users(
     )
       return
     const r = await api.purgeTestUsers()
-    await forgetSessions(ctx.cwd, ctx.envName)
+    await forgetSessions(ctx.cwd, { apiUrl: api.baseUrl, app: ctx.appName(), env: ctx.envName })
     ctx.out.data(r)
     if (r.mirror.startsWith('kept'))
       ctx.out.line(

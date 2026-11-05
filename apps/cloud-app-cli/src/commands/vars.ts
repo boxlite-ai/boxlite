@@ -96,7 +96,11 @@ async function rewrite(ctx: Ctx, mutate: (doc: TomlDoc) => void): Promise<boolea
   try {
     source = await readFile(path, 'utf8')
   } catch {
-    throw new MicrocloudError('missing_manifest', 'boxlite.toml not found', 'run `boxlite-app init` here first')
+    throw new MicrocloudError(
+      'missing_manifest',
+      'boxlite.toml not found',
+      'run `boxlite-app init --app <name>` here first',
+    )
   }
   const edit = editToml(source, mutate)
   await writeFile(path, edit.text)
