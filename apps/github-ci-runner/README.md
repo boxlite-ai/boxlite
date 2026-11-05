@@ -161,7 +161,8 @@ flow; keep original credentials for execution and cleanup.
 The first App receives `/v1/ci/github/webhook`; additional Apps receive
 `/v1/ci/github/webhook/CLIENT_ID`. Each path verifies its own secret and records
 the trusted App identity outside the webhook body. App delivery-recovery
-checkpoints are separate. All Apps share the same SQLite database, Listener,
+checkpoints are separate. The scheduling lease registers the App list in execution state; the webhook inbox
+cannot write configuration records. All Apps share the same SQLite database, Listener,
 BoxLite principal and total `CI_WORKER_MAX`; configuring another App adds no
 second worker budget. Hosted use shares this App implementation and uses
 PostgreSQL plus the native BoxService adapter.
