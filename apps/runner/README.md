@@ -29,6 +29,28 @@ The health response includes `custom_kernel: "supported"` to identify binaries
 that implement this setting. It describes build capability; deployment also
 checks the running process's kernel environment and listening socket.
 
+## Nested virtualization
+
+Set `BOXLITE_EXPERIMENTAL=nested-virtualization` on the **Runner process** to
+authorize this release-candidate capability. Each new box still defaults off;
+an internal Runner create payload opts in with `"nestedVirtualization":true`.
+The Runner forwards authorization and the per-box choice through the Go/C SDK.
+Unauthorized requests fail before volume mounts. Guest environment variables
+cannot authorize nesting, and enabling nesting does not grant guest privilege.
+
+Comma-separated features are validated at startup. Existing boxes and archive
+imports keep their saved options; requesting nesting when replaying a plain box
+fails, so create a new box instead. Host and guest kernels must support nesting;
+the flag alone does not establish hardware availability or a performance guarantee.
+
+Cloud stages deliver process settings through
+[`BOXLITE_RUNNER_ENV`](../infra/mdeploy/README.md#runner-process-environment).
+This Runner protocol support does not add a control-plane REST option. Upgrade
+Runners before enabling callers that send the field; older Runners ignore it.
+
+When both settings are enabled, the Runner combines their RC permissions and
+preserves kernel, privilege and nesting options together during create and replay.
+
 For the system-wide context (CDN, load balancers, where the runner fits in
 the request path), see [`apps/README.md`](../README.md).
 

@@ -36,6 +36,9 @@ type CreateBoxDTO struct {
 	OtelEndpoint     *string           `json:"otelEndpoint,omitempty"`
 	SkipStart        *bool             `json:"skipStart,omitempty"`
 
+	// Requires explicit authorization on the Runner process; omitted means off.
+	NestedVirtualization bool `json:"nestedVirtualization,omitempty"`
+
 	// Nullable for backward compatibility
 	OrganizationId *string `json:"organizationId,omitempty"`
 	RegionId       *string `json:"regionId,omitempty"`

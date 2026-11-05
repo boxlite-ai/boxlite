@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/user"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -57,6 +58,8 @@ type Client struct {
 	lastVolumeCleanup   time.Time
 	volumeCleanup       volumeCleanupConfig
 
+	nestedVirtualizationAllowed bool
+
 	// afterGuestStateCheck runs right after DialGuestPort's persisted-state
 	// check, before it fetches a handle. Tests use it to land a stop in that
 	// window; nil in production.
@@ -68,6 +71,7 @@ type ClientConfig struct {
 	Logger                       *slog.Logger
 	HomeDir                      string
 	KernelPath                   string
+	ExperimentalFeatures         string
 	InsecureRegistries           []string
 	RegistryProxy                RegistryProxy
 	AWSRegion                    string
@@ -324,10 +328,17 @@ func NewClient(ctx context.Context, config ClientConfig) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	opts := []boxlite.RuntimeOption{boxlite.WithHomeDir(homeDir)}
-	if config.KernelPath != "" {
-		opts = append(opts, boxlite.WithExperimentalFeatures("custom-kernel"))
+	var features []string
+	if raw := strings.TrimSpace(config.ExperimentalFeatures); raw != "" {
+		features = strings.Split(raw, ",")
+		for i := range features {
+			features[i] = strings.TrimSpace(features[i])
+		}
 	}
+	if config.KernelPath != "" && !slices.Contains(features, "custom-kernel") {
+		features = append(features, "custom-kernel")
+	}
+	opts := []boxlite.RuntimeOption{boxlite.WithHomeDir(homeDir), boxlite.WithExperimentalFeatures(features...)}
 	logger := config.Logger
 	if logger == nil {
 		logger = slog.Default()
@@ -346,6 +357,8 @@ func NewClient(ctx context.Context, config ClientConfig) (*Client, error) {
 	}
 
 	return &Client{
+		nestedVirtualizationAllowed: slices.Contains(features, "nested-virtualization"),
+
 		runtime:             rt,
 		logger:              logger,
 		homeDir:             homeDir,
@@ -419,6 +432,9 @@ func (c *Client) Close() error {
 // Create creates a new box (VM) from the given image and configuration.
 // Returns the box ID and runtime version.
 func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, string, error) {
+	if boxDto.NestedVirtualization && !c.nestedVirtualizationAllowed {
+		return "", "", fmt.Errorf("nested virtualization requires BOXLITE_EXPERIMENTAL=nested-virtualization on the Runner")
+	}
 	// Before any side effect: a request without a policy must not leave
 	// volume mounts or a box behind.
 	network, err := networkSpec(boxDto)
@@ -476,7 +492,7 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 		opts = append(opts, boxlite.WithUser(boxDto.RunAsUser))
 	}
 
-	if boxDto.Privileged || c.kernelPath != "" {
+	if boxDto.Privileged || c.kernelPath != "" || boxDto.NestedVirtualization {
 		advanced, advancedErr := boxlite.NewAdvancedBoxOptions()
 		if advancedErr != nil {
 			return "", "", advancedErr
@@ -488,6 +504,11 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 		if c.kernelPath != "" {
 			if advancedErr = advanced.SetKernelPath(c.kernelPath); advancedErr != nil {
 				return "", "", advancedErr
+			}
+		}
+		if boxDto.NestedVirtualization {
+			if advancedErr = advanced.SetNestedVirtualization(true); advancedErr != nil {
+				return "", "", fmt.Errorf("set nested virtualization: %w", advancedErr)
 			}
 		}
 		opts = append(opts, boxlite.WithAdvancedOptions(advanced))

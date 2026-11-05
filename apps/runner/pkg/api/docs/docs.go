@@ -688,6 +688,10 @@ const docTemplate = `{
                         "type": "string"
                     }
                 },
+                "nestedVirtualization": {
+                    "description": "Requires explicit authorization on the Runner process; omitted means off.",
+                    "type": "boolean"
+                },
                 "organizationId": {
                     "description": "Nullable for backward compatibility",
                     "type": "string"

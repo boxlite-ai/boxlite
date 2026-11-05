@@ -71,6 +71,16 @@ func main() {
 }
 ```
 
+### Nested virtualization (experimental)
+
+For a local runtime, pass `WithExperimentalFeatures("nested-virtualization")` to
+`NewRuntime`. Build advanced options with `NewAdvancedBoxOptions`, call
+`advanced.SetNestedVirtualization(true)`, and pass `WithAdvancedOptions(advanced)`
+when creating the box. Check each returned error and close the advanced handle
+after creation. Both settings are required; the SDK does not read
+`BOXLITE_EXPERIMENTAL`. Keep the runtime feature enabled on subsequent restarts.
+Host support is checked when the box boots; REST runtimes reject this box option.
+
 ### Archive Export and Import
 
 ```go

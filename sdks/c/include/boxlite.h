@@ -834,6 +834,15 @@ enum BoxliteErrorCode boxlite_advanced_options_set_kernel_path(CAdvancedBoxOptio
                                                                const char *path,
                                                                struct FFIError *out_error);
 
+// Require nested virtualization for this box (RC): nonzero enables, zero disables.
+// The local runtime must explicitly enable nested-virtualization, including on
+// restart. Host support is checked at boot. Null returns InvalidArgument.
+//
+// # Safety
+// `opts` must be null or a live, exclusively accessible advanced-options handle.
+enum BoxliteErrorCode boxlite_advanced_options_set_nested_virtualization(CAdvancedBoxOptions *opts,
+                                                                         int enabled);
+
 // Allocate a `CAdvancedBoxOptions` initialized to `AdvancedBoxOptions::default()`
 // (secure-by-default security profile, mount isolation off, no health check).
 //
@@ -870,6 +879,12 @@ enum BoxliteErrorCode boxlite_advanced_options_set_capabilities_add(CAdvancedBox
 enum BoxliteErrorCode boxlite_advanced_options_set_capabilities_drop(CAdvancedBoxOptions *opts,
                                                                      const char *const *capabilities,
                                                                      int count);
+
+// Enable full capabilities and writable kernel mounts inside the guest only.
+// Runner sandbox security is unchanged. Returns InvalidArgument for a null
+// handle or a conflicting explicit capability policy.
+enum BoxliteErrorCode boxlite_advanced_options_set_privileged(CAdvancedBoxOptions *opts,
+                                                              int enabled);
 
 // Obtain a namespace without starting the Box.
 // handle must be live; out must be writable; out_error may be null.
@@ -1022,11 +1037,6 @@ void boxlite_agent_turn_free(struct CAgentTurn *handle);
 // Release only the local handle. Does not close an agent or interrupt a turn.
 // handle must be null or a live, uniquely owned pointer returned by this SDK.
 void boxlite_agent_events_free(struct CAgentEvents *handle);
-// Enable full capabilities and writable kernel mounts inside the guest only.
-// Runner sandbox security is unchanged. Returns InvalidArgument for a null
-// handle or a conflicting explicit capability policy.
-enum BoxliteErrorCode boxlite_advanced_options_set_privileged(CAdvancedBoxOptions *opts,
-                                                              int enabled);
 
 // Submit a box export.
 //
