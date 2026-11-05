@@ -271,6 +271,8 @@ Quickstart remains readable without Box write permission; its console creation
 button is disabled with an explanation, and the creation handler checks permission.
 Unavailable membership is distinguished from denied permission and offers a full
 page reload to retry the provider fetch without racing an organization switch.
+Recovery preserves the console method, template and Box name in the Quickstart
+URL; generated credentials stay ephemeral, and restored names retain validation.
 
 Images lists only rows returned by the image catalog API: the organization's
 registered images and the operator-configured system images. Quickstart's

@@ -27,7 +27,7 @@ export function ConsoleTemplatePicker() {
   const [credential] = useState<string>(() => crypto.randomUUID())
   const [search, setSearch] = useState('')
   const [category, setCategory] = useState('All')
-  const [name, setName] = useState('first-box')
+  const [name, setName] = useState(() => params.get('boxName') ?? 'first-box')
   const selected = boxTemplateFor(activeId)
   const envVars = selected?.requiredEnv ? { [selected.requiredEnv.key]: credential } : undefined
   const image = selected?.image ?? ''
@@ -37,6 +37,14 @@ export function ConsoleTemplatePicker() {
       (category === 'All' || item.category === category) &&
       `${item.name} ${item.description} ${item.image}`.toLowerCase().includes(search.toLowerCase()),
   )
+  // A full navigation reloads permissions while keeping the current console draft.
+  const reloadWithSelection = () => {
+    const search = new URLSearchParams(params)
+    search.set('method', 'console')
+    search.set('template', activeId)
+    search.set('boxName', name)
+    location.assign(`${RoutePath.QUICKSTART}?${search.toString()}`)
+  }
   const deploy = async () => {
     if (!canCreate) return
     try {
@@ -176,7 +184,7 @@ export function ConsoleTemplatePicker() {
               ) : (
                 <>
                   <p>Permissions are unavailable. Reload to try again.</p>
-                  <AsciiButton type="button" size="sm" className="mt-2" onClick={() => location.reload()}>
+                  <AsciiButton type="button" size="sm" className="mt-2" onClick={reloadWithSelection}>
                     Reload page
                   </AsciiButton>
                 </>

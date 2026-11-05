@@ -32,7 +32,7 @@ beforeEach(() => {
   state.isError = false
   state.canCreate = true
   state.memberLoaded = true
-  vi.stubGlobal('location', { reload: state.reload })
+  vi.stubGlobal('location', { reload: state.reload, assign: state.reload })
   host = document.createElement('div')
   document.body.append(host)
   root = createRoot(host)
@@ -145,4 +145,28 @@ it('offers a page reload when membership is unavailable without claiming denial'
   await click('Reload page')
   expect(state.reload).toHaveBeenCalledTimes(1)
   expect(state.create).not.toHaveBeenCalled()
+})
+
+it('preserves the console template and name across permission recovery', async () => {
+  state.canCreate = false
+  state.memberLoaded = false
+  await mount('/?from=images')
+  await click('Select Node.js')
+  await input('Box name', 'my-node')
+  await click('Reload page')
+  expect(state.reload).toHaveBeenCalledWith(expect.stringContaining('method=console'))
+  const destination = new URL(state.reload.mock.calls[0][0], 'https://console.example')
+  expect(destination.pathname).toBe('/dashboard/quickstart')
+  expect(destination.searchParams.get('from')).toBe('images')
+  expect([...destination.searchParams.keys()].sort()).toEqual(['boxName', 'from', 'method', 'template'])
+  await act(async () => root.unmount())
+  root = createRoot(host)
+  await mount(destination.pathname + destination.search)
+  expect(host.querySelector('[aria-label="Select Node.js"]')?.getAttribute('aria-pressed')).toBe('true')
+  expect(host.querySelector<HTMLInputElement>('[aria-label="Box name"]')?.value).toBe('my-node')
+})
+it.each(['', 'invalid name'])('keeps invalid restored name %j blocked', async (name) => {
+  await mount('/?boxName=' + encodeURIComponent(name))
+  expect(host.querySelector<HTMLInputElement>('[aria-label="Box name"]')?.value).toBe(name)
+  expect(Array.from(host.querySelectorAll('button')).find((e) => e.textContent === 'Create Box')!.disabled).toBe(true)
 })
