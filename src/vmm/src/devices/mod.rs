@@ -31,9 +31,9 @@ use crate::{
     },
 };
 
-/// Adds every device the configuration names, in slot order: the reporting
-/// balloon first, then the legacy platform devices and one block per
-/// configured disk. Adding a device is one `add_slot_device` line here;
+/// Adds every device the configuration names, in slot order: the legacy
+/// platform devices, one block per configured disk, then the reporting
+/// balloon. Adding a device is one `add_slot_device` line here;
 /// [`crate::vm`] stays unchanged.
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 pub(crate) fn add_all(
@@ -46,18 +46,19 @@ pub(crate) fn add_all(
 
     let mut slots = Slots::new();
     let mut used = Vec::new();
-    // The reporting device goes first, so it keeps the design's fixed
-    // `0xd0000000`/GSI 5 window instead of following the disks.
-    add_slot_device(&mut slots, &mut used, |slot| {
-        crate::devices::balloon::add(chipset, &ctx, slot, ReclaimPolicy::default())
-    })?;
     for (index, disk) in config.disks.iter().enumerate() {
         add_slot_device(&mut slots, &mut used, |slot| {
             blk::add_disk(chipset, &ctx, disk, index, slot)
         })?;
     }
+    // The balloon follows the disks so it never renumbers them: the guest
+    // names virtio devices by slot order, so adding it ahead of storage would
+    // move every disk to a higher index.
+    add_slot_device(&mut slots, &mut used, |slot| {
+        crate::devices::balloon::add(chipset, &ctx, slot, ReclaimPolicy::default())
+    })?;
     // The next device is one more `add_slot_device` line here. A device that
-    // must keep slot 0 goes before this loop.
+    // must keep slot 0 goes before the disk loop.
     mmio::announce(&mut config.cmdline, &used)?;
     Ok(())
 }
