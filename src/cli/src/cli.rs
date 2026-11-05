@@ -900,7 +900,12 @@ fn without_hidden_arguments(command: Command) -> Command {
 
 pub(crate) fn experimental_features_from_env() -> boxlite::BoxliteResult<ExperimentalFeatures> {
     match std::env::var(EXPERIMENTAL_FEATURES_ENV) {
-        Ok(value) => ExperimentalFeatures::parse(&value),
+        Ok(value) => ExperimentalFeatures::parse(&value).map_err(|error| match error {
+            boxlite::BoxliteError::Config(message) => {
+                boxlite::BoxliteError::Config(format!("{EXPERIMENTAL_FEATURES_ENV}: {message}"))
+            }
+            error => error,
+        }),
         Err(std::env::VarError::NotPresent) => Ok(ExperimentalFeatures::default()),
         Err(std::env::VarError::NotUnicode(_)) => Err(boxlite::BoxliteError::Config(format!(
             "{EXPERIMENTAL_FEATURES_ENV} must contain valid UTF-8"

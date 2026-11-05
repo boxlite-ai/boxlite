@@ -169,7 +169,7 @@ const Volumes: React.FC = () => {
   const showEmpty = !isLoading && volumes.length === 0
 
   return (
-    <div className="flex h-[calc(100svh-60px)] min-h-0 flex-col px-4 pt-5 sm:px-6 lg:px-[40px] lg:pt-[26px]">
+    <div className="page-container flex h-[calc(100svh-60px)] min-h-0 flex-col pt-5 lg:pt-[26px]">
       <div className="mb-[18px] flex items-end justify-between lg:mb-[22px]">
         <div>
           <h1 className="font-display text-page font-semibold text-foreground">Volumes</h1>

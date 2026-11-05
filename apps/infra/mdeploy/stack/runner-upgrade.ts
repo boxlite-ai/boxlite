@@ -32,6 +32,7 @@
  */
 
 import { RUNNER_ENV_FILE, runnerApiUrl } from './runner-boot.ts'
+import { CLOUD_RUNNER_KERNEL, kernelDeployment } from './runner-kernel.ts'
 import { dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { artifactFetchCommand, verifyAgainstManifest } from './runner-binary.ts'
@@ -120,6 +121,7 @@ export const upgradeResourceName = (slot: RunnerSlot): string =>
  * would skip every dev deploy after the first.
  */
 export type UpgradeTarget = {
+  kernel?: typeof CLOUD_RUNNER_KERNEL
   identity: string
   /** The same pair the boot script installs from. See `runner-binary.ts`. */
   binary: RunnerBinary
@@ -163,19 +165,17 @@ export type UpgradeTarget = {
 }
 
 /**
- * The one thing that should make a host's upgrade run again.
- *
- * The identity and the address, which together are everything about the run
- * that could change. Not the digest: the stack never reads one — the host does,
- * from the manifest beside the tarball — so a republished asset under one
- * version is a case this cannot see, and `runner-binary.ts` records that as the
- * cost of resolving from the checkout rather than on the deployer.
+ * Runner identity, artifact name and kernel digest determine when to upgrade.
+ * The kernel pin can change independently of the runner package. The runner's
+ * own checksum is read on the host, so republishing a runner asset under the
+ * same identity is still invisible here; see `runner-binary.ts`.
  *
  * The instance id is added by the provider, because a replaced host is also due
  * an upgrade.
  */
-export const upgradeTrigger = (target: Pick<UpgradeTarget, 'identity'> & { binary: Pick<RunnerBinary, 'tarballName'> }): string =>
-  `${target.identity}:${target.binary.tarballName}`
+export const upgradeTrigger = (
+  target: Pick<UpgradeTarget, 'identity' | 'kernel'> & { binary: Pick<RunnerBinary, 'tarballName'> },
+): string => `${target.identity}:${target.binary.tarballName}:${(target.kernel ?? CLOUD_RUNNER_KERNEL).sha256}`
 
 /**
  * Never move a host backwards by accident.
@@ -193,7 +193,7 @@ export const upgradeTrigger = (target: Pick<UpgradeTarget, 'identity'> & { binar
  * precedence — otherwise a release deploy would read `0.9.7+abc` as newer than
  * `0.9.7` and refuse to replace a dev build.
  */
-const downgradeGuard = (source: RunnerBinary['source']): string =>
+const downgradeGuard = (source: RunnerBinary['source'], refused = 'exit 0'): string =>
   source === 'build'
     ? '# Build mode: no ordering to guard, the requested commit is the requested commit.\n'
     : `live_is_newer() {
@@ -211,7 +211,7 @@ const downgradeGuard = (source: RunnerBinary['source']): string =>
 
 if [ "\${ALLOW_DOWNGRADE:-}" != "1" ] && live_is_newer; then
   echo "WARNING: live $CURRENT is newer than target $TARGET; refusing to downgrade (set ALLOW_DOWNGRADE=1 to force)"
-  exit 0
+  ${refused}
 fi
 `
 
@@ -228,9 +228,9 @@ fi
  *      reports `running` — all the engine waits for — long before cloud-init has
  *      installed the binary and written the unit, and its boot script installs
  *      this very identity. Swapping against a missing unit would fail and roll
- *      back a host that was coming up fine. `is-enabled` is the last of the
- *      three to become true, so it also covers the window where the unit exists
- *      but has not been started yet.
+ *      back a host that was coming up fine. Enabled or already active means
+ *      the unit is managed; disabling autostart does not exempt a live runner
+ *      from updates.
  *   2. Converge, don't reinstall. A host already serving the target is left
  *      completely alone, which is what makes running this on every deploy free
  *      of gratuitous restarts. Past step 1, an unreachable probe means
@@ -334,16 +334,17 @@ probe_identity() {
  * environment after it still runs. Passing the statement rather than a code is
  * what keeps one copy of the checks.
  */
-const guards = (satisfied: string): string => `if [ ! -x /usr/local/bin/boxlite-runner ] ||
+const guards = (satisfied: string, kernelCheck = ''): string => `if [ ! -x /usr/local/bin/boxlite-runner ] ||
   [ ! -f /etc/systemd/system/boxlite-runner.service ] ||
-  ! systemctl is-enabled --quiet boxlite-runner 2>/dev/null; then
-  echo "still bootstrapping (binary or unit not in place, or not enabled); the boot script installs $TARGET itself — nothing to do"
+  { ! systemctl is-enabled --quiet boxlite-runner 2>/dev/null &&
+    ! systemctl is-active --quiet boxlite-runner; }; then
+  echo "still bootstrapping (binary or unit missing, or neither enabled nor active); the boot script installs $TARGET itself — nothing to do"
   ${satisfied}
 fi
 
 CURRENT=$(probe_identity || true)
 echo "current identity: \${CURRENT:-<not serving>}"
-if [ "$CURRENT" = "$TARGET" ]; then
+if [ "$CURRENT" = "$TARGET" ]${kernelCheck}; then
   echo "already serving $TARGET; leaving the unit untouched"
   ${satisfied}
 fi
@@ -351,11 +352,11 @@ fi
 `
 
 /** Steps 3 to 5, in the shell's own grading: fall off the end, or exit 1. */
-const swapSequence = (target: UpgradeTarget): string => {
+const swapSequence = (target: UpgradeTarget, refused = 'exit 0'): string => {
   const region = target.region ?? null
   const fetch = (url: string, destination: string) =>
     artifactFetchCommand({ artifact: target.binary, url, destination, region })
-  return `${downgradeGuard(target.binary.source)}
+  return `${downgradeGuard(target.binary.source, refused)}
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
 ${fetch(target.binary.tarballUrl, '$WORK/runner.tar.gz')}
@@ -402,16 +403,19 @@ fi
 
 export const renderUpgradePayload = (target: UpgradeTarget): string => {
   assertUpgradeTarget(target)
-  return `${preamble(target)}${guards('exit 0')}${swapSequence(target)}`
+  return `set -euo pipefail
+(
+${preamble(target)}${guards('exit 0')}${swapSequence(target)}
+)
+${kernelDeployment(target.kernel, target.port).enforce}`
 }
 
 /**
  * The same work as an OS policy's two scripts, graded by exit code.
  *
- * `validate` answers the two guards and nothing else: 100 means the host is in
- * the desired state, 101 is the only answer that makes the agent run `enforce`.
- * `enforce` is the tail of the same script — it re-checks nothing, because the
- * agent reaches it only after `validate` said to.
+ * `validate` checks bootstrap readiness, runner identity and the kernel pin.
+ * 100 means no work is due; 101 asks the agent to run `enforce`. Enforcement
+ * rechecks the host before applying either the binary or kernel update.
  */
 export type UpgradePolicyScripts = { validate: string; enforce: string }
 
@@ -430,7 +434,7 @@ const SHEBANG = '#!/bin/bash\n'
 export const renderPolicyScripts = (target: UpgradeTarget): UpgradePolicyScripts => {
   assertUpgradeTarget(target)
   return {
-    validate: `${SHEBANG}${preamble(target)}${guards('exit 100')}echo "not serving $TARGET"
+    validate: `${SHEBANG}${preamble(target)}${kernelDeployment(target.kernel, target.port).setup}${guards('exit 100', ' && runner_kernel_matches')}echo "runner binary or kernel needs updating"
 exit 101
 `,
     /*
@@ -518,9 +522,12 @@ unit_environment_matches() {
 
 # Bail out as settled while a host is still bootstrapping: the boot script
 # writes this file itself, and enforcing against a file that does not exist yet
-# would restart a unit that has not started once.
+# would restart a unit that has not started once. A disabled but active runner
+# still needs its environment converged.
 unit_environment_settled() {
-  if [ ! -f "$UNIT_ENV_FILE" ] || ! systemctl is-enabled --quiet boxlite-runner 2>/dev/null; then
+  if [ ! -f "$UNIT_ENV_FILE" ] ||
+    { ! systemctl is-enabled --quiet boxlite-runner 2>/dev/null &&
+      ! systemctl is-active --quiet boxlite-runner; }; then
     echo "still bootstrapping; the boot script writes $UNIT_ENV_FILE itself — nothing to do"
     return 0
   fi
@@ -596,7 +603,9 @@ export const renderUnitEnvironmentPolicyScripts = ({
   otlpUrl,
   volumeBackend,
   registryProxyHost,
-}: Pick<UpgradeTarget, 'otlpUrl' | 'volumeBackend' | 'registryProxyHost'> & { apiUrl: string }): UpgradePolicyScripts => {
+}: Pick<UpgradeTarget, 'otlpUrl' | 'volumeBackend' | 'registryProxyHost'> & {
+  apiUrl: string
+}): UpgradePolicyScripts => {
   const block = `set -euo pipefail
 ${unitEnvironmentBlock({ apiUrl, otlpUrl, volumeBackend, registryProxyHost })}`
   return {
@@ -625,19 +634,15 @@ exit 101
 /**
  * Everything one command has to do to a host, for the transports that send one.
  *
- * SSM and ssh carry a script rather than a desired state, so both halves travel
- * together: the binary first, then the unit environment — the order GCP's two
- * policy resources run in. One command per host is also what keeps the restarts
- * to the host whose turn it is; two would let each restart it in its own time.
- *
- * The binary half becomes a function so that "already serving this identity"
- * ends that half rather than the payload, which is the case where only the
- * environment has moved — a stage that changed its domain and nothing else.
+ * SSM and ssh converge the binary, optional unit environment and kernel in one
+ * command per host, keeping restarts on the host whose turn it is. The binary
+ * guard returns from its function so an unchanged identity still lets the
+ * environment and kernel converge.
  */
 export const renderHostConvergence = (target: UpgradeTarget): string => {
   assertUpgradeTarget(target)
   const binary = `upgrade_binary() {
-${guards('return 0')}${swapSequence(target)}}
+${guards('return 0')}${swapSequence(target, 'return 0')}}
 `
   const environment = target.apiUrl
     ? `${unitEnvironmentBlock({
@@ -650,7 +655,8 @@ converge_unit_environment
 `
     : ''
   return `${preamble(target)}${binary}upgrade_binary
-${environment}`
+${environment}
+${kernelDeployment(target.kernel, target.port).enforce}`
 }
 
 /**

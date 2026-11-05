@@ -242,7 +242,7 @@ impl RuntimeImpl {
         Self::initialize(options, ExperimentalFeatures::default())
     }
 
-    fn initialize(
+    pub(super) fn initialize(
         options: BoxliteOptions,
         experimental_features: ExperimentalFeatures,
     ) -> BoxliteResult<SharedRuntimeImpl> {

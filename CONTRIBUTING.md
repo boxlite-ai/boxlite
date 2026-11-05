@@ -71,9 +71,10 @@ of changed lines**, with no tolerance below that target. Total project coverage
 is reported as an informational status. The local collection command checks
 test success; Codecov evaluates changed lines against the pull request's base.
 
-The Rust report combines core, shared, REST, CLI (including authentication
-and loopback cloud SSH integration tests), C/Node/Python native bindings, native VMM, and the
-runtime/shutdown/network tests that need no VM. Hosted runtime and C unit tests
+The Rust report combines core, shared, REST, CLI (including authentication,
+loopback cloud SSH and custom-kernel opt-in process tests), C/Node/Python native
+bindings, native VMM, and the runtime/shutdown/network tests that need no VM.
+Hosted runtime and C unit tests
 use the existing test-only runtime constructor; production runtime creation
 still validates the host. Linux also collects guest unit coverage. Run guest tests with
 `make test:unit:guest` as a normal user. SSH tests require `unshare` and a

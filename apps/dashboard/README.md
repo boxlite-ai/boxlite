@@ -57,6 +57,48 @@ lost through an accidental close.
 Mock preview simulates these actions with a clearly marked mock host fingerprint;
 it does not start an SSH server. See [the design](https://github.com/boxlite-ai/boxlite/issues/2325).
 
+## ASCII action buttons
+
+Use `AsciiButton` from `components/ascii` for console actions. It delegates to
+`ui/button`, which owns the shared geometry, typography, focus, and disabled
+styles; raw buttons remain appropriate for tabs and custom choices. Use native
+links for route navigation.
+
+| Purpose | Variant / size | Appearance |
+| --- | --- | --- |
+| Main create or submit action | `primary` / default | 36px high, monochrome fill |
+| Row action | `secondary` / `sm` | 28px high, neutral border |
+| Icon action or overflow menu | `secondary` / `icon` | 28px square; `icon-lg` is 40px for mobile |
+| Destructive row action | `danger` / `sm` or `icon` | Red text/icon, red border on hover |
+| Final destructive confirmation | `dangerSolid` | Solid red |
+
+Keep square corners and the shared monospace font. Secondary actions use a cyan
+border with a neutral surface on hover/open; they do not turn solid cyan.
+Hover styles apply only to enabled controls. Keyboard focus uses a contrasting
+outline in both themes. Preserve larger mobile primary targets with `h-11 sm:h-9`.
+
+Import operation icons from `components/ui/icon`, whose aliases all use the
+offline pixel collection. Give icon-only actions an `aria-label`, retain helpful
+titles, and forward native props/ref through wrappers used by Radix triggers.
+Choose variants and sizes instead of copying hover, padding, or border classes.
+
+## Page width and alignment
+
+Normal dashboard pages use the `page-container` class from `src/index.css`.
+It follows the Images page's full-width layout, with no maximum page width:
+16px side padding on phones, 24px from `sm`, and 40px from `lg`. Large screens
+keep the same side padding as the content expands to fill the available width.
+The root reserves scrollbar space so short and long pages share both content edges.
+When stable gutters are supported, modal scroll locks do not add another body
+margin for that same space. Browsers without support retain the lock's fallback.
+
+Apply it once to a page root, or use `PageHeader` and `PageContent`, which share
+the same rule. Keep banners, tabs, tables, and Quickstart panels aligned to
+those edges; do not add another page-level width or horizontal padding inside
+them. Individual inputs and explanatory text can retain readable width limits.
+The initial welcome form, dialogs, and dedicated fullscreen terminal have their
+own sizing because they are separate surfaces.
+
 ## SDK and CLI quickstart readability
 
 The walkthrough uses a dedicated `quickstart-code` type style: 14px monospaced
@@ -140,29 +182,19 @@ The `test` target is inferred by `@nx/vite` from the `test` block in
 signal CI has about this app — see [the workflows
 README](../../.github/workflows/README.md) for how its coverage is reported.
 
-## ASCII action buttons
+## Creation can finish before startup
 
-Use `AsciiButton` from `components/ascii` for console actions. It delegates to
-`ui/button`, which owns the shared geometry, typography, focus, and disabled
-styles; raw buttons remain appropriate for navigation, tabs, and custom choices.
+Template creation and the ordinary create dialog share `useCreateBoxMutation`.
+The Box API creates the resource before waiting up to 30 seconds for it to
+start. A cold image pull can exceed that wait while continuing in the background.
+When HTTP 408 carries `boxId`, the dashboard reads that exact Box in the selected
+organization and opens its details. The details page polls transitioning Boxes
+every three seconds and displays their actual state, including startup errors.
 
-| Purpose | Variant / size | Appearance |
-| --- | --- | --- |
-| Main create or submit action | `primary` / default | 36px high, monochrome fill |
-| Row action | `secondary` / `sm` | 28px high, neutral border |
-| Icon action or overflow menu | `secondary` / `icon` | 28px square; `icon-lg` is 40px for mobile |
-| Destructive row action | `danger` / `sm` or `icon` | Red text/icon, red border on hover |
-| Final destructive confirmation | `dangerSolid` | Solid red |
-
-Keep square corners and the shared monospace font. Secondary actions use a cyan
-border with a neutral surface on hover/open; they do not turn solid cyan.
-Hover styles apply only to enabled controls. Keyboard focus uses a contrasting
-outline in both themes. Preserve larger mobile primary targets with `h-11 sm:h-9`.
-
-Import operation icons from `components/ui/icon`, whose aliases all use the
-offline pixel collection. Give icon-only actions an `aria-label`, retain helpful
-titles, and forward native props/ref through wrappers used by Radix triggers.
-Choose variants and sizes instead of copying hover, padding, or border classes.
+This path sends only one create request. It does not infer success from a name
+or an error message. A timeout without `boxId`, another error status, or a failed
+follow-up read remains an error. Deploy both API and dashboard changes for this
+handoff; older APIs do not include the structured identity.
 
 ## Finding your way around
 

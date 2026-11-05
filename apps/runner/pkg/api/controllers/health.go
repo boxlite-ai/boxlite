@@ -21,7 +21,8 @@ import (
 //	@id				HealthCheck
 func HealthCheck(ctx *gin.Context) {
 	ctx.JSON(http.StatusOK, gin.H{
-		"status":  "ok",
-		"version": internal.Version,
+		"status":        "ok",
+		"version":       internal.Version,
+		"custom_kernel": "supported",
 	})
 }

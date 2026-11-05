@@ -140,7 +140,7 @@ const OrganizationSettings: React.FC = () => {
   if (!selectedOrganization) return null
 
   return (
-    <div className="px-4 py-6 sm:px-6 lg:px-10">
+    <div className="page-container py-6">
       <h1 className="font-display text-2xl font-semibold leading-none tracking-tight">Organization</h1>
       <p className="mt-2 text-body leading-relaxed text-muted-foreground">
         Manage settings and members for{' '}

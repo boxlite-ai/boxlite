@@ -116,6 +116,7 @@ func run() int {
 	boxliteClient, err := blclient.NewClient(ctx, blclient.ClientConfig{
 		Logger:                       logger,
 		HomeDir:                      cfg.BoxliteHomeDir,
+		KernelPath:                   cfg.KernelPath,
 		InsecureRegistries:           insecureRegs,
 		RegistryProxy:                registryProxy,
 		AWSRegion:                    cfg.AWSRegion,

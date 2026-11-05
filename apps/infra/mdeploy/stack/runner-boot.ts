@@ -38,6 +38,7 @@
  */
 
 import { artifactFetchCommand, verifyAgainstManifest, type RunnerArtifact } from './runner-binary.ts'
+import { kernelDeployment } from './runner-kernel.ts'
 
 /**
  * Where the unit environment lives on a host.
@@ -164,7 +165,7 @@ set -euo pipefail
 while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do sleep 5; done
 
 apt-get update
-apt-get install -y curl ca-certificates
+apt-get install -y curl ca-certificates iproute2
 
 ${platform.installVolumeMount}
 
@@ -184,6 +185,8 @@ ${verify}
 tar -xzf /tmp/boxlite-runner.tar.gz -C /usr/local/bin/
 rm -f /tmp/boxlite-runner.tar.gz /tmp/boxlite-runner.sha256
 chmod +x /usr/local/bin/boxlite-runner
+
+${kernelDeployment().install}
 
 ${platform.hostAddress}
 ${platform.startWrapper?.script ?? ''}
