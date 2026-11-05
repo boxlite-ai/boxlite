@@ -728,9 +728,6 @@ const configuration = {
   admin: {
     apiKey: process.env.ADMIN_API_KEY,
   },
-  emailPolicy: {
-    readApiKey: process.env.EMAIL_POLICY_READ_API_KEY,
-  },
   skipUserEmailVerification: process.env.SKIP_USER_EMAIL_VERIFICATION === 'true',
   // Whether a newly created non-default organization starts suspended until a
   // payment method exists. Separate from billingApiUrl on purpose: pointing the

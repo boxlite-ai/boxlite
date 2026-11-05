@@ -302,15 +302,12 @@ for the source evidence, concurrency model and verification boundaries.
 See [organization onboarding](src/organization/ONBOARDING.md) for the profile, personal prompt
 draft and idempotent handoff API contracts, migration order, and frontend integration behavior.
 
-## Retention-policy read identity and genuine logins
+## Retention-policy reads and genuine logins
 
-`EMAIL_POLICY_READ_API_KEY` configures a separate machine credential of at least 32 characters.
-It authenticates as `email-policy-reader`, never as Admin or a user. Combined authentication
-allows it only `GET /api/admin/organizations`; all other paths and methods are rejected
-before user handlers. Every policy read requires `boxCountScope=all` and no `q`.
-Registration reads require both bounds of an increasing window of at most 31 days, without
-an organization selector. Exact-org reads require `organizationId=<UUID>` without date filters.
-No database column or user-role enum migration is involved. Provisioning the secret is separate.
+Retention-policy workers reuse the existing Backoffice Admin credential for
+`GET /api/admin/organizations`. The endpoint retains its existing Admin authorization;
+no policy-specific key or role is required. Registration reads use `createdFrom`, `createdTo`
+and `boxCountScope=all`. Exact-org reads use `organizationId=<UUID>&boxCountScope=all`.
 
 `OIDC_AUTHENTICATION_TIME_CLAIM` opt-in names a verified issuer claim containing the original
 positive integer authentication time in seconds. Never configure an issuance/refresh timestamp.

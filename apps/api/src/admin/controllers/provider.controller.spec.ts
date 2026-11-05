@@ -10,19 +10,20 @@ import { AdminPlatformOverviewService } from '../services/platform-overview.serv
 import { AdminProviderController } from './provider.controller'
 
 describe('AdminProviderController', () => {
-  it('limits a policy reader to bounded registrations and exact-org all-state counts', async () => {
+  it('keeps registration and exact-org inventory reads behind existing Admin authorization', async () => {
     const list = jest.fn().mockResolvedValue({ items: [], nextCursor: null, limit: 200, observedAt: null })
+    let role = 'admin'
     const module = await Test.createTestingModule({
       controllers: [AdminProviderController],
       providers: [
         { provide: AdminOrganizationOverviewService, useValue: { list } },
-        { provide: AdminPlatformOverviewService, useValue: { regions: jest.fn() } },
+        { provide: AdminPlatformOverviewService, useValue: {} },
       ],
     })
       .overrideGuard(CombinedAuthGuard)
       .useValue({
         canActivate: (context) => {
-          context.switchToHttp().getRequest().user = { role: 'email-policy-reader' }
+          context.switchToHttp().getRequest().user = { userId: 'existing-admin', role }
           return true
         },
       })
@@ -32,46 +33,31 @@ describe('AdminProviderController', () => {
     await app.listen(0)
     try {
       const { port } = app.getHttpServer().address() as AddressInfo
-      const base = `http://127.0.0.1:${port}/api/admin`
-      const id = '00000000-0000-4000-8000-000000000001'
-      expect(
-        (
-          await fetch(
-            `${base}/organizations?boxCountScope=all&createdFrom=2026-10-01T00:00:00Z&createdTo=2026-10-02T00:00:00Z`,
-          )
-        ).status,
-      ).toBe(200)
-      expect(list).toHaveBeenLastCalledWith(expect.objectContaining({ boxCountScope: 'all' }))
-      expect((await fetch(`${base}/organizations?boxCountScope=all&organizationId=${id}`)).status).toBe(200)
-      expect((await fetch(`${base}/organizations?boxCountScope=all`)).status).toBe(403)
-      expect(
-        (
-          await fetch(
-            `${base}/organizations?boxCountScope=all&createdFrom=2026-01-01T00:00:00Z&createdTo=2026-10-02T00:00:00Z`,
-          )
-        ).status,
-      ).toBe(403)
-      expect(
-        (
-          await fetch(
-            `${base}/organizations?boxCountScope=all&createdFrom=2026-10-01T00:00:00Z&createdTo=2026-11-01T00:00:00Z`,
-          )
-        ).status,
-      ).toBe(200)
-      const calls = list.mock.calls.length
-      for (const query of [
-        'boxCountScope=all&q=ab&createdFrom=2026-10-01T00:00:00Z&createdTo=2026-10-02T00:00:00Z',
-        'boxCountScope=all&createdFrom=2026-10-01T00:00:00Z',
-        'boxCountScope=all&createdFrom=2026-10-01T00:00:00Z&createdTo=2026-11-01T00:00:00.001Z',
-        `organizationId=${id}&boxCountScope=all&createdTo=2026-10-02T00:00:00Z`,
-      ])
-        expect((await fetch(`${base}/organizations?${query}`)).status).toBe(403)
-      expect(list).toHaveBeenCalledTimes(calls)
-      expect((await fetch(`${base}/organizations?organizationId=${id}&boxCountScope=all`)).status).toBe(200)
-      expect((await fetch(`${base}/organizations?organizationId=${id}`)).status).toBe(403)
-      expect((await fetch(`${base}/organizations?boxCountScope=all`)).status).toBe(403)
-      expect((await fetch(`${base}/regions`)).status).toBe(403)
-      expect((await fetch(`${base}/organizations/${id}`)).status).toBe(403)
+      const base = `http://127.0.0.1:${port}/api/admin/organizations`
+      const queries = [
+        'boxCountScope=all&createdFrom=2026-10-01T00:00:00Z&createdTo=2026-10-02T00:00:00Z',
+        'boxCountScope=all&organizationId=00000000-0000-4000-8000-000000000001',
+        '',
+      ]
+      for (const query of queries) expect((await fetch(`${base}?${query}`)).status).toBe(200)
+      expect(list).toHaveBeenNthCalledWith(
+        1,
+        expect.objectContaining({
+          boxCountScope: 'all',
+          createdFrom: '2026-10-01T00:00:00.000Z',
+          createdTo: '2026-10-02T00:00:00.000Z',
+        }),
+      )
+      expect(list).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({
+          boxCountScope: 'all',
+          organizationId: '00000000-0000-4000-8000-000000000001',
+        }),
+      )
+      for (role of ['user', 'proxy', 'billing'])
+        for (const query of queries) expect((await fetch(`${base}?${query}`)).status).toBe(403)
+      expect(list).toHaveBeenCalledTimes(3)
     } finally {
       await app.close()
     }

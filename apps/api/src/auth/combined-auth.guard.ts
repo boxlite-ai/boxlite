@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { Injectable, Logger, UnauthorizedException, ForbiddenException, ExecutionContext } from '@nestjs/common'
+import { Injectable, Logger, UnauthorizedException } from '@nestjs/common'
 import { AuthGuard } from '@nestjs/passport'
 import { EmailVerificationRequiredException } from '../exceptions/email-verification-required.exception'
 
@@ -26,7 +26,7 @@ import { EmailVerificationRequiredException } from '../exceptions/email-verifica
 export class CombinedAuthGuard extends AuthGuard(['api-key', 'jwt']) {
   private readonly logger = new Logger(CombinedAuthGuard.name)
 
-  handleRequest(err: any, user: any, _info?: any, context?: ExecutionContext) {
+  handleRequest(err: any, user: any) {
     // Flattening this to 401 would strip the status the client branches on and re-arm its
     // stale-token recovery, bouncing an unverified user through a login that cannot help.
     if (err instanceof EmailVerificationRequiredException) {
@@ -36,14 +36,6 @@ export class CombinedAuthGuard extends AuthGuard(['api-key', 'jwt']) {
     if (err || !user) {
       this.logger.debug('Authentication failed', { err, user })
       throw new UnauthorizedException('Invalid credentials')
-    }
-
-    // This machine principal has no userId. Reject at authentication, before unscoped
-    // user endpoints can mistake undefined identity for an unconstrained database lookup.
-    if (user.role === 'email-policy-reader') {
-      const request = context?.switchToHttp().getRequest()
-      if (request?.method !== 'GET' || request.path !== '/api/admin/organizations')
-        throw new ForbiddenException('This credential only reads email policy facts')
     }
 
     return user

@@ -15,24 +15,20 @@ const base = { STACK_DOMAIN: 'dev.boxlite.ai', OIDC_ISSUER_BASE_URL: 'https://au
 const assemble = (environment: Record<string, string | undefined>, declaration = groups([])) =>
   apiEnvironmentFrom({ environment, declaration, region: 'ap-southeast-1', stage: 'dev', home: 'aws' })
 
-test('policy read key is an optional API secret while trusted-auth claim stays an API setting', () => {
+test('trusted-auth claim stays an optional API setting', () => {
   const path = new URL('../../mstage.env.json', import.meta.url)
   const declared = parseBase(path.pathname, readFileSync(path, 'utf8'))
   const required = Object.fromEntries(
     declared.envSelectGroup.api.filter((key) => !declared.envOptional.api.includes(key)).map((key) => [key, 'fixture']),
   )
-  const address = 'arn:aws:ssm:ap-southeast-1:123456789012:parameter/email-policy-reader'
   const result = assemble(
     {
       ...base,
       ...required,
-      EMAIL_POLICY_READ_API_KEY: JSON.stringify({ address }),
       OIDC_AUTHENTICATION_TIME_CLAIM: 'auth_time',
     },
     { groups: declared.envSelectGroup, optional: declared.envOptional, where: path.pathname },
   )
-  assert.equal(result.secrets.EMAIL_POLICY_READ_API_KEY, address)
-  assert.equal(result.environment.EMAIL_POLICY_READ_API_KEY, undefined)
   assert.equal(result.environment.OIDC_AUTHENTICATION_TIME_CLAIM, 'auth_time')
 })
 

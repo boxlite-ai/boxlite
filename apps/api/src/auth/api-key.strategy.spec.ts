@@ -55,14 +55,6 @@ function createStrategy() {
 }
 
 describe('ApiKeyStrategy', () => {
-  it('authenticates a dedicated policy reader without a user lookup or an Admin role', async () => {
-    const { strategy, mocks } = createStrategy()
-    const key = 'synthetic-policy-reader-key-0123456789'
-    mocks.configService.get.mockImplementation((name: string) => (name === 'emailPolicy.readApiKey' ? key : undefined))
-    await expect(strategy.validate(key)).resolves.toEqual({ role: 'email-policy-reader' })
-    expect(mocks.apiKeyService.getApiKeyByValue).not.toHaveBeenCalled()
-    await expect(strategy.validate('not-the-key')).resolves.toBeNull()
-  })
   it('translates historical cached grants without separating the revocation cache', async () => {
     const { strategy, mocks } = createStrategy()
     const key = `api-key:validation:${generateApiKeyHash('cached-key')}`

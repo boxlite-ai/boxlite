@@ -7,8 +7,6 @@ import {
   Param,
   ParseUUIDPipe,
   Query,
-  Req,
-  ForbiddenException,
   Res,
   UseGuards,
 } from '@nestjs/common'
@@ -174,7 +172,6 @@ export class AdminProviderController {
   }
 
   @Get('organizations')
-  @RequiredApiRole([SystemRole.ADMIN, 'email-policy-reader'])
   @ApiOperation({ summary: 'List organization operational summaries', operationId: 'adminListOrganizationsOverview' })
   @ApiQuery({
     name: 'organizationId',
@@ -214,19 +211,8 @@ export class AdminProviderController {
   organizations(
     @Query() query: Record<string, unknown>,
     @Res({ passthrough: true }) response: Response,
-    @Req() request?: { user?: { role: string } },
   ): Promise<AdminOrganizationOverviewPageDto> {
     const parsed = parseRegistrationQuery(query)
-    if (request?.user?.role === 'email-policy-reader') {
-      const exactOrganization = !!parsed.organizationId && !parsed.createdFrom && !parsed.createdTo
-      const boundedRegistrations =
-        !parsed.organizationId &&
-        !!parsed.createdFrom &&
-        !!parsed.createdTo &&
-        Date.parse(parsed.createdTo) - Date.parse(parsed.createdFrom) <= 31 * 86_400_000
-      if (parsed.query || parsed.boxCountScope !== 'all' || (!exactOrganization && !boundedRegistrations))
-        throw new ForbiddenException()
-    }
     response.setHeader('Cache-Control', 'private, no-store')
     return this.organizationsService.list(parsed)
   }

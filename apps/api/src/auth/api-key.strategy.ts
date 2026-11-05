@@ -54,10 +54,6 @@ export class ApiKeyStrategy extends PassportStrategy(Strategy, 'api-key') implem
     if (JWT_REGEX.test(token)) {
       return null
     }
-    const policyReadKey = this.configService.get('emailPolicy.readApiKey')
-    if (policyReadKey && policyReadKey.length >= 32 && policyReadKey === token) {
-      return { role: 'email-policy-reader' }
-    }
 
     const proxyApiKey = this.configService.get('proxy.apiKey')
     if (proxyApiKey && proxyApiKey === token) {
