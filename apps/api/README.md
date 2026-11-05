@@ -673,7 +673,8 @@ with the existing metadata. A permanently lost Runner/Box needs operational
 recovery; a terminal failure leaves the old size and billing in place.
 
 Validation: `make test:apps:api` includes PostgreSQL/Redis tests when `DB_*` and
-`REDIS_*` are configured. For SDK/CLI acceptance, use the existing
+`REDIS_HOST` are configured. `REDIS_PORT` defaults to `6379`, matching CI; the
+resize suite checks connectivity before exercising jobs. For SDK/CLI acceptance, use the existing
 [E2E stack](../e2e/README.md), enable `CLOUD_RESIZE_ENABLED=true` on the API,
 and run `BOXLITE_E2E_RESIZE=1 make test:rest:e2e FILTER=resize`.
 It requires a Linux/KVM Runner and SDK/CLI builds from this tree; it verifies

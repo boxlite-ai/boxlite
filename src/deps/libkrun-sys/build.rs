@@ -462,9 +462,9 @@ impl LibFixup {
     /// Holds a library's libc `DT_NEEDED` entry to what the target
     /// architecture requires: present on aarch64, absent everywhere else.
     ///
-    /// libkrunfw is a kernel blob linked `-nostdlib`, so it declares no
-    /// dependencies at all. A `+crt-static` shim cannot dlopen such a library
-    /// on aarch64: glibc's static-dlopen path resolves `_dl_var_init` through
+    /// The x86_64 firmware wrapper links `-nostdlib` to avoid libc dependencies
+    /// and version requirements. A `+crt-static` shim cannot dlopen a dependency-free
+    /// bundle on aarch64: glibc's static-dlopen path resolves `_dl_var_init` through
     /// the loaded object's own scope, and with no dependency chain `ld.so` —
     /// the only place that symbol exists — is never reached. The load then
     /// fails as `undefined symbol: _dl_var_init`, naming the library, which
