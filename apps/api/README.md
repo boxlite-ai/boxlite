@@ -135,6 +135,30 @@ and Box cursors independently on detail. Responses use `Cache-Control: private, 
 
 ### Generated clients
 
+The TypeScript organization-list method accepts Axios request options in the original
+sixth position or after the new filters in the eighth position. This applies to the class,
+factory, functional interface and request creator. For an initialized `admin` client:
+
+```typescript
+const options = { headers: { Authorization: `Bearer ${adminApiKey}` }, timeout: 5000 }
+// Existing callers keep their headers and other Axios options.
+await admin.adminListOrganizationsOverview(undefined, undefined, 50, undefined, undefined, options)
+// New callers can select all retained Box states and an exact organization.
+await admin.adminListOrganizationsOverview(
+  undefined,
+  undefined,
+  50,
+  undefined,
+  undefined,
+  'all',
+  organizationId,
+  options,
+)
+```
+
+Request options remain outside URL query parameters. The TypeScript generation
+postprocessor preserves both forms and fails if the expected generated signatures change.
+
 Existing organization operation IDs and response models are retained. Registration fields
 are required; usage and activation remain optional, present only when selected. Query
 parameters have explicit Swagger string types; runtime validation still applies. Regenerate the committed

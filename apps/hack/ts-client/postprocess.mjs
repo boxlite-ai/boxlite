@@ -111,12 +111,36 @@ if (existing.test(config)) {
 
 writeFileSync(configPath, config)
 
-// Preserve normalized organization documentation when regenerating its changed contract.
+// Preserve the original sixth-position Axios options as new list filters are added.
 const adminPath = `${srcDir}/api/admin-api.ts`
 if (existsSync(adminPath)) {
-  const admin = readFileSync(adminPath, 'utf8').replace(/\/\*\*[\s\S]*?\*\//g, (block) =>
-    block.includes('boxCountScope') ? block.replace(/[ \t]+$/gm, '') : block,
-  )
+  let admin = readFileSync(adminPath, 'utf8')
+  const scopeParameter = 'boxCountScope?: AdminListOrganizationsOverviewBoxCountScopeEnum,'
+  const requestEntry = /(adminListOrganizationsOverview: async \([^\n]+\): Promise<RequestArgs> => \{\n)/g
+  if (admin.split(scopeParameter).length - 1 !== 4 || [...admin.matchAll(requestEntry)].length !== 1) {
+    throw new Error(`Unexpected organization-list signatures in ${adminPath}; review request-options compatibility`)
+  }
+  admin = admin
+    .replaceAll(
+      scopeParameter,
+      'boxCountScope?: AdminListOrganizationsOverviewBoxCountScopeEnum | RawAxiosRequestConfig,',
+    )
+    .replace(
+      requestEntry,
+      `$1            // Legacy callers pass Axios options before the optional inventory filters.
+            if (typeof boxCountScope === 'object' && boxCountScope !== null) {
+                options = boxCountScope;
+                boxCountScope = undefined;
+            }
+`,
+    )
+    .replaceAll(
+      '@param {AdminListOrganizationsOverviewBoxCountScopeEnum} [boxCountScope]',
+      '@param {AdminListOrganizationsOverviewBoxCountScopeEnum | RawAxiosRequestConfig} [boxCountScope] Legacy Axios options, or:',
+    )
+    .replace(/\/\*\*[\s\S]*?\*\//g, (block) =>
+      block.includes('boxCountScope') ? block.replace(/[ \t]+$/gm, '') : block,
+    )
   writeFileSync(adminPath, admin)
 }
 

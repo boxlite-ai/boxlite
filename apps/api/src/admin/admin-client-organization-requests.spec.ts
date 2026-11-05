@@ -1,14 +1,35 @@
 import { createServer, Server } from 'node:http'
 import { AddressInfo } from 'node:net'
-import axios from 'axios'
-import { AdminApi, Configuration } from '@boxlite-ai/api-client'
+import axios, { AxiosInstance } from 'axios'
+import { AdminApi, AdminApiAxiosParamCreator, AdminApiFactory, AdminApiFp, Configuration } from '@boxlite-ai/api-client'
 
 // The generated TypeScript client is the consumer-side request layer for the
 // Admin organization contract; this checks what it sends to a local server.
 describe('generated AdminApi organization requests', () => {
   let server: Server
   let admin: AdminApi
+  let configuration: Configuration
+  let transport: AxiosInstance
   const requests: Array<{ method?: string; url?: string; headers?: Record<string, unknown> }> = []
+  const timeouts: Array<number | undefined> = []
+  const surfaces = ['class', 'factory', 'fp', 'request-creator'] as const
+
+  // Exercise JavaScript positional calls independently of the TypeScript compatibility fixture.
+  const invoke = async (surface: (typeof surfaces)[number], args: unknown[]) => {
+    if (surface === 'class') return Reflect.apply(admin.adminListOrganizationsOverview, admin, args)
+    if (surface === 'factory') {
+      const factory = AdminApiFactory(configuration, undefined, transport)
+      return Reflect.apply(factory.adminListOrganizationsOverview, factory, args)
+    }
+    if (surface === 'fp') {
+      const fp = AdminApiFp(configuration)
+      const request = await Reflect.apply(fp.adminListOrganizationsOverview, fp, args)
+      return request(transport)
+    }
+    const creator = AdminApiAxiosParamCreator(configuration)
+    const request = await Reflect.apply(creator.adminListOrganizationsOverview, creator, args)
+    return transport.request({ ...request.options, baseURL: configuration.basePath, url: request.url })
+  }
 
   const sent = () => {
     expect(requests).toHaveLength(1)
@@ -26,16 +47,81 @@ describe('generated AdminApi organization requests', () => {
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
     const { port } = server.address() as AddressInfo
     // A loopback request must not follow an http_proxy from the environment.
-    admin = new AdminApi(
-      new Configuration({ basePath: `http://127.0.0.1:${port}/api` }),
-      undefined,
-      axios.create({ proxy: false }),
-    )
+    configuration = new Configuration({ basePath: `http://127.0.0.1:${port}/api` })
+    transport = axios.create({ proxy: false })
+    transport.interceptors.request.use((request) => {
+      timeouts.push(request.timeout)
+      return request
+    })
+    admin = new AdminApi(configuration, undefined, transport)
+  })
+
+  afterEach(() => {
+    requests.length = 0
+    timeouts.length = 0
   })
 
   afterAll(async () => {
     await new Promise<void>((resolve) => server.close(() => resolve()))
   })
+
+  it.each(surfaces)(
+    '%s preserves legacy sixth-position request options without putting credentials in the URL',
+    async (surface) => {
+      await invoke(surface, [
+        'legacy org',
+        'next',
+        20,
+        '2026-10-20T00:00:00Z',
+        '2026-10-19T00:00:00Z',
+        { headers: { Authorization: 'Bearer synthetic-legacy-credential', 'X-Request-Test': 'legacy' }, timeout: 2345 },
+      ])
+      expect(requests[0]?.headers?.authorization).toBe('Bearer synthetic-legacy-credential')
+      expect(requests[0]?.headers?.['x-request-test']).toBe('legacy')
+      expect(timeouts).toEqual([2345])
+      expect(requests[0]?.url).not.toContain('synthetic-legacy-credential')
+      expect(sent()).toEqual({
+        method: 'GET',
+        path: '/api/admin/organizations',
+        query: {
+          q: 'legacy org',
+          cursor: 'next',
+          limit: '20',
+          createdTo: '2026-10-20T00:00:00Z',
+          createdFrom: '2026-10-19T00:00:00Z',
+        },
+      })
+    },
+  )
+
+  it.each(surfaces.flatMap((surface) => ['all', undefined].map((scope) => [surface, scope] as const)))(
+    '%s preserves extended request options with scope %s',
+    async (surface, scope) => {
+      const id = '00000000-0000-4000-8000-000000000011'
+      await invoke(surface, [
+        undefined,
+        'next',
+        20,
+        undefined,
+        undefined,
+        scope,
+        id,
+        {
+          headers: { Authorization: 'Bearer synthetic-extended-credential', 'X-Request-Test': 'extended' },
+          timeout: 3456,
+        },
+      ])
+      expect(requests[0]?.headers?.authorization).toBe('Bearer synthetic-extended-credential')
+      expect(requests[0]?.headers?.['x-request-test']).toBe('extended')
+      expect(timeouts).toEqual([3456])
+      expect(requests[0]?.url).not.toContain('synthetic-extended-credential')
+      expect(sent()).toEqual({
+        method: 'GET',
+        path: '/api/admin/organizations',
+        query: { cursor: 'next', limit: '20', organizationId: id, ...(scope ? { boxCountScope: scope } : {}) },
+      })
+    },
+  )
 
   it('sends the creation window only when the list sets it', async () => {
     await admin.adminListOrganizationsOverview()

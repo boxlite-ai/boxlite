@@ -504,12 +504,17 @@ export const AdminApiAxiosParamCreator = function (configuration?: Configuration
          * @param {number} [limit]
          * @param {string} [createdTo] Exclusive RFC 3339 instant, at most milliseconds.
          * @param {string} [createdFrom] Inclusive RFC 3339 instant, at most milliseconds.
-         * @param {AdminListOrganizationsOverviewBoxCountScopeEnum} [boxCountScope] Count every retained Box state; omit to keep the existing active-state count.
+         * @param {AdminListOrganizationsOverviewBoxCountScopeEnum | RawAxiosRequestConfig} [boxCountScope] Legacy Axios options, or: Count every retained Box state; omit to keep the existing active-state count.
          * @param {string} [organizationId] Exact organization UUID; avoids name search and cannot be combined with q.
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        adminListOrganizationsOverview: async (q?: string, cursor?: string, limit?: number, createdTo?: string, createdFrom?: string, boxCountScope?: AdminListOrganizationsOverviewBoxCountScopeEnum, organizationId?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+        adminListOrganizationsOverview: async (q?: string, cursor?: string, limit?: number, createdTo?: string, createdFrom?: string, boxCountScope?: AdminListOrganizationsOverviewBoxCountScopeEnum | RawAxiosRequestConfig, organizationId?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // Legacy callers pass Axios options before the optional inventory filters.
+            if (typeof boxCountScope === 'object' && boxCountScope !== null) {
+                options = boxCountScope;
+                boxCountScope = undefined;
+            }
             const localVarPath = `/admin/organizations`;
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
@@ -1043,12 +1048,12 @@ export const AdminApiFp = function(configuration?: Configuration) {
          * @param {number} [limit]
          * @param {string} [createdTo] Exclusive RFC 3339 instant, at most milliseconds.
          * @param {string} [createdFrom] Inclusive RFC 3339 instant, at most milliseconds.
-         * @param {AdminListOrganizationsOverviewBoxCountScopeEnum} [boxCountScope] Count every retained Box state; omit to keep the existing active-state count.
+         * @param {AdminListOrganizationsOverviewBoxCountScopeEnum | RawAxiosRequestConfig} [boxCountScope] Legacy Axios options, or: Count every retained Box state; omit to keep the existing active-state count.
          * @param {string} [organizationId] Exact organization UUID; avoids name search and cannot be combined with q.
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        async adminListOrganizationsOverview(q?: string, cursor?: string, limit?: number, createdTo?: string, createdFrom?: string, boxCountScope?: AdminListOrganizationsOverviewBoxCountScopeEnum, organizationId?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<AdminOrganizationOverviewPage>> {
+        async adminListOrganizationsOverview(q?: string, cursor?: string, limit?: number, createdTo?: string, createdFrom?: string, boxCountScope?: AdminListOrganizationsOverviewBoxCountScopeEnum | RawAxiosRequestConfig, organizationId?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<AdminOrganizationOverviewPage>> {
             const localVarAxiosArgs = await localVarAxiosParamCreator.adminListOrganizationsOverview(q, cursor, limit, createdTo, createdFrom, boxCountScope, organizationId, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['AdminApi.adminListOrganizationsOverview']?.[localVarOperationServerIndex]?.url;
@@ -1270,12 +1275,12 @@ export const AdminApiFactory = function (configuration?: Configuration, basePath
          * @param {number} [limit]
          * @param {string} [createdTo] Exclusive RFC 3339 instant, at most milliseconds.
          * @param {string} [createdFrom] Inclusive RFC 3339 instant, at most milliseconds.
-         * @param {AdminListOrganizationsOverviewBoxCountScopeEnum} [boxCountScope] Count every retained Box state; omit to keep the existing active-state count.
+         * @param {AdminListOrganizationsOverviewBoxCountScopeEnum | RawAxiosRequestConfig} [boxCountScope] Legacy Axios options, or: Count every retained Box state; omit to keep the existing active-state count.
          * @param {string} [organizationId] Exact organization UUID; avoids name search and cannot be combined with q.
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        adminListOrganizationsOverview(q?: string, cursor?: string, limit?: number, createdTo?: string, createdFrom?: string, boxCountScope?: AdminListOrganizationsOverviewBoxCountScopeEnum, organizationId?: string, options?: RawAxiosRequestConfig): AxiosPromise<AdminOrganizationOverviewPage> {
+        adminListOrganizationsOverview(q?: string, cursor?: string, limit?: number, createdTo?: string, createdFrom?: string, boxCountScope?: AdminListOrganizationsOverviewBoxCountScopeEnum | RawAxiosRequestConfig, organizationId?: string, options?: RawAxiosRequestConfig): AxiosPromise<AdminOrganizationOverviewPage> {
             return localVarFp.adminListOrganizationsOverview(q, cursor, limit, createdTo, createdFrom, boxCountScope, organizationId, options).then((request) => request(axios, basePath));
         },
         /**
@@ -1484,12 +1489,12 @@ export class AdminApi extends BaseAPI {
      * @param {number} [limit]
      * @param {string} [createdTo] Exclusive RFC 3339 instant, at most milliseconds.
      * @param {string} [createdFrom] Inclusive RFC 3339 instant, at most milliseconds.
-     * @param {AdminListOrganizationsOverviewBoxCountScopeEnum} [boxCountScope] Count every retained Box state; omit to keep the existing active-state count.
+     * @param {AdminListOrganizationsOverviewBoxCountScopeEnum | RawAxiosRequestConfig} [boxCountScope] Legacy Axios options, or: Count every retained Box state; omit to keep the existing active-state count.
      * @param {string} [organizationId] Exact organization UUID; avoids name search and cannot be combined with q.
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
      */
-    public adminListOrganizationsOverview(q?: string, cursor?: string, limit?: number, createdTo?: string, createdFrom?: string, boxCountScope?: AdminListOrganizationsOverviewBoxCountScopeEnum, organizationId?: string, options?: RawAxiosRequestConfig) {
+    public adminListOrganizationsOverview(q?: string, cursor?: string, limit?: number, createdTo?: string, createdFrom?: string, boxCountScope?: AdminListOrganizationsOverviewBoxCountScopeEnum | RawAxiosRequestConfig, organizationId?: string, options?: RawAxiosRequestConfig) {
         return AdminApiFp(this.configuration).adminListOrganizationsOverview(q, cursor, limit, createdTo, createdFrom, boxCountScope, organizationId, options).then((request) => request(this.axios, this.basePath));
     }
 
