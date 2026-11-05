@@ -134,3 +134,28 @@ it('requests the newly selected organization when connecting a card after switch
   })
   expect(checkoutWindow.location.href).toBe('https://checkout.stripe.com/c/pay/cs_test_other')
 })
+
+it.each(['success', 'failure'])('settles a checkout %s when the browser blocks the new tab', async (outcome) => {
+  vi.mocked(window.open).mockReturnValue(null)
+  let pending!: Promise<void>
+  await act(async () => {
+    pending = current.connectCard()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+  })
+  expect(current.isPending).toBe(true)
+  expect(requests).toHaveLength(1)
+  await act(async () => {
+    if (outcome === 'success') complete('https://checkout.stripe.com/c/pay/cs_test_blocked')
+    else fail(new Error('Billing unavailable'))
+    await pending
+    await new Promise((resolve) => setTimeout(resolve, 0))
+  })
+  expect(current.isPending).toBe(false)
+  expect(checkoutWindow.close).not.toHaveBeenCalled()
+  expect(checkoutWindow.location.href).toBe('')
+  if (outcome === 'failure') {
+    expect(toast.error).toHaveBeenCalledWith('Failed to fetch checkout url', {
+      description: expect.stringContaining('Billing unavailable'),
+    })
+  } else expect(toast.error).not.toHaveBeenCalled()
+})

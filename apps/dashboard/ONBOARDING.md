@@ -59,7 +59,10 @@ organization name and use-case persistence keep their current contracts.
 
 Validation covers Checkout requests and navigation, genuine connected-card state
 after returning, failed and successful redemption, completion restoration, and
-the absence of reward reads in both Welcome and Wallet. The browser walkthrough
+the absence of reward reads in both Welcome and Wallet. Animation tests verify
+step-specific playback rates, responsive placement, and listener/observer cleanup;
+billing tests cover blocked checkout tabs, empty or repeated promo submissions,
+saved-card details, and owner-only actions. The browser walkthrough
 covers all three steps; Get credits is checked at desktop and mobile widths in
 light and dark themes. Query refresh follows
 [TanStack Query's invalidation contract](https://tanstack.com/query/v5/docs/framework/react/guides/query-invalidation).

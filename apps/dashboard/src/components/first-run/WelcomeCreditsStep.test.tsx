@@ -12,11 +12,12 @@ const billingApi = vi.hoisted(() => ({
   getOrganizationCheckoutUrl: vi.fn(),
   redeemCoupon: vi.fn(),
 }))
+const membership = vi.hoisted(() => ({ role: 'owner' }))
 vi.mock('@/hooks/useApi', () => ({ useApi: () => ({ billingApi }) }))
 vi.mock('@/hooks/useSelectedOrganization', () => ({
   useSelectedOrganization: () => ({
     selectedOrganization: { id: 'org-1', name: 'Acme', isDefaultForAuthenticatedUser: true },
-    authenticatedUserOrganizationMember: { role: 'owner' },
+    authenticatedUserOrganizationMember: membership,
   }),
 }))
 vi.mock('@/hooks/useConfig', () => ({
@@ -44,6 +45,7 @@ const onBack = vi.fn()
 beforeEach(() => {
   globalThis.IS_REACT_ACT_ENVIRONMENT = true
   vi.resetAllMocks()
+  membership.role = 'owner'
   billingApi.getOrganizationWallet.mockResolvedValue(wallet)
   billingApi.listAllPaymentMethods.mockResolvedValue([])
   billingApi.getOrganizationCheckoutUrl.mockResolvedValue(checkoutUrl)
@@ -84,7 +86,7 @@ async function click(text: string) {
   await act(async () => target!.click())
 }
 
-async function mount() {
+async function mount(expectedButton = 'Verify card & claim $100') {
   await act(async () => {
     root.render(
       <QueryClientProvider client={client}>
@@ -92,7 +94,7 @@ async function mount() {
       </QueryClientProvider>,
     )
   })
-  await eventually(() => expect(button('Verify card & claim $100')?.disabled).toBe(false))
+  await eventually(() => expect(button(expectedButton)?.disabled).toBe(false))
 }
 
 function promoInput() {
@@ -122,6 +124,49 @@ it('shows the card offer, promo input and an Explore exit before any payment act
   expect(billingApi.getOrganizationCheckoutUrl).not.toHaveBeenCalled()
   expect(billingApi.redeemCoupon).not.toHaveBeenCalled()
   await click('Explore with BoxLite')
+  expect(onContinue).toHaveBeenCalledTimes(1)
+})
+
+it('lets a member explore without reading or changing organization billing', async () => {
+  membership.role = 'member'
+  await mount('Explore with BoxLite')
+  expect(host.textContent).toContain('Only organization owners can manage billing.')
+  expect(button('Verify card & claim $100')).toBeUndefined()
+  expect(promoInput()).toBeNull()
+  await focusWindow()
+  await click('Explore with BoxLite')
+  expect(onContinue).toHaveBeenCalledTimes(1)
+  expect(billingApi.getOrganizationWallet).not.toHaveBeenCalled()
+  expect(billingApi.listAllPaymentMethods).not.toHaveBeenCalled()
+  expect(billingApi.getOrganizationCheckoutUrl).not.toHaveBeenCalled()
+  expect(billingApi.redeemCoupon).not.toHaveBeenCalled()
+})
+
+it('shows the existing default card instead of the first saved payment method', async () => {
+  billingApi.getOrganizationWallet.mockResolvedValue({ ...wallet, creditCardConnected: true })
+  billingApi.listAllPaymentMethods.mockResolvedValue([
+    {
+      id: 'card-other',
+      isDefault: false,
+      paymentProviderType: 'stripe',
+      providerMethodId: 'pm_other',
+      details: { brand: 'mastercard', last4: '4444' },
+    },
+    {
+      id: 'card-default',
+      isDefault: true,
+      paymentProviderType: 'stripe',
+      providerMethodId: 'pm_default',
+      details: { brand: 'visa', last4: '4242' },
+    },
+  ])
+  await mount('Start quickstart')
+  expect(host.textContent).toContain('Card connected')
+  expect(host.textContent).toContain('visa ending in 4242')
+  expect(host.textContent).not.toContain('mastercard ending in 4444')
+  expect(button('Verify card & claim $100')).toBeUndefined()
+  expect(billingApi.getOrganizationCheckoutUrl).not.toHaveBeenCalled()
+  await click('Start quickstart')
   expect(onContinue).toHaveBeenCalledTimes(1)
 })
 
@@ -175,6 +220,45 @@ it('offers a card-status retry after a failed return read without treating check
   billingApi.getOrganizationWallet.mockResolvedValue({ ...wallet, creditCardConnected: true })
   await click('Check card status')
   await eventually(() => expect(host.textContent).toContain('Card connected'))
+})
+
+it('requires a promo code before sending a redemption and clears the error when editing', async () => {
+  await mount()
+  await click('Redeem')
+  expect(host.querySelector('[role="alert"]')?.textContent).toBe('Enter a promo code.')
+  expect(promoInput().getAttribute('aria-invalid')).toBe('true')
+  expect(promoInput().getAttribute('aria-describedby')).toBe('welcome-promo-error')
+  expect(billingApi.redeemCoupon).not.toHaveBeenCalled()
+  await enterPromo('TeamDiscount')
+  expect(host.querySelector('[role="alert"]')).toBeNull()
+  expect(promoInput().getAttribute('aria-invalid')).toBe('false')
+  expect(billingApi.redeemCoupon).not.toHaveBeenCalled()
+})
+
+it('keeps one redemption in flight when the form is submitted again', async () => {
+  let resolveRedemption!: (message: string) => void
+  billingApi.redeemCoupon.mockReturnValueOnce(
+    new Promise<string>((resolve) => {
+      resolveRedemption = resolve
+    }),
+  )
+  await mount()
+  await enterPromo('TeamDiscount')
+  const form = promoInput().form!
+  await click('Redeem')
+  await eventually(() => expect(promoInput().disabled).toBe(true))
+  expect(button('Redeem')?.disabled).toBe(true)
+  expect(button('Please wait…')?.disabled).toBe(true)
+  expect(host.querySelector('[role="status"]')?.textContent).toBe('Redeeming your code…')
+  await act(async () => {
+    form.requestSubmit()
+    form.requestSubmit()
+  })
+  expect(billingApi.redeemCoupon).toHaveBeenCalledTimes(1)
+  expect(billingApi.redeemCoupon).toHaveBeenCalledWith('org-1', 'TeamDiscount')
+  await act(async () => resolveRedemption('Discount applied.'))
+  await eventually(() => expect(host.textContent).toContain('Discount applied.'))
+  expect(billingApi.redeemCoupon).toHaveBeenCalledTimes(1)
 })
 
 it('redeems the entered code and shows the server message without declaring a credit amount or card connection', async () => {
