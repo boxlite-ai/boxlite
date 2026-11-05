@@ -27,7 +27,11 @@ export class RunnerMemoryIncident {
   @Column('double precision')
   runnerMemoryPercent: number
 
-  @ApiProperty({ type: [BoxMemoryUsageDto], maxItems: 5 })
+  @ApiProperty({
+    type: [BoxMemoryUsageDto],
+    maxItems: 5,
+    description: 'Only Boxes whose maximum in the query range belongs to this snapshot; ties use the smaller row ID.',
+  })
   @Column('jsonb')
   boxes: BoxMemoryUsageDto[]
 

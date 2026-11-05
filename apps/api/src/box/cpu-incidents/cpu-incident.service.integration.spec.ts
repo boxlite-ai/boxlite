@@ -64,7 +64,7 @@ describeWithDatabase('CPU incident PostgreSQL persistence', () => {
     await service.record(runnerId, report())
     const missing = { ...report(), boxId: null, image: null, cpuSeconds: 0 }
     await service.record(runnerId, missing)
-    const { items } = await service.list({ ...range, limit: 50 })
+    const items = await db.getRepository(RunnerCpuIncident).find({ order: { id: 'ASC' } })
     expect(items).toMatchObject([
       { boxId: first.boxId, image: first.image },
       { image: '' },
@@ -84,16 +84,18 @@ describeWithDatabase('CPU incident PostgreSQL persistence', () => {
     expect(result.items).toHaveLength(1)
     expect(result.items[0]).toMatchObject({ runnerId, eventId: first.eventId, boxId: 'business-box', cpuSeconds: 240 })
     const all = await service.list({ ...range, limit: 50 })
-    expect(all.items).toHaveLength(3)
-    expect(all.items[2].boxId).toBeNull()
+    expect(all.items).toHaveLength(2)
+    expect(all.items[1].boxId).toBeNull()
+    expect(await db.getRepository(RunnerCpuIncident).count()).toBe(3)
     expect((await service.list({ ...range, limit: 50, runnerId })).items).toHaveLength(2)
     expect(await service.list({ from: range.to, to: '2026-10-31T00:00:00Z', limit: 50 })).toEqual({ items: [] })
   })
 
   it('filters capture completion in [from,to) and returns the first N rows by ID', async () => {
     const completed = ['2026-10-29T00:07:00Z', '2026-10-29T00:07:01Z', '2026-10-29T00:07:02Z']
-    for (const windowEndedAt of completed) await service.record(runnerId, { ...report(), windowEndedAt })
-    await service.record(otherRunner, { ...report(), windowEndedAt: completed[1] })
+    for (const [index, windowEndedAt] of completed.entries())
+      await service.record(runnerId, { ...report(), windowEndedAt, boxId: `box-${index}` })
+    await service.record(otherRunner, { ...report(), windowEndedAt: completed[1], boxId: 'other-box' })
     const query = { from: completed[0], to: completed[2], limit: 1, runnerId }
     const first = await service.list(query)
     expect(first.items.map((item) => item.windowEndedAt.toISOString())).toEqual(['2026-10-29T00:07:00.000Z'])
@@ -112,6 +114,55 @@ describeWithDatabase('CPU incident PostgreSQL persistence', () => {
 
   it.each([range.from, '2026-10-28T00:00:00Z', 'invalid'])('rejects invalid range ending %s', async (to) => {
     await expect(service.list({ ...range, to, limit: 50 })).rejects.toThrow('Invalid CPU incident time range')
+  })
+
+  it('selects each box maximum before limiting and keeps the winning observation intact', async () => {
+    await service.record(runnerId, { ...report(), cpuSeconds: 10, runnerCpuPercent: 99 })
+    const winner = { ...report(), cpuSeconds: 300, image: 'winner:cpu', samplingComplete: false }
+    await service.record(otherRunner, winner)
+    await service.record(runnerId, { ...report(), cpuSeconds: 300, image: 'tied:cpu' })
+    await service.record(runnerId, { ...report(), boxId: 'another-box', cpuSeconds: 500 })
+
+    const { items } = await service.list({ ...range, limit: 1 })
+    expect(items).toHaveLength(1)
+    expect(items[0]).toMatchObject({
+      id: '2',
+      runnerId: otherRunner,
+      eventId: winner.eventId,
+      boxId: winner.boxId,
+      cpuSeconds: 300,
+      image: 'winner:cpu',
+      samplingComplete: false,
+    })
+    const all = await service.list({ ...range, limit: 50 })
+    expect(all.items.map(({ id, boxId }) => ({ id, boxId }))).toEqual([
+      { id: '2', boxId: 'business-box' },
+      { id: '4', boxId: 'another-box' },
+    ])
+    expect(await db.getRepository(RunnerCpuIncident).count()).toBe(4)
+  })
+
+  it('selects maxima only within the requested runner and time range', async () => {
+    const first = { ...report(), cpuSeconds: 20 }
+    await service.record(runnerId, first)
+    const winner = { ...report(), cpuSeconds: 30 }
+    await service.record(runnerId, winner)
+    await service.record(otherRunner, { ...report(), cpuSeconds: 100 })
+    await service.record(runnerId, { ...report(), cpuSeconds: 200, windowEndedAt: '2026-10-29T00:08:00Z' })
+    const { items } = await service.list({
+      ...range,
+      from: first.windowEndedAt,
+      to: '2026-10-29T00:08:00Z',
+      runnerId,
+      limit: 50,
+    })
+    expect(items).toHaveLength(1)
+    expect(items[0]).toMatchObject({ eventId: winner.eventId, cpuSeconds: 30 })
+  })
+
+  it('retains each report without a box attribution', async () => {
+    for (let i = 0; i < 2; i++) await service.record(runnerId, { ...report(), boxId: null, cpuSeconds: 0 })
+    expect((await service.list({ ...range, limit: 50 })).items.map(({ boxId }) => boxId)).toEqual([null, null])
   })
 
   it.each([

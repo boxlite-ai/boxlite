@@ -639,7 +639,7 @@ receive 401. Responses use `Cache-Control: private, no-store`.
 | --- | --- |
 | `from` | Required RFC 3339 timestamp with timezone, at most milliseconds. Inclusive lower bound on `windowEndedAt`. |
 | `to` | Required RFC 3339 timestamp with timezone, at most milliseconds. Exclusive upper bound on `windowEndedAt`; must be after `from`. |
-| `limit` | Integer 1–200; default 50. Returns only the first N matching rows in ID ascending order. |
+| `limit` | Integer 1–200; default 50. First N rows in ID ascending order after per-Box maximum selection. |
 | `runnerId` | Optional UUID filter. |
 
 ```bash
@@ -666,13 +666,18 @@ curl --get "$BOXLITE_API_URL/api/admin/runner-cpu-incidents" \
 ```
 
 The range is `[from,to)` on capture completion time, not high-load start or server
-receipt time. Adjacent ranges therefore do not share boundary rows. Results are
-ordered by ID ascending and capped at `limit`; additional matching rows are not
-returned. There is no pagination. An empty result is `{"items":[]}`. IDs remain
+receipt time. Adjacent ranges therefore do not share boundary rows. After the time
+and optional Runner filters, each non-null `boxId` appears once, using the row
+with the largest `cpuSeconds`; equal values retain the smaller numeric row ID.
+Without a Runner filter, the same Box is deduplicated across Runners. All fields,
+including the image and capture timestamps, come from that winning row.
+Rows with `boxId=null` remain separate observations. Only after this selection are
+results ordered by ID ascending and capped at `limit`; additional selected rows
+are not returned. There is no pagination. An empty result is `{"items":[]}`. IDs remain
 decimal strings to preserve bigint precision; ID order need not match completion
 or commit order. Upload retries can add records to older ranges. Repeating a query
-still returns only the first N matches, so this endpoint does not guarantee full
-incident enumeration. Consumers must recheck the box's
+still returns only the first N selected rows; this endpoint is a per-Box maximum
+view, not a complete incident history. Consumers must recheck the box's
 current state before operations: evidence persists after migration or deletion.
 `cpuSeconds / window duration in seconds * 100` gives average box CPU percent
 on a one-core scale, which can exceed 100%. `samplingComplete=false` means the
@@ -743,11 +748,20 @@ credentials receive 401. Responses use `Cache-Control: private, no-store`.
 | `from` | Required timezone-qualified timestamp, inclusive lower bound on `sampledAt`. |
 | `to` | Required timezone-qualified timestamp, exclusive upper bound on `sampledAt`; after `from`. |
 | `runnerId` | Optional UUID filter. |
-| `limit` | Integer 1–200, default 50; first N matching rows in ID ascending order. |
+| `limit` | Integer 1–200, default 50; first N snapshots in ID ascending order after per-Box maximum selection. |
 
 Timestamps accept at most millisecond precision. Results are `{"items":[...]}`;
 each item adds decimal-string `id`, authenticated `runnerId`, and server
-`receivedAt` to the snapshot above. Empty results are `{"items":[]}`.
+`receivedAt` to the snapshot above. Across the full time range and optional Runner
+filter, each `boxId` appears only in the snapshot containing its largest
+`memoryBytes`, compared as an exact integer. Equal values retain the smaller
+numeric snapshot ID. Without a Runner filter, deduplication spans Runners.
+Each returned `boxes` array contains only the winning entries from that snapshot,
+in their original order, with their original images and snapshot metadata.
+Snapshots losing all entries are omitted; originally empty snapshots remain.
+Then snapshots are ordered by ID and capped at `limit`. The limit counts snapshots,
+not individual Boxes; one snapshot can still contain up to five Boxes.
+Stored reports remain intact. Empty results are `{"items":[]}`.
 There is no pagination; repeated queries with the same limit do not enumerate
 additional rows. Late retries retain their original `sampledAt`, so historical
 ranges can gain records. Box deletion does not remove evidence.

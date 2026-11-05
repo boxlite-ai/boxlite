@@ -70,7 +70,7 @@ describeWithDatabase('Memory incident PostgreSQL persistence', () => {
     await Promise.all(Array.from({ length: 8 }, () => service.record(runnerId, first)))
     await service.record(runnerId, { ...first, boxes: [], samplingComplete: false })
     await service.record(otherRunner, first)
-    const { items } = await service.list(range)
+    const items = await db.getRepository(RunnerMemoryIncident).find({ order: { id: 'ASC' } })
     expect(items).toHaveLength(2)
     expect(items[0]).toMatchObject({ runnerId, boxes: first.boxes, samplingComplete: true })
     expect((await service.list({ ...range, runnerId })).items).toHaveLength(1)
@@ -88,7 +88,12 @@ describeWithDatabase('Memory incident PostgreSQL persistence', () => {
 
   it('filters host sample time in [from,to), independently of receipt time, in ID order', async () => {
     const times = ['2026-11-05T00:00:00Z', '2026-11-05T00:01:00Z', '2026-11-05T00:02:00Z']
-    for (const sampledAt of times) await service.record(runnerId, { ...report(), sampledAt })
+    for (const [index, sampledAt] of times.entries())
+      await service.record(runnerId, {
+        ...report(),
+        sampledAt,
+        boxes: [{ boxId: `box-${index}`, image: '', memoryBytes: '1' }],
+      })
     const query = { ...range, to: times[2], runnerId }
     expect((await service.list(query)).items.map((item) => item.sampledAt.toISOString())).toEqual([
       '2026-11-05T00:00:00.000Z',
@@ -97,6 +102,74 @@ describeWithDatabase('Memory incident PostgreSQL persistence', () => {
     expect((await service.list({ ...query, limit: 1 })).items).toHaveLength(1)
     expect((await service.list({ ...query, from: '2026-11-05T08:00:00+08:00' })).items).toHaveLength(2)
     expect(await service.list({ ...range, from: range.to, to: '2026-11-07T00:00:00Z' })).toEqual({ items: [] })
+  })
+
+  it('selects each box maximum before limiting and preserves the source snapshot metadata', async () => {
+    const low = { ...report(), boxes: [{ boxId: 'a', image: 'old', memoryBytes: '9' }] }
+    await service.record(runnerId, low)
+    const first = {
+      ...report(),
+      boxes: [
+        { boxId: 'a', image: 'a:max', memoryBytes: '10' },
+        { boxId: 'b', image: 'b:old', memoryBytes: '8' },
+        { boxId: 'c', image: 'c:max', memoryBytes: '7' },
+      ],
+    }
+    await service.record(runnerId, first)
+    const second = {
+      ...report(),
+      sampledAt: '2026-11-05T00:01:00Z',
+      samplingComplete: false,
+      boxes: [
+        { boxId: 'b', image: 'b:max', memoryBytes: '11' },
+        { boxId: 'a', image: 'a:tie', memoryBytes: '10' },
+        { boxId: 'c', image: 'c:old', memoryBytes: '6' },
+      ],
+    }
+    await service.record(otherRunner, second)
+    const { items } = await service.list({ ...range, limit: 1 })
+    expect(items).toHaveLength(1)
+    expect(items[0]).toMatchObject({ id: '2', eventId: first.eventId, boxes: [first.boxes[0], first.boxes[2]] })
+    const all = (await service.list(range)).items
+    expect(all).toHaveLength(2)
+    expect(all[1]).toMatchObject({
+      id: '3',
+      runnerId: otherRunner,
+      eventId: second.eventId,
+      sampledAt: new Date(second.sampledAt),
+      samplingComplete: false,
+      boxes: [second.boxes[0]],
+    })
+    expect(all.flatMap(({ boxes }) => boxes.map(({ boxId }) => boxId))).toEqual(['a', 'c', 'b'])
+    expect((await db.getRepository(RunnerMemoryIncident).findOneByOrFail({ eventId: first.eventId })).boxes).toEqual(
+      first.boxes,
+    )
+  })
+
+  it('selects exact byte maxima beyond safe integers with numeric row IDs breaking ties', async () => {
+    await db.query('ALTER TABLE runner_memory_incident ALTER COLUMN id RESTART WITH 9007199254740993')
+    await service.record(runnerId, {
+      ...report(),
+      boxes: [{ boxId: 'a', image: 'old', memoryBytes: '9007199254740992' }],
+    })
+    const winner = { ...report(), boxes: [{ boxId: 'a', image: 'max', memoryBytes: '9007199254740993' }] }
+    await service.record(runnerId, winner)
+    await service.record(otherRunner, { ...winner, boxes: [{ ...winner.boxes[0], image: 'tie' }] })
+    const { items } = await service.list(range)
+    expect(items).toHaveLength(1)
+    expect(items[0]).toMatchObject({ id: '9007199254740994', eventId: winner.eventId, boxes: winner.boxes })
+  })
+
+  it('selects maxima only within the requested runner and time range', async () => {
+    const single = (memoryBytes: string) => [{ boxId: 'a', image: '', memoryBytes }]
+    await service.record(runnerId, { ...report(), boxes: single('1') })
+    const winner = { ...report(), boxes: single('2') }
+    await service.record(runnerId, winner)
+    await service.record(otherRunner, { ...report(), boxes: single('3') })
+    await service.record(runnerId, { ...report(), sampledAt: range.to, boxes: single('4') })
+    const { items } = await service.list({ ...range, runnerId })
+    expect(items).toHaveLength(1)
+    expect(items[0]).toMatchObject({ eventId: winner.eventId, boxes: winner.boxes })
   })
 
   it.each([

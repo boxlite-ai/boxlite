@@ -512,7 +512,9 @@ Indexes on `(runnerId,id)` and `windowEndedAt` support runner and capture-comple
 time-range filters. No foreign-key cascade or automatic retention job: evidence
 survives resource deletion. A single insert ignores duplicate `(runnerId,eventId)`
 reports through the unique constraint. [Admin queries](API.md#runner-cpu-incidents)
-return at most `limit` visible rows ordered by ID, without pagination or a commit-order guarantee.
+select the largest `cpuSeconds` row per Box within the time/Runner filters, with
+smaller row IDs breaking ties. Null-attribution rows remain separate. Selection
+precedes ID ordering and `limit`; there is no pagination or commit-order guarantee.
 Each window has a distinct event ID. Image is recorded in the same insert and
 cannot change on retry; no box-table lookup or organization field is involved.
 
@@ -545,6 +547,12 @@ Indexes on `sampledAt` and `(runnerId,id)` support the
 atomically, preserving all original rankings. There are no resource foreign-key
 cascades or automatic retention jobs. A single JSONB snapshot keeps the bounded
 ranking atomic without a separate child table.
+
+Queries select each Box's maximum numeric `memoryBytes` within the time/Runner
+filters, with smaller snapshot IDs breaking ties. They return only winning entries
+in their source snapshots, preserving entry order and originally empty snapshots,
+then apply ID ordering and the snapshot limit. These projections do not modify
+the persisted JSONB arrays.
 
 ### `region`
 

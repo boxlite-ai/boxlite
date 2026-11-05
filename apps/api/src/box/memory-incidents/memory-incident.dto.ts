@@ -82,7 +82,13 @@ export class ListMemoryIncidentsDto {
   @Matches(timestampWithTimezone)
   to: string
 
-  @ApiPropertyOptional({ type: 'integer', minimum: 1, maximum: 200, default: 50 })
+  @ApiPropertyOptional({
+    type: 'integer',
+    minimum: 1,
+    maximum: 200,
+    default: 50,
+    description: 'Maximum snapshots after per-Box maximum memory selection, ordered by ID ascending.',
+  })
   @Type(() => Number)
   @IsInt()
   @Min(1)

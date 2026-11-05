@@ -122,7 +122,10 @@ The route remains excluded from customer OpenAPI and generated SDKs.
 `GET /api/admin/runner-memory-incidents` requires administrator authentication and returns `Cache-Control: private, no-store`.
 Require timezone-qualified `from` and `to`, with `from < to`, filtering `sampledAt` in `[from,to)`.
 Accept optional UUID `runnerId` and integer `limit` from 1 to 200, default 50.
-Return `{items:[...]}` with complete rows in ascending ID order, preserving bigint strings.
+Return `{items:[...]}` with snapshots in ascending ID order, preserving bigint strings.
+The [query deduplication follow-up](2026-11-05-incident-query-deduplication.md)
+selects each Box's maximum within the filters before applying the snapshot limit;
+response arrays contain only the winning entries, while stored arrays remain complete.
 Like CPU queries, this endpoint has no pagination and cannot guarantee enumeration beyond the limit.
 
 ## Validation
