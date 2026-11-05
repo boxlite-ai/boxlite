@@ -52,6 +52,13 @@ pub(crate) fn ram_ranges(memory_mib: u32) -> Vec<(GuestAddress, usize)> {
 }
 
 /// Query once per reporting device; a failed query must not guess granularity.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "Only the reporting device queries this, and nothing composes it yet."
+    )
+)]
 pub(crate) fn host_page_size() -> io::Result<usize> {
     // SAFETY: sysconf only queries a numeric host setting.
     let size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };

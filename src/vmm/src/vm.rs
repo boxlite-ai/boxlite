@@ -52,8 +52,8 @@ impl StopHandle {
 /// What device constructors get besides the chipset: the guest memory a
 /// virtio device's queues address, and the workers that run its events.
 #[cfg_attr(
-    not(any(test, all(target_os = "linux", target_arch = "x86_64"))),
-    expect(dead_code, reason = "Only Linux x86_64 adds the reporting device yet.")
+    not(test),
+    expect(dead_code, reason = "Only tests add a virtio device yet.")
 )]
 pub(crate) struct DeviceContext<'a> {
     /// The guest RAM every host-side user shares.
@@ -110,25 +110,8 @@ impl Vm<boxlite_hypervisor::KvmVm> {
     /// registers its RAM and loads the kernel and boot data. The guest's COM1
     /// output goes to `console` through a queue, so a slow sink never stalls
     /// the guest.
-    pub fn new(mut config: VmConfig, console: Box<dyn std::io::Write + Send>) -> Result<Self> {
-        use crate::devices::{
-            console::DEFAULT_QUEUE_BYTES,
-            x86_64::{BALLOON_MMIO, add_balloon, add_legacy_devices},
-        };
-
-        // Discovery must come from the record that registers the window, so a
-        // caller declaration cannot bind it to another guest IRQ.
-        if config.cmdline.split_ascii_whitespace().any(|token| {
-            token
-                .trim_start_matches('"')
-                .starts_with("virtio_mmio.device=")
-        }) {
-            return Err(Error::InvalidCommandLine(
-                "virtio_mmio.device is platform-owned",
-            ));
-        }
-        BALLOON_MMIO.append_cmdline(&mut config.cmdline);
-        let reclaim = config.reclaim;
+    pub fn new(config: VmConfig, console: Box<dyn std::io::Write + Send>) -> Result<Self> {
+        use crate::devices::{console::DEFAULT_QUEUE_BYTES, x86_64::add_legacy_devices};
 
         let (writer, worker) =
             ConsoleWorker::spawn(console, DEFAULT_QUEUE_BYTES).map_err(Error::SpawnConsole)?;
@@ -136,10 +119,7 @@ impl Vm<boxlite_hypervisor::KvmVm> {
             config,
             boxlite_hypervisor::KvmVm::new,
             |ram, config| crate::boot::prepare(ram, config).map(|setup| setup.boot_regs),
-            |chipset, context| {
-                add_legacy_devices(chipset, writer)?;
-                add_balloon(chipset, context, reclaim)
-            },
+            |chipset, _| add_legacy_devices(chipset, writer),
         )?;
         vm.console = Mutex::new(Some(worker));
         Ok(vm)

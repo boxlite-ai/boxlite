@@ -13,7 +13,7 @@ use vm_memory::{Bytes, GuestAddress};
 use super::write_boot_params;
 use crate::{
     config::{MAX_CMDLINE_BYTES, VmConfig},
-    memory::{GuestMemoryMmap, ReclaimPolicy, ram_ranges},
+    memory::{GuestMemoryMmap, ram_ranges},
 };
 
 const CMDLINE: &str = "console=ttyS0 panic=-1";
@@ -151,7 +151,6 @@ fn agrees_with_validate_on_command_line_limits() {
             kernel: "vmlinux".into(),
             cmdline,
             initramfs: None,
-            reclaim: ReclaimPolicy::Immediate,
         };
         assert_eq!(config.validate().is_ok(), accepted, "{config:?}");
     }

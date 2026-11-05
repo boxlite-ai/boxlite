@@ -7,7 +7,7 @@ use std::path::PathBuf;
 
 use crate::{
     error::{Error, Result},
-    memory::{MAX_MEMORY_MIB, ReclaimPolicy},
+    memory::MAX_MEMORY_MIB,
 };
 
 /// Largest vCPU count a guest can use. The M1 guest kernel configuration sets
@@ -33,10 +33,6 @@ pub struct VmConfig {
     pub cmdline: String,
     /// The uncompressed newc archive to load as the initramfs, if any.
     pub initramfs: Option<PathBuf>,
-    /// How guest-reported free pages return to the host. [`ReclaimPolicy::Immediate`]
-    /// discards them now; [`ReclaimPolicy::Lazy`] lets Linux reclaim them
-    /// under memory pressure.
-    pub reclaim: ReclaimPolicy,
 }
 
 impl VmConfig {
@@ -69,7 +65,7 @@ impl VmConfig {
 mod tests {
     use std::error::Error as _;
 
-    use super::{MAX_CMDLINE_BYTES, MAX_VCPUS, ReclaimPolicy, VmConfig};
+    use super::{MAX_CMDLINE_BYTES, MAX_VCPUS, VmConfig};
     use crate::{error::Error, memory::MAX_MEMORY_MIB};
 
     fn config(vcpu_count: u8, memory_mib: u32) -> VmConfig {
@@ -79,7 +75,6 @@ mod tests {
             kernel: "vmlinux".into(),
             cmdline: "console=ttyS0".into(),
             initramfs: None,
-            reclaim: ReclaimPolicy::Immediate,
         }
     }
 

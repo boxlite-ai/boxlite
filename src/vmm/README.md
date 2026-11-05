@@ -29,7 +29,7 @@ boxlite-vmm
 | --- | --- |
 | `vm` | `Vm<H>`: validate the configuration, allocate and register RAM on host backend `H`, own the devices in a `Chipset`, load the boot data, and run the vCPUs until the first event; `StopHandle` and `VmExit` |
 | `boot` | Linux x86_64 boot: `prepare` loads the pinned ELF kernel through linux-loader, places an optional initramfs at the top of RAM, writes the zero page, E820 map, command line and MP table, and sets up the 64-bit entry state (GDT, identity page tables, registers) |
-| `config` | `VmConfig { vcpu_count, memory_mib, kernel, cmdline, initramfs, reclaim }` and its bounds: 1..=64 vCPUs, 1..=3072 MiB, a printable-ASCII command line under 2048 bytes; `reclaim` is `ReclaimPolicy::{Immediate, Lazy}` |
+| `config` | `VmConfig { vcpu_count, memory_mib, kernel, cmdline, initramfs }` and its bounds: 1..=64 vCPUs, 1..=3072 MiB, a printable-ASCII command line under 2048 bytes |
 | `error` | VMM errors that keep the hypervisor's cause chain, including a virtio device that cannot continue |
 | `memory` | `GuestRam`: owned guest RAM, the RAM layout, and the registration lifetime rules |
 | `cpu_features` | x86_64 guest CPUID for each vCPU and the boot MSRs |
@@ -39,7 +39,7 @@ boxlite-vmm
 | `virtio` | The virtio common infrastructure: the synchronous device contract (`VirtioDevice`, `DeviceSpec`, `DeviceEvent`, `ActivationContext`, `EventRegistrar`, `Waker`, `WorkerControl`), the `VirtQueues` facade (dense preparation and validation, EVENT_IDX, exactly-once deferred completion, notification drain, the stored guest-memory Arc and negotiated indirect flag, and `save`/`restore` stubs that report snapshots unsupported until M8), the 4 KiB virtio-mmio transport (register file, feature negotiation, queue configuration and activation, Status=0 reset, post-activation queue-write rejection), the MMIO interrupt handle, the default snapshot methods, and the virtio workers (`VirtioWorkers` over a `WorkerRuntime`; `SharedRuntime` runs every device's events on one thread) |
 | `irq` | `IrqChip`, the host interrupt controller as devices see it, and `IrqLine`, one device line; HVF and KVM provide the controller, WHP (M10) only local APICs |
 | `devices` | The console queue, and on x86_64 the 8250 UART at COM1 and the i8042 reset, with `add_legacy_devices`, which adds them to the chipset |
-| `devices::balloon` | Reporting-only `VirtioBalloon`: configuration, negotiation, whole-chain prevalidation and configurable immediate or lazy reclaim-before-used |
+| `devices::balloon` | Reporting-only `VirtioBalloon`: configuration, negotiation, whole-chain prevalidation and a `ReclaimPolicy` chosen when the device is constructed; nothing composes it into `Vm` yet |
 | `virtio::worker` | One lazy shared poller/thread, coalesced generation-bound queue kicks, backend readiness, stop barriers and VM shutdown |
 | `events` | `Event`, which ends the VM, `EventSender`, which also latches the stop, and `EventLoop`, the poller that waits for the first event |
 
@@ -446,11 +446,13 @@ read-only `num_pages=0` and guest-writable `actual`, reset to zero. Linux setup
 uses inflate/deflate queues 0/1; reporting alone is queue 2. All have maximum
 size 256. Queue 2 is required only when reporting is negotiated and is never
 consumed otherwise. No quota, stats, hinting, poison or snapshot support is
-advertised. The x86_64 `0xd0000000`/GSI 5 resource record supplies both the
-chipset claim and appended `virtio_mmio.device=` command-line argument.
-`Vm::new` rejects caller `virtio_mmio.device=` parameters, including quoted
-declarations, before host allocation. Discovery is platform-owned: an earlier
-caller declaration must not bind the same window to a different guest IRQ.
+advertised. `Vm` does not compose the device yet: it names no balloon window,
+endpoint or command-line argument, and adding a device is becoming the one-line
+composition seam in #2332 (`devices::add_all`, `virtio::mmio::add_device`),
+where the reporting device will be one slot entry whose window and
+`virtio_mmio.device=` argument come from that slot's record. Until then the
+qualification test places the device itself on the x86_64 `0xd0000000`/GSI 5
+window the design records.
 
 Before any reclaim, the entire chain must pass direction, nonzero length,
 checked address arithmetic, single-region raw-range and normal-termination
@@ -464,8 +466,9 @@ extra bytes in the same region; activation rejects it otherwise.
 
 The RAM owner supports only owned private-anonymous backing. It queries the real
 host page size once per device and prepares inward complete host pages before
-the first syscall. Empty interiors skip `madvise`. `VmConfig::reclaim` selects
-the advice. `Immediate` (the default) discards the pages with `MADV_DONTNEED`
+the first syscall. Empty interiors skip `madvise`. `ReclaimPolicy`, passed to
+the device's constructor, selects the advice. `Immediate` (the default)
+discards the pages with `MADV_DONTNEED`
 before used length zero is published. `Lazy` marks them with `MADV_FREE` on
 Linux, so the kernel discards them only under memory pressure and a guest that
 reuses them first does not fault; on other hosts it falls back to `Immediate`.

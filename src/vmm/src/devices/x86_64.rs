@@ -4,21 +4,10 @@
 //! The x86_64 legacy platform: the PC ports Linux expects at boot, and
 //! the windows KVM's in-kernel PIC, PIT and APICs serve.
 
-use std::{
-    fmt::Write as _,
-    sync::{Arc, Mutex},
-};
-
-use super::{balloon::VirtioBalloon, console::ConsoleWriter, i8042::I8042, serial::Serial8250};
+use super::{console::ConsoleWriter, i8042::I8042, serial::Serial8250};
 use crate::{
     chipset::{BusKind, ChipsetBuilder},
-    error::{Error, Result},
-    memory::ReclaimPolicy,
-    virtio::{
-        interrupt::MmioInterrupt,
-        mmio::{MMIO_WINDOW_LEN, MmioResources, MmioTransport},
-    },
-    vm::DeviceContext,
+    error::Result,
 };
 
 // COM1, the interrupt line (GSI) it raises, then the i8042 data and command ports.
@@ -26,53 +15,6 @@ pub(crate) const COM1: u64 = 0x3f8;
 pub(crate) const COM1_GSI: u32 = 4;
 pub(crate) const I8042_DATA: u64 = 0x60;
 pub(crate) const I8042_COMMAND: u64 = 0x64;
-
-/// The resource record used for both registration and guest discovery.
-pub(crate) struct MmioSlot {
-    pub(crate) base: u64,
-    pub(crate) irq: u32,
-}
-
-pub(crate) const BALLOON_MMIO: MmioSlot = MmioSlot {
-    base: 0xd000_0000,
-    irq: 5,
-};
-
-impl MmioSlot {
-    pub(crate) fn append_cmdline(&self, cmdline: &mut String) {
-        write!(
-            cmdline,
-            " virtio_mmio.device={}@{:#x}:{}",
-            MMIO_WINDOW_LEN, self.base, self.irq
-        )
-        .expect("writing to a String cannot fail");
-    }
-}
-
-/// Uses the VM's RAM and shared executor; no device-private worker is created.
-pub(crate) fn add_balloon(
-    builder: &mut ChipsetBuilder,
-    context: DeviceContext<'_>,
-    reclaim: ReclaimPolicy,
-) -> Result<()> {
-    let device = Arc::new(Mutex::new(
-        VirtioBalloon::new(reclaim).map_err(Error::CreateBalloon)?,
-    ));
-    builder.add("balloon", |resources| {
-        resources.mmio(BALLOON_MMIO.base, MMIO_WINDOW_LEN);
-        let interrupt = Arc::new(MmioInterrupt::new(resources.line(BALLOON_MMIO.irq)));
-        let worker = context.workers.add(device.clone(), interrupt.clone());
-        MmioTransport::new(
-            device,
-            interrupt,
-            MmioResources {
-                memory: Arc::clone(context.memory),
-                sender: resources.event_sender(),
-                worker,
-            },
-        )
-    })
-}
 
 /// Reserves the windows the host serves in the kernel, so a device placed
 /// there fails the build, then adds COM1 on GSI 4, writing to `console`, and

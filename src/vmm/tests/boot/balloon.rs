@@ -8,7 +8,7 @@
 
 use super::*;
 use crate::{
-    devices::{balloon::VirtioBalloon, x86_64::BALLOON_MMIO},
+    devices::balloon::VirtioBalloon,
     memory::{GuestMemoryMmap, ReclaimPolicy},
     virtio::{
         ActivationContext, DeviceError, DeviceEvent, DeviceSpec, FeatureError, VirtioDevice,
@@ -149,6 +149,10 @@ fn sample(
     }
 }
 
+const BALLOON_BASE: u64 = 0xd000_0000;
+const BALLOON_IRQ: u32 = 5;
+const BALLOON_CMDLINE: &str = " virtio_mmio.device=4096@0xd0000000:5";
+
 fn run_reporting_guest(enabled: bool, init_on_free: bool) {
     let host_page = crate::memory::host_page_size().unwrap();
     assert_eq!(host_page, 4096, "x86_64 qualification uses 4 KiB PFNs");
@@ -170,7 +174,7 @@ fn run_reporting_guest(enabled: bool, init_on_free: bool) {
         ConsoleWorker::spawn(Box::new(log.clone()), DEFAULT_QUEUE_BYTES).unwrap();
     let evidence = Arc::new(Mutex::new(Evidence::default()));
     let mut cmdline = CONSOLE_CMDLINE.to_owned();
-    BALLOON_MMIO.append_cmdline(&mut cmdline);
+    cmdline.push_str(BALLOON_CMDLINE);
     if init_on_free {
         cmdline.push_str(" init_on_free=1");
     }
@@ -195,8 +199,8 @@ fn run_reporting_guest(enabled: bool, init_on_free: bool) {
                 used: None,
             }));
             builder.add("balloon", |resources| {
-                resources.mmio(BALLOON_MMIO.base, MMIO_WINDOW_LEN);
-                let interrupt = Arc::new(MmioInterrupt::new(resources.line(BALLOON_MMIO.irq)));
+                resources.mmio(BALLOON_BASE, MMIO_WINDOW_LEN);
+                let interrupt = Arc::new(MmioInterrupt::new(resources.line(BALLOON_IRQ)));
                 let worker = context.workers.add(device.clone(), interrupt.clone());
                 sampler_memory = Some(Arc::clone(context.memory));
                 MmioTransport::new(

@@ -40,6 +40,10 @@ pub(crate) struct VirtioBalloon {
 }
 
 impl VirtioBalloon {
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "No composition point constructs a device yet.")
+    )]
     pub(crate) fn new(reclaim: ReclaimPolicy) -> io::Result<Self> {
         Ok(Self {
             actual: 0,
