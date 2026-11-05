@@ -13,8 +13,9 @@ import { AsciiButton } from '@/components/ascii'
 import { BOX_TEMPLATES, TEMPLATE_CATEGORIES, boxTemplateFor, validTemplateImage } from '@/lib/quickstart/box-templates'
 import { cn } from '@/lib/utils'
 
+/** Select a public template and create a Box only after membership grants write access. */
 export function ConsoleTemplatePicker() {
-  const { authenticatedUserHasPermission } = useSelectedOrganization()
+  const { authenticatedUserHasPermission, authenticatedUserOrganizationMember } = useSelectedOrganization()
   const canCreate = authenticatedUserHasPermission(OrganizationRolePermissionsEnum.WRITE_BOXES)
   const [params] = useSearchParams()
   const [selection, setSelection] = useState<string | null>(
@@ -169,7 +170,18 @@ export function ConsoleTemplatePicker() {
             {busy ? 'Creating Box…' : 'Create Box'}
           </AsciiButton>
           {!canCreate && (
-            <p className="mt-2 text-xs text-muted-foreground">You need Box write permission to create a Box.</p>
+            <div className="mt-2 text-xs text-muted-foreground">
+              {authenticatedUserOrganizationMember ? (
+                <p>You need Box write permission to create a Box.</p>
+              ) : (
+                <>
+                  <p>Permissions are unavailable. Reload to try again.</p>
+                  <AsciiButton type="button" size="sm" className="mt-2" onClick={() => location.reload()}>
+                    Reload page
+                  </AsciiButton>
+                </>
+              )}
+            </div>
           )}
           {createBox.isError && (
             <p role="alert" className="mt-2 text-xs text-destructive">

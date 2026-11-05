@@ -17,6 +17,7 @@ import { toast } from 'sonner'
 
 const SHORT_NAME = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/
 
+/** List and reserve names within one organization, preserving quota and write-permission checks. */
 function OrganizationDomains({ organizationId, canManage }: { organizationId: string; canManage: boolean }) {
   const api = useApi()
   const queryClient = useQueryClient()
@@ -291,6 +292,7 @@ function OrganizationDomains({ organizationId, canManage }: { organizationId: st
   )
 }
 
+/** Remount organization-local form state when the selected organization changes. */
 export default function Domains() {
   const { selectedOrganization, authenticatedUserHasPermission } = useSelectedOrganization()
   if (!selectedOrganization) return <p>Select an organization to view domains.</p>

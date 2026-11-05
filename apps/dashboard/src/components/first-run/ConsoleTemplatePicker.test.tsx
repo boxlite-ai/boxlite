@@ -4,7 +4,14 @@ import { createRoot, type Root } from 'react-dom/client'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { ConsoleTemplatePicker } from './ConsoleTemplatePicker'
-const state = vi.hoisted(() => ({ create: vi.fn(), navigate: vi.fn(), isError: false, canCreate: true }))
+const state = vi.hoisted(() => ({
+  create: vi.fn(),
+  navigate: vi.fn(),
+  isError: false,
+  canCreate: true,
+  memberLoaded: true,
+  reload: vi.fn(),
+}))
 vi.mock('@/hooks/mutations/useCreateBoxMutation', () => ({
   useCreateBoxMutation: () => ({ mutateAsync: state.create, reset: vi.fn(), isPending: false, isError: state.isError }),
 }))
@@ -13,7 +20,10 @@ vi.mock('react-router-dom', async () => ({
   useNavigate: () => state.navigate,
 }))
 vi.mock('@/hooks/useSelectedOrganization', () => ({
-  useSelectedOrganization: () => ({ authenticatedUserHasPermission: () => state.canCreate }),
+  useSelectedOrganization: () => ({
+    authenticatedUserHasPermission: () => state.canCreate,
+    authenticatedUserOrganizationMember: state.memberLoaded ? { id: 'member-1' } : null,
+  }),
 }))
 let host: HTMLDivElement, root: Root
 beforeEach(() => {
@@ -21,6 +31,8 @@ beforeEach(() => {
   vi.clearAllMocks()
   state.isError = false
   state.canCreate = true
+  state.memberLoaded = true
+  vi.stubGlobal('location', { reload: state.reload })
   host = document.createElement('div')
   document.body.append(host)
   root = createRoot(host)
@@ -28,6 +40,7 @@ beforeEach(() => {
 afterEach(async () => {
   await act(async () => root.unmount())
   host.remove()
+  vi.unstubAllGlobals()
 })
 async function mount(url = '/') {
   await act(async () =>
@@ -120,5 +133,16 @@ it('blocks console creation without Box write permission', async () => {
   expect(button.disabled).toBe(true)
   expect(host.textContent).toContain('You need Box write permission to create a Box.')
   await click('Create Box')
+  expect(state.create).not.toHaveBeenCalled()
+})
+
+it('offers a page reload when membership is unavailable without claiming denial', async () => {
+  state.canCreate = false
+  state.memberLoaded = false
+  await mount()
+  expect(host.textContent).toContain('Permissions are unavailable.')
+  expect(host.textContent).not.toContain('You need Box write permission')
+  await click('Reload page')
+  expect(state.reload).toHaveBeenCalledTimes(1)
   expect(state.create).not.toHaveBeenCalled()
 })

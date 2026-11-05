@@ -53,6 +53,7 @@ export function useImageQuery(idOrRef: string | undefined) {
   })
 }
 
+/** Refresh organization-owned image usage on return and during foreground viewing. */
 export function useImageUsageQuery() {
   const { imageApi } = useApi()
   const { selectedOrganization } = useSelectedOrganization()
