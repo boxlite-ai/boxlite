@@ -11,7 +11,7 @@ How the BoxLite runtime's code fits together, for contributors. The user-level p
 - [Container capabilities](container-capabilities.md): the Linux capability API.
 - [Guest SSH](../../../src/guest/src/service/ssh/README.md): russh APIs, authentication,
   container workloads, forwarding, and shutdown ownership.
-- [Jailer threat model](../../../src/boxlite/src/jailer/THREAT_MODEL.md).
+- [Jailer threat model](../../../src/boxlite/src/jailer/README.md).
 
 ## Source map
 

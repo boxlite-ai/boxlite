@@ -1,4 +1,4 @@
-# REST API E2E test report and runbook
+# REST API testing
 
 This document defines the reusable BoxLite REST API test flow. It covers the
 public REST contract, the existing SDK -> API -> Runner -> VM E2E suite, the
@@ -20,13 +20,13 @@ flowchart LR
   Runner --> VM["libkrun VM"]
 ```
 
-## Existing base
+## Coverage
 
 The suite under `apps/e2e` is already REST-backed. It builds a Python
 SDK REST client and verifies that requests reach the API and Runner. It is not
 a local FFI test path.
 
-This PR fills the following gaps:
+The workflow provides:
 
 - static coverage inventory based on `openapi/box.openapi.yaml`;
 - explicit `AUTH=api-key` and `AUTH=oidc` modes for REST E2E;
@@ -40,10 +40,10 @@ Run heavy verification on the dev machine or in CI. Do not run full REST E2E,
 CLI integration, or `make test:apps` on the local Mac unless local rebuilds are
 intentional.
 
-Recommended narrow check, locally or on Remote:
+For a focused API check:
 
 ```bash
-cd apps && yarn nx test api --testNamePattern BoxliteWsProxyService --runInBand
+make test:apps:api FILTER=BoxliteWsProxyService
 ```
 
 Full validation belongs on the dev machine:

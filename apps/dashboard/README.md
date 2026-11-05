@@ -202,22 +202,12 @@ Navigation is the sidebar plus the tables. There is one route per resource, and
 each resource's table is the place you act on it — filter, sort, select, and run
 per-row or bulk actions from there.
 
-There is deliberately **no command palette**. The console had a `Ctrl/Cmd-K`
-palette that re-listed the sidebar's routes, re-implemented each table's search
-against a different data source, and exposed row actions a second time through
-per-table command providers. Every command in it was a second, drifting copy of
-an affordance the page already had, and keeping the two in step was a standing
-cost paid on every table change. Search belongs to the table that owns the data;
-actions belong to the row. If an action is hard to reach, fix the page.
+Search and actions belong to their resource tables. The console has no command
+palette duplicating those controls.
 
+## Wallet history
 
-## Two histories of the same thing go on tabs, not on top of each other
-
-Invoices and credit activity both answer "where did my money go", so stacking
-them made the Wallet tab a long scroll in which the second list was easy to miss
-entirely. They are sibling tabs now, and each is paged rather than rendered
-whole — an account with hundreds of documents must not decide how tall this page
-is.
+Invoices and credit activity use separate, paginated tabs.
 
 ## Card setup and promo redemption share one billing flow
 
@@ -314,9 +304,7 @@ image limit; usage comes from the separate usage API, not the displayed row coun
 
 A new organization with the default system-image configuration sees `base`,
 `python`, and `node`, with zero organization image slots used. The operator may
-configure additional system images, so three is not a fixed UI limit. See the
-[expected screenshots](../../docs/contributing/investigations/2026-11-03-images-catalog-membership.md#screenshots)
-for a new organization and an organization with registered images.
+configure additional system images, so three is not a fixed UI limit.
 
 ## A state the API records once is told in the past tense
 
@@ -456,8 +444,8 @@ meantime, the console falls back to their personal organization.
 
 The welcome flow saves organization intent, then offers card setup, promo redemption,
 or direct entry to Quickstart.
-[Onboarding](ONBOARDING.md) describes the dedicated Quickstart page, public image templates,
-server-backed prompt drafts, and deployment/verification requirements.
+[Onboarding](onboarding.md) describes the dedicated Quickstart page, public image templates,
+server-backed prompt drafts, completion state, and deployment requirements.
 
 ## Box limits refresh without interrupting creation
 

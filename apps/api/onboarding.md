@@ -17,13 +17,13 @@ and enforce organization membership through the existing organization guard.
 | POST /quickstart/handoffs                    | requestId (UUID), text | Immutable snapshot; same ID/content returns original  |
 | PATCH /quickstart/handoffs/:requestId/copied | —                      | Idempotently mark successful clipboard copy           |
 
-Drafts are keyed by organization and authenticated user. Empty text clears a draft. Revision
-conflicts return 409 so delayed autosaves and multiple tabs cannot silently overwrite newer
-work. Clients should serialize saves and reload on conflict. Handoff text must not be empty.
-A handoff request ID is scoped to organization and user. Reusing it with different text returns
-409; concurrent identical submissions return one snapshot. Handoffs do not modify drafts.
-A created snapshot means prepared for copying; copiedAt is populated only after the client
-reports clipboard success. Neither event indicates a successful deployment.
+## Drafts and handoffs
+
+- Drafts are keyed by organization and user; empty text clears a draft.
+- Revision conflicts return 409; clients serialize saves and reload on conflict.
+- Handoff text must be nonempty; its request ID is scoped to organization and user.
+- Identical submissions return one snapshot; reusing an ID with different text returns 409.
+- Handoffs do not modify drafts; `copiedAt` records reported clipboard success, not deployment.
 
 Only original user text is accepted (maximum 16,000 characters); do not send the assembled
 credential-bearing agent prompt. Unknown DTO properties are rejected and these routes do not
@@ -46,16 +46,12 @@ hosts and creates a random isolated schema. It never reads the application's DB 
 Set `NX_SKIP_NX_CACHE=true` when enabling database integration tests so a cached skipped run
 cannot substitute for database execution. Run `make test:apps:api FILTER=onboarding`.
 
-Verified locally on PostgreSQL 17: migration up/down/up, existing organization null profile,
-persistence across service instances, organization/user draft isolation, concurrent draft
-revision conflicts, concurrent handoff deduplication, changed-content conflicts, idempotent
-copy acknowledgement and organization deletion cascade. Controller guard and DTO/service
-unit tests also cover role restrictions, input limits, unknown fields and sanitized errors.
+CI uses the API job's disposable PostgreSQL service when its standard localhost/boxlite configuration is present.
+Local runs opt in with `ONBOARDING_TEST_DATABASE_URL`; without either configuration, the integration suite is skipped.
+Each run creates and removes an isolated schema.
 
-Deploy the pre-deploy migration and API before the new Console. The Console saves
-onboarding before checking credit, restores each user's prompt draft, and acknowledges
-copying only after handing the assembled prompt to the clipboard.
+## Wire format
 
-CI runs the onboarding migration integration suite against the API job’s existing disposable PostgreSQL service when its standard localhost/boxlite configuration is present. Local runs opt in with `ONBOARDING_TEST_DATABASE_URL`. Each run uses an isolated schema and removes it after testing; without either configuration, the suite is skipped.
-
-Nullable onboarding reads explicitly serialize JSON `null`, including for new users without prompt drafts. Revision schemas use bounded `int32` values (request maximum 2147483646, response maximum 2147483647). Generated TypeScript onboarding timestamp properties are ISO strings, matching Axios response data; their OpenAPI wire format remains `date-time`.
+- Missing profiles and drafts serialize as JSON `null`.
+- Revisions use bounded `int32` values: request maximum 2147483646, response maximum 2147483647.
+- Generated TypeScript timestamps are ISO strings; the OpenAPI wire format remains `date-time`.
