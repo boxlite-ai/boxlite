@@ -215,8 +215,10 @@ describe('Domains page', () => {
       document.querySelector<HTMLButtonElement>('button[aria-label="Copy spare.apps.test"]')!.click(),
     )
     expect(feedback.copy).toHaveBeenCalledWith('spare.apps.test')
-    if (copied) expect(feedback.success).toHaveBeenCalledWith('Domain copied')
-    else {
+    if (copied) {
+      expect(feedback.success).toHaveBeenCalledWith('Domain copied')
+      expect(feedback.error).not.toHaveBeenCalled()
+    } else {
       expect(feedback.success).not.toHaveBeenCalled()
       expect(feedback.error).toHaveBeenCalledWith('Could not copy domain. Select the hostname and copy it manually.')
     }

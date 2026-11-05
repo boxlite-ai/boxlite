@@ -29,6 +29,9 @@ export function useImagesQuery() {
       const response = await imageApi.listImages(selectedOrganization.id)
       return response.data
     },
+    // Registration can finish after STARTED without another state event.
+    refetchOnMount: 'always',
+    refetchInterval: 30_000,
     enabled: !!selectedOrganization,
   })
 }
@@ -63,6 +66,9 @@ export function useImageUsageQuery() {
       const response = await imageApi.getImageUsage(selectedOrganization.id)
       return response.data
     },
+    // Registration can finish after STARTED without another state event.
+    refetchOnMount: 'always',
+    refetchInterval: 30_000,
     enabled: !!selectedOrganization,
   })
 }

@@ -4,7 +4,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { ConsoleTemplatePicker } from './ConsoleTemplatePicker'
-const state = vi.hoisted(() => ({ create: vi.fn(), navigate: vi.fn(), isError: false }))
+const state = vi.hoisted(() => ({ create: vi.fn(), navigate: vi.fn(), isError: false, canCreate: true }))
 vi.mock('@/hooks/mutations/useCreateBoxMutation', () => ({
   useCreateBoxMutation: () => ({ mutateAsync: state.create, reset: vi.fn(), isPending: false, isError: state.isError }),
 }))
@@ -12,11 +12,15 @@ vi.mock('react-router-dom', async () => ({
   ...(await vi.importActual('react-router-dom')),
   useNavigate: () => state.navigate,
 }))
+vi.mock('@/hooks/useSelectedOrganization', () => ({
+  useSelectedOrganization: () => ({ authenticatedUserHasPermission: () => state.canCreate }),
+}))
 let host: HTMLDivElement, root: Root
 beforeEach(() => {
   globalThis.IS_REACT_ACT_ENVIRONMENT = true
   vi.clearAllMocks()
   state.isError = false
+  state.canCreate = true
   host = document.createElement('div')
   document.body.append(host)
   root = createRoot(host)
@@ -104,9 +108,17 @@ it('retires Coder Universal from selection and search and falls back to Python f
   expect(host.querySelector('[aria-label="Select Coder Universal"]')).toBeNull()
   expect(host.querySelector('[aria-label="Select Python"]')?.getAttribute('aria-pressed')).toBe('true')
   await click('Create Box')
-  expect(state.create).toHaveBeenCalledWith(
-    expect.objectContaining({ image: 'docker.io/library/python:3.12-slim' }),
-  )
+  expect(state.create).toHaveBeenCalledWith(expect.objectContaining({ image: 'docker.io/library/python:3.12-slim' }))
   await input('Search templates', 'coder')
   expect(host.textContent).toContain('No templates found')
+})
+
+it('blocks console creation without Box write permission', async () => {
+  state.canCreate = false
+  await mount()
+  const button = Array.from(host.querySelectorAll('button')).find((e) => e.textContent === 'Create Box')!
+  expect(button.disabled).toBe(true)
+  expect(host.textContent).toContain('You need Box write permission to create a Box.')
+  await click('Create Box')
+  expect(state.create).not.toHaveBeenCalled()
 })

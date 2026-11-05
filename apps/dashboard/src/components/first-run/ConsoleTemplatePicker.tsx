@@ -2,6 +2,8 @@
 
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useState } from 'react'
+import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
+import { OrganizationRolePermissionsEnum } from '@boxlite-ai/api-client'
 import { useCreateBoxMutation } from '@/hooks/mutations/useCreateBoxMutation'
 import { useNavigate, generatePath, useSearchParams } from 'react-router-dom'
 import { RoutePath } from '@/enums/RoutePath'
@@ -12,6 +14,8 @@ import { BOX_TEMPLATES, TEMPLATE_CATEGORIES, boxTemplateFor, validTemplateImage 
 import { cn } from '@/lib/utils'
 
 export function ConsoleTemplatePicker() {
+  const { authenticatedUserHasPermission } = useSelectedOrganization()
+  const canCreate = authenticatedUserHasPermission(OrganizationRolePermissionsEnum.WRITE_BOXES)
   const [params] = useSearchParams()
   const [selection, setSelection] = useState<string | null>(
     () => boxTemplateFor(params.get('template') ?? '')?.id ?? null,
@@ -33,6 +37,7 @@ export function ConsoleTemplatePicker() {
       `${item.name} ${item.description} ${item.image}`.toLowerCase().includes(search.toLowerCase()),
   )
   const deploy = async () => {
+    if (!canCreate) return
     try {
       const box = await createBox.mutateAsync({
         name,
@@ -158,11 +163,14 @@ export function ConsoleTemplatePicker() {
           <AsciiButton
             variant="primary"
             className="w-full justify-center py-2.5"
-            disabled={busy || !validTemplateImage(image) || !/^[a-z0-9][a-z0-9-]{0,39}$/.test(name)}
+            disabled={!canCreate || busy || !validTemplateImage(image) || !/^[a-z0-9][a-z0-9-]{0,39}$/.test(name)}
             onClick={() => void deploy()}
           >
             {busy ? 'Creating Box…' : 'Create Box'}
           </AsciiButton>
+          {!canCreate && (
+            <p className="mt-2 text-xs text-muted-foreground">You need Box write permission to create a Box.</p>
+          )}
           {createBox.isError && (
             <p role="alert" className="mt-2 text-xs text-destructive">
               Could not complete the action. Check the configuration and try again.
