@@ -14,7 +14,7 @@ use mio::{Events, Poll, Token};
 use std::{
     collections::HashMap,
     fs,
-    os::unix::net::UnixListener,
+    os::{fd::OwnedFd, unix::net::UnixListener},
     sync::{
         Arc, Mutex,
         atomic::{AtomicU8, AtomicUsize, Ordering},
@@ -702,6 +702,64 @@ fn io_budget_rearms_readiness_without_more_peer_writes() {
     }
 }
 
+impl Active {
+    fn transmit_for_test(
+        &mut self,
+        write: impl FnMut(&mut UnixStream, &[u8]) -> io::Result<usize>,
+    ) -> Result<(), DeviceError> {
+        self.transmit_with(write)
+    }
+}
+
+#[test]
+fn tx_budget_rearms_readiness_with_an_incomplete_chain() {
+    let (mut h, mut peer) = Harness::connected();
+    let frame = [0x63; 60];
+    h.tx(0, &packet(&frame));
+    let active = h.net.active.as_mut().unwrap();
+    let old_source = active.source_id;
+    active.collect(TX).unwrap();
+    let mut attempts = 0;
+    // Keep the socket writable: signal timing and send-buffer sizes must not
+    // decide whether the last budgeted write leaves an incomplete chain.
+    active
+        .transmit_for_test(|stream, bytes| {
+            attempts += 1;
+            if attempts < IO_BUDGET {
+                Err(io::ErrorKind::Interrupted.into())
+            } else {
+                stream.write(&bytes[..1])
+            }
+        })
+        .unwrap();
+    assert_eq!(attempts, IO_BUDGET);
+    assert_eq!(active.tx.as_ref().unwrap().written, HEADER_LEN - 4 + 1);
+    assert_ne!(
+        active.source_id, old_source,
+        "TX budget must rearm readiness"
+    );
+    assert_eq!(h.used(TX), 0);
+
+    // No peer read or guest kick may create a new writable edge before completion.
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while h.used(TX) == 0 {
+        assert!(Instant::now() < deadline, "TX budget continuation stalled");
+        for event in h.registrar.ready(Duration::from_millis(10)) {
+            h.event(event);
+        }
+    }
+    h.pump();
+    assert_eq!(h.used(TX), 1);
+    assert_eq!(h.completion(TX, 0), (0, 0));
+    assert!(h.net.active.as_ref().unwrap().tx.is_none());
+    assert_eq!(read_wire(&mut peer), frame);
+    peer.set_nonblocking(true).unwrap();
+    assert_eq!(
+        peer.read(&mut [0]).unwrap_err().kind(),
+        io::ErrorKind::WouldBlock
+    );
+}
+
 #[test]
 fn pending_connect_defers_queue_io_until_backend_readiness() {
     let (mut h, mut peer) = Harness::connected();
@@ -715,6 +773,35 @@ fn pending_connect_defers_queue_io_until_backend_readiness() {
     h.backend();
     assert_eq!(read_wire(&mut peer), [0x21; 60]);
     assert!(!h.net.active.as_ref().unwrap().connecting);
+}
+
+#[test]
+fn pending_connect_completion_failure_releases_active_state() {
+    let (mut h, _peer) = Harness::connected();
+    let path = SocketPath::new();
+    let listener = UnixListener::bind(&path.0).unwrap();
+    listener.set_nonblocking(true).unwrap();
+    // A listening stream socket has no peer; owned conversion avoids raw FDs
+    // and a connect/backlog race while reaching the real peer_addr() check.
+    let stream = UnixStream::from(OwnedFd::from(listener));
+    assert!(stream.take_error().unwrap().is_none());
+    assert!(stream.peer_addr().is_err());
+    let active = h.net.active.as_mut().unwrap();
+    active.stream = stream;
+    active.connecting = true;
+    let event = DeviceEvent::BackendReady(active.source_id);
+
+    assert!(matches!(
+        h.net.on_event(event),
+        Err(DeviceError::NeedsReset("complete gvproxy connect"))
+    ));
+    assert!(h.net.failed);
+    assert!(h.net.active.is_none());
+    assert!(h.registrar.state.lock().unwrap().sources.is_empty());
+    assert!(matches!(
+        h.net.on_event(event),
+        Err(DeviceError::NeedsReset("net"))
+    ));
 }
 
 #[test]

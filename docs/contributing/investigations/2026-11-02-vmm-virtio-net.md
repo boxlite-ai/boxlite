@@ -74,6 +74,36 @@ Count added source and configuration lines after formatting, including untracked
 Verify that shared virtio files have no diff against the intended base.
 Real gvproxy, Linux guest execution, and whole-VM snapshots are not qualified by these tests.
 
+### TX budget and connection-failure coverage
+
+The TX budget test injects interrupted writes followed by a one-byte socket
+write, leaving one chain incomplete after all 256 attempts. The test-only
+`transmit_for_test()` method accepts a write callback to control this boundary.
+Production calls the argument-free `transmit()`, which supplies
+`UnixStream::write` to the private `transmit_with()` implementation. Both entry
+points use that same sending loop; the test entry lives in the `#[cfg(test)]`
+module, without conditional parameters or arguments in the production path.
+The real poller resumes TX before the peer reads or the
+guest kicks again; the test checks the complete frame and its single completion.
+This avoids depending on host socket-buffer sizes or signal timing.
+
+The connection-completion test converts a listening Unix socket into an owned
+stream descriptor with no connected peer. It dispatches `BackendReady` and
+checks the `complete gvproxy connect` error, failure latch, registration cleanup,
+and cleared active state. This covers `peer_addr()` failure, not the separate
+`take_error()` error path or real gvproxy connection establishment.
+
+On macOS ARM64, removing TX rearming made
+`make test:unit:vmm FILTER=tx_budget_rearms_readiness_with_an_incomplete_chain`
+fail with `TX budget must rearm readiness`; restoring it passed.
+Independently removing the connection-completion check made
+`make test:unit:vmm FILTER=pending_connect_completion_failure_releases_active_state`
+fail at the exact error assertion; restoring it passed.
+These mutation checks establish regression coverage for existing behavior,
+not a newly fixed production defect. The 25 net tests, full VMM unit target,
+`make clippy:vmm`, and `make fmt:check:rust` passed; these additions have not
+yet been run on Linux.
+
 ### Malformed-descriptor socket closure
 
 The malformed RX descriptor test sends a frame before dispatching readiness.

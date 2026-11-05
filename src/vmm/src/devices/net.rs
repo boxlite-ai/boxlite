@@ -258,6 +258,13 @@ impl Active {
     }
 
     fn transmit(&mut self) -> Result<(), DeviceError> {
+        self.transmit_with(UnixStream::write)
+    }
+
+    fn transmit_with(
+        &mut self,
+        mut write: impl FnMut(&mut UnixStream, &[u8]) -> io::Result<usize>,
+    ) -> Result<(), DeviceError> {
         for _ in 0..IO_BUDGET {
             if self.tx.is_none() {
                 let Some(chain) = self.pending[TX].pop_front() else {
@@ -291,7 +298,10 @@ impl Active {
                 });
             }
             let tx = self.tx.as_mut().unwrap();
-            if !advance(self.stream.write(&tx.bytes[tx.written..]), &mut tx.written)? {
+            if !advance(
+                write(&mut self.stream, &tx.bytes[tx.written..]),
+                &mut tx.written,
+            )? {
                 return Ok(());
             }
             if tx.written == tx.bytes.len() {
