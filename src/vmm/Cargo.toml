@@ -10,6 +10,7 @@ description = "Virtual machine lifecycle and device model for BoxLite"
 
 [dependencies]
 boxlite-hypervisor.workspace = true
+libc = "0.2"
 # The disk format layer; `sync` keeps tokio out of the crate.
 imago = { version = "0.2.6", default-features = false, features = ["sync"] }
 mio = { version = "1.2.0", default-features = false, features = ["os-poll", "net"] }
