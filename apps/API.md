@@ -809,7 +809,8 @@ out `--header`: the client opens a browser sign-in instead.
 
 **Credentials.** A user API key, or an OAuth token whose audience is
 `MCP_RESOURCE_URL`. Dashboard tokens are refused, as are the API keys of machine
-principals (proxy, runner, collectors). A `401` carries
+principals (proxy, runner, collectors); without `MCP_RESOURCE_URL` every OAuth token
+is refused. A `401` carries
 `WWW-Authenticate: Bearer resource_metadata=...` naming the RFC 9728 document at
 `/.well-known/oauth-protected-resource/api/mcp`, which lists the API's OIDC issuer
 as the authorization server; it is published only when `MCP_RESOURCE_URL` is set.
@@ -832,7 +833,8 @@ an OAuth caller before it runs, for direct tools and `invoke_api_endpoint` alike
   only, since each grants access that outlives the token. New operations are denied
   until listed, and a spec fails until each v1 operation is classified.
 - An operation whose route declares a permission the token lacks
-  (`RequiredOrganizationResourcePermissions`, read at startup) answers `403` with
+  (`RequiredOrganizationResourcePermissions`, read at startup; an `@All` route such
+  as the exec and file proxies decides every verb on its path) answers `403` with
   `WWW-Authenticate: Bearer error="insufficient_scope", scope="<granted> <missing>"`,
   so a client that re-authorizes keeps the scopes it had.
 
@@ -849,7 +851,7 @@ permissions apply in REST.
 | --- | --- |
 | `createBox`, `listBoxes`, `getBox`, `startBox`, `stopBox`, `removeBox` | The box operations of the same `operationId` |
 | `startExecution`, `getExecution` | Run a command; with `wait` (default) the result carries `stdout`, `stderr`, `exit_code` and `complete` |
-| `uploadFiles`, `downloadFiles` | Tar archives as base64 (`body_base64`), up to 8 MiB |
+| `uploadFiles`, `downloadFiles` | Tar archives as base64 (`body_base64`), up to 8 MiB; `/api/mcp` accepts JSON bodies up to 12 MiB for this, every other route keeps the default limit |
 | `list_api_endpoints`, `get_api_endpoint_schema`, `invoke_api_endpoint` | Find, describe and call any other catalog operation by `operationId` |
 
 The catalog is built at startup from [`openapi/box.openapi.yaml`](../openapi/box.openapi.yaml),
@@ -877,9 +879,12 @@ POST /api/mcp ─▶ McpOriginGuard, McpAuthGuard ─▶ caller
 The caller's token is never forwarded (MCP forbids token passthrough). The nonce is
 32 random bytes, valid for 30 seconds, consumed on first use and held only in the
 process's memory; the socket lives in a fresh `0700` temporary directory, so a
-request never reaches another cluster worker. `startExecution` with `wait` and
-`attachExecution` read output from the read-only attach WebSocket on the loopback,
-authenticated by a one-time attach ticket; output printed before the attach is
+request never reaches another cluster worker. A delegated call is cut off, and the
+tool answers with an error, when its response passes 8 MiB, when it sends nothing
+for five minutes, or when the MCP client disconnects. `startExecution` with `wait`
+and `attachExecution` read output from the read-only attach WebSocket over the same
+Unix socket (so no TLS name or port is involved), authenticated by a one-time
+attach ticket; output printed before the attach is
 replayed from the runner's 256 KiB per-stream backlog. A wait that runs out returns
 `complete: false` with the output so far.
 

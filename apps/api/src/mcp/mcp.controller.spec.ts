@@ -4,6 +4,7 @@
  */
 
 import {
+  All,
   CanActivate,
   Controller,
   Delete,
@@ -11,6 +12,9 @@ import {
   INestApplication,
   Injectable,
   Param,
+  Post,
+  Put,
+  Req,
   UnauthorizedException,
   UseGuards,
 } from '@nestjs/common'
@@ -18,24 +22,31 @@ import { DiscoveryModule } from '@nestjs/core'
 import { Test } from '@nestjs/testing'
 import { CLIENT_CAPABILITIES_META_KEY, PROTOCOL_VERSION_META_KEY } from '@modelcontextprotocol/server'
 import { MCP_STRATEGY } from '@rekog/mcp-nest'
+import { ApiOperation, DocumentBuilder, SwaggerModule } from '@nestjs/swagger'
+import type { Request } from 'express'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
+import { WebSocketServer } from 'ws'
 import { parse } from 'yaml'
 import { CombinedAuthGuard } from '../auth/combined-auth.guard'
 import { FailedAuthTrackerService } from '../auth/failed-auth-tracker.service'
 import { McpDelegation } from '../auth/mcp-delegation'
 import { AuthContext } from '../common/decorators/auth-context.decorator'
-import { TypedConfigService } from '../config/typed-config.service'
+import { BoxliteWsProxyService } from '../boxlite-rest/boxlite-ws-proxy.service'
 import { RequiredOrganizationResourcePermissions } from '../organization/decorators/required-organization-resource-permissions.decorator'
 import { OrganizationResourcePermission } from '../organization/enums/organization-resource-permission.enum'
 import { McpAuthChallengeFilter } from './mcp-auth-challenge.filter'
 import { McpAuthMetadata } from './mcp-auth-metadata'
 import { McpAuthGuard } from './mcp-auth.guard'
-import { McpController, mcpStrategy } from './mcp.controller'
+import { McpController, mcpStrategy, useMcpBodyParser } from './mcp.controller'
 import { McpDispatcher } from './mcp-dispatcher'
 import { setMcpOAuthScopes } from './mcp-oauth-policy'
 import { servedOperations } from './mcp-routes'
 import { McpTools } from './mcp-tools'
+
+// `McpDispatcher` routes attach upgrades through `BoxliteWsProxyService`, whose
+// proxy dependency ships ESM that Jest does not transform.
+jest.mock('http-proxy-middleware', () => ({ createProxyMiddleware: jest.fn(() => ({ upgrade: jest.fn() })) }))
 
 const CALLER = { userId: 'user-1', role: 'user', email: 'u@example.test', organizationId: 'org-1' }
 
@@ -71,6 +82,47 @@ class BoxRoute {
   removeBox(@Param('boxId') boxId: string) {
     return { removed: boxId }
   }
+
+  /** Like the real exec proxy: an `@All` route that declares its permission. */
+  @All(':boxId/exec')
+  @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
+  startExecution() {
+    return { execution_id: 'exec-1' }
+  }
+
+  @Post(':boxId/ssh')
+  configureSsh(@Param('boxId') boxId: string) {
+    return { ssh: boxId }
+  }
+
+  /** Counts the tar bytes that reached the route. */
+  @Put(':boxId/files')
+  async uploadFiles(@Req() req: Request) {
+    let bytes = 0
+    for await (const chunk of req) bytes += (chunk as Buffer).length
+    return { bytes }
+  }
+}
+
+@Controller('box')
+@UseGuards(CombinedAuthGuard)
+class AttachTicketRoute {
+  @Post(':boxIdOrName/attach-tickets')
+  @ApiOperation({ operationId: 'createAttachTicket' })
+  createAttachTicket(@Param('boxIdOrName') boxIdOrName: string) {
+    return { ticket: `ticket-for-${boxIdOrName}` }
+  }
+}
+
+/** Stands in for the attach proxy: answers an upgrade with stdout `2` and exit 0. */
+const attachSockets = new WebSocketServer({ noServer: true })
+const wsProxy = {
+  matchAttachPath: (url?: string) => (url?.includes('/attach?') ? {} : null),
+  upgrade: async (req: never, socket: never, head: never) =>
+    attachSockets.handleUpgrade(req, socket, head, (ws) => {
+      ws.send(Buffer.from([0x01, ...Buffer.from('2\n')]))
+      ws.send(JSON.stringify({ type: 'exit', exit_code: 0 }))
+    }),
 }
 
 const spec = (name: string) => parse(readFileSync(resolve(__dirname, '../../../../openapi', name), 'utf8'))
@@ -78,7 +130,7 @@ const spec = (name: string) => parse(readFileSync(resolve(__dirname, '../../../.
 async function boot(): Promise<INestApplication> {
   const moduleRef = await Test.createTestingModule({
     imports: [DiscoveryModule],
-    controllers: [McpController, BoxRoute],
+    controllers: [McpController, BoxRoute, AttachTicketRoute],
     providers: [
       { provide: MCP_STRATEGY, useValue: mcpStrategy },
       McpTools,
@@ -86,7 +138,7 @@ async function boot(): Promise<INestApplication> {
       McpDelegation,
       { provide: McpAuthMetadata, useValue: { url: undefined } },
       { provide: FailedAuthTrackerService, useValue: { recordFailure: async () => undefined } },
-      { provide: TypedConfigService, useValue: { get: () => 3000 } },
+      { provide: BoxliteWsProxyService, useValue: wsProxy },
       McpAuthChallengeFilter,
     ],
   })
@@ -95,11 +147,12 @@ async function boot(): Promise<INestApplication> {
     .compile()
   const app = moduleRef.createNestApplication()
   app.setGlobalPrefix('api')
+  useMcpBodyParser(app)
   await app.init()
   app.get(McpTools).register({
     box: spec('box.openapi.yaml'),
     admin: spec('admin.openapi.yaml'),
-    dashboard: {},
+    dashboard: SwaggerModule.createDocument(app, new DocumentBuilder().build()),
     served: () => true,
   })
   await app.connectMicroservice({ strategy: mcpStrategy }).listen()
@@ -247,9 +300,49 @@ describe('/api/mcp', () => {
   )
 
   it('leaves operations off the OAuth allowlist to API-key callers', async () => {
-    const allowed = await call('invoke_api_endpoint', { operationId: 'configureSsh', arguments: {} }, 'Bearer good')
+    const allowed = await call(
+      'invoke_api_endpoint',
+      { operationId: 'configureSsh', arguments: { box_id: 'my-box', body: {} } },
+      'Bearer good',
+    )
 
     expect(allowed.status).toBe(200)
+    expect(allowed.json.result.structuredContent).toEqual({ ssh: 'my-box' })
+  })
+
+  it('challenges an OAuth caller on an @All route that declares a permission', async () => {
+    const denied = await call(
+      'startExecution',
+      { box_id: 'my-box', body: { command: 'true' }, wait: false },
+      'Bearer oauth:read:volumes',
+    )
+
+    expect(denied.status).toBe(403)
+  })
+
+  it('takes a tool call larger than the default JSON body limit', async () => {
+    const tar = Buffer.alloc(512 * 1024, 7)
+    const uploaded = await call(
+      'uploadFiles',
+      { box_id: 'my-box', path: '/tmp', body_base64: tar.toString('base64') },
+      'Bearer good',
+    )
+
+    expect(uploaded.status).toBe(200)
+    expect(uploaded.json.result.structuredContent).toEqual({ bytes: tar.length })
+  })
+
+  it('reads execution output over the private socket even when the API serves TLS', async () => {
+    const certPath = process.env.CERT_PATH
+    process.env.CERT_PATH = '/etc/ssl/boxlite/api.pem'
+    try {
+      const run = await call('startExecution', { box_id: 'my-box', body: { command: 'echo 2' } }, 'Bearer good')
+
+      expect(run.json.result.structuredContent).toMatchObject({ complete: true, exit_code: 0, stdout: '2\n' })
+    } finally {
+      if (certPath === undefined) delete process.env.CERT_PATH
+      else process.env.CERT_PATH = certPath
+    }
   })
 
   it('names no scope in the 401 challenge, so clients request scopes_supported', async () => {

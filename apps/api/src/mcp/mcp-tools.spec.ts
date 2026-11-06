@@ -14,11 +14,14 @@ import { resolve } from 'node:path'
 import { parse } from 'yaml'
 import { CombinedAuthGuard } from '../auth/combined-auth.guard'
 import { RunnerAuthGuard } from '../auth/runner-auth.guard'
-import { TypedConfigService } from '../config/typed-config.service'
 import { McpDispatcher } from './mcp-dispatcher'
 import { servedOperations } from './mcp-routes'
 import { McpTools } from './mcp-tools'
 import { MCP_OAUTH_OPERATIONS, MCP_OAUTH_SCOPES } from './mcp-oauth-policy'
+
+// `McpDispatcher` routes attach upgrades through `BoxliteWsProxyService`, whose
+// proxy dependency ships ESM that Jest does not transform.
+jest.mock('http-proxy-middleware', () => ({ createProxyMiddleware: jest.fn(() => ({ upgrade: jest.fn() })) }))
 
 @Controller('box')
 @UseGuards(CombinedAuthGuard)
@@ -61,7 +64,6 @@ async function registered(served: Parameters<McpTools['register']>[0]['served'] 
       McpTools,
       { provide: MCP_STRATEGY, useValue: { registerTool: (tool: Tool) => tools.push(tool) } },
       { provide: McpDispatcher, useValue: {} },
-      { provide: TypedConfigService, useValue: { get: () => 3000 } },
     ],
   }).compile()
   const app = moduleRef.createNestApplication()
