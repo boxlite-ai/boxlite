@@ -445,7 +445,7 @@ request body, not platform API-key authentication. Only supported, verified noti
 matching an established installation binding persist a wake hint. Success is 204;
 invalid signatures are 401, conflicting delivery bodies 409, unsupported media/compression
 415, bodies above 1 MiB 413, and unavailable persistence/capacity 503. See the
-[ingress contract and recovery limitations](api/README.md#github-ci-webhook-ingress-in-development).
+[ingress contract and recovery limitations](../../../../apps/api/README.md#github-ci-webhook-ingress-in-development).
 
 ## Experimental GitHub CI connect
 
@@ -465,7 +465,7 @@ also registered without `{prefix}`, using the authenticated organization.
 
 Every operation requires an organization owner or the explicit platform-admin exception;
 API keys also need `write:boxes` and `delete:boxes`. A connected binding reports
-its durable `listener_status`; authorization success can precede runner setup. See [API behavior and limits](api/README.md#github-ci-installation-connect-in-development).
+its durable `listener_status`; authorization success can precede runner setup. See [API behavior and limits](../../../../apps/api/README.md#github-ci-installation-connect-in-development).
 
 ## Experimental GitHub CI management
 
@@ -482,7 +482,7 @@ Runner reads use existing organization Box access. Connection writes require the
 current owner and both Box write/delete key scopes. Policy updates retain delivered
 jobs; workers awaiting JIT may retire under the new policy. Connection deletion is
 separate from cancelling a pending authorization attempt above. See
-[management contracts](api/README.md#hosted-ci-management).
+[management contracts](../../../../apps/api/README.md#hosted-ci-management).
 
 ## Hosted BoxLite-compatible API
 
