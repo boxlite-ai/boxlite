@@ -12,14 +12,14 @@ function metadataFor(resourceUrl: string) {
 }
 
 describe('McpAuthMetadata', () => {
-  it('advertises only the sign-in baseline scope, not every MCP scope', () => {
+  it('advertises every MCP scope, so a client requests them all at sign-in', () => {
     const document = metadataFor('https://api.example.test/api/mcp').document()
 
     expect(document).toEqual({
       resource: 'https://api.example.test/api/mcp',
       authorization_servers: ['https://issuer.example.test/'],
-      scopes_supported: ['write:boxes'],
+      scopes_supported: [...MCP_OAUTH_SCOPES],
     })
-    expect(document.scopes_supported!.length).toBeLessThan(MCP_OAUTH_SCOPES.length)
+    expect(document.scopes_supported).toContain('delete:boxes')
   })
 })

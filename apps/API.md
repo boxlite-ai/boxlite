@@ -748,11 +748,10 @@ an OAuth caller before it runs, for direct tools and `invoke_api_endpoint` alike
   `WWW-Authenticate: Bearer error="insufficient_scope", scope="<granted> <missing>"`,
   so a client that re-authorizes keeps the scopes it had.
 
-Sign-in requests `write:boxes`, the MCP scope-minimization starting set that covers
-every direct tool but `removeBox`: the `401` challenge carries `scope="write:boxes"`
-and the metadata's `scopes_supported` lists only it, since clients without a
-challenge scope request everything listed there. The other scopes are defined on the
-authorization server and granted through step-up. Whether a client completes step-up for the rest is
+Sign-in requests every MCP scope, as Supabase's MCP server does: the `401` challenge
+names no scope, so clients request the metadata's `scopes_supported`, which lists all
+of `MCP_OAUTH_SCOPES`. One consent then covers every allowlisted operation; step-up
+still covers a client or user that grants fewer. Whether a client completes step-up for the rest is
 checked per client on the dev tenant. API-key callers skip both checks; the key's own
 permissions apply in REST.
 

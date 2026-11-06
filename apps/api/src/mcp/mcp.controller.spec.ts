@@ -252,7 +252,7 @@ describe('/api/mcp', () => {
     expect(allowed.status).toBe(200)
   })
 
-  it('names the sign-in baseline scope in the 401 challenge', async () => {
+  it('names no scope in the 401 challenge, so clients request scopes_supported', async () => {
     const { port } = app.getHttpServer().address()
     const response = await fetch(`http://127.0.0.1:${port}/api/mcp`, {
       method: 'POST',
@@ -261,7 +261,7 @@ describe('/api/mcp', () => {
     })
 
     expect(response.status).toBe(401)
-    expect(response.headers.get('www-authenticate')).toContain('scope="write:boxes"')
+    expect(response.headers.get('www-authenticate')).not.toContain('scope=')
   })
 
   it('reads served routes from the Nest app under its global prefix', () => {

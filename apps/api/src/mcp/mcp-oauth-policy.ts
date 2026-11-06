@@ -25,13 +25,6 @@ export const MCP_OAUTH_SCOPES: readonly string[] = [
 ]
 
 /**
- * The scopes a client asks for at sign-in, advertised by the 401 challenge and
- * `scopes_supported` (MCP scope minimization): enough for the direct box tools.
- * Every other scope comes later through an `insufficient_scope` step-up.
- */
-export const MCP_OAUTH_BASELINE_SCOPES: readonly string[] = [P.WRITE_BOXES]
-
-/**
  * The catalog operations an OAuth caller may run; every other operation answers
  * 403 and needs an API key. Default deny: an operation added to the API stays
  * API-key only until it is listed here. Left out on purpose: SSH keys, tunnels,
