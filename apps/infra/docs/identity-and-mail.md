@@ -147,10 +147,12 @@ no token reaches the API for one. Beyond the dashboard client and the MCP resour
 it covers any client asking for the API audience (`--api-audience`) and every
 database connection. The API stores `email_verified` when a token carries it but
 never refuses a token over it, since Auth0 leaves it out of tokens for third-party
-MCP clients. On a stage whose Action
-did not gate its MCP resource, apply the Action and wait one access-token
-lifetime before deploying an API without its own check, so unverified MCP tokens
-already issued expire first.
+MCP clients. On every stage, apply the Action and wait one access-token lifetime
+before deploying an API without its own check: tokens issued earlier to an
+unverified database user, for the MCP resource or for the API through another
+client, must expire first, because the old Action did not gate them.
+`auth0:configure-login` refuses an `--api-audience` that names no Auth0 API on the
+tenant, and `auth0:configure-mcp` refuses a live Action that names a different one.
 
 ## MCP client sign-in
 
@@ -179,10 +181,12 @@ path is not `/mcp` at boot. Its Auth0 API can stay; the API refuses its tokens.
 
 ```bash
 npm run auth0:configure-mcp -- --tenant <tenant.auth0.com> \
-  --resource-url <MCP_RESOURCE_URL> --connection <connection-a> --connection <connection-b>
+  --resource-url <MCP_RESOURCE_URL> --api-audience <OIDC_AUDIENCE> \
+  --connection <connection-a> --connection <connection-b>
 
 npm run auth0:configure-mcp -- --tenant <tenant.auth0.com> \
-  --resource-url <MCP_RESOURCE_URL> --connection <connection-a> --connection <connection-b> --apply
+  --resource-url <MCP_RESOURCE_URL> --api-audience <OIDC_AUDIENCE> \
+  --connection <connection-a> --connection <connection-b> --apply
 ```
 
 | Step | Auth0 default | Set by apply |
@@ -205,9 +209,8 @@ do not read it.
 The preview calls `clients/cimd/preview`, which validates a document without
 creating anything, and otherwise only reads. Preview and apply refuse a tenant
 whose deployed, post-login-bound `boxlite-login-policy` Action does not name this
-exact `--resource-url`, because that Action is the only email-verification gate:
-the API never refuses a token over `email_verified`. The Action must also name
-the API audience.
+exact `--resource-url` and `--api-audience`, because that Action is the only email-verification gate:
+the API never refuses a token over `email_verified`.
 Apply also refuses a tenant with active Rules, since CIMD logins fail while Rules run. It writes a mode-`0600` journal
 under `.sst/auth0-backups/` before each write, and marks each write as sent before
 sending it. Undo a run with `npm run auth0:configure-mcp -- --rollback <journal-path>`:

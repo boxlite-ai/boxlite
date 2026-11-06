@@ -18,6 +18,8 @@ export interface Auth0McpOptions {
   tenant: string
   /** `MCP_RESOURCE_URL`: the MCP endpoint's resource, and the MCP API's identifier. */
   resourceUrl: string
+  /** `OIDC_AUDIENCE`: the BoxLite API the live login Action must also gate. */
+  apiAudience: string
   /** Connections MCP clients may sign in with; each becomes a domain-level connection. */
   connections: string[]
   apply: boolean
@@ -64,6 +66,7 @@ export function parseAuth0McpOptions(argv: string[]): Auth0McpOptions {
     options: {
       tenant: { type: 'string' },
       'resource-url': { type: 'string' },
+      'api-audience': { type: 'string' },
       connection: { type: 'string', multiple: true },
       apply: { type: 'boolean', default: false },
     },
@@ -74,8 +77,10 @@ export function parseAuth0McpOptions(argv: string[]): Auth0McpOptions {
   if (!/^https:\/\//.test(resourceUrl) || new URL(resourceUrl).href !== resourceUrl) {
     throw new Error('--resource-url must be the exact https MCP_RESOURCE_URL')
   }
+  const apiAudience = values['api-audience'] ?? ''
+  if (!apiAudience) throw new Error('--api-audience is required: the OIDC_AUDIENCE the login Action gates')
   if (!values.connection?.length) throw new Error('--connection is required, once per connection MCP clients sign in with')
-  return { tenant, resourceUrl, connections: values.connection, apply: values.apply ?? false }
+  return { tenant, resourceUrl, apiAudience, connections: values.connection, apply: values.apply ?? false }
 }
 
 export function loadMcpSources(bootstrapRoot: string): Omit<Auth0McpSources, 'journalDirectory'> {
@@ -175,10 +180,11 @@ export class Auth0McpConfigurator {
     const response = this.client.request('get', 'actions/triggers/post-login/bindings') as JsonObject | null
     const bindings = (response?.bindings ?? []) as JsonObject[]
     const bound = action !== undefined && bindings.some((binding) => binding.action?.id === action.id)
-    if (!bound || !deployedActionGatesBoxLite(action, this.options.resourceUrl)) {
+    const { apiAudience, resourceUrl, tenant } = this.options
+    if (!bound || !deployedActionGatesBoxLite(action, apiAudience, resourceUrl)) {
       throw new Error(
-        `Auth0 Action '${LOGIN_POLICY_ACTION_NAME}' on ${this.options.tenant} does not gate MCP logins for ${this.options.resourceUrl} and the BoxLite API; ` +
-          `run auth0:configure-login with --api-audience and --mcp-resource-url ${this.options.resourceUrl} first`,
+        `Auth0 Action '${LOGIN_POLICY_ACTION_NAME}' on ${tenant} does not gate MCP logins for ${resourceUrl} and the API ${apiAudience}; ` +
+          `run auth0:configure-login with --api-audience ${apiAudience} --mcp-resource-url ${resourceUrl} first`,
       )
     }
   }

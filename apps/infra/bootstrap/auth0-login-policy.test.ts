@@ -896,6 +896,10 @@ function fakeTenant() {
           'actions/actions': state.action ? [state.action] : [],
           'actions/actions/act_policy': state.action,
           'actions/triggers/post-login/bindings': { bindings: state.bindings },
+          [`resource-servers/${encodeURIComponent('https://api.example.test/api')}`]: {
+            id: 'rs_api',
+            identifier: 'https://api.example.test/api',
+          },
         }
         return reads[path]
       }
@@ -1344,6 +1348,34 @@ test('login policy apply keeps MCP login checks unless told to drop them', () =>
     configure({ disableMcpLogin: true }).apply()
     assert.match(tenant.state.action.deployed_version.code, /const MCP_RESOURCE_URL = ""/)
     assert.doesNotThrow(() => upgradeConfigurator(tenant).apply())
+  } finally {
+    rmSync(tenant.journalDirectory, { recursive: true, force: true })
+  }
+})
+
+// A mistyped audience would gate an API nobody calls and leave the real one open.
+test('login policy refuses an API audience the tenant does not serve', () => {
+  const tenant = fakeTenant()
+  const configure = (apiAudience: string) =>
+    new Auth0LoginPolicyConfigurator(
+      {
+        tenant: 'tenant.us.auth0.com',
+        clientId: 'spa_123',
+        connectionName: 'boxlite-users',
+        apiAudience,
+        apply: false,
+        allowTestEmailProvider: false,
+      },
+      tenant.client,
+      {
+        actionCode: POLICY_SOURCE,
+        emailVerificationTemplate: tenant.template,
+        journalDirectory: tenant.journalDirectory,
+      },
+    )
+  try {
+    assert.throws(() => configure('https://api.example.test/apl').preview(), /names no Auth0 API/)
+    assert.doesNotThrow(() => configure('https://api.example.test/api').preview())
   } finally {
     rmSync(tenant.journalDirectory, { recursive: true, force: true })
   }

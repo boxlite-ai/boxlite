@@ -972,6 +972,18 @@ export class Auth0LoginPolicyConfigurator {
     throw new Error(`database user preflight exceeded Auth0's 1,000-user search window for '${connectionName}'`)
   }
 
+  /** A mistyped audience would gate an API nobody calls and leave the real one open. */
+  private assertApiAudienceServed(): void {
+    const audience = this.options.apiAudience
+    if (audience === undefined) return
+    const api = objectOrNull(
+      this.client.request('get', `resource-servers/${encodeURIComponent(audience)}`, { allowNotFound: true }),
+    )
+    if (api?.identifier !== audience) {
+      throw new Error(`--api-audience '${audience}' names no Auth0 API on ${this.options.tenant}`)
+    }
+  }
+
   private assertProductionEmailReady(state: PolicyState): void {
     assertEmailDeliveryReady(
       emailDeliveryReadiness(
@@ -984,6 +996,7 @@ export class Auth0LoginPolicyConfigurator {
   }
 
   private assertStateAdoptable(state: PolicyState): void {
+    this.assertApiAudienceServed()
     if (state.managementClient) this.assertManagementClientCompatible(state.managementClient)
     if (this.options.accountLinkApiOrigin && state.linkClient) this.assertLinkClientCompatible(state.linkClient)
     if (this.options.accountLinkApiOrigin && state.linkForm && !this.options.replaceLinkForm) {
@@ -1765,11 +1778,11 @@ function runsAccountLink(action: JsonObject): boolean {
 /** The deployed login Action, the only email-verification gate, as configure-mcp checks it. */
 export const LOGIN_POLICY_ACTION_NAME = RESOURCE_NAMES.action
 
-/** Whether the deployed Action version gates the BoxLite API and exactly this MCP resource. */
-export function deployedActionGatesBoxLite(action: JsonObject, mcpResourceUrl: string): boolean {
+/** Whether the deployed Action version gates exactly this API audience and MCP resource. */
+export function deployedActionGatesBoxLite(action: JsonObject, apiAudience: string, mcpResourceUrl: string): boolean {
   const code = String(action.deployed_version?.code ?? '')
   return (
-    /const API_AUDIENCE = "[^"]+"/.test(code) &&
+    code.includes(`const API_AUDIENCE = ${JSON.stringify(apiAudience)}`) &&
     code.includes(`const MCP_RESOURCE_URL = ${JSON.stringify(mcpResourceUrl)}`)
   )
 }

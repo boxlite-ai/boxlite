@@ -135,7 +135,13 @@ function fakeTenant(rules: object[] = [], lose?: string, refuse?: string) {
 
 function configurator(tenant: ReturnType<typeof fakeTenant>, apply: boolean, journalDirectory: string) {
   return new Auth0McpConfigurator(
-    { tenant: 't.example.auth0.com', resourceUrl: RESOURCE, connections: ['Username-Password-Authentication'], apply },
+    {
+      tenant: 't.example.auth0.com',
+      resourceUrl: RESOURCE,
+      apiAudience: 'https://api.example.test/api',
+      connections: ['Username-Password-Authentication'],
+      apply,
+    },
     tenant.client as never,
     { scopes: SCOPES, clients: [CLIENT], journalDirectory },
   )
@@ -149,6 +155,7 @@ test('refuses before any write while the live login Action does not gate this re
     ['no MCP URL', (t) => (t.state.actions[0].deployed_version.code = 'const API_AUDIENCE = "a"\nconst MCP_RESOURCE_URL = ""')],
     ['another URL', (t) => (t.state.actions[0].deployed_version.code = 'const API_AUDIENCE = "a"\nconst MCP_RESOURCE_URL = "https://other.test/mcp"')],
     ['no API audience', (t) => (t.state.actions[0].deployed_version.code = `const API_AUDIENCE = ""\nconst MCP_RESOURCE_URL = ${JSON.stringify(RESOURCE)}`)],
+    ['stale API audience', (t) => (t.state.actions[0].deployed_version.code = `const API_AUDIENCE = "https://old.test/api"\nconst MCP_RESOURCE_URL = ${JSON.stringify(RESOURCE)}`)],
     ['not deployed', (t) => delete t.state.actions[0].deployed_version],
     ['not bound', (t) => (t.state.bindings = [])],
     ['missing', (t) => (t.state.actions = [])],
@@ -321,9 +328,14 @@ test('refuses a tenant with active Rules', () => {
 })
 
 test('parseAuth0McpOptions requires an exact https resource URL and a connection', () => {
-  const base = ['--tenant', 't.example.auth0.com', '--resource-url', RESOURCE]
+  const base = ['--tenant', 't.example.auth0.com', '--resource-url', RESOURCE, '--api-audience', 'https://api.example.test/api']
 
   assert.equal(parseAuth0McpOptions([...base, '--connection', 'db']).apply, false)
+  assert.equal(parseAuth0McpOptions([...base, '--connection', 'db']).apiAudience, 'https://api.example.test/api')
   assert.throws(() => parseAuth0McpOptions(base), /--connection/)
+  assert.throws(
+    () => parseAuth0McpOptions(['--tenant', 't.example.auth0.com', '--resource-url', RESOURCE, '--connection', 'db']),
+    /--api-audience/,
+  )
   assert.throws(() => parseAuth0McpOptions(['--tenant', 't.example.auth0.com', '--resource-url', 'http://x/mcp', '--connection', 'db']))
 })
