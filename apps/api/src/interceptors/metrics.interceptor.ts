@@ -310,10 +310,6 @@ export class MetricsInterceptor implements NestInterceptor {
     request: CreateOrganizationDto,
     response: OrganizationDto,
   ) {
-    if (!this.analytics.enabled) {
-      return
-    }
-
     this.analytics.groupIdentify({
       groupType: 'organization',
       groupKey: response.id,
@@ -485,10 +481,6 @@ export class MetricsInterceptor implements NestInterceptor {
   }
 
   private capture(event: string, props: CommonCaptureProps, errorEvent?: string, extraProps?: Record<string, any>) {
-    if (!this.analytics.enabled) {
-      return
-    }
-
     this.analytics.capture({
       distinctId: props.distinctId,
       event: props.error ? errorEvent || event : event,
