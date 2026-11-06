@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { ArgumentsHost, HttpStatus, RequestTimeoutException } from '@nestjs/common'
+import { ArgumentsHost, HttpStatus, NotFoundException, RequestTimeoutException } from '@nestjs/common'
 import { AllExceptionsFilter } from './all-exceptions.filter'
 import { RunnerApiError } from '../box/errors/runner-api-error'
 import { BoxCreationAdmissionUnavailableError } from '../box/errors/box-creation-limit.error'
@@ -31,6 +31,27 @@ describe('AllExceptionsFilter', () => {
     } else {
       expect(json.mock.calls[0][0]).not.toHaveProperty('boxId')
     }
+  })
+
+  it.each([
+    ['/.well-known/oauth-protected-resource/mcp', false],
+    ['/boxes/some-client-route', true],
+  ])('answers a missing %s with the dashboard: %p', async (path, dashboard) => {
+    const json = jest.fn()
+    const status = jest.fn().mockReturnValue({ json })
+    const sendFile = jest.fn()
+    const filter = new AllExceptionsFilter({ incrementFailedAuth: jest.fn() } as never)
+    const host = {
+      switchToHttp: () => ({
+        getResponse: () => ({ status, sendFile }),
+        getRequest: () => ({ path, url: path }),
+      }),
+    } as ArgumentsHost
+
+    await filter.catch(new NotFoundException(), host)
+
+    expect(sendFile).toHaveBeenCalledTimes(dashboard ? 1 : 0)
+    if (!dashboard) expect(status).toHaveBeenCalledWith(HttpStatus.NOT_FOUND)
   })
 
   it('serializes HttpException code fields into the JSON response', async () => {
