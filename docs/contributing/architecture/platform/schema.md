@@ -36,7 +36,7 @@ control plane through `runner` telemetry columns, `job` results and CPU incident
 ## Experimental CI authorization state
 
 The SQL-owned tables below are created by
-[`1793664000000-add-ci-connect-migration.ts`](api/src/migrations/pre-deploy/1793664000000-add-ci-connect-migration.ts)
+[`1793664000000-add-ci-connect-migration.ts`](../../../../apps/api/src/migrations/pre-deploy/1793664000000-add-ci-connect-migration.ts)
 and accessed by `CiConnectService`; they have no TypeORM entity mapping.
 
 | Table                     | Stored state                                                                                                                                                | Enforced boundaries                                                                                                                       |
@@ -53,7 +53,7 @@ Organization deletion cascades these authorization-only rows. Execution history 
 separate and has no cascade foreign keys: revocation must not erase original cleanup
 identity or uncertain resource allocations.
 
-Migration [`1793700000000-add-ci-listener-state-migration.ts`](api/src/migrations/pre-deploy/1793700000000-add-ci-listener-state-migration.ts)
+Migration [`1793700000000-add-ci-listener-state-migration.ts`](../../../../apps/api/src/migrations/pre-deploy/1793700000000-add-ci-listener-state-migration.ts)
 adds one shared controller table, `ci_listener_state`:
 
 | Columns / keys                           | Stored state                                     | Enforcement                                                    |
