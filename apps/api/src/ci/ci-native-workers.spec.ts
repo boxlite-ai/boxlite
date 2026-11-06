@@ -6,10 +6,20 @@ import { AddressInfo } from 'node:net'
 import { setTimeout as delay } from 'node:timers/promises'
 import { Header } from 'tar'
 import { DataSource } from 'typeorm'
-import { ConfirmedWorkerAbsent, decodeScope, ExecutionJournal, ExecutionLease, scopeKey } from '@boxlite-ai/ci-listener'
+import {
+  ConfirmedWorkerAbsent,
+  ConfirmedWorkerCreationRejected,
+  decodeScope,
+  ExecutionJournal,
+  ExecutionLease,
+  scopeKey,
+} from '@boxlite-ai/ci-listener'
 import { WorkerPool } from '../../../libs/ci-listener/src/execution/pool'
+import { GitHubExecutionBackend } from '../../../libs/ci-listener/src/execution/backend'
+import { BoxDto } from '../box/dto/box.dto'
 import { CiNativeState } from './ci-native-state'
 import { CiNativeWorkers } from './ci-native-workers'
+import { CiSettingsService } from './ci-settings.service'
 import { Box } from '../box/entities/box.entity'
 import { BoxLastActivity } from '../box/entities/box-last-activity.entity'
 import { BoxRepository } from '../box/repositories/box.repository'
@@ -111,6 +121,9 @@ integration('CI native workers (shared lease, actual PostgreSQL and HTTP)', () =
       return { ...box } as any
     })
     jest.spyOn(platform, 'toBoxDtoWithExitCode').mockImplementation(async (box) => ({ ...box }) as any)
+    jest
+      .spyOn(platform, 'toBoxDtos')
+      .mockImplementation(async (boxes) => boxes.map((box) => BoxDto.fromBox(box, 'https://toolbox.test')))
     jest.spyOn(platform, 'stop').mockResolvedValue(undefined)
     jest.spyOn(platform, 'destroy').mockResolvedValue(undefined)
     store = new CiNativeState(db, { get: (key: string) => (key === 'ci.githubClientId' ? app : undefined) } as any)
@@ -219,6 +232,72 @@ integration('CI native workers (shared lease, actual PostgreSQL and HTTP)', () =
     await value.host.remove(value.config.name)
     return value
   }
+  it('preserves a delivered running worker after a real policy update and retains original cleanup', async () => {
+    const { host, config, row, box } = await forDelivery()
+    await host.deliverJit(config.name, jit)
+    await journal.advance(lease, row.record.key, row.record.version, { delivery: 'done' })
+    const settings = new CiSettingsService(store, limits as any)
+    await settings.updateConnection({ organizationId: org, userId: actor }, binding, false)
+    const admit = jest.fn(() => store.transaction((tx) => store.admit(tx, scope(), app)))
+    await expect(admit()).rejects.toThrow('no longer active')
+    admit.mockClear()
+    const pool = new WorkerPool(
+      journal,
+      scopeKey(scope()),
+      async () => ({
+        workers: host,
+        admit,
+        job: async () => {
+          throw Error('No new demand')
+        },
+        runners: async () => {
+          throw Error('Running workers need no registration mutation')
+        },
+      }),
+      { image: 'runner:test', cpus: 2, memoryMiB: 2048, labels: ['boxlite-ci-runner'] },
+    )
+    await pool.tick(lease, testCapacity({ account: 4, tenant: 4 }))
+    expect(admit).not.toHaveBeenCalled()
+    expect(platform.stop).not.toHaveBeenCalled()
+    expect(platform.destroy).not.toHaveBeenCalled()
+    const current = (await journal.load(lease)).allocations.get(row.record.key)!
+    expect(current.value).toMatchObject({
+      delivery: 'done',
+      closing: false,
+      box: { id: box.box_id },
+      runner: { id: 7 },
+    })
+    expect(received.map((request) => request.content)).toEqual([jit, 'ready'])
+    await db.getRepository(Box).update(box.box_id, { state: BoxState.STOPPED, desiredState: BoxDesiredState.STOPPED })
+    await journal.advance(lease, current.record.key, current.record.version, {
+      closing: true,
+      effect: { kind: 'box-remove', id: randomUUID() },
+    })
+    jest.mocked(platform.destroy).mockImplementationOnce(BoxService.prototype.destroy.bind(platform))
+    await host.remove(config.name)
+    expect(platform.destroy).toHaveBeenCalledWith(box.box_id, org, expect.anything(), 'id')
+    expect(await db.getRepository(Box).findOneByOrFail({ id: box.box_id })).toMatchObject({
+      desiredState: BoxDesiredState.DESTROYED,
+      pending: true,
+    })
+  })
+  it('fences an old policy before JIT delivery', async () => {
+    const settings = new CiSettingsService(store, limits as any)
+    const delivering = await forDelivery()
+    await settings.updateConnection({ organizationId: org, userId: actor }, binding, false)
+    await expect(delivering.host.deliverJit(delivering.config.name, jit)).rejects.toThrow('no longer active')
+    expect(received).toHaveLength(0)
+  })
+  it('records a recoverable refusal when policy changes before native creation persistence', async () => {
+    const settings = new CiSettingsService(store, limits as any)
+    const { host, config, row } = await prepared()
+    beforePersist.mockImplementationOnce(() =>
+      settings.updateConnection({ organizationId: org, userId: actor }, binding, false),
+    )
+    await expect(host.create(config)).rejects.toBeInstanceOf(ConfirmedWorkerCreationRejected)
+    expect(await db.getRepository(Box).count()).toBe(0)
+    await expect(host.get(config.name)).rejects.toMatchObject({ rejectedCreationEffect: row.value.effect!.id })
+  })
   it('commits the real original Box ID with the Box row in the single shared table', async () => {
     const { host, config, box } = await created()
     const [ledger] = await store.state.read(['box-native/' + config.name.slice(7)])
@@ -286,6 +365,104 @@ integration('CI native workers (shared lease, actual PostgreSQL and HTTP)', () =
     expect(await store.state.read(['box-native/' + config.name.slice(7)])).toEqual([])
     expect((await journal.load(lease)).allocations.get(row.record.key)!.value.box.phase).toBe('requested')
     expect((await journal.load(lease)).workers).toHaveLength(1)
+  })
+  it('disconnect creation refusal survives restart and releases capacity once', async () => {
+    const { host, config, row } = await prepared()
+    beforePersist.mockImplementationOnce(() =>
+      db.query("UPDATE ci_installation_binding SET state='disabled',generation=2"),
+    )
+    await expect(host.create(config)).rejects.toBeInstanceOf(ConfirmedWorkerCreationRejected)
+    expect(await db.getRepository(Box).count()).toBe(0)
+    await db.query(
+      "UPDATE ci_listener_state SET payload=payload||'{\"until\":0}'::jsonb WHERE namespace=$1 AND record_key='@owner'",
+      [store.namespace],
+    )
+    lease = (await store.state.acquire(randomUUID(), 30000))!
+    const restarted = new CiNativeWorkers(store, platform, organizations as any, limits as any, runners as any).open(
+      scope(),
+      lease,
+    )
+    await expect(restarted.get(config.name)).rejects.toMatchObject({ rejectedCreationEffect: row.value.effect!.id })
+    const createCalls = jest.mocked(platform.create).mock.calls.length
+    const pool = new WorkerPool(
+      journal,
+      scopeKey(scope()),
+      async () => ({
+        workers: restarted,
+        admit: async () => {
+          throw Error('Disconnected')
+        },
+        job: async () => {
+          throw Error('No new demand')
+        },
+        runners: async () => {
+          throw Error('No runner was created')
+        },
+      }),
+      { image: 'runner:test', cpus: 2, memoryMiB: 2048, labels: ['boxlite-ci-runner'] },
+    )
+    await pool.tick(lease, testCapacity({ account: 4, tenant: 4 }))
+    await pool.tick(lease, testCapacity({ account: 4, tenant: 4 }))
+    expect((await journal.load(lease)).workers).toHaveLength(0)
+    expect(jest.mocked(platform.create).mock.calls.length).toBe(createCalls)
+  })
+  it('records a fenced refusal when disconnect wins before backend create dispatch', async () => {
+    const { host, config, row } = await prepared()
+    await db.query("UPDATE ci_installation_binding SET state='disabled',generation=2")
+    const backend = new GitHubExecutionBackend(
+      store.state,
+      lease,
+      scope(),
+      {
+        kind: 'app',
+        app: {} as any,
+        installation: { ...scope().installation, permissions: {}, suspended: false },
+      },
+      {
+        workers: host,
+        rejectUndispatchedCreate: host.rejectUndispatchedCreate,
+        authorize: async (current, operation) => {
+          if (operation === 'admission') await store.transaction((tx) => store.admit(tx, current, app))
+        },
+      },
+      ['boxlite-ci-runner'],
+    )
+    const before = jest.mocked(platform.create).mock.calls.length
+    await expect(backend.workers.create(config)).rejects.toMatchObject({ rejectedCreationEffect: row.value.effect!.id })
+    expect(jest.mocked(platform.create).mock.calls.length).toBe(before)
+    await expect(backend.workers.get(config.name)).rejects.toBeInstanceOf(ConfirmedWorkerCreationRejected)
+  })
+  it('lists only original CI Box IDs within their original organization and uses the safe Box DTO', async () => {
+    const first = await created()
+    const second = await created()
+    const destroyed = await created()
+    await db.getRepository(Box).update(destroyed.box.box_id, { state: BoxState.DESTROYED })
+    await db.getRepository(Box).update(first.box.box_id, { authToken: 'private-auth-token' })
+    const spoof = new Box('test-region', 'ci-jit-' + 'f'.repeat(32))
+    Object.assign(spoof, { organizationId: org, osUser: 'runner', labels: {}, state: BoxState.STARTED })
+    await db.getRepository(Box).save(spoof)
+    const page = await workers.list(org, 1, 1)
+    const next = await workers.list(org, 2, 1)
+    expect(page).toMatchObject({ total: 2, page: 1, totalPages: 2 })
+    expect(new Set([...page.items, ...next.items].map((box) => box.id))).toEqual(
+      new Set([first.box.box_id, second.box.box_id]),
+    )
+    expect(JSON.stringify(page)).not.toContain('private-auth-token')
+    const target = next.items[0]
+    expect(await workers.list(org, 1, 1, `  ${target.name.toUpperCase()}  `)).toMatchObject({
+      total: 1,
+      totalPages: 1,
+      items: [{ id: target.id }],
+    })
+    expect((await workers.list(org, 1, 1, 'CI-JIT-')).total).toBe(2)
+    expect((await workers.list(org, 1, 1, '   ')).total).toBe(2)
+    for (const literal of ['%', '_', "' OR true --", '\\'])
+      expect(await workers.list(org, 1, 25, literal)).toMatchObject({ items: [], total: 0, totalPages: 0 })
+    const foreign = randomUUID()
+    await db.getRepository(Box).update(second.box.box_id, { organizationId: foreign })
+    expect((await workers.list(org, 1, 25)).total).toBe(1)
+    expect((await workers.list(foreign, 1, 25)).total).toBe(0)
+    expect((await workers.list(foreign, 1, 25, 'ci-jit-')).total).toBe(0)
   })
   it('creation refusal boundary: a typed error after committed persistence retains its original Box ID', async () => {
     const { host, config } = await prepared()
@@ -355,7 +532,7 @@ integration('CI native workers (shared lease, actual PostgreSQL and HTTP)', () =
     })
     await expect(host.create(config)).rejects.toMatchObject({ rejectedCreationEffect: row.value.effect!.id })
     await expect(host.get(config.name)).rejects.toMatchObject({ rejectedCreationEffect: row.value.effect!.id })
-    await expect(host.create(config)).rejects.toThrow('owner')
+    await expect(host.create(config)).rejects.toBeInstanceOf(ConfirmedWorkerCreationRejected)
     expect(await db.getRepository(Box).count()).toBe(0)
   })
   it.each([
@@ -369,9 +546,9 @@ integration('CI native workers (shared lease, actual PostgreSQL and HTTP)', () =
   ])('rolls back the actual Box when %s changes before persistence', async (_kind, sql) => {
     const { host, config } = await prepared()
     beforePersist.mockImplementationOnce(() => db.query(sql))
-    await expect(host.create(config)).rejects.toThrow()
+    await expect(host.create(config)).rejects.toBeInstanceOf(ConfirmedWorkerCreationRejected)
     expect(await db.getRepository(Box).count()).toBe(0)
-    expect(await store.state.read(['box-native/' + config.name.slice(7)])).toHaveLength(0)
+    expect(await store.state.read(['box-native/' + config.name.slice(7)])).toHaveLength(1)
     expect((await journal.load(lease)).allocations.size).toBe(1)
   })
   it('rechecks the execution epoch inside Box persistence after a real lease takeover', async () => {
@@ -408,13 +585,14 @@ integration('CI native workers (shared lease, actual PostgreSQL and HTTP)', () =
   it('allows current admin authority without membership but denies a missing actor', async () => {
     const { host, config } = await prepared()
     await db.query('DELETE FROM organization_user')
-    await expect(host.create(config)).rejects.toThrow('owner')
+    await expect(host.create(config)).rejects.toBeInstanceOf(ConfirmedWorkerCreationRejected)
     await db.query('UPDATE "user" SET role=\'admin\'')
-    const box = await host.create(config)
+    const promoted = await prepared(51)
+    const box = await promoted.host.create(promoted.config)
     expect(box.box_id).toBeTruthy()
     await db.query('DELETE FROM "user"')
-    const next = await prepared()
-    await expect(next.host.create(next.config)).rejects.toThrow('actor')
+    const next = await prepared(52)
+    await expect(next.host.create(next.config)).rejects.toBeInstanceOf(ConfirmedWorkerCreationRejected)
   })
   it('keeps original-resource cleanup after binding removal without admitting a new Box', async () => {
     const { host, config, row, box } = await created()
@@ -427,7 +605,7 @@ integration('CI native workers (shared lease, actual PostgreSQL and HTTP)', () =
     expect(platform.stop).toHaveBeenCalledWith(box.box_id, org, expect.anything(), true, 'id')
     expect(await host.get(config.name)).toMatchObject({ box_id: box.box_id })
     const next = await prepared()
-    await expect(next.host.create(next.config)).rejects.toThrow('binding')
+    await expect(next.host.create(next.config)).rejects.toBeInstanceOf(ConfirmedWorkerCreationRejected)
   })
   it('rejects a conflicting ID ledger before the actual stop capability', async () => {
     const { host, config, row } = await created(),

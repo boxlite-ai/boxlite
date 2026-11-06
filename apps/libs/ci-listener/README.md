@@ -211,13 +211,18 @@ The native API can also record a definitive creation refusal when the typed
 Box creation-limit error occurs before `onPersist` begins. It stores the original
 scope and creation-operation UUID in the same ledger key that would hold a Box ID;
 an expected-null CAS makes those outcomes mutually exclusive. Only this durable
-fact yields `ConfirmedWorkerCreationRejected`. Restart can recover the fact through
+fact yields `ConfirmedWorkerCreationRejected`. Hosted authority revocation can
+use the same fence before dispatch or after a rejected native persistence
+transaction rolls back. The optional `ExecutionHost.rejectUndispatchedCreate`
+capability binds that proof to the exact original effect before reporting refusal;
+hosts without it retain uncertain reservations. A committed original Box ID wins
+over refusal and remains available for cleanup. Restart can recover the fact through
 the original worker lookup. The kernel checks the original pending operation and
 atomically retires its allocation and scope reference, leaving queued demand pending.
 It emits `ci-worker-create-rejected`; a later attempt gets a new allocation/name.
 
-Ordinary HTTP errors, timeouts, failed proof persistence and errors after entering
-`onPersist` keep the reservation. The standalone REST adapter does not infer this
+Ordinary HTTP errors, timeouts, failed proof persistence and uncertain persistence
+outcomes keep the reservation. The standalone REST adapter does not infer this
 proof from a 429 or an error-body property. Unknown creates are never repeated.
 The general resource state machine still forbids requested-to-absent transitions;
 the explicit refusal path is limited to an unmaterialized Box with no runner.

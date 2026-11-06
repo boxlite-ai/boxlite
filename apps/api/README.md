@@ -354,7 +354,7 @@ require an owner or the explicit platform-admin exception; API keys additionally
 organization. GitHub device authorization proves personal-account ownership or active
 organization-admin membership and cross-checks the installation through App authentication.
 
-The Dashboard's Organization → CI tab uses GitHub App browser authorization with
+The Dashboard's CI → Connects page uses GitHub App browser authorization with
 an independent random state and S256 PKCE. CLI connect keeps Device Flow. Browser
 start accepts `account_type: User | Organization` and the public-repository policy;
 complete accepts only `code` and `state`. The selected type chooses the Personal
@@ -1264,13 +1264,65 @@ final limit. Existing workers continue and recover after the limit is lowered.
 
 The hosted `CiSettingsService` implements `CapacityProvider.resolve()`, while standalone
 uses its fixed environment adapter. Policy versions and the execution index are
-checked in the reservation transaction. The Dashboard CI tab configures this account total and shows connected-account
-setup state. Repository-specific limits are not available yet.
+checked in the reservation transaction. Dashboard → CI → Connects configures this
+account total and shows connected-account setup state. Repository-specific limits
+are not available yet.
 
 If another Box consumes the last Commerce slot after CI admission, the native
-adapter records a definitive refusal only for `BoxCreationLimitExceededError`
-before `onPersist` starts. The durable original-operation fact shares the Box-ID
+adapter records a definitive refusal for `BoxCreationLimitExceededError`
+before `onPersist` starts. It also fences revocation before dispatch or a rejected
+native persistence transaction. The durable original-operation fact shares the Box-ID
 ledger key, preventing conflicting outcomes. The shared kernel can return the CI
 reservation while keeping its queued notice, including after restart. A failed
-proof write, generic HTTP error or error after persistence begins keeps the
+proof write, generic HTTP error or uncertain persistence outcome keeps the
 reservation for recovery. See the shared [worker recovery contract](../libs/ci-listener/README.md#worker-recovery-and-logs).
+
+### Hosted CI management
+
+`GET /api/v1/{organization-prefix}/ci/runners` uses existing organization Box-read
+access: membership permits reading without a separate Box-read permission enum.
+It accepts `page` (default 1) and `limit` (default 25, maximum 200), returns
+`items`, `total`, `page`, `totalPages`, and `capacity`, and reuses the safe Box DTO conversion.
+Optional `name` is a string of at most 128 characters. It trims outer whitespace
+and matches a case-insensitive literal substring before count and pagination;
+SQL wildcard characters have no special meaning. Capacity remains unfiltered.
+Original native CI ledger IDs establish JIT identity; matching names do not.
+Both original scope and current Box organization must match. Destroyed Boxes are
+excluded; stopped/error/transitional Boxes remain visible until cleanup completes.
+
+`capacity` contains `available`, `used`, `max_concurrent_jobs`, `commerce_limit`,
+and `effective_limit`. Members may read this aggregate without owner settings access.
+It contains no connection identities or credentials. `used` counts catalog-referenced
+active allocations in this hosted namespace and original organization whose Box
+phase is not `absent`, including reserved creation and cleanup. It is independent
+of inventory pagination and Box row existence. The read-only repeatable-read
+transaction validates scope and allocation records without borrowing a leader lease;
+broken references or provider failures return errors rather than a zero/unlimited guess.
+Owner writes retain the existing PATCH settings endpoint and authority checks.
+
+`PATCH /api/v1/{organization-prefix}/ci/connections/{bindingId}` accepts only
+`{ "allow_public_repositories": boolean }`, with the same owner and Box write/delete
+key authorization as settings. It returns 204; a changed policy advances generation,
+sets provisioning and writes the existing durable inventory wake in one transaction.
+An identical value preserves state and generation but still rechecks key expiry.
+Unknown/foreign bindings return 404; disabled connections return 409. Binding,
+verified GitHub identity, original actor, quota, authorization attempts and workers
+remain intact. Delivered jobs continue through original-resource recovery and
+cleanup; workers not yet given JIT may retire when old admission is rejected.
+Organization runner-group public access must still match on GitHub. The endpoint
+does not mutate GitHub configuration. See the [update design](../../docs/contributing/investigations/2026-11-06-ci-connection-update.md).
+
+`DELETE /api/v1/{organization-prefix}/ci/connections/{bindingId}` requires the
+current owner and both Box write/delete key scopes. Unknown or foreign bindings
+return 404. Success returns 204, disables the binding, and advances its generation
+once; repeated deletion is idempotent. Settings omit disabled connections.
+The transaction cancels stored unfinished attempts for the same organization/App
+and clears temporary credentials, locking attempts before the binding to match
+finalization. A subsequent verified request may reactivate that same organization's
+binding with a fresh generation; another tenant cannot claim it.
+
+Admission already holding its binding lock may finish before deletion commits.
+Later admissions fail; original workers retain cleanup authority and the shared
+quota remains unchanged. Deletion does not uninstall the GitHub App or cancel a
+GitHub workflow. These management routes also support `/api/v1/ci/...` with the
+authenticated organization. Design: [CI Dashboard navigation and connection lifecycle](https://linear.app/polygala/issue/BUI-1471/ci-dashboard-navigation-and-connection-lifecycle).

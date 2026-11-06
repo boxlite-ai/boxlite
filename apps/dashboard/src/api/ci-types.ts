@@ -1,4 +1,22 @@
 /* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
+import type { Box } from '@boxlite-ai/api-client'
+
+export interface CiCapacity {
+  available: boolean
+  used: number
+  max_concurrent_jobs: number | null
+  commerce_limit: number | null
+  effective_limit: number | null
+}
+
+export interface CiRunners {
+  items: Box[]
+  total: number
+  page: number
+  totalPages: number
+  capacity: CiCapacity
+}
+
 export interface CiSettings {
   available: boolean
   max_concurrent_jobs: number | null

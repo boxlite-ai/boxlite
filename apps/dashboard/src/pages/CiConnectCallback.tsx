@@ -43,7 +43,7 @@ export default function CiConnectCallback() {
           <Button
             onClick={() => {
               window.localStorage.setItem(LocalStorageKey.SelectedOrganizationId, view!.organization)
-              window.location.assign('/dashboard/settings?tab=ci')
+              window.location.assign('/dashboard/ci/connects')
             }}
           >
             Continue to CI settings
@@ -62,7 +62,7 @@ export default function CiConnectCallback() {
                 Install GitHub App
               </a>
             )}
-            <Link className="block underline" to="/dashboard/settings?tab=ci">
+            <Link className="block underline" to="/dashboard/ci/connects">
               Back to CI settings
             </Link>
           </>

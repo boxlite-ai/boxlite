@@ -86,7 +86,7 @@ describe('Organization settings tabs', () => {
     expect([...document.querySelectorAll('input')].some((input) => input.value === 'org-1')).toBe(true)
     expect(mocks.api.organizationsApi.listOrganizationInvitations).not.toHaveBeenCalled()
     const tabs = [...document.querySelectorAll<HTMLButtonElement>('[role="tab"]')]
-    expect(tabs.map((tab) => tab.textContent)).toEqual(['General', 'Member', 'CI'])
+    expect(tabs.map((tab) => tab.textContent)).toEqual(['General', 'Member'])
     expect(tabs[0].getAttribute('aria-selected')).toBe('true')
     await act(async () => tabs[1].dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0 })))
     expect(document.querySelector('output')?.textContent).toBe('/dashboard/settings?tab=member')
@@ -95,6 +95,11 @@ describe('Organization settings tabs', () => {
       [...document.querySelectorAll('button')].find((button) => button.textContent === 'Back')?.click(),
     )
     expect(document.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toBe('General')
+  })
+
+  it('redirects the former CI tab to the top-level Connects page', async () => {
+    await renderPage('/dashboard/settings?tab=ci')
+    expect(document.querySelector('output')?.textContent).toBe('/dashboard/ci/connects')
   })
 
   it('opens Member directly from a bookmarked tab URL', async () => {

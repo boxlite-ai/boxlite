@@ -5,7 +5,14 @@
  */
 
 import type { FirstRunUseCase } from '@/lib/first-run'
-import type { CiSettings, CiConnectInput, CiWebStart, CiConnectResult, CiConnectConfiguration } from './ci-types'
+import type {
+  CiSettings,
+  CiConnectInput,
+  CiWebStart,
+  CiConnectResult,
+  CiConnectConfiguration,
+  CiRunners,
+} from './ci-types'
 import { BillingApiClient } from '@/billing-api/billingApiClient'
 import { DashboardConfig } from '@/types/DashboardConfig'
 import {
@@ -146,6 +153,27 @@ export class ApiClient {
     ).data
   }
 
+  public async getCiRunners(organization: string, page: number, limit: number, name?: string): Promise<CiRunners> {
+    return (
+      await this.http.get(`/v1/${encodeURIComponent(organization)}/ci/runners`, {
+        ...this.v1Config(),
+        params: { page, limit, ...(name?.trim() ? { name: name.trim() } : {}) },
+      })
+    ).data
+  }
+  public async updateCiConnection(organization: string, binding: string, allowPublic: boolean): Promise<void> {
+    await this.http.patch(
+      `/v1/${encodeURIComponent(organization)}/ci/connections/${encodeURIComponent(binding)}`,
+      { allow_public_repositories: allowPublic },
+      this.v1Config(),
+    )
+  }
+  public async deleteCiConnection(organization: string, binding: string): Promise<void> {
+    await this.http.delete(
+      `/v1/${encodeURIComponent(organization)}/ci/connections/${encodeURIComponent(binding)}`,
+      this.v1Config(),
+    )
+  }
   public async getCiSettings(organization: string): Promise<CiSettings> {
     return (await this.http.get(`/v1/${encodeURIComponent(organization)}/ci/settings`, this.v1Config())).data
   }

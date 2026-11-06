@@ -345,6 +345,7 @@ describe('Sidebar primary navigation', () => {
     const domainLinks = [...document.querySelectorAll<HTMLAnchorElement>('a[href="/dashboard/domains"]')]
     expect(domainLinks.length).toBeGreaterThan(0)
     expect(domainLinks.every((link) => link.textContent === 'Domains')).toBe(true)
+    expect(document.querySelector('a[href="/dashboard/ci"]')?.textContent).toBe('CI')
   })
 
   it('opens Management children in primary navigation from the compact rail', () => {
