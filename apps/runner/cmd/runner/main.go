@@ -99,36 +99,7 @@ func run() int {
 		defer telemetry.ShutdownTracer(logger, tp)
 	}
 
-	// Initialize BoxLite runtime
-	var insecureRegs []string
-	if cfg.InsecureRegistries != "" {
-		for _, r := range strings.Split(cfg.InsecureRegistries, ",") {
-			if trimmed := strings.TrimSpace(r); trimmed != "" {
-				insecureRegs = append(insecureRegs, trimmed)
-			}
-		}
-	}
-
-	registryProxy := blclient.RegistryProxy{
-		Host:     cfg.RegistryProxyHost,
-		Username: cfg.RegistryProxyUsername,
-		Password: cfg.RegistryProxyPassword,
-	}
-	boxliteClient, err := blclient.NewClient(ctx, blclient.ClientConfig{
-		Logger:                       logger,
-		HomeDir:                      cfg.BoxliteHomeDir,
-		KernelPath:                   cfg.KernelPath,
-		InsecureRegistries:           insecureRegs,
-		RegistryProxy:                registryProxy,
-		AWSRegion:                    cfg.AWSRegion,
-		AWSEndpointUrl:               cfg.AWSEndpointUrl,
-		AWSAccessKeyId:               cfg.AWSAccessKeyId,
-		AWSSecretAccessKey:           cfg.AWSSecretAccessKey,
-		VolumeStorageBackend:         cfg.VolumeStorageBackend,
-		VolumeCleanupInterval:        cfg.VolumeCleanupInterval,
-		VolumeCleanupDryRun:          cfg.VolumeCleanupDryRun,
-		VolumeCleanupExclusionPeriod: cfg.VolumeCleanupExclusionPeriod,
-	})
+	boxliteClient, err := blclient.NewClient(ctx, buildBoxliteClientConfig(cfg, logger))
 	if err != nil {
 		logger.Error("Error creating BoxLite client", "error", err)
 		return 2
@@ -322,6 +293,40 @@ func run() int {
 		apiServer.Stop()
 		logger.Info("Shutdown complete")
 		return 143
+	}
+}
+
+// buildBoxliteClientConfig keeps startup policy mapping separate from runtime
+// construction, so configuration can be checked without starting the server.
+func buildBoxliteClientConfig(cfg *config.Config, logger *slog.Logger) blclient.ClientConfig {
+	var insecureRegs []string
+	if cfg.InsecureRegistries != "" {
+		for _, r := range strings.Split(cfg.InsecureRegistries, ",") {
+			if trimmed := strings.TrimSpace(r); trimmed != "" {
+				insecureRegs = append(insecureRegs, trimmed)
+			}
+		}
+	}
+
+	return blclient.ClientConfig{
+		Logger:               logger,
+		HomeDir:              cfg.BoxliteHomeDir,
+		KernelPath:           cfg.KernelPath,
+		ExperimentalFeatures: cfg.ExperimentalFeatures,
+		InsecureRegistries:   insecureRegs,
+		RegistryProxy: blclient.RegistryProxy{
+			Host:     cfg.RegistryProxyHost,
+			Username: cfg.RegistryProxyUsername,
+			Password: cfg.RegistryProxyPassword,
+		},
+		AWSRegion:                    cfg.AWSRegion,
+		AWSEndpointUrl:               cfg.AWSEndpointUrl,
+		AWSAccessKeyId:               cfg.AWSAccessKeyId,
+		AWSSecretAccessKey:           cfg.AWSSecretAccessKey,
+		VolumeStorageBackend:         cfg.VolumeStorageBackend,
+		VolumeCleanupInterval:        cfg.VolumeCleanupInterval,
+		VolumeCleanupDryRun:          cfg.VolumeCleanupDryRun,
+		VolumeCleanupExclusionPeriod: cfg.VolumeCleanupExclusionPeriod,
 	}
 }
 

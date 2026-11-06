@@ -45,7 +45,10 @@ configuration, so a later CLI `start` or `restart` also needs the variable and
 an SDK process must construct its runtime with the same explicit feature. The
 REST runtime rejects nested-virtualization configuration even when the opt-in is
 present, and a REST server rejects uploaded archives that request it. The RC is
-not exposed through the Python, Node.js, Go, or C request APIs.
+not exposed through the Python or Node.js request APIs. The local
+[Go SDK](../../sdks/go/README.md#nested-virtualization-experimental) and
+[C SDK](../../sdks/c/README.md) expose explicit runtime authorization and advanced
+box options; they do not read the process environment.
 
 ## Supported hosts
 

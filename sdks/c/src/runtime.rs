@@ -116,6 +116,7 @@ pub unsafe extern "C" fn boxlite_runtime_new(
 
 /// Create a local runtime with an explicit comma-separated RC feature allowlist
 /// (for example, "custom-kernel"). Null enables none; unknown tokens fail.
+/// Invalid UTF-8 returns InvalidArgument; unknown UTF-8 tokens return Config.
 /// Does not read BOXLITE_EXPERIMENTAL. Ownership matches boxlite_runtime_new.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_runtime_new_experimental(
