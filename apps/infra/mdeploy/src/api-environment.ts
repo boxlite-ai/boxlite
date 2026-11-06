@@ -134,7 +134,7 @@ const oidcFrom = (environment: Environment, hosts: PublicHosts): Record<string, 
       optional(environment, 'OIDC_END_SESSION_ENDPOINT') ?? `https://${hosts.dashboard}/api/auth/end-session`,
     ...passthrough('PUBLIC_OIDC_DOMAIN'),
     ...passthrough('OIDC_POST_LOGOUT_REDIRECT_ALLOWLIST'),
-    // The MCP endpoint's OAuth resource; unset, `/api/mcp` takes API keys only.
+    // The MCP endpoint's OAuth resource; unset, `/mcp` takes API keys only.
     ...passthrough('MCP_RESOURCE_URL'),
     ...(management
       ? {

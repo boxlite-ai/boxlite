@@ -10,7 +10,7 @@ import { SystemRole } from '../user/enums/system-role.enum'
 import { McpAuthGuard } from './mcp-auth.guard'
 import { mcpOAuthScopes } from './mcp-oauth-policy'
 
-const MCP_AUDIENCE = 'https://api.example.test/api/mcp'
+const MCP_AUDIENCE = 'https://api.example.test/mcp'
 const JWT = 'eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1In0.c2ln'
 
 function contextFor(authorization?: string) {

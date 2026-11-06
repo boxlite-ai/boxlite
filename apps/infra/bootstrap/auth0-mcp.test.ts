@@ -9,7 +9,7 @@ import test from 'node:test'
 
 import { Auth0McpConfigurator, parseAuth0McpOptions } from './auth0-mcp.js'
 
-const RESOURCE = 'https://api.example.test/api/mcp'
+const RESOURCE = 'https://api.example.test/mcp'
 const CLIENT = 'https://claude.ai/oauth/claude-code-client-metadata'
 const SCOPES = ['write:boxes', 'delete:boxes']
 

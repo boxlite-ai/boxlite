@@ -1192,13 +1192,13 @@ test('login policy leaves social identities and other clients outside the verifi
 })
 
 test('login policy gates an MCP client login for the MCP resource like a dashboard login', async () => {
-  const { onExecutePostLogin } = loadAction({}, 'https://api.example.test/api/mcp')
+  const { onExecutePostLogin } = loadAction({}, 'https://api.example.test/mcp')
   const mcp = actionApi()
   const otherApi = actionApi()
   const mcpClient = { client_id: 'https://claude.ai/oauth/claude-code-client-metadata' }
 
   await onExecutePostLogin(
-    managedEvent({ client: mcpClient, resource_server: { identifier: 'https://api.example.test/api/mcp' } }),
+    managedEvent({ client: mcpClient, resource_server: { identifier: 'https://api.example.test/mcp' } }),
     mcp.api,
   )
   await onExecutePostLogin(
@@ -1230,8 +1230,8 @@ test('parseAuth0LoginPolicyOptions accepts only an exact https MCP resource URL'
   const base = ['--tenant', 't.example.auth0.com', '--client-id', 'spa', '--connection', 'db']
 
   assert.equal(
-    parseAuth0LoginPolicyOptions([...base, '--mcp-resource-url', 'https://api.example.test/api/mcp']).mcpResourceUrl,
-    'https://api.example.test/api/mcp',
+    parseAuth0LoginPolicyOptions([...base, '--mcp-resource-url', 'https://api.example.test/mcp']).mcpResourceUrl,
+    'https://api.example.test/mcp',
   )
   assert.throws(() => parseAuth0LoginPolicyOptions([...base, '--mcp-resource-url', 'http://api.example.test/mcp']))
 })

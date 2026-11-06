@@ -8,6 +8,7 @@ import { ApiExcludeController } from '@nestjs/swagger'
 import { McpHttpControllerFor, McpStrategy, StreamableHttpTransport } from '@rekog/mcp-nest'
 import type { Request, Response } from 'express'
 import { McpAuthChallengeFilter } from './mcp-auth-challenge.filter'
+import { MCP_ROUTE } from './mcp-auth-metadata'
 import { McpAuthGuard } from './mcp-auth.guard'
 import { McpScopeGuard } from './mcp-scope.guard'
 import { McpOriginGuard } from './origin.guard'
@@ -28,13 +29,13 @@ export const mcpStrategy = new McpStrategy({
 })
 
 /**
- * `/api/mcp`. The guards admit a user API key or an MCP-audience OAuth token and
+ * `/mcp`. The guards admit a user API key or an MCP-audience OAuth token and
  * set `req.user`, which each tool call runs its REST route as; a 401 carries the
  * bearer challenge naming the OAuth discovery metadata. `McpScopeGuard` then
  * holds OAuth callers to their allowlist and scopes.
  */
 @ApiExcludeController()
-@Controller('mcp')
+@Controller(MCP_ROUTE)
 @UseGuards(McpOriginGuard, McpAuthGuard, McpScopeGuard)
 @UseFilters(McpAuthChallengeFilter)
 export class McpController extends McpHttpControllerFor(mcpTransport) {

@@ -32,7 +32,7 @@ import type { Socket } from 'net'
 import { Logger as PinoLogger, LoggerErrorInterceptor } from 'nestjs-pino'
 import { BoxliteWsProxyService } from './boxlite-rest/boxlite-ws-proxy.service'
 import { parse as parseYaml } from 'yaml'
-import { MCP_METADATA_PATH } from './mcp/mcp-auth-metadata'
+import { MCP_ROOT_ROUTES } from './mcp/mcp-auth-metadata'
 import { mcpStrategy } from './mcp/mcp.controller'
 import { McpTools } from './mcp/mcp-tools'
 import { servedOperations } from './mcp/mcp-routes'
@@ -130,8 +130,7 @@ async function bootstrap() {
   }
 
   const globalPrefix = 'api'
-  // RFC 9728 puts the MCP endpoint's OAuth metadata at the origin root.
-  app.setGlobalPrefix(globalPrefix, { exclude: [MCP_METADATA_PATH] })
+  app.setGlobalPrefix(globalPrefix, { exclude: MCP_ROOT_ROUTES })
 
   // Built once: the Swagger UI serves it, and the MCP catalog reads the dashboard routes from it.
   const document = SwaggerModule.createDocument(app, getOpenApiConfig(configService.get('oidc.issuer')))
@@ -192,7 +191,7 @@ async function bootstrap() {
       dashboard: document,
       served: servedOperations(app.getHttpAdapter().getInstance(), (path) => !!wsProxy.matchAttachPath(path)),
     })
-    // Started on its own, before listen(), so `/api/mcp` is ready with the first
+    // Started on its own, before listen(), so `/mcp` is ready with the first
     // request; Kafka below keeps its own start and cannot delay this one.
     await app.connectMicroservice({ strategy: mcpStrategy }).listen()
 

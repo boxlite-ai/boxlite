@@ -145,15 +145,20 @@ retroactively gate independently validating Commerce/Analytics services.
 
 ## MCP client sign-in
 
-MCP clients such as Claude Code, ChatGPT, VS Code and Zed sign in to `/api/mcp`
+MCP clients such as Claude Code, ChatGPT, VS Code and Zed sign in to `/mcp`
 by browser with an OAuth token whose audience is the stage's `MCP_RESOURCE_URL`.
 Each client registers by its Client ID Metadata Document (CIMD); only the
 reviewed documents in [`auth0/mcp-clients.json`](../bootstrap/auth0/mcp-clients.json)
 are registered, and dynamic client registration stays off. Clients with no fixed
 document (Cursor, Windsurf, Gemini CLI, MCP Inspector) use an API key instead.
 
-Set `MCP_RESOURCE_URL` for the stage (for example `https://api.example.com/api/mcp`),
-deploy, then preview and apply the tenant change:
+Set `MCP_RESOURCE_URL` for the stage (for example `https://api.example.com/mcp`),
+deploy, then preview and apply the tenant change.
+
+The script finds the MCP API by identifier and never deletes one. Before the first
+run on a tenant, list its APIs (`auth0 apis list`) and delete any whose identifier
+is `<origin>/api/mcp`, the path an earlier build used; it is inert, since the API
+accepts only the `MCP_RESOURCE_URL` audience.
 
 ```bash
 npm run auth0:configure-mcp -- --tenant <tenant.auth0.com> \

@@ -47,7 +47,7 @@ and private tunnels as enabled; clients check that before every private prepare.
 | ------------------------------------------------------------------------- | ---------------------------- | ------------------------------------------------------------------------------------ | ------------------------ |
 | [Control-plane API](#control-plane-api)                                   | `apps/api`                   | `/api`                                                                               | `3000`                   |
 | [Hosted BoxLite-compatible API](#hosted-boxlite-compatible-api)           | `apps/api`                   | `/api/v1`                                                                            | `3000`                   |
-| [MCP endpoint](#mcp-endpoint)                                             | `apps/api`                   | `/api/mcp`                                                                           | `3000`                   |
+| [MCP endpoint](#mcp-endpoint)                                             | `apps/api`                   | `/mcp`                                                                               | `3000`                   |
 | [Runner API](#runner-api)                                                 | `apps/runner`                | `/`                                                                                  | `3003`                   |
 | [Preview proxy API](#preview-proxy-api)                                   | `apps/proxy`                 | `proxy.<domain>`, `<port>-<box>.proxy.<domain>`                                      | `4000`                   |
 | [Registry proxy API](#registry-proxy-api)                                 | `apps/image-service`         | `/v2`                                                                                | `4100`                   |
@@ -788,8 +788,13 @@ for accounting scope and delivery limitations.
 
 ## MCP endpoint
 
-**Service:** `apps/api` · **Path:** `/api/mcp` · **Port:** `3000` in deployments
+**Service:** `apps/api` · **Path:** `/mcp` · **Port:** `3000` in deployments
 (shared with the control-plane API)
+
+The endpoint and its OAuth metadata sit outside the `api` global prefix
+([`MCP_ROOT_ROUTES`](./api/src/mcp/mcp-auth-metadata.ts)), so the URL a client
+connects to is also the OAuth resource that RFC 9728 discovery checks. The GCP URL
+map passes both paths through unchanged, and `/api/mcp` is not served.
 
 A Model Context Protocol server, served from [`mcp`](./api/src/mcp/) over
 Streamable HTTP. It speaks both protocol eras on one endpoint: the 2025
@@ -799,7 +804,7 @@ refused with `-32601`. A request that carries an `Origin` header is refused with
 `403`, because MCP hosts call from servers and CLIs, not browsers.
 
 ```
-claude mcp add --transport http boxlite https://<api-host>/api/mcp \
+claude mcp add --transport http boxlite https://<api-host>/mcp \
   --header "Authorization: Bearer $BOXLITE_API_KEY"
 ```
 
@@ -811,7 +816,7 @@ out `--header`: the client opens a browser sign-in instead.
 `MCP_RESOURCE_URL`. Dashboard tokens are refused, as are the API keys of machine
 principals (proxy, runner, collectors). A `401` carries
 `WWW-Authenticate: Bearer resource_metadata=...` naming the RFC 9728 document at
-`/.well-known/oauth-protected-resource/api/mcp`, which lists the API's OIDC issuer
+`/.well-known/oauth-protected-resource/mcp`, which lists the API's OIDC issuer
 as the authorization server; it is published only when `MCP_RESOURCE_URL` is set.
 
 **OAuth callers.** [`McpAuthGuard`](./api/src/mcp/mcp-auth.guard.ts) turns an OAuth
@@ -867,7 +872,7 @@ API's own Express app as the REST request for its operation, so that route's gua
 validation, throttles and audit run unchanged:
 
 ```
-POST /api/mcp ─▶ McpOriginGuard, McpAuthGuard ─▶ caller
+POST /mcp ─▶ McpOriginGuard, McpAuthGuard ─▶ caller
   tools/call ─▶ McpDispatcher ─▶ METHOD /api/... over a per-process Unix socket
                                  no Authorization, x-boxlite-mcp-delegation: <nonce>,
                                  X-Forwarded-For naming the MCP client
