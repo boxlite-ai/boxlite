@@ -65,7 +65,7 @@ pub struct VmConfig {
 impl VmConfig {
     /// Rejects counts, sizes and command-line text the layout or the kernel
     /// cannot take, before any host call. The budget for the
-    /// `virtio_mmio.device=` arguments that `devices::add_all` appends is
+    /// `virtio_mmio.device=` arguments that `devices::add_all` prepends is
     /// checked in `add_all`, after the host VM and the disk images exist.
     pub(crate) fn validate(&self) -> Result<()> {
         if !(1..=MAX_VCPUS).contains(&self.vcpu_count) {

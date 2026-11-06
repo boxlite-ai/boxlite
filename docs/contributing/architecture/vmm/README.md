@@ -313,8 +313,10 @@ On x86_64 the layout uses the values most surveyed VMMs share.
 
 x86_64 guests boot without ACPI or a device tree, so the command line announces
 each virtio-mmio device (`virtio_mmio.device=4K@0xd0000000:5`), as libkrun does
-today; the arguments go before the `--` that starts the init program's
-arguments, which the kernel does not parse.
+today. The arguments go at the front of the command line: the kernel hands
+everything after a `--` to the init program, and the front is always before
+any `--`, so the VMM never parses the caller's text, whose quoted values may
+hold ` -- `.
 
 ### Buses
 
@@ -562,7 +564,7 @@ from the new VMM.
 | Kernel | libkrunfw: Linux 6.12 with 32 patches, loaded as a shared library | a pinned LTS kernel file with BoxLite's config: `Image` on arm64; `bzImage` or ELF `vmlinux` on x86_64; the native engine takes it from `advanced.kernel` until the runtime bundles it | M1 |
 | PID 1 | `init.krun`, which starts the agent as its child | `boxlite-guest` | M2 |
 | Root filesystem | a throwaway virtio-fs root; `init.krun` then mounts `/dev/vdb` | the kernel mounts `/dev/vdb` (ext4) read-only, and the disk reports itself read-only | M2 |
-| Command line | libkrun's defaults (`libkrun/src/vmm/src/vmm_config/kernel_cmdline.rs:7-11`), `init=/init.krun` and `KRUN_*` variables | `console=hvc0 root=/dev/vdb ro panic=-1 reboot=k init=/boxlite/bin/boxlite-guest`, then the agent's environment as `KEY=value`, then `-- --listen vsock://2695 --notify vsock://2696`; on x86_64, one `virtio_mmio.device=` per device | M2 |
+| Command line | libkrun's defaults (`libkrun/src/vmm/src/vmm_config/kernel_cmdline.rs:7-11`), `init=/init.krun` and `KRUN_*` variables | `console=hvc0 root=/dev/vdb ro panic=-1 reboot=k init=/boxlite/bin/boxlite-guest`, then the agent's environment as `KEY=value`, then `-- --listen vsock://2695 --notify vsock://2696`; on x86_64, one `virtio_mmio.device=` per device at the front | M2 |
 | Disks | `vda` is the container disk (qcow2, read-write) and `vdb` the guest root (raw, read-only); names follow attach order | unchanged | M2 |
 | virtio-fs | one device per share: `BoxLiteShared` (read-write) and one per volume | one device, with each share as an export under it | M2 (SHARED), M3 (volumes) |
 | vsock | guest CID 3; host `box.sock` to guest port 2695 for gRPC, guest to host port 2696 as the ready signal (`src/shared/src/constants.rs:20-26`) | unchanged | M2 |
