@@ -80,7 +80,7 @@ export class AuditInterceptor implements NestInterceptor {
       const auditLog = await this.auditService.createLog({
         actorId: actor.actorId,
         actorEmail: actor.actorEmail,
-        organizationId: actor.organizationId,
+        organizationId: this.resolveOrganizationId(auditContext, request) ?? actor.organizationId,
         action: auditContext.action,
         targetType: auditContext.targetType,
         targetId: this.resolveTargetId(auditContext, request),
@@ -93,7 +93,7 @@ export class AuditInterceptor implements NestInterceptor {
       try {
         const result = await firstValueFrom(next.handle())
 
-        const organizationId = this.resolveOrganizationId(request, result)
+        const organizationId = this.resolveOrganizationId(auditContext, request, result)
         const targetId = this.resolveTargetId(auditContext, request, result)
         const statusCode = response.statusCode || HttpStatus.NO_CONTENT
         await this.recordHandlerSuccess(auditLog, organizationId, targetId, statusCode)
@@ -114,8 +114,14 @@ export class AuditInterceptor implements NestInterceptor {
     }
   }
 
-  private resolveOrganizationId(request: RequestWithUser, result?: any): string | null {
-    return result?.organizationId || this.resolveActor(request.user).organizationId || null
+  private resolveOrganizationId(auditContext: AuditContext, request: RequestWithUser, result?: any): string | null {
+    const requested = auditContext.organizationIdFromRequest?.(request)
+    return (
+      this.normalizeTargetId(requested) ||
+      result?.organizationId ||
+      this.resolveActor(request.user).organizationId ||
+      null
+    )
   }
 
   /**

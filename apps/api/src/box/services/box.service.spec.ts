@@ -403,6 +403,105 @@ describe('BoxService inbound defaults', () => {
    * asked, and the box records the resolver's answer rather than what the
    * caller typed. Which ref the resolver picks is its own specification's job.
    */
+  describe('organization nesting default', () => {
+    function fixture(value: unknown, apiVersion = '0') {
+      const runner = { id: 'chosen-runner', apiVersion }
+      const info = jest.fn().mockResolvedValue({ nestedVirtualizationEnabled: value })
+      const factory = { create: jest.fn().mockResolvedValue({ runnerInfo: info }) }
+      const result = makeCreateService({
+        runnerService: { getRandomAvailableRunner: jest.fn().mockResolvedValue(runner) },
+        runnerAdapterFactory: factory,
+        configService: { getOrThrow: () => 0.02 },
+      })
+      return { ...result, runnerService: (result.service as any).runnerService, runner, info, factory }
+    }
+    it('leaves non-allowlisted organizations ordinary without probing or logging', async () => {
+      const { service, factory } = fixture(true)
+      const box = await service.create(
+        { name: 'ordinary', image: 'alpine' } as any,
+        { id: 'org-1' } as any,
+        Context.user(),
+      )
+      expect((box as any).nestedVirtualization).toBe(false)
+      expect(factory.create).not.toHaveBeenCalled()
+      expect((service as any).logger.warn).not.toHaveBeenCalled()
+    })
+    it('enables the saved box decision only for an allowlisted org and its selected capable Runner', async () => {
+      const { service, runnerService, factory, runner, boxRepository } = fixture(true)
+      const organization = { id: 'org-1', nestedVirtualizationEnabled: true }
+      const box = await service.create({ name: 'nested', image: 'alpine' } as any, organization as any, Context.user())
+      expect(factory.create).toHaveBeenCalledWith(runner)
+      expect(runnerService.getRandomAvailableRunner).toHaveBeenCalledTimes(1)
+      expect(boxRepository.insert).toHaveBeenCalledWith(
+        expect.objectContaining({ runnerId: runner.id, nestedVirtualization: true }),
+        undefined,
+      )
+      organization.nestedVirtualizationEnabled = false
+      expect((box as any).nestedVirtualization).toBe(true)
+    })
+    it.each([false, undefined, null, 'true', 1])(
+      'falls back on unconfirmed capability %p and names the Runner',
+      async (value) => {
+        const { service } = fixture(value)
+        const box = await service.create(
+          { name: 'fallback', image: 'alpine' } as any,
+          { id: 'org-1', nestedVirtualizationEnabled: true } as any,
+          Context.user(),
+        )
+        expect((box as any).nestedVirtualization).toBe(false)
+        expect((service as any).logger.warn).toHaveBeenCalledWith(
+          expect.objectContaining({
+            runnerId: 'chosen-runner',
+            organizationId: 'org-1',
+            boxId: box.id,
+            reason: 'capability_not_confirmed',
+          }),
+        )
+      },
+    )
+    it('does not probe or refuse an old V2 Runner', async () => {
+      const { service, factory } = fixture(true, '2')
+      const box = await service.create(
+        { name: 'old-runner', image: 'alpine' } as any,
+        { id: 'org-1', nestedVirtualizationEnabled: true } as any,
+        Context.user(),
+      )
+      expect((box as any).nestedVirtualization).toBe(false)
+      expect(factory.create).not.toHaveBeenCalled()
+      expect((service as any).logger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ runnerId: 'chosen-runner', apiVersion: '2', reason: 'unsupported_runner_api' }),
+      )
+    })
+    it.each(['error', 'timeout'])('creates an ordinary box when discovery ends in %s', async (mode) => {
+      const { service, info } = fixture(true)
+      if (mode === 'error') info.mockRejectedValue(new Error('upstream unavailable'))
+      else info.mockImplementation(() => new Promise(() => {}))
+      const box = await service.create(
+        { name: 'unavailable', image: 'alpine' } as any,
+        { id: 'org-1', nestedVirtualizationEnabled: true } as any,
+        Context.user(),
+      )
+      expect((box as any).nestedVirtualization).toBe(false)
+      expect((service as any).logger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          runnerId: 'chosen-runner',
+          reason: mode === 'error' ? 'capability_probe_failed' : 'capability_timeout',
+        }),
+      )
+    })
+    it('bypasses an ordinary warm box for an allowlisted organization', async () => {
+      const { service, warmPoolService } = fixture(true)
+      ;(service as any).imageResolverService.resolve.mockResolvedValue({ ref: 'curated', isOrgOwned: false })
+      ;(service as any).redis.exists.mockResolvedValue(0)
+      await service.create(
+        { name: 'fresh', image: 'curated' } as any,
+        { id: 'org-1', nestedVirtualizationEnabled: true } as any,
+        Context.user(),
+      )
+      expect(warmPoolService.fetchWarmPoolBox).not.toHaveBeenCalled()
+    })
+  })
+
   it('stores the ref the resolver returned, not the selector the caller sent', async () => {
     const { service, boxRepository } = makeCreateService()
 

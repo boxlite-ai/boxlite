@@ -95,6 +95,8 @@ described in the [DinD guide](../../docs/guides/docker-in-docker.md).
 
 Migration-backed integration suites that query `Box`, including usage accounting,
 run `AddGuestPrivileged1792540800000` so their schema includes the persisted field.
+They also run `AddNestedVirtualizationAllowlist1793870400000` for the saved nesting
+decision; adding an entity column requires updating these explicit migration chains.
 
 ## Admin Box image
 

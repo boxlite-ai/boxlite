@@ -18,6 +18,7 @@ export type AuditTargetId = string | string[] | null | undefined
 export interface AuditContext {
   action: AuditAction
   targetType?: AuditTarget
+  organizationIdFromRequest?: (req: Request) => AuditTargetId
   targetIdFromRequest?: (req: Request) => AuditTargetId
   targetIdFromResult?: (result: any) => AuditTargetId
   requestMetadata?: Record<string, (req: Request) => any>

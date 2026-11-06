@@ -1,5 +1,60 @@
 # BoxLite application API catalog
 
+## Organization nested virtualization allowlist (RC)
+
+System administrators control this internal rollout; public create requests and
+SDK/CLI per-box controls do not change.
+
+| Organization allowlisted | Selected Runner | New box |
+| --- | --- | --- |
+| No | Any | Ordinary; no Runner settings request |
+| Yes | Validated startup RC feature enabled | Nested virtualization enabled |
+| Yes | Old, disabled, malformed or unavailable | Ordinary; log Runner ID and reason |
+
+`GET` and `PUT /api/admin/organizations/{organizationId}/nested-virtualization`
+read or replace `{ "enabled": true }`. Both require a system administrator JWT
+or Admin API key; organization owners and ordinary organization keys cannot
+grant this permission. PUT requires a strict boolean, rejects unknown properties,
+and returns the saved setting. Unknown organizations return 404.
+Allowlist audit records belong to the organization in the path, including failed
+updates; the actor remains the administrator. Other organization updates write
+only their own fields, so a stale owner update cannot restore a revoked grant.
+
+The default is false. Existing scheduling selects a Runner first; allowlisted
+creates query only that Runner under the normal health deadline. V0 `/info`
+returns `nestedVirtualizationEnabled` from its validated startup feature set.
+This declaration is independent of `supportsPrivileged`; create and recovery
+preserve both saved options when they are enabled together.
+Missing or non-true values fall back
+without refusing creation or changing placement. The fallback log includes
+`organizationId`, `boxId`, `runnerId`, `apiVersion`, and a stable reason.
+
+Allowlisted creates bypass ordinary warm boxes because their VM options are
+already fixed. The saved box decision survives replay, restart and recovery;
+changing the organization switch affects future creates only. Nested boxes do
+not support archive migration. The internal Runner recovery request carries the
+saved value and checks authorization before deleting an existing box.
+The API first confirms the original Runner's capability under the health deadline,
+even after the organization's grant is revoked. Missing, false, invalid or unavailable
+capability rejects nested recovery before dispatch; ordinary recovery does not probe.
+Pending nested archive imports roll back without waiting for destination capacity.
+Nested V0 create dispatches also confirm capability immediately before sending
+the saved request, including UNKNOWN-state replay. A Runner rollback cannot
+silently turn a saved nested box into an ordinary box.
+
+Deploy the additive migration, compatible API/workers and Runners while every
+organization remains disabled, then enable selected organizations. During
+rollback, keep nested boxes on compatible workers; retire them before removing
+their saved configuration.
+Rollback locks the box table before checking for nested rows and holds that lock
+until its transaction ends, so a concurrent create cannot lose its saved decision.
+The pre-deploy migration uses the required `*-migration.ts` filename convention.
+The ENV flag declares authorization; the existing
+native VM startup path checks hardware and preserves startup errors. External per-box interfaces remain
+deferred in #2356.
+
+## Interface inventory
+
 This catalog lists the interfaces registered by the applications in this
 directory. It covers HTTP, WebSocket, CONNECT, OTLP, health, static-asset, and
 outbound event interfaces; each entry names the owning service and what the

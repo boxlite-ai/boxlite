@@ -140,6 +140,47 @@ function makeHarness(
 }
 
 describe('BoxMigrationManager submitter loop', () => {
+  it('rolls back a nested import without waiting for destination capacity', async () => {
+    const migration = makeMigration(BoxMigrationState.PENDING_IMPORT, {
+      box: makeBox({ nestedVirtualization: true }),
+      arcPath: 'box-migrations/box-1.boxlite',
+    })
+    const h = makeHarness([migration])
+    h.runnerService.getRandomAvailableRunner.mockRejectedValue(new Error('No destination capacity'))
+    await h.manager.submitMigrationJobs()
+    expect(h.writes).toEqual([
+      {
+        kind: 'update',
+        values: { state: BoxMigrationState.PENDING_ROLLBACK },
+        params: { boxId: BOX_ID, expected: BoxMigrationState.PENDING_IMPORT },
+      },
+    ])
+    expect(h.runnerService.getRandomAvailableRunner).not.toHaveBeenCalled()
+    expect(h.jobService.createJob).not.toHaveBeenCalled()
+  })
+
+  it.each([BoxMigrationState.PENDING_EXPORT, BoxMigrationState.PENDING_IMPORT])(
+    'refuses nested migration in %s without source-side jobs',
+    async (state) => {
+      const migration = makeMigration(state, {
+        box: makeBox({ nestedVirtualization: true }),
+        arcPath: 'box-migrations/box-1.boxlite',
+      })
+      const h = makeHarness([migration])
+      await h.manager.submitMigrationJobs()
+      expect(h.jobService.createJob).not.toHaveBeenCalled()
+      expect(migration.box.runnerId).toBe(SOURCE_RUNNER)
+      expect(migration.box.state).toBe(BoxState.STOPPED)
+      expect(h.writes).toEqual([
+        {
+          kind: 'update',
+          values: { state: BoxMigrationState.PENDING_ROLLBACK },
+          params: { boxId: BOX_ID, expected: state },
+        },
+      ])
+    },
+  )
+
   it('submits EXPORT_BOX to the box runner and holds the lock for the job in flight', async () => {
     const migration = makeMigration(BoxMigrationState.PENDING_EXPORT)
     const h = makeHarness([migration])

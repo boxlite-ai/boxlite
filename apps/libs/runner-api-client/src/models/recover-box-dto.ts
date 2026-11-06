@@ -27,6 +27,7 @@ export interface RecoverBoxDTO {
     'fromVolumeId'?: string;
     'gpuQuota'?: number;
     'memoryQuota'?: number;
+    'nestedVirtualization'?: boolean;
     'osUser': string;
     'outboundAllowNet'?: Array<string>;
     /**

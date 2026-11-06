@@ -4,6 +4,20 @@ One runner service manages many BoxLite VMs and exposes their lifecycle, executi
 
 # BoxLite Runner
 
+## Nested virtualization capability
+
+`BOXLITE_EXPERIMENTAL=nested-virtualization` authorizes the Runner runtime.
+Its V0 `/info` reports `nestedVirtualizationEnabled` from the feature set parsed
+and validated when the runtime starts. It reuses the saved authorization flag;
+it does not re-read process ENV or run an additional hardware probe.
+Physical host support remains checked by the existing native VM startup path,
+and startup errors retain their existing behavior.
+
+The control plane's [organization allowlist](../API.md#organization-nested-virtualization-allowlist-rc)
+decides whether a new box should use that capability. Saved requirements travel
+through create replay and recovery; recovery checks runtime authorization before
+destruction. The Runner flag does not establish hardware availability or L2 execution.
+
 The runner is the Go HTTP server that fronts a single `BoxliteRuntime` (the
 Rust SDK in [`sdks/go/`](../../sdks/go/) via FFI) and exposes a REST + WebSocket
 API for SDK clients and the control-plane API. One runner process hosts many
@@ -62,6 +76,10 @@ then runs only `NestedVirtualization` tests with
 local runtime fails instead of skipping. Both atomic coverage profiles are merged
 before upload. This verifies metadata creation/replay and authorization, without
 booting a box or establishing nested guest execution.
+
+General startup authorization tests use the same typed `ErrUnsupported` prerequisite
+classification as other runtime tests; every other constructor error fails. Setting
+`BOXLITE_REQUIRE_NESTED_RUNTIME_TESTS=1` also makes these startup tests mandatory.
 
 For the system-wide context (CDN, load balancers, where the runner fits in
 the request path), see [`apps/README.md`](../README.md).

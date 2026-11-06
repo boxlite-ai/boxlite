@@ -52,16 +52,17 @@ type UpdateNetworkSettingsDTO struct {
 } //	@name	UpdateNetworkSettingsDTO
 
 type RecoverBoxDTO struct {
-	FromVolumeId string            `json:"fromVolumeId,omitempty"`
-	OsUser       string            `json:"osUser" validate:"required"`
-	CpuQuota     int64             `json:"cpuQuota" validate:"min=1"`
-	GpuQuota     int64             `json:"gpuQuota" validate:"min=0"`
-	MemoryQuota  int64             `json:"memoryQuota" validate:"min=1"`
-	StorageQuota int64             `json:"storageQuota" validate:"min=1"`
-	Env          map[string]string `json:"env,omitempty"`
-	Privileged   bool              `json:"privileged,omitempty"`
-	Volumes      []VolumeDTO       `json:"volumes,omitempty"`
-	Secrets      []SecretDTO       `json:"secrets,omitempty" validate:"dive"`
+	NestedVirtualization bool              `json:"nestedVirtualization,omitempty"`
+	FromVolumeId         string            `json:"fromVolumeId,omitempty"`
+	OsUser               string            `json:"osUser" validate:"required"`
+	CpuQuota             int64             `json:"cpuQuota" validate:"min=1"`
+	GpuQuota             int64             `json:"gpuQuota" validate:"min=0"`
+	MemoryQuota          int64             `json:"memoryQuota" validate:"min=1"`
+	StorageQuota         int64             `json:"storageQuota" validate:"min=1"`
+	Env                  map[string]string `json:"env,omitempty"`
+	Privileged           bool              `json:"privileged,omitempty"`
+	Volumes              []VolumeDTO       `json:"volumes,omitempty"`
+	Secrets              []SecretDTO       `json:"secrets,omitempty" validate:"dive"`
 	// Outbound network policy. outboundEnabled is required: a request without
 	// it is rejected rather than started with a guessed policy.
 	OutboundEnabled  *bool    `json:"outboundEnabled" validate:"required"`
