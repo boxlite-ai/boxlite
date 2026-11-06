@@ -37,7 +37,7 @@ fn pending_handshake_keeps_half_closed_hosts_until_both_directions_close() {
         );
         assert!(outgoing.is_empty());
 
-        // Separate poll batches exercise accumulation of the kqueue filters.
+        // Full closure must be distinguishable from the earlier half-close.
         drop(host);
         assert!(!poll(&registrar).is_empty());
         assert_eq!(

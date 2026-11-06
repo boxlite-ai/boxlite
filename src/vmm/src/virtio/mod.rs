@@ -106,10 +106,6 @@ pub(crate) struct SourceId(pub(crate) u32);
 pub(crate) trait EventSource: Send {
     /// The source the workers register with their poller.
     fn as_source(&mut self) -> &mut dyn mio::event::Source;
-
-    /// Retains readiness metadata before events coalesce into `BackendReady`.
-    /// Runs under the worker slot lock: do not block, do I/O, or call the registrar.
-    fn on_ready(&mut self, _event: &mio::event::Event) {}
 }
 
 /// The interface a device uses to register background sources with the

@@ -612,7 +612,6 @@ fn serve(shared: &Shared) -> io::Result<()> {
             if let Some(slot) = slots.get(index)
                 && let Some(registered) = slot.lock().sources.get_mut(&id)
             {
-                registered.source.on_ready(event);
                 registered.ready = true;
             }
         }

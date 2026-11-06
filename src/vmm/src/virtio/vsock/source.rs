@@ -8,24 +8,18 @@ use mio::{Interest, Registry, Token, event::Source};
 use std::{
     io::{self, Read, Write},
     os::unix::net::{UnixListener, UnixStream},
-    sync::{
-        Arc,
-        atomic::{AtomicU8, Ordering},
-    },
+    sync::Arc,
 };
 
-const READ_CLOSED: u8 = 1;
-const WRITE_CLOSED: u8 = 2;
-
 enum PollSource {
-    Stream(mio::net::UnixStream, Interest, Arc<AtomicU8>),
+    Stream(mio::net::UnixStream, Interest),
     Listener(mio::net::UnixListener, Interest),
 }
 
 impl PollSource {
     fn source(&mut self) -> (&mut dyn Source, Interest) {
         match self {
-            Self::Stream(io, interests, _) => (io, *interests),
+            Self::Stream(io, interests) => (io, *interests),
             Self::Listener(io, interests) => (io, *interests),
         }
     }
@@ -34,15 +28,6 @@ impl PollSource {
 impl EventSource for PollSource {
     fn as_source(&mut self) -> &mut dyn Source {
         self
-    }
-
-    fn on_ready(&mut self, event: &mio::event::Event) {
-        if let Self::Stream(_, _, closed) = self {
-            // kqueue can report the two directions in separate events.
-            let bits = (u8::from(event.is_read_closed()) * READ_CLOSED)
-                | (u8::from(event.is_write_closed()) * WRITE_CLOSED);
-            closed.fetch_or(bits, Ordering::Relaxed);
-        }
     }
 }
 
@@ -74,7 +59,6 @@ impl Source for PollSource {
 pub(super) struct Registration {
     registrar: Arc<dyn EventRegistrar>,
     id: SourceId,
-    closed: Option<Arc<AtomicU8>>,
 }
 
 impl Registration {
@@ -88,11 +72,7 @@ impl Registration {
             .try_clone()
             .map_err(|_| DeviceError::Fatal("vsock socket duplication"))?;
         Self::new(
-            PollSource::Stream(
-                mio::net::UnixStream::from_std(copy),
-                interests,
-                Arc::new(AtomicU8::new(0)),
-            ),
+            PollSource::Stream(mio::net::UnixStream::from_std(copy), interests),
             registrar,
         )
     }
@@ -113,25 +93,10 @@ impl Registration {
     }
 
     fn new(source: PollSource, registrar: Arc<dyn EventRegistrar>) -> Result<Self, DeviceError> {
-        let closed = match &source {
-            PollSource::Stream(_, _, closed) => Some(closed.clone()),
-            PollSource::Listener(_, _) => None,
-        };
         let id = registrar
             .register(Box::new(source))
             .map_err(|_| DeviceError::Fatal("vsock event registration"))?;
-        Ok(Self {
-            registrar,
-            id,
-            closed,
-        })
-    }
-
-    /// Both directions were reported closed; a read half-close alone is insufficient.
-    pub fn is_closed(&self) -> bool {
-        self.closed
-            .as_ref()
-            .is_some_and(|closed| closed.load(Ordering::Relaxed) == READ_CLOSED | WRITE_CLOSED)
+        Ok(Self { registrar, id })
     }
 }
 

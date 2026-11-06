@@ -237,12 +237,6 @@ pub(super) fn poll(registrar: &Registrar) -> Events {
         .unwrap()
         .poll(&mut events, Some(Duration::from_secs(1)))
         .unwrap();
-    let mut sources = registrar.sources.lock().unwrap();
-    for event in &events {
-        if let Some(source) = sources.get_mut(&SourceId(event.token().0 as u32)) {
-            source.on_ready(event);
-        }
-    }
     events
 }
 

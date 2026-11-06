@@ -10,7 +10,7 @@ use std::{
     collections::VecDeque,
     io::{self, Read, Write},
     net::Shutdown,
-    os::unix::net::UnixStream,
+    os::{fd::AsRawFd, unix::net::UnixStream},
     sync::Arc,
 };
 
@@ -29,7 +29,7 @@ pub(super) enum State {
 
 pub(super) struct Connection {
     // Fields drop in declaration order: release the polling copy before the I/O socket.
-    registration: Registration,
+    _registration: Registration,
     socket: UnixStream,
     state: State,
     key: Key,
@@ -57,7 +57,7 @@ impl Connection {
         cid: u64,
     ) -> Result<Self, DeviceError> {
         Ok(Self {
-            registration: Registration::stream(
+            _registration: Registration::stream(
                 &socket,
                 registrar,
                 Interest::READABLE | Interest::WRITABLE,
@@ -145,8 +145,12 @@ impl Connection {
     /// One write/read per turn; successful reads or remaining write tails request another.
     /// Returns whether this flow is closed and whether runnable work may remain.
     pub fn drive(&mut self, outgoing: &mut VecDeque<Packet>) -> io::Result<(bool, bool)> {
-        if self.state == State::AwaitResponse && self.registration.is_closed() {
-            return Ok((true, false));
+        if self.state == State::AwaitResponse {
+            return match self.host_closed() {
+                Ok(closed) => Ok((closed, false)),
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => Ok((false, true)),
+                Err(error) => Err(error),
+            };
         }
         if self.state == State::Connecting {
             if let Some(error) = self.socket.take_error()? {
@@ -166,9 +170,6 @@ impl Connection {
             }
             self.state = State::Established;
             outgoing.push_back(self.packet(RESPONSE, 0, vec![]));
-        }
-        if self.state != State::Established {
-            return Ok((false, false));
         }
         let mut again = false;
         if !self.pending.is_empty() {
@@ -231,6 +232,22 @@ impl Connection {
             self.credit_requested = true;
         }
         Ok((false, again))
+    }
+
+    fn host_closed(&self) -> io::Result<bool> {
+        // macOS maps either direction's EOF to POLLHUP. Separate entries keep
+        // a half-close distinct from a full close, even with unread host data.
+        let mut directions = [libc::POLLIN, libc::POLLOUT].map(|events| libc::pollfd {
+            fd: self.socket.as_raw_fd(),
+            events,
+            revents: 0,
+        });
+        // SAFETY: the initialized array and owned socket remain valid for the
+        // synchronous call; its length is exact and timeout zero never waits.
+        if unsafe { libc::poll(directions.as_mut_ptr(), directions.len() as libc::nfds_t, 0) } < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(directions.iter().all(|fd| fd.revents & libc::POLLHUP != 0))
     }
 }
 
