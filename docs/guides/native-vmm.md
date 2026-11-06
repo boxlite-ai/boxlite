@@ -52,5 +52,6 @@ carry it.
 The guest's serial console lands in `logs/console.log` under the box
 directory. The runtime-level test in `src/boxlite/tests/native_vmm.rs` pins how
 far the boot gets; `make test:integration:vmm:native` runs it together with the
-shim-level kernel boot. The design and the device roadmap are in
-[boxlite-ai/boxlite#2369](https://github.com/boxlite-ai/boxlite/issues/2369).
+shim-level kernel boot. The
+[VMM design](../contributing/architecture/vmm/README.md#where-the-engine-plugs-in-m2)
+describes the adapter and the devices it still lacks.

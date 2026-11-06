@@ -71,8 +71,8 @@ pub(crate) fn unsupported_requests(spec: &InstanceSpec) -> Vec<&'static str> {
 }
 
 /// Requests the engine drops with a warning until their devices land. Each
-/// entry goes when its device attaches: virtio-fs shares (#2301), virtio-net
-/// (the #2311 device is not wired into `Vm` yet) and the vsock bridge (#2312).
+/// entry goes when its device attaches: virtio-fs shares, virtio-net (the
+/// device exists, but `Vm` does not attach it yet) and the vsock bridge.
 pub(crate) fn transitional_unattached(spec: &InstanceSpec) -> Vec<&'static str> {
     let mut unattached = Vec::new();
     if !spec.fs_shares.shares().is_empty() {

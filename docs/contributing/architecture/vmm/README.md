@@ -538,12 +538,12 @@ logged.
   a request it cannot serve fails `create` with `Unsupported` (no kernel, a
   non-ELF kernel, a virtio-fs root, nested virtualization). Three transitional
   requests log one warning and boot anyway until their devices land: virtio-fs
-  shares (#2301), the gvproxy endpoint (virtio-net wiring after #2311) and the
-  guest agent's socket bridge (vsock, #2312). It takes its kernel from
-  `InstanceSpec.kernel` (the custom-kernel channel) until the runtime bundles
-  one, attaches the disks in attach order (`vda` container disk, `vdb` guest
-  root) and composes the command line of the boot contract below. Design:
-  [#2369](https://github.com/boxlite-ai/boxlite/issues/2369).
+  shares, the gvproxy endpoint for virtio-net, and the guest agent's vsock
+  bridge. It takes its kernel from `InstanceSpec.kernel` (the custom-kernel
+  channel) until the runtime bundles one, attaches the disks in attach order
+  (`vda` container disk, `vdb` guest root) and composes the command line of the
+  boot contract below. Until virtio-console is wired into `Vm`, that command
+  line names the 8250 (`console=ttyS0`) instead of `hvc0`.
 - **libkrun assumptions outside `krun/`.**
   - The jailer copies libkrunfw into every box
     (`src/boxlite/src/jailer/shim_copy.rs:103-105`).
@@ -567,7 +567,7 @@ from the new VMM.
 | virtio-fs | one device per share: `BoxLiteShared` (read-write) and one per volume | one device, with each share as an export under it | M2 (SHARED), M3 (volumes) |
 | vsock | guest CID 3; host `box.sock` to guest port 2695 for gRPC, guest to host port 2696 as the ready signal (`src/shared/src/constants.rs:20-26`) | unchanged | M2 |
 | Network | virtio-net to gvproxy in the shim (a stream socket with 4-byte length prefixes on Linux, datagrams with the `VFKT` handshake on macOS), with 192.168.127.2/24 set by the agent | unchanged; no TSI | M2 |
-| Console | virtio-console `hvc0` into `console.log`, truncated at each boot | unchanged once virtio-console is wired into `Vm`; until then the native engine boots on the 8250 (`console=ttyS0`), and M1 first boots on the PL011 or 8250 | M1–M2 |
+| Console | virtio-console `hvc0` into `console.log`, truncated at each boot | unchanged; M1 first boots on the PL011 or 8250 | M1–M2 |
 | Other devices | virtio-rng, and virtio-balloon with free page reporting (`libkrun/src/devices/src/virtio/balloon/device.rs:28-30`) | unchanged | M2 |
 | Wall clock | PL031 (arm64) or CMOS (x86_64) at boot; on macOS, resync over vsock datagram port 123 | the same at boot; M2 chooses the resync mechanism | M1–M2 |
 | End of the VM | the agent writes `exit.json`, syncs and calls `reboot(RESTART)`; libkrun then exits the process | the same guest steps; `run()` returns `GuestReset` | M2 |

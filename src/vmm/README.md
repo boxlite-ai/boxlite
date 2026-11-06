@@ -51,9 +51,9 @@ tested with test devices, and `Vm` owns them. `devices::add_all` composes one
 tested with a real kernel. The output-only virtio console device is implemented
 and tested against real guest RAM and split virtqueues, but it is not wired
 into `Vm` yet. Linux arm64 and macOS arm64 remain required M2 qualification
-gates, blocked by their boot dependencies (#1698/#2103); unit tests or x86_64
-evidence do not qualify those platforms or complete M2. The BoxLite engine
-adapter (`src/boxlite/src/vmm/native/`, behind the runtime's `native` feature)
+gates, blocked by their boot dependencies; unit tests or x86_64 evidence do not
+qualify those platforms or complete M2. The BoxLite engine adapter
+(`src/boxlite/src/vmm/native/`, behind the runtime's `native` feature)
 builds a `VmConfig` from the box specification and runs `Vm`; the pinned kernel
 also mounts an ext4 root disk and devtmpfs for a disk-root boot, so a box boots
 to `boxlite-guest` as PID 1. The vsock and virtio-fs devices and the virtio-net

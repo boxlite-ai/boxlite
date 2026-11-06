@@ -5,7 +5,7 @@
 //! PID 1. The box cannot become ready yet: the native engine has no vsock,
 //! virtio-fs or virtio-net device, so the agent exits, the kernel panics into
 //! a reset, and `start` fails. Each device that lands moves the pinned stop
-//! point until `start` succeeds (design: boxlite-ai/boxlite#2369).
+//! point until `start` succeeds.
 //!
 //! Run with `make test:integration:vmm:native`: it needs `/dev/kvm`,
 //! `VMM_KERNEL` (from `make vmm:boot`) and a `boxlite-shim` built with the
