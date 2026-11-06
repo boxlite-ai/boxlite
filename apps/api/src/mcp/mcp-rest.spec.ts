@@ -46,6 +46,66 @@ describe('MCP loopback REST boundary', () => {
     expect(request.res.listenerCount('close')).toBe(0)
   })
 
+  it('rejects calls outside an authenticated invocation without contacting REST', async () => {
+    await expect(rest.fetch('http://mcp-rest.invalid/boxes')).rejects.toMatchObject({ code: 'missing_context' })
+    expect(calls).toBe(0)
+  })
+
+  it.each([new URL('https://untrusted.invalid/boxes'), new Request('https://untrusted.invalid/boxes')])(
+    'routes a %p template through the authenticated loopback connection',
+    async (input) => {
+      respond = (req, res) => {
+        expect(req.url).toBe('/api/v1/org-1/boxes')
+        expect(req.headers.authorization).toBe('Bearer exact-value')
+        res.end('{"boxes":[]}')
+      }
+      const response = await rest.run(request, new AbortController().signal, () => rest.fetch(input))
+      expect(await response.json()).toEqual({ boxes: [] })
+      expect(calls).toBe(1)
+    },
+  )
+
+  it('accepts a JSON response exactly at the size limit', async () => {
+    const value = 'x'.repeat(128 * 1024 - 2)
+    respond = (_req, res) => res.end(JSON.stringify(value))
+    const response = await call()
+    expect(await response.json()).toBe(value)
+    expect(request.res.listenerCount('close')).toBe(0)
+  })
+
+  it.each([200, 502])('rejects non-JSON REST responses with status %s', async (status) => {
+    respond = (_req, res) => res.writeHead(status).end('<html>upstream unavailable</html>')
+    await expect(call()).rejects.toMatchObject({
+      code: 'invalid_response',
+      message: 'REST returned a non-JSON response',
+    })
+    expect(request.res.listenerCount('close')).toBe(0)
+  })
+
+  it.each([null, 'Forbidden', { message: ['Permission denied'] }, { error: 'Forbidden' }])(
+    'preserves REST error details without a string message: %j',
+    async (details) => {
+      respond = (_req, res) => res.writeHead(403).end(JSON.stringify(details))
+      await expect(call()).rejects.toMatchObject({
+        code: 'http_error',
+        message: 'REST returned HTTP 403',
+        status: 403,
+        details,
+      })
+      expect(request.res.listenerCount('close')).toBe(0)
+    },
+  )
+
+  it('does not dispatch an invocation whose session is already cancelled', async () => {
+    const controller = new AbortController()
+    controller.abort()
+    await expect(
+      rest.run(request, controller.signal, () => rest.fetch('http://mcp-rest.invalid/boxes')),
+    ).rejects.toMatchObject({ code: 'request_cancelled' })
+    expect(calls).toBe(0)
+    expect(request.res.listenerCount('close')).toBe(0)
+  })
+
   it('rejects oversized responses and releases the REST connection', async () => {
     let closed: Promise<unknown>
     respond = (_req, res) => {

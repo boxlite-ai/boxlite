@@ -118,6 +118,9 @@ these tests do not boot a Box or complete an Auth0 browser login. They cover the
 six tools, structured REST failures, concurrent identities, permission checks,
 input validation and session cleanup. Adapter tests cover response size,
 redirect refusal, disconnect cancellation and the real timeout.
+Coverage checks also exercise missing invocation context, non-JSON upstream replies,
+REST errors without a string message, and responses exactly at the size limit.
+Operation-selection tests reject missing or duplicate Box operations before startup.
 
 The unused standalone `mcp-proxy` listener is mapped to a shared stub in the API's
 CommonJS Jest configuration, covering both MCP and `AppModule` importers; Nest owns
