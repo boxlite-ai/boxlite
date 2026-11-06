@@ -6,6 +6,7 @@ rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 description = "Host hypervisor backends for BoxLite's VMM"
+repository = "https://github.com/boxlite-ai/boxlite"
 
 [target.'cfg(all(target_os = "linux", target_arch = "x86_64"))'.dependencies]
 kvm-bindings = "0.14.1"

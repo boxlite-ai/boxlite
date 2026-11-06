@@ -6,6 +6,7 @@ rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 description = "Virtual machine lifecycle and device model for BoxLite"
+repository = "https://github.com/boxlite-ai/boxlite"
 
 [dependencies]
 boxlite-hypervisor.workspace = true
