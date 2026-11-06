@@ -143,6 +143,10 @@ followed by POST `/ssh/enable`, without a Setup POST, and preserves the key down
 and path. The screenshots below use local mock data and contain no private keys.
 This verification does not establish a live cloud SSH handshake.
 
+On the main-based branch, `make test:apps:dashboard` passed all 97 test files and
+814 tests. `make build:apps:dashboard` and `git diff --check` also passed. Validation
+reused the existing local dependency installation without changing the lockfile.
+
 ### Before
 
 The original SSH tab opens a prose-heavy connection-details dialog.
