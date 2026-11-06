@@ -57,10 +57,6 @@ pub struct DomainList {
 /// Backend abstraction for the organization's domains.
 ///
 /// Implemented by the REST backend only; a local runtime publishes nothing.
-#[expect(
-    clippy::double_must_use,
-    reason = "async_trait generates a must-use boxed future"
-)]
 #[async_trait]
 pub(crate) trait DomainBackend: Send + Sync {
     async fn list_domains(&self) -> BoxliteResult<DomainList>;

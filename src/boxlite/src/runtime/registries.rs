@@ -64,10 +64,6 @@ impl fmt::Debug for NewRegistryCredential {
 /// Internal trait for registry logins. Only `RestRuntime` implements it.
 ///
 /// `id` arguments have passed [`checked_id`].
-#[expect(
-    clippy::double_must_use,
-    reason = "async_trait generates a must-use boxed future"
-)]
 #[async_trait]
 pub(crate) trait RegistryBackend: Send + Sync {
     async fn list_registries(&self) -> BoxliteResult<Vec<RegistryCredential>>;
