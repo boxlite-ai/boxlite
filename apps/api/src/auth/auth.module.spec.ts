@@ -43,6 +43,8 @@ describe('AuthModule JwtStrategy provider', () => {
             return false
           case 'oidc.audience':
             return 'https://dev.boxlite.ai/api'
+          case 'mcp.resourceUrl':
+            return 'https://api.example.test/api/mcp'
           case 'oidc.publicIssuer':
             return 'https://auth.dev.boxlite.ai'
           default:
@@ -61,6 +63,7 @@ describe('AuthModule JwtStrategy provider', () => {
 
     expect((strategy as any).options).toMatchObject({
       audience: 'https://dev.boxlite.ai/api',
+      mcpAudience: 'https://api.example.test/api/mcp',
       issuer: 'https://auth.dev.boxlite.ai/',
       jwksUri: 'https://dev-j60pjpmu6neaeaga.us.auth0.com/.well-known/jwks.json',
     })

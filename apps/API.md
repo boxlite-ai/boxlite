@@ -46,6 +46,7 @@ and private tunnels as enabled; clients check that before every private prepare.
 | API                                                                       | Service                      | Base path or host                                                                    | Deployed port            |
 | ------------------------------------------------------------------------- | ---------------------------- | ------------------------------------------------------------------------------------ | ------------------------ |
 | [Control-plane API](#control-plane-api)                                   | `apps/api`                   | `/api`                                                                               | `3000`                   |
+| [MCP endpoint](#mcp-endpoint) | `apps/api` | `/api/mcp` | `3000` |
 | [Hosted BoxLite-compatible API](#hosted-boxlite-compatible-api)           | `apps/api`                   | `/api/v1`                                                                            | `3000`                   |
 | [Runner API](#runner-api)                                                 | `apps/runner`                | `/`                                                                                  | `3003`                   |
 | [Preview proxy API](#preview-proxy-api)                                   | `apps/proxy`                 | `proxy.<domain>`, `<port>-<box>.proxy.<domain>`                                      | `4000`                   |
@@ -61,6 +62,16 @@ OTLP and HTTP health ports come from
 [`settings.ts`](./infra/stack/settings.ts); the collector's gRPC health port
 comes from its own [`config.yaml`](./otel-collector/config.yaml). Where an
 in-code default differs, the section notes it.
+
+## MCP endpoint
+
+`POST /api/mcp` serves the TypeScript FastMCP prototype in the API process.
+It exposes OAuth-protected Box list, get, create, start, stop and delete tools
+from the shipped OpenAPI contract. The existing REST controllers remain
+responsible for permissions, validation, limits and audit.
+
+See the [MCP implementation guide](api/src/mcp/README.md) for OAuth settings,
+client inputs, structured errors, bounds and local verification.
 
 ## Admin organization metadata
 

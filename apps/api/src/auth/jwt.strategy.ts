@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { Injectable, Logger } from '@nestjs/common'
+import { Injectable, Logger, UnauthorizedException } from '@nestjs/common'
 import { PassportStrategy } from '@nestjs/passport'
 import { ExtractJwt, Strategy } from 'passport-jwt'
 import { passportJwtSecret } from 'jwks-rsa'
@@ -21,6 +21,7 @@ import { Context } from '../common/context/context'
 interface JwtStrategyConfig {
   jwksUri: string
   audience: string
+  mcpAudience?: string
   issuer: string
 }
 
@@ -71,7 +72,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
         jwksUri: options.jwksUri,
       }),
       jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
-      audience: options.audience,
+      audience: options.mcpAudience ? [options.audience, options.mcpAudience] : options.audience,
       issuer: options.issuer,
       algorithms: ['RS256'],
       passReqToCallback: true,
@@ -81,6 +82,20 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
   }
 
   async validate(request: Request, payload: any): Promise<AuthContext> {
+    // Dynamically registered Auth0 clients may have no identity claims. Select
+    // this path by verified audience, including when MCP forwards to REST.
+    const audiences = Array.isArray(payload.aud) ? payload.aud : [payload.aud]
+    if (this.options.mcpAudience && audiences.includes(this.options.mcpAudience)) {
+      if (typeof payload.sub !== 'string' || !payload.sub || payload.sub.endsWith('@clients')) {
+        throw new UnauthorizedException('Invalid credentials')
+      }
+      const user = await this.userService.findOne(payload.sub)
+      if (!user) throw new UnauthorizedException('Existing BoxLite account required')
+      requireVerifiedAuth0DatabaseEmail({ sub: payload.sub, email_verified: user.emailVerified })
+      await this.loginEvents.recordFirstUse(user.id, payload)
+      return { userId: user.id, role: user.role, email: user.email, mcp: true }
+    }
+
     // Keep this before JIT user creation: an already-issued unverified Auth0
     // database token must not create local state while the Auth0 Action rollout
     // is converging.
@@ -142,6 +157,10 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       email: user.email,
       organizationId,
     }
+  }
+
+  get issuer(): string {
+    return this.options.issuer
   }
 
   async verifyToken(token: string): Promise<JWTPayload> {

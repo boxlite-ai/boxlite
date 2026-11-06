@@ -33,7 +33,7 @@ help:
 	@echo "    make vmm:boot       - Build the pinned x86_64 ELF kernel inside a pinned BoxLite box (BOOT_OUTPUT, BOOT_JOBS)"
 	@echo "    make vmm:boot:host  - Build the same kernel with Linux host tools instead"
 	@echo "    make skillbox-image - Build SkillBox Docker image (APT_SOURCE=mirrors.aliyun.com for China)"
-	@echo "    make build:apps     - Build the apps workspace (api, dashboard, runner, libs…)"
+	@echo "    make build:apps     - Build apps (optional PROJECTS=api,dashboard)"
 	@echo "    make build:apps:dashboard - Build and type-check the dashboard"
 	@echo ""
 	@echo "  Plugins:"

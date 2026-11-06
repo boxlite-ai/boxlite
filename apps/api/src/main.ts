@@ -31,6 +31,7 @@ import type { IncomingMessage } from 'http'
 import type { Socket } from 'net'
 import { Logger as PinoLogger, LoggerErrorInterceptor } from 'nestjs-pino'
 import { BoxliteWsProxyService } from './boxlite-rest/boxlite-ws-proxy.service'
+import { MCP_METADATA_PATH } from './mcp/mcp-auth'
 
 // https options
 const httpsEnabled = process.env.CERT_PATH && process.env.CERT_KEY_PATH
@@ -125,7 +126,7 @@ async function bootstrap() {
   }
 
   const globalPrefix = 'api'
-  app.setGlobalPrefix(globalPrefix)
+  app.setGlobalPrefix(globalPrefix, { exclude: [MCP_METADATA_PATH] })
 
   const documentFactory = () => SwaggerModule.createDocument(app, getOpenApiConfig(configService.get('oidc.issuer')))
   SwaggerModule.setup('api', app, documentFactory, {

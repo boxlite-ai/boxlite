@@ -216,6 +216,7 @@ export function buildApi(input: ApiInputs) {
         // OIDC — external provider (Auth0/Okta/etc.)
         OIDC_CLIENT_ID: oidcClientId.value,
         OIDC_AUDIENCE: envOr('OIDC_AUDIENCE', 'boxlite'),
+        ...(process.env.MCP_RESOURCE_URL && { MCP_RESOURCE_URL: process.env.MCP_RESOURCE_URL }),
         OIDC_ISSUER_BASE_URL: oidcIssuer,
         ...(publicOidcIssuer && {
           PUBLIC_OIDC_DOMAIN: publicOidcIssuer,
