@@ -74,6 +74,10 @@ export class Box {
   @Column({ type: 'boolean', nullable: true })
   imageIsOrgOwned?: boolean | null
 
+  // Fixed at creation, independently of later organization allowlist changes.
+  @Column({ type: 'boolean', default: false })
+  nestedVirtualization = false
+
   @Column({
     type: 'uuid',
     nullable: true,

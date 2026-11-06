@@ -13,7 +13,7 @@ it does not re-read process ENV or run an additional hardware probe.
 Physical host support remains checked by the existing native VM startup path,
 and startup errors retain their existing behavior.
 
-The control plane's [organization-policy PR](https://github.com/boxlite-ai/boxlite/pull/2360)
+The control plane's [organization allowlist](../API.md#organization-nested-virtualization-allowlist-rc)
 decides whether a new box should use that capability. Saved requirements travel
 through create replay and recovery; recovery checks runtime authorization before
 destruction. The Runner flag does not establish hardware availability or L2 execution.
@@ -63,9 +63,9 @@ support nesting; the flag alone does not establish hardware availability or a pe
 
 Cloud stages deliver process settings through
 [`BOXLITE_RUNNER_ENV`](../infra/mdeploy/README.md#runner-process-environment).
-Public REST create requests have no nesting option. Cloud organization admission
-is supplied by the dependent [policy PR](https://github.com/boxlite-ai/boxlite/pull/2360).
-Upgrade Runners before enabling that control-plane policy.
+Public REST create requests have no nesting option. Upgrade Runners before
+enabling an organization: Cloud refuses creation when the selected Runner cannot
+confirm authorization, rather than falling back to an ordinary box.
 
 When both settings are enabled, the Runner combines their RC permissions and
 preserves kernel, privilege and nesting options together during create and replay.

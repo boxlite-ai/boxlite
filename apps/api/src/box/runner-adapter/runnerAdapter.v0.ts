@@ -22,6 +22,7 @@ import {
 import { Box } from '../entities/box.entity'
 import { BoxState } from '../enums/box-state.enum'
 import { RunnerApiError } from '../errors/runner-api-error'
+import { TypedConfigService } from '../../config/typed-config.service'
 
 const isDebugEnabled = process.env.DEBUG === 'true'
 
@@ -119,6 +120,8 @@ export function sanitizedNonJsonRunnerMessage(data: unknown): string {
 
 @Injectable()
 export class RunnerAdapterV0 implements RunnerAdapter {
+  constructor(private readonly configService: TypedConfigService) {}
+
   private readonly logger = new Logger(RunnerAdapterV0.name)
   private boxApiClient: BoxApi
   private runnerApiClient: DefaultApi
@@ -241,6 +244,7 @@ export class RunnerAdapterV0 implements RunnerAdapter {
       metrics: response.data.metrics,
       appVersion: response.data.appVersion,
       supportsPrivileged: response.data.supportsPrivileged,
+      nestedVirtualizationEnabled: response.data.nestedVirtualizationEnabled,
     }
   }
 
@@ -260,8 +264,16 @@ export class RunnerAdapterV0 implements RunnerAdapter {
     if (box.privileged && !this.runner.supportsPrivileged) {
       throw new Error(`Runner ${this.runner.id} does not support privileged Boxes`)
     }
+    if (box.nestedVirtualization === true) {
+      const signal = AbortSignal.timeout(this.configService.getOrThrow('runnerHealthTimeout') * 1000)
+      const info = await this.runnerInfo(signal)
+      if (info.nestedVirtualizationEnabled !== true) {
+        throw new Error(`Runner ${this.runner.id} cannot confirm nested virtualization support`)
+      }
+    }
     const response = await this.boxApiClient.create({
       id: box.id,
+      ...(box.nestedVirtualization === true ? { nestedVirtualization: true } : {}),
       image,
       osUser: box.osUser,
       cpuQuota: box.cpu,
@@ -341,6 +353,7 @@ export class RunnerAdapterV0 implements RunnerAdapter {
       throw new Error(`Runner ${this.runner.id} does not support privileged Boxes`)
     }
     const recoverBoxDTO: RecoverBoxDTO = {
+      ...(box.nestedVirtualization === true ? { nestedVirtualization: true } : {}),
       osUser: box.osUser,
       cpuQuota: box.cpu,
       gpuQuota: box.gpu,

@@ -7,7 +7,7 @@ import { RunnerAdapterV0 } from './runnerAdapter.v0'
 
 describe('RunnerAdapterV0 createBox', () => {
   it.each([false, true])('forwards persisted guest privilege %s to the runner', async (privileged) => {
-    const adapter = new RunnerAdapterV0()
+    const adapter = new RunnerAdapterV0({ getOrThrow: () => 3 } as any)
     await adapter.init({ id: 'runner-1', apiUrl: 'http://runner.invalid', supportsPrivileged: true } as any)
     const create = jest.fn().mockResolvedValue({ data: { daemonVersion: '1.0' } })
     ;(adapter as any).boxApiClient = { create }
@@ -20,7 +20,7 @@ describe('RunnerAdapterV0 createBox', () => {
   // The runner body carries the row's outbound policy as is; the Daytona-era
   // networkBlockAll / networkAllowList pair is gone from the wire.
   it('sends the outbound policy as the enabled flag and entries', async () => {
-    const adapter = new RunnerAdapterV0()
+    const adapter = new RunnerAdapterV0({ getOrThrow: () => 3 } as any)
     const create = jest.fn().mockResolvedValue({ data: { daemonVersion: '1.0' } })
     ;(adapter as any).boxApiClient = { create }
 
@@ -43,7 +43,7 @@ describe('RunnerAdapterV0 createBox', () => {
   })
 
   it('passes secrets through to the runner create body', async () => {
-    const adapter = new RunnerAdapterV0()
+    const adapter = new RunnerAdapterV0({ getOrThrow: () => 3 } as any)
     const create = jest.fn().mockResolvedValue({ data: { daemonVersion: '1.0' } })
     ;(adapter as any).boxApiClient = { create }
 
@@ -79,7 +79,7 @@ describe('RunnerAdapterV0 createBox', () => {
 
   /** The caller may pin a curated tag to the build this runner already has. */
   it('sends the image it is handed rather than the one on the box', async () => {
-    const adapter = new RunnerAdapterV0()
+    const adapter = new RunnerAdapterV0({ getOrThrow: () => 3 } as any)
     const create = jest.fn().mockResolvedValue({ data: { daemonVersion: '1.0' } })
     ;(adapter as any).boxApiClient = { create }
     const pinned = `ghcr.io/boxlite-ai/boxlite-agent-base@sha256:${'a'.repeat(64)}`
@@ -90,7 +90,7 @@ describe('RunnerAdapterV0 createBox', () => {
   })
 
   it('passes secrets through to the runner recover body', async () => {
-    const adapter = new RunnerAdapterV0()
+    const adapter = new RunnerAdapterV0({ getOrThrow: () => 3 } as any)
     const recover = jest.fn().mockResolvedValue(undefined)
     ;(adapter as any).boxApiClient = { recover }
 
@@ -122,7 +122,7 @@ describe('RunnerAdapterV0 createBox', () => {
 
 describe('RunnerAdapterV0 recoverBox', () => {
   it.each([false, true])('forwards persisted guest privilege %s to the recover request', async (privileged) => {
-    const adapter = new RunnerAdapterV0()
+    const adapter = new RunnerAdapterV0({ getOrThrow: () => 3 } as any)
     await adapter.init({ id: 'runner-1', apiUrl: 'http://runner.invalid', supportsPrivileged: true } as any)
     const recover = jest.fn().mockResolvedValue(undefined)
     ;(adapter as any).boxApiClient = { recover }
@@ -137,7 +137,7 @@ describe('RunnerAdapterV0 privilege support', () => {
   it.each([undefined, false])(
     'rejects privileged create and recovery when runner support is %s',
     async (supportsPrivileged) => {
-      const adapter = new RunnerAdapterV0()
+      const adapter = new RunnerAdapterV0({ getOrThrow: () => 3 } as any)
       await adapter.init({ id: 'runner-1', apiUrl: 'http://runner.invalid', supportsPrivileged } as any)
       const create = jest.fn().mockResolvedValue({ data: {} })
       const recover = jest.fn().mockResolvedValue(undefined)
@@ -152,7 +152,7 @@ describe('RunnerAdapterV0 privilege support', () => {
   )
 
   it('preserves the capability returned by runner info', async () => {
-    const adapter = new RunnerAdapterV0()
+    const adapter = new RunnerAdapterV0({ getOrThrow: () => 3 } as any)
     ;(adapter as any).runnerApiClient = {
       runnerInfo: jest.fn().mockResolvedValue({ data: { supportsPrivileged: true } }),
     }
@@ -165,7 +165,7 @@ describe('RunnerAdapterV0 updateNetworkSettings', () => {
   // The network-settings body speaks the same outbound policy as create and
   // recover; the Daytona-era flag pair is not sent.
   it('sends the outbound policy as the enabled flag and entries', async () => {
-    const adapter = new RunnerAdapterV0()
+    const adapter = new RunnerAdapterV0({ getOrThrow: () => 3 } as any)
     const updateNetworkSettings = jest.fn().mockResolvedValue(undefined)
     ;(adapter as any).boxApiClient = { updateNetworkSettings }
 

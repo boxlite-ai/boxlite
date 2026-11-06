@@ -29,6 +29,7 @@ export interface RunnerMetrics {
 }
 
 export interface RunnerInfo {
+  nestedVirtualizationEnabled?: boolean
   serviceHealth?: RunnerServiceInfo[]
   metrics?: RunnerMetrics
   appVersion?: string
