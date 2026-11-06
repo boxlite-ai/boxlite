@@ -206,8 +206,8 @@ flowchart TD
     E --> F["Fs::reset → Server::reset"]
     F --> G["Release handles and lookup references; invalidate old IDs"]
     H["VM exit or stop"] --> I["Join vCPUs → shut down virtio workers"]
-    I --> J["Drop device/backend File ownership"]
-    J --> K["Unregister and release guest RAM"]
+    I --> J["Vm::drop unregisters guest RAM while devices still exist"]
+    J --> K["Drop device/backend File ownership, then release backing RAM"]
     L["Runtime stop / initialization failure / observed shim exit"] --> M["Confirm handler stopped or process exited"]
     M --> N["cleanup_volume_staging removes hardlinks and snapshots"]
 ```
@@ -237,8 +237,9 @@ sequenceDiagram
         V->>V: 停止并 join vCPU
         V->>W: shutdown 并 join
         W-->>V: 不再访问 RAM
-        V->>F: 释放设备和后端 fd
-        V->>V: 解除 RAM 注册并释放
+        V->>V: 设备仍存在时解除 RAM 注册
+        V->>F: 字段析构释放设备和后端 fd
+        V->>V: 释放 RAM backing
     end
     alt 停止失败
         V-->>H: 返回错误，保留可能仍被访问的 RAM
@@ -267,7 +268,11 @@ instead of 0. The unchanged regression therefore exposes a sustained-load stop
 failure: the shared drain can remain inside the callback while requests keep
 arriving. Earlier passes do not qualify bounded progress. Resolving this requires
 a public queue budget/continuation decision, which the current design assigns to
-common scheduling work; it cannot be solved by cancelling a host syscall. VM RAM-registration retention on failed shutdown
+common scheduling work; it cannot be solved by cancelling a host syscall.
+The current delivery accepts this recorded limitation and defers sustained-load
+stop progress to that follow-up. The failing test remains unchanged and runs
+in the ordinary unit target; no clean full-suite result is claimed.
+VM RAM-registration retention on failed shutdown
 remains covered by the common VM lifecycle tests, separately from fs ownership.
 
 ## Verification record
@@ -346,7 +351,7 @@ and block resize/diagnostic failure unmounts the current mount before outer roll
 pass; six box-wrapper tests pass and one fails because its isolated PATH has no
 `sh`. Earlier use of the old kernel also failed three block tests; the rebuilt
 kernel resolves those failures. Neither earlier failure is reported as a passing
-run. The parent also ran `make test:integration:vmm:kvm`: all eight VMM checks
+run. `make test:integration:vmm:kvm` also ran: all eight VMM checks
 passed; hypervisor checks reported seven passes and the existing register
 round-trip failure (`set sregs` returns EINVAL). This remains a failed target.
 `BOXLITE_DEPS_STUB=1 make test:unit:rust FILTER=single_file` passed: four core,
@@ -356,7 +361,10 @@ release archive builds were not run.
 Private mmap was checked for initial data access only; visibility of later host
 changes through an existing private mapping is not guaranteed by this direct-I/O
 contract. The producer workload has exposed a reproducible reset timeout under
-concurrent replenishment; sustained-load shutdown remains an open blocker. Full Box exit.json, copy RPC and normal lifecycle acceptance still need
+concurrent replenishment. Sustained-load shutdown is an explicitly deferred
+common-framework optimization and does not block this functional delivery.
+The failure remains reproducible, rather than being counted as a pass.
+Full Box exit.json, copy RPC and normal lifecycle acceptance still need
 a native engine adapter and whole-machine Guest.Init integration. BSD source attribution and packaging recipes have been checked; real release
 archive builds and inspection remain outstanding. These are open acceptance items, not passing results.
 
@@ -375,7 +383,7 @@ archive builds and inspection remain outstanding. These are open acceptance item
 | B05 | lookup/open/inflight 独立所有权、FORGET/PLUS、真实 fd 回收 | 编号在会话内不复用 |
 | B06 | DIRECT_IO/零超时契约；同 guest fd 协调 host rewrite；MAP_PRIVATE 初始 fault 和 MAP_SHARED ENODEV | 不保证已有 private mmap 后续修改可见 |
 | B08–B09 | 分段/方向/容量、公共冻结描述符、indirect、双队列、通知、激活/reset | 沿公共队列和 transport 边界 |
-| B10 | 真正 lease 阻塞 OPEN、其他 Fs 延迟、reset 超时/成功、注入 gate、RAM Arc通过；四链补充最终复现reset超时失败 | 当前阻塞：公共drain持续请求不能保证退出；VM注册保留还是独立通用测试 |
+| B10 | 真正 lease 阻塞 OPEN、其他 Fs 延迟、reset 超时/成功、注入 gate、RAM Arc通过；四链补充最终复现reset超时失败 | 后续公共框架优化：持续补充时drain停止进展；已知失败保留，不阻塞本次功能交付；VM注册保留仍为独立通用测试 |
 | B11 | EMFILE 根/辅助 fd、第二导出失败、ENOSPC/短写注入、反复 populated reset/destroy/drop | 注入错误与真实磁盘满分别标明 |
 | B13–B14 | 配置、挂载、最小真实 guest 与旧引擎准备回归 | 完整 Box、exit.json、独立 copy RPC、双引擎运行待外部集成 |
 
