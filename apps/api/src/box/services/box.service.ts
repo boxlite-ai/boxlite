@@ -61,6 +61,7 @@ import {
 } from '../dto/list-boxes-query.dto'
 import { createRangeFilter } from '../../common/utils/range-filter'
 import { recordBoxRequested, recordWarmPoolClaim } from '../utils/box-business-event.util'
+import { mutationFailureType, recordBusinessEvent } from '../../common/utils/business-event.util'
 import { Context } from '../../common/context/context'
 import { PlatformReason } from '../../common/context/platform-reason.enum'
 import { LogExecution } from '../../common/decorators/log-execution.decorator'
@@ -110,6 +111,9 @@ const DEFAULT_BOX_CPU = 1
 const DEFAULT_BOX_MEM = 1
 const DEFAULT_BOX_DISK = 10
 const DEFAULT_BOX_GPU = 0
+
+// Leave room inside the proxy's two-second delivery timeout.
+const PREVIEW_ACTIVITY_TIMEOUT_MS = 1500
 
 export type BoxCreationOptions = {
   maxCreatedBoxes?: number
@@ -1069,8 +1073,52 @@ export class BoxService {
     })
   }
 
-  async updateLastActivityAt(boxId: string, lastActivityAt: Date): Promise<void> {
-    await this.boxActivityService.updateLastActivityAt(boxId, lastActivityAt)
+  async updateLastActivityAt(boxId: string, lastActivityAt: Date, previewOpen = false): Promise<void> {
+    if (!previewOpen) return this.boxActivityService.updateLastActivityAt(boxId, lastActivityAt)
+    const controller = new AbortController()
+    const { signal } = controller
+    let operation = 'update_activity'
+    let timeout: ReturnType<typeof setTimeout>
+    const observe = async () => {
+      await this.boxActivityService.updateLastActivityAt(boxId, lastActivityAt, signal)
+      signal.throwIfAborted()
+      operation = 'deduplicate'
+      const first = await this.redis.set(`box:preview-open:${boxId}`, '1', 'EX', 60, 'NX')
+      signal.throwIfAborted()
+      if (first !== 'OK') return
+      operation = 'load_box'
+      const box = await this.findOne(boxId)
+      signal.throwIfAborted()
+      operation = 'record_event'
+      recordBusinessEvent({
+        name: 'box.open',
+        outcome: 'success',
+        correlationId: box.id,
+        organizationId: box.organizationId,
+      })
+    }
+    try {
+      await Promise.race([
+        observe(),
+        new Promise<never>((_, reject) => {
+          timeout = setTimeout(() => {
+            const error = new Error('Preview activity deadline exceeded')
+            controller.abort(error)
+            reject(error)
+          }, PREVIEW_ACTIVITY_TIMEOUT_MS)
+        }),
+      ])
+    } catch (error) {
+      // Preserve activity-buffer failures; only preview observation/timeouts fail closed.
+      if (operation === 'update_activity' && !signal.aborted) throw error
+      this.logger.warn('Preview activity observation could not be recorded', {
+        boxId,
+        operation,
+        errorType: signal.aborted ? 'timeout' : mutationFailureType(error),
+      })
+    } finally {
+      clearTimeout(timeout)
+    }
   }
 
   async getToolboxProxyUrl(boxId: string): Promise<string> {
