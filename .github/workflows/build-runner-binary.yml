@@ -221,7 +221,14 @@ jobs:
   upload-to-release:
     name: Upload to GitHub Release
     needs: [config, resolve-ref, build]
-    if: github.event_name == 'workflow_run' && github.event.workflow_run.event == 'release'
+    # The manual C build is skipped on releases; publication must also override implicit success().
+    if: >-
+      !cancelled() &&
+      needs.config.result == 'success' &&
+      needs['resolve-ref'].result == 'success' &&
+      needs.build.result == 'success' &&
+      github.event_name == 'workflow_run' &&
+      github.event.workflow_run.event == 'release'
     runs-on: ubuntu-latest
     permissions:
       contents: write

@@ -318,6 +318,14 @@ The release chain still downloads the published C archives. Reusable Runner call
 `libboxlite_source` selection: `deploy-infra.yml` supplies its existing C artifact without a
 second C build. A C build failure stops its consumers; manual runs publish no releases or tags.
 
+Runner release uploads and Go module tagging run only after successful release-origin C SDK
+builds, followed by a successful Runner build or Go test matrix respectively.
+The manual `build-c` job is intentionally skipped on that path, so each publication job uses
+`!cancelled()` and explicit prerequisite-result checks to override the implicit `success()`
+check inherited through the dependency chain. Failed or skipped prerequisites and workflow
+cancellation still prevent publication; manual builds, reusable deployment builds, and
+non-release upstream runs do not publish through these jobs.
+
 ## Do not rename these
 
 Two workflows chain off another's **display name**, not its filename. Changing the `name:` below

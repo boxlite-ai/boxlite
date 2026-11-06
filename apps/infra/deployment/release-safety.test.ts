@@ -1390,6 +1390,69 @@ for (const [file, consumer, linuxOnly, name] of [
   })
 }
 
+for (const [file, publication, requiredJobs, name] of [
+  [BUILD_RUNNER_WORKFLOW, 'upload-to-release', ['config', 'resolve-ref', 'build'], 'Runner'],
+  [BUILD_GO_WORKFLOW, 'tag-go-module', ['test'], 'Go'],
+] as const) {
+  test(`${name} release publication survives a skipped manual C build without widening publication`, () => {
+    const workflow = load(readFileSync(file, 'utf8'))
+    const job = workflow.jobs[publication]
+    for (const prerequisite of requiredJobs) {
+      assert.ok([job.needs].flat().includes(prerequisite), `publication must wait for ${prerequisite}`)
+    }
+    const context = {
+      github: { event_name: 'workflow_run', event: { workflow_run: { event: 'release' } } },
+      inputs: {},
+      needs: Object.fromEntries(requiredJobs.map((prerequisite) => [prerequisite, { result: 'success' }])),
+      cancelled: () => false,
+      always: () => true,
+      success: () => false,
+      failure: () => false,
+    }
+    assert.equal(workflowExpression(workflow.jobs['build-c'].if, context), false)
+    // Actions adds success() when no status function is present. A skipped ancestor
+    // makes that default false even after the immediate build/test job succeeds.
+    assert.match(
+      job.if,
+      /\b(?:always|cancelled|success|failure)\s*\(/,
+      'release publication must override implicit success() after the manual C build is skipped',
+    )
+    assert.equal(workflowExpression(job.if, context), true, 'a successful release must publish')
+    assert.equal(workflowExpression(job.if, { ...context, cancelled: () => true }), false)
+
+    for (const prerequisite of requiredJobs) {
+      for (const result of ['failure', 'cancelled', 'skipped']) {
+        assert.equal(
+          workflowExpression(job.if, {
+            ...context,
+            needs: { ...context.needs, [prerequisite]: { result } },
+          }),
+          false,
+          `${prerequisite}=${result} must prevent publication`,
+        )
+      }
+    }
+    for (const [event, upstreamEvent] of [
+      ['workflow_dispatch', 'release'],
+      ['workflow_call', 'release'],
+      ['push', 'release'],
+      ['workflow_run', 'push'],
+      ['workflow_run', 'pull_request'],
+      ['workflow_run', 'workflow_dispatch'],
+      ['workflow_run', 'schedule'],
+    ]) {
+      assert.equal(
+        workflowExpression(job.if, {
+          ...context,
+          github: { event_name: event, event: { workflow_run: { event: upstreamEvent } } },
+        }),
+        false,
+        `${event}/${upstreamEvent} must not publish`,
+      )
+    }
+  })
+}
+
 test('manual Runner identity uses its own C artifact while reusable callers keep their selected source', () => {
   const workflow = load(readFileSync(BUILD_RUNNER_WORKFLOW, 'utf8'))
   const step = workflow.jobs.build.steps.find((step: any) => step.name === 'Resolve artifact identity')
