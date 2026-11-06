@@ -416,4 +416,15 @@ checkout because the vendor submodules are intentionally not expanded.
 | `linux/passthrough.rs` | `src/devices/src/virtio/fs/linux/passthrough.rs` |
 | `descriptor.rs` | `src/devices/src/virtio/descriptor_utils.rs` |
 
-`aggregate.rs` and the native device/VM registration glue are BoxLite implementation files with the project's Apache header. `linux/mod.rs` preserves its original BSD header. This table records provenance rather than a claim that every source or binary package has already been audited.
+`aggregate.rs` and the native device/VM registration glue are BoxLite implementation files with the project's Apache header. At the pinned commit, `src/devices/src/virtio/fs/linux/mod.rs` contains only module declarations and has no copyright header; the local `linux/mod.rs` conservatively carries the adjacent implementation's BSD notice, rather than a preserved upstream header.
+
+The source and license check re-fetched all six mapped files at the pinned commit
+and confirmed their original headers, source paths and local modification notes.
+The commit matches the repository's libkrun gitlink. After stripping comment
+prefixes and normalizing bullets, numbering and whitespace, all three conditions
+and the complete disclaimer match the historical Chromium OS license linked
+above. Root `NOTICE` identifies the same source and original copyright. Runtime,
+CLI and C archive recipes each copy the complete local BSD text to
+`LICENSE-virtio-fs`. This source/recipe inspection completes the current provenance
+and license scope; it does not claim that real release archives were built or
+that other bundled components have been audited.
