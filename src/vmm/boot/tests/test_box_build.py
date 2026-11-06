@@ -77,7 +77,7 @@ class BoxBuildContract(unittest.TestCase):
         self.cache = self.repo / "target/vmm/boot/.cache"
         self.bin = self.fixture / "bin"
         self.bin.mkdir()
-        for name in ("awk", "bash", "dirname", "getconf", "mkdir", "mv", "rm", "tar", "gzip"):
+        for name in ("awk", "bash", "sh", "dirname", "getconf", "mkdir", "mv", "rm", "tar", "gzip"):
             (self.bin / name).symlink_to(shutil.which(name))
         # macOS has only shasum; the wrapper falls back to it when sha256sum is missing.
         for name in ("sha256sum", "shasum"):

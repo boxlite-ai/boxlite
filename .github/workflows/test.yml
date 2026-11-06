@@ -725,7 +725,12 @@ jobs:
       # PATH, where the runner preinstalls rustup, so both Rust homes start
       # empty. sccache goes in by absolute path; when its setup failed the
       # wrapper is unset and the build runs uncached.
-      - name: Build the CLI in the dev shell
+      #
+      # The checks run after the build in the same shell because `make cli`
+      # alone passes while rustfmt, clippy or the VMM test harness is missing
+      # from flake.nix: a developer would find out only after a successful
+      # build, which is the expensive way to learn it.
+      - name: Build and check in the dev shell
         run: |
           export CARGO_HOME="$RUNNER_TEMP/cargo" RUSTUP_HOME="$RUNNER_TEMP/rustup"
           if [ -n "${RUSTC_WRAPPER:-}" ]; then
@@ -735,7 +740,7 @@ jobs:
           nix develop --ignore-environment --keep HOME --keep USER \
             --keep CARGO_HOME --keep RUSTUP_HOME --keep RUSTC_WRAPPER \
             --keep CARGO_INCREMENTAL --keep SCCACHE_IGNORE_SERVER_IO_ERROR \
-            -c make cli
+            -c make cli fmt:check:rust clippy test:unit:vmm test:vmm:boot
 
       # The jailer runs bwrap, which Ubuntu 24.04's AppArmor blocks without the
       # bwrap profile (docs/guides/troubleshooting.md); the runner is discarded.
