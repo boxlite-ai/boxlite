@@ -107,6 +107,34 @@ shows the separate spawned event loop.
 
 Opening a session channel only reserves pending state. `env_request()` and
 `pty_request()` fill it; shell, exec, or SFTP requests start the process.
+
+### PTY startup ordering
+
+PTY requests carry their window size and terminal modes through `PtyConfig`
+in the zygote build request. After Youki wires the terminal slave to stdin,
+`PtyExecutor` initializes it before invoking either the SSH workload executor
+or Youki's ordinary command executor. Parent-side `create_pty_child()` only
+attaches I/O and retains the controller for later window changes.
+
+This order matters: a shell can switch to raw mode immediately after exec.
+Applying the client's original modes during parent attachment can re-enable
+`ECHO` and `ICANON`, while initializing dimensions there lets the shell start
+with a zero-sized terminal. Proxy and ordinary port forwarding both reach
+this same Guest execution path; transport-specific terminal workarounds are
+not needed.
+
+Do not add a child wait for parent attachment. The pinned Youki tenant builder
+[waits for exec-notify EOF before returning](https://github.com/youki-dev/youki/blob/4b2f0e00a4a11107f3a338c21c17407d2f664ec9/crates/libcontainer/src/container/tenant_builder.rs#L288-L320),
+and the parent receives the console FD after that return. Initializing locally
+in the child avoids this circular dependency. Container **init** is different:
+its handle is attached before `Container.Start`, so it retains explicit
+initialization at that existing pre-start attachment point.
+
+The [PTY regressions](README.md#tests) force raw mode before parent attachment
+and bound the real startup handshake.
+
+### Command completion
+
 The following diagram shows normal completion of `echo hello`.
 
 ```mermaid
