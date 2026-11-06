@@ -34,20 +34,59 @@ const API_OPERATION_METADATA = 'swagger/apiOperation'
 const WAIT_DEFAULT_SECONDS = 60
 const WAIT_MAX_SECONDS = 300
 
-/** The box operations exposed as their own tools, with descriptions written for agents. */
-const DIRECT_TOOLS: Record<string, string> = {
-  createBox:
-    'Create a box: an isolated Linux micro-VM started from a container image. Returns its id and state. startExecution starts it automatically.',
-  listBoxes: 'List the boxes in your organization with their id, name, image and state.',
-  getBox: 'Get one box by id or name: state, image, resources and network settings.',
-  startBox: 'Start a stopped box.',
-  stopBox: 'Stop a running box. Its disk is kept, and startBox resumes it.',
-  removeBox: 'Delete a box and its disk. This cannot be undone.',
-  startExecution:
-    'Run a command in a box, starting the box if needed. With wait (the default) it returns stdout, stderr and exit_code; with wait=false it returns the execution_id to poll with getExecution.',
-  getExecution: 'Get the status and exit code of an execution. Output comes from startExecution with wait.',
-  uploadFiles: 'Upload files into a box as a base64-encoded tar archive in body_base64.',
-  downloadFiles: 'Download a path from a box as a base64-encoded tar archive.',
+/**
+ * MCP `ToolAnnotations`, all required: an omitted hint falls back to the schema's
+ * destructive, non-idempotent, open-world default, so hosts would prompt on reads.
+ */
+type ToolHints = { readOnlyHint: boolean; destructiveHint: boolean; idempotentHint: boolean; openWorldHint: boolean }
+
+const READ: Omit<ToolHints, 'openWorldHint'> = { readOnlyHint: true, destructiveHint: false, idempotentHint: true }
+const WRITE = { readOnlyHint: false, openWorldHint: true } as const
+
+/** The box operations exposed as their own tools, with descriptions and hints written for agents. */
+const DIRECT_TOOLS: Record<string, { description: string; annotations: ToolHints }> = {
+  createBox: {
+    description:
+      'Create a box: an isolated Linux micro-VM started from a container image. Returns its id and state. startExecution starts it automatically.',
+    annotations: { ...WRITE, destructiveHint: false, idempotentHint: false },
+  },
+  listBoxes: {
+    description: 'List the boxes in your organization with their id, name, image and state.',
+    annotations: { ...READ, openWorldHint: false },
+  },
+  getBox: {
+    description: 'Get one box by id or name: state, image, resources and network settings.',
+    annotations: { ...READ, openWorldHint: false },
+  },
+  startBox: {
+    description: 'Start a stopped box.',
+    annotations: { ...WRITE, destructiveHint: false, idempotentHint: true },
+  },
+  stopBox: {
+    description: 'Stop a running box. Its disk is kept, and startBox resumes it.',
+    annotations: { ...WRITE, destructiveHint: true, idempotentHint: true },
+  },
+  removeBox: {
+    description: 'Delete a box and its disk. This cannot be undone.',
+    annotations: { ...WRITE, destructiveHint: true, idempotentHint: true },
+  },
+  startExecution: {
+    description:
+      'Run a command in a box, starting the box if needed. With wait (the default) it returns stdout, stderr and exit_code; with wait=false it returns the execution_id to poll with getExecution.',
+    annotations: { ...WRITE, destructiveHint: true, idempotentHint: false },
+  },
+  getExecution: {
+    description: 'Get the status and exit code of an execution. Output comes from startExecution with wait.',
+    annotations: { ...READ, openWorldHint: false },
+  },
+  uploadFiles: {
+    description: 'Upload files into a box as a base64-encoded tar archive in body_base64.',
+    annotations: { ...WRITE, destructiveHint: true, idempotentHint: true },
+  },
+  downloadFiles: {
+    description: 'Download a path from a box as a base64-encoded tar archive.',
+    annotations: { ...READ, openWorldHint: true },
+  },
 }
 
 /**
@@ -86,7 +125,7 @@ export class McpTools {
       // An `@All` route serves every verb, so it decides any operation on its path.
       this.permissions.set(op.operationId, routes.get(`${op.method} ${shape}`) ?? routes.get(`all ${shape}`) ?? [])
     }
-    for (const [operationId, description] of Object.entries(DIRECT_TOOLS)) {
+    for (const [operationId, { description, annotations }] of Object.entries(DIRECT_TOOLS)) {
       const op = catalog.get(operationId)
       if (!op) {
         throw new Error(`MCP direct tool ${operationId} is missing from the OpenAPI catalog`)
@@ -94,6 +133,7 @@ export class McpTools {
       this.strategy.registerTool({
         name: operationId,
         description,
+        annotations,
         parameters: operationId === 'startExecution' ? withWait(op.inputSchema) : op.inputSchema,
         handler: (args, _ctx, request: Request) => this.invoke(op, args, request),
       })

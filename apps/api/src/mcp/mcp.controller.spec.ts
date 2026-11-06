@@ -196,6 +196,30 @@ async function rpc(app: INestApplication, body: object, headers: Record<string, 
   return { status: response.status, json: await response.json().catch(() => undefined) }
 }
 
+const read = { readOnlyHint: true, destructiveHint: false, idempotentHint: true }
+/** The hints hosts use to decide which box tools need approval (design #2427). */
+const BOX_TOOL_HINTS = {
+  listBoxes: { ...read, openWorldHint: false },
+  getBox: { ...read, openWorldHint: false },
+  getExecution: { ...read, openWorldHint: false },
+  downloadFiles: { ...read, openWorldHint: true },
+  createBox: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+  startBox: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+  stopBox: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
+  removeBox: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
+  startExecution: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
+  uploadFiles: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
+}
+
+function expectBoxToolHints(tools: { name: string; annotations?: Record<string, unknown> }[]) {
+  const byName = Object.fromEntries(tools.map((tool) => [tool.name, tool.annotations]))
+  for (const [name, hints] of Object.entries(BOX_TOOL_HINTS)) {
+    expect({ name, annotations: byName[name] }).toEqual({ name, annotations: hints })
+  }
+  // It reaches reads and deletes alike, so it keeps the schema's destructive default.
+  expect(byName.invoke_api_endpoint).toBeUndefined()
+}
+
 describe('/mcp', () => {
   let app: INestApplication
   beforeAll(async () => {
@@ -221,6 +245,7 @@ describe('/mcp', () => {
       { 'mcp-protocol-version': '2025-06-18' },
     )
     expect(list.json.result.tools).toHaveLength(13)
+    expectBoxToolHints(list.json.result.tools)
   })
 
   it('serves a 2026-07-28 client without a handshake', async () => {
@@ -236,6 +261,7 @@ describe('/mcp', () => {
 
     expect(list.status).toBe(200)
     expect(list.json.result.tools).toHaveLength(13)
+    expectBoxToolHints(list.json.result.tools)
   })
 
   it('runs a tool call through the REST route as the MCP caller', async () => {
