@@ -117,7 +117,7 @@ help:
 	@echo "    make coverage:infra        - Test infrastructure tooling and collect LCOV coverage"
 	@echo "    make coverage:python:integration - Collect Python unit and VM integration coverage"
 	@echo "    make coverage:node:integration   - Collect Node.js unit and VM integration coverage"
-	@echo "    make coverage:api          - Collect cloud API coverage (Postgres/Redis required)"
+	@echo "    make coverage:api          - Collect API coverage (TEST_FILES=<pattern>; integrations need Postgres/Redis)"
 	@echo "    make coverage:integration  - Generate coverage for Rust integration tests"
 	@echo ""
 	@echo "  Local Development:"

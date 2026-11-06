@@ -98,6 +98,7 @@
         "default",
         "^default",
         { "env": "DB_HOST" },
+        { "env": "REDIS_HOST" },
         { "runtime": "git hash-object ../openapi/box.openapi.yaml ../openapi/admin.openapi.yaml" }
       ],
       "options": {
