@@ -100,6 +100,109 @@ fn maps_the_ram_layout_with_its_host_address_and_unmaps_on_drop() {
 }
 
 #[test]
+#[cfg(target_os = "linux")]
+fn blocked_fs_shutdown_keeps_vm_ram_registered_until_retry_and_drop() {
+    use std::{sync::Arc, time::Duration};
+
+    use crate::virtio::worker::{SharedRuntime, Timeouts, VirtioWorkers};
+
+    let mut vm = bare(config(1, 16), || Ok(MockVm::new())).unwrap();
+    let log = vm.host_vm.log();
+    let memory = Arc::downgrade(vm.ram.memory());
+    vm.workers = VirtioWorkers::with_runtime(Arc::new(
+        SharedRuntime::new(
+            vm.sender.clone(),
+            Timeouts {
+                stop: Duration::from_millis(200),
+                shutdown: Duration::from_millis(200),
+            },
+        )
+        .unwrap(),
+    ));
+    crate::virtio::fs::worker_tests::with_blocked_vm_read(
+        vm.ram.memory().clone(),
+        &vm.workers,
+        &vm.events.lock().unwrap(),
+        |release| {
+            let error = vm.workers.shutdown().unwrap_err();
+            assert!(matches!(error, Error::VirtioWorker(error)
+                if error.kind() == io::ErrorKind::TimedOut));
+            assert!(memory.upgrade().is_some());
+            assert!(
+                !log.lock()
+                    .unwrap()
+                    .iter()
+                    .any(|call| matches!(call, Call::Unmap { .. })),
+                "a blocked Fs still uses registered VM RAM"
+            );
+            release();
+            vm.workers.shutdown().unwrap();
+        },
+    );
+    assert!(memory.upgrade().is_some(), "VM still owns the backing");
+    assert_eq!(log.lock().unwrap().len(), 1, "only RAM registration");
+    drop(vm);
+    assert!(matches!(
+        &log.lock().unwrap()[..],
+        [Call::Map { .. }, Call::Unmap { .. }]
+    ));
+    assert!(
+        memory.upgrade().is_none(),
+        "successful VM drop frees backing RAM"
+    );
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn dropping_vm_during_blocked_fs_keeps_registration_and_backing() {
+    use std::{sync::Arc, time::Duration};
+
+    use crate::{
+        events::EventLoop,
+        virtio::worker::{SharedRuntime, Timeouts, VirtioWorkers},
+    };
+
+    let mut vm = bare(config(1, 1), || Ok(MockVm::new())).unwrap();
+    let log = vm.host_vm.log();
+    let memory = vm.ram.memory().clone();
+    let backing = Arc::downgrade(&memory);
+    let events = EventLoop::new().unwrap();
+    let runtime = Arc::new(
+        SharedRuntime::new(
+            events.sender(),
+            Timeouts {
+                stop: Duration::from_millis(200),
+                shutdown: Duration::from_millis(200),
+            },
+        )
+        .unwrap(),
+    );
+    let workers = VirtioWorkers::with_runtime(runtime.clone());
+    vm.workers = VirtioWorkers::with_runtime(runtime);
+    crate::virtio::fs::worker_tests::with_blocked_vm_read(memory, &workers, &events, |release| {
+        drop(vm);
+        assert_eq!(
+            log.lock().unwrap().len(),
+            1,
+            "failed Drop must not unregister RAM"
+        );
+        assert!(backing.upgrade().is_some());
+        release();
+        workers.shutdown().unwrap();
+    });
+    drop(workers);
+    assert_eq!(
+        log.lock().unwrap().len(),
+        1,
+        "failed Drop preserves the registration"
+    );
+    assert!(
+        backing.upgrade().is_some(),
+        "failed Drop deliberately retains backing RAM"
+    );
+}
+
+#[test]
 fn a_rejected_mapping_returns_the_hypervisor_error_and_keeps_no_registration() {
     let backend = MockVm::failing_at(&[0]);
     let log = backend.log();

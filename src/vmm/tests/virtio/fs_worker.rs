@@ -198,6 +198,16 @@ fn write(transport: &mut MmioTransport, offset: u64, value: u32) {
 
 impl Guest {
     fn new(workers: &VirtioWorkers, events: &EventLoop, path: &std::path::Path) -> Self {
+        let memory = Arc::new(GuestMemoryMmap::from_ranges(&[(GuestAddress(0), 0x10000)]).unwrap());
+        Self::with_memory(workers, events, path, memory)
+    }
+
+    fn with_memory(
+        workers: &VirtioWorkers,
+        events: &EventLoop,
+        path: &std::path::Path,
+        memory: Arc<GuestMemoryMmap>,
+    ) -> Self {
         let device = Arc::new(Mutex::new(
             Fs::new(
                 "test",
@@ -214,7 +224,6 @@ impl Guest {
             device.clone(),
             interrupt.clone() as Arc<dyn VirtioInterrupt>,
         );
-        let memory = Arc::new(GuestMemoryMmap::from_ranges(&[(GuestAddress(0), 0x10000)]).unwrap());
         let transport = MmioTransport::new(
             device,
             interrupt,
@@ -509,6 +518,33 @@ fn host_write_lease_blocks_real_open_delays_other_device_and_times_out_reset() {
     assert_eq!(object::<OutHeader>(&guest.complete()).error, 0);
     assert_eq!(object::<OutHeader>(&other.complete()).error, 0);
     rig.workers.shutdown().unwrap();
+}
+
+/// Runs production Fs READ on registered VM RAM while the caller checks shutdown.
+pub(crate) fn with_blocked_vm_read(
+    memory: Arc<GuestMemoryMmap>,
+    workers: &VirtioWorkers,
+    events: &EventLoop,
+    check: impl FnOnce(&dyn Fn()),
+) {
+    let _serial = SERIAL.lock().unwrap();
+    let rig = Rig::new();
+    let mut guest = Guest::with_memory(workers, events, &rig.path, memory);
+    let (node, fh) = guest.open_file();
+    let gate = Fault::install(&rig.path.join("file"), None);
+    guest.submit(
+        Opcode::Read,
+        node,
+        ReadIn {
+            fh,
+            size: 10,
+            ..Default::default()
+        }
+        .as_slice(),
+    );
+    gate.entered();
+    check(&|| gate.open());
+    assert_eq!(&guest.complete()[16..], b"host bytes");
 }
 
 #[test]
