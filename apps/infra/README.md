@@ -52,5 +52,11 @@ missing, including older installs that already have `node_modules`. CI uploads t
 infrastructure changes cannot use the empty-upload path. The wheel smoke fixture copies Python
 sources while omitting native extensions, so unrelated missing modules cannot mask a broken wheel.
 `test:apps:infra-config` installs SST's platform and typechecks the full configuration.
+
+Infrastructure subprocess fixtures allow 30 seconds for Node/tsx and dependency startup under concurrent test load.
+Signal fixtures publish readiness after installing their handlers and retain five-second shutdown limits afterward.
+Exit waits cancel their timer and detach listeners on success, launch failure or timeout.
+Captured stdout and stderr must still be drained before assertions so timing changes cannot hide missing diagnostics or corrupt JSON.
+
 For documentation-only edits, check local links,
 anchors, Mermaid rendering and existing documentation contracts; a cloud apply is not validation.
