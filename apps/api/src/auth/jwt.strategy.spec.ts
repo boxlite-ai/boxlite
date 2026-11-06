@@ -114,6 +114,58 @@ describe('JwtStrategy.validate — auto-created user', () => {
     ).rejects.toThrow(EmailVerificationRequiredException)
     expect(loginEvents.recordFirstUse).not.toHaveBeenCalled()
   })
+
+  it.each([undefined, '', '   '])('rejects a new OIDC user without a registration email (%s)', async (email) => {
+    const { strategy, userService, loginEvents } = buildStrategy()
+    const request = { get: jest.fn() } as unknown as Request
+
+    await expect(strategy.validate(request, { sub: 'github|new-user', email })).rejects.toMatchObject({
+      status: 403,
+      response: { code: 'email_required' },
+    })
+
+    expect(userService.create).not.toHaveBeenCalled()
+    expect(loginEvents.recordFirstUse).not.toHaveBeenCalled()
+  })
+
+  it('allows an existing user whose email domain is now disposable', async () => {
+    const { strategy, userService, loginEvents } = buildStrategy()
+    const user = { id: 'auth0|existing', name: 'Existing User', email: 'existing@mailinator.com', emailVerified: true }
+    jest.mocked(userService.findOne).mockResolvedValue(user as never)
+    const request = { get: jest.fn() } as unknown as Request
+
+    await expect(
+      strategy.validate(request, { sub: user.id, email: user.email, email_verified: true }),
+    ).resolves.toMatchObject({ userId: user.id, email: user.email })
+
+    expect(userService.create).not.toHaveBeenCalled()
+    expect(loginEvents.recordFirstUse).toHaveBeenCalledTimes(1)
+  })
+
+  it('preserves an existing OIDC user login without an email claim', async () => {
+    const { strategy, userService, loginEvents } = buildStrategy()
+    const user = { id: 'github|existing', name: 'Existing User', email: '', emailVerified: false }
+    jest.mocked(userService.findOne).mockResolvedValue(user as never)
+    const request = { get: jest.fn() } as unknown as Request
+
+    await expect(strategy.validate(request, { sub: user.id })).resolves.toMatchObject({ userId: user.id })
+
+    expect(userService.create).not.toHaveBeenCalled()
+    expect(loginEvents.recordFirstUse).toHaveBeenCalledTimes(1)
+  })
+
+  it('preserves an existing user login when the provider updates their email to a disposable domain', async () => {
+    const { strategy, userService, loginEvents } = buildStrategy()
+    const user = { id: 'github|existing', name: 'Existing User', email: 'existing@gmail.com', emailVerified: true }
+    jest.mocked(userService.findOne).mockResolvedValue(user as never)
+    const request = { get: jest.fn() } as unknown as Request
+
+    await strategy.validate(request, { sub: user.id, email: 'existing@mailinator.com', email_verified: true })
+
+    expect(userService.create).not.toHaveBeenCalled()
+    expect(userService.update).toHaveBeenCalledWith(user.id, { email: 'existing@mailinator.com' })
+    expect(loginEvents.recordFirstUse).toHaveBeenCalledTimes(1)
+  })
 })
 
 describe('requireVerifiedAuth0DatabaseEmail', () => {

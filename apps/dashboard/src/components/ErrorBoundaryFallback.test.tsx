@@ -77,6 +77,50 @@ describe('ErrorBoundaryFallback', () => {
     expect(text).not.toContain('Verify your email address')
   })
 
+  it.each([
+    ['disposable_email', 'temporary email addresses'],
+    ['email_required', "didn't share an email address"],
+    ['invalid_email', 'invalid email address'],
+  ])('explains %s as an account creation refusal', (code, reason) => {
+    const assign = vi.fn()
+    vi.spyOn(window, 'location', 'get').mockReturnValue({ ...window.location, assign } as unknown as Location)
+
+    const text = render(BoxliteError.fromString('Account creation refused', { code }))
+
+    expect(text).toContain('Use a different email address')
+    expect(text).toContain(reason)
+    expect(text).toContain('Sign out and use another email')
+    expect(text).not.toContain('Something went wrong')
+    expect(text).not.toContain('Stack Trace')
+    expect(text).not.toContain('Try Again')
+    expect(text).not.toContain('Reload Page')
+    expect(assign).not.toHaveBeenCalled()
+  })
+
+  it('ends the rejected account session only when the user chooses another email', () => {
+    const assign = vi.fn()
+    vi.spyOn(window, 'location', 'get').mockReturnValue({ ...window.location, assign } as unknown as Location)
+    render(BoxliteError.fromString('Account creation refused', { code: 'disposable_email' }))
+
+    const button = Array.from(document.querySelectorAll('button')).find((item) =>
+      item.textContent?.includes('Sign out and use another email'),
+    )
+    if (!button) throw new Error('registration refusal must offer a sign-out action')
+
+    act(() => button.dispatchEvent(new MouseEvent('click', { bubbles: true })))
+
+    expect(assign).toHaveBeenCalledOnce()
+    expect(assign).toHaveBeenCalledWith(RoutePath.LOGOUT)
+  })
+
+  it('keeps an ordinary forbidden response on the existing error screen', () => {
+    const text = render(BoxliteError.fromString('Forbidden', { code: 'permission_denied' }))
+
+    expect(text).toContain('Something went wrong')
+    expect(text).toContain('Forbidden')
+    expect(text).not.toContain('Sign out and use another email')
+  })
+
   // The API sends this literal (apps/api/src/exceptions/email-verification-required.exception.ts);
   // asserting the constant against itself would prove nothing, so pin the value.
   it('pins the wire code the API is expected to send', () => {

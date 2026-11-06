@@ -14780,6 +14780,13 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@visulima/disposable-email-domains@npm:2.0.20":
+  version: 2.0.20
+  resolution: "@visulima/disposable-email-domains@npm:2.0.20"
+  checksum: 10c0/5d3453d48a41e46fe1788ace4324e19c7ac823ac933405c040b27e75c77490dcf791cc564558024f7d6c9487371ad35f9e9a1bb3dad1454c2849aadc3a972eff
+  languageName: node
+  linkType: hard
+
 "@vitejs/plugin-react@npm:^4.2.0, @vitejs/plugin-react@npm:^4.3.3":
   version: 4.7.0
   resolution: "@vitejs/plugin-react@npm:4.7.0"
@@ -17174,6 +17181,7 @@ __metadata:
     "@types/shell-quote": "npm:^1.7.5"
     "@types/tar": "npm:^6.1.13"
     "@types/ws": "npm:^8.5.12"
+    "@visulima/disposable-email-domains": "npm:2.0.20"
     "@vitejs/plugin-react": "npm:^4.2.0"
     "@vitest/coverage-v8": "npm:^4.1.8"
     "@vitest/ui": "npm:^1.3.1"
@@ -17315,7 +17323,7 @@ __metadata:
     vite-plugin-svgr: "npm:^4.3.0"
     vitest: "npm:^4.1.8"
     webpack-cli: "npm:^5.1.4"
-    ws: "npm:^8.18.0"
+    ws: "npm:^8.21.3"
     xdg-basedir: "npm:^5.1.0"
     xml2js: "npm:^0.6.2"
     yaml: "npm:^2.8.0"
@@ -40201,9 +40209,9 @@ __metadata:
   languageName: node
   linkType: hard
 
-"ws@npm:8.18.0":
-  version: 8.18.0
-  resolution: "ws@npm:8.18.0"
+"ws@npm:^8.21.3":
+  version: 8.22.0
+  resolution: "ws@npm:8.22.0"
   peerDependencies:
     bufferutil: ^4.0.1
     utf-8-validate: ">=5.0.2"
@@ -40212,37 +40220,7 @@ __metadata:
       optional: true
     utf-8-validate:
       optional: true
-  checksum: 10c0/25eb33aff17edcb90721ed6b0eb250976328533ad3cd1a28a274bd263682e7296a6591ff1436d6cbc50fa67463158b062f9d1122013b361cec99a05f84680e06
-  languageName: node
-  linkType: hard
-
-"ws@npm:^8.13.0, ws@npm:^8.18.0, ws@npm:^8.2.3":
-  version: 8.20.1
-  resolution: "ws@npm:8.20.1"
-  peerDependencies:
-    bufferutil: ^4.0.1
-    utf-8-validate: ">=5.0.2"
-  peerDependenciesMeta:
-    bufferutil:
-      optional: true
-    utf-8-validate:
-      optional: true
-  checksum: 10c0/ce162433218399cdedeb76fd33363d4d86a7d910058d4e3c679dce08cea65d6da6b39f11baa4d7808d024cf46ed88f6a05c17611621aaad8fc5e62edacc30c5d
-  languageName: node
-  linkType: hard
-
-"ws@npm:~8.18.3":
-  version: 8.18.3
-  resolution: "ws@npm:8.18.3"
-  peerDependencies:
-    bufferutil: ^4.0.1
-    utf-8-validate: ">=5.0.2"
-  peerDependenciesMeta:
-    bufferutil:
-      optional: true
-    utf-8-validate:
-      optional: true
-  checksum: 10c0/eac918213de265ef7cb3d4ca348b891a51a520d839aa51cdb8ca93d4fa7ff9f6ccb339ccee89e4075324097f0a55157c89fa3f7147bde9d8d7e90335dc087b53
+  checksum: 10c0/7304d14ef38898dd366a528a85e2da389c4eebf30f4ce8a007bd2dce6025f9b619cefe44fe2354f0bad0ec541b1c9a4da06a3f3e046ab56f01fd52d5784ecfb2
   languageName: node
   linkType: hard
 

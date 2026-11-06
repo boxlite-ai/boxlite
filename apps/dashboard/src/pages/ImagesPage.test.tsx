@@ -85,5 +85,4 @@ describe('the images page', () => {
       '/dashboard/images/registries?connect=ghcr.io',
     )
   })
-
 })

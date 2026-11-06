@@ -491,7 +491,7 @@ const configuration = {
     ttlSeconds: organizationInvitationTtlSeconds(),
   },
   mcp: {
-    // The public URL of `/api/mcp`; setting it publishes the endpoint's OAuth discovery metadata
+    // The public URL of `/mcp`; setting it publishes the endpoint's OAuth discovery metadata
     // and makes it the audience MCP OAuth tokens must name.
     resourceUrl: process.env.MCP_RESOURCE_URL,
   },

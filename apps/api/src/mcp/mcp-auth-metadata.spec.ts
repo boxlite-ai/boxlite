@@ -13,13 +13,23 @@ function metadataFor(resourceUrl: string) {
 
 describe('McpAuthMetadata', () => {
   it('advertises every MCP scope, so a client requests them all at sign-in', () => {
-    const document = metadataFor('https://api.example.test/api/mcp').document()
+    const document = metadataFor('https://api.example.test/mcp').document()
 
     expect(document).toEqual({
-      resource: 'https://api.example.test/api/mcp',
+      resource: 'https://api.example.test/mcp',
       authorization_servers: ['https://issuer.example.test/'],
       scopes_supported: [...MCP_OAUTH_SCOPES],
     })
     expect(document.scopes_supported).toContain('delete:boxes')
+  })
+
+  it('advertises its metadata at the well-known URI for /mcp', () => {
+    expect(metadataFor('https://api.example.test/mcp').url).toBe(
+      'https://api.example.test/.well-known/oauth-protected-resource/mcp',
+    )
+  })
+
+  it('refuses a resource URL that is not /mcp', () => {
+    expect(() => metadataFor('https://api.example.test/api/mcp')).toThrow('MCP_RESOURCE_URL')
   })
 })

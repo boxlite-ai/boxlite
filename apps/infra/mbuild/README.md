@@ -74,6 +74,15 @@ Upgrade affected dependencies and commit both `package.json` and `yarn.lock` bef
 rerunning publication. If the audit could not reach its registry, resolve connectivity
 and rerun deliberately; the workflow will not retry the failed audit automatically.
 
+The API, proxy, collector and registry-proxy publications share this `apps/` audit;
+a vulnerable workspace dependency can block all four before any image is built.
+The workspace requires `ws ^8.21.3` and uses a Yarn resolution to upgrade copies
+pinned by transitive dependencies, including Engine.IO and module federation.
+This covers [GHSA-96hv-2xvq-fx4p](https://github.com/advisories/GHSA-96hv-2xvq-fx4p),
+which affects `ws >=8.0.0 <8.21.0`. Remove the resolution only when the direct and
+transitive requirements all select patched versions; check `corepack yarn why ws`
+and regenerate the lockfile before rerunning the audit.
+
 ## Implementation and verification
 
 The CLI is [`bin/mbuild.ts`](bin/mbuild.ts). Addressing lives in [`src/address.ts`](src/address.ts),

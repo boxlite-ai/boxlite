@@ -145,16 +145,28 @@ retroactively gate independently validating Commerce/Analytics services.
 
 ## MCP client sign-in
 
-MCP clients such as Claude Code, ChatGPT, VS Code and Zed sign in to `/api/mcp`
+MCP clients such as Claude Code, ChatGPT, VS Code and Zed sign in to `/mcp`
 by browser with an OAuth token whose audience is the stage's `MCP_RESOURCE_URL`.
 Each client registers by its Client ID Metadata Document (CIMD); only the
 reviewed documents in [`auth0/mcp-clients.json`](../bootstrap/auth0/mcp-clients.json)
 are registered, and dynamic client registration stays off. Clients with no fixed
 document (Cursor, Windsurf, Gemini CLI, MCP Inspector) use an API key instead.
 
-Set `MCP_RESOURCE_URL` for the stage (for example `https://api.example.com/api/mcp`),
-deploy, then preview and apply the tenant change. Pass the same `--connection`
-list to both commands; apply configures only the connections it is given:
+mdeploy sets `MCP_RESOURCE_URL` to `https://<api host>/mcp`, for example
+`https://api.dev.boxlite.ai/mcp`; a stage value overrides it. Each stage then runs,
+in this order:
+
+1. Deploy.
+2. `auth0:configure-login` with `--mcp-resource-url <MCP_RESOURCE_URL>` (see the end
+   of this section), so the login Action gates logins for that resource.
+3. `auth0:configure-mcp` (below), which creates the MCP API; pass the same
+   `--connection` list to both its commands, since apply configures only those. Until it does, Auth0
+   issues no token for the resource, so no MCP login can skip step 2's checks;
+   browser sign-in is down in between, and API keys keep working.
+
+Earlier builds served MCP at `/api/mcp`, and dev used `https://dev.boxlite.ai/api/mcp`.
+Remove such a stage value before deploying: the API refuses any resource URL whose
+path is not `/mcp` at boot. Its Auth0 API can stay; the API refuses its tokens.
 
 ```bash
 npm run auth0:configure-mcp -- --tenant <tenant.auth0.com> \
@@ -168,7 +180,7 @@ npm run auth0:configure-mcp -- --tenant <tenant.auth0.com> \
 | --- | --- | --- |
 | Tenant | `audience` parameter profile, CIMD off, no `iss` in authorization responses | `resource_parameter_profile: "compatibility"`, `client_id_metadata_document_supported: true`, `authorization_response_iss_parameter_supported: true` |
 | MCP API | absent | identifier `MCP_RESOURCE_URL`; the `mcp-clients.json` scopes; user access needs a client grant, machine access denied |
-| Each listed client | unregistered | registered from its CIMD document (validated by `clients/cimd/preview` first), plus a user grant for the scopes |
+| Each listed client | unregistered | registered from its CIMD document (validated by `clients/cimd/preview` first) as a `tpc_` client, found again by its `external_client_id`, plus a user grant to that `tpc_` id for the scopes |
 | A CIMD client no longer listed | its user grant stays | the grant on the MCP API is deleted; grants of other clients and other APIs are left alone |
 | Each `--connection` | application-level | `is_domain_connection: true`, so third-party MCP clients can sign in with it |
 

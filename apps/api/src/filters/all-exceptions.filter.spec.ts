@@ -34,7 +34,7 @@ describe('AllExceptionsFilter', () => {
   })
 
   it.each([
-    ['/.well-known/oauth-protected-resource/api/mcp', false],
+    ['/.well-known/oauth-protected-resource/mcp', false],
     ['/boxes/some-client-route', true],
   ])('answers a missing %s with the dashboard: %p', async (path, dashboard) => {
     const json = jest.fn()

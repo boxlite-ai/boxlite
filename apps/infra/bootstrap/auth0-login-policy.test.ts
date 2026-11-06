@@ -1193,13 +1193,13 @@ test('login policy leaves social identities and other clients outside the verifi
 })
 
 test('login policy gates an MCP client login for the MCP resource like a dashboard login', async () => {
-  const { onExecutePostLogin } = loadAction({}, 'https://api.example.test/api/mcp')
+  const { onExecutePostLogin } = loadAction({}, 'https://api.example.test/mcp')
   const mcp = actionApi()
   const otherApi = actionApi()
   const mcpClient = { client_id: 'https://claude.ai/oauth/claude-code-client-metadata' }
 
   await onExecutePostLogin(
-    managedEvent({ client: mcpClient, resource_server: { identifier: 'https://api.example.test/api/mcp' } }),
+    managedEvent({ client: mcpClient, resource_server: { identifier: 'https://api.example.test/mcp' } }),
     mcp.api,
   )
   await onExecutePostLogin(
@@ -1210,6 +1210,26 @@ test('login policy gates an MCP client login for the MCP resource like a dashboa
   assert.deepEqual(mcp.rendered, ['ap_verify'])
   assert.deepEqual(otherApi.rendered, [])
   assert.equal(otherApi.claims.email_verified, false)
+})
+
+test('login policy puts the plain identity claims on an MCP token Auth0 issues with no authorization', async () => {
+  // Auth0 can leave `event.authorization` unset for a third-party MCP client. The
+  // API refuses a database user's token whose `email_verified` is not true.
+  const { onExecutePostLogin } = loadAction({}, 'https://api.example.test/mcp')
+  const capture = actionApi()
+
+  await onExecutePostLogin(
+    managedEvent({
+      authorization: undefined,
+      client: { client_id: 'https://chatgpt.com/oauth/client-metadata' },
+      resource_server: { identifier: 'https://api.example.test/mcp' },
+      user: { user_id: 'auth0|123', email: 'person@example.com', email_verified: true, name: 'Person' },
+    }),
+    capture.api,
+  )
+
+  assert.deepEqual(capture.denied, [])
+  assert.deepEqual(capture.claims, { email_verified: true, email: 'person@example.com', name: 'Person' })
 })
 
 test('login policy without an MCP resource leaves MCP client logins ungated', async () => {
@@ -1231,18 +1251,18 @@ test('parseAuth0LoginPolicyOptions accepts only an exact https MCP resource URL'
   const base = ['--tenant', 't.example.auth0.com', '--client-id', 'spa', '--connection', 'db']
 
   assert.equal(
-    parseAuth0LoginPolicyOptions([...base, '--mcp-resource-url', 'https://api.example.test/api/mcp']).mcpResourceUrl,
-    'https://api.example.test/api/mcp',
+    parseAuth0LoginPolicyOptions([...base, '--mcp-resource-url', 'https://api.example.test/mcp']).mcpResourceUrl,
+    'https://api.example.test/mcp',
   )
   assert.throws(() => parseAuth0LoginPolicyOptions([...base, '--mcp-resource-url', 'http://api.example.test/mcp']))
   assert.equal(parseAuth0LoginPolicyOptions([...base, '--disable-mcp-login']).disableMcpLogin, true)
-  const both = [...base, '--disable-mcp-login', '--mcp-resource-url', 'https://api.example.test/api/mcp']
+  const both = [...base, '--disable-mcp-login', '--mcp-resource-url', 'https://api.example.test/mcp']
   assert.throws(() => parseAuth0LoginPolicyOptions(both), /cannot be combined/)
 })
 
 test('login policy apply keeps MCP login checks unless told to drop them', () => {
   const tenant = fakeTenant()
-  const mcpCode = /const MCP_RESOURCE_URL = "https:\/\/api\.example\.test\/api\/mcp"/
+  const mcpCode = /const MCP_RESOURCE_URL = "https:\/\/api\.example\.test\/mcp"/
   const configure = (options: Record<string, unknown>) =>
     new Auth0LoginPolicyConfigurator(
       {
@@ -1261,7 +1281,7 @@ test('login policy apply keeps MCP login checks unless told to drop them', () =>
       },
     )
   try {
-    configure({ mcpResourceUrl: 'https://api.example.test/api/mcp' }).apply()
+    configure({ mcpResourceUrl: 'https://api.example.test/mcp' }).apply()
     assert.match(tenant.state.action.deployed_version.code, mcpCode)
 
     assert.throws(() => upgradeConfigurator(tenant).apply(), /--disable-mcp-login/)

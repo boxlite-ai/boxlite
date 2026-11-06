@@ -12,20 +12,21 @@ import {
   Injectable,
 } from '@nestjs/common'
 import { json, type NextFunction, type Request, type RequestHandler, type Response, urlencoded } from 'express'
+import { MCP_ROUTE } from './mcp-auth-metadata'
 
 /**
- * JSON limit for `/api/mcp`: a tool call carries up to 8 MiB of binary as base64
+ * JSON limit for `/mcp`: a tool call carries up to 8 MiB of binary as base64
  * (11,184,812 bytes) plus its JSON-RPC envelope. Other routes keep the 100 KB default.
  */
 export const MCP_JSON_LIMIT_BYTES = 12 * 1024 * 1024
 
-/** `/api/mcp`, matched as Express routes it: any case, with or without a trailing slash. */
-const MCP_PATH = /^\/api\/mcp\/?$/i
+/** {@link MCP_ROUTE}, matched as Express routes it: any case, with or without a trailing slash. */
+const MCP_PATH = new RegExp(`^${MCP_ROUTE}/?$`, 'i')
 
 /**
  * The API's body parsers, for an app created with `bodyParser: false`: the
  * defaults Nest would register (JSON, and extended form bodies), except on
- * `/api/mcp`, whose body {@link McpBodyGuard} reads once the caller is
+ * `/mcp`, whose body {@link McpBodyGuard} reads once the caller is
  * authenticated. Call before `app.init()`.
  */
 export function useApiBodyParsers(app: INestApplication): void {
@@ -37,7 +38,7 @@ export function useApiBodyParsers(app: INestApplication): void {
 }
 
 /**
- * Reads the `/api/mcp` JSON body after `McpAuthGuard`, so an unauthenticated
+ * Reads the `/mcp` JSON body after `McpAuthGuard`, so an unauthenticated
  * caller gets its counted 401 before any byte of the body is buffered or parsed.
  * Parse errors keep the statuses the global parsers give them: invalid JSON is
  * the 400 `BodyParserErrorModule` sends, and 413 or 415 stay as they are.
