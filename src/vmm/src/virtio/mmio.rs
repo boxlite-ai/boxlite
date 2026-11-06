@@ -99,53 +99,31 @@ impl Slots {
     }
 }
 
-/// Adds each slot's argument to `cmdline`, which must leave room for them
-/// under `MAX_CMDLINE_BYTES`: the kernel probes a virtio-mmio device only
-/// when the command line names it, and copies at most that many bytes. The
-/// arguments go before a standalone `--`, since the kernel hands everything
-/// after it to the init program instead of parsing it.
+/// Puts each slot's argument at the front of `cmdline`, which must leave room
+/// for them under `MAX_CMDLINE_BYTES`: the kernel probes a virtio-mmio device
+/// only when the command line names it, and copies at most that many bytes.
+/// The front is always before a `--`, after which the kernel hands everything
+/// to the init program, so the caller's text is never parsed.
 pub(crate) fn announce(cmdline: &mut String, slots: &[Slot]) -> Result<()> {
-    let (mut kernel, init) = match init_args_start(cmdline) {
-        Some(at) => (
-            cmdline[..at].trim_end().to_string(),
-            Some(cmdline[at..].to_string()),
-        ),
-        None => (cmdline.clone(), None),
-    };
-    let init_len = init.as_ref().map_or(0, |init| init.len() + 1);
-    for slot in slots {
-        let argument = slot.cmdline_arg();
-        if kernel.len() + argument.len() + usize::from(!kernel.is_empty()) + init_len
-            >= crate::config::MAX_CMDLINE_BYTES
-        {
-            return Err(Error::InvalidCommandLine(
-                "leaves no room for the virtio device arguments",
-            ));
-        }
-        if !kernel.is_empty() {
-            kernel.push(' ');
-        }
-        kernel.push_str(&argument);
+    if slots.is_empty() {
+        return Ok(());
     }
-    if let Some(init) = init {
-        if !kernel.is_empty() {
-            kernel.push(' ');
-        }
-        kernel.push_str(&init);
+    let mut announced = slots
+        .iter()
+        .map(Slot::cmdline_arg)
+        .collect::<Vec<_>>()
+        .join(" ");
+    if !cmdline.is_empty() {
+        announced.push(' ');
+        announced.push_str(cmdline);
     }
-    *cmdline = kernel;
+    if announced.len() >= crate::config::MAX_CMDLINE_BYTES {
+        return Err(Error::InvalidCommandLine(
+            "leaves no room for the virtio device arguments",
+        ));
+    }
+    *cmdline = announced;
     Ok(())
-}
-
-/// The byte offset of the first standalone `--` token, where the init
-/// program's arguments start.
-fn init_args_start(cmdline: &str) -> Option<usize> {
-    let bytes = cmdline.as_bytes();
-    cmdline.match_indices("--").find_map(|(at, _)| {
-        let starts_token = at == 0 || bytes[at - 1] == b' ';
-        let ends_token = at + 2 == bytes.len() || bytes[at + 2] == b' ';
-        (starts_token && ends_token).then_some(at)
-    })
 }
 
 /// Adds `device` behind a virtio-mmio transport in `slot` under the chipset
