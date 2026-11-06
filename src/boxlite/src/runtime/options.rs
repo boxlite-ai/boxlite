@@ -757,8 +757,13 @@ impl BoxOptions {
         let mut conflicts = Vec::new();
         for secret in &self.secrets {
             let header = secret.effective_header().to_ascii_lowercase();
+            let mut own_hosts = std::collections::HashSet::new();
             for host in &secret.hosts {
-                let pair = (host.to_ascii_lowercase(), header.clone());
+                let host = host.to_ascii_lowercase();
+                if !own_hosts.insert(host.clone()) {
+                    continue;
+                }
+                let pair = (host, header.clone());
                 if !seen.insert(pair.clone()) {
                     conflicts.push(pair);
                 }
@@ -3336,5 +3341,17 @@ mod tests {
         let secret: Secret = serde_json::from_str(json).unwrap();
         assert_eq!(secret.header, None);
         assert_eq!(secret.effective_header(), "Authorization");
+    }
+
+    #[test]
+    fn validate_secrets_allows_a_host_repeated_within_one_secret() {
+        let opts = BoxOptions {
+            secrets: vec![Secret {
+                hosts: vec!["api.example.com".to_string(), "API.example.com".to_string()],
+                ..test_secret()
+            }],
+            ..Default::default()
+        };
+        assert!(opts.validate_secrets().is_ok());
     }
 }

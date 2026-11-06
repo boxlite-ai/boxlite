@@ -166,3 +166,12 @@ func TestRecoverRejectsMissingOutboundPolicyBeforeDestroy(t *testing.T) {
 		t.Fatalf("RecoverBox() error = %v, want an invalid-argument error", err)
 	}
 }
+
+func TestValidateRecreatableSecretsAllowsHostRepeatedWithinOneSecret(t *testing.T) {
+	err := validateRecreatableSecrets([]dto.SecretDTO{
+		{Name: "a", Value: "real-value", Hosts: []string{"api.example.com", "API.example.com"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}

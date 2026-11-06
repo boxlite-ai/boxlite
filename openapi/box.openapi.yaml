@@ -2529,7 +2529,9 @@ components:
             $ref: "#/components/schemas/SecretSpec"
           description: |
             Secrets injected into a request header on outbound HTTPS requests.
-            Requests to a secret's hosts carry its value; the guest never holds it.
+            Requests to a secret's hosts carry its value. A host that echoes the
+            injected header returns the value to the guest, so bind secrets only to
+            trusted hosts.
         detach:
           type: boolean
           description: Box survives parent process exit
@@ -2804,7 +2806,7 @@ components:
           description: Human-readable secret name
         value:
           type: string
-          description: Real secret value. Never enters the guest VM.
+          description: Real secret value. Not stored in the guest VM; a host that echoes the injected header returns it to the guest.
         hosts:
           type: array
           items:

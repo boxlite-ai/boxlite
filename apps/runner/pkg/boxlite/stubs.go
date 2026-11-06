@@ -45,11 +45,16 @@ func validateRecreatableSecrets(secrets []dto.SecretDTO) error {
 		if len(secret.Hosts) == 0 {
 			return errdefs.ErrInvalidArgument.WithMessage(fmt.Sprintf("secret %q must list at least one host", secret.Name))
 		}
+		ownHosts := make(map[string]struct{}, len(secret.Hosts))
 		for _, host := range secret.Hosts {
 			if host == "" {
 				return errdefs.ErrInvalidArgument.WithMessage(fmt.Sprintf("secret %q has an empty host", secret.Name))
 			}
 			key := strings.ToLower(host)
+			if _, repeated := ownHosts[key]; repeated {
+				continue
+			}
+			ownHosts[key] = struct{}{}
 			if _, dup := seenHosts[key]; dup {
 				return errdefs.ErrInvalidArgument.WithMessage(fmt.Sprintf("multiple secrets configure the same header on host %q", host))
 			}
