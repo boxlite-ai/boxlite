@@ -20,7 +20,7 @@ use std::{
 
 /// Bounds sockets and per-flow buffers per backend.
 pub(super) const MAX_CONNECTIONS: usize = 128;
-/// Bounds queued output; callers reserve room before consuming guest TX.
+/// Bounds queued output; callers reserve room before consuming non-RST guest TX.
 pub(super) const MAX_PENDING: usize = 256;
 /// Start host allocations above common service ports; explicit mappings are skipped too.
 const FIRST_HOST_PORT: u32 = 1 << 30;
@@ -72,7 +72,7 @@ impl Backend {
         self.outgoing.len() < MAX_PENDING
     }
 
-    /// The caller must check `can_receive` before consuming a guest packet.
+    /// Non-RST packets require `can_receive`; RST only removes a flow and its output.
     pub fn receive(&mut self, packet: Packet) -> Result<(), DeviceError> {
         let h = &packet.header;
         if h.src_cid != self.cid || h.dst_cid != HOST_CID {

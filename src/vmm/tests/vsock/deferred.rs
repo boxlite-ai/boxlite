@@ -253,8 +253,64 @@ fn tx_intake_stalls_completion_at_capacity_and_resumes_in_order() {
 }
 
 #[test]
-fn rst_tx_stalls_completion_at_capacity_and_resumes_in_order() {
+fn rst_tx_completes_at_capacity_without_reply() {
     assert_tx_stalls_at_capacity_and_resumes_in_order(RST);
+}
+
+#[test]
+fn rst_tx_at_capacity_closes_only_its_flow_and_resumes_pending_tx() {
+    let temp = Temp::new();
+    let (mut h, mut header, mut host) = stream_without_rx(temp.path("reset"));
+    host.write_all(b"discard on reset").unwrap();
+    h.tick();
+    let outgoing = &h.device.active.as_ref().unwrap().backend.outgoing;
+    assert_eq!(outgoing.len(), 1);
+    assert_eq!(outgoing[0].header.op, RW);
+    assert_eq!(outgoing[0].payload, b"discard on reset");
+    for port in 0..backend::MAX_PENDING as u32 - 1 {
+        h.send(Packet {
+            header: guest(REQUEST, port, 999),
+            payload: vec![],
+        });
+    }
+    let outgoing = &h.device.active.as_ref().unwrap().backend.outgoing;
+    assert_eq!(outgoing.len(), backend::MAX_PENDING);
+    let mut expected: Vec<_> = outgoing.iter().skip(1).map(|p| p.header.dst_port).collect();
+    expected.push(9000);
+    let registrations = h.registrar.len();
+    let before = h.tx.avail;
+    header.op = RST;
+    for packet in [header, guest(REQUEST, 9000, 999)] {
+        let bytes = packet.encode();
+        h.tx.submit(&h.memory, &bytes, false, bytes.len());
+    }
+    h.device.on_event(DeviceEvent::QueueKick(1)).unwrap();
+    assert_eq!(
+        h.tx.take(&h.memory).len(),
+        2,
+        "RST must free output capacity for the following REQUEST without RX"
+    );
+    assert_eq!(h.registrar.len(), registrations - 1);
+    assert_eq!(host.read(&mut [0u8; 1]).unwrap(), 0);
+    let outgoing = &h.device.active.as_ref().unwrap().backend.outgoing;
+    assert_eq!(outgoing.len(), backend::MAX_PENDING);
+    assert_eq!(
+        outgoing
+            .iter()
+            .map(|p| p.header.dst_port)
+            .collect::<Vec<_>>(),
+        expected,
+        "reset must discard only its flow's output and produce no reply"
+    );
+    for offset in 0..2 {
+        let head = (before + offset) % SIZE;
+        let entry = h.tx.base + 0x2004 + u64::from(head) * 8;
+        let id: u32 = h.memory.read_obj(GuestAddress(entry)).unwrap();
+        assert_eq!(u32::from_le(id), u32::from(head));
+    }
+    h.tick();
+    assert!(h.tx.take(&h.memory).is_empty(), "TX heads completed twice");
+    assert!(h.packets.is_empty(), "no RX buffers were replenished");
 }
 
 #[test]
@@ -278,7 +334,14 @@ fn assert_tx_stalls_at_capacity_and_resumes_in_order(first_op: u16) {
     let before = h.tx.avail;
     for port in 0..SIZE {
         // Put the operation under test first so a stalled REQUEST cannot hide it.
-        let op = if port == 0 { first_op } else { REQUEST };
+        let op = if port == 0 {
+            first_op
+        } else if port == SIZE - 1 {
+            // This RST must not overtake a preceding stalled packet.
+            RST
+        } else {
+            REQUEST
+        };
         let mut header = guest(op, 1000 + u32::from(port), 999);
         if op == SHUTDOWN {
             header.flags = SEND | RECEIVE;
@@ -302,11 +365,13 @@ fn assert_tx_stalls_at_capacity_and_resumes_in_order(first_op: u16) {
         before + SIZE,
         "TX intake must drain into device storage"
     );
+    let completed = u16::from(first_op == RST);
     assert_eq!(
-        state.next_used, before,
-        "capacity exhaustion must withhold completion"
+        state.next_used,
+        before + completed,
+        "only a head RST may complete while output remains full"
     );
-    assert!(h.tx.take(&h.memory).is_empty());
+    assert_eq!(h.tx.take(&h.memory).len(), usize::from(completed));
     assert!(
         h.registrar.ready().is_empty(),
         "stalled capacity must not spin"
@@ -328,11 +393,11 @@ fn assert_tx_stalls_at_capacity_and_resumes_in_order(first_op: u16) {
     }
     let ports: Vec<_> = h.packets.iter().map(|p| p.header.dst_port).collect();
     let expected: Vec<_> = (SIZE as u32..SIZE as u32 + backend::MAX_PENDING as u32)
-        // An unknown RST completes without a reply; the other operations get RST.
-        .chain((1000..1000 + SIZE as u32).filter(|port| first_op != RST || *port != 1000))
+        // Unknown RSTs complete without replies; the other operations get RST.
+        .chain((1000..1000 + SIZE as u32 - 1).filter(|port| first_op != RST || *port != 1000))
         .collect();
     assert_eq!(ports, expected);
-    assert_eq!(h.tx.take(&h.memory).len(), SIZE as usize);
+    assert_eq!(h.tx.take(&h.memory).len(), usize::from(SIZE - completed));
     for head in 0..SIZE {
         let entry = h.tx.base + 0x2004 + u64::from((before + head) % SIZE) * 8;
         let id: u32 = h.memory.read_obj(GuestAddress(entry)).unwrap();

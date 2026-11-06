@@ -345,8 +345,11 @@ Exhausting the range closes new accepts. Non-transient listener errors remain
 fatal; descriptor-exhaustion retry scheduling is not implemented here.
 
 Limits are 128 live connections and 256 outgoing packets. Callers check
-`can_receive` before consuming a guest packet and call `drive` when output space
-returns. A deque rotates flows after each bounded I/O turn, so output pressure
+`can_receive` before consuming a non-RST guest packet and call `drive` when output
+space returns. A TX-head RST is processed even when output is full: it closes
+that flow and discards its queued output without generating a reply. RST does
+not overtake earlier TX packets; REQUEST and SHUTDOWN still wait for capacity.
+A deque rotates flows after each bounded I/O turn, so output pressure
 does not repeatedly favor one flow. Routing scans at most 128 entries; this
 removes the separate sorted map, copied key list and cursor. A reset removes
 that flow's queued packets; RECEIVE shutdown discards its queued data.
@@ -417,9 +420,11 @@ EOF ordering. Backend tests cover explicit mappings, host accepts, limits,
 fairness after output pressure, budgeted listener scans and retries across empty
 scan segments, isolated resets and registration rollback.
 Device tests cover 4096/61/45-byte RX chains, deferred TX/RX ownership,
-and REQUEST/RST/SHUTDOWN TX completion withheld at full output capacity, then
-resumed in order exactly once after RX replenishment. They also cover malformed
-chains, activation rollback and Unsupported snapshots. MMIO tests use
+and REQUEST/SHUTDOWN TX completion withheld at full output capacity, then
+resumed in order exactly once after RX replenishment. RST tests cover immediate
+TX-head completion at capacity, socket and registration cleanup, isolated output
+discard, and resumption of following TX without RX replenishment. They also cover
+malformed chains, activation rollback and Unsupported snapshots. MMIO tests use
 the production shared worker, including a host burst and EOF without new kicks
 or writes. Vsock tests also check private notification coalescing, preparation
 and reset cleanup. These are local

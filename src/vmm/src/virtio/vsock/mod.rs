@@ -16,7 +16,7 @@ use crate::virtio::{
 };
 use backend::{Backend, Mappings};
 use buffer::Buffer;
-use packet::{HEADER_LEN, Packet};
+use packet::{HEADER_LEN, Packet, RST};
 use source::Reschedule;
 use std::{
     collections::{HashSet, VecDeque},
@@ -233,12 +233,14 @@ impl Active {
 
     fn transmit(&mut self) -> Result<(), DeviceError> {
         for _ in 0..IO_BUDGET {
-            if !self.backend.can_receive() {
-                break;
-            }
-            let Some((head, packet)) = self.tx.pop_front() else {
+            let Some((_, packet)) = self.tx.front() else {
                 break;
             };
+            // RST emits no reply and can free queued output; preserve TX order.
+            if packet.header.op != RST && !self.backend.can_receive() {
+                break;
+            }
+            let (head, packet) = self.tx.pop_front().unwrap();
             self.backend.receive(packet)?;
             self.complete(TX, head, 0)?;
         }
