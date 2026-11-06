@@ -160,7 +160,17 @@ fn execute(
     Ok(owned.into_iter().map(Path::to_path_buf).collect())
 }
 
-pub(super) fn mount_volumes(volumes: &[Volume]) -> BoxliteResult<MountedVolumes> {
+/// Only explicitly marked aggregate batches use planning and rollback.
+/// Legacy batches retain their input order and original failure semantics.
+pub(crate) fn mount_volumes(volumes: &[Volume]) -> BoxliteResult<MountedVolumes> {
+    let aggregate = volumes.iter().any(|volume| {
+        matches!(&volume.source, Some(volume::Source::Virtiofs(fs))
+            if !fs.device_tag.is_empty() || !fs.export_key.is_empty())
+    });
+    if !aggregate {
+        super::mount_volumes(volumes)?;
+        return Ok(MountedVolumes(Vec::new()));
+    }
     execute(
         &plan(volumes)?,
         |operation| match operation {
@@ -553,6 +563,33 @@ mod tests {
         )
         .is_err());
         assert_eq!(undone, owned.into_iter().rev().collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn legacy_batch_preserves_input_order_before_mounting() {
+        let volume = |device: &str, target: &str| Volume {
+            mount_point: target.into(),
+            container_id: String::new(),
+            source: Some(volume::Source::BlockDevice(
+                boxlite_shared::BlockDeviceSource {
+                    device: device.into(),
+                    ..Default::default()
+                },
+            )),
+        };
+        let error = match mount_volumes(&[
+            volume("/nonexistent-boxlite-first-device", "/data/nested"),
+            volume("/nonexistent-boxlite-second-device", "/data"),
+        ]) {
+            Ok(_) => panic!("missing block device mounted"),
+            Err(error) => error,
+        };
+        assert!(
+            error
+                .to_string()
+                .contains("/nonexistent-boxlite-first-device"),
+            "{error}"
+        );
     }
 
     #[test]

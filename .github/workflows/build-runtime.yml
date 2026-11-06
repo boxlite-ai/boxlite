@@ -114,9 +114,7 @@ jobs:
           VERSION=$(grep '^version = ' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
           CLI_BIN="target/release/boxlite"
           [ -f "$CLI_BIN" ] || { echo "ERROR: CLI binary not found at $CLI_BIN"; exit 1; }
-          # The embedded shim includes libkrun's BSD-licensed virtio-fs code.
-          cp src/vmm/src/virtio/fs/LICENSE target/release/LICENSE-virtio-fs
-          tar czf "boxlite-cli-v${VERSION}-${{ matrix.rust_target }}.tar.gz" -C target/release boxlite LICENSE-virtio-fs
+          tar czf "boxlite-cli-v${VERSION}-${{ matrix.rust_target }}.tar.gz" -C target/release boxlite
 
       - name: Upload CLI artifact
         uses: actions/upload-artifact@v4

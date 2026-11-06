@@ -9,7 +9,7 @@ flowchart TD
     A["BoxOptions.volumes: Vec<VolumeSpec>"] --> B["resolve_user_volumes: Vec<ResolvedVolume>"]
     B --> C{"subpath"}
     C -->|None| D["Authorized host directory"]
-    C -->|Some filename| E["stage_single_file: volume-staging/uservolN"]
+    C -->|Some filename| E["stage_single_file: shared/user-volumes/uservolN"]
     E -->|rw| F["Hardlink to original inode; EXDEV fails"]
     E -->|ro| G["Startup copy; separate inode"]
     D --> H["ContainerVolumeManager"]
@@ -35,7 +35,14 @@ flowchart TD
 
 Device tag identifies the device; export key selects a child of its synthetic root; logical tag resolves legacy guest paths. Host paths stay in host configuration. Directory exports retain their own read-only policy. A single-file export contains only the staged file; the existing container subpath binding selects that file at the requested container destination.
 
-`volume-staging` is a sibling of `shared`, independent of `isolate_mounts`. Sandbox rules grant each existing staged export with its volume's write policy, without authorizing source siblings. Legacy registration consumes the same staged paths. Writable single-file staging requires the source and box storage to share a filesystem. Read-only single-file mounts retain startup bytes when the host later edits the source.
+The existing libkrun preparation remains unchanged: single files are staged under
+`shared/user-volumes/<tag>`, with writable hardlinks and read-only startup copies.
+The legacy builders keep empty aggregate identity fields. Guest initialization
+uses the original input-order mount loop for those batches, without new sorting
+or rollback. Only batches carrying `device_tag` or `export_key` enter the aggregate
+planner; malformed aggregate identities fail validation there. Dynamic attachment
+and existing block-device mount behavior remain unchanged. This PR adds no host
+staging migration, sandbox grants or runtime stop/cleanup changes.
 
 ## 数据结构与所有权
 
@@ -154,8 +161,8 @@ classDiagram
 `Buffers` 持有当前受检描述符的 `VecDeque<VolatileSlice>` 视图及剩余/已消费长度；
 `Reader` 和 `Writer` 分别包装它。`ActivationContext` 持有 RAM、队列和中断入口，
 由 `Fs` 在激活期间持有。`MountedVolumes(Vec<PathBuf>)` 记录本次建立的 guest
-挂载，未提交时逆序卸载；宿主 `BoxFilesystemLayout` 定义 staging 的位置，运行时
-负责确认 VM 已停后删除暂存硬链接和快照。这些对象不转移原始宿主文件的所有权。
+聚合批次的挂载，未提交时逆序卸载。旧配置返回空 guard，不接管旧挂载的清理。
+宿主单文件暂存及生命周期保持原样；这些对象不转移原始宿主文件的所有权。
 
 ## Device requests and replies
 
@@ -208,8 +215,6 @@ flowchart TD
     H["VM exit or stop"] --> I["Join vCPUs → shut down virtio workers"]
     I --> J["Vm::drop unregisters guest RAM while devices still exist"]
     J --> K["Drop device/backend File ownership, then release backing RAM"]
-    L["Runtime stop / initialization failure / observed shim exit"] --> M["Confirm handler stopped or process exited"]
-    M --> N["cleanup_volume_staging removes hardlinks and snapshots"]
 ```
 
 ```mermaid
@@ -243,13 +248,13 @@ sequenceDiagram
     end
     alt 停止失败
         V-->>H: 返回错误，保留可能仍被访问的 RAM
-        H->>H: 保留 staging，等待确认退出
-    else 确认进程已退出
-        H->>H: 删除 staging 硬链接和快照
     end
 ```
 
-A failed handler stop preserves staging. The initialization guard still records failure and preserves diagnostic files. Removing a hardlink leaves the original host file intact. A worker shutdown failure retains potentially accessed RAM according to the common VMM lifecycle.
+Host staging, sandbox authorization and libkrun shutdown behavior are unchanged.
+A native worker shutdown failure retains potentially accessed RAM according to
+the common VMM lifecycle. Aggregate rollback applies only to explicitly selected
+aggregate batches; legacy-only batches keep their original failure semantics.
 
 Host file operations execute synchronously on the shared worker thread. A real
 host write lease test holds a regular file while production FUSE OPEN blocks in
@@ -300,7 +305,7 @@ The source runs used Linux x86_64 with KVM and Linux 6.12.110 built through
 | `make test:integration:vmm:kvm` | VMM 8 passed; hypervisor 7 passed, 1 failed with EINVAL during set sregs |
 | `BOXLITE_DEPS_STUB=1 make test:unit:rust FILTER=volumes` | Passed: core 14 in each feature pass, shared layout 1 |
 | `BOXLITE_DEPS_STUB=1 make test:unit:guest FILTER=storage::aggregate` | All 6 passed, including real bind/remount/rollback inside a mount namespace |
-| Single-file sandbox regression | Missing staging grant assertion failed before the grant fix; passed after it |
+| Single-file sandbox regression | Historical staging migration test; migration and its grants removed from this PR |
 | `BOXLITE_DEPS_STUB=1 make test:unit:rust FILTER=volumes::staging` | All 5 passed in both core feature configurations, including actual cross-filesystem hardlink failure and startup snapshot isolation |
 | `BOXLITE_DEPS_STUB=1 make test:unit:rust FILTER=single_file` | Core 4 and REST-enabled core 5 passed; includes both isolate_mounts modes, write-through and idempotent staging cleanup |
 | `BOXLITE_DEPS_STUB=1 make test:unit:rust FILTER=cleanup_guard` | Initialization failure persistence regression passed in both feature configurations |
@@ -345,14 +350,12 @@ Final supporting checks also passed:
   in each feature configuration, one hypervisor test and three VMM tests.
 - `make fmt:check:rust`, `make help` and `git diff --check`: passed.
 
-The review regressions failed before their production fixes and passed afterward:
-retained runtime shutdown left staging present; mixed parent/child planning placed
-Legacy before the aggregate root; and a real mounted tmpfs remained over its
-underlying marker after a post-mount failure. The block regression used a temporary
-test-only adapter for the old invocation, then removed it for the fixed run.
-Synchronous shutdown now confirms process exit before deleting staging; a process
-still alive preserves state. Mount ownership includes successful legacy mounts,
-and block resize/diagnostic failure unmounts the current mount before outer rollback.
+The earlier staging cleanup and block post-mount cleanup changes have been
+removed to preserve existing libkrun behavior. Historical counts above predate
+that scope correction and do not qualify the revised branch. Aggregate batches
+retain parent-first planning and rollback; legacy-only batches use the original
+mount loop. A regression with two missing block sources checks that the first
+input error is preserved even when its destination is deeper than the second.
 
 `make test:vmm:boot` remains a failure on this Nix host: two host-build contracts
 pass; six box-wrapper tests pass and one fails because its isolated PATH has no
@@ -372,7 +375,7 @@ concurrent replenishment. Sustained-load shutdown is an explicitly deferred
 common-framework optimization and does not block this functional delivery.
 The failure remains reproducible, rather than being counted as a pass.
 Full Box exit.json, copy RPC and normal lifecycle acceptance still need
-a native engine adapter and whole-machine Guest.Init integration. BSD source attribution and packaging recipes have been checked; real release
+a native engine adapter and whole-machine Guest.Init integration. BSD source attribution has been checked; existing packaging is unchanged and real release
 archive builds and inspection remain outstanding. A local `make runtime` release
 attempt failed first because Go was absent from PATH. Retrying with the installed
 Go toolchain built libgvproxy, then failed in libkrunfw install-name adjustment
@@ -390,7 +393,7 @@ These are open acceptance items, not passing results.
 | F11–F12 | WRITE 实际计数；真实 FSYNC/FSYNCDIR；worker FSYNC/FDATASYNC gate验证回复等待与EIO；三次FLUSH后READ及RELEASE/FORGET fd回归 | gate是注入时序，成功同步执行真实syscall；持久化不由FLUSH承诺 |
 | F13–F17 | statfs、allocation、seek、rename flags、INIT 及 unsupported 协议测试 | 未扩大到 DAX、锁或特殊文件数据访问 |
 | B01–B03 | 一个设备混合导出、同名路由、独立身份、ro 修改入口、真实 guest 组合挂载 | 正常 Box native 路径仍缺引擎适配 |
-| B04/B07/B12 | 越界/移名对象、宿主身份、独立暂存授权、两个 isolate 准备模式、rw 写穿/ro 快照/EXDEV | 未做完整 jailed native Box 验收 |
+| B04/B07/B12 | 越界/移名对象、宿主身份、rw 写穿/ro 快照/EXDEV | 未做完整 jailed native Box 验收 |
 | B05 | lookup/open/inflight 独立所有权、FORGET/PLUS、真实 fd 回收 | 编号在会话内不复用 |
 | B06 | DIRECT_IO/零超时契约；同 guest fd 协调 host rewrite；MAP_PRIVATE 初始 fault 和 MAP_SHARED ENODEV | 不保证已有 private mmap 后续修改可见 |
 | B08–B09 | 分段/方向/容量、公共冻结描述符、indirect、双队列、通知、激活/reset | 沿公共队列和 transport 边界 |
@@ -400,12 +403,9 @@ These are open acceptance items, not passing results.
 
 ## Source attribution
 
-FUSE ABI, filesystem interfaces, server, descriptor adapter and Linux passthrough derive from the Chromium OS implementation carried by libkrun commit `e12b9b3780ffa8df9f3e1797b217d13453479167`. Retain their original BSD headers and the accompanying `src/vmm/src/virtio/fs/LICENSE`; root `NOTICE` records the source. The original Chromium OS headers were compared against those six files at the pinned commit, and each adapted file now records its original path, commit and BoxLite modifications. The mapping is below. The upstream repository's top-level Apache license does not replace these file-specific BSD terms. The license conditions and disclaimer match the historical Chromium OS crosvm
-license, with formatting and copyright-line differences documented in the
-[distribution guide](../../development/building.md#virtio-fs-license-distribution).
-Runtime assembly and the CLI/C archive recipes now include the full BSD text.
-Fixture packaging checks passed; full release artifacts remain unbuilt in this
-checkout because the vendor submodules are intentionally not expanded.
+FUSE ABI, filesystem interfaces, server, descriptor adapter and Linux passthrough derive from the Chromium OS implementation carried by libkrun commit `e12b9b3780ffa8df9f3e1797b217d13453479167`. Retain their original BSD headers and the accompanying `src/vmm/src/virtio/fs/LICENSE`; root `NOTICE` records the source. The original Chromium OS headers were compared against those six files at the pinned commit, and each adapted file now records its original path, commit and BoxLite modifications. The mapping is below. The upstream repository's top-level Apache license does not replace these file-specific BSD terms. The license conditions and disclaimer match the [historical Chromium OS crosvm license](https://chromium.googlesource.com/chromiumos/platform/crosvm/+/refs/heads/release-R80-12739.B/LICENSE). Native VMM source redistribution retains these headers, the full local
+BSD text and root NOTICE. Existing runtime, CLI and C SDK packaging is unchanged;
+future binaries carrying the native VMM must include the applicable license text.
 
 | BoxLite path beneath `src/vmm/src/virtio/fs/` | Original path at the pinned commit |
 | --- | --- |
@@ -423,8 +423,22 @@ and confirmed their original headers, source paths and local modification notes.
 The commit matches the repository's libkrun gitlink. After stripping comment
 prefixes and normalizing bullets, numbering and whitespace, all three conditions
 and the complete disclaimer match the historical Chromium OS license linked
-above. Root `NOTICE` identifies the same source and original copyright. Runtime,
-CLI and C archive recipes each copy the complete local BSD text to
-`LICENSE-virtio-fs`. This source/recipe inspection completes the current provenance
-and license scope; it does not claim that real release archives were built or
+above. Root `NOTICE` identifies the same source and original copyright.
+This source inspection does not claim that release archives have been built or
 that other bundled components have been audited.
+
+## Legacy compatibility scope correction
+
+Legacy-only Guest.Init batches now call the original `volume::mount_volumes`
+loop and return an empty guard. Their input order, first-error behavior and
+post-initialization failure semantics remain unchanged. Aggregate identity fields
+are empty in existing builders; the new builder is opt-in. Existing staging,
+sandbox, block mounting, shutdown and artifact packaging files match main.
+
+After this correction, `BOXLITE_DEPS_STUB=1 make test:unit:guest FILTER=storage::`
+passed in the Nix development environment with libseccomp available: 24 passed,
+4 privileged tests ignored. The legacy order regression failed against the prior
+production code (the second, shallower destination failed first) and passed with
+the restored legacy loop. The real VM mount target was not rerun in this checkout;
+its kernel and static init artifacts are absent. Earlier VM results above remain
+historical evidence, not a fresh qualification of this revision.

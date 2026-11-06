@@ -76,46 +76,6 @@ old version number. `boxlite-test-utils` keeps its independent version. The Go r
 workflow derives its `sdks/go/v...` tag from `Cargo.toml`. Version edits prepare source
 metadata; publishing follows the [release workflows](../../../.github/workflows/README.md).
 
-## Virtio-fs license distribution
-
-The native `boxlite-vmm` crate is a workspace member with `publish = false`;
-current runtime, CLI and C SDK builds do not depend on it. They do carry
-libkrun's virtio-fs implementation: `boxlite-shim` statically links libkrun,
-and release CLI and C libraries embed that shim. The BSD redistribution
-obligation therefore already applies to these artifacts independently of the
-native VMM integration.
-
-The six adapted native files preserve the Chromium OS copyright header from
-[libkrun commit e12b9b3780ffa8df9f3e1797b217d13453479167](https://github.com/boxlite-ai/libkrun/tree/e12b9b3780ffa8df9f3e1797b217d13453479167):
-`src/devices/src/virtio/fs/{filesystem,fuse,server,multikey}.rs`,
-`src/devices/src/virtio/fs/linux/passthrough.rs`, and
-`src/devices/src/virtio/descriptor_utils.rs` (adapted as `descriptor.rs`).
-Libkrun's top-level Apache license does not replace their file-specific BSD
-license. The three conditions and disclaimer in
-[`src/vmm/src/virtio/fs/LICENSE`](../../../src/vmm/src/virtio/fs/LICENSE)
-match the [historical Chromium OS crosvm license](https://chromium.googlesource.com/chromiumos/platform/crosvm/+/refs/heads/release-R80-12739.B/LICENSE),
-with comment prefixes removed, numbered conditions instead of bullets, the
-2019 source copyright, and an added BoxLite copyright. This is equivalent
-license text, not a byte-identical copy of that historical file.
-
-Source redistribution must retain the copyright, conditions and disclaimer.
-Binary redistribution must reproduce them in accompanying documentation or
-materials; Google's or contributors' names cannot be used for endorsement
-without permission. Root `NOTICE` gives attribution but does not contain the
-full BSD terms, so it cannot replace the license text.
-
-| Artifact | BSD notice location | Packaging source |
-| --- | --- | --- |
-| Runtime tarball | `boxlite-runtime/LICENSE-virtio-fs` | `scripts/build/build-runtime.sh` |
-| CLI tarball | `LICENSE-virtio-fs` beside `boxlite` | `.github/workflows/build-runtime.yml` |
-| C SDK tarball | `boxlite-c-v<version>-<target>/LICENSE-virtio-fs` | `.github/workflows/build-c.yml` |
-
-These copies use the local virtio-fs license as the source of the common BSD
-terms. Preserve the notice when redistributing these archives or their embedded
-shim. Before shipping a future native VMM executable or library, include the same
-license with that artifact too. This check covers the virtio-fs BSD notice; it
-is not a complete audit of other bundled components or SDK package formats.
-
 ## TLS dependency security updates
 
 BoxLite's Rust HTTPS clients use rustls. Registry pulls trust both the bundled

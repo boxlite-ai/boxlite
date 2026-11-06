@@ -337,26 +337,18 @@ fn build_path_access(
     }
 
     // User volumes. Directories are shared directly, so grant the VMM access.
-    // Single-file staging receives its own grant with the volume's policy;
-    // neither its source nor the source's siblings enter the sandbox.
+    // Single files are staged under shared_dir (granted above), so they need no
+    // grant here — this also keeps the file's host siblings out of the sandbox.
     // A managed volume names no host path, so there is nothing to grant; the
     // local runtime rejects one before boot anyway (`resolve_user_volumes`).
-    for (index, vol) in volumes.iter().enumerate() {
+    for vol in volumes {
         if vol.managed_volume.is_some() {
             continue;
         }
         let p = PathBuf::from(&vol.host_path);
-        let export = match classify_volume_share(&p) {
-            Some(VolumeShare::Dir(dir)) => Some(dir),
-            Some(VolumeShare::File(_)) => {
-                let staging = layout.volume_staging_dir().join(format!("uservol{index}"));
-                staging.is_dir().then_some(staging)
-            }
-            None => None,
-        };
-        if let Some(path) = export {
+        if let Some(VolumeShare::Dir(dir)) = classify_volume_share(&p) {
             paths.push(PathAccess {
-                path,
+                path: dir,
                 writable: !vol.read_only,
             });
         }
@@ -364,8 +356,8 @@ fn build_path_access(
 
     // Bind mounts from `BoxOptions::mounts`, by the same rules as the user
     // volumes above: a directory is shared directly(TODO), so the VMM needs
-    // access to it; single-file bind preparation is handled by its export,
-    // so its host siblings stay out of the sandbox. A volume
+    // access to it; a single file is staged under shared_dir(TODO), which is
+    // already granted, so its host siblings stay out of the sandbox. A volume
     // mount names no host path, and the local runtime refuses one before boot.
     for mount in mounts {
         if mount.mount_type != MountType::Bind {
@@ -1130,17 +1122,10 @@ mod tests {
             read_only: true,
         }];
 
-        let staging = layout.root().join("volume-staging/uservol0");
-        crate::volumes::stage_single_file(&staging, &file, "app.conf", true).unwrap();
         let paths = build_path_access(&layout, &volumes, &[]);
-        assert!(!staging.starts_with(layout.shared_dir()));
-        assert!(
-            paths
-                .iter()
-                .any(|access| access.path == staging && !access.writable)
-        );
 
-        // Staging must not widen access to the source or its host siblings.
+        // A single file is staged under shared_dir, so it must not widen path
+        // access to the file or its parent (which would expose host siblings).
         assert!(
             paths.iter().all(|p| p.path != file && p.path != parent),
             "single-file volume must not grant its host file or parent dir"

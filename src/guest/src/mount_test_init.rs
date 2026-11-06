@@ -64,7 +64,7 @@ fn check() -> Result<(), Box<dyn std::error::Error>> {
     ];
     let mut failing = volumes.clone();
     failing.push(volume("missing", false));
-    let failure = match crate::storage::mount_volumes(&failing) {
+    let failure = match crate::storage::mount_initial_volumes(&failing) {
         Ok(_) => panic!("missing export unexpectedly mounted"),
         Err(error) => error,
     };
@@ -72,7 +72,7 @@ fn check() -> Result<(), Box<dyn std::error::Error>> {
     assert!(!mounted(), "failed batch retained mounts");
 
     {
-        let _initializing = crate::storage::mount_volumes(&volumes)?;
+        let _initializing = crate::storage::mount_initial_volumes(&volumes)?;
         check_bytes(format!("{BASE}/file"), b"shared")?;
         check_bytes(format!("{VOLUMES}/directory/file"), b"directory")?;
         check_bytes(format!("{VOLUMES}/writable/file"), b"writable")?;
@@ -91,7 +91,7 @@ fn check() -> Result<(), Box<dyn std::error::Error>> {
     }
     assert!(!mounted(), "later initialization failure retained mounts");
 
-    crate::storage::mount_volumes(&volumes)?.commit();
+    crate::storage::mount_initial_volumes(&volumes)?.commit();
     assert!(mounted(), "commit lost mounts");
     for (tag, bytes) in [
         ("directory", b"guest directory".as_slice()),
