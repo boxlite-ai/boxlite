@@ -580,23 +580,15 @@ M1 boots only a test initramfs, so its command line names the serial console
 (`console=ttyAMA0` for the arm64 PL011, `console=ttyS0` for the x86 8250) and no
 root disk.
 
-As PID 1, `boxlite-guest` takes on these duties in M2:
+The [guest bootstrap](../../../../src/guest/README.md) now owns these duties
+when the agent is PID 1; libkrun keeps supplying them when it launches the
+agent as a child:
 
-- **Take over `init.krun`'s setup** (`libkrun/init/init.c:504-570`, `:1290`,
-  `:1364-1374`):
-  - mount devtmpfs on `/dev`, proc, sysfs, cgroup2 on `/sys/fs/cgroup`, devpts,
-    and `/dev/shm`;
-  - make `/` a shared mount;
-  - set `RLIMIT_NPROC` and `RLIMIT_NOFILE`;
-  - set the hostname.
-- **Bring `lo` up in every box.** Today the agent raises it only when
-  networking is enabled (`src/guest/src/network.rs:178-192`), and boxes without
-  networking still need 127.0.0.1.
-- **Never exit.**
-  - Today the panic hook calls `exit(1)` (`src/guest/src/main.rs:83-85`). As
-    PID 1, that panics a stock kernel.
-  - Fatal paths therefore sync and reset, and `panic=-1` turns a kernel panic
-    into a reset.
+- Mount the system filesystems, make root propagation shared, set the hostname
+  and agent limits, and mount writable runtime directories before the zygote forks.
+- Bring loopback up before the RPC listener, including boxes with networking disabled.
+- Sync and reset on fatal startup errors or panics; ordinary processes retain
+  their exit codes, and forked zygote children drop the init panic policy.
 - **Keep boot inputs small.**
   - The kernel caps the command line: 2 KiB on arm64
     (`src/boxlite/src/litebox/init/tasks/guest_entrypoint.rs:36-41`).
@@ -679,8 +671,9 @@ The kernel then boots itself (Linux v6.12):
 4. **Root and init.** `prepare_namespace` mounts `/dev/vdb` read-only as `/`
    (`init/main.c:1593`, `init/do_mounts.c:60-69`), and `kernel_init` executes
    the `init=` program as PID 1 (`init/main.c:594-605`, `:1509`).
-5. **Agent.** `boxlite-guest` applies its sysctl hardening and forks its zygote
-   before any thread (`src/guest/src/main.rs:106-120`). It then serves gRPC on
+5. **Agent.** `boxlite-guest` bootstraps its filesystems and init defaults,
+   applies sysctl hardening, and forks its zygote before Tokio starts
+   (`src/guest/src/main.rs`). It then raises loopback and serves gRPC on
    vsock port 2695, connects to port 2696 to report ready, and waits for
    `Guest.Init` (`src/guest/src/service/server.rs:107-163`).
 
