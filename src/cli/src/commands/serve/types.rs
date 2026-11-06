@@ -11,6 +11,26 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+pub(super) struct CheckpointBoxRequest {
+    pub checkpoint_id: String,
+    pub name: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct CreateCheckpointRequest {
+    pub source_box_id: String,
+    pub name: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct RecoverCheckpointRequest {
+    pub checkpoint_id: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(super) struct CreateBoxRequest {
     #[serde(default)]
     pub name: Option<String>,
@@ -353,6 +373,7 @@ pub(super) struct ServerConfig {
 
 #[derive(Serialize)]
 pub(super) struct ServerCapabilities {
+    pub checkpoints_enabled: bool,
     pub linux_capabilities_enabled: bool,
     pub privileged_enabled: bool,
     pub snapshots_enabled: bool,

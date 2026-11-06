@@ -24,10 +24,14 @@ import { BoxliteMemberController } from './boxlite-member.controller'
 import { BoxliteInvitationController } from './boxlite-invitation.controller'
 import { BoxliteDomainController } from './boxlite-domain.controller'
 import { CommerceBoxLimitService } from './commerce-box-limit.service'
+import { BoxliteCheckpointController } from './boxlite-checkpoint.controller'
+import { BoxliteCheckpointRecoverController } from './boxlite-checkpoint-recover.controller'
 
 @Module({
   imports: [BoxModule, AuthModule, ApiKeyModule, OrganizationModule, UserModule, ImageModule, RegistryModule],
   controllers: [
+    BoxliteCheckpointController,
+    BoxliteCheckpointRecoverController,
     // Canonical domain paths must precede legacy /v1/:prefix resource routes.
     BoxliteDomainController,
     BoxliteMeController,

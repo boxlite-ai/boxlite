@@ -339,6 +339,10 @@ export class BoxManager implements TrackableJobExecutions, OnApplicationShutdown
         where: { id: boxId },
       })
 
+      // Checkpoint import commits its configuration before ordinary lifecycle
+      // reconciliation may start or stop the replacement.
+      if (box.checkpointJobId) return
+
       while (new Date().getTime() - startedAt.getTime() <= 10000) {
         if (
           [BoxState.DESTROYED, BoxState.RESIZING].includes(box.state) ||

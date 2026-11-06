@@ -55,6 +55,7 @@ test('GCP rollout batches observe one host before updating the fleet', async (t)
     apiUrl: 'https://api.dev.example.com',
     otlpUrl: 'http://otel:4317',
     registryProxyHost: null,
+    checkpointBucket: null,
     environment: {},
     secrets: {},
   })

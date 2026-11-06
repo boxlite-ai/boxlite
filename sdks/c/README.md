@@ -7,6 +7,28 @@ Box-owned sessions, turns, callbacks and handle ownership.
 
 **C Standard:** C11-compatible compiler (GCC/Clang)
 
+## Managed checkpoints
+
+`boxlite_checkpoint_create`, `list`, `get`, `remove`, `create_box` and
+`recover_box` take a runtime and use its existing post-and-drain event queue.
+Input strings are copied before return. Metadata callbacks own `CCheckpointInfo`
+or `CCheckpointList`; release them with `boxlite_free_checkpoint_info` or
+`boxlite_free_checkpoint_list`. List entries belong to the list. Create/recover
+callbacks own a Box handle, released with `boxlite_box_free`, which does not
+delete the native Box. Error pointers are borrowed during callback dispatch.
+
+Cloud capture may initially report `creating`; wait for `ready` before use.
+Creation and recovery inherit all saved execution settings. Local recovery
+preserves the name and returns a new native ID; cloud recovery preserves the
+public Box ID. Force removal ignores absence and never bypasses active use.
+
+The default local directory is `<BOXLITE_HOME>/checkpoints`. Use
+`BOXLITE_CHECKPOINTS_DIR`, or the additive
+`boxlite_runtime_new_with_checkpoint_directory` constructor for an explicit
+directory. Existing constructors and archive export/import signatures retain
+their ABI. `boxlite_box_name` returns an owned name string, released with
+`boxlite_free_string`, or null for an unnamed Box.
+
 ## Table of Contents
 
 - [Overview](#overview)
@@ -925,6 +947,22 @@ make
 ---
 
 ## Memory Management
+
+### Prepared checkpoint archives
+
+`boxlite_runtime_prepare_checkpoint_archive` validates a downloaded archive,
+its recorded SHA-256, disks and pinned OCI startup configuration through the
+existing native validators. The callback receives an owned
+`CPreparedCheckpointArchive`; its borrowed path comes from
+`boxlite_prepared_checkpoint_archive_path` and can be supplied to the existing
+`boxlite_runtime_import` function. No box is created or removed by preparation.
+
+Retain this owner until native import completes, then release it with
+`boxlite_prepared_checkpoint_archive_free`. Freeing it removes only the private
+derived archive; the original file stays owned by the caller. The optional
+platform-environment JSON accepts only reserved target identity keys and cannot
+override captured user configuration. Preparation uses the normal runtime drain
+queue; callbacks and borrowed error pointers follow the same rules as import.
 
 ### Rules
 

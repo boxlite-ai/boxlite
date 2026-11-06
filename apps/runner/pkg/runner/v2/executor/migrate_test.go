@@ -22,6 +22,7 @@ import (
 	apiclient "github.com/boxlite-ai/boxlite/libs/api-client-go"
 	"github.com/boxlite-ai/runner/pkg/api/dto"
 	"github.com/boxlite-ai/runner/pkg/models"
+	"github.com/boxlite-ai/runner/pkg/storage"
 )
 
 const (
@@ -354,6 +355,16 @@ func TestExportBoxFailsBeforePackingWhenStoreIsUnconfigured(t *testing.T) {
 	assertFailedWith(t, h.lastReport(t), "archive store is not configured")
 	if calls := h.calls.snapshot(); len(calls) != 0 {
 		t.Fatalf("backend was used despite an unusable object store: %v", calls)
+	}
+}
+
+func TestExportBoxChecksSchemeBeforePacking(t *testing.T) {
+	h := newHarness(t, nil)
+	h.executor.archiveStore = &storage.SchemeArchiveStore{GCS: &storage.GCSArchiveStore{}}
+	h.executor.Execute(context.Background(), migrateJob(apiclient.JOBTYPE_EXPORT_BOX, arcPathPayload()))
+	assertFailedWith(t, h.lastReport(t), "S3 archive store is not configured")
+	if calls := h.calls.snapshot(); len(calls) != 0 {
+		t.Fatalf("backend was used without the required scheme: %v", calls)
 	}
 }
 

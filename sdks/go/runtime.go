@@ -52,6 +52,11 @@ func NewRuntime(opts ...RuntimeOption) (*Runtime, error) {
 	}
 
 	var homeDir *C.char
+	if err := validateArchiveArgument(cfg.checkpointsDir, "checkpoint directory", true); err != nil {
+		return nil, err
+	}
+	cCheckpointDir, freeCheckpointDir := archiveNameCString(cfg.checkpointsDir)
+	defer freeCheckpointDir()
 	if cfg.homeDir != "" {
 		homeDir = toCString(cfg.homeDir)
 		defer C.free(unsafe.Pointer(homeDir))
@@ -79,11 +84,12 @@ func NewRuntime(opts ...RuntimeOption) (*Runtime, error) {
 	features := strings.Join(cfg.experimentalFeatures, ",")
 	cFeatures := toCString(features)
 	defer C.free(unsafe.Pointer(cFeatures))
-	code := C.boxlite_runtime_new_experimental(
+	code := C.boxlite_runtime_new_with_checkpoint_directory(
 		homeDir,
 		cImageRegistries,
 		C.int(imageRegistriesCount),
 		cFeatures,
+		cCheckpointDir,
 		&handle,
 		&cerr,
 	)

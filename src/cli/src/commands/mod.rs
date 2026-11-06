@@ -1,6 +1,7 @@
 pub mod agent;
 pub mod attach;
 pub mod auth;
+pub mod checkpoint;
 pub mod cp;
 pub mod create;
 pub mod domain;
@@ -13,6 +14,7 @@ pub mod list;
 pub mod logs;
 pub mod network;
 pub mod pull;
+pub mod recover;
 pub mod restart;
 pub mod rm;
 pub mod run;

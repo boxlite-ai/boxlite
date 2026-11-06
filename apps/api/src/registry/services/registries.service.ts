@@ -15,6 +15,7 @@ import { InjectRepository } from '@nestjs/typeorm'
 import { randomUUID } from 'node:crypto'
 import { EntityManager, Repository } from 'typeorm'
 import { Box } from '../../box/entities/box.entity'
+import { Checkpoint } from '../../box/entities/checkpoint.entity'
 import { BoxDesiredState } from '../../box/enums/box-desired-state.enum'
 import { parseImageRef, upstreamRefOf } from '../../image/utils/image-ref.util'
 import { CreateRegistryCredentialDto, UpdateRegistryCredentialDto } from '../dto/registry-credential.dto'
@@ -171,6 +172,7 @@ export class RegistriesService {
             `Registry credential ${id} cannot be removed while ${inUse.length} box(es) pull through it: ${inUse.join(', ')}`,
           )
         }
+        await this.assertNoCheckpointUsing(credential, manager)
         await this.enabledStore().destroy(credential.secretVersion)
         await manager.delete(RegistryCredential, { id, organizationId })
       })
@@ -213,6 +215,37 @@ export class RegistriesService {
       }
     }
     return inUse
+  }
+
+  private async assertNoCheckpointUsing(credential: RegistryCredential, manager: EntityManager): Promise<void> {
+    const proxy = registryProxyHost()
+    if (!proxy) return
+    const prefix = `${proxy}/${credential.organizationId}/${credential.registryHost}/`
+    const checkpoints = await manager.getRepository(Checkpoint).find({
+      where: { organizationId: credential.organizationId },
+      select: ['id', 'environment', 'archive'],
+    })
+    const candidates = checkpoints
+      .map((checkpoint) => ({
+        checkpoint,
+        refs: [checkpoint.environment.image, checkpoint.archive?.pinnedImage].filter(
+          (ref): ref is string => !!ref?.startsWith(prefix),
+        ),
+      }))
+      .filter((item) => item.refs.length)
+    if (!candidates.length) return
+    const credentials = await manager.getRepository(RegistryCredential).find({
+      where: { organizationId: credential.organizationId, registryHost: credential.registryHost },
+    })
+    const retained = candidates.filter(({ refs }) =>
+      refs.some(
+        (ref) => matchingCredential(credentials, parseImageRef(upstreamRefOf(ref)).repository)?.id === credential.id,
+      ),
+    )
+    if (retained.length)
+      throw new ConflictException(
+        `Registry credential ${credential.id} cannot be removed while checkpoint(s) use it: ${retained.map((item) => item.checkpoint.id).join(', ')}`,
+      )
   }
 
   /**

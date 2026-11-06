@@ -425,6 +425,15 @@ func (c *Client) Create(ctx context.Context, boxDto dto.CreateBoxDTO) (string, s
 	if err != nil {
 		return "", "", err
 	}
+	operation, err := c.checkpointOperations().Lock(ctx, boxDto.Id)
+	if err != nil {
+		return "", "", err
+	}
+	defer operation.Close()
+	if err := operation.Invalidate(); err != nil {
+		return "", "", err
+	}
+	ctx = context.WithoutCancel(ctx)
 
 	// API sends cores / GB / GB as small integers (see apps/api Box entity).
 	cpus := int(boxDto.CpuQuota)
@@ -603,6 +612,12 @@ func (c *Client) recordPulledImage(ctx context.Context, boxId string, bx boxInfo
 
 // Start starts a stopped box and returns the runtime version.
 func (c *Client) Start(ctx context.Context, boxId string, authToken *string, metadata map[string]string) (string, error) {
+	operation, err := c.lockCheckpointTarget(ctx, boxId)
+	if err != nil {
+		return "", err
+	}
+	defer operation.Close()
+	ctx = context.WithoutCancel(ctx)
 	if err := c.ensureVolumeMountsFromMetadata(ctx, boxId, metadata); err != nil {
 		c.logger.ErrorContext(ctx, "failed to ensure volume FUSE mounts", "error", err)
 	}
@@ -622,6 +637,12 @@ func (c *Client) Start(ctx context.Context, boxId string, authToken *string, met
 
 // Stop stops a running box.
 func (c *Client) Stop(ctx context.Context, boxId string, force bool) error {
+	operation, err := c.lockCheckpointTarget(ctx, boxId)
+	if err != nil {
+		return err
+	}
+	defer operation.Close()
+	ctx = context.WithoutCancel(ctx)
 	bx, err := c.getOrFetchBox(ctx, boxId)
 	if err != nil {
 		return err
@@ -636,6 +657,15 @@ func (c *Client) Stop(ctx context.Context, boxId string, force bool) error {
 
 // Destroy removes a box entirely.
 func (c *Client) Destroy(ctx context.Context, boxId string) error {
+	operation, err := c.checkpointOperations().Lock(ctx, boxId)
+	if err != nil {
+		return err
+	}
+	defer operation.Close()
+	if err := operation.Invalidate(); err != nil {
+		return err
+	}
+	ctx = context.WithoutCancel(ctx)
 	c.forgetBox(boxId)
 
 	if err := c.runtime.ForceRemove(ctx, boxId); err != nil {

@@ -42,7 +42,7 @@ func (e *Executor) exportBox(ctx context.Context, job *apiclient.Job) (any, erro
 	if err != nil {
 		return nil, err
 	}
-	store, err := e.requireMigrationSetup()
+	store, err := e.requireMigrationSetup(payload.ArcPath)
 	if err != nil {
 		return nil, err
 	}
@@ -67,7 +67,7 @@ func (e *Executor) importBox(ctx context.Context, job *apiclient.Job) (any, erro
 	if err != nil {
 		return nil, err
 	}
-	store, err := e.requireMigrationSetup()
+	store, err := e.requireMigrationSetup(payload.ArcPath)
 	if err != nil {
 		return nil, err
 	}
@@ -96,7 +96,7 @@ func (e *Executor) rollbackExportBox(ctx context.Context, job *apiclient.Job) (a
 	if err != nil {
 		return nil, err
 	}
-	store, err := e.requireMigrationSetup()
+	store, err := e.requireMigrationSetup(payload.ArcPath)
 	if err != nil {
 		return nil, err
 	}
@@ -125,7 +125,7 @@ func (e *Executor) discardExportedBox(ctx context.Context, job *apiclient.Job) (
 	if err != nil {
 		return nil, err
 	}
-	store, err := e.requireMigrationSetup()
+	store, err := e.requireMigrationSetup(payload.ArcPath)
 	if err != nil {
 		return nil, err
 	}
@@ -153,12 +153,17 @@ func (e *Executor) migrateArchivePayload(job *apiclient.Job) (MigrateArchivePayl
 
 // requireMigrationSetup returns the object store to move the archive through,
 // or the reason this runner cannot serve a migration job at all.
-func (e *Executor) requireMigrationSetup() (storage.ArchiveStore, error) {
+func (e *Executor) requireMigrationSetup(arcPath string) (storage.ArchiveStore, error) {
 	if e.archiveStore == nil {
 		return nil, fmt.Errorf("migration archive store is not configured: set AWS_DEFAULT_BUCKET and the AWS credentials on this runner")
 	}
 	if e.migrateWorkDir == "" {
 		return nil, fmt.Errorf("migration work directory is not configured")
+	}
+	if store, ok := e.archiveStore.(*storage.SchemeArchiveStore); ok {
+		if err := store.Check(arcPath); err != nil {
+			return nil, err
+		}
 	}
 	return e.archiveStore, nil
 }

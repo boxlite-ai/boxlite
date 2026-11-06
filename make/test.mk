@@ -694,7 +694,7 @@ test\:e2e\:setup:
 	@python3 apps/e2e/fixture_setup.py
 
 test\:e2e:
-	@cd apps/e2e && python3 -m pytest cases/ -v
+	@cd apps/e2e && python3 -m pytest $(if $(TEST_FILES),$(TEST_FILES),cases/) -v $(PYTEST_FILTER)
 
 test\:e2e\:two-sided:
 	@PR_REF=$${PR_REF:?must set PR_REF=<branch>} bash apps/e2e/two_sided.sh
