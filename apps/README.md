@@ -5,21 +5,9 @@ The API, proxy, collector and VM runners form BoxLite's cloud platform on AWS or
 # BoxLite cloud applications
 
 The applications under this directory form BoxLite's hosted control plane and
-runner data plane. This view shows how public traffic reaches private services,
-how the control plane schedules boxes, and where state and telemetry flow.
-
-## Architecture
-
-Choose the architecture for the stage's declared cloud; neither provider is preferred.
-
-| Cloud | Guide |
-| --- | --- |
-| AWS | [Architecture and diagrams](infra/docs/aws/architecture.md) |
-| GCP | [Architecture and diagrams](infra/docs/gcp/architecture.md) |
-
-The [infrastructure index](infra/README.md) links deployment, configuration, runner operations,
-networking, security, observability and costs. Follow the [deployment runbook](infra/docs/deployment.md)
-for the intended cloud and deployment path.
+runner data plane. How they fit together, the interfaces between them, and the
+data model they share are documented in
+[`docs/contributing/architecture/platform/`](../docs/contributing/architecture/platform/README.md).
 
 ## Service guides
 
@@ -31,18 +19,5 @@ for the intended cloud and deployment path.
   tunnels to guest ports.
 - [`image-service/README.md`](./image-service/README.md) — the registry proxy: how a runner pulls
   an image whose registry credentials only the platform holds.
-
-## API catalog
-
-See [`API.md`](./API.md) for the categorized inventory of every application
-interface, including its method, path, owning service, and purpose. Alongside
-the registered routes it covers outbound events, static asset trees, the local
-development stack, and the APIs whose clients live here but whose routes are
-served elsewhere.
-
-## Data model
-
-See [`SCHEMA.md`](./SCHEMA.md) for the control-plane Postgres schema: every
-table with its columns, keys, and indexes, how the tables relate and which of
-those relationships the database enforces, and the satellite stores that sit
-beside it.
+- [`infra/README.md`](./infra/README.md) — deployment, configuration, runner operations,
+  networking, security, observability, and costs for each cloud.
