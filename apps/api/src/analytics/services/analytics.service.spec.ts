@@ -63,6 +63,7 @@ describe('PostHog business events', () => {
         }),
       }),
     )
+    expect(PostHog).toHaveBeenCalledTimes(1)
     expect(JSON.stringify(mockCapture.mock.calls)).not.toContain('secret database failure')
   })
   it('preserves business results when capture throws', async () => {
