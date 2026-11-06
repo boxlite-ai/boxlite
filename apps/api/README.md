@@ -243,9 +243,8 @@ error strings are excluded because they may contain credentials or user data.
 The preview marker is internal to the proxy/API exchange and is absent from the public OpenAPI parameters;
 ordinary heartbeat clients keep their existing signature and need no new header.
 
-At most 1,440 preview rows per continuously active box/day add 0.15552 GB over 400 days at 270 bytes/row.
-Before production, measure seven days of preview-active minutes and actual row sizes with other new events.
-Recheck the 20% storage budget as traffic grows; provision capacity or reduce retention before exceeding it.
+At most 1,440 preview events per continuously active box/day reach PostHog. Include these sampled
+observations when reviewing the project's ingestion budget and retention settings.
 
 For v0 runners, which have no START_BOX job, BoxManager records an existing start's terminal
 `box.start` outcome after its state is persisted. Returned runner errors, startup timeouts and
