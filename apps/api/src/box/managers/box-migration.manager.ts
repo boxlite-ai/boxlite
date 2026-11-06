@@ -300,7 +300,8 @@ export class BoxMigrationManager implements TrackableJobExecutions, OnApplicatio
       // costs no extra query, and resolving from a copy that may have gone
       // stale is safe: the locked re-read below runs ValidCheck against the
       // same stamp and turns the migration around instead of submitting.
-      const target = await resolveTarget(migration.box, migration)
+      // Nested boxes cannot use archive migration, even if no destination is available.
+      const target = migration.box.nestedVirtualization === true ? null : await resolveTarget(migration.box, migration)
 
       submitted = await this.dataSource.transaction(async (entityManager) => {
         const box = await entityManager.findOne(Box, {
@@ -315,6 +316,12 @@ export class BoxMigrationManager implements TrackableJobExecutions, OnApplicatio
         })
 
         if (!box || !current || current.state !== migration.state) {
+          return false
+        }
+
+        if (box.nestedVirtualization === true || !target) {
+          this.logger.warn(`Box ${box.id} requires nested virtualization; archive migration is unsupported`)
+          await this.markRollback(entityManager, current)
           return false
         }
 

@@ -24,12 +24,18 @@ A `boxlite serve` process uses its own local environment. REST clients use the
 ordinary create request and ignore their local feature environment, including
 unknown or non-UTF-8 values. Client environment never authorizes the server.
 
-## Cloud integration
+## Cloud policy
 
-The Runner uses an internal managed entry point that preserves each control-plane
-decision instead of applying its local environment to every tenant.
-Cloud organization admission is supplied by the dependent
-[organization policy PR](https://github.com/boxlite-ai/boxlite/pull/2360).
+A system administrator enables the organization's allowlist. The API checks the
+normally selected Runner's validated startup authorization before saving a nested
+box. Missing, false, malformed, failed or timed-out declarations refuse creation;
+they never produce an ordinary box as a fallback. The Runner environment alone
+cannot enable boxes for other organizations on the same host.
+
+See the [organization rollout contract](../../apps/API.md#organization-nested-virtualization-allowlist-rc).
+Runner declarations express authorization; hardware support is checked by the
+existing native VM startup path. Unsupported hardware returns an error, without
+software emulation or disabling nesting.
 
 ## Existing boxes
 

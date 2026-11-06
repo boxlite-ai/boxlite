@@ -80,9 +80,10 @@ There is no public per-box setter. Keep the environment enabled when reopening
 nested boxes; their saved configuration is immutable.
 
 `NewRest` ignores local feature environment. The server selects its policy:
-a local server uses its process environment. Cloud organization admission is
-supplied by the dependent [policy PR](https://github.com/boxlite-ai/boxlite/pull/2360).
-An enabled local policy that cannot be provided fails instead of creating an ordinary box. Hardware is checked at VM startup; metadata creation does not establish L2.
+a local server uses its process environment; Cloud uses the organization's
+Admin-controlled allowlist and the selected Runner's authorization.
+An enabled policy that cannot be provided fails rather than creating an ordinary
+box. Hardware is checked at VM startup; metadata creation does not establish L2.
 
 Runner integration uses the private `boxlite_runner` build tag and saved decisions;
 it does not apply local defaults to all tenants.
