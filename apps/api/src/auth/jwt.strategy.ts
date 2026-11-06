@@ -144,9 +144,15 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     }
   }
 
-  async verifyToken(token: string): Promise<JWTPayload> {
+  /** The issuer whose tokens this strategy accepts, as tokens and the issuer's own metadata name it. */
+  get issuer(): string {
+    return this.options.issuer
+  }
+
+  /** Verifies a token for the API's audience, or for another one this API serves (the MCP endpoint). */
+  async verifyToken(token: string, audience: string = this.options.audience): Promise<JWTPayload> {
     const { payload } = await jwtVerify(token, this.JWKS, {
-      audience: this.options.audience,
+      audience,
       issuer: this.options.issuer,
       algorithms: ['RS256'],
     })

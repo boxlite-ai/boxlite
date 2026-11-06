@@ -44,6 +44,15 @@ tools and never compiles Linux or starts a box. The VMM's
 the `vmm` path filter, and weekly, CI builds it with `make vmm:boot:host` and
 caches it on `kernel.lock`, `kernel.config` and the build script.
 
+The fragment enables virtio-mmio, the reporting-only balloon and its selected
+`PAGE_REPORTING` dependency. Rebuild after a fragment change; an older M1
+kernel cannot qualify reporting. The fragment carries no test-only setting: the
+qualification init reaches the host through its console, so nothing in the
+guest needs a capability the shipped kernel lacks. Reporting is deliberately
+disabled by the pinned driver under `init_on_free=1` without PAGE_POISON
+negotiation; tests preserve that security policy rather than forcing reporting
+on.
+
 ## Default: building inside a BoxLite box
 
 `boxlite.lock` pins a BoxLite CLI release, its SHA-256 for each host and a

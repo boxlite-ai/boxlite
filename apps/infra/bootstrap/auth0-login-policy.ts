@@ -146,6 +146,12 @@ export interface Auth0LoginPolicyOptions {
    */
   accountLinkSecret?: string
   /**
+   * The MCP endpoint's resource URL (`MCP_RESOURCE_URL`). Logins asking for a
+   * token for it get the dashboard's email verification and account link, since
+   * MCP clients sign in under their own client ids. Unset leaves them ungated.
+   */
+  mcpResourceUrl?: string
+  /**
    * Turn the account link off on a tenant whose Action runs it. Without this,
    * an apply lacking `--account-link-api-origin` refuses such an Action rather
    * than silently leaving every later login unlinked.
@@ -170,6 +176,7 @@ export function parseAuth0LoginPolicyOptions(
       'replace-link-form': { type: 'boolean', default: false },
       'account-link-api-origin': { type: 'string' },
       'disable-account-link': { type: 'boolean', default: false },
+      'mcp-resource-url': { type: 'string' },
     },
   })
   if (values['disable-account-link'] && values['account-link-api-origin'] !== undefined) {
@@ -191,7 +198,16 @@ export function parseAuth0LoginPolicyOptions(
     replaceLinkForm: values['replace-link-form'] ?? false,
     ...accountLinkOptions(values['account-link-api-origin'], environment[ACCOUNT_LINK_SECRET_ENV]),
     disableAccountLink: values['disable-account-link'] ?? false,
+    ...mcpResourceOption(values['mcp-resource-url']),
   }
+}
+
+/** `--mcp-resource-url`: the exact `https` URL the MCP endpoint publishes as its resource. */
+function mcpResourceOption(value: string | undefined): Pick<Auth0LoginPolicyOptions, 'mcpResourceUrl'> {
+  if (value === undefined) return {}
+  const url = new URL(value)
+  if (url.protocol !== 'https:' || url.href !== value) throw new Error('--mcp-resource-url must be an exact https URL')
+  return { mcpResourceUrl: value }
 }
 
 function accountLinkOptions(
@@ -410,6 +426,8 @@ export function hydrateLoginPolicyAction(
     accountLinkApiOrigin?: string
     accountLinkFormId?: string
     tenant?: string
+    // The MCP endpoint's resource URL; its logins get the dashboard's checks.
+    mcpResourceUrl?: string
   },
 ): string {
   const replacements: Record<string, string> = {
@@ -419,9 +437,10 @@ export function hydrateLoginPolicyAction(
     __ACCOUNT_LINK_API_ORIGIN_JSON__: JSON.stringify(values.accountLinkApiOrigin ?? ''),
     __ACCOUNT_LINK_FORM_ID_JSON__: JSON.stringify(values.accountLinkFormId ?? ''),
     __AUTH0_DOMAIN_JSON__: JSON.stringify(values.tenant ?? ''),
+    __MCP_RESOURCE_URL_JSON__: JSON.stringify(values.mcpResourceUrl ?? ''),
   }
   const hydrated = source.replace(
-    /__(?:BOXLITE_CLIENT_ID|BOXLITE_DB_CONNECTION|EMAIL_VERIFICATION_FORM_ID|ACCOUNT_LINK_API_ORIGIN|ACCOUNT_LINK_FORM_ID|AUTH0_DOMAIN)_JSON__/g,
+    /__(?:BOXLITE_CLIENT_ID|BOXLITE_DB_CONNECTION|EMAIL_VERIFICATION_FORM_ID|ACCOUNT_LINK_API_ORIGIN|ACCOUNT_LINK_FORM_ID|AUTH0_DOMAIN|MCP_RESOURCE_URL)_JSON__/g,
     (placeholder) => replacements[placeholder],
   )
   const unresolved = hydrated.match(/__[A-Z_]+_JSON__/)
@@ -1399,6 +1418,7 @@ export class Auth0LoginPolicyConfigurator {
         accountLinkApiOrigin: this.options.accountLinkApiOrigin,
         accountLinkFormId: linkFormId,
         tenant: this.options.tenant,
+        mcpResourceUrl: this.options.mcpResourceUrl,
       }),
       runtime: 'node22',
     }

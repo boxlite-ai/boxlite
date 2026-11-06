@@ -1,5 +1,5 @@
 import { BadRequestException, Injectable } from '@nestjs/common'
-import { And, DataSource, LessThan, MoreThanOrEqual } from 'typeorm'
+import { DataSource } from 'typeorm'
 import { ListCpuIncidentsDto, RunnerCpuIncidentDto } from './cpu-incident.dto'
 import { CpuIncidentListDto, RunnerCpuIncident } from './cpu-incident.entity'
 
@@ -50,14 +50,28 @@ export class CpuIncidentService {
     const to = new Date(query.to)
     if (!Number.isFinite(from.getTime()) || !Number.isFinite(to.getTime()) || from >= to)
       throw new BadRequestException('Invalid CPU incident time range: from must precede to')
-    const items = await this.db.getRepository(RunnerCpuIncident).find({
-      where: {
-        windowEndedAt: And(MoreThanOrEqual(from), LessThan(to)),
-        ...(query.runnerId ? { runnerId: query.runnerId } : {}),
-      },
-      order: { id: 'ASC' },
-      take: query.limit,
+    return this.db.transaction(async (manager) => {
+      await manager.query("SET LOCAL statement_timeout = '5s'")
+      const incidents = manager.getRepository(RunnerCpuIncident)
+      const ranked = incidents
+        .createQueryBuilder('incident')
+        .select('incident.id', 'id')
+        .addSelect(
+          'ROW_NUMBER() OVER (PARTITION BY incident."boxId" ORDER BY incident."cpuSeconds" DESC, incident.id ASC)',
+          'position',
+        )
+        .where('incident."windowEndedAt" >= :from AND incident."windowEndedAt" < :to', { from, to })
+      if (query.runnerId) ranked.andWhere('incident."runnerId" = :runnerId', { runnerId: query.runnerId })
+
+      const items = await incidents
+        .createQueryBuilder('incident')
+        .addCommonTableExpression(ranked, 'ranked')
+        .innerJoin('ranked', 'ranked', 'ranked.id = incident.id')
+        .where('ranked.position = 1 OR incident."boxId" IS NULL')
+        .orderBy('incident.id', 'ASC')
+        .limit(query.limit)
+        .getMany()
+      return { items }
     })
-    return { items }
   }
 }

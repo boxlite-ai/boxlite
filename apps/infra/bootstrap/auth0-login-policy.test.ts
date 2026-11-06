@@ -1059,7 +1059,10 @@ test('Auth0LoginPolicyConfigurator applies, binds last, reads back, and journals
 
 type ActionHandler = (event: any, api: any) => Promise<void>
 
-function loadAction(context: Record<string, unknown> = {}): {
+function loadAction(
+  context: Record<string, unknown> = {},
+  mcpResourceUrl?: string,
+): {
   onExecutePostLogin: ActionHandler
   onContinuePostLogin: ActionHandler
 } {
@@ -1067,6 +1070,7 @@ function loadAction(context: Record<string, unknown> = {}): {
     clientId: 'spa_123',
     connectionName: 'boxlite-users',
     formId: 'ap_verify',
+    mcpResourceUrl,
   })
   const exports: Record<string, ActionHandler> = {}
   runInNewContext(source, { exports, ...context })
@@ -1185,6 +1189,51 @@ test('login policy leaves social identities and other clients outside the verifi
   assert.deepEqual(otherClient.denied, [])
   assert.equal(social.claims.email_verified, false)
   assert.equal(otherClient.claims.email_verified, false)
+})
+
+test('login policy gates an MCP client login for the MCP resource like a dashboard login', async () => {
+  const { onExecutePostLogin } = loadAction({}, 'https://api.example.test/api/mcp')
+  const mcp = actionApi()
+  const otherApi = actionApi()
+  const mcpClient = { client_id: 'https://claude.ai/oauth/claude-code-client-metadata' }
+
+  await onExecutePostLogin(
+    managedEvent({ client: mcpClient, resource_server: { identifier: 'https://api.example.test/api/mcp' } }),
+    mcp.api,
+  )
+  await onExecutePostLogin(
+    managedEvent({ client: mcpClient, resource_server: { identifier: 'https://elsewhere.example.test' } }),
+    otherApi.api,
+  )
+
+  assert.deepEqual(mcp.rendered, ['ap_verify'])
+  assert.deepEqual(otherApi.rendered, [])
+  assert.equal(otherApi.claims.email_verified, false)
+})
+
+test('login policy without an MCP resource leaves MCP client logins ungated', async () => {
+  const { onExecutePostLogin } = loadAction()
+  const capture = actionApi()
+
+  await onExecutePostLogin(
+    managedEvent({
+      client: { client_id: 'https://claude.ai/oauth/claude-code-client-metadata' },
+      resource_server: { identifier: '' },
+    }),
+    capture.api,
+  )
+
+  assert.deepEqual(capture.rendered, [])
+})
+
+test('parseAuth0LoginPolicyOptions accepts only an exact https MCP resource URL', () => {
+  const base = ['--tenant', 't.example.auth0.com', '--client-id', 'spa', '--connection', 'db']
+
+  assert.equal(
+    parseAuth0LoginPolicyOptions([...base, '--mcp-resource-url', 'https://api.example.test/api/mcp']).mcpResourceUrl,
+    'https://api.example.test/api/mcp',
+  )
+  assert.throws(() => parseAuth0LoginPolicyOptions([...base, '--mcp-resource-url', 'http://api.example.test/mcp']))
 })
 
 test('login policy continuation trusts only the exact verification form', async () => {

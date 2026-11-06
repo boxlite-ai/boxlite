@@ -37,6 +37,7 @@ use crate::{
     memory::{GuestRam, ram_ranges},
 };
 
+mod balloon;
 #[cfg(target_os = "linux")]
 #[path = "virtio_blk.rs"]
 mod virtio_blk;

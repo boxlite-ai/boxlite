@@ -93,6 +93,23 @@ export class OrganizationUserService {
     })
   }
 
+  /** The membership a user marked as their default, with the permissions it holds. */
+  async findDefault(
+    userId: string,
+  ): Promise<{ organizationId: string; permissions: Set<OrganizationResourcePermission> } | null> {
+    const membership = await this.organizationUserRepository.findOne({
+      where: { userId, isDefaultForUser: true },
+      relations: { assignedRoles: true },
+    })
+    if (!membership) {
+      return null
+    }
+    return {
+      organizationId: membership.organizationId,
+      permissions: this.getAssignedPermissions(membership.role, membership.assignedRoles ?? []),
+    }
+  }
+
   async exists(organizationId: string, userId: string): Promise<boolean> {
     if (!organizationId || !userId) {
       return false

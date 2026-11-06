@@ -44,7 +44,7 @@ func TestCPUIncidentReporterHTTPContract(t *testing.T) {
 			t.Fatalf("retry changed body: %+v", body)
 		}
 	}
-	for _, base := range []string{"", "file:///tmp/api", "https://user:password@example.com", "https://example.com?token=x"} {
+	for _, base := range []string{"", "file:///tmp/api", "https://user:password@example.com", "https://example.com?token=x", "https://example.com/api?"} {
 		if _, err := NewReporter(base, "synthetic", server.Client()); err == nil {
 			t.Fatalf("accepted invalid base %q", base)
 		}

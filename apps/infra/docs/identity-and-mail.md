@@ -143,6 +143,47 @@ API deploy. The API then rejects old unverified `auth0|...` access tokens across
 HTTP, Socket.IO, and the WebSocket proxy. It does not revoke refresh tokens or
 retroactively gate independently validating Commerce/Analytics services.
 
+## MCP client sign-in
+
+MCP clients such as Claude Code, ChatGPT, VS Code and Zed sign in to `/api/mcp`
+by browser with an OAuth token whose audience is the stage's `MCP_RESOURCE_URL`.
+Each client registers by its Client ID Metadata Document (CIMD); only the
+reviewed documents in [`auth0/mcp-clients.json`](../bootstrap/auth0/mcp-clients.json)
+are registered, and dynamic client registration stays off. Clients with no fixed
+document (Cursor, Windsurf, Gemini CLI, MCP Inspector) use an API key instead.
+
+Set `MCP_RESOURCE_URL` for the stage (for example `https://api.example.com/api/mcp`),
+deploy, then preview and apply the tenant change:
+
+```bash
+npm run auth0:configure-mcp -- --tenant <tenant.auth0.com> \
+  --resource-url <MCP_RESOURCE_URL> --connection <connection-name> [--connection ...]
+
+npm run auth0:configure-mcp -- --tenant <tenant.auth0.com> \
+  --resource-url <MCP_RESOURCE_URL> --connection <connection-name> --apply
+```
+
+| Step | Auth0 default | Set by apply |
+| --- | --- | --- |
+| Tenant | `audience` parameter profile, CIMD off | `resource_parameter_profile: "compatibility"`, `client_id_metadata_document_supported: true` |
+| MCP API | absent | identifier `MCP_RESOURCE_URL`; the `mcp-clients.json` scopes; user access needs a client grant, machine access denied |
+| Each listed client | unregistered | registered from its CIMD document (validated by `clients/cimd/preview` first), plus a user grant for the scopes |
+| Each `--connection` | application-level | `is_domain_connection: true`, so third-party MCP clients can sign in with it |
+
+The preview calls `clients/cimd/preview`, which validates a document without
+creating anything, and otherwise only reads. Apply refuses a tenant with active
+Rules, since CIMD logins fail while Rules run. It writes a mode-`0600` journal
+under `.sst/auth0-backups/` before each write; undo a run with
+`npm run auth0:configure-mcp -- --rollback <journal-path>`. A rerun on a configured
+tenant writes nothing.
+
+So that MCP logins get the same email verification and account link as the
+dashboard, pass the same URL to the login policy:
+`npm run auth0:configure-login -- ... --mcp-resource-url <MCP_RESOURCE_URL> --apply`.
+The Action then treats any login asking for that resource as a BoxLite login.
+The scopes the API accepts from a token are checked against `mcp-clients.json` by
+an API spec; see [MCP endpoint](../../API.md#mcp-endpoint) for how they are enforced.
+
 ## Account linking at login
 
 Google, GitHub and a password sign-up holding one address have to reach the
