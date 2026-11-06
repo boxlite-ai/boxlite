@@ -8,6 +8,19 @@
 //! stalls other device callbacks. The VM registers this device through the common
 //! MMIO transport and worker runtime.
 
+use std::sync::{Arc, Mutex};
+
+use self::device::Fs;
+use super::{
+    DeviceContext, VirtioDevice,
+    mmio::{self, Slot},
+};
+use crate::{
+    chipset::ChipsetBuilder,
+    config::FsConfig,
+    error::{Error, Result},
+};
+
 pub(crate) mod aggregate;
 pub(crate) mod descriptor;
 pub(crate) mod device;
@@ -19,15 +32,14 @@ pub(crate) mod server;
 
 pub(crate) use aggregate::{AggregateFs, Share};
 
-/// Connects the configured exports to the VM's transport, RAM and workers.
+/// Adds the configured exports behind a virtio-mmio transport in `slot`,
+/// run by the VM's workers.
 pub(crate) fn add_filesystem(
-    chipset: &mut crate::chipset::ChipsetBuilder,
-    ctx: &crate::virtio::DeviceContext<'_>,
-    config: &crate::config::FsConfig,
-    slot: crate::virtio::mmio::Slot,
-) -> crate::error::Result<()> {
-    use std::sync::{Arc, Mutex};
-
+    chipset: &mut ChipsetBuilder,
+    ctx: &DeviceContext<'_>,
+    config: &FsConfig,
+    slot: Slot,
+) -> Result<()> {
     let shares = config
         .shares
         .iter()
@@ -37,14 +49,9 @@ pub(crate) fn add_filesystem(
             read_only: share.read_only,
         })
         .collect();
-    let device = device::Fs::new(&config.tag, shares).map_err(crate::error::Error::Filesystem)?;
-    crate::virtio::mmio::add_device(
-        chipset,
-        ctx,
-        "virtio-fs",
-        slot,
-        Arc::new(Mutex::new(device)),
-    )
+    let filesystem = Fs::new(&config.tag, shares).map_err(Error::Filesystem)?;
+    let device: Arc<Mutex<dyn VirtioDevice>> = Arc::new(Mutex::new(filesystem));
+    mmio::add_device(chipset, ctx, "virtio-fs", slot, device)
 }
 
 mod bindings {
