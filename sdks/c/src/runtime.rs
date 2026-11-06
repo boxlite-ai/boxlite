@@ -109,14 +109,16 @@ pub unsafe extern "C" fn boxlite_runtime_new(
         image_registries,
         image_registries_count,
         ptr::null(),
+        false,
         out_runtime,
         out_error,
     )
 }
 
 /// Create a local runtime with an explicit comma-separated RC feature allowlist
-/// (for example, "custom-kernel"). Null enables none; unknown tokens fail.
-/// Does not read BOXLITE_EXPERIMENTAL. Ownership matches boxlite_runtime_new.
+/// (for example, "custom-kernel"). Null grants no explicit features; unknown tokens fail.
+/// Invalid UTF-8 returns InvalidArgument; unknown UTF-8 tokens return Config.
+/// Local nesting follows BOXLITE_EXPERIMENTAL. Ownership matches boxlite_runtime_new.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_runtime_new_experimental(
     home_dir: *const c_char,
@@ -131,9 +133,33 @@ pub unsafe extern "C" fn boxlite_runtime_new_experimental(
         image_registries,
         image_registries_count,
         features,
+        false,
         out_runtime,
         out_error,
     )
+}
+
+/// Internal Runner constructor: preserve API decisions instead of local defaults.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_internal_runtime_new_runner(
+    home_dir: *const c_char,
+    image_registries: *const BoxliteImageRegistry,
+    image_registries_count: c_int,
+    features: *const c_char,
+    out_runtime: *mut *mut CBoxliteRuntime,
+    out_error: *mut CBoxliteError,
+) -> BoxliteErrorCode {
+    unsafe {
+        runtime_new(
+            home_dir,
+            image_registries,
+            image_registries_count,
+            features,
+            true,
+            out_runtime,
+            out_error,
+        )
+    }
 }
 
 #[unsafe(no_mangle)]
@@ -214,6 +240,7 @@ unsafe fn runtime_new(
     image_registries: *const BoxliteImageRegistry,
     image_registries_count: c_int,
     features: *const c_char,
+    runner_managed: bool,
     out_runtime: *mut *mut RuntimeHandle,
     out_error: *mut FFIError,
 ) -> BoxliteErrorCode {
@@ -276,9 +303,17 @@ unsafe fn runtime_new(
         // The exported library keeps host validation for C integration tests.
         let builder = RuntimeBuilder::new(options).with_features(features);
         #[cfg(test)]
-        let runtime_result = builder.build_for_test();
+        let runtime_result = if runner_managed {
+            builder.build_for_runner_test()
+        } else {
+            builder.build_for_test()
+        };
         #[cfg(not(test))]
-        let runtime_result = builder.build();
+        let runtime_result = if runner_managed {
+            builder.build_for_runner()
+        } else {
+            builder.build()
+        };
         let runtime = match runtime_result {
             Ok(rt) => rt,
             Err(e) => {

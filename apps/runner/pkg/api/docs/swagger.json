@@ -633,6 +633,10 @@
             "type": "string"
           }
         },
+        "nestedVirtualization": {
+          "description": "Requires explicit authorization on the Runner process; omitted means off.",
+          "type": "boolean"
+        },
         "organizationId": {
           "description": "Nullable for backward compatibility",
           "type": "string"
@@ -765,6 +769,9 @@
           "type": "integer",
           "minimum": 1
         },
+        "nestedVirtualization": {
+          "type": "boolean"
+        },
         "osUser": {
           "type": "string"
         },
@@ -825,6 +832,9 @@
         },
         "metrics": {
           "$ref": "#/definitions/RunnerMetrics"
+        },
+        "nestedVirtualizationEnabled": {
+          "type": "boolean"
         },
         "serviceHealth": {
           "type": "array",

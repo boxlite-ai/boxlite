@@ -26,8 +26,8 @@ one feature does not enable any other present or future RC feature.
 architecture-dependent. `--initramfs` and `--kernel-args` require `--kernel`.
 Boot files are copied into the box before the shim starts.
 
-For the Rust SDK, opt in explicitly when constructing the runtime. The library
-does not read `BOXLITE_EXPERIMENTAL`:
+For the Rust SDK, authorize custom kernels explicitly when constructing the runtime.
+The environment does not grant this capability:
 
 ```rust
 use boxlite::experimental::custom_kernel::{self, KernelFormat, KernelOptions};
@@ -62,8 +62,9 @@ The local C constructor `boxlite_runtime_new_experimental` accepts the same
 comma-separated feature names as Rust. Pass `"custom-kernel"`, then set the
 absolute file path with `boxlite_advanced_options_set_kernel_path` and apply
 the advanced options with `boxlite_options_set_advanced`. The original
-`boxlite_runtime_new` constructor enables no experimental features. Neither
-constructor reads `BOXLITE_EXPERIMENTAL`.
+`boxlite_runtime_new` constructor does not authorize custom kernels. Both
+constructors read `BOXLITE_EXPERIMENTAL` only for the separate nested-virtualization
+creation policy; it does not grant custom-kernel authorization.
 Invalid feature-list errors describe the explicit constructor input. A null kernel
 path or invalid UTF-8 returns `InvalidArgument` and leaves the previous kernel
 option unchanged.

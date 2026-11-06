@@ -1,51 +1,47 @@
 # Nested virtualization (RC)
 
-Nested virtualization lets a workload inside a box launch hardware-accelerated
-virtual machines. It is a release-candidate feature: disabled by default,
-supported only by the local runtime, and may change without the compatibility
-guarantees of BoxLite's stable CLI and Rust API. Its CLI flag is intentionally
-omitted from normal help, shell completions, and the stable command reference.
+Nested virtualization lets workloads inside a box launch hardware-accelerated
+virtual machines. This release-candidate feature is disabled by default.
+Its policy belongs to the runtime environment; SDK create calls have no per-box
+nested virtualization option.
 
-The opt-in is strict. When the host cannot provide nested virtualization,
-BoxLite returns `Unsupported` instead of falling back to software emulation or
-starting without the feature.
+## Local SDKs, CLI and server
 
-Enable only this capability for every process that creates, starts, or restarts
-the box:
+Set the variable on the process that constructs the local runtime:
 
 ```bash
-BOXLITE_EXPERIMENTAL=nested-virtualization boxlite run \
-  --nested-virtualization --rm alpine:latest \
+BOXLITE_EXPERIMENTAL=nested-virtualization boxlite run --rm alpine:latest \
   sh -c 'test -r /dev/kvm && test -w /dev/kvm'
 ```
 
-`BOXLITE_EXPERIMENTAL` is a comma-separated allowlist. The CLI reads it once
-before operational command dispatch and fails closed on unknown names. Enabling
-one feature does not enable any other present or future RC feature.
+Rust, Python, Node.js, Go and C local runtimes capture this policy during
+initialization. Every subsequent new box uses it; there is no separate CLI flag
+or SDK setter. Changing the environment after construction does not change that
+runtime. Unknown feature names and non-UTF-8 values fail initialization.
+Custom-kernel authorization retains its existing explicit SDK opt-in.
 
-For the Rust SDK, opt in explicitly when constructing the runtime. The library
-does not read `BOXLITE_EXPERIMENTAL`:
+A `boxlite serve` process uses its own local environment. REST clients use the
+ordinary create request and ignore their local feature environment, including
+unknown or non-UTF-8 values. Client environment never authorizes the server.
 
-```rust
-use boxlite::experimental::{nested_virtualization, ExperimentalFeature, RuntimeBuilder};
-use boxlite::{BoxOptions, BoxliteOptions};
+## Cloud integration
 
-let runtime = RuntimeBuilder::new(BoxliteOptions::default())
-    .enable(ExperimentalFeature::NestedVirtualization)
-    .build()?;
+The Runner uses an internal managed entry point that preserves each control-plane
+decision instead of applying its local environment to every tenant.
+Cloud organization admission is supplied by the dependent
+[organization policy PR](https://github.com/boxlite-ai/boxlite/pull/2360).
 
-let mut options = BoxOptions::default();
-nested_virtualization::configure(&mut options);
+## Existing boxes
 
-let box_ = runtime.create(options, None).await?;
-```
+The creation-time decision is saved and immutable. Changing the environment or
+organization setting affects future creates; existing boxes retain their saved
+configuration. A nested box still requires current runtime/Runner authorization
+when it starts or restarts. Replay and recovery preserve the saved requirement
+and cannot downgrade it.
 
-The local runtime checks the opt-in again when it consumes persisted box
-configuration, so a later CLI `start` or `restart` also needs the variable and
-an SDK process must construct its runtime with the same explicit feature. The
-REST runtime rejects nested-virtualization configuration even when the opt-in is
-present, and a REST server rejects uploaded archives that request it. The RC is
-not exposed through the Python, Node.js, Go, or C request APIs.
+With local nesting enabled, `get_or_create` rejects a same-name ordinary box.
+Use a new name or explicitly remove and recreate it. Nested archive import and
+migration remain unsupported.
 
 ## Supported hosts
 

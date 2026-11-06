@@ -50,6 +50,10 @@ definitions:
         additionalProperties:
           type: string
         type: object
+      nestedVirtualization:
+        description: Requires explicit authorization on the Runner process; omitted
+          means off.
+        type: boolean
       organizationId:
         description: Nullable for backward compatibility
         type: string
@@ -153,6 +157,8 @@ definitions:
       memoryQuota:
         minimum: 1
         type: integer
+      nestedVirtualization:
+        type: boolean
       osUser:
         type: string
       outboundAllowNet:
@@ -201,6 +207,8 @@ definitions:
         type: string
       metrics:
         $ref: '#/definitions/RunnerMetrics'
+      nestedVirtualizationEnabled:
+        type: boolean
       serviceHealth:
         items:
           $ref: '#/definitions/RunnerServiceInfo'

@@ -632,7 +632,7 @@ test\:apps\:dashboard: _ensure-apps-deps
 
 test\:apps\:runner: dev\:go
 	@echo "🧪 Running runner Go tests..."
-	@cd apps/runner && go test -tags boxlite_dev ./... $(GOTEST_FILTER)
+	@cd apps/runner && go test -tags boxlite_dev,boxlite_runner ./... $(GOTEST_FILTER)
 
 test\:apps\:proxy:
 	@cd apps/proxy && go test ./... $(GOTEST_FILTER)
@@ -640,7 +640,7 @@ test\:apps\:proxy:
 test\:apps: _ensure-apps-deps dev\:go
 	@echo "🧪 Running apps workspace test matrix..."
 	@$(MAKE) test:apps:infra
-	@cd apps && GOFLAGS=-tags=boxlite_dev yarn nx run-many --target=test --all --parallel=$$(getconf _NPROCESSORS_ONLN) $(if $(FILTER),-- --testNamePattern '$(FILTER)',)
+	@cd apps && GOFLAGS=-tags=boxlite_dev,boxlite_runner yarn nx run-many --target=test --all --parallel=$$(getconf _NPROCESSORS_ONLN) $(if $(FILTER),-- --testNamePattern '$(FILTER)',)
 
 test\:rest\:inventory: _ensure-apps-deps
 	@cd apps && yarn node ../scripts/test/rest/inventory.mjs

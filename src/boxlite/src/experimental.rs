@@ -3,14 +3,16 @@
 //! Experimental features are unavailable by default and may change before
 //! becoming stable. CLI users opt in through
 //! [`BOXLITE_EXPERIMENTAL`](EXPERIMENTAL_FEATURES_ENV); Rust callers use
-//! [`RuntimeBuilder`] so capability state is explicit and runtime-scoped.
+//! [`RuntimeBuilder`] for explicit custom-kernel authorization. Local nesting
+//! follows the process environment captured when the runtime is constructed.
 
 use crate::runtime::options::{BoxOptions, BoxliteOptions};
 use crate::{BoxliteError, BoxliteResult, BoxliteRuntime};
 use std::collections::BTreeSet;
 
 pub mod custom_kernel;
-pub mod nested_virtualization;
+#[doc(hidden)]
+pub mod runner;
 
 /// Comma-separated list of release-candidate features enabled for this process.
 pub const EXPERIMENTAL_FEATURES_ENV: &str = "BOXLITE_EXPERIMENTAL";
@@ -47,6 +49,32 @@ pub struct ExperimentalFeatures {
 }
 
 impl ExperimentalFeatures {
+    /// Read and validate the process RC allowlist.
+    pub fn from_env() -> BoxliteResult<Self> {
+        match std::env::var(EXPERIMENTAL_FEATURES_ENV) {
+            Ok(value) => Self::parse(&value).map_err(|error| match error {
+                BoxliteError::Config(message) => {
+                    BoxliteError::Config(format!("{EXPERIMENTAL_FEATURES_ENV}: {message}"))
+                }
+                error => error,
+            }),
+            Err(std::env::VarError::NotPresent) => Ok(Self::default()),
+            Err(std::env::VarError::NotUnicode(_)) => Err(BoxliteError::Config(format!(
+                "{EXPERIMENTAL_FEATURES_ENV} must contain valid UTF-8"
+            ))),
+        }
+    }
+
+    pub(crate) fn with_local_nesting(mut self) -> BoxliteResult<Self> {
+        let environment = Self::from_env()?;
+        self.enabled
+            .remove(&ExperimentalFeature::NestedVirtualization);
+        if environment.is_enabled(ExperimentalFeature::NestedVirtualization) {
+            self.enabled
+                .insert(ExperimentalFeature::NestedVirtualization);
+        }
+        Ok(self)
+    }
     /// Parse a comma-separated feature list.
     pub fn parse(value: &str) -> BoxliteResult<Self> {
         if value.trim().is_empty() {
@@ -84,6 +112,12 @@ impl ExperimentalFeatures {
     pub fn require(&self, feature: ExperimentalFeature) -> BoxliteResult<()> {
         if self.is_enabled(feature) {
             return Ok(());
+        }
+
+        if feature == ExperimentalFeature::NestedVirtualization {
+            return Err(BoxliteError::Config(format!(
+                "nested virtualization support is disabled; set {EXPERIMENTAL_FEATURES_ENV}=nested-virtualization on the local process or Runner"
+            )));
         }
 
         Err(BoxliteError::Config(format!(
@@ -136,13 +170,42 @@ impl RuntimeBuilder {
 
     /// Construct the local runtime with the selected capabilities.
     pub fn build(self) -> BoxliteResult<BoxliteRuntime> {
-        BoxliteRuntime::new_with_experimental_features(self.options, self.features)
+        BoxliteRuntime::new_with_experimental_features(
+            self.options,
+            self.features.with_local_nesting()?,
+            false,
+        )
+    }
+
+    /// Internal CLI entry: use the already validated startup snapshot.
+    #[doc(hidden)]
+    pub fn build_with_environment_snapshot(
+        self,
+        features: ExperimentalFeatures,
+    ) -> BoxliteResult<BoxliteRuntime> {
+        BoxliteRuntime::new_with_experimental_features(self.options, features, false)
+    }
+
+    /// Internal Runner entry: execute saved per-box decisions without local defaults.
+    #[doc(hidden)]
+    pub fn build_for_runner(self) -> BoxliteResult<BoxliteRuntime> {
+        BoxliteRuntime::new_with_experimental_features(self.options, self.features, true)
     }
 
     /// Construct without host validation for tests that never start a VM.
     #[cfg(any(test, feature = "test-support"))]
     pub fn build_for_test(self) -> BoxliteResult<BoxliteRuntime> {
-        BoxliteRuntime::new_for_test_with_features(self.options, self.features)
+        BoxliteRuntime::new_for_test_with_features(
+            self.options,
+            self.features.with_local_nesting()?,
+            false,
+        )
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn build_for_runner_test(self) -> BoxliteResult<BoxliteRuntime> {
+        BoxliteRuntime::new_for_test_with_features(self.options, self.features, true)
     }
 }
 
@@ -207,7 +270,7 @@ mod tests {
     #[test]
     fn nested_virtualization_options_require_the_matching_token() {
         let mut options = BoxOptions::default();
-        nested_virtualization::configure(&mut options);
+        options.advanced.nested_virtualization = true;
 
         let error = ExperimentalFeatures::default()
             .require_for_options(&options)

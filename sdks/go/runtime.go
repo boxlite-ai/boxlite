@@ -79,14 +79,19 @@ func NewRuntime(opts ...RuntimeOption) (*Runtime, error) {
 	features := strings.Join(cfg.experimentalFeatures, ",")
 	cFeatures := toCString(features)
 	defer C.free(unsafe.Pointer(cFeatures))
-	code := C.boxlite_runtime_new_experimental(
-		homeDir,
-		cImageRegistries,
-		C.int(imageRegistriesCount),
-		cFeatures,
-		&handle,
-		&cerr,
-	)
+	var code uint32
+	if cfg.runnerManaged {
+		code = C.boxlite_internal_runtime_new_runner(homeDir, cImageRegistries, C.int(imageRegistriesCount), cFeatures, &handle, &cerr)
+	} else {
+		code = C.boxlite_runtime_new_experimental(
+			homeDir,
+			cImageRegistries,
+			C.int(imageRegistriesCount),
+			cFeatures,
+			&handle,
+			&cerr,
+		)
+	}
 	if code != C.Ok {
 		return nil, freeError(&cerr)
 	}

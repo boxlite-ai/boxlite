@@ -71,6 +71,22 @@ func main() {
 }
 ```
 
+### Nested virtualization (experimental)
+
+Set `BOXLITE_EXPERIMENTAL=nested-virtualization` before `NewRuntime`.
+The runtime captures the environment once and enables nesting for every new box;
+ordinary `Create` calls need no feature or advanced-options argument.
+There is no public per-box setter. Keep the environment enabled when reopening
+nested boxes; their saved configuration is immutable.
+
+`NewRest` ignores local feature environment. The server selects its policy:
+a local server uses its process environment. Cloud organization admission is
+supplied by the dependent [policy PR](https://github.com/boxlite-ai/boxlite/pull/2360).
+An enabled local policy that cannot be provided fails instead of creating an ordinary box. Hardware is checked at VM startup; metadata creation does not establish L2.
+
+Runner integration uses the private `boxlite_runner` build tag and saved decisions;
+it does not apply local defaults to all tenants.
+
 ### Archive Export and Import
 
 ```go
@@ -354,8 +370,18 @@ Build from source (requires Rust toolchain):
 make dev:go
 
 # Run tests
-cd sdks/go && go test -tags boxlite_dev -v ./...
+make test:unit:go
 ```
+
+Nested-virtualization argument tests always check malformed tokens before native
+host validation. Local-runtime tests normally skip `ErrUnsupported` when the host
+cannot use KVM or Hypervisor.framework. Set
+`BOXLITE_REQUIRE_NESTED_RUNTIME_TESTS=1` to make those constructor checks mandatory;
+the Linux x86_64 CI metadata pass uses this setting after granting KVM access.
+Host-independent SDK tests capture ordinary REST requests with empty, enabled
+and invalid local feature ENV; all use server policy without adding a nesting field.
+The Runner-only bridge is separately exercised through Go/C and the native
+managed runtime, preserving authorization and each saved decision without booting a VM.
 
 ## License
 

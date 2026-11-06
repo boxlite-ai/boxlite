@@ -10,7 +10,7 @@
       "options": {
         "main": "{projectRoot}/cmd/runner/main.go",
         "outputPath": "dist/apps/runner",
-        "flags": ["-ldflags \"-X 'github.com/boxlite-ai/runner/internal.Version=$VERSION'\""]
+        "flags": ["-tags=boxlite_runner", "-ldflags \"-X 'github.com/boxlite-ai/runner/internal.Version=$VERSION'\""]
       },
       "dependsOn": ["check-version-env"],
       "inputs": [
@@ -18,7 +18,15 @@
         "^goProduction",
         { "env": "VERSION" },
         { "dependentTasksOutputFiles": "**/*", "transitive": true }
-      ]
+      ],
+      "configurations": {
+        "development": {
+          "flags": [
+            "-tags=boxlite_dev,boxlite_runner",
+            "-ldflags \"-X 'github.com/boxlite-ai/runner/internal.Version=$VERSION'\""
+          ]
+        }
+      }
     },
     "build-amd64": {
       "executor": "@nx-go/nx-go:build",
@@ -29,7 +37,7 @@
           "GOARCH": "amd64",
           "GOOS": "linux"
         },
-        "flags": ["-ldflags \"-X 'github.com/boxlite-ai/runner/internal.Version=$VERSION'\""]
+        "flags": ["-tags=boxlite_runner", "-ldflags \"-X 'github.com/boxlite-ai/runner/internal.Version=$VERSION'\""]
       },
       "dependsOn": ["check-version-env"],
       "inputs": [
@@ -43,7 +51,7 @@
       "executor": "nx:run-commands",
       "options": {
         "cwd": ".",
-        "command": "go run -tags boxlite_dev {projectRoot}/cmd/runner/main.go"
+        "command": "go run -tags boxlite_dev,boxlite_runner {projectRoot}/cmd/runner/main.go"
       },
       "configurations": {
         "production": {}
@@ -56,7 +64,11 @@
       }
     },
     "test": {
-      "executor": "@nx-go/nx-go:test"
+      "executor": "nx:run-commands",
+      "options": {
+        "cwd": "{projectRoot}",
+        "command": "go test -tags boxlite_dev,boxlite_runner ./..."
+      }
     },
     "lint": {
       "executor": "@nx-go/nx-go:lint"

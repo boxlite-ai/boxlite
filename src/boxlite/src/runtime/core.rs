@@ -102,9 +102,12 @@ impl BoxliteRuntime {
     pub(crate) fn new_with_experimental_features(
         options: BoxliteOptions,
         features: ExperimentalFeatures,
+        runner_managed: bool,
     ) -> BoxliteResult<Self> {
         let local = LocalRuntime(RuntimeImpl::new_with_experimental_features(
-            options, features,
+            options,
+            features,
+            runner_managed,
         )?);
         Ok(Self::from_local(local))
     }
@@ -122,9 +125,12 @@ impl BoxliteRuntime {
     pub(crate) fn new_for_test_with_features(
         options: BoxliteOptions,
         features: ExperimentalFeatures,
+        runner_managed: bool,
     ) -> BoxliteResult<Self> {
         Ok(Self::from_local(LocalRuntime(RuntimeImpl::initialize(
-            options, features,
+            options,
+            features,
+            runner_managed,
         )?)))
     }
 

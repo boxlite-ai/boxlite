@@ -24,16 +24,16 @@ fn custom_kernel_requires_explicit_rc_opt_in() {
 
 #[test]
 fn unknown_rc_feature_fails_before_runtime_setup() {
+    let home = tempfile::tempdir().unwrap();
     let mut command = Command::new(assert_cmd::cargo::cargo_bin!("boxlite"));
     command
+        .arg("--home")
+        .arg(home.path())
+        .env_remove("BOXLITE_REST_URL")
+        .env_remove("BOXLITE_CONTEXT")
+        .env_remove("BOXLITE_PROFILE")
         .env("BOXLITE_EXPERIMENTAL", "custom-kernal")
-        .args([
-            "--url",
-            "http://127.0.0.1:1",
-            "create",
-            "--rootfs",
-            "/definitely/missing/rootfs",
-        ])
+        .args(["create", "--rootfs", "/definitely/missing/rootfs"])
         .assert()
         .failure()
         .stderr(
