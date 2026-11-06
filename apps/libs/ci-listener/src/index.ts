@@ -32,6 +32,7 @@ export type { WorkerEvent } from './execution/pool'
 export type { CapacityProvider, CapacityRequest, CapacityPolicy, CapacityLimit } from './capacity'
 export { ConfirmedWorkerAbsent, ConfirmedWorkerCreationRejected } from './worker'
 export { ExecutionJournal } from './execution/journal'
+export { WorkerPool } from './execution/pool'
 export { scopeKey, decodeScope, decodeAllocation } from './execution/model'
 export { jitFileArchive } from './jit-file'
 

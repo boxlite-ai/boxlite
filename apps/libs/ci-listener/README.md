@@ -614,3 +614,12 @@ Run under Node 24. SQLite tests always run. To include PostgreSQL contracts, sup
 and drop isolated schemas and reject remote hosts. This variable is test-only and
 is not a Listener production setting. `FILTER` selects test names as on other Make
 test targets. These checks do not establish real hosted or standalone CI acceptance.
+When changing the optional PostgreSQL environment, use `NX_SKIP_NX_CACHE=true`
+to execute the contracts rather than reuse a cached run from a different environment.
+
+Workspace hosts import the shared pool from `@boxlite-ai/ci-listener`; SQLite uses
+the separate `@boxlite-ai/ci-listener/sqlite` path, keeping its Node-only adapter out
+of the hosted entry. Cross-project test fixtures use the scoped `/testing` alias.
+Standalone shutdown attempts every owned resource and reports combined cleanup
+failures; extracting that cleanup operation preserves failure precedence.
+Cursor and label validators retain their existing ASCII-control rejection ranges.

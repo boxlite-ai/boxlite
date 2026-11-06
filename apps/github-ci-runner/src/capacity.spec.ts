@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { ExecutionJournal, ExecutionScope, ListenerState } from '@boxlite-ai/ci-listener'
-import { SqliteStateDatabase } from '../../libs/ci-listener/src/state/sqlite'
+import { SqliteStateDatabase } from '@boxlite-ai/ci-listener/sqlite'
 import { EnvironmentCapacity } from './capacity'
 
 describe('CI standalone ENV capacity provider', () => {

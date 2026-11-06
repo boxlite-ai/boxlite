@@ -1,11 +1,12 @@
 /* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
-import { testCapacity } from '../../libs/ci-listener/tests/capacity'
+import { testCapacity } from '@boxlite-ai/ci-listener/testing'
 import { EnvironmentCapacity } from './capacity'
 import { createHmac, generateKeyPairSync, randomUUID } from 'node:crypto'
 import { chmodSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
+  WorkerPool,
   Listener,
   ListenerState,
   ExecutionLease,
@@ -14,12 +15,11 @@ import {
   StateDatabase,
   verifyWebhook,
 } from '@boxlite-ai/ci-listener'
-import { SqliteStateDatabase } from '../../libs/ci-listener/src/state/sqlite'
+import { SqliteStateDatabase } from '@boxlite-ai/ci-listener/sqlite'
 import { BoxLiteWorkers } from './boxlite-workers'
 import { loadConfig, privateFile } from './config'
 import { createHttp } from './http'
 import { SelfHost } from './self-host'
-import { WorkerPool } from '../../libs/ci-listener/src/execution/pool'
 
 describe('Standalone App binding and HTTP ingress', () => {
   const originalFetch = global.fetch,
