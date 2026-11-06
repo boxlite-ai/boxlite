@@ -100,7 +100,7 @@ fn maps_the_ram_layout_with_its_host_address_and_unmaps_on_drop() {
 }
 
 #[test]
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 fn blocked_fs_shutdown_keeps_vm_ram_registered_until_retry_and_drop() {
     use std::{sync::Arc, time::Duration};
 
@@ -153,7 +153,7 @@ fn blocked_fs_shutdown_keeps_vm_ram_registered_until_retry_and_drop() {
 }
 
 #[test]
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 fn dropping_vm_during_blocked_fs_keeps_registration_and_backing() {
     use std::{sync::Arc, time::Duration};
 

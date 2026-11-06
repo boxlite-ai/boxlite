@@ -4,6 +4,7 @@
 compile_error!("BoxLite guest is Linux-only; build with a Linux target");
 
 #[cfg(all(target_os = "linux", feature = "integration-test-init", not(test)))]
+#[path = "../tests/support/mount_init.rs"]
 mod mount_test_init;
 
 #[cfg(target_os = "linux")]

@@ -51,6 +51,7 @@ pub struct VmmMountConfig {
 }
 
 /// One aggregate device's exports and corresponding guest mount instructions.
+#[allow(dead_code)] // Prepared for the native engine adapter, like VmmMountConfig.
 #[derive(Debug)]
 pub struct AggregateMountConfig {
     pub device_tag: String,
@@ -272,6 +273,12 @@ impl GuestVolumeManager {
     }
 }
 
+impl Default for GuestVolumeManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -352,11 +359,5 @@ mod tests {
                     .is_err()
             );
         }
-    }
-}
-
-impl Default for GuestVolumeManager {
-    fn default() -> Self {
-        Self::new()
     }
 }
