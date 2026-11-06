@@ -280,6 +280,7 @@ registration carries its default organization on success only.
 ### Querying Activity in PostHog
 
 The producer uses the existing `POSTHOG_API_KEY`, `POSTHOG_HOST` and `POSTHOG_ENVIRONMENT` settings.
+Cloud deployments set `POSTHOG_ENVIRONMENT` to the deployed stage name on both AWS and GCP.
 Without the key or host, analytics is disabled while business operations and operational logs continue.
 AnalyticsService owns disabled-source and capture-error handling; the interceptor skips request extraction
 when analytics is disabled.
