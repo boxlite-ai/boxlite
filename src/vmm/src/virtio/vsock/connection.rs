@@ -29,7 +29,7 @@ pub(super) enum State {
 
 pub(super) struct Connection {
     // Fields drop in declaration order: release the polling copy before the I/O socket.
-    _registration: Registration,
+    registration: Registration,
     socket: UnixStream,
     state: State,
     key: Key,
@@ -57,7 +57,7 @@ impl Connection {
         cid: u64,
     ) -> Result<Self, DeviceError> {
         Ok(Self {
-            _registration: Registration::stream(
+            registration: Registration::stream(
                 &socket,
                 registrar,
                 Interest::READABLE | Interest::WRITABLE,
@@ -145,6 +145,9 @@ impl Connection {
     /// One write/read per turn; successful reads or remaining write tails request another.
     /// Returns whether this flow is closed and whether runnable work may remain.
     pub fn drive(&mut self, outgoing: &mut VecDeque<Packet>) -> io::Result<(bool, bool)> {
+        if self.state == State::AwaitResponse && self.registration.is_closed() {
+            return Ok((true, false));
+        }
         if self.state == State::Connecting {
             if let Some(error) = self.socket.take_error()? {
                 return Err(error);

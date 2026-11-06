@@ -3,6 +3,80 @@
 
 use super::*;
 
+fn pending_handshake_close(payload: &[u8]) {
+    let temp = Temp::new();
+    let path = temp.path("pending");
+    let listener = UnixListener::bind(&path).unwrap();
+    let mut h = TransportHarness::new(vec![PortMapping::Listen {
+        port: 2695,
+        listener,
+    }]);
+    h.activate();
+    let mut host = UnixStream::connect(&path).unwrap();
+    bounded(&host);
+    let request = h.next(REQUEST);
+    {
+        let _device = h.device.lock().unwrap();
+        host.write_all(payload).unwrap();
+        drop(host);
+    }
+    let reset = h.next(RST);
+    assert_eq!(reset.header.src_port, request.header.src_port);
+    assert_eq!(reset.header.dst_port, request.header.dst_port);
+    assert!(
+        h.packets.is_empty(),
+        "handshake data must not reach the guest"
+    );
+    assert!(h.events.wait(Some(Duration::ZERO)).unwrap().is_none());
+}
+
+#[test]
+fn production_worker_reclaims_pending_handshake_after_empty_host_close() {
+    pending_handshake_close(b"");
+}
+
+#[test]
+fn production_worker_reclaims_pending_handshake_after_buffered_host_close() {
+    pending_handshake_close(b"unread handshake payload");
+}
+
+#[test]
+fn production_worker_resumes_accept_after_pending_handshake_close() {
+    let temp = Temp::new();
+    let path = temp.path("capacity");
+    let listener = UnixListener::bind(&path).unwrap();
+    let mut h = TransportHarness::new(vec![PortMapping::Listen {
+        port: 2695,
+        listener,
+    }]);
+    h.activate();
+    let mut hosts = Vec::new();
+    let mut last_port = 0;
+    for _ in 0..backend::MAX_CONNECTIONS {
+        hosts.push(UnixStream::connect(&path).unwrap());
+        last_port = h.next(REQUEST).header.src_port;
+    }
+    let _queued_host = UnixStream::connect(&path).unwrap();
+    drop(hosts.pop().unwrap());
+
+    // Enough RX heads remain for both controls. Do not refill or kick: closure
+    // must resume the listener even if its readiness arrived at full capacity.
+    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+    let mut controls = Vec::new();
+    while controls.len() < 2 {
+        controls.extend(h.rx.take(&h.memory).into_iter().map(|bytes| {
+            let header = Packet::read(&mut bytes.as_slice()).unwrap().header;
+            (header.op, header.src_port)
+        }));
+        if controls.len() < 2 {
+            h.irq
+                .recv_timeout(deadline.saturating_duration_since(std::time::Instant::now()))
+                .expect("closed handshake did not release a slot and resume accepts");
+        }
+    }
+    assert_eq!(controls, [(RST, last_port), (REQUEST, last_port + 1)]);
+}
+
 #[test]
 fn private_notifications_coalesce_reuse_registration_and_tolerate_spurious_readiness() {
     let registrar = Arc::new(Registrar::new());

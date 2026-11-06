@@ -229,7 +229,7 @@ fn socket_pair() -> (UnixStream, UnixStream) {
     (device, host)
 }
 
-fn poll(registrar: &Registrar) -> Events {
+pub(super) fn poll(registrar: &Registrar) -> Events {
     let mut events = Events::with_capacity(8);
     registrar
         .poll
@@ -237,6 +237,12 @@ fn poll(registrar: &Registrar) -> Events {
         .unwrap()
         .poll(&mut events, Some(Duration::from_secs(1)))
         .unwrap();
+    let mut sources = registrar.sources.lock().unwrap();
+    for event in &events {
+        if let Some(source) = sources.get_mut(&SourceId(event.token().0 as u32)) {
+            source.on_ready(event);
+        }
+    }
     events
 }
 

@@ -74,10 +74,15 @@ impl Registrar {
             .unwrap()
             .poll(&mut events, Some(Duration::from_millis(2)))
             .unwrap();
-        let sources = self.sources.lock().unwrap();
+        let mut sources = self.sources.lock().unwrap();
         events
             .iter()
-            .filter_map(|e| sources.get(&SourceId(e.token().0 as u32)).map(|s| s.0))
+            .filter_map(|e| {
+                sources.get_mut(&SourceId(e.token().0 as u32)).map(|s| {
+                    s.1.on_ready(e);
+                    s.0
+                })
+            })
             .collect()
     }
     fn len(&self) -> usize {

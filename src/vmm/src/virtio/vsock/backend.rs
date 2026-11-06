@@ -206,6 +206,8 @@ impl Backend {
                 _ => {
                     self.outgoing.retain(|p| reply_key(&p.header) != key);
                     self.outgoing.push_back(connection.packet(RST, 0, vec![]));
+                    // An earlier listener scan may have stalled at the connection cap.
+                    again = true;
                 }
             }
         }

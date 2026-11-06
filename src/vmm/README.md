@@ -306,6 +306,16 @@ the stream. Guest requests receive a RESPONSE when the host socket connects;
 host-initiated flows wait for RESPONSE before exchanging bytes. Unexpected
 handshakes and operations reset only that flow.
 
+While awaiting RESPONSE, a host closing both socket directions cancels the flow,
+discards its queued packets and emits RST, even when unread host bytes remain.
+The worker passes raw readiness to the registered source before coalescing it;
+the source retains both close bits because kqueue can report the directions
+separately. This metadata callback runs under the worker slot lock and must not
+block, perform I/O, or call the registrar. A single half-close does not cancel a
+handshake. Established streams retain the ordered EOF handling below. Cleanup
+resumes listeners stalled at the connection cap; output backpressure still waits
+for RX capacity. Live hosts with unanswered handshakes have no timeout.
+
 Pending guest writes are bounded at 64 KiB. Partial writes retain the tail,
 WouldBlock retains all pending bytes, and only successful writes advance
 `fwd_cnt`. Each turn performs at most one write and one read of up to 4 KiB,

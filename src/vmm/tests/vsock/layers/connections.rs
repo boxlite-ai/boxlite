@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
-use crate::virtio::vsock::tests::{Registrar, header};
+use crate::virtio::vsock::tests::{Registrar, header, poll};
 use std::time::Duration;
 
 fn packet(h: Header, payload: &[u8]) -> Packet {
@@ -12,6 +12,39 @@ fn packet(h: Header, payload: &[u8]) -> Packet {
             ..h
         },
         payload: payload.to_vec(),
+    }
+}
+
+#[test]
+fn pending_handshake_keeps_half_closed_hosts_until_both_directions_close() {
+    for half in [Shutdown::Read, Shutdown::Write] {
+        let registrar = Arc::new(Registrar::new());
+        let (device, mut host) = UnixStream::pair().unwrap();
+        device.set_nonblocking(true).unwrap();
+        let mut connection = new_connection(device, registrar.clone(), State::AwaitResponse);
+        let mut outgoing = VecDeque::new();
+        host.write_all(b"buffered before handshake").unwrap();
+        poll(&registrar);
+        host.shutdown(half).unwrap();
+        let events = poll(&registrar);
+        if half == Shutdown::Write {
+            assert!(events.iter().any(|event| event.is_read_closed()));
+        }
+        assert_eq!(
+            connection.drive(&mut outgoing).unwrap(),
+            (false, false),
+            "a directional shutdown must not cancel the handshake"
+        );
+        assert!(outgoing.is_empty());
+
+        // Separate poll batches exercise accumulation of the kqueue filters.
+        drop(host);
+        assert!(!poll(&registrar).is_empty());
+        assert_eq!(
+            connection.drive(&mut outgoing).unwrap(),
+            (true, false),
+            "full closure must cancel the pending handshake despite buffered data"
+        );
     }
 }
 
