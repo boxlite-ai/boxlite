@@ -33,6 +33,8 @@ Follow the shared [secret-handling and resource-protection rules](../security.md
 - Volume access uses scoped temporary credentials and bucket-prefix permissions; stage naming alone does not isolate every volume bucket.
 - Registry passwords sit in Secret Manager under `registry-credential-*`. The API holds two custom roles: create a secret, and add or destroy versions under that prefix. It cannot read a password back. The required project isolation separates these stage-independent prefixes.
 
+- Checkpoint archives use the dedicated `<app>-<stage>-checkpoints` bucket with uniform access and public access prevention. API and runner `roles/storage.objectUser` grants name that bucket alone; they do not grant access to volume or infrastructure-state buckets.
+
 
 Runner updates converge through [OS Config](runners.md); host protection does not establish rollout health.
 

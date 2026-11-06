@@ -1,5 +1,6 @@
 //! High-level sandbox runtime structures.
 
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 
@@ -7,6 +8,7 @@ use crate::experimental::ExperimentalFeatures;
 use crate::litebox::LiteBox;
 use crate::metrics::RuntimeMetrics;
 use crate::runtime::backend::RuntimeBackend;
+use crate::runtime::checkpoints::{CheckpointBackend, CheckpointHandle, LocalCheckpoints};
 use crate::runtime::images::ImageBackend;
 use crate::runtime::options::{BoxArchive, BoxOptions, BoxliteOptions};
 use crate::runtime::registries::RegistryBackend;
@@ -59,6 +61,7 @@ extern "C" fn shutdown_on_exit() {
 #[derive(Clone)]
 pub struct BoxliteRuntime {
     backend: Arc<dyn RuntimeBackend>,
+    checkpoint_backend: Arc<dyn CheckpointBackend>,
     /// Image capability — an `Arc` view of the same backend, local or REST.
     image_backend: Arc<dyn ImageBackend>,
     /// Named-volume capability — an `Arc` view of the same backend (local or
@@ -95,8 +98,9 @@ impl BoxliteRuntime {
     /// - Filesystem initialization fails
     /// - Image API initialization fails
     pub fn new(options: BoxliteOptions) -> BoxliteResult<Self> {
+        let directory = options.checkpoints_directory()?;
         let local = LocalRuntime(RuntimeImpl::new(options)?);
-        Ok(Self::from_local(local))
+        Ok(Self::from_local(local, directory))
     }
 
     pub(crate) fn new_with_experimental_features(
@@ -104,12 +108,13 @@ impl BoxliteRuntime {
         features: ExperimentalFeatures,
         runner_managed: bool,
     ) -> BoxliteResult<Self> {
+        let directory = options.checkpoints_directory()?;
         let local = LocalRuntime(RuntimeImpl::new_with_experimental_features(
             options,
             features,
             runner_managed,
         )?);
-        Ok(Self::from_local(local))
+        Ok(Self::from_local(local, directory))
     }
 
     /// Build a local runtime without host validation, for tests on hosts without
@@ -117,8 +122,9 @@ impl BoxliteRuntime {
     /// hypervisor operations.
     #[cfg(any(test, feature = "test-support"))]
     pub fn new_for_test(options: BoxliteOptions) -> BoxliteResult<Self> {
+        let directory = options.checkpoints_directory()?;
         let local = LocalRuntime(RuntimeImpl::new_for_test(options)?);
-        Ok(Self::from_local(local))
+        Ok(Self::from_local(local, directory))
     }
 
     #[cfg(any(test, feature = "test-support"))]
@@ -127,19 +133,21 @@ impl BoxliteRuntime {
         features: ExperimentalFeatures,
         runner_managed: bool,
     ) -> BoxliteResult<Self> {
-        Ok(Self::from_local(LocalRuntime(RuntimeImpl::initialize(
-            options,
-            features,
-            runner_managed,
-        )?)))
+        let directory = options.checkpoints_directory()?;
+        Ok(Self::from_local(
+            LocalRuntime(RuntimeImpl::initialize(options, features, runner_managed)?),
+            directory,
+        ))
     }
 
-    fn from_local(local: LocalRuntime) -> Self {
+    fn from_local(local: LocalRuntime, directory: PathBuf) -> Self {
+        let checkpoint_backend = Arc::new(LocalCheckpoints::new(Arc::clone(&local.0), directory));
         let backend_arc = Arc::new(local);
         let image_backend = Arc::clone(&backend_arc) as Arc<dyn ImageBackend>;
         let volume_backend = Arc::clone(&backend_arc) as Arc<dyn VolumeBackend>;
         Self {
             backend: backend_arc,
+            checkpoint_backend,
             image_backend,
             volume_backend: Some(volume_backend),
             auth_backend: None,
@@ -174,8 +182,10 @@ impl BoxliteRuntime {
         let registry_backend = Arc::clone(&rest_runtime) as Arc<dyn RegistryBackend>;
         let domain_backend =
             Arc::clone(&rest_runtime) as Arc<dyn crate::runtime::domains::DomainBackend>;
+        let checkpoint_backend = Arc::clone(&rest_runtime) as Arc<dyn CheckpointBackend>;
         Ok(Self {
             backend: rest_runtime,
+            checkpoint_backend,
             image_backend,
             volume_backend: Some(volume_backend),
             auth_backend: Some(auth_backend),
@@ -400,6 +410,11 @@ impl BoxliteRuntime {
         name: Option<String>,
     ) -> BoxliteResult<LiteBox> {
         self.backend.import_box(archive, name).await
+    }
+
+    /// Managed disk checkpoints, independent of their source box's lifetime.
+    pub fn checkpoints(&self) -> CheckpointHandle {
+        CheckpointHandle::new(Arc::clone(&self.checkpoint_backend))
     }
 
     // ========================================================================

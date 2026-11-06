@@ -1895,8 +1895,8 @@ async fn get_or_attach_main_session(
 
 fn build_router(state: Arc<AppState>) -> Router {
     use handlers::{
-        advanced, boxes, config, executions, files, images, me, metrics, network, snapshots, ssh,
-        volumes,
+        advanced, boxes, checkpoints, config, executions, files, images, me, metrics, network,
+        snapshots, ssh, volumes,
     };
 
     Router::new()
@@ -1930,8 +1930,11 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route("/v1/boxes/import", post(advanced::import_box))
         .route(
             "/v1/boxes",
-            post(boxes::create_box).get(boxes::list_boxes),
+            post(checkpoints::create_box).get(boxes::list_boxes),
         )
+        .route("/v1/checkpoints", post(checkpoints::create).get(checkpoints::list))
+        .route("/v1/checkpoints/{checkpoint_id}", get(checkpoints::get).delete(checkpoints::remove))
+        .route("/v1/boxes/{box_id}/recover", post(checkpoints::recover_box))
         .route(
             "/v1/boxes/{box_id}",
             get(boxes::get_box)
@@ -2109,6 +2112,7 @@ mod tests {
     use boxlite::runtime::options::NetworkSpec;
     use std::time::Duration;
 
+    mod checkpoints;
     mod executions;
     mod nested_reuse;
     mod ssh;

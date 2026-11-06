@@ -173,6 +173,8 @@ typedef struct ImageHandle ImageHandle;
 
 typedef struct OptionsHandle OptionsHandle;
 
+typedef struct PreparedCheckpointArchiveHandle PreparedCheckpointArchiveHandle;
+
 // Opaque handle to a REST runtime's registry logins, released with
 // `boxlite_registry_free`.
 typedef struct RegistryHandle RegistryHandle;
@@ -258,10 +260,16 @@ typedef struct CAgentEventsOptions {
   const char *after;
 } CAgentEventsOptions;
 
+typedef struct RuntimeHandle CBoxliteRuntime;
+
+typedef struct PreparedCheckpointArchiveHandle CPreparedCheckpointArchive;
+
+// Owns a prepared checkpoint archive until it is explicitly freed, including
+// the temporary files needed by the existing archive import operation.
+typedef void (*CCheckpointArchiveCb)(CPreparedCheckpointArchive*, CBoxliteError*, void*);
+
 // Box export completion.
 typedef void (*CBoxExportCb)(char*, CBoxliteError*, void*);
-
-typedef struct RuntimeHandle CBoxliteRuntime;
 
 // Runtime import completion.
 typedef void (*CRuntimeImportCb)(CBoxHandle*, CBoxliteError*, void*);
@@ -286,6 +294,31 @@ typedef void (*CBoxRemoveBoxCb)(CBoxliteError*, void*);
 
 // Box start completion.
 typedef void (*CBoxStartBoxCb)(CBoxliteError*, void*);
+
+// Callback-owned checkpoint metadata. Release with boxlite_free_checkpoint_info.
+typedef struct CCheckpointInfo {
+  char *id;
+  char *name;
+  char *source_box_id;
+  char *created_at;
+  uint64_t size_bytes;
+  // Lowercase creating, ready, failed, or deleting.
+  char *state;
+} CCheckpointInfo;
+
+// Entries belong to this list; release once with boxlite_free_checkpoint_list.
+typedef struct CCheckpointList {
+  struct CCheckpointInfo *items;
+  int count;
+} CCheckpointList;
+
+// On success, the recipient owns metadata and frees it with
+// boxlite_free_checkpoint_info. Error pointers live only during dispatch.
+typedef void (*CCheckpointInfoCb)(struct CCheckpointInfo*, CBoxliteError*, void*);
+
+// On success, the recipient owns the entire list and frees it with
+// boxlite_free_checkpoint_list; entries must not be freed individually.
+typedef void (*CCheckpointListCb)(struct CCheckpointList*, CBoxliteError*, void*);
 
 // Copy (into / out of) completion.
 typedef void (*CBoxCopyCb)(CBoxliteError*, void*);
@@ -1050,6 +1083,32 @@ void boxlite_agent_turn_free(struct CAgentTurn *handle);
 // handle must be null or a live, uniquely owned pointer returned by this SDK.
 void boxlite_agent_events_free(struct CAgentEvents *handle);
 
+// Validate a checkpoint archive and pinned OCI startup configuration, returning
+// a private archive for the existing import API. `platform_env_json_or_null`
+// may contain only reserved target identity keys. Inputs are copied before
+// returning. The callback owns its handle; keep it until import completes.
+enum BoxliteErrorCode boxlite_runtime_prepare_checkpoint_archive(CBoxliteRuntime *runtime,
+                                                                 const char *archive_path,
+                                                                 const char *archive_sha256,
+                                                                 const char *pinned_image,
+                                                                 const char *platform_env_json_or_null,
+                                                                 CCheckpointArchiveCb cb,
+                                                                 void *user_data,
+                                                                 CBoxliteError *out_error);
+
+// Borrow the prepared path; it remains valid until the archive owner is freed.
+const char *boxlite_prepared_checkpoint_archive_path(const CPreparedCheckpointArchive *handle);
+
+// Borrow the derived archive's lowercase SHA-256 hex until the owner is freed.
+const char *boxlite_prepared_checkpoint_archive_sha256(const CPreparedCheckpointArchive *handle);
+
+// Return the derived archive length; a null owner returns zero.
+uint64_t boxlite_prepared_checkpoint_archive_size_bytes(const CPreparedCheckpointArchive *handle);
+
+// Delete the private derived archive without touching its source or any box.
+// A null handle is accepted. Never free it while import is still using it.
+void boxlite_prepared_checkpoint_archive_free(CPreparedCheckpointArchive *handle);
+
 // Submit a box export.
 //
 // On success, the callback owns the returned path and must release it with
@@ -1116,7 +1175,60 @@ enum BoxliteErrorCode boxlite_start_box(CBoxHandle *handle,
 
 char *boxlite_box_id(CBoxHandle *handle);
 
+// Return an owned name string, or null for an unnamed/invalid handle.
+// Release the returned string with boxlite_free_string.
+char *boxlite_box_name(CBoxHandle *handle);
+
 void boxlite_box_free(CBoxHandle *handle);
+
+void boxlite_free_checkpoint_info(struct CCheckpointInfo *info);
+
+void boxlite_free_checkpoint_list(struct CCheckpointList *list);
+
+// Queue capture; name may be null. Runtime, source and callback must be valid.
+enum BoxliteErrorCode boxlite_checkpoint_create(CBoxliteRuntime *runtime,
+                                                const char *source,
+                                                const char *name,
+                                                CCheckpointInfoCb cb,
+                                                void *user_data,
+                                                CBoxliteError *out_error);
+
+// Queue metadata lookup by ID or name. All inputs except out_error are required.
+enum BoxliteErrorCode boxlite_checkpoint_get(CBoxliteRuntime *runtime,
+                                             const char *key,
+                                             CCheckpointInfoCb cb,
+                                             void *user_data,
+                                             CBoxliteError *out_error);
+
+// Queue listing. Runtime and callback must be valid; user_data is opaque.
+enum BoxliteErrorCode boxlite_checkpoint_list(CBoxliteRuntime *runtime,
+                                              CCheckpointListCb cb,
+                                              void *user_data,
+                                              CBoxliteError *out_error);
+
+// Queue deletion; force only ignores absence. Completion has no owned payload.
+enum BoxliteErrorCode boxlite_checkpoint_remove(CBoxliteRuntime *runtime,
+                                                const char *key,
+                                                int force,
+                                                CBoxRemoveBoxCb cb,
+                                                void *user_data,
+                                                CBoxliteError *out_error);
+
+// Queue creation with inherited settings. Name may be null; callback owns Box.
+enum BoxliteErrorCode boxlite_checkpoint_create_box(CBoxliteRuntime *runtime,
+                                                    const char *key,
+                                                    const char *name,
+                                                    CRuntimeImportCb cb,
+                                                    void *user_data,
+                                                    CBoxliteError *out_error);
+
+// Queue recovery. Target must be idle; local result has a new native ID.
+enum BoxliteErrorCode boxlite_checkpoint_recover_box(CBoxliteRuntime *runtime,
+                                                     const char *key,
+                                                     const char *target,
+                                                     CRuntimeImportCb cb,
+                                                     void *user_data,
+                                                     CBoxliteError *out_error);
 
 enum BoxliteErrorCode boxlite_copy_into(CBoxHandle *handle,
                                         const char *host_src,
@@ -2032,6 +2144,16 @@ void boxlite_runtime_free(CBoxliteRuntime *runtime);
 //
 // Returns the number of dispatched events, or `-1` on error.
 int boxlite_runtime_drain(CBoxliteRuntime *runtime, int timeout_ms, CBoxliteError *out_error);
+
+// Create a local runtime with an explicit checkpoint directory. Null directory
+// uses environment/default resolution; existing constructors keep their ABI.
+enum BoxliteErrorCode boxlite_runtime_new_with_checkpoint_directory(const char *home_dir,
+                                                                    const struct BoxliteImageRegistry *image_registries,
+                                                                    int image_registries_count,
+                                                                    const char *features,
+                                                                    const char *checkpoints_dir,
+                                                                    CBoxliteRuntime **out_runtime,
+                                                                    CBoxliteError *out_error);
 
 // Queue SSH configuration replacement. The caller's JSON is copied and
 // deserialized into the runtime's `SshConfig` at entry — a malformed or

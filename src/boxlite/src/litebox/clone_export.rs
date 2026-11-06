@@ -67,6 +67,14 @@ impl BoxImpl {
             )));
         }
 
+        let _source = self
+            .runtime
+            .checkpoint_lifecycle
+            .read(Some(self.config.id.as_ref()), self.config.name.as_deref())?;
+        let _targets = names
+            .iter()
+            .map(|name| self.runtime.checkpoint_lifecycle.read(None, Some(name)))
+            .collect::<BoxliteResult<Vec<_>>>()?;
         let t0 = Instant::now();
         let _lock = self.disk_ops.lock().await;
 
@@ -193,6 +201,10 @@ impl BoxImpl {
         _options: crate::runtime::options::ExportOptions,
         dest: &std::path::Path,
     ) -> BoxliteResult<crate::runtime::options::BoxArchive> {
+        let _ownership = self
+            .runtime
+            .checkpoint_lifecycle
+            .read(Some(self.config.id.as_ref()), self.config.name.as_deref())?;
         let t0 = Instant::now();
         let _lock = self.disk_ops.lock().await;
 

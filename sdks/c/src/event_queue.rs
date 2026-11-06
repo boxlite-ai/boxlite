@@ -19,6 +19,19 @@ use crate::metrics::{CBoxMetrics, CRuntimeMetrics};
 use crate::registries::{CRegistryCredential, CRegistryCredentialList};
 use crate::volumes::{CVolumeInfo, CVolumeInfoList};
 
+/// On success, the recipient owns metadata and frees it with
+/// boxlite_free_checkpoint_info. Error pointers live only during dispatch.
+pub type CCheckpointInfoCb =
+    Option<extern "C" fn(*mut crate::CCheckpointInfo, *mut crate::CBoxliteError, *mut c_void)>;
+pub(crate) type CCheckpointInfoFn =
+    extern "C" fn(*mut crate::CCheckpointInfo, *mut crate::CBoxliteError, *mut c_void);
+/// On success, the recipient owns the entire list and frees it with
+/// boxlite_free_checkpoint_list; entries must not be freed individually.
+pub type CCheckpointListCb =
+    Option<extern "C" fn(*mut crate::CCheckpointList, *mut crate::CBoxliteError, *mut c_void)>;
+pub(crate) type CCheckpointListFn =
+    extern "C" fn(*mut crate::CCheckpointList, *mut crate::CBoxliteError, *mut c_void);
+
 /// Maximum number of buffered events before producer tasks yield.
 pub const QUEUE_CAPACITY: usize = 4096;
 
@@ -101,6 +114,14 @@ pub type CRuntimeImportCb =
     Option<extern "C" fn(*mut crate::CBoxHandle, *mut crate::CBoxliteError, *mut c_void)>;
 pub(crate) type CRuntimeImportFn =
     extern "C" fn(*mut crate::CBoxHandle, *mut crate::CBoxliteError, *mut c_void);
+
+/// Owns a prepared checkpoint archive until it is explicitly freed, including
+/// the temporary files needed by the existing archive import operation.
+pub type CCheckpointArchiveCb = Option<
+    extern "C" fn(*mut crate::CPreparedCheckpointArchive, *mut crate::CBoxliteError, *mut c_void),
+>;
+pub(crate) type CCheckpointArchiveFn =
+    extern "C" fn(*mut crate::CPreparedCheckpointArchive, *mut crate::CBoxliteError, *mut c_void);
 
 /// Box start completion.
 pub type CBoxStartBoxCb = Option<extern "C" fn(*mut crate::CBoxliteError, *mut c_void)>;
@@ -424,6 +445,11 @@ pub enum RuntimeEvent {
         user_data: usize,
         result: Result<OwnedFfiPtr<crate::CBoxHandle>, BoxliteError>,
     },
+    CheckpointArchive {
+        cb: CCheckpointArchiveFn,
+        user_data: usize,
+        result: Result<OwnedFfiPtr<crate::CPreparedCheckpointArchive>, BoxliteError>,
+    },
     StartBox {
         cb: CBoxStartBoxFn,
         user_data: usize,
@@ -473,6 +499,16 @@ pub enum RuntimeEvent {
         cb: CBoxVolumeCreateFn,
         user_data: usize,
         result: Result<OwnedFfiPtr<CVolumeInfo>, BoxliteError>,
+    },
+    CheckpointInfo {
+        cb: CCheckpointInfoFn,
+        user_data: usize,
+        result: Result<OwnedFfiPtr<crate::CCheckpointInfo>, BoxliteError>,
+    },
+    CheckpointList {
+        cb: CCheckpointListFn,
+        user_data: usize,
+        result: Result<OwnedFfiPtr<crate::CCheckpointList>, BoxliteError>,
     },
     VolumeGet {
         cb: CBoxVolumeGetFn,

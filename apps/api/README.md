@@ -93,6 +93,95 @@ either host is unset.
 The `api:test` cache includes PostgreSQL and Redis hosts, ports, usernames, passwords,
 and the database name, so changing connection settings invalidates cached results.
 Coverage runs bypass the cache.
+## Checkpoint capture
+
+`POST /api/v1/checkpoints` accepts `source_box_id` and an optional `name`.
+`GET /api/v1/checkpoints` and `GET /api/v1/checkpoints/{id-or-name}` read the
+organization's records. The routes also accept the existing organization path
+prefix. Capture requires Box write permission; reads require organization
+membership, following the existing Box read policy. List/detail responses omit stored environment values and
+internal object locations.
+
+A source must be idle on a ready v2 runner, either started or stopped, without
+volumes or secrets. Creating a checkpoint takes the source's `BOX` job slot
+until native export completes. The completion transaction clears its checkpoint
+ownership marker and creates an `UPLOAD_CHECKPOINT` job under `CHECKPOINT`;
+the source can then start while upload runs. Only a matching successful upload
+makes the checkpoint `ready`. Runner failures or invalid archive metadata make
+it `failed`; they do not recreate or destroy the source.
+
+The checkpoint persists its captured execution settings and immutable archive
+identity. It has no source Box foreign key: deleting the source after export
+does not delete the checkpoint. Duplicate or stale callbacks cannot advance a
+newer operation. A reconciliation task replays durable terminal jobs after a
+lost callback or API restart.
+
+`POST /api/v1/boxes` accepts `checkpoint_id` and an optional `name` to create a
+new public Box from a ready checkpoint. Configuration overrides are rejected.
+The existing scheduler selects a compatible ready v2 runner; creation skips the
+warm pool. Box admission, the import operation and its job commit together, so
+quota, name conflicts or a checkpoint deleted during admission leave no job.
+
+`DELETE /api/v1/checkpoints/{id-or-name}` requires Box write permission and
+returns 204 after object and metadata deletion. It refuses active capture and
+pending or failed import use. `force=true` ignores absence only. Object deletion
+runs outside the database transaction after persisting `deleting`; failures
+retain that state and quota for retry. Checkpoints also protect their referenced
+organization image and matching registry credential after source deletion.
+
+`POST /api/v1/boxes/{id-or-name}/recover` accepts only `checkpoint_id` and
+requires Box write permission. Recovery rechecks organization admission,
+per-Box limits and the existing runner's compatibility before creating an
+`IMPORT_CHECKPOINT` job. The public Box ID remains unchanged. The Box reports
+`restoring` internally while its committed resource/configuration fields remain
+unchanged; a separate operation record reserves the checkpoint configuration.
+The import completion transaction verifies operation ID, target sequence and
+current job ownership, then commits the saved configuration and releases busy.
+The existing desired state controls whether the Box subsequently starts.
+
+Failed import attempts retain their operation and checkpoint use for retry;
+retrying the same checkpoint preserves logical operation ID and sequence while
+creating a fresh job attempt. Late callbacks cannot commit an older attempt.
+This also covers a terminal runner job whose success receipt is missing or
+invalid: its logical operation stays failed and retryable. A target with an
+active migration is refused even between migration jobs. If configuration
+commit fails after native import, the transaction keeps the previous public
+configuration and current ownership; reconciliation replays the durable success
+receipt without scheduling another import.
+Recovery is a remove/import sequence, so an import failure can leave the old
+native Box absent. The HTTP state wait is bounded to 30 seconds and does not
+cancel accepted runner work.
+
+Explicit target deletion cancels its import operation and advances the target
+sequence before scheduling native destruction. Late callbacks cannot commit
+configuration; the runner also durably retires that public target before native
+destruction, preventing delayed imports from recreating it. An already absent
+native target counts as successful destruction.
+
+| Boundary | Job owner | Source busy | Archive ownership and retry |
+| --- | --- | --- | --- |
+| Export pending or running | Source `BOX` | Yes | Runner retains its private export directory. |
+| Export receipt accepted | `CHECKPOINT` upload job | No | Checkpoint owns the immutable archive; upload retries reuse it. |
+| Upload receipt accepted | No active capture job | No | Object storage holds the archive; runner staging can be reclaimed. |
+| Recover pending or failed | Target `BOX` | Unchanged | Operation retains checkpoint use and target ownership for replay or retry. |
+
+Run the transaction and HTTP admission checks with
+`make test:apps:api TEST_FILES='checkpoint|job-state-handler'`, providing
+`DB_HOST`, `DB_PORT`, `DB_USERNAME`, `DB_PASSWORD` and `DB_DATABASE` for a test
+PostgreSQL instance. Without `DB_HOST`, the database suites are skipped. The
+transaction tests inject a failure after the Box write and before operation
+completion; they verify rollback and concurrent replay against PostgreSQL.
+
+Set `CHECKPOINT_ARCHIVE_PREFIX=gs://<bucket>/checkpoints/` to enable capture and
+grant the configured API/runner identities object access. The optional
+`CHECKPOINT_MAX_PER_ORGANIZATION` defaults to 10; creating, ready, failed and
+deleting records all count. Quota and name checks run in the transaction that
+creates the export job. An unset prefix returns 503 before source mutation.
+
+Apply the checkpoint pre-deploy migration before API instances that map its
+table and ownership column. Enable capture after compatible runners are
+available. Rollback refuses while checkpoints or incomplete checkpoint jobs
+remain; it retains the additive, unused PostgreSQL job-resource enum value.
 
 ## Box startup timeouts
 

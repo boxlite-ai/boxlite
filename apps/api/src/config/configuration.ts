@@ -4,6 +4,8 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { checkpointConfig } from './checkpoint-config'
+
 /**
  * A whole number at least 1, or a hard failure.
  *
@@ -437,6 +439,7 @@ export function domainConfig(env: NodeJS.ProcessEnv = process.env) {
 }
 
 const configuration = {
+  checkpoint: checkpointConfig(),
   production: process.env.NODE_ENV === 'production',
   version: process.env.VERSION || '0.0.0-dev',
   environment: process.env.ENVIRONMENT,

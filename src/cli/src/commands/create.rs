@@ -16,6 +16,18 @@ pub struct CreateArgs {
     #[arg(long = "rootfs", value_name = "PATH")]
     pub rootfs: Option<String>,
 
+    /// Create from an immutable checkpoint; execution settings are inherited.
+    #[arg(long, value_name = "ID", conflicts_with_all = [
+        "image", "rootfs", "env", "workdir", "entrypoint", "command",
+        "cpus", "memory", "disk_size_gb", "cap_add", "cap_drop", "publish", "volume",
+        "network", "allow_net", "inbound", "net_tx_kbps", "net_rx_kbps",
+        "auto_stop", "auto_delete", "no_auto_resume", "security"
+    ])]
+    pub checkpoint: Option<String>,
+
+    #[command(flatten)]
+    pub checkpoint_storage: crate::commands::checkpoint::StorageArgs,
+
     #[command(flatten)]
     pub management: crate::cli::ManagementFlags,
 
@@ -57,6 +69,23 @@ pub struct CreateArgs {
 }
 
 pub async fn execute(args: CreateArgs, global: &GlobalFlags) -> anyhow::Result<()> {
+    if let Some(key) = &args.checkpoint {
+        // RC options are removed from the completion command tree when their
+        // feature is disabled, so static Clap conflicts cannot name them.
+        if args.boot.kernel.is_some() || args.management.nested_virtualization {
+            anyhow::bail!("checkpoint execution configuration cannot be overridden");
+        }
+        let rt = crate::commands::checkpoint::runtime(global, &args.checkpoint_storage)?;
+        let bx = rt
+            .checkpoints()
+            .create_box(key, args.management.name)
+            .await?;
+        println!("{}", bx.id());
+        return Ok(());
+    }
+    if args.checkpoint_storage.checkpoints_dir.is_some() {
+        anyhow::bail!("--checkpoints-dir requires --checkpoint");
+    }
     let box_options = args.to_box_options(global)?;
     let rt = global.create_runtime()?;
 

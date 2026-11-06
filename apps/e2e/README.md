@@ -25,6 +25,29 @@ CLI matrix and both authentication modes, is in
 
 ## What the suite verifies
 
+### Managed checkpoints
+
+`cases/test_checkpoints.py` exercises hot export and upload, source deletion,
+new-Box import and stopped-target recovery through the SDK and actual guests.
+Guest reads verify immutable disk contents and inherited environment values;
+recovery verifies the public Box ID and captured CPU/memory settings. Deleting
+the checkpoint must leave the created and recovered Boxes usable.
+
+Run against an API/runner built from this branch with checkpoint storage enabled:
+
+```bash
+make test:e2e E2E_ARGS=cases/test_checkpoints.py
+```
+
+Use the existing environment/profile authentication described below. The case
+requires `capabilities.checkpoints_enabled=true`; absence fails before creating
+a Box. It uses unique `e2e-` resource names, retains the suite's bounded Box
+lifetimes, and reports cleanup failures. It is outside the production smoke
+selection because it uses two concurrent Boxes. Loopback, mock-storage and
+native stub checks do not satisfy this real VM/storage acceptance case.
+
+### Existing coverage
+
 Product acceptance cases use the REST-mode runtime built by `conftest.py::rt`.
 `test_network_harness.py` separately checks probe failures and framing without
 creating a box; those checks are not counted as product E2E evidence.

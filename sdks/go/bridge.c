@@ -15,6 +15,9 @@ extern void goBoxliteOnExit(int exit_code, void *ud);
 extern void goBoxliteOnCreateBox(CBoxHandle *box, CBoxliteError *err, void *ud);
 extern void goBoxliteOnBoxExport(char *archive_path, CBoxliteError *err, void *ud);
 extern void goBoxliteOnRuntimeImport(CBoxHandle *box, CBoxliteError *err, void *ud);
+extern void goBoxliteOnCheckpointInfo(CCheckpointInfo *info, CBoxliteError *err, void *ud);
+extern void goBoxliteOnCheckpointList(CCheckpointList *list, CBoxliteError *err, void *ud);
+extern void goBoxliteOnCheckpointArchive(CPreparedCheckpointArchive *archive, CBoxliteError *err, void *ud);
 extern void goBoxliteOnGetOrCreateBox(CBoxHandle *box, bool created, CBoxliteError *err, void *ud);
 extern void goBoxliteOnGetBox(CBoxHandle *box, CBoxliteError *err, void *ud);
 extern void goBoxliteOnStartBox(CBoxliteError *err, void *ud);
@@ -59,12 +62,16 @@ CBoxStderrCb cbStderr(void) { return (CBoxStderrCb)goBoxliteOnStderr; }
 CBoxExitCb cbExit(void) { return (CBoxExitCb)goBoxliteOnExit; }
 
 CBoxCreateBoxCb cbCreateBox(void) { return (CBoxCreateBoxCb)goBoxliteOnCreateBox; }
+CCheckpointArchiveCb cbCheckpointArchive(void) { return (CCheckpointArchiveCb)goBoxliteOnCheckpointArchive; }
 CBoxExportCb cbBoxExport(void) {
     return (CBoxExportCb)goBoxliteOnBoxExport;
 }
 CRuntimeImportCb cbRuntimeImport(void) {
     return (CRuntimeImportCb)goBoxliteOnRuntimeImport;
 }
+
+CCheckpointInfoCb cbCheckpointInfo(void) { return (CCheckpointInfoCb)goBoxliteOnCheckpointInfo; }
+CCheckpointListCb cbCheckpointList(void) { return (CCheckpointListCb)goBoxliteOnCheckpointList; }
 CBoxGetOrCreateBoxCb cbGetOrCreateBox(void) { return (CBoxGetOrCreateBoxCb)goBoxliteOnGetOrCreateBox; }
 CBoxGetBoxCb cbGetBox(void) { return (CBoxGetBoxCb)goBoxliteOnGetBox; }
 CBoxStartBoxCb cbStartBox(void) { return (CBoxStartBoxCb)goBoxliteOnStartBox; }

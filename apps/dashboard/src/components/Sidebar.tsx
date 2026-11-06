@@ -27,6 +27,7 @@ import {
   BookOpen,
   Building2,
   Container,
+  Database,
   Layers,
   HardDrive,
   Globe,
@@ -80,6 +81,11 @@ const PRIMARY_NAV_ITEMS: NavItem[] = [
         icon: <Server className="size-3.5 shrink-0" aria-hidden="true" />,
       },
     ],
+  },
+  {
+    label: 'Checkpoints',
+    icon: <Database className="size-[18px] shrink-0" aria-hidden="true" />,
+    path: RoutePath.CHECKPOINTS,
   },
   {
     label: 'Volumes',

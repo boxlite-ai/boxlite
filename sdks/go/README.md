@@ -16,6 +16,33 @@ Requires Go 1.24+ with CGO enabled. The setup step downloads the prebuilt native
 
 ## Usage
 
+### Managed checkpoints
+
+`runtime.Checkpoints()` exposes `Create`, `List`, `Get`, `Remove`, `CreateBox`
+and `RecoverBox`, each taking a context. The handle follows its runtime's
+lifetime and needs no separate close. Captured archives survive source deletion.
+
+```go
+checkpoint, err := runtime.Checkpoints().Create(ctx, "source", "dev-base")
+if err != nil { return err }
+worker, err := runtime.Checkpoints().CreateBox(ctx, checkpoint.ID, "worker")
+if err != nil { return err }
+defer worker.Close()
+```
+
+Cloud capture may report `creating`; query until `ready` before use. Creation
+and recovery inherit all saved execution settings without overrides. Local
+recovery preserves the name and returns a new native ID; cloud recovery preserves
+the public Box ID. `Remove(ctx, key, true)` ignores absence only. Cancellation
+stops waiting; accepted native work continues under its ownership protection.
+Create local recovery targets with `WithAutoDeleteInterval(0)` so stopping retains them.
+
+Local storage defaults to `<BOXLITE_HOME>/checkpoints`. `WithCheckpointDir(path)`
+overrides `BOXLITE_CHECKPOINTS_DIR` and the default. REST storage belongs to the
+server. Existing archive export/import APIs retain their behavior.
+
+### Create a box
+
 ```go
 package main
 
@@ -154,6 +181,27 @@ server's untrusted-upload policy.
 
 Export and Import never delete the archive. The caller owns its retention and
 must explicitly remove it when it is no longer needed.
+
+`rt.PrepareCheckpointArchive` checks a downloaded checkpoint's recorded SHA-256,
+native manifest and disk, then loads the pinned OCI startup configuration. It
+returns a `PreparedCheckpointArchive` whose `Path()` can be passed to the same
+`rt.Import`. It neither creates nor removes a box, so recovery callers can finish
+preflight before removing their old target.
+
+`SHA256()` and `SizeBytes()` describe the derived file, including its target
+identity metadata; they do not replace the source checkpoint's immutable record.
+
+Keep the prepared owner open until native import finishes; `Close()` removes
+its private derived archive and leaves the source file intact. Optional platform
+environment values may replace only the reserved BoxLite identity/telemetry
+keys, require a target `BOXLITE_BOX_ID`, and preserve all other user variables
+and execution settings. This utility requires a local runtime; a REST runtime
+returns unsupported without transmitting local paths.
+
+Canceling the preparation context stops the caller's wait. Accepted native work
+retains its temporary archive until completion; an undelivered successful result
+is freed by the callback. The caller must keep the source archive available until
+that accepted work finishes.
 
 ### Runtime Image Management
 

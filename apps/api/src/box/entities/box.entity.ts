@@ -218,6 +218,12 @@ export class Box {
   @Column({ default: false, type: 'boolean' })
   pending: boolean | undefined = false
 
+  @Column({ type: 'uuid', nullable: true })
+  checkpointJobId?: string | null
+
+  @Column({ type: 'int', default: 0 })
+  checkpointSequence = 0
+
   @Column({ type: 'character varying' })
   authToken = nanoid(32).toLowerCase()
 
@@ -276,9 +282,14 @@ export class Box {
         throw new Error(`Box ${this.id} is not in a valid state to be started. State: ${this.state}`)
       case BoxDesiredState.STOPPED:
         if (
-          [BoxState.STARTED, BoxState.STOPPING, BoxState.STOPPED, BoxState.ERROR, BoxState.RESIZING].includes(
-            this.state,
-          )
+          [
+            BoxState.STARTED,
+            BoxState.STOPPING,
+            BoxState.STOPPED,
+            BoxState.RESTORING,
+            BoxState.ERROR,
+            BoxState.RESIZING,
+          ].includes(this.state)
         ) {
           break
         }

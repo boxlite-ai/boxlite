@@ -110,6 +110,7 @@ pub unsafe extern "C" fn boxlite_runtime_new(
         image_registries_count,
         ptr::null(),
         false,
+        ptr::null(),
         out_runtime,
         out_error,
     )
@@ -134,6 +135,7 @@ pub unsafe extern "C" fn boxlite_runtime_new_experimental(
         image_registries_count,
         features,
         false,
+        ptr::null(),
         out_runtime,
         out_error,
     )
@@ -156,6 +158,7 @@ pub unsafe extern "C" fn boxlite_internal_runtime_new_runner(
             image_registries_count,
             features,
             true,
+            ptr::null(),
             out_runtime,
             out_error,
         )
@@ -235,12 +238,39 @@ pub unsafe extern "C" fn boxlite_runtime_drain(
     drain(runtime, timeout_ms, out_error)
 }
 
+/// Create a local runtime with an explicit checkpoint directory. Null directory
+/// uses environment/default resolution; existing constructors keep their ABI.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_runtime_new_with_checkpoint_directory(
+    home_dir: *const c_char,
+    image_registries: *const BoxliteImageRegistry,
+    image_registries_count: c_int,
+    features: *const c_char,
+    checkpoints_dir: *const c_char,
+    out_runtime: *mut *mut CBoxliteRuntime,
+    out_error: *mut CBoxliteError,
+) -> BoxliteErrorCode {
+    unsafe {
+        runtime_new(
+            home_dir,
+            image_registries,
+            image_registries_count,
+            features,
+            false,
+            checkpoints_dir,
+            out_runtime,
+            out_error,
+        )
+    }
+}
+
 unsafe fn runtime_new(
     home_dir: *const c_char,
     image_registries: *const BoxliteImageRegistry,
     image_registries_count: c_int,
     features: *const c_char,
     runner_managed: bool,
+    checkpoints_dir: *const c_char,
     out_runtime: *mut *mut RuntimeHandle,
     out_error: *mut FFIError,
 ) -> BoxliteErrorCode {
@@ -276,6 +306,16 @@ unsafe fn runtime_new(
         };
 
         let mut options = BoxliteOptions::default();
+        if !checkpoints_dir.is_null() {
+            match c_string_field(checkpoints_dir, "checkpoint directory") {
+                Ok(directory) => options.checkpoints_dir = Some(directory.into()),
+                Err(error) => {
+                    let code = error_to_code(&error);
+                    write_error(out_error, error);
+                    return code;
+                }
+            }
+        }
         if !home_dir.is_null() {
             match c_str_to_string(home_dir) {
                 Ok(path) => options.home_dir = path.into(),
@@ -645,6 +685,11 @@ unsafe fn dispatch_event(event: RuntimeEvent) {
                 user_data,
                 result,
             } => dispatch_handle_event::<crate::CBoxHandle>(result, user_data, cb),
+            RuntimeEvent::CheckpointArchive {
+                cb,
+                user_data,
+                result,
+            } => dispatch_handle_event::<crate::CPreparedCheckpointArchive>(result, user_data, cb),
             RuntimeEvent::StartBox {
                 cb,
                 user_data,
@@ -695,6 +740,16 @@ unsafe fn dispatch_event(event: RuntimeEvent) {
                 user_data,
                 result,
             } => dispatch_handle_event::<crate::CVolumeInfo>(result, user_data, cb),
+            RuntimeEvent::CheckpointInfo {
+                cb,
+                user_data,
+                result,
+            } => dispatch_handle_event::<crate::CCheckpointInfo>(result, user_data, cb),
+            RuntimeEvent::CheckpointList {
+                cb,
+                user_data,
+                result,
+            } => dispatch_handle_event::<crate::CCheckpointList>(result, user_data, cb),
             RuntimeEvent::VolumeGet {
                 cb,
                 user_data,
