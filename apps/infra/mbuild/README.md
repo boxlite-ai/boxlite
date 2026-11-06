@@ -38,7 +38,35 @@ Use the deployment workflow to resolve a ref and prepare the matching source tre
 | GCP | Artifact Registry | Declared project, region and repository |
 | AWS | ECR | Account from credentials, declared region and repository |
 
-Promotion copies existing image bytes within one registry kind. Cross-cloud promotion is refused.
+### Release images in GHCR
+
+The GHCR release commands publish images independently of dev/prod cloud credentials:
+
+```bash
+npm run mbuild publish -- --tag <full-commit-sha> --version vX.Y.Z --ghcr boxlite-ai/boxlite
+npm run mbuild verify -- --tag <full-commit-sha> --version vX.Y.Z --ghcr boxlite-ai/boxlite
+npm run mbuild import-release -- --tag <full-commit-sha> --version vX.Y.Z --ghcr boxlite-ai/boxlite --stage prod
+```
+
+The address is `ghcr.io/<owner>/<repository>/<artifact>:vX.Y.Z-<full-sha>`.
+Artifact names and tags match Artifact Registry's layout; GHCR has no stage suffix.
+Set `GHCR_USERNAME` and `GHCR_TOKEN`, or use `GITHUB_ACTOR` and `GH_TOKEN` in Actions.
+Publishing needs package write access; verification/import needs package read access.
+`publish` and `verify` with `--ghcr` read the artifact declaration without a cloud stage file.
+For publication, use `MSTAGE_ENV_CONFIG` to select the release source's declaration and build context.
+`import-release` imports and verifies the artifacts required by its current declaration;
+an older release lacking a required artifact fails this import.
+
+Publication audits dependencies and reuses existing images without overwriting them.
+Retry a partial publication to build only missing artifacts; success requires every selected image to exist.
+Import checks all source manifests before destination writes, pulls immutable source digests,
+refuses conflicting destination images, and verifies the copied manifest digest.
+Only single-platform OCI and Docker schema 2 manifests are supported; indexes are refused.
+GHCR publication pushes `linux/amd64` explicitly and requires Docker API 1.46 or later.
+GHCR image scanning runs after import, using the receiving stage's existing scan policy.
+Confirmed missing manifests exit `66`; authentication, transport and other registry errors fail separately.
+
+Stage-to-stage promotion copies existing image bytes within one cloud registry kind. Cross-cloud promotion is refused.
 The caller needs source read and destination write access; `promoteFrom` lets bootstrap prepare
 those permissions. On AWS, the current CLI uses one resolved account for both registry addresses.
 
@@ -91,4 +119,5 @@ The reusable [mbuild workflow](../../../.github/workflows/mbuild.yml) is called 
 [mdeploy-all](../../../.github/workflows/mdeploy-all.yml); release publication uses
 [mbuild-release](../../../.github/workflows/mbuild-release.yml).
 
-Run `make test:apps:infra` from the repository root for tooling typechecks and tests.
+Run `make test:apps:mbuild` for image tooling typechecks and tests, or `make test:apps:infra`
+for the complete infrastructure suite, from the repository root.
