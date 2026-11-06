@@ -739,13 +739,52 @@ Clicking Images in a compact rail reveals its children. Quota metadata uses read
 short Quickstart code blocks expand naturally. Billing and box details retain all
 data and actions while removing excess whitespace and dotted leaders.
 
-## GitHub CI settings and browser connect
+## GitHub CI dashboard and browser connect
 
-Organization → CI lets account owners connect a GitHub personal account or
-organization and set one concurrent-worker total across every connected repository.
+The primary **CI** page follows Images' two-tab layout. **Runners** (`/dashboard/ci`)
+lists actual JIT Boxes, with state, image, resources and links to Box details.
+It uses Box socket events and three-second polling during transitions, with a
+five-second fallback during socket loss or errors and ten-second refresh for
+journal-only capacity changes. It uses the same organization
+access as Box reads. Each JIT Box row has a 28px isometric BoxCube beside its name,
+matching the Boxes table. Running workers have a brand-colored play symbol;
+transitions, stopped workers and errors use the corresponding cube treatment.
+The CI cube is also used in the empty runner view; the page title has no icon.
+Name filtering sits immediately below the capacity strip in the same dashed
+search field as Images. It searches case-insensitive literal substrings across
+all pages, resets pagination on edits and preserves organization-wide capacity.
+Clearing the input restores the inventory; matching count is independent of page size.
+**Connects** (`/dashboard/ci/connects`) uses a registry-style table for GitHub accounts;
+owners can connect a personal account or organization. Capacity is shown above the
+Runners table using Images' panel spacing and segmented meter, with a plain **Edit**
+text action beside the count for owners; the strip has no visible title or explanatory footer.
+It shows occupied scheduler slots against the effective shared limit; reservations
+and workers awaiting Box cleanup count, even before a Box row exists. Confirmed
+Box absence releases a slot even if GitHub runner cleanup remains pending.
+Zero displays Paused, unlimited capacity has no percentage, and lowering the limit
+below current usage preserves the actual count without terminating existing jobs.
 Leave the maximum blank to inherit Commerce, or use zero to pause new workers.
 Other Boxes consume the same commercial account allowance. Repository limits are
 not exposed. GitHub owns job logs; use existing Box tools for worker inspection.
+
+Each connection has a Registries-style **UPDATE** action beside its trash control.
+It edits public-repository permission on the existing verified binding; changing
+GitHub account identity still requires authorization. A changed policy refreshes
+the listener catalog. Delivered jobs continue and original cleanup remains available;
+workers awaiting JIT configuration may be retired under the new policy.
+For Organization accounts, the GitHub runner group's public-repository setting must
+match the policy; the update does not modify GitHub settings. Failed saves retain
+the dialog and checkbox, and successful saves refresh only the original organization.
+
+Deleting a connection requires confirmation and waits for the server before removing
+the row. It stops new admissions, cancels stored unfinished authorizations for that
+account type, and preserves running-worker cleanup and the shared capacity setting.
+A new verified connection can reconnect later. Switching BoxLite organizations
+does not redirect an in-flight delete. Legacy Organization `?tab=ci` links and
+successful browser authorization lead to Connects. `start:mock` includes synthetic
+JIT Boxes and deletable connections for local presentation checks.
+Neither tab has a manual Refresh control. Connects fetches on entry and after
+successful additions/updates/deletions; it does not poll the connection list.
 
 Connect uses the existing BoxLite login and GitHub App browser OAuth with S256
 PKCE. The original account ID survives in tab-scoped session metadata, so changing
@@ -763,6 +802,8 @@ verification on the API; an installation callback alone cannot claim an account.
 Run `make test:apps:dashboard` and `make build:apps:dashboard` from the repository
 root. Local DOM/HTTP tests do not replace a real App connect and workflow run on
 the deployed API and Dashboard.
+
+Capacity design and verification plan: [Runners capacity meter](../../docs/contributing/investigations/2026-11-06-ci-capacity-meter.md).
 
 ```mermaid
 sequenceDiagram

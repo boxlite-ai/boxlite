@@ -1,6 +1,6 @@
 /* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
 import { randomUUID } from 'node:crypto'
-import { BadRequestException, ForbiddenException } from '@nestjs/common'
+import { BadRequestException, ConflictException, ForbiddenException, NotFoundException } from '@nestjs/common'
 import { DataSource } from 'typeorm'
 import { ExecutionJournal, ExecutionScope, LeaseLost, StateConflict, StateCorrupt } from '@boxlite-ai/ci-listener'
 import { AddCiConnect1793664000000 } from '../migrations/pre-deploy/1793664000000-add-ci-connect-migration'
@@ -8,6 +8,8 @@ import { AddCiListenerState1793700000000 } from '../migrations/pre-deploy/179370
 import { BoxState } from '../box/enums/box-state.enum'
 import { CiSettingsService } from './ci-settings.service'
 import { CiNativeState } from './ci-native-state'
+import { AddCiWebConnect1793786400000 } from '../migrations/pre-deploy/1793786400000-add-ci-web-connect-migration'
+import { AddCiAccountSelection1793894400000 } from '../migrations/pre-deploy/1793894400000-add-ci-account-selection-migration'
 
 const url = process.env.CI_CONNECT_TEST_DATABASE_URL
 const integration = url ? describe : describe.skip
@@ -50,6 +52,8 @@ integration('CI account settings (real Postgres)', () => {
     const runner = db.createQueryRunner()
     try {
       await new AddCiConnect1793664000000().up(runner)
+      await new AddCiWebConnect1793786400000().up(runner)
+      await new AddCiAccountSelection1793894400000().up(runner)
       await new AddCiListenerState1793700000000().up(runner)
     } finally {
       await runner.release()
@@ -124,6 +128,149 @@ integration('CI account settings (real Postgres)', () => {
       await expect(settings.update(actor, value)).rejects.toBeInstanceOf(BadRequestException)
     expect(await native.state.read([policyKey()])).toEqual([])
   })
+  it('reads aggregate limits without requiring an owner or a leader lease', async () => {
+    const disabled = new CiSettingsService(new CiNativeState(db, { get: () => undefined } as any), commerce as any)
+    expect(await disabled.capacity(org)).toEqual({
+      available: false,
+      used: 0,
+      max_concurrent_jobs: null,
+      commerce_limit: null,
+      effective_limit: null,
+    })
+    expect(await settings.capacity(org)).toEqual({
+      available: true,
+      used: 0,
+      max_concurrent_jobs: null,
+      commerce_limit: 5,
+      effective_limit: 5,
+    })
+    await settings.update(actor, 0)
+    expect(await settings.capacity(org)).toMatchObject({ used: 0, effective_limit: 0 })
+    commerce.resolveMaxCreatedBoxes.mockResolvedValue(undefined)
+    await settings.update(actor, null)
+    expect(await settings.capacity(org)).toMatchObject({ effective_limit: null, commerce_limit: null })
+    commerce.resolveMaxCreatedBoxes.mockRejectedValueOnce(Error('Commerce unavailable'))
+    await expect(settings.capacity(org)).rejects.toThrow('Commerce unavailable')
+  })
+  it('counts active slot reservations across creation and cleanup, independent of Box rows and lease ownership', async () => {
+    await connect()
+    await connect(otherOrg, 11, 21, 'other')
+    const journal = new ExecutionJournal(native.state),
+      lease = (await native.state.acquire('test-reader', 30000))!
+    const original = scope()
+    await native.applications().define(lease, original, 'test-app')
+    const key = await journal.define(lease, original)
+    const policy = await settings.resolve({
+      scope: original,
+      repository: 30,
+      lease,
+      signal: new AbortController().signal,
+    })
+    const reserve = (job: number) => journal.reserve(lease, key, { repository: 30, run: 40, job }, policy)
+    await reserve(50)
+    const requested = (await reserve(51))!
+    await journal.advance(lease, requested.record.key, requested.record.version, {
+      box: { phase: 'requested', id: null },
+      effect: { kind: 'box-create', id: randomUUID() },
+    })
+    const closing = (await reserve(52))!,
+      box = randomUUID()
+    await db.query('INSERT INTO box VALUES($1,$2,$3)', [box, org, BoxState.STOPPED])
+    let cleanup = await journal.advance(lease, closing.record.key, closing.record.version, {
+      box: { phase: 'requested', id: null },
+      effect: { kind: 'box-create', id: randomUUID() },
+    })
+    cleanup = await journal.advance(lease, cleanup.record.key, cleanup.record.version, {
+      box: { phase: 'known', id: box },
+    })
+    cleanup = await journal.advance(lease, cleanup.record.key, cleanup.record.version, {
+      runner: { phase: 'requested', id: null },
+      effect: { kind: 'runner-register', id: randomUUID() },
+    })
+    cleanup = await journal.advance(lease, cleanup.record.key, cleanup.record.version, {
+      runner: { phase: 'known', id: 7 },
+      closing: true,
+      effect: { kind: 'box-remove', id: randomUUID() },
+    })
+    const [foreignBinding] = await db.query('SELECT id FROM ci_installation_binding WHERE organization_id=$1', [
+      otherOrg,
+    ])
+    const foreign: ExecutionScope = {
+      ...original,
+      organization: otherOrg,
+      binding: foreignBinding.id,
+      actor: 'other-owner',
+      installation: { id: 11, account: { id: 21, login: 'other', type: 'User' } },
+      runners: {
+        kind: 'repository',
+        allowPublic: false,
+        repository: { id: 31, name: 'other-repo', private: true, owner: { id: 21, login: 'other' } },
+      },
+    }
+    await native.applications().define(lease, foreign, 'test-app')
+    const foreignKey = await journal.define(lease, foreign)
+    const foreignPolicy = await settings.resolve({
+      scope: foreign,
+      repository: 31,
+      lease,
+      signal: new AbortController().signal,
+    })
+    await journal.reserve(lease, foreignKey, { repository: 31, run: 40, job: 53 }, foreignPolicy)
+    expect(await settings.capacity(org)).toMatchObject({ used: 3 })
+    expect(await settings.capacity(otherOrg)).toMatchObject({ used: 1 })
+    cleanup = await journal.advance(lease, cleanup.record.key, cleanup.record.version, {
+      box: { phase: 'absent', id: box },
+      effect: { kind: 'runner-remove', id: randomUUID() },
+    })
+    const expected = (await journal.load(lease)).workers.filter((worker) => worker.organization === org).length
+    expect(expected).toBe(2)
+    await settings.update(actor, 1)
+    await db.query("UPDATE ci_installation_binding SET state='disabled',generation=generation+1")
+    await db.query(
+      `INSERT INTO ci_listener_state(namespace,record_key,record_version,schema_version,payload,updated_at)
+        SELECT 'other-namespace',record_key,record_version,schema_version,payload,updated_at FROM ci_listener_state WHERE namespace=$1`,
+      [native.namespace],
+    )
+    await db.query(
+      "UPDATE ci_listener_state SET payload=jsonb_set(payload,'{until}','0'),lease_until=clock_timestamp()-interval '1 second' WHERE namespace=$1 AND record_key='@owner'",
+      [native.namespace],
+    )
+    await expect(journal.load(lease)).rejects.toBeInstanceOf(LeaseLost)
+    const ownerRow = () =>
+      db.query("SELECT * FROM ci_listener_state WHERE namespace=$1 AND record_key='@owner'", [native.namespace])
+    const before = await ownerRow()
+    expect(await settings.capacity(org)).toMatchObject({ used: expected, effective_limit: 1 })
+    expect(await ownerRow()).toEqual(before)
+  })
+  it('does not turn missing or invalid active allocation references into zero occupancy', async () => {
+    await connect()
+    const journal = new ExecutionJournal(native.state),
+      lease = (await native.state.acquire('test-reader', 30000))!
+    await native.applications().define(lease, scope(), 'test-app')
+    const key = await journal.define(lease, scope())
+    const policy = await settings.resolve({
+      scope: scope(),
+      repository: 30,
+      lease,
+      signal: new AbortController().signal,
+    })
+    const allocation = (await journal.reserve(lease, key, { repository: 30, run: 40, job: 50 }, policy))!
+    await db.query(
+      "UPDATE ci_listener_state SET payload=jsonb_set(payload,'{box,phase}','\"invalid\"') WHERE namespace=$1 AND record_key=$2",
+      [native.namespace, allocation.record.key],
+    )
+    await expect(settings.capacity(org)).rejects.toBeInstanceOf(StateCorrupt)
+    await db.query('DELETE FROM ci_listener_state WHERE namespace=$1 AND record_key=$2', [
+      native.namespace,
+      allocation.record.key,
+    ])
+    await expect(settings.capacity(org)).rejects.toBeInstanceOf(StateCorrupt)
+    await db.query(
+      "UPDATE ci_listener_state SET payload=jsonb_set(payload,'{active}','[null]') WHERE namespace=$1 AND record_key=$2",
+      [native.namespace, key],
+    )
+    await expect(settings.capacity(org)).rejects.toBeInstanceOf(StateCorrupt)
+  })
   it('preserves zero and an unlimited Commerce response rather than substituting one', async () => {
     commerce.resolveMaxCreatedBoxes.mockResolvedValue(0)
     expect(await settings.get(actor)).toMatchObject({ effective_limit: 0 })
@@ -149,6 +296,172 @@ integration('CI account settings (real Postgres)', () => {
     await expect(settings.update({ ...actor, organizationId: otherOrg }, 2)).rejects.toBeInstanceOf(ForbiddenException)
     expect((await settings.get({ organizationId: otherOrg, userId: 'other-owner' })).max_concurrent_jobs).toBeNull()
   })
+  it('updates only public policy while preserving the binding, attempts, workers and shared quota', async () => {
+    await connect()
+    await connect(otherOrg, 11, 21, 'other')
+    await settings.update(actor, 2)
+    const [before] = await db.query('SELECT * FROM ci_installation_binding WHERE id=$1', [binding])
+    const attempt = randomUUID()
+    await db.query(
+      `INSERT INTO ci_connect_attempt(id,organization_id,user_id,github_account,allow_public,app_client_id,device_ciphertext,expires_at,next_poll_at,interval_seconds)
+      VALUES($1,$2,'owner','owner',false,'test-app','encrypted-fixture',clock_timestamp()+interval '5 minutes',clock_timestamp(),5)`,
+      [attempt, org],
+    )
+    const attempts = await db.query('SELECT * FROM ci_connect_attempt')
+    const journal = new ExecutionJournal(native.state),
+      lease = (await native.state.acquire('update-test', 30000))!
+    await native.applications().define(lease, scope(), 'test-app')
+    const scopeId = await journal.define(lease, scope())
+    const policy = await settings.resolve({
+      scope: scope(),
+      repository: 30,
+      lease,
+      signal: new AbortController().signal,
+    })
+    const allocation = (await journal.reserve(lease, scopeId, { repository: 30, run: 40, job: 50 }, policy))!
+    const keys = [policyKey(), scopeId, allocation.record.key]
+    const records = await native.state.read(keys)
+    await settings.updateConnection(actor, binding, false)
+    expect((await db.query('SELECT * FROM ci_installation_binding WHERE id=$1', [binding]))[0]).toEqual(before)
+    await settings.updateConnection(actor, binding, true)
+    const wake = await native.state.read(['wake/10/0'])
+    expect(wake[0].payload).toEqual({ installationId: 10, accountId: 20, repositoryId: 0 })
+    await settings.updateConnection(actor, binding, true)
+    expect(await native.state.read(['wake/10/0'])).toEqual(wake)
+    expect((await db.query('SELECT * FROM ci_installation_binding WHERE id=$1', [binding]))[0]).toEqual({
+      ...before,
+      allow_public: true,
+      generation: '2',
+      state: 'provisioning',
+    })
+    expect(await db.query('SELECT * FROM ci_connect_attempt')).toEqual(attempts)
+    expect(await native.state.read(keys)).toEqual(records)
+    expect((await settings.get({ organizationId: otherOrg, userId: 'other-owner' })).connections[0]).toMatchObject({
+      allow_public_repositories: false,
+      listener_status: 'ready',
+    })
+    await expect(native.transaction((tx) => native.admit(tx, scope(), 'test-app'))).rejects.toBeInstanceOf(
+      ForbiddenException,
+    )
+    await native.transaction((tx) =>
+      native.admit(tx, { ...scope(), generation: 2, runners: { ...scope().runners, allowPublic: true } }, 'test-app'),
+    )
+  })
+  it('rejects foreign, unknown, non-owner and disabled connection updates', async () => {
+    await connect()
+    await expect(
+      settings.updateConnection({ organizationId: otherOrg, userId: 'other-owner' }, binding, true),
+    ).rejects.toBeInstanceOf(NotFoundException)
+    await expect(settings.updateConnection(actor, randomUUID(), true)).rejects.toBeInstanceOf(NotFoundException)
+    await db.query('UPDATE organization_user SET role=\'member\' WHERE "organizationId"=$1', [org])
+    await expect(settings.updateConnection(actor, binding, true)).rejects.toBeInstanceOf(ForbiddenException)
+    await db.query('UPDATE organization_user SET role=\'owner\' WHERE "organizationId"=$1', [org])
+    await settings.deleteConnection(actor, binding)
+    await expect(settings.updateConnection(actor, binding, true)).rejects.toBeInstanceOf(ConflictException)
+    expect(
+      (await db.query('SELECT state,allow_public,generation FROM ci_installation_binding WHERE id=$1', [binding]))[0],
+    ).toEqual({ state: 'disabled', allow_public: false, generation: '2' })
+  })
+  it('rechecks delegated scopes and rolls back a policy update when its key expires before commit', async () => {
+    await connect()
+    const hash = 'e'.repeat(64)
+    await db.query(`INSERT INTO api_key VALUES($1,$2,'owner',ARRAY['write:boxes'],NULL)`, [hash, org])
+    const delegated = { ...actor, apiKey: { keyHash: hash } }
+    await expect(settings.updateConnection(delegated, binding, true)).rejects.toBeInstanceOf(ForbiddenException)
+    await db.query(
+      `UPDATE api_key SET permissions=ARRAY['write:boxes','delete:boxes'],"expiresAt"=clock_timestamp()-interval '1 second' WHERE "keyHash"=$1`,
+      [hash],
+    )
+    await expect(settings.updateConnection(delegated, binding, false)).rejects.toBeInstanceOf(ForbiddenException)
+    await db.query(`CREATE FUNCTION delay_ci_binding() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN PERFORM pg_sleep(0.2); RETURN NEW; END $$;
+      CREATE TRIGGER delay_ci_binding BEFORE UPDATE ON ci_installation_binding FOR EACH ROW EXECUTE FUNCTION delay_ci_binding()`)
+    try {
+      await db.query(
+        'UPDATE api_key SET "expiresAt"=clock_timestamp()+interval \'150 milliseconds\' WHERE "keyHash"=$1',
+        [hash],
+      )
+      await expect(settings.updateConnection(delegated, binding, true)).rejects.toBeInstanceOf(ForbiddenException)
+    } finally {
+      await db.query('DROP TRIGGER delay_ci_binding ON ci_installation_binding; DROP FUNCTION delay_ci_binding()')
+    }
+    expect(
+      (await db.query('SELECT state,allow_public,generation FROM ci_installation_binding WHERE id=$1', [binding]))[0],
+    ).toEqual({ state: 'ready', allow_public: false, generation: '1' })
+  })
+  it('deletes only the owned connection, keeps quota and advances generation once', async () => {
+    await connect()
+    await connect(otherOrg, 11, 21, 'other')
+    await settings.update(actor, 2)
+    await settings.deleteConnection(actor, binding)
+    await settings.deleteConnection(actor, binding)
+    expect(await settings.get(actor)).toMatchObject({ max_concurrent_jobs: 2, connections: [] })
+    expect(await db.query('SELECT state,generation FROM ci_installation_binding WHERE id=$1', [binding])).toEqual([
+      { state: 'disabled', generation: '2' },
+    ])
+    expect((await settings.get({ organizationId: otherOrg, userId: 'other-owner' })).connections).toHaveLength(1)
+    await expect(native.transaction((tx) => native.admit(tx, scope(), 'test-app'))).rejects.toThrow('no longer active')
+  })
+  it('refuses member, foreign connection and expired delegated key deletions without mutation', async () => {
+    await connect()
+    await expect(
+      settings.deleteConnection({ organizationId: otherOrg, userId: 'other-owner' }, binding),
+    ).rejects.toBeInstanceOf(NotFoundException)
+    await db.query('UPDATE organization_user SET role=\'member\' WHERE "organizationId"=$1', [org])
+    await expect(settings.deleteConnection(actor, binding)).rejects.toBeInstanceOf(ForbiddenException)
+    await db.query('UPDATE organization_user SET role=\'owner\' WHERE "organizationId"=$1', [org])
+    const keyHash = 'a'.repeat(64)
+    await db.query(
+      `INSERT INTO api_key VALUES($1,$2,'owner',ARRAY['write:boxes','delete:boxes'],now()-interval '1 second')`,
+      [keyHash, org],
+    )
+    await expect(settings.deleteConnection({ ...actor, apiKey: { keyHash } }, binding)).rejects.toBeInstanceOf(
+      ForbiddenException,
+    )
+    expect(await db.query('SELECT state,generation FROM ci_installation_binding WHERE id=$1', [binding])).toEqual([
+      { state: 'ready', generation: '1' },
+    ])
+  })
+  it.each(['delete', 'update'])(
+    'waits for prior admitted work during %s, then denies its stale generation',
+    async (operation) => {
+      await connect()
+      const prior = db.createQueryRunner()
+      await prior.connect()
+      await prior.startTransaction()
+      try {
+        await native.admit(prior.manager, scope(), 'test-app')
+        const mutation =
+          operation === 'delete'
+            ? settings.deleteConnection(actor, binding)
+            : settings.updateConnection(actor, binding, true)
+        const deadline = Date.now() + 1000
+        let blocked = false
+        while (Date.now() < deadline) {
+          const [row] = await db.query(
+            "SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE wait_event_type='Lock' AND query LIKE $1) AS blocked",
+            [
+              operation === 'delete'
+                ? '%UPDATE ci_installation_binding SET state=%'
+                : '%ci_installation_binding%FOR UPDATE%',
+            ],
+          )
+          if (row.blocked) {
+            blocked = true
+            break
+          }
+        }
+        expect(blocked).toBe(true)
+        await prior.commitTransaction()
+        await mutation
+        await expect(native.transaction((tx) => native.admit(tx, scope(), 'test-app'))).rejects.toThrow(
+          'no longer active',
+        )
+      } finally {
+        if (prior.isTransactionActive) await prior.rollbackTransaction()
+        await prior.release()
+      }
+    },
+  )
   it('rechecks the current owner and exact delegated Key permissions', async () => {
     await db.query('UPDATE organization_user SET role=\'member\' WHERE "organizationId"=$1', [org])
     await expect(settings.update(actor, 2)).rejects.toBeInstanceOf(ForbiddenException)

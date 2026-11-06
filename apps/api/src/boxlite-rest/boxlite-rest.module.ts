@@ -9,6 +9,7 @@ import { CiWebhookController } from '../ci/ci-webhook.controller'
 import { CiWebhookService } from '../ci/ci-webhook.service'
 import { CiConnectController } from '../ci/ci-connect.controller'
 import { CiSettingsController } from '../ci/ci-settings.controller'
+import { CiManagementController } from '../ci/ci-management.controller'
 import { CiSettingsService } from '../ci/ci-settings.service'
 import { CiConnectService } from '../ci/ci-connect.service'
 import { CiListenerService } from '../ci/ci-listener.service'
@@ -54,6 +55,7 @@ import { AuditModule } from '../audit/audit.module'
     BoxliteDomainController,
     CiConnectController,
     CiSettingsController,
+    CiManagementController,
     CiWebhookController,
     BoxliteMeController,
     BoxliteConfigController,

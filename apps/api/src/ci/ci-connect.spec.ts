@@ -464,6 +464,51 @@ integration('CI connect persistence (real Postgres)', () => {
     expect(await service.poll(actor, second.id)).toMatchObject({ status: 'connected' })
     expect((await native.state.read(['wake/123/0']))[0].version).toBe(current.version)
   })
+  it('reconnect reactivates a disabled binding with a fresh generation', async () => {
+    const first = await begin()
+    expect(await service.poll(actor, first.id)).toMatchObject({ status: 'connected' })
+    await db.query("UPDATE ci_installation_binding SET state='disabled',generation=2")
+    const second = await begin()
+    expect(await service.poll(actor, second.id)).toMatchObject({ status: 'connected' })
+    const [binding] = await db.query('SELECT state,generation FROM ci_installation_binding')
+    expect(binding).toEqual({ state: 'provisioning', generation: '3' })
+  })
+  it('deletion cancels a pending verified connect before it can reactivate the binding', async () => {
+    const first = await begin()
+    await service.poll(actor, first.id)
+    const [binding] = await db.query('SELECT id FROM ci_installation_binding')
+    const attempt = await begin()
+    const verified = github.verifyUserInstallation.getMockImplementation()!
+    let entered!: () => void, resume!: () => void
+    const reached = new Promise<void>((resolve) => {
+      entered = resolve
+    })
+    const paused = new Promise<void>((resolve) => {
+      resume = resolve
+    })
+    github.verifyUserInstallation.mockImplementationOnce(async (...args) => {
+      entered()
+      await paused
+      return verified(...args)
+    })
+    const polling = service.poll(actor, attempt.id)
+    await reached
+    try {
+      await settings.deleteConnection(actor, binding.id)
+    } finally {
+      resume()
+    }
+    expect(await polling).toMatchObject({ status: 'cancelled' })
+    expect(
+      await db.query('SELECT state,device_ciphertext,oauth_token_ciphertext FROM ci_connect_attempt WHERE id=$1', [
+        attempt.id,
+      ]),
+    ).toEqual([{ state: 'cancelled', device_ciphertext: null, oauth_token_ciphertext: null }])
+    expect((await settings.get(actor)).connections).toEqual([])
+    const next = await begin()
+    expect(await service.poll(actor, next.id)).toMatchObject({ status: 'connected' })
+    expect((await settings.get(actor)).connections).toHaveLength(1)
+  })
   it('retries the inventory wake when a concurrent scheduler settles the captured version', async () => {
     await priorInventoryEvent()
     const first = await begin()

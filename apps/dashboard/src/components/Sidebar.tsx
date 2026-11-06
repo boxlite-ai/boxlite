@@ -40,6 +40,7 @@ import {
   MoonIcon,
   MoreHorizontal,
   PanelLeft,
+  Play,
   Settings,
   Server,
   SunIcon,
@@ -81,6 +82,7 @@ const PRIMARY_NAV_ITEMS: NavItem[] = [
       },
     ],
   },
+  { label: 'CI', icon: <Play className="size-[18px] shrink-0" aria-hidden="true" />, path: RoutePath.CI },
   {
     label: 'Volumes',
     icon: <HardDrive className="size-[18px] shrink-0" aria-hidden="true" />,
