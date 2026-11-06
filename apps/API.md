@@ -47,6 +47,7 @@ and private tunnels as enabled; clients check that before every private prepare.
 | ------------------------------------------------------------------------- | ---------------------------- | ------------------------------------------------------------------------------------ | ------------------------ |
 | [Control-plane API](#control-plane-api)                                   | `apps/api`                   | `/api`                                                                               | `3000`                   |
 | [Hosted BoxLite-compatible API](#hosted-boxlite-compatible-api)           | `apps/api`                   | `/api/v1`                                                                            | `3000`                   |
+| [MCP endpoint](#mcp-endpoint)                                             | `apps/api`                   | `/api/mcp`                                                                           | `3000`                   |
 | [Runner API](#runner-api)                                                 | `apps/runner`                | `/`                                                                                  | `3003`                   |
 | [Preview proxy API](#preview-proxy-api)                                   | `apps/proxy`                 | `proxy.<domain>`, `<port>-<box>.proxy.<domain>`                                      | `4000`                   |
 | [Registry proxy API](#registry-proxy-api)                                 | `apps/image-service`         | `/v2`                                                                                | `4100`                   |
@@ -793,6 +794,103 @@ ranges can gain records. Box deletion does not remove evidence.
 Deploy the [pre-deploy table migration](SCHEMA.md#runner_memory_incident), then
 the API, then Runners. See the [sampling and retry contract](runner/README.md#memory-incident-snapshots)
 for accounting scope and delivery limitations.
+
+## MCP endpoint
+
+**Service:** `apps/api` · **Path:** `/api/mcp` · **Port:** `3000` in deployments
+(shared with the control-plane API)
+
+A Model Context Protocol server, served from [`mcp`](./api/src/mcp/) over
+Streamable HTTP. It speaks both protocol eras on one endpoint: the 2025
+`initialize` handshake, served statelessly, and the session-less 2026-07-28
+revision. Every POST is answered with one JSON body; `subscriptions/listen` is
+refused with `-32601`. A request that carries an `Origin` header is refused with
+`403`, because MCP hosts call from servers and CLIs, not browsers.
+
+```
+claude mcp add --transport http boxlite https://<api-host>/api/mcp \
+  --header "Authorization: Bearer $BOXLITE_API_KEY"
+```
+
+On a stage with `MCP_RESOURCE_URL` set and its tenant configured
+([MCP client sign-in](./infra/docs/identity-and-mail.md#mcp-client-sign-in)), leave
+out `--header`: the client opens a browser sign-in instead.
+
+**Credentials.** A user API key, or an OAuth token whose audience is
+`MCP_RESOURCE_URL`. Dashboard tokens are refused, as are the API keys of machine
+principals (proxy, runner, collectors). A `401` carries
+`WWW-Authenticate: Bearer resource_metadata=...` naming the RFC 9728 document at
+`/.well-known/oauth-protected-resource/api/mcp`, which lists the API's OIDC issuer
+as the authorization server; it is published only when `MCP_RESOURCE_URL` is set.
+
+**OAuth callers.** [`McpAuthGuard`](./api/src/mcp/mcp-auth.guard.ts) turns an OAuth
+token into an API-key-shaped caller, so the REST guards apply their API-key rules
+unchanged:
+
+| Property | Value |
+| --- | --- |
+| Organization | The user's default organization, read on every request; changing the default moves existing tokens with it |
+| System role | Always `USER`, so no admin exemption applies to a token |
+| Permissions | The token's `scope` limited to [`MCP_OAUTH_SCOPES`](./api/src/mcp/mcp-oauth-policy.ts) (box, volume, image and template permissions), then to what the user's role holds; an owner holds all |
+
+[`McpScopeGuard`](./api/src/mcp/mcp-scope.guard.ts) checks every `tools/call` from
+an OAuth caller before it runs, for direct tools and `invoke_api_endpoint` alike:
+
+- An operation off `MCP_OAUTH_OPERATIONS` answers `403`: SSH keys, tunnels, network
+  rules, domains, export and import, registries, members and invitations stay API-key
+  only, since each grants access that outlives the token. New operations are denied
+  until listed, and a spec fails until each v1 operation is classified.
+- An operation whose route declares a permission the token lacks
+  (`RequiredOrganizationResourcePermissions`, read at startup) answers `403` with
+  `WWW-Authenticate: Bearer error="insufficient_scope", scope="<granted> <missing>"`,
+  so a client that re-authorizes keeps the scopes it had.
+
+Sign-in requests every MCP scope, as Supabase's MCP server does: the `401` challenge
+names no scope, so clients request the metadata's `scopes_supported`, which lists all
+of `MCP_OAUTH_SCOPES`. One consent then covers every allowlisted operation; step-up
+still covers a client or user that grants fewer. Whether a client completes step-up for the rest is
+checked per client on the dev tenant. API-key callers skip both checks; the key's own
+permissions apply in REST.
+
+**Tools.** `tools/list` returns 13 tools:
+
+| Tools | What they do |
+| --- | --- |
+| `createBox`, `listBoxes`, `getBox`, `startBox`, `stopBox`, `removeBox` | The box operations of the same `operationId` |
+| `startExecution`, `getExecution` | Run a command; with `wait` (default) the result carries `stdout`, `stderr`, `exit_code` and `complete` |
+| `uploadFiles`, `downloadFiles` | Tar archives as base64 (`body_base64`), up to 8 MiB |
+| `list_api_endpoints`, `get_api_endpoint_schema`, `invoke_api_endpoint` | Find, describe and call any other catalog operation by `operationId` |
+
+The catalog is built at startup from [`openapi/box.openapi.yaml`](../openapi/box.openapi.yaml),
+[`openapi/admin.openapi.yaml`](../openapi/admin.openapi.yaml) and the product Swagger
+document. Tool names and argument schemas are the operations' own; the v1 specs win
+an `operationId` both define. An operation is in the catalog only when this API
+registered a route for it, so spec operations only `boxlite serve` implements
+(snapshots, clone, export, import, `attachBox`) are left out. A product route must
+also sit behind `CombinedAuthGuard` with no runner or proxy guard: runner, proxy,
+browser-auth, health and JWT-only routes (organizations, roles, invitations, usage)
+are left out.
+
+**How a call runs.** A tool call never re-implements a route. It is sent to the
+API's own Express app as the REST request for its operation, so that route's guards,
+validation, throttles and audit run unchanged:
+
+```
+POST /api/mcp ─▶ McpOriginGuard, McpAuthGuard ─▶ caller
+  tools/call ─▶ McpDispatcher ─▶ METHOD /api/... over a per-process Unix socket
+                                 no Authorization, x-boxlite-mcp-delegation: <nonce>,
+                                 X-Forwarded-For naming the MCP client
+             ─▶ CombinedAuthGuard: mcp-delegation strategy ─▶ same caller ─▶ REST route
+```
+
+The caller's token is never forwarded (MCP forbids token passthrough). The nonce is
+32 random bytes, valid for 30 seconds, consumed on first use and held only in the
+process's memory; the socket lives in a fresh `0700` temporary directory, so a
+request never reaches another cluster worker. `startExecution` with `wait` and
+`attachExecution` read output from the read-only attach WebSocket on the loopback,
+authenticated by a one-time attach ticket; output printed before the attach is
+replayed from the runner's 256 KiB per-stream backlog. A wait that runs out returns
+`complete: false` with the output so far.
 
 ## Runner API
 

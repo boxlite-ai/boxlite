@@ -32,6 +32,10 @@ const ACCOUNT_LINK_FORM_ID = __ACCOUNT_LINK_FORM_ID_JSON__
 // The tenant's own domain: its token endpoint and Management API answer there
 // whichever domain the login itself runs on.
 const AUTH0_DOMAIN = __AUTH0_DOMAIN_JSON__
+// The MCP endpoint's resource URL. An MCP client signs in under its own client
+// id, so a login is recognized as BoxLite's by the API it asks for instead.
+// Empty leaves MCP logins out of the checks below.
+const MCP_RESOURCE_URL = __MCP_RESOURCE_URL_JSON__
 
 // The API refuses a request signed for any audience but the one it serves.
 const ADOPT_AUDIENCE = 'boxlite-account-link-adopt'
@@ -40,13 +44,21 @@ const PASSWORD_REALM_GRANT = 'http://auth0.com/oauth/grant-type/password-realm'
 // Gmail addresses, whose mail Google itself serves.
 const GMAIL_DOMAINS = new Set(['gmail.com', 'googlemail.com'])
 
+/** The dashboard client, or any client asking for a token for the MCP endpoint. */
+function isBoxLiteLogin(event) {
+  return (
+    event.client?.client_id === BOXLITE_CLIENT_ID ||
+    (MCP_RESOURCE_URL !== '' && event.resource_server?.identifier === MCP_RESOURCE_URL)
+  )
+}
+
 function isBoxLiteBrowserLogin(event) {
-  return event.client?.client_id === BOXLITE_CLIENT_ID && BROWSER_PROTOCOLS.has(event.transaction?.protocol)
+  return isBoxLiteLogin(event) && BROWSER_PROTOCOLS.has(event.transaction?.protocol)
 }
 
 function isManagedDatabaseLogin(event) {
   return (
-    event.client?.client_id === BOXLITE_CLIENT_ID &&
+    isBoxLiteLogin(event) &&
     event.connection?.strategy === 'auth0' &&
     event.connection?.name === BOXLITE_DB_CONNECTION
   )

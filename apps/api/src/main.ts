@@ -31,6 +31,11 @@ import type { IncomingMessage } from 'http'
 import type { Socket } from 'net'
 import { Logger as PinoLogger, LoggerErrorInterceptor } from 'nestjs-pino'
 import { BoxliteWsProxyService } from './boxlite-rest/boxlite-ws-proxy.service'
+import { parse as parseYaml } from 'yaml'
+import { MCP_METADATA_PATH } from './mcp/mcp-auth-metadata'
+import { mcpStrategy } from './mcp/mcp.controller'
+import { McpTools } from './mcp/mcp-tools'
+import { servedOperations } from './mcp/mcp-routes'
 
 // https options
 const httpsEnabled = process.env.CERT_PATH && process.env.CERT_KEY_PATH
@@ -125,10 +130,12 @@ async function bootstrap() {
   }
 
   const globalPrefix = 'api'
-  app.setGlobalPrefix(globalPrefix)
+  // RFC 9728 puts the MCP endpoint's OAuth metadata at the origin root.
+  app.setGlobalPrefix(globalPrefix, { exclude: [MCP_METADATA_PATH] })
 
-  const documentFactory = () => SwaggerModule.createDocument(app, getOpenApiConfig(configService.get('oidc.issuer')))
-  SwaggerModule.setup('api', app, documentFactory, {
+  // Built once: the Swagger UI serves it, and the MCP catalog reads the dashboard routes from it.
+  const document = SwaggerModule.createDocument(app, getOpenApiConfig(configService.get('oidc.issuer')))
+  SwaggerModule.setup('api', app, () => document, {
     swaggerOptions: {
       initOAuth: {
         clientId: configService.get('oidc.clientId'),
@@ -174,6 +181,21 @@ async function bootstrap() {
   const port = configService.get('port')
 
   if (isApiEnabled()) {
+    // MCP tools come from the v1 specs (bundled as assets) and the dashboard document,
+    // limited to the routes this app registered, so init() runs first.
+    await app.init()
+    const openapi = (name: string) => parseYaml(readFileSync(join(__dirname, 'assets', 'openapi', name), 'utf8'))
+    const wsProxy = app.get(BoxliteWsProxyService)
+    app.get(McpTools).register({
+      box: openapi('box.openapi.yaml'),
+      admin: openapi('admin.openapi.yaml'),
+      dashboard: document,
+      served: servedOperations(app.getHttpAdapter().getInstance(), (path) => !!wsProxy.matchAttachPath(path)),
+    })
+    // Started on its own, before listen(), so `/api/mcp` is ready with the first
+    // request; Kafka below keeps its own start and cannot delay this one.
+    await app.connectMicroservice({ strategy: mcpStrategy }).listen()
+
     await app.listen(port, host)
     Logger.log(`🚀 BoxLite API is running on: http://${host}:${port}/${globalPrefix}`)
 
@@ -205,7 +227,6 @@ async function bootstrap() {
     // paths fall through to socket.io rather than destroying the socket out
     // from under it; everything else is unauthenticated traffic and gets
     // closed here.
-    const wsProxy = app.get(BoxliteWsProxyService)
     httpServer.on('upgrade', (req: IncomingMessage, socket: Socket, head: Buffer) => {
       if (wsProxy.matchAttachPath(req.url)) {
         void wsProxy.upgrade(req, socket, head)
@@ -223,7 +244,7 @@ async function bootstrap() {
   }
 
   if (isWorkerEnabled() && configService.get('kafka.enabled')) {
-    app.connectMicroservice<MicroserviceOptions>({
+    const kafka = app.connectMicroservice<MicroserviceOptions>({
       transport: Transport.KAFKA,
       options: {
         client: configService.getKafkaClientConfig(),
@@ -244,7 +265,8 @@ async function bootstrap() {
         },
       },
     })
-    await app.startAllMicroservices()
+    // Only this one: startAllMicroservices() would start the MCP strategy a second time.
+    await kafka.listen()
   }
 
   // If app running in cluster mode, send ready signal

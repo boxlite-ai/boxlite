@@ -1,0 +1,208 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (c) 2026 BoxLite AI
+
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { parseArgs } from 'node:util'
+
+import type { Auth0ManagementClient } from './auth0-login-policy.js'
+
+type JsonObject = Record<string, any>
+
+export interface Auth0McpOptions {
+  tenant: string
+  /** `MCP_RESOURCE_URL`: the MCP endpoint's resource, and the MCP API's identifier. */
+  resourceUrl: string
+  /** Connections MCP clients may sign in with; each becomes a domain-level connection. */
+  connections: string[]
+  apply: boolean
+}
+
+export interface Auth0McpSources {
+  /** Scopes the MCP API defines and every client grant allows (the API's `MCP_OAUTH_SCOPES`). */
+  scopes: string[]
+  /** Client ID Metadata Document URLs of the reviewed MCP clients. */
+  clients: string[]
+  journalDirectory: string
+}
+
+/** One write, with what rollback needs to undo it. */
+interface JournalEntry {
+  kind: string
+  method: 'post' | 'patch'
+  path: string
+  data: JsonObject
+  /** The fields' values before a `patch`, restored by rollback. */
+  previous?: JsonObject
+  /** For a `post`, the path rollback deletes; filled after the write. */
+  created?: string
+}
+
+const TENANT_SETTINGS = {
+  resource_parameter_profile: 'compatibility',
+  client_id_metadata_document_supported: true,
+}
+
+export function parseAuth0McpOptions(argv: string[]): Auth0McpOptions {
+  const { values } = parseArgs({
+    args: argv,
+    strict: true,
+    options: {
+      tenant: { type: 'string' },
+      'resource-url': { type: 'string' },
+      connection: { type: 'string', multiple: true },
+      apply: { type: 'boolean', default: false },
+    },
+  })
+  const tenant = values.tenant ?? ''
+  if (!tenant || tenant.includes('/') || !tenant.includes('.')) throw new Error('--tenant must be an exact Auth0 tenant hostname')
+  const resourceUrl = values['resource-url'] ?? ''
+  if (!/^https:\/\//.test(resourceUrl) || new URL(resourceUrl).href !== resourceUrl) {
+    throw new Error('--resource-url must be the exact https MCP_RESOURCE_URL')
+  }
+  if (!values.connection?.length) throw new Error('--connection is required, once per connection MCP clients sign in with')
+  return { tenant, resourceUrl, connections: values.connection, apply: values.apply ?? false }
+}
+
+export function loadMcpSources(bootstrapRoot: string): Omit<Auth0McpSources, 'journalDirectory'> {
+  const file = JSON.parse(readFileSync(join(bootstrapRoot, 'auth0', 'mcp-clients.json'), 'utf8'))
+  return { scopes: file.scopes, clients: file.clients }
+}
+
+/**
+ * Lets a tenant issue MCP-audience tokens to the reviewed MCP clients only:
+ * an MCP API whose user access needs a client grant and whose machine access is
+ * off, the `resource` parameter profile and CIMD on, one registered client and
+ * one user grant per allowlisted metadata document, and domain-level connections
+ * so those third-party clients can sign in. Dynamic registration stays off.
+ *
+ * `preview` reads and lists the writes; `apply` journals each write's before
+ * values under `.sst/auth0-backups/` first, so `rollback` can undo a run.
+ */
+export class Auth0McpConfigurator {
+  constructor(
+    private readonly options: Auth0McpOptions,
+    private readonly client: Auth0ManagementClient,
+    private readonly sources: Auth0McpSources,
+  ) {}
+
+  preview(): JsonObject {
+    return { mode: 'preview', tenant: this.options.tenant, writes: this.plan().map(({ kind, method, path }) => ({ kind, method, path })) }
+  }
+
+  apply(): JsonObject {
+    const writes = this.plan()
+    mkdirSync(this.sources.journalDirectory, { recursive: true, mode: 0o700 })
+    const journalPath = join(this.sources.journalDirectory, `mcp-${this.options.tenant}-${Date.now()}.json`)
+    const save = () =>
+      writeFileSync(journalPath, `${JSON.stringify({ version: 1, tenant: this.options.tenant, entries: writes }, null, 2)}\n`, {
+        mode: 0o600,
+      })
+    save()
+    for (const write of writes) {
+      const result = this.client.request(write.method, write.path, { data: write.data }) as JsonObject | null
+      if (write.method === 'post') write.created = createdPath(write, result)
+      save()
+    }
+    return { mode: 'applied', tenant: this.options.tenant, writes: writes.length, journal: journalPath }
+  }
+
+  static rollback(journalPath: string, clientFactory: (tenant: string) => Auth0ManagementClient): JsonObject {
+    const journal = JSON.parse(readFileSync(journalPath, 'utf8'))
+    if (journal.version !== 1 || !journal.tenant || !Array.isArray(journal.entries)) {
+      throw new Error(`invalid Auth0 MCP journal '${journalPath}'`)
+    }
+    const client = clientFactory(journal.tenant)
+    for (const entry of [...(journal.entries as JournalEntry[])].reverse()) {
+      if (entry.created) client.request('delete', entry.created)
+      else if (entry.previous) client.request('patch', entry.path, { data: entry.previous })
+    }
+    return { mode: 'rolled-back', tenant: journal.tenant, entries: journal.entries.length }
+  }
+
+  /** The writes that bring the tenant to the desired state; empty once it is there. */
+  private plan(): JournalEntry[] {
+    const rules = this.list('rules', { enabled: 'true' })
+    if (rules.length > 0) {
+      throw new Error(`${rules.length} active Rule(s) on ${this.options.tenant}: CIMD logins fail while Rules run`)
+    }
+    return [...this.tenantWrites(), ...this.apiWrites(), ...this.clientWrites(), ...this.connectionWrites()]
+  }
+
+  private tenantWrites(): JournalEntry[] {
+    const settings = (this.client.request('get', 'tenants/settings') ?? {}) as JsonObject
+    return patchIfChanged('tenant settings', 'tenants/settings', settings, TENANT_SETTINGS)
+  }
+
+  private apiWrites(): JournalEntry[] {
+    const desired = {
+      scopes: this.sources.scopes.map((value) => ({ value, description: `BoxLite ${value}` })),
+      subject_type_authorization: { user: { policy: 'require_client_grant' }, client: { policy: 'deny_all' } },
+    }
+    const existing = this.list('resource-servers').find((api) => api.identifier === this.options.resourceUrl)
+    if (!existing) {
+      return [
+        {
+          kind: 'MCP API',
+          method: 'post',
+          path: 'resource-servers',
+          data: { name: 'BoxLite MCP', identifier: this.options.resourceUrl, ...desired },
+        },
+      ]
+    }
+    return patchIfChanged('MCP API', `resource-servers/${existing.id}`, existing, desired)
+  }
+
+  private clientWrites(): JournalEntry[] {
+    const writes: JournalEntry[] = []
+    const grants = this.list('client-grants', { audience: this.options.resourceUrl })
+    for (const url of this.sources.clients) {
+      const registered = this.client.request('get', `clients/${encodeURIComponent(url)}`, { allowNotFound: true })
+      if (!registered) {
+        // Preview fetches and validates the document; register only what it accepts.
+        this.client.request('post', 'clients/cimd/preview', { data: { external_client_id: url } })
+        writes.push({ kind: `client ${url}`, method: 'post', path: 'clients/cimd/register', data: { external_client_id: url } })
+      }
+      const grant = grants.find((g) => g.client_id === url && g.subject_type === 'user')
+      const data = { client_id: url, audience: this.options.resourceUrl, scope: this.sources.scopes, subject_type: 'user' }
+      if (!grant) writes.push({ kind: `grant ${url}`, method: 'post', path: 'client-grants', data })
+      else writes.push(...patchIfChanged(`grant ${url}`, `client-grants/${grant.id}`, grant, { scope: this.sources.scopes }))
+    }
+    return writes
+  }
+
+  private connectionWrites(): JournalEntry[] {
+    return this.options.connections.flatMap((name) => {
+      const connection = this.list('connections', { name }).find((c) => c.name === name)
+      if (!connection) throw new Error(`connection '${name}' not found on ${this.options.tenant}`)
+      return patchIfChanged(`connection ${name}`, `connections/${connection.id}`, connection, { is_domain_connection: true })
+    })
+  }
+
+  private list(path: string, query?: Record<string, string>): JsonObject[] {
+    const result = this.client.request('get', path, { query })
+    return Array.isArray(result) ? result : []
+  }
+}
+
+/** A `patch` of the fields whose values differ, carrying their previous values for rollback. */
+function patchIfChanged(kind: string, path: string, current: JsonObject, desired: JsonObject): JournalEntry[] {
+  const changed = Object.keys(desired).filter((key) => JSON.stringify(current[key]) !== JSON.stringify(desired[key]))
+  if (changed.length === 0) return []
+  return [
+    {
+      kind,
+      method: 'patch',
+      path,
+      data: Object.fromEntries(changed.map((key) => [key, desired[key]])),
+      previous: Object.fromEntries(changed.map((key) => [key, current[key] ?? null])),
+    },
+  ]
+}
+
+function createdPath(write: JournalEntry, result: JsonObject | null): string {
+  if (write.path === 'clients/cimd/register') return `clients/${encodeURIComponent(write.data.external_client_id)}`
+  const id = result?.id
+  if (typeof id !== 'string' || !id) throw new Error(`${write.kind}: Auth0 returned no id`)
+  return `${write.path}/${id}`
+}

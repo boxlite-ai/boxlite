@@ -7,12 +7,15 @@
 import { Injectable, Logger, UnauthorizedException } from '@nestjs/common'
 import { AuthGuard } from '@nestjs/passport'
 import { EmailVerificationRequiredException } from '../exceptions/email-verification-required.exception'
+import { MCP_DELEGATION_STRATEGY } from './mcp-delegation'
 
 /**
  * Main authentication guard for the application.
  *
  * Strategies are tried in array order.
- * On first success, the rest are skipped.
+ * On first success, the rest are skipped. `mcp-delegation` goes first: it admits
+ * only a request the MCP endpoint injected in-process (see `McpDelegation`) and
+ * fails through to the token strategies for everything else.
  *
  * `handleRequest` is invoked once — either when a strategy succeeds or when all strategies fail.
  * It returns the authenticated user object or throws a generic `UnauthorizedException`.
@@ -23,7 +26,7 @@ import { EmailVerificationRequiredException } from '../exceptions/email-verifica
  * do not already know, and carries the status and machine code the client needs to act on.
  */
 @Injectable()
-export class CombinedAuthGuard extends AuthGuard(['api-key', 'jwt']) {
+export class CombinedAuthGuard extends AuthGuard([MCP_DELEGATION_STRATEGY, 'api-key', 'jwt']) {
   private readonly logger = new Logger(CombinedAuthGuard.name)
 
   handleRequest(err: any, user: any) {

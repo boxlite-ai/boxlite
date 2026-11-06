@@ -490,6 +490,11 @@ const configuration = {
   organizationInvitation: {
     ttlSeconds: organizationInvitationTtlSeconds(),
   },
+  mcp: {
+    // The public URL of `/api/mcp`; setting it publishes the endpoint's OAuth discovery metadata
+    // and makes it the audience MCP OAuth tokens must name.
+    resourceUrl: process.env.MCP_RESOURCE_URL,
+  },
   smtp: {
     host: process.env.SMTP_HOST,
     port: parseInt(process.env.SMTP_PORT || '587', 10),
