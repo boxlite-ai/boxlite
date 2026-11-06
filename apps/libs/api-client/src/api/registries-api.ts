@@ -25,6 +25,8 @@ import { BASE_PATH, type RequestArgs, BaseAPI, operationServerMap } from '../bas
 import type { CreateRegistryCredential } from '../models';
 // @ts-ignore
 import type { RegistryCredential } from '../models';
+// @ts-ignore
+import type { UpdateRegistryCredential } from '../models';
 /**
  * RegistriesApi - axios parameter creator
  */
@@ -158,6 +160,55 @@ export const RegistriesApiAxiosParamCreator = function (configuration?: Configur
                 options: localVarRequestOptions,
             };
         },
+        /**
+         * Replace the username and password without changing its scope or destroying dependent Boxes.
+         * @summary Update a registry credential
+         * @param {string} id Credential ID
+         * @param {UpdateRegistryCredential} updateRegistryCredential Replacement username and password
+         * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        updateRegistryCredential: async (id: string, updateRegistryCredential: UpdateRegistryCredential, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'id' is not null or undefined
+            assertParamExists('updateRegistryCredential', 'id', id)
+            // verify required parameter 'updateRegistryCredential' is not null or undefined
+            assertParamExists('updateRegistryCredential', 'updateRegistryCredential', updateRegistryCredential)
+            const localVarPath = `/images/registries/{id}`
+                .replace('{id}', encodeURIComponent(String(id)));
+            // use dummy base URL string because the URL constructor only accepts absolute URLs.
+            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
+            let baseOptions;
+            if (configuration) {
+                baseOptions = configuration.baseOptions;
+            }
+
+            const localVarRequestOptions = { method: 'PUT', ...baseOptions, ...options};
+            const localVarHeaderParameter = {} as any;
+            const localVarQueryParameter = {} as any;
+
+            // authentication bearer required
+            // http bearer authentication required
+            await setBearerAuthToObject(localVarHeaderParameter, configuration)
+
+            // authentication oauth2 required
+
+            localVarHeaderParameter['Content-Type'] = 'application/json';
+            localVarHeaderParameter['Accept'] = 'application/json';
+
+            if (xBoxLiteOrganizationID != null) {
+                localVarHeaderParameter['X-BoxLite-Organization-ID'] = String(xBoxLiteOrganizationID);
+            }
+            setSearchParams(localVarUrlObj, localVarQueryParameter);
+            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
+            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+            localVarRequestOptions.data = serializeDataIfNeeded(updateRegistryCredential, localVarRequestOptions, configuration)
+
+            return {
+                url: toPathString(localVarUrlObj),
+                options: localVarRequestOptions,
+            };
+        },
     }
 };
 
@@ -208,6 +259,21 @@ export const RegistriesApiFp = function(configuration?: Configuration) {
             const localVarOperationServerBasePath = operationServerMap['RegistriesApi.listRegistryCredentials']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
+        /**
+         * Replace the username and password without changing its scope or destroying dependent Boxes.
+         * @summary Update a registry credential
+         * @param {string} id Credential ID
+         * @param {UpdateRegistryCredential} updateRegistryCredential Replacement username and password
+         * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        async updateRegistryCredential(id: string, updateRegistryCredential: UpdateRegistryCredential, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<RegistryCredential>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.updateRegistryCredential(id, updateRegistryCredential, xBoxLiteOrganizationID, options);
+            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
+            const localVarOperationServerBasePath = operationServerMap['RegistriesApi.updateRegistryCredential']?.[localVarOperationServerIndex]?.url;
+            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
+        },
     }
 };
 
@@ -249,6 +315,18 @@ export const RegistriesApiFactory = function (configuration?: Configuration, bas
         listRegistryCredentials(xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<Array<RegistryCredential>> {
             return localVarFp.listRegistryCredentials(xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
+        /**
+         * Replace the username and password without changing its scope or destroying dependent Boxes.
+         * @summary Update a registry credential
+         * @param {string} id Credential ID
+         * @param {UpdateRegistryCredential} updateRegistryCredential Replacement username and password
+         * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        updateRegistryCredential(id: string, updateRegistryCredential: UpdateRegistryCredential, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<RegistryCredential> {
+            return localVarFp.updateRegistryCredential(id, updateRegistryCredential, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
+        },
     };
 };
 
@@ -289,6 +367,19 @@ export class RegistriesApi extends BaseAPI {
      */
     public listRegistryCredentials(xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
         return RegistriesApiFp(this.configuration).listRegistryCredentials(xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
+    }
+
+    /**
+     * Replace the username and password without changing its scope or destroying dependent Boxes.
+     * @summary Update a registry credential
+     * @param {string} id Credential ID
+     * @param {UpdateRegistryCredential} updateRegistryCredential Replacement username and password
+     * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
+     * @param {*} [options] Override http request option.
+     * @throws {RequiredError}
+     */
+    public updateRegistryCredential(id: string, updateRegistryCredential: UpdateRegistryCredential, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
+        return RegistriesApiFp(this.configuration).updateRegistryCredential(id, updateRegistryCredential, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 }
 

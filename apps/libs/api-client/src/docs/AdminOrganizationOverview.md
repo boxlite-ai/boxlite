@@ -7,7 +7,7 @@ Name | Type | Description | Notes
 ------------ | ------------- | ------------- | -------------
 **createdAt** | **Date** | Organization creation time. | [default to undefined]
 **createdBy** | **string** | Stored creator ID; account linking replaces it with the primary user ID. | [default to undefined]
-**creator** | [**AdminOrganizationCreator**](AdminOrganizationCreator.md) | Current creator identity. | [default to undefined]
+**creator** | [**AdminOrganizationVerifiedCreator**](AdminOrganizationVerifiedCreator.md) | Current creator identity. | [default to undefined]
 **organizationId** | **string** |  | [default to undefined]
 **name** | **string** |  | [default to undefined]
 **memberCount** | **number** |  | [default to undefined]

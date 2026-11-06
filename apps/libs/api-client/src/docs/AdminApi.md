@@ -17,6 +17,7 @@ All URIs are relative to *http://localhost:3000*
 |[**adminListOrganizationsOverview**](#adminlistorganizationsoverview) | **GET** /admin/organizations | List organization operational summaries|
 |[**adminListRegions**](#adminlistregions) | **GET** /admin/regions | List regions with capacity and health|
 |[**adminListRunnerCpuIncidents**](#adminlistrunnercpuincidents) | **GET** /admin/runner-cpu-incidents | Query sustained runner CPU incidents by capture completion time range|
+|[**adminListRunnerMemoryIncidents**](#adminlistrunnermemoryincidents) | **GET** /admin/runner-memory-incidents | Query runner memory snapshots by host sample time range|
 |[**adminListRunners**](#adminlistrunners) | **GET** /admin/runners | List all runners|
 |[**adminQueryUsage**](#adminqueryusage) | **GET** /admin/usage | Query recorded resource usage with fixed snapshot pagination|
 |[**adminRecoverBox**](#adminrecoverbox) | **POST** /admin/box/{boxId}/recover | Recover box from error state as an admin|
@@ -568,13 +569,17 @@ let cursor: string; //Opaque cursor returned by the previous page (optional) (de
 let limit: number; // (optional) (default to undefined)
 let createdTo: string; //Exclusive RFC 3339 instant, at most milliseconds. (optional) (default to undefined)
 let createdFrom: string; //Inclusive RFC 3339 instant, at most milliseconds. (optional) (default to undefined)
+let boxCountScope: 'all'; //Count every retained Box state; omit to keep the existing active-state count. (optional) (default to undefined)
+let organizationId: string; //Exact organization UUID; avoids name search and cannot be combined with q. (optional) (default to undefined)
 
 const { status, data } = await apiInstance.adminListOrganizationsOverview(
     q,
     cursor,
     limit,
     createdTo,
-    createdFrom
+    createdFrom,
+    boxCountScope,
+    organizationId
 );
 ```
 
@@ -587,6 +592,8 @@ const { status, data } = await apiInstance.adminListOrganizationsOverview(
 | **limit** | [**number**] |  | (optional) defaults to undefined|
 | **createdTo** | [**string**] | Exclusive RFC 3339 instant, at most milliseconds. | (optional) defaults to undefined|
 | **createdFrom** | [**string**] | Inclusive RFC 3339 instant, at most milliseconds. | (optional) defaults to undefined|
+| **boxCountScope** | [**&#39;all&#39;**] | Count every retained Box state; omit to keep the existing active-state count. | (optional) defaults to undefined|
+| **organizationId** | [**string**] | Exact organization UUID; avoids name search and cannot be combined with q. | (optional) defaults to undefined|
 
 
 ### Return type
@@ -682,7 +689,7 @@ const apiInstance = new AdminApi(configuration);
 
 let from: Date; //Inclusive capture completion time, with timezone.
 let to: Date; //Exclusive capture completion time, with timezone; must follow from.
-let limit: number; //Maximum rows, ordered by ID ascending. (optional) (default to 50)
+let limit: number; //Maximum rows after per-Box maximum CPU-seconds selection, ordered by ID ascending. (optional) (default to 50)
 let runnerId: string; // (optional) (default to undefined)
 
 const { status, data } = await apiInstance.adminListRunnerCpuIncidents(
@@ -699,13 +706,72 @@ const { status, data } = await apiInstance.adminListRunnerCpuIncidents(
 |------------- | ------------- | ------------- | -------------|
 | **from** | [**Date**] | Inclusive capture completion time, with timezone. | |
 | **to** | [**Date**] | Exclusive capture completion time, with timezone; must follow from. | |
-| **limit** | [**number**] | Maximum rows, ordered by ID ascending. | (optional) defaults to 50|
+| **limit** | [**number**] | Maximum rows after per-Box maximum CPU-seconds selection, ordered by ID ascending. | (optional) defaults to 50|
 | **runnerId** | [**string**] |  | (optional) defaults to undefined|
 
 
 ### Return type
 
 **CpuIncidentListDto**
+
+### Authorization
+
+[bearer](../README.md#bearer)
+
+### HTTP request headers
+
+ - **Content-Type**: Not defined
+ - **Accept**: application/json
+
+
+### HTTP response details
+| Status code | Description | Response headers |
+|-------------|-------------|------------------|
+|**200** |  |  -  |
+
+[[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
+
+# **adminListRunnerMemoryIncidents**
+> MemoryIncidentListDto adminListRunnerMemoryIncidents()
+
+
+### Example
+
+```typescript
+import {
+    AdminApi,
+    Configuration
+} from './api';
+
+const configuration = new Configuration();
+const apiInstance = new AdminApi(configuration);
+
+let from: Date; //Inclusive host sample time, with timezone.
+let to: Date; //Exclusive host sample time, after from.
+let limit: number; //Maximum snapshots after per-Box maximum memory selection, ordered by ID ascending. (optional) (default to 50)
+let runnerId: string; // (optional) (default to undefined)
+
+const { status, data } = await apiInstance.adminListRunnerMemoryIncidents(
+    from,
+    to,
+    limit,
+    runnerId
+);
+```
+
+### Parameters
+
+|Name | Type | Description  | Notes|
+|------------- | ------------- | ------------- | -------------|
+| **from** | [**Date**] | Inclusive host sample time, with timezone. | |
+| **to** | [**Date**] | Exclusive host sample time, after from. | |
+| **limit** | [**number**] | Maximum snapshots after per-Box maximum memory selection, ordered by ID ascending. | (optional) defaults to 50|
+| **runnerId** | [**string**] |  | (optional) defaults to undefined|
+
+
+### Return type
+
+**MemoryIncidentListDto**
 
 ### Authorization
 

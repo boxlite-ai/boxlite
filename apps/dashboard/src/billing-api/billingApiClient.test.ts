@@ -26,6 +26,22 @@ afterEach(() => {
   axios.defaults.adapter = undefined as never
 })
 
+describe('redeemCoupon', () => {
+  it.each(['BoXlite20', 'TEAM#2026', 'TEAM?2026', 'TEAM/2026', 'TEAM%2026'])(
+    'preserves %s as one coupon path segment',
+    async (couponCode) => {
+      const api = serve({ message: 'Promotion accepted.' })
+      expect(await api.redeemCoupon('org-1', couponCode)).toBe('Promotion accepted.')
+      const request = new URL(requestedUrl)
+      expect(requestedMethod).toBe('post')
+      expect(request.search).toBe('')
+      expect(request.hash).toBe('')
+      expect(request.pathname.split('/').slice(0, -1).join('/')).toBe('/api/billing/organization/org-1/redeem-coupon')
+      expect(decodeURIComponent(request.pathname.split('/').at(-1)!)).toBe(couponCode)
+    },
+  )
+})
+
 describe('getOrganizationPlan', () => {
   it('unwraps the plan envelope and turns the cycle bounds into Dates', async () => {
     const api = serve({
@@ -148,16 +164,6 @@ describe('topUpWallet', () => {
     expect(requestedMethod).toBe('post')
     expect(requestedUrl).toBe('http://billing.test/api/billing/organization/org-without-card/wallet/top-up')
     expect(JSON.parse(String(requestedData))).toEqual({ amountCents: 10_000 })
-  })
-})
-
-describe('getSignupCreditDelivery', () => {
-  it('reads the registration coupon route and returns its delivery flag', async () => {
-    const api = serve({ delivered: false })
-
-    await expect(api.getSignupCreditDelivery('org-1')).resolves.toEqual({ delivered: false })
-    expect(requestedMethod).toBe('get')
-    expect(requestedUrl).toBe('http://billing.test/api/billing/organization/org-1/coupon/register')
   })
 })
 

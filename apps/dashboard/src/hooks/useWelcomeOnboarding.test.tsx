@@ -28,7 +28,7 @@ let current: ReturnType<typeof useWelcomeOnboarding>
 let root: Root
 let client: QueryClient
 function Harness() {
-  current = useWelcomeOnboarding({ organizationName: '', useCase: null, note: '', creditGrantedAt: null })
+  current = useWelcomeOnboarding({ organizationName: '', useCase: null, note: '' })
   return null
 }
 beforeEach(async () => {
@@ -68,41 +68,7 @@ it('keeps the organization step incomplete if rename fails', async () => {
   expect(current.welcome.organizationName).toBe('')
   expect(api.refresh).not.toHaveBeenCalled()
 })
-it('marks completion and refreshes billing only after the server confirms delivery', async () => {
-  let deliver!: (value: { delivered: boolean }) => void
-  api.delivery.mockImplementation(
-    () =>
-      new Promise((resolve) => {
-        deliver = resolve
-      }),
-  )
-  const invalidate = vi.spyOn(client, 'invalidateQueries')
-  let pending!: Promise<void>
-  await act(async () => {
-    pending = current.action.mutateAsync({ type: 'intent', useCase: 'coding-agent', note: 'tests' })
-  })
-  expect(current.welcome.creditGrantedAt).toBeNull()
-  expect(invalidate).not.toHaveBeenCalled()
-  await act(async () => {
-    deliver({ delivered: true })
-    await pending
-  })
-  expect(current.welcome.creditGrantedAt).not.toBeNull()
-  expect(invalidate).toHaveBeenCalledWith({ queryKey: ['organization', 'org-1', 'wallet'] })
-  expect(invalidate).toHaveBeenCalledWith({ queryKey: ['billing', 'org-1', 'transactions'] })
-})
-it('retains intent but not completion on a billing error', async () => {
-  api.delivery.mockRejectedValue(new Error('billing unavailable'))
-  await act(async () => {
-    await expect(
-      current.action.mutateAsync({ type: 'intent', useCase: 'coding-agent', note: 'saved answer' }),
-    ).rejects.toThrow('billing unavailable')
-  })
-  expect(current.welcome.note).toBe('saved answer')
-  expect(current.welcome.creditGrantedAt).toBeNull()
-})
-
-it('saves the selected scenario before polling and does not poll when saving fails', async () => {
+it('keeps setup incomplete when saving the selected use case fails', async () => {
   api.save.mockRejectedValue(new Error('save failed'))
   await act(async () => {
     await expect(
@@ -124,7 +90,6 @@ it('finishes without inventing credit delivery when billing is disabled', async 
   )
   await act(async () => current.action.mutateAsync({ type: 'intent', useCase: 'exploring', note: '' }))
   expect(api.delivery).not.toHaveBeenCalled()
-  expect(current.welcome.creditGrantedAt).toBeNull()
   expect(current.welcome.completedAt).toEqual(expect.any(Number))
   expect(localStorage.getItem('SkipOnboarding_user-1')).toBe('true')
 })
@@ -133,17 +98,27 @@ it('does not dismiss unfinished setup on the organization step', async () => {
   expect(localStorage.getItem('SkipOnboarding_user-1')).toBeNull()
 })
 
-it('allows an explicit exit after undelivered credits without recording a grant', async () => {
-  api.delivery.mockRejectedValueOnce(new Error('not delivered'))
-  await act(async () => {
-    await expect(current.action.mutateAsync({ type: 'intent', useCase: 'exploring', note: '' })).rejects.toThrow(
-      'not delivered',
-    )
-  })
-  await act(async () =>
-    current.action.mutateAsync({ type: 'intent', useCase: 'exploring', note: '', skipCredit: true }),
-  )
-  expect(api.delivery).toHaveBeenCalledTimes(1)
+it('saves intent without requesting registration rewards or completing the credits step', async () => {
+  api.delivery.mockResolvedValue({ delivered: true })
+  await act(async () => current.action.mutateAsync({ type: 'intent', useCase: 'exploring', note: 'New project' }))
+  expect(api.save).toHaveBeenCalledWith('org-1', { useCase: 'exploring', note: 'New project' })
+  expect(api.delivery).not.toHaveBeenCalled()
+  expect(current.welcome.completedAt).toBeUndefined()
+  expect(localStorage.getItem('SkipOnboarding_user-1')).toBeNull()
+})
+
+it('records completion separately from saving intent and preserves the saved answers', async () => {
+  await act(async () => current.action.mutateAsync({ type: 'organization', name: 'Example team' }))
+  await act(async () => current.action.mutateAsync({ type: 'intent', useCase: 'exploring', note: 'A project' }))
+  expect(localStorage.getItem('SkipOnboarding_user-1')).toBeNull()
+  await act(async () => current.complete())
   expect(current.welcome.completedAt).toEqual(expect.any(Number))
-  expect(current.welcome.creditGrantedAt).toBeNull()
+  expect(JSON.parse(localStorage.getItem('boxlite:welcome:user-1:org-1')!)).toEqual({
+    organizationName: 'Example team',
+    useCase: 'exploring',
+    note: 'A project',
+    completedAt: expect.any(Number),
+  })
+  expect(localStorage.getItem('SkipOnboarding_user-1')).toBe('true')
+  expect(api.delivery).not.toHaveBeenCalled()
 })

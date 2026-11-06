@@ -3,6 +3,7 @@
 
 //! The devices behind the buses, and the platform code that adds them.
 
+pub(crate) mod balloon;
 pub(crate) mod console;
 #[cfg(target_arch = "x86_64")]
 pub(crate) mod i8042;
@@ -23,6 +24,7 @@ use crate::{
     chipset::ChipsetBuilder,
     config::VmConfig,
     error::Result,
+    memory::ReclaimPolicy,
     virtio::{
         DeviceContext, blk,
         mmio::{self, Slot, Slots},
@@ -30,8 +32,9 @@ use crate::{
 };
 
 /// Adds every device the configuration names, in slot order: the legacy
-/// platform devices, then one block per device type. Adding a device is one
-/// `add_slot_device` line here; [`crate::vm`] stays unchanged.
+/// platform devices, one block per configured disk, then the reporting
+/// balloon. Adding a device is one `add_slot_device` line here;
+/// [`crate::vm`] stays unchanged.
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 pub(crate) fn add_all(
     chipset: &mut ChipsetBuilder,
@@ -48,8 +51,14 @@ pub(crate) fn add_all(
             blk::add_disk(chipset, &ctx, disk, index, slot)
         })?;
     }
+    // The balloon follows the disks so it never renumbers them: the guest
+    // names virtio devices by slot order, so adding it ahead of storage would
+    // move every disk to a higher index.
+    add_slot_device(&mut slots, &mut used, |slot| {
+        crate::devices::balloon::add(chipset, &ctx, slot, ReclaimPolicy::default())
+    })?;
     // The next device is one more `add_slot_device` line here. A device that
-    // must keep slot 0 goes before this loop.
+    // must keep slot 0 goes before the disk loop.
     mmio::announce(&mut config.cmdline, &used)?;
     Ok(())
 }

@@ -22,7 +22,10 @@ const configPath = `${srcDir}/configuration.ts`
 let config = readFileSync(configPath, 'utf8')
 
 function importedIdentifier(specifier) {
-  return specifier.replace(/^type\s+/, '').split(/\s+as\s+/).at(-1)
+  return specifier
+    .replace(/^type\s+/, '')
+    .split(/\s+as\s+/)
+    .at(-1)
 }
 
 function pruneUnusedImports(source, modulePath) {
@@ -44,7 +47,10 @@ function pruneUnusedImports(source, modulePath) {
       return identifier && new RegExp(`\\b${identifier}\\b`).test(sourceWithoutImport)
     })
 
-  return source.replace(match[0], usedSpecifiers.length ? `import { ${usedSpecifiers.join(', ')} } from '${modulePath}';` : '')
+  return source.replace(
+    match[0],
+    usedSpecifiers.length ? `import { ${usedSpecifiers.join(', ')} } from '${modulePath}';` : '',
+  )
 }
 
 function fixParameterDocumentation(source) {
@@ -64,9 +70,7 @@ function fixParameterDocumentation(source) {
           const memberList = members.split(' &#124; ')
           const validMembers = memberList.filter((member) => member !== fallbackMember)
 
-          return validMembers.length === memberList.length
-            ? arrayType
-            : `**Array<${validMembers.join(' &#124; ')}>**`
+          return validMembers.length === memberList.length ? arrayType : `**Array<${validMembers.join(' &#124; ')}>**`
         })
 
         if (!line.includes('(optional)')) {
@@ -106,6 +110,39 @@ if (existing.test(config)) {
 }
 
 writeFileSync(configPath, config)
+
+// Preserve the original sixth-position Axios options as new list filters are added.
+const adminPath = `${srcDir}/api/admin-api.ts`
+if (existsSync(adminPath)) {
+  let admin = readFileSync(adminPath, 'utf8')
+  const scopeParameter = 'boxCountScope?: AdminListOrganizationsOverviewBoxCountScopeEnum,'
+  const requestEntry = /(adminListOrganizationsOverview: async \([^\n]+\): Promise<RequestArgs> => \{\n)/g
+  if (admin.split(scopeParameter).length - 1 !== 4 || [...admin.matchAll(requestEntry)].length !== 1) {
+    throw new Error(`Unexpected organization-list signatures in ${adminPath}; review request-options compatibility`)
+  }
+  admin = admin
+    .replaceAll(
+      scopeParameter,
+      'boxCountScope?: AdminListOrganizationsOverviewBoxCountScopeEnum | RawAxiosRequestConfig,',
+    )
+    .replace(
+      requestEntry,
+      `$1            // Legacy callers pass Axios options before the optional inventory filters.
+            if (typeof boxCountScope === 'object' && boxCountScope !== null) {
+                options = boxCountScope;
+                boxCountScope = undefined;
+            }
+`,
+    )
+    .replaceAll(
+      '@param {AdminListOrganizationsOverviewBoxCountScopeEnum} [boxCountScope]',
+      '@param {AdminListOrganizationsOverviewBoxCountScopeEnum | RawAxiosRequestConfig} [boxCountScope] Legacy Axios options, or:',
+    )
+    .replace(/\/\*\*[\s\S]*?\*\//g, (block) =>
+      block.includes('boxCountScope') ? block.replace(/[ \t]+$/gm, '') : block,
+    )
+  writeFileSync(adminPath, admin)
+}
 
 const apiDir = `${srcDir}/api`
 if (existsSync(apiDir)) {

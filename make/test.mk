@@ -298,6 +298,14 @@ test\:integration\:vmm\:kvm: _ensure-kvm
 VMM_KERNEL ?= $(CURDIR)/target/vmm/boot/x86_64/vmlinux
 export VMM_KERNEL
 
+# Freestanding allocator scenario used by both boot qualification and coverage.
+VMM_BALLOON_INIT ?= $(CURDIR)/target/vmm/boot/balloon-init
+export VMM_BALLOON_INIT
+
+$(VMM_BALLOON_INIT): $(PROJECT_ROOT)/src/vmm/tests/boot/balloon_init.c
+	@mkdir -p "$(@D)"
+	$(CC) -O2 -nostdlib -static -fno-pie -no-pie -fno-stack-protector -fno-builtin -Wl,--build-id=none "$<" -o "$@"
+
 _ensure-vmm-kernel:
 	@test -r "$(VMM_KERNEL)" || { echo "VMM_KERNEL=$(VMM_KERNEL) is not readable; run make vmm:boot or set VMM_KERNEL" >&2; exit 1; }
 
@@ -306,12 +314,18 @@ test\:integration\:vmm\:elf: _ensure-kvm _ensure-vmm-kernel
 	@cargo test -p boxlite-vmm --lib --no-run
 	@timeout 60s cargo test -p boxlite-vmm --lib boot::elf::tests:: -- --ignored --test-threads=1
 
+# Every ignored boot test bounds itself with its own watchdog, so the wrapper
+# must not be shorter than their sum: at most 9 x BOOT_TIMEOUT (30 s) plus
+# 3 x balloon (35 s) = 375 s, before guest boot and teardown on a loaded host.
+# A shorter wrapper kills the whole suite instead of the one test that hangs.
+VMM_BOOT_TESTS_TIMEOUT ?= 900s
+
 # Boot the real kernel on KVM and the legacy devices, on one and four vCPUs: up to its root-mount
 # panic, up to the panic when a generated init exits, and on a ttyS0 console until a generated
 # init restarts, once through the public Vm::new as the M1 smoke test.
-test\:integration\:vmm\:linux: _ensure-kvm _ensure-vmm-kernel
+test\:integration\:vmm\:linux: _ensure-kvm _ensure-vmm-kernel $(VMM_BALLOON_INIT)
 	@cargo test -p boxlite-vmm --lib --no-run
-	@timeout 60s cargo test -p boxlite-vmm --lib boot::tests:: -- --ignored --test-threads=1
+	@timeout $(VMM_BOOT_TESTS_TIMEOUT) cargo test -p boxlite-vmm --lib boot::tests:: -- --ignored --test-threads=1 --nocapture
 
 # A host without Hypervisor.framework must fail HVF qualification, not report skipped tests as a pass.
 _ensure-hvf:
@@ -342,16 +356,16 @@ test\:unit\:guest:
 		cargo test -p boxlite-guest --bins -- --test-threads=1 capabilit spec::tests sysctl::tests; \
 	fi
 
-# Keep ordinary ownership tests unprivileged. Only explicitly ignored tests
+# Keep ordinary guest mount tests unprivileged. Only explicitly ignored tests
 # whose names contain `privileged_` run as root, inside a private mount
 # namespace so bind mounts cannot escape into the host namespace.
 test\:guest-perms:
 	@if [ "$$(uname)" != "Linux" ]; then \
-		echo "⏭️  Guest ownership tests require Linux"; \
+		echo "⏭️  Guest mount tests require Linux"; \
 		exit 0; \
 	fi; \
-	echo "🧪 Running guest ownership tests..."; \
-	cargo test -p boxlite-guest --bin boxlite-guest 'storage::perms::tests' -- \
+	echo "🧪 Running guest mount tests..."; \
+	cargo test -p boxlite-guest --bin boxlite-guest 'storage::attach::tests' -- \
 		--test-threads=1 --skip privileged_ || exit $$?; \
 	if ! command -v jq >/dev/null 2>&1; then \
 		echo "❌ jq is required to locate the prebuilt guest test executable"; \
@@ -377,17 +391,17 @@ test\:guest-perms:
 		echo "❌ Could not locate the prebuilt boxlite-guest test executable"; \
 		exit 1; \
 	fi; \
-	echo "🔐 Running privileged guest ownership tests..."; \
+	echo "🔐 Running privileged guest mount tests..."; \
 	if [ "$$(id -u)" -eq 0 ]; then \
 		unshare --mount --propagation private -- \
-			"$$test_binary" 'storage::perms::tests::privileged_' \
+			"$$test_binary" 'storage::attach::tests::privileged_' \
 			--ignored --test-threads=1; \
 	elif command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then \
 		sudo -n unshare --mount --propagation private -- \
-			"$$test_binary" 'storage::perms::tests::privileged_' \
+			"$$test_binary" 'storage::attach::tests::privileged_' \
 			--ignored --test-threads=1; \
 	else \
-		echo "❌ Privileged ownership tests require root or passwordless sudo"; \
+		echo "❌ Privileged guest mount tests require root or passwordless sudo"; \
 		exit 1; \
 	fi
 
@@ -423,6 +437,20 @@ test\:integration\:rust: $(if $(SETUP_DONE),,runtime\:debug test\:warm-cache\:ru
 	else \
 		cargo test -p boxlite --features krun,gvproxy --test '*' --no-fail-fast -- --test-threads=1 --nocapture \
 			$(CARGOTEST_FILTER); \
+	fi
+
+# OpenCode agent adapter tests (requires VM environment). Ignored by the suite above:
+# each Box needs the OpenCode 2.2.2 release binary named by BOXLITE_TEST_OPENCODE_BINARY.
+test\:integration\:agents: $(if $(SETUP_DONE),,runtime\:debug)
+	@test -n "$$BOXLITE_TEST_OPENCODE_BINARY" || { \
+		echo "❌ Set BOXLITE_TEST_OPENCODE_BINARY to the OpenCode 2.2.2 glibc Linux binary"; exit 1; }
+	@echo "🧪 Running OpenCode agent tests (requires VM)..."
+	@if command -v cargo-nextest >/dev/null 2>&1; then \
+		cargo nextest run -p boxlite --features krun,gvproxy --test agents_opencode --run-ignored only \
+			--no-fail-fast --profile vm $(NEXTEST_FILTER); \
+	else \
+		cargo test -p boxlite --features krun,gvproxy --test agents_opencode --no-fail-fast -- \
+			--ignored --test-threads=1 --nocapture $(CARGOTEST_FILTER); \
 	fi
 
 # Manual release-mode benchmark. Kept out of every aggregate and CI suite.

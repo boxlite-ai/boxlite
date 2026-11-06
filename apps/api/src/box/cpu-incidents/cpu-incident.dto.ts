@@ -88,7 +88,7 @@ export class ListCpuIncidentsDto {
     minimum: 1,
     maximum: 200,
     default: 50,
-    description: 'Maximum rows, ordered by ID ascending.',
+    description: 'Maximum rows after per-Box maximum CPU-seconds selection, ordered by ID ascending.',
   })
   @Type(() => Number)
   @IsInt()

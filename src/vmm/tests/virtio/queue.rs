@@ -810,3 +810,32 @@ fn save_reports_snapshots_unsupported() {
     assert!(!queues.drain(0, |_| Ok(Completion::Deferred)).unwrap());
     assert_eq!(queues.save().err(), Some(SnapshotError::Unsupported));
 }
+
+/// The reporting device must be able to reject report ranges that overlap the
+/// rings themselves, so the snapshot has to cover every ready queue's control
+/// areas at their actual sizes, including the event fields.
+#[test]
+fn control_ranges_use_actual_sizes_include_events_and_skip_unready_slots() {
+    let memory = memory();
+    let mut small = ready_queue_at(DESC2, AVAIL2, USED2);
+    small.try_set_size(4).unwrap();
+    let queues = VirtQueues::prepare(
+        vec![ready_queue(), Queue::new(SIZE).unwrap(), small],
+        &[SIZE; 3],
+        false,
+        false,
+        Arc::clone(&memory),
+    )
+    .unwrap();
+    assert_eq!(
+        queues.control_ranges().collect::<Vec<_>>(),
+        [
+            (GuestAddress(DESC), 16 * SIZE as usize),
+            (GuestAddress(AVAIL), 6 + 2 * SIZE as usize),
+            (GuestAddress(USED), 6 + 8 * SIZE as usize),
+            (GuestAddress(DESC2), 16 * 4),
+            (GuestAddress(AVAIL2), 6 + 2 * 4),
+            (GuestAddress(USED2), 6 + 8 * 4),
+        ]
+    );
+}
