@@ -417,7 +417,9 @@ EOF ordering. Backend tests cover explicit mappings, host accepts, limits,
 fairness after output pressure, budgeted listener scans and retries across empty
 scan segments, isolated resets and registration rollback.
 Device tests cover 4096/61/45-byte RX chains, deferred TX/RX ownership,
-malformed chains, activation rollback and Unsupported snapshots. MMIO tests use
+and REQUEST/RST/SHUTDOWN TX completion withheld at full output capacity, then
+resumed in order exactly once after RX replenishment. They also cover malformed
+chains, activation rollback and Unsupported snapshots. MMIO tests use
 the production shared worker, including a host burst and EOF without new kicks
 or writes. Vsock tests also check private notification coalescing, preparation
 and reset cleanup. These are local

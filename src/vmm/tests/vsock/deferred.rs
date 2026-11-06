@@ -249,6 +249,20 @@ fn rx_intake_defers_completion_until_a_packet_arrives() {
 
 #[test]
 fn tx_intake_stalls_completion_at_capacity_and_resumes_in_order() {
+    assert_tx_stalls_at_capacity_and_resumes_in_order(REQUEST);
+}
+
+#[test]
+fn rst_tx_stalls_completion_at_capacity_and_resumes_in_order() {
+    assert_tx_stalls_at_capacity_and_resumes_in_order(RST);
+}
+
+#[test]
+fn shutdown_tx_stalls_completion_at_capacity_and_resumes_in_order() {
+    assert_tx_stalls_at_capacity_and_resumes_in_order(SHUTDOWN);
+}
+
+fn assert_tx_stalls_at_capacity_and_resumes_in_order(first_op: u16) {
     let mut h = Harness::new(vec![]);
     h.refill = false;
     for port in 0..SIZE as u32 + backend::MAX_PENDING as u32 {
@@ -263,7 +277,13 @@ fn tx_intake_stalls_completion_at_capacity_and_resumes_in_order() {
     );
     let before = h.tx.avail;
     for port in 0..SIZE {
-        let bytes = guest(REQUEST, 1000 + u32::from(port), 999).encode();
+        // Put the operation under test first so a stalled REQUEST cannot hide it.
+        let op = if port == 0 { first_op } else { REQUEST };
+        let mut header = guest(op, 1000 + u32::from(port), 999);
+        if op == SHUTDOWN {
+            header.flags = SEND | RECEIVE;
+        }
+        let bytes = header.encode();
         h.tx.submit(&h.memory, &bytes, false, bytes.len());
     }
     assert!(h.registrar.ready().is_empty());
@@ -308,10 +328,18 @@ fn tx_intake_stalls_completion_at_capacity_and_resumes_in_order() {
     }
     let ports: Vec<_> = h.packets.iter().map(|p| p.header.dst_port).collect();
     let expected: Vec<_> = (SIZE as u32..SIZE as u32 + backend::MAX_PENDING as u32)
-        .chain(1000..1000 + SIZE as u32)
+        // An unknown RST completes without a reply; the other operations get RST.
+        .chain((1000..1000 + SIZE as u32).filter(|port| first_op != RST || *port != 1000))
         .collect();
     assert_eq!(ports, expected);
     assert_eq!(h.tx.take(&h.memory).len(), SIZE as usize);
+    for head in 0..SIZE {
+        let entry = h.tx.base + 0x2004 + u64::from((before + head) % SIZE) * 8;
+        let id: u32 = h.memory.read_obj(GuestAddress(entry)).unwrap();
+        assert_eq!(u32::from_le(id), u32::from((before + head) % SIZE));
+    }
+    h.tick();
+    assert!(h.tx.take(&h.memory).is_empty(), "TX heads completed twice");
 }
 
 #[test]
