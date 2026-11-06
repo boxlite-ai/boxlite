@@ -384,6 +384,12 @@ impl ContainerService for GuestServer {
             entrypoint = ?config.entrypoint,
             "Starting OCI container with pipe-based stdio"
         );
+        let init_argv = config.entrypoint.clone();
+        let init_tty = config.tty;
+        let init_started_at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
         match Container::start(
             &container_id,
             &bundle_rootfs,
@@ -535,7 +541,14 @@ impl ContainerService for GuestServer {
                             handle,
                             exit.clone(),
                             process,
-                        );
+                        )
+                        .with_metadata(boxlite_shared::ExecutionInfo {
+                            execution_id: init_execution_id.clone(),
+                            argv: init_argv,
+                            started_at: init_started_at,
+                            tty: init_tty,
+                            is_main_session: true,
+                        });
                         if !self
                             .registry
                             .register(init_execution_id.clone(), state.clone())

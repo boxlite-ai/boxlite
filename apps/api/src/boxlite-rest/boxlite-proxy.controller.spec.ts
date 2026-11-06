@@ -127,6 +127,38 @@ describe('BoxliteProxyController', () => {
     expect(proxyHandler).toHaveBeenCalledWith(req, res, next)
   })
 
+  it('lists a stopped box without resuming it or extending its idle lifetime', async () => {
+    jest.mocked(createProxyMiddleware).mockReturnValue(jest.fn() as never)
+    const { controller, boxService, autoResume } = makeHarness()
+    boxService.findOneByIdOrName.mockResolvedValue({
+      id: 'box-uuid',
+      runnerId: 'runner-1',
+      autoResume: true,
+      state: 'stopped',
+      autoStop: 10,
+    })
+
+    await controller.proxyExecList(activeAuth as never, 'public-box', {} as never, {} as never, jest.fn())
+
+    expect(boxService.updateLastActivityAt).not.toHaveBeenCalled()
+    expect(autoResume.ensureReady).not.toHaveBeenCalled()
+    const proxyOptions = jest.mocked(createProxyMiddleware).mock.calls[0][0]
+    const pathRewrite = proxyOptions.pathRewrite as (path: string, req: unknown) => string
+    expect(pathRewrite('/api/v1/boxes/public-box/executions', {})).toBe('/v1/boxes/box-uuid/executions')
+  })
+
+  it('does not expose execution inventory outside the caller organization', async () => {
+    const { controller, boxService } = makeHarness()
+    boxService.findOneByIdOrName.mockRejectedValue(new NotFoundException('Box public-box not found'))
+
+    await expect(
+      controller.proxyExecList(activeAuth as never, 'public-box', {} as never, {} as never, jest.fn()),
+    ).rejects.toMatchObject({ status: 404 })
+
+    expect(boxService.findOneByIdOrName).toHaveBeenCalledWith('public-box', 'org-1')
+    expect(createProxyMiddleware).not.toHaveBeenCalled()
+  })
+
   it('disables the runner timeout for files only', async () => {
     jest.mocked(createProxyMiddleware).mockReturnValue(jest.fn() as never)
     const { controller } = makeHarness()

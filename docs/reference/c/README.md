@@ -798,6 +798,26 @@ local-only host listener that accepts repeated connections.
 
 ### Command execution
 
+#### Live execution inventory and recovery
+
+`boxlite_box_executions_list(box, callback, user_data, out_error)` queues a
+read-only guest query. The callback owns its `CExecutionInfoList`; release it
+with `boxlite_free_execution_info_list`. Each entry contains `execution_id`,
+`argv`/`argc`, Unix-millisecond `started_at`, `tty`,
+and `is_main_session`. Created/stopped boxes return an empty list without starting;
+a paused box returns an invalid-state error.
+
+Use a returned ID with `boxlite_box_executions_get` for control-only access,
+or `boxlite_box_executions_attach` for stdin/output. Both return an owned
+`CExecutionHandle` released with `boxlite_execution_free`; freeing a recovered
+or attached handle does not kill the process. Only one output reader is allowed
+per session. Attachment includes available buffered output.
+Use `boxlite_box_executions_attach_read_only` when the client only reads: a
+stdin attach that is freed sends the guest a stdin close, which a process
+reading stdin sees as EOF.
+See the [recovery guide](../../guides/ai-agent-integration.md#recovering-control-after-losing-the-handle)
+for completed-session retention.
+
 #### boxlite_execute
 
 Start a command with optional streaming output and return an execution handle.

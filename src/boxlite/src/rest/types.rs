@@ -877,6 +877,11 @@ pub(crate) struct ExecResponse {
 pub(crate) struct ExecutionStatusResponse {
     pub status: String,
     pub exit_code: Option<i32>,
+    /// The guest's diagnostic when the process died unexpectedly. Part of the
+    /// `ExecutionInfo` schema; dropping it here loses the only explanation a
+    /// caller gets for an abnormal exit.
+    #[serde(default)]
+    pub error_message: Option<String>,
 }
 
 #[derive(Debug, Serialize)]

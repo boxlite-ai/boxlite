@@ -238,11 +238,25 @@ process inside a VM. The endpoints below split create / status / kill
 | Method | Path | Controller | Purpose |
 | --- | --- | --- | --- |
 | `POST` | `exec` | `BoxliteExec` | Create execution; returns `{execution_id}` |
+| `GET` | `executions` | `BoxliteListExecutions` | Live guest inventory, including main; never boots a stopped box |
 | `GET` | `executions/:id/attach` | `BoxliteExecAttach` | WebSocket upgrade; bidirectional stdio + control |
 | `GET` | `executions/:id` | `BoxliteGetExecution` | Status (`running` / `completed`, `exit_code` when done) |
 | `POST` | `executions/:id/signal` | `BoxliteExecSignal` | Send a cooperative signal (whitelist) |
 | `POST` | `executions/:id/resize` | `BoxliteExecResize` | Resize TTY (cols, rows) — TTY-only |
 | `DELETE` | `executions/:id` | `BoxliteExecKill` | Atomic kill + evict |
+
+Inventory returns the guest's real `execution_id`, `argv`, `started_at` (Unix
+milliseconds), `tty`, and `is_main_session`. Status, signal, resize, kill, and
+attach can recover an execution absent from the runner's local manager using
+that ID. Recovery keeps the API's box identifier as the ownership boundary;
+it does not substitute the runtime's internal box UUID.
+
+Control recovery does not acquire guest output. The first attach claims the
+single SDK output reader and reconnects reuse the same bounded broadcaster;
+an existing reader is never stolen. A completed execution's status remains
+available during retention. Main uses the container ID across box restarts,
+so a closed cached main is replaced only when the live guest inventory reports
+that ID again, without reusing the old output backlog.
 
 #### Call graph
 
@@ -254,7 +268,7 @@ pkg/api/controllers/boxlite_exec.go
 ├─ BoxliteExec(ctx)                           POST /exec
 │  └─ ExecManager.Start(ctx, bx, ...)         spawns process + Wait goroutine
 ├─ BoxliteGetExecution(ctx)                   GET /executions/:id (status)
-│  └─ ExecManager.Get(id)                     select on Done → running|completed
+│  └─ ExecManager.Resolve(ctx, bx, id, boxID)  recover control; select on Done
 ├─ BoxliteExecKill(ctx)                       DELETE /executions/:id
 │  └─ ExecManager.Kill(id)                    atomic kill + evict
 ├─ BoxliteExecSignal(ctx)                     POST /signal (whitelist enforced)
@@ -399,8 +413,12 @@ Notable properties:
 #### Reaping policy
 
 The background `cleanupLoop` ticks every 30 s and applies the policy
-below to each `ManagedExec`. All three timers are independently
-configurable via environment variables.
+below to executions started through the manager. Recovered guest sessions,
+including main, are not subject to its orphan or maximum-lifetime policy;
+discovery must not turn observation into a decision to kill a guest workload.
+Completed recovered sessions still use the same retention period. All three
+timers for manager-started executions are independently configurable via
+environment variables.
 
 | Trigger | Action | Default | Env var |
 | --- | --- | --- | --- |
@@ -696,6 +714,7 @@ the Swagger UI (development only).
 | `POST` | `/artifacts/inspect` | Remote digest + size |
 | `GET` | `/artifacts/logs` | Stream build log (`follow=true` polls until image exists) |
 | `POST` | `/v1/boxes/:boxId/exec` | Create execution |
+| `GET` | `/v1/boxes/:boxId/executions` | Live guest inventory (including main), without booting |
 | `GET` | `/v1/boxes/:boxId/executions/:execId` | Execution status |
 | `DELETE` | `/v1/boxes/:boxId/executions/:execId` | Kill + evict |
 | `GET` | `/v1/boxes/:boxId/executions/:execId/attach` | WebSocket stdio + control |

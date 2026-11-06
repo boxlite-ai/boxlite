@@ -147,6 +147,50 @@ fn command_help_only_advertises_meaningful_global_options() {
         ),
         (&["create"], GLOBAL_OPTIONS),
         (
+            &["top"],
+            &[
+                "--debug",
+                "--home",
+                "--config",
+                "--url",
+                "--context",
+                "--path-prefix",
+            ],
+        ),
+        (
+            &["attach"],
+            &[
+                "--debug",
+                "--home",
+                "--config",
+                "--url",
+                "--context",
+                "--path-prefix",
+            ],
+        ),
+        (
+            &["kill"],
+            &[
+                "--debug",
+                "--home",
+                "--config",
+                "--url",
+                "--context",
+                "--path-prefix",
+            ],
+        ),
+        (
+            &["signal"],
+            &[
+                "--debug",
+                "--home",
+                "--config",
+                "--url",
+                "--context",
+                "--path-prefix",
+            ],
+        ),
+        (
             &["list"],
             &[
                 "--debug",

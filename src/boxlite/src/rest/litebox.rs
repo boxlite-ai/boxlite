@@ -182,6 +182,128 @@ impl BoxBackend for RestBox {
         Ok(())
     }
 
+    async fn list_executions(&self) -> BoxliteResult<Vec<crate::ExecutionInfo>> {
+        #[derive(serde::Deserialize)]
+        struct Inventory {
+            executions: Vec<crate::ExecutionInfo>,
+        }
+        let response: Inventory = self
+            .client
+            .get(&format!("/boxes/{}/executions", self.box_id_str()))
+            .await?;
+        Ok(response.executions)
+    }
+
+    async fn get_execution(&self, execution_id: &str) -> BoxliteResult<Execution> {
+        // The by-id endpoint is authoritative: it can answer a live session,
+        // a retained terminal one, or 404 when neither exists. Do not gate it
+        // on the inventory — that would turn every list-side filtering or
+        // snapshot difference into a false NotFound, and would drop a retained
+        // status the endpoint can still serve.
+        let path = format!("/boxes/{}/executions/{}", self.box_id_str(), execution_id);
+        let initial = self.client.get::<ExecutionStatusResponse>(&path).await?;
+
+        let (tx, rx) = mpsc::unbounded_channel();
+        if matches!(
+            initial.status.as_str(),
+            "completed" | "killed" | "timed_out"
+        ) {
+            match initial.exit_code {
+                Some(exit_code) => {
+                    let _ = tx.send(ExecResult {
+                        exit_code,
+                        error_message: initial.error_message,
+                    });
+                }
+                None => tracing::warn!(
+                    %path,
+                    status = %initial.status,
+                    "Recovered execution completed without an exit code"
+                ),
+            }
+        } else {
+            let client = self.client.clone();
+            tokio::spawn(async move {
+                // Start responsive and back off to 1s: a long-running session must
+                // not generate a status request every 100ms.
+                let mut delay = std::time::Duration::from_millis(100);
+                let mut failures = 0u32;
+                loop {
+                    let response = tokio::select! {
+                        _ = tx.closed() => return,
+                        result = client.get::<ExecutionStatusResponse>(&path) => result,
+                    };
+                    match response {
+                        Ok(info)
+                            if matches!(
+                                info.status.as_str(),
+                                "completed" | "killed" | "timed_out"
+                            ) =>
+                        {
+                            match info.exit_code {
+                                Some(exit_code) => {
+                                    let _ = tx.send(ExecResult {
+                                        exit_code,
+                                        error_message: info.error_message,
+                                    });
+                                }
+                                None => tracing::warn!(
+                                    %path,
+                                    status = %info.status,
+                                    "Recovered execution completed without an exit code"
+                                ),
+                            }
+                            return;
+                        }
+                        Ok(_) => {
+                            failures = 0;
+                        }
+                        Err(BoxliteError::NotFound(_)) => {
+                            // The server no longer retains this session; the waiter
+                            // cannot observe an outcome any more.
+                            tracing::debug!(%path, "Recovered execution left the retained window");
+                            return;
+                        }
+                        Err(error) => {
+                            // A transport blip is not a process exit. Retry with the
+                            // same backoff, then give up rather than pinning the
+                            // handle on a dead endpoint: `wait()` answers with an
+                            // explicit "no longer observable" error the caller can
+                            // act on. A single blip therefore never invents an exit,
+                            // which is what this loop has to guarantee.
+                            failures += 1;
+                            if failures >= 5 {
+                                tracing::warn!(
+                                    %path,
+                                    %error,
+                                    "Recovered execution status unavailable; giving up"
+                                );
+                                return;
+                            }
+                            tracing::warn!(
+                                %path,
+                                %error,
+                                "Recovered execution status unavailable; retrying"
+                            );
+                        }
+                    }
+                    tokio::select! {
+                        _ = tx.closed() => return,
+                        _ = tokio::time::sleep(delay) => {}
+                    }
+                    delay = (delay * 2).min(std::time::Duration::from_secs(1));
+                }
+            });
+        }
+        Ok(Execution::new(
+            execution_id.to_owned(),
+            Box::new(RestExecControl::new(self.client.clone(), self.box_id_str())),
+            rx,
+            None,
+            None,
+            None,
+        ))
+    }
     async fn exec(&self, command: BoxCommand) -> BoxliteResult<Execution> {
         let box_id = self.box_id_str();
         if command.user.is_some() {
@@ -235,21 +357,9 @@ impl BoxBackend for RestBox {
 
     /// Attach to a session in the box.
     ///
-    /// - `None` — the main command session (the container's init). Hits the
-    ///   container-attach route (docker's `POST /containers/{id}/attach`), a
-    ///   distinct resource from exec-attach: the client cannot name the init
-    ///   session (its execution id is the container id, which `BoxInfo` does not
-    ///   carry), so the server returns it on the upgrade header. The route boots
-    ///   the box and subscribes to init's session but does not run it —
-    ///   `POST /start` does. `run --url` calls `attach(None)` then `start()`, the
-    ///   same create → attach → start it does locally, so a command that finishes
-    ///   instantly cannot outrun the stream.
-    /// - `Some(id)` — reattach to an existing exec session on
-    ///   `/executions/{id}/attach`.
-    ///
-    /// Either way the returned `Execution` is a fully ordinary one — signal,
-    /// resize and kill go out over the same `/executions/{id}/…` routes, and the
-    /// pump reconnects through them too.
+    /// `None` follows create-before-start for the main command; an explicit
+    /// guest ID addresses an existing exec or init session. The server must
+    /// reject output-reader conflicts before accepting the WebSocket upgrade.
     async fn attach(&self, options: AttachOptions) -> BoxliteResult<Execution> {
         let box_id = self.box_id_str();
 
@@ -1147,7 +1257,7 @@ async fn probe_execution_status(
         Ok(Ok(info)) => match info.status.as_str() {
             "completed" | "killed" | "timed_out" => ProbeResult::Terminal(ExecResult {
                 exit_code: info.exit_code.unwrap_or(-1),
-                error_message: None,
+                error_message: info.error_message,
             }),
             _ => ProbeResult::StillRunning,
         },
@@ -1590,6 +1700,109 @@ mod tests {
         );
         let resp: BoxResponse = serde_json::from_str(&body).expect("BoxResponse");
         RestBox::new(client_for(port), resp.to_box_info().expect("to_box_info"))
+    }
+
+    #[tokio::test]
+    async fn recovered_wait_does_not_invent_an_exit_on_status_failure() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            // The by-id endpoint is the first request: a running status is
+            // what hands back the handle.
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let request = read_request_head(&mut stream).await;
+            assert!(
+                String::from_utf8_lossy(&request)
+                    .starts_with("GET /v1/boxes/box-1/executions/exec-1 ")
+            );
+            write_status_response(
+                &mut stream,
+                r#"{"execution_id":"exec-1","status":"running"}"#,
+            )
+            .await;
+
+            // The poller retries a failing status endpoint five times, then
+            // stops without inventing an exit.
+            let body = r#"{"error":{"message":"guest unavailable","type":"NetworkError","code":"unavailable"}}"#;
+            for _ in 0..5 {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let request = read_request_head(&mut stream).await;
+                assert!(
+                    String::from_utf8_lossy(&request)
+                        .starts_with("GET /v1/boxes/box-1/executions/exec-1 ")
+                );
+                stream.write_all(format!("HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
+            }
+        });
+        let sandbox = rest_box_for(port, "box-1");
+        let execution = sandbox.get_execution("exec-1").await.unwrap();
+        let outcome = tokio::time::timeout(std::time::Duration::from_secs(5), execution.wait())
+            .await
+            .expect("status retries must finish inside the deadline");
+        server.await.unwrap();
+        let error = outcome.expect_err("a failed observation is not a process exit");
+        assert!(
+            error.to_string().contains("no longer observable"),
+            "observation failure should be explicit, got: {error}"
+        );
+    }
+
+    /// Existence is decided by the by-id endpoint, not by the inventory.
+    #[tokio::test]
+    async fn recovered_get_execution_uses_the_by_id_endpoint() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let request = read_request_head(&mut stream).await;
+            assert!(
+                String::from_utf8_lossy(&request)
+                    .starts_with("GET /v1/boxes/box-1/executions/exec-1 "),
+                "the client must ask for the id, not the inventory"
+            );
+            write_status_response(
+                &mut stream,
+                r#"{"execution_id":"exec-1","status":"completed","exit_code":7}"#,
+            )
+            .await;
+        });
+        let sandbox = rest_box_for(port, "box-1");
+
+        let execution = sandbox.get_execution("exec-1").await.unwrap();
+        let result = execution.wait().await.unwrap();
+
+        server.await.unwrap();
+        assert_eq!(result.exit_code, 7);
+    }
+
+    /// A definitive by-id 404 is the client's NotFound; there is no list
+    /// pre-check to disagree with it.
+    #[tokio::test]
+    async fn recovered_get_execution_maps_by_id_404_to_not_found() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let request = read_request_head(&mut stream).await;
+            assert!(
+                String::from_utf8_lossy(&request)
+                    .starts_with("GET /v1/boxes/box-1/executions/missing ")
+            );
+            let body = r#"{"error":{"message":"execution not found","type":"NotFoundError","code":"not_found"}}"#;
+            stream.write_all(format!("HTTP/1.1 404 Not Found\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
+        });
+        let sandbox = rest_box_for(port, "box-1");
+
+        let error = match sandbox.get_execution("missing").await {
+            Ok(_) => panic!("a by-id 404 must not produce an execution handle"),
+            Err(error) => error,
+        };
+
+        server.await.unwrap();
+        assert!(
+            matches!(error, BoxliteError::NotFound(_)),
+            "expected NotFound, got: {error:?}"
+        );
     }
 
     /// Send a minimal HTTP/1.1 200 OK with a JSON body.

@@ -326,6 +326,8 @@ typedef struct CDomainList {
   uint32_t min_length;
 } CDomainList;
 
+typedef struct ExecutionHandle CExecutionHandle;
+
 // C-compatible command descriptor with all BoxCommand options.
 //
 // All string fields are nullable — NULL means "use default".
@@ -351,8 +353,6 @@ typedef struct BoxliteCommand {
   int tty;
 } BoxliteCommand;
 
-typedef struct ExecutionHandle CExecutionHandle;
-
 // Streaming stdout chunk callback.
 typedef void (*CBoxStdoutCb)(const uint8_t*, size_t, void*);
 
@@ -376,6 +376,27 @@ typedef void (*CExecutionSignalCb)(CBoxliteError*, void*);
 
 // Execution PTY resize completion.
 typedef void (*CExecutionResizeCb)(CBoxliteError*, void*);
+
+// Owned metadata for one live guest execution, including the main process.
+typedef struct CExecutionInfo {
+  char *execution_id;
+  char **argv;
+  int argc;
+  // Start time in Unix milliseconds.
+  uint64_t started_at;
+  bool tty;
+  bool is_main_session;
+} CExecutionInfo;
+
+// Owned list. Release it with `boxlite_free_execution_info_list`.
+typedef struct CExecutionInfoList {
+  struct CExecutionInfo *items;
+  int count;
+} CExecutionInfoList;
+
+// Live execution inventory completion. The caller owns the returned list and
+// must release it with `boxlite_free_execution_info_list`.
+typedef void (*CExecutionInfoListCb)(struct CExecutionInfoList*, CBoxliteError*, void*);
 
 typedef struct BoxRunner CBoxliteSimple;
 
@@ -871,6 +892,12 @@ enum BoxliteErrorCode boxlite_advanced_options_set_capabilities_drop(CAdvancedBo
                                                                      const char *const *capabilities,
                                                                      int count);
 
+// Enable full capabilities and writable kernel mounts inside the guest only.
+// Runner sandbox security is unchanged. Returns InvalidArgument for a null
+// handle or a conflicting explicit capability policy.
+enum BoxliteErrorCode boxlite_advanced_options_set_privileged(CAdvancedBoxOptions *opts,
+                                                              int enabled);
+
 // Obtain a namespace without starting the Box.
 // handle must be live; out must be writable; out_error may be null.
 enum BoxliteErrorCode boxlite_box_agents(CBoxHandle *handle,
@@ -1022,11 +1049,6 @@ void boxlite_agent_turn_free(struct CAgentTurn *handle);
 // Release only the local handle. Does not close an agent or interrupt a turn.
 // handle must be null or a live, uniquely owned pointer returned by this SDK.
 void boxlite_agent_events_free(struct CAgentEvents *handle);
-// Enable full capabilities and writable kernel mounts inside the guest only.
-// Runner sandbox security is unchanged. Returns InvalidArgument for a null
-// handle or a conflicting explicit capability policy.
-enum BoxliteErrorCode boxlite_advanced_options_set_privileged(CAdvancedBoxOptions *opts,
-                                                              int enabled);
 
 // Submit a box export.
 //
@@ -1259,6 +1281,36 @@ void boxlite_free_domain_list(struct CDomainList *list);
 
 void boxlite_error_free(CBoxliteError *error);
 
+// Recover control of a live execution without claiming its output reader.
+// Freeing this handle releases control only; it never kills the process.
+enum BoxliteErrorCode boxlite_box_executions_get(CBoxHandle *handle,
+                                                 const char *execution_id,
+                                                 CExecutionHandle **out_execution,
+                                                 CBoxliteError *out_error);
+
+// Attach live streams to an existing guest execution. A current reader causes
+// an immediate conflict error rather than stealing output. This never boots
+// the box; freeing the attached handle does not kill the guest process.
+enum BoxliteErrorCode boxlite_box_executions_attach(CBoxHandle *handle,
+                                                    const char *execution_id,
+                                                    CExecutionHandle **out_execution,
+                                                    CBoxliteError *out_error);
+
+// Attach output only, without opening a stdin channel.
+//
+// Use this for a client that never writes. Freeing a stdin-attached handle
+// sends a stdin close to the guest, which a process reading stdin observes as
+// EOF — it can exit or change state on it. A read-only attach sends nothing on
+// free. A current reader still causes an immediate conflict error.
+enum BoxliteErrorCode boxlite_box_executions_attach_read_only(CBoxHandle *handle,
+                                                              const char *execution_id,
+                                                              CExecutionHandle **out_execution,
+                                                              CBoxliteError *out_error);
+
+// Return an owned copy of the canonical guest execution ID. Null means an
+// invalid handle; release a non-null result with `boxlite_free_string`.
+char *boxlite_execution_id(CExecutionHandle *execution);
+
 enum BoxliteErrorCode boxlite_box_exec(CBoxHandle *handle,
                                        const struct BoxliteCommand *cmd,
                                        CExecutionHandle **out_execution,
@@ -1322,6 +1374,15 @@ enum BoxliteErrorCode boxlite_execution_tty_resize(CExecutionHandle *execution,
                                                    CBoxliteError *out_error);
 
 void boxlite_execution_free(CExecutionHandle *execution);
+
+// Callback owns the returned list; errors are borrowed during dispatch only.
+enum BoxliteErrorCode boxlite_box_executions_list(CBoxHandle *handle,
+                                                  CExecutionInfoListCb cb,
+                                                  void *user_data,
+                                                  CBoxliteError *out_error);
+
+// Free the list and all IDs/argv strings. Null is accepted.
+void boxlite_free_execution_info_list(struct CExecutionInfoList *list);
 
 enum BoxliteErrorCode boxlite_simple_new(const char *image,
                                          int cpus,
