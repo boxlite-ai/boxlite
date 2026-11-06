@@ -318,7 +318,8 @@ await this.stop(event.boxId, undefined, Context.platform(PlatformReason.ORG_SUSP
 - Only the platform gives a reason; user and admin contexts have none.
 - A request handler names its caller with `@UserContext() ctx`, or `requestContext(req)` where it
   already holds the request: `user.id`, `auth.method` (`api_key` or `jwt`) and, when the client
-  sends `X-BoxLite-Source` or `X-BoxLite-SDK-Version`, `client.source` and `sdk.version`.
+  sends `X-BoxLite-Source` or `X-BoxLite-SDK-Version`, `client.source` and `sdk.version`. Values must be 1–64 ASCII
+  characters using letters, digits, `_`, `.`, `+`, `/`, space or `-`; invalid values are omitted.
 - The boot-time admin seed registers as `Context.platform(PlatformReason.BOOTSTRAP)`.
 - Job outcome events carry no context: the runner reports after the request has ended.
 - Admin box recovery and user creation retain the authenticated administrator in `Context.admin(actor)`.
