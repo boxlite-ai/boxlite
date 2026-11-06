@@ -68,6 +68,7 @@ describeWithDatabase('Organization nesting allowlist storage (real PostgreSQL)',
       (await database.query('SELECT "nestedVirtualization" FROM "box" WHERE id = $1', [boxId]))[0].nestedVirtualization,
     ).toBe(false)
   })
+  // Cold coverage instrumentation imports the complete production migration chain.
   it('discovers the allowlist migration through the production pre-deploy loader', async () => {
     const source = new DataSource({
       ...database.options,
@@ -82,7 +83,7 @@ describeWithDatabase('Organization nesting allowlist storage (real PostgreSQL)',
     } finally {
       if (source.isInitialized) await source.destroy()
     }
-  })
+  }, 30_000)
 
   it.each(['name', 'suspend', 'unsuspend', 'network', 'region', 'experiments', 'verification'])(
     'keeps an Admin revocation committed after the %s writer reads',

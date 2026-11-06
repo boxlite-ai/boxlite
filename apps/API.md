@@ -38,6 +38,9 @@ The API first confirms the original Runner's capability under the health deadlin
 even after the organization's grant is revoked. Missing, false, invalid or unavailable
 capability rejects nested recovery before dispatch; ordinary recovery does not probe.
 Pending nested archive imports roll back without waiting for destination capacity.
+Nested V0 create dispatches also confirm capability immediately before sending
+the saved request, including UNKNOWN-state replay. A Runner rollback cannot
+silently turn a saved nested box into an ordinary box.
 
 Deploy the additive migration, compatible API/workers and Runners while every
 organization remains disabled, then enable selected organizations. During
