@@ -283,7 +283,7 @@ impl Default for TunnelOptions {
     }
 }
 
-/// A prepared, one-shot tunnel to one TCP service inside a box.
+/// A prepared, one-shot tunnel to a service inside a box.
 pub struct BoxTunnel {
     /// The public URI the backend minted while preparing, if any.
     uri: Option<String>,

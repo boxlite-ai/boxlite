@@ -247,6 +247,19 @@ pub struct InstanceSpec {
     pub detach: bool,
 }
 
+impl InstanceSpec {
+    pub(crate) fn sockets(&self) -> crate::net::socket_path::BoxSockets {
+        use crate::runtime::layout::dirs;
+        crate::net::socket_path::BoxSockets::new(
+            &self.box_id,
+            self.home_dir
+                .join(dirs::BOXES_DIR)
+                .join(&self.box_id)
+                .join(dirs::SOCKETS_DIR),
+        )
+    }
+}
+
 /// Entrypoint configuration that the guest should run.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Entrypoint {

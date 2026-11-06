@@ -6,13 +6,23 @@ Russh speaks SSH; BoxLite decides who may connect and turns SSH requests into co
 
 ## Overview
 
-The host first enables SSH through gRPC. An SSH client then uses a separate TCP
-connection to the listener.
+The host enables SSH through gRPC. Rust `SshHandle::tunnel()` uses a dedicated
+`ssh.sock` beside `box.sock`, mapped by libkrun to guest vsock port 2697.
+The guest passes that stream directly to russh. The TCP listener remains
+available for network clients.
+
+The dedicated ingress accepts SSH `none` authentication after checking the
+host CID, with PTY and forwarding permissions. Its login does not select an
+account or OS user. TCP clients still authenticate against configured accounts.
+Socket directory access follows the existing RPC path, with no permission
+changes. See [the SSH guide](../../../../../docs/guides/ssh.md#local-data-channel)
+for connection and forwarding semantics.
 
 ```mermaid
 flowchart TB
     CONTROL["Host control client"]
     CLIENT["SSH client"]
+    LOCAL["Local runtime<br/>ssh.sock ↔ vsock:2697"]
     subgraph GUEST["Guest VM"]
         MANAGER["SshManager<br/>control / restore"]
         LISTENER["TCP listener<br/>accept connections"]
@@ -24,6 +34,7 @@ flowchart TB
         end
         MANAGER -->|"starts"| LISTENER
         LISTENER -->|"run_stream()"| RUSSH
+        LOCAL <-->|"host CID / SSH none"| RUSSH
         RUSSH -->|"callbacks"| HANDLER
         HANDLER --> BRIDGE --> WORK
     end
@@ -75,7 +86,7 @@ sequenceDiagram
     R-->>C: Output, exit status, EOF, close
 ```
 
-`alice` selects SSH credentials. The process runs as the **container's configured
+On TCP, `alice` selects SSH credentials. The process runs as the **container's configured
 user**; an SSH account does not create a separate Linux user.
 
 Continue with [SSH lifecycles](lifecycles.md) to follow startup, authentication,
@@ -169,8 +180,9 @@ OpenSSH already performs these steps; a Rust client uses the following APIs.
 | `channel_close()` | Remove channel state and terminate its running bridge. |
 
 `auth_publickey_offered()` accepts probes without revealing account existence;
-actual authorization follows proof of key possession. Password/none authentication,
-agent forwarding, and X11 forwarding are rejected.
+actual authorization follows proof of key possession. TCP rejects `none`;
+the host-only vsock ingress accepts it. Password authentication, agent
+forwarding, and X11 forwarding are rejected on both transports.
 
 `start_ssh_execution()` is an internal entry point outside the public Execution
 RPC contract. Libcontainer applies the container's namespaces and credentials;

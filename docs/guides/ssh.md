@@ -3,13 +3,19 @@
 SSH starts disabled when no saved configuration exists. The Rust runtime exposes `LiteBox::ssh()` to configure,
 query, or disable it, for local boxes and for REST-backed boxes served by
 `boxlite serve` ([HTTP control](#http-control-with-boxlite-serve)) or the
-[hosted cloud API](#hosted-cloud-api). Only
+[hosted cloud API](#hosted-cloud-api).
+
 `configure(config)` follows the implicit-start policy of exec, metrics, and file
 copying. A `Configured` or `Stopped` box using the image's default command can
 start implicitly. If `BoxOptions.cmd` or `entrypoint` explicitly sets the main
 command, configuration returns `InvalidState` in these states; call `start()`
 first. On a REST server, a stopped box with `auto_resume=false` is refused
 instead of resumed.
+
+For local Rust boxes, `tunnel()` also starts the VM and container main command as
+needed, including an explicit `cmd` or `entrypoint`. It does not configure or
+enable SSH. REST handles return `Unsupported` for this data API. See the
+[local data channel](#local-data-channel) for connection and lifecycle details.
 
 `status()`, `enable()` and `disable()` never start the VM or container main command.
 On valid `Configured` or `Stopped` local handles, `status()` returns disabled status
@@ -30,7 +36,8 @@ SSH does not publish a host port; forward one with [`boxlite ssh --tunnel`](#cli
 or other network forwarding. For component diagrams and implementation details, see
 [Guest SSH architecture](../../src/guest/src/service/ssh/README.md).
 
-The SDKs expose `configure`, `status`, `enable`, and `disable`.
+The SDKs expose `configure`, `status`, `enable`, and `disable`; Rust also exposes
+the local [dedicated data channel](#local-data-channel).
 Automatic credential management belongs to the CLI's [default setup](#cli) command.
 `enable()` uses saved configuration, errors if none exists, and preserves
 connections when SSH is already healthy. It requires a running box on both local
@@ -59,12 +66,12 @@ ssh.disable().await?;
 
 `SshHandle` owns its backend reference and can outlive the `LiteBox` borrow.
 A fresh handle to a running VM can query SSH without calling `start()` again.
-For a local box, after startup each operation has a total 15-second budget:
+For local SSH control, after startup each operation has a total 15-second budget:
 the guest's 10-second cleanup limit plus 5 seconds for communication and
 scheduling. Obtaining the SSH interface, connection setup, queueing, and the
 RPC all consume this budget; VM and container startup time is excluded.
 Connection or queueing delays can leave less than 10 seconds for guest cleanup.
-Local runtime shutdown rejects new SSH operations and cancels interface
+Local runtime shutdown rejects new SSH control operations and cancels interface
 acquisition and RPCs. In-progress VM initialization finishes before
 cancellation is returned, so detached boxes remain recoverable; container
 startup retains its own cancellation. Operations are not automatically retried.
@@ -173,6 +180,54 @@ against the same home: the runtime holds an exclusive home lock for the connecti
 - Over REST, proxy/tunnel open the box's public tunnel for the SSH port and leave it
   open, so anyone who reaches it can attempt a login and wake a stopped box; SSH keys
   remain the access control. Close it with `boxlite network tunnel BOX PORT --revoke`.
+
+## Local data channel
+
+Rust `SshHandle::tunnel()` uses `runtime ↔ ssh.sock ↔ vsock ↔ guest SSH`.
+`ssh.sock` sits in the existing per-box `sockets/` directory beside the RPC
+`box.sock`, with the same directory permissions and short-path alias mechanism.
+The guest SSH vsock port is 2697; RPC and ready notification retain 2695/2696.
+This path works with box networking disabled and with a loopback TCP SSH address.
+Preparing or connecting this channel publishes no TCP port. CLI `--proxy` and
+`--tunnel` continue using the existing network/TCP path and authentication.
+
+This channel accepts SSH `none` authentication: the client needs no user key,
+certificate, password, or configured login. Commands still run as the container
+user. SSH protocol key exchange and client host-key verification still apply.
+Existing configuration supplies the server host key and enabled state; TCP and
+REST connections retain their account authentication.
+
+Rust can prepare `let tunnel = sandbox.ssh().tunnel().await?` and open
+`let stream = tunnel.connect().await?`. As with a local network tunnel,
+preparation starts the VM and container main command as needed, including an
+explicit command, but opens no data connection. It does not configure or enable
+SSH; startup restores saved SSH configuration and enabled state. To prepare a
+new tunnel after stopping a box, obtain a fresh handle with `runtime.get()`.
+Preparation on the old handle returns `Stopped` before VM initialization, even
+if the box was stopped before its first boot.
+
+`connect()` and each forwarded client open the saved socket path without starting
+the box again or checking the previous instance's cancellation token. A tunnel
+prepared before a stop can reach the same box after it restarts. Connections
+already open are not migrated. Missing sockets return a network error.
+`connect()` has a 15-second socket connection limit and returns without consuming
+SSH bytes; then run an SSH client over the duplex stream. Disabled SSH
+refuses/closes the stream. No local network fallback occurs. Runtime and guest
+must be upgraded together and the VM restarted to install the new mapping. The
+Rust data API returns `Unsupported` on REST handles.
+
+Calling Rust `forward()` on this SSH tunnel explicitly delegates credential-free
+access to everyone who can reach its listener. Loopback includes other local
+users; an external bind address can expose it to other hosts. Use `connect()`
+when no local listener is needed.
+
+The existing relay supports concurrent reads/writes and write half-close, so
+write EOF still allows a final response. On streams returned by `connect()`,
+local I/O failures propagate to the caller. Individual forwarded-client failures
+are logged; they do not reach `wait()` or `close()`, which report the listener's
+terminal result. Guest SSH failures close the transport. Disable, reconfigure
+and guest shutdown cancel and drain dedicated sessions with the same deadlines
+as TCP.
 
 ## HTTP control with `boxlite serve`
 

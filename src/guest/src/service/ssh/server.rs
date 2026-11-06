@@ -39,6 +39,7 @@ impl PendingChannelState {
 pub(crate) struct SshConnection {
     guest: Arc<GuestServer>,
     authorizer: Arc<SshAuthorizer>,
+    trusted_host: bool,
     pending_channels: HashSet<ChannelId>,
     pending_state: HashMap<ChannelId, PendingChannelState>,
     bridges: HashMap<ChannelId, ChannelBridge>,
@@ -61,6 +62,7 @@ impl SshConnection {
         Self {
             guest,
             authorizer,
+            trusted_host: false,
             pending_channels: HashSet::new(),
             pending_state: HashMap::new(),
             bridges: HashMap::new(),
@@ -83,6 +85,11 @@ impl SshConnection {
             let _ = authenticated.send(());
         }
         Auth::Accept
+    }
+
+    /// Selected only after the dedicated vsock ingress checks the host CID.
+    pub(super) fn allow_host_access(&mut self) {
+        self.trusted_host = true;
     }
 
     fn open_channel_count(&self) -> usize {
@@ -127,7 +134,15 @@ impl russh::server::Handler for SshConnection {
     type Error = russh::Error;
 
     async fn auth_none(&mut self, _user: &str) -> Result<Auth, Self::Error> {
-        Ok(Auth::reject())
+        let identity = self.trusted_host.then_some(AuthorizedIdentity {
+            permissions: SessionPermissions {
+                pty: true,
+                port_forwarding: true,
+                agent_forwarding: false,
+                x11_forwarding: false,
+            },
+        });
+        Ok(self.commit_authentication(identity))
     }
 
     async fn auth_password(&mut self, _user: &str, _password: &str) -> Result<Auth, Self::Error> {

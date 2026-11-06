@@ -12,6 +12,147 @@ use boxlite_shared as proto;
 use std::sync::Mutex;
 use tonic::{Request, Response, Status};
 
+#[tokio::test]
+async fn ssh_dedicated_transport_is_lazy_duplex_and_preserves_half_close() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let fixture = fixture().await;
+    assert!(fixture.backend.live.get().unwrap().network.is_none());
+    let tunnel = fixture.ssh.tunnel().await.unwrap();
+    let listener =
+        tokio::net::UnixListener::bind(fixture.backend.config.sockets().ssh_sock()).unwrap();
+    // Neither preparation nor connect waits for the peer's SSH identification.
+    let connection = tokio::time::timeout(Duration::from_secs(2), tunnel.connect())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(fixture.mock.requests.lock().unwrap().is_empty());
+    let (mut reader, mut writer) = connection.into_split();
+    let (mut peer, _) = listener.accept().await.unwrap();
+    let uploaded = vec![0xa5; 128 * 1024];
+    let downloaded = vec![0x5a; 128 * 1024];
+    tokio::time::timeout(Duration::from_secs(5), async {
+        let client = async {
+            let mut received = Vec::new();
+            tokio::try_join!(
+                async {
+                    writer.write_all(&uploaded).await?;
+                    writer.shutdown().await.map_err(std::io::Error::other)
+                },
+                reader.read_to_end(&mut received)
+            )
+            .unwrap();
+            assert_eq!(received, downloaded);
+        };
+        let server = async {
+            let (mut read, mut write) = peer.split();
+            let mut received = Vec::new();
+            tokio::try_join!(
+                write.write_all(&downloaded),
+                read.read_to_end(&mut received)
+            )
+            .unwrap();
+            assert_eq!(received, uploaded);
+            write.shutdown().await.unwrap();
+        };
+        tokio::join!(client, server);
+    })
+    .await
+    .expect("both directions and EOF must finish");
+}
+
+#[tokio::test]
+async fn ssh_dedicated_transport_reports_missing_socket_and_spent_handle() {
+    let fixture = fixture().await;
+    let tunnel = fixture.ssh.tunnel().await.unwrap();
+    assert!(matches!(
+        tunnel.connect().await,
+        Err(BoxliteError::Network(_))
+    ));
+    let fixture = fixture_with_container(false).await;
+    fixture.backend.state.write().status = BoxStatus::Stopped;
+    assert!(matches!(
+        fixture.ssh.tunnel().await,
+        Err(BoxliteError::Stopped(_))
+    ));
+    assert!(fixture.backend.container_start.get().is_none());
+    assert!(fixture.mock.requests.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn ssh_dedicated_transport_starts_container_during_preparation() {
+    let fixture = fixture_with_container(false).await;
+    let _tunnel = fixture.ssh.tunnel().await.unwrap();
+    assert!(fixture.backend.container_start.get().is_some());
+    assert!(fixture.mock.requests.lock().unwrap().is_empty());
+    assert!(!fixture.backend.config.sockets().ssh_sock().exists());
+}
+
+#[tokio::test]
+async fn ssh_dedicated_transport_propagates_startup_failure() {
+    let fixture = fixture_with_container(false).await;
+    *fixture.mock.start_fail.lock().unwrap() = true;
+    let result = fixture.ssh.tunnel().await;
+    assert!(matches!(result, Err(BoxliteError::Rpc(_))));
+    assert!(fixture.backend.container_start.get().is_none());
+    assert!(fixture.mock.requests.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn ssh_dedicated_transport_connects_after_instance_cancellation() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let fixture = fixture().await;
+    let tunnel = fixture.ssh.tunnel().await.unwrap();
+    let path = fixture.backend.config.sockets().ssh_sock();
+    let original = tokio::net::UnixListener::bind(&path).unwrap();
+    drop(original);
+    std::fs::remove_file(&path).unwrap();
+    fixture.backend.state.write().mark_stop();
+    fixture.backend.shutdown_token.cancel();
+    let replacement = tokio::net::UnixListener::bind(&path).unwrap();
+    tokio::time::timeout(Duration::from_secs(2), async {
+        let mut stream = tunnel.connect().await.unwrap();
+        let (mut peer, _) = replacement.accept().await.unwrap();
+        peer.write_all(b"replacement").await.unwrap();
+        let mut received = [0; 11];
+        stream.read_exact(&mut received).await.unwrap();
+        assert_eq!(&received, b"replacement");
+    })
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn ssh_dedicated_transport_forwards_after_instance_cancellation() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let fixture = fixture().await;
+    let forwarder = fixture
+        .ssh
+        .tunnel()
+        .await
+        .unwrap()
+        .forward(crate::SocketAddress::Tcp("127.0.0.1:0".parse().unwrap()))
+        .await
+        .unwrap();
+    fixture.backend.state.write().mark_stop();
+    fixture.backend.shutdown_token.cancel();
+    let replacement =
+        tokio::net::UnixListener::bind(fixture.backend.config.sockets().ssh_sock()).unwrap();
+    let crate::SocketAddress::Tcp(address) = forwarder.local_addr() else {
+        panic!("expected TCP listener");
+    };
+    tokio::time::timeout(Duration::from_secs(2), async {
+        let mut client = tokio::net::TcpStream::connect(address).await.unwrap();
+        let (mut peer, _) = replacement.accept().await.unwrap();
+        peer.write_all(b"replacement").await.unwrap();
+        let mut received = [0; 11];
+        client.read_exact(&mut received).await.unwrap();
+        assert_eq!(&received, b"replacement");
+    })
+    .await
+    .unwrap();
+    forwarder.close().await.unwrap();
+}
+
 #[derive(Default)]
 struct Mock {
     requests: Mutex<Vec<&'static str>>,

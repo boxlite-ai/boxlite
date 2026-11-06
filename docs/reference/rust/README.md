@@ -314,6 +314,18 @@ control answer `NotFound` or `Unsupported`; there is no capability negotiation.
 | Enable | `async fn enable(&self) -> BoxliteResult<SshStatus>` |
 | Query | `async fn status(&self) -> BoxliteResult<SshStatus>` |
 | Disable | `async fn disable(&self) -> BoxliteResult<SshStatus>` |
+| Local data channel | `async fn tunnel(&self) -> BoxliteResult<BoxTunnel>` |
+
+`tunnel()` starts the VM and container main command as needed, like a local
+network tunnel, and prepares dedicated SSH access without opening a data
+connection or changing saved SSH configuration. Startup restores saved enabled
+state. `connect()` returns a raw duplex `BoxConnection` without waiting for SSH
+identification. Prepared connections and forwarded clients do not start the box
+again or check the old instance's cancellation token; they may reach the same
+box after restart. This ingress accepts SSH `none` authentication;
+forwarding it delegates container access to the listener's clients. REST returns
+`Unsupported`. See [local SSH data channel](../../guides/ssh.md#local-data-channel)
+for errors, closure and upgrade requirements.
 
 These types are exported directly from `boxlite`, independently of protobuf:
 
@@ -336,7 +348,7 @@ The configuration types implement `Deserialize` but not `Serialize`;
 the configuration, account, and CA objects (not in `SshStatus`), and the
 [OpenAPI schema](../../../openapi/box.openapi.yaml) owns the wire shape.
 
-For a local box, after VM and container startup each operation has a total
+For local SSH control, after VM and container startup each operation has a total
 15-second budget: the guest's 10-second cleanup limit plus 5 seconds for
 communication and scheduling. Obtaining the SSH interface, connection setup,
 queueing, and the RPC consume this same budget, so delays can leave less than
@@ -370,7 +382,7 @@ HTTP contract, reconfiguration, disable, and generation semantics.
 | `id` | `fn id(&self) -> &BoxID` | Get box ID |
 | `name` | `fn name(&self) -> Option<&str>` | Get optional box name |
 | `info` | `async fn info(&self) -> Result<BoxInfo>` | Get box info (no VM init) |
-| `ssh` | `fn ssh(&self) -> SshHandle` | Control SSH (local or REST-backed); only configure may implicitly start or resume the box |
+| `ssh` | `fn ssh(&self) -> SshHandle` | Get SSH control and local data access; `configure()` and local `tunnel()` may start the box under their respective [startup policies](#ssh-control) |
 | `network` | `fn network(&self) -> NetworkHandle` | Get box-scoped policy and tunnel operations |
 | `start` | `async fn start(&self) -> BoxliteResult<()>` | Start the box |
 | `run` | `async fn run(&self, command: BoxCommand) -> BoxliteResult<Execution>` | Run command |
@@ -575,6 +587,11 @@ forwarder opens fresh connections against the prepared declaration and never
 prepares again, so connecting cannot reopen a revoked tunnel.
 This differs from `BoxOptions.ports`, which publishes a local port for
 the lifetime of the box.
+
+Local network and SSH tunnel preparation reject an invalidated handle with
+`Stopped` before VM initialization, including a box stopped before its first
+boot. Obtain a fresh handle with `runtime.get()` to prepare a new tunnel.
+This check does not affect connections through a tunnel prepared before stop.
 
 `TunnelForwarder::local_addr()` reports the canonical bound address, while
 repeatable `wait()` and `close()` share the listener's cached terminal result.
