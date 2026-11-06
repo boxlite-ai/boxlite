@@ -273,6 +273,7 @@ export const apiEnvironmentFrom = ({
       // Constant on every deployed stage. The per-stage identity is the stage
       // name, which is what the status sync's dedup prefix uses.
       ENVIRONMENT: 'production',
+      POSTHOG_ENVIRONMENT: stage,
       /*
        * The API applies its own schema at boot, on both clouds.
        *
