@@ -151,6 +151,8 @@ accept this field before rolling out the added response property.
 
 `recordBusinessEvent` (`src/common/utils/business-event.util.ts`) writes one structured log record
 per business event; the attributes reach OTLP through nestjs-pino, where alerts query them.
+The same sanitized attributes reach PostHog through the client shared with HTTP metrics.
+Activity does not require the optional logging ClickHouse instance.
 
 | Event                                  | Recorded by                                       | Outcomes                      |
 | -------------------------------------- | ------------------------------------------------- | ----------------------------- |
@@ -164,6 +166,59 @@ recorded in different places, so one call cannot cover both.
 
 An event names its entity only by `correlation.id` (the user id or the box id). It carries no
 `org.id`: the box table holds a box's organization, and the organization tables a user's.
+
+### Querying Activity in PostHog
+
+The producer uses the existing `POSTHOG_API_KEY`, `POSTHOG_HOST` and `POSTHOG_ENVIRONMENT` settings.
+Without the key or host, analytics is disabled while business operations and operational logs continue.
+Delivery is queued and best effort; application shutdown waits up to five seconds for the shared client.
+SDK diagnostics are separate from the sanitized business-event payload. Retention follows the PostHog
+project; BoxLite does not provision a second store or guarantee 400 days of history.
+
+An Activity consumer needs the PostHog **API origin** (for example `https://us.posthog.com`, distinct
+from an ingestion origin such as `https://us.i.posthog.com`), project ID and a backend-only personal
+API key scoped to that project with **Query Read** permission. The producer's project capture key
+cannot authorize reads. Keep the query key out of browser code.
+
+Send a `POST /api/projects/<project-id>/query/` request with `Authorization: Bearer <query-read-key>`
+and `Content-Type: application/json`. For example, this illustrative HogQL query counts requested
+operations and failures in a half-open UTC window, grouped into Shanghai days:
+
+```json
+{
+  "name": "customer_activity_days",
+  "query": {
+    "kind": "HogQLQuery",
+    "query": "SELECT toString(toDate(toTimeZone(timestamp, 'Asia/Shanghai'))) AS day, countIf(properties['event.outcome'] = 'requested') AS operations, countIf(properties['event.outcome'] = 'exception') AS failures FROM events WHERE properties.activity_schema = '1' AND properties.environment = '<producer-environment>' AND properties['organization.id'] = '<organization-id>' AND timestamp >= fromUnixTimestamp64Milli(1793030400000) AND timestamp < fromUnixTimestamp64Milli(1793203200000) GROUP BY day ORDER BY day DESC LIMIT 32"
+  }
+}
+```
+
+Replace the example organization/environment and bounds with validated values; never interpolate raw
+request text into SQL. Use explicit limits, bounded requests and strict response validation. PostHog
+returns `columns` and positional `results` arrays, unlike ClickHouse's JSON object rows. See the
+[Query API](https://posthog.com/docs/api/queries) and [supported SQL functions](https://posthog.com/docs/sql/clickhouse-functions).
+The example documents the contract; it has not been executed against a live PostHog project.
+
+| Activity field | PostHog value |
+| --- | --- |
+| Event/time | `event`, `timestamp` (the original event emission time) |
+| Outcome/entity | `properties['event.outcome']`, `properties['correlation.id']` |
+| Organization/person | `properties['organization.id']`, optional `properties['user.id']` |
+| Actor/reason/failure | `properties['actor.kind']`, `properties['event.reason']`, `properties['exception.type']` |
+| Client/auth | `properties['client.source']`, `properties['sdk.version']`, `properties['auth.method']` |
+
+Always filter `properties.activity_schema = '1'` and the exact configured producer environment, including
+nested queries. Legacy `api_*` events remain available for existing analytics but are not Activity rows.
+Organization-scoped events also carry the existing `organization` group. Unknown people use namespaced
+anonymous/platform distinct IDs with person profiles disabled; do not treat those IDs as people.
+`user.login` has no organization: associate it only with users observed in the requested organization
+and time window. Registration has an organization only on success.
+
+For steps, select the fields above, group equal steps per minute, and request the UI limit plus one
+to report truncation. Include requested/exception outcomes plus successes for `org.active`, `box.open`,
+`user.login` and `user.registration`; ordinary success records confirm requests already listed.
+Only requested outcomes contribute to operation totals. Preview presence remains anonymous and sampled.
 
 ### Who asked: the operation context
 

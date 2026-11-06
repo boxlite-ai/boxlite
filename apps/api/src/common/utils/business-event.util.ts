@@ -26,6 +26,15 @@ export type BusinessEvent =
   | (BusinessEventBase & { outcome: 'exception'; exceptionType: string })
 
 const logger = new Logger('BusinessEvent')
+const subscribers = new Set<(attributes: Readonly<Record<string, string>>) => void>()
+
+/** The analytics owner subscribes once and disposes its listener during shutdown. */
+export function subscribeBusinessEvents(listener: (attributes: Readonly<Record<string, string>>) => void): () => void {
+  subscribers.add(listener)
+  return () => {
+    subscribers.delete(listener)
+  }
+}
 
 /**
  * Emits one business event as a structured log record. The attributes reach
@@ -38,9 +47,16 @@ export function recordBusinessEvent(event: BusinessEvent): void {
 
   if (event.outcome === 'exception') {
     logger.error(message, attributes)
-    return
+  } else {
+    logger.log(message, attributes)
   }
-  logger.log(message, attributes)
+  for (const listener of subscribers) {
+    try {
+      listener(attributes)
+    } catch {
+      logger.warn('Business event analytics capture failed')
+    }
+  }
 }
 
 /**
