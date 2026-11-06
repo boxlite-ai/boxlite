@@ -18,11 +18,9 @@ import (
 // credentialedTokenLifetime caps how long a token bought with an
 // organization's own login is reused.
 //
-// The cache is the revocation delay. A login the organization deletes or
-// rotates keeps working here until its token expires, and the control plane has
-// no way to tell this process to forget one. gcr.io states twelve hours; five
-// minutes still covers a manifest and every layer of one pull. An anonymous
-// token is not capped: there is nothing to revoke.
+// Version checks reject rotated credentials' cached tokens before reuse. This
+// cap remains an additional bound: gcr.io states twelve hours; five minutes
+// covers a manifest and every layer of one pull. Anonymous tokens are not capped.
 const credentialedTokenLifetime = 5 * time.Minute
 
 // ErrRealmRefused means a registry named a token endpoint this proxy will not
@@ -64,16 +62,25 @@ func checkRealm(challenge oci.Challenge, upstream oci.Upstream) error {
 // same path without that question being asked.
 type tokenBroker struct {
 	client *oci.Client
-	tokens *ttlCache[string]
+	tokens *ttlCache[registryToken]
+}
+
+type registryToken struct {
+	value         string
+	secretVersion string
 }
 
 func newTokenBroker(client *oci.Client) *tokenBroker {
-	return &tokenBroker{client: client, tokens: newTTLCache[string](maxCacheEntries)}
+	return &tokenBroker{client: client, tokens: newTTLCache[registryToken](maxCacheEntries)}
 }
 
 // cached returns a bearer already held for this runner's pull, if any.
-func (b *tokenBroker) cached(runnerID, org string, upstream oci.Upstream) (string, bool) {
-	return b.tokens.get(tokenKey(runnerID, org, upstream))
+func (b *tokenBroker) cached(runnerID, org string, upstream oci.Upstream, secretVersion string) (string, bool) {
+	token, held := b.tokens.get(tokenKey(runnerID, org, upstream))
+	if !held || token.secretVersion != secretVersion {
+		return "", false
+	}
+	return token.value, true
 }
 
 // acquire answers the challenge an upstream just made and remembers the result.
@@ -112,7 +119,11 @@ func (b *tokenBroker) acquire(
 	if login != nil && lifetime > credentialedTokenLifetime {
 		lifetime = credentialedTokenLifetime
 	}
-	b.tokens.put(tokenKey(runnerID, org, upstream), token.Value, lifetime)
+	cached := registryToken{value: token.Value}
+	if login != nil {
+		cached.secretVersion = login.secretVersion
+	}
+	b.tokens.put(tokenKey(runnerID, org, upstream), cached, lifetime)
 	return token.Value, nil
 }
 

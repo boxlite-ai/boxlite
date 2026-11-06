@@ -202,43 +202,24 @@ Navigation is the sidebar plus the tables. There is one route per resource, and
 each resource's table is the place you act on it — filter, sort, select, and run
 per-row or bulk actions from there.
 
-There is deliberately **no command palette**. The console had a `Ctrl/Cmd-K`
-palette that re-listed the sidebar's routes, re-implemented each table's search
-against a different data source, and exposed row actions a second time through
-per-table command providers. Every command in it was a second, drifting copy of
-an affordance the page already had, and keeping the two in step was a standing
-cost paid on every table change. Search belongs to the table that owns the data;
-actions belong to the row. If an action is hard to reach, fix the page.
+Search and actions belong to their resource tables. The console has no command
+palette duplicating those controls.
 
+## Wallet history
 
-## Two histories of the same thing go on tabs, not on top of each other
+Invoices and credit activity use separate, paginated tabs.
 
-Invoices and credit activity both answer "where did my money go", so stacking
-them made the Wallet tab a long scroll in which the second list was easy to miss
-entirely. They are sibling tabs now, and each is paged rather than rendered
-whole — an account with hundreds of documents must not decide how tall this page
-is.
+## Card setup and promo redemption share one billing flow
 
-## A pending signup credit is announced only while it can still arrive
+Wallet and Welcome use the same card setup operation: open a tab, request the
+organization's Checkout URL, and navigate to Stripe. Returning to Welcome or
+choosing Check card status refreshes the wallet and saved payment methods.
+A connected card allows the user to continue without waiting for reward delivery.
 
-A new owner's wallet reads $0.00 until the signup credit is granted, so the
-Wallet tab says it is on its way: "Registration rewards are being distributed,
-please wait patiently." The billing service only reports whether the credit
-has been delivered, and "not yet" also covers a credit that never comes: one
-switched off, or an organization that does not qualify. Three rules keep the
-notice from promising money that is not coming:
-
-- Only a verified owner asks, and only for their default organization. No one
-  else is granted a credit, so for anyone else "not yet" would never change.
-- Reads stop after about two minutes, 2, 4, 8, 16, 30, 30 and 30 s apart, and
-  the notice goes with them. Returning after the cached answer is dropped
-  starts a fresh window.
-- A failed read ends the wait as well, rather than polling the error.
-
-When the credit lands, the wallet and its ledger are refetched before the
-notice goes, so the balance changes as it disappears. `npm run start:mock`
-reports every credit delivered; `localStorage['signup-credit-pending'] = '1'`
-holds it back for six seconds.
+Both pages redeem coupons through `useRedeemCouponMutation`. Success invalidates
+wallet, transactions, invoices, plan, and usage so the next view reflects the
+server's result. Welcome shows the returned message and offers Quickstart;
+Explore with BoxLite is available without a card or coupon.
 
 ## A choice says what it does, and shows which one is picked
 
@@ -290,11 +271,22 @@ as the API orders its routes, or it would read as an image named "registries".
 
 The API has no create for an image: one enters the catalog when a box first
 starts from it. So the Images page has no "New image" button, which would
-promise a registration step that does not exist. It says how an image arrives
-instead, as three steps across the top: connect a private registry if the image
-needs one, start a box from it, and it is listed once the box runs. The first
-is the only step a reader may have to take beforehand, so it links to Private
-registries; the second opens the box create.
+promise a registration step that does not exist. One description below the title
+explains the active tab: built-in/used images or private-registry credentials.
+The Private registries tab provides credential setup. New box in the filter
+toolbar opens the existing create dialog, while row actions prefill an image.
+Quota information stays in the usage meter. The inline "How to add an image"
+control expands the registry → New box → successful start steps on demand.
+Its registry link preserves query parameters, including a suggested registry to connect.
+Feature descriptions carry definitions, and empty states give a brief next action.
+The list and usage refresh on mount and every 30 seconds in the foreground,
+since image registration may finish after the Box startup notification.
+Quickstart remains readable without Box write permission; its console creation
+button is disabled with an explanation, and the creation handler checks permission.
+Unavailable membership is distinguished from denied permission and offers a full-page
+reload to retry the provider fetch without racing an organization switch.
+Recovery preserves the console method, template and Box name in the Quickstart
+URL; generated credentials stay ephemeral, and restored names retain validation.
 
 Images lists only rows returned by the image catalog API: the organization's
 registered images and the operator-configured system images. Quickstart's
@@ -312,9 +304,7 @@ image limit; usage comes from the separate usage API, not the displayed row coun
 
 A new organization with the default system-image configuration sees `base`,
 `python`, and `node`, with zero organization image slots used. The operator may
-configure additional system images, so three is not a fixed UI limit. See the
-[expected screenshots](../../docs/contributing/investigations/2026-11-03-images-catalog-membership.md#screenshots)
-for a new organization and an organization with registered images.
+configure additional system images, so three is not a fixed UI limit.
 
 ## A state the API records once is told in the past tense
 
@@ -370,13 +360,26 @@ registries are off there and offers nothing to connect.
 
 ## Registry login tests
 
+In Images → Registries, **UPDATE** replaces a credential's username and password/token without destroying dependent Boxes.
+It requires registry write permission, preloads the username and leaves the masked secret empty.
+The registry and repository prefix stay fixed; enter a replacement secret and choose **Save changes**.
+
+The UPDATE action uses the shared small ASCII button, matching image-row actions and the adjacent removal button's height.
+
+Closing or completing the form clears its secret; failed submissions preserve the form for retry.
+Closing a pending save clears inputs and mutation state without cancelling the request.
+Save and row mutation actions remain disabled until it settles; an earlier completion never closes a subsequently opened form.
+
+New private pulls check the current credential version and stop reusing old-version tokens after update commits.
+Pulls already in progress may finish; the upstream token itself is not revoked.
+
 Registry query and mutation tests use a real QueryClient with mocked API calls.
 They verify organization isolation, refusal before sending an unscoped request,
 and invalidation after successful changes. Page tests cover confirmation and
 failed submissions, and API client tests check that removal refusals retain
 their message through the shared interceptor. Panel tests cover the masked
 secret and its cleanup on close, prefix completion, the `?connect=` link,
-duplicates, and refusals named by box.
+duplicates, updates with fixed scope, write permissions, and refusals named by box.
 
 ## Console API keys include member access
 
@@ -439,9 +442,10 @@ meantime, the console falls back to their personal organization.
 
 ## New-user onboarding
 
-The welcome flow saves organization intent before confirming signup credit delivery.
-[Onboarding](ONBOARDING.md) describes the dedicated Quickstart page, public image templates,
-server-backed prompt drafts, and deployment/verification requirements.
+The welcome flow saves organization intent, then offers card setup, promo redemption,
+or direct entry to Quickstart.
+[Onboarding](onboarding.md) describes the dedicated Quickstart page, public image templates,
+server-backed prompt drafts, completion state, and deployment requirements.
 
 ## Box limits refresh without interrupting creation
 
@@ -470,11 +474,22 @@ See [Cloud sandbox sizes](../../docs/guides/resource-limits.md#cloud-sandbox-siz
 
 **Domains** is a primary navigation page alongside Images and Volumes. It lists
 the selected organization's full hostnames and Box/port, App, or unbound targets.
+The filter matches hostnames and target names/IDs. Request domain lives in the
+resource toolbar; each row can copy its full hostname with explicit clipboard
+feedback. Empty, filtered-empty, permission and load-error states are distinct.
+Associated with links Box targets to their existing details page. App targets
+remain text because the console has no App details route; unbound targets show —.
+The page and request dialog use the shared console buttons and square surfaces.
 Use **Request domain** to enter a short name and preview the full hostname; a
 successful request holds the name without binding it. Quota and Box write
 permission apply. Bind acquired full hostnames through the CLI or SDK; binding
 does not request names, and App binding remains reserved. Unbinding retains
 ownership and consumes the same quota slot.
+
+Connection guidance is available in the collapsed "How to connect a domain"
+section. Successful requests clear filtering and show a reservation confirmation.
+Late results from a previous organization invalidate that organization's cache
+without showing a success notification in the current organization.
 
 Run `make test:apps:dashboard` for page/client tests and
 `make build:apps:dashboard` for the production build and type check.

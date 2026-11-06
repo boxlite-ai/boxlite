@@ -1,0 +1,235 @@
+/* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
+@property --welcome-box-rise {
+  syntax: '<length>';
+  inherits: true;
+  initial-value: -38px;
+}
+
+@property --welcome-box-dip {
+  syntax: '<length>';
+  inherits: true;
+  initial-value: 5px;
+}
+
+.welcome-box-artwork {
+  --welcome-box-rise: -38px;
+  --welcome-box-dip: 5px;
+}
+
+.welcome-box-dots {
+  opacity: 0;
+}
+
+.welcome-box-artwork[data-phase='organization'] {
+  --welcome-box-rise: -12px;
+  --welcome-box-dip: 2px;
+  opacity: 0.62;
+  transform: scale(1.25);
+}
+
+.welcome-box-artwork[data-phase='intent'] {
+  --welcome-box-rise: -22px;
+  --welcome-box-dip: 3px;
+  opacity: 0.82;
+  transform: scale(1.25);
+}
+
+.dark .welcome-box-artwork[data-phase='organization'] {
+  opacity: 0.8;
+}
+
+.dark .welcome-box-artwork[data-phase='intent'] {
+  opacity: 0.95;
+}
+
+.dark .welcome-box-artwork[data-phase='organization'] .welcome-box-outline {
+  opacity: 0.16;
+}
+
+.dark .welcome-box-artwork[data-phase='intent'] .welcome-box-outline {
+  opacity: 0.4;
+}
+
+.dark .welcome-box-artwork[data-phase='intent'] .welcome-box-dots {
+  opacity: 0.55;
+}
+
+.welcome-box-artwork[data-phase='organization'] .welcome-box-dots {
+  opacity: 0.8;
+}
+.welcome-box-artwork[data-phase='organization'] .welcome-box-outline {
+  opacity: 0.08;
+}
+.welcome-box-artwork[data-phase='organization'] .welcome-box-surfaces {
+  opacity: 0;
+}
+.welcome-box-artwork[data-phase='organization'] .welcome-box-floor {
+  opacity: 0.035;
+}
+.welcome-box-artwork[data-phase='organization'] .welcome-box-shadow {
+  visibility: hidden;
+}
+.welcome-box-artwork[data-phase='intent'] .welcome-box-dots {
+  opacity: 0.45;
+}
+.welcome-box-artwork[data-phase='intent'] .welcome-box-outline {
+  opacity: 0.2;
+}
+
+.welcome-box-artwork[data-phase='organization'] .welcome-box-core-visibility,
+.welcome-box-artwork[data-phase='intent'][data-selected='false'] .welcome-box-core-visibility {
+  opacity: 0;
+}
+
+.welcome-box-shadow {
+  opacity: 0.055;
+}
+
+.welcome-box-shadow,
+.welcome-box-core,
+.welcome-box-selection {
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+@media (min-width: 1024px) and (prefers-reduced-motion: no-preference) {
+  .welcome-box-artwork {
+    transition:
+      opacity 600ms ease,
+      transform 800ms cubic-bezier(0.22, 1, 0.36, 1),
+      --welcome-box-rise 800ms ease,
+      --welcome-box-dip 800ms ease;
+  }
+
+  .welcome-box-dots,
+  .welcome-box-outline,
+  .welcome-box-core-visibility,
+  .welcome-box-surfaces,
+  .welcome-box-floor {
+    transition: opacity 600ms ease;
+  }
+
+  .welcome-box-artwork[data-phase='intent'][data-selected='true'] .welcome-box-selection {
+    animation: welcome-box-select 650ms ease-out both;
+  }
+
+  .welcome-box-outline path {
+    stroke-dasharray: 1;
+    animation: welcome-box-draw 1.4s cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+
+  .welcome-box-outline path + path {
+    animation-delay: 0.2s;
+  }
+
+  .welcome-box-reveal {
+    animation: welcome-box-reveal 1.2s ease-out 0.35s both;
+  }
+
+  .welcome-box-float {
+    animation: welcome-box-float 4s ease-in-out 1.4s infinite;
+    will-change: transform;
+  }
+
+  .welcome-box-core {
+    animation: welcome-box-breathe 4s ease-in-out 1.56s infinite;
+  }
+
+  .welcome-box-shadow {
+    animation: welcome-box-shadow 4s ease-in-out 1.4s infinite;
+  }
+}
+
+@keyframes welcome-box-draw {
+  from {
+    stroke-dashoffset: 1;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+@keyframes welcome-box-reveal {
+  from {
+    opacity: 0;
+    transform: translateY(5px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes welcome-box-float {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  13% {
+    transform: translateY(var(--welcome-box-dip));
+  }
+  40%,
+  47% {
+    transform: translateY(var(--welcome-box-rise));
+  }
+  78% {
+    transform: translateY(3px);
+  }
+  90% {
+    transform: translateY(-3px);
+  }
+}
+
+@keyframes welcome-box-select {
+  0% {
+    transform: scale(0.8);
+  }
+  55% {
+    transform: scale(1.12);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+@keyframes welcome-box-breathe {
+  0%,
+  100% {
+    transform: translateY(0) scale(1);
+    opacity: 0.85;
+  }
+  18% {
+    transform: translateY(6px) scale(0.95);
+    opacity: 0.7;
+  }
+  44% {
+    transform: translateY(-18px) scale(1.12);
+    opacity: 1;
+  }
+  60% {
+    transform: translateY(-10px) scale(1.05);
+    opacity: 1;
+  }
+  82% {
+    transform: translateY(5px) scale(0.98);
+    opacity: 0.8;
+  }
+}
+
+@keyframes welcome-box-shadow {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 0.055;
+  }
+  13%,
+  78% {
+    transform: scale(1.06);
+    opacity: 0.08;
+  }
+  40%,
+  47% {
+    transform: scale(0.65);
+    opacity: 0.02;
+  }
+}

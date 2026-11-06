@@ -1336,6 +1336,8 @@ type AdminAPIAdminListOrganizationsOverviewRequest struct {
 	limit *float32
 	createdTo *string
 	createdFrom *string
+	boxCountScope *string
+	organizationId *string
 }
 
 // Organization ID or name
@@ -1364,6 +1366,18 @@ func (r AdminAPIAdminListOrganizationsOverviewRequest) CreatedTo(createdTo strin
 // Inclusive RFC 3339 instant, at most milliseconds.
 func (r AdminAPIAdminListOrganizationsOverviewRequest) CreatedFrom(createdFrom string) AdminAPIAdminListOrganizationsOverviewRequest {
 	r.createdFrom = &createdFrom
+	return r
+}
+
+// Count every retained Box state; omit to keep the existing active-state count.
+func (r AdminAPIAdminListOrganizationsOverviewRequest) BoxCountScope(boxCountScope string) AdminAPIAdminListOrganizationsOverviewRequest {
+	r.boxCountScope = &boxCountScope
+	return r
+}
+
+// Exact organization UUID; avoids name search and cannot be combined with q.
+func (r AdminAPIAdminListOrganizationsOverviewRequest) OrganizationId(organizationId string) AdminAPIAdminListOrganizationsOverviewRequest {
+	r.organizationId = &organizationId
 	return r
 }
 
@@ -1419,6 +1433,12 @@ func (a *AdminAPIService) AdminListOrganizationsOverviewExecute(r AdminAPIAdminL
 	}
 	if r.createdFrom != nil {
 		parameterAddToHeaderOrQuery(localVarQueryParams, "createdFrom", r.createdFrom, "form", "")
+	}
+	if r.boxCountScope != nil {
+		parameterAddToHeaderOrQuery(localVarQueryParams, "boxCountScope", r.boxCountScope, "form", "")
+	}
+	if r.organizationId != nil {
+		parameterAddToHeaderOrQuery(localVarQueryParams, "organizationId", r.organizationId, "form", "")
 	}
 	// to determine the Content-Type header
 	localVarHTTPContentTypes := []string{}

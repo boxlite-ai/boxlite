@@ -49,6 +49,7 @@ docs/AdminOrganizationMemberPage.md
 docs/AdminOrganizationOverview.md
 docs/AdminOrganizationOverviewPage.md
 docs/AdminOrganizationUsage.md
+docs/AdminOrganizationVerifiedCreator.md
 docs/AdminRegionOverview.md
 docs/AdminRegionOverviewPage.md
 docs/AdminRunner.md
@@ -170,6 +171,7 @@ docs/UpdateOrganizationMemberAccess.md
 docs/UpdateOrganizationName.md
 docs/UpdateOrganizationRole.md
 docs/UpdateRegion.md
+docs/UpdateRegistryCredential.md
 docs/UsageApi.md
 docs/UsageConcurrencyPointDto.md
 docs/UsageConcurrencySeriesDto.md
@@ -210,6 +212,7 @@ models/admin-organization-member.ts
 models/admin-organization-overview-page.ts
 models/admin-organization-overview.ts
 models/admin-organization-usage.ts
+models/admin-organization-verified-creator.ts
 models/admin-region-overview-page.ts
 models/admin-region-overview.ts
 models/admin-runner.ts
@@ -318,6 +321,7 @@ models/update-organization-member-access.ts
 models/update-organization-name.ts
 models/update-organization-role.ts
 models/update-region.ts
+models/update-registry-credential.ts
 models/usage-concurrency-point-dto.ts
 models/usage-concurrency-series-dto.ts
 models/user-public-key.ts

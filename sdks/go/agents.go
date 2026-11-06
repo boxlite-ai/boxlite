@@ -41,7 +41,8 @@ type AgentSendOptions struct {
 // AgentWaitOptions groups the optional deadline; nil means no deadline.
 type AgentWaitOptions struct{ Timeout *time.Duration }
 
-// AgentEventsOptions groups the optional journal cursor.
+// AgentEventsOptions groups the optional cursor to resume events after,
+// where the adapter supports it.
 type AgentEventsOptions struct{ After string }
 
 type AgentControlOptions struct{ IdempotencyKey string }
@@ -154,12 +155,15 @@ type AgentTurnState struct {
 	Requests []AgentRequest
 	Steering []AgentSteeringReceipt
 }
+
+// AgentCapabilities reports supported operations. A nil limit is unknown or
+// unsupported, never zero. Cursors elsewhere are empty when not resumable.
 type AgentCapabilities struct {
 	Operations           []string
 	InputKinds           []string
-	MaxQueuedTurns       uint
-	MaxPendingSteering   uint
-	IdempotencyRetention time.Duration
+	MaxQueuedTurns       *uint
+	MaxPendingSteering   *uint
+	IdempotencyRetention *time.Duration
 }
 type AgentEvent struct {
 	Cursor  string
@@ -169,7 +173,7 @@ type AgentEvent struct {
 	Data    json.RawMessage
 }
 
-// AgentEventStream reads the agent journal.
+// AgentEventStream reads the agent's events.
 type AgentEventStream interface {
 	Next(context.Context) (*AgentEvent, error)
 	Close() error

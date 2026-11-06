@@ -227,7 +227,10 @@ impl LiteBox {
 
     /// Get the agent namespace without starting the Box.
     pub fn agents(&self) -> crate::Agents {
-        crate::Agents { _private: () }
+        crate::Agents::new(
+            Arc::clone(&self.box_backend),
+            Arc::clone(&self.network_backend),
+        )
     }
 
     /// Get a network handle for raw tunnel operations.

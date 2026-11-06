@@ -3287,6 +3287,57 @@ paths:
       summary: Remove a registry credential
       tags:
       - registries
+    put:
+      description: Replace the username and password without changing its scope or
+        destroying dependent Boxes.
+      operationId: updateRegistryCredential
+      parameters:
+      - description: Use with JWT to specify the organization ID
+        explode: false
+        in: header
+        name: X-BoxLite-Organization-ID
+        required: false
+        schema:
+          type: string
+        style: simple
+      - description: Credential ID
+        explode: false
+        in: path
+        name: id
+        required: true
+        schema:
+          format: uuid
+          type: string
+        style: simple
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateRegistryCredential"
+        description: Replacement username and password
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RegistryCredential"
+          description: ""
+        "404":
+          description: No such credential in this organization
+        "409":
+          description: Another request is using the credential; retry the update
+        "501":
+          description: Private registries are not enabled in this deployment
+      security:
+      - bearer: []
+      - oauth2:
+        - openid
+        - profile
+        - email
+      summary: Update a registry credential
+      tags:
+      - registries
   /images:
     get:
       description: "The organization’s images together with the operator’s curated\
@@ -3980,6 +4031,26 @@ paths:
         explode: true
         in: query
         name: createdFrom
+        required: false
+        schema:
+          type: string
+        style: form
+      - description: Count every retained Box state; omit to keep the existing active-state
+          count.
+        explode: true
+        in: query
+        name: boxCountScope
+        required: false
+        schema:
+          enum:
+          - all
+          type: string
+        style: form
+      - description: Exact organization UUID; avoids name search and cannot be combined
+          with q.
+        explode: true
+        in: query
+        name: organizationId
         required: false
         schema:
           type: string
@@ -7804,6 +7875,23 @@ components:
       - registryHost
       - username
       type: object
+    UpdateRegistryCredential:
+      example:
+        username: acme-bot
+        password: password
+      properties:
+        username:
+          description: Username the registry expects
+          example: acme-bot
+          type: string
+        password:
+          description: Password or access token. Never returned.
+          type: string
+          writeOnly: true
+      required:
+      - password
+      - username
+      type: object
     Image:
       example:
         name: quay.io/acme/app
@@ -8874,7 +8962,7 @@ components:
       - observedAt
       - runners
       type: object
-    AdminOrganizationCreator:
+    AdminOrganizationVerifiedCreator:
       properties:
         userId:
           type: string
@@ -8885,6 +8973,9 @@ components:
           type: string
         displayName:
           type: string
+        emailVerified:
+          description: Current verification state from the creator account.
+          type: boolean
       required:
       - displayName
       - email
@@ -8912,7 +9003,7 @@ components:
           type: string
         creator:
           allOf:
-          - $ref: "#/components/schemas/AdminOrganizationCreator"
+          - $ref: "#/components/schemas/AdminOrganizationVerifiedCreator"
           description: Current creator identity.
           nullable: true
           type: object
@@ -8987,6 +9078,22 @@ components:
       required:
       - items
       - limit
+      type: object
+    AdminOrganizationCreator:
+      properties:
+        userId:
+          type: string
+        email:
+          description: "Current email, not necessarily the email at registration."
+          format: email
+          nullable: true
+          type: string
+        displayName:
+          type: string
+      required:
+      - displayName
+      - email
+      - userId
       type: object
     AdminOrganizationMember:
       example:

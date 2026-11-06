@@ -298,6 +298,14 @@ test\:integration\:vmm\:kvm: _ensure-kvm
 VMM_KERNEL ?= $(CURDIR)/target/vmm/boot/x86_64/vmlinux
 export VMM_KERNEL
 
+# Freestanding allocator scenario used by both boot qualification and coverage.
+VMM_BALLOON_INIT ?= $(CURDIR)/target/vmm/boot/balloon-init
+export VMM_BALLOON_INIT
+
+$(VMM_BALLOON_INIT): $(PROJECT_ROOT)/src/vmm/tests/boot/balloon_init.c
+	@mkdir -p "$(@D)"
+	$(CC) -O2 -nostdlib -static -fno-pie -no-pie -fno-stack-protector -fno-builtin -Wl,--build-id=none "$<" -o "$@"
+
 _ensure-vmm-kernel:
 	@test -r "$(VMM_KERNEL)" || { echo "VMM_KERNEL=$(VMM_KERNEL) is not readable; run make vmm:boot or set VMM_KERNEL" >&2; exit 1; }
 
@@ -306,12 +314,18 @@ test\:integration\:vmm\:elf: _ensure-kvm _ensure-vmm-kernel
 	@cargo test -p boxlite-vmm --lib --no-run
 	@timeout 60s cargo test -p boxlite-vmm --lib boot::elf::tests:: -- --ignored --test-threads=1
 
+# Every ignored boot test bounds itself with its own watchdog, so the wrapper
+# must not be shorter than their sum: at most 9 x BOOT_TIMEOUT (30 s) plus
+# 3 x balloon (35 s) = 375 s, before guest boot and teardown on a loaded host.
+# A shorter wrapper kills the whole suite instead of the one test that hangs.
+VMM_BOOT_TESTS_TIMEOUT ?= 900s
+
 # Boot the real kernel on KVM and the legacy devices, on one and four vCPUs: up to its root-mount
 # panic, up to the panic when a generated init exits, and on a ttyS0 console until a generated
 # init restarts, once through the public Vm::new as the M1 smoke test.
-test\:integration\:vmm\:linux: _ensure-kvm _ensure-vmm-kernel
+test\:integration\:vmm\:linux: _ensure-kvm _ensure-vmm-kernel $(VMM_BALLOON_INIT)
 	@cargo test -p boxlite-vmm --lib --no-run
-	@timeout 60s cargo test -p boxlite-vmm --lib boot::tests:: -- --ignored --test-threads=1
+	@timeout $(VMM_BOOT_TESTS_TIMEOUT) cargo test -p boxlite-vmm --lib boot::tests:: -- --ignored --test-threads=1 --nocapture
 
 # A host without Hypervisor.framework must fail HVF qualification, not report skipped tests as a pass.
 _ensure-hvf:
@@ -423,6 +437,20 @@ test\:integration\:rust: $(if $(SETUP_DONE),,runtime\:debug test\:warm-cache\:ru
 	else \
 		cargo test -p boxlite --features krun,gvproxy --test '*' --no-fail-fast -- --test-threads=1 --nocapture \
 			$(CARGOTEST_FILTER); \
+	fi
+
+# OpenCode agent adapter tests (requires VM environment). Ignored by the suite above:
+# each Box needs the OpenCode 2.2.2 release binary named by BOXLITE_TEST_OPENCODE_BINARY.
+test\:integration\:agents: $(if $(SETUP_DONE),,runtime\:debug)
+	@test -n "$$BOXLITE_TEST_OPENCODE_BINARY" || { \
+		echo "❌ Set BOXLITE_TEST_OPENCODE_BINARY to the OpenCode 2.2.2 glibc Linux binary"; exit 1; }
+	@echo "🧪 Running OpenCode agent tests (requires VM)..."
+	@if command -v cargo-nextest >/dev/null 2>&1; then \
+		cargo nextest run -p boxlite --features krun,gvproxy --test agents_opencode --run-ignored only \
+			--no-fail-fast --profile vm $(NEXTEST_FILTER); \
+	else \
+		cargo test -p boxlite --features krun,gvproxy --test agents_opencode --no-fail-fast -- \
+			--ignored --test-threads=1 --nocapture $(CARGOTEST_FILTER); \
 	fi
 
 # Manual release-mode benchmark. Kept out of every aggregate and CI suite.

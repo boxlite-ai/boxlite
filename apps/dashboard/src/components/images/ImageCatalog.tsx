@@ -16,7 +16,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
-import { Search, Trash } from '@/components/ui/icon'
+import { Plus, Search, Trash } from '@/components/ui/icon'
 import { RoutePath } from '@/enums/RoutePath'
 import { useDeleteImageMutation } from '@/hooks/mutations/useDeleteImageMutation'
 import { useBoxesByImageQuery } from '@/hooks/queries/useBoxesByImageQuery'
@@ -138,38 +138,6 @@ export function ImageCatalog() {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      {/* An image has no create of its own: it is added when a box first
-          starts from it. The one step a reader may have to take first is a
-          credential for a private registry, so that is where this points. */}
-      <ol className="mb-[14px] flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-meta text-muted-foreground">
-        <li>
-          <span className="text-foreground">1</span> Private registry?{' '}
-          <Link to={RoutePath.IMAGE_REGISTRIES} className="text-foreground underline underline-offset-4">
-            Connect it
-          </Link>
-        </li>
-        <li aria-hidden>→</li>
-        <li>
-          <span className="text-foreground">2</span> Start a box from any image
-          {canCreateBox && (
-            <>
-              {' '}
-              <button
-                type="button"
-                onClick={() => setNewBoxImage('')}
-                className="text-foreground underline underline-offset-4"
-              >
-                New box
-              </button>
-            </>
-          )}
-        </li>
-        <li aria-hidden>→</li>
-        <li>
-          <span className="text-foreground">3</span> Used images count toward your image limit
-        </li>
-      </ol>
-
       {usage && (
         <Panel className={cn('mb-[14px] px-[14px] py-[12px]', atLimit && 'border-destructive')}>
           <div className="flex flex-wrap items-center gap-4">
@@ -191,15 +159,23 @@ export function ImageCatalog() {
         </Panel>
       )}
 
-      <div className="flex h-11 w-full min-w-0 items-center gap-[11px] border border-dashed border-border bg-card px-[14px] sm:h-9 sm:max-w-[380px]">
-        <Search className="size-[15px] shrink-0" style={{ color: 'hsl(var(--brand))' }} strokeWidth={2} />
-        <input
-          value={filter}
-          onChange={(event) => setFilter(event.target.value)}
-          placeholder="Filter images…"
-          className="w-full border-0 bg-transparent p-0 text-body text-foreground outline-none placeholder:text-muted-foreground"
-        />
-        <span className="whitespace-nowrap font-mono text-label uppercase text-muted-foreground">{rows.length}</span>
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex h-11 w-full min-w-0 items-center gap-[11px] border border-dashed border-border bg-card px-[14px] sm:h-9 sm:max-w-[380px]">
+          <Search className="size-[15px] shrink-0" style={{ color: 'hsl(var(--brand))' }} strokeWidth={2} />
+          <input
+            value={filter}
+            onChange={(event) => setFilter(event.target.value)}
+            placeholder="Filter images…"
+            className="w-full border-0 bg-transparent p-0 text-body text-foreground outline-none placeholder:text-muted-foreground"
+          />
+          <span className="whitespace-nowrap font-mono text-label uppercase text-muted-foreground">{rows.length}</span>
+        </div>
+        {canCreateBox && (
+          <AsciiButton variant="primary" className="h-11 sm:h-9" type="button" onClick={() => setNewBoxImage('')}>
+            <Plus className="size-3.5" strokeWidth={2.4} />
+            New box
+          </AsciiButton>
+        )}
       </div>
 
       <div className="mt-[14px] flex min-h-0 flex-1 flex-col overflow-y-auto">

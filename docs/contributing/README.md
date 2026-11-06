@@ -26,24 +26,20 @@ How to build, test, and change the code.
 - [Rust style guide](development/rust-style.md): conventions for Rust code.
 - [CLI development](development/cli.md): building, testing, and extending the `boxlite` CLI.
 - [E2E local CI runbook](development/e2e-local.md): the self-hosted runner behind `e2e-local.yml`.
+- [REST API testing](development/rest-api-testing.md): API-key and OIDC coverage across the SDK, CLI, API, runner, and VM.
 - [macOS sandbox debugging](development/macos-sandbox-debugging.md): find and fix Seatbelt denials.
 
 ## Investigations
 
 Dated root-cause analyses and design studies, newest first.
 
-- 2026-11-05 · [Dashboard creation after a startup timeout](investigations/2026-11-05-dashboard-create-timeout.md): follows the created Box by ID when image preparation outlasts the startup wait.
-- 2026-11-05 · [Dashboard page width](investigations/2026-11-05-dashboard-page-width.md): shared full-width dashboard layout, measurements, and checks.
-- 2026-11-05 · [ASCII action buttons](investigations/2026-11-05-ascii-buttons.md): shared console button styles, native interactions, and rendered comparisons.
 - 2026-11-05 · [Dedicated SSH transport](investigations/2026-11-05-ssh-dedicated-vsock.md): host-only SSH over Unix sockets and vsock, tunnel lifecycle, and socket cleanup.
 - 2026-11-04 · [CLI-managed SSH setup](investigations/ssh-quick-configuration.md): managed SSH credentials and the printed SSH connection command.
-- 2026-11-03 · [Quickstart code readability](investigations/2026-11-03-quickstart-code-readability.md): SDK/CLI code typography and unpinned installation commands.
-- 2026-11-03 · [Images catalog membership](investigations/2026-11-03-images-catalog-membership.md): keeps Quickstart recommendations out of the API-backed image list.
+- 2026-11-02 · [VMM virtio-net device](investigations/2026-11-02-vmm-virtio-net.md): guest queue framing, gvproxy stream backpressure, event contracts and device-only qualification.
 - 2026-10-28 · [Agent REST API design](investigations/2026-10-28-agent-rest-api-design.md): nine HTTP operations for agents, turns and interaction, with snapshot, retry and event-recovery contracts.
-- 2026-10-28 · [Agent CLI simplification](investigations/2026-10-28-agent-cli-simplification.md): compares command hierarchies and named runtime targets for agent instances and turns.
-- 2026-10-27 · [CLI guest SSH commands](investigations/cli-ssh-commands.md)
-- 2026-10-08 · [BoxLite skills in Claude Code](investigations/claude-code-plugin.md): describes the Claude adapter, shared package layout, and installation/acceptance checks.
+- 2026-10-23 · [Organization activity facts](investigations/organization-activation-facts.md): lifecycle timestamps, transaction boundaries, and migration availability.
 - 2026-10-08 · [CLI device authorization discovery](investigations/cli-device-authorization.md)
+- 2026-09-18 · [Main command exit codes](investigations/box-exit-code-on-box-info.md): runner-backed reads, absent values, and notification-path boundaries.
 - 2026-07-19 · [Reaper: one wait, one place](investigations/reaper-exit-slot.md)
 - 2026-07-15 · [Collapse `start_attached` into `attach` and `start`](investigations/collapse-start-attached.md)
 - 2026-07-14 · [Container init creation via the zygote](investigations/init-build-via-zygote.md)
