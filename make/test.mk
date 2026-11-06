@@ -356,16 +356,16 @@ test\:unit\:guest:
 		cargo test -p boxlite-guest --bins -- --test-threads=1 capabilit spec::tests sysctl::tests; \
 	fi
 
-# Keep ordinary ownership tests unprivileged. Only explicitly ignored tests
+# Keep ordinary guest mount tests unprivileged. Only explicitly ignored tests
 # whose names contain `privileged_` run as root, inside a private mount
 # namespace so bind mounts cannot escape into the host namespace.
 test\:guest-perms:
 	@if [ "$$(uname)" != "Linux" ]; then \
-		echo "⏭️  Guest ownership tests require Linux"; \
+		echo "⏭️  Guest mount tests require Linux"; \
 		exit 0; \
 	fi; \
-	echo "🧪 Running guest ownership tests..."; \
-	cargo test -p boxlite-guest --bin boxlite-guest 'storage::perms::tests' -- \
+	echo "🧪 Running guest mount tests..."; \
+	cargo test -p boxlite-guest --bin boxlite-guest 'storage::attach::tests' -- \
 		--test-threads=1 --skip privileged_ || exit $$?; \
 	if ! command -v jq >/dev/null 2>&1; then \
 		echo "❌ jq is required to locate the prebuilt guest test executable"; \
@@ -391,17 +391,17 @@ test\:guest-perms:
 		echo "❌ Could not locate the prebuilt boxlite-guest test executable"; \
 		exit 1; \
 	fi; \
-	echo "🔐 Running privileged guest ownership tests..."; \
+	echo "🔐 Running privileged guest mount tests..."; \
 	if [ "$$(id -u)" -eq 0 ]; then \
 		unshare --mount --propagation private -- \
-			"$$test_binary" 'storage::perms::tests::privileged_' \
+			"$$test_binary" 'storage::attach::tests::privileged_' \
 			--ignored --test-threads=1; \
 	elif command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then \
 		sudo -n unshare --mount --propagation private -- \
-			"$$test_binary" 'storage::perms::tests::privileged_' \
+			"$$test_binary" 'storage::attach::tests::privileged_' \
 			--ignored --test-threads=1; \
 	else \
-		echo "❌ Privileged ownership tests require root or passwordless sudo"; \
+		echo "❌ Privileged guest mount tests require root or passwordless sudo"; \
 		exit 1; \
 	fi
 
