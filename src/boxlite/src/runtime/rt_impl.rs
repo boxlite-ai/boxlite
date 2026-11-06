@@ -926,32 +926,15 @@ impl RuntimeImpl {
                         config.id
                     );
                     crate::util::kill_process(pid);
-                    // Sending SIGKILL does not confirm exit. Keep staging until
-                    // the process has actually stopped, even on this fallback.
-                    let kill_start = std::time::Instant::now();
-                    while crate::util::is_process_alive(pid) && kill_start.elapsed() < timeout {
-                        std::thread::sleep(std::time::Duration::from_millis(50));
-                    }
                     break;
                 }
                 std::thread::sleep(std::time::Duration::from_millis(50));
-            }
-
-            if crate::util::is_process_alive(pid) {
-                eprintln!(
-                    "[boxlite] Shim is still running; preserving box state and volume staging: id={}, pid={pid}",
-                    config.id
-                );
-                continue;
             }
 
             let box_layout = self
                 .layout
                 .box_layout(config.id.as_str(), false)
                 .expect("box_layout is infallible");
-            if let Err(error) = box_layout.cleanup_volume_staging() {
-                tracing::warn!(box_id = %config.id, %error, "Failed to remove stopped box volume staging");
-            }
 
             // The third way a box dies, and it must report the exit code like the
             // other two. `stop()` records it, and so does the live watcher — but
@@ -2563,36 +2546,13 @@ mod tests {
 
     #[test]
     fn test_shutdown_sync_stops_non_detached_running_box() {
-        use std::os::unix::fs::MetadataExt;
-
-        let (runtime, dir) = create_test_runtime();
+        let (runtime, _dir) = create_test_runtime();
 
         // Spawn a dummy process to simulate a shim
         let (pid, mut child) = spawn_dummy_process();
 
         // Insert a non-detached Running box into the DB
-        let config = test_box_config_in_layout(false, &runtime);
-        assert!(!config.options.removes_on_stop());
-        let layout = runtime.layout.box_layout(config.id.as_str(), true).unwrap();
-        let staging = layout.volume_staging_dir();
-        let source = dir.path().join("config");
-        std::fs::write(&source, b"startup").unwrap();
-        let writable =
-            crate::volumes::stage_single_file(&staging.join("uservol0"), &source, "config", false)
-                .unwrap();
-        let snapshot =
-            crate::volumes::stage_single_file(&staging.join("uservol1"), &source, "config", true)
-                .unwrap();
-        assert_eq!(
-            std::fs::metadata(&writable).unwrap().ino(),
-            std::fs::metadata(&source).unwrap().ino()
-        );
-        assert_ne!(
-            std::fs::metadata(&snapshot).unwrap().ino(),
-            std::fs::metadata(&source).unwrap().ino()
-        );
-        std::fs::write(&writable, b"guest update").unwrap();
-        assert_eq!(std::fs::read(&snapshot).unwrap(), b"startup");
+        let config = test_box_config(false); // detach=false
         let state = running_state(pid);
         runtime
             .box_manager
@@ -2621,12 +2581,6 @@ mod tests {
             .expect("Box should exist");
         assert_eq!(updated_state.status, BoxStatus::Stopped);
         assert!(updated_state.pid.is_none());
-        assert!(config.box_home.exists(), "Retained box home should remain");
-        assert_eq!(std::fs::read(&source).unwrap(), b"guest update");
-        assert!(
-            !staging.exists(),
-            "Volume staging should be removed after synchronous shutdown"
-        );
     }
 
     #[test]

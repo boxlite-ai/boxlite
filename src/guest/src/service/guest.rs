@@ -42,7 +42,7 @@ impl GuestService for GuestServer {
         // Step 1: Mount all volumes (virtiofs + block devices)
         // Empty mount_point = guest determines path from tag
         info!("Mounting {} volumes", req.volumes.len());
-        let mounted = match crate::storage::mount_volumes(&req.volumes) {
+        let mounted = match crate::storage::mount_initial_volumes(&req.volumes) {
             Ok(mounted) => mounted,
             Err(e) => {
                 error!("Failed to mount volumes: {}", e);

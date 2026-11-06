@@ -34,18 +34,6 @@ volumes=[
 ]
 ```
 
-## Single-file mounts
-
-A single-file mount exposes only the selected file. Writable files are hardlinked
-into a private staging directory outside SHARED, so guest writes reach the original
-host inode. Source and box storage must share a filesystem; otherwise preparation
-fails with EXDEV. Mount the parent directory when cross-filesystem access is needed.
-
-Read-only single-file mounts use a startup copy. Later host edits do not change that
-snapshot. Read-only directory mounts continue to expose current host contents.
-Staging is removed after the VM stops or initialization fails; a failed stop retains
-it until the VM is confirmed stopped.
-
 ## Common use cases
 
 ### 1. Configuration files

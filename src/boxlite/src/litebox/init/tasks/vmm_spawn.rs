@@ -189,12 +189,13 @@ async fn build_config(
     // Add user volumes via ContainerVolumeManager
     let mut container_mgr = ContainerVolumeManager::new(&mut volume_mgr);
     for vol in &user_volumes {
-        // Export only this file, outside SHARED so writable shares cannot
-        // bypass its policy or expose the source's host siblings.
+        // Single-file volume: stage the file into a dedicated dir under the box's
+        // shared tree (already granted to the VMM sandbox) and share that dir, so
+        // virtio-fs never exposes the file's host siblings. Directories share as-is.
         let share_dir = match &vol.subpath {
             None => vol.host_path.clone(),
             Some(file_name) => {
-                let staging_dir = layout.volume_staging_dir().join(&vol.tag);
+                let staging_dir = layout.shared_dir().join("user-volumes").join(&vol.tag);
                 stage_single_file(&staging_dir, &vol.host_path, file_name, vol.read_only)?;
                 staging_dir
             }

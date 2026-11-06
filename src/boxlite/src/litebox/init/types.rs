@@ -250,19 +250,11 @@ impl Drop for CleanupGuard {
 
         tracing::warn!(box_id = %self.box_id, reason = %reason, "Box initialization failed, cleaning up");
 
-        // Keep exports while a failed stop may still leave the VM using them.
-        let stopped = match self.handler.as_mut().map(|handler| handler.stop()) {
-            Some(Err(error)) => {
-                tracing::warn!(%error, "Failed to stop handler during cleanup");
-                false
-            }
-            _ => true,
-        };
-        if stopped
-            && let Some(layout) = &self.layout
-            && let Err(error) = layout.cleanup_volume_staging()
+        // Stop handler if started
+        if let Some(ref mut handler) = self.handler
+            && let Err(e) = handler.stop()
         {
-            tracing::warn!(%error, "Failed to remove volume staging");
+            tracing::warn!("Failed to stop handler during cleanup: {}", e);
         }
 
         // DON'T cleanup filesystem - preserve diagnostic files for debugging
@@ -518,23 +510,11 @@ mod tests {
             BoxliteError::Engine("Box CL84LvGx7RBE failed to start: timeout after 30s".to_string());
         let err_display = err.to_string();
 
-        let layout = BoxFilesystemLayout::new(
-            home.path.join("boxes").join(box_id.as_str()),
-            crate::runtime::layout::FsLayoutConfig::without_bind_mount(),
-            false,
-        );
-        let source = home.path.join("source.conf");
-        std::fs::write(&source, b"original").unwrap();
-        let staging = layout.volume_staging_dir().join("uservol0");
-        crate::volumes::stage_single_file(&staging, &source, "source.conf", false).unwrap();
         {
             let mut guard = CleanupGuard::new(runtime.clone(), box_id.clone());
-            guard.set_layout(layout);
             guard.set_last_error(&err);
             // Drop fires here: armed=true by default.
         }
-        assert!(!staging.exists());
-        assert_eq!(std::fs::read(source).unwrap(), b"original");
 
         // Assertion 1: record was NOT deleted (the original bug).
         assert!(

@@ -86,6 +86,9 @@ pub fn mount_volume(vol: &Volume) -> BoxliteResult<()> {
 }
 
 /// Mount all volumes.
-pub fn mount_volumes(volumes: &[Volume]) -> BoxliteResult<super::aggregate::MountedVolumes> {
-    super::aggregate::mount_volumes(volumes)
+pub fn mount_volumes(volumes: &[Volume]) -> BoxliteResult<()> {
+    for vol in volumes {
+        mount_volume(vol)?;
+    }
+    Ok(())
 }
