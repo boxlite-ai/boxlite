@@ -4,46 +4,18 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { EmailVerificationRequiredError, RegistrationEmailError } from '@/api/errors'
+import { RegistrationEmailError } from '@/api/errors'
 import { Dialog, DialogHeader, DialogDescription, DialogTitle, DialogContent } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { RoutePath } from '@/enums/RoutePath'
 import { FallbackProps } from 'react-error-boundary'
 
 /**
- * Signing out is the recovery: it ends the IdP session, so the sign-in that
- * follows is a fresh interactive login — the only flow that can render the
- * hosted email verification step. Reloading or retrying replays the same
- * unverified identity.
- *
- * /logout marks the session just-logged-out, which LandingPage honours by
- * showing a manual sign-in button instead of auto-redirecting (see
- * lib/auth-session.ts). That pause is wanted here: it keeps a still-unverified
- * account from being bounced straight back into the same 403.
- *
- * This boundary sits outside the router and the auth provider (see main.tsx), so
- * it navigates the whole page rather than reaching for useNavigate/useAuth.
+ * Signing out is the recovery: it ends the IdP session, so the next sign-in can
+ * pick another account. This boundary sits outside the router and the auth
+ * provider (see main.tsx), so it navigates the whole page rather than reaching
+ * for useNavigate/useAuth.
  */
-function EmailVerificationRequired() {
-  return (
-    <Dialog open>
-      <DialogContent className="[&>button]:hidden">
-        <DialogHeader>
-          <DialogTitle>Verify your email address</DialogTitle>
-          <DialogDescription>
-            You're signed in, but BoxLite needs a verified email address before it can load your account. Check your
-            inbox for the verification link, then sign in again to finish.
-          </DialogDescription>
-        </DialogHeader>
-
-        <div className="flex justify-end">
-          <Button onClick={() => window.location.assign(RoutePath.LOGOUT)}>Sign out and verify</Button>
-        </div>
-      </DialogContent>
-    </Dialog>
-  )
-}
-
 function RegistrationEmailRejected({ error }: { error: RegistrationEmailError }) {
   const messages = {
     disposable_email:
@@ -72,9 +44,6 @@ function RegistrationEmailRejected({ error }: { error: RegistrationEmailError })
 export function ErrorBoundaryFallback({ error, resetErrorBoundary }: FallbackProps) {
   // An account-state rejection is not a crash: the stack trace and "try again"
   // are noise, and the only useful action is the one that can clear it.
-  if (error instanceof EmailVerificationRequiredError) {
-    return <EmailVerificationRequired />
-  }
   if (error instanceof RegistrationEmailError) {
     return <RegistrationEmailRejected error={error} />
   }

@@ -38,6 +38,17 @@ function fakeTenant(rules: object[] = [], lose?: string, refuse?: string) {
     clients: [] as Record<string, any>[],
     grants: [] as Record<string, any>[],
     connections: [{ id: 'con_1', name: 'Username-Password-Authentication', is_domain_connection: false }],
+    // The login Action as configure-login deploys it for this stage, bound to post-login.
+    actions: [
+      {
+        id: 'act_1',
+        name: 'boxlite-login-policy',
+        deployed_version: {
+          code: `const API_AUDIENCE = "https://api.example.test/api"\nconst MCP_RESOURCE_URL = ${JSON.stringify(RESOURCE)}`,
+        },
+      },
+    ] as Record<string, any>[],
+    bindings: [{ id: 'bnd_1', action: { id: 'act_1' } }] as Record<string, any>[],
   }
   const writes: string[] = []
   let next = 0
@@ -53,6 +64,8 @@ function fakeTenant(rules: object[] = [], lose?: string, refuse?: string) {
       if (method !== 'get') writes.push(`${method} ${path}`)
       const data = options.data
       if (method === 'get' && path === 'rules') return page(rules, options.query)
+      if (method === 'get' && path === 'actions/actions') return { actions: page(state.actions, options.query) }
+      if (method === 'get' && path === 'actions/triggers/post-login/bindings') return { bindings: state.bindings }
       if (path === 'tenants/settings') return method === 'get' ? state.settings : Object.assign(state.settings, data)
       if (path === 'resource-servers') {
         if (method === 'get') return page(state.apis, options.query)
@@ -127,6 +140,32 @@ function configurator(tenant: ReturnType<typeof fakeTenant>, apply: boolean, jou
     { scopes: SCOPES, clients: [CLIENT], journalDirectory },
   )
 }
+
+// The API no longer checks email verification itself (#2404): the login Action is
+// the only gate, so MCP must not be configured on a tenant whose live Action does
+// not gate this exact resource.
+test('refuses before any write while the live login Action does not gate this resource', () => {
+  const drifts: Array<[string, (tenant: ReturnType<typeof fakeTenant>) => void]> = [
+    ['no MCP URL', (t) => (t.state.actions[0].deployed_version.code = 'const API_AUDIENCE = "a"\nconst MCP_RESOURCE_URL = ""')],
+    ['another URL', (t) => (t.state.actions[0].deployed_version.code = 'const API_AUDIENCE = "a"\nconst MCP_RESOURCE_URL = "https://other.test/mcp"')],
+    ['no API audience', (t) => (t.state.actions[0].deployed_version.code = `const API_AUDIENCE = ""\nconst MCP_RESOURCE_URL = ${JSON.stringify(RESOURCE)}`)],
+    ['not deployed', (t) => delete t.state.actions[0].deployed_version],
+    ['not bound', (t) => (t.state.bindings = [])],
+    ['missing', (t) => (t.state.actions = [])],
+  ]
+  for (const [name, drift] of drifts) {
+    const tenant = fakeTenant()
+    drift(tenant)
+    const dir = mkdtempSync(join(tmpdir(), 'mcp-'))
+    try {
+      assert.throws(() => configurator(tenant, true, dir).apply(), /does not gate MCP logins/, name)
+      assert.deepEqual(tenant.writes, [], name)
+      assert.deepEqual(readdirSync(dir), [], name)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  }
+})
 
 test('preview lists every write and changes nothing', () => {
   const tenant = fakeTenant()

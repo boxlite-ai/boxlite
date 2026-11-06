@@ -5,7 +5,12 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { parseArgs } from 'node:util'
 
-import { type Auth0ManagementClient, readAllPages } from './auth0-login-policy.js'
+import {
+  type Auth0ManagementClient,
+  deployedActionGatesBoxLite,
+  LOGIN_POLICY_ACTION_NAME,
+  readAllPages,
+} from './auth0-login-policy.js'
 
 type JsonObject = Record<string, any>
 
@@ -150,11 +155,32 @@ export class Auth0McpConfigurator {
 
   /** The writes that bring the tenant to the desired state; empty once it is there. */
   private plan(): JournalEntry[] {
+    this.assertLoginActionGatesMcp()
     const rules = readAllPages(this.client, 'rules', 'rules', { enabled: 'true' })
     if (rules.length > 0) {
       throw new Error(`${rules.length} active Rule(s) on ${this.options.tenant}: CIMD logins fail while Rules run`)
     }
     return [...this.tenantWrites(), ...this.apiWrites(), ...this.clientWrites(), ...this.connectionWrites()]
+  }
+
+  /**
+   * The API leaves email verification to the login Action (#2404), so an MCP API
+   * on a tenant whose live, bound Action skips this resource would admit
+   * unverified database users.
+   */
+  private assertLoginActionGatesMcp(): void {
+    const action = readAllPages(this.client, 'actions/actions', 'actions').find(
+      (candidate) => candidate.name === LOGIN_POLICY_ACTION_NAME,
+    )
+    const response = this.client.request('get', 'actions/triggers/post-login/bindings') as JsonObject | null
+    const bindings = (response?.bindings ?? []) as JsonObject[]
+    const bound = action !== undefined && bindings.some((binding) => binding.action?.id === action.id)
+    if (!bound || !deployedActionGatesBoxLite(action, this.options.resourceUrl)) {
+      throw new Error(
+        `Auth0 Action '${LOGIN_POLICY_ACTION_NAME}' on ${this.options.tenant} does not gate MCP logins for ${this.options.resourceUrl} and the BoxLite API; ` +
+          `run auth0:configure-login with --api-audience and --mcp-resource-url ${this.options.resourceUrl} first`,
+      )
+    }
   }
 
   private tenantWrites(): JournalEntry[] {

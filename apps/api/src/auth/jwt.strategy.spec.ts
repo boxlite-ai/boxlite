@@ -5,17 +5,12 @@
  */
 
 import { Request } from 'express'
-import { HttpStatus } from '@nestjs/common'
 import * as jose from 'jose'
-import { JwtStrategy, requireVerifiedAuth0DatabaseEmail } from './jwt.strategy'
+import { JwtStrategy } from './jwt.strategy'
 import { UserService } from '../user/user.service'
 import { TypedConfigService } from '../config/typed-config.service'
 import { LoginEventRecorder } from './login-event.recorder'
 import { Context } from '../common/context/context'
-import {
-  EMAIL_VERIFICATION_REQUIRED_CODE,
-  EmailVerificationRequiredException,
-} from '../exceptions/email-verification-required.exception'
 
 const DEFAULT_REGION_ID = 'region-default-id'
 
@@ -74,17 +69,6 @@ describe('JwtStrategy.validate — auto-created user', () => {
     expect(userService.create).toHaveBeenCalledWith(expect.anything(), Context.user())
   })
 
-  it('rejects an unverified Auth0 database identity before local user creation', async () => {
-    const { strategy, userService } = buildStrategy()
-    const request = { get: jest.fn().mockReturnValue(undefined) } as unknown as Request
-
-    await expect(
-      strategy.validate(request, { sub: 'auth0|user-1', email: 'new@boxlite.dev', email_verified: false }),
-    ).rejects.toThrow(EmailVerificationRequiredException)
-    expect(userService.findOne).not.toHaveBeenCalled()
-    expect(userService.create).not.toHaveBeenCalled()
-  })
-
   it('allows social identities through even when their provider claim is false', async () => {
     const { strategy, userService } = buildStrategy()
     const request = { get: jest.fn().mockReturnValue(undefined) } as unknown as Request
@@ -102,17 +86,6 @@ describe('JwtStrategy.validate — auto-created user', () => {
     await strategy.validate(request, payload)
 
     expect(loginEvents.recordFirstUse).toHaveBeenCalledWith('user-1', payload)
-  })
-
-  // A rejected token is not a login, so nothing may be recorded for it.
-  it('does not record a login for a rejected unverified identity', async () => {
-    const { strategy, loginEvents } = buildStrategy()
-    const request = { get: jest.fn().mockReturnValue(undefined) } as unknown as Request
-
-    await expect(
-      strategy.validate(request, { sub: 'auth0|user-1', email: 'new@boxlite.dev', email_verified: false }),
-    ).rejects.toThrow(EmailVerificationRequiredException)
-    expect(loginEvents.recordFirstUse).not.toHaveBeenCalled()
   })
 
   it.each([undefined, '', '   '])('rejects a new OIDC user without a registration email (%s)', async (email) => {
@@ -154,6 +127,39 @@ describe('JwtStrategy.validate — auto-created user', () => {
     expect(loginEvents.recordFirstUse).toHaveBeenCalledTimes(1)
   })
 
+  // Third-party MCP clients get access tokens without profile claims (#2404).
+  it('keeps a known user email and name when the token carries neither', async () => {
+    const { strategy, userService } = buildStrategy()
+    const user = {
+      id: 'google-oauth2|existing',
+      name: 'Existing User',
+      email: 'existing@gmail.com',
+      emailVerified: true,
+    }
+    jest.mocked(userService.findOne).mockResolvedValue(user as never)
+    const request = { get: jest.fn() } as unknown as Request
+
+    await expect(strategy.validate(request, { sub: user.id })).resolves.toMatchObject({
+      userId: user.id,
+      email: user.email,
+    })
+
+    expect(userService.update).not.toHaveBeenCalled()
+  })
+
+  // The login Action is the only email-verification gate; the API trusts the
+  // tokens it lets through, whether or not they carry `email_verified`.
+  it('admits a known database user whose MCP token carries no email_verified', async () => {
+    const { strategy, userService } = buildStrategy()
+    const user = { id: 'auth0|existing', name: 'Existing User', email: 'existing@boxlite.dev', emailVerified: true }
+    jest.mocked(userService.findOne).mockResolvedValue(user as never)
+    const request = { get: jest.fn() } as unknown as Request
+
+    await expect(strategy.validate(request, { sub: user.id })).resolves.toMatchObject({ userId: user.id })
+
+    expect(userService.update).not.toHaveBeenCalled()
+  })
+
   it('preserves an existing user login when the provider updates their email to a disposable domain', async () => {
     const { strategy, userService, loginEvents } = buildStrategy()
     const user = { id: 'github|existing', name: 'Existing User', email: 'existing@gmail.com', emailVerified: true }
@@ -168,59 +174,12 @@ describe('JwtStrategy.validate — auto-created user', () => {
   })
 })
 
-describe('requireVerifiedAuth0DatabaseEmail', () => {
-  it('rejects false or missing verification on Auth0 database identities', () => {
-    expect(() => requireVerifiedAuth0DatabaseEmail({ sub: 'auth0|123', email_verified: false })).toThrow(
-      EmailVerificationRequiredException,
-    )
-    expect(() => requireVerifiedAuth0DatabaseEmail({ sub: 'auth0|123' })).toThrow(EmailVerificationRequiredException)
-  })
-
-  // 401 would tell the dashboard the token is stale, which re-arms a re-login
-  // loop that cannot clear an unverified address. 403 says the token is fine
-  // and the bearer is not yet allowed — the client can then show a real screen.
-  it('rejects with 403 and a machine-readable code, never 401', () => {
-    let thrown: unknown
-    try {
-      requireVerifiedAuth0DatabaseEmail({ sub: 'auth0|123', email_verified: false })
-    } catch (error) {
-      thrown = error
-    }
-
-    const exception = thrown as EmailVerificationRequiredException
-    expect(exception).toBeInstanceOf(EmailVerificationRequiredException)
-    expect(exception.getStatus()).toBe(HttpStatus.FORBIDDEN)
-    expect(exception.getResponse()).toMatchObject({ code: 'email_verification_required' })
-
-    // Pinned to the literal, not the constant: asserting the constant against
-    // itself proves nothing, and the dashboard keeps its own copy of this string
-    // (apps/dashboard/src/api/errors.ts). A rename on either side must break a
-    // test rather than silently desync the wire contract.
-    expect(EMAIL_VERIFICATION_REQUIRED_CODE).toBe('email_verification_required')
-  })
-
-  it('accepts verified Auth0 database and non-Auth0 identities', () => {
-    expect(() => requireVerifiedAuth0DatabaseEmail({ sub: 'auth0|123', email_verified: true })).not.toThrow()
-    expect(() => requireVerifiedAuth0DatabaseEmail({ sub: 'google-oauth2|123', email_verified: false })).not.toThrow()
-  })
-})
-
 describe('JwtStrategy.verifyToken', () => {
   afterEach(() => jest.restoreAllMocks())
 
-  it('applies the same email-verification gate to direct JWT consumers', async () => {
+  it('returns the payload of a token without profile claims', async () => {
     const { strategy } = buildStrategy()
-    jest.spyOn(jose, 'jwtVerify').mockResolvedValue({
-      payload: { sub: 'auth0|123', email_verified: false },
-      protectedHeader: { alg: 'RS256' },
-    } as any)
-
-    await expect(strategy.verifyToken('already-issued-token')).rejects.toThrow(EmailVerificationRequiredException)
-  })
-
-  it('returns a verified Auth0 database payload', async () => {
-    const { strategy } = buildStrategy()
-    const payload = { sub: 'auth0|123', email_verified: true }
+    const payload = { sub: 'auth0|123' }
     jest.spyOn(jose, 'jwtVerify').mockResolvedValue({
       payload,
       protectedHeader: { alg: 'RS256' },

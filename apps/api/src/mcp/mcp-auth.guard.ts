@@ -65,8 +65,8 @@ export class McpAuthGuard implements CanActivate {
     try {
       payload = await this.jwtStrategy.verifyToken(token, audience)
     } catch (error) {
-      // A bad signature, issuer, audience or expiry is a 401; anything else, such
-      // as the unverified-email 403, keeps its own status.
+      // A bad signature, issuer, audience or expiry is a 401; anything else keeps
+      // its own status.
       if (error instanceof errors.JOSEError) {
         throw new UnauthorizedException()
       }

@@ -125,6 +125,12 @@ export interface Auth0LoginPolicyOptions {
   tenant: string
   clientId: string
   connectionName: string
+  /**
+   * The BoxLite API's audience (`OIDC_AUDIENCE`). The API does not check email
+   * verification itself, so the Action denies an unverified database user any
+   * token for it, whatever the client or database connection.
+   */
+  apiAudience?: string
   apply: boolean
   allowTestEmailProvider: boolean
   /** Overwrite a login policy Action this tool cannot show it generated. */
@@ -177,6 +183,7 @@ export function parseAuth0LoginPolicyOptions(
       tenant: { type: 'string' },
       'client-id': { type: 'string' },
       connection: { type: 'string' },
+      'api-audience': { type: 'string' },
       apply: { type: 'boolean', default: false },
       'allow-test-email-provider': { type: 'boolean', default: false },
       'replace-action': { type: 'boolean', default: false },
@@ -197,12 +204,14 @@ export function parseAuth0LoginPolicyOptions(
   const tenant = requireExactValue('--tenant', values.tenant)
   const clientId = requireExactValue('--client-id', values['client-id'])
   const connectionName = requireExactValue('--connection', values.connection)
+  const apiAudience = requireExactValue('--api-audience', values['api-audience'])
   if (tenant.includes('/') || !tenant.includes('.')) throw new Error('--tenant must be an exact Auth0 tenant hostname')
 
   return {
     tenant,
     clientId,
     connectionName,
+    apiAudience,
     apply: values.apply ?? false,
     allowTestEmailProvider: values['allow-test-email-provider'] ?? false,
     replaceAction: values['replace-action'] ?? false,
@@ -440,6 +449,8 @@ export function hydrateLoginPolicyAction(
     tenant?: string
     // The MCP endpoint's resource URL; its logins get the dashboard's checks.
     mcpResourceUrl?: string
+    // The BoxLite API's audience; any token for it needs a verified database user.
+    apiAudience?: string
   },
 ): string {
   const replacements: Record<string, string> = {
@@ -450,9 +461,10 @@ export function hydrateLoginPolicyAction(
     __ACCOUNT_LINK_FORM_ID_JSON__: JSON.stringify(values.accountLinkFormId ?? ''),
     __AUTH0_DOMAIN_JSON__: JSON.stringify(values.tenant ?? ''),
     __MCP_RESOURCE_URL_JSON__: JSON.stringify(values.mcpResourceUrl ?? ''),
+    __API_AUDIENCE_JSON__: JSON.stringify(values.apiAudience ?? ''),
   }
   const hydrated = source.replace(
-    /__(?:BOXLITE_CLIENT_ID|BOXLITE_DB_CONNECTION|EMAIL_VERIFICATION_FORM_ID|ACCOUNT_LINK_API_ORIGIN|ACCOUNT_LINK_FORM_ID|AUTH0_DOMAIN|MCP_RESOURCE_URL)_JSON__/g,
+    /__(?:BOXLITE_CLIENT_ID|BOXLITE_DB_CONNECTION|EMAIL_VERIFICATION_FORM_ID|ACCOUNT_LINK_API_ORIGIN|ACCOUNT_LINK_FORM_ID|AUTH0_DOMAIN|MCP_RESOURCE_URL|API_AUDIENCE)_JSON__/g,
     (placeholder) => replacements[placeholder],
   )
   const unresolved = hydrated.match(/__[A-Z_]+_JSON__/)
@@ -1447,6 +1459,7 @@ export class Auth0LoginPolicyConfigurator {
         accountLinkFormId: linkFormId,
         tenant: this.options.tenant,
         mcpResourceUrl: this.options.mcpResourceUrl,
+        apiAudience: this.options.apiAudience,
       }),
       runtime: 'node22',
     }
@@ -1747,6 +1760,18 @@ function bindingsSnapshot(bindings: JsonObject[]): JsonObject[] {
 /** Whether the Action the tenant runs names a link Form, the account link's switch. */
 function runsAccountLink(action: JsonObject): boolean {
   return /const ACCOUNT_LINK_FORM_ID = "[^"]+"/.test(String(action.deployed_version?.code ?? action.code ?? ''))
+}
+
+/** The deployed login Action, the only email-verification gate, as configure-mcp checks it. */
+export const LOGIN_POLICY_ACTION_NAME = RESOURCE_NAMES.action
+
+/** Whether the deployed Action version gates the BoxLite API and exactly this MCP resource. */
+export function deployedActionGatesBoxLite(action: JsonObject, mcpResourceUrl: string): boolean {
+  const code = String(action.deployed_version?.code ?? '')
+  return (
+    /const API_AUDIENCE = "[^"]+"/.test(code) &&
+    code.includes(`const MCP_RESOURCE_URL = ${JSON.stringify(mcpResourceUrl)}`)
+  )
 }
 
 function gatesMcpLogins(action: JsonObject): boolean {

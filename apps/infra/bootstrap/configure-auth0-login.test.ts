@@ -60,7 +60,7 @@ function runConfigureLogin(scopes: string[], extraArgs: string[]) {
   try {
     const result = spawnSync(
       'npx',
-      ['tsx', ENTRYPOINT, '--tenant', TENANT, '--client-id', 'spa_123', '--connection', 'boxlite-users', ...extraArgs],
+      ['tsx', ENTRYPOINT, '--tenant', TENANT, '--client-id', 'spa_123', '--connection', 'boxlite-users', '--api-audience', 'https://api.example.test/api', ...extraArgs],
       {
         cwd: infraRoot,
         encoding: 'utf8',
