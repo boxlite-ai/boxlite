@@ -119,6 +119,21 @@ describe('ApiClient 401 -> bounded re-login recovery', () => {
     expect(window.sessionStorage.getItem('boxlite.reauth-attempted')).toBeNull()
   })
 
+  it.each([
+    { status: 403, code: 'disposable_email' },
+    { status: 403, code: 'email_required' },
+    { status: 400, code: 'invalid_email' },
+  ])('preserves registration email rejection $status/$code without re-login', async ({ status, code }) => {
+    const onUnauthorized = vi.fn(() => Promise.resolve())
+    const api = await makeClient(onUnauthorized, status, { message: 'Account creation refused', code })
+
+    const error = await api.organizationsApi.listOrganizations().catch((caught: unknown) => caught)
+
+    expect(error).toMatchObject({ code, message: 'Account creation refused' })
+    expect(onUnauthorized).not.toHaveBeenCalled()
+    expect(window.sessionStorage.getItem('boxlite.reauth-attempted')).toBeNull()
+  })
+
   it('an uncoded error stays a plain BoxliteError', async () => {
     const onUnauthorized = vi.fn(() => Promise.resolve())
     const api = await makeClient(onUnauthorized, 403, { message: 'Forbidden' })
@@ -128,6 +143,7 @@ describe('ApiClient 401 -> bounded re-login recovery', () => {
     const error = await api.organizationsApi.listOrganizations().catch((e: unknown) => e)
     expect(error).toBeInstanceOf(BoxliteError)
     expect(error).not.toBeInstanceOf(EmailVerificationRequiredError)
+    expect(onUnauthorized).not.toHaveBeenCalled()
   })
 
   // The catalog's delete refusal is only useful for the box ids in its message;
