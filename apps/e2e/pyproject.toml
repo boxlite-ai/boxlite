@@ -1,0 +1,18 @@
+[project]
+name = "boxlite-e2e"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "greenlet==3.5.6",
+    "maturin==1.15.0",
+    "pytest==9.1.1",
+    "pytest-asyncio==1.4.0",
+    "pytest-cov==7.1.0",
+    "pytest-timeout==2.4.0",
+    "ruff==0.17.1",
+]
+
+[tool.uv]
+# The uv version is pinned once in dependencies.json, which the Make targets
+# install before syncing; required-version here would be a second source.
+package = false

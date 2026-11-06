@@ -38,6 +38,27 @@ received the corresponding HTTP requests by tailing `/var/log/boxlite-api.log`
 and `journalctl -u boxlite-runner`. If that meta-test passes, every other
 case in this suite is using the same fixtures and the same path.
 
+## Managed local E2E (preferred)
+
+`make test:e2e:setup` starts the dependency services with Docker Compose and runs the current-source API/Runner/proxies as host processes; fixtures and a real guest smoke follow. State lives in `target/e2e/`; no sudo or system services are used.
+
+Initialize submodules once (`git submodule update --init --recursive`, or `make setup`), then:
+
+```bash
+nix develop -c make test:e2e:doctor
+nix develop -c make test:e2e:setup
+make test:e2e FILTER=exec_working_dir
+make test:e2e:down
+```
+
+`make test:e2e:down` also terminates `bwrap`/`boxlite-shim` processes left in this checkout's runtime home by an interrupted run, removes their box directories, and fails if any process survives. The jailer starts every shim with `setsid()`, so signalling the runner's process group never reaches them.
+
+`up`, `setup`, `run`, and `down` hold an exclusive lock in this checkout's shared runtime home (`/tmp/ble2e-*/r`) for their whole lifetime: concurrent invocations fail fast instead of racing, because `down` prunes box directories that a concurrent `up`/`run` may have just created. Different `E2E_STATE_DIR` values share the same runtime home and Compose project, so the lock is keyed on the runtime home rather than the state dir. The kernel releases the lock if a holder dies.
+
+`E2E_PYTHON` accepts absolute paths, bare interpreter names found on `PATH`, or paths relative to the repository root (the pytest cases run with `cwd=apps/e2e`, so relative values are anchored at the root). A command-line `E2E_STATE_DIR` overrides an inherited `BOXLITE_E2E_STATE_DIR`, and relative `E2E_STATE_DIR` values are anchored at the repository root, so the runner/proxy builds land in the same directory `up` reads.
+
+Nix is optional: install the same tools with the distro and run the same commands. Host prerequisites remain Docker with Compose v2, `/dev/kvm`, and (for volumes) `/dev/fuse`, `mount-s3` and `user_allow_other` in `/etc/fuse.conf`. The devshell includes `docker-compose`; Ubuntu can use `docker-compose-v2`. The bootstrap instructions below are the legacy Ubuntu system-service path and are no longer used by `make test:e2e:setup`.
+
 ## Prereqs
 
 `BOXLITE_E2E_CATALOG_IMAGE` accepts tagged, digest-pinned, and untagged

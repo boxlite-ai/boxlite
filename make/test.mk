@@ -685,12 +685,69 @@ test\:install-script:
 	@bash scripts/release/test_install.sh
 
 # ─── E2E: SDK → API → Runner → VM ───────────────────────────────────────────
+export FILTER E2E_ARGS
+E2E_STATE_DIR ?= $(PROJECT_ROOT)/target/e2e
+E2E_PYTHON ?= $(PROJECT_ROOT)/.venv-e2e/bin/python
+export E2E_PYTHON
+# A command-line E2E_STATE_DIR must win over an inherited BOXLITE_E2E_STATE_DIR,
+# or down would tear down the stale state dir while builds fill the new one.
+ifeq ($(origin E2E_STATE_DIR),command line)
+BOXLITE_E2E_STATE_DIR = $(E2E_STATE_DIR)
+else
+BOXLITE_E2E_STATE_DIR ?= $(E2E_STATE_DIR)
+endif
+export BOXLITE_E2E_STATE_DIR
+E2E_UV_VERSION = $(shell python3 -c 'import json; print(json.load(open("apps/e2e/dependencies.json"))["uv"])')
+
 test\:e2e\:setup:
-	@apps/e2e/bootstrap.sh
-	@python3 apps/e2e/fixture_setup.py
+	@python3 apps/e2e/local.py setup
+
+test\:e2e\:up:
+	@python3 apps/e2e/local.py up
+
+test\:e2e\:down:
+	@python3 apps/e2e/local.py down
+
+test\:e2e\:doctor:
+	@python3 apps/e2e/local.py doctor
+
+test\:e2e\:status:
+	@python3 apps/e2e/local.py status
 
 test\:e2e:
-	@cd apps/e2e && python3 -m pytest cases/ -v
+	@python3 apps/e2e/local.py run
+
+test\:e2e\:deps:
+	@python3 -c 'import pathlib, sys; root = pathlib.Path(sys.argv[1]).absolute().parent.parent; sys.exit(0 if not root.exists() or (root / "pyvenv.cfg").exists() else "E2E_PYTHON must point into a virtual environment (set E2E_PYTHON=<venv>/bin/python)")' "$(E2E_PYTHON)"
+	@if [ ! -e "$$(dirname "$$(dirname "$(E2E_PYTHON)")")/pyvenv.cfg" ]; then python3 -m venv "$$(dirname "$$(dirname "$(E2E_PYTHON)")")"; fi
+	@"$(E2E_PYTHON)" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 11) else "E2E requires Python 3.11+")'
+	@"$(E2E_PYTHON)" -m pip install --quiet 'uv==$(E2E_UV_VERSION)'
+	@UV_PROJECT_ENVIRONMENT="$$(dirname "$$(dirname "$(E2E_PYTHON)")")" "$(E2E_PYTHON)" -m uv sync --project apps/e2e --locked --inexact --no-install-project --python "$(E2E_PYTHON)" --no-python-downloads
+
+test\:e2e\:deps\:apps:
+	@cd apps && corepack yarn install --immutable
+
+test\:e2e\:deps\:node:
+	@cd sdks/node && node scripts/check-lockfile.mjs && npm ci --no-audit --no-fund
+
+test\:e2e\:build\:python:
+	@"$(E2E_PYTHON)" -m uv pip install --python "$(E2E_PYTHON)" --no-deps --no-build-isolation --config-settings 'build-args=--locked --profile dev' --editable sdks/python
+
+test\:e2e\:build\:minio:
+	@python3 apps/e2e/minio.py --state-dir "$(E2E_STATE_DIR)"
+
+# Invoked only when source inputs changed; setup owns the shared runtime build.
+test\:e2e\:build\:runner:
+	@mkdir -p "$(E2E_STATE_DIR)/bin"
+	@cd apps/runner && CGO_ENABLED=1 go build $(E2E_GO_REBUILD) -tags boxlite_dev -o "$(abspath $(E2E_STATE_DIR))/bin/runner" ./cmd/runner
+
+test\:e2e\:build\:proxies:
+	@mkdir -p "$(E2E_STATE_DIR)/bin"
+	@cd apps/proxy && go build -o "$(abspath $(E2E_STATE_DIR))/bin/proxy" ./cmd/proxy
+	@cd apps/image-service && go build -o "$(abspath $(E2E_STATE_DIR))/bin/registry-proxy" ./cmd/registry-proxy
+
+test\:e2e\:build\:node:
+	@cd sdks/node && npm run build:native -- -- --locked && npm run build
 
 test\:e2e\:two-sided:
 	@PR_REF=$${PR_REF:?must set PR_REF=<branch>} bash apps/e2e/two_sided.sh
