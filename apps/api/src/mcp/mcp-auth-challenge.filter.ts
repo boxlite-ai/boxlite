@@ -9,10 +9,12 @@ import type { Response } from 'express'
 import { FailedAuthTrackerService } from '../auth/failed-auth-tracker.service'
 import { AllExceptionsFilter } from '../filters/all-exceptions.filter'
 import { McpAuthMetadata } from './mcp-auth-metadata'
+import { MCP_OAUTH_BASELINE_SCOPES } from './mcp-oauth-policy'
 
 /**
  * Adds the RFC 6750 bearer challenge to the MCP endpoint's 401s, naming the
- * Protected Resource Metadata so a host without a token can find where to sign in.
+ * Protected Resource Metadata so a host without a token can find where to sign in,
+ * and the baseline scope it should ask for there.
  *
  * The answer itself stays the global filter's, so failed-auth tracking and its
  * throttling still apply.
@@ -27,7 +29,7 @@ export class McpAuthChallengeFilter implements ExceptionFilter {
     // header in the same form as the SDK's own scope challenges.
     const sdkAnswer = bearerAuthChallengeResponse(
       new OAuthError(OAuthErrorCode.InvalidToken, 'Missing or invalid access token'),
-      { resourceMetadataUrl: metadata.url },
+      { resourceMetadataUrl: metadata.url, requiredScopes: [...MCP_OAUTH_BASELINE_SCOPES] },
     )
     this.challenge = sdkAnswer.headers.get('WWW-Authenticate') ?? 'Bearer'
     this.answer = new AllExceptionsFilter(failedAuthTracker)

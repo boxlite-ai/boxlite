@@ -749,7 +749,10 @@ an OAuth caller before it runs, for direct tools and `invoke_api_endpoint` alike
   so a client that re-authorizes keeps the scopes it had.
 
 Sign-in requests `write:boxes`, the MCP scope-minimization starting set that covers
-every direct tool but `removeBox`. Whether a client completes step-up for the rest is
+every direct tool but `removeBox`: the `401` challenge carries `scope="write:boxes"`
+and the metadata's `scopes_supported` lists only it, since clients without a
+challenge scope request everything listed there. The other scopes are defined on the
+authorization server and granted through step-up. Whether a client completes step-up for the rest is
 checked per client on the dev tenant. API-key callers skip both checks; the key's own
 permissions apply in REST.
 

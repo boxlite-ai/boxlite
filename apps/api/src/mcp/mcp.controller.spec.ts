@@ -3,7 +3,17 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { CanActivate, Controller, Delete, Get, INestApplication, Injectable, Param, UseGuards } from '@nestjs/common'
+import {
+  CanActivate,
+  Controller,
+  Delete,
+  Get,
+  INestApplication,
+  Injectable,
+  Param,
+  UnauthorizedException,
+  UseGuards,
+} from '@nestjs/common'
 import { DiscoveryModule } from '@nestjs/core'
 import { Test } from '@nestjs/testing'
 import { CLIENT_CAPABILITIES_META_KEY, PROTOCOL_VERSION_META_KEY } from '@modelcontextprotocol/server'
@@ -38,6 +48,7 @@ const CALLER = { userId: 'user-1', role: 'user', email: 'u@example.test', organi
 class FakeMcpAuthGuard implements CanActivate {
   canActivate(context: Parameters<CanActivate['canActivate']>[0]) {
     const req = context.switchToHttp().getRequest()
+    if (!req.headers.authorization) throw new UnauthorizedException()
     const oauth = /^Bearer oauth:(.*)$/.exec(req.headers.authorization ?? '')
     if (req.headers.authorization !== 'Bearer good' && !oauth) return false
     req.user = CALLER
@@ -239,6 +250,18 @@ describe('/api/mcp', () => {
     const allowed = await call('invoke_api_endpoint', { operationId: 'configureSsh', arguments: {} }, 'Bearer good')
 
     expect(allowed.status).toBe(200)
+  })
+
+  it('names the sign-in baseline scope in the 401 challenge', async () => {
+    const { port } = app.getHttpServer().address()
+    const response = await fetch(`http://127.0.0.1:${port}/api/mcp`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 9, method: 'tools/list' }),
+    })
+
+    expect(response.status).toBe(401)
+    expect(response.headers.get('www-authenticate')).toContain('scope="write:boxes"')
   })
 
   it('reads served routes from the Nest app under its global prefix', () => {

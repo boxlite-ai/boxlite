@@ -7,6 +7,7 @@ import { Injectable, NotFoundException } from '@nestjs/common'
 import { getOAuthProtectedResourceMetadataUrl, type OAuthProtectedResourceMetadata } from '@modelcontextprotocol/server'
 import { JwtStrategy } from '../auth/jwt.strategy'
 import { TypedConfigService } from '../config/typed-config.service'
+import { MCP_OAUTH_BASELINE_SCOPES } from './mcp-oauth-policy'
 
 /** Where this API serves MCP: the `mcp` controller under the `api` global prefix. */
 const MCP_ROUTE = '/api/mcp'
@@ -54,7 +55,13 @@ export class McpAuthMetadata {
     }
     // The issuer the JWT strategy checks `iss` against is the one the
     // authorization server's own metadata reports, so a host's issuer check holds.
-    return { resource: this.resource.href, authorization_servers: [this.jwtStrategy.issuer] }
+    // Only the sign-in baseline: clients without a challenge scope request all of
+    // `scopes_supported`, so listing every scope here would grant them all up front.
+    return {
+      resource: this.resource.href,
+      authorization_servers: [this.jwtStrategy.issuer],
+      scopes_supported: [...MCP_OAUTH_BASELINE_SCOPES],
+    }
   }
 }
 
