@@ -24,6 +24,9 @@ function page<T>(items: T[], query: Record<string, string> = {}): T[] {
 
 /**
  * An in-memory tenant answering the Management API paths the configurator uses.
+ * As Auth0 does, it gives a CIMD client its own `tpc_` id, finds it by
+ * `external_client_id`, refuses a metadata URL where a client id belongs (400
+ * `invalid_uri`), and grants only to client ids.
  * `lose` names one write (`post resource-servers`) whose change lands but whose
  * response is lost, as on a dropped connection; `refuse` names one that fails
  * before it lands.
@@ -32,7 +35,7 @@ function fakeTenant(rules: object[] = [], lose?: string, refuse?: string) {
   const state = {
     settings: { resource_parameter_profile: 'audience', client_id_metadata_document_supported: false } as Record<string, any>,
     apis: [] as Record<string, any>[],
-    clients: new Set<string>(),
+    clients: [] as Record<string, any>[],
     grants: [] as Record<string, any>[],
     connections: [{ id: 'con_1', name: 'Username-Password-Authentication', is_domain_connection: false }],
   }
@@ -70,11 +73,28 @@ function fakeTenant(rules: object[] = [], lose?: string, refuse?: string) {
         return api
       }
       if (path === 'clients/cimd/preview') return {}
-      if (path === 'clients/cimd/register') return state.clients.add(data.external_client_id) && { client_id: data.external_client_id }
+      if (path === 'clients/cimd/register') {
+        // Registering a URL again updates its client rather than adding one.
+        const known = state.clients.find((c) => c.external_client_id === data.external_client_id)
+        if (known) return known
+        const created = { client_id: `tpc_${++next}`, external_client_id: data.external_client_id, external_metadata_type: 'cimd' }
+        state.clients.push(created)
+        return created
+      }
+      if (path === 'clients') {
+        const external = options.query?.external_client_id
+        return page(state.clients.filter((c) => !external || c.external_client_id === external), options.query)
+      }
       if (path.startsWith('clients/')) {
         const id = decodeURIComponent(path.slice('clients/'.length))
-        if (method === 'delete') return state.clients.delete(id) && null
-        return state.clients.has(id) ? { client_id: id } : null
+        if (!/^[\w-]+$/.test(id)) throw new Error(`400 invalid_uri ${path}`)
+        const found = state.clients.find((c) => c.client_id === id)
+        if (method === 'delete') {
+          state.clients = state.clients.filter((c) => c !== found)
+          return null
+        }
+        if (!found && !options.allowNotFound) throw new Error(`404 ${path}`)
+        return found ?? null
       }
       if (path === 'client-grants') {
         if (method === 'get') {
@@ -84,6 +104,7 @@ function fakeTenant(rules: object[] = [], lose?: string, refuse?: string) {
           )
           return page(matching, options.query)
         }
+        if (!/^[\w-]+$/.test(data.client_id)) throw new Error(`400 invalid client_id ${data.client_id}`)
         const grant = { id: `cgr_${++next}`, ...data }
         state.grants.push(grant)
         return grant
@@ -136,10 +157,11 @@ test('apply reaches the desired state, a rerun writes nothing, and rollback rest
       user: { policy: 'require_client_grant' },
       client: { policy: 'deny_all' },
     })
-    assert.ok(tenant.state.clients.has(CLIENT))
+    const [registered] = tenant.state.clients
+    assert.equal(registered.external_client_id, CLIENT)
     assert.deepEqual(tenant.state.grants[0], {
       id: tenant.state.grants[0].id,
-      client_id: CLIENT,
+      client_id: registered.client_id,
       audience: RESOURCE,
       scope: SCOPES,
       subject_type: 'user',
@@ -151,7 +173,7 @@ test('apply reaches the desired state, a rerun writes nothing, and rollback rest
 
     assert.equal(tenant.state.settings.resource_parameter_profile, 'audience')
     assert.equal(tenant.state.apis.length, 0)
-    assert.equal(tenant.state.clients.size, 0)
+    assert.equal(tenant.state.clients.length, 0)
     assert.equal(tenant.state.grants.length, 0)
     assert.equal(tenant.state.connections[0].is_domain_connection, false)
     assert.equal(JSON.parse(readFileSync(applied.journal, 'utf8')).entries.length, 5)
@@ -195,20 +217,21 @@ test('revokes the grant of a client dropped from the list, sparing every other g
   const dropped = 'https://old.example.test/oauth/client.json'
   try {
     configurator(tenant, true, dir).apply()
-    const listed = tenant.state.grants.find((g) => g.client_id === CLIENT)!
+    const [listed] = tenant.state.grants
+    tenant.state.clients.push({ client_id: 'tpc_old', external_client_id: dropped, external_metadata_type: 'cimd' })
     const others = [
       { id: 'cgr_dashboard', client_id: 'spa_dashboard', audience: RESOURCE, scope: SCOPES, subject_type: 'user' },
-      { id: 'cgr_elsewhere', client_id: dropped, audience: 'https://other.test/api', scope: [], subject_type: 'user' },
+      { id: 'cgr_elsewhere', client_id: 'tpc_old', audience: 'https://other.test/api', scope: [], subject_type: 'user' },
     ]
-    const stale = { id: 'cgr_stale', client_id: dropped, audience: RESOURCE, scope: SCOPES, subject_type: 'user' }
+    const stale = { id: 'cgr_stale', client_id: 'tpc_old', audience: RESOURCE, scope: SCOPES, subject_type: 'user' }
     tenant.state.grants.push(...others, stale)
 
     const applied = configurator(tenant, true, dir).apply()
 
     assert.deepEqual(tenant.state.grants.map((g) => g.id).sort(), [listed.id, ...others.map((g) => g.id)].sort())
     Auth0McpConfigurator.rollback(applied.journal, () => tenant.client as never)
-    const { id: _id, ...restored } = tenant.state.grants.find((g) => g.client_id === dropped && g.audience === RESOURCE) ?? {}
-    assert.deepEqual(restored, { client_id: dropped, audience: RESOURCE, scope: SCOPES, subject_type: 'user' })
+    const { id: _id, ...restored } = tenant.state.grants.find((g) => g.client_id === 'tpc_old' && g.audience === RESOURCE) ?? {}
+    assert.deepEqual(restored, { client_id: 'tpc_old', audience: RESOURCE, scope: SCOPES, subject_type: 'user' })
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
@@ -220,13 +243,14 @@ test('rollback re-creates only a revoked grant that is really gone', () => {
   const dropped = 'https://old.example.test/oauth/client.json'
   try {
     configurator(tenant, true, dir).apply()
-    tenant.state.grants.push({ id: 'cgr_stale', client_id: dropped, audience: RESOURCE, scope: SCOPES, subject_type: 'user' })
+    tenant.state.clients.push({ client_id: 'tpc_old', external_client_id: dropped, external_metadata_type: 'cimd' })
+    tenant.state.grants.push({ id: 'cgr_stale', client_id: 'tpc_old', audience: RESOURCE, scope: SCOPES, subject_type: 'user' })
     assert.throws(() => configurator(tenant, true, dir).apply(), /503/)
     const journal = readdirSync(dir).sort().at(-1)!
 
     Auth0McpConfigurator.rollback(join(dir, journal), () => tenant.client as never)
 
-    assert.equal(tenant.state.grants.filter((g) => g.client_id === dropped).length, 1)
+    assert.equal(tenant.state.grants.filter((g) => g.client_id === 'tpc_old').length, 1)
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
