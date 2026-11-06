@@ -30,7 +30,7 @@ that implement this setting. It describes build capability; deployment also
 checks the running process's kernel environment and listening socket.
 
 For the system-wide context (CDN, load balancers, where the runner fits in
-the request path), see [`apps/README.md`](../README.md).
+the request path), see the [hosted platform](../../docs/contributing/architecture/platform/README.md).
 
 ---
 
@@ -602,7 +602,7 @@ window retains the last successful sample's image even if the box exits; no
 winner produces `image=null`, and an empty image string stays empty. Reading the
 image needs no additional API query, registry lookup or guest command.
 
-The runner posts to the [internal ingestion route](../API.md#runner-cpu-incidents)
+The runner posts to the [internal ingestion route](../../docs/contributing/architecture/platform/api.md#runner-cpu-incidents)
 when `BOXLITE_API_URL` and `BOXLITE_RUNNER_TOKEN` are configured. Up to 32 completed
 reports wait in memory. Network errors, 429 and 5xx retry every 30 seconds with a
 ten-second timeout; other failures and queue overflow are logged and dropped.
@@ -638,7 +638,7 @@ Reads are sequential rather than an atomic host-wide snapshot. One-minute
 sampling can miss short memory spikes.
 
 When API URL and Runner token are configured, completed snapshots enter a separate
-32-report queue for [internal ingestion](../API.md#runner-memory-incidents).
+32-report queue for [internal ingestion](../../docs/contributing/architecture/platform/api.md#runner-memory-incidents).
 Scans have a ten-second context deadline and do not wait for network uploads.
 Cancellation releases the sampler even if a Linux kernel read is blocked. At most
 one such read remains in flight; later scans wait for its slot within their own

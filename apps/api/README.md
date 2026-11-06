@@ -1,7 +1,9 @@
 # API
 
-The NestJS control-plane service. See the [apps hub](../README.md) for how it fits with the
-other services and [`API.md`](../API.md) for its interfaces.
+The NestJS control-plane service. See the
+[hosted platform](../../docs/contributing/architecture/platform/README.md) for how it fits with
+the other services and [service interfaces](../../docs/contributing/architecture/platform/api.md)
+for its interfaces.
 
 ## Development runtime
 

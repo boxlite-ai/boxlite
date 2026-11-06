@@ -210,7 +210,7 @@ A later apply without `--mcp-resource-url` refuses an Action that gates MCP logi
 rather than silently dropping the gate; pass `--disable-mcp-login` to stop gating
 them on purpose.
 The scopes the API accepts from a token are checked against `mcp-clients.json` by
-an API spec; see [MCP endpoint](../../API.md#mcp-endpoint) for how they are enforced.
+an API spec; see [MCP endpoint](../../../docs/contributing/architecture/platform/api.md#mcp-endpoint) for how they are enforced.
 
 ## Account linking at login
 

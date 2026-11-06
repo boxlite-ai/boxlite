@@ -1,10 +1,12 @@
 # Architecture
 
-How the BoxLite runtime's code fits together, for contributors. The user-level picture is in
-[Concepts](../../concepts/README.md).
+How BoxLite's code fits together, for contributors: the runtime, and the hosted platform under
+`apps/`. The user-level picture is in [Concepts](../../concepts/README.md).
 
 ## Design documents
 
+- [Hosted platform](platform/README.md): how the `apps/` services fit together, their
+  [interfaces](platform/api.md), and their [data model](platform/schema.md).
 - [VMM](vmm/README.md): BoxLite's own VMM, which is replacing libkrun.
 - [Jailer network permissions](jailer-network-permissions.md): guest networking, host IP grants,
   and the AF_UNIX control plane.

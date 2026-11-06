@@ -8,20 +8,20 @@ constraints and indexes the database actually enforces.
 The model is implementation-grounded:
 
 - Tables and columns come from the TypeORM entities under
-  [`api/src`](./api/src). The data source globs every `*.entity.ts` in that
-  tree (see [`data-source.ts`](./api/src/migrations/data-source.ts)), so the
+  [`api/src`](../../../../apps/api/src). The data source globs every `*.entity.ts` in that
+  tree (see [`data-source.ts`](../../../../apps/api/src/migrations/data-source.ts)), so the
   entity files are the complete list of mapped tables.
 - Column types, constraints, and index definitions come from the migrations in
-  [`api/src/migrations`](./api/src/migrations/): the baseline
+  [`api/src/migrations`](../../../../apps/api/src/migrations/): the baseline
   `1741087887225-migration.ts` and the
-  [`pre-deploy`](./api/src/migrations/pre-deploy/) set create the tables.
-- Satellite stores come from [`dex/config.yaml`](./dex/config.yaml),
-  [`otel-collector/config.yaml`](./otel-collector/config.yaml), and the
+  [`pre-deploy`](../../../../apps/api/src/migrations/pre-deploy/) set create the tables.
+- Satellite stores come from [`dex/config.yaml`](../../../../apps/dex/config.yaml),
+  [`otel-collector/config.yaml`](../../../../apps/otel-collector/config.yaml), and the
   ClickHouse queries in
-  [`box-telemetry`](./api/src/box-telemetry/services/box-telemetry.service.ts).
+  [`box-telemetry`](../../../../apps/api/src/box-telemetry/services/box-telemetry.service.ts).
 
 `apps/api` is the only application that owns a database. The Go services —
-[`runner`](./runner/) and [`proxy`](./proxy/) — hold no persistence: neither
+[`runner`](../../../../apps/runner/) and [`proxy`](../../../../apps/proxy/) — hold no persistence: neither
 imports an ORM, `database/sql`, or an embedded store. Runner state reaches the
 control plane through `runner` telemetry columns, `job` results and CPU incident reports.
 
@@ -223,7 +223,7 @@ is selected with include=activation on the existing organization detail.
 | `lastBoxCreatedAt` | `timestamptz` | nullable; maximum retained creation or warm-pool claim |
 | `lastBoxModifiedAt` | `timestamptz` | nullable; maximum successful-start or accepted-deletion time |
 
-The [activation design](../docs/contributing/investigations/organization-activation-facts.md)
+The [activation design](../../investigations/organization-activation-facts.md)
 describes the optimistic update, migration locking, backfill and uncertainty.
 
 ### `user`
@@ -511,7 +511,7 @@ saturation trigger. Captures repeat while high CPU observations continue. Create
 Indexes on `(runnerId,id)` and `windowEndedAt` support runner and capture-completion
 time-range filters. No foreign-key cascade or automatic retention job: evidence
 survives resource deletion. A single insert ignores duplicate `(runnerId,eventId)`
-reports through the unique constraint. [Admin queries](API.md#runner-cpu-incidents)
+reports through the unique constraint. [Admin queries](api.md#runner-cpu-incidents)
 select the largest `cpuSeconds` row per Box within the time/Runner filters, with
 smaller row IDs breaking ties. Null-attribution rows remain separate. Selection
 precedes ID ordering and `limit`; there is no pagination or commit-order guarantee.
@@ -543,7 +543,7 @@ zero-byte Boxes remain valid observations. Image strings come from the same scan
 including empty strings. No Box-table lookup is needed.
 
 Indexes on `sampledAt` and `(runnerId,id)` support the
-[administrator query](API.md#runner-memory-incidents). A duplicate event is ignored
+[administrator query](api.md#runner-memory-incidents). A duplicate event is ignored
 atomically, preserving all original rankings. There are no resource foreign-key
 cascades or automatic retention jobs. A single JSONB snapshot keeps the bounded
 ranking atomic without a separate child table.
@@ -963,8 +963,8 @@ boundary.
 
 | Store | Owner | Contents |
 | ----- | ----- | -------- |
-| ClickHouse database `otel` | written by [`otel-collector`](./otel-collector/config.yaml), read by `apps/api` | `otel_logs`, `otel_traces`, `otel_metrics_gauge` — the upstream ClickHouse exporter's own schema, queried by [`box-telemetry`](./api/src/box-telemetry/services/box-telemetry.service.ts) to serve per-box logs, traces, and metrics. The collector uses `create_schema: false`; self-hosted infrastructure owns table TTLs through `CLICKHOUSE_RETENTION_HOURS`, defaulting to 720 hours (30 days). |
-| SQLite `/var/dex/dex.db` | [`dex`](./dex/config.yaml) | Dex's own OIDC state — clients, auth codes, refresh tokens, signing keys. The control plane knows a person only by the subject dex issues, stored as `user.id`. |
+| ClickHouse database `otel` | written by [`otel-collector`](../../../../apps/otel-collector/config.yaml), read by `apps/api` | `otel_logs`, `otel_traces`, `otel_metrics_gauge` — the upstream ClickHouse exporter's own schema, queried by [`box-telemetry`](../../../../apps/api/src/box-telemetry/services/box-telemetry.service.ts) to serve per-box logs, traces, and metrics. The collector uses `create_schema: false`; self-hosted infrastructure owns table TTLs through `CLICKHOUSE_RETENTION_HOURS`, defaulting to 720 hours (30 days). |
+| SQLite `/var/dex/dex.db` | [`dex`](../../../../apps/dex/config.yaml) | Dex's own OIDC state — clients, auth codes, refresh tokens, signing keys. The control plane knows a person only by the subject dex issues, stored as `user.id`. |
 | Redis | `apps/api` | Advisory locks, rate-limit counters, and caches. Not a table store, and not a source of truth: because the locks expire, the invariants that matter live in the partial unique indexes listed above. |
 
 ## Known gaps

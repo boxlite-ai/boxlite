@@ -14,7 +14,7 @@ Place a new or moved doc by the first matching rule in
 | `concepts/`        | How boxes, images, storage, networking, security, and metrics work                                |
 | `reference/`       | SDK APIs (`python/`, `nodejs/`, `rust/`, `c/`), `cli/`, configuration, errors, file formats       |
 | `faq.md`           | Short answers that link to the detailed page                                                      |
-| `contributing/`    | `architecture/`, `development/`, and dated `investigations/`                                      |
+| `contributing/`    | `architecture/` (hosted platform in `platform/`), `development/`, and dated `investigations/`     |
 | `legal/CLA.md`     | The CLA; its URL is published, so keep the path                                                   |
 
 Each section's `README.md` is its landing page: start there, and link every new page from it.
