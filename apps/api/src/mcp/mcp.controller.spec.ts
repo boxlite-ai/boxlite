@@ -5,6 +5,7 @@
 
 import {
   All,
+  Body,
   CanActivate,
   Controller,
   Delete,
@@ -25,6 +26,7 @@ import { MCP_STRATEGY } from '@rekog/mcp-nest'
 import { ApiOperation, DocumentBuilder, SwaggerModule } from '@nestjs/swagger'
 import type { Request } from 'express'
 import { readFileSync } from 'node:fs'
+import http from 'node:http'
 import { resolve } from 'node:path'
 import { WebSocketServer } from 'ws'
 import { parse } from 'yaml'
@@ -38,7 +40,8 @@ import { OrganizationResourcePermission } from '../organization/enums/organizati
 import { McpAuthChallengeFilter } from './mcp-auth-challenge.filter'
 import { McpAuthMetadata } from './mcp-auth-metadata'
 import { McpAuthGuard } from './mcp-auth.guard'
-import { McpController, mcpStrategy, useMcpBodyParser } from './mcp.controller'
+import { McpController, mcpStrategy } from './mcp.controller'
+import { MCP_JSON_LIMIT_BYTES, useApiBodyParsers } from './mcp-body'
 import { McpDispatcher } from './mcp-dispatcher'
 import { setMcpOAuthScopes } from './mcp-oauth-policy'
 import { servedOperations } from './mcp-routes'
@@ -104,6 +107,15 @@ class BoxRoute {
   }
 }
 
+/** A non-MCP route that reads a JSON body, parsed by the default parsers. */
+@Controller('echo')
+class EchoRoute {
+  @Post()
+  echo(@Body() body: unknown) {
+    return { echoed: body }
+  }
+}
+
 @Controller('box')
 @UseGuards(CombinedAuthGuard)
 class AttachTicketRoute {
@@ -127,17 +139,20 @@ const wsProxy = {
 
 const spec = (name: string) => parse(readFileSync(resolve(__dirname, '../../../../openapi', name), 'utf8'))
 
+/** Counts the failed-auth hits the 401 path records. */
+const failedAuth = { recordFailure: async () => undefined, incrementFailedAuth: jest.fn(async () => undefined) }
+
 async function boot(): Promise<INestApplication> {
   const moduleRef = await Test.createTestingModule({
     imports: [DiscoveryModule],
-    controllers: [McpController, BoxRoute, AttachTicketRoute],
+    controllers: [McpController, BoxRoute, AttachTicketRoute, EchoRoute],
     providers: [
       { provide: MCP_STRATEGY, useValue: mcpStrategy },
       McpTools,
       McpDispatcher,
       McpDelegation,
       { provide: McpAuthMetadata, useValue: { url: undefined } },
-      { provide: FailedAuthTrackerService, useValue: { recordFailure: async () => undefined } },
+      { provide: FailedAuthTrackerService, useValue: failedAuth },
       { provide: BoxliteWsProxyService, useValue: wsProxy },
       McpAuthChallengeFilter,
     ],
@@ -145,9 +160,9 @@ async function boot(): Promise<INestApplication> {
     .overrideGuard(McpAuthGuard)
     .useClass(FakeMcpAuthGuard)
     .compile()
-  const app = moduleRef.createNestApplication()
+  const app = moduleRef.createNestApplication({ bodyParser: false })
   app.setGlobalPrefix('api')
-  useMcpBodyParser(app)
+  useApiBodyParsers(app)
   await app.init()
   app.get(McpTools).register({
     box: spec('box.openapi.yaml'),
@@ -173,6 +188,59 @@ async function rpc(app: INestApplication, body: object, headers: Record<string, 
     body: JSON.stringify(body),
   })
   return { status: response.status, json: await response.json().catch(() => undefined) }
+}
+
+/** POSTs a raw body with the given headers. */
+async function post(app: INestApplication, path: string, body: string, headers: Record<string, string>) {
+  const server = app.getHttpServer()
+  const { port } = server.address() ?? (await new Promise((r) => server.listen(0, () => r(server.address()))))
+  const response = await fetch(`http://127.0.0.1:${port}${path}`, {
+    method: 'POST',
+    headers: { accept: 'application/json, text/event-stream', 'mcp-protocol-version': '2025-06-18', ...headers },
+    body,
+  })
+  return { status: response.status, text: await response.text(), challenge: response.headers.get('www-authenticate') }
+}
+
+/**
+ * Streams `megabytes` MiB chunked (no Content-Length) and resolves with the
+ * response status, even when the server answers and closes before the upload ends.
+ */
+async function postChunked(app: INestApplication, path: string, megabytes: number, headers: Record<string, string>) {
+  const server = app.getHttpServer()
+  const { port } = server.address() ?? (await new Promise((r) => server.listen(0, () => r(server.address()))))
+  return new Promise<number>((resolve, reject) => {
+    const request = http.request({
+      port,
+      method: 'POST',
+      path,
+      headers: { ...headers, 'transfer-encoding': 'chunked' },
+    })
+    request.on('response', (response) => {
+      // The server answered before the upload ended; stop sending so the
+      // connection closes and the app can shut down.
+      resolve(response.statusCode ?? 0)
+      request.destroy()
+    })
+    request.on('error', (error) => reject(error))
+    const chunk = Buffer.alloc(1024 * 1024, 'x')
+    let sent = 0
+    const pump = () => {
+      while (sent < megabytes && !request.destroyed) {
+        sent += 1
+        if (!request.write(chunk)) return void request.once('drain', pump)
+      }
+      if (!request.destroyed) request.end()
+    }
+    pump()
+  })
+}
+
+/** A `tools/list` call padded through `_meta` to exactly `bytes` bytes of JSON. */
+function paddedCall(bytes: number): string {
+  const shell = (pad: string) =>
+    JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list', params: { _meta: { pad } } })
+  return shell('x'.repeat(bytes - shell('').length))
 }
 
 describe('/api/mcp', () => {
@@ -343,6 +411,58 @@ describe('/api/mcp', () => {
       if (certPath === undefined) delete process.env.CERT_PATH
       else process.env.CERT_PATH = certPath
     }
+  })
+
+  it('reads no body before authentication: an oversized unauthenticated call gets the counted 401', async () => {
+    failedAuth.incrementFailedAuth.mockClear()
+
+    const refused = await post(app, '/api/mcp', paddedCall(MCP_JSON_LIMIT_BYTES + 1), {
+      'content-type': 'application/json',
+    })
+
+    expect(refused.status).toBe(401)
+    expect(refused.challenge).toContain('Bearer')
+    expect(failedAuth.incrementFailedAuth).toHaveBeenCalledTimes(1)
+  })
+
+  it('reads no chunked body before authentication either', async () => {
+    const status = await postChunked(app, '/api/mcp', 13, { 'content-type': 'application/json' })
+
+    expect(status).toBe(401)
+  })
+
+  it('takes an authenticated body up to the limit and answers 413 past it', async () => {
+    const auth = { authorization: 'Bearer good', 'content-type': 'application/json' }
+
+    const atLimit = await post(app, '/api/mcp', paddedCall(MCP_JSON_LIMIT_BYTES), auth)
+    const overLimit = await post(app, '/api/mcp', paddedCall(MCP_JSON_LIMIT_BYTES + 1), auth)
+
+    expect(atLimit.status).toBe(200)
+    expect(overLimit.status).toBe(413)
+  })
+
+  it('keeps the parse error statuses for an authenticated caller', async () => {
+    const auth = { authorization: 'Bearer good' }
+
+    const badJson = await post(app, '/api/mcp', '{"jsonrpc":', { ...auth, 'content-type': 'application/json' })
+    const badCharset = await post(app, '/api/mcp', '{}', {
+      ...auth,
+      'content-type': 'application/json; charset=latin1',
+    })
+
+    expect(badJson.status).toBe(400)
+    expect(JSON.parse(badJson.text).message).toBe('Invalid JSON in request body')
+    expect(badCharset.status).toBe(415)
+  })
+
+  it('leaves other routes on the default parsers', async () => {
+    const json = { 'content-type': 'application/json' }
+
+    const small = await post(app, '/api/echo', JSON.stringify({ hello: 'world' }), json)
+    const large = await post(app, '/api/echo', JSON.stringify({ pad: 'x'.repeat(200 * 1024) }), json)
+
+    expect(JSON.parse(small.text)).toEqual({ echoed: { hello: 'world' } })
+    expect(large.status).toBe(413)
   })
 
   it('names no scope in the 401 challenge, so clients request scopes_supported', async () => {

@@ -33,7 +33,8 @@ import { Logger as PinoLogger, LoggerErrorInterceptor } from 'nestjs-pino'
 import { BoxliteWsProxyService } from './boxlite-rest/boxlite-ws-proxy.service'
 import { parse as parseYaml } from 'yaml'
 import { MCP_METADATA_PATH } from './mcp/mcp-auth-metadata'
-import { mcpStrategy, useMcpBodyParser } from './mcp/mcp.controller'
+import { mcpStrategy } from './mcp/mcp.controller'
+import { useApiBodyParsers } from './mcp/mcp-body'
 import { McpTools } from './mcp/mcp-tools'
 import { servedOperations } from './mcp/mcp-routes'
 
@@ -51,11 +52,13 @@ async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {
     bufferLogs: true,
     httpsOptions: httpsEnabled ? httpsOptions : undefined,
+    // `useApiBodyParsers` registers the parsers, so `/api/mcp` reads its body only
+    // after authentication.
+    bodyParser: false,
   })
   app.useLogger(app.get(PinoLogger))
   app.flushLogs()
-  // Before init(), so `/api/mcp` bodies get their own limit ahead of the global parser.
-  useMcpBodyParser(app)
+  useApiBodyParsers(app)
   // Pin CORS to known first-party origins rather than reflecting any origin.
   // With `credentials: true`, `origin: true` would let any site make
   // credentialed cross-origin calls to the API. The dashboard SPA (served at
