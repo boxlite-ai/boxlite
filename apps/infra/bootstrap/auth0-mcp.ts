@@ -248,7 +248,7 @@ function undo(client: Auth0ManagementClient, entry: JournalEntry): void {
       client.request('post', collectionOf(entry.path), { data: entry.previous })
     }
   } else if (entry.previous) {
-    client.request('patch', entry.path, { data: entry.previous })
+    client.request('patch', entry.path, { data: entry.previous, allowNotFound: true })
   }
 }
 

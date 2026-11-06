@@ -866,7 +866,7 @@ permissions apply in REST.
 | --- | --- |
 | `createBox`, `listBoxes`, `getBox`, `startBox`, `stopBox`, `removeBox` | The box operations of the same `operationId` |
 | `startExecution`, `getExecution` | Run a command; with `wait` (default) the result carries `stdout`, `stderr`, `exit_code` and `complete` |
-| `uploadFiles`, `downloadFiles` | Tar archives as base64 (`body_base64`), up to 8 MiB; `/mcp` accepts JSON bodies up to 12 MiB for this, read only after the caller is authenticated, so an unauthenticated call gets its `401` before any of the body is buffered; every other route keeps the default limit |
+| `uploadFiles`, `downloadFiles` | Tar archives as base64 (`body_base64`), up to 8 MiB; `/mcp` accepts JSON bodies up to 12 MiB for this, read only after the caller is authenticated, so an unauthenticated call gets its `401` (or `403` if it carries an `Origin` header) before any of the body is buffered; every other route keeps the default limit |
 | `list_api_endpoints`, `get_api_endpoint_schema`, `invoke_api_endpoint` | Find, describe and call any other catalog operation by `operationId` |
 
 The catalog is built at startup from [`openapi/box.openapi.yaml`](../../../../openapi/box.openapi.yaml),

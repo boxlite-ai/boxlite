@@ -35,6 +35,8 @@ describe('AllExceptionsFilter', () => {
 
   it.each([
     ['/.well-known/oauth-protected-resource/mcp', false],
+    // Express routes ignore case, so this reaches the metadata route too.
+    ['/.WELL-KNOWN/oauth-protected-resource/mcp', false],
     ['/boxes/some-client-route', true],
   ])('answers a missing %s with the dashboard: %p', async (path, dashboard) => {
     const json = jest.fn()
