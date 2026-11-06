@@ -871,12 +871,6 @@ enum BoxliteErrorCode boxlite_advanced_options_set_capabilities_drop(CAdvancedBo
                                                                      const char *const *capabilities,
                                                                      int count);
 
-// Enable full capabilities and writable kernel mounts inside the guest only.
-// Runner sandbox security is unchanged. Returns InvalidArgument for a null
-// handle or a conflicting explicit capability policy.
-enum BoxliteErrorCode boxlite_advanced_options_set_privileged(CAdvancedBoxOptions *opts,
-                                                              int enabled);
-
 // Obtain a namespace without starting the Box.
 // handle must be live; out must be writable; out_error may be null.
 enum BoxliteErrorCode boxlite_box_agents(CBoxHandle *handle,
@@ -1028,6 +1022,11 @@ void boxlite_agent_turn_free(struct CAgentTurn *handle);
 // Release only the local handle. Does not close an agent or interrupt a turn.
 // handle must be null or a live, uniquely owned pointer returned by this SDK.
 void boxlite_agent_events_free(struct CAgentEvents *handle);
+// Enable full capabilities and writable kernel mounts inside the guest only.
+// Runner sandbox security is unchanged. Returns InvalidArgument for a null
+// handle or a conflicting explicit capability policy.
+enum BoxliteErrorCode boxlite_advanced_options_set_privileged(CAdvancedBoxOptions *opts,
+                                                              int enabled);
 
 // Submit a box export.
 //
