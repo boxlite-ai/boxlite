@@ -53,6 +53,8 @@ import type { Box } from '../models';
 import type { CpuIncidentListDto } from '../models';
 // @ts-ignore
 import type { CreateRunnerResponse } from '../models';
+// @ts-ignore
+import type { MemoryIncidentListDto } from '../models';
 /**
  * AdminApi - axios parameter creator
  */
@@ -623,7 +625,7 @@ export const AdminApiAxiosParamCreator = function (configuration?: Configuration
          * @summary Query sustained runner CPU incidents by capture completion time range
          * @param {Date} from Inclusive capture completion time, with timezone.
          * @param {Date} to Exclusive capture completion time, with timezone; must follow from.
-         * @param {number} [limit] Maximum rows, ordered by ID ascending.
+         * @param {number} [limit] Maximum rows after per-Box maximum CPU-seconds selection, ordered by ID ascending.
          * @param {string} [runnerId] 
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -634,6 +636,68 @@ export const AdminApiAxiosParamCreator = function (configuration?: Configuration
             // verify required parameter 'to' is not null or undefined
             assertParamExists('adminListRunnerCpuIncidents', 'to', to)
             const localVarPath = `/admin/runner-cpu-incidents`;
+            // use dummy base URL string because the URL constructor only accepts absolute URLs.
+            const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
+            let baseOptions;
+            if (configuration) {
+                baseOptions = configuration.baseOptions;
+            }
+
+            const localVarRequestOptions = { method: 'GET', ...baseOptions, ...options};
+            const localVarHeaderParameter = {} as any;
+            const localVarQueryParameter = {} as any;
+
+            // authentication bearer required
+            // http bearer authentication required
+            await setBearerAuthToObject(localVarHeaderParameter, configuration)
+
+            if (from !== undefined) {
+                localVarQueryParameter['from'] = (from as any instanceof Date) ?
+                    (from as any).toISOString() :
+                    from;
+            }
+
+            if (to !== undefined) {
+                localVarQueryParameter['to'] = (to as any instanceof Date) ?
+                    (to as any).toISOString() :
+                    to;
+            }
+
+            if (limit !== undefined) {
+                localVarQueryParameter['limit'] = limit;
+            }
+
+            if (runnerId !== undefined) {
+                localVarQueryParameter['runnerId'] = runnerId;
+            }
+
+            localVarHeaderParameter['Accept'] = 'application/json';
+
+            setSearchParams(localVarUrlObj, localVarQueryParameter);
+            let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
+            localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+
+            return {
+                url: toPathString(localVarUrlObj),
+                options: localVarRequestOptions,
+            };
+        },
+        /**
+         * 
+         * @summary Query runner memory snapshots by host sample time range
+         * @param {Date} from Inclusive host sample time, with timezone.
+         * @param {Date} to Exclusive host sample time, after from.
+         * @param {number} [limit] Maximum snapshots after per-Box maximum memory selection, ordered by ID ascending.
+         * @param {string} [runnerId] 
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        adminListRunnerMemoryIncidents: async (from: Date, to: Date, limit?: number, runnerId?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'from' is not null or undefined
+            assertParamExists('adminListRunnerMemoryIncidents', 'from', from)
+            // verify required parameter 'to' is not null or undefined
+            assertParamExists('adminListRunnerMemoryIncidents', 'to', to)
+            const localVarPath = `/admin/runner-memory-incidents`;
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -1078,7 +1142,7 @@ export const AdminApiFp = function(configuration?: Configuration) {
          * @summary Query sustained runner CPU incidents by capture completion time range
          * @param {Date} from Inclusive capture completion time, with timezone.
          * @param {Date} to Exclusive capture completion time, with timezone; must follow from.
-         * @param {number} [limit] Maximum rows, ordered by ID ascending.
+         * @param {number} [limit] Maximum rows after per-Box maximum CPU-seconds selection, ordered by ID ascending.
          * @param {string} [runnerId] 
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -1087,6 +1151,22 @@ export const AdminApiFp = function(configuration?: Configuration) {
             const localVarAxiosArgs = await localVarAxiosParamCreator.adminListRunnerCpuIncidents(from, to, limit, runnerId, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['AdminApi.adminListRunnerCpuIncidents']?.[localVarOperationServerIndex]?.url;
+            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
+        },
+        /**
+         * 
+         * @summary Query runner memory snapshots by host sample time range
+         * @param {Date} from Inclusive host sample time, with timezone.
+         * @param {Date} to Exclusive host sample time, after from.
+         * @param {number} [limit] Maximum snapshots after per-Box maximum memory selection, ordered by ID ascending.
+         * @param {string} [runnerId] 
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        async adminListRunnerMemoryIncidents(from: Date, to: Date, limit?: number, runnerId?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<MemoryIncidentListDto>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.adminListRunnerMemoryIncidents(from, to, limit, runnerId, options);
+            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
+            const localVarOperationServerBasePath = operationServerMap['AdminApi.adminListRunnerMemoryIncidents']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
@@ -1299,13 +1379,26 @@ export const AdminApiFactory = function (configuration?: Configuration, basePath
          * @summary Query sustained runner CPU incidents by capture completion time range
          * @param {Date} from Inclusive capture completion time, with timezone.
          * @param {Date} to Exclusive capture completion time, with timezone; must follow from.
-         * @param {number} [limit] Maximum rows, ordered by ID ascending.
+         * @param {number} [limit] Maximum rows after per-Box maximum CPU-seconds selection, ordered by ID ascending.
          * @param {string} [runnerId] 
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
         adminListRunnerCpuIncidents(from: Date, to: Date, limit?: number, runnerId?: string, options?: RawAxiosRequestConfig): AxiosPromise<CpuIncidentListDto> {
             return localVarFp.adminListRunnerCpuIncidents(from, to, limit, runnerId, options).then((request) => request(axios, basePath));
+        },
+        /**
+         * 
+         * @summary Query runner memory snapshots by host sample time range
+         * @param {Date} from Inclusive host sample time, with timezone.
+         * @param {Date} to Exclusive host sample time, after from.
+         * @param {number} [limit] Maximum snapshots after per-Box maximum memory selection, ordered by ID ascending.
+         * @param {string} [runnerId] 
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        adminListRunnerMemoryIncidents(from: Date, to: Date, limit?: number, runnerId?: string, options?: RawAxiosRequestConfig): AxiosPromise<MemoryIncidentListDto> {
+            return localVarFp.adminListRunnerMemoryIncidents(from, to, limit, runnerId, options).then((request) => request(axios, basePath));
         },
         /**
          * 
@@ -1515,13 +1608,27 @@ export class AdminApi extends BaseAPI {
      * @summary Query sustained runner CPU incidents by capture completion time range
      * @param {Date} from Inclusive capture completion time, with timezone.
      * @param {Date} to Exclusive capture completion time, with timezone; must follow from.
-     * @param {number} [limit] Maximum rows, ordered by ID ascending.
+     * @param {number} [limit] Maximum rows after per-Box maximum CPU-seconds selection, ordered by ID ascending.
      * @param {string} [runnerId] 
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
      */
     public adminListRunnerCpuIncidents(from: Date, to: Date, limit?: number, runnerId?: string, options?: RawAxiosRequestConfig) {
         return AdminApiFp(this.configuration).adminListRunnerCpuIncidents(from, to, limit, runnerId, options).then((request) => request(this.axios, this.basePath));
+    }
+
+    /**
+     * 
+     * @summary Query runner memory snapshots by host sample time range
+     * @param {Date} from Inclusive host sample time, with timezone.
+     * @param {Date} to Exclusive host sample time, after from.
+     * @param {number} [limit] Maximum snapshots after per-Box maximum memory selection, ordered by ID ascending.
+     * @param {string} [runnerId] 
+     * @param {*} [options] Override http request option.
+     * @throws {RequiredError}
+     */
+    public adminListRunnerMemoryIncidents(from: Date, to: Date, limit?: number, runnerId?: string, options?: RawAxiosRequestConfig) {
+        return AdminApiFp(this.configuration).adminListRunnerMemoryIncidents(from, to, limit, runnerId, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**

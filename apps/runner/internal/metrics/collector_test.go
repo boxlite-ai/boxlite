@@ -8,6 +8,7 @@ import (
 	"container/ring"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"strings"
@@ -16,6 +17,7 @@ import (
 	"time"
 
 	"github.com/shirou/gopsutil/v4/disk"
+	"github.com/shirou/gopsutil/v4/mem"
 )
 
 const bytesPerGiB = 1 << 30
@@ -37,7 +39,7 @@ func newTestCollector(home string, usage disk.UsageStat, askedPath *string) *Col
 	return c
 }
 
-func TestRunnerResourceLogUsesRecentCPUAndHomeDisk(t *testing.T) {
+func TestRunnerResourceLogUsesMinuteCPUMaximumAndHomeDisk(t *testing.T) {
 	var askedPath string
 	c := newTestCollector("/boxlite-home", disk.UsageStat{Total: 400 * bytesPerGiB, Used: 100 * bytesPerGiB, UsedPercent: 25}, &askedPath)
 	var logs bytes.Buffer
@@ -53,7 +55,7 @@ func TestRunnerResourceLogUsesRecentCPUAndHomeDisk(t *testing.T) {
 	if err := json.Unmarshal(logs.Bytes(), &entry); err != nil {
 		t.Fatal(err)
 	}
-	if entry["event"] != "runner.resource.usage" || entry["cpuPercent"] != float64(60) || entry["diskPercent"] != float64(25) || entry["diskUsedGiB"] != float64(100) || entry["diskTotalGiB"] != float64(400) || askedPath != "/boxlite-home" {
+	if entry["event"] != "runner.resource.usage" || entry["cpuPercent"] != float64(80) || entry["diskPercent"] != float64(25) || entry["diskUsedGiB"] != float64(100) || entry["diskTotalGiB"] != float64(400) || askedPath != "/boxlite-home" {
 		t.Fatalf("incorrect resource log: %v, path=%s", entry, askedPath)
 	}
 	if percent, ok := entry["memoryPercent"].(float64); !ok || percent < 0 || percent > 100 {
@@ -119,4 +121,72 @@ func TestCollectRejectsAZeroCapacityHome(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "reports zero capacity") {
 		t.Fatalf("collect() error = %v, want a zero-capacity rejection", err)
 	}
+}
+
+func TestMemoryObservationUsesMinuteSampleDespiteOtherMetricFailures(t *testing.T) {
+	var path string
+	c := newTestCollector("/home", disk.UsageStat{}, &path)
+	reads, observations := 0, 0
+	c.memoryUsage = func(context.Context) (*mem.VirtualMemoryStat, error) {
+		reads++
+		return &mem.VirtualMemoryStat{Total: bytesPerGiB, UsedPercent: 80.000001}, nil
+	}
+	now := time.Now()
+	c.observeMemory = func(_ context.Context, sampledAt time.Time, percent float64) {
+		observations++
+		if sampledAt != now || percent != 80.000001 {
+			t.Fatal("changed host sample or rounded strict threshold")
+		}
+	}
+	// A disk error must not suppress the memory observation.
+	c.logResourceSnapshot(context.Background(), now)
+	// Nor may a missing CPU history suppress the next minute's observation.
+	c.cpuRing = ring.New(1)
+	c.logResourceSnapshot(context.Background(), now)
+	if observations != 2 || reads != 2 {
+		t.Fatalf("observations=%d reads=%d", observations, reads)
+	}
+	c.memoryUsage = func(context.Context) (*mem.VirtualMemoryStat, error) { return nil, errors.New("unreadable") }
+	c.logResourceSnapshot(context.Background(), now)
+	if observations != 2 {
+		t.Fatal("observed invalid memory")
+	}
+}
+
+func TestMemoryObservationOnlyRunsOnMinuteTicker(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var path string
+		c := newTestCollector("/home", disk.UsageStat{Total: bytesPerGiB}, &path)
+		c.memoryUsage = func(context.Context) (*mem.VirtualMemoryStat, error) {
+			return &mem.VirtualMemoryStat{Total: bytesPerGiB, UsedPercent: 90}, nil
+		}
+		observations := 0
+		c.observeMemory = func(context.Context, time.Time, float64) { observations++ }
+		if _, err := c.collect(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if observations != 0 {
+			t.Fatal("health collection triggered incident")
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan struct{})
+		go func() { defer close(done); c.logResourceUsage(ctx) }()
+		synctest.Wait()
+		time.Sleep(59 * time.Second)
+		if observations != 0 {
+			t.Fatal("early memory observation")
+		}
+		time.Sleep(time.Second)
+		synctest.Wait()
+		if observations != 1 {
+			t.Fatal("missing minute observation")
+		}
+		time.Sleep(time.Minute)
+		synctest.Wait()
+		if observations != 2 {
+			t.Fatal("missing next minute observation")
+		}
+		cancel()
+		<-done
+	})
 }
