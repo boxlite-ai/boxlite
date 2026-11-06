@@ -15,6 +15,7 @@ support subdirectories under `.github/workflows/`, so composite actions are wher
 ```text
 PULL REQUEST / PUSH                     lint · test · codeql · api-client-drift
                                         e2e-local · build-box-images
+RELEASE VERSION PULL REQUEST            release-dependency-audit (title-selected)
 
 BUILD + CACHE (weekly)                  build-runtime
 
@@ -50,6 +51,7 @@ own.
 | `config.yml` | `workflow_call` | call-only | Loads `.github/ci-config.json` before build matrices expand |
 | `lint.yml` | push, PR, merge_group | — | Format and lint per language, plus the installer smoke test. `Lint (conclusion)` is the required check |
 | `test.yml` | push, PR, merge_group, weekly, dispatch | — | Lightweight draft checks; SDK tests and combined Rust/CLI coverage on ready PRs. Compact routine matrices and full weekly/manual matrices. Codecov requires 90% patch coverage |
+| `release-dependency-audit.yml` | PR, merge_group | — | Audits production application dependencies on release version PRs selected by title; other PRs and merge groups skip the job |
 | `codeql.yml` | push, PR, dispatch, weekly | — | CodeQL advanced setup, so fork PRs are scanned |
 | `api-client-drift.yml` | PR | — | Fails if the committed generated clients no longer match their specs. It regenerates through the `generate:api-client` targets, `apps/hack` post-steps included, so regenerate with those targets rather than the bare generator |
 | `author-review.yml` | PR (target), issue_comment, merge_group | — | Converts unacknowledged PRs to draft, posts author instructions, and publishes `Author reviewed the PR` on the current head. Merge queues carry forward the required PR admission check |
@@ -192,6 +194,26 @@ platform/profile combinations. PR, push, and merge-queue runs skip that job; use
 tests run in hosted CI for infrastructure, workflow and relevant Make changes, including drafts,
 and remain available through `make test:apps:infra` and the local pre-push check;
 `make test:apps:infra-config` explicitly installs and type-checks the SST configuration.
+
+## Release dependency preflight
+
+`Release dependency audit` runs on PRs targeting `main` whose title starts with
+`chore(release): bump version to `, such as `chore(release): bump version to 0.11.2`.
+It includes drafts and reruns on new commits, reopening, or metadata edits, so renaming
+a PR re-evaluates selection. Renaming outside that convention excludes the PR.
+The separate workflow leaves the existing Test workflow's triggers unchanged.
+
+The job runs `make audit:apps` with Node 22, using the pinned Yarn version without
+installing dependencies. It applies the same production, high/critical audit as
+[mbuild publication](../../apps/infra/mbuild/README.md#dependency-audit-failures).
+Findings and registry/service failures fail the check and retain their diagnostics.
+Other PRs skip the job before runner allocation; merge groups also skip because
+release PRs complete their preflight before queue admission. Publication retains its
+own audit because advisory data can change after the PR check.
+
+After the workflow lands and produces a check run, require `Release dependency audit`
+from GitHub Actions in the `main` ruleset. Until enabled, a failure is visible but does
+not itself block merging; `Test (conclusion)` does not aggregate this separate workflow.
 
 ## Author review gate rollout
 
