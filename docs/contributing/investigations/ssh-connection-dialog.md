@@ -21,9 +21,11 @@ existing clients.
 
 After confirmation, one guarded operation prepares access. Success reveals three
 steps: set up the CLI, download or enter the private-key path, and copy the connection
-command. CLI instructions start expanded on every entry. **I've signed in** collapses
-them for that opening only; this is a presentation choice, not detection of local
-installation or authentication. Invalid or empty key paths hide the command.
+command. CLI instructions start expanded on every entry. **Hide commands** and
+**Show commands** are text actions that change their visibility for that opening
+only; they do not represent local installation or authentication. Downloading a
+private key uses an outlined button, leaving access confirmation as the primary
+action. Invalid or empty key paths hide the command.
 
 New keys remain downloadable before leaving the page. A download action does not
 prove that a file was saved or reveal its destination. Returning users enter the

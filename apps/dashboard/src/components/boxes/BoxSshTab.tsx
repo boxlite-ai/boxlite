@@ -467,8 +467,8 @@ function SshControls({
                     number={1}
                     title="Set up CLI"
                     action={
-                      <Button variant={cliExpanded ? 'default' : 'link'} onClick={() => setCliExpanded(!cliExpanded)}>
-                        {cliExpanded ? "I've signed in" : 'Show commands'}
+                      <Button variant="link" onClick={() => setCliExpanded(!cliExpanded)}>
+                        {cliExpanded ? 'Hide commands' : 'Show commands'}
                       </Button>
                     }
                   >
@@ -491,7 +491,13 @@ function SshControls({
                   <SshStep
                     number={2}
                     title={<label htmlFor={keyPathId}>Private key path</label>}
-                    action={credentials ? <Button onClick={download}>Download private key</Button> : undefined}
+                    action={
+                      credentials ? (
+                        <Button variant="outline" onClick={download}>
+                          Download private key
+                        </Button>
+                      ) : undefined
+                    }
                   >
                     <div className="space-y-3">
                       {credentials && (

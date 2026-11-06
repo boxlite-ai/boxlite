@@ -46,9 +46,10 @@ available only through the separate Reset confirmation.
 Successful preparation opens the connection guide: CLI setup, private-key path,
 and a copyable command once the path is valid. It contains no Enable controls.
 CLI instructions start expanded every time the dialog is opened, regardless of SSH
-status or previously stored preferences. **I've signed in** collapses them only for
-the current opening; **Show commands** expands them again. Background status refreshes
-preserve this choice. The browser does not detect local CLI installation or auth.
+status or previously stored preferences. **Hide commands** collapses them only for
+the current opening; **Show commands** expands them again. Both are text actions,
+and downloading a private key uses an outlined button. Background status refreshes
+preserve the visibility choice. The browser does not detect local CLI installation or auth.
 Download a new private key before leaving, then enter its actual path. A download
 click does not establish that saving succeeded or reveal the destination.
 

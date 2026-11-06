@@ -408,7 +408,7 @@ describe('BoxSshTab access and connection', () => {
   it('restores the path on return but discards generated credentials on unmount', async () => {
     await firstSetup()
     await fillPath('/tmp/saved-key')
-    await click("I've signed in")
+    await click('Hide commands')
     await act(async () => root.render(null))
     mocks.get.mockResolvedValue({ data: status })
     await render()
@@ -689,7 +689,7 @@ describe('BoxSshTab access and connection', () => {
     await render()
     await openConnection()
     expect(document.body.textContent).toContain('curl -fsSL')
-    await click("I've signed in")
+    await click('Hide commands')
     expect(document.body.textContent).not.toContain('curl -fsSL')
     await render(BoxState.STARTED, 'box-1', 1)
     expect(document.body.textContent).not.toContain('curl -fsSL')
