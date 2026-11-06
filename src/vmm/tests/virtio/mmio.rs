@@ -938,6 +938,43 @@ fn announcing_appends_each_slot_within_the_command_line_budget() {
 }
 
 #[test]
+fn announce_keeps_the_device_arguments_before_the_init_arguments() {
+    let mut slots = Slots::new();
+    let taken = [slots.take().unwrap()];
+    let mut cmdline = String::from("console=ttyS0 init=/init -- --listen vsock://2695");
+    announce(&mut cmdline, &taken).unwrap();
+    assert_eq!(
+        cmdline,
+        "console=ttyS0 init=/init virtio_mmio.device=4K@0xd0000000:5 -- --listen vsock://2695"
+    );
+
+    let mut only_init = String::from("-- --notify vsock://2696");
+    announce(&mut only_init, &taken).unwrap();
+    assert_eq!(
+        only_init,
+        "virtio_mmio.device=4K@0xd0000000:5 -- --notify vsock://2696"
+    );
+
+    let mut dashes_inside = String::from("name=a--b");
+    announce(&mut dashes_inside, &taken).unwrap();
+    assert_eq!(
+        dashes_inside,
+        "name=a--b virtio_mmio.device=4K@0xd0000000:5"
+    );
+
+    let argument = taken[0].cmdline_arg();
+    let init = " -- x";
+    let mut full = "a".repeat(MAX_CMDLINE_BYTES - argument.len() - init.len() - 1);
+    full.push_str(init);
+    assert!(matches!(
+        announce(&mut full, &taken),
+        Err(Error::InvalidCommandLine(
+            "leaves no room for the virtio device arguments"
+        ))
+    ));
+}
+
+#[test]
 fn add_device_puts_each_device_in_its_own_slot() {
     let vm = Arc::new(MockVm::new());
     let events = EventLoop::new().unwrap();

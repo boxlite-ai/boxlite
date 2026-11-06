@@ -12,7 +12,6 @@ use crate::runtime::lock::RuntimeLock;
 use crate::runtime::options::{BoxArchive, BoxOptions, BoxliteOptions};
 use crate::runtime::signal_handler::timeout_to_duration;
 use crate::runtime::types::{BoxInfo, BoxState, BoxStatus, ContainerID};
-use crate::vmm::VmmKind;
 use crate::vmm::controller::{ShimHandler, VmmHandler};
 use boxlite_shared::{BoxliteError, BoxliteResult};
 use chrono::Utc;
@@ -558,6 +557,16 @@ impl RuntimeImpl {
         {
             return Err(BoxliteError::Unsupported(format!(
                 "box '{box_name}' was created without nested virtualization and cannot satisfy a required nested virtualization request; use a different name or recreate the box"
+            )));
+        }
+        // The engine is fixed at creation: a box on one VMM cannot serve a
+        // request for another, so compare against the persisted kind.
+        if let Some(engine) = requested.advanced.engine
+            && engine != actual.engine_kind
+        {
+            return Err(BoxliteError::Unsupported(format!(
+                "box '{box_name}' runs on the {:?} engine and cannot satisfy a request for the {engine:?} engine; use a different name or recreate the box",
+                actual.engine_kind
             )));
         }
         if requested.advanced.privileged && !actual.options.advanced.privileged {
@@ -1214,7 +1223,7 @@ impl RuntimeImpl {
             created_at: now,
             container,
             options: options.clone(),
-            engine_kind: VmmKind::Libkrun,
+            engine_kind: options.advanced.engine.unwrap_or_default(),
             box_home,
         };
 
@@ -1262,13 +1271,14 @@ impl RuntimeImpl {
             ))
         })?;
 
+        let engine_kind = options.advanced.engine.unwrap_or_default();
         let config = BoxConfig {
             id: box_id.clone(),
             name,
             created_at: now,
             container: ContainerRuntimeConfig { id: container_id },
             options,
-            engine_kind: VmmKind::Libkrun,
+            engine_kind,
             box_home,
         };
 
@@ -2357,7 +2367,7 @@ mod tests {
                 auto_delete: Some(0),
                 ..Default::default()
             },
-            engine_kind: VmmKind::Libkrun,
+            engine_kind: crate::vmm::VmmKind::Libkrun,
             box_home: std::path::PathBuf::from("/tmp/test-box"),
         }
     }
@@ -2420,7 +2430,7 @@ mod tests {
                 auto_delete: Some(0),
                 ..Default::default()
             },
-            engine_kind: VmmKind::Libkrun,
+            engine_kind: crate::vmm::VmmKind::Libkrun,
             box_home,
         }
     }
@@ -3402,6 +3412,47 @@ mod tests {
             }
             Err(other) => panic!("expected Unsupported error, got: {other}"),
             Ok(_) => panic!("get_or_create must not reuse a non-nested box"),
+        }
+    }
+
+    #[tokio::test]
+    async fn get_or_create_rejects_another_engine() {
+        let (runtime, _dir) = create_test_runtime();
+        let name = Some("libkrun-box".to_string());
+
+        let (_, created) = runtime
+            .get_or_create(
+                BoxOptions {
+                    rootfs: RootfsSpec::Image("alpine:latest".into()),
+                    ..Default::default()
+                },
+                name.clone(),
+            )
+            .await
+            .unwrap();
+        assert!(created);
+
+        let mut native_advanced = crate::runtime::advanced_options::AdvancedBoxOptions::default();
+        native_advanced.engine = Some(crate::vmm::VmmKind::Native);
+        let result = runtime
+            .get_or_create(
+                BoxOptions {
+                    rootfs: RootfsSpec::Image("alpine:latest".into()),
+                    advanced: native_advanced,
+                    ..Default::default()
+                },
+                name,
+            )
+            .await;
+
+        match result {
+            Err(BoxliteError::Unsupported(message)) => {
+                assert!(message.contains("Libkrun"), "{message}");
+                assert!(message.contains("Native"), "{message}");
+                assert!(message.contains("libkrun-box"), "{message}");
+            }
+            Err(other) => panic!("expected Unsupported error, got: {other}"),
+            Ok(_) => panic!("get_or_create must not reuse a box on another engine"),
         }
     }
 

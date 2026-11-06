@@ -313,7 +313,8 @@ On x86_64 the layout uses the values most surveyed VMMs share.
 
 x86_64 guests boot without ACPI or a device tree, so the command line announces
 each virtio-mmio device (`virtio_mmio.device=4K@0xd0000000:5`), as libkrun does
-today.
+today; the arguments go before the `--` that starts the init program's
+arguments, which the kernel does not parse.
 
 ### Buses
 
@@ -508,19 +509,41 @@ logged.
   - `boxlite_vmm::Error` wraps `boxlite_hypervisor::Error` and adds
     configuration, device and guest failures, keeping the chain through
     `source()`.
-  - The adapter maps an `Unsupported` or `PermissionDenied` host cause to
-    `BoxliteError::Unsupported` and everything else to `BoxliteError::Engine`.
+  - The adapter (`src/boxlite/src/vmm/native/engine.rs`) maps an `Unsupported`
+    or `PermissionDenied` host cause to `BoxliteError::Unsupported`, the
+    configuration bounds (`InvalidVcpuCount`, `InvalidMemorySize`,
+    `InvalidCommandLine`, `InvalidDiskCount`) to `BoxliteError::InvalidArgument`,
+    and everything else to `BoxliteError::Engine`, keeping the cause chain in
+    the message.
   - It keeps the shim's exit-file format (`src/boxlite/src/vmm/exit_info.rs:80`).
+  - `create_engine` reports an engine missing from the build as
+    `BoxliteError::Unsupported`, so a shim built without the `native` feature
+    fails a native box the same typed way.
+- **The stop handle is not wired to SIGTERM yet.** The shim's SIGTERM handler
+  asks the guest to shut down over gRPC and re-raises the signal, which ends the
+  process with the VM inside it; `StopHandle::stop` joins that path once the
+  guest agent can answer.
 
 ### Where the engine plugs in (M2)
 
-- **Hard-coded engine.**
-  - `src/boxlite/src/litebox/init/tasks/vmm_spawn.rs:238` and `:413` hard-code
-    `VmmKind::Libkrun`.
-  - `ShimController` overwrites `InstanceSpec.engine` with its own engine
-    (`src/boxlite/src/vmm/controller/shim.rs:322`).
-  - The per-box `BoxConfig.engine_kind` (`src/boxlite/src/litebox/config.rs:44`)
-    is never read when a box spawns.
+- **Engine choice.** The `native-vmm` experimental token gates
+  `AdvancedBoxOptions.engine` (`src/boxlite/src/runtime/advanced_options.rs`),
+  which `init_box_variables` and `provision_box` persist as
+  `BoxConfig.engine_kind` (`src/boxlite/src/litebox/config.rs:44`);
+  `vmm_spawn.rs` reads it into the `InstanceSpec` and the `ShimController`.
+  `get_or_create` refuses a box on another engine, and the REST runtime and
+  untrusted imports reject the option like `nested_virtualization`.
+- **The native adapter** (`src/boxlite/src/vmm/native/`, Linux x86_64, feature
+  `native`, registered through `inventory` like `krun/`) is strict like libkrun:
+  a request it cannot serve fails `create` with `Unsupported` (no kernel, a
+  non-ELF kernel, a virtio-fs root, nested virtualization). Three transitional
+  requests log one warning and boot anyway until their devices land: virtio-fs
+  shares (#2301), the gvproxy endpoint (virtio-net wiring after #2311) and the
+  guest agent's socket bridge (vsock, #2312). It takes its kernel from
+  `InstanceSpec.kernel` (the custom-kernel channel) until the runtime bundles
+  one, attaches the disks in attach order (`vda` container disk, `vdb` guest
+  root) and composes the command line of the boot contract below. Design:
+  [#2369](https://github.com/boxlite-ai/boxlite/issues/2369).
 - **libkrun assumptions outside `krun/`.**
   - The jailer copies libkrunfw into every box
     (`src/boxlite/src/jailer/shim_copy.rs:103-105`).
@@ -536,7 +559,7 @@ from the new VMM.
 
 | Item | libkrun today | New VMM | Milestone |
 | --- | --- | --- | --- |
-| Kernel | libkrunfw: Linux 6.12 with 32 patches, loaded as a shared library | a pinned LTS kernel file with BoxLite's config: `Image` on arm64; `bzImage` or ELF `vmlinux` on x86_64 | M1 |
+| Kernel | libkrunfw: Linux 6.12 with 32 patches, loaded as a shared library | a pinned LTS kernel file with BoxLite's config: `Image` on arm64; `bzImage` or ELF `vmlinux` on x86_64; the native engine takes it from `advanced.kernel` until the runtime bundles it | M1 |
 | PID 1 | `init.krun`, which starts the agent as its child | `boxlite-guest` | M2 |
 | Root filesystem | a throwaway virtio-fs root; `init.krun` then mounts `/dev/vdb` | the kernel mounts `/dev/vdb` (ext4) read-only, and the disk reports itself read-only | M2 |
 | Command line | libkrun's defaults (`libkrun/src/vmm/src/vmm_config/kernel_cmdline.rs:7-11`), `init=/init.krun` and `KRUN_*` variables | `console=hvc0 root=/dev/vdb ro panic=-1 reboot=k init=/boxlite/bin/boxlite-guest`, then the agent's environment as `KEY=value`, then `-- --listen vsock://2695 --notify vsock://2696`; on x86_64, one `virtio_mmio.device=` per device | M2 |
@@ -544,7 +567,7 @@ from the new VMM.
 | virtio-fs | one device per share: `BoxLiteShared` (read-write) and one per volume | one device, with each share as an export under it | M2 (SHARED), M3 (volumes) |
 | vsock | guest CID 3; host `box.sock` to guest port 2695 for gRPC, guest to host port 2696 as the ready signal (`src/shared/src/constants.rs:20-26`) | unchanged | M2 |
 | Network | virtio-net to gvproxy in the shim (a stream socket with 4-byte length prefixes on Linux, datagrams with the `VFKT` handshake on macOS), with 192.168.127.2/24 set by the agent | unchanged; no TSI | M2 |
-| Console | virtio-console `hvc0` into `console.log`, truncated at each boot | unchanged; M1 first boots on the PL011 or 8250 | M1–M2 |
+| Console | virtio-console `hvc0` into `console.log`, truncated at each boot | unchanged once virtio-console is wired into `Vm`; until then the native engine boots on the 8250 (`console=ttyS0`), and M1 first boots on the PL011 or 8250 | M1–M2 |
 | Other devices | virtio-rng, and virtio-balloon with free page reporting (`libkrun/src/devices/src/virtio/balloon/device.rs:28-30`) | unchanged | M2 |
 | Wall clock | PL031 (arm64) or CMOS (x86_64) at boot; on macOS, resync over vsock datagram port 123 | the same at boot; M2 chooses the resync mechanism | M1–M2 |
 | End of the VM | the agent writes `exit.json`, syncs and calls `reboot(RESTART)`; libkrun then exits the process | the same guest steps; `run()` returns `GuestReset` | M2 |
