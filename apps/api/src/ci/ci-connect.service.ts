@@ -471,10 +471,19 @@ export class CiConnectService {
         binding.organization_id !== attempt.organization_id ||
         Number(binding.account_id) !== verified.accountId ||
         binding.account_type !== verified.accountType ||
-        binding.allow_public !== attempt.allow_public ||
         !binding.follow_installation
       )
         throw new ConflictException('Installation is already bound with a different owner or policy')
+      if (binding.state === 'disabled') {
+        await this.query(
+          tx,
+          `UPDATE ci_installation_binding SET state='provisioning',generation=generation+1,
+          actor_id=$2,allow_public=$3 WHERE id=$1`,
+          [binding.id, attempt.user_id, attempt.allow_public],
+        )
+      } else if (binding.allow_public !== attempt.allow_public) {
+        throw new ConflictException('Installation is already bound with a different owner or policy')
+      }
       await this.native.wakeInventory(tx, attempt.app_client_id, verified)
       // now() is transaction-start time. Row-lock waits can cross any deadline,
       // so the final write is the authorization decision's clock-time boundary.

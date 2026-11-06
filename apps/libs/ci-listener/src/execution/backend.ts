@@ -10,6 +10,8 @@ import { PoolBackend, RunnerSession } from './pool'
 
 export interface ExecutionHost {
   workers: WorkerExecutor
+  /** A host may fence an undispatched create with its original-ID ledger. */
+  rejectUndispatchedCreate?(name: string, effect: string): Promise<never>
   /** Cleanup may retain original-resource authority after admission is revoked. */
   authorize(scope: ExecutionScope, operation: 'admission' | 'cleanup', signal?: AbortSignal): Promise<void>
 }
@@ -53,7 +55,25 @@ export class GitHubExecutionBackend implements PoolBackend {
     this.workers = {
       create: async (launch) => {
         const originalLaunch = { ...launch, entrypoint: [...launch.entrypoint] }
-        await this.check('admission')
+        let effect: string | undefined
+        if (host.rejectUndispatchedCreate) {
+          const snapshot = await this.journal.load(this.lease)
+          const row = [...snapshot.allocations.values()].find((item) => item.value.name === originalLaunch.name)
+          if (
+            !row ||
+            row.value.scope !== scopeKey(this.scope) ||
+            row.value.box.phase !== 'requested' ||
+            row.value.effect?.kind !== 'box-create'
+          )
+            throw new Error('Original creation intent required')
+          effect = row.value.effect.id
+        }
+        try {
+          await this.check('admission')
+        } catch (error) {
+          if (effect) await host.rejectUndispatchedCreate!(originalLaunch.name, effect)
+          throw error
+        }
         return host.workers.create(originalLaunch)
       },
       get: async (name) => {

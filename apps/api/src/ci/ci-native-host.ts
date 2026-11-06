@@ -218,13 +218,15 @@ export class CiNativeHost implements ListenerHost {
   async backend(original: ExecutionScope, lease: ExecutionLease): Promise<ListenerBackend> {
     const scope = decodeScope(original)
     const app = this.github.byClientId(await this.store.application(scope, lease))
+    const workers = this.workers.open(scope, lease)
     return new GitHubExecutionBackend(
       this.store.state,
       lease,
       scope,
       { kind: 'app', app: app.appSource(), installation: { ...scope.installation, permissions: {}, suspended: false } },
       {
-        workers: this.workers.open(scope, lease),
+        workers,
+        rejectUndispatchedCreate: workers.rejectUndispatchedCreate,
         authorize: async (current, operation, signal) => {
           signal?.throwIfAborted()
           await this.store.transaction(async (tx, state) => {

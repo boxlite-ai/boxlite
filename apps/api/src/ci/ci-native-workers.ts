@@ -30,6 +30,15 @@ import { CiNativeState } from './ci-native-state'
 import { uploadJitFile } from './ci-runner-files'
 type Effect = 'box-create' | 'box-stop' | 'box-remove' | 'jit-deliver'
 
+class CreationAdmissionDenied extends ForbiddenException {
+  constructor(
+    readonly effect: string,
+    message: string,
+  ) {
+    super(message)
+  }
+}
+
 /** Internal capability: original scope + execution lease, with no user API Key. */
 @Injectable()
 export class CiNativeWorkers {
@@ -40,7 +49,34 @@ export class CiNativeWorkers {
     private readonly limits: CommerceBoxLimitService,
     private readonly runners: RunnerService,
   ) {}
-  open(original: ExecutionScope, originalLease: ExecutionLease): WorkerExecutor {
+
+  async list(organization: string, page: number, limit: number, name?: string) {
+    if (!this.store.app) return { items: [], total: 0, page, totalPages: 0 }
+    const { rows, total } = await this.store.transaction(async (tx, state) => {
+      await this.store.root(state)
+      const from = `FROM box b WHERE b."organizationId"=$2 AND b.state<>$3
+        AND strpos(lower(b.name),lower($4))>0 AND EXISTS (
+        SELECT 1 FROM ci_listener_state ledger JOIN ci_listener_state scope
+          ON scope.namespace=ledger.namespace AND scope.record_key=ledger.payload->>'scope'
+        WHERE ledger.namespace=$1 AND ledger.record_key LIKE 'box-native/%' AND ledger.schema_version=1
+          AND ledger.payload->>'box'=b.id AND scope.payload->'scope'->>'organization'=$2::text)`
+      const parameters = [this.store.namespace, organization, BoxState.DESTROYED, name?.trim() ?? '']
+      const [count] = await tx.query('SELECT count(*)::int AS total ' + from, parameters)
+      const rows = await tx.query('SELECT b.* ' + from + ' ORDER BY b."createdAt" DESC,b.id DESC LIMIT $5 OFFSET $6', [
+        ...parameters,
+        limit,
+        (page - 1) * limit,
+      ])
+      return { rows, total: count.total as number }
+    })
+    return { items: await this.boxes.toBoxDtos(rows), total, page, totalPages: Math.ceil(total / limit) }
+  }
+  open(
+    original: ExecutionScope,
+    originalLease: ExecutionLease,
+  ): WorkerExecutor & {
+    rejectUndispatchedCreate(name: string, effect: string): Promise<never>
+  } {
     const scope = decodeScope(original),
       lease = { ...originalLease },
       originalScope = scopeKey(scope)
@@ -56,7 +92,13 @@ export class CiNativeWorkers {
         throw new ConflictException('Durable CI effect intent required')
       if (effect === 'box-create' || effect === 'jit-deliver') {
         if (allocation.value.closing) throw new ConflictException('CI allocation is closing')
-        await this.store.admit(tx, scope)
+        try {
+          await this.store.admit(tx, scope)
+        } catch (error) {
+          if (effect === 'box-create' && error instanceof ForbiddenException)
+            throw new CreationAdmissionDenied(allocation.value.effect!.id, error.message)
+          throw error
+        }
       }
       const key = 'box-native/' + name.slice(7),
         [record] = await state.read([key])
@@ -114,6 +156,29 @@ export class CiNativeWorkers {
       return box
     }
     const context = () => Context.platform(PlatformReason.CI_RUNNER)
+    const rejectUndispatchedCreate = async (name: string, effect: string): Promise<never> => {
+      await this.store.transaction(async (tx, state) => {
+        // The same expected-null ledger write fences a racing Box persistence transaction.
+        const original = await inspect(tx, state, name)
+        if (original.rejected === effect) return
+        if (
+          original.record ||
+          original.allocation.box.phase !== 'requested' ||
+          original.allocation.box.id !== null ||
+          original.allocation.effect?.kind !== 'box-create' ||
+          original.allocation.effect.id !== effect
+        )
+          throw new ConflictException('CI creation rejection cannot replace the original operation')
+        await state.commit(lease, [
+          {
+            key: original.key,
+            expected: null,
+            payload: { scope: originalScope, box: null, rejectedCreationEffect: effect },
+          },
+        ])
+      })
+      throw new ConfirmedWorkerCreationRejected(effect)
+    }
     const running = async (name: string) => {
       const box = await owned(name, 'jit-deliver')
       if (
@@ -126,6 +191,7 @@ export class CiNativeWorkers {
       return box
     }
     return {
+      rejectUndispatchedCreate,
       create: async (input) => {
         const launch: WorkerLaunch = { ...input, entrypoint: [...input.entrypoint] }
         if (
@@ -140,12 +206,18 @@ export class CiNativeWorkers {
           launch.entrypoint.some((v) => typeof v !== 'string' || v.includes('\0'))
         )
           throw new ForbiddenException('Invalid CI worker launch')
-        const creationEffect = await this.store.transaction(async (tx, state) => {
-          const original = await inspect(tx, state, launch.name, 'box-create')
-          if (original.record || original.allocation.box.phase !== 'requested' || original.allocation.box.id !== null)
-            throw new ConflictException('CI Box creation was already attempted')
-          return original.allocation.effect!.id
-        })
+        let creationEffect: string
+        try {
+          creationEffect = await this.store.transaction(async (tx, state) => {
+            const original = await inspect(tx, state, launch.name, 'box-create')
+            if (original.record || original.allocation.box.phase !== 'requested' || original.allocation.box.id !== null)
+              throw new ConflictException('CI Box creation was already attempted')
+            return original.allocation.effect!.id
+          })
+        } catch (error) {
+          if (error instanceof CreationAdmissionDenied) return rejectUndispatchedCreate(launch.name, error.effect)
+          throw error
+        }
         const organization = await this.organizations.findOne(scope.organization)
         const maxCreatedBoxes = await this.limits.resolveMaxCreatedBoxes(scope.organization)
         const dto = Object.assign(new CreateBoxDto(), {
@@ -183,29 +255,10 @@ export class CiNativeWorkers {
             },
           })
         } catch (error) {
+          if (error instanceof CreationAdmissionDenied && error.effect === creationEffect)
+            return rejectUndispatchedCreate(launch.name, creationEffect)
           if (!(error instanceof BoxCreationLimitExceededError) || persistenceEntered) throw error
-          await this.store.transaction(async (tx, state) => {
-            // This is cleanup of a rejected original operation, not authority to start new work.
-            const original = await inspect(tx, state, launch.name)
-            if (
-              original.record ||
-              original.allocation.box.phase !== 'requested' ||
-              original.allocation.box.id !== null ||
-              original.allocation.effect?.kind !== 'box-create' ||
-              original.allocation.effect.id !== creationEffect
-            )
-              throw new ConflictException('Original CI creation rejection cannot be recorded')
-            // One ledger key arbitrates persisted Box IDs and definitive refusal facts.
-            // A racing onPersist must lose the same expected-null CAS and roll back its Box row.
-            await state.commit(lease, [
-              {
-                key: original.key,
-                expected: null,
-                payload: { scope: originalScope, box: null, rejectedCreationEffect: creationEffect },
-              },
-            ])
-          })
-          throw new ConfirmedWorkerCreationRejected(creationEffect)
+          return rejectUndispatchedCreate(launch.name, creationEffect)
         }
         return boxToBoxResponse(created)
       },
