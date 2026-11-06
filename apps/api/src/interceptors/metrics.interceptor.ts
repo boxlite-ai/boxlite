@@ -4,17 +4,10 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import {
-  Injectable,
-  NestInterceptor,
-  ExecutionContext,
-  CallHandler,
-  OnApplicationShutdown,
-  Logger,
-} from '@nestjs/common'
+import { Injectable, NestInterceptor, ExecutionContext, CallHandler, Logger } from '@nestjs/common'
 import { Observable } from 'rxjs'
 import { tap } from 'rxjs/operators'
-import { PostHog } from 'posthog-node'
+import { AnalyticsService } from '../analytics/services/analytics.service'
 import { Request } from 'express'
 import { CreateOrganizationDto } from '../organization/dto/create-organization.dto'
 import { OrganizationDto } from '../organization/dto/organization.dto'
@@ -48,33 +41,19 @@ type CommonCaptureProps = {
 }
 
 @Injectable()
-export class MetricsInterceptor implements NestInterceptor, OnApplicationShutdown {
-  private readonly posthog?: PostHog
+export class MetricsInterceptor implements NestInterceptor {
   private readonly version: string
   private readonly logger = new Logger(MetricsInterceptor.name)
 
-  constructor(private readonly configService: TypedConfigService) {
+  constructor(
+    private readonly configService: TypedConfigService,
+    private readonly analytics: AnalyticsService,
+  ) {
     this.version = this.configService.getOrThrow('version')
-
-    if (!this.configService.get('posthog.apiKey')) {
-      this.logger.warn('POSTHOG_API_KEY is not set, metrics will not be recorded')
-      return
-    }
-
-    if (!this.configService.get('posthog.host')) {
-      this.logger.warn('POSTHOG_HOST is not set, metrics will not be recorded')
-      return
-    }
-
-    // Initialize PostHog client
-    // Make sure to set POSTHOG_API_KEY in your environment variables
-    this.posthog = new PostHog(this.configService.getOrThrow('posthog.apiKey'), {
-      host: this.configService.getOrThrow('posthog.host'),
-    })
   }
 
   intercept(context: ExecutionContext, next: CallHandler): Observable<any> {
-    if (!this.posthog) {
+    if (!this.analytics.enabled) {
       return next.handle()
     }
 
@@ -331,11 +310,11 @@ export class MetricsInterceptor implements NestInterceptor, OnApplicationShutdow
     request: CreateOrganizationDto,
     response: OrganizationDto,
   ) {
-    if (!this.posthog) {
+    if (!this.analytics.enabled) {
       return
     }
 
-    this.posthog.groupIdentify({
+    this.analytics.groupIdentify({
       groupType: 'organization',
       groupKey: response.id,
       properties: {
@@ -506,11 +485,11 @@ export class MetricsInterceptor implements NestInterceptor, OnApplicationShutdow
   }
 
   private capture(event: string, props: CommonCaptureProps, errorEvent?: string, extraProps?: Record<string, any>) {
-    if (!this.posthog) {
+    if (!this.analytics.enabled) {
       return
     }
 
-    this.posthog.capture({
+    this.analytics.capture({
       distinctId: props.distinctId,
       event: props.error ? errorEvent || event : event,
       groups: this.captureCommonGroups(props),
@@ -533,11 +512,5 @@ export class MetricsInterceptor implements NestInterceptor, OnApplicationShutdow
 
   private captureCommonGroups(props: CommonCaptureProps) {
     return props.organizationId ? { organization: props.organizationId } : undefined
-  }
-
-  onApplicationShutdown(/*signal?: string*/) {
-    if (this.posthog) {
-      this.posthog.shutdown()
-    }
   }
 }
