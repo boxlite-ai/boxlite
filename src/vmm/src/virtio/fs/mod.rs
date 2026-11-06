@@ -75,4 +75,4 @@ mod linux_tests;
 
 #[cfg(test)]
 #[path = "../../../tests/virtio/fs_worker.rs"]
-mod worker_tests;
+pub(crate) mod worker_tests;

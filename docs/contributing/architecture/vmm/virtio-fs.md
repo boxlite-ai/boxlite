@@ -272,8 +272,15 @@ common scheduling work; it cannot be solved by cancelling a host syscall.
 The current delivery accepts this recorded limitation and defers sustained-load
 stop progress to that follow-up. The failing test remains unchanged and runs
 in the ordinary unit target; no clean full-suite result is claimed.
-VM RAM-registration retention on failed shutdown
-remains covered by the common VM lifecycle tests, separately from fs ownership.
+Joint VM/Fs lifecycle tests now run production FUSE READ on the VM's registered
+RAM through the shared worker, with an injected `pread64` gate and a mock
+hypervisor registration log. A timed-out shutdown keeps the registration and
+backing; releasing the gate completes READ, shutdown retry succeeds, and VM drop
+unregisters and frees the backing. Dropping the VM while READ remains blocked
+instead preserves the registration and deliberately retains backing RAM, even
+after the callback finishes. Both cases pass with
+`make test:unit:vmm FILTER=blocked_fs`. This verifies host ownership and cleanup;
+it does not exercise a real hypervisor or physical slow storage.
 
 ## Verification record
 
@@ -366,7 +373,11 @@ common-framework optimization and does not block this functional delivery.
 The failure remains reproducible, rather than being counted as a pass.
 Full Box exit.json, copy RPC and normal lifecycle acceptance still need
 a native engine adapter and whole-machine Guest.Init integration. BSD source attribution and packaging recipes have been checked; real release
-archive builds and inspection remain outstanding. These are open acceptance items, not passing results.
+archive builds and inspection remain outstanding. A local `make runtime` release
+attempt failed first because Go was absent from PATH. Retrying with the installed
+Go toolchain built libgvproxy, then failed in libkrunfw install-name adjustment
+because the required executable was unavailable. No release archive was produced.
+These are open acceptance items, not passing results.
 
 ## 验收编号与证据层次
 
@@ -383,7 +394,7 @@ archive builds and inspection remain outstanding. These are open acceptance item
 | B05 | lookup/open/inflight 独立所有权、FORGET/PLUS、真实 fd 回收 | 编号在会话内不复用 |
 | B06 | DIRECT_IO/零超时契约；同 guest fd 协调 host rewrite；MAP_PRIVATE 初始 fault 和 MAP_SHARED ENODEV | 不保证已有 private mmap 后续修改可见 |
 | B08–B09 | 分段/方向/容量、公共冻结描述符、indirect、双队列、通知、激活/reset | 沿公共队列和 transport 边界 |
-| B10 | 真正 lease 阻塞 OPEN、其他 Fs 延迟、reset 超时/成功、注入 gate、RAM Arc通过；四链补充最终复现reset超时失败 | 后续公共框架优化：持续补充时drain停止进展；已知失败保留，不阻塞本次功能交付；VM注册保留仍为独立通用测试 |
+| B10 | 真正 lease 阻塞 OPEN、其他 Fs 延迟、reset 超时/成功、注入 gate、RAM Arc通过；四链补充最终复现reset超时失败 | 后续公共框架优化：持续补充时drain停止进展；已知失败保留，不阻塞本次功能交付；已补真实Fs读回调与mock VM注册/释放联合测试 |
 | B11 | EMFILE 根/辅助 fd、第二导出失败、ENOSPC/短写注入、反复 populated reset/destroy/drop | 注入错误与真实磁盘满分别标明 |
 | B13–B14 | 配置、挂载、最小真实 guest 与旧引擎准备回归 | 完整 Box、exit.json、独立 copy RPC、双引擎运行待外部集成 |
 
