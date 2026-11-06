@@ -2294,6 +2294,14 @@ components:
       description: REST box metadata
       required: [box_id, status, created_at, updated_at, image, cpus, memory_mib]
       properties:
+        reuse_error:
+          type: string
+          readOnly: true
+          description: |
+            Detail GET only: the current server policy prevents get_or_create
+            from reusing this box. SDKs must report this reason instead of
+            returning a reused handle. Ordinary get/get_info remain readable.
+            Omitted when reuse is allowed or the server predates this metadata.
         box_id:
           type: string
           description: |

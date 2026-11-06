@@ -181,7 +181,11 @@ export class BoxliteBoxController {
   ): Promise<BoxResponseDto> {
     const box = await this.boxService.findOneByIdOrName(boxId, authContext.organizationId)
     const dto = await this.boxService.toBoxDtoWithExitCode(box)
-    return boxToBoxResponse(dto)
+    const response = boxToBoxResponse(dto)
+    if (authContext.organization?.nestedVirtualizationEnabled === true && !box.nestedVirtualization) {
+      response.reuse_error = `box '${box.name || box.id}' was created without nested virtualization and cannot satisfy a required nested virtualization request; use a different name or recreate the box`
+    }
+    return response
   }
 
   @Head(':boxId')

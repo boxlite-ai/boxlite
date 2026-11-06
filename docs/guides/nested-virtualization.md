@@ -45,9 +45,17 @@ configuration. A nested box still requires current runtime/Runner authorization
 when it starts or restarts. Replay and recovery preserve the saved requirement
 and cannot downgrade it.
 
-With local nesting enabled, `get_or_create` rejects a same-name ordinary box.
-Use a new name or explicitly remove and recreate it. Nested archive import and
+With nesting enabled by local ENV or Cloud organization policy, `get_or_create`
+rejects a same-name ordinary box. Use a new name or explicitly remove and recreate
+it; ordinary `get` and `get_info` can still read it. Nested archive import and
 migration remain unsupported.
+
+REST detail GET responses carry an optional, read-only `reuse_error` when the
+current policy prevents reuse. Updated SDKs report it from `get_or_create`
+without a creation request. Older servers omit this metadata and retain their
+previous reuse behavior: upgrade the API/server and calling SDKs before enabling
+this RC. Local server policy is captured at startup; Cloud evaluates the
+authenticated organization's policy. Client ENV does not change either decision.
 
 ## Supported hosts
 
