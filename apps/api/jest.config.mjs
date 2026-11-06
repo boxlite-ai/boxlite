@@ -13,9 +13,9 @@ export default {
   transform: {
     '^.+\\.[tj]s$': ['ts-jest', { tsconfig: '<rootDir>/tsconfig.spec.json' }],
   },
-  // uuid v14 and nanoid v5 ship ESM-only. The nx preset ignores node_modules
+  // uuid, nanoid and FastMCP's xsschema dependency ship ESM-only. The nx preset ignores node_modules
   // from transformation, so let ts-jest down-level them.
-  transformIgnorePatterns: ['/node_modules/(?!(?:uuid|nanoid)/)'],
+  transformIgnorePatterns: ['/node_modules/(?!(?:uuid|nanoid|xsschema|@apidevtools/json-schema-ref-parser)/)'],
   moduleFileExtensions: ['ts', 'js', 'html'],
   collectCoverageFrom: ['src/**/*.ts', '!src/**/*.spec.ts', '!src/**/*.d.ts'],
   coverageReporters: ['text', ['lcov', { projectRoot: fileURLToPath(new URL('../..', import.meta.url)) }]],

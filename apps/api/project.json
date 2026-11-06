@@ -18,6 +18,7 @@
         "sourceMap": true,
         "webpackConfig": "api/webpack.config.js",
         "assets": [
+          { "input": "../openapi", "glob": "box.openapi.yaml", "output": "./assets/" },
           {
             "input": "api/src/assets",
             "glob": "**/*",

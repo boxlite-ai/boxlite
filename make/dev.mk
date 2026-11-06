@@ -24,7 +24,7 @@ _ensure-node-deps:
 # Plain install (not --immutable) mirrors _ensure-node/python-deps and
 # bootstraps the lockfile.
 _ensure-apps-deps:
-	@if [ ! -d apps/node_modules ] || [ ! -f apps/yarn.lock ]; then \
+	@if [ "$(INSTALL_APPS_DEPS)" = "1" ] || [ ! -d apps/node_modules ] || [ ! -f apps/yarn.lock ]; then \
 		echo "📦 Installing apps workspace dependencies (yarn)..."; \
 		cd apps && { [ -f yarn.lock ] || : > yarn.lock; } && yarn install; \
 	fi

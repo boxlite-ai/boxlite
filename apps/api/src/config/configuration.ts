@@ -440,7 +440,33 @@ export function domainConfig(env: NodeJS.ProcessEnv = process.env) {
   return { appDomain, appHost, platformSubdomainMinLength }
 }
 
+function mcpResourceUrl(): string | undefined {
+  const value = process.env.MCP_RESOURCE_URL
+  if (!value) return undefined
+  let url: URL
+  try {
+    url = new URL(value)
+  } catch {
+    throw new Error('MCP_RESOURCE_URL must be an absolute URL ending in /api/mcp')
+  }
+  const localHttp = url.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname)
+  if (
+    (!localHttp && url.protocol !== 'https:') ||
+    url.pathname !== '/api/mcp' ||
+    url.username ||
+    url.password ||
+    value.includes('?') ||
+    value.includes('#')
+  ) {
+    throw new Error(
+      'MCP_RESOURCE_URL must use HTTPS (HTTP only on loopback), end in /api/mcp, and contain no credentials, query or fragment',
+    )
+  }
+  return url.href
+}
+
 const configuration = {
+  mcp: { resourceUrl: mcpResourceUrl() },
   production: process.env.NODE_ENV === 'production',
   version: process.env.VERSION || '0.0.0-dev',
   environment: process.env.ENVIRONMENT,

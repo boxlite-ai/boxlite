@@ -25,6 +25,8 @@ export interface AuthContext extends BaseAuthContext {
   userId: string
   email: string
   apiKey?: ApiKey
+  /** Set only after verification of the MCP resource audience. */
+  mcp?: boolean
   organizationId?: string
   runnerId?: string
 }

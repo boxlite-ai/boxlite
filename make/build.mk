@@ -45,7 +45,11 @@ cli\:release: runtime
 # build runs tsc, so this is the compile gate for apps/ changes.
 build\:apps: _ensure-apps-deps
 	@echo "🔨 Building apps workspace..."
+ifneq ($(PROJECTS),)
+	@cd apps && yarn nx run-many --target=build --projects=$(PROJECTS)
+else
 	@cd apps && yarn build
+endif
 	@echo "✅ apps workspace built → dist/apps"
 
 build\:apps\:dashboard: _ensure-apps-deps

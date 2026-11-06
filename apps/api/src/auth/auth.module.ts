@@ -64,6 +64,7 @@ import { AccountLinkService } from './account-link.service'
         return new JwtStrategy(
           {
             audience: configService.get('oidc.audience'),
+            mcpAudience: configService.get('mcp.resourceUrl'),
             issuer: toPublicJwtIssuer(metadata.issuer, internalIssuer, publicIssuer),
             jwksUri: jwksUri,
           },
