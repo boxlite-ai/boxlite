@@ -376,6 +376,37 @@ HTTP contract, reconfiguration, disable, and generation semantics.
 | `run` | `async fn run(&self, command: BoxCommand) -> BoxliteResult<Execution>` | Run command |
 | `metrics` | `async fn metrics(&self) -> BoxliteResult<BoxMetrics>` | Get box metrics |
 | `stop` | `async fn stop(&self) -> BoxliteResult<()>` | Stop the box |
+| `executions` | `fn executions(&self) -> ExecutionsHandle` | Live session inventory and control recovery; never boots a box |
+| `attach` | `async fn attach(&self, options: AttachOptions) -> BoxliteResult<Execution>` | Attach to init or a named live session; only one output reader is allowed |
+
+#### ExecutionsHandle
+
+`LiteBox::executions()` returns an owned, cloneable `ExecutionsHandle` without
+starting the box.
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `list` | `async fn list(&self) -> BoxliteResult<Vec<ExecutionInfo>>` | Snapshot live guest sessions, including init; never boots a box |
+| `get` | `async fn get(&self, execution_id: &str) -> BoxliteResult<Execution>` | Recover control and wait for a known session without taking its output reader |
+
+`executions().list()` is a live-process inventory, not history: sessions disappear
+once the guest reaper records their exit, before registry cleanup. Existing wait
+status/output may remain available in bounded guest retention after a session
+disappears from the list. Calling it on a created or stopped box returns an
+empty vector and does not start or restart the box. A paused box returns an
+invalid-state error instead of claiming its sessions disappeared.
+`ExecutionInfo` carries the canonical guest execution ID, argv, Unix-millisecond
+spawn time, PTY flag, and `is_main_session`.
+
+`executions().get(id)` returns a control-only handle (no stdin/stdout/stderr).
+The local runtime verifies the ID against the live guest inventory; a
+REST-backed runtime asks the server's by-id endpoint, so a retained terminal
+session can still be recovered after it leaves the inventory. Its `wait`,
+`kill`, `signal`, and PTY resize methods remain usable while another handle
+owns output.
+To recover streams after a client process exits, call
+`attach(AttachOptions::execution(id))`; an existing reader is reported as a
+conflict rather than silently returning no output.
 
 #### Lifecycle
 

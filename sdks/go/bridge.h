@@ -38,6 +38,7 @@ extern CBoxRegistryRemoveCb cbRegistryRemove(void);
 
 extern CBoxInfoCb cbInfo(void);
 extern CBoxInfoListCb cbInfoList(void);
+extern CExecutionInfoListCb cbExecutionInfoList(void);
 
 extern CBoxMetricsCb cbBoxMetrics(void);
 extern CRuntimeMetricsCb cbRuntimeMetrics(void);

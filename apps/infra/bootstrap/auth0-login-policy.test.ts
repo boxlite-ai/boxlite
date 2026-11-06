@@ -331,6 +331,7 @@ test('parseAuth0LoginPolicyOptions defaults to preview and requires exact tenant
       accountLinkApiOrigin: undefined,
       accountLinkSecret: undefined,
       disableAccountLink: false,
+      disableMcpLogin: false,
     },
   )
   assert.equal(
@@ -1254,6 +1255,44 @@ test('parseAuth0LoginPolicyOptions accepts only an exact https MCP resource URL'
     'https://api.example.test/mcp',
   )
   assert.throws(() => parseAuth0LoginPolicyOptions([...base, '--mcp-resource-url', 'http://api.example.test/mcp']))
+  assert.equal(parseAuth0LoginPolicyOptions([...base, '--disable-mcp-login']).disableMcpLogin, true)
+  const both = [...base, '--disable-mcp-login', '--mcp-resource-url', 'https://api.example.test/mcp']
+  assert.throws(() => parseAuth0LoginPolicyOptions(both), /cannot be combined/)
+})
+
+test('login policy apply keeps MCP login checks unless told to drop them', () => {
+  const tenant = fakeTenant()
+  const mcpCode = /const MCP_RESOURCE_URL = "https:\/\/api\.example\.test\/mcp"/
+  const configure = (options: Record<string, unknown>) =>
+    new Auth0LoginPolicyConfigurator(
+      {
+        tenant: 'tenant.us.auth0.com',
+        clientId: 'spa_123',
+        connectionName: 'boxlite-users',
+        apply: true,
+        allowTestEmailProvider: false,
+        ...options,
+      },
+      tenant.client,
+      {
+        actionCode: POLICY_SOURCE,
+        emailVerificationTemplate: tenant.template,
+        journalDirectory: tenant.journalDirectory,
+      },
+    )
+  try {
+    configure({ mcpResourceUrl: 'https://api.example.test/mcp' }).apply()
+    assert.match(tenant.state.action.deployed_version.code, mcpCode)
+
+    assert.throws(() => upgradeConfigurator(tenant).apply(), /--disable-mcp-login/)
+    assert.match(tenant.state.action.deployed_version.code, mcpCode)
+
+    configure({ disableMcpLogin: true }).apply()
+    assert.match(tenant.state.action.deployed_version.code, /const MCP_RESOURCE_URL = ""/)
+    assert.doesNotThrow(() => upgradeConfigurator(tenant).apply())
+  } finally {
+    rmSync(tenant.journalDirectory, { recursive: true, force: true })
+  }
 })
 
 test('login policy continuation trusts only the exact verification form', async () => {

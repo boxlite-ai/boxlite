@@ -98,6 +98,10 @@ pub(crate) trait BoxBackend: Send + Sync + Any {
 
     async fn exec(&self, command: BoxCommand) -> BoxliteResult<Execution>;
 
+    async fn list_executions(&self) -> BoxliteResult<Vec<crate::ExecutionInfo>>;
+
+    async fn get_execution(&self, execution_id: &str) -> BoxliteResult<Execution>;
+
     /// Attach to a session in the box.
     ///
     /// [`AttachOptions::main`] follows the box's main command session (docker
@@ -117,9 +121,8 @@ pub(crate) trait BoxBackend: Send + Sync + Any {
     /// sender, and a backend that talks over a bidirectional transport refuses
     /// writes on it.
     ///
-    /// Default is `Unsupported`; a backend implements the arms it models. A local
-    /// in-process backend has no long-lived reattachable exec sessions, so it
-    /// supports `main()` only.
+    /// Default is `Unsupported`; both production backends implement existing
+    /// session attachment. Output reader conflicts must remain explicit.
     async fn attach(&self, _options: AttachOptions) -> BoxliteResult<Execution> {
         Err(BoxliteError::Unsupported(
             "this backend does not support attaching to sessions".into(),

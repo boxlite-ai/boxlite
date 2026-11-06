@@ -55,9 +55,15 @@ export class McpAuthGuard implements CanActivate {
   }
 
   private async fromOAuthToken(request: Request, token: string) {
+    // Without `MCP_RESOURCE_URL` no token is issued for this endpoint; any JWT is
+    // one issued for another audience, which an MCP server must not accept.
+    const audience = this.metadata.audience
+    if (!audience) {
+      throw new UnauthorizedException()
+    }
     let payload: JWTPayload
     try {
-      payload = await this.jwtStrategy.verifyToken(token, this.metadata.audience)
+      payload = await this.jwtStrategy.verifyToken(token, audience)
     } catch (error) {
       // A bad signature, issuer, audience or expiry is a 401; anything else, such
       // as the unverified-email 403, keeps its own status.

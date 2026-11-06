@@ -225,6 +225,69 @@ async def main():
 
 **When to use:** Most AI agent scenarios. Keeps VM boot cost to one-time.
 
+#### Recovering control after losing the handle
+
+An `Execution` object is a handle, not the process. If the client that started
+a long-running exec crashes, or the connection to a REST server drops, the
+process keeps running inside the box — and the handle that named it is gone.
+`box.executions().list()` closes that gap: it reports the box's live sessions,
+and every id it returns is directly usable with `executions().attach()` and
+`kill()`.
+
+```python
+# A new process: no Execution objects survive from the one that started them.
+runtime = boxlite.Boxlite.default()
+box = await runtime.get(box_id)
+
+for session in await box.executions().list():
+    print(session.execution_id, session.argv, session.is_main_session)
+
+target = next(
+    s for s in await box.executions().list() if s.argv[:1] == ["pytest"]
+)
+execution = await box.executions().attach(target.execution_id)
+await execution.kill()
+```
+
+From the CLI, the same three steps are `boxlite top BOX`,
+`boxlite attach BOX EXECUTION_ID` and `boxlite kill BOX EXECUTION_ID`.
+
+REST execution routes use the API's `box_id` together with the listed
+`execution_id`. The runner maps that box ID to a local runtime handle whose
+ID differs; its execution ownership cache keeps the API box ID consistently
+for start, recovery, attach, and later control requests.
+
+What the list contains, and what it does not:
+
+- **Live sessions only.** A finished execution disappears immediately; the
+  list keeps no completed-session history. Existing handles can still use
+  `wait()`. Guest replay/status normally has a five-minute grace period,
+  followed by a terminal-metadata tombstone for another fifteen minutes.
+  The replay cache is bounded to 64 entries / 8 MiB; tombstones to
+  1,024 entries / 5 MiB, so pressure can evict either earlier. Active readers
+  finish before their replay is retired. None of this survives guest shutdown.
+- **The main command is included**, with `is_main_session=True`. Its id is the
+  container id, the same convention the wire layer uses.
+- **Metadata, not a process listing.** `argv`, `started_at` and `tty`
+  are captured when the session is spawned, so they describe the BoxLite
+  execution rather than whatever a `ps` parse would report.
+- **Listing never starts or resumes a box.** Configured and stopped boxes list
+  nothing. A paused box returns an invalid-state error rather than claiming
+  that its sessions disappeared. Listing does not refresh the server's idle clock.
+
+`executions().get(id)` recovers wait and control without taking the output
+reader. On a REST-backed box it asks the server by ID rather than requiring the
+ID to still appear in the inventory, so a retained terminal session can still be
+recovered. The local runtime verifies the ID against the live guest inventory.
+`executions().attach(id)` also claims the output reader and returns a conflict
+if another reader still owns it. Attach includes output still present in the guest's
+bounded buffer, not durable history. A failed status request is an observation
+error, not a fabricated process exit; callers decide whether to try again.
+
+The main session reuses its execution ID after a box restart. Server-side
+recovery records belong to one box lifecycle and are discarded before an
+explicit or implicit restart, so an old exit cannot complete a new main session.
+
 ### One box per agent
 
 Use separate boxes when you need strict isolation between agents, different images, or independent resource limits.

@@ -14,6 +14,53 @@ import (
 
 var execManager = boxlite.NewExecManager()
 
+var getExecutionBox = func(ctx *gin.Context, boxID string) (*sdkboxlite.Box, error) {
+	r, err := runner.GetInstance(nil)
+	if err != nil {
+		return nil, err
+	}
+	return r.Boxlite.GetBox(ctx.Request.Context(), boxID)
+}
+
+func resolveManagedExecution(ctx *gin.Context, boxID, execID string, attach bool) (*boxlite.ManagedExec, error) {
+	cached, cachedErr := execManager.GetForBox(execID, boxID)
+	if cachedErr != nil && !errors.Is(cachedErr, boxlite.ErrExecNotFound) {
+		return nil, cachedErr
+	}
+	if !attach && cached != nil {
+		select {
+		case <-cached.Done:
+		default:
+			return cached, nil
+		}
+	}
+	bx, err := getExecutionBox(ctx, boxID)
+	if err != nil {
+		if !attach && cached != nil {
+			return cached, nil
+		}
+		return nil, fmt.Errorf("box not found: %w", err)
+	}
+	if attach {
+		return execManager.Attach(ctx.Request.Context(), bx, execID, boxID)
+	}
+	return execManager.Resolve(ctx.Request.Context(), bx, execID, boxID)
+}
+
+func BoxliteListExecutions(ctx *gin.Context) {
+	bx, err := getExecutionBox(ctx, ctx.Param("boxId"))
+	if err != nil {
+		ctx.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("box not found: %s", err)})
+		return
+	}
+	entries, err := bx.Executions().List(ctx.Request.Context())
+	if err != nil {
+		ctx.JSON(execStartStatus(err), gin.H{"error": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusOK, gin.H{"executions": entries})
+}
+
 type ExecRequest struct {
 	Command        string            `json:"command"`
 	Args           []string          `json:"args"`
@@ -148,7 +195,7 @@ func BoxliteExecSignal(ctx *gin.Context) {
 		return
 	}
 
-	if _, err := execManager.GetForBox(execId, boxId); err != nil {
+	if _, err := resolveManagedExecution(ctx, boxId, execId, false); err != nil {
 		ctx.JSON(classifyExecError(err), gin.H{"error": err.Error()})
 		return
 	}
@@ -168,7 +215,7 @@ func BoxliteExecKill(ctx *gin.Context) {
 	boxId := ctx.Param("boxId")
 	execId := ctx.Param("execId")
 
-	if _, err := execManager.GetForBox(execId, boxId); err != nil {
+	if _, err := resolveManagedExecution(ctx, boxId, execId, false); err != nil {
 		ctx.JSON(classifyExecError(err), gin.H{"error": err.Error()})
 		return
 	}
@@ -189,7 +236,7 @@ func BoxliteGetExecution(ctx *gin.Context) {
 	boxId := ctx.Param("boxId")
 	execId := ctx.Param("execId")
 
-	exec, err := execManager.GetForBox(execId, boxId)
+	exec, err := resolveManagedExecution(ctx, boxId, execId, false)
 	if err != nil {
 		ctx.JSON(classifyExecError(err), gin.H{"error": err.Error()})
 		return
@@ -240,7 +287,7 @@ func BoxliteExecResize(ctx *gin.Context) {
 		return
 	}
 
-	if _, err := execManager.GetForBox(execId, boxId); err != nil {
+	if _, err := resolveManagedExecution(ctx, boxId, execId, false); err != nil {
 		ctx.JSON(classifyExecError(err), gin.H{"error": err.Error()})
 		return
 	}
@@ -255,11 +302,12 @@ func BoxliteExecResize(ctx *gin.Context) {
 
 func classifyExecError(err error) int {
 	switch {
-	case errors.Is(err, boxlite.ErrExecNotFound), errors.Is(err, boxlite.ErrBoxMismatch):
+	case errors.Is(err, boxlite.ErrExecNotFound), errors.Is(err, boxlite.ErrBoxMismatch), sdkboxlite.IsNotFound(err):
 		return http.StatusNotFound
-	case errors.Is(err, boxlite.ErrExecClosed), errors.Is(err, boxlite.ErrExecReaping):
+	case errors.Is(err, boxlite.ErrExecClosed), errors.Is(err, boxlite.ErrExecReaping),
+		sdkboxlite.IsAlreadyExists(err), sdkboxlite.IsInvalidState(err), sdkboxlite.IsStopped(err):
 		return http.StatusConflict
-	case errors.Is(err, boxlite.ErrExecNotTTY):
+	case errors.Is(err, boxlite.ErrExecNotTTY), sdkboxlite.IsInvalidArgument(err):
 		return http.StatusBadRequest
 	default:
 		return http.StatusInternalServerError
