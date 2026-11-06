@@ -432,9 +432,18 @@ jobs:
         timeout-minutes: 5
         run: make coverage:vmm:kvm
 
+      - name: Prepare guest mount test toolchain
+        if: matrix.platform.target == 'linux-x64-gnu' && needs.changes.outputs.vmm == 'true'
+        run: |
+          sudo apt-get install -y musl-tools gperf
+          rustup target add x86_64-unknown-linux-musl
+
       - name: Run real-kernel boot tests with coverage
         if: matrix.platform.target == 'linux-x64-gnu' && needs.changes.outputs.vmm == 'true'
         timeout-minutes: 5
+        env:
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER: x86_64-linux-musl-gcc
+          CC_x86_64_unknown_linux_musl: x86_64-linux-musl-gcc
         run: make coverage:vmm:boot
 
       - uses: actions/setup-node@v4
