@@ -524,16 +524,23 @@ runner does not push state for boxes the API isn't tracking.
 [`internal/metrics/collector.go`](internal/metrics/collector.go) runs independent
 sampling and logging loops:
 
-- **CPU usage snapshot** every `CPUUsageSnapshotInterval` — keeps a
-  ring buffer of the last `WindowSize` samples so `/info` can return a
-  smoothed CPU % without re-sampling on each request.
+- **CPU usage snapshot** every `CPUUsageSnapshotInterval` (default five seconds),
+  including the first reading after startup, regardless of host load. The ring
+  retains the last `WindowSize` samples (default 60, about five minutes) for the
+  CPU average returned by `/info` and healthchecks.
 - **Allocated resources snapshot** every
   `AllocatedResourcesSnapshotInterval` — queries `Boxlite.ListInfo()`
   and sums the CPU/RAM allocations across running boxes.
 - **Resource log** every minute — emits `event=runner.resource.usage` with
-  `cpuPercent` (available samples from the last minute), current `memoryPercent`,
+  `cpuPercent` (the maximum successful CPU sample from the last minute), current `memoryPercent`,
   `diskPercent`, `diskUsedGiB` and `diskTotalGiB`. Failed collection emits a warning.
 - **Runtime counters** every 15 seconds — refreshes aggregate runtime metrics.
+
+For example, CPU readings of 40% and 80% within the minute produce `cpuPercent=80`
+in the resource log; `/info` still returns the mean of its retained history.
+Each CPU reading covers a counter interval, so this is the largest sampled
+interval, not an instantaneous peak. The minute cutoff is inclusive. If no CPU
+sample falls within it, collection logs a warning instead of using older data.
 
 `Collect(ctx)` reads the current values with a short timeout and is
 called from both `/info` and the v2 healthcheck. Disk numbers come from
@@ -583,6 +590,45 @@ reports wait in memory. Network errors, 429 and 5xx retry every 30 seconds with 
 ten-second timeout; other failures and queue overflow are logged and dropped.
 Restart loses pending captures/reports. Deploy the migration and API before runners.
 This feature records evidence only; it does not stop boxes or change scheduling.
+
+### Memory incident snapshots
+
+[`internal/memorymonitor`](internal/memorymonitor/) uses the existing minute
+resource sampler. Every valid host memory reading strictly above 80% immediately
+scans running Boxes and reports up to five, ordered by current memory bytes
+descending and business Box ID ascending for ties. Consecutive high minutes
+produce separate events. At or below 80%, or on an invalid host reading, no scan
+occurs. CPU's five-minute qualification and two-minute windows are unchanged.
+
+Host admission uses the same raw `gopsutil.VirtualMemory.UsedPercent` reading as
+the resource log, before rounding for health metrics. CPU/disk collection failures
+do not suppress that memory observation. `/info` and healthchecks do not trigger
+additional scans. Linux uses `memory.current` from the matching Box cgroup v2,
+including VM descendants and charged cache; swap is separate. macOS uses process
+RSS only when the process was created no later than `BoxInfo.StartedAt` and its
+identity remains unchanged across the read. Missing start times are unreadable.
+These accounting scopes differ, and Box totals need
+not sum to the host's used-memory value. This is evidence of large consumers,
+not proof of the cause of host pressure.
+
+Each item carries `boxId`, the snapshot's `image`, and decimal-string
+`memoryBytes`. Fewer than five readable Boxes produce a shorter array, and no
+readable Boxes produce `boxes=[]`. Zero-byte readings are retained. Failed
+enumeration, unreadable or mismatched cgroups, process identity changes, or an
+expired scan mark `samplingComplete=false`; successful observations still report.
+Reads are sequential rather than an atomic host-wide snapshot. One-minute
+sampling can miss short memory spikes.
+
+When API URL and Runner token are configured, completed snapshots enter a separate
+32-report queue for [internal ingestion](../API.md#runner-memory-incidents).
+Scans have a ten-second context deadline and do not wait for network uploads.
+Cancellation releases the sampler even if a Linux kernel read is blocked. At most
+one such read remains in flight; later scans wait for its slot within their own
+deadline, reporting incomplete observations if it has not finished.
+Requests time out after ten seconds; network errors, 429, and 5xx retry after
+30 seconds with the original payload and event ID. Other failures and queue
+overflow are logged and dropped. Missed ticks are not replayed, and process
+restart loses queued reports. Deploy the migration and API before Runners.
 
 ### v2 job poller + executor
 

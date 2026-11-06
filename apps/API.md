@@ -278,6 +278,7 @@ See [rotation ordering and recovery](api/README.md#registry-credential-rotation)
 | `POST`   | `/api/runners`                         | Registers a runner.                                            |
 | `GET`    | `/api/runners/me`                      | Returns the authenticated runner's identity and configuration. |
 | `POST`   | `/api/runners/me/cpu-incidents`         | Internal runner-only CPU incident ingestion; excluded from customer OpenAPI and SDKs. |
+| `POST`   | `/api/runners/me/memory-incidents`      | Internal runner-only top-five memory snapshot ingestion; excluded from customer OpenAPI and SDKs. |
 | `GET`    | `/api/runners/me/images/registry-credentials` | Internal registry-proxy lookup; excluded from customer OpenAPI and SDKs. |
 | `GET`    | `/api/runners/by-box/{boxId}`          | Resolves the runner assigned to a box.                         |
 | `GET`    | `/api/runners/{id}`                    | Gets a runner by ID.                                           |
@@ -299,6 +300,7 @@ See [rotation ordering and recovery](api/README.md#registry-credential-rotation)
 | Method   | Path                                 | What it does                                   |
 | -------- | ------------------------------------ | ---------------------------------------------- |
 | `GET`    | `/api/admin/runner-cpu-incidents`      | Queries CPU incident evidence by capture completion time range for backoffice operations. |
+| `GET`    | `/api/admin/runner-memory-incidents`   | Queries top-five memory snapshots by host sample time for backoffice operations. |
 | `GET`    | `/api/admin/runners`                 | Lists runners using admin authorization.       |
 | `POST`   | `/api/admin/runners`                 | Registers a runner as an administrator.        |
 | `GET`    | `/api/admin/runners/{id}`            | Gets a runner by ID as an administrator.       |
@@ -644,7 +646,7 @@ receive 401. Responses use `Cache-Control: private, no-store`.
 | --- | --- |
 | `from` | Required RFC 3339 timestamp with timezone, at most milliseconds. Inclusive lower bound on `windowEndedAt`. |
 | `to` | Required RFC 3339 timestamp with timezone, at most milliseconds. Exclusive upper bound on `windowEndedAt`; must be after `from`. |
-| `limit` | Integer 1–200; default 50. Returns only the first N matching rows in ID ascending order. |
+| `limit` | Integer 1–200; default 50. First N rows in ID ascending order after per-Box maximum selection. |
 | `runnerId` | Optional UUID filter. |
 
 ```bash
@@ -670,14 +672,24 @@ curl --get "$BOXLITE_API_URL/api/admin/runner-cpu-incidents" \
 }
 ```
 
+Ranking queries have a five-second database statement timeout, including lock
+waits. A timeout fails the request without partial results. Valid time ranges
+remain unrestricted; a timed-out query can be retried with a narrower range.
+The setting is transaction-local and does not affect ingestion or pooled sessions.
+
 The range is `[from,to)` on capture completion time, not high-load start or server
-receipt time. Adjacent ranges therefore do not share boundary rows. Results are
-ordered by ID ascending and capped at `limit`; additional matching rows are not
-returned. There is no pagination. An empty result is `{"items":[]}`. IDs remain
+receipt time. Adjacent ranges therefore do not share boundary rows. After the time
+and optional Runner filters, each non-null `boxId` appears once, using the row
+with the largest `cpuSeconds`; equal values retain the smaller numeric row ID.
+Without a Runner filter, the same Box is deduplicated across Runners. All fields,
+including the image and capture timestamps, come from that winning row.
+Rows with `boxId=null` remain separate observations. Only after this selection are
+results ordered by ID ascending and capped at `limit`; additional selected rows
+are not returned. There is no pagination. An empty result is `{"items":[]}`. IDs remain
 decimal strings to preserve bigint precision; ID order need not match completion
 or commit order. Upload retries can add records to older ranges. Repeating a query
-still returns only the first N matches, so this endpoint does not guarantee full
-incident enumeration. Consumers must recheck the box's
+still returns only the first N selected rows; this endpoint is a per-Box maximum
+view, not a complete incident history. Consumers must recheck the box's
 current state before operations: evidence persists after migration or deletion.
 `cpuSeconds / window duration in seconds * 100` gives average box CPU percent
 on a one-core scale, which can exceed 100%. `samplingComplete=false` means the
@@ -703,6 +715,75 @@ Deploy the pre-deploy migration, then the API, then runners. See the
 [runner monitoring contract](runner/README.md#sustained-cpu-incidents) for sampling,
 retry and restart limitations and [the table schema](SCHEMA.md#runner_cpu_incident)
 for persistence guarantees.
+
+### Runner memory incidents
+
+Each minute, a host memory reading strictly above 80% triggers an immediate scan
+of running Boxes. The Runner reports the five largest readable memory usages,
+or fewer when fewer are available. There is no five-minute qualification or
+two-minute capture window. CPU incidents retain their existing policy.
+
+`POST /api/runners/me/memory-incidents` uses the Runner token and returns 204
+for first ingestion and retries. The server derives `runnerId` from credentials;
+duplicate `(runnerId,eventId)` reports leave the first snapshot unchanged.
+The route is internal and excluded from customer OpenAPI and SDKs.
+
+```json
+{
+  "eventId": "22222222-2222-4222-8222-222222222222",
+  "sampledAt": "2026-11-05T00:01:00.000Z",
+  "runnerMemoryPercent": 87.5,
+  "boxes": [
+    { "boxId": "box-a", "image": "ubuntu:24.04", "memoryBytes": "4294967296" },
+    { "boxId": "box-b", "image": "python:3.13", "memoryBytes": "3221225472" }
+  ],
+  "samplingComplete": true
+}
+```
+
+`boxes` is required and has at most five distinct business Box IDs, ordered by
+bytes descending and then ID ascending. Each item requires a string `image`
+(empty is preserved) and canonical decimal-string `memoryBytes` between zero
+and 9223372036854775807. JSON numbers are rejected to prevent precision loss.
+An empty array means no Box could be measured or no Boxes were running.
+`samplingComplete=false` means enumeration or at least one reading failed;
+the reported ranking then covers only successful observations. Unknown fields,
+invalid nested items, duplicate IDs, incorrect ordering, invalid dates, and host
+percentages outside `(80,100]` return 400.
+
+Administrators query `GET /api/admin/runner-memory-incidents` using an admin API
+key or JWT. Ordinary users and Runner credentials receive 403; missing or invalid
+credentials receive 401. Responses use `Cache-Control: private, no-store`.
+
+| Query | Contract |
+| --- | --- |
+| `from` | Required timezone-qualified timestamp, inclusive lower bound on `sampledAt`. |
+| `to` | Required timezone-qualified timestamp, exclusive upper bound on `sampledAt`; after `from`. |
+| `runnerId` | Optional UUID filter. |
+| `limit` | Integer 1–200, default 50; first N snapshots in ID ascending order after per-Box maximum selection. |
+
+Timestamps accept at most millisecond precision. Results are `{"items":[...]}`;
+each item adds decimal-string `id`, authenticated `runnerId`, and server
+`receivedAt` to the snapshot above. Across the full time range and optional Runner
+filter, each `boxId` appears only in the snapshot containing its largest
+`memoryBytes`, compared as an exact integer. Equal values retain the smaller
+numeric snapshot ID. Without a Runner filter, deduplication spans Runners.
+Each returned `boxes` array contains only the winning entries from that snapshot,
+in their original order, with their original images and snapshot metadata.
+Snapshots losing all entries are omitted; originally empty snapshots remain.
+Then snapshots are ordered by ID and capped at `limit`. The limit counts snapshots,
+not individual Boxes; one snapshot can still contain up to five Boxes.
+Stored reports remain intact. Empty results are `{"items":[]}`.
+As with CPU queries, ranking has a five-second transaction-local database statement
+timeout, including lock waits. A timeout fails without partial results; retry with
+a narrower range if necessary. Ingestion and other pooled queries are unaffected.
+There is no pagination; repeated queries with the same limit do not enumerate
+additional rows. Late retries retain their original `sampledAt`, so historical
+ranges can gain records. Box deletion does not remove evidence.
+
+Deploy the [pre-deploy table migration](SCHEMA.md#runner_memory_incident), then
+the API, then Runners. See the [sampling and retry contract](runner/README.md#memory-incident-snapshots)
+for accounting scope and delivery limitations.
 
 ## Runner API
 

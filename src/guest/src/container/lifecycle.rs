@@ -11,11 +11,13 @@ use super::{console_socket, kill, spec, start};
 use crate::layout::GuestLayout;
 use crate::service::exec::exec_handle::{ExecHandle, PtyConfig};
 use crate::service::exec::InitHealthCheck;
+use crate::storage::attach::Attacher;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use libcontainer::container::Container as LibContainer;
 use libcontainer::signal::Signal;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 /// Size init's PTY opens at.
 ///
@@ -64,8 +66,13 @@ pub struct Container {
     env: HashMap<String, String>,
     /// Resolved (uid, gid) from image USER directive, propagated to exec commands.
     user: (u32, u32),
-    /// Destinations of every mount the applied OCI spec declares.
+    /// Destinations of every mount the applied OCI spec declares, plus those
+    /// added later by `Container.Mount`.
     mount_destinations: Vec<PathBuf>,
+    /// Attaches share folders into this container. `Container.Mount` holds it
+    /// for writing while it attaches and records the mount; file copies hold
+    /// it for reading, so no mount lands under a copy in progress.
+    attacher: Arc<tokio::sync::RwLock<Attacher>>,
     /// Resolved capability set shared by init and every exec process.
     capabilities: CapabilitySet,
     /// Stdio pipes that keep init process alive.
@@ -235,6 +242,7 @@ impl Container {
             env: env_map,
             user: (uid, gid),
             mount_destinations: bundle.mount_destinations,
+            attacher: Arc::default(),
             capabilities,
             stdio,
             is_shutdown: std::sync::atomic::AtomicBool::new(false),
@@ -328,25 +336,38 @@ impl Container {
         self.user
     }
 
-    /// Destinations of every mount the container was created with.
+    /// Destinations of every mount in the container: those it was created with,
+    /// plus those `Container.Mount` added since (see
+    /// [`Self::record_mount_destination`]).
     ///
-    /// Taken from the OCI spec that was actually applied — the same object
-    /// `config.json` was written from — so it covers the standard tmpfs/pseudo
-    /// mounts and user volumes alike and cannot drift from what the runtime
-    /// did. Callers use this to tell whether a path inside the container is
-    /// reachable through the rootfs directory: anything at or below one of
-    /// these destinations is covered by a mount in the container's own
-    /// namespace and is *not* the file a process in the box would see at that
-    /// path.
+    /// The creation mounts come from the OCI spec that was actually applied —
+    /// the same object `config.json` was written from — so they cover the
+    /// standard tmpfs/pseudo mounts and user volumes alike and cannot drift
+    /// from what the runtime did. Callers use this to tell whether a path
+    /// inside the container is reachable through the rootfs directory: anything
+    /// at or below one of these destinations is covered by a mount in the
+    /// container's own namespace and is *not* the file a process in the box
+    /// would see at that path.
     ///
-    /// Resolved once at creation, like [`Self::user`], rather than re-read per
-    /// question: the bundle is written once and never rewritten, and the
-    /// callers are RPC handlers on the guest's async runtime — which on a
-    /// single-vCPU box is a single worker thread — so a `Spec::load` here
-    /// stalled every other in-flight RPC for the length of a file read and a
-    /// deserialize.
+    /// Held in memory, like [`Self::user`], rather than re-read per question:
+    /// the bundle is written once and never rewritten, and the callers are RPC
+    /// handlers on the guest's async runtime — which on a single-vCPU box is a
+    /// single worker thread — so a `Spec::load` here stalled every other
+    /// in-flight RPC for the length of a file read and a deserialize.
     pub fn mount_destinations(&self) -> &[PathBuf] {
         &self.mount_destinations
+    }
+
+    /// Record a mount added to the running container (`Container.Mount`),
+    /// so [`Self::mount_destinations`] still covers every mount it has.
+    pub fn record_mount_destination(&mut self, destination: PathBuf) {
+        self.mount_destinations.push(destination);
+    }
+
+    /// The attacher, behind the lock that orders mounts and copies (see the
+    /// field). Taken without holding this container's lock.
+    pub(crate) fn attacher(&self) -> Arc<tokio::sync::RwLock<Attacher>> {
+        Arc::clone(&self.attacher)
     }
 
     /// PID of the container's init process, from libcontainer state.
@@ -384,6 +405,7 @@ impl Container {
             env: HashMap::new(),
             user: (0, 0),
             mount_destinations: Vec::new(),
+            attacher: Arc::default(),
             capabilities: CapabilitySet::default(),
             stdio: ContainerStdio::pipes().expect("create stdio pipes").0,
             is_shutdown: std::sync::atomic::AtomicBool::new(true),
@@ -761,6 +783,7 @@ mod tests {
             env: HashMap::new(),
             user: (0, 0),
             mount_destinations: Vec::new(),
+            attacher: Arc::default(),
             capabilities: CapabilitySet::default(),
             stdio: ContainerStdio::pipes().expect("create stdio pipes").0,
             // Drop must not SIGKILL the recorded pid — it is this test process.

@@ -3150,7 +3150,8 @@ paths:
           format: date-time
           type: string
         style: form
-      - description: "Maximum rows, ordered by ID ascending."
+      - description: "Maximum rows after per-Box maximum CPU-seconds selection, ordered\
+          \ by ID ascending."
         explode: true
         in: query
         name: limit
@@ -3179,6 +3180,60 @@ paths:
       security:
       - bearer: []
       summary: Query sustained runner CPU incidents by capture completion time range
+      tags:
+      - admin
+  /admin/runner-memory-incidents:
+    get:
+      operationId: adminListRunnerMemoryIncidents
+      parameters:
+      - description: "Inclusive host sample time, with timezone."
+        explode: true
+        in: query
+        name: from
+        required: true
+        schema:
+          format: date-time
+          type: string
+        style: form
+      - description: "Exclusive host sample time, after from."
+        explode: true
+        in: query
+        name: to
+        required: true
+        schema:
+          format: date-time
+          type: string
+        style: form
+      - description: "Maximum snapshots after per-Box maximum memory selection, ordered\
+          \ by ID ascending."
+        explode: true
+        in: query
+        name: limit
+        required: false
+        schema:
+          default: 50
+          maximum: 200
+          minimum: 1
+          type: integer
+        style: form
+      - explode: true
+        in: query
+        name: runnerId
+        required: false
+        schema:
+          format: uuid
+          type: string
+        style: form
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MemoryIncidentListDto"
+          description: ""
+      security:
+      - bearer: []
+      summary: Query runner memory snapshots by host sample time range
       tags:
       - admin
   /images/registries:
@@ -7794,6 +7849,146 @@ components:
         items:
           items:
             $ref: "#/components/schemas/RunnerCpuIncident"
+          type: array
+      required:
+      - items
+      type: object
+    BoxMemoryUsageDto:
+      example:
+        boxId: boxId
+        image: image
+        memoryBytes: memoryBytes
+      properties:
+        boxId:
+          description: Business Box ID.
+          type: string
+        image:
+          description: Exact image reference from the same Box snapshot; empty is
+            preserved.
+          type: string
+        memoryBytes:
+          description: "Current bytes as a decimal string, between 0 and 9223372036854775807."
+          type: string
+      required:
+      - boxId
+      - image
+      - memoryBytes
+      type: object
+    RunnerMemoryIncident:
+      example:
+        id: id
+        runnerId: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+        eventId: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+        sampledAt: 2000-01-23T04:56:07.000+00:00
+        runnerMemoryPercent: 0.8008281904610115
+        boxes:
+        - boxId: boxId
+          image: image
+          memoryBytes: memoryBytes
+        - boxId: boxId
+          image: image
+          memoryBytes: memoryBytes
+        - boxId: boxId
+          image: image
+          memoryBytes: memoryBytes
+        - boxId: boxId
+          image: image
+          memoryBytes: memoryBytes
+        - boxId: boxId
+          image: image
+          memoryBytes: memoryBytes
+        samplingComplete: true
+        receivedAt: 2000-01-23T04:56:07.000+00:00
+      properties:
+        id:
+          description: Bigint row ID; keep as a string.
+          type: string
+        runnerId:
+          format: uuid
+          type: string
+        eventId:
+          format: uuid
+          type: string
+        sampledAt:
+          format: date-time
+          type: string
+        runnerMemoryPercent:
+          type: number
+        boxes:
+          description: Only Boxes whose maximum in the query range belongs to this
+            snapshot; ties use the smaller row ID.
+          items:
+            $ref: "#/components/schemas/BoxMemoryUsageDto"
+          maxItems: 5
+          type: array
+        samplingComplete:
+          type: boolean
+        receivedAt:
+          format: date-time
+          type: string
+      required:
+      - boxes
+      - eventId
+      - id
+      - receivedAt
+      - runnerId
+      - runnerMemoryPercent
+      - sampledAt
+      - samplingComplete
+      type: object
+    MemoryIncidentListDto:
+      example:
+        items:
+        - id: id
+          runnerId: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+          eventId: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+          sampledAt: 2000-01-23T04:56:07.000+00:00
+          runnerMemoryPercent: 0.8008281904610115
+          boxes:
+          - boxId: boxId
+            image: image
+            memoryBytes: memoryBytes
+          - boxId: boxId
+            image: image
+            memoryBytes: memoryBytes
+          - boxId: boxId
+            image: image
+            memoryBytes: memoryBytes
+          - boxId: boxId
+            image: image
+            memoryBytes: memoryBytes
+          - boxId: boxId
+            image: image
+            memoryBytes: memoryBytes
+          samplingComplete: true
+          receivedAt: 2000-01-23T04:56:07.000+00:00
+        - id: id
+          runnerId: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+          eventId: 046b6c7f-0b8a-43b9-b35d-6489e6daee91
+          sampledAt: 2000-01-23T04:56:07.000+00:00
+          runnerMemoryPercent: 0.8008281904610115
+          boxes:
+          - boxId: boxId
+            image: image
+            memoryBytes: memoryBytes
+          - boxId: boxId
+            image: image
+            memoryBytes: memoryBytes
+          - boxId: boxId
+            image: image
+            memoryBytes: memoryBytes
+          - boxId: boxId
+            image: image
+            memoryBytes: memoryBytes
+          - boxId: boxId
+            image: image
+            memoryBytes: memoryBytes
+          samplingComplete: true
+          receivedAt: 2000-01-23T04:56:07.000+00:00
+      properties:
+        items:
+          items:
+            $ref: "#/components/schemas/RunnerMemoryIncident"
           type: array
       required:
       - items

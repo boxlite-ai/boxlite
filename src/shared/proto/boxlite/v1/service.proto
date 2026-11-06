@@ -22,6 +22,11 @@ service Container {
   // code die with the VM. The host sequences the two: for an ordinary boot it
   // calls Start right after Init; for a foreground `run` it attaches in between.
   rpc Start(ContainerStartRequest) returns (ContainerStartResponse);
+
+  // Bind a folder of the container's share into the running container,
+  // read-only, without restarting it. The mount joins the container's own
+  // mount namespace, so every process in it sees the folder.
+  rpc Mount(ContainerMountRequest) returns (ContainerMountResponse);
 }
 
 // Guest agent management
@@ -298,6 +303,25 @@ message ContainerInitRequest {
 message ContainerStartRequest {
   string container_id = 1;
 }
+
+// A share folder to mount in a running container. Source and destination
+// follow the OCI runtime spec Mount fields. Errors are gRPC statuses:
+// INVALID_ARGUMENT (a bad source or destination, or a writable mount),
+// NOT_FOUND (no such container), FAILED_PRECONDITION (a container that is not
+// running, or a destination with entries), INTERNAL (any other failure).
+message ContainerMountRequest {
+  string container_id = 1;
+  // Folder name in this container's share, one path component, never a path:
+  // /run/boxlite/shared/containers/{container_id}/volumes/{source}
+  string source = 2;
+  // Absolute path inside the container. Missing directories are created; one
+  // that has entries is refused, so no image content is hidden.
+  string destination = 3;
+  // Must be true: writable mounts are refused.
+  bool read_only = 4;
+}
+
+message ContainerMountResponse {}
 
 message ContainerStartResponse {
   oneof result {
