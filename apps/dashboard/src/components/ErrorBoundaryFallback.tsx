@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { EmailVerificationRequiredError } from '@/api/errors'
+import { EmailVerificationRequiredError, RegistrationEmailError } from '@/api/errors'
 import { Dialog, DialogHeader, DialogDescription, DialogTitle, DialogContent } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { RoutePath } from '@/enums/RoutePath'
@@ -44,11 +44,39 @@ function EmailVerificationRequired() {
   )
 }
 
+function RegistrationEmailRejected({ error }: { error: RegistrationEmailError }) {
+  const messages = {
+    disposable_email:
+      "BoxLite doesn't support temporary email addresses for new accounts. Sign out and use a regular email address to continue.",
+    email_required:
+      "Your sign-in provider didn't share an email address. Sign out and choose an account that provides an email address.",
+    invalid_email:
+      'Your sign-in provider returned an invalid email address. Sign out and choose an account with a valid email address.',
+  }
+
+  return (
+    <Dialog open>
+      <DialogContent className="[&>button]:hidden">
+        <DialogHeader>
+          <DialogTitle>Use a different email address</DialogTitle>
+          <DialogDescription>{messages[error.code]}</DialogDescription>
+        </DialogHeader>
+        <div className="flex justify-end">
+          <Button onClick={() => window.location.assign(RoutePath.LOGOUT)}>Sign out and use another email</Button>
+        </div>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
 export function ErrorBoundaryFallback({ error, resetErrorBoundary }: FallbackProps) {
   // An account-state rejection is not a crash: the stack trace and "try again"
   // are noise, and the only useful action is the one that can clear it.
   if (error instanceof EmailVerificationRequiredError) {
     return <EmailVerificationRequired />
+  }
+  if (error instanceof RegistrationEmailError) {
+    return <RegistrationEmailRejected error={error} />
   }
 
   const caughtError = error instanceof Error ? error : undefined

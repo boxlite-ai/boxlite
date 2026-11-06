@@ -3,6 +3,15 @@
 The web console at `app.boxlite.ai`. A Vite + React app, built and tested
 through Nx as the `dashboard` project.
 
+## New-account email policy
+
+When the API rejects account creation with `disposable_email`, `email_required`,
+or `invalid_email`, the console explains the email problem and offers
+**Sign out and use another email**. These responses do not restart authentication
+or offer a retry with the same identity. The explicit action uses `/logout` to end
+the identity-provider session and return to the existing manual sign-in screen.
+Other authorization failures keep their existing error handling.
+
 ## SSH access
 
 Open a box's **SSH** tab beside **Shell**. Setup, Enable and Disable require a

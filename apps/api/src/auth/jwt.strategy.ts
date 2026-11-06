@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { Injectable, Logger } from '@nestjs/common'
+import { ForbiddenException, Injectable, Logger } from '@nestjs/common'
 import { PassportStrategy } from '@nestjs/passport'
 import { ExtractJwt, Strategy } from 'passport-jwt'
 import { passportJwtSecret } from 'jwks-rsa'
@@ -103,11 +103,14 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     }
 
     if (!user) {
+      if (typeof email !== 'string' || !email.trim()) {
+        throw new ForbiddenException({ message: 'Email address required for registration', code: 'email_required' })
+      }
       user = await this.userService.create(
         {
           id: userId,
           name: payload.name || payload.username || 'Unknown',
-          email: email || '',
+          email,
           emailVerified: payload.email_verified || false,
           // Anchor the auto-created default organization to the platform's
           // default region, matching the admin-seed path in AppService. Without

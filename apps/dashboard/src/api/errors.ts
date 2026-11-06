@@ -21,6 +21,10 @@ export class BoxliteError extends Error {
       })
     }
 
+    if (code === 'disposable_email' || code === 'email_required' || code === 'invalid_email') {
+      return new RegistrationEmailError(error.message, code, { cause: error.cause })
+    }
+
     if (String(error).includes('Organization is suspended')) {
       return new OrganizationSuspendedError(error.message, {
         cause: error.cause,
@@ -46,3 +50,14 @@ export class OrganizationSuspendedError extends BoxliteError {}
  * verification rather than another round trip through login.
  */
 export class EmailVerificationRequiredError extends BoxliteError {}
+
+/** The identity is authenticated, but its email cannot be used to create a BoxLite account. */
+export class RegistrationEmailError extends BoxliteError {
+  constructor(
+    message: string,
+    public readonly code: 'disposable_email' | 'email_required' | 'invalid_email',
+    options?: ErrorOptions,
+  ) {
+    super(message, options)
+  }
+}
