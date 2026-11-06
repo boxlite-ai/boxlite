@@ -11,11 +11,13 @@ use super::{console_socket, kill, spec, start};
 use crate::layout::GuestLayout;
 use crate::service::exec::exec_handle::{ExecHandle, PtyConfig};
 use crate::service::exec::InitHealthCheck;
+use crate::storage::attach::Attacher;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use libcontainer::container::Container as LibContainer;
 use libcontainer::signal::Signal;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 /// Size init's PTY opens at.
 ///
@@ -67,6 +69,10 @@ pub struct Container {
     /// Destinations of every mount the applied OCI spec declares, plus those
     /// added later by `Container.Mount`.
     mount_destinations: Vec<PathBuf>,
+    /// Attaches share folders into this container. `Container.Mount` holds it
+    /// for writing while it attaches and records the mount; file copies hold
+    /// it for reading, so no mount lands under a copy in progress.
+    attacher: Arc<tokio::sync::RwLock<Attacher>>,
     /// Resolved capability set shared by init and every exec process.
     capabilities: CapabilitySet,
     /// Stdio pipes that keep init process alive.
@@ -236,6 +242,7 @@ impl Container {
             env: env_map,
             user: (uid, gid),
             mount_destinations: bundle.mount_destinations,
+            attacher: Arc::default(),
             capabilities,
             stdio,
             is_shutdown: std::sync::atomic::AtomicBool::new(false),
@@ -357,6 +364,12 @@ impl Container {
         self.mount_destinations.push(destination);
     }
 
+    /// The attacher, behind the lock that orders mounts and copies (see the
+    /// field). Taken without holding this container's lock.
+    pub(crate) fn attacher(&self) -> Arc<tokio::sync::RwLock<Attacher>> {
+        Arc::clone(&self.attacher)
+    }
+
     /// PID of the container's init process, from libcontainer state.
     ///
     /// `None` if the state can't be loaded or init never started.
@@ -392,6 +405,7 @@ impl Container {
             env: HashMap::new(),
             user: (0, 0),
             mount_destinations: Vec::new(),
+            attacher: Arc::default(),
             capabilities: CapabilitySet::default(),
             stdio: ContainerStdio::pipes().expect("create stdio pipes").0,
             is_shutdown: std::sync::atomic::AtomicBool::new(true),
@@ -769,6 +783,7 @@ mod tests {
             env: HashMap::new(),
             user: (0, 0),
             mount_destinations: Vec::new(),
+            attacher: Arc::default(),
             capabilities: CapabilitySet::default(),
             stdio: ContainerStdio::pipes().expect("create stdio pipes").0,
             // Drop must not SIGKILL the recorded pid — it is this test process.

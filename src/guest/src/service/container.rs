@@ -5,9 +5,8 @@
 
 use std::path::{Component, Path, PathBuf};
 
-use crate::container::zygote::{AttachSpec, ZYGOTE};
 use crate::service::server::GuestServer;
-use crate::storage::attach::validate_destination;
+use crate::storage::attach::{validate_destination, Target};
 use boxlite_shared::errors::BoxliteError;
 use boxlite_shared::{
     container_init_response, container_start_response, rootfs_init, Container as ContainerService,
@@ -71,8 +70,9 @@ fn checked_mount(request: &ContainerMountRequest) -> Result<PathBuf, Status> {
 }
 
 /// Report a failed attach: caller mistakes stay `INVALID_ARGUMENT`; a
-/// non-empty destination, or init exiting since the running check, is
-/// `FAILED_PRECONDITION`; anything else is `INTERNAL`.
+/// non-empty destination, a link on the way to it, an earlier attach still
+/// being stopped, or init exiting since the running check, is
+/// `FAILED_PRECONDITION`; anything else, a timeout included, is `INTERNAL`.
 fn mount_status(error: BoxliteError) -> Status {
     match error {
         BoxliteError::InvalidArgument(message) => Status::invalid_argument(message),
@@ -682,29 +682,48 @@ impl ContainerService for GuestServer {
                 "No such container: {container_id}"
             )));
         };
-        let mut container = container_arc.lock().await;
-        let target = container
-            .init_pid()
-            .filter(|_| container.is_running())
-            .ok_or_else(|| {
-                Status::failed_precondition(format!("container {container_id} is not running"))
-            })?;
-        let spec = AttachSpec {
-            source: self
-                .layout
-                .shared()
-                .container(&container_id)
-                .volume_dir(&request.source),
-            target_pid: target.as_raw(),
-            destination: destination.clone(),
+        let (target, attacher) = {
+            let container = container_arc.lock().await;
+            let init = container
+                .init_pid()
+                .filter(|_| container.is_running())
+                .ok_or_else(|| {
+                    Status::failed_precondition(format!("container {container_id} is not running"))
+                })?;
+            // Opened right after the check, before any wait: the attach then
+            // uses init's namespace even if init exits and its PID is reused.
+            let target = Target::open(init).map_err(mount_status)?;
+            (target, container.attacher())
         };
-        let zygote = ZYGOTE.get().expect("zygote not started");
-        tokio::task::spawn_blocking(move || zygote.attach_mount(spec))
+        let source = self
+            .layout
+            .shared()
+            .container(&container_id)
+            .volume_dir(&request.source);
+        let mount_point = destination.clone();
+        // Attach and record in a task of their own, so a caller that gives up
+        // cannot leave a mount the container does not know about. The write
+        // lock is held until the mount is recorded: a copy waits for both.
+        let attach = tokio::spawn(async move {
+            let mut attacher = attacher.write_owned().await;
+            let attacher = tokio::task::spawn_blocking(move || {
+                attacher.attach_read_only(&source, &target, &mount_point)?;
+                Ok::<_, BoxliteError>(attacher)
+            })
             .await
             .map_err(|error| Status::internal(format!("attach task failed: {error}")))?
             .map_err(mount_status)?;
-        info!(container_id = %container_id, destination = %destination.display(), "Mounted a share folder read-only");
-        container.record_mount_destination(destination);
+            container_arc
+                .lock()
+                .await
+                .record_mount_destination(destination);
+            drop(attacher);
+            Ok::<_, Status>(())
+        });
+        attach
+            .await
+            .map_err(|error| Status::internal(format!("attach task failed: {error}")))??;
+        info!(container_id = %container_id, destination = %request.destination, "Mounted a share folder read-only");
         Ok(Response::new(ContainerMountResponse {}))
     }
 }

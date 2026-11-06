@@ -79,52 +79,6 @@ pub(crate) struct InitBuildSpec {
     pub console_socket: Option<String>,
 }
 
-/// What to attach into a running container. Serialized over IPC to the zygote,
-/// because attaching forks and the guest forks only from the zygote.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
-pub(crate) struct AttachSpec {
-    /// Folder in the guest's own mount namespace.
-    pub source: PathBuf,
-    /// A process in the container, normally its init.
-    pub target_pid: i32,
-    /// Absolute path inside the container.
-    pub destination: PathBuf,
-}
-
-/// Attach outcome, keeping the error kinds the RPC reports.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
-pub(crate) enum AttachOutcome {
-    Attached,
-    InvalidArgument(String),
-    InvalidState(String),
-    NotFound(String),
-    Failed(String),
-}
-
-impl From<BoxliteResult<()>> for AttachOutcome {
-    fn from(result: BoxliteResult<()>) -> Self {
-        match result {
-            Ok(()) => Self::Attached,
-            Err(BoxliteError::InvalidArgument(message)) => Self::InvalidArgument(message),
-            Err(BoxliteError::InvalidState(message)) => Self::InvalidState(message),
-            Err(BoxliteError::NotFound(message)) => Self::NotFound(message),
-            Err(error) => Self::Failed(error.to_string()),
-        }
-    }
-}
-
-impl From<AttachOutcome> for BoxliteResult<()> {
-    fn from(outcome: AttachOutcome) -> Self {
-        match outcome {
-            AttachOutcome::Attached => Ok(()),
-            AttachOutcome::InvalidArgument(message) => Err(BoxliteError::InvalidArgument(message)),
-            AttachOutcome::InvalidState(message) => Err(BoxliteError::InvalidState(message)),
-            AttachOutcome::NotFound(message) => Err(BoxliteError::NotFound(message)),
-            AttachOutcome::Failed(message) => Err(BoxliteError::Storage(message)),
-        }
-    }
-}
-
 /// Build outcome. Invalid states are unrepresentable.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub(crate) enum BuildResult {
@@ -198,8 +152,6 @@ enum ZygoteRequest {
     Build(BuildSpec),
     /// Build a container's init process. Same fd-passing contract as `Build`.
     BuildInit(InitBuildSpec),
-    /// Attach a folder read-only into a running container. Carries no fds.
-    AttachMount(AttachSpec),
     #[cfg(test)]
     InspectAmbientRuntimeEnvironment,
 }
@@ -214,7 +166,6 @@ enum ZygoteRequest {
 enum ZygoteResponse {
     Build(BuildResult),
     BuildInit(BuildResult),
-    AttachMount(AttachOutcome),
     #[cfg(test)]
     AmbientRuntimeEnvironment(Vec<String>),
 }
@@ -310,21 +261,6 @@ impl Zygote {
         }
     }
 
-    /// Attach a folder read-only into a running container. The attach forks a
-    /// child, and the guest forks only from the single-threaded zygote.
-    /// Blocks until done (use from `spawn_blocking`).
-    pub fn attach_mount(&self, spec: AttachSpec) -> BoxliteResult<()> {
-        let sock = self.sock.lock().unwrap();
-        let fd = sock.as_raw_fd();
-        send_request(fd, &ZygoteRequest::AttachMount(spec), None)?;
-        match recv_response(fd)? {
-            ZygoteResponse::AttachMount(outcome) => outcome.into(),
-            other => Err(BoxliteError::Internal(format!(
-                "zygote protocol violation: AttachMount answered with {other:?}"
-            ))),
-        }
-    }
-
     #[cfg(test)]
     fn inspect_ambient_runtime_environment(&self) -> BoxliteResult<Vec<String>> {
         let sock = self.sock.lock().unwrap();
@@ -363,13 +299,6 @@ fn serve(sock: OwnedFd) -> ! {
                     ZygoteRequest::BuildInit(spec) => {
                         ZygoteResponse::BuildInit(do_build_init(spec, fds))
                     }
-                    ZygoteRequest::AttachMount(spec) => ZygoteResponse::AttachMount(
-                        AttachOutcome::from(crate::storage::attach::attach_read_only(
-                            &spec.source,
-                            Pid::from_raw(spec.target_pid),
-                            &spec.destination,
-                        )),
-                    ),
                     #[cfg(test)]
                     ZygoteRequest::InspectAmbientRuntimeEnvironment => {
                         let retained = ["LISTEN_FDS", "LISTEN_PID", "LISTEN_FDNAMES"]
@@ -890,56 +819,6 @@ mod tests {
     // ========================================================================
     // IPC protocol tests (need socketpair — Linux only)
     // ========================================================================
-
-    #[test]
-    fn ipc_attach_mount_round_trip_keeps_the_error_kind() {
-        let (a, b) = socketpair(
-            AddressFamily::Unix,
-            SockType::SeqPacket,
-            None,
-            SockFlag::SOCK_CLOEXEC,
-        )
-        .unwrap();
-        let spec = AttachSpec {
-            source: PathBuf::from("/run/boxlite/shared/containers/c1/volumes/agents"),
-            target_pid: 42,
-            destination: PathBuf::from("/opt/boxlite/agents"),
-        };
-        send_request(
-            a.as_raw_fd(),
-            &ZygoteRequest::AttachMount(spec.clone()),
-            None,
-        )
-        .unwrap();
-        let (ZygoteRequest::AttachMount(received), None) = recv_request(b.as_raw_fd()).unwrap()
-        else {
-            panic!("expected an AttachMount request without fds");
-        };
-        assert_eq!(received, spec);
-
-        let failures = [
-            BoxliteError::InvalidArgument("bad destination".into()),
-            BoxliteError::InvalidState("has entries".into()),
-            BoxliteError::NotFound("init gone".into()),
-            BoxliteError::Storage("move_mount failed".into()),
-        ];
-        for failure in failures {
-            let kind = std::mem::discriminant(&failure);
-            let outcome = AttachOutcome::from(Err(failure));
-            send_response(b.as_raw_fd(), &ZygoteResponse::AttachMount(outcome)).unwrap();
-            let ZygoteResponse::AttachMount(outcome) = recv_response(a.as_raw_fd()).unwrap() else {
-                panic!("expected an AttachMount response");
-            };
-            let error = BoxliteResult::<()>::from(outcome).unwrap_err();
-            assert_eq!(std::mem::discriminant(&error), kind, "{error}");
-        }
-        let attached = AttachOutcome::from(Ok(()));
-        send_response(b.as_raw_fd(), &ZygoteResponse::AttachMount(attached)).unwrap();
-        let ZygoteResponse::AttachMount(outcome) = recv_response(a.as_raw_fd()).unwrap() else {
-            panic!("expected an AttachMount response");
-        };
-        BoxliteResult::<()>::from(outcome).unwrap();
-    }
 
     #[test]
     fn ipc_send_recv_build_request_without_fds() {
@@ -1463,7 +1342,6 @@ mod tests {
                     ZygoteRequest::InspectAmbientRuntimeEnvironment => {
                         panic!("unexpected environment probe")
                     }
-                    ZygoteRequest::AttachMount(_) => panic!("unexpected attach"),
                 };
                 send_response(child_fd, &response).unwrap();
             }

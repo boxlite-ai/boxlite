@@ -132,10 +132,13 @@ Runs inside the Box, receives commands from host via gRPC.
 - `Guest`: Environment initialization (mounts, rootfs, network)
 - `Container`: OCI container lifecycle management (via libcontainer). `Mount`
   binds a folder of the container's share (`source`, a folder name, never a path)
-  read-only at `destination` in the running container: the single-threaded zygote
-  forks a child that joins the container's mount namespace and moves an
-  `open_tree` clone there (`storage/attach.rs`). It refuses a destination that
-  already has entries, so no image content is hidden.
+  read-only at `destination` in the running container: the agent clones a child
+  with exit signal 0 and a pidfd, which closes every other descriptor, joins the
+  container's mount namespace and moves an `open_tree` clone there
+  (`storage/attach.rs`). The agent lets it mount only within 30 s and kills it
+  otherwise. It refuses a destination that already has entries or is reached
+  through a link, so no image content is hidden. File copies into the container
+  wait for a `Mount` in progress.
 - `Execution`: Command execution with streaming I/O
 
 **Guest-side modules:**
