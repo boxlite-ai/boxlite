@@ -23,6 +23,7 @@ use crate::vmm::{
     VmmKind, native::Native,
 };
 
+mod guest_boot;
 mod m1_initramfs;
 
 const CONSOLE_CMDLINE: &str = "console=ttyS0 panic=-1 reboot=k";

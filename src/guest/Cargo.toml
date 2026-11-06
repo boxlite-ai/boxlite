@@ -11,6 +11,10 @@ edition = "2021"
 name = "boxlite-guest"
 path = "src/main.rs"
 
+[[example]]
+name = "guest-boot-probe"
+path = "tests/boot/probe.rs"
+
 [dependencies]
 boxlite-shared.workspace = true
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "io-util", "net", "fs", "time", "signal", "process"] }
@@ -20,7 +24,7 @@ base64 = "0.22"
 bytes = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-nix = { version = "0.29", features = ["mount", "process", "fs", "dir", "sched", "socket", "poll", "user"] }
+nix = { version = "0.29", features = ["mount", "process", "fs", "dir", "sched", "socket", "poll", "user", "hostname", "resource"] }
 async-trait = "0.1"
 uuid = { version = "1.10", features = ["v4"] }
 tonic = "0.12"
@@ -41,7 +45,10 @@ tokio-vsock = { version = "0.7", features = ["tonic012"] }
 libcontainer = { version = "0.6", default-features = false, features = ["v2", "libseccomp"] }
 oci-spec = "0.9"
 rtnetlink = "0.14"
+rustix = { version = "1.1", features = ["fs"] }
 futures = "0.3"
 
 [dev-dependencies]
 tempfile = "3"
+hyper-util = { version = "0.1", features = ["tokio"] }
+tower = { version = "0.5", features = ["util"] }
