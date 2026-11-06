@@ -152,13 +152,20 @@ reviewed documents in [`auth0/mcp-clients.json`](../bootstrap/auth0/mcp-clients.
 are registered, and dynamic client registration stays off. Clients with no fixed
 document (Cursor, Windsurf, Gemini CLI, MCP Inspector) use an API key instead.
 
-Set `MCP_RESOURCE_URL` for the stage (for example `https://api.example.com/mcp`),
-deploy, then preview and apply the tenant change.
+mdeploy sets `MCP_RESOURCE_URL` to `https://<api host>/mcp`, for example
+`https://api.dev.boxlite.ai/mcp`; a stage value overrides it. Each stage then runs,
+in this order:
 
-The script finds the MCP API by identifier and never deletes one. Before the first
-run on a tenant, list its APIs (`auth0 apis list`) and delete any whose identifier
-is `<origin>/api/mcp`, the path an earlier build used; it is inert, since the API
-accepts only the `MCP_RESOURCE_URL` audience.
+1. Deploy.
+2. `auth0:configure-login` with `--mcp-resource-url <MCP_RESOURCE_URL>` (see the end
+   of this section), so the login Action gates logins for that resource.
+3. `auth0:configure-mcp` (below), which creates the MCP API. Until it does, Auth0
+   issues no token for the resource, so no MCP login can skip step 2's checks;
+   browser sign-in is down in between, and API keys keep working.
+
+Earlier builds served MCP at `/api/mcp`, and dev used `https://dev.boxlite.ai/api/mcp`.
+Remove such a stage value before deploying: the API refuses any resource URL whose
+path is not `/mcp` at boot. Its Auth0 API can stay; the API refuses its tokens.
 
 ```bash
 npm run auth0:configure-mcp -- --tenant <tenant.auth0.com> \

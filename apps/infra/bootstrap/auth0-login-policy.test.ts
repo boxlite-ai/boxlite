@@ -1211,6 +1211,26 @@ test('login policy gates an MCP client login for the MCP resource like a dashboa
   assert.equal(otherApi.claims.email_verified, false)
 })
 
+test('login policy puts the plain identity claims on an MCP token Auth0 issues with no authorization', async () => {
+  // Auth0 can leave `event.authorization` unset for a third-party MCP client. The
+  // API refuses a database user's token whose `email_verified` is not true.
+  const { onExecutePostLogin } = loadAction({}, 'https://api.example.test/mcp')
+  const capture = actionApi()
+
+  await onExecutePostLogin(
+    managedEvent({
+      authorization: undefined,
+      client: { client_id: 'https://chatgpt.com/oauth/client-metadata' },
+      resource_server: { identifier: 'https://api.example.test/mcp' },
+      user: { user_id: 'auth0|123', email: 'person@example.com', email_verified: true, name: 'Person' },
+    }),
+    capture.api,
+  )
+
+  assert.deepEqual(capture.denied, [])
+  assert.deepEqual(capture.claims, { email_verified: true, email: 'person@example.com', name: 'Person' })
+})
+
 test('login policy without an MCP resource leaves MCP client logins ungated', async () => {
   const { onExecutePostLogin } = loadAction()
   const capture = actionApi()
