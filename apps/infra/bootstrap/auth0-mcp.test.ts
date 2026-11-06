@@ -7,11 +7,18 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 
+import { hydrateLoginPolicyAction } from './auth0-login-policy.js'
 import { Auth0McpConfigurator, parseAuth0McpOptions } from './auth0-mcp.js'
 
 const RESOURCE = 'https://api.example.test/mcp'
 const CLIENT = 'https://claude.ai/oauth/claude-code-client-metadata'
 const SCOPES = ['write:boxes', 'delete:boxes']
+const API_AUDIENCE = 'https://api.example.test/api'
+// The Action exactly as configure-login generates and stamps it for this stage.
+const GENERATED_ACTION = hydrateLoginPolicyAction(
+  readFileSync(new URL('./auth0/login-policy.js', import.meta.url), 'utf8'),
+  { clientId: 'spa_123', connectionName: 'boxlite-users', formId: 'ap_verify', mcpResourceUrl: RESOURCE, apiAudience: API_AUDIENCE },
+)
 
 type RequestOptions = { data?: any; query?: Record<string, string>; allowNotFound?: boolean }
 
@@ -43,9 +50,7 @@ function fakeTenant(rules: object[] = [], lose?: string, refuse?: string) {
       {
         id: 'act_1',
         name: 'boxlite-login-policy',
-        deployed_version: {
-          code: `const API_AUDIENCE = "https://api.example.test/api"\nconst MCP_RESOURCE_URL = ${JSON.stringify(RESOURCE)}`,
-        },
+        deployed_version: { code: GENERATED_ACTION },
       },
     ] as Record<string, any>[],
     bindings: [{ id: 'bnd_1', action: { id: 'act_1' } }] as Record<string, any>[],
@@ -156,6 +161,11 @@ test('refuses before any write while the live login Action does not gate this re
     ['another URL', (t) => (t.state.actions[0].deployed_version.code = 'const API_AUDIENCE = "a"\nconst MCP_RESOURCE_URL = "https://other.test/mcp"')],
     ['no API audience', (t) => (t.state.actions[0].deployed_version.code = `const API_AUDIENCE = ""\nconst MCP_RESOURCE_URL = ${JSON.stringify(RESOURCE)}`)],
     ['stale API audience', (t) => (t.state.actions[0].deployed_version.code = `const API_AUDIENCE = "https://old.test/api"\nconst MCP_RESOURCE_URL = ${JSON.stringify(RESOURCE)}`)],
+    // Both declarations intact, the denial removed: only the generator's stamp tells.
+    [
+      'gate removed',
+      (t) => (t.state.actions[0].deployed_version.code = GENERATED_ACTION.replace("api.access.deny('Email verification required')", 'void 0')),
+    ],
     ['not deployed', (t) => delete t.state.actions[0].deployed_version],
     ['not bound', (t) => (t.state.bindings = [])],
     ['missing', (t) => (t.state.actions = [])],

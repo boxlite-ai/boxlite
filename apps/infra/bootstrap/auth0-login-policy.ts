@@ -1778,10 +1778,31 @@ function runsAccountLink(action: JsonObject): boolean {
 /** The deployed login Action, the only email-verification gate, as configure-mcp checks it. */
 export const LOGIN_POLICY_ACTION_NAME = RESOURCE_NAMES.action
 
-/** Whether the deployed Action version gates exactly this API audience and MCP resource. */
+/**
+ * Refuses an `--api-audience` other than the one the stage's API validates
+ * tokens against (`OIDC_AUDIENCE`, or the API's `OID_AUDIENCE` fallback):
+ * another real API on the tenant would pass the existence check and leave this
+ * stage's API ungated.
+ */
+export function assertStageApiAudience(apiAudience: string, environment: NodeJS.ProcessEnv = process.env): void {
+  const stageAudience = (environment.OIDC_AUDIENCE || environment.OID_AUDIENCE || '').trim()
+  if (!stageAudience) {
+    throw new Error('OIDC_AUDIENCE is unset: load the stage deployment .env or export it, so --api-audience can be checked')
+  }
+  if (stageAudience !== apiAudience) {
+    throw new Error(`--api-audience '${apiAudience}' differs from this stage's OIDC_AUDIENCE '${stageAudience}'`)
+  }
+}
+
+/**
+ * Whether the deployed Action version is the one configure-login generated (its
+ * stamp proves the verification gate is intact) for exactly this API audience and
+ * MCP resource.
+ */
 export function deployedActionGatesBoxLite(action: JsonObject, apiAudience: string, mcpResourceUrl: string): boolean {
   const code = String(action.deployed_version?.code ?? '')
   return (
+    carriesOwnStamp(code) &&
     code.includes(`const API_AUDIENCE = ${JSON.stringify(apiAudience)}`) &&
     code.includes(`const MCP_RESOURCE_URL = ${JSON.stringify(mcpResourceUrl)}`)
   )

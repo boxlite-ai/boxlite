@@ -151,8 +151,9 @@ MCP clients. On every stage, apply the Action and wait one access-token lifetime
 before deploying an API without its own check: tokens issued earlier to an
 unverified database user, for the MCP resource or for the API through another
 client, must expire first, because the old Action did not gate them.
-`auth0:configure-login` refuses an `--api-audience` that names no Auth0 API on the
-tenant, and `auth0:configure-mcp` refuses a live Action that names a different one.
+Both `auth0:configure-login` and `auth0:configure-mcp` load the stage `.env` and
+refuse an `--api-audience` other than its `OIDC_AUDIENCE`; `auth0:configure-login`
+also refuses one that names no Auth0 API on the tenant.
 
 ## MCP client sign-in
 
@@ -208,9 +209,10 @@ do not read it.
 
 The preview calls `clients/cimd/preview`, which validates a document without
 creating anything, and otherwise only reads. Preview and apply refuse a tenant
-whose deployed, post-login-bound `boxlite-login-policy` Action does not name this
-exact `--resource-url` and `--api-audience`, because that Action is the only email-verification gate:
-the API never refuses a token over `email_verified`.
+whose deployed, post-login-bound `boxlite-login-policy` Action is not the stamped
+code `auth0:configure-login` generated for this exact `--resource-url` and
+`--api-audience`, because that Action is the only email-verification gate: the API
+never refuses a token over `email_verified`. An Action edited by hand fails the stamp.
 Apply also refuses a tenant with active Rules, since CIMD logins fail while Rules run. It writes a mode-`0600` journal
 under `.sst/auth0-backups/` before each write, and marks each write as sent before
 sending it. Undo a run with `npm run auth0:configure-mcp -- --rollback <journal-path>`:

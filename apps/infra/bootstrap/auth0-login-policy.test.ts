@@ -14,6 +14,7 @@ import {
   assertDatabaseConnectionCompatible,
   assertEmailDeliveryReady,
   assertJournalSnapshotSafe,
+  assertStageApiAudience,
   buildDatabaseConnectionUpdate,
   buildLoginPolicyBindings,
   buildPromptUpdate,
@@ -1351,6 +1352,18 @@ test('login policy apply keeps MCP login checks unless told to drop them', () =>
   } finally {
     rmSync(tenant.journalDirectory, { recursive: true, force: true })
   }
+})
+
+// Another real API on the tenant passes the existence check; only the stage's own
+// value, which the API itself reads, proves the right audience is gated.
+test('assertStageApiAudience accepts only the stage OIDC_AUDIENCE', () => {
+  assert.doesNotThrow(() => assertStageApiAudience(API_AUDIENCE, { OIDC_AUDIENCE: API_AUDIENCE }))
+  assert.doesNotThrow(() => assertStageApiAudience(API_AUDIENCE, { OID_AUDIENCE: API_AUDIENCE }))
+  assert.throws(
+    () => assertStageApiAudience(API_AUDIENCE, { OIDC_AUDIENCE: 'https://other.example.test/api' }),
+    /differs from this stage/,
+  )
+  assert.throws(() => assertStageApiAudience(API_AUDIENCE, {}), /OIDC_AUDIENCE is unset/)
 })
 
 // A mistyped audience would gate an API nobody calls and leave the real one open.
