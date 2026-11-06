@@ -138,6 +138,9 @@ Regression coverage includes consent before writes, fresh reads and request orde
 exact missing-config recovery, reconnect after Disable, another client's host change,
 failed Setup recovered through matching GET or Enable, retained downloads, explicit
 Reset, permission loss, stale responses, storage isolation and terminal preservation.
+UI boundary tests verify that invalid paths hide the command without replacing a
+saved valid path, clipboard rejection can be retried and changing the command resets
+copy feedback, and missing authenticated identity keeps paths in memory only.
 Key tests use OpenSSH to check generated host metadata and special-character paths.
 The MSW preview echoes the actual generated public host identity, retains saved
 configuration across Disable/Enable and hides disabled listener identity.
@@ -148,8 +151,8 @@ followed by POST `/ssh/enable`, without a Setup POST, and preserves the key down
 and path. The screenshots below use local mock data and contain no private keys.
 This verification does not establish a live cloud SSH handshake.
 
-On the main-based branch, `make test:apps:dashboard` passed all 97 test files and
-814 tests. `make build:apps:dashboard` and `git diff --check` also passed. Validation
+On the main-based branch, the Dashboard suite with coverage passed all 97 test files
+and 817 tests. `make build:apps:dashboard` and `git diff --check` also passed. Validation
 reused the existing local dependency installation without changing the lockfile.
 Browser measurements confirm the scrolling body's right edge meets the dialog's
 inner border at desktop and narrow widths, with no horizontal content overflow;

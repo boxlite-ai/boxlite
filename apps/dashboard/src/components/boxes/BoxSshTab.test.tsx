@@ -419,6 +419,87 @@ describe('BoxSshTab access and connection', () => {
     expect(document.body.textContent).toContain('curl -fsSL')
   })
 
+  it('rejects an invalid key path without replacing the saved path and recovers after correction', async () => {
+    await render()
+    await openConnection()
+    await fillPath('/tmp/saved-key')
+    const preferenceKey = Object.keys(sessionStorage).find((key) => key.startsWith('boxlite:ssh:'))!
+    const savedPreference = sessionStorage.getItem(preferenceKey)
+
+    await fillPath('${HOME}/key')
+    expect(document.querySelector('input')!.getAttribute('aria-invalid')).toBe('true')
+    expect(document.querySelector('[role="alert"]')!.textContent).toContain('Use a file path')
+    expect(document.body.textContent).not.toContain('box@boxlite-box-1')
+    expect(sessionStorage.getItem(preferenceKey)).toBe(savedPreference)
+
+    await fillPath('/tmp/corrected key')
+    expect(document.querySelector('input')!.getAttribute('aria-invalid')).toBe('false')
+    expect(document.querySelector('[role="alert"]')).toBeNull()
+    expect(document.body.textContent).toContain("ssh -i '/tmp/corrected key'")
+    expect(JSON.parse(sessionStorage.getItem(preferenceKey)!).keyPath).toBe('/tmp/corrected key')
+    expect(mocks.post).not.toHaveBeenCalled()
+    expect(mocks.generate).not.toHaveBeenCalled()
+  })
+
+  it('reports clipboard rejection, retries the displayed command and resets feedback when the path changes', async () => {
+    const writeText = vi.fn().mockRejectedValueOnce(new Error('clipboard denied')).mockResolvedValue(undefined)
+    vi.stubGlobal('navigator', { clipboard: { writeText } })
+    await render()
+    await openConnection()
+    await fillPath('/tmp/first-key')
+    const commandBlock = [...document.querySelectorAll('pre')].find((pre) =>
+      pre.textContent?.includes('box@boxlite-box-1'),
+    )!.parentElement!
+    const copyButton = commandBlock.querySelector('button')!
+    const firstCommand = commandBlock.querySelector('pre')!.textContent
+
+    await act(async () => copyButton.click())
+    expect(copyButton.textContent).toBe('Copy failed — retry')
+    expect(writeText).toHaveBeenLastCalledWith(firstCommand)
+    await act(async () => copyButton.click())
+    expect(copyButton.textContent).toBe('Copied')
+    expect(writeText).toHaveBeenLastCalledWith(firstCommand)
+
+    await fillPath('/tmp/second-key')
+    expect(copyButton.textContent).toBe('Copy')
+    const updatedCommand = commandBlock.querySelector('pre')!.textContent
+    expect(updatedCommand).not.toBe(firstCommand)
+    await act(async () => copyButton.click())
+    expect(writeText).toHaveBeenLastCalledWith(updatedCommand)
+    expect(copyButton.textContent).toBe('Copied')
+    expect(mocks.post).not.toHaveBeenCalled()
+  })
+
+  it('keeps connection paths in memory only when the authenticated user identity is absent', async () => {
+    await render()
+    await openConnection()
+    await fillPath('/tmp/authenticated-key')
+    const savedPreferences = Object.fromEntries(
+      Object.keys(sessionStorage).map((key) => [key, sessionStorage.getItem(key)]),
+    )
+    await act(async () => root.render(null))
+    mocks.user = ''
+    const readPreference = vi.spyOn(Storage.prototype, 'getItem')
+    const writePreference = vi.spyOn(Storage.prototype, 'setItem')
+
+    await render()
+    await openConnection()
+    expect(document.querySelector('input')!.value).toBe('')
+    await fillPath('/tmp/session-only-key')
+    expect(document.body.textContent).toContain("ssh -i '/tmp/session-only-key'")
+    expect(readPreference).not.toHaveBeenCalled()
+    expect(writePreference).not.toHaveBeenCalled()
+    await act(async () => root.render(null))
+    await render()
+    await openConnection()
+    expect(document.querySelector('input')!.value).toBe('')
+    expect(writePreference).not.toHaveBeenCalled()
+    readPreference.mockRestore()
+    expect(Object.fromEntries(Object.keys(sessionStorage).map((key) => [key, sessionStorage.getItem(key)]))).toEqual(
+      savedPreferences,
+    )
+  })
+
   it('isolates reset confirmation and preserves the path when cancelled', async () => {
     await render()
     await openConnection()
