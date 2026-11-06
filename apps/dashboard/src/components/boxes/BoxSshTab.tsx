@@ -381,12 +381,12 @@ function SshControls({
             Connect via SSH
           </Button>
         </DialogTrigger>
-        <DialogContent className="w-[calc(100%_-_2rem)] gap-5 overflow-hidden text-sm leading-6 sm:max-w-2xl">
-          <DialogHeader className="shrink-0 pr-6">
+        <DialogContent className="w-[calc(100%_-_2rem)] gap-5 overflow-hidden p-0 pt-6 text-sm leading-6 sm:max-w-2xl">
+          <DialogHeader className="shrink-0 px-6 pr-12">
             <DialogTitle>{confirmSetup ? 'Reset SSH configuration?' : 'Connect via SSH'}</DialogTitle>
             <DialogDescription className="sr-only">Connect from your local terminal.</DialogDescription>
           </DialogHeader>
-          <div className="min-h-0 overflow-y-auto overscroll-contain pr-3 -mr-3 [scrollbar-width:thin] [scrollbar-color:hsl(var(--muted-foreground)/0.25)_transparent]">
+          <div className="min-h-0 overflow-y-auto overscroll-contain px-6 pb-6 [scrollbar-width:thin] [scrollbar-color:hsl(var(--muted-foreground)/0.25)_transparent]">
             {!running && (
               <p className="mb-4" role="status">
                 Start the box to connect via SSH.

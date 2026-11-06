@@ -35,9 +35,12 @@ keys or changes inbound access. Header, sidebar and dialog share a single contro
 and pending state. Status refreshes on request, window focus and every 30 seconds
 while visible and idle; reads do not overlap mutations.
 
-The dialog title and close control remain fixed while the body scrolls. Command
-lines wrap visually without changing copied content. Opening and closing the dialog
-preserves the browser terminal instance.
+The dialog title and close control remain fixed while the body scrolls. The scroll
+container spans the dialog's inner width so the scrollbar follows the right border;
+horizontal padding belongs to the header and scrolling content rather than the
+dialog shell. This preserves the content inset without leaving a gutter outside the
+scrollbar. Command lines wrap visually without changing copied content. Opening and
+closing the dialog preserves the browser terminal instance.
 
 ## Backend contract
 
@@ -146,6 +149,9 @@ This verification does not establish a live cloud SSH handshake.
 On the main-based branch, `make test:apps:dashboard` passed all 97 test files and
 814 tests. `make build:apps:dashboard` and `git diff --check` also passed. Validation
 reused the existing local dependency installation without changing the lockfile.
+Browser measurements confirm the scrolling body's right edge meets the dialog's
+inner border at desktop and narrow widths, with no horizontal content overflow;
+the title keeps its position relative to the dialog while the body scrolls.
 
 ### Before
 
