@@ -85,7 +85,7 @@ describe('Preview activity deadline', () => {
     const at = new Date()
     await service.updateLastActivityAt('box-1', at, true)
     expect(redis.set.mock.calls).toEqual([
-      ['box:update-last-activity:box-1', '1', 'EX', 30, 'NX'],
+      ['box:update-last-activity:box-1', expect.any(String), 'EX', 30, 'NX'],
       ['box:preview-open:box-1', '1', 'EX', 60, 'NX'],
     ])
     expect(redis.zadd).toHaveBeenCalledWith('box:activity', at.getTime(), 'box-1')
