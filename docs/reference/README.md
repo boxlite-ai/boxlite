@@ -84,9 +84,11 @@ Rejection of the box's init command during `start()` remains an error, so
 
 ### Unreleased: execution inventory (POL-485, additive)
 
-Boxes expose live executions through SDK `list_executions` / `listExecutions` /
-`ListExecutions`, CLI `boxlite top BOX`, and REST
-`GET /{prefix}/boxes/{box_id}/executions`. The main command is included.
+Boxes expose live executions through the SDK `executions` namespace
+(`box.executions().list()` in Python, Node, and Rust; `box.Executions().List(ctx)`
+in Go; `boxlite_box_executions_list(box, cb, user_data, &error)` in C), CLI
+`boxlite top BOX`, and REST `GET /{prefix}/boxes/{box_id}/executions`. The main
+command is included.
 Discovered IDs work with attach and control operations; listing never starts
 a box and retains no completed-session history. Existing status schemas and
 request defaults are unchanged.

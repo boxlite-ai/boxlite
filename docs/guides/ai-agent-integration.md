@@ -230,19 +230,22 @@ async def main():
 An `Execution` object is a handle, not the process. If the client that started
 a long-running exec crashes, or the connection to a REST server drops, the
 process keeps running inside the box — and the handle that named it is gone.
-`list_executions()` closes that gap: it reports the box's live sessions, and
-every id it returns is directly usable with `attach()` and `kill()`.
+`box.executions().list()` closes that gap: it reports the box's live sessions,
+and every id it returns is directly usable with `executions().attach()` and
+`kill()`.
 
 ```python
 # A new process: no Execution objects survive from the one that started them.
 runtime = boxlite.Boxlite.default()
 box = await runtime.get(box_id)
 
-for session in await box.list_executions():
+for session in await box.executions().list():
     print(session.execution_id, session.argv, session.is_main_session)
 
-target = next(s for s in await box.list_executions() if s.argv[:1] == ["pytest"])
-execution = await box.attach(target.execution_id)
+target = next(
+    s for s in await box.executions().list() if s.argv[:1] == ["pytest"]
+)
+execution = await box.executions().attach(target.execution_id)
 await execution.kill()
 ```
 
@@ -272,12 +275,12 @@ What the list contains, and what it does not:
   nothing. A paused box returns an invalid-state error rather than claiming
   that its sessions disappeared. Listing does not refresh the server's idle clock.
 
-`get_execution(id)` recovers wait and control without taking the output reader.
-On a REST-backed box it asks the server by ID rather than requiring the ID to
-still appear in the inventory, so a retained terminal session can still be
+`executions().get(id)` recovers wait and control without taking the output
+reader. On a REST-backed box it asks the server by ID rather than requiring the
+ID to still appear in the inventory, so a retained terminal session can still be
 recovered. The local runtime verifies the ID against the live guest inventory.
-`attach(id)` also claims the output reader and returns a conflict if another
-reader still owns it. Attach includes output still present in the guest's
+`executions().attach(id)` also claims the output reader and returns a conflict
+if another reader still owns it. Attach includes output still present in the guest's
 bounded buffer, not durable history. A failed status request is an observation
 error, not a fabricated process exit; callers decide whether to try again.
 

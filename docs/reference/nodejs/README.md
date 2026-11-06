@@ -310,9 +310,7 @@ Handle to a running or stopped box.
 |--------|-----------|-------------|
 | `info()` | `() => Promise<JsBoxInfo>` | Get box metadata |
 | `exec()` | `(cmd, args?, env?, tty?) => Promise<JsExecution>` | Execute command |
-| `listExecutions()` | `() => Promise<ExecutionInfo[]>` | List live sessions, including the main command; never starts a box |
-| `getExecution(id)` | `(executionId: string) => Promise<JsExecution>` | Recover control without taking the output reader |
-| `attach(id, stdin?)` | `(executionId: string, stdin?: boolean) => Promise<JsExecution>` | Recover streams for a listed live session |
+| `executions()` | `() => JsExecutionsHandle` | Live session inventory and recovery; never starts a box |
 | `stop()` | `() => Promise<void>` | Stop the box |
 | `metrics()` | `() => Promise<JsBoxMetrics>` | Get resource metrics |
 
@@ -495,6 +493,25 @@ console.log(`Exit code: ${result.exitCode}`);
 
 ---
 
+### `JsExecutionsHandle`
+
+Live execution namespace of one box, returned by `box.executions()`. Creating it
+never starts the box.
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `list()` | `() => Promise<ExecutionInfo[]>` | List live sessions, including the main command; never starts a box |
+| `get(id)` | `(executionId: string) => Promise<JsExecution>` | Recover control without taking the output reader |
+| `attach(id, stdin?)` | `(executionId: string, stdin?: boolean) => Promise<JsExecution>` | Recover streams for a listed live session |
+
+```typescript
+for (const execution of await box.executions().list()) {
+  console.log(execution.executionId, execution.isMainSession);
+}
+```
+
+---
+
 ### `JsExecStdin`
 
 Writer for sending input to a running process.
@@ -594,6 +611,7 @@ interface SimpleBoxOptions {
 | `getInfo()` | `() => Promise<JsBoxInfo>` | Get box info (async) |
 | `exec()` | `(cmd, ...args) => Promise<ExecResult>` | Execute and wait (variadic) |
 | `exec()` | `(cmd, args[], env?, options?) => Promise<ExecResult>` | Execute with options (array form) |
+| `executions()` | `() => Executions` | Live session namespace; an uncreated box lists nothing |
 | `stop()` | `() => Promise<void>` | Stop the box |
 | `[Symbol.asyncDispose]()` | `() => Promise<void>` | Async disposal |
 
@@ -1062,7 +1080,7 @@ console.log(`Boot time: ${metrics.guestBootDurationMs}ms`);
 
 ### `ExecutionInfo`
 
-Returned by `JsBox.listExecutions()` and `SimpleBox.listExecutions()`.
+Returned by `JsBox.executions().list()` and `SimpleBox.executions().list()`.
 
 ```typescript
 interface ExecutionInfo {
@@ -1076,8 +1094,9 @@ interface ExecutionInfo {
 
 The list excludes completed sessions. A created or stopped box returns `[]`
 without starting; a paused box returns an invalid-state error. Use
-`getExecution(executionId)` for independent control, or
-`attach(executionId)` for streams; an existing output reader is a conflict.
+`executions().get(executionId)` for independent control, or
+`executions().attach(executionId)` for streams; an existing output reader is a
+conflict.
 See the [recovery guide](../../guides/ai-agent-integration.md#recovering-control-after-losing-the-handle)
 for retention semantics.
 

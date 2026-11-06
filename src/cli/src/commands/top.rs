@@ -56,7 +56,7 @@ pub async fn execute(args: TopArgs, global: &GlobalFlags) -> anyhow::Result<()> 
         .get(&args.target_box)
         .await?
         .ok_or_else(|| anyhow::anyhow!("No such box: {}", args.target_box))?;
-    let executions = bx.list_executions().await?;
+    let executions = bx.executions().list().await?;
     if args.quiet {
         for execution in executions {
             println!("{}", execution.execution_id);

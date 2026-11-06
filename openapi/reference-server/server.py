@@ -542,13 +542,13 @@ async def get_active_execution_or_recover(
         # The id belongs to another box; do not leak it through this route.
         raise execution_not_found(exec_id)
 
-    sessions = await box_handle.list_executions()
+    sessions = await box_handle.executions().list()
     info = next((s for s in sessions if s.execution_id == exec_id), None)
     if info is None:
         raise execution_not_found(exec_id)
 
     # Control-only: status/signal/resize do not claim the output reader.
-    execution = await box_handle.get_execution(exec_id)
+    execution = await box_handle.executions().get(exec_id)
     active = ActiveExecution(
         the_execution=execution,
         box_id=canonical,
@@ -987,7 +987,7 @@ async def list_executions(
     _auth: dict = Depends(require_auth),
 ):
     box_handle = await get_box_or_404(box_id)
-    executions = await box_handle.list_executions()
+    executions = await box_handle.executions().list()
     return {
         "executions": [
             {

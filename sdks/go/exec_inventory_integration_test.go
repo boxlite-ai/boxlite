@@ -26,7 +26,7 @@ func TestIntegrationExecutionInventoryControlsDoNotClaimOutput(t *testing.T) {
 	if execution.ID() == "" {
 		t.Fatal("exec did not expose its canonical guest ID")
 	}
-	inventory, err := box.ListExecutions(ctx)
+	inventory, err := box.Executions().List(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -43,7 +43,7 @@ func TestIntegrationExecutionInventoryControlsDoNotClaimOutput(t *testing.T) {
 	if !found || !foundMain {
 		t.Fatalf("inventory missing exec/main: %+v", inventory)
 	}
-	control, err := box.GetExecution(ctx, execution.ID())
+	control, err := box.Executions().Get(ctx, execution.ID())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,7 +71,7 @@ func TestIntegrationExecutionInventoryControlsDoNotClaimOutput(t *testing.T) {
 			t.Fatal("control recovery stole or closed the original output reader")
 		}
 	}
-	control, err = box.GetExecution(ctx, execution.ID())
+	control, err = box.Executions().Get(ctx, execution.ID())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,7 +93,7 @@ func TestIntegrationAttachExecutionReaderRecovery(t *testing.T) {
 		WithCmd("sh", "-c", "while true; do if [ -e /tmp/go-attached ]; then echo attached-live; break; fi; sleep 0.1; done; sleep 30"))
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	inventory, err := box.ListExecutions(ctx)
+	inventory, err := box.Executions().List(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -106,12 +106,12 @@ func TestIntegrationAttachExecutionReaderRecovery(t *testing.T) {
 	if mainID == "" {
 		t.Fatal("main command absent from live inventory")
 	}
-	reader, err := box.AttachExecution(ctx, mainID, nil)
+	reader, err := box.Executions().Attach(ctx, mainID, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer reader.Close()
-	if other, err := box.AttachExecution(ctx, mainID, nil); err == nil {
+	if other, err := box.Executions().Attach(ctx, mainID, nil); err == nil {
 		other.Close()
 		t.Fatal("second active reader stole the original output stream")
 	}
@@ -126,7 +126,7 @@ func TestIntegrationAttachExecutionReaderRecovery(t *testing.T) {
 	chunks := make(chan string, 32)
 	var attached *Execution
 	for attached == nil {
-		attached, err = freshBox.AttachExecution(ctx, mainID, &ExecutionOptions{
+		attached, err = freshBox.Executions().Attach(ctx, mainID, &ExecutionOptions{
 			OnStdout: func(chunk []byte) { chunks <- string(chunk) },
 		})
 		if err != nil {
@@ -177,7 +177,7 @@ func TestIntegrationListExecutionsNeverBootsCreatedBox(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	inventory, err := box.ListExecutions(ctx)
+	inventory, err := box.Executions().List(ctx)
 	if err != nil || len(inventory) != 0 {
 		t.Fatalf("created box inventory = %+v, %v; want empty success", inventory, err)
 	}

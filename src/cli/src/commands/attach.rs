@@ -21,7 +21,8 @@ pub async fn execute(args: AttachArgs, global: &GlobalFlags) -> anyhow::Result<i
         .await?
         .ok_or_else(|| anyhow::anyhow!("No such box: {}", args.target_box))?;
     let info = bx
-        .list_executions()
+        .executions()
+        .list()
         .await?
         .into_iter()
         .find(|item| item.execution_id == args.execution_id)

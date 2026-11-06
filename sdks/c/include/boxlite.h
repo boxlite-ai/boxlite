@@ -892,6 +892,12 @@ enum BoxliteErrorCode boxlite_advanced_options_set_capabilities_drop(CAdvancedBo
                                                                      const char *const *capabilities,
                                                                      int count);
 
+// Enable full capabilities and writable kernel mounts inside the guest only.
+// Runner sandbox security is unchanged. Returns InvalidArgument for a null
+// handle or a conflicting explicit capability policy.
+enum BoxliteErrorCode boxlite_advanced_options_set_privileged(CAdvancedBoxOptions *opts,
+                                                              int enabled);
+
 // Obtain a namespace without starting the Box.
 // handle must be live; out must be writable; out_error may be null.
 enum BoxliteErrorCode boxlite_box_agents(CBoxHandle *handle,
@@ -1043,11 +1049,6 @@ void boxlite_agent_turn_free(struct CAgentTurn *handle);
 // Release only the local handle. Does not close an agent or interrupt a turn.
 // handle must be null or a live, uniquely owned pointer returned by this SDK.
 void boxlite_agent_events_free(struct CAgentEvents *handle);
-// Enable full capabilities and writable kernel mounts inside the guest only.
-// Runner sandbox security is unchanged. Returns InvalidArgument for a null
-// handle or a conflicting explicit capability policy.
-enum BoxliteErrorCode boxlite_advanced_options_set_privileged(CAdvancedBoxOptions *opts,
-                                                              int enabled);
 
 // Submit a box export.
 //
@@ -1282,18 +1283,18 @@ void boxlite_error_free(CBoxliteError *error);
 
 // Recover control of a live execution without claiming its output reader.
 // Freeing this handle releases control only; it never kills the process.
-enum BoxliteErrorCode boxlite_box_get_execution(CBoxHandle *handle,
-                                                const char *execution_id,
-                                                CExecutionHandle **out_execution,
-                                                CBoxliteError *out_error);
+enum BoxliteErrorCode boxlite_box_executions_get(CBoxHandle *handle,
+                                                 const char *execution_id,
+                                                 CExecutionHandle **out_execution,
+                                                 CBoxliteError *out_error);
 
 // Attach live streams to an existing guest execution. A current reader causes
 // an immediate conflict error rather than stealing output. This never boots
 // the box; freeing the attached handle does not kill the guest process.
-enum BoxliteErrorCode boxlite_box_attach_execution(CBoxHandle *handle,
-                                                   const char *execution_id,
-                                                   CExecutionHandle **out_execution,
-                                                   CBoxliteError *out_error);
+enum BoxliteErrorCode boxlite_box_executions_attach(CBoxHandle *handle,
+                                                    const char *execution_id,
+                                                    CExecutionHandle **out_execution,
+                                                    CBoxliteError *out_error);
 
 // Attach output only, without opening a stdin channel.
 //
@@ -1301,10 +1302,10 @@ enum BoxliteErrorCode boxlite_box_attach_execution(CBoxHandle *handle,
 // sends a stdin close to the guest, which a process reading stdin observes as
 // EOF — it can exit or change state on it. A read-only attach sends nothing on
 // free. A current reader still causes an immediate conflict error.
-enum BoxliteErrorCode boxlite_box_attach_execution_read_only(CBoxHandle *handle,
-                                                             const char *execution_id,
-                                                             CExecutionHandle **out_execution,
-                                                             CBoxliteError *out_error);
+enum BoxliteErrorCode boxlite_box_executions_attach_read_only(CBoxHandle *handle,
+                                                              const char *execution_id,
+                                                              CExecutionHandle **out_execution,
+                                                              CBoxliteError *out_error);
 
 // Return an owned copy of the canonical guest execution ID. Null means an
 // invalid handle; release a non-null result with `boxlite_free_string`.
@@ -1375,10 +1376,10 @@ enum BoxliteErrorCode boxlite_execution_tty_resize(CExecutionHandle *execution,
 void boxlite_execution_free(CExecutionHandle *execution);
 
 // Callback owns the returned list; errors are borrowed during dispatch only.
-enum BoxliteErrorCode boxlite_list_executions(CBoxHandle *handle,
-                                              CExecutionInfoListCb cb,
-                                              void *user_data,
-                                              CBoxliteError *out_error);
+enum BoxliteErrorCode boxlite_box_executions_list(CBoxHandle *handle,
+                                                  CExecutionInfoListCb cb,
+                                                  void *user_data,
+                                                  CBoxliteError *out_error);
 
 // Free the list and all IDs/argv strings. Null is accepted.
 void boxlite_free_execution_info_list(struct CExecutionInfoList *list);

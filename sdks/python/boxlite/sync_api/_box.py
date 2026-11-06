@@ -9,9 +9,10 @@ from typing import TYPE_CHECKING
 from ._agents import SyncAgents
 
 if TYPE_CHECKING:
-    from ..boxlite import Box, BoxMetrics, ExecutionInfo, TunnelOptions
+    from ..boxlite import Box, BoxMetrics, TunnelOptions
     from ._boxlite import SyncBoxlite
     from ._execution import SyncExecution
+    from ._executions import SyncExecutions
     from ._network import SyncNetworkHandle
     from ._ssh import SyncSshHandle
 
@@ -66,6 +67,7 @@ class SyncBox:
         self._sync_helper = SyncBase(box, runtime.loop, runtime.dispatcher_fiber)
         self._network = None
         self._ssh = None
+        self._executions = None
 
     def _sync(self, coro):
         """Run async operation synchronously."""
@@ -141,29 +143,6 @@ class SyncBox:
         """Stop the box (preserves state for potential restart)."""
         self._sync(self._box.stop())
 
-    def list_executions(self) -> list["ExecutionInfo"]:
-        """List live guest executions without starting a stopped box."""
-        return self._sync(self._box.list_executions())
-
-    def get_execution(self, execution_id: str) -> "SyncExecution":
-        """Recover control without claiming output.
-
-        The handle's stream accessors raise RuntimeError because it has no streams.
-        """
-        from ._execution import SyncExecution
-
-        return SyncExecution(
-            self._runtime, self._sync(self._box.get_execution(execution_id))
-        )
-
-    def attach(self, execution_id: str, *, stdin: bool = True) -> "SyncExecution":
-        """Attach to a listed live session without starting the box."""
-        from ._execution import SyncExecution
-
-        return SyncExecution(
-            self._runtime, self._sync(self._box.attach(execution_id, stdin=stdin))
-        )
-
     def metrics(self) -> "BoxMetrics":
         """Get box metrics (CPU, memory usage, etc.)."""
         return self._sync(self._box.metrics())
@@ -176,6 +155,14 @@ class SyncBox:
 
             self._network = SyncNetworkHandle(self)
         return self._network
+
+    def executions(self) -> "SyncExecutions":
+        """Get the live execution namespace without starting the box."""
+        from ._executions import SyncExecutions
+
+        if self._executions is None:
+            self._executions = SyncExecutions(lambda: self)
+        return self._executions
 
     @property
     def ssh(self) -> "SyncSshHandle":

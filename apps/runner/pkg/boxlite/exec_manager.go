@@ -79,11 +79,11 @@ type executionSource interface {
 type sdkExecutionSource struct{ box *boxlite.Box }
 
 func (s sdkExecutionSource) list(ctx context.Context) ([]boxlite.ExecutionInfo, error) {
-	return s.box.ListExecutions(ctx)
+	return s.box.Executions().List(ctx)
 }
 
 func (s sdkExecutionSource) get(ctx context.Context, id string) (execHandle, error) {
-	execution, err := s.box.GetExecution(ctx, id)
+	execution, err := s.box.Executions().Get(ctx, id)
 	if err != nil {
 		return nil, err
 	}
@@ -91,7 +91,7 @@ func (s sdkExecutionSource) get(ctx context.Context, id string) (execHandle, err
 }
 
 func (s sdkExecutionSource) attach(ctx context.Context, id string, stdout, stderr io.Writer) (execHandle, io.Writer, error) {
-	execution, err := s.box.AttachExecution(ctx, id, &boxlite.ExecutionOptions{Stdout: stdout, Stderr: stderr})
+	execution, err := s.box.Executions().Attach(ctx, id, &boxlite.ExecutionOptions{Stdout: stdout, Stderr: stderr})
 	if err != nil {
 		return nil, nil, err
 	}

@@ -177,7 +177,8 @@ async fn cold_execution_list_failure_preserves_running_shim() {
         .expect("box exists");
 
     let error = litebox
-        .list_executions()
+        .executions()
+        .list()
         .await
         .expect_err("guest reconnect must reject the non-symlink binding");
     let message = error.to_string();

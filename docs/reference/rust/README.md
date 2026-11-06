@@ -376,11 +376,20 @@ HTTP contract, reconfiguration, disable, and generation semantics.
 | `run` | `async fn run(&self, command: BoxCommand) -> BoxliteResult<Execution>` | Run command |
 | `metrics` | `async fn metrics(&self) -> BoxliteResult<BoxMetrics>` | Get box metrics |
 | `stop` | `async fn stop(&self) -> BoxliteResult<()>` | Stop the box |
-| `list_executions` | `async fn list_executions(&self) -> BoxliteResult<Vec<ExecutionInfo>>` | Snapshot live guest sessions, including init; never boots a box |
-| `get_execution` | `async fn get_execution(&self, id: &str) -> BoxliteResult<Execution>` | Recover control and wait for a known session without taking its output reader |
+| `executions` | `fn executions(&self) -> ExecutionsHandle` | Live session inventory and control recovery; never boots a box |
 | `attach` | `async fn attach(&self, options: AttachOptions) -> BoxliteResult<Execution>` | Attach to init or a named live session; only one output reader is allowed |
 
-`list_executions()` is a live-process inventory, not history: sessions disappear
+#### ExecutionsHandle
+
+`LiteBox::executions()` returns an owned, cloneable `ExecutionsHandle` without
+starting the box.
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `list` | `async fn list(&self) -> BoxliteResult<Vec<ExecutionInfo>>` | Snapshot live guest sessions, including init; never boots a box |
+| `get` | `async fn get(&self, execution_id: &str) -> BoxliteResult<Execution>` | Recover control and wait for a known session without taking its output reader |
+
+`executions().list()` is a live-process inventory, not history: sessions disappear
 once the guest reaper records their exit, before registry cleanup. Existing wait
 status/output may remain available in bounded guest retention after a session
 disappears from the list. Calling it on a created or stopped box returns an
@@ -389,7 +398,7 @@ invalid-state error instead of claiming its sessions disappeared.
 `ExecutionInfo` carries the canonical guest execution ID, argv, Unix-millisecond
 spawn time, PTY flag, and `is_main_session`.
 
-`get_execution(id)` returns a control-only handle (no stdin/stdout/stderr).
+`executions().get(id)` returns a control-only handle (no stdin/stdout/stderr).
 The local runtime verifies the ID against the live guest inventory; a
 REST-backed runtime asks the server's by-id endpoint, so a retained terminal
 session can still be recovered after it leaves the inventory. Its `wait`,

@@ -123,7 +123,7 @@ impl ExecutionHandle {
 /// Recover control of a live execution without claiming its output reader.
 /// Freeing this handle releases control only; it never kills the process.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn boxlite_box_get_execution(
+pub unsafe extern "C" fn boxlite_box_executions_get(
     handle: *mut CBoxHandle,
     execution_id: *const c_char,
     out_execution: *mut *mut CExecutionHandle,
@@ -144,7 +144,7 @@ pub unsafe extern "C" fn boxlite_box_get_execution(
 /// an immediate conflict error rather than stealing output. This never boots
 /// the box; freeing the attached handle does not kill the guest process.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn boxlite_box_attach_execution(
+pub unsafe extern "C" fn boxlite_box_executions_attach(
     handle: *mut CBoxHandle,
     execution_id: *const c_char,
     out_execution: *mut *mut CExecutionHandle,
@@ -168,7 +168,7 @@ pub unsafe extern "C" fn boxlite_box_attach_execution(
 /// EOF — it can exit or change state on it. A read-only attach sends nothing on
 /// free. A current reader still causes an immediate conflict error.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn boxlite_box_attach_execution_read_only(
+pub unsafe extern "C" fn boxlite_box_executions_attach_read_only(
     handle: *mut CBoxHandle,
     execution_id: *const c_char,
     out_execution: *mut *mut CExecutionHandle,
@@ -228,7 +228,7 @@ unsafe fn recover_execution(
         let handle = &*handle;
         let result = handle.tokio_rt.block_on(async {
             match recovery {
-                Recovery::Control => handle.handle.get_execution(id).await,
+                Recovery::Control => handle.handle.executions().get(id).await,
                 Recovery::Attach => {
                     handle
                         .handle
@@ -1606,14 +1606,14 @@ mod tests {
             let mut error = FFIError::default();
             let code = unsafe {
                 if attach {
-                    boxlite_box_attach_execution(
+                    boxlite_box_executions_attach(
                         ptr::null_mut(),
                         id.as_ptr(),
                         &mut execution,
                         &mut error,
                     )
                 } else {
-                    boxlite_box_get_execution(
+                    boxlite_box_executions_get(
                         ptr::null_mut(),
                         id.as_ptr(),
                         &mut execution,

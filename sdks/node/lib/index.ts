@@ -114,6 +114,7 @@ export {
   BoxTunnel,
   TunnelForwarder,
   NetworkHandle,
+  Executions,
   SshHandle,
   type NetworkSpec,
   type InboundNetworkSpec,

@@ -13,7 +13,7 @@ import (
 )
 
 // ExecutionInfo describes a live guest execution, including the main process.
-// ExecutionID is the canonical guest ID accepted by GetExecution.
+// ExecutionID is the canonical guest ID accepted by Executions.Get.
 type ExecutionInfo struct {
 	ExecutionID string   `json:"execution_id"`
 	Argv        []string `json:"argv"`
@@ -28,8 +28,20 @@ type executionInfoListResult struct {
 	err   error
 }
 
-// ListExecutions queries live guest state without starting a stopped box.
-func (b *Box) ListExecutions(ctx context.Context) ([]ExecutionInfo, error) {
+// Executions namespaces the live execution sessions of one box. It refers to
+// its Box, so it stays usable until the box is closed and has no Close of its
+// own. Listing and recovery never start or restart the box; attaching output
+// still fails on a box that is not running.
+type Executions struct {
+	box *Box
+}
+
+// Executions returns the live execution namespace without starting the box.
+func (b *Box) Executions() *Executions { return &Executions{box: b} }
+
+// List queries live guest state without starting a stopped box.
+func (e *Executions) List(ctx context.Context) ([]ExecutionInfo, error) {
+	b := e.box
 	if b == nil || b.handle == nil {
 		return nil, &Error{Code: ErrInvalidState, Message: "box is closed"}
 	}
@@ -40,7 +52,7 @@ func (b *Box) ListExecutions(ctx context.Context) ([]ExecutionInfo, error) {
 	ch := make(chan executionInfoListResult, 1)
 	h := registerHandleForDispatch(cgo.NewHandle(ch))
 	var cerr C.CBoxliteError
-	if code := C.boxlite_list_executions(b.handle, C.cbExecutionInfoList(), handleToPtr(h), &cerr); code != C.Ok {
+	if code := C.boxlite_box_executions_list(b.handle, C.cbExecutionInfoList(), handleToPtr(h), &cerr); code != C.Ok {
 		deleteHandleForDispatch(h)
 		return nil, freeError(&cerr)
 	}
@@ -56,21 +68,21 @@ func (b *Box) ListExecutions(ctx context.Context) ([]ExecutionInfo, error) {
 	}
 }
 
-// GetExecution recovers a control-only handle for a live execution in this box.
+// Get recovers a control-only handle for a live execution in this box.
 // It does not claim stdout/stderr or stdin. Wait, Signal, Kill, and ResizeTTY
 // remain available while another handle consumes output. Close only releases
 // the recovered handle and does not terminate the process.
-func (b *Box) GetExecution(ctx context.Context, executionID string) (*Execution, error) {
-	return b.recoverExecution(ctx, executionID, nil, false)
+func (e *Executions) Get(ctx context.Context, executionID string) (*Execution, error) {
+	return e.box.recoverExecution(ctx, executionID, nil, false)
 }
 
-// AttachExecution opens live stdin/output streams for an existing execution.
+// Attach opens live stdin/output streams for an existing execution.
 // It never starts a stopped box and fails if another output reader is active.
 // Only the Stdout/Stderr/OnStdout/OnStderr fields of opts configure attachment;
 // process launch options do not apply to an already-running execution.
 // Closing this handle releases its reader without killing the process.
-func (b *Box) AttachExecution(ctx context.Context, executionID string, opts *ExecutionOptions) (*Execution, error) {
-	return b.recoverExecution(ctx, executionID, opts, true)
+func (e *Executions) Attach(ctx context.Context, executionID string, opts *ExecutionOptions) (*Execution, error) {
+	return e.box.recoverExecution(ctx, executionID, opts, true)
 }
 
 func (b *Box) recoverExecution(ctx context.Context, executionID string, opts *ExecutionOptions, attach bool) (*Execution, error) {
@@ -95,9 +107,9 @@ func (b *Box) recoverExecution(ctx context.Context, executionID string, opts *Ex
 	var cerr C.CBoxliteError
 	var code C.enum_BoxliteErrorCode
 	if attach {
-		code = C.boxlite_box_attach_execution(b.handle, id, &handle, &cerr)
+		code = C.boxlite_box_executions_attach(b.handle, id, &handle, &cerr)
 	} else {
-		code = C.boxlite_box_get_execution(b.handle, id, &handle, &cerr)
+		code = C.boxlite_box_executions_get(b.handle, id, &handle, &cerr)
 	}
 	if code != C.Ok {
 		return nil, freeError(&cerr)

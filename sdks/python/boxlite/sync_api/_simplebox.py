@@ -106,6 +106,7 @@ class SyncSimpleBox:
         self._reuse_existing = reuse_existing
         self._box: SyncBox | None = None
         self._created: bool | None = None
+        self._executions = None
 
     def __enter__(self) -> "SyncSimpleBox":  # noqa: PYI034 - typing.Self needs 3.11+; project supports 3.10+
         """Enter context - starts runtime if owned, then creates or reuses box.
@@ -279,27 +280,17 @@ class SyncSimpleBox:
             )
         return self._box.network
 
+    def executions(self):
+        """Get the live execution namespace without creating or starting the box."""
+        from ._executions import SyncExecutions
+
+        if self._executions is None:
+            self._executions = SyncExecutions(lambda: self._box)
+        return self._executions
+
     def stop(self) -> None:
         """Stop the box (preserves state for restart)."""
         self._box.stop()
-
-    def list_executions(self):
-        """List live guest executions without starting a stopped box."""
-        if self._box is None:
-            return []
-        return self._box.list_executions()
-
-    def get_execution(self, execution_id: str):
-        """Recover control without claiming the session's output reader."""
-        if self._box is None:
-            raise RuntimeError("Box not started. Use 'with SyncSimpleBox(...)' first.")
-        return self._box.get_execution(execution_id)
-
-    def attach(self, execution_id: str, *, stdin: bool = True):
-        """Attach to a listed live session without starting the box."""
-        if self._box is None:
-            raise RuntimeError("Box not started. Use 'with SyncSimpleBox(...)' first.")
-        return self._box.attach(execution_id, stdin=stdin)
 
     def metrics(self):
         """Get box metrics (CPU, memory usage)."""

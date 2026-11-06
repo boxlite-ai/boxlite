@@ -10,6 +10,7 @@ pub(crate) mod config;
 pub mod copy;
 mod crash_report;
 mod exec;
+mod executions;
 mod init;
 pub(crate) mod local_snapshot;
 mod manager;
@@ -28,6 +29,7 @@ pub use exec::{
     BoxCommand, ExecResult, ExecStderr, ExecStdin, ExecStdout, Execution, ExecutionId,
     ExecutionInfo,
 };
+pub use executions::ExecutionsHandle;
 pub(crate) use manager::BoxManager;
 pub use network::{
     BoxConnection, BoxReader, BoxTunnel, BoxWriter, NetworkHandle, SocketAddress, TunnelForwarder,
@@ -116,19 +118,10 @@ impl LiteBox {
         self.box_backend.exec(command).await
     }
 
-    /// Discover live guest sessions, including the main command. Never starts
-    /// or restarts a box. Finished sessions are not execution history.
-    pub async fn list_executions(&self) -> BoxliteResult<Vec<ExecutionInfo>> {
-        self.box_backend.list_executions().await
-    }
-
-    /// Recover a control-only handle for a live execution in this box.
-    ///
-    /// Does not claim the output reader or stdin; use `attach` separately for
-    /// streams. Wait, signal, kill, and resize remain available while another
-    /// handle reads output. Neither discovery nor recovery starts the box.
-    pub async fn get_execution(&self, execution_id: &str) -> BoxliteResult<Execution> {
-        self.box_backend.get_execution(execution_id).await
+    /// Get the live execution namespace without starting the box.
+    /// See [`ExecutionsHandle`].
+    pub fn executions(&self) -> ExecutionsHandle {
+        ExecutionsHandle::new(Arc::clone(&self.box_backend))
     }
 
     /// Attach to a session in the box.
@@ -145,7 +138,7 @@ impl LiteBox {
     /// including the main command, without booting or restarting the box.
     /// Only one output reader is allowed. An eager pump from an existing exec
     /// handle may still own it; that conflict is returned at this await point.
-    /// Use `get_execution` for controls independently of output ownership.
+    /// Use `executions().get(id)` for controls independently of output ownership.
     ///
     /// [`AttachOptions::read_only`] attaches without stdin — docker's
     /// `--no-stdin`. The returned `Execution` has no stdin sender.

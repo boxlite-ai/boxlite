@@ -335,7 +335,7 @@ See [the Node.js reference](../../docs/reference/nodejs/README.md#registryhandle
 
 ### Live Execution Inventory
 
-`await box.listExecutions()` is available on native `JsBox` and `SimpleBox`.
+`await box.executions().list()` is available on native `JsBox` and `SimpleBox`.
 It returns `ExecutionInfo[]` from the guest's live inventory, including the
 main process: `executionId` (canonical guest ID), `argv`, `startedAt`
 (Unix milliseconds), `tty`, and `isMainSession`. Completed processes disappear; this
@@ -344,14 +344,14 @@ boots a stopped box. A stopped/unstarted native box returns an empty list; a
 paused box returns an invalid-state error. An uncreated `SimpleBox` also
 returns an empty list without creating its box.
 
-Use `await box.getExecution(executionId)` for control-only access while another
-client owns output, or `await box.attach(executionId, false)` to recover streams
-without stdin. Both are available on native `JsBox` and `SimpleBox`, never start
-the box, and return a `JsExecution` supporting `kill()`, `signal()`, and `wait()`.
-Only one output reader is permitted.
+Use `await box.executions().get(executionId)` for control-only access while
+another client owns output, or `await box.executions().attach(executionId, false)`
+to recover streams without stdin. Both are available on native `JsBox` and
+`SimpleBox`, never start the box, and return a `JsExecution` supporting `kill()`,
+`signal()`, and `wait()`. Only one output reader is permitted.
 
 ```typescript
-for (const execution of await box.listExecutions()) {
+for (const execution of await box.executions().list()) {
   console.log(execution.executionId, execution.argv, execution.isMainSession);
 }
 ```

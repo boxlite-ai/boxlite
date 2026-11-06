@@ -342,16 +342,16 @@ Handle to a running or stopped box.
 |--------|-----------|-------------|
 | `exec()` | `(cmd, args, env, tty) -> Execution` | Execute command (async) |
 | `attach()` | `(execution_id=None, stdin=True) -> Execution` | Follow a running session (async) |
-| `list_executions()` | `() -> list[ExecutionInfo]` | List live sessions, including the main command (async) |
-| `get_execution()` | `(execution_id: str) -> Execution` | Recover control without taking the output reader (async) |
+| `executions()` | `() -> Executions` | Live session inventory and recovery; never boots a box |
 | `stop()` | `() -> None` | Stop the box gracefully (async) |
 | `info()` | `async () -> BoxInfo` | Get box metadata |
 | `metrics()` | `() -> BoxMetrics` | Get resource usage metrics (async) |
 
-`list_executions()` returns the box's live sessions, so an execution whose
+`executions().list()` returns the box's live sessions, so an execution whose
 handle was lost — a crashed client, a dropped connection — can be named again
-and driven through `attach()` for streams or `get_execution()` for a control
-handle. Call `kill()`, `signal()`, `resize_tty()`, or `wait()` on that handle.
+and driven through `executions().attach()` for streams or `executions().get()`
+for a control handle. Call `kill()`, `signal()`, `resize_tty()`, or `wait()` on
+that handle.
 Listing reads the guest's own registry, never boots or resumes a box, and lists
 only unfinished sessions: a finished execution's exit status is read through
 `wait()`. A created or stopped box returns an empty list; a paused box returns
@@ -559,6 +559,24 @@ print(f"Exit code: {result.exit_code}")
 
 ---
 
+### `boxlite.Executions`
+
+Live execution namespace of one box, returned by `box.executions()`. Creating it
+never starts the box. Native `Box` and `SimpleBox` operations are async.
+`SyncBox.executions()` and `SyncSimpleBox.executions()` expose the same three
+operations synchronously through `SyncExecutions`.
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `list()` | `() -> list[ExecutionInfo]` | List live sessions, including the main command (async) |
+| `get()` | `(execution_id: str) -> Execution` | Recover control without taking the output reader (async) |
+| `attach()` | `(execution_id: str, stdin=True) -> Execution` | Attach output to a listed live session (async) |
+
+`attach()` here needs an explicit ID; the pre-existing `Box.attach()` keeps its
+optional `execution_id`, which defaults to the main command session.
+
+---
+
 ### `boxlite.ExecutionInfo`
 
 Metadata for one live session, captured when it was spawned — not derived from
@@ -566,7 +584,7 @@ a process listing, so `execution_id` is always addressable.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `execution_id` | `str` | Identifier accepted by `attach()` and `get_execution()` |
+| `execution_id` | `str` | Identifier accepted by `executions().attach()` and `executions().get()` |
 | `argv` | `list[str]` | The command as requested, program first |
 | `started_at` | `int` | Spawn time, Unix epoch milliseconds |
 | `tty` | `bool` | Whether the session owns a PTY |
@@ -576,15 +594,15 @@ The main session's `execution_id` is the container id, the same convention the
 wire layer uses.
 
 Use a listed ID while the session is still live; it may finish between listing
-and recovery. On a REST-backed box, `get_execution(id)` asks the server by ID,
+and recovery. On a REST-backed box, `executions().get(id)` asks the server by ID,
 so a retained terminal session can still be recovered after it leaves the live
 list; the local runtime resolves live sessions only. A control handle has no
 streams: `stdin()`, `stdout()`, and `stderr()` raise `RuntimeError` when
-unavailable, including on `SyncExecution`. Use `attach()` to claim streams
-instead.
+unavailable, including on `SyncExecution`. Use `executions().attach()` to claim
+streams instead.
 
 ```python
-for session in await box.list_executions():
+for session in await box.executions().list():
     marker = " (main)" if session.is_main_session else ""
     print(f"{session.execution_id}{marker}: {' '.join(session.argv)}")
 ```

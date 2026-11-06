@@ -53,7 +53,7 @@ func BoxliteListExecutions(ctx *gin.Context) {
 		ctx.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("box not found: %s", err)})
 		return
 	}
-	entries, err := bx.ListExecutions(ctx.Request.Context())
+	entries, err := bx.Executions().List(ctx.Request.Context())
 	if err != nil {
 		ctx.JSON(execStartStatus(err), gin.H{"error": err.Error()})
 		return

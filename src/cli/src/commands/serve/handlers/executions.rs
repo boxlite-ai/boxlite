@@ -109,7 +109,7 @@ pub(in crate::commands::serve) async fn list_executions(
         Ok(b) => b,
         Err(response) => return response,
     };
-    match litebox.list_executions().await {
+    match litebox.executions().list().await {
         Ok(executions) => Json(serde_json::json!({"executions": executions})).into_response(),
         Err(error) => error_from_boxlite(&error),
     }
@@ -152,7 +152,7 @@ async fn execution_control(
     // exit, and a control handle has nothing left to ask then. Watch the exit
     // now so `GET /executions/{id}` keeps answering with the real code after —
     // the runner's `watchRecovered` in serve form.
-    match litebox.get_execution(exec_id).await {
+    match litebox.executions().get(exec_id).await {
         Ok(execution) => {
             state
                 .watch_recovered(&canonical, exec_id, execution.clone())
@@ -188,7 +188,8 @@ async fn recover_attached_execution(
     // across them: recovery only has to be consistent at the insert, and a
     // stalled VM must not freeze status, signal, kill or AutoStop sweeps.
     let info = litebox
-        .list_executions()
+        .executions()
+        .list()
         .await
         .map_err(|error| error_from_boxlite(&error))?
         .into_iter()

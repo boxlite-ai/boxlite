@@ -4,6 +4,7 @@ mod advanced_options;
 mod box_handle;
 mod domains;
 mod exec;
+mod executions;
 mod images;
 mod info;
 mod metrics;
@@ -23,6 +24,7 @@ use crate::advanced_options::{
 use crate::box_handle::PyBox;
 use crate::domains::{PyDomain, PyDomainHandle, PyDomainList, PyDomainTarget};
 use crate::exec::{PyExecStderr, PyExecStdin, PyExecStdout, PyExecution, PyExecutionInfo};
+use crate::executions::PyExecutions;
 use crate::images::{
     PyImageAliasEvent, PyImageDetail, PyImageHandle, PyImageInfo, PyImagePullResult, PyImageUsage,
     PyImageVersion,
@@ -64,6 +66,7 @@ fn boxlite_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyBoxlite>()?;
     m.add_class::<PyBox>()?;
     m.add_class::<PyExecution>()?;
+    m.add_class::<PyExecutions>()?;
     m.add_class::<PyExecutionInfo>()?;
     m.add_class::<PyExecStdin>()?;
     m.add_class::<PyExecStdout>()?;

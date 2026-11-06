@@ -88,7 +88,7 @@ impl From<StagedExecutionInfo> for CExecutionInfo {
 
 /// Callback owns the returned list; errors are borrowed during dispatch only.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn boxlite_list_executions(
+pub unsafe extern "C" fn boxlite_box_executions_list(
     handle: *mut CBoxHandle,
     cb: CExecutionInfoListCb,
     user_data: *mut c_void,
@@ -105,7 +105,7 @@ pub unsafe extern "C" fn boxlite_list_executions(
         let queue = handle.queue.clone();
         let user_data = user_data as usize;
         handle.tokio_rt.spawn(async move {
-            let result = lite.list_executions().await.and_then(|executions| {
+            let result = lite.executions().list().await.and_then(|executions| {
                 // Stage every entry before converting any: a failure therefore
                 // returns with only dropped `CString`s, never a half-built list
                 // whose raw strings nothing would free.
@@ -233,7 +233,7 @@ mod tests {
         let mut error = crate::error::FFIError::default();
         unsafe {
             assert_eq!(
-                boxlite_list_executions(ptr::null_mut(), None, ptr::null_mut(), &mut error),
+                boxlite_box_executions_list(ptr::null_mut(), None, ptr::null_mut(), &mut error),
                 BoxliteErrorCode::InvalidArgument,
             );
             crate::boxlite_error_free(&mut error);

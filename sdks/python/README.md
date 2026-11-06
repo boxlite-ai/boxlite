@@ -408,7 +408,7 @@ await box.stop()
 
 ### Live Execution Inventory
 
-`await box.list_executions()` returns `list[boxlite.ExecutionInfo]` from the
+`await box.executions().list()` returns `list[boxlite.ExecutionInfo]` from the
 guest's live process inventory, including the main command (`is_main_session=True`).
 Each record has `execution_id` (canonical guest ID), `argv`, `started_at`
 (Unix milliseconds), `tty`, and `is_main_session`. Completed commands are not history
@@ -416,13 +416,13 @@ entries and disappear from this list. Listing never starts a box: a stopped
 or not-yet-started native box returns an empty list, and a paused box returns
 an invalid-state error.
 
-`SimpleBox.list_executions()` exposes the same async operation without creating
-a box. `SyncBox.list_executions()` and `SyncSimpleBox.list_executions()` return
-the same metadata synchronously. Uncreated convenience wrappers also return an
-empty list. No inventory call attaches streams or consumes command output.
+`SimpleBox.executions()` exposes the same async operations without creating a
+box. `SyncBox.executions()` and `SyncSimpleBox.executions()` return the same
+metadata synchronously. Uncreated convenience wrappers also return an empty
+list. No inventory call attaches streams or consumes command output.
 
-Use `await box.get_execution(id)` for a control-only handle when another client
-still owns output. Use `await box.attach(id, stdin=False)` to recover streams
+Use `await box.executions().get(id)` for a control-only handle when another client
+still owns output. Use `await box.executions().attach(id, stdin=False)` to recover streams
 after the old reader disconnects. Both are available on native and convenience
 boxes, with synchronous counterparts; neither starts a stopped box. Attaching
 while a reader is active is a conflict, not an implicit takeover.
@@ -430,7 +430,7 @@ The control handle's `stdin()`, `stdout()`, and `stderr()` raise `RuntimeError`
 because it has no streams; synchronous handles behave the same way.
 
 ```python
-for execution in await box.list_executions():
+for execution in await box.executions().list():
     print(execution.execution_id, execution.argv, execution.is_main_session)
 ```
 

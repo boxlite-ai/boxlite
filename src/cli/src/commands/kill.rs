@@ -15,6 +15,10 @@ pub async fn execute(args: KillArgs, global: &GlobalFlags) -> anyhow::Result<()>
         .get(&args.target_box)
         .await?
         .ok_or_else(|| anyhow::anyhow!("No such box: {}", args.target_box))?;
-    bx.get_execution(&args.execution_id).await?.kill().await?;
+    bx.executions()
+        .get(&args.execution_id)
+        .await?
+        .kill()
+        .await?;
     Ok(())
 }

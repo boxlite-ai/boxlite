@@ -11,6 +11,7 @@ mod box_handle;
 mod copy;
 mod domains;
 mod exec;
+mod executions;
 mod images;
 mod info;
 mod metrics;
@@ -32,6 +33,7 @@ pub use domains::{JsDomain, JsDomainHandle, JsDomainList, JsDomainTarget};
 pub use exec::{
     JsExecResult, JsExecStderr, JsExecStdin, JsExecStdout, JsExecution, JsExecutionInfo,
 };
+pub use executions::JsExecutions;
 pub use images::{
     JsImageDetail, JsImageHandle, JsImageInfo, JsImagePullResult, JsImageUsage, JsImageVersion,
 };

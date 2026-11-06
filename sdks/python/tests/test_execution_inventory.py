@@ -12,7 +12,7 @@ from boxlite.simplebox import SimpleBox
 @pytest.mark.asyncio
 async def test_unstarted_simplebox_inventory_does_not_create(shared_runtime):
     box = SimpleBox(image="alpine:latest", runtime=shared_runtime)
-    assert await box.list_executions() == []
+    assert await box.executions().list() == []
     assert box._box is None
 
 
@@ -26,11 +26,11 @@ async def test_native_inventory_includes_main_and_exec_without_boot(shared_runti
     )
     try:
         before = await box.info()
-        assert await box.list_executions() == []
+        assert await box.executions().list() == []
         assert (await box.info()).state.status == before.state.status
         await box.start()
         execution = await box.exec("sleep", ["300"], tty=True)
-        inventory = await box.list_executions()
+        inventory = await box.executions().list()
         assert any(info.is_main_session for info in inventory)
         info = next(info for info in inventory if info.execution_id == execution.id())
         assert isinstance(info, boxlite.ExecutionInfo)
@@ -40,14 +40,15 @@ async def test_native_inventory_includes_main_and_exec_without_boot(shared_runti
         assert info.is_main_session is False
         with pytest.raises(AttributeError):
             info.started_at = 0
-        control = await box.get_execution(info.execution_id)
+        control = await box.executions().get(info.execution_id)
         for stream in (control.stdin, control.stdout, control.stderr):
             with pytest.raises(RuntimeError, match="stream not available"):
                 stream()
         await control.kill()
         await control.wait()
         assert all(
-            item.execution_id != execution.id() for item in await box.list_executions()
+            item.execution_id != execution.id()
+            for item in await box.executions().list()
         )
     finally:
         await shared_runtime.remove(box.id, force=True)
@@ -65,9 +66,9 @@ async def test_simplebox_inventory_recovers_main_output(shared_runtime):
     await box.start()
     try:
         main = next(
-            info for info in await box.list_executions() if info.is_main_session
+            info for info in await box.executions().list() if info.is_main_session
         )
-        reader = await box.attach(main.execution_id, stdin=False)
+        reader = await box.executions().attach(main.execution_id, stdin=False)
         output = reader.stdout()
 
         async def read_marker():
@@ -79,9 +80,9 @@ async def test_simplebox_inventory_recovers_main_output(shared_runtime):
             return text
 
         assert "recovered-wrapper" in await asyncio.wait_for(read_marker(), 5)
-        control = await box.get_execution(main.execution_id)
+        control = await box.executions().get(main.execution_id)
         await control.kill()
         await reader.wait()
-        assert await box.list_executions() == []
+        assert await box.executions().list() == []
     finally:
         await shared_runtime.remove(box.id, force=True)

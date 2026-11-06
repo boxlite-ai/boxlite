@@ -12,7 +12,7 @@ import unittest
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import ANY, AsyncMock, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 from pydantic import ValidationError
 
@@ -499,9 +499,19 @@ class ExecutionRecoveryTests(unittest.IsolatedAsyncioTestCase):
     def _box(self, box_id: str = "box-1"):
         handle = _make_box_handle(box_id)
         SERVER.state.active_boxes_by_id[box_id] = handle
-        handle.list_executions = AsyncMock(return_value=[])
-        handle.get_execution = AsyncMock()
+        # `box.executions()` is synchronous on every SDK; only its methods await.
+        handle.executions = MagicMock(
+            return_value=SimpleNamespace(
+                list=AsyncMock(return_value=[]),
+                get=AsyncMock(),
+            )
+        )
         return handle
+
+    @staticmethod
+    def _sessions(handle):
+        """The fake execution namespace behind one box handle."""
+        return handle.executions.return_value
 
     def _fake(self, exec_id: str) -> _FakeExecution:
         execution = _FakeExecution(exec_id)
@@ -512,8 +522,8 @@ class ExecutionRecoveryTests(unittest.IsolatedAsyncioTestCase):
         handle = self._box()
         info = _make_execution_info("container-1", main=True)
         execution = self._fake("container-1")
-        handle.list_executions.return_value = [info]
-        handle.get_execution.return_value = execution
+        self._sessions(handle).list.return_value = [info]
+        self._sessions(handle).get.return_value = execution
 
         body = await SERVER.get_execution(
             "demo", "box-1", "container-1", _auth={}
@@ -530,7 +540,7 @@ class ExecutionRecoveryTests(unittest.IsolatedAsyncioTestCase):
         active = SERVER.state.active_executions["container-1"]
         self.assertIs(active.the_execution, execution)
         self.assertIsNone(active.stdout)
-        handle.get_execution.assert_awaited_once_with("container-1")
+        self._sessions(handle).get.assert_awaited_once_with("container-1")
 
     async def test_get_execution_404s_when_the_guest_also_has_no_session(self) -> None:
         handle = self._box()
@@ -539,7 +549,7 @@ class ExecutionRecoveryTests(unittest.IsolatedAsyncioTestCase):
             await SERVER.get_execution("demo", "box-1", "missing", _auth={})
 
         self.assertEqual(ctx.exception.status_code, 404)
-        handle.get_execution.assert_not_awaited()
+        self._sessions(handle).get.assert_not_awaited()
 
     async def test_execution_from_another_box_is_not_recovered(self) -> None:
         self._box("box-2")
@@ -563,8 +573,8 @@ class ExecutionRecoveryTests(unittest.IsolatedAsyncioTestCase):
         handle = self._box()
         info = _make_execution_info("exec-1")
         execution = self._fake("exec-1")
-        handle.list_executions.return_value = [info]
-        handle.get_execution.return_value = execution
+        self._sessions(handle).list.return_value = [info]
+        self._sessions(handle).get.return_value = execution
 
         response = await SERVER.signal_execution(
             "demo",

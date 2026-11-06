@@ -15,7 +15,7 @@ async fn live_inventory_includes_init_and_recovers_controls_without_reader() {
     })
     .unwrap();
     let handle = runtime.create(common::alpine_opts(), None).await.unwrap();
-    assert!(handle.list_executions().await.unwrap().is_empty());
+    assert!(handle.executions().list().await.unwrap().is_empty());
     assert_eq!(handle.info().await.unwrap().status, BoxStatus::Configured);
     handle.start().await.unwrap();
     let first = handle
@@ -26,7 +26,7 @@ async fn live_inventory_includes_init_and_recovers_controls_without_reader() {
         .exec(BoxCommand::new("sleep").arg("3600").tty(true))
         .await
         .unwrap();
-    let live = handle.list_executions().await.unwrap();
+    let live = handle.executions().list().await.unwrap();
     let main = live
         .iter()
         .find(|info| info.is_main_session)
@@ -47,14 +47,14 @@ async fn live_inventory_includes_init_and_recovers_controls_without_reader() {
             .tty
     );
 
-    let recovered = handle.get_execution(first.id()).await.unwrap();
+    let recovered = handle.executions().get(first.id()).await.unwrap();
     assert_eq!(recovered.id(), first.id());
     recovered.kill().await.unwrap();
     tokio::time::timeout(Duration::from_secs(10), recovered.wait())
         .await
         .unwrap()
         .unwrap();
-    let live = handle.list_executions().await.unwrap();
+    let live = handle.executions().list().await.unwrap();
     assert!(!live.iter().any(|info| &info.execution_id == first.id()));
     assert!(live.iter().any(|info| &info.execution_id == second.id()));
     assert!(live.iter().any(|info| info.is_main_session));
@@ -84,7 +84,7 @@ async fn live_inventory_includes_init_and_recovers_controls_without_reader() {
         .unwrap()
         .unwrap();
     handle.stop().await.unwrap();
-    assert!(handle.list_executions().await.unwrap().is_empty());
+    assert!(handle.executions().list().await.unwrap().is_empty());
     assert_eq!(handle.info().await.unwrap().status, BoxStatus::Stopped);
     assert!(
         handle
