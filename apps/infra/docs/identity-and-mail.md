@@ -180,7 +180,7 @@ npm run auth0:configure-mcp -- --tenant <tenant.auth0.com> \
 | --- | --- | --- |
 | Tenant | `audience` parameter profile, CIMD off, no `iss` in authorization responses | `resource_parameter_profile: "compatibility"`, `client_id_metadata_document_supported: true`, `authorization_response_iss_parameter_supported: true` |
 | MCP API | absent | identifier `MCP_RESOURCE_URL`; the `mcp-clients.json` scopes; user access needs a client grant, machine access denied |
-| Each listed client | unregistered | registered from its CIMD document (validated by `clients/cimd/preview` first), plus a user grant for the scopes |
+| Each listed client | unregistered | registered from its CIMD document (validated by `clients/cimd/preview` first) as a `tpc_` client, found again by its `external_client_id`, plus a user grant to that `tpc_` id for the scopes |
 | A CIMD client no longer listed | its user grant stays | the grant on the MCP API is deleted; grants of other clients and other APIs are left alone |
 | Each `--connection` | application-level | `is_domain_connection: true`, so third-party MCP clients can sign in with it |
 
