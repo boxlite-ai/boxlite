@@ -272,11 +272,14 @@ What the list contains, and what it does not:
   nothing. A paused box returns an invalid-state error rather than claiming
   that its sessions disappeared. Listing does not refresh the server's idle clock.
 
-`get_execution(id)` recovers wait and control without taking the output reader;
-`attach(id)` also claims that reader and returns a conflict if another reader
-still owns it. Attach includes output still present in the guest's bounded
-buffer, not durable history. A failed status request is an observation error,
-not a fabricated process exit; callers decide whether to try again.
+`get_execution(id)` recovers wait and control without taking the output reader.
+On a REST-backed box it asks the server by ID rather than requiring the ID to
+still appear in the inventory, so a retained terminal session can still be
+recovered. The local runtime verifies the ID against the live guest inventory.
+`attach(id)` also claims the output reader and returns a conflict if another
+reader still owns it. Attach includes output still present in the guest's
+bounded buffer, not durable history. A failed status request is an observation
+error, not a fabricated process exit; callers decide whether to try again.
 
 The main session reuses its execution ID after a box restart. Server-side
 recovery records belong to one box lifecycle and are discarded before an

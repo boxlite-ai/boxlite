@@ -370,7 +370,7 @@ HTTP contract, reconfiguration, disable, and generation semantics.
 | `metrics` | `async fn metrics(&self) -> BoxliteResult<BoxMetrics>` | Get box metrics |
 | `stop` | `async fn stop(&self) -> BoxliteResult<()>` | Stop the box |
 | `list_executions` | `async fn list_executions(&self) -> BoxliteResult<Vec<ExecutionInfo>>` | Snapshot live guest sessions, including init; never boots a box |
-| `get_execution` | `async fn get_execution(&self, id: &str) -> BoxliteResult<Execution>` | Recover control and wait for a live session without taking its output reader |
+| `get_execution` | `async fn get_execution(&self, id: &str) -> BoxliteResult<Execution>` | Recover control and wait for a known session without taking its output reader |
 | `attach` | `async fn attach(&self, options: AttachOptions) -> BoxliteResult<Execution>` | Attach to init or a named live session; only one output reader is allowed |
 
 `list_executions()` is a live-process inventory, not history: sessions disappear
@@ -382,9 +382,12 @@ invalid-state error instead of claiming its sessions disappeared.
 `ExecutionInfo` carries the canonical guest execution ID, argv, Unix-millisecond
 spawn time, PTY flag, and `is_main_session`.
 
-`get_execution(id)` verifies the ID against this box's guest inventory and
-returns a control-only handle (no stdin/stdout/stderr). Its `wait`, `kill`,
-`signal`, and PTY resize methods remain usable while another handle owns output.
+`get_execution(id)` returns a control-only handle (no stdin/stdout/stderr).
+The local runtime verifies the ID against the live guest inventory; a
+REST-backed runtime asks the server's by-id endpoint, so a retained terminal
+session can still be recovered after it leaves the inventory. Its `wait`,
+`kill`, `signal`, and PTY resize methods remain usable while another handle
+owns output.
 To recover streams after a client process exits, call
 `attach(AttachOptions::execution(id))`; an existing reader is reported as a
 conflict rather than silently returning no output.

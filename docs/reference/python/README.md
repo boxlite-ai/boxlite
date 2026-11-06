@@ -573,9 +573,12 @@ The main session's `execution_id` is the container id, the same convention the
 wire layer uses.
 
 Use a listed ID while the session is still live; it may finish between listing
-and recovery. A control handle has no streams: `stdin()`, `stdout()`, and
-`stderr()` raise `RuntimeError` when unavailable, including on `SyncExecution`.
-Use `attach()` to claim streams instead.
+and recovery. On a REST-backed box, `get_execution(id)` asks the server by ID,
+so a retained terminal session can still be recovered after it leaves the live
+list; the local runtime resolves live sessions only. A control handle has no
+streams: `stdin()`, `stdout()`, and `stderr()` raise `RuntimeError` when
+unavailable, including on `SyncExecution`. Use `attach()` to claim streams
+instead.
 
 ```python
 for session in await box.list_executions():
