@@ -58,8 +58,9 @@ builds a `VmConfig` from the box specification and runs `Vm`; the pinned kernel
 also mounts an ext4 root disk and devtmpfs for a disk-root boot, so a box boots
 to `boxlite-guest` as PID 1. The vsock and virtio-fs devices and the virtio-net
 wiring follow in M2.
-Neither new crate depends on `boxlite-shared`, and both are unpublished while
-their interfaces are being established.
+Neither new crate depends on `boxlite-shared`; the release workflow publishes
+`boxlite-hypervisor`, then `boxlite-vmm`, before `boxlite`, now that the engine
+adapter depends on `boxlite-vmm`.
 
 ## Virtio network device
 
