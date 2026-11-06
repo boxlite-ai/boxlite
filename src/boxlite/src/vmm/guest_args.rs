@@ -42,7 +42,7 @@ fn transform_shell_arg_unix_to_vsock(input: &str, arg_name: &str, vsock_port: u3
                     break;
                 }
                 chars.next();
-                pos += 1;
+                pos += next.len_utf8();
             }
 
             // Add the vsock URI
@@ -128,6 +128,18 @@ mod tests {
         assert_eq!(
             rewritten[1],
             "exec agent --listen vsock://2695 --notify vsock://2696 --tty"
+        );
+    }
+
+    #[test]
+    fn shell_command_paths_with_multibyte_characters_are_rewritten() {
+        let rewritten = transform_guest_args(args(&[
+            "-c",
+            "agent --listen unix:///tmp/中 --notify unix:///tmp/b.sock --verbose",
+        ]));
+        assert_eq!(
+            rewritten[1],
+            "agent --listen vsock://2695 --notify vsock://2696 --verbose"
         );
     }
 

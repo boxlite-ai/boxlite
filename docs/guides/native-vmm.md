@@ -43,7 +43,9 @@ let box_ = runtime.create(options, None).await?;
 
 The engine choice is persisted with the box and rechecked on every start, so a
 later start needs the same opt-in. It is immutable for an existing box:
-`get_or_create` refuses to reuse a box that runs on another engine. The REST
+`get_or_create` refuses to reuse a box that runs on another engine, and a
+request without an engine asks for the default Libkrun engine, so it does not
+reuse a native box either. The REST
 runtime rejects the option, and a REST server rejects uploaded archives that
 carry it.
 

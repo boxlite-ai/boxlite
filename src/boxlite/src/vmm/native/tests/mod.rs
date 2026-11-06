@@ -25,6 +25,11 @@ use crate::vmm::{
 
 mod m1_initramfs;
 
+#[test]
+fn the_public_engine_type_implements_debug() {
+    assert_eq!(format!("{:?}", Native), "Native");
+}
+
 const CONSOLE_CMDLINE: &str = "console=ttyS0 panic=-1 reboot=k";
 const SHIM_TIMEOUT: Duration = Duration::from_secs(90);
 
@@ -255,12 +260,39 @@ fn the_command_line_names_the_root_disk_the_agent_and_its_vsock_ports() {
     assert_eq!(
         build_cmdline(&spec, None),
         "console=ttyS0 panic=-1 reboot=k root=/dev/vdb rootfstype=ext4 ro \
-         init=/boxlite/bin/boxlite-guest RUST_LOG=info \
+         init=/boxlite/bin/boxlite-guest \"RUST_LOG=info\" \
          -- --listen vsock://2695 --notify vsock://2696"
     );
     assert_eq!(
         build_cmdline(&test_box.spec(None), Some("earlycon panic=-1")),
         "earlycon panic=-1 init=/init"
+    );
+}
+
+#[test]
+fn each_environment_entry_stays_one_kernel_parameter() {
+    let test_box = TestBox::new();
+    let mut spec = runtime_like_spec(&test_box, None);
+    spec.guest_entrypoint.env = vec![
+        ("FOO".to_string(), "hello root=/dev/vda".to_string()),
+        ("BAD".to_string(), "a\"b".to_string()),
+    ];
+
+    let cmdline = build_cmdline(&spec, None);
+
+    // Unquoted, the space would split `root=/dev/vda` into a kernel
+    // parameter of its own and mount the wrong root disk.
+    assert!(
+        !cmdline.contains(" root=/dev/vda "),
+        "a value leaked a kernel parameter: {cmdline}"
+    );
+    // The kernel cannot quote a `"`, so that entry is dropped.
+    assert!(!cmdline.contains("BAD="), "{cmdline}");
+    assert_eq!(
+        cmdline,
+        "console=ttyS0 panic=-1 reboot=k root=/dev/vdb rootfstype=ext4 ro \
+         init=/boxlite/bin/boxlite-guest \"FOO=hello root=/dev/vda\" \
+         -- --listen vsock://2695 --notify vsock://2696"
     );
 }
 
