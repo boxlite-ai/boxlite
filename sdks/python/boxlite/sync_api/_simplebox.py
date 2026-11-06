@@ -106,6 +106,7 @@ class SyncSimpleBox:
         self._reuse_existing = reuse_existing
         self._box: SyncBox | None = None
         self._created: bool | None = None
+        self._executions = None
 
     def __enter__(self) -> "SyncSimpleBox":  # noqa: PYI034 - typing.Self needs 3.11+; project supports 3.10+
         """Enter context - starts runtime if owned, then creates or reuses box.
@@ -278,6 +279,14 @@ class SyncSimpleBox:
                 "Box not started. Use 'with SyncSimpleBox(...) as box:' first."
             )
         return self._box.network
+
+    def executions(self):
+        """Get the live execution namespace without creating or starting the box."""
+        from ._executions import SyncExecutions
+
+        if self._executions is None:
+            self._executions = SyncExecutions(lambda: self._box)
+        return self._executions
 
     def stop(self) -> None:
         """Stop the box (preserves state for restart)."""

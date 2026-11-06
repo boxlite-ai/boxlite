@@ -71,6 +71,49 @@ func main() {
 }
 ```
 
+### Live Execution Discovery and Recovery
+
+`box.Executions().List(ctx)` returns `[]ExecutionInfo` from the live guest,
+including its main process (`IsMainSession`). Fields are `ExecutionID` (canonical guest
+ID), `Argv`, `StartedAt` (Unix milliseconds), `TTY`, and `IsMainSession`.
+Completed executions disappear. Listing never boots the box; a stopped or
+not-yet-started box returns an empty slice, and a paused box returns an
+invalid-state error.
+
+`box.Executions().Get(ctx, id)` recovers a control-only `*Execution`: `ID()`,
+`Wait`, `Kill`, `Signal`, and `ResizeTTY` work without claiming stdout/stderr.
+It has no stdin or output sinks, and `Close` only releases the handle.
+
+`box.Executions().Attach(ctx, id, opts)` opens live stdin/output streams with the
+same `Stdout`, `Stderr`, `OnStdout`, and `OnStderr` sink options as
+`StartExecution`. An existing reader causes a synchronous conflict rather than
+stealing output. Launch options do not apply to attachment. After the original
+reader disconnects, a fresh client can discover and attach by ID. Attachment
+does not boot the box. It includes available buffered output, without guaranteeing
+a complete historical log. Closing an attached handle releases its reader without
+killing the guest process.
+
+```go
+executions, err := box.Executions().List(ctx)
+if err != nil {
+	log.Fatal(err)
+}
+for _, info := range executions {
+	if info.IsMainSession {
+		continue
+	}
+	control, err := box.Executions().Get(ctx, info.ExecutionID)
+	if err != nil {
+		log.Fatal(err)
+	}
+	err = control.Signal(ctx, 15)
+	control.Close()
+	if err != nil {
+		log.Fatal(err)
+	}
+}
+```
+
 ### Archive Export and Import
 
 ```go

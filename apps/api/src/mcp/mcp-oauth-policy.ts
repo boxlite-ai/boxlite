@@ -54,6 +54,7 @@ export const MCP_OAUTH_OPERATIONS: ReadonlySet<string> = new Set([
   'restoreSnapshot',
   'cloneBox',
   'startExecution',
+  'listExecutions',
   'getExecution',
   'killExecution',
   'attachExecution',
