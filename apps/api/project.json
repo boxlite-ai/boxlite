@@ -22,6 +22,11 @@
             "input": "api/src/assets",
             "glob": "**/*",
             "output": "./assets/"
+          },
+          {
+            "input": "../openapi",
+            "glob": "{box,admin}.openapi.yaml",
+            "output": "./assets/openapi/"
           }
         ]
       },
