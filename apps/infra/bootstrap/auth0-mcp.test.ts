@@ -122,7 +122,10 @@ function fakeTenant(rules: object[] = [], lose?: string, refuse?: string) {
         return null
       }
       if (path === 'connections') return state.connections.filter((c) => c.name === options.query?.name)
-      if (path.startsWith('connections/')) return Object.assign(state.connections.find((c) => path.endsWith(c.id))!, data)
+      if (path.startsWith('connections/')) {
+        const connection = state.connections.find((c) => path.endsWith(c.id))
+        return connection ? Object.assign(connection, data) : gone(path, options)
+      }
       throw new Error(`unexpected ${method} ${path}`)
   }
   function gone(path: string, options: RequestOptions) {
@@ -294,7 +297,7 @@ test('rollback undoes every entry it can, names the failures, and a rerun finish
 
     assert.throws(
       () => Auth0McpConfigurator.rollback(applied.journal, () => tenant.client as never),
-      new RegExp(`client ${CLIENT.replace(/[.?/]/g, '\\$&')}`),
+      (error: Error) => error.message.includes(`client ${CLIENT}`),
     )
     assert.equal(tenant.state.apis.length, 0)
     assert.equal(tenant.state.settings.resource_parameter_profile, 'audience')
@@ -304,6 +307,22 @@ test('rollback undoes every entry it can, names the failures, and a rerun finish
     Auth0McpConfigurator.rollback(applied.journal, () => tenant.client as never)
     assert.equal(tenant.state.clients.length, 0)
     assert.equal(tenant.state.grants.length, 0)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('rollback counts a patched resource that is already gone as undone', () => {
+  const tenant = fakeTenant()
+  const dir = mkdtempSync(join(tmpdir(), 'mcp-'))
+  try {
+    const applied = configurator(tenant, true, dir).apply()
+    tenant.state.connections.length = 0
+
+    Auth0McpConfigurator.rollback(applied.journal, () => tenant.client as never)
+
+    assert.equal(tenant.state.apis.length, 0)
+    assert.equal(tenant.state.settings.resource_parameter_profile, 'audience')
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
