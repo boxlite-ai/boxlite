@@ -10,7 +10,7 @@ import { TypedConfigService } from '../config/typed-config.service'
 import { MCP_OAUTH_SCOPES } from './mcp-oauth-policy'
 
 /** Where this API serves MCP: the `mcp` controller under the `api` global prefix. */
-const MCP_ROUTE = '/api/mcp'
+export const MCP_ROUTE = '/api/mcp'
 
 /**
  * The RFC 9728 metadata route for {@link MCP_ROUTE}. The well-known prefix goes
@@ -23,7 +23,7 @@ export const MCP_METADATA_PATH = `.well-known/oauth-protected-resource${MCP_ROUT
  * OAuth discovery for the MCP endpoint.
  *
  * `MCP_RESOURCE_URL` is the public URL hosts connect to, so it is the resource
- * the metadata names. Without it the endpoint still takes bearer tokens but
+ * the metadata names. Without it the endpoint takes only API keys and
  * publishes no metadata.
  */
 @Injectable()

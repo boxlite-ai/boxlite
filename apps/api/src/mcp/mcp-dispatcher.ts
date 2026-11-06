@@ -8,15 +8,23 @@ import { HttpAdapterHost } from '@nestjs/core'
 import type { Request } from 'express'
 import { randomBytes } from 'node:crypto'
 import { mkdtempSync, rmSync } from 'node:fs'
-import http from 'node:http'
+import http, { type IncomingMessage } from 'node:http'
+import type { Socket } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { MCP_DELEGATION_HEADER, McpDelegation } from '../auth/mcp-delegation'
+import { BoxliteWsProxyService } from '../boxlite-rest/boxlite-ws-proxy.service'
 import type { AuthContextType } from '../common/interfaces/auth-context.interface'
 import type { McpOperation } from './mcp-catalog'
 
-/** Largest binary body a tool call sends or returns as base64. */
+/** Largest binary body a tool call sends or returns as base64, and largest REST response it reads. */
 export const MCP_MAX_BINARY_BYTES = 8 * 1024 * 1024
+
+/**
+ * How long a delegated REST call may go without sending a byte. It bounds a stalled
+ * route, not a slow one: a transfer that keeps sending data is never cut.
+ */
+export const MCP_DELEGATED_IDLE_MS = 5 * 60 * 1000
 
 /** Request headers copied from the MCP request so the REST route sees the same client. */
 const FORWARDED_HEADERS = ['user-agent', 'x-boxlite-organization-id']
@@ -30,6 +38,9 @@ export interface McpRestResponse {
 
 /** Thrown for tool arguments the dispatcher refuses before any route runs. */
 export class McpArgumentError extends Error {}
+
+/** Thrown when a delegated REST call is cut off: too large, idle too long, or its MCP client gone. */
+export class McpResponseError extends Error {}
 
 /**
  * Runs one catalog operation through its REST route, in this process, as the
@@ -45,10 +56,12 @@ export class McpArgumentError extends Error {}
 @Injectable()
 export class McpDispatcher implements OnModuleDestroy {
   private socket?: Promise<{ server: http.Server; path: string; dir: string }>
+  protected idleTimeoutMs = MCP_DELEGATED_IDLE_MS
 
   constructor(
     private readonly adapterHost: HttpAdapterHost,
     private readonly delegation: McpDelegation,
+    private readonly wsProxy: BoxliteWsProxyService,
   ) {}
 
   async call(op: McpOperation, args: Record<string, unknown>, mcpRequest: Request): Promise<McpRestResponse> {
@@ -68,7 +81,10 @@ export class McpDispatcher implements OnModuleDestroy {
       if (param.in === 'path') {
         path = path.replace(`{${param.name}}`, pathSegment(param.name, value))
       } else if (param.in === 'query') {
-        query.set(param.name, typeof value === 'string' ? value : JSON.stringify(value))
+        // An array is the OpenAPI default `style: form, explode: true`: one key per item.
+        for (const item of Array.isArray(value) ? value : [value]) {
+          query.append(param.name, typeof item === 'string' ? item : JSON.stringify(item))
+        }
       } else {
         headers[param.name.toLowerCase()] = String(value)
       }
@@ -80,7 +96,13 @@ export class McpDispatcher implements OnModuleDestroy {
     const payload = this.body(op, args, headers)
     headers[MCP_DELEGATION_HEADER] = this.delegation.issue(mcpRequest.user as AuthContextType)
     const search = query.toString()
-    return this.send(op.method.toUpperCase(), search ? `${path}?${search}` : path, headers, payload)
+    return this.send(op.method.toUpperCase(), search ? `${path}?${search}` : path, headers, mcpRequest, payload)
+  }
+
+  /** A `ws+unix:` URL for a WebSocket route of this API, reached over the private socket. */
+  async webSocketUrl(pathAndQuery: string): Promise<string> {
+    const { path } = await this.listen()
+    return `ws+unix:${path}:${pathAndQuery}`
   }
 
   async onModuleDestroy(): Promise<void> {
@@ -110,6 +132,7 @@ export class McpDispatcher implements OnModuleDestroy {
     method: string,
     url: string,
     headers: Record<string, string>,
+    mcpRequest: Request,
     payload?: Buffer,
   ): Promise<McpRestResponse> {
     const { path: socketPath } = await this.listen()
@@ -117,7 +140,15 @@ export class McpDispatcher implements OnModuleDestroy {
     return new Promise((resolve, reject) => {
       const request = http.request({ socketPath, method, path: url, headers }, (response) => {
         const chunks: Buffer[] = []
-        response.on('data', (chunk: Buffer) => chunks.push(chunk))
+        let size = 0
+        response.on('data', (chunk: Buffer) => {
+          size += chunk.length
+          if (size > MCP_MAX_BINARY_BYTES) {
+            request.destroy(new McpResponseError(`${method} ${url} returned more than ${MCP_MAX_BINARY_BYTES} bytes`))
+            return
+          }
+          chunks.push(chunk)
+        })
         response.on('error', reject)
         response.on('end', () => {
           const body = Buffer.concat(chunks)
@@ -134,6 +165,15 @@ export class McpDispatcher implements OnModuleDestroy {
         })
       })
       request.on('error', reject)
+      // A stalled route or a departed MCP client must not hold this socket open.
+      request.setTimeout(this.idleTimeoutMs, () =>
+        request.destroy(new McpResponseError(`${method} ${url} sent nothing for ${this.idleTimeoutMs / 1000} s`)),
+      )
+      const client = mcpRequest.socket
+      const abandon = () => request.destroy(new McpResponseError('The MCP client disconnected'))
+      if (client?.destroyed) abandon()
+      client?.once('close', abandon)
+      request.once('close', () => client?.off('close', abandon))
       request.end(payload)
     })
   }
@@ -144,6 +184,11 @@ export class McpDispatcher implements OnModuleDestroy {
       const dir = mkdtempSync(join(tmpdir(), 'boxlite-mcp-'))
       const path = join(dir, `${randomBytes(8).toString('hex')}.sock`)
       const server = http.createServer(this.adapterHost.httpAdapter.getInstance())
+      // Attach upgrades, routed as `main.ts` routes them on the public server.
+      server.on('upgrade', (req: IncomingMessage, upgraded: Socket, head: Buffer) => {
+        if (this.wsProxy.matchAttachPath(req.url)) void this.wsProxy.upgrade(req, upgraded, head)
+        else upgraded.destroy()
+      })
       server.once('error', reject)
       server.listen(path, () => resolve({ server, path, dir }))
     })

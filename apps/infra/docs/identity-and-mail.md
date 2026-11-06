@@ -153,34 +153,50 @@ are registered, and dynamic client registration stays off. Clients with no fixed
 document (Cursor, Windsurf, Gemini CLI, MCP Inspector) use an API key instead.
 
 Set `MCP_RESOURCE_URL` for the stage (for example `https://api.example.com/api/mcp`),
-deploy, then preview and apply the tenant change:
+deploy, then preview and apply the tenant change. Pass the same `--connection`
+list to both commands; apply configures only the connections it is given:
 
 ```bash
 npm run auth0:configure-mcp -- --tenant <tenant.auth0.com> \
-  --resource-url <MCP_RESOURCE_URL> --connection <connection-name> [--connection ...]
+  --resource-url <MCP_RESOURCE_URL> --connection <connection-a> --connection <connection-b>
 
 npm run auth0:configure-mcp -- --tenant <tenant.auth0.com> \
-  --resource-url <MCP_RESOURCE_URL> --connection <connection-name> --apply
+  --resource-url <MCP_RESOURCE_URL> --connection <connection-a> --connection <connection-b> --apply
 ```
 
 | Step | Auth0 default | Set by apply |
 | --- | --- | --- |
-| Tenant | `audience` parameter profile, CIMD off | `resource_parameter_profile: "compatibility"`, `client_id_metadata_document_supported: true` |
+| Tenant | `audience` parameter profile, CIMD off, no `iss` in authorization responses | `resource_parameter_profile: "compatibility"`, `client_id_metadata_document_supported: true`, `authorization_response_iss_parameter_supported: true` |
 | MCP API | absent | identifier `MCP_RESOURCE_URL`; the `mcp-clients.json` scopes; user access needs a client grant, machine access denied |
 | Each listed client | unregistered | registered from its CIMD document (validated by `clients/cimd/preview` first), plus a user grant for the scopes |
+| A CIMD client no longer listed | its user grant stays | the grant on the MCP API is deleted; grants of other clients and other APIs are left alone |
 | Each `--connection` | application-level | `is_domain_connection: true`, so third-party MCP clients can sign in with it |
+
+`authorization_response_iss_parameter_supported` adds the RFC 9207 `iss`
+parameter to every authorization response. ChatGPT signs in as its stable
+`https://chatgpt.com/oauth/client.json`, the document listed here, only from a
+server that advertises it; otherwise it uses a per-callback
+`https://chatgpt.com/oauth/{callback_id}/client.json` that no allowlist can name
+([OpenAI: Authentication – Plugins](https://developers.openai.com/plugins/build/auth)).
+Clients that do not check `iss` ignore it; the dashboard and the `boxlite` CLI
+do not read it.
 
 The preview calls `clients/cimd/preview`, which validates a document without
 creating anything, and otherwise only reads. Apply refuses a tenant with active
 Rules, since CIMD logins fail while Rules run. It writes a mode-`0600` journal
-under `.sst/auth0-backups/` before each write; undo a run with
-`npm run auth0:configure-mcp -- --rollback <journal-path>`. A rerun on a configured
-tenant writes nothing.
+under `.sst/auth0-backups/` before each write, and marks each write as sent before
+sending it. Undo a run with `npm run auth0:configure-mcp -- --rollback <journal-path>`:
+rollback deletes what a run created, looking up a create whose response never
+arrived, and re-creates a grant a run deleted unless it is still there. A rerun on a configured tenant
+writes nothing.
 
 So that MCP logins get the same email verification and account link as the
 dashboard, pass the same URL to the login policy:
 `npm run auth0:configure-login -- ... --mcp-resource-url <MCP_RESOURCE_URL> --apply`.
 The Action then treats any login asking for that resource as a BoxLite login.
+A later apply without `--mcp-resource-url` refuses an Action that gates MCP logins,
+rather than silently dropping the gate; pass `--disable-mcp-login` to stop gating
+them on purpose.
 The scopes the API accepts from a token are checked against `mcp-clients.json` by
 an API spec; see [MCP endpoint](../../API.md#mcp-endpoint) for how they are enforced.
 
