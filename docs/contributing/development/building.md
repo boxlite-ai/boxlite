@@ -76,6 +76,22 @@ old version number. `boxlite-test-utils` keeps its independent version. The Go r
 workflow derives its `sdks/go/v...` tag from `Cargo.toml`. Version edits prepare source
 metadata; publishing follows the [release workflows](../../../.github/workflows/README.md).
 
+Before opening the bump PR, verify the resolved workspace metadata and Node lockfile:
+
+```bash
+cargo metadata --locked --offline --no-deps --format-version 1
+make fmt:check:rust fmt:check:node lint:node
+```
+
+Check that every member inheriting `workspace.package.version` reports the release
+version; independently versioned members keep their existing versions. Compare both
+lockfiles against the PR base to confirm dependency resolutions and checksums are
+unchanged.
+
+For example, bumping BoxLite from 0.11.0 to 0.11.1 must leave third-party
+`sha2` at 0.11.0. The Node lint target checks manifest/lockfile agreement; these
+metadata checks do not replace release builds or VM integration tests.
+
 ## TLS dependency security updates
 
 BoxLite's Rust HTTPS clients use rustls. Registry pulls trust both the bundled
