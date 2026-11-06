@@ -256,11 +256,12 @@ impl LocalCheckpoints {
         let info = catalog.ready(self.source_id(), key)?;
         let directory = catalog.directory(&info.id)?;
         let marker = if let Some(operation_id) = operation {
-            let directory_for_digest = directory.clone();
-            let digest =
-                tokio::task::spawn_blocking(move || archive::content_digest(&directory_for_digest))
-                    .await
-                    .map_err(invalid)??;
+            let directory_for_identity = directory.clone();
+            let digest = tokio::task::spawn_blocking(move || {
+                archive::replay_identity(&directory_for_identity)
+            })
+            .await
+            .map_err(invalid)??;
             Some(super::ImportIdentity {
                 operation_id,
                 checkpoint_id: info.id.clone(),
@@ -321,11 +322,8 @@ pub(super) fn copy_boot(
         .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
         .open(source)
         .map_err(invalid)?;
-    if input.metadata().map_err(invalid)?.len() != dependencies.boot_disk_bytes
-        || hex::encode(pair::digest(&input, 0, dependencies.boot_disk_bytes)?)
-            != dependencies.boot_disk_sha256
-    {
-        return Err(invalid("managed boot dependency length/checksum mismatch"));
+    if input.metadata().map_err(invalid)?.len() != dependencies.boot_disk_bytes {
+        return Err(invalid("managed boot dependency length mismatch"));
     }
     let mut output = OpenOptions::new()
         .write(true)

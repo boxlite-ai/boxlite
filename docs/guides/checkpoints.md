@@ -99,7 +99,7 @@ removal ignores only absence. Capture/import holds a checkpoint-operation lease;
 concurrent catalog mutations return an in-use error. This does not serialize
 unrelated box lifecycle or disk operations.
 
-Catalog storage owns a verified boot copy in addition to the unchanged pair.
+Catalog storage owns a boot copy in addition to the unchanged pair.
 A restored box owns another boot copy, so deleting the checkpoint cannot break
 its resume or later cold start. External share contents remain external and
 must still be prepared and kept unchanged for recovery. Interrupted captures
@@ -133,15 +133,22 @@ boxlite resume web-copy
 storage unchanged through export and import. Prepare the configured external directories and exact readonly boot disk on the
 target runtime before importing. Keep those dependencies available for the imported box’s lifetime. Export never implicitly starts or pauses a box.
 
-Inspection reads the memory image and lists dependencies and the paired disk digest.
-It opens no shares and provisions no runtime or box. Import additionally checks the
-QCOW2, external objects and exact readonly boot disk before guest execution.
+Inspection reads the memory envelope and metadata and lists dependencies. It opens
+no shares and provisions no runtime or box. Import checks format, lengths, external
+object bindings and descriptor roles before guest execution.
+
+New exports use **memory format v10**, with a random capture identity instead of
+RAM and QCOW2 checksums. Reads also accept v9 without verifying its checksums.
+Neither format detects same-size corruption of RAM, disk or boot contents during
+import. New exports require the updated runtime and shim; older runtimes reject v10.
+Zstd content checksums and archive-member content hashes are also disabled.
+Actual decoding/writing errors, format bounds, fsync and atomic publication remain.
 
 The output directory contains exactly these entries:
 
 ```text
 web/
-├── snapshot.mem       # Version 9: checked metadata, RAM and CPU/device/FUSE state
+├── snapshot.mem       # Version 10: metadata, RAM and CPU/device/FUSE state
 └── snapshot.qcow2     # Standalone container disk, without a backing file
 ```
 
@@ -186,7 +193,7 @@ intermediate symlink escape, linked-file disappearance and access errors fail im
 reuse after all prior descriptors close; external writer coordination is required. A symlink object itself may be retained with `O_PATH` without
 following its target.
 
-New exports use **path binding metadata v2** inside the unchanged native version-9
+New exports use **path binding metadata v2** inside the native memory
 pair. Saved `BoxOptions` retain their mounts. Import creates the new box’s internal
 directories first, resolves already prepared directory volumes from those options,
 and reopens each saved relative path under its target root. External data is never
@@ -224,9 +231,11 @@ focused guest test uses aligned direct I/O for an absent whole object and `fsync
 for an absent handle. Later exports preserve allocation counters and omit missing
 backend records, so stale guest IDs cannot alias newly allocated objects.
 
-The readonly guest boot disk is external. Import checks the saved boot path's full
-length and digest, or uses an exact digest-matching entry in the importing runtime's
-cache when that path is absent. It never rebuilds a substitute on cache miss.
+The readonly guest boot disk is external. Import checks the saved boot path's
+length, or locates an exact digest-matching entry in the importing runtime's cache
+when that path is absent. Boot digests remain dependency identifiers: capture and
+cache lookup still compute them, but selected boot copies are not rehashed during
+restore or cold start. It never rebuilds a substitute on cache miss.
 The imported container disk is a private QCOW2 and stays private through resume,
 stopped cold starts, disk snapshots and later checkpoints. Share roots and the
 selected boot path persist across runtime restarts; a cold start creates a new guest
@@ -234,14 +243,15 @@ session and does not recover old orphan handles.
 
 ## Failure and compatibility
 
-Runner upload admission uses `BoxliteRuntime::inspect_cloud_upload` to verify both
-the pair and its captured configuration. Its inspection response uses admission
-schema version 1; this is separate from memory-file format 9 and local-path
+Runner upload admission uses `BoxliteRuntime::inspect_cloud_upload` to check
+the pair's format and captured configuration. Its inspection response uses admission
+schema version 1; this is separate from memory-file formats 9/10 and local-path
 metadata version 2. The native parser validates those file formats before
 returning an inspection.
 
-The inspection contains a typed configuration summary and complete-pair digest. It
-does not open saved host paths. `import_checkpoint_pair` rechecks that digest and
+The inspection contains a typed configuration summary and an envelope/metadata
+identity in the existing `pair_sha256` field. It never hashes RAM or QCOW2 contents
+and does not open saved host paths. `import_checkpoint_pair` rechecks that identity and
 registers a managed resource using an exact boot from trusted runtime storage or
 an authorized runner download; it creates no VM. The runner then uses
 `create_from_checkpoint_with_operation` with a persistent operation identity.
@@ -250,7 +260,7 @@ effective network policy as preflight. Ordinary local raw import and default
 catalog restore retain their existing configuration behavior.
 
 The new cloud upload boundary classifies confirmed malformed input as
-InvalidArgument; actual OS/storage failures and corrupt trusted boot remain
+InvalidArgument; actual OS/storage failures and invalid trusted-boot lengths remain
 Storage. Existing raw import keeps its Storage error mapping. The global HTTP
 mapping is unchanged: InvalidArgument is 400 and Storage is 500.
 
@@ -260,7 +270,7 @@ pause and export, then import, resume and grow to 3 CPUs / 640 MiB within its
 saved ceilings. Resize requires Running and refuses an active shim capture
 session with `Busy`. The native memory mailbox rejects growth while paused.
 
-The current version-9 schema saves every provisioned vCPU, the actual CPU/RAM
+The current memory metadata schema saves every provisioned vCPU, the actual CPU/RAM
 allocation, virtio-mem queues/configuration, plugged blocks, reserved capacity and
 pending memory target. Only mapped hotplug slots contribute RAM bytes. A pending
 request can continue after resume; allocation records count mapped host memory,
@@ -337,11 +347,18 @@ boxlite --url http://127.0.0.1:8081 resume restored
 
 Configured base URL and routing prefixes apply normally; discovery stays at the
 unprefixed `/v1/config`. Authentication is unchanged. Transport uses temporary files
-and bounded chunks rather than buffering the checkpoint in memory. Downloads validate
-the complete pair and hashes in private staging before atomic no-overwrite publication.
-Uploads finish and validate before VM restoration. Missing, duplicate, extra and
+and bounded chunks rather than buffering the checkpoint in memory. Downloads check
+the pair's format in private staging before atomic no-overwrite publication.
+Uploads finish and check format before VM restoration. Missing, duplicate, extra and
 nonregular archive members fail; transfer temporaries are removed on failure.
 The archive is temporary: the delivered directory still contains only two files.
+
+Managed archive v2 carries member lengths, the boot dependency identifier and
+`metadata_sha256`. Cloud capture reports that bounded identity through the existing
+`contentSha256` field. Cloud import compares it with the expected identity and the
+native importer checks actual metadata before publication; payload bytes are not
+hashed. Cloud restore requires v2 archives; re-export older managed checkpoints
+with an updated runtime. Local native archive import still accepts v1.
 
 Import is never retried automatically. A lost response can mean that the server
 created the remote box; inspect the server before issuing another import. Accepted

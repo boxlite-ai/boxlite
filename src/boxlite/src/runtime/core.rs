@@ -440,7 +440,7 @@ impl BoxliteRuntime {
         self.backend.import_box(archive, name).await
     }
 
-    /// Import a version-9 checkpoint pair written by
+    /// Import a version-9/10 checkpoint pair written by
     /// [`LiteBox::export_checkpoint`] as a new box with a new ID, paused.
     ///
     /// The guest keeps its container ID, processes and execution IDs;
@@ -529,7 +529,7 @@ impl BoxliteRuntime {
             .await
     }
 
-    /// Inspect memory checksums and required bindings without opening shares or
+    /// Inspect memory format and required bindings without opening shares or
     /// provisioning a box. Import separately verifies the paired QCOW2.
     pub fn inspect_checkpoint(
         path: impl AsRef<std::path::Path>,

@@ -173,7 +173,29 @@ fn transport_archive(source: &Path, names: &[&str]) -> File {
 }
 
 #[test]
-fn checkpoint_transport_rejects_missing_duplicate_extra_corrupt_and_incomplete() {
+fn checkpoint_transport_ignores_zstd_content_checksum() {
+    let source = fixture();
+    let packed = crate::checkpoint_transport::pack(source.path()).unwrap();
+    let raw = zstd::stream::decode_all(packed).unwrap();
+    let mut encoder = zstd::stream::write::Encoder::new(tempfile::tempfile().unwrap(), 1).unwrap();
+    encoder.include_checksum(true).unwrap();
+    encoder.write_all(&raw).unwrap();
+    let file = encoder.finish().unwrap();
+    let last = file.metadata().unwrap().len() - 1;
+    let mut byte = [0];
+    file.read_exact_at(&mut byte, last).unwrap();
+    byte[0] ^= 1;
+    file.write_all_at(&byte, last).unwrap();
+    let home = tempfile::tempdir().unwrap();
+    crate::checkpoint_transport::unpack(file, &home.path().join("pair")).unwrap();
+    assert_eq!(
+        std::fs::read(home.path().join("pair").join(MEMORY)).unwrap(),
+        std::fs::read(source.path().join(MEMORY)).unwrap()
+    );
+}
+
+#[test]
+fn checkpoint_transport_rejects_missing_duplicate_extra_and_incomplete() {
     use crate::checkpoint_transport::{pack, unpack};
     let source = fixture();
     let home = tempfile::tempdir().unwrap();
@@ -194,7 +216,7 @@ fn checkpoint_transport_rejects_missing_duplicate_extra_corrupt_and_incomplete()
         .write(true)
         .open(source.path().join(DISK))
         .unwrap()
-        .write_all_at(b"bad", 104)
+        .write_all_at(b"bad", 0)
         .unwrap();
     assert!(
         unpack(
@@ -237,7 +259,7 @@ fn checkpoint_transport_requires_v2_but_local_inspection_keeps_v1() {
 }
 
 #[test]
-fn checkpoint_pair_checks_the_disk_and_memory_without_mutating_inputs() {
+fn checkpoint_pair_skips_payload_checksums_without_mutating_inputs() {
     let directory = fixture();
     let pair = open(directory.path()).unwrap();
     pair.verify_disk().unwrap();
@@ -248,30 +270,46 @@ fn checkpoint_pair_checks_the_disk_and_memory_without_mutating_inputs() {
         .unwrap()
         .write_all_at(b"bad", 104)
         .unwrap();
-    assert!(
-        pair.verify_disk()
-            .unwrap_err()
-            .to_string()
-            .contains("checksum")
-    );
+    pair.verify_disk().unwrap();
     assert_eq!(
         std::fs::read(directory.path().join(MEMORY)).unwrap(),
         memory_before
     );
     let directory = fixture();
+    let identity = open(directory.path()).unwrap().metadata_identity().unwrap();
     let file = OpenOptions::new()
         .write(true)
         .open(directory.path().join(MEMORY))
         .unwrap();
     let length = file.metadata().unwrap().len();
     file.write_all_at(b"!", length - 1).unwrap();
-    assert!(
-        open(directory.path())
-            .err()
-            .unwrap()
-            .to_string()
-            .contains("checksum")
+    assert_eq!(
+        open(directory.path()).unwrap().metadata_identity().unwrap(),
+        identity
     );
+}
+
+#[test]
+fn checkpoint_pair_v10_capture_identity_and_reserved_fields() {
+    let directory = fixture();
+    let file = OpenOptions::new()
+        .write(true)
+        .open(directory.path().join(MEMORY))
+        .unwrap();
+    file.write_all_at(&10u32.to_le_bytes(), 8).unwrap();
+    file.write_all_at(&[0; 80], 80).unwrap();
+    let pair = open(directory.path()).unwrap();
+    pair.verify_disk().unwrap();
+    assert_eq!(pair.dependencies.version, 10);
+    assert!(pair.dependencies.qcow2_sha256.is_empty());
+    let identity = pair.metadata_identity().unwrap();
+    file.write_all_at(&[17; 32], 48).unwrap();
+    assert_ne!(
+        open(directory.path()).unwrap().metadata_identity().unwrap(),
+        identity
+    );
+    file.write_all_at(&[1], 80).unwrap();
+    assert!(open(directory.path()).is_err());
 }
 
 #[test]

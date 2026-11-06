@@ -176,7 +176,7 @@ fn checkpoint_cloud_bad_qcow2_resources_and_unsupported_configuration_are_reject
         .open(corrupt.path().join("pair/snapshot.qcow2"))
         .unwrap();
     use std::os::unix::fs::FileExt;
-    disk.write_all_at(b"bad", 104).unwrap();
+    disk.write_all_at(b"bad", 0).unwrap();
     assert!(matches!(
         inspect(&corrupt.path().join("pair")),
         Err(BoxliteError::InvalidArgument(_))

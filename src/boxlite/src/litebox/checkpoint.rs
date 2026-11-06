@@ -132,10 +132,7 @@ impl RestoredStorage {
             .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
             .open(&disk.path)
             .map_err(pair::invalid)?;
-        if !disk.read_only
-            || file.metadata().map_err(pair::invalid)?.len() != dependency.length
-            || pair::digest(&file, 0, dependency.length)? != dependency.sha256
-        {
+        if !disk.read_only || file.metadata().map_err(pair::invalid)?.len() != dependency.length {
             return Err(pair::invalid(
                 "persistent readonly boot dependency mismatch",
             ));
