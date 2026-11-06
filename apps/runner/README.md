@@ -574,6 +574,13 @@ boot copy; only a subsequent resume continues the saved process. For example,
 pause a task, capture `before-upgrade`, restore it into a new box, then resume.
 Disk snapshot restore remains a separate stopped-disk operation.
 
+Managed archive v2 binds admission to the native memory envelope and metadata.
+`contentSha256` stores that identity, not a compressed-archive checksum. Download
+checks the expected manifest identity; native import recomputes it from bounded
+metadata before publication. RAM, disk and boot payloads are not rehashed. Zstd
+content checksums are disabled; framing, lengths, actual I/O and GCS transport
+checks remain. Re-export v1 managed archives before cloud restore.
+
 The runner advertises `checkpointsEnabled` only on Linux x86_64 with KVM,
 default kernel configuration and available GCS credential/emulator discovery.
 The API separately checks configured storage and organization admission.
@@ -585,7 +592,7 @@ Internal bearer-authenticated transfer routes are:
 | Method | Path | Result |
 | --- | --- | --- |
 | POST | `/api/checkpoint-transfers/:transferId` | Validate a bounded tar+zstd public pair and return native allowlisted inspection |
-| POST | `/api/checkpoint-transfers/:transferId/register` | Register the inspected digest using trusted runtime-cache boot or a same-organization managed archive |
+| POST | `/api/checkpoint-transfers/:transferId/register` | Register the inspected metadata identity using trusted runtime-cache boot or a same-organization managed archive |
 | POST | `/api/checkpoint-transfers/:transferId/export` | Stream a Paused source's public pair |
 | DELETE | `/api/checkpoint-transfers/:transferId` | Acknowledge cleanup after native consumers finish |
 

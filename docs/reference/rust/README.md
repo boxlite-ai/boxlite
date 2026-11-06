@@ -105,7 +105,7 @@ let runtime = BoxliteRuntime::default_runtime();
 | `remove` | `async fn remove(&self, id_or_name: &str, force: bool) -> BoxliteResult<()>` | Remove box completely |
 | `images` | `fn images(&self) -> BoxliteResult<ImageHandle>` | The images this runtime can boot from; never fails |
 | `import_checkpoint` | `async fn import_checkpoint(&self, dir: impl AsRef<Path>, options: CheckpointImportOptions) -> BoxliteResult<LiteBox>` | Create a new, `Paused` box from a verified checkpoint pair using prepared target mounts and an exact boot dependency; `CheckpointImportOptions { name: Option<String> }`. With REST, uploads the caller-local pair and creates the remote box; server capability required. See [checkpoints](../../guides/checkpoints.md) |
-| `inspect_checkpoint` | `fn inspect_checkpoint(dir: impl AsRef<Path>) -> BoxliteResult<CheckpointDependencies>` | Associated function; read memory checksums, pair digest and saved local dependency paths without creating a runtime or box |
+| `inspect_checkpoint` | `fn inspect_checkpoint(dir: impl AsRef<Path>) -> BoxliteResult<CheckpointDependencies>` | Associated function; parse memory metadata and saved local dependency paths without payload checksums or creating a runtime or box |
 | `checkpoints` | `fn checkpoints(&self) -> BoxliteResult<RuntimeCheckpointHandle>` | Persistent runtime/organization catalog: `list()`, `get(id_or_name)` and `remove(id_or_name, force)`, independent of the source's lifetime |
 | `create_from_checkpoint` | `async fn create_from_checkpoint(&self, id_or_name: &str, name: Option<String>) -> BoxliteResult<LiteBox>` | Create a new Paused box from a ready managed checkpoint; captured resources cannot be overridden; resume explicitly |
 

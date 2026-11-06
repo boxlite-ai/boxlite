@@ -1,4 +1,4 @@
-//! Version-9 pair verification. Verified descriptors stay pinned through use.
+//! Version-9/10 pair parsing. Descriptors stay pinned through use.
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -62,6 +62,7 @@ pub struct CheckpointDependencies {
     pub boot_disk_bytes: u64,
     pub boot_disk_sha256: String,
     pub qcow2_bytes: u64,
+    /// Legacy v9 digest, empty for v10. Never verified during import.
     pub qcow2_sha256: String,
     pub shares: Vec<ShareDependency>,
     /// Concrete local roots which must remain available for import and cold starts.
@@ -442,11 +443,14 @@ fn inspect_memory_checked(mut memory: &File) -> PairResult<CheckpointDependencie
     read_exact(memory, &mut prefix)?;
     if &prefix[..8] != b"KRUNVM\0\0" {
         return Err(input(
-            "unsupported checkpoint version/format; version 9 directory required",
+            "unsupported checkpoint version/format; version 9 or 10 directory required",
         ));
     }
-    if u32::from_le_bytes(prefix[8..].try_into().unwrap()) != 9 {
-        return Err(input("unsupported checkpoint version; version 9 required"));
+    let version = u32::from_le_bytes(prefix[8..].try_into().unwrap());
+    if !matches!(version, 9 | 10) {
+        return Err(input(
+            "unsupported checkpoint version; version 9 or 10 required",
+        ));
     }
     memory.seek(SeekFrom::Start(0)).map_err(PairFailure::Io)?;
     let mut header = [0; HEADER as usize];
@@ -455,6 +459,7 @@ fn inspect_memory_checked(mut memory: &File) -> PairResult<CheckpointDependencie
     let (total, metadata_bytes, payload_bytes) = (number(16), number(24), number(32));
     if u32::from_le_bytes(header[12..16].try_into().unwrap()) != HEADER as u32
         || header[144..].iter().any(|&b| b != 0)
+        || (version == 10 && header[80..144].iter().any(|&b| b != 0))
         || metadata_bytes == 0
         || metadata_bytes > 16 << 20
         || HEADER
@@ -464,11 +469,6 @@ fn inspect_memory_checked(mut memory: &File) -> PairResult<CheckpointDependencie
         || memory.metadata().map_err(PairFailure::Io)?.len() != total
     {
         return Err(input("memory envelope bounds/reserved fields mismatch"));
-    }
-    if digest_checked(memory, HEADER, metadata_bytes)? != header[48..80]
-        || digest_checked(memory, HEADER + metadata_bytes, payload_bytes)? != header[80..112]
-    {
-        return Err(input("memory checksum mismatch"));
     }
     let mut bytes = vec![0; metadata_bytes as usize];
     read_exact(memory, &mut bytes)?;
@@ -498,7 +498,7 @@ fn inspect_memory_checked(mut memory: &File) -> PairResult<CheckpointDependencie
     let boot = &metadata["disk_dependencies"][1]["external_readonly_boot"];
     let boot_hash: [u8; 32] = serde_json::from_value(boot["sha256"].clone()).map_err(input)?;
     Ok(CheckpointDependencies {
-        version: 9,
+        version,
         cpus: metadata["cpus"]
             .as_array()
             .expect("validated CPU table")
@@ -514,7 +514,11 @@ fn inspect_memory_checked(mut memory: &File) -> PairResult<CheckpointDependencie
             .ok_or_else(|| input("boot physical length missing"))?,
         boot_disk_sha256: hex::encode(boot_hash),
         qcow2_bytes: number(40),
-        qcow2_sha256: hex::encode(&header[112..144]),
+        qcow2_sha256: if version == 9 {
+            hex::encode(&header[112..144])
+        } else {
+            String::new()
+        },
         shares: shares(&metadata["fs"]).map_err(PairFailure::InvalidInput)?,
         local_roots: metadata["application"]["local_paths"]["shares"]
             .as_object()
@@ -540,7 +544,7 @@ pub(crate) fn open_checked(path: &Path) -> PairResult<VerifiedPair> {
         .is_dir()
     {
         return Err(input(
-            "unsupported checkpoint version/format; version 9 two-file directory required",
+            "unsupported checkpoint version/format; version 9 or 10 two-file directory required",
         ));
     }
     let directory = OpenOptions::new()
@@ -647,6 +651,18 @@ fn directory_names(directory: &File) -> PairResult<Vec<std::ffi::OsString>> {
 }
 
 impl VerifiedPair {
+    /// Bind capture/configuration identity without reading RAM or disk contents.
+    pub(crate) fn metadata_identity(&self) -> BoxliteResult<String> {
+        use std::os::unix::fs::FileExt;
+        let mut bytes = [0; 8];
+        self.memory.read_exact_at(&mut bytes, 24).map_err(invalid)?;
+        let length = u64::from_le_bytes(bytes);
+        if length == 0 || length > 16 << 20 {
+            return Err(invalid("memory metadata bound mismatch"));
+        }
+        Ok(hex::encode(digest(&self.memory, 0, HEADER + length)?))
+    }
+
     pub fn verify_disk(&self) -> BoxliteResult<()> {
         self.verify_disk_checked().map_err(PairFailure::legacy)
     }
@@ -654,14 +670,8 @@ impl VerifiedPair {
         if self.dependencies.qcow2_bytes < 104 {
             return Err(input("truncated QCOW2 header"));
         }
-        if self.disk.metadata().map_err(PairFailure::Io)?.len() != self.dependencies.qcow2_bytes
-            || hex::encode(digest_checked(
-                &self.disk,
-                0,
-                self.dependencies.qcow2_bytes,
-            )?) != self.dependencies.qcow2_sha256
-        {
-            return Err(input("paired QCOW2 length/checksum mismatch"));
+        if self.disk.metadata().map_err(PairFailure::Io)?.len() != self.dependencies.qcow2_bytes {
+            return Err(input("paired QCOW2 length mismatch"));
         }
         use std::os::unix::fs::FileExt;
         let mut header = [0; 104];

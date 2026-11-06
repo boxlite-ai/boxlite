@@ -1,6 +1,6 @@
 //! Private managed transfer. Public pair archives remain a different format.
 
-use super::{Catalog, CheckpointInfo, copy_boot};
+use super::{Catalog, CheckpointInfo};
 use crate::litebox::checkpoint::pair::{self, invalid};
 use crate::{BoxliteError, BoxliteResult};
 use serde::{Deserialize, Serialize};
@@ -37,13 +37,16 @@ fn require_space(directory: &Path, length: u64) -> BoxliteResult<()> {
 #[derive(Serialize, Deserialize, PartialEq, Eq)]
 struct Member {
     length: u64,
-    sha256: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    sha256: Option<String>,
 }
 #[derive(Serialize, Deserialize)]
 struct Manifest {
     version: u32,
     checkpoint: CheckpointInfo,
     members: BTreeMap<String, Member>,
+    #[serde(default)]
+    metadata_sha256: String,
 }
 
 fn members(directory: &Path) -> BoxliteResult<BTreeMap<String, Member>> {
@@ -63,16 +66,17 @@ fn members(directory: &Path) -> BoxliteResult<BTreeMap<String, Member>> {
                 name.to_owned(),
                 Member {
                     length: metadata.len(),
-                    sha256: hex::encode(pair::digest(&file, 0, metadata.len())?),
+                    sha256: None,
                 },
             ))
         })
         .collect()
 }
 
-pub(super) fn content_digest(directory: &Path) -> BoxliteResult<String> {
+pub(super) fn replay_identity(directory: &Path) -> BoxliteResult<String> {
     use sha2::{Digest, Sha256};
-    let bytes = serde_json::to_vec(&members(directory)?).map_err(invalid)?;
+    let identity = pair::open(&directory.join("pair"))?.metadata_identity()?;
+    let bytes = serde_json::to_vec(&(identity, members(directory)?)).map_err(invalid)?;
     Ok(hex::encode(Sha256::digest(bytes)))
 }
 
@@ -83,16 +87,16 @@ pub(super) fn pack(
 ) -> BoxliteResult<()> {
     let pair = pair::open(&directory.join("pair"))?;
     pair.verify_disk()?;
-    let members = members(directory)?;
-    if members["boot.raw"].length != pair.dependencies.boot_disk_bytes
-        || members["boot.raw"].sha256 != pair.dependencies.boot_disk_sha256
-    {
-        return Err(invalid("managed boot dependency length/checksum mismatch"));
+    let mut members = members(directory)?;
+    if members["boot.raw"].length != pair.dependencies.boot_disk_bytes {
+        return Err(invalid("managed boot dependency length mismatch"));
     }
+    members.get_mut("boot.raw").unwrap().sha256 = Some(pair.dependencies.boot_disk_sha256.clone());
     let manifest = Manifest {
-        version: 1,
+        version: 2,
         checkpoint: info.clone(),
         members,
+        metadata_sha256: pair.metadata_identity()?,
     };
     let bytes = serde_json::to_vec(&manifest).map_err(invalid)?;
     let parent = destination
@@ -103,7 +107,7 @@ pub(super) fn pack(
     {
         let mut encoder =
             zstd::stream::write::Encoder::new(staging.as_file_mut(), 1).map_err(invalid)?;
-        encoder.include_checksum(true).map_err(invalid)?;
+        encoder.include_checksum(false).map_err(invalid)?;
         let mut archive = tar::Builder::new(encoder);
         append(
             &mut archive,
@@ -164,7 +168,10 @@ pub(super) fn unpack(
         .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
         .open(source)
         .map_err(invalid)?;
-    let decoder = zstd::stream::read::Decoder::new(input).map_err(invalid)?;
+    let mut decoder = zstd::stream::read::Decoder::new(input).map_err(invalid)?;
+    decoder
+        .set_parameter(zstd::zstd_safe::DParameter::ForceIgnoreChecksum(true))
+        .map_err(invalid)?;
     let mut archive = tar::Archive::new(decoder);
     let mut seen = std::collections::BTreeSet::new();
     let mut manifest = None;
@@ -225,11 +232,31 @@ pub(super) fn unpack(
         return Err(invalid("incomplete managed archive"));
     }
     let manifest = manifest.ok_or_else(|| invalid("missing managed manifest"))?;
-    if manifest.version != 1 || manifest.members != members(stage.path())? {
-        return Err(invalid("managed manifest version or digest mismatch"));
+    let actual = members(stage.path())?;
+    if !matches!(manifest.version, 1 | 2)
+        || manifest.members.len() != actual.len()
+        || actual.iter().any(|(name, member)| {
+            manifest
+                .members
+                .get(name)
+                .is_none_or(|saved| saved.length != member.length)
+        })
+    {
+        return Err(invalid(
+            "managed manifest version or member length mismatch",
+        ));
     }
     let pair = pair::open(&stage.path().join("pair"))?;
     pair.verify_disk()?;
+    if manifest.version == 2 && manifest.metadata_sha256 != pair.metadata_identity()? {
+        return Err(invalid("managed checkpoint metadata identity mismatch"));
+    }
+    if actual["boot.raw"].length != pair.dependencies.boot_disk_bytes {
+        return Err(invalid("managed boot dependency length mismatch"));
+    }
+    if manifest.members["boot.raw"].sha256.as_deref() != Some(&pair.dependencies.boot_disk_sha256) {
+        return Err(invalid("managed boot dependency identity mismatch"));
+    }
     let resources: crate::BoxResources =
         serde_json::from_value(pair.dependencies.application["resources"].clone())
             .map_err(invalid)?;
@@ -239,15 +266,6 @@ pub(super) fn unpack(
             "managed checkpoint requires relocatable path metadata v2",
         ));
     }
-    // Verify boot without trusting the saved absolute path. The temporary copy
-    // is removed before publishing; the original validated member is retained.
-    let boot_check = stage.path().join("boot-check.raw");
-    copy_boot(
-        &stage.path().join("boot.raw"),
-        &boot_check,
-        &pair.dependencies,
-    )?;
-    std::fs::remove_file(boot_check).map_err(invalid)?;
     if manifest.checkpoint.cpus != u16::from(resources.cpus)
         || manifest.checkpoint.memory_bytes != pair.dependencies.memory_bytes
         || manifest.checkpoint.container_disk_bytes != pair.dependencies.container_disk_bytes
@@ -260,7 +278,7 @@ pub(super) fn unpack(
     if let Some(existing) = catalog.store.get(None, operation)? {
         if existing.id != operation
             || existing.status != "ready"
-            || content_digest(&catalog.directory(operation)?)? != content_digest(stage.path())?
+            || replay_identity(&catalog.directory(operation)?)? != replay_identity(stage.path())?
         {
             return Err(BoxliteError::InvalidState(
                 "managed import operation already names different content or state".into(),

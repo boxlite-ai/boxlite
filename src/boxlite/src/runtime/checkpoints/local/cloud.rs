@@ -6,7 +6,6 @@ use crate::runtime::options::{InboundNetworkConfig, NetworkMode, OutboundNetwork
 use crate::runtime::rt_impl::SharedRuntimeImpl;
 use crate::{BoxResources, BoxliteError, BoxliteResult, RootfsSpec};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use std::fs::{File, OpenOptions};
 use std::io::{Seek, SeekFrom};
 use std::os::unix::fs::OpenOptionsExt;
@@ -27,11 +26,12 @@ pub struct CloudCheckpointConfiguration {
     pub inbound: InboundNetworkConfig,
 }
 
-/// Verified native summary for a server-issued upload transfer identity.
+/// Parsed native summary for a server-issued upload transfer identity.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CloudCheckpointInspection {
     /// Admission-summary schema version, independent of the memory file format.
     pub version: u32,
+    /// Bounded envelope/metadata identity, not a payload integrity checksum.
     pub pair_sha256: String,
     pub memory_file_bytes: u64,
     pub qcow2_bytes: u64,
@@ -76,22 +76,6 @@ pub(crate) fn inspect(path: &Path) -> BoxliteResult<CloudCheckpointInspection> {
     pair.verify_disk_checked().map_err(PairFailure::cloud)?;
     let (inspection, _) = prepare(&pair, Origin::Upload)?;
     Ok(inspection)
-}
-
-fn fingerprint(pair: &VerifiedPair, origin: Origin) -> BoxliteResult<(String, u64)> {
-    let memory_length = pair.memory.metadata().map_err(invalid)?.len();
-    let disk_length = pair.disk.metadata().map_err(invalid)?.len();
-    let map = |error: PairFailure| match origin {
-        Origin::Upload => error.cloud(),
-        Origin::Managed => error.legacy(),
-    };
-    let mut hash = Sha256::new();
-    hash.update(b"boxlite-cloud-pair-v1\0");
-    hash.update(memory_length.to_le_bytes());
-    hash.update(pair::digest_checked(&pair.memory, 0, memory_length).map_err(map)?);
-    hash.update(disk_length.to_le_bytes());
-    hash.update(pair::digest_checked(&pair.disk, 0, disk_length).map_err(map)?);
-    Ok((hex::encode(hash.finalize()), memory_length))
 }
 
 /// The same validation and normalized policy feed preflight and native execution.
@@ -248,7 +232,8 @@ pub(crate) fn prepare(
     options
         .sanitize()
         .map_err(|error| origin.validation(error))?;
-    let (pair_sha256, memory_file_bytes) = fingerprint(pair, origin)?;
+    let pair_sha256 = pair.metadata_identity()?;
+    let memory_file_bytes = pair.memory.metadata().map_err(invalid)?.len();
     Ok((
         CloudCheckpointInspection {
             version: 1,
@@ -407,8 +392,10 @@ fn verify_boot(path: &Path, dependencies: &crate::CheckpointDependencies) -> Box
         .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
         .open(path)
         .map_err(invalid)?;
-    if !boot_matches(&file, dependencies)? {
-        return Err(invalid("trusted boot dependency length/checksum mismatch"));
+    if !file.metadata().map_err(invalid)?.is_file()
+        || file.metadata().map_err(invalid)?.len() != dependencies.boot_disk_bytes
+    {
+        return Err(invalid("trusted boot dependency length/type mismatch"));
     }
     Ok(file)
 }

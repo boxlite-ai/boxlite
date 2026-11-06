@@ -9,7 +9,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -327,11 +326,11 @@ func (s *CheckpointService) run(ctx context.Context, job CheckpointJob, record *
 				return e
 			}
 		}
-		digest, size, e := checkpointFileDigest(archive)
+		stat, e := os.Stat(archive)
 		if e != nil {
 			return e
 		}
-		boot, e := checkpointArchiveBootDigest(archive)
+		manifest, e := checkpointArchiveIdentity(archive)
 		if e != nil {
 			return e
 		}
@@ -339,9 +338,9 @@ func (s *CheckpointService) run(ctx context.Context, job CheckpointJob, record *
 			return checkpointStorageError(e)
 		}
 		result.CheckpointID = job.CheckpointID
-		result.ContentSHA256 = digest
-		result.BootDiskSHA256 = boot
-		result.SizeBytes = size
+		result.ContentSHA256 = manifest.MetadataSHA256
+		result.BootDiskSHA256 = manifest.Members["boot.raw"].SHA256
+		result.SizeBytes = stat.Size()
 		return nil
 	case "IMPORT_CHECKPOINT":
 		if !canonicalUUID(job.CheckpointID) || !canonicalUUID(job.OrganizationID) || !validDigest(job.ContentSHA256) {
@@ -356,12 +355,12 @@ func (s *CheckpointService) run(ctx context.Context, job CheckpointJob, record *
 			if e := s.store.Download(ctx, job.ArchiveURI, archive); e != nil {
 				return checkpointStorageError(e)
 			}
-			digest, _, e := checkpointFileDigest(archive)
+			manifest, e := checkpointArchiveIdentity(archive)
 			if e != nil {
 				return e
 			}
-			if digest != job.ContentSHA256 {
-				return checkpointError(sdk.ErrStorage, "managed checkpoint archive digest mismatch")
+			if manifest.MetadataSHA256 != job.ContentSHA256 {
+				return checkpointError(sdk.ErrStorage, "managed checkpoint metadata identity mismatch")
 			}
 			record.NativeID = job.OperationID
 			if e = writeCheckpointJSON(recordPath, record); e != nil {
@@ -386,17 +385,6 @@ func (s *CheckpointService) run(ctx context.Context, job CheckpointJob, record *
 	default:
 		return checkpointError(sdk.ErrInvalidArgument, "unknown checkpoint operation")
 	}
-}
-
-func checkpointFileDigest(path string) (string, int64, error) {
-	file, e := os.Open(path)
-	if e != nil {
-		return "", 0, e
-	}
-	defer file.Close()
-	h := sha256.New()
-	n, e := io.Copy(h, file)
-	return hex.EncodeToString(h.Sum(nil)), n, e
 }
 
 // CheckpointFailureFromError preserves the native error envelope in job

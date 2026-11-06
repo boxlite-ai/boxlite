@@ -7,14 +7,14 @@ use std::io::{Read, Seek, SeekFrom};
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
 
-/// Pack a verified pair into an anonymous temporary tar+zstd file.
+/// Pack a structurally valid pair into an anonymous temporary tar+zstd file.
 pub fn pack(directory: &Path) -> BoxliteResult<File> {
     let mut pair = pair::open(directory)?;
     require_relocatable(&pair)?;
     pair.verify_disk()?;
     let output = tempfile::tempfile().map_err(invalid)?;
     let mut encoder = zstd::stream::write::Encoder::new(output, 1).map_err(invalid)?;
-    encoder.include_checksum(true).map_err(invalid)?;
+    encoder.include_checksum(false).map_err(invalid)?;
     let mut archive = tar::Builder::new(encoder);
     for (name, file) in [(MEMORY, &mut pair.memory), (DISK, &mut pair.disk)] {
         file.seek(SeekFrom::Start(0)).map_err(invalid)?;
@@ -36,7 +36,7 @@ pub fn pack(directory: &Path) -> BoxliteResult<File> {
     Ok(output)
 }
 
-/// Decode and verify before publishing a new, caller-owned two-file directory.
+/// Decode and check format before publishing a new, caller-owned two-file directory.
 /// The destination must not exist. No network or VM operation runs here.
 pub fn unpack(mut input: File, destination: &Path) -> BoxliteResult<()> {
     let destination = std::path::absolute(destination).map_err(invalid)?;
@@ -59,7 +59,10 @@ pub fn unpack(mut input: File, destination: &Path) -> BoxliteResult<()> {
         .tempdir_in(&parent)
         .map_err(invalid)?;
     input.seek(SeekFrom::Start(0)).map_err(invalid)?;
-    let decoder = zstd::stream::read::Decoder::new(input).map_err(invalid)?;
+    let mut decoder = zstd::stream::read::Decoder::new(input).map_err(invalid)?;
+    decoder
+        .set_parameter(zstd::zstd_safe::DParameter::ForceIgnoreChecksum(true))
+        .map_err(invalid)?;
     let mut archive = tar::Archive::new(decoder);
     let mut members = std::collections::BTreeSet::new();
     for entry in archive.entries().map_err(invalid)?.raw(true) {
@@ -93,8 +96,8 @@ pub fn unpack(mut input: File, destination: &Path) -> BoxliteResult<()> {
     if members.len() != 2 {
         return Err(invalid("checkpoint transport requires exactly two members"));
     }
-    // tar stops at its first zero block. Drain the decoder to validate the
-    // zstd frame/trailer too, and reject hidden entries after the tar footer.
+    // tar stops at its first zero block. Drain the frame to reject truncation
+    // and hidden entries after the tar footer.
     let mut decoder = archive.into_inner();
     let mut buffer = [0; 8192];
     let mut tail = 0;
