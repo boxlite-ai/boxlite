@@ -500,11 +500,10 @@ function SshControls({
                     }
                   >
                     <div className="space-y-3">
-                      {credentials && (
-                        <p className="text-muted-foreground">
-                          Save the key before leaving this page, then enter its path below.
-                        </p>
-                      )}
+                      <p id={`${keyPathId}-hint`} className="text-muted-foreground">
+                        {credentials && 'Download and save your private key before leaving this page. '}
+                        Find the private key file on your computer, copy its full path, and paste it below.
+                      </p>
                       {identityNotice && (
                         <p role="status" className="text-muted-foreground">
                           {identityNotice}
@@ -512,6 +511,7 @@ function SshControls({
                       )}
                       <Input
                         id={keyPathId}
+                        aria-describedby={`${keyPathId}-hint`}
                         value={keyPath}
                         onChange={(event) => {
                           setKeyPath(event.target.value)
