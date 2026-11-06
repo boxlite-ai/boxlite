@@ -1,13 +1,6 @@
 /* Copyright 2026 BoxLite AI; SPDX-License-Identifier: AGPL-3.0 */
 // Infrastructure modules are replaced below; keep their import graphs out of
 // this HTTP test while exercising the real Passport strategies and MCP module.
-// FastMCP's optional standalone listener is unused: Nest owns the real HTTP socket.
-// Its ESM-only dependency cannot load in this CommonJS Jest runner.
-jest.mock('mcp-proxy', () => ({
-  startHTTPServer: () => {
-    throw new Error('Standalone MCP listener is not allowed')
-  },
-}))
 jest.mock('../auth/auth.module', () => ({ AuthModule: class AuthModule {} }))
 jest.mock('../organization/organization.module', () => ({ OrganizationModule: class OrganizationModule {} }))
 jest.mock('../box/services/runner.service', () => ({ RunnerService: class RunnerService {} }))

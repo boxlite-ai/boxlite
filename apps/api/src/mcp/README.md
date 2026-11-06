@@ -119,8 +119,10 @@ six tools, structured REST failures, concurrent identities, permission checks,
 input validation and session cleanup. Adapter tests cover response size,
 redirect refusal, disconnect cancellation and the real timeout.
 
-The unused standalone `mcp-proxy` listener is stubbed in CommonJS Jest; Nest owns
-the HTTP socket. `xsschema` and the reference parser are transformed for Jest.
+The unused standalone `mcp-proxy` listener is mapped to a shared stub in the API's
+CommonJS Jest configuration, covering both MCP and `AppModule` importers; Nest owns
+the HTTP socket. The stub throws if invoked. `xsschema` and the reference parser
+are transformed for Jest.
 The production server loads the actual published packages.
 
 Real runtime acceptance additionally requires `make -C apps/infra-local up`,
