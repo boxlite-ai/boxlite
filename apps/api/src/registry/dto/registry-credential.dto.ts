@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { ApiProperty, ApiPropertyOptional, ApiSchema } from '@nestjs/swagger'
+import { ApiProperty, ApiPropertyOptional, ApiSchema, PickType } from '@nestjs/swagger'
 import { IsIn, IsNotEmpty, IsOptional, IsString, Matches, MaxLength } from 'class-validator'
 import { RegistryCredential } from '../entities/registry-credential.entity'
 import { RegistryCredentialKind } from '../enums/registry-credential-kind.enum'
@@ -51,6 +51,10 @@ export class CreateRegistryCredentialDto {
   @MaxLength(8192)
   password: string
 }
+
+/** Rotation replaces the login without changing which repositories it covers. */
+@ApiSchema({ name: 'UpdateRegistryCredential' })
+export class UpdateRegistryCredentialDto extends PickType(CreateRegistryCredentialDto, ['username', 'password']) {}
 
 /** A login as the API reports it. There is no password field to leave out. */
 @ApiSchema({ name: 'RegistryCredential' })

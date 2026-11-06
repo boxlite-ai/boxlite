@@ -156,12 +156,14 @@ export class BoxStateWaiterService implements OnModuleDestroy {
       const box = await this.boxService.findOneByIdOrName(boxId, organizationId)
       const { progress } = await this.boxService.toBoxDto(box)
       if (progress) {
-        return new BoxPreparingImageTimeoutError(message, progress)
+        return new BoxPreparingImageTimeoutError(message, progress, boxId)
       }
     } catch (error) {
       this.logger.warn(`Failed to read what box ${boxId} was waiting on at timeout: ${error}`)
     }
-    return new RequestTimeoutException(message)
+    // Startup outlives this wait. Keep its identity even if the progress read
+    // failed so callers can inspect the existing box without creating another.
+    return new RequestTimeoutException({ message, boxId })
   }
 
   private assertNotFailed(state: BoxState, errorReason?: string | null) {

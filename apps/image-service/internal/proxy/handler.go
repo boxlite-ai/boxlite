@@ -115,11 +115,10 @@ func upstreamRefusal(route Route, presentedLogin bool) string {
 // if the upstream makes one. It also reports whether that answer presented the
 // organization's login.
 //
-// The token is tried first and the challenge is only read when the upstream
-// objects, so a warm token costs no extra round trip and a cold one costs
-// exactly the 401 that names the scope to ask for. The login is looked up on
-// that path too, so neither the control plane nor Secret Manager is asked
-// while a token is warm.
+// The current private credential version is checked before reusing a bearer.
+// A matching token avoids another exchange and secret read; a rotated version
+// needs the normal 401 challenge and a new exchange. Lookup failure is closed,
+// even when a bearer is still warm.
 func (p *registryProxy) forward(
 	ctx context.Context,
 	route Route,
@@ -128,7 +127,11 @@ func (p *registryProxy) forward(
 	from caller,
 ) (*http.Response, bool, error) {
 	header := upstreamHeader(inbound)
-	token, _ := p.tokens.cached(from.runnerID, route.Org, route.Upstream)
+	credential, err := p.credentials.lookup(ctx, from, route.Org, route.PublishedHost, route.Upstream.Repository)
+	if err != nil {
+		return nil, false, err
+	}
+	token, _ := p.tokens.cached(from.runnerID, route.Org, route.Upstream, credential.secretVersion)
 	response, err := p.upstream.Pull(ctx, method, route.Upstream, route.Request, merge(header, bearer(token)))
 	if err != nil || response.StatusCode != http.StatusUnauthorized {
 		return response, false, err
@@ -140,7 +143,15 @@ func (p *registryProxy) forward(
 		return nil, false, errors.New("upstream refused the pull and named no way to authenticate")
 	}
 
-	login, err := p.credentials.find(ctx, from, route.Org, route.PublishedHost, route.Upstream.Repository)
+	login, err := p.credentials.loginFrom(ctx, credential)
+	if errors.Is(err, ErrCredentialUnavailable) {
+		// Rotation may have retired the selected version during the challenge round trip.
+		credential, err = p.credentials.lookup(ctx, from, route.Org, route.PublishedHost, route.Upstream.Repository)
+		if err != nil {
+			return nil, false, err
+		}
+		login, err = p.credentials.loginFrom(ctx, credential)
+	}
 	if err != nil {
 		return nil, false, err
 	}

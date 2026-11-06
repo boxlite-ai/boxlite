@@ -334,7 +334,7 @@ Handle to a running or stopped box.
 |----------|------|-------------|
 | `id` | `str` | Unique box identifier (ULID format) |
 | `network` | `NetworkHandle` | Box-scoped tunnel operations |
-| `ssh` | `SshHandle` | SSH control (`configure`/`status`/`disable`) |
+| `ssh` | `SshHandle` | SSH control (`configure`/`enable`/`status`/`disable`) |
 
 #### Methods
 
@@ -427,11 +427,14 @@ Detailed state information for a box.
 
 ## SSH control
 
-Both `boxlite.Box` and `SyncBox` expose `box.ssh`.
+Both `boxlite.Box` and `SyncBox` expose `box.ssh`. Synchronous calls omit `await`;
+for example, `box.ssh.enable()` returns the enabled `SshStatus`. Enable works
+locally and over REST, requires saved configuration, and never starts the box.
 
 | Operation | Signature | Description |
 |-----------|-----------|-------------|
 | Configure | `await box.ssh.configure(config) -> SshStatus` | Apply SSH configuration |
+| Enable | `await box.ssh.enable() -> SshStatus` | Enable saved configuration on a running box; preserve healthy connections |
 | Query | `await box.ssh.status() -> SshStatus` | Return SSH status |
 | Disable | `await box.ssh.disable() -> SshStatus` | Disable SSH |
 

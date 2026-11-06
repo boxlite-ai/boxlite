@@ -20,6 +20,7 @@ import (
 	"github.com/boxlite-ai/runner/cmd/runner/config"
 	"github.com/boxlite-ai/runner/internal"
 	"github.com/boxlite-ai/runner/internal/cpumonitor"
+	"github.com/boxlite-ai/runner/internal/memorymonitor"
 	"github.com/boxlite-ai/runner/internal/metrics"
 	"github.com/boxlite-ai/runner/pkg/api"
 	"github.com/boxlite-ai/runner/pkg/backend"
@@ -116,6 +117,7 @@ func run() int {
 	boxliteClient, err := blclient.NewClient(ctx, blclient.ClientConfig{
 		Logger:                       logger,
 		HomeDir:                      cfg.BoxliteHomeDir,
+		KernelPath:                   cfg.KernelPath,
 		InsecureRegistries:           insecureRegs,
 		RegistryProxy:                registryProxy,
 		AWSRegion:                    cfg.AWSRegion,
@@ -145,6 +147,7 @@ func run() int {
 	boxSyncService.StartSyncProcess(ctx)
 
 	var observeCPU func(time.Time, float64)
+	var observeMemory func(context.Context, time.Time, float64)
 	if cfg.BoxliteApiUrl != "" && cfg.ApiToken != "" {
 		report, err := cpumonitor.NewReporter(cfg.BoxliteApiUrl, cfg.ApiToken, &http.Client{
 			Timeout:       10 * time.Second,
@@ -171,6 +174,32 @@ func run() int {
 		monitorDone := make(chan struct{})
 		go func() { defer close(monitorDone); monitor.Run(ctx) }()
 		defer func() { cancel(); <-monitorDone }()
+
+		memoryReport, err := memorymonitor.NewReporter(cfg.BoxliteApiUrl, cfg.ApiToken, &http.Client{
+			Timeout:       10 * time.Second,
+			CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse },
+		})
+		if err != nil {
+			logger.Error("Failed to initialize memory incident reporter", "error", err)
+			return 2
+		}
+		memoryMonitor := memorymonitor.New(logger, func(ctx context.Context) ([]memorymonitor.Box, error) {
+			boxes, err := boxliteClient.ListInfo(ctx)
+			if err != nil {
+				return nil, err
+			}
+			result := make([]memorymonitor.Box, 0, len(boxes))
+			for _, box := range boxes {
+				if box.Running {
+					result = append(result, memorymonitor.Box{ID: box.Name, RuntimeID: box.ID, Image: box.Image, PID: box.PID, StartedAt: box.StartedAt})
+				}
+			}
+			return result, nil
+		}, memoryReport)
+		observeMemory = memoryMonitor.Observe
+		memoryDone := make(chan struct{})
+		go func() { defer close(memoryDone); memoryMonitor.Run(ctx) }()
+		defer func() { cancel(); <-memoryDone }()
 	}
 
 	metricsCollector := metrics.NewCollector(metrics.CollectorConfig{
@@ -181,6 +210,7 @@ func run() int {
 		CPUUsageSnapshotInterval:           cfg.CPUUsageSnapshotInterval,
 		AllocatedResourcesSnapshotInterval: cfg.AllocatedResourcesSnapshotInterval,
 		ObserveCPU:                         observeCPU,
+		ObserveMemory:                      observeMemory,
 	})
 	metricsCollector.Start(ctx)
 

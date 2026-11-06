@@ -168,7 +168,10 @@ async fn ssh_rest_journey() {
         .expect("get stopped box")
         .expect("stopped box still exists");
     assert_eq!(recovered.ssh().status().await.unwrap(), disabled());
-    assert!(!recovered.ssh().disable().await.unwrap().enabled);
+    assert!(matches!(
+        recovered.ssh().disable().await,
+        Err(BoxliteError::InvalidState(_))
+    ));
     let stopped = recovered.info().await.unwrap();
     assert_eq!(stopped.status, BoxStatus::Stopped);
     assert!(stopped.pid.is_none(), "observation must not restart the VM");
@@ -287,7 +290,7 @@ async fn ssh_rest_auth_errors_and_startup_gates() {
     );
 
     // A stopped box with AutoResume disabled is refused for configure, but
-    // status and disable still observe it without resuming.
+    // status observes it and disable rejects it without resuming.
     let frozen = runtime
         .create(options(None, false), None)
         .await
@@ -302,7 +305,10 @@ async fn ssh_rest_auth_errors_and_startup_gates() {
         .expect_err("stopped box with AutoResume disabled must be refused");
     assert!(error.to_string().contains("AutoResume disabled"), "{error}");
     assert_eq!(frozen.ssh().status().await.unwrap(), disabled());
-    assert!(!frozen.ssh().disable().await.unwrap().enabled);
+    assert!(matches!(
+        frozen.ssh().disable().await,
+        Err(BoxliteError::InvalidState(_))
+    ));
     let info = frozen.info().await.unwrap();
     assert_eq!(info.status, BoxStatus::Stopped);
     assert!(info.pid.is_none(), "observation must not resume the box");

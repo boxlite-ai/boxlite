@@ -14,6 +14,21 @@ Cloud deployment runs on Compute Engine or EC2 with nested KVM, listening on `:3
 behind the control-plane API. See [infrastructure architecture](../infra/docs/architecture.md)
 and [runner operations](../infra/docs/runners.md).
 
+`BOXLITE_KERNEL_PATH` selects an operator-installed kernel for newly created
+Boxes. It must be an absolute readable regular file; invalid settings fail
+startup. The Runner enables the local `custom-kernel` RC capability through
+the Go/C SDK and preserves the guest privilege policy separately. An unset
+path keeps the bundled default. Cloud deployment downloads and verifies the
+file; the Runner itself performs no download. Existing Boxes retain their
+saved boot configuration. Keep `BOXLITE_KERNEL_PATH` configured while managing
+custom-kernel Boxes: clearing it removes the feature opt-in needed to restart them.
+The `--kernel` flag belongs to the local CLI; the Runner uses the environment
+variable. See [cloud kernel operations](../infra/docs/runners.md#cloud-kernel).
+
+The health response includes `custom_kernel: "supported"` to identify binaries
+that implement this setting. It describes build capability; deployment also
+checks the running process's kernel environment and listening socket.
+
 For the system-wide context (CDN, load balancers, where the runner fits in
 the request path), see [`apps/README.md`](../README.md).
 
@@ -483,8 +498,9 @@ the counters maintained in `pkg/common/` (operation counts, etc.).
 | Method | Path | Controller | Purpose |
 | --- | --- | --- | --- |
 | `POST` | `/v1/boxes/:boxId/ssh` | `BoxliteSSHConfigure` | Strict `SshConfig` parse → one `SSH().Configure` on a running box |
+| `POST` | `/v1/boxes/:boxId/ssh/enable` | `BoxliteSSHEnable` | Enable saved configuration on a running box; otherwise `409` |
 | `GET` | `/v1/boxes/:boxId/ssh` | `BoxliteSSHStatus` | `SshStatus`; stopped boxes answer disabled from persisted state |
-| `DELETE` | `/v1/boxes/:boxId/ssh` | `BoxliteSSHDisable` | Idempotent disable; never boots |
+| `DELETE` | `/v1/boxes/:boxId/ssh` | `BoxliteSSHDisable` | Disable on a running box; otherwise `409`. Repeatable while running; never boots |
 
 - **Running-state checks.** Configure on a box observed as not running answers
   `409 invalid_state`; the API resumes a box first when its policy allows. The
@@ -492,9 +508,12 @@ the counters maintained in `pkg/common/` (operation counts, etc.).
   The shared helper retains the tunnel's known race: after a runner restart,
   a fresh handle can still boot a box that exits after these checks. Preventing
   that race requires a runtime operation that cannot implicitly start a box.
-- **No handle churn.** Status and disable read a stopped or never-started box's
-  state from the runtime and answer the zero disabled status without fetching a
-  handle (see `evictBox`). Other states, such as paused, answer `409`.
+- **No handle churn.** Status reads a stopped or never-started box's state
+  and returns the zero disabled status without fetching a handle (see `evictBox`).
+  Enable and disable instead return `409 invalid_state`; they never claim a
+  saved-state change succeeded on an idle box. Other states, such as paused,
+  also answer `409`. The SDK prevents these mutations from starting a box even
+  if it stops after the runner's checks.
 - **Strict body.** The parser matches member names exactly and rejects unknown,
   case-variant, duplicate, missing, and `null` members (`ca` may be `null`).
   Every rejection is the fixed `400 invalid SSH configuration`, so private key
@@ -523,16 +542,23 @@ runner does not push state for boxes the API isn't tracking.
 [`internal/metrics/collector.go`](internal/metrics/collector.go) runs independent
 sampling and logging loops:
 
-- **CPU usage snapshot** every `CPUUsageSnapshotInterval` — keeps a
-  ring buffer of the last `WindowSize` samples so `/info` can return a
-  smoothed CPU % without re-sampling on each request.
+- **CPU usage snapshot** every `CPUUsageSnapshotInterval` (default five seconds),
+  including the first reading after startup, regardless of host load. The ring
+  retains the last `WindowSize` samples (default 60, about five minutes) for the
+  CPU average returned by `/info` and healthchecks.
 - **Allocated resources snapshot** every
   `AllocatedResourcesSnapshotInterval` — queries `Boxlite.ListInfo()`
   and sums the CPU/RAM allocations across running boxes.
 - **Resource log** every minute — emits `event=runner.resource.usage` with
-  `cpuPercent` (available samples from the last minute), current `memoryPercent`,
+  `cpuPercent` (the maximum successful CPU sample from the last minute), current `memoryPercent`,
   `diskPercent`, `diskUsedGiB` and `diskTotalGiB`. Failed collection emits a warning.
 - **Runtime counters** every 15 seconds — refreshes aggregate runtime metrics.
+
+For example, CPU readings of 40% and 80% within the minute produce `cpuPercent=80`
+in the resource log; `/info` still returns the mean of its retained history.
+Each CPU reading covers a counter interval, so this is the largest sampled
+interval, not an instantaneous peak. The minute cutoff is inclusive. If no CPU
+sample falls within it, collection logs a warning instead of using older data.
 
 `Collect(ctx)` reads the current values with a short timeout and is
 called from both `/info` and the v2 healthcheck. Disk numbers come from
@@ -582,6 +608,45 @@ reports wait in memory. Network errors, 429 and 5xx retry every 30 seconds with 
 ten-second timeout; other failures and queue overflow are logged and dropped.
 Restart loses pending captures/reports. Deploy the migration and API before runners.
 This feature records evidence only; it does not stop boxes or change scheduling.
+
+### Memory incident snapshots
+
+[`internal/memorymonitor`](internal/memorymonitor/) uses the existing minute
+resource sampler. Every valid host memory reading strictly above 80% immediately
+scans running Boxes and reports up to five, ordered by current memory bytes
+descending and business Box ID ascending for ties. Consecutive high minutes
+produce separate events. At or below 80%, or on an invalid host reading, no scan
+occurs. CPU's five-minute qualification and two-minute windows are unchanged.
+
+Host admission uses the same raw `gopsutil.VirtualMemory.UsedPercent` reading as
+the resource log, before rounding for health metrics. CPU/disk collection failures
+do not suppress that memory observation. `/info` and healthchecks do not trigger
+additional scans. Linux uses `memory.current` from the matching Box cgroup v2,
+including VM descendants and charged cache; swap is separate. macOS uses process
+RSS only when the process was created no later than `BoxInfo.StartedAt` and its
+identity remains unchanged across the read. Missing start times are unreadable.
+These accounting scopes differ, and Box totals need
+not sum to the host's used-memory value. This is evidence of large consumers,
+not proof of the cause of host pressure.
+
+Each item carries `boxId`, the snapshot's `image`, and decimal-string
+`memoryBytes`. Fewer than five readable Boxes produce a shorter array, and no
+readable Boxes produce `boxes=[]`. Zero-byte readings are retained. Failed
+enumeration, unreadable or mismatched cgroups, process identity changes, or an
+expired scan mark `samplingComplete=false`; successful observations still report.
+Reads are sequential rather than an atomic host-wide snapshot. One-minute
+sampling can miss short memory spikes.
+
+When API URL and Runner token are configured, completed snapshots enter a separate
+32-report queue for [internal ingestion](../API.md#runner-memory-incidents).
+Scans have a ten-second context deadline and do not wait for network uploads.
+Cancellation releases the sampler even if a Linux kernel read is blocked. At most
+one such read remains in flight; later scans wait for its slot within their own
+deadline, reporting incomplete observations if it has not finished.
+Requests time out after ten seconds; network errors, 429, and 5xx retry after
+30 seconds with the original payload and event ID. Other failures and queue
+overflow are logged and dropped. Missed ticks are not replayed, and process
+restart loses queued reports. Deploy the migration and API before Runners.
 
 ### v2 job poller + executor
 
@@ -659,8 +724,9 @@ the Swagger UI (development only).
 | `GET` | `/v1/boxes/:boxId/files?path=<src>` | Download tar |
 | `GET` | `/v1/boxes/:boxId/metrics` | Per-box metrics |
 | `POST` | `/v1/boxes/:boxId/ssh` | Configure guest SSH once; running boxes only |
+| `POST` | `/v1/boxes/:boxId/ssh/enable` | Enable saved guest SSH configuration on a running box; otherwise `409`; never boots |
 | `GET` | `/v1/boxes/:boxId/ssh` | Guest SSH status; never boots |
-| `DELETE` | `/v1/boxes/:boxId/ssh` | Disable guest SSH; never boots |
+| `DELETE` | `/v1/boxes/:boxId/ssh` | Disable guest SSH on a running box; otherwise `409`; never boots |
 
 ---
 
@@ -700,6 +766,15 @@ development against the Rust SDK directly, see `boxlite serve` at
 ---
 
 ## Tests
+
+SSH control boundary tests run without a VM using
+`make test:apps:runner FILTER=TestSSHControlLifecycle`. They verify that enable
+and disable reject idle boxes before fetching a handle, send one bodyless
+request per running-box call, and preserve every returned status field.
+`make test:apps:runner FILTER=TestIntegrationSSHServesTheRealClient` additionally
+requires a working VM runtime and OpenSSH: it reconnects after enable using the
+original trusted host key and account key. HTTP fixtures alone do not verify
+that the guest listener restarts.
 
 ```bash
 # All runner tests

@@ -54,6 +54,8 @@ vi.mock('./BoxNetworkSection', () => ({
   BoxNetworkSection: () => null,
 }))
 
+vi.mock('./BoxSshTab', () => ({ BoxSshTab: () => <div>SSH controls</div> }))
+
 vi.mock('@/hooks/useConfig', () => ({
   useConfig: () => ({}),
 }))
@@ -182,6 +184,17 @@ describe('BoxDetails refresh', () => {
 
     await flushReactWork()
   }
+
+  it('opens the SSH tab without remounting the shell', async () => {
+    await renderBoxDetails()
+    const sshTab = [...document.querySelectorAll<HTMLButtonElement>('[role="tab"]')].find(
+      (tab) => tab.textContent === 'SSH',
+    )!
+    await act(async () => sshTab.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0 })))
+    expect(sshTab.getAttribute('aria-selected')).toBe('true')
+    expect(document.body.textContent).toContain('SSH controls')
+    expect(mocks.terminalMounts).toHaveBeenCalledTimes(1)
+  })
 
   it('reconnects an active terminal when the detail refresh button is clicked', async () => {
     await renderBoxDetails()

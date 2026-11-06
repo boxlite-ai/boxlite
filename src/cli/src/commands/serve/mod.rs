@@ -1484,7 +1484,8 @@ fn auth_allows(expected: Option<&str>, path: &str, bearer: Option<&str>) -> bool
 ///   box — a client watching `status` once a second would otherwise reset the
 ///   idle window before every sweep and AutoStop would never fire;
 /// - `GET`/`HEAD`/`DELETE` on `/ssh`, which observe or disable SSH without
-///   starting the box. `POST /ssh` configures it and does count;
+///   starting the box; `/ssh/enable` also never starts it or counts as activity.
+///   `POST /ssh` configures it and does count;
 /// - `DELETE`, which is removing the box, not using it.
 ///
 /// `/stop` is excluded because it cannot matter: AutoStop ignores a box that is
@@ -1495,7 +1496,7 @@ fn activity_box_id<'a>(method: &Method, path: &'a str) -> Option<&'a str> {
         Some((box_id, tail)) => (box_id, tail),
         None => (rest, ""),
     };
-    if box_id.is_empty() || matches!(tail, "metrics" | "stop") {
+    if box_id.is_empty() || matches!(tail, "metrics" | "stop" | "ssh/enable") {
         return None;
     }
     // A read of the box resource itself is metadata, not use.
@@ -1947,7 +1948,11 @@ fn build_router(state: Arc<AppState>) -> Router {
             "/v1/boxes/{box_id}/stop",
             post(boxes::stop_box),
         )
-        // Guest SSH control. POST may start the box; GET/DELETE only observe.
+        // Guest SSH control. Only configuration may start the box.
+        .route(
+            "/v1/boxes/{box_id}/ssh/enable",
+            post(ssh::enable_ssh),
+        )
         .route(
             "/v1/boxes/{box_id}/ssh",
             post(ssh::configure_ssh)

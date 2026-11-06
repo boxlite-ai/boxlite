@@ -10,6 +10,58 @@ import { AdminPlatformOverviewService } from '../services/platform-overview.serv
 import { AdminProviderController } from './provider.controller'
 
 describe('AdminProviderController', () => {
+  it('keeps registration and exact-org inventory reads behind existing Admin authorization', async () => {
+    const list = jest.fn().mockResolvedValue({ items: [], nextCursor: null, limit: 200, observedAt: null })
+    let role = 'admin'
+    const module = await Test.createTestingModule({
+      controllers: [AdminProviderController],
+      providers: [
+        { provide: AdminOrganizationOverviewService, useValue: { list } },
+        { provide: AdminPlatformOverviewService, useValue: {} },
+      ],
+    })
+      .overrideGuard(CombinedAuthGuard)
+      .useValue({
+        canActivate: (context) => {
+          context.switchToHttp().getRequest().user = { userId: 'existing-admin', role }
+          return true
+        },
+      })
+      .compile()
+    const app = module.createNestApplication()
+    app.setGlobalPrefix('api')
+    await app.listen(0)
+    try {
+      const { port } = app.getHttpServer().address() as AddressInfo
+      const base = `http://127.0.0.1:${port}/api/admin/organizations`
+      const queries = [
+        'boxCountScope=all&createdFrom=2026-10-01T00:00:00Z&createdTo=2026-10-02T00:00:00Z',
+        'boxCountScope=all&organizationId=00000000-0000-4000-8000-000000000001',
+        '',
+      ]
+      for (const query of queries) expect((await fetch(`${base}?${query}`)).status).toBe(200)
+      expect(list).toHaveBeenNthCalledWith(
+        1,
+        expect.objectContaining({
+          boxCountScope: 'all',
+          createdFrom: '2026-10-01T00:00:00.000Z',
+          createdTo: '2026-10-02T00:00:00.000Z',
+        }),
+      )
+      expect(list).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({
+          boxCountScope: 'all',
+          organizationId: '00000000-0000-4000-8000-000000000001',
+        }),
+      )
+      for (role of ['user', 'proxy', 'billing'])
+        for (const query of queries) expect((await fetch(`${base}?${query}`)).status).toBe(403)
+      expect(list).toHaveBeenCalledTimes(3)
+    } finally {
+      await app.close()
+    }
+  })
   it('returns 404 for an organization missing from the read projection', async () => {
     const controller = new AdminProviderController({ detail: jest.fn().mockResolvedValue(null) } as never, {} as never)
     const response = { setHeader: jest.fn() }
@@ -103,6 +155,16 @@ describe('AdminProviderController', () => {
       expect(schemas?.AdminOrganizationCreator).toMatchObject({
         properties: { email: { type: 'string', nullable: true } },
       })
+      expect(schemas?.AdminOrganizationCreator).not.toHaveProperty('properties.emailVerified')
+      expect(schemas?.AdminOrganizationDetail).toMatchObject({
+        properties: { creator: { allOf: [{ $ref: '#/components/schemas/AdminOrganizationCreator' }] } },
+      })
+      for (const name of ['AdminOrganizationOverview']) {
+        const creator = (schemas?.[name] as { properties: { creator: { allOf: { $ref: string }[] } } }).properties
+          .creator
+        const creatorName = creator.allOf[0].$ref.split('/').at(-1) ?? ''
+        expect(schemas?.[creatorName]).toHaveProperty('properties.emailVerified.type', 'boolean')
+      }
       expect(schemas?.AdminOrganizationDetail).toMatchObject({
         required: expect.arrayContaining(['members', 'boxes']),
         properties: { createdAt: { type: 'string' }, activation: { nullable: true } },
@@ -117,13 +179,25 @@ describe('AdminProviderController', () => {
         spec.paths['/api/admin/organizations'].get?.parameters?.map(
           (parameter) => 'name' in parameter && parameter.name,
         ),
-      ).toEqual(['q', 'cursor', 'limit', 'createdTo', 'createdFrom'])
+      ).toEqual(['q', 'cursor', 'limit', 'createdTo', 'createdFrom', 'boxCountScope', 'organizationId'])
       expect(
         spec.paths['/api/admin/organizations/{organizationId}'].get?.parameters?.map(
           (parameter) => 'name' in parameter && parameter.name,
         ),
       ).toEqual(['organizationId', 'memberCursor', 'boxCursor', 'sectionLimit', 'include'])
       expect(list).toHaveBeenCalledWith(expect.objectContaining({ createdFrom: '2026-10-01T00:00:00.000Z' }))
+      expect((await fetch(`${base}?projection=registration`)).status).toBe(400)
+      expect(spec.paths['/api/admin/organizations/registrations']).toBeUndefined()
+      expect(spec.paths['/api/admin/organizations'].get?.responses['200']).toMatchObject({
+        content: { 'application/json': { schema: { $ref: '#/components/schemas/AdminOrganizationOverviewPage' } } },
+      })
+      expect((await fetch(`${base}?boxCountScope=all&q=example&cursor=next&limit=20`)).status).toBe(200)
+      expect(list).toHaveBeenLastCalledWith(
+        expect.objectContaining({ boxCountScope: 'all', query: 'example', cursor: 'next', limit: 20 }),
+      )
+      expect((await fetch(`${base}/registrations`)).status).toBe(400)
+      expect((await fetch(`${base}?boxCountScope=all`)).status).toBe(200)
+      expect(list).toHaveBeenLastCalledWith(expect.objectContaining({ boxCountScope: 'all' }))
       const id = '00000000-0000-4000-8000-000000000001'
       const missing = await fetch(`${base}/${id}`)
       expect(missing.status).toBe(404)
@@ -155,6 +229,10 @@ describe('AdminProviderController', () => {
       expect(await capability.json()).toEqual(identities)
       for (const path of [
         '?unknown=value',
+        '?projection=',
+        '?projection=unknown',
+        '?projection=registration&projection=registration',
+        '?projection=registration&boxCountScope=all',
         '?view=metadata',
         '?limit=0',
         '?createdFrom=2026-10-02T00:00:00Z&createdTo=2026-10-01T00:00:00Z',

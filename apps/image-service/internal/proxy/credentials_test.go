@@ -39,6 +39,72 @@ func (p passwords) Read(_ context.Context, version string) (string, error) {
 	return password, nil
 }
 
+type passwordReaderFunc func(context.Context, string) (string, error)
+
+func (f passwordReaderFunc) Read(ctx context.Context, version string) (string, error) {
+	return f(ctx, version)
+}
+
+func TestSecretRetiredDuringChallengeRefreshesCredentialOnce(t *testing.T) {
+	for _, scenario := range []struct {
+		name       string
+		unreadable bool
+		forbidden  bool
+		status     int
+		reads      int
+	}{
+		{"rotated", false, false, http.StatusOK, 2},
+		{"replacement unreadable", true, false, http.StatusServiceUnavailable, 2},
+		{"refresh forbidden", false, true, http.StatusForbidden, 1},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			const version, password = "registry-credential-rotated", "rotated-test-token"
+			upstream := newStubUpstream(t)
+			router, proxy, plane, _ := privateProxy(t, upstream)
+			available := passwords{}
+			if !scenario.unreadable {
+				available[version] = password
+			}
+			reads := 0
+			proxy.credentials.secrets = passwordReaderFunc(func(ctx context.Context, version string) (string, error) {
+				reads++
+				return available.Read(ctx, version)
+			})
+			upstream.server.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/token" && r.Header.Get("Authorization") == "" {
+					// The lookup already chose the old version; retire it during the challenge round trip.
+					plane.logins.Store(acmeOrg+" ghcr.io acme/app", version)
+					if scenario.forbidden {
+						plane.hosting.Delete(runnerKey + " " + acmeOrg)
+					}
+				}
+				upstream.serve(w, r)
+			})
+
+			response := pull(router, http.MethodGet, privatePath, runnerKey)
+
+			if response.Code != scenario.status {
+				t.Fatalf("status = %d, want %d: %s", response.Code, scenario.status, response.Body.String())
+			}
+			if reads != scenario.reads {
+				t.Errorf("secret reads = %d, want %d", reads, scenario.reads)
+			}
+			if lookups := plane.lookups.Load(); lookups != 2 {
+				t.Errorf("credential lookups = %d, want 2", lookups)
+			}
+			exchanges := tokenRequests(upstream)
+			if scenario.status == http.StatusOK {
+				want := "Basic " + base64.StdEncoding.EncodeToString([]byte("acme-bot:"+password))
+				if len(exchanges) != 1 || exchanges[0].authorization != want {
+					t.Fatalf("exchanges = %+v, want one with the replacement login", exchanges)
+				}
+			} else if len(exchanges) != 0 {
+				t.Errorf("failed refresh exchanged %d tokens", len(exchanges))
+			}
+		})
+	}
+}
+
 // clock is a time a test moves by hand.
 type clock struct{ at time.Time }
 
@@ -283,8 +349,7 @@ func TestOneRunnersTokenIsNotAnothersToUse(t *testing.T) {
 	upstream := newStubUpstream(t)
 	router, _, plane, _ := privateProxy(t, upstream)
 
-	// acme's runner looks the login up and buys a token with it; both are now
-	// warm, and the stranger's pull comes while they are.
+	// Acme's runner buys a token; the stranger's pull arrives while it is warm.
 	if response := pull(router, http.MethodGet, privatePath, runnerKey); response.Code != http.StatusOK {
 		t.Fatalf("GET %s = %d: %s", privatePath, response.Code, response.Body.String())
 	}
@@ -341,15 +406,12 @@ func TestAPasswordThatCannotBeReadFailsThePullAsUnavailable(t *testing.T) {
 	}
 }
 
-func TestARotatedLoginIsPresentedBeforeTheCachedAnswerExpires(t *testing.T) {
+func TestARotatedLoginIsPresentedAfterBearerExpiry(t *testing.T) {
 	upstream := newStubUpstream(t)
 	router, proxy, plane, moment := privateProxy(t, upstream)
 	pull(router, http.MethodGet, privatePath, runnerKey)
 
-	// There is no update, so rotating a password is a delete and an add: the
-	// old version is destroyed and the control plane names a new one, while
-	// this proxy still holds the answer that named the old. The token the old
-	// password bought has lapsed too, so the next pull exchanges again.
+	// After the bearer expires, authentication must use the committed replacement.
 	const rotatedVersion, rotatedPassword = "registry-credential-acme-2", "ghp_rotated-not-a-real-token"
 	plane.logins.Store(acmeOrg+" ghcr.io acme/app", rotatedVersion)
 	proxy.credentials.secrets = passwords{rotatedVersion: rotatedPassword}
@@ -367,5 +429,55 @@ func TestARotatedLoginIsPresentedBeforeTheCachedAnswerExpires(t *testing.T) {
 	}
 	if lookups := plane.lookups.Load(); lookups != 2 {
 		t.Errorf("the control plane was asked %d times, want once more after the old password went", lookups)
+	}
+}
+
+func TestRegistryRotationInvalidatesWarmTokensAcrossProxies(t *testing.T) {
+	upstream := newStubUpstream(t)
+	first, firstProxy, plane, _ := privateProxy(t, upstream)
+	second, secondProxy := testProxy(t, upstream, plane, "ghcr.io")
+	secondProxy.credentials = newCredentialFinder(plane.client(), passwords{acmeVersion: acmePassword}, time.Minute)
+	for _, router := range []*gin.Engine{first, second} {
+		if response := pull(router, http.MethodGet, privatePath, runnerKey); response.Code != http.StatusOK {
+			t.Fatalf("warm-up pull = %d", response.Code)
+		}
+	}
+	if got := len(tokenRequests(upstream)); got != 2 {
+		t.Fatalf("warm-up exchanges = %d, want one per proxy", got)
+	}
+
+	const version, password = "registry-credential-replacement", "replacement-test-token"
+	plane.logins.Store(acmeOrg+" ghcr.io acme/app", version)
+	// Retirement can fail after update commits. Both secrets remain readable,
+	// and neither proxy's bearer TTL has advanced.
+	for _, proxy := range []*registryProxy{firstProxy, secondProxy} {
+		proxy.credentials.secrets = passwords{acmeVersion: acmePassword, version: password}
+	}
+	for index, router := range []*gin.Engine{first, second} {
+		response := pull(router, http.MethodGet, privatePath, runnerKey)
+		if response.Code != http.StatusOK {
+			t.Fatalf("proxy %d after rotation = %d: %s", index, response.Code, response.Body.String())
+		}
+		exchanges := tokenRequests(upstream)
+		if len(exchanges) != 3+index {
+			t.Fatalf("proxy %d reused a pre-rotation bearer: exchanges = %d, want %d", index, len(exchanges), 3+index)
+		}
+		want := "Basic " + base64.StdEncoding.EncodeToString([]byte("acme-bot:"+password))
+		if exchanges[len(exchanges)-1].authorization != want {
+			t.Fatal("replacement exchange did not use the updated login")
+		}
+	}
+}
+
+func TestWarmPrivateTokenFailsClosedWhenVersionCannotBeChecked(t *testing.T) {
+	upstream := newStubUpstream(t)
+	router, proxy, plane, _ := privateProxy(t, upstream)
+	if response := pull(router, http.MethodGet, privatePath, runnerKey); response.Code != http.StatusOK {
+		t.Fatalf("warm-up pull = %d", response.Code)
+	}
+	proxy.credentials.api = plane.unreachable()
+	response := pull(router, http.MethodGet, privatePath, runnerKey)
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("unchecked warm bearer served a pull: status = %d, want 503", response.Code)
 	}
 }

@@ -1,5 +1,5 @@
 import { BadRequestException } from '@nestjs/common'
-import { isISO8601 } from 'class-validator'
+import { isISO8601, isUUID } from 'class-validator'
 import { createHash } from 'crypto'
 import { cursorFor, cursorValue, timeCursorKey, timeCursorValue } from './pagination'
 
@@ -8,6 +8,8 @@ export type RegistrationQuery = {
   cursor?: string
   createdFrom?: string
   createdTo?: string
+  boxCountScope?: 'all'
+  organizationId?: string
   limit: number
 }
 
@@ -48,12 +50,24 @@ const allow = (query: Record<string, unknown>, keys: string[]) => {
 }
 
 export const parseRegistrationQuery = (query: Record<string, unknown>): RegistrationQuery => {
-  allow(query, ['q', 'cursor', 'limit', 'createdFrom', 'createdTo'])
+  allow(query, ['q', 'cursor', 'limit', 'createdFrom', 'createdTo', 'boxCountScope', 'organizationId'])
   const search = text(query.q, 200)
   const createdFrom = instant(query.createdFrom)
   const createdTo = instant(query.createdTo)
+  const boxCountScope = text(query.boxCountScope, 20)
+  const organizationId = text(query.organizationId, 36)
+  if (organizationId !== undefined && (!isUUID(organizationId) || search !== undefined)) return invalid()
+  if (boxCountScope !== undefined && boxCountScope !== 'all') return invalid()
   if ((search && search.length < 2) || (createdFrom && createdTo && createdFrom >= createdTo)) return invalid()
-  return { query: search, cursor: text(query.cursor, 2048), limit: limit(query.limit), createdFrom, createdTo }
+  return {
+    query: search,
+    cursor: text(query.cursor, 2048),
+    limit: limit(query.limit),
+    createdFrom,
+    createdTo,
+    ...(boxCountScope ? { boxCountScope: 'all' as const } : {}),
+    ...(organizationId ? { organizationId } : {}),
+  }
 }
 
 export const parseOrganizationSections = (query: Record<string, unknown>) => {
@@ -80,10 +94,13 @@ export const parseOrganizationSections = (query: Record<string, unknown>) => {
   }
 }
 
-const filterHash = (query: RegistrationQuery) =>
-  createHash('sha256')
-    .update(JSON.stringify([query.query ?? null, query.createdFrom ?? null, query.createdTo ?? null]))
-    .digest('hex')
+const filterHash = (query: RegistrationQuery) => {
+  // Bind inventory scope and exact organization to the page cursor.
+  const filters: unknown[] = [query.query ?? null, query.createdFrom ?? null, query.createdTo ?? null]
+  if (query.boxCountScope || query.organizationId)
+    filters.push(query.boxCountScope ?? null, query.organizationId ?? null)
+  return createHash('sha256').update(JSON.stringify(filters)).digest('hex')
+}
 
 export const registrationCursor = (query: RegistrationQuery, row: { id: string; createdAt: Date }): string =>
   cursorFor(JSON.stringify({ v: 1, filter: filterHash(query), after: cursorFor(timeCursorKey(row.createdAt, row.id)) }))

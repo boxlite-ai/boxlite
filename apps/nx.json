@@ -140,7 +140,12 @@
     },
     "@nx-go/nx-go:test": {
       "cache": true,
-      "inputs": ["default", "^goProduction", { "dependentTasksOutputFiles": "**/*", "transitive": true }]
+      "inputs": [
+        "default",
+        "{projectRoot}/**/*_test.go",
+        "^goProduction",
+        { "dependentTasksOutputFiles": "**/*", "transitive": true }
+      ]
     },
     "@nx-go/nx-go:lint": {
       "cache": true,

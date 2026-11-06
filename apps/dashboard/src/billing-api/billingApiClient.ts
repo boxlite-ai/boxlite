@@ -21,7 +21,6 @@ import {
   PaymentUrl,
   Plan,
   SeriesGranularity,
-  SignupCreditDelivery,
   UsageFundingBucket,
   UsagePrices,
   WalletTopUpRequest,
@@ -87,17 +86,10 @@ export class BillingApiClient {
     return response.data
   }
 
-  /** The billing API calls the signup credit the registration coupon, hence the route. */
-  public async getSignupCreditDelivery(organizationId: string, signal?: AbortSignal): Promise<SignupCreditDelivery> {
-    const response = await this.axiosInstance.get(
-      `/organization/${organizationId}/coupon/register`,
-      signal ? { signal, timeout: 15_000 } : undefined,
-    )
-    return response.data
-  }
-
   public async redeemCoupon(organizationId: string, couponCode: string): Promise<string> {
-    const response = await this.axiosInstance.post(`/organization/${organizationId}/redeem-coupon/${couponCode}`)
+    const response = await this.axiosInstance.post(
+      `/organization/${organizationId}/redeem-coupon/${encodeURIComponent(couponCode)}`,
+    )
     return response.data?.message || 'Coupon redeemed successfully'
   }
 

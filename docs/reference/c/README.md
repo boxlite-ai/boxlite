@@ -1257,10 +1257,14 @@ callback convention.
 | Function | Additional input | Callback |
 |----------|------------------|----------|
 | `boxlite_box_ssh_configure` | `const char* config_json` | `CBoxSshConfigureCb` |
+| `boxlite_box_ssh_enable` | None | `CBoxSshEnableCb` |
 | `boxlite_box_ssh_status` | None | `CBoxSshStatusCb` |
 | `boxlite_box_ssh_disable` | None | `CBoxSshDisableCb` |
 
-All three callbacks receive `CSshStatus*`. Its corresponding release function
+Enable requires a running box and saved configuration, preserves healthy
+connections, and never starts the box. It works locally and over REST.
+
+All four callbacks receive `CSshStatus*`. Its corresponding release function
 is `boxlite_free_ssh_status()`; the existing [memory management rules](#memory-management)
 apply.
 

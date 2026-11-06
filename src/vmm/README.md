@@ -1,17 +1,18 @@
 # boxlite-vmm
 
 BoxLite's native VMM. On Linux x86_64, `Vm::new` validates the machine
-configuration, creates the KVM VM with the legacy devices, registers guest RAM
-and loads the kernel and boot data; `Vm::run` runs every vCPU until the guest powers off or resets, or a
+configuration, creates the KVM VM with legacy devices and a reporting balloon,
+registers guest RAM and loads the kernel and boot data; `Vm::run` runs every vCPU until the guest powers off or resets, or a
 `StopHandle` stops it, and returns how the VM ended (see [Lifecycle](#lifecycle)).
 `Error` wraps `boxlite_hypervisor::Error` with its cause chain intact. The
 [VMM design](../../docs/contributing/architecture/vmm/README.md) specifies the
 lifecycle API, memory layout, buses, interrupts, and threads.
 
-`Vm`, `VmConfig`, `VmExit`, `StopHandle`, `Error` and `Result` are public, as
-are `BusKind` and `Conflict`, which `Error::ChipsetConflicts` carries; M2's
-engine adapter will consume that API and inspect the error's host cause.
-`Vm::new(config, console)` adds COM1 and the i8042, and the guest's COM1
+`Vm`, `VmConfig`, `ReclaimPolicy`, `VmExit`, `StopHandle`, `Error` and `Result`
+are public, as are `BusKind` and `Conflict`, which `Error::ChipsetConflicts`
+carries; M2's engine adapter will consume that API and inspect the error's host
+cause.
+`Vm::new(config, console)` adds COM1, the i8042 and virtio-balloon; COM1
 output reaches `console` through the
 [console queue](#legacy-devices-and-the-console).
 
@@ -26,29 +27,73 @@ boxlite-vmm
 
 | Module | Responsibility |
 | --- | --- |
-| `vm` | `Vm<H>`: validate the configuration, allocate and register RAM on host backend `H`, own the devices in a `Chipset`, load the boot data, and run the vCPUs until the first event; `StopHandle` and `VmExit` |
+| `vm` | `Vm<H>`: validate the configuration, allocate and register RAM on host backend `H`, compose the devices through `with_devices` and `devices::add_all`, load the boot data, and run the vCPUs until the first event; `with_backend` is the test seam; `StopHandle` and `VmExit` |
 | `boot` | Linux x86_64 boot: `prepare` loads the pinned ELF kernel through linux-loader, places an optional initramfs at the top of RAM, writes the zero page, E820 map, command line and MP table, and sets up the 64-bit entry state (GDT, identity page tables, registers) |
-| `config` | `VmConfig { vcpu_count, memory_mib, kernel, cmdline, initramfs }` and its bounds: 1..=64 vCPUs, 1..=3072 MiB, a printable-ASCII command line under 2048 bytes |
+| `config` | `VmConfig { vcpu_count, memory_mib, kernel, cmdline, initramfs, disks }` and its bounds: 1..=64 vCPUs, 1..=3072 MiB, a printable-ASCII command line under 2048 bytes, at most 8 `DiskConfig { path, format, read_only }` entries |
 | `error` | VMM errors that keep the hypervisor's cause chain, including a virtio device that cannot continue |
 | `memory` | `GuestRam`: owned guest RAM, the RAM layout, and the registration lifetime rules |
 | `cpu_features` | x86_64 guest CPUID for each vCPU and the boot MSRs |
 | `vcpu` | x86_64 vCPU workers: create and configure each vCPU, hold them at a start gate, run the guest and dispatch its exits until the VM ends |
 | `chipset` | `ChipsetBuilder`, the one registry of ranges and interrupt lines, and `Chipset`, the read-only machine it builds |
 | `bus` | `Bus`, `BusRange` and `BusDevice`, and `Buses::dispatch`, which serves the MMIO and port exits of a vCPU |
-| `virtio` | The virtio common infrastructure: the synchronous device contract (`VirtioDevice`, `DeviceSpec`, `DeviceEvent`, `ActivationContext`, `EventRegistrar`, `Waker`, `WorkerControl`), the `VirtQueues` facade (dense preparation and validation, EVENT_IDX, exactly-once deferred completion, notification drain, the stored guest-memory Arc and negotiated indirect flag, and `save`/`restore` stubs that report snapshots unsupported until M8), the 4 KiB virtio-mmio transport (register file, feature negotiation, queue configuration and activation, Status=0 reset, post-activation queue-write rejection), the MMIO interrupt handle, the default snapshot methods, and the virtio workers (`VirtioWorkers` over a `WorkerRuntime`; `SharedRuntime` runs every device's events on one thread) |
+| `virtio` | The virtio common infrastructure: the synchronous device contract (`VirtioDevice`, `DeviceSpec`, `DeviceEvent`, `ActivationContext`, `EventRegistrar`, `Waker`, `WorkerControl`), the `VirtQueues` facade (dense preparation and validation, EVENT_IDX, exactly-once deferred completion, notification drain, the stored guest-memory Arc and negotiated indirect flag, and `save`/`restore` stubs that report snapshots unsupported until M8), the 4 KiB virtio-mmio transport (register file, feature negotiation, queue configuration and activation, Status=0 reset, post-activation queue-write rejection), `mmio::add_device`, which attaches any device through that transport, the MMIO interrupt handle, the default snapshot methods, and the virtio workers (`VirtioWorkers` over a `WorkerRuntime`; `SharedRuntime` runs every device's events on one thread) |
 | `irq` | `IrqChip`, the host interrupt controller as devices see it, and `IrqLine`, one device line; HVF and KVM provide the controller, WHP (M10) only local APICs |
-| `devices` | The console queue, and on x86_64 the 8250 UART at COM1 and the i8042 reset, with `add_legacy_devices`, which adds them to the chipset |
+| `devices` | `devices::add_all`, the one composition helper (add a device type as one `add_slot_device` line), the console queue, internal virtio-net device, output-only virtio console device, and on x86_64 the 8250 UART at COM1 and the i8042 reset, with `add_legacy_devices` |
+| `devices::balloon` | Reporting-only `VirtioBalloon`: configuration, negotiation, whole-chain prevalidation and a `ReclaimPolicy` chosen when the device is constructed; `devices::add_all` composes it after the disks, so it never renumbers them |
+| `virtio::worker` | One lazy shared poller/thread, coalesced generation-bound queue kicks, backend readiness, stop barriers and VM shutdown |
 | `events` | `Event`, which ends the VM, `EventSender`, which also latches the stop, and `EventLoop`, the poller that waits for the first event |
 
-The x86_64 KVM boot and lifecycle are in place; the M1 devices, arm64 and HVF
-follow in M1. The virtio common infrastructure (`virtio`) is in place for M2:
-the device contract, queue adapter, MMIO transport, interrupt handle and the
-shared virtio workers are tested with test devices, and `Vm` owns them;
-production adds no virtio device yet. Real device backends, the
-BoxLite engine adapter, engine selection, and `native` feature wiring follow
-in M2.
+The x86_64 KVM boot and lifecycle are in place. The virtio common
+infrastructure (`virtio`) is in place for M2: the device contract, queue
+adapter, MMIO transport, interrupt handle and the shared virtio workers are
+tested with test devices, and `Vm` owns them. The first production device
+(`virtio::blk`, composed by `devices::add_all`) is tested with a real kernel.
+The output-only virtio console device is implemented and tested against real
+guest RAM and split virtqueues, but it is not wired into `Vm` yet; neither is
+the reporting balloon, so `Vm` composes only the block device for now. Linux
+arm64 and macOS arm64 remain required M2 qualification gates, blocked by their
+boot dependencies (#1698/#2103); unit tests or x86_64 evidence do not qualify
+those platforms or complete M2. The BoxLite engine adapter, engine selection
+and `native` feature wiring are separate M2 work.
 Neither new crate depends on `boxlite-shared`, and both are unpublished while
 their interfaces are being established.
+
+## Virtio network device
+
+`devices::net::Net::new(socket_path, mac)` implements an internal RX/TX queue
+pair over the Linux gvproxy QEMU stream. It compiles on Unix for socket tests;
+macOS gvproxy uses a different wire protocol. VM assembly and
+snapshots remain out of scope; `Vm::new` does not yet attach this device.
+
+- Device ID 1, RX queue 0, TX queue 1, up to 256 entries each; only MAC is
+  offered by Net. The unchanged transport owns VERSION_1 negotiation.
+- Guest buffers contain a modern 12-byte virtio header; the stream carries a
+  four-byte big-endian length and 14–65,549 Ethernet bytes. Offloads are rejected;
+  unknown TX flag bits and unused TX `num_buffers` are ignored. RX sets it to 1.
+- The existing `VirtQueues::drain` defers chains into bounded metadata queues;
+  `complete` returns each head exactly once. Only one packet per direction is
+  buffered. Partial socket I/O retains its offset, and an undersized RX chain
+  is returned with zero length without writing a truncated packet.
+- A Net-local socket source registers both read/write interests through the
+  unchanged `EventRegistrar`. Unix edge-triggered polling permits fixed
+  interests; a queue kick resumes RX when guest buffers become available.
+- Each direction has a 256-iteration budget. Budget exhaustion registers a new
+  socket source before removing the old one, rechecking readiness without
+  changing the worker. RX delivers a complete packet before yielding, so remaining
+  work needs socket I/O or a guest kick; WouldBlock never triggers busy retries.
+- Errors latch `NeedsReset`; error/reset/drop deregisters and closes the stream.
+  Reset discards outstanding metadata and packet buffers. A new activation needs
+  a listening backend; gvproxy accepts one stream per instance.
+
+Completion interrupts follow the unchanged queue facade. Its current dependency
+ignores the ordinary NO_INTERRUPT flag without EVENT_IDX; fixing that shared
+behavior is a separate task. Net does not claim stopped or whole-VM snapshots.
+
+Run `make test:unit:vmm` and `make clippy:vmm`. Tests exercise real Unix sockets,
+guest RAM, descriptor chains, backpressure, reset, the unchanged MMIO
+transport, and continuation on the production shared worker. They do not qualify the real gvproxy bridge or a Linux guest.
+See the [design study](../../docs/contributing/investigations/2026-11-02-vmm-virtio-net.md)
+for the scope and interface trade-offs.
 
 ## Guest RAM
 
@@ -70,12 +115,13 @@ vm-memory and registers it with the host VM. Three rules keep the backend's
 - The backing is released only after every registration is gone. Dropping a
   `GuestRam` that may still be registered leaks the backing instead.
 
-`Vm::with_backend` runs validate, allocate, create the host VM, then map, so
-every early return drops the host VM before the RAM; `Vm`'s `Drop` unmaps as a
-backstop. Unit tests drive these paths with a recording mock backend. The
-`memory` and `vm` tests and that backend live in `tests/` and are included as
-unit-test modules, which keeps them outside the counted sources and the
-coverage denominator; `config` and `error` keep inline test modules.
+`Vm::with_devices` runs validate, allocate, create the host VM, compose the
+devices, then map, so every early return drops the host VM before the RAM;
+`Vm`'s `Drop` unmaps as a backstop. `with_backend` is the same constructor
+without the mutable configuration, for tests. The `memory` and `vm` tests and
+that backend live in `tests/` and are included as unit-test modules, which
+keeps them outside the counted sources and the coverage denominator; `config`
+and `error` keep inline test modules.
 
 ## Kernel loading
 
@@ -233,6 +279,34 @@ The boot with every interrupt dropped and the stopped boot end in
 `StopRequested`. Every other boot must end in `GuestReset`: `panic=-1
 reboot=k` turns a panic, and the restart, into the i8042 reset.
 
+## Vsock building blocks
+
+The Unix-only `virtio::vsock` module provides the wire codec, captured writable
+guest buffers and registered Unix socket sources. The connection state machine,
+backend routing, device facade and snapshots are subsequent layers of the
+[vsock design](https://github.com/boxlite-ai/boxlite/issues/2312).
+There is no attached vsock device at this layer.
+
+The codec uses explicit little-endian fields and rejects truncated packets or
+payloads above 64 KiB. A captured buffer owns checked descriptor metadata and
+uses the chain's total capacity: a 4096-byte chain writes a 44-byte header and
+up to 4052 stream bytes. The caller retains any unsent tail. Header-only buffers
+can carry controls; data returns zero bytes, while shorter headers require reset.
+Callers own nonblocking standard-library Unix streams and listeners directly.
+`Registration::stream` and `Registration::listener` clone a handle for the poller;
+a private enum holds those two source types with their requested interests.
+Device I/O takes no socket mutex and needs no generic wrapper or explicit fd
+conversion. Each registration costs one extra file descriptor. Dropping the
+registration deregisters and closes only the polling copy, leaving caller I/O
+usable. Closing the caller's socket first is safe too; the polling copy keeps it
+open until deregistration. Failed registration leaves the original socket intact.
+Callers must set accepted streams nonblocking before worker use. This ownership
+change has no measured throughput claim.
+
+`make test:unit:vmm FILTER=vsock` checks encoding, packet bounds, guest-memory
+scatter delivery, real Unix stream/listener readiness, and registration cleanup
+in either ownership order, including rejected registrations.
+
 ## Lifecycle
 
 `Vm::run` runs on x86_64, against any backend that implements
@@ -383,13 +457,12 @@ through `ActivationContext`.
   notification that arrived between Linux's read and acknowledgement.
   `raise_config` also bumps the configuration generation; a reset keeps it
   monotonic.
-- **Worker slot.** The transport drives its device's slot in the
-  [virtio workers](#virtio-workers) through `WorkerControl`: `prepare` before
-  activation, whose registrar and waker reach the device in its
-  `ActivationContext`, `start` after it, `kick(index)` for each in-range
-  `QueueNotify` once active, and `stop` before `Status=0` resets the device. A
-  failed activation or `start` calls `cancel_prepare`; a failed `stop` leaves
-  the device unreset.
+- **Worker generations.** `prepare` supplies a generation-bound registrar,
+  waker and queue continuation; `start` admits dispatch after activation.
+  QueueNotify sets a coalesced queue bit. `stop` prevents new callbacks and
+  waits for admitted callbacks/registrations before reset; only VM-wide
+  shutdown joins the shared thread. Failed activation cancellation also waits
+  before rollback; barrier failure retains resources and takes Fatal.
 - **Errors.** `NeedsReset` sets `DEVICE_NEEDS_RESET` and raises the
   configuration interrupt; `Fatal` sends `Event::DeviceFailed` with
   `Error::VirtioDevice` and never stops the worker slot synchronously. The
@@ -405,8 +478,8 @@ replace the shared one without changing the transport, the devices or `Vm`.
 
 - **One thread.** `SharedRuntime` owns one `mio::Poll`, its one `Waker`, and
   one `virtio-worker` thread that starts at the first `start`. Every device's
-  `on_event` runs there under the device lock, so a blocking call stalls every
-  other device: `on_event` must not block.
+  `on_event` runs there under the device lock. A synchronous request can block
+  other devices; the common one-chain budget bounds work count, not duration.
 - **Generations.** Each slot is stopped, prepared, running, halted, stopping
   or failed. `prepare` opens a generation and clears its kicks; `stop` and
   `cancel_prepare` close it with its sources, and kicks and sources never
@@ -415,8 +488,9 @@ replace the shared one without changing the transport, the devices or `Vm`.
 - **Kicks.** `kick(index)` sets the queue's bit and wakes the poller only when
   the bit was clear. Each pass delivers one `QueueKick` per set bit, so kicks
   that arrive before their event runs coalesce, and one that arrives during
-  the event runs in the next pass. The poller rechecks every second, so a
-  failed wake-up delays a kick instead of losing it.
+  the event runs in the next pass. A generation-bound continuation uses the same
+  kick bitmap; all current-pass ready queues and backend events run first.
+  The poller rechecks every second if wake-up fails.
 - **Backend sources.** A device registers a source through the generation's
   `EventRegistrar` and gets its `SourceId`; each readiness edge arrives as
   `BackendReady(id)`, so the device reads the source until it would block. A
@@ -434,6 +508,216 @@ replace the shared one without changing the transport, the devices or `Vm`.
 - **Shutdown.** `shutdown` closes every source, wakes the thread and waits up
   to 300 s for it to exit before it joins it. A timeout reports
   `Error::VirtioWorker` with `TimedOut`, and a later call retries.
+
+## Device composition
+
+`devices::add_all` is the one place that names device types. `Vm::new` calls it
+through `Vm::with_devices`; the helper adds the legacy platform devices, then
+each configured device type in slot order, and finally announces every slot on
+the kernel command line.
+
+- **One line per device.** `add_slot_device` takes the next `Slot`, runs the
+  device's attach function, and records the slot for `announce`. Adding a
+  device type is one such line in `add_all`; a device that must keep slot 0
+  goes before the disk loop.
+- **One attach path.** `virtio::mmio::add_device` claims the window and line,
+  adds the device's worker slot and builds the `MmioTransport`; every
+  virtio-mmio device uses it, so the wiring is not copied into each device
+  module.
+- **Test seam.** `Vm::with_backend` keeps the old closure signature for tests
+  that add mock, conflict or legacy devices directly; `with_devices` hands the
+  closure the mutable `VmConfig` so `add_all` can announce slots.
+
+## Virtio block device
+
+`virtio::blk` is the first production virtio device: one request queue over
+the [virtio-mmio transport](#virtio-mmio-transport) and the
+[virtio workers](#virtio-workers), with the image format handled by
+[imago](https://crates.io/crates/imago) (`sync` feature, so no tokio).
+`VmConfig::disks` lists the disks; `devices::add_all` calls `blk::add_disk` for
+each one, which opens the image and attaches it in the slot `add_slot_device`
+took, and then announces that slot on the kernel command line.
+
+- **Slots.** `virtio::mmio::Slots` hands out `(window, line)` pairs in
+  order: window `i` is `0xd000_0000 + i * 4 KiB`, line `i` is GSI `5 + i`,
+  19 slots in all (the legacy range above COM1 and below the MSI space, as
+  Firecracker and libkrun allocate it). `Slot::cmdline_arg` renders the
+  `virtio_mmio.device=4K@<base>:<gsi>` argument the kernel probes, and
+  `announce` appends one per slot under the command-line budget, so the
+  chipset claim and the kernel's view come from the same value. Disks take
+  slots in `VmConfig::disks` order, so disk 0 is `/dev/vda`, disk 1 is
+  `/dev/vdb`, and so on.
+- **Configuration.** `DiskConfig { path, format: Raw | Qcow2, read_only }`;
+  the format is stated, never probed from the file. A qcow2 image opens the
+  backing chain its header names. At most 8 disks; `blk::add_disk` fails with
+  `Error::OpenDisk` for an image it cannot open and `add_all` fails with
+  `Error::InvalidCommandLine` when the line leaves no room for the device
+  arguments.
+- **Features.** `VERSION_1`, `SEG_MAX` (254: the queue size 256 minus the
+  header and status), `INDIRECT_DESC`; a writable disk adds `FLUSH` and
+  `DISCARD`, a read-only one `RO`. `WRITE_ZEROES`, `EVENT_IDX` and multiple
+  queues are not offered. The 60-byte configuration space carries the
+  capacity in sectors, `seg_max`, and the discard limits; one discard covers
+  at most 128 MiB, and a read past the end returns zeros, while writes are
+  refused.
+- **Backend contract.** `blk::backend::DiskBackend` is the seam a disk
+  engine implements: `disk_info` once after open; `event_source` at every
+  activation, registered with the worker generation when it is `Some`;
+  `submit(token, Request)` per parsed chain, answering `Done(CompletedRequest)`
+  inline or `Pending`; `completions` on each `BackendReady` edge, drained
+  until empty; `flush` on reset and quiesce, with the worker stopped. A
+  `Request` owns its bounce buffer, and a completion returns it with the
+  status byte, so a backend can keep requests across events.
+- **Request lifecycle.** On `QueueKick(0)` the device drains the queue:
+  `request::parse` reads the 16-byte header and the OUT or discard payload
+  from the readable descriptors and records the writable ones as the
+  `WriteTargets` for IN data and the status byte. A chain the backend must not
+  see (wrong direction, short header, misaligned or out-of-range transfer,
+  a transfer over the 4 MiB bounce limit, an unnegotiated or unknown type)
+  is finished at once with `IOERR` or `UNSUPP`; a chain without a status
+  byte is a `NeedsReset`. A `Done` completion writes the results and the
+  chain is used with `data + 1` bytes for a successful read, 1 otherwise. A
+  `Pending` chain is deferred: `blk::inflight` keeps its head and targets
+  by token until the completion arrives, when `VirtQueues::complete` adds
+  the used entry. The interrupt is raised exactly when `drain` or `complete`
+  says so.
+- **Writes.** With `FLUSH` negotiated, `FLUSH` flushes and syncs the image
+  and writes complete when the format layer took them; without it every
+  OUT syncs before `OK`. `DISCARD` takes one 16-byte segment with no flags
+  and at most 128 MiB, so a conforming guest splits a larger range; imago
+  zeroes what the format cannot discard, and a qcow2 image frees the
+  clusters without punching the host file.
+- **Reset.** `Status=0` stops the worker slot, then `reset` deregisters the
+  backend source, fails the device with `Fatal` if a request is still in
+  flight (no completion can arrive any more, and the guest may already
+  reuse that memory), flushes, and forgets the activation. The imago
+  backend finishes every request inline, so its table is always empty; a
+  bounded wait comes with the first asynchronous engine.
+- **Known limits.** The imago backend runs on the shared worker thread, so
+  a slow disk stalls every other virtio device while a request runs; a
+  thread-pool or io_uring engine behind the same contract is a follow-up.
+  Discards on qcow2 do not return host space. Snapshots stay
+  `Unsupported`.
+
+## Virtio console
+
+`devices::virtio_console::VirtioConsole` is the output-only virtio console
+port and shares `ConsoleWriter`/`ConsoleWorker` with COM1.
+
+- **Shape.** Device ID 3, one RX and one TX queue with a maximum of 256
+  entries, a 12-byte zero configuration space, and no device feature bits;
+  the transport owns `VIRTIO_F_VERSION_1`, so only the split ring is offered.
+  Activation requires a ready TX queue. RX is left untouched: the device
+  neither reads it nor publishes used entries for it.
+- **TX.** A kick validates the whole descriptor chain from a host-side
+  snapshot before copying anything. It rejects writable descriptors,
+  non-empty ranges outside guest RAM, indirect descriptors the driver did not
+  negotiate, cycles, and a head already deferred in the batch. A zero-length
+  descriptor is valid whatever address it carries because the device never
+  reads it. Any failure is
+  `NeedsReset` and emits no prefix of that chain. Valid chain bytes are copied
+  in fixed 4 KiB chunks into the shared 64 KiB console queue; a full queue
+  drops its oldest bytes and a closed one drops new bytes, and both count the
+  loss, so a slow or broken sink never delays the guest's completion. Each accepted head is completed
+  once, in order, with used length 0; the queue facade decides whether to
+  raise the interrupt.
+- **Stop and reset.** `quiesce` stops accepting new kicks; `finish_tx` scans
+  pending TX once even without a kick, completes it, and drops the queue and
+  RAM references. The console writer stays open, so a later activation keeps
+  appending to the same `console.log`. `reset` clears activation and failed
+  state for a new `DRIVER_OK`.
+- **VM seam.** The device is exercised with real guest RAM, split virtqueues,
+  the MMIO transport and the console worker; it is not wired into `Vm` yet.
+  The callback still processes every available TX head, so a continuously
+  refilled queue is unbounded. N1 in the design closes that before the device
+  becomes the default path. A stalled sink cannot block TX, but its backlog
+  is bounded by the 64 KiB pending queue plus the batch the worker is writing,
+  so up to about 128 KiB can be outstanding.
+
+## Reporting balloon and shared dispatch
+
+Design: [authoritative Notion specification](https://www.notion.so/4058d8d97179803fb555cd0420cb232d)
+and [tracking/registration extract #2278](https://github.com/boxlite-ai/boxlite/issues/2278).
+
+The device exposes ID 5, only reporting bit 5, and eight configuration bytes:
+read-only `num_pages=0` and guest-writable `actual`, reset to zero. Linux setup
+uses inflate/deflate queues 0/1; reporting alone is queue 2. All have maximum
+size 256. Queue 2 is required only when reporting is negotiated and is never
+consumed otherwise. No quota, stats, hinting, poison or snapshot support is
+advertised. `devices::add_all` composes the device through `balloon::add` after
+the disks, so its window, interrupt line and `virtio_mmio.device=` argument come
+from the slot record rather than from the device: the disks keep the slots they
+had before the balloon existed and the reporting device takes the slot after
+them, because the guest names virtio devices by slot order.
+
+Before any reclaim, the entire chain must pass direction, nonzero length,
+checked address arithmetic, single-region raw-range and normal-termination
+checks. Activation caches up to nine ready-queue control GPA/HVA intervals.
+Reject raw GPA/control or inward-aligned HVA/control overlap without reclaiming
+any prefix. Duplicate and partially overlapping reports are allowed, validated
+independently and attempted in guest order; no sorting, merging or deduplication.
+The control snapshot includes both event-index fields even when EVENT_IDX is
+not negotiated. A ring at a RAM-region tail therefore also needs those two
+extra bytes in the same region; activation rejects it otherwise.
+
+The RAM owner supports only owned private-anonymous backing. It queries the real
+host page size once per device and prepares inward complete host pages before
+the first syscall. Empty interiors skip `madvise`. `ReclaimPolicy`, passed to
+the device's constructor, selects the advice. `Immediate` (the default)
+discards the pages with `MADV_DONTNEED`
+before used length zero is published. `Lazy` marks them with `MADV_FREE` on
+Linux, so the kernel discards them only under memory pressure and a guest that
+reuses them first does not fault; on other hosts it falls back to `Immediate`.
+With `Lazy`, used zero means the advice was applied, not that the backing is
+gone: an already-reported page that the guest never reuses may stay resident
+until pressure. Linux may skip a range that covers only part of a large folio;
+guest pageblock-order reports normally cover whole blocks. Partial failures
+record GPA, raw length, aligned offset/length and errno, then continue. Used
+zero permits reuse, not released-byte accounting. There is no retry after
+completion, and Darwin's pressure-dependent `MADV_DONTNEED` is not immediate
+Linux discard.
+
+Common `VirtQueues::drain` processes at most one complete chain per callback.
+Its notification recheck schedules pending work through a generation-bound
+continuation, without another guest kick. The executor finishes the current
+pass's other ready work before self-continuation; stopping prevents the next
+chain, while an admitted chain may finish before the barrier succeeds. This
+bounds work count, not syscall duration, total CPU or syscall rate. A protective
+timeout is Fatal and retains mappings; it is not a latency SLA. Normal VM exit
+and Drop both stop/join before RAM unmap.
+
+Worker and driver cumulative status updates use atomic OR, so publishing
+`DEVICE_NEEDS_RESET` cannot erase a concurrent driver `FAILED` bit or vice
+versa. Backend delivery takes the device mutex before admitting a source;
+configuration code can therefore retire a queued source without waiting for
+a callback blocked on that same mutex. Admission then rechecks source liveness
+and generation. Retiring an already-admitted callback from another thread
+waits for its completion; self-retirement defers destruction until it returns.
+
+```sh
+make vmm:boot:host
+make test:unit:vmm FILTER=balloon
+make test:integration:vmm:linux
+make coverage:vmm:boot
+```
+
+Coverage targets create `target/coverage` on a fresh checkout and append to
+existing instrumented unit profiles. Use the matching toolchain's LLVM tools;
+the output is `target/coverage/lcov.info`, not a three-platform qualification.
+
+Both real-boot entry points build the freestanding `balloon_init.c` test init.
+The guest touches scratch and independent live regions, announces each phase on
+its console, unmaps scratch, verifies unchanged capacity/live data,
+reallocates/touches, and unbinds/rebinds the driver. The frame comes from the
+production composition (`devices::add_all`), and the host samples `mincore`
+residency across the run against those markers, so the test needs no device or
+kernel capability of its own. Reporting must drop most of the freed scratch
+residency; the `init_on_free=1` control asserts the guest's own checks only,
+because the kernel can reclaim or swap anonymous RAM independently. Security
+settings are not weakened, and watchdog expiry fails. Sampled residency is not
+the exact-PFN evidence a per-page protocol would give, and three-platform
+real-guest reporting/reclaim/reuse/lifetime evidence is still required; these
+commands do not waive the arm64 prerequisites.
 
 ## Chipset
 
@@ -457,20 +741,21 @@ devices:
 - **Constructors.** A constructor only claims resources and builds state; a
   device that needs a thread starts it after `build`, and a virtio device's
   events run on the worker thread, which starts at its first DRIVER_OK.
-  `Vm::with_backend` passes the guest memory and the workers in a
-  `DeviceContext`, which tests use to add a transport. A line from
-  `Resources::line` is not armed until `build` succeeds: using it earlier
-  fails with `Error::LineNotArmed` and makes no host call, so a device that a
-  conflict discards never raised anything. On a conflict, every device drops
-  without having run.
+  `Vm::with_devices` passes the guest memory, the workers and the mutable
+  configuration in a `DeviceContext`; `devices::add_all` adds the
+  [block devices](#virtio-block-device) and tests use `with_backend` to add a
+  transport. A line from `Resources::line` is not armed until `build`
+  succeeds: using it earlier fails with `Error::LineNotArmed` and makes no
+  host call, so a device that a conflict discards never raised anything. On a
+  conflict, every device drops without having run.
 - **Dispatch.** `Chipset::dispatch` hands a vCPU exit to the buses and
   returns every exit that is not MMIO or port I/O. The chipset never changes
   after the build, so every vCPU thread shares it without a lock of its own.
 
 ## Legacy devices and the console
 
-On x86_64, `devices::x86_64::add_legacy_devices`, which `Vm::new` calls,
-reserves the in-kernel PIC
+On x86_64, `devices::x86_64::add_legacy_devices`, which `devices::add_all`
+calls, reserves the in-kernel PIC
 (`0x20`, `0xA0`, `0x4D0`), PIT (`0x40`–`0x43`, `0x61`), IOAPIC and local APIC
 windows, then adds the legacy devices:
 

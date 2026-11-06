@@ -42,6 +42,7 @@ fn config(vcpu_count: u8, memory_mib: u32) -> VmConfig {
         kernel: "vmlinux".into(),
         cmdline: "console=ttyS0".into(),
         initramfs: None,
+        disks: Vec::new(),
     }
 }
 
@@ -684,13 +685,11 @@ mod lifecycle {
             events::Event,
             mock_vm::Step,
             virtio::{
-                ActivationContext, DeviceError, DeviceEvent, DeviceSpec, FeatureError,
-                SnapshotSupport, VirtioDevice, VirtioInterrupt, WorkerContext,
-                interrupt::MmioInterrupt,
-                mmio::{MMIO_WINDOW_LEN, MmioResources, MmioTransport},
+                ActivationContext, DeviceContext, DeviceError, DeviceEvent, DeviceSpec,
+                FeatureError, SnapshotSupport, VirtioDevice, VirtioInterrupt, WorkerContext,
+                mmio::{self, Slot},
                 worker::{SlotId, VirtioWorkers, WorkerRuntime},
             },
-            vm::DeviceContext,
         };
 
         const BASE: u64 = 0xd000_0000;
@@ -782,23 +781,16 @@ mod lifecycle {
             ctx: DeviceContext<'_>,
             device: Arc<Mutex<dyn VirtioDevice>>,
         ) -> crate::Result<()> {
-            chipset.add("virtio", |resources| {
-                resources.mmio(BASE, MMIO_WINDOW_LEN);
-                let interrupt = Arc::new(MmioInterrupt::new(resources.line(GSI)));
-                let worker = ctx.workers.add(
-                    Arc::clone(&device),
-                    Arc::clone(&interrupt) as Arc<dyn VirtioInterrupt>,
-                );
-                MmioTransport::new(
-                    device,
-                    interrupt,
-                    MmioResources {
-                        memory: Arc::clone(ctx.memory),
-                        sender: resources.event_sender(),
-                        worker,
-                    },
-                )
-            })
+            mmio::add_device(
+                chipset,
+                &ctx,
+                "virtio",
+                Slot {
+                    base: BASE,
+                    gsi: GSI,
+                },
+                device,
+            )
         }
 
         /// Waits until `condition` holds, failing the test after ten seconds.

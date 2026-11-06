@@ -76,10 +76,10 @@ const Webhooks: React.FC = () => {
   if (endpoints.error) {
     return (
       <PageLayout>
-        <PageHeader size="full">
+        <PageHeader>
           <PageTitle>Webhooks</PageTitle>
         </PageHeader>
-        <PageContent size="full">
+        <PageContent>
           <Card>
             <CardHeader>
               <CardTitle className="text-center">Oops, something went wrong</CardTitle>
@@ -99,7 +99,7 @@ const Webhooks: React.FC = () => {
 
   return (
     <PageLayout>
-      <PageHeader size="full">
+      <PageHeader>
         <PageTitle>Webhooks</PageTitle>
         <a href="https://docs.boxlite.ai" target="_blank" rel="noopener noreferrer" className="ml-auto">
           <Button variant="link" size="sm">
@@ -109,7 +109,7 @@ const Webhooks: React.FC = () => {
         {activeTab === 'endpoints' && <CreateEndpointDialog onSuccess={handleSuccess} />}
       </PageHeader>
 
-      <PageContent size="full">
+      <PageContent>
         <Tabs value={activeTab} onValueChange={setActiveTab} className="gap-6">
           <TabsList className="shadow-none bg-transparent w-auto p-0 pb-0 justify-start border-b rounded-none">
             <TabsTrigger

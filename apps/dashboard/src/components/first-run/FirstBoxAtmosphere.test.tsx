@@ -103,3 +103,21 @@ it('keeps the form usable when canvas is unavailable', async () => {
   expect(host.textContent).toBe('Form')
   expect(requestAnimationFrame).not.toHaveBeenCalled()
 })
+
+it('renders the form without starting the canvas when the journey supplies its own artwork', async () => {
+  await act(async () =>
+    root.render(
+      <FirstBoxAtmosphere animated={false}>
+        <main>Organization form</main>
+      </FirstBoxAtmosphere>,
+    ),
+  )
+  expect(host.querySelector('main')?.textContent).toBe('Organization form')
+  expect(host.querySelector('canvas')).toBeNull()
+  expect(HTMLCanvasElement.prototype.getContext).not.toHaveBeenCalled()
+  expect(requestAnimationFrame).not.toHaveBeenCalled()
+
+  await mount()
+  expect(host.querySelector('canvas')).not.toBeNull()
+  expect(requestAnimationFrame).toHaveBeenCalled()
+})

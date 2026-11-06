@@ -1715,6 +1715,10 @@ impl crate::runtime::backend::BoxBackend for BoxImpl {
         BoxImpl::ssh_configure(self, config).await
     }
 
+    async fn ssh_enable(&self) -> BoxliteResult<SshStatus> {
+        BoxImpl::ssh_enable(self).await
+    }
+
     async fn ssh_status(&self) -> BoxliteResult<SshStatus> {
         BoxImpl::ssh_status(self).await
     }
@@ -1929,6 +1933,13 @@ mod tests {
                     ContainerStartSuccess { container_id },
                 )),
             }))
+        }
+
+        async fn mount(
+            &self,
+            _: Request<boxlite_shared::ContainerMountRequest>,
+        ) -> Result<Response<boxlite_shared::ContainerMountResponse>, Status> {
+            Err(Status::unimplemented("not used by these tests"))
         }
     }
 

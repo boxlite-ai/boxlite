@@ -54,7 +54,7 @@ impl JsAgent {
         not_implemented("agent.get_turn")
     }
 
-    /// Open the agent journal after an opaque cursor.
+    /// Open the agent's events, after an opaque cursor where the adapter supports it.
     #[napi]
     pub fn events(&self, _options: Option<Value>) -> Result<Value> {
         not_implemented("agent.events")

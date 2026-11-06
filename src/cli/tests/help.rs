@@ -107,17 +107,20 @@ fn command_help_groups_global_options(
 }
 
 #[test]
-fn command_help_ssh_only_advertises_separate_operations() {
+fn command_help_ssh_advertises_default_setup_and_operation_options() {
     for flag in ["--help", "-h"] {
         let help = help_for(&["ssh"], flag);
-        assert!(
-            !help
-                .lines()
-                .any(|line| line.split_whitespace().next() == Some("run")),
-            "{help}"
-        );
+        assert!(help.contains("<BOX>"), "{help}");
+        assert!(!help.contains("Commands:"), "{help}");
         assert!(!help.contains("configure-and-forward"), "{help}");
-        for name in ["configure", "status", "disable", "forward"] {
+        for name in [
+            "--configure",
+            "--proxy",
+            "--status",
+            "--enable",
+            "--disable",
+            "--tunnel",
+        ] {
             assert!(
                 help.lines()
                     .any(|line| line.split_whitespace().next() == Some(name)),
@@ -335,7 +338,7 @@ fn command_help_only_advertises_meaningful_global_options() {
             ],
         ),
         (
-            &["ssh", "configure"],
+            &["ssh", "dev", "--configure"],
             &[
                 "--debug",
                 "--home",
@@ -346,7 +349,7 @@ fn command_help_only_advertises_meaningful_global_options() {
             ],
         ),
         (
-            &["ssh", "status"],
+            &["ssh", "dev", "--status"],
             &[
                 "--debug",
                 "--home",
@@ -357,7 +360,7 @@ fn command_help_only_advertises_meaningful_global_options() {
             ],
         ),
         (
-            &["ssh", "disable"],
+            &["ssh", "dev", "--disable"],
             &[
                 "--debug",
                 "--home",
@@ -368,7 +371,7 @@ fn command_help_only_advertises_meaningful_global_options() {
             ],
         ),
         (
-            &["ssh", "forward"],
+            &["ssh", "dev", "--tunnel"],
             &[
                 "--debug",
                 "--home",

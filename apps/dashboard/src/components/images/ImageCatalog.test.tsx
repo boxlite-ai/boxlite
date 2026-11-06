@@ -273,13 +273,23 @@ describe('starting a box', () => {
     expect(mocks.navigate).toHaveBeenCalledWith('/dashboard/quickstart?method=console&template=python')
   })
 
-  // The first thing a private image needs is a registry credential, so the
-  // page says so before anything else and points there.
-  it('points to private registries as the step before a private image', async () => {
+  it('opens the general box create without prefilling an image', async () => {
     await renderCatalog()
 
-    const link = [...document.querySelectorAll('a')].find((a) => a.textContent === 'Connect it')
-    expect(link?.getAttribute('href')).toBe('/dashboard/images/registries')
+    const button = [...document.querySelectorAll('button')].find((b) => b.textContent === 'New box' && !b.title)
+    expect(button).toBeDefined()
+    await act(async () => button!.click())
+
+    expect(state.newBoxOpen).toBe(true)
+    expect(state.newBoxImage).toBe('')
+  })
+
+  it('offers no box creation without Box write permission', async () => {
+    state.deniedPermissions = [OrganizationRolePermissionsEnum.WRITE_BOXES]
+    await renderCatalog()
+
+    expect([...document.querySelectorAll('button')].filter((b) => b.textContent === 'New box')).toHaveLength(0)
+    expect(state.newBoxOpen).toBe(false)
   })
 })
 
