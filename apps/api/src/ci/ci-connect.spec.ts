@@ -1,5 +1,5 @@
 /* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
-import { testCapacity } from '../../../libs/ci-listener/tests/capacity'
+import { testCapacity } from '@boxlite-ai/ci-listener/testing'
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { DataSource } from 'typeorm'
 import { AddCiConnect1793664000000 } from '../migrations/pre-deploy/1793664000000-add-ci-connect-migration'

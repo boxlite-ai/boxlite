@@ -29,7 +29,7 @@ export function deliveryCursor(value: unknown): string {
     typeof value !== 'string' ||
     !value.length ||
     Buffer.byteLength(value) > 2048 ||
-    /[\u0000-\u001f\u007f]/.test(value)
+    Array.from(value).some((char) => char.charCodeAt(0) < 32 || char.charCodeAt(0) === 127)
   )
     throw new Error('Invalid GitHub delivery cursor')
   return value

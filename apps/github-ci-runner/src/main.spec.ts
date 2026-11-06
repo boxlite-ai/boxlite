@@ -5,7 +5,7 @@ import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { ListenerState } from '@boxlite-ai/ci-listener'
-import { SqliteStateDatabase } from '../../libs/ci-listener/src/state/sqlite'
+import { SqliteStateDatabase } from '@boxlite-ai/ci-listener/sqlite'
 import * as configuration from './config'
 
 it('initializes the standalone entrypoint with a leased App registry and durable SQLite state', async () => {
@@ -51,7 +51,9 @@ it('initializes the standalone entrypoint with a leased App registry and durable
     try {
       const value = JSON.parse(message)
       if (['ci-listener-started', 'ci-listener-failed'].includes(value.event)) report(value)
-    } catch {}
+    } catch {
+      // Non-JSON console output is not a Listener lifecycle signal.
+    }
   }
   const logging = jest.spyOn(console, 'log').mockImplementation(capture)
   const errors = jest.spyOn(console, 'error').mockImplementation(capture)
