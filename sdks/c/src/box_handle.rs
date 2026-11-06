@@ -115,6 +115,20 @@ pub unsafe extern "C" fn boxlite_box_id(handle: *mut CBoxHandle) -> *mut c_char 
     box_id(handle)
 }
 
+/// Return an owned name string, or null for an unnamed/invalid handle.
+/// Release the returned string with boxlite_free_string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_box_name(handle: *mut CBoxHandle) -> *mut c_char {
+    if handle.is_null() {
+        return ptr::null_mut();
+    }
+    unsafe { &*handle }
+        .handle
+        .name()
+        .and_then(|name| CString::new(name).ok())
+        .map_or(ptr::null_mut(), CString::into_raw)
+}
+
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_box_free(handle: *mut CBoxHandle) {
     box_free(handle)

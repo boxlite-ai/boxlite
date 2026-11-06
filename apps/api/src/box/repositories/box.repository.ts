@@ -8,6 +8,8 @@ import { DataSource, EntityManager, FindOptionsWhere, In, Not } from 'typeorm'
 import { Box } from '../entities/box.entity'
 import { BoxLastActivity } from '../entities/box-last-activity.entity'
 import { BoxMigration } from '../entities/box-migration.entity'
+import { Checkpoint } from '../entities/checkpoint.entity'
+import { CheckpointOperation } from '../entities/checkpoint-operation.entity'
 import { BoxState } from '../enums/box-state.enum'
 import { BoxDesiredState } from '../enums/box-desired-state.enum'
 import { BoxMigrationState } from '../enums/box-migration-state.enum'
@@ -134,7 +136,11 @@ export class BoxRepository extends BaseRepository<Box> {
     super(dataSource, eventEmitter, Box)
   }
 
-  async insert(box: Box, maxCreatedBoxes?: number): Promise<Box> {
+  async insert(
+    box: Box,
+    maxCreatedBoxes?: number,
+    initialize?: (manager: EntityManager) => Promise<void>,
+  ): Promise<Box> {
     const now = new Date()
     if (!box.createdAt) {
       box.createdAt = now
@@ -147,6 +153,9 @@ export class BoxRepository extends BaseRepository<Box> {
     box.enforceInvariants()
 
     await this.withCreationAdmission(box.organizationId, maxCreatedBoxes, async (entityManager) => {
+      // Provisioning work and ownership must commit with the new Box. Run
+      // initialization before insertion so checkpoint use can hold its row lock.
+      await initialize?.(entityManager)
       await this.lockRegistryCredential(box, entityManager)
       await entityManager.insert(Box, box)
       await this.upsertLastActivity(entityManager, box.id, box.createdAt)
@@ -260,6 +269,7 @@ export class BoxRepository extends BaseRepository<Box> {
     organizationId: string,
     maxCreatedBoxes: number | undefined,
     persist: (entityManager: EntityManager) => Promise<T>,
+    existingBoxId?: string,
   ): Promise<T> {
     if (maxCreatedBoxes === undefined) {
       return this.dataSource.transaction(persist)
@@ -272,6 +282,7 @@ export class BoxRepository extends BaseRepository<Box> {
         where: {
           organizationId,
           state: Not(In(BOX_CREATION_LIMIT_EXCLUDED_STATES)),
+          ...(existingBoxId ? { id: Not(existingBoxId) } : {}),
         },
       })
       if (currentCount >= maxCreatedBoxes) {
@@ -280,6 +291,63 @@ export class BoxRepository extends BaseRepository<Box> {
 
       return persist(entityManager)
     })
+  }
+
+  /** Count a recovery target once while admitting its pending replacement. */
+  async withCheckpointRestoreAdmission<T>(
+    organizationId: string,
+    boxId: string,
+    maxCreatedBoxes: number | undefined,
+    persist: (manager: EntityManager) => Promise<T>,
+  ): Promise<T> {
+    return this.withCreationAdmission(organizationId, maxCreatedBoxes, persist, boxId)
+  }
+
+  /** Explicit deletion fences checkpoint callbacks before the runner removes the target. */
+  async deleteCheckpointTarget(selected: Box): Promise<Box> {
+    if (!selected.checkpointJobId) throw new ConflictException('Box has no checkpoint operation')
+    const pending = await this.manager.findOneBy(CheckpointOperation, {
+      boxId: selected.id,
+      organizationId: selected.organizationId,
+      jobId: selected.checkpointJobId,
+    })
+    if (!pending) throw new ConflictException('Box has another state change in progress')
+    const changed = await this.dataSource.transaction(async (manager) => {
+      // Match checkpoint use/deletion and receipt processing: checkpoint first.
+      await manager.findOne(Checkpoint, {
+        where: { id: pending.checkpointId, organizationId: selected.organizationId },
+        lock: { mode: 'pessimistic_write' },
+      })
+      const box = await manager.findOne(Box, {
+        where: { id: selected.id, organizationId: selected.organizationId },
+        lock: { mode: 'pessimistic_write' },
+      })
+      if (!box || box.checkpointJobId !== pending.jobId || box.checkpointSequence !== pending.sequence)
+        throw new ConflictException('Checkpoint operation changed; retry Box deletion')
+      const previous = { ...box }
+      const operation = await manager.findOne(CheckpointOperation, {
+        where: { id: pending.id, jobId: box.checkpointJobId, state: In(['pending', 'failed']) },
+        lock: { mode: 'pessimistic_write' },
+      })
+      if (!operation) throw new ConflictException('Checkpoint operation changed; retry Box deletion')
+      operation.state = 'cancelled'
+      await manager.save(CheckpointOperation, operation)
+      Object.assign(box, Box.getSoftDeleteUpdate(box), {
+        state: BoxState.ERROR,
+        checkpointJobId: null,
+        checkpointSequence: box.checkpointSequence + 1,
+        recoverable: false,
+        errorReason: 'Checkpoint operation cancelled for Box deletion',
+      })
+      box.assertValid()
+      box.enforceInvariants()
+      await manager.save(Box, box)
+      return { box, previous }
+    })
+    this.emitUpdateEvents(changed.box, changed.previous)
+    this.invalidateLookupCacheOnUpdate(changed.box, changed.previous)
+    await this.recordOrganizationActivity(changed.box, changed.previous)
+    return changed.box
   }
 
   // One statement sets the wait cap, takes the lock, and restores the default,

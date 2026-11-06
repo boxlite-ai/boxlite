@@ -61,6 +61,12 @@ import { TunnelService } from './services/tunnel.service'
 import { AttachTicketService } from './services/attach-ticket.service'
 import { CpuIncidentModule } from './cpu-incidents/cpu-incident.module'
 import { MemoryIncidentModule } from './memory-incidents/memory-incident.module'
+import { Checkpoint } from './entities/checkpoint.entity'
+import { CheckpointService } from './services/checkpoint.service'
+import { CheckpointJobReceiver } from './services/checkpoint-job-receiver.service'
+import { CheckpointOperation } from './entities/checkpoint-operation.entity'
+import { CheckpointRecoverService } from './services/checkpoint-recover.service'
+import { CheckpointArchiveStore } from './stores/checkpoint-archive.store'
 
 @Module({
   imports: [
@@ -81,10 +87,16 @@ import { MemoryIncidentModule } from './memory-incidents/memory-incident.module'
       BoxMigration,
       Tunnel,
       Domain,
+      Checkpoint,
+      CheckpointOperation,
     ]),
   ],
   controllers: [BoxController, RunnerController, PreviewController, VolumeController, JobController],
   providers: [
+    CheckpointService,
+    CheckpointArchiveStore,
+    CheckpointRecoverService,
+    CheckpointJobReceiver,
     BoxService,
     BoxManager,
     BoxWarmPoolService,
@@ -127,6 +139,8 @@ import { MemoryIncidentModule } from './memory-incidents/memory-incident.module'
     },
   ],
   exports: [
+    CheckpointService,
+    CheckpointRecoverService,
     BoxService,
     TunnelService,
     DomainService,

@@ -126,6 +126,69 @@ boxlite pull alpine:latest
 boxlite images
 ```
 
+## Checkpoint management
+
+A checkpoint is an independently managed disk archive with the box's execution
+configuration. It survives deletion of its source box and can create multiple
+new boxes. It is separate from a box's snapshots and does not capture memory or
+running processes.
+
+```bash
+# Capture an initialized box; the runtime also supports a running source.
+boxlite checkpoint create source --name dev-base
+boxlite checkpoint list
+boxlite checkpoint get dev-base
+
+# Execution settings are inherited; overrides such as --cpus or -e are refused.
+boxlite create --checkpoint dev-base --name worker
+
+# Replace an existing stopped or failed box, preserving its name.
+boxlite recover worker --checkpoint dev-base
+boxlite checkpoint delete dev-base
+```
+
+Local checkpoints default to `<BOXLITE_HOME>/checkpoints/`, normally
+`~/.boxlite/checkpoints/`. Select another directory with
+`BOXLITE_CHECKPOINTS_DIR`, a `checkpoints_dir` JSON configuration field, or a
+per-command `--checkpoints-dir PATH`:
+
+```bash
+boxlite checkpoint --checkpoints-dir /data/checkpoints list
+boxlite create --checkpoint dev-base --checkpoints-dir /data/checkpoints --name worker
+```
+
+For the CLI, the explicit storage flag overrides the environment, which overrides
+the JSON configuration, followed by the directory under the selected home. For
+SDK options, an explicitly supplied directory overrides the environment. Remote
+contexts use the server's storage; a client-side `--checkpoints-dir` is refused.
+
+Local recover returns a **new box ID**; the original name stays available and old
+handles/IDs no longer address that box. Recover validates the archive and pinned
+image configuration before removing the old box, but replacement is not atomic.
+An import failure after removal retains the checkpoint and recovery record for
+retry. Recovery records the planned native ID before replacement. If import
+succeeds but its completion receipt cannot be saved, retry adopts that exact
+Box, including after restart; it does not remove a Box just because its name
+matches. Recovery owns the target name and original ID through preflight, removal,
+import and completion recording. Conflicting starts, removals, imports and
+clones fail while that operation runs. A pending recovery record also reserves
+the name after failure or restart and prevents checkpoint deletion, including
+with force. Retry the same checkpoint, or explicitly remove the target by its
+original ID or name to cancel the pending recovery and release the name. A new
+native ID reported by a failed completion write can also be explicitly removed.
+Superseded handles cannot boot the removed native box. Deleting a checkpoint
+never deletes a box already created from it.
+
+Interrupted archive cleanup remains visible as `deleting` and retains its name.
+Retry deletion by ID or name after correcting the storage error; `--force` only
+ignores an absent checkpoint and does not hide a cleanup failure.
+
+The source must have a recorded image build or an explicitly digest-pinned image.
+A mutable tag without build metadata is refused. Startup uses that fixed digest;
+the corresponding OCI configuration must remain available in the cache or
+registry. Volumes, typed mounts, secrets and host-rootfs sources are unsupported
+for checkpoint capture in this version.
+
 ## Connecting to a remote server
 
 To target a remote BoxLite REST server instead of the local runtime, sign in
@@ -722,6 +785,7 @@ Then reload your shell or source the file.
 | Variable | Description |
 |----------|-------------|
 | `BOXLITE_HOME` | Runtime, credential, and context preference directory (default: `~/.boxlite`). Overridden by `--home`. |
+| `BOXLITE_CHECKPOINTS_DIR` | Local checkpoint directory; defaults to `<BOXLITE_HOME>/checkpoints/`. |
 | `BOXLITE_REST_URL` | REST server endpoint; equivalent to `--url`. |
 | `BOXLITE_API_KEY` | Long-lived API key sent as `Authorization: Bearer`. Overrides any stored credentials. |
 | `BOXLITE_CONTEXT` | Override the saved current context; explicit `--context` takes precedence. |

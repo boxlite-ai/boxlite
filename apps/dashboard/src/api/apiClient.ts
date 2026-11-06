@@ -31,6 +31,7 @@ import {
 import axios, { AxiosError, AxiosInstance } from 'axios'
 import { BoxliteError } from './errors'
 import type { DomainList, HeldDomain } from './domain-types'
+import type { Checkpoint, CheckpointPage } from './checkpoint-types'
 
 // A burst of in-flight requests can all 401 at once when the access token goes
 // invalid; this in-page guard ensures at most one re-login redirect per page
@@ -86,6 +87,57 @@ export interface PromptDraft {
   updatedAt: string
 }
 export class ApiClient {
+  public async listCheckpoints(org: string): Promise<Checkpoint[]> {
+    const checkpoints: Checkpoint[] = []
+    const seen = new Set<string>()
+    let pageToken: string | undefined
+    do {
+      const { data } = await this.http.get<CheckpointPage>(`/v1/${encodeURIComponent(org)}/checkpoints`, {
+        ...this.v1Config(),
+        ...(pageToken ? { params: { page_token: pageToken } } : {}),
+      })
+      checkpoints.push(...data.checkpoints)
+      pageToken = data.next_page_token || undefined
+      if (pageToken && seen.has(pageToken)) throw new Error('Checkpoint server repeated a pagination token')
+      if (pageToken) seen.add(pageToken)
+    } while (pageToken)
+    return checkpoints
+  }
+
+  public async createCheckpoint(org: string, source: string, name?: string): Promise<Checkpoint> {
+    return (
+      await this.http.post(
+        `/v1/${encodeURIComponent(org)}/checkpoints`,
+        {
+          source_box_id: source,
+          ...(name ? { name } : {}),
+        },
+        this.v1Config(),
+      )
+    ).data
+  }
+
+  public async removeCheckpoint(org: string, key: string): Promise<void> {
+    await this.http.delete(`/v1/${encodeURIComponent(org)}/checkpoints/${encodeURIComponent(key)}`, this.v1Config())
+  }
+
+  public async createBoxFromCheckpoint(org: string, key: string, name?: string): Promise<{ box_id: string }> {
+    return (
+      await this.http.post(
+        `/v1/${encodeURIComponent(org)}/boxes`,
+        {
+          checkpoint_id: key,
+          ...(name ? { name } : {}),
+        },
+        this.v1Config(),
+      )
+    ).data
+  }
+
+  public async recoverBoxFromCheckpoint(org: string, key: string, target: string): Promise<{ box_id: string }> {
+    return (await this.http.post(this.v1BoxPath(org, target, '/recover'), { checkpoint_id: key }, this.v1Config())).data
+  }
+
   public async getOrganizationOnboarding(org: string): Promise<OrganizationOnboarding | null> {
     return (await this.http.get(`/organizations/${encodeURIComponent(org)}/onboarding`, this.v1Config())).data
   }

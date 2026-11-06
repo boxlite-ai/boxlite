@@ -88,6 +88,22 @@ npm run mdeploy -- --stage dev --refresh
 stage's login requirements. `--local-env` is an explicit diagnostic override, not the ordinary
 configuration path; the caller must supply the required inputs.
 
+## Checkpoint archive bucket
+
+GCP creates a dedicated `Checkpoints` resource named `<app>-<stage>-checkpoints`.
+Archives use `gs://<bucket>/checkpoints/`; the stack passes this location to the
+API as `CHECKPOINT_ARCHIVE_PREFIX` and the same bucket to runner object grants.
+The API and runners receive `roles/storage.objectUser` on this bucket alone.
+Uniform access and public access prevention are enabled; versioning and soft
+delete retention are disabled for this archive bucket.
+
+This bucket is separate from application storage, per-volume buckets and the
+infrastructure engine's state/checkpoint bucket. AWS does not enable this archive
+capability. Deploy the checkpoint database migration and compatible API/runners
+with this storage configuration before enabling capture. The REST API and
+create/recover orchestration use this archive path; see the
+[API checkpoint contract](../../api/README.md#checkpoint-capture).
+
 ## Implementation and validation
 
 - [`src/run.ts`](src/run.ts): input parsing, login and protected-stage guards.

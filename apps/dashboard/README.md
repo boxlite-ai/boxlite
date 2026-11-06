@@ -12,6 +12,26 @@ or offer a retry with the same identity. The explicit action uses `/logout` to e
 the identity-provider session and return to the existing manual sign-in screen.
 Other authorization failures keep their existing error handling.
 
+## Managed checkpoints
+
+Open **Checkpoints** in the primary navigation to inspect the organization's
+independent disk archives. The table shows capture state, source identity,
+archive size, creation time and failures. It follows all list pages and polls
+while captures or deletions are pending. Deleted source Boxes do not hide rows.
+
+**Capture checkpoint** accepts a source Box ID/name and optional checkpoint
+name. **New Box** inherits the ready checkpoint's settings and accepts only an
+optional name. **Recover** confirms replacement of an idle stopped or failed
+target; the public Box ID stays unchanged. Both use actions remain disabled
+until the checkpoint is ready. **Delete** confirms archive removal and keeps
+the dialog and row when the server refuses active use or storage cleanup fails.
+
+Mutations require Box write permission; readers can inspect the table. Requests
+use the existing authenticated API client and organization-scoped routes. A
+pending result from an organization left in the meantime cannot navigate the
+new organization's view. The mock preview simulates capture, inherited Boxes,
+recovery and deletion without creating a VM or storing an archive.
+
 ## SSH access
 
 Open a box's **SSH** tab beside **Shell**. Setup, Enable and Disable require a

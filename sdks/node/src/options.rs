@@ -61,12 +61,17 @@ impl From<JsHealthCheckOptions> for HealthCheckOptions {
 pub struct JsOptions {
     /// Home directory for BoxLite data (defaults to ~/.boxlite)
     pub home_dir: Option<String>,
+    /// Managed checkpoint directory; defaults to the selected home.
+    pub checkpoints_dir: Option<String>,
     /// Registry transport, TLS, search, and auth configuration.
     pub image_registries: Option<Vec<JsImageRegistry>>,
 }
 
 pub(crate) fn js_options_into_core(js_opts: JsOptions) -> napi::Result<BoxliteOptions> {
-    let mut config = BoxliteOptions::default();
+    let mut config = BoxliteOptions {
+        checkpoints_dir: js_opts.checkpoints_dir.map(PathBuf::from),
+        ..BoxliteOptions::default()
+    };
 
     if let Some(home_dir) = js_opts.home_dir {
         config.home_dir = PathBuf::from(home_dir);
@@ -732,6 +737,7 @@ mod tests {
         let password = test_registry_password();
         let token = test_bearer_token();
         let opts = js_options_into_core(JsOptions {
+            checkpoints_dir: Some("/tmp/boxlite-checkpoints".into()),
             home_dir: Some("/tmp/boxlite-node".into()),
             image_registries: Some(vec![
                 JsImageRegistry {
@@ -764,6 +770,10 @@ mod tests {
         .unwrap();
 
         assert_eq!(opts.home_dir, PathBuf::from("/tmp/boxlite-node"));
+        assert_eq!(
+            opts.checkpoints_dir,
+            Some(PathBuf::from("/tmp/boxlite-checkpoints"))
+        );
         assert_eq!(
             opts.image_registries,
             vec![
