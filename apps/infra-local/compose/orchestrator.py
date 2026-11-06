@@ -1,8 +1,7 @@
 """Top-level orchestration: topo_sort + up/down/ps + healthcheck loop.
 
-Plain async functions, no classes. Single shared Boxlite.default() runtime
-per call. Reuse path of get_or_create silently keeps existing config
-(parent design doc §1.7.D); we warn on observable drift but do not auto-recreate.
+Plain async functions with one shared runtime per call. Reuse healthy boxes;
+recreate failed or unhealthy boxes without deleting their host data.
 """
 
 from __future__ import annotations
@@ -96,6 +95,7 @@ def _build_box_options_with_volumes(spec: ServiceSpec, config: InfraConfig, volu
         cmd=cmd,
         entrypoint=spec.entrypoint,
         working_dir=spec.working_dir,
+        user=spec.user,
     )
 
 
@@ -134,23 +134,6 @@ def get_runtime():
     return Boxlite.default()
 
 
-# ─── exception-narrowing predicate (Phase-2 debt #1) ──────────────────────
-
-_ALREADY_RUNNING_PATTERNS = ("already running", "already started", "already exists")
-
-
-def _is_already_running_error(exc: Exception) -> bool:
-    """Heuristic: SDK doesn't expose a typed exception for 'box is already running'.
-
-    Match on message substring so we can tolerate this specific case while
-    letting all other SDK errors propagate.
-    """
-    msg = str(exc).lower()
-    if not msg:
-        return False
-    return any(p in msg for p in _ALREADY_RUNNING_PATTERNS)
-
-
 # ─── HTTP healthcheck ─────────────────────────────────────────────────────
 
 def _http_probe(url: str) -> bool:
@@ -166,7 +149,21 @@ def _http_probe(url: str) -> bool:
 
 # ─── start / stop / wait ──────────────────────────────────────────────────
 
-async def start_service(runtime, spec: ServiceSpec, config: InfraConfig) -> None:
+async def probe_health(box, hc: HealthCheck, config: InfraConfig) -> bool:
+    """One bounded probe for reconciliation and status, without warmup sleeps."""
+    try:
+        if hc.http_url is not None:
+            return await asyncio.wait_for(asyncio.to_thread(_http_probe, hc.http_url), hc.timeout_s)
+        if hc.exec is not None:
+            command = hc.exec(config) if callable(hc.exec) else hc.exec
+            rc, _, _ = await asyncio.wait_for(exec_collect(box, command[0], command[1:]), hc.timeout_s)
+            return rc == 0
+    except Exception:
+        return False
+    return False
+
+
+async def start_service(runtime, spec: ServiceSpec, config: InfraConfig) -> bool:
     name = _box_name(spec.name)
     volumes = spec.volumes(config)
     opts = _build_box_options_with_volumes(spec, config, volumes)
@@ -180,40 +177,17 @@ async def start_service(runtime, spec: ServiceSpec, config: InfraConfig) -> None
 
     box, created = await runtime.get_or_create(opts, name=name)
 
-    if spec.one_shot:
-        # One-shot services re-run every `up` (idempotent bootstrap).
-        # If an old box exists, drop it first so cmd actually re-executes.
-        if not created:
-            print(f"  {name}: removing stale one-shot box before re-running")
-            try:
-                await box.stop()
-            except Exception:
-                pass
-            await runtime.remove(name)
-            box, _ = await runtime.get_or_create(opts, name=name)
-        await box.start()
-        await _wait_one_shot_exit(runtime, name, label=spec.name)
-        # One-shot box's VM is still "running" per the SDK even after init
-        # exited; force=True stops the VM as part of remove (SDK gotcha —
-        # see the README gotcha table).
-        try:
-            await runtime.remove(name, force=True)
-        except Exception as e:
-            print(f"  {name}: one-shot remove failed ({e!r})")
-        print(f"  {name}: one-shot completed and removed")
-        return
-
-    if created:
-        await box.start()
-    else:
-        try:
-            await box.start()
-        except Exception as e:
-            if not _is_already_running_error(e):
-                raise
-            print(f"  {name}: (already running: {e!r})")
+    if not created:
+        state = (await box.info()).state.status.lower()
+        if state == "running" and (spec.healthcheck is None or await probe_health(box, spec.healthcheck, config)):
+            return False
+        print(f"  {name}: recreating {state} or unhealthy box (host data kept)")
+        await runtime.remove(name, force=True)
+        box, _ = await runtime.get_or_create(opts, name=name)
+    await box.start()
     if spec.healthcheck:
         await wait_healthy(box, spec.healthcheck, label=spec.name, config=config)
+    return True
 
 
 async def stop_service(runtime, service_name: str) -> bool:
@@ -308,53 +282,6 @@ async def _wait_healthy_http(hc: HealthCheck, *, label: str) -> None:
     )
 
 
-async def _wait_one_shot_exit(runtime, name: str, *, label: str, timeout_s: float = 60.0) -> None:
-    """Wait until the named one-shot box's init process exits.
-
-    SDK's `list_info().state.status` stays "running" as long as the VM is up,
-    independent of whether the OCI container's init process inside has exited
-    (SDK gotcha — see the README gotcha table; re-verified still present on
-    current main). The init-exit signal only
-    surfaces by `box.exec(...)` failing with a specific error message
-    ("incorrect container status" / "Container init process exited").
-
-    Fast path: poll `list_info()` in case the SDK starts reporting it.
-    Slow path: probe via `box.exec("true")` every second — success means init
-    is still running; the specific exit-related failure means we're done.
-    """
-    start = time.monotonic()
-    last_err: str = ""
-    while time.monotonic() - start < timeout_s:
-        infos = await runtime.list_info()
-        info = next((i for i in infos if i.name == name), None)
-        if info is None:
-            return
-        status = info.state.status.lower()
-        if status != "running":
-            print(f"  {label}: one-shot exited with state={status}")
-            return
-
-        try:
-            box = await runtime.get(name)
-            if box is not None:
-                try:
-                    rc, _o, _e = await exec_collect(box, "true", [])
-                    _ = rc  # init still running; keep polling
-                except Exception as e:
-                    msg = str(e)
-                    last_err = msg
-                    if "Container init process exited" in msg or "incorrect container status" in msg:
-                        print(f"  {label}: one-shot init process has exited")
-                        return
-        except Exception:
-            pass
-
-        await asyncio.sleep(1.0)
-    # Don't raise — for a one-shot we'd rather force-clean than block the up().
-    print(f"  {label}: one-shot did not signal exit within {timeout_s}s "
-          f"(last exec err: {last_err[:120]!r}); proceeding to remove")
-
-
 # ─── top-level entry points ───────────────────────────────────────────────
 
 async def up(
@@ -363,7 +290,7 @@ async def up(
     *,
     only: list[str] | None = None,
     skip_doctor: bool = False,
-) -> None:
+) -> bool:
     # Pin home before anything builds a Boxlite.default() singleton (doctor
     # below does), so box starts hit the repo-scoped home.
     ensure_home_env(config)
@@ -374,11 +301,17 @@ async def up(
         print("WARNING: --skip-doctor was passed — preflight checks bypassed")
         print("=" * 60)
     runtime = get_runtime()
+    changed = False
     for layer in topo_sort(services):
         targets = [n for n in layer if only is None or n in only]
         if not targets:
             continue
-        await asyncio.gather(*[start_service(runtime, services[n], config) for n in targets])
+        results = await asyncio.gather(*[start_service(runtime, services[n], config) for n in targets])
+        changed |= any(results)
+    if "minio" in services and (only is None or "minio" in only):
+        from .storage import ensure_bucket
+        await asyncio.to_thread(ensure_bucket, config)
+    return changed
 
 
 async def down(

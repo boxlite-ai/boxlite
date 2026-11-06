@@ -2,6 +2,7 @@ PHONY_TARGETS += test test\:unit\:cli test\:unit\:vmm test\:unit\:guest test\:gu
 PHONY_TARGETS += test\:integration\:vmm\:kvm test\:integration\:vmm\:elf test\:integration\:vmm\:linux _ensure-kvm _ensure-vmm-kernel test\:vmm\:boot
 PHONY_TARGETS += test\:integration\:vmm\:hvf _ensure-hvf
 PHONY_TARGETS += test\:apps\:runner
+PHONY_TARGETS += test\:apps\:infra-local
 PHONY_TARGETS += test\:apps\:proxy test\:apps\:dashboard
 PHONY_TARGETS += test\:apps\:mdeploy test\:e2e\:drivers
 PHONY_TARGETS += _local-registry
@@ -627,6 +628,9 @@ _ensure-infra-deps:
 # Type-check first: the suite runs under `tsx --test`, which strips types without checking them, so
 # a signature change that no longer compiles still leaves every test green. tsconfig.tooling.json
 # is the subset that checks without `sst install`; test:apps:infra-config below covers the rest.
+test\:apps\:infra-local:
+	@$(MAKE) -C apps/infra-local test
+
 test\:apps\:infra: _ensure-infra-deps
 	@echo "🧪 Type-checking infrastructure scripts..."
 	@cd apps/infra && npm run --silent typecheck:tooling
