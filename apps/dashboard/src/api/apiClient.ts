@@ -85,6 +85,9 @@ export interface PromptDraft {
   revision: number
   updatedAt: string
 }
+
+const activityHeaders = { 'X-BoxLite-Source': 'dashboard' }
+
 export class ApiClient {
   public async getOrganizationOnboarding(org: string): Promise<OrganizationOnboarding | null> {
     return (await this.http.get(`/organizations/${encodeURIComponent(org)}/onboarding`, this.v1Config())).data
@@ -149,7 +152,7 @@ export class ApiClient {
       accessToken: accessToken,
     })
 
-    const axiosInstance = axios.create()
+    const axiosInstance = axios.create({ headers: activityHeaders })
     axiosInstance.interceptors.request.use((request) => {
       request.headers?.delete?.('User-Agent')
       if (request.headers) {
@@ -410,6 +413,7 @@ export class ApiClient {
     const axiosInstance = axios.create({
       baseURL: this.config.basePath,
       headers: {
+        ...activityHeaders,
         Authorization: `Bearer ${this.config.accessToken}`,
       },
     })
@@ -425,6 +429,7 @@ export class ApiClient {
     return axios.create({
       baseURL: this.config.basePath,
       headers: {
+        ...activityHeaders,
         Authorization: `Bearer ${this.config.accessToken}`,
       },
     })

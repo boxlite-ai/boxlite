@@ -231,6 +231,7 @@ registration carries its default organization on success only.
 ### Querying Activity in PostHog
 
 The producer uses the existing `POSTHOG_API_KEY`, `POSTHOG_HOST` and `POSTHOG_ENVIRONMENT` settings.
+Cloud deployments set `POSTHOG_ENVIRONMENT` to the deployed stage name on both AWS and GCP.
 Without the key or host, analytics is disabled while business operations and operational logs continue.
 AnalyticsService owns disabled-source and capture-error handling; the interceptor skips request extraction
 when analytics is disabled.
@@ -304,6 +305,12 @@ await this.stop(event.boxId, undefined, Context.platform(PlatformReason.ORG_SUSP
   already holds the request: `user.id`, `auth.method` (`api_key` or `jwt`) and, when the client
   sends `X-BoxLite-Source` or `X-BoxLite-SDK-Version`, `client.source` and `sdk.version`. Values must be 1–64 ASCII
   characters using letters, digits, `_`, `.`, `+`, `/`, space or `-`; invalid values are omitted.
+- The Dashboard sends source `dashboard`. The shared native REST transport sends source
+  `sdk` and its compiled BoxLite version on HTTP and API WebSocket requests, including file
+  operations. Rust, Python, Node, C, Go and the CLI use that transport; the label identifies
+  the SDK transport, not a particular language or a verified caller. Guest tunnel traffic
+  is not labeled. Older or third-party clients may still omit these optional headers.
+  HTTP test servers with explicit CORS allowlists must also permit `X-BoxLite-Source`.
 - The boot-time admin seed registers as `Context.platform(PlatformReason.BOOTSTRAP)`.
 - Job outcome events carry no context: the runner reports after the request has ended.
 - Admin box recovery and user creation retain the authenticated administrator in `Context.admin(actor)`.
@@ -335,6 +342,10 @@ With `REDIS_HOST` set, the throttle suite exercises cancellation and ownership r
 Run `make coverage:api` from the repository root to include these paths in the API LCOV
 report at `target/coverage/api/lcov.info`. The patch coverage requirement remains 90%; a
 passing test suite alone does not establish coverage of these caller boundaries.
+
+Run `make test:apps:dashboard FILTER='sends the dashboard activity source'` to check the Dashboard's
+source header on authenticated requests. This target filters test names;
+omit `FILTER` to run all Dashboard unit tests.
 
 ## Admin organization metadata
 
