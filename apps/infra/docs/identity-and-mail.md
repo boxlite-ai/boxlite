@@ -19,7 +19,7 @@ Application invitation mail and the identity provider's verification/reset mail 
 Invitation emails reuse the black BoxLite wordmark at
 `<DASHBOARD_URL>/auth0/boxlite-black-3f7875da.png`, served by the dashboard's public assets.
 It displays at 32 pixels high with proportional width, matching the Auth0 reset email.
-Keep the asset filename aligned with [Auth0 branding](../auth0/branding/ASSETS.md) when updating the logo.
+Keep the asset filename aligned with [Auth0 branding](../auth0/branding/README.md) when updating the logo.
 The invitation email tests check both the branding path and the referenced public file, so a
 branding migration cannot silently leave emails pointing to a deleted asset.
 
@@ -345,7 +345,7 @@ catalog is separate from the mstage declaration; update/review the intended tena
 using it for a new stage. Each target names its `apiOrigin`, where the identity check reads
 `/api/config`: prod serves the API at `api.boxlite.ai`, not under its dashboard host, so the origin
 cannot be derived from `stackOrigin`. It manages theme, tenant image and prompt text; widget geometry remains
-Auth0-managed. [ASSETS.md](../auth0/branding/ASSETS.md) records hashes, licenses and update steps.
+Auth0-managed. The [branding guide](../auth0/branding/README.md) records hashes, licenses and update steps.
 
 Prompt text lives in `auth0/branding/prompts/<language>/<prompt>.json`, one Auth0 prompt per file;
 keys starting with `_` are comments the command never sends. Identifier First serves `login-id` and

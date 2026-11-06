@@ -49,6 +49,7 @@ docs/AdminOrganizationMemberPage.md
 docs/AdminOrganizationOverview.md
 docs/AdminOrganizationOverviewPage.md
 docs/AdminOrganizationUsage.md
+docs/AdminOrganizationVerifiedCreator.md
 docs/AdminRegionOverview.md
 docs/AdminRegionOverviewPage.md
 docs/AdminRunner.md
@@ -72,6 +73,7 @@ docs/BoxApi.md
 docs/BoxClass.md
 docs/BoxDesiredState.md
 docs/BoxLabels.md
+docs/BoxMemoryUsageDto.md
 docs/BoxProgress.md
 docs/BoxProgressPhase.md
 docs/BoxState.md
@@ -109,6 +111,7 @@ docs/JobStatus.md
 docs/JobType.md
 docs/JobsApi.md
 docs/LogEntry.md
+docs/MemoryIncidentListDto.md
 docs/MetricDataPoint.md
 docs/MetricSeries.md
 docs/MetricsResponse.md
@@ -152,6 +155,7 @@ docs/RunnerCpuIncident.md
 docs/RunnerFull.md
 docs/RunnerHealthMetrics.md
 docs/RunnerHealthcheck.md
+docs/RunnerMemoryIncident.md
 docs/RunnerServiceHealth.md
 docs/RunnerState.md
 docs/RunnersApi.md
@@ -170,6 +174,7 @@ docs/UpdateOrganizationMemberAccess.md
 docs/UpdateOrganizationName.md
 docs/UpdateOrganizationRole.md
 docs/UpdateRegion.md
+docs/UpdateRegistryCredential.md
 docs/UsageApi.md
 docs/UsageConcurrencyPointDto.md
 docs/UsageConcurrencySeriesDto.md
@@ -210,6 +215,7 @@ models/admin-organization-member.ts
 models/admin-organization-overview-page.ts
 models/admin-organization-overview.ts
 models/admin-organization-usage.ts
+models/admin-organization-verified-creator.ts
 models/admin-region-overview-page.ts
 models/admin-region-overview.ts
 models/admin-runner.ts
@@ -228,6 +234,7 @@ models/audit-log.ts
 models/box-class.ts
 models/box-desired-state.ts
 models/box-labels.ts
+models/box-memory-usage-dto.ts
 models/box-progress-phase.ts
 models/box-progress.ts
 models/box-state.ts
@@ -263,6 +270,7 @@ models/job-status.ts
 models/job-type.ts
 models/job.ts
 models/log-entry.ts
+models/memory-incident-list-dto.ts
 models/metric-data-point.ts
 models/metric-series.ts
 models/metrics-response.ts
@@ -300,6 +308,7 @@ models/runner-cpu-incident.ts
 models/runner-full.ts
 models/runner-health-metrics.ts
 models/runner-healthcheck.ts
+models/runner-memory-incident.ts
 models/runner-service-health.ts
 models/runner-state.ts
 models/runner.ts
@@ -318,6 +327,7 @@ models/update-organization-member-access.ts
 models/update-organization-name.ts
 models/update-organization-role.ts
 models/update-region.ts
+models/update-registry-credential.ts
 models/usage-concurrency-point-dto.ts
 models/usage-concurrency-series-dto.ts
 models/user-public-key.ts

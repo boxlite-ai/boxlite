@@ -15,7 +15,6 @@ vi.mock('@/hooks/useConfig', () => ({
 
 vi.mock('@/components/billing/BillingAlerts', () => ({
   BillingAlerts: () => null,
-  SignupCreditBanner: () => <div data-testid="signup-credit-banner">Signup credit banner</div>,
 }))
 vi.mock('@/components/billing/BalanceLowBanner', () => ({
   BalanceLowBanner: ({ onGoToWallet }: { onGoToWallet: () => void }) => (
@@ -32,11 +31,11 @@ vi.mock('@/components/billing/WalletSection', () => ({
   WalletSection: () => <div data-testid="wallet-section">Wallet section</div>,
 }))
 
-function closestMaxWidthContainer(element: Element | null): Element | null {
+function closestPageContainer(element: Element | null): Element | null {
   let current = element
 
   while (current) {
-    if (current.classList.contains('max-w-[1440px]')) {
+    if (current.classList.contains('page-container')) {
       return current
     }
     current = current.parentElement
@@ -70,11 +69,11 @@ describe('Billing layout', () => {
     const heading = Array.from(document.querySelectorAll('h1')).find((element) => element.textContent === 'Billing')
     const tabs = document.querySelector('[data-slot="tabs-list"]')
     const activePanel = document.querySelector('[data-testid="plan-section"]')
-    const headingContainer = closestMaxWidthContainer(heading ?? null)
+    const headingContainer = closestPageContainer(heading ?? null)
 
     expect(headingContainer).not.toBeNull()
-    expect(closestMaxWidthContainer(tabs)).toBe(headingContainer)
-    expect(closestMaxWidthContainer(activePanel)).toBe(headingContainer)
+    expect(closestPageContainer(tabs)).toBe(headingContainer)
+    expect(closestPageContainer(activePanel)).toBe(headingContainer)
   })
 
   it('keeps critical balance warnings between the title and tabs in the wide-page container', () => {
@@ -89,10 +88,10 @@ describe('Billing layout', () => {
     const heading = Array.from(document.querySelectorAll('h1')).find((element) => element.textContent === 'Billing')
     const banner = document.querySelector('[data-testid="critical-balance-banner"]')
     const tabs = document.querySelector('[data-slot="tabs-list"]')
-    const headingContainer = closestMaxWidthContainer(heading ?? null)
+    const headingContainer = closestPageContainer(heading ?? null)
 
     expect(banner).not.toBeNull()
-    expect(closestMaxWidthContainer(banner)).toBe(headingContainer)
+    expect(closestPageContainer(banner)).toBe(headingContainer)
     expect(heading?.compareDocumentPosition(banner as Node) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     expect(banner?.compareDocumentPosition(tabs as Node) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     expect(banner?.parentElement?.classList.contains('mt-4')).toBe(true)
@@ -103,18 +102,5 @@ describe('Billing layout', () => {
       ;(banner as HTMLElement).click()
     })
     expect(document.querySelector('[data-testid="wallet-section"]')).not.toBeNull()
-  })
-
-  it('announces a pending signup credit on the Wallet tab only, above the wallet', () => {
-    root = createRoot(document.body.appendChild(document.createElement('div')))
-    act(() => root?.render(<Billing />))
-    expect(document.querySelector('[data-testid="signup-credit-banner"]')).toBeNull()
-
-    act(() => (document.querySelector('[data-testid="critical-balance-banner"]') as HTMLElement).click())
-    const signupBanner = document.querySelector('[data-testid="signup-credit-banner"]')
-    const wallet = document.querySelector('[data-testid="wallet-section"]')
-    expect(signupBanner).not.toBeNull()
-    expect(signupBanner?.compareDocumentPosition(wallet as Node) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
-    expect(signupBanner?.parentElement?.classList.contains('empty:hidden')).toBe(true)
   })
 })

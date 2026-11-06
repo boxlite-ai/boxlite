@@ -60,6 +60,21 @@ type RegistriesAPI interface {
 	// ListRegistryCredentialsExecute executes the request
 	//  @return []RegistryCredential
 	ListRegistryCredentialsExecute(r RegistriesAPIListRegistryCredentialsRequest) ([]RegistryCredential, *http.Response, error)
+
+	/*
+	UpdateRegistryCredential Update a registry credential
+
+	Replace the username and password without changing its scope or destroying dependent Boxes.
+
+	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
+	@param id Credential ID
+	@return RegistriesAPIUpdateRegistryCredentialRequest
+	*/
+	UpdateRegistryCredential(ctx context.Context, id string) RegistriesAPIUpdateRegistryCredentialRequest
+
+	// UpdateRegistryCredentialExecute executes the request
+	//  @return RegistryCredential
+	UpdateRegistryCredentialExecute(r RegistriesAPIUpdateRegistryCredentialRequest) (*RegistryCredential, *http.Response, error)
 }
 
 // RegistriesAPIService RegistriesAPI service
@@ -355,6 +370,131 @@ func (a *RegistriesAPIService) ListRegistryCredentialsExecute(r RegistriesAPILis
 	if r.xBoxLiteOrganizationID != nil {
 		parameterAddToHeaderOrQuery(localVarHeaderParams, "X-BoxLite-Organization-ID", r.xBoxLiteOrganizationID, "simple", "")
 	}
+	req, err := a.client.prepareRequest(r.ctx, localVarPath, localVarHTTPMethod, localVarPostBody, localVarHeaderParams, localVarQueryParams, localVarFormParams, formFiles)
+	if err != nil {
+		return localVarReturnValue, nil, err
+	}
+
+	localVarHTTPResponse, err := a.client.callAPI(req)
+	if err != nil || localVarHTTPResponse == nil {
+		return localVarReturnValue, localVarHTTPResponse, err
+	}
+
+	localVarBody, err := io.ReadAll(localVarHTTPResponse.Body)
+	localVarHTTPResponse.Body.Close()
+	localVarHTTPResponse.Body = io.NopCloser(bytes.NewBuffer(localVarBody))
+	if err != nil {
+		return localVarReturnValue, localVarHTTPResponse, err
+	}
+
+	if localVarHTTPResponse.StatusCode >= 300 {
+		newErr := &GenericOpenAPIError{
+			body:  localVarBody,
+			error: localVarHTTPResponse.Status,
+		}
+		return localVarReturnValue, localVarHTTPResponse, newErr
+	}
+
+	err = a.client.decode(&localVarReturnValue, localVarBody, localVarHTTPResponse.Header.Get("Content-Type"))
+	if err != nil {
+		newErr := &GenericOpenAPIError{
+			body:  localVarBody,
+			error: err.Error(),
+		}
+		return localVarReturnValue, localVarHTTPResponse, newErr
+	}
+
+	return localVarReturnValue, localVarHTTPResponse, nil
+}
+
+type RegistriesAPIUpdateRegistryCredentialRequest struct {
+	ctx context.Context
+	ApiService RegistriesAPI
+	id string
+	updateRegistryCredential *UpdateRegistryCredential
+	xBoxLiteOrganizationID *string
+}
+
+// Replacement username and password
+func (r RegistriesAPIUpdateRegistryCredentialRequest) UpdateRegistryCredential(updateRegistryCredential UpdateRegistryCredential) RegistriesAPIUpdateRegistryCredentialRequest {
+	r.updateRegistryCredential = &updateRegistryCredential
+	return r
+}
+
+// Use with JWT to specify the organization ID
+func (r RegistriesAPIUpdateRegistryCredentialRequest) XBoxLiteOrganizationID(xBoxLiteOrganizationID string) RegistriesAPIUpdateRegistryCredentialRequest {
+	r.xBoxLiteOrganizationID = &xBoxLiteOrganizationID
+	return r
+}
+
+func (r RegistriesAPIUpdateRegistryCredentialRequest) Execute() (*RegistryCredential, *http.Response, error) {
+	return r.ApiService.UpdateRegistryCredentialExecute(r)
+}
+
+/*
+UpdateRegistryCredential Update a registry credential
+
+Replace the username and password without changing its scope or destroying dependent Boxes.
+
+ @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
+ @param id Credential ID
+ @return RegistriesAPIUpdateRegistryCredentialRequest
+*/
+func (a *RegistriesAPIService) UpdateRegistryCredential(ctx context.Context, id string) RegistriesAPIUpdateRegistryCredentialRequest {
+	return RegistriesAPIUpdateRegistryCredentialRequest{
+		ApiService: a,
+		ctx: ctx,
+		id: id,
+	}
+}
+
+// Execute executes the request
+//  @return RegistryCredential
+func (a *RegistriesAPIService) UpdateRegistryCredentialExecute(r RegistriesAPIUpdateRegistryCredentialRequest) (*RegistryCredential, *http.Response, error) {
+	var (
+		localVarHTTPMethod   = http.MethodPut
+		localVarPostBody     interface{}
+		formFiles            []formFile
+		localVarReturnValue  *RegistryCredential
+	)
+
+	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "RegistriesAPIService.UpdateRegistryCredential")
+	if err != nil {
+		return localVarReturnValue, nil, &GenericOpenAPIError{error: err.Error()}
+	}
+
+	localVarPath := localBasePath + "/images/registries/{id}"
+	localVarPath = strings.Replace(localVarPath, "{"+"id"+"}", url.PathEscape(parameterValueToString(r.id, "id")), -1)
+
+	localVarHeaderParams := make(map[string]string)
+	localVarQueryParams := url.Values{}
+	localVarFormParams := url.Values{}
+	if r.updateRegistryCredential == nil {
+		return localVarReturnValue, nil, reportError("updateRegistryCredential is required and must be specified")
+	}
+
+	// to determine the Content-Type header
+	localVarHTTPContentTypes := []string{"application/json"}
+
+	// set Content-Type header
+	localVarHTTPContentType := selectHeaderContentType(localVarHTTPContentTypes)
+	if localVarHTTPContentType != "" {
+		localVarHeaderParams["Content-Type"] = localVarHTTPContentType
+	}
+
+	// to determine the Accept header
+	localVarHTTPHeaderAccepts := []string{"application/json"}
+
+	// set Accept header
+	localVarHTTPHeaderAccept := selectHeaderAccept(localVarHTTPHeaderAccepts)
+	if localVarHTTPHeaderAccept != "" {
+		localVarHeaderParams["Accept"] = localVarHTTPHeaderAccept
+	}
+	if r.xBoxLiteOrganizationID != nil {
+		parameterAddToHeaderOrQuery(localVarHeaderParams, "X-BoxLite-Organization-ID", r.xBoxLiteOrganizationID, "simple", "")
+	}
+	// body params
+	localVarPostBody = r.updateRegistryCredential
 	req, err := a.client.prepareRequest(r.ctx, localVarPath, localVarHTTPMethod, localVarPostBody, localVarHeaderParams, localVarQueryParams, localVarFormParams, formFiles)
 	if err != nil {
 		return localVarReturnValue, nil, err

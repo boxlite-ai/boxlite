@@ -7,45 +7,103 @@ use std::process::{Command, Stdio};
 
 use anyhow::{Context, Result, bail};
 use boxlite::runtime::layout::{FilesystemLayout, FsLayoutConfig};
-use boxlite::{LiteBox, SshAccount, SshConfig};
+use boxlite::{BoxliteRestOptions, BoxliteRuntime, LiteBox, SshAccount, SshConfig};
+use sha2::{Digest, Sha256};
 
 use crate::cli::GlobalFlags;
 
 pub(super) async fn execute(target: &str, global: &GlobalFlags) -> Result<()> {
-    super::require_local(global)?;
-    let options = global.resolve_runtime_options()?;
-    let home = options.home_dir.clone();
-    let runtime = global.create_runtime_with_options(options)?;
+    let connection = ConnectionTarget {
+        context: global.resolved_context(),
+        rest: global.rest_options()?,
+    };
+    let (runtime, home) = match &connection.rest {
+        Some(options) => {
+            let home = global
+                .credential_store()
+                .path()?
+                .parent()
+                .context("missing credential home")?
+                .to_path_buf();
+            (BoxliteRuntime::rest(options.clone())?, home)
+        }
+        None => {
+            let options = global.resolve_runtime_options()?;
+            let home = options.home_dir.clone();
+            (global.create_runtime_with_options(options)?, home)
+        }
+    };
     let sandbox = runtime.get(target).await?.context("No such box")?;
-    println!(
-        "{}",
-        configure(&sandbox, &home, &global.resolved_context()).await?
-    );
+    if connection.rest.is_some() {
+        crate::credentials::create_secure_dir(&home)?;
+    }
+    println!("{}", configure(&sandbox, &home, &connection).await?);
     Ok(())
 }
 
+struct ConnectionTarget {
+    context: String,
+    rest: Option<BoxliteRestOptions>,
+}
+
+impl ConnectionTarget {
+    fn remote_scope(&self) -> Result<Option<String>> {
+        self.rest
+            .as_ref()
+            .map(|rest| {
+                // Fixed-size safe path component; credential rotation retains SSH identity.
+                let identity = serde_json::to_vec(&(
+                    &self.context,
+                    rest.url.trim_end_matches('/'),
+                    rest.path_prefix.as_deref().unwrap_or(""),
+                ))?;
+                Ok(format!("{:x}", Sha256::digest(identity)))
+            })
+            .transpose()
+    }
+}
+
 /// Apply managed credentials and describe how to connect after CLI exit.
-async fn configure(sandbox: &LiteBox, home: &Path, context: &str) -> Result<String> {
+async fn configure(
+    sandbox: &LiteBox,
+    home: &Path,
+    connection: &ConnectionTarget,
+) -> Result<String> {
     let home = fs::canonicalize(home).context("resolve runtime home")?;
-    let layout = FilesystemLayout::new(home.clone(), FsLayoutConfig::without_bind_mount());
-    let directory = layout
-        .box_layout(sandbox.id().as_str(), false)?
-        .root()
-        .join("ssh");
+    let directory = match connection.remote_scope()? {
+        Some(scope) => home
+            .join("ssh/remote")
+            .join(scope)
+            .join(sandbox.id().as_str()),
+        None => {
+            let layout = FilesystemLayout::new(home.clone(), FsLayoutConfig::without_bind_mount());
+            layout
+                .box_layout(sandbox.id().as_str(), false)?
+                .root()
+                .join("ssh")
+        }
+    };
     let private_key = directory.join("client_key");
     let command = connection_command(
         &std::env::current_exe()?,
         &home,
         sandbox.id().as_str(),
         &private_key,
-        context,
+        connection,
     )?;
     let config = tokio::task::spawn_blocking(move || managed_config(&directory)).await??;
-    sandbox.ssh().configure(config).await?;
+    let status = sandbox.ssh().configure(config).await?;
+    let guidance = if connection.rest.is_some() {
+        "The connection requires enabled guest SSH and server tunnel support with inbound access. Proxy opens a public tunnel that remains open after exit.\n\nCopy and run the following command to enter the box:"
+    } else {
+        "Warning: CLI exit stops non-detached boxes. The connection command requires a running detached box (created with `boxlite create` or `boxlite run -d`).\n\nCopy and run the following command to enter a running detached box:"
+    };
     Ok(format!(
-        "SSH configured for box {}.\n\nPrivate key: {}\nLogin: box\nGuest address: 0.0.0.0:22\n\nWarning: CLI exit stops non-detached boxes. The connection command requires a running detached box (created with `boxlite create` or `boxlite run -d`).\n\nCopy and run the following command to enter a running detached box:\n\n  {command}\n",
+        "SSH configured for box {}.\n\nPrivate key: {}\nLogin: box\nGuest address: {}\nSSH host key fingerprint: {}\n\n{guidance}\n\n  {command}\n",
         sandbox.name().unwrap_or(sandbox.id().as_str()),
         private_key.display(),
+        status.listen_address,
+        status.host_key_fingerprint,
     ))
 }
 
@@ -135,7 +193,7 @@ fn connection_command(
     home: &Path,
     id: &str,
     key: &Path,
-    context: &str,
+    connection: &ConnectionTarget,
 ) -> Result<String> {
     let text = |path: &Path| -> Result<String> {
         let value = path.to_str().context("SSH command paths must be UTF-8")?;
@@ -147,13 +205,40 @@ fn connection_command(
         }
         Ok(value.into())
     };
-    let proxy = format!(
-        "{} --home {} --context {} ssh proxy {}",
+    let mut proxy = format!(
+        "{} --home {}",
         quote(&text(executable)?),
         quote(&text(home)?),
-        quote(context),
-        quote(id)
     );
+    if connection.context.chars().any(char::is_control) {
+        bail!("SSH command context cannot contain control characters");
+    }
+    let hostname = if let Some(rest) = &connection.rest {
+        let prefix = rest.path_prefix.as_deref().unwrap_or("");
+        if rest.url.chars().chain(prefix.chars()).any(char::is_control) {
+            bail!("SSH command routing cannot contain control characters");
+        }
+        // URL selection uses default credentials; the parser rejects combining it
+        // with --context. Named contexts resolve their endpoint when proxy runs.
+        if connection.context == crate::credentials::DEFAULT_PROFILE {
+            proxy.push_str(&format!(" --url={}", quote(&rest.url)));
+        } else {
+            proxy.push_str(&format!(" --context={}", quote(&connection.context)));
+        }
+        proxy.push_str(&format!(" --path-prefix={}", quote(prefix)));
+        proxy.push_str(&format!(" ssh --proxy -- {}", quote(id)));
+        format!(
+            "boxlite-{}-{id}",
+            connection.remote_scope()?.context("missing remote scope")?
+        )
+    } else {
+        proxy.push_str(&format!(
+            " --context {} ssh --proxy -- {}",
+            quote(&connection.context),
+            quote(id)
+        ));
+        id.to_string()
+    };
     // Unlike -i's early filesystem check, IdentityFile expands SSH tokens
     // before loading the key. Quote for ssh_config first, then for the shell.
     let identity = text(key)?
@@ -164,7 +249,7 @@ fn connection_command(
         "ssh -o {} -o IdentitiesOnly=yes -o {} {}",
         quote(&format!("IdentityFile=\"{identity}\"")),
         quote(&format!("ProxyCommand={}", proxy.replace('%', "%%"))),
-        quote(&format!("box@{id}"))
+        quote(&format!("box@{hostname}"))
     ))
 }
 

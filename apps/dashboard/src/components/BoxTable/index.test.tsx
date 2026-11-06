@@ -126,6 +126,38 @@ describe('BoxTable pagination controls', () => {
     return props
   }
 
+  it.each([
+    ['Start', BoxState.STOPPED, 'handleStart'],
+    ['Stop', BoxState.STARTED, 'handleStop'],
+    ['Recover', BoxState.ERROR, 'handleRecover'],
+  ] as const)('dispatches %s for the selected box without opening its row', (label, state, handler) => {
+    const box = { ...makeBox('action-target'), state, recoverable: true }
+    const props = renderBoxTable({ data: [box] })
+    const actions = document.querySelectorAll<HTMLButtonElement>(`button[title="${label}"]`)
+    expect(actions).toHaveLength(2)
+
+    actions.forEach((button) => act(() => button.click()))
+
+    expect(props[handler]).toHaveBeenCalledTimes(2)
+    expect(props[handler]).toHaveBeenCalledWith(box.id)
+    expect(props.onRowClick).not.toHaveBeenCalled()
+  })
+
+  it('keeps a transitioning box action disabled', () => {
+    const props = renderBoxTable({ data: [{ ...makeBox('busy'), state: BoxState.STARTING }] })
+    const actions = document.querySelectorAll<HTMLButtonElement>('button[title="Working…"]')
+    expect(actions).toHaveLength(2)
+
+    actions.forEach((button) => {
+      expect(button.disabled).toBe(true)
+      act(() => button.click())
+    })
+
+    expect(props.handleStart).not.toHaveBeenCalled()
+    expect(props.handleStop).not.toHaveBeenCalled()
+    expect(props.handleRecover).not.toHaveBeenCalled()
+  })
+
   it('does not navigate when the click ends a text selection over a row', () => {
     const onRowClick = vi.fn()
     renderBoxTable({ onRowClick, data: [makeBox('1')] })

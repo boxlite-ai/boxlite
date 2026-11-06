@@ -99,7 +99,7 @@ describe('Organization settings tabs', () => {
 
   it('opens Member directly from a bookmarked tab URL', async () => {
     await renderPage('/dashboard/settings?tab=member')
-    expect(document.querySelector('[aria-label="Current organization"]')?.textContent).toBe('Acme')
+    expect(document.querySelector('h1 + p')?.textContent).toBe('Manage settings and members for Acme.')
     expect(document.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toBe('Member')
     expect(document.querySelector('tbody')?.textContent).toContain('owner@example.com')
   })

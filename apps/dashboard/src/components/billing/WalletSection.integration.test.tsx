@@ -148,9 +148,11 @@ describe('WalletSection top-up checkout', () => {
     mocks.wallet.creditCardConnected = false
     mocks.wallet.usageChargeMultiplier = undefined
     mocks.topUpWallet.mockClear()
+    mocks.fetchCheckoutUrl.mockReset()
     mocks.invoicesQuery.mockClear()
     mocks.walletTransactionsQuery.mockClear()
     mocks.topUpWallet.mockResolvedValue({ url: 'https://checkout.stripe.com/pay/cs_top_up' })
+    mocks.fetchCheckoutUrl.mockResolvedValue('https://checkout.stripe.com/c/pay/cs_connect')
     mocks.totalsUnknown = false
     mocks.historiesPending = false
     mocks.walletPending = false
@@ -162,6 +164,24 @@ describe('WalletSection top-up checkout', () => {
     root = null
     document.body.innerHTML = ''
     vi.restoreAllMocks()
+  })
+
+  it('connects a card through the shared checkout action', async () => {
+    const checkoutWindow = { location: { href: '' }, close: vi.fn() }
+    const open = vi.spyOn(window, 'open').mockReturnValue(checkoutWindow as unknown as Window)
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    await act(async () => {
+      root = createRoot(host)
+      root.render(<WalletSection />)
+    })
+    const connect = [...host.querySelectorAll('button')].find((button) => button.textContent?.trim() === 'Connect')
+    expect(connect).toBeDefined()
+    await act(async () => connect!.click())
+    expect(open).toHaveBeenCalledWith('', '_blank')
+    expect(mocks.fetchCheckoutUrl).toHaveBeenCalledTimes(1)
+    expect(checkoutWindow.location.href).toBe('https://checkout.stripe.com/c/pay/cs_connect')
+    expect(mocks.topUpWallet).not.toHaveBeenCalled()
   })
 
   it('opens the returned payment page for an organization without a saved card', async () => {

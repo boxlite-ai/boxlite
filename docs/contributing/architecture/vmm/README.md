@@ -330,6 +330,12 @@ today.
   it claims. `build` reports every conflict at once, naming the claimant and
   the owner, or returns an immutable `Chipset` that owns the devices. Devices register while
   the VM is built; M6 and M7 change the guest without adding bus devices.
+- **Composition.** `devices::add_all` is the one place that names device
+  types: it adds the legacy platform devices, then each configured device in
+  slot order through `add_slot_device`, and `virtio::mmio::add_device` claims a
+  window and line, adds the worker slot and builds the transport. Adding a
+  device type is one line in `add_all`; `Vm::with_devices` and `vm.rs` stay
+  unchanged.
 - **Dispatch.** `Chipset::dispatch` serves MMIO and port exits through the buses and returns every
   other exit to the vCPU loop. An access must lie entirely inside one range,
   as in Firecracker's bus. Any other access reads `0xFF`, drops its write and
@@ -402,13 +408,17 @@ worker slot synchronously.
     post-DRIVER_OK queue-write rejection, Status=0 reset, and a `VirtQueues`
     facade that validates the dense queue set, applies EVENT_IDX, tracks each
     deferred chain's head so completion happens exactly once, keeps
-    `save`/`restore` as `SnapshotError::Unsupported` stubs until M8, runs the
-    disable/drain/enable notification loop, and lets a device defer a chain's
-    completion to its backend;
+    `save`/`restore` as `SnapshotError::Unsupported` until M8, processes at
+    most one complete chain per callback, re-enables notifications and
+    schedules pending work through a generation-bound continuation;
   - virtio-blk, virtio-vsock, virtio-net, virtio-console and virtio-rng;
-  - virtio-balloon with free page reporting, so the host can reclaim unused
-    guest memory as it can with libkrun today: at once on Linux, and under
-    memory pressure on macOS, where `MADV_DONTNEED` only deactivates pages;
+  - reporting-only virtio-balloon: whole-chain validation, raw GPA and aligned
+    HVA queue-control protection, inward private-anonymous reclaim before
+    used, unchanged capacity and safe reuse; `Immediate` discards with
+    `MADV_DONTNEED`, while Linux `Lazy` marks with `MADV_FREE` so reclaim
+    follows memory pressure; Darwin `MADV_DONTNEED` may need pressure. Linux
+    x86_64, Linux arm64 and macOS arm64 real guests are all completion gates;
+    arm64 boot dependencies cannot be replaced by unit tests;
   - the virtio-fs core.
 - **M3:** virtio-fs passthrough for user volumes.
 - **M7:** virtio-mem.
@@ -430,15 +440,17 @@ worker slot synchronously.
     (`target/arm/hvf/hvf.c:2273-2306`). libkrun, written for a userspace GIC,
     parks until the deadline in `CNTV_CVAL_EL0`
     (`libkrun/src/hvf/src/lib.rs:705-721`).
-- **The virtio workers.**
-  - One `virtio-worker` thread, started at the first DRIVER_OK, runs every
-    virtio device's events, as Firecracker and libkrun run their devices.
-  - A vCPU's queue-notify write sets the queue's kick bit and wakes the
-    workers' `mio` poller; the thread calls the device's `on_event`, and
-    the device processes the queue and raises its interrupt itself.
-  - A slow `on_event` delays every other device. The `WorkerRuntime` seam
-    keeps per-device threads (Cloud Hypervisor, crosvm) a swap that leaves the
-    transport, the devices and `Vm` unchanged.
+- **Shared virtio execution.**
+  - One lazy `mio::Poll`/waker/thread dispatches generation-bound queue kicks
+    and backend events. The device owns the prepared queues and completion.
+  - Common drain handles at most one complete chain, then returns. A durable,
+    coalesced continuation admits backlog next pass after other ready work,
+    even without another guest kick. Balloon has no private scheduler.
+  - A reclaim syscall may still block. Count bounds are not syscall-time,
+    total CPU or throughput guarantees; stop timeout is Fatal and retains RAM.
+  - Status=0 closes admission and waits for the old generation before reset.
+    VM exit and Drop stop/join before unmap. `WorkerRuntime` preserves the
+    future per-device seam without adding a second runtime in M2.
 - **The `run()` thread.**
   - It waits on one poller for stop requests, vCPU outcomes and device
     failures.

@@ -10,7 +10,7 @@ export function domainHandlers() {
         {
           hostname: 'demo-web.apps.example',
           url: 'https://demo-web.apps.example',
-          target: { type: 'box', box: 'mock-web-box', port: 3000 },
+          target: { type: 'box', box: 'mock-box-running', port: 3000 },
         },
         {
           hostname: 'demo-shop.apps.example',

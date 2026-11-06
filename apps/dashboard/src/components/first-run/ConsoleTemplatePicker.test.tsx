@@ -4,7 +4,14 @@ import { createRoot, type Root } from 'react-dom/client'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { ConsoleTemplatePicker } from './ConsoleTemplatePicker'
-const state = vi.hoisted(() => ({ create: vi.fn(), navigate: vi.fn(), isError: false }))
+const state = vi.hoisted(() => ({
+  create: vi.fn(),
+  navigate: vi.fn(),
+  isError: false,
+  canCreate: true,
+  memberLoaded: true,
+  reload: vi.fn(),
+}))
 vi.mock('@/hooks/mutations/useCreateBoxMutation', () => ({
   useCreateBoxMutation: () => ({ mutateAsync: state.create, reset: vi.fn(), isPending: false, isError: state.isError }),
 }))
@@ -12,11 +19,20 @@ vi.mock('react-router-dom', async () => ({
   ...(await vi.importActual('react-router-dom')),
   useNavigate: () => state.navigate,
 }))
+vi.mock('@/hooks/useSelectedOrganization', () => ({
+  useSelectedOrganization: () => ({
+    authenticatedUserHasPermission: () => state.canCreate,
+    authenticatedUserOrganizationMember: state.memberLoaded ? { id: 'member-1' } : null,
+  }),
+}))
 let host: HTMLDivElement, root: Root
 beforeEach(() => {
   globalThis.IS_REACT_ACT_ENVIRONMENT = true
   vi.clearAllMocks()
   state.isError = false
+  state.canCreate = true
+  state.memberLoaded = true
+  vi.stubGlobal('location', { reload: state.reload, assign: state.reload })
   host = document.createElement('div')
   document.body.append(host)
   root = createRoot(host)
@@ -24,6 +40,7 @@ beforeEach(() => {
 afterEach(async () => {
   await act(async () => root.unmount())
   host.remove()
+  vi.unstubAllGlobals()
 })
 async function mount(url = '/') {
   await act(async () =>
@@ -104,9 +121,52 @@ it('retires Coder Universal from selection and search and falls back to Python f
   expect(host.querySelector('[aria-label="Select Coder Universal"]')).toBeNull()
   expect(host.querySelector('[aria-label="Select Python"]')?.getAttribute('aria-pressed')).toBe('true')
   await click('Create Box')
-  expect(state.create).toHaveBeenCalledWith(
-    expect.objectContaining({ image: 'docker.io/library/python:3.12-slim' }),
-  )
+  expect(state.create).toHaveBeenCalledWith(expect.objectContaining({ image: 'docker.io/library/python:3.12-slim' }))
   await input('Search templates', 'coder')
   expect(host.textContent).toContain('No templates found')
+})
+
+it('blocks console creation without Box write permission', async () => {
+  state.canCreate = false
+  await mount()
+  const button = Array.from(host.querySelectorAll('button')).find((e) => e.textContent === 'Create Box')!
+  expect(button.disabled).toBe(true)
+  expect(host.textContent).toContain('You need Box write permission to create a Box.')
+  await click('Create Box')
+  expect(state.create).not.toHaveBeenCalled()
+})
+
+it('offers a page reload when membership is unavailable without claiming denial', async () => {
+  state.canCreate = false
+  state.memberLoaded = false
+  await mount()
+  expect(host.textContent).toContain('Permissions are unavailable.')
+  expect(host.textContent).not.toContain('You need Box write permission')
+  await click('Reload page')
+  expect(state.reload).toHaveBeenCalledTimes(1)
+  expect(state.create).not.toHaveBeenCalled()
+})
+
+it('preserves the console template and name across permission recovery', async () => {
+  state.canCreate = false
+  state.memberLoaded = false
+  await mount('/?from=images')
+  await click('Select Node.js')
+  await input('Box name', 'my-node')
+  await click('Reload page')
+  expect(state.reload).toHaveBeenCalledWith(expect.stringContaining('method=console'))
+  const destination = new URL(state.reload.mock.calls[0][0], 'https://console.example')
+  expect(destination.pathname).toBe('/dashboard/quickstart')
+  expect(destination.searchParams.get('from')).toBe('images')
+  expect([...destination.searchParams.keys()].sort()).toEqual(['boxName', 'from', 'method', 'template'])
+  await act(async () => root.unmount())
+  root = createRoot(host)
+  await mount(destination.pathname + destination.search)
+  expect(host.querySelector('[aria-label="Select Node.js"]')?.getAttribute('aria-pressed')).toBe('true')
+  expect(host.querySelector<HTMLInputElement>('[aria-label="Box name"]')?.value).toBe('my-node')
+})
+it.each(['', 'invalid name'])('keeps invalid restored name %j blocked', async (name) => {
+  await mount('/?boxName=' + encodeURIComponent(name))
+  expect(host.querySelector<HTMLInputElement>('[aria-label="Box name"]')?.value).toBe(name)
+  expect(Array.from(host.querySelectorAll('button')).find((e) => e.textContent === 'Create Box')!.disabled).toBe(true)
 })

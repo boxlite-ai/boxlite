@@ -151,6 +151,7 @@ fn agrees_with_validate_on_command_line_limits() {
             kernel: "vmlinux".into(),
             cmdline,
             initramfs: None,
+            disks: Vec::new(),
         };
         assert_eq!(config.validate().is_ok(), accepted, "{config:?}");
     }

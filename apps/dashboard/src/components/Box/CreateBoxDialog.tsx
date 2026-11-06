@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { AsciiButton } from '@/components/ascii'
 import { AsciiChip, BRAND, PanelNote } from '@/components/ascii'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
@@ -1090,23 +1091,20 @@ export const CreateBoxDialog = ({
           </p>
         )}
         <div className="grid shrink-0 grid-cols-2 gap-[10px] border-t border-border px-4 py-4 sm:flex sm:justify-end sm:px-6">
-          <button
-            type="button"
-            onClick={() => setOpen(false)}
-            className="border border-border px-[18px] py-[11px] text-[13px] font-medium transition-colors hover:bg-card focus-visible:border-brand focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/35 sm:py-[10px]"
-          >
+          <AsciiButton className="h-11 sm:h-9" type="button" onClick={() => setOpen(false)}>
             Cancel
-          </button>
-          <button
+          </AsciiButton>
+          <AsciiButton
+            variant="primary"
+            className="h-11 sm:h-9"
             type="button"
             onClick={handleCreate}
             disabled={
               submitting || !selectedOrganization?.id || !nameValid || Boolean(lifecycleError) || Boolean(mountError)
             }
-            className="bg-primary px-5 py-[11px] text-[13px] font-semibold text-primary-foreground transition-opacity hover:opacity-85 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/35 disabled:cursor-not-allowed disabled:opacity-50 sm:py-[10px]"
           >
             {submitting ? 'Creating…' : 'Create Box'}
-          </button>
+          </AsciiButton>
         </div>
       </DialogContent>
     </Dialog>

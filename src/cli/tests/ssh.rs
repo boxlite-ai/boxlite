@@ -255,19 +255,19 @@ async fn ssh_local_configure_forward_and_disable() {
         command.arg("--home").arg(&ctx.home).arg("ssh").args(args);
         command
     };
-    let status = |what| output_status(&ssh(&["status", &id]).output().unwrap(), what);
+    let status = |what| output_status(&ssh(&["--status", &id]).output().unwrap(), what);
 
     assert!(!status("initial status").enabled);
 
-    let mut configure = ssh(&["configure", &id]);
+    let mut configure = ssh(&["--configure", &id]);
     configure.args(keys.flags("alice"));
-    let configured = output_status(&configure.output().unwrap(), "configure");
+    let configured = output_status(&configure.output().unwrap(), "--configure");
     assert!(configured.enabled);
     assert_eq!(configured.listen_address, "0.0.0.0:2222");
 
     // Each `forward` only observes SSH; logins work and the listener survives.
     for _ in 0..2 {
-        let mut forwarder = Forwarder::spawn(ssh(&["forward", &id]));
+        let mut forwarder = Forwarder::spawn(ssh(&["--tunnel", &id]));
         let address = forwarder.address;
         let output = ssh_exec(
             address,
@@ -294,7 +294,7 @@ async fn ssh_local_configure_forward_and_disable() {
     }
 
     // Configure a dynamic guest port explicitly, then forward without reconfiguring.
-    let mut configure = ssh(&["configure", &id, "--guest-listen", "0.0.0.0:0"]);
+    let mut configure = ssh(&["--configure", &id, "--guest-listen", "0.0.0.0:0"]);
     configure.args(keys.flags("alice"));
     let dynamic = output_status(&configure.output().unwrap(), "configure dynamic guest port");
     assert!(dynamic.enabled);
@@ -308,7 +308,7 @@ async fn ssh_local_configure_forward_and_disable() {
         .unwrap();
     assert_ne!(guest_port, 0);
 
-    let mut forwarder = Forwarder::spawn(ssh(&["forward", &id]));
+    let mut forwarder = Forwarder::spawn(ssh(&["--tunnel", &id]));
     let address = forwarder.address;
     let output = ssh_exec(
         address,
@@ -336,9 +336,9 @@ async fn ssh_local_configure_forward_and_disable() {
     );
 
     // Disabled SSH refuses `forward`, and nothing answers on the old port.
-    let disabled = output_status(&ssh(&["disable", &id]).output().unwrap(), "disable");
+    let disabled = output_status(&ssh(&["--disable", &id]).output().unwrap(), "--disable");
     assert!(!disabled.enabled);
-    let refused = ssh(&["forward", &id]).output().unwrap();
+    let refused = ssh(&["--tunnel", &id]).output().unwrap();
     assert!(!refused.status.success());
     assert!(String::from_utf8_lossy(&refused.stderr).contains("disabled"));
 
@@ -385,10 +385,10 @@ async fn ssh_local_setup_enable_and_restart() {
     let id = String::from_utf8_lossy(&run.stdout).trim().to_string();
     let ssh = |operation: &str| {
         let mut command = Command::new(env!("CARGO_BIN_EXE_boxlite"));
-        command
-            .arg("--home")
-            .arg(&ctx.home)
-            .args(["ssh", operation, &id]);
+        command.arg("--home").arg(&ctx.home).args(["ssh", &id]);
+        if operation != "setup" {
+            command.arg(operation);
+        }
         command
     };
     let key_dir = ctx.home.join("boxes").join(&id).join("ssh");
@@ -421,7 +421,7 @@ async fn ssh_local_setup_enable_and_restart() {
     let retry_key = std::fs::read(&client_key).expect("failed configure retains credentials");
     ctx.new_cmd().args(["start", &id]).assert().success();
     assert!(
-        !ssh("enable").output().unwrap().status.success(),
+        !ssh("--enable").output().unwrap().status.success(),
         "enable needs saved configuration"
     );
     let setup = || {
@@ -443,7 +443,7 @@ async fn ssh_local_setup_enable_and_restart() {
     let command = setup();
     let private_key = std::fs::read(&client_key).unwrap();
     assert_eq!(private_key, retry_key);
-    let first = output_status(&ssh("status").output().unwrap(), "setup status");
+    let first = output_status(&ssh("--status").output().unwrap(), "setup status");
     let host_file = tempfile::NamedTempFile::new().unwrap();
     let known_hosts = host_file.path();
     std::fs::write(
@@ -483,7 +483,7 @@ async fn ssh_local_setup_enable_and_restart() {
         nix::sys::signal::Signal::SIGHUP,
         nix::sys::signal::Signal::SIGTERM,
     ] {
-        let mut child = ssh("proxy")
+        let mut child = ssh("--proxy")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -515,17 +515,17 @@ async fn ssh_local_setup_enable_and_restart() {
             std::thread::sleep(Duration::from_millis(10));
         }
         assert!(
-            ssh("status").output().unwrap().status.success(),
+            ssh("--status").output().unwrap().status.success(),
             "home lock released"
         );
     }
     assert!(first.enabled);
     assert_eq!(first.listen_address, "0.0.0.0:22");
     assert_eq!(
-        output_status(&ssh("enable").output().unwrap(), "repeat enable"),
+        output_status(&ssh("--enable").output().unwrap(), "repeat enable"),
         first
     );
-    let mut forwarder = Forwarder::spawn(ssh("forward"));
+    let mut forwarder = Forwarder::spawn(ssh("--tunnel"));
     assert_eq!(
         ssh_exec(
             forwarder.address,
@@ -551,31 +551,32 @@ async fn ssh_local_setup_enable_and_restart() {
         .is_err()
     );
     assert!(forwarder.interrupt().0.success());
-    assert!(!output_status(&ssh("disable").output().unwrap(), "disable").enabled);
-    let enabled = output_status(&ssh("enable").output().unwrap(), "enable");
+    assert!(!output_status(&ssh("--disable").output().unwrap(), "--disable").enabled);
+    let enabled = output_status(&ssh("--enable").output().unwrap(), "--enable");
     assert_eq!(enabled.host_key_fingerprint, first.host_key_fingerprint);
     assert_eq!(enabled.generation, first.generation + 1);
     setup();
     assert_eq!(std::fs::read(&client_key).unwrap(), private_key);
     assert_eq!(
-        output_status(&ssh("status").output().unwrap(), "repeated setup").host_public_key,
+        output_status(&ssh("--status").output().unwrap(), "repeated setup").host_public_key,
         first.host_public_key
     );
 
     ctx.new_cmd().args(["stop", &id]).assert().success();
-    for operation in ["enable", "disable", "proxy"] {
+    for operation in ["--enable", "--disable", "--proxy"] {
         let result = ssh(operation).output().unwrap();
         assert!(!result.status.success());
         assert!(String::from_utf8_lossy(&result.stderr).contains("not running"));
     }
-    assert!(!output_status(&ssh("status").output().unwrap(), "stopped status").enabled);
+    assert!(!output_status(&ssh("--status").output().unwrap(), "stopped status").enabled);
     ctx.new_cmd().args(["start", &id]).assert().success();
-    let restored = output_status(&ssh("status").output().unwrap(), "restored status");
+    let restored = output_status(&ssh("--status").output().unwrap(), "restored status");
     assert!(restored.enabled);
     assert_eq!(restored.host_public_key, first.host_public_key);
     setup();
     assert_eq!(
-        output_status(&ssh("status").output().unwrap(), "setup after restart").host_key_fingerprint,
+        output_status(&ssh("--status").output().unwrap(), "setup after restart")
+            .host_key_fingerprint,
         first.host_key_fingerprint
     );
     ctx.cleanup_box(&id);
@@ -606,7 +607,7 @@ async fn ssh_setup_warns_that_non_detached_boxes_stop_on_exit() {
     drop(sandbox);
     drop(runtime);
 
-    let output = ctx.new_cmd().args(["ssh", "setup", &id]).output().unwrap();
+    let output = ctx.new_cmd().args(["ssh", &id]).output().unwrap();
     assert!(
         output.status.success(),
         "{}",
@@ -622,7 +623,10 @@ async fn ssh_setup_warns_that_non_detached_boxes_stop_on_exit() {
         "warn before presenting the connection command"
     );
     assert!(!stdout.contains("SSH is ready"));
-    ctx.new_cmd().args(["ssh", "proxy", &id]).assert().failure();
+    ctx.new_cmd()
+        .args(["ssh", "--proxy", &id])
+        .assert()
+        .failure();
     ctx.cleanup_box(&id);
 }
 
@@ -675,18 +679,18 @@ async fn ssh_serve_controls_and_forward_failure() {
     );
     let id = String::from_utf8_lossy(&run.stdout).trim().to_string();
     boxes.ids.push(id.clone());
-    let status = |what| output_status(&serve.client(&["ssh", "status", &id]), what);
+    let status = |what| output_status(&serve.client(&["ssh", "--status", &id]), what);
 
     assert!(!status("initial status").enabled);
     let configured = output_status(
-        &serve.client(&["ssh", "configure", &id, "--ssh-config", config]),
-        "configure",
+        &serve.client(&["ssh", "--configure", &id, "--ssh-config", config]),
+        "--configure",
     );
     assert!(configured.enabled);
-    assert_eq!(status("status"), configured);
+    assert_eq!(status("--status"), configured);
 
     // serve has no tunnel route; forwarding fails without changing configuration.
-    let forward = serve.client(&["ssh", "forward", &id]);
+    let forward = serve.client(&["ssh", "--tunnel", &id]);
     assert!(!forward.status.success());
     // The missing tunnel route returns a bare 404, unlike SSH handler errors.
     assert_eq!(
@@ -695,7 +699,7 @@ async fn ssh_serve_controls_and_forward_failure() {
     );
     assert_eq!(status("status after failed forward"), configured);
 
-    assert!(!output_status(&serve.client(&["ssh", "disable", &id]), "disable").enabled);
+    assert!(!output_status(&serve.client(&["ssh", "--disable", &id]), "--disable").enabled);
     assert!(!status("status after disable").enabled);
 
     drop(boxes);

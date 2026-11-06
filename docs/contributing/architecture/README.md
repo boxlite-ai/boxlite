@@ -11,7 +11,7 @@ How the BoxLite runtime's code fits together, for contributors. The user-level p
 - [Container capabilities](container-capabilities.md): the Linux capability API.
 - [Guest SSH](../../../src/guest/src/service/ssh/README.md): russh APIs, authentication,
   container workloads, forwarding, and shutdown ownership.
-- [Jailer threat model](../../../src/boxlite/src/jailer/THREAT_MODEL.md).
+- [Jailer threat model](../../../src/boxlite/src/jailer/README.md).
 
 ## Source map
 
@@ -24,6 +24,7 @@ How the BoxLite runtime's code fits together, for contributors. The user-level p
 | Networking  | `src/boxlite/src/net/`                          | [Networking](../../concepts/networking.md)    |
 | Jailer      | `src/boxlite/src/jailer/`                       | [Security](../../concepts/security.md)        |
 | Metrics     | `src/boxlite/src/metrics/`                      | [Metrics](../../concepts/metrics.md)          |
+| Agents      | `src/boxlite/src/agents/`                       | [Agents](../../reference/agents.md)           |
 | VMM         | `src/boxlite/src/vmm/`                          | —                                             |
 | Shared      | `src/shared/`                                   | —                                             |
 
@@ -226,6 +227,31 @@ To add a new Vmm implementation:
 2. Implement `VmmInstanceImpl` for the instance type
 3. Register in `VmmFactory`
 4. Add `VmmKind` variant
+
+## Agent adapters
+
+```text
+Agents / Agent / AgentTurn        agents/mod.rs: public facade, turn.wait polling
+        │ Arc<dyn AgentBackend>
+        ▼
+opencode::Session                 agents/opencode/: OpenCode 2.2 protocol over a Box tunnel
+```
+
+The facade forwards every operation to the private `AgentBackend` trait. Each
+agent implementation is one module whose agent type implements it. Operations
+the native interface lacks keep the trait's defaults, which return `Unsupported`
+naming the adapter before anything reaches the Box.
+
+### Adding an agent implementation
+
+1. Add a module under `src/boxlite/src/agents/` and implement `AgentBackend`
+   for its agent type: `adapter`, `config`, `capabilities`, `send`, `turn` and
+   `events`, plus any optional operation it supports.
+2. List every supported operation in its `capabilities`.
+3. Add a match arm for its implementation name in `Agents::create`.
+4. Before release, decide how `Agents::get` routes an agent ID to it. Today the
+   OpenCode `ses_` prefix picks the adapter, and a second adapter's IDs could
+   share that shape.
 
 ## Host-guest communication
 

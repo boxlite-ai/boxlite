@@ -17,7 +17,7 @@ define run_unit_coverage
 	cargo llvm-cov nextest --no-report --no-tests=warn $(NEXTEST_PROFILE_FLAG) $(RUST_UNIT_VMM_ARGS) $(NEXTEST_FILTER) || rc=$$?; \
 	cargo llvm-cov test --no-report $(RUST_UNIT_REST_ARGS) -- --test-threads=1 $(REST_CARGOTEST_FILTER) || rc=$$?; \
 	$(MAKE) coverage:runtime || rc=$$?; \
-	cargo llvm-cov nextest --no-report --no-tests=fail $(NEXTEST_PROFILE_FLAG) -p boxlite-cli --bins --test auth $(NEXTEST_FILTER) || rc=$$?; \
+	cargo llvm-cov nextest --no-report --no-tests=fail $(NEXTEST_PROFILE_FLAG) -p boxlite-cli --bins --test auth --test ssh_cloud --test custom_kernel_rc $(NEXTEST_FILTER) || rc=$$?; \
 	$(MAKE) coverage:bindings || rc=$$?; \
 	if [ "$$(uname)" = Linux ]; then \
 		cargo llvm-cov nextest $(GUEST_RUNNER_CONFIG) --no-report --no-tests=fail $(NEXTEST_PROFILE_FLAG) -p boxlite-guest $(NEXTEST_FILTER) || rc=$$?; \
@@ -78,7 +78,7 @@ coverage\:vmm\:kvm: _ensure-kvm
 
 # Add the real-kernel boots of VMM_KERNEL to the same profiles, listed the same way.
 # CI runs it only when the vmm path filter matches.
-coverage\:vmm\:boot: _ensure-kvm _ensure-vmm-kernel
+coverage\:vmm\:boot: _ensure-kvm _ensure-vmm-kernel $(VMM_BALLOON_INIT)
 	@cargo llvm-cov nextest --no-report --no-tests=fail --profile ci --retries 0 --status-level pass \
 		-p boxlite-vmm --lib --run-ignored only --test-threads=1 -E 'test(boot::tests::)'
 	@cargo llvm-cov report $(COVERAGE_REPORT_ARGS) --lcov --output-path target/coverage/lcov.info

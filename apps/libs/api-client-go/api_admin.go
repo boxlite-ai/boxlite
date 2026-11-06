@@ -186,6 +186,18 @@ type AdminAPI interface {
 	AdminListRunnerCpuIncidentsExecute(r AdminAPIAdminListRunnerCpuIncidentsRequest) (*CpuIncidentListDto, *http.Response, error)
 
 	/*
+	AdminListRunnerMemoryIncidents Query runner memory snapshots by host sample time range
+
+	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
+	@return AdminAPIAdminListRunnerMemoryIncidentsRequest
+	*/
+	AdminListRunnerMemoryIncidents(ctx context.Context) AdminAPIAdminListRunnerMemoryIncidentsRequest
+
+	// AdminListRunnerMemoryIncidentsExecute executes the request
+	//  @return MemoryIncidentListDto
+	AdminListRunnerMemoryIncidentsExecute(r AdminAPIAdminListRunnerMemoryIncidentsRequest) (*MemoryIncidentListDto, *http.Response, error)
+
+	/*
 	AdminListRunners List all runners
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
@@ -1336,6 +1348,8 @@ type AdminAPIAdminListOrganizationsOverviewRequest struct {
 	limit *float32
 	createdTo *string
 	createdFrom *string
+	boxCountScope *string
+	organizationId *string
 }
 
 // Organization ID or name
@@ -1364,6 +1378,18 @@ func (r AdminAPIAdminListOrganizationsOverviewRequest) CreatedTo(createdTo strin
 // Inclusive RFC 3339 instant, at most milliseconds.
 func (r AdminAPIAdminListOrganizationsOverviewRequest) CreatedFrom(createdFrom string) AdminAPIAdminListOrganizationsOverviewRequest {
 	r.createdFrom = &createdFrom
+	return r
+}
+
+// Count every retained Box state; omit to keep the existing active-state count.
+func (r AdminAPIAdminListOrganizationsOverviewRequest) BoxCountScope(boxCountScope string) AdminAPIAdminListOrganizationsOverviewRequest {
+	r.boxCountScope = &boxCountScope
+	return r
+}
+
+// Exact organization UUID; avoids name search and cannot be combined with q.
+func (r AdminAPIAdminListOrganizationsOverviewRequest) OrganizationId(organizationId string) AdminAPIAdminListOrganizationsOverviewRequest {
+	r.organizationId = &organizationId
 	return r
 }
 
@@ -1419,6 +1445,12 @@ func (a *AdminAPIService) AdminListOrganizationsOverviewExecute(r AdminAPIAdminL
 	}
 	if r.createdFrom != nil {
 		parameterAddToHeaderOrQuery(localVarQueryParams, "createdFrom", r.createdFrom, "form", "")
+	}
+	if r.boxCountScope != nil {
+		parameterAddToHeaderOrQuery(localVarQueryParams, "boxCountScope", r.boxCountScope, "form", "")
+	}
+	if r.organizationId != nil {
+		parameterAddToHeaderOrQuery(localVarQueryParams, "organizationId", r.organizationId, "form", "")
 	}
 	// to determine the Content-Type header
 	localVarHTTPContentTypes := []string{}
@@ -1611,7 +1643,7 @@ func (r AdminAPIAdminListRunnerCpuIncidentsRequest) To(to time.Time) AdminAPIAdm
 	return r
 }
 
-// Maximum rows, ordered by ID ascending.
+// Maximum rows after per-Box maximum CPU-seconds selection, ordered by ID ascending.
 func (r AdminAPIAdminListRunnerCpuIncidentsRequest) Limit(limit int32) AdminAPIAdminListRunnerCpuIncidentsRequest {
 	r.limit = &limit
 	return r
@@ -1655,6 +1687,148 @@ func (a *AdminAPIService) AdminListRunnerCpuIncidentsExecute(r AdminAPIAdminList
 	}
 
 	localVarPath := localBasePath + "/admin/runner-cpu-incidents"
+
+	localVarHeaderParams := make(map[string]string)
+	localVarQueryParams := url.Values{}
+	localVarFormParams := url.Values{}
+	if r.from == nil {
+		return localVarReturnValue, nil, reportError("from is required and must be specified")
+	}
+	if r.to == nil {
+		return localVarReturnValue, nil, reportError("to is required and must be specified")
+	}
+
+	parameterAddToHeaderOrQuery(localVarQueryParams, "from", r.from, "form", "")
+	parameterAddToHeaderOrQuery(localVarQueryParams, "to", r.to, "form", "")
+	if r.limit != nil {
+		parameterAddToHeaderOrQuery(localVarQueryParams, "limit", r.limit, "form", "")
+	} else {
+		var defaultValue int32 = 50
+		parameterAddToHeaderOrQuery(localVarQueryParams, "limit", defaultValue, "form", "")
+		r.limit = &defaultValue
+	}
+	if r.runnerId != nil {
+		parameterAddToHeaderOrQuery(localVarQueryParams, "runnerId", r.runnerId, "form", "")
+	}
+	// to determine the Content-Type header
+	localVarHTTPContentTypes := []string{}
+
+	// set Content-Type header
+	localVarHTTPContentType := selectHeaderContentType(localVarHTTPContentTypes)
+	if localVarHTTPContentType != "" {
+		localVarHeaderParams["Content-Type"] = localVarHTTPContentType
+	}
+
+	// to determine the Accept header
+	localVarHTTPHeaderAccepts := []string{"application/json"}
+
+	// set Accept header
+	localVarHTTPHeaderAccept := selectHeaderAccept(localVarHTTPHeaderAccepts)
+	if localVarHTTPHeaderAccept != "" {
+		localVarHeaderParams["Accept"] = localVarHTTPHeaderAccept
+	}
+	req, err := a.client.prepareRequest(r.ctx, localVarPath, localVarHTTPMethod, localVarPostBody, localVarHeaderParams, localVarQueryParams, localVarFormParams, formFiles)
+	if err != nil {
+		return localVarReturnValue, nil, err
+	}
+
+	localVarHTTPResponse, err := a.client.callAPI(req)
+	if err != nil || localVarHTTPResponse == nil {
+		return localVarReturnValue, localVarHTTPResponse, err
+	}
+
+	localVarBody, err := io.ReadAll(localVarHTTPResponse.Body)
+	localVarHTTPResponse.Body.Close()
+	localVarHTTPResponse.Body = io.NopCloser(bytes.NewBuffer(localVarBody))
+	if err != nil {
+		return localVarReturnValue, localVarHTTPResponse, err
+	}
+
+	if localVarHTTPResponse.StatusCode >= 300 {
+		newErr := &GenericOpenAPIError{
+			body:  localVarBody,
+			error: localVarHTTPResponse.Status,
+		}
+		return localVarReturnValue, localVarHTTPResponse, newErr
+	}
+
+	err = a.client.decode(&localVarReturnValue, localVarBody, localVarHTTPResponse.Header.Get("Content-Type"))
+	if err != nil {
+		newErr := &GenericOpenAPIError{
+			body:  localVarBody,
+			error: err.Error(),
+		}
+		return localVarReturnValue, localVarHTTPResponse, newErr
+	}
+
+	return localVarReturnValue, localVarHTTPResponse, nil
+}
+
+type AdminAPIAdminListRunnerMemoryIncidentsRequest struct {
+	ctx context.Context
+	ApiService AdminAPI
+	from *time.Time
+	to *time.Time
+	limit *int32
+	runnerId *string
+}
+
+// Inclusive host sample time, with timezone.
+func (r AdminAPIAdminListRunnerMemoryIncidentsRequest) From(from time.Time) AdminAPIAdminListRunnerMemoryIncidentsRequest {
+	r.from = &from
+	return r
+}
+
+// Exclusive host sample time, after from.
+func (r AdminAPIAdminListRunnerMemoryIncidentsRequest) To(to time.Time) AdminAPIAdminListRunnerMemoryIncidentsRequest {
+	r.to = &to
+	return r
+}
+
+// Maximum snapshots after per-Box maximum memory selection, ordered by ID ascending.
+func (r AdminAPIAdminListRunnerMemoryIncidentsRequest) Limit(limit int32) AdminAPIAdminListRunnerMemoryIncidentsRequest {
+	r.limit = &limit
+	return r
+}
+
+func (r AdminAPIAdminListRunnerMemoryIncidentsRequest) RunnerId(runnerId string) AdminAPIAdminListRunnerMemoryIncidentsRequest {
+	r.runnerId = &runnerId
+	return r
+}
+
+func (r AdminAPIAdminListRunnerMemoryIncidentsRequest) Execute() (*MemoryIncidentListDto, *http.Response, error) {
+	return r.ApiService.AdminListRunnerMemoryIncidentsExecute(r)
+}
+
+/*
+AdminListRunnerMemoryIncidents Query runner memory snapshots by host sample time range
+
+ @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
+ @return AdminAPIAdminListRunnerMemoryIncidentsRequest
+*/
+func (a *AdminAPIService) AdminListRunnerMemoryIncidents(ctx context.Context) AdminAPIAdminListRunnerMemoryIncidentsRequest {
+	return AdminAPIAdminListRunnerMemoryIncidentsRequest{
+		ApiService: a,
+		ctx: ctx,
+	}
+}
+
+// Execute executes the request
+//  @return MemoryIncidentListDto
+func (a *AdminAPIService) AdminListRunnerMemoryIncidentsExecute(r AdminAPIAdminListRunnerMemoryIncidentsRequest) (*MemoryIncidentListDto, *http.Response, error) {
+	var (
+		localVarHTTPMethod   = http.MethodGet
+		localVarPostBody     interface{}
+		formFiles            []formFile
+		localVarReturnValue  *MemoryIncidentListDto
+	)
+
+	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "AdminAPIService.AdminListRunnerMemoryIncidents")
+	if err != nil {
+		return localVarReturnValue, nil, &GenericOpenAPIError{error: err.Error()}
+	}
+
+	localVarPath := localBasePath + "/admin/runner-memory-incidents"
 
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}

@@ -54,5 +54,6 @@ extern CTunnelForwarderCloseCb cbTunnelForwarderClose(void);
 extern CBoxSshConfigureCb cbSSHConfigure(void);
 extern CBoxSshStatusCb cbSSHStatus(void);
 extern CBoxSshDisableCb cbSSHDisable(void);
+extern CBoxSshEnableCb cbSSHEnable(void);
 
 #endif // BOXLITE_GO_BRIDGE_H

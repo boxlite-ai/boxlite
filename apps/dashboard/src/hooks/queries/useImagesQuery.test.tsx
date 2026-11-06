@@ -68,6 +68,7 @@ describe('image catalog queries', () => {
     refetchAll = undefined
     queryClient.clear()
     document.body.innerHTML = ''
+    vi.useRealTimers()
     vi.clearAllMocks()
   })
 
@@ -84,7 +85,8 @@ describe('image catalog queries', () => {
     })
     for (let i = 0; i < 3; i += 1) {
       await act(async () => {
-        await new Promise((resolve) => setTimeout(resolve, 0))
+        if (vi.isFakeTimers()) await vi.advanceTimersByTimeAsync(1)
+        else await new Promise((resolve) => setTimeout(resolve, 0))
       })
     }
   }
@@ -138,5 +140,36 @@ describe('image catalog queries', () => {
     expect(mocks.getImage).not.toHaveBeenCalled()
     expect(shown('detail')).toBe('none')
     expect(mocks.listImages).toHaveBeenCalledWith('org-1')
+  })
+  it('refreshes list and usage after delayed image registration', async () => {
+    vi.useFakeTimers()
+    await renderProbe()
+    mocks.listImages.mockResolvedValue({ data: [{ name: 'newly-registered' }] })
+    mocks.getImageUsage.mockResolvedValue({ data: { count: 2, limit: 20 } })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_001)
+    })
+    expect(shown('list')).toBe('newly-registered')
+    expect(shown('usage')).toBe('2/20')
+    expect(mocks.listImages).toHaveBeenLastCalledWith('org-1')
+    act(() => root?.unmount())
+    root = null
+    const calls = mocks.listImages.mock.calls.length
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000)
+    })
+    expect(mocks.listImages).toHaveBeenCalledTimes(calls)
+  })
+
+  it('refreshes a still-fresh catalog when returning to Images', async () => {
+    queryClient.setDefaultOptions({ queries: { retry: false, staleTime: 300_000 } })
+    await renderProbe()
+    act(() => root?.unmount())
+    root = null
+    mocks.listImages.mockResolvedValue({ data: [{ name: 'registered-away' }] })
+    mocks.getImageUsage.mockResolvedValue({ data: { count: 2, limit: 20 } })
+    await renderProbe()
+    expect(shown('list')).toBe('registered-away')
+    expect(shown('usage')).toBe('2/20')
   })
 })

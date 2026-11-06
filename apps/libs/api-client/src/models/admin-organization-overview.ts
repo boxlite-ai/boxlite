@@ -15,7 +15,7 @@
 
 // May contain unused imports in some cases
 // @ts-ignore
-import type { AdminOrganizationCreator } from './admin-organization-creator';
+import type { AdminOrganizationVerifiedCreator } from './admin-organization-verified-creator';
 
 export interface AdminOrganizationOverview {
     /**
@@ -29,7 +29,7 @@ export interface AdminOrganizationOverview {
     /**
      * Current creator identity.
      */
-    'creator': AdminOrganizationCreator | null;
+    'creator': AdminOrganizationVerifiedCreator | null;
     'organizationId': string;
     'name': string;
     'memberCount': number;

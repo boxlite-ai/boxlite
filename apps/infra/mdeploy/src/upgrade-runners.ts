@@ -46,7 +46,7 @@ const CONNECT_ATTEMPTS = 30
 const CONNECT_PAUSE_SECONDS = 10
 /**
  * ~30 min at 5s apart. It has to stay above everything the payload can bound —
- * a 300s fetch and a 60s readiness gate — with room for the apt/tar/systemctl
+ * 300s fetches and two readiness gates of up to 150s each — with room for the apt/tar/systemctl
  * steps that take no timeout at all. Read it as "supervision must exceed
  * everything we can bound, with room for what we cannot".
  */
@@ -72,7 +72,8 @@ const RETRYABLE_SEND_ERRORS = /InvalidInstanceId|ThrottlingException|TooManyUpda
  * thirty-first attempt is refused exactly like the first, and retrying buries
  * the one line that says what to grant.
  */
-const RETRYABLE_SESSION_ERRORS = /Connection refused|Connection timed out|Connection closed|not yet ready|Could not SSH|kex_exchange_identification|Broken pipe/i
+const RETRYABLE_SESSION_ERRORS =
+  /Connection refused|Connection timed out|Connection closed|not yet ready|Could not SSH|kex_exchange_identification|Broken pipe/i
 
 /** ssh's own exit status for "could not establish the session". Always retryable. */
 const SSH_CONNECT_FAILURE = 255
@@ -125,10 +126,7 @@ export type UpgradeOneRequest = {
   payload: string
   /** The host as the control plane knows it, for the log. */
   label?: string
-} & (
-  | { cloud: 'aws'; target: string; region: string }
-  | { cloud: 'gcp'; target: string; project: string; zone: string }
-)
+} & ({ cloud: 'aws'; target: string; region: string } | { cloud: 'gcp'; target: string; project: string; zone: string })
 
 export type UpgradeContext = {
   run?: RunCommand
