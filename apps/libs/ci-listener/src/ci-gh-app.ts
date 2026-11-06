@@ -1,6 +1,7 @@
 /* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
 import type { KeyObject } from 'node:crypto'
-import { createGitHubAppJwt, githubRequest } from './github'
+import { createGitHubAppJwt, githubRequest, GitHubRequestError } from './github'
+import type { GitHubAccount } from './ci-github-oauth'
 import { GitHubAppSource } from './github-app'
 export interface CiGitHubAppOptions {
   clientId: string
@@ -212,6 +213,43 @@ export class CiGitHubApp {
     return choices.sort(
       (a, b) => a.accountType.localeCompare(b.accountType) || a.accountLogin.localeCompare(b.accountLogin),
     )
+  }
+
+  async installationFor(
+    account: GitHubAccount,
+    signal = AbortSignal.timeout(45_000),
+  ): Promise<VerifiedInstallation | null> {
+    this.id(account.accountId)
+    if (
+      !this.accountType ||
+      !['User', 'Organization'].includes(account.accountType) ||
+      account.accountType !== this.accountType ||
+      !/^[A-Za-z0-9][A-Za-z0-9-]{0,38}$/.test(account.accountLogin)
+    )
+      throw this.failure(403, 'GitHub account does not match the CI App')
+    let value: Installation
+    try {
+      value = (await githubRequest({
+        url: `https://api.github.com/${account.accountType === 'User' ? 'users' : 'orgs'}/${encodeURIComponent(account.accountLogin)}/installation`,
+        token: await this.appJwt(),
+        signal,
+      })) as Installation
+    } catch (error) {
+      if (error instanceof GitHubRequestError && error.status === 404) return null
+      throw this.failure(502, 'GitHub CI installation lookup failed')
+    }
+    this.id(value?.id)
+    if (
+      value.account?.id !== account.accountId ||
+      value.account?.type !== account.accountType ||
+      typeof value.account?.login !== 'string' ||
+      value.account.login.toLowerCase() !== account.accountLogin.toLowerCase() ||
+      value.suspended_at !== null ||
+      value.permissions?.[account.accountType === 'User' ? 'administration' : 'organization_self_hosted_runners'] !==
+        'write'
+    )
+      throw this.failure(403, 'GitHub CI installation identity, status or permissions denied')
+    return { ...account, installationId: value.id }
   }
 
   private async userInstallations(token: string, signal: AbortSignal) {

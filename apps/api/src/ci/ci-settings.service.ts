@@ -282,10 +282,10 @@ export class CiSettingsService implements CapacityProvider {
       if (!binding) throw new NotFoundException('CI connection not found')
       // Finalization locks its attempt before its binding; keep that ordering here.
       await tx.query(
-        `WITH pending AS (SELECT id FROM ci_connect_attempt WHERE organization_id=$1 AND app_client_id=$2
+        `WITH pending AS (SELECT id FROM ci_connect_attempt WHERE organization_id=$1 AND (app_client_id=$2 OR flow='web')
           AND state IN ('pending','polling','selecting','installation_required') ORDER BY id FOR UPDATE)
         UPDATE ci_connect_attempt SET state='cancelled',device_ciphertext=NULL,oauth_verifier_ciphertext=NULL,
-          oauth_token_ciphertext=NULL,lease_id=NULL,lease_until=NULL WHERE id IN (SELECT id FROM pending)`,
+          oauth_token_ciphertext=NULL,web_target_ciphertext=NULL,lease_id=NULL,lease_until=NULL WHERE id IN (SELECT id FROM pending)`,
         [captured.organizationId, binding.app_client_id],
       )
       await tx.query(

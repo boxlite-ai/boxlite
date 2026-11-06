@@ -10,6 +10,7 @@ import { CiNativeState } from './ci-native-state'
 import { CiSettingsService } from './ci-settings.service'
 import { AddCiWebConnect1793786400000 } from '../migrations/pre-deploy/1793786400000-add-ci-web-connect-migration'
 import { AddCiListenerState1793700000000 } from '../migrations/pre-deploy/1793700000000-add-ci-listener-state-migration'
+import { AddCiWebTarget1794000000000 } from '../migrations/pre-deploy/1794000000000-add-ci-web-target-migration'
 import { AddCiAccountSelection1793894400000 } from '../migrations/pre-deploy/1793894400000-add-ci-account-selection-migration'
 import { Listener, ListenerInbox } from '@boxlite-ai/ci-listener'
 
@@ -25,6 +26,9 @@ integration('CI connect persistence (real Postgres)', () => {
   const secrets = new CiSecretsService({ get: () => encryptionKey } as any)
   let db: DataSource, service: CiConnectService, native: CiNativeState, settings: CiSettingsService
   const github = {
+    ids: ['app-client', 'org-client'],
+    identity: jest.fn(() => github),
+    authorizationApp: jest.fn(() => github),
     clientId: 'app-client',
     accountType: 'User',
     forAccount: jest.fn(async () => github),
@@ -32,6 +36,10 @@ integration('CI connect persistence (real Postgres)', () => {
     byClientId: jest.fn(() => github),
     configured: () => [github],
     availableInstallations: jest.fn(),
+    availableAccounts: jest.fn(),
+    ownedAccounts: jest.fn(),
+    installationFor: jest.fn(),
+    isIdentityClient: jest.fn(() => false),
     settings: () => ({ clientId: 'app-client', installationUrl: 'https://github.com/apps/example/installations/new' }),
     startDevice: jest.fn(),
     webSettings: () => ({
@@ -71,6 +79,7 @@ integration('CI connect persistence (real Postgres)', () => {
       await new AddCiConnect1793664000000().up(runner)
       await new AddCiWebConnect1793786400000().up(runner)
       await new AddCiAccountSelection1793894400000().up(runner)
+      await new AddCiWebTarget1794000000000().up(runner)
       await new AddCiListenerState1793700000000().up(runner)
     } finally {
       await runner.release()
@@ -89,7 +98,7 @@ integration('CI connect persistence (real Postgres)', () => {
       'TRUNCATE ci_connect_attempt, ci_installation_binding, ci_listener_state, "user", organization_user, api_key',
     )
     native = new CiNativeState(db, {
-      get: (key: string) => (key === 'ci.githubClientId' ? 'app-client' : undefined),
+      get: (key: string) => ({ 'ci.githubClientId': 'app-client', 'ci.githubOrgClientId': 'org-client' })[key],
     } as any)
     await native.initialize()
     settings = new CiSettingsService(native, { resolveMaxCreatedBoxes: async () => 5 } as any)
@@ -108,6 +117,14 @@ integration('CI connect persistence (real Postgres)', () => {
     })
     github.pollDevice.mockReset().mockResolvedValue({ access_token: 'github-user-token' })
     github.exchangeWeb.mockReset().mockResolvedValue('github-web-user-token')
+    github.isIdentityClient.mockReset().mockReturnValue(false)
+    github.availableAccounts.mockReset()
+    github.identity.mockReset().mockReturnValue(github)
+    github.authorizationApp.mockReset().mockReturnValue(github)
+    github.forType.mockReset().mockReturnValue(github)
+    github.byClientId.mockReset().mockReturnValue(github)
+    github.ownedAccounts.mockReset()
+    github.installationFor.mockReset()
     github.availableInstallations
       .mockReset()
       .mockResolvedValue([{ installationId: 123, accountId: 456, accountLogin: 'alice', accountType: 'User' }])
@@ -472,6 +489,266 @@ integration('CI connect persistence (real Postgres)', () => {
     expect(await service.poll(actor, second.id)).toMatchObject({ status: 'connected' })
     const [binding] = await db.query('SELECT state,generation FROM ci_installation_binding')
     expect(binding).toEqual({ state: 'provisioning', generation: '3' })
+  })
+  async function accountSession() {
+    const personal = { accountId: 456, accountLogin: 'alice', accountType: 'User' as const }
+    const team = { accountId: 789, accountLogin: 'team', accountType: 'Organization' as const }
+    const installed = new Map([
+      [456, 123],
+      [789, 321],
+    ])
+    const identity = {
+      ...github,
+      clientId: 'identity-client',
+      webSettings: () => ({
+        clientId: 'identity-client',
+        redirectUri: 'https://console.test/settings/ci/callback',
+        authorizationSettingsUrl: 'https://github.com/settings/connections/applications/identity-client',
+      }),
+    }
+    const orgApp = {
+      ...github,
+      clientId: 'org-client',
+      accountType: 'Organization',
+      settings: () => ({ clientId: 'org-client', installationUrl: 'https://github.com/apps/org-ci/installations/new' }),
+    }
+    github.identity.mockReturnValue(identity)
+    github.authorizationApp.mockImplementation((client) => (client === 'identity-client' ? identity : github))
+    github.isIdentityClient.mockImplementation((client) => client === 'identity-client')
+    github.forType.mockImplementation((type) => (type === 'Organization' ? orgApp : github))
+    github.byClientId.mockImplementation((client) => (client === 'org-client' ? orgApp : github))
+    github.ownedAccounts.mockResolvedValue({ user: personal, accounts: [personal, team] })
+    github.installationFor.mockImplementation(async (account) =>
+      installed.has(account.accountId) ? { ...account, installationId: installed.get(account.accountId) } : null,
+    )
+    github.availableAccounts.mockImplementation(async () => ({
+      user: personal,
+      accounts: [personal, team].map((account) => ({
+        ...account,
+        clientId: account.accountType === 'User' ? 'app-client' : 'org-client',
+        installationId: installed.get(account.accountId) ?? null,
+      })),
+    }))
+    const attempt = await web()
+    await service.completeWeb(actor, attempt.id, { code: 'web-code', state: attempt.state })
+    return { attempt, installed }
+  }
+  it('connects two owned accounts under one bounded OAuth session with separate CI App bindings', async () => {
+    const { attempt } = await accountSession()
+    const [before] = await db.query('SELECT expires_at FROM ci_connect_attempt WHERE id=$1', [attempt.id])
+    const first = await service.selectAccount(actor, attempt.id, { account_id: 456, allow_public_repositories: false })
+    expect(first.accounts.find((account) => account.account_id === 456).connected).toBe(true)
+    const second = await service.selectAccount(actor, attempt.id, { account_id: 789, allow_public_repositories: true })
+    expect(second.accounts.every((account) => account.connected)).toBe(true)
+    const bindings = await db.query(
+      'SELECT app_client_id,account_type,allow_public FROM ci_installation_binding ORDER BY app_client_id',
+    )
+    expect(bindings).toEqual([
+      { app_client_id: 'app-client', account_type: 'User', allow_public: false },
+      { app_client_id: 'org-client', account_type: 'Organization', allow_public: true },
+    ])
+    const [row] = await db.query('SELECT * FROM ci_connect_attempt WHERE id=$1', [attempt.id])
+    expect(row.app_client_id).toBe('identity-client')
+    expect(row.state).toBe('selecting')
+    expect(row.expires_at).toEqual(before.expires_at)
+    expect(row.oauth_token_ciphertext).toBeTruthy()
+    expect(row.web_target_ciphertext).toBeNull()
+    await service.cancel(actor, attempt.id)
+    expect(
+      (await db.query('SELECT oauth_token_ciphertext FROM ci_connect_attempt WHERE id=$1', [attempt.id]))[0]
+        .oauth_token_ciphertext,
+    ).toBeNull()
+    expect(await db.query('SELECT id FROM ci_installation_binding')).toHaveLength(2)
+  })
+  it('resumes a missing installation with fresh target state and auto-binds only its matching Org App', async () => {
+    const { attempt, installed } = await accountSession()
+    installed.delete(789)
+    const result = await service.selectAccount(actor, attempt.id, { account_id: 789, allow_public_repositories: false })
+    expect(result.status).toBe('installation_required')
+    const url = new URL(result.installation_url),
+      state = url.searchParams.get('state')!
+    expect(url.pathname).toBe('/apps/org-ci/installations/new')
+    expect(state).not.toBe(attempt.state)
+    expect((await service.getWeb(actor, attempt.id)).installation_url).toBe(url.href)
+    await expect(service.completeInstallation(actor, attempt.id, 321, attempt.state)).rejects.toThrow('state mismatch')
+    installed.set(789, 321)
+    const completed = await service.completeInstallation(actor, attempt.id, 321, state)
+    expect(completed.accounts.find((account) => account.account_id === 789).connected).toBe(true)
+    expect((await db.query('SELECT app_client_id FROM ci_installation_binding'))[0].app_client_id).toBe('org-client')
+    await expect(service.completeInstallation(actor, attempt.id, 321, state)).rejects.toThrow('No pending')
+  })
+  it.each(['owner-revoked', 'wrong-installation', 'wrong-account'])(
+    'denies installation completion after %s',
+    async (scenario) => {
+      const { attempt, installed } = await accountSession()
+      installed.delete(789)
+      const selected = await service.selectAccount(actor, attempt.id, {
+        account_id: 789,
+        allow_public_repositories: false,
+      })
+      const state = new URL(selected.installation_url).searchParams.get('state')!
+      installed.set(789, 321)
+      if (scenario === 'owner-revoked')
+        github.ownedAccounts.mockResolvedValue({
+          user: { accountId: 456, accountLogin: 'alice', accountType: 'User' },
+          accounts: [],
+        })
+      if (scenario === 'wrong-account')
+        github.installationFor.mockResolvedValue({
+          installationId: 321,
+          accountId: 999,
+          accountLogin: 'other',
+          accountType: 'Organization',
+        })
+      await expect(
+        service.completeInstallation(actor, attempt.id, scenario === 'wrong-installation' ? 777 : 321, state),
+      ).rejects.toThrow()
+      expect(await db.query('SELECT id FROM ci_installation_binding')).toHaveLength(0)
+      expect(
+        (
+          await db.query(
+            'SELECT state,oauth_token_ciphertext,web_target_ciphertext FROM ci_connect_attempt WHERE id=$1',
+            [attempt.id],
+          )
+        )[0],
+      ).toEqual({ state: 'failed', oauth_token_ciphertext: null, web_target_ciphertext: null })
+    },
+  )
+  it('fences a cross-App Delete while account verification is paused and preserves independent bindings', async () => {
+    const { attempt } = await accountSession()
+    await service.selectAccount(actor, attempt.id, { account_id: 456, allow_public_repositories: false })
+    await service.selectAccount(actor, attempt.id, { account_id: 789, allow_public_repositories: false })
+    const [binding] = await db.query("SELECT id FROM ci_installation_binding WHERE account_type='Organization'")
+    const [wake] = await native.state.read(['wake/321/0'])
+    const next = await web()
+    await service.completeWeb(actor, next.id, { code: 'web-code', state: next.state })
+    let entered!: () => void, release!: () => void
+    const reached = new Promise<void>((resolve) => {
+        entered = resolve
+      }),
+      paused = new Promise<void>((resolve) => {
+        release = resolve
+      })
+    github.installationFor.mockImplementationOnce(async (account) => {
+      entered()
+      await paused
+      return { ...account, installationId: 321 }
+    })
+    const choosing = service.selectAccount(actor, next.id, { account_id: 789, allow_public_repositories: false })
+    await reached
+    try {
+      await settings.deleteConnection(actor, binding.id)
+    } finally {
+      release()
+    }
+    expect((await choosing).status).toBe('cancelled')
+    expect((await db.query('SELECT state FROM ci_installation_binding WHERE id=$1', [binding.id]))[0].state).toBe(
+      'disabled',
+    )
+    expect((await settings.get(actor)).connections.map((row) => row.github_account)).toEqual(['alice'])
+    const rows = await db.query(
+      'SELECT state,oauth_token_ciphertext,web_target_ciphertext,lease_id FROM ci_connect_attempt WHERE id=ANY($1::uuid[])',
+      [[attempt.id, next.id]],
+    )
+    expect(rows).toEqual([
+      expect.objectContaining({
+        state: 'cancelled',
+        oauth_token_ciphertext: null,
+        web_target_ciphertext: null,
+        lease_id: null,
+      }),
+      expect.objectContaining({
+        state: 'cancelled',
+        oauth_token_ciphertext: null,
+        web_target_ciphertext: null,
+        lease_id: null,
+      }),
+    ])
+    expect((await native.state.read(['wake/321/0']))[0].version).toBe(wake.version)
+    const fresh = await web()
+    await service.completeWeb(actor, fresh.id, { code: 'web-code', state: fresh.state })
+    expect(
+      (
+        await service.selectAccount(actor, fresh.id, { account_id: 789, allow_public_repositories: false })
+      ).accounts.find((account) => account.account_id === 789).connected,
+    ).toBe(true)
+  })
+  it('rolls back target context without damaging a pre-existing Device Flow attempt', async () => {
+    const device = await begin()
+    const { attempt, installed } = await accountSession()
+    installed.delete(789)
+    await service.selectAccount(actor, attempt.id, { account_id: 789, allow_public_repositories: false })
+    const runner = db.createQueryRunner()
+    try {
+      await new AddCiWebTarget1794000000000().down(runner)
+      const [row] = await db.query('SELECT state,oauth_token_ciphertext,lease_id FROM ci_connect_attempt WHERE id=$1', [
+        attempt.id,
+      ])
+      expect(row).toEqual({ state: 'failed', oauth_token_ciphertext: null, lease_id: null })
+      expect(
+        (await db.query('SELECT device_ciphertext FROM ci_connect_attempt WHERE id=$1', [device.id]))[0]
+          .device_ciphertext,
+      ).toBeTruthy()
+    } finally {
+      await new AddCiWebTarget1794000000000().up(runner)
+      await runner.release()
+    }
+    expect((await service.poll(actor, device.id)).status).toBe('connected')
+  })
+  it('expires abandoned installation context and clears it on the next start', async () => {
+    const { attempt, installed } = await accountSession()
+    installed.delete(789)
+    await service.selectAccount(actor, attempt.id, { account_id: 789, allow_public_repositories: false })
+    await db.query(
+      "UPDATE ci_connect_attempt SET state='polling',oauth_token_ciphertext=NULL,lease_id=$2,lease_until=now()+interval '1 minute',expires_at=now()-interval '1 second' WHERE id=$1",
+      [attempt.id, randomUUID()],
+    )
+    await web()
+    expect(
+      (
+        await db.query(
+          'SELECT state,oauth_token_ciphertext,web_target_ciphertext FROM ci_connect_attempt WHERE id=$1',
+          [attempt.id],
+        )
+      )[0],
+    ).toEqual({ state: 'expired', oauth_token_ciphertext: null, web_target_ciphertext: null })
+    expect((await service.getWeb(actor, attempt.id)).status).toBe('expired')
+  })
+  it('discovers owned organizations independently of the identity App installation inventory', async () => {
+    const attempt = await web()
+    github.availableInstallations.mockResolvedValue([])
+    github.isIdentityClient.mockReturnValue(true)
+    github.availableAccounts.mockResolvedValue({
+      user: { accountId: 456, accountLogin: 'alice', accountType: 'User' },
+      accounts: [
+        {
+          accountId: 789,
+          accountLogin: 'team',
+          accountType: 'Organization',
+          installationId: 321,
+          clientId: 'org-client',
+        },
+      ],
+    })
+    const result = await service.completeWeb(actor, attempt.id, { code: 'web-code', state: attempt.state })
+    expect(result.accounts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ account_id: 789, github_account: 'team', account_type: 'Organization' }),
+      ]),
+    )
+  })
+  it('deletion cancels browser authorization issued by a different App', async () => {
+    const first = await begin()
+    await service.poll(actor, first.id)
+    const [binding] = await db.query('SELECT id FROM ci_installation_binding')
+    const attempt = await web()
+    await service.completeWeb(actor, attempt.id, { code: 'web-code', state: attempt.state })
+    await db.query('UPDATE ci_connect_attempt SET app_client_id=$2 WHERE id=$1', [attempt.id, 'identity-client'])
+    await settings.deleteConnection(actor, binding.id)
+    const [row] = await db.query('SELECT state,oauth_token_ciphertext,lease_id FROM ci_connect_attempt WHERE id=$1', [
+      attempt.id,
+    ])
+    expect(row).toEqual({ state: 'cancelled', oauth_token_ciphertext: null, lease_id: null })
   })
   it('deletion cancels a pending verified connect before it can reactivate the binding', async () => {
     const first = await begin()
