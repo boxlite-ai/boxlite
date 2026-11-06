@@ -154,18 +154,46 @@ per business event; the attributes reach OTLP through nestjs-pino, where alerts 
 The same sanitized attributes reach PostHog through the client shared with HTTP metrics.
 Activity does not require the optional logging ClickHouse instance.
 
-| Event                                  | Recorded by                                       | Outcomes                      |
-| -------------------------------------- | ------------------------------------------------- | ----------------------------- |
-| `user.registration`                    | `UserService.create`, through `recordOutcomes`    | requested, success, exception |
-| `user.login`                           | `LoginEventRecorder`                              | success                       |
-| `box.create`, `box.stop`, `box.delete` | `BoxService`, the auto-stop and auto-delete crons | requested                     |
-| `box.create`, `box.stop`, `box.delete` | `JobStateHandler`, when the runner job finishes   | success, exception            |
+| Event | Recorded by | Outcomes |
+| --- | --- | --- |
+| `user.registration` | `UserService.create`, through `recordOutcomes` | requested, success, exception |
+| `user.login` | `LoginEventRecorder` | success |
+| `org.active` | `OrganizationActivityInterceptor`, best effort on a person's first request in an organization each UTC hour; a process exit or lost Redis acknowledgment after claiming the key can suppress the rest of that hour | success |
+| `box.create`, `box.start`, `box.stop`, `box.delete` | `BoxService`, the auto-stop and auto-delete crons | requested |
+| `box.create`, `box.start`, `box.stop`, `box.delete` | `JobStateHandler`, when the runner job finishes | success, exception |
+| `box.exec`, `box.file_upload` | `BoxliteProxyController`, for `POST …/exec` and `PUT …/files` | requested, then success or exception by the response status |
+| `tunnel.create` | `BoxliteProxyController`, through `recordOutcomes` | requested, success, exception |
+
+For v0 runners, which have no START_BOX job, BoxManager records an existing start's terminal
+`box.start` outcome after its state is persisted. Returned runner errors, startup timeouts and
+thrown starts yield `runner_start_failed`; v2 outcomes remain with JobStateHandler. Initial
+creation and repeated terminal syncs do not emit an extra start outcome.
+Both accepted-start writes atomically set internal `startEventPending`; it survives runner
+instance loss and recreation across sync invocations. Entity invariants clear it in the
+terminal or superseding state write, including v2 job completion. Logging remains best effort,
+not an exactly-once outbox. Run the pre-deploy migration before upgrading the API; roll back
+the API before dropping the column. Already in-flight UNKNOWN/CREATING operations from before
+the upgrade have no marker and cannot be reliably backfilled as starts.
+
+The API CI job sets `BOXLITE_TEST_POSTGRES_URL` to its PostgreSQL service so the start-intent
+migration's up/down and existing-row defaults are exercised. Set this variable to a disposable
+local PostgreSQL database when running `make coverage:api`; without it, that integration spec
+is skipped. Caller-attribution tests cover JWT and API-key administrators and both proxied
+exec/upload error categories without changing authentication policy.
+Integration fixtures that build their schema with explicit migrations must also apply
+the start-intent migration before querying the `Box` entity, including the usage ledger fixture.
 
 Box events go through `src/box/utils/box-business-event.util.ts`: the request and the outcome are
-recorded in different places, so one call cannot cover both.
+recorded in different places, so one call cannot cover both. A proxied call that fails with an
+HTTP status records `http_<status>`; a client that disconnects first records `client_closed`.
+An already finished/closed response is accounted for after the box lookup, and outcome
+listeners are removed once recorded. Organization-presence Redis warnings use fixed categories,
+not raw error strings.
 
-An event names its entity only by `correlation.id` (the user id or the box id). It carries no
-`org.id`: the box table holds a box's organization, and the organization tables a user's.
+An event names its entity by `correlation.id`: the user id for `user.*` and `org.active`, the box
+id for box and tunnel events. It also carries `organization.id`, so an organization's activity
+can be counted from the log alone. `user.login` has none, since a login spans organizations, and a
+registration carries its default organization on success only.
 
 ### Querying Activity in PostHog
 
@@ -232,15 +260,24 @@ return this.userService.create(createUserDto, Context.admin())
 await this.stop(event.boxId, undefined, Context.platform(PlatformReason.ORG_SUSPENSION))
 ```
 
-| Context                    | `actor.kind` | `event.reason`                                           |
-| -------------------------- | ------------ | -------------------------------------------------------- |
-| `Context.user()`           | `user`       | —                                                        |
-| `Context.admin()`          | `admin`      | —                                                        |
-| `Context.platform(reason)` | `platform`   | the `PlatformReason`, such as `auto_stop` or `bootstrap` |
+| Context | `actor.kind` | `event.reason` |
+| --- | --- | --- |
+| `Context.user(actor?)` | `user` | — |
+| `Context.admin(actor?)` | `admin` | — |
+| `Context.platform(reason)` | `platform` | the `PlatformReason`, such as `auto_stop` or `auto_resume` |
 
 - Only the platform gives a reason; user and admin contexts have none.
+- A request handler names its caller with `@UserContext() ctx`, or `requestContext(req)` where it
+  already holds the request: `user.id`, `auth.method` (`api_key` or `jwt`) and, when the client
+  sends `X-BoxLite-Source` or `X-BoxLite-SDK-Version`, `client.source` and `sdk.version`. Values must be 1–64 ASCII
+  characters using letters, digits, `_`, `.`, `+`, `/`, space or `-`; invalid values are omitted.
 - The boot-time admin seed registers as `Context.platform(PlatformReason.BOOTSTRAP)`.
 - Job outcome events carry no context: the runner reports after the request has ended.
+- Admin box recovery and user creation retain the authenticated administrator in `Context.admin(actor)`.
+- The shared request context selects admin/user from the authenticated role, including tunnels,
+  proxied exec/uploads and decorated mutation handlers. Client headers cannot choose actor kind;
+  requested and terminal events retain the same caller identity. Service callers with no person
+  keep their existing user context without an actor; explicit admin/platform decisions stay separate.
 - Add caller-decided fields to `Context`, not new service parameters.
 
 ## Admin organization metadata

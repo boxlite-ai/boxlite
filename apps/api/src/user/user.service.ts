@@ -19,6 +19,7 @@ import { UserCreatedEvent } from './events/user-created.event'
 import { UserDeletedEvent } from './events/user-deleted.event'
 import { UserEmailVerifiedEvent } from './events/user-email-verified.event'
 import { recordOutcomes } from '../common/utils/business-event.util'
+import { Organization } from '../organization/entities/organization.entity'
 import { Context } from '../common/context/context'
 import { EmailUtils } from '../common/utils/email.util'
 import { DisposableEmailException } from '../exceptions/disposable-email.exception'
@@ -69,12 +70,15 @@ export class UserService {
       () =>
         this.dataSource.transaction(async (em) => {
           user = await em.save(user)
-          await this.eventEmitter.emitAsync(
+          // The default organization's listener returns it; the registration belongs to it.
+          const created = await this.eventEmitter.emitAsync(
             UserEvents.CREATED,
             new UserCreatedEvent(em, user, defaultOrganizationDefaultRegionId),
           )
+          return created.find((value): value is Organization => value instanceof Organization)
         }),
       (error) => ((error as { code?: string })?.code === PG_UNIQUE_VIOLATION ? 'user_conflict' : 'internal'),
+      (organization) => organization?.id,
     )
 
     return user

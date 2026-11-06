@@ -5,13 +5,15 @@
  */
 
 import { EventEmitter } from 'node:events'
-import { ForbiddenException, HttpStatus, NotFoundException, RequestMethod } from '@nestjs/common'
-import { HTTP_CODE_METADATA, METHOD_METADATA, PATH_METADATA } from '@nestjs/common/constants'
+import { ForbiddenException, HttpStatus, Logger, NotFoundException, RequestMethod } from '@nestjs/common'
+import { HTTP_CODE_METADATA, METHOD_METADATA, PATH_METADATA, ROUTE_ARGS_METADATA } from '@nestjs/common/constants'
 import { Reflector } from '@nestjs/core'
 import { createProxyMiddleware } from 'http-proxy-middleware'
 import { BoxliteProxyController } from './boxlite-proxy.controller'
+import { Context } from '../common/context/context'
 import { RequiredOrganizationResourcePermissions } from '../organization/decorators/required-organization-resource-permissions.decorator'
 import { OrganizationResourcePermission } from '../organization/enums/organization-resource-permission.enum'
+import { SystemRole } from '../user/enums/system-role.enum'
 
 jest.mock('http-proxy-middleware', () => ({
   createProxyMiddleware: jest.fn(),
@@ -58,7 +60,7 @@ describe('BoxliteProxyController', () => {
     const { controller, tunnelService } = makeHarness()
     tunnelService.prepare.mockResolvedValue({ isPublic: false, token: 'blt_first-secret' })
     await expect(
-      controller.proxyNetworkTunnel(activeAuth as never, 'mybox', 3000, { isPublic: false }),
+      controller.proxyNetworkTunnel(activeAuth as never, 'mybox', 3000, Context.user(), { isPublic: false }),
     ).resolves.toEqual({ uri: 'https://3000-box.proxy.test', isPublic: false, token: 'blt_first-secret' })
     expect(tunnelService.prepare).toHaveBeenCalledWith('box-uuid', 3000, false)
   })
@@ -212,7 +214,7 @@ describe('BoxliteProxyController', () => {
   it('returns the public endpoint for JSON tunnel requests', async () => {
     const { controller, boxService, tunnelService } = makeHarness()
 
-    const result = await controller.proxyNetworkTunnel(activeAuth as never, 'public-box', 3000)
+    const result = await controller.proxyNetworkTunnel(activeAuth as never, 'public-box', 3000, Context.user())
 
     expect(boxService.getNetworkTunnelUrl).toHaveBeenCalledWith('public-box', 'org-1', 3000)
     expect(tunnelService.prepare).toHaveBeenCalledWith('box-uuid', 3000, true)
@@ -226,9 +228,9 @@ describe('BoxliteProxyController', () => {
     const { controller, boxService, tunnelService } = makeHarness()
     tunnelService.prepare.mockRejectedValue(new Error('database unavailable'))
 
-    await expect(controller.proxyNetworkTunnel(activeAuth as never, 'public-box', 3000)).rejects.toThrow(
-      'database unavailable',
-    )
+    await expect(
+      controller.proxyNetworkTunnel(activeAuth as never, 'public-box', 3000, Context.user()),
+    ).rejects.toThrow('database unavailable')
     expect(boxService.getNetworkTunnelUrl).toHaveBeenCalledWith('public-box', 'org-1', 3000)
   })
 
@@ -236,9 +238,9 @@ describe('BoxliteProxyController', () => {
     const { controller, boxService, tunnelService } = makeHarness()
     boxService.getNetworkTunnelUrl.mockRejectedValue(new Error('region unavailable'))
 
-    await expect(controller.proxyNetworkTunnel(activeAuth as never, 'public-box', 3000)).rejects.toThrow(
-      'region unavailable',
-    )
+    await expect(
+      controller.proxyNetworkTunnel(activeAuth as never, 'public-box', 3000, Context.user()),
+    ).rejects.toThrow('region unavailable')
     expect(tunnelService.prepare).not.toHaveBeenCalled()
   })
 
@@ -252,7 +254,9 @@ describe('BoxliteProxyController', () => {
       inboundEnabled: false,
     })
 
-    await expect(controller.proxyNetworkTunnel(activeAuth as never, 'public-box', 3000)).rejects.toMatchObject({
+    await expect(
+      controller.proxyNetworkTunnel(activeAuth as never, 'public-box', 3000, Context.user()),
+    ).rejects.toMatchObject({
       status: 409,
     })
     expect(boxService.getNetworkTunnelUrl).not.toHaveBeenCalled()
@@ -268,7 +272,9 @@ describe('BoxliteProxyController', () => {
       inboundEnabled: true,
     })
 
-    await expect(controller.proxyNetworkTunnel(activeAuth as never, 'public-box', 3000)).rejects.toMatchObject({
+    await expect(
+      controller.proxyNetworkTunnel(activeAuth as never, 'public-box', 3000, Context.user()),
+    ).rejects.toMatchObject({
       status: 409,
       // Pin the reason: without inboundEnabled: true this 409s at the visibility
       // gate instead, and the state policy under test never runs.
@@ -290,7 +296,7 @@ describe('BoxliteProxyController', () => {
       inboundEnabled: true,
     })
 
-    const result = await controller.proxyNetworkTunnel(activeAuth as never, 'public-box', 3000)
+    const result = await controller.proxyNetworkTunnel(activeAuth as never, 'public-box', 3000, Context.user())
 
     expect(autoResume.ensureReady).not.toHaveBeenCalled()
     expect(tunnelService.prepare).toHaveBeenCalledWith('box-uuid', 3000, true)
@@ -302,7 +308,7 @@ describe('BoxliteProxyController', () => {
     // eligible for the idle sweeper, so the caller's tunnel dies under it.
     const { controller, boxService } = makeHarness()
 
-    await controller.proxyNetworkTunnel(activeAuth as never, 'public-box', 3000)
+    await controller.proxyNetworkTunnel(activeAuth as never, 'public-box', 3000, Context.user())
 
     expect(boxService.updateLastActivityAt).toHaveBeenCalledWith('box-uuid', expect.any(Date))
   })
@@ -317,9 +323,9 @@ describe('BoxliteProxyController', () => {
       inboundEnabled: false,
     })
 
-    await expect(controller.proxyNetworkTunnel(activeAuth as never, 'public-box', 3000)).rejects.toMatchObject({
-      status: 409,
-    })
+    await expect(
+      controller.proxyNetworkTunnel(activeAuth as never, 'public-box', 3000, Context.user()),
+    ).rejects.toMatchObject({ status: 409 })
     expect(boxService.updateLastActivityAt).not.toHaveBeenCalled()
   })
 
@@ -337,9 +343,9 @@ describe('BoxliteProxyController', () => {
         inboundEnabled: true,
       })
 
-      await expect(controller.proxyNetworkTunnel(activeAuth as never, 'public-box', 3000)).rejects.toMatchObject({
-        status: 409,
-      })
+      await expect(
+        controller.proxyNetworkTunnel(activeAuth as never, 'public-box', 3000, Context.user()),
+      ).rejects.toMatchObject({ status: 409 })
       expect(autoResume.ensureReady).not.toHaveBeenCalled()
       expect(boxService.getNetworkTunnelUrl).not.toHaveBeenCalled()
     },
@@ -357,7 +363,7 @@ describe('BoxliteProxyController', () => {
         inboundEnabled: true,
       })
 
-      await controller.proxyNetworkTunnel(activeAuth as never, 'public-box', 3000)
+      await controller.proxyNetworkTunnel(activeAuth as never, 'public-box', 3000, Context.user())
 
       expect(autoResume.ensureReady).not.toHaveBeenCalled()
       expect(boxService.getNetworkTunnelUrl).toHaveBeenCalled()
@@ -376,7 +382,9 @@ describe('BoxliteProxyController', () => {
         inboundEnabled: true,
       })
 
-      await expect(controller.proxyNetworkTunnel(activeAuth as never, 'public-box', 3000)).rejects.toMatchObject({
+      await expect(
+        controller.proxyNetworkTunnel(activeAuth as never, 'public-box', 3000, Context.user()),
+      ).rejects.toMatchObject({
         status: 409,
         message: expect.stringContaining('is not running'),
       })
@@ -502,5 +510,256 @@ describe('BoxliteProxyController', () => {
     res.emit('close')
     jest.advanceTimersByTime(900_000)
     expect(boxService.updateLastActivityAt).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('BoxliteProxyController business events', () => {
+  // Every business event [message, attributes] logged, in order.
+  let events: [string, Record<string, string>][]
+  const caller = { userId: 'user-1', role: 'user', email: 'user@boxlite.dev', apiKey: {}, organizationId: 'org-1' }
+
+  function harness() {
+    jest.mocked(createProxyMiddleware).mockReturnValue(jest.fn() as never)
+    const built = makeHarness()
+    built.boxService.findOneByIdOrName.mockResolvedValue({
+      id: 'box-uuid',
+      organizationId: 'org-1',
+      runnerId: 'runner-1',
+      autoResume: false,
+      state: 'started',
+      inboundEnabled: true,
+    })
+    return built
+  }
+
+  const request = (method: string, url: string) => ({ method, url, user: caller, get: () => undefined }) as never
+  const response = () => Object.assign(new EventEmitter(), { statusCode: 200 })
+
+  function tunnelRequestContext(req: unknown): Context {
+    const parameters: Record<string, { index: number; factory?: (data: unknown, execution: unknown) => Context }> =
+      Reflect.getMetadata(ROUTE_ARGS_METADATA, BoxliteProxyController, 'proxyNetworkTunnel')
+    const parameter = Object.values(parameters).find(({ index, factory }) => index === 3 && factory)
+    if (!parameter?.factory) throw new Error('Tunnel context decorator is missing')
+    return parameter.factory(undefined, { switchToHttp: () => ({ getRequest: () => req }) })
+  }
+
+  beforeEach(() => {
+    jest.clearAllMocks()
+    events = []
+    const record = (message: string, attributes: Record<string, string>) => {
+      if (/^(box|tunnel)\./.test(message)) events.push([message, attributes])
+    }
+    jest.spyOn(Logger.prototype, 'log').mockImplementation(record as never)
+    jest.spyOn(Logger.prototype, 'error').mockImplementation(record as never)
+  })
+
+  afterEach(() => jest.restoreAllMocks())
+
+  it('records an exec as requested by the caller, then success when the response completes', async () => {
+    const { controller } = harness()
+    const res = response()
+
+    await controller.proxyExec(activeAuth as never, 'public-box', request('POST', '/exec'), res as never, jest.fn())
+    expect(events.map(([message]) => message)).toEqual(['box.exec requested'])
+
+    res.emit('finish')
+    res.emit('close')
+
+    expect(events.map(([message]) => message)).toEqual(['box.exec requested', 'box.exec success'])
+    for (const [, attributes] of events) {
+      expect(attributes).toEqual(
+        expect.objectContaining({
+          'correlation.id': 'box-uuid',
+          'organization.id': 'org-1',
+          'actor.kind': 'user',
+          'user.id': 'user-1',
+          'auth.method': 'api_key',
+        }),
+      )
+    }
+  })
+
+  it('records an error status as the exception', async () => {
+    const { controller } = harness()
+    const res = response()
+
+    await controller.proxyExec(activeAuth as never, 'public-box', request('POST', '/exec'), res as never, jest.fn())
+    res.statusCode = 502
+    res.emit('finish')
+
+    expect(events[1]).toEqual(['box.exec exception', expect.objectContaining({ 'exception.type': 'http_502' })])
+  })
+
+  it.each(
+    [SystemRole.ADMIN, SystemRole.USER].flatMap((role) =>
+      ['exec', 'file_upload'].flatMap((operation) =>
+        [200, 502].flatMap((status) =>
+          ['jwt', 'api_key'].map((authMethod) => [role, operation, status, authMethod] as const),
+        ),
+      ),
+    ),
+  )('preserves %s identity for proxied %s status %s with %s', async (role, operation, status, authMethod) => {
+    const { controller } = harness()
+    const userId = role === SystemRole.ADMIN ? 'admin-1' : 'user-1'
+    const auth = { ...activeAuth, ...caller, userId, role, apiKey: authMethod === 'api_key' ? {} : undefined }
+    const req = { method: operation === 'exec' ? 'POST' : 'PUT', url: '/operation', user: auth, get: () => undefined }
+    const res = response()
+    if (operation === 'exec') {
+      await controller.proxyExec(auth as never, 'public-box', req as never, res as never, jest.fn())
+    } else {
+      await controller.proxyFiles(auth as never, 'public-box', req as never, res as never, jest.fn())
+    }
+    res.statusCode = status
+    res.emit('finish')
+    res.emit('close')
+    expect(events.map(([message]) => message)).toEqual([
+      `box.${operation} requested`,
+      `box.${operation} ${status < 400 ? 'success' : 'exception'}`,
+    ])
+    if (status >= 400) expect(events[1][1]['exception.type']).toBe(`http_${status}`)
+    for (const [, attributes] of events) {
+      expect(attributes).toEqual(
+        expect.objectContaining({
+          'actor.kind': role,
+          'user.id': userId,
+          'auth.method': authMethod,
+          'organization.id': 'org-1',
+          'correlation.id': 'box-uuid',
+        }),
+      )
+    }
+  })
+
+  it.each(['closed', 'finished'])('accounts for a response already %s during the box lookup', async (state) => {
+    const { controller, boxService } = harness()
+    const box = await boxService.findOneByIdOrName()
+    let release!: (value: typeof box) => void
+    boxService.findOneByIdOrName.mockReturnValue(
+      new Promise((resolve) => {
+        release = resolve
+      }),
+    )
+    const res = Object.assign(response(), { destroyed: false, writableFinished: false })
+    const pending = controller.proxyExec(
+      activeAuth as never,
+      'public-box',
+      request('POST', '/exec'),
+      res as never,
+      jest.fn(),
+    )
+    if (state === 'finished') {
+      res.writableFinished = true
+      res.emit('finish')
+    }
+    res.destroyed = true
+    res.emit('close')
+    release(box)
+    await pending
+    expect(events.map(([message]) => message)).toEqual([
+      'box.exec requested',
+      state === 'finished' ? 'box.exec success' : 'box.exec exception',
+    ])
+    if (state === 'closed') expect(events[1][1]['exception.type']).toBe('client_closed')
+    res.emit('finish')
+    res.emit('close')
+    expect(events).toHaveLength(2)
+  })
+
+  it('records a client that disconnects before the response completes as client_closed, once', async () => {
+    const { controller } = harness()
+    const res = response()
+
+    await controller.proxyFiles(activeAuth as never, 'public-box', request('PUT', '/files'), res as never, jest.fn())
+    res.emit('close')
+    res.emit('finish')
+
+    expect(events).toEqual([
+      ['box.file_upload requested', expect.anything()],
+      ['box.file_upload exception', expect.objectContaining({ 'exception.type': 'client_closed' })],
+    ])
+  })
+
+  it('records nothing for reads: downloads and other exec calls', async () => {
+    const { controller } = harness()
+
+    await controller.proxyFiles(
+      activeAuth as never,
+      'public-box',
+      request('GET', '/files'),
+      response() as never,
+      jest.fn(),
+    )
+    await controller.proxyExec(
+      activeAuth as never,
+      'public-box',
+      request('GET', '/exec'),
+      response() as never,
+      jest.fn(),
+    )
+
+    expect(events).toEqual([])
+  })
+
+  it('records a tunnel as requested, then success with its organization', async () => {
+    const { controller } = harness()
+    const ctx = Context.user({ userId: 'user-1', authMethod: 'jwt' })
+
+    await controller.proxyNetworkTunnel(activeAuth as never, 'public-box', 3000, ctx)
+
+    expect(events.map(([message]) => message)).toEqual(['tunnel.create requested', 'tunnel.create success'])
+    expect(events[1][1]).toEqual(
+      expect.objectContaining({ 'correlation.id': 'box-uuid', 'organization.id': 'org-1', 'user.id': 'user-1' }),
+    )
+  })
+
+  it('records a refused tunnel as a conflict', async () => {
+    const { controller, boxService } = harness()
+    boxService.findOneByIdOrName.mockResolvedValue({
+      id: 'box-uuid',
+      organizationId: 'org-1',
+      runnerId: 'runner-1',
+      autoResume: false,
+      state: 'started',
+      inboundEnabled: false,
+    })
+
+    await expect(
+      controller.proxyNetworkTunnel(activeAuth as never, 'public-box', 3000, Context.user()),
+    ).rejects.toThrow()
+
+    expect(events[1]).toEqual(['tunnel.create exception', expect.objectContaining({ 'exception.type': 'conflict' })])
+  })
+
+  it.each(
+    [SystemRole.ADMIN, SystemRole.USER].flatMap((role) =>
+      ['jwt', 'api_key'].flatMap((method) => [true, false].map((allowed) => [role, method, allowed] as const)),
+    ),
+  )('preserves decorated %s tunnel attribution with %s, allowed=%s', async (role, method, allowed) => {
+    const { controller, boxService } = harness()
+    const box = await boxService.findOneByIdOrName()
+    boxService.findOneByIdOrName.mockResolvedValue({ ...box, inboundEnabled: allowed })
+    const auth = { ...activeAuth, ...caller, role, apiKey: method === 'api_key' ? {} : undefined }
+    const req = {
+      user: auth,
+      get: (name: string) => (name.toLowerCase() === 'x-boxlite-source' ? 'dashboard' : undefined),
+    }
+    const ctx = tunnelRequestContext(req)
+    const result = controller.proxyNetworkTunnel(auth as never, 'public-box', 3000, ctx)
+    if (allowed) await result
+    else await expect(result).rejects.toThrow()
+    expect(events.map(([message]) => message)).toEqual([
+      'tunnel.create requested',
+      `tunnel.create ${allowed ? 'success' : 'exception'}`,
+    ])
+    for (const [, attributes] of events) {
+      expect(attributes).toMatchObject({
+        'actor.kind': role,
+        'user.id': caller.userId,
+        'auth.method': method,
+        'client.source': 'dashboard',
+        'organization.id': 'org-1',
+        'correlation.id': 'box-uuid',
+      })
+    }
   })
 })

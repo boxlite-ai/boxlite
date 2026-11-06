@@ -68,4 +68,26 @@ describe('recordBusinessEvent through the API logging stack', () => {
     )
     expect(record?.attributes['event.timestamp']).toEqual(expect.any(String))
   })
+
+  // ClickHouse copies a business event into analytics.business_events by these keys.
+  it('exports the organization and the acting user as top-level OTLP log attributes', () => {
+    recordBusinessEvent({
+      name: 'box.exec',
+      outcome: 'requested',
+      correlationId: 'box-1',
+      organizationId: 'org-1',
+      ctx: Context.user({ userId: 'user-1', authMethod: 'api_key', clientSource: 'sdk-python', sdkVersion: '0.9.0' }),
+    })
+
+    const record = exporter.getFinishedLogRecords().find((log) => log.body === 'box.exec requested')
+    expect(record?.attributes).toEqual(
+      expect.objectContaining({
+        'organization.id': 'org-1',
+        'user.id': 'user-1',
+        'auth.method': 'api_key',
+        'client.source': 'sdk-python',
+        'sdk.version': '0.9.0',
+      }),
+    )
+  })
 })

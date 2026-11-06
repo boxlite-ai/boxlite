@@ -51,6 +51,34 @@ describe('JobStateHandlerService business events', () => {
       name: 'box.create',
       outcome: 'exception',
       correlationId: 'box-1',
+      organizationId: 'org-1',
+      exceptionType: 'runner_job_failed',
+    })
+  })
+
+  it('records a completed START_BOX job as a box.start success', async () => {
+    const service = makeService(BoxDesiredState.STARTED)
+
+    await service.handleJobCompletion(job(JobType.START_BOX, JobStatus.COMPLETED))
+
+    expect(recordBusinessEvent).toHaveBeenCalledWith({
+      name: 'box.start',
+      outcome: 'success',
+      correlationId: 'box-1',
+      organizationId: 'org-1',
+    })
+  })
+
+  it('records a failed START_BOX job as a box.start exception', async () => {
+    const service = makeService(BoxDesiredState.STARTED)
+
+    await service.handleJobCompletion(job(JobType.START_BOX, JobStatus.FAILED, 'runner unreachable'))
+
+    expect(recordBusinessEvent).toHaveBeenCalledWith({
+      name: 'box.start',
+      outcome: 'exception',
+      correlationId: 'box-1',
+      organizationId: 'org-1',
       exceptionType: 'runner_job_failed',
     })
   })
@@ -64,6 +92,7 @@ describe('JobStateHandlerService business events', () => {
       name: 'box.delete',
       outcome: 'success',
       correlationId: 'box-1',
+      organizationId: 'org-1',
     })
   })
 
@@ -76,6 +105,7 @@ describe('JobStateHandlerService business events', () => {
       name: 'box.stop',
       outcome: 'success',
       correlationId: 'box-1',
+      organizationId: 'org-1',
     })
   })
 

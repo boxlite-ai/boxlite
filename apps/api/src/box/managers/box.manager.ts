@@ -42,6 +42,7 @@ import { getStateChangeLockKey } from '../utils/lock-key.util'
 import { OnAsyncEvent } from '../../common/decorators/on-async-event.decorator'
 import { sanitizeBoxError } from '../utils/sanitize-error.util'
 import { recordBoxRequested } from '../utils/box-business-event.util'
+import { recordBusinessEvent } from '../../common/utils/business-event.util'
 import { Context } from '../../common/context/context'
 import { PlatformReason } from '../../common/context/platform-reason.enum'
 import { ImagePullFailureService } from '../../image/services/image-pull-failure.service'
@@ -141,7 +142,7 @@ export class BoxManager implements TrackableJobExecutions, OnApplicationShutdown
                   },
                 })
 
-                recordBoxRequested('box.stop', box.id, Context.platform(PlatformReason.AUTO_STOP))
+                recordBoxRequested('box.stop', box, Context.platform(PlatformReason.AUTO_STOP))
 
                 this.syncInstanceState(box.id).catch(this.logger.error)
               } catch (error) {
@@ -216,7 +217,7 @@ export class BoxManager implements TrackableJobExecutions, OnApplicationShutdown
                   },
                 })
 
-                recordBoxRequested('box.delete', box.id, Context.platform(PlatformReason.AUTO_DELETE))
+                recordBoxRequested('box.delete', box, Context.platform(PlatformReason.AUTO_DELETE))
 
                 this.syncInstanceState(box.id).catch(this.logger.error)
               } catch (error) {
@@ -338,6 +339,9 @@ export class BoxManager implements TrackableJobExecutions, OnApplicationShutdown
       const box = await this.boxRepository.findOneOrFail({
         where: { id: boxId },
       })
+      const startingExistingBox =
+        box.desiredState === BoxDesiredState.STARTED &&
+        (box.startEventPending || [BoxState.STOPPED, BoxState.STARTING, BoxState.RESTORING].includes(box.state))
 
       while (new Date().getTime() - startedAt.getTime() <= 10000) {
         if (
@@ -397,10 +401,13 @@ export class BoxManager implements TrackableJobExecutions, OnApplicationShutdown
 
           // Update box to error state without safeguards
           await this.boxRepository.updateWhere(boxId, { updateData, whereCondition: {} })
+          if (startingExistingBox) await this.recordLegacyStartOutcome(box, BoxState.ERROR)
 
           // Break sync loop since box is in error state.
           break
         }
+
+        if (startingExistingBox) await this.recordLegacyStartOutcome(box, box.state)
 
         // Do not sync again for v2 runners
         // Job completion will update the box state
@@ -415,6 +422,20 @@ export class BoxManager implements TrackableJobExecutions, OnApplicationShutdown
       }
     } finally {
       await this.redisLockProvider.unlock(lockKey)
+    }
+  }
+
+  /** v0 has no START_BOX job; attribute only an existing start's persisted terminal state. */
+  private async recordLegacyStartOutcome(box: Box, state: BoxState): Promise<void> {
+    if (!box.runnerId || ![BoxState.STARTED, BoxState.ERROR].includes(state)) return
+    try {
+      if ((await this.runnerService.getRunnerApiVersion(box.runnerId)) !== '0') return
+      const event = { name: 'box.start' as const, correlationId: box.id, organizationId: box.organizationId }
+      if (state === BoxState.STARTED) recordBusinessEvent({ ...event, outcome: 'success' })
+      else recordBusinessEvent({ ...event, outcome: 'exception', exceptionType: 'runner_start_failed' })
+    } catch {
+      // Telemetry lookup/logging must never reclassify a successful lifecycle transition as ERROR.
+      this.logger.warn('Legacy start outcome could not be attributed', { boxId: box.id })
     }
   }
 

@@ -45,6 +45,9 @@ import { reportedBoxState } from '../box/utils/box-state.util'
 import { Box } from '../box/entities/box.entity'
 import { TunnelService } from '../box/services/tunnel.service'
 import { PrepareTunnelDto } from '../box/dto/tunnel.dto'
+import { requestContext, UserContext } from '../common/decorators/user-context.decorator'
+import { Context } from '../common/context/context'
+import { recordBusinessEvent, recordOutcomes } from '../common/utils/business-event.util'
 
 type ProxyActivityPolicy = { activity: boolean; autoResume: boolean }
 const USER_OPERATION: ProxyActivityPolicy = { activity: true, autoResume: true }
@@ -79,6 +82,8 @@ function requireSshObservable(box: Box, boxId: string): void {
     throw new ConflictException(`Box ${boxId} is ${box.state}; SSH can be read once it is started or stopped`)
   }
 }
+/** A proxied call that is a business operation: a command started, or files uploaded. */
+type ProxiedOperation = 'box.exec' | 'box.file_upload'
 
 function requireSshRunning(box: Box, boxId: string): void {
   const state = reportedBoxState(box)
@@ -121,6 +126,7 @@ export class BoxliteProxyController {
       res,
       next,
       USER_OPERATION,
+      { operation: req.method === 'POST' ? 'box.exec' : undefined },
     )
   }
 
@@ -250,7 +256,7 @@ export class BoxliteProxyController {
       res,
       next,
       USER_OPERATION,
-      { proxyTimeoutMs: 0 },
+      { proxyTimeoutMs: 0, operation: req.method === 'PUT' ? 'box.file_upload' : undefined },
     )
   }
 
@@ -366,11 +372,19 @@ export class BoxliteProxyController {
     @AuthContext() authContext: OrganizationAuthContext,
     @Param('boxId') boxId: string,
     @Query('port', ParseIntPipe) port: number,
+    @UserContext() ctx: Context,
     @Body(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true })) options: PrepareTunnelDto = {},
   ) {
     // findOneByIdOrName already 404s for a missing/destroyed box.
     const box = await this.boxService.findOneByIdOrName(boxId, authContext.organizationId)
+    return recordOutcomes(
+      { name: 'tunnel.create', correlationId: box.id, organizationId: box.organizationId, ctx },
+      () => this.openTunnel(box, boxId, port, authContext.organizationId, options),
+      (error) => (error instanceof ConflictException ? 'conflict' : 'internal'),
+    )
+  }
 
+  private async openTunnel(box: Box, boxId: string, port: number, organizationId: string, options: PrepareTunnelDto) {
     // Tunnel URLs expose the box to the public internet, so only a box with
     // inbound access enabled can use one. Any other box is reached through
     // the authenticated API.
@@ -396,7 +410,7 @@ export class BoxliteProxyController {
       throw new ConflictException(`Box ${boxId} is not running (state: ${box.state})`)
     }
 
-    const uri = await this.boxService.getNetworkTunnelUrl(boxId, authContext.organizationId, port)
+    const uri = await this.boxService.getNetworkTunnelUrl(boxId, organizationId, port)
     const access = await this.tunnelService.prepare(box.id, port, options.isPublic ?? true)
     return { uri, ...access }
   }
@@ -425,11 +439,15 @@ export class BoxliteProxyController {
     policy: ProxyActivityPolicy,
     // admit throws to refuse the request after activity is recorded and before
     // any resume.
-    opts?: { ws?: boolean; proxyTimeoutMs?: number; admit?: ProxyAdmission },
+    opts?: { ws?: boolean; proxyTimeoutMs?: number; admit?: ProxyAdmission; operation?: ProxiedOperation },
   ) {
     const box = await this.boxService.findOneByIdOrName(boxId, authContext.organizationId)
     if (!box) {
       throw new NotFoundException(`Box ${boxId} not found`)
+    }
+
+    if (opts?.operation) {
+      this.recordProxiedOperation(opts.operation, box, requestContext(req), res)
     }
 
     if (policy.activity) {
@@ -499,6 +517,37 @@ export class BoxliteProxyController {
     }
 
     return createProxyMiddleware(proxyOptions)(req, res, next)
+  }
+
+  /**
+   * Records the operation as requested now and its outcome when the response
+   * ends: the runner's (or a gateway error's) status decides success, and a
+   * client that disconnects first leaves an exception.
+   */
+  private recordProxiedOperation(name: ProxiedOperation, box: Box, ctx: Context, res: Response): void {
+    const event = {
+      name,
+      correlationId: box.id,
+      organizationId: box.organizationId,
+      ctx,
+    }
+    recordBusinessEvent({ ...event, outcome: 'requested' })
+    let recorded = false
+    const finish = (exceptionType?: string) => {
+      if (recorded) return
+      recorded = true
+      res.off('finish', onFinish)
+      res.off('close', onClose)
+      if (exceptionType) recordBusinessEvent({ ...event, outcome: 'exception', exceptionType })
+      else recordBusinessEvent({ ...event, outcome: 'success' })
+    }
+    const onFinish = () => finish(res.statusCode >= 400 ? `http_${res.statusCode}` : undefined)
+    const onClose = () => finish('client_closed')
+    res.once('finish', onFinish)
+    res.once('close', onClose)
+    // The asynchronous box lookup may have outlived the response's terminal event.
+    if (res.writableFinished) onFinish()
+    else if (res.destroyed || res.closed) onClose()
   }
 
   private startActivityHeartbeat(boxId: string, autoStopSeconds: number): () => void {
