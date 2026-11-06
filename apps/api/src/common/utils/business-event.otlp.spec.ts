@@ -69,7 +69,7 @@ describe('recordBusinessEvent through the API logging stack', () => {
     expect(record?.attributes['event.timestamp']).toEqual(expect.any(String))
   })
 
-  // ClickHouse copies a business event into analytics.business_events by these keys.
+  // Operational telemetry preserves the same business-event attribute keys as analytics.
   it('exports the organization and the acting user as top-level OTLP log attributes', () => {
     recordBusinessEvent({
       name: 'box.exec',
