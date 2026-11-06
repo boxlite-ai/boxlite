@@ -134,8 +134,10 @@ const oidcFrom = (environment: Environment, hosts: PublicHosts): Record<string, 
       optional(environment, 'OIDC_END_SESSION_ENDPOINT') ?? `https://${hosts.dashboard}/api/auth/end-session`,
     ...passthrough('PUBLIC_OIDC_DOMAIN'),
     ...passthrough('OIDC_POST_LOGOUT_REDIRECT_ALLOWLIST'),
-    // The MCP endpoint's OAuth resource; unset, `/api/mcp` takes API keys only.
-    ...passthrough('MCP_RESOURCE_URL'),
+    // The MCP endpoint's OAuth resource: the URL clients connect to, on the
+    // control plane's host as `DASHBOARD_BASE_API_URL` is. Browser sign-in also
+    // needs `auth0:configure-mcp` on the tenant; API keys work without it.
+    MCP_RESOURCE_URL: optional(environment, 'MCP_RESOURCE_URL') ?? `https://${hosts.api}/mcp`,
     ...(management
       ? {
           OIDC_MANAGEMENT_API_ENABLED: 'true',

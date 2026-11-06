@@ -21,13 +21,13 @@ import { McpOriginGuard } from './origin.guard'
 export const mcpTransport = new StreamableHttpTransport({ protocol: 'dual', responseMode: 'json' })
 
 /**
- * JSON limit for `/api/mcp`: a tool call carries up to 8 MiB of binary as base64
+ * JSON limit for `/mcp`: a tool call carries up to 8 MiB of binary as base64
  * (11,184,812 bytes) plus its JSON-RPC envelope. Other routes keep the default.
  */
 export const MCP_JSON_LIMIT = '12mb'
 
 /**
- * Parses `/api/mcp` bodies with {@link MCP_JSON_LIMIT}. Call before `app.init()`, so
+ * Parses `/mcp` bodies with {@link MCP_JSON_LIMIT}. Call before `app.init()`, so
  * it runs ahead of the global parser, which then skips the already-read body. The
  * wrapper keeps its own name: Nest registers no global JSON parser when a router
  * layer is already named `jsonParser`.
@@ -48,13 +48,13 @@ export const mcpStrategy = new McpStrategy({
 })
 
 /**
- * `/api/mcp`. The guards admit a user API key or an MCP-audience OAuth token and
+ * `/mcp`. The guards admit a user API key or an MCP-audience OAuth token and
  * set `req.user`, which each tool call runs its REST route as; a 401 carries the
  * bearer challenge naming the OAuth discovery metadata. `McpScopeGuard` then
  * holds OAuth callers to their allowlist and scopes.
  */
 @ApiExcludeController()
-@Controller('mcp')
+@Controller(MCP_ROUTE)
 @UseGuards(McpOriginGuard, McpAuthGuard, McpScopeGuard)
 @UseFilters(McpAuthChallengeFilter)
 export class McpController extends McpHttpControllerFor(mcpTransport) {

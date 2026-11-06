@@ -11,10 +11,14 @@ import {
   Get,
   INestApplication,
   Injectable,
+  MiddlewareConsumer,
+  Module,
+  NestModule,
   Param,
   Post,
   Put,
   Req,
+  RequestMethod,
   UnauthorizedException,
   UseGuards,
 } from '@nestjs/common'
@@ -36,10 +40,11 @@ import { BoxliteWsProxyService } from '../boxlite-rest/boxlite-ws-proxy.service'
 import { RequiredOrganizationResourcePermissions } from '../organization/decorators/required-organization-resource-permissions.decorator'
 import { OrganizationResourcePermission } from '../organization/enums/organization-resource-permission.enum'
 import { McpAuthChallengeFilter } from './mcp-auth-challenge.filter'
-import { McpAuthMetadata } from './mcp-auth-metadata'
+import { MCP_ROOT_ROUTES, McpAuthMetadata } from './mcp-auth-metadata'
 import { McpAuthGuard } from './mcp-auth.guard'
 import { McpController, mcpStrategy, useMcpBodyParser } from './mcp.controller'
 import { McpDispatcher } from './mcp-dispatcher'
+import { McpMetadataController } from './mcp-metadata.controller'
 import { setMcpOAuthScopes } from './mcp-oauth-policy'
 import { servedOperations } from './mcp-routes'
 import { McpTools } from './mcp-tools'
@@ -125,18 +130,34 @@ const wsProxy = {
     }),
 }
 
+/**
+ * Marks every response, applied the way `AppModule` applies its global middleware
+ * (`{*path}`), so a test can see whether those middleware reach the MCP routes.
+ */
+@Module({})
+class GlobalMiddlewareProbe implements NestModule {
+  configure(consumer: MiddlewareConsumer) {
+    consumer
+      .apply((_req: unknown, res: { setHeader(name: string, value: string): void }, next: () => void) => {
+        res.setHeader('x-global-middleware', 'ran')
+        next()
+      })
+      .forRoutes({ path: '{*path}', method: RequestMethod.ALL })
+  }
+}
+
 const spec = (name: string) => parse(readFileSync(resolve(__dirname, '../../../../openapi', name), 'utf8'))
 
 async function boot(): Promise<INestApplication> {
   const moduleRef = await Test.createTestingModule({
-    imports: [DiscoveryModule],
-    controllers: [McpController, BoxRoute, AttachTicketRoute],
+    imports: [DiscoveryModule, GlobalMiddlewareProbe],
+    controllers: [McpController, McpMetadataController, BoxRoute, AttachTicketRoute],
     providers: [
       { provide: MCP_STRATEGY, useValue: mcpStrategy },
       McpTools,
       McpDispatcher,
       McpDelegation,
-      { provide: McpAuthMetadata, useValue: { url: undefined } },
+      { provide: McpAuthMetadata, useValue: { url: undefined, document: () => ({ resource: 'metadata' }) } },
       { provide: FailedAuthTrackerService, useValue: { recordFailure: async () => undefined } },
       { provide: BoxliteWsProxyService, useValue: wsProxy },
       McpAuthChallengeFilter,
@@ -146,7 +167,7 @@ async function boot(): Promise<INestApplication> {
     .useClass(FakeMcpAuthGuard)
     .compile()
   const app = moduleRef.createNestApplication()
-  app.setGlobalPrefix('api')
+  app.setGlobalPrefix('api', { exclude: MCP_ROOT_ROUTES })
   useMcpBodyParser(app)
   await app.init()
   app.get(McpTools).register({
@@ -162,7 +183,7 @@ async function boot(): Promise<INestApplication> {
 async function rpc(app: INestApplication, body: object, headers: Record<string, string> = {}) {
   const server = app.getHttpServer()
   const { port } = server.address() ?? (await new Promise((r) => server.listen(0, () => r(server.address()))))
-  const response = await fetch(`http://127.0.0.1:${port}/api/mcp`, {
+  const response = await fetch(`http://127.0.0.1:${port}/mcp`, {
     method: 'POST',
     headers: {
       authorization: 'Bearer good',
@@ -175,7 +196,7 @@ async function rpc(app: INestApplication, body: object, headers: Record<string, 
   return { status: response.status, json: await response.json().catch(() => undefined) }
 }
 
-describe('/api/mcp', () => {
+describe('/mcp', () => {
   let app: INestApplication
   beforeAll(async () => {
     app = await boot()
@@ -251,7 +272,7 @@ describe('/api/mcp', () => {
   it('challenges an OAuth caller missing a route permission with granted plus missing scopes', async () => {
     const server = app.getHttpServer()
     const { port } = server.address()
-    const response = await fetch(`http://127.0.0.1:${port}/api/mcp`, {
+    const response = await fetch(`http://127.0.0.1:${port}/mcp`, {
       method: 'POST',
       headers: {
         authorization: 'Bearer oauth:write:boxes',
@@ -347,7 +368,7 @@ describe('/api/mcp', () => {
 
   it('names no scope in the 401 challenge, so clients request scopes_supported', async () => {
     const { port } = app.getHttpServer().address()
-    const response = await fetch(`http://127.0.0.1:${port}/api/mcp`, {
+    const response = await fetch(`http://127.0.0.1:${port}/mcp`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream' },
       body: JSON.stringify({ jsonrpc: '2.0', id: 9, method: 'tools/list' }),
@@ -357,11 +378,28 @@ describe('/api/mcp', () => {
     expect(response.headers.get('www-authenticate')).not.toContain('scope=')
   })
 
+  const request = (method: string, path: string) =>
+    fetch(`http://127.0.0.1:${app.getHttpServer().address().port}${path}`, { method })
+
+  it('serves MCP and its metadata outside the api prefix, and nothing at the prefixed paths', async () => {
+    expect((await request('GET', '/.well-known/oauth-protected-resource/mcp')).status).toBe(200)
+    expect((await request('GET', '/.well-known/oauth-protected-resource/api/mcp')).status).toBe(404)
+    expect((await request('POST', '/api/mcp')).status).toBe(404)
+  })
+
+  it.each(['GET', 'DELETE'])('holds %s /mcp behind the MCP guards', async (method) => {
+    expect((await request(method, '/mcp')).status).toBe(401)
+  })
+
+  it('runs the global middleware on /mcp', async () => {
+    expect((await request('POST', '/mcp')).headers.get('x-global-middleware')).toBe('ran')
+  })
+
   it('reads served routes from the Nest app under its global prefix', () => {
     const served = servedOperations(app.getHttpAdapter().getInstance(), () => false)
 
     expect(served({ method: 'get', path: '/api/v1/boxes/{box_id}', webSocket: false })).toBe(true)
-    expect(served({ method: 'post', path: '/api/mcp', webSocket: false })).toBe(true)
+    expect(served({ method: 'post', path: '/mcp', webSocket: false })).toBe(true)
     expect(served({ method: 'get', path: '/api/v1/boxes', webSocket: false })).toBe(false)
   })
 })
