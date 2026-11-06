@@ -48,6 +48,36 @@ describe('PostHog business events', () => {
     jest.restoreAllMocks()
   })
 
+  it('captures requested and terminal events through the existing PostHog client', async () => {
+    const ctx = Context.user({ userId: 'user-1', authMethod: 'api_key', clientSource: 'sdk', sdkVersion: '0.9.7' })
+    await expect(
+      recordOutcomes(
+        { name: 'box.create', correlationId: 'box-1', organizationId: 'org-1', ctx },
+        async () => 42,
+        () => 'internal',
+      ),
+    ).resolves.toBe(42)
+    expect(mockCapture.mock.calls.map(([event]) => event.properties['event.outcome'])).toEqual(['requested', 'success'])
+    expect(mockCapture).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: 'box.create',
+        distinctId: 'user-1',
+        groups: { organization: 'org-1' },
+        timestamp: expect.any(Date),
+        properties: expect.objectContaining({
+          activity_schema: '1',
+          environment: 'test',
+          'correlation.id': 'box-1',
+          'organization.id': 'org-1',
+          'user.id': 'user-1',
+          'auth.method': 'api_key',
+          'client.source': 'sdk',
+          'sdk.version': '0.9.7',
+        }),
+      }),
+    )
+    expect(PostHog).toHaveBeenCalledTimes(1)
+  })
   it('captures classified failures without leaking the business exception', async () => {
     const failure = new Error('secret database failure')
     await expect(
@@ -73,6 +103,17 @@ describe('PostHog business events', () => {
     expect(PostHog).toHaveBeenCalledTimes(1)
     expect(JSON.stringify(mockCapture.mock.calls)).not.toContain('secret database failure')
   })
+  it('does not invent a person for preview presence', () => {
+    recordBusinessEvent({ name: 'box.open', outcome: 'success', correlationId: 'box-1', organizationId: 'org-1' })
+    expect(mockCapture).toHaveBeenCalledWith(
+      expect.objectContaining({
+        distinctId: 'anonymous:box-1',
+        properties: expect.objectContaining({ $process_person_profile: false }),
+      }),
+    )
+    expect(mockCapture.mock.calls[0][0].properties).not.toHaveProperty('user.id')
+  })
+
   it('preserves business results when capture throws', async () => {
     mockCapture.mockImplementation(() => {
       throw new Error('transport secret')
