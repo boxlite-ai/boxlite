@@ -51,7 +51,9 @@ carry it.
 
 The guest's serial console lands in `logs/console.log` under the box
 directory. The runtime-level test in `src/boxlite/tests/native_vmm.rs` pins how
-far the boot gets; `make test:integration:vmm:native` runs it together with the
-shim-level kernel boot. The
+far the boot gets. These native engine boot tests remain `#[ignore]` and are
+not selected by `make test:integration` or the E2E local workflow. Run
+`make test:integration:vmm:native` manually to exercise them together with the
+shim-level kernel boot, using the pinned kernel described above. The
 [VMM design](../contributing/architecture/vmm/README.md#where-the-engine-plugs-in-m2)
 describes the adapter and the devices it still lacks.
