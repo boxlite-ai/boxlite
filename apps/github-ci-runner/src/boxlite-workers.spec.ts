@@ -1,5 +1,5 @@
 /* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
-import { testCapacity } from '../../libs/ci-listener/tests/capacity'
+import { testCapacity } from '@boxlite-ai/ci-listener/testing'
 import { randomUUID } from 'node:crypto'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -13,7 +13,7 @@ import {
   ListenerState,
   WorkerExecutor,
 } from '@boxlite-ai/ci-listener'
-import { SqliteStateDatabase } from '../../libs/ci-listener/src/state/sqlite'
+import { SqliteStateDatabase } from '@boxlite-ai/ci-listener/sqlite'
 import { BoxLiteWorkers } from './boxlite-workers'
 import { BoxLiteRequestError } from './boxlite-http'
 

@@ -56,3 +56,11 @@ API and Dashboard builds passed. Shared Listener and standalone tests/builds als
 A local browser measured Runners and Images search fields identically: x=40, y=226.703125, width=380px, height=36px, 13px IBM Plex Mono, 19.5px line height and dashed borders.
 Typing an uppercase substring reduced two demo runners to one while capacity stayed at two of three; clearing restored both rows.
 These are local mock and automated results, not deployed acceptance.
+
+## Final rebase validation
+
+The requested branch was rebased onto main `95768eb4e2f7490b3ea373d424a2c9d20fd5ea0f`, preserving a linear feature history.
+CI API tests and both app builds passed after refreshing main dependencies; Dashboard passed 812 tests.
+Shared Listener PostgreSQL contracts were executed with cache disabled, and standalone tests/builds passed.
+Workspace lint passed with zero errors after using scoped project imports and preserving existing control-character checks and resource-cleanup failure precedence.
+CI management routes were also added to the API hub documentation. Hosted dual-App deployment acceptance remains pending.

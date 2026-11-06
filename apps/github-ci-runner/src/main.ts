@@ -1,6 +1,6 @@
 /* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
 import { Json, Listener, ListenerState } from '@boxlite-ai/ci-listener'
-import { SqliteStateDatabase } from '../../libs/ci-listener/src/state/sqlite'
+import { SqliteStateDatabase } from '@boxlite-ai/ci-listener/sqlite'
 import { BoxLiteWorkers } from './boxlite-workers'
 import { loadConfig } from './config'
 import { createHttp } from './http'
@@ -19,6 +19,25 @@ async function main(): Promise<void> {
   const stop = new AbortController()
   let host: SelfHost | undefined, http: ReturnType<typeof createHttp> | undefined
   const shutdown = () => stop.abort()
+  const closeResources = async () => {
+    const errors: unknown[] = []
+    try {
+      await http?.close()
+    } catch (error) {
+      errors.push(error)
+    }
+    try {
+      await host?.close()
+    } catch (error) {
+      errors.push(error)
+    }
+    try {
+      await database.close()
+    } catch (error) {
+      errors.push(error)
+    }
+    if (errors.length) throw new AggregateError(errors, 'Listener host shutdown is incomplete')
+  }
   process.once('SIGTERM', shutdown)
   process.once('SIGINT', shutdown)
   try {
@@ -64,23 +83,7 @@ async function main(): Promise<void> {
     stop.abort()
     process.removeListener('SIGTERM', shutdown)
     process.removeListener('SIGINT', shutdown)
-    const errors: unknown[] = []
-    try {
-      await http?.close()
-    } catch (error) {
-      errors.push(error)
-    }
-    try {
-      await host?.close()
-    } catch (error) {
-      errors.push(error)
-    }
-    try {
-      await database.close()
-    } catch (error) {
-      errors.push(error)
-    }
-    if (errors.length) throw new AggregateError(errors, 'Listener host shutdown is incomplete')
+    await closeResources()
   }
 }
 void main().catch((error) => {

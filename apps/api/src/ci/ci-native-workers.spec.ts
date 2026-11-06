@@ -1,5 +1,5 @@
 /* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
-import { testCapacity } from '../../../libs/ci-listener/tests/capacity'
+import { testCapacity } from '@boxlite-ai/ci-listener/testing'
 import { randomUUID } from 'node:crypto'
 import { createServer, Server } from 'node:http'
 import { AddressInfo } from 'node:net'
@@ -7,6 +7,8 @@ import { setTimeout as delay } from 'node:timers/promises'
 import { Header } from 'tar'
 import { DataSource } from 'typeorm'
 import {
+  WorkerPool,
+  GitHubExecutionBackend,
   ConfirmedWorkerAbsent,
   ConfirmedWorkerCreationRejected,
   decodeScope,
@@ -14,8 +16,6 @@ import {
   ExecutionLease,
   scopeKey,
 } from '@boxlite-ai/ci-listener'
-import { WorkerPool } from '../../../libs/ci-listener/src/execution/pool'
-import { GitHubExecutionBackend } from '../../../libs/ci-listener/src/execution/backend'
 import { BoxDto } from '../box/dto/box.dto'
 import { CiNativeState } from './ci-native-state'
 import { CiNativeWorkers } from './ci-native-workers'

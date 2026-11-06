@@ -18,7 +18,9 @@
       "@boxlite-ai/api-client": ["libs/api-client/src/index.ts"],
       "@boxlite-ai/runner-api-client": ["libs/runner-api-client/src/index.ts"],
       "@boxlite-ai/analytics-api-client": ["libs/analytics-api-client/src/index.ts"],
-      "@boxlite-ai/ci-listener": ["libs/ci-listener/src/index.ts"]
+      "@boxlite-ai/ci-listener": ["libs/ci-listener/src/index.ts"],
+      "@boxlite-ai/ci-listener/sqlite": ["libs/ci-listener/src/state/sqlite.ts"],
+      "@boxlite-ai/ci-listener/testing": ["libs/ci-listener/tests/capacity.ts"]
     }
   },
   "exclude": ["node_modules", "tmp"]

@@ -442,6 +442,23 @@ Every operation requires an organization owner or the explicit platform-admin ex
 API keys also need `write:boxes` and `delete:boxes`. A connected binding reports
 its durable `listener_status`; authorization success can precede runner setup. See [API behavior and limits](api/README.md#github-ci-installation-connect-in-development).
 
+## Experimental GitHub CI management
+
+Registered by `ci-management.controller.ts`; these routes also accept the
+authenticated-organization form without `{prefix}` and are excluded from generated clients.
+
+| Method | Path | Behavior |
+| --- | --- | --- |
+| `GET` | `/api/v1/{prefix}/ci/runners` | Lists original JIT Boxes with name filtering, pagination and organization-wide capacity. |
+| `PATCH` | `/api/v1/{prefix}/ci/connections/{id}` | Updates the existing connection's public-repository policy. |
+| `DELETE` | `/api/v1/{prefix}/ci/connections/{id}` | Disables a connection while retaining original worker cleanup identities. |
+
+Runner reads use existing organization Box access. Connection writes require the
+current owner and both Box write/delete key scopes. Policy updates retain delivered
+jobs; workers awaiting JIT may retire under the new policy. Connection deletion is
+separate from cancelling a pending authorization attempt above. See
+[management contracts](api/README.md#hosted-ci-management).
+
 ## Hosted BoxLite-compatible API
 
 **Service:** `apps/api` · **Base path:** `/api/v1` · **Port:** `3000` in

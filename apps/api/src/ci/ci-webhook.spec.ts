@@ -1,5 +1,5 @@
 /* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
-import { testCapacity } from '../../../libs/ci-listener/tests/capacity'
+import { testCapacity } from '@boxlite-ai/ci-listener/testing'
 import { INestApplication } from '@nestjs/common'
 import { Test } from '@nestjs/testing'
 import { createHash, createHmac, randomBytes, randomUUID } from 'node:crypto'

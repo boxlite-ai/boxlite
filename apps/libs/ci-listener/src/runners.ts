@@ -66,7 +66,9 @@ export class GitHubRunners {
     if (
       !labels.length ||
       labels.length > 100 ||
-      labels.some((label) => !label || label.length > 128 || /[\x00-\x1f]/.test(label)) ||
+      labels.some(
+        (label) => !label || label.length > 128 || Array.from(label).some((char) => char.charCodeAt(0) < 32),
+      ) ||
       new Set(labels.map((label) => label.toLowerCase())).size !== labels.length ||
       !labels.some((label) => label.toLowerCase() === 'boxlite-ci-runner')
     )
