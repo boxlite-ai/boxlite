@@ -908,16 +908,18 @@ export class BoxService {
   ): Promise<Box> {
     const box = await this.lifecycleBox(boxIdOrName, organizationId, lookup)
 
-    if (box.pending) {
+    if (box.pending && !box.checkpointJobId) {
       throw new BoxError('Box state change in progress')
     }
 
     const updateData = Box.getSoftDeleteUpdate(box)
 
-    const updatedBox = await this.boxRepository.updateWhere(box.id, {
-      updateData,
-      whereCondition: { pending: box.pending, state: box.state },
-    })
+    const updatedBox = box.checkpointJobId
+      ? await this.boxRepository.deleteCheckpointTarget(box)
+      : await this.boxRepository.updateWhere(box.id, {
+          updateData,
+          whereCondition: { pending: box.pending, state: box.state },
+        })
 
     recordBoxRequested('box.delete', updatedBox, ctx)
 

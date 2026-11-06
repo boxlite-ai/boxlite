@@ -306,6 +306,17 @@ const COMMAND_SCOPES: &[CommandScope] = &[
             children: &[],
         }],
     },
+
+    box_command_scope(
+        "checkpoint",
+        &[
+            box_command_scope("create", &[]),
+            box_command_scope("list", &[]),
+            box_command_scope("get", &[]),
+            box_command_scope("delete", &[]),
+        ],
+    ),
+    box_command_scope("recover", &[]),
     box_command_scope("agent", AGENT_SCOPES),
     CommandScope {
         name: "run",
@@ -745,6 +756,10 @@ pub enum Commands {
     Signal(crate::commands::signal::SignalArgs),
     /// Create a new box
     Create(crate::commands::create::CreateArgs),
+    /// Manage disk checkpoints locally or on the selected REST server.
+    Checkpoint(crate::commands::checkpoint::CheckpointArgs),
+    /// Replace a stopped or failed box from a checkpoint.
+    Recover(crate::commands::recover::RecoverArgs),
 
     /// List boxes
     #[command(visible_alias = "ls", visible_alias = "ps")]
@@ -1045,6 +1060,11 @@ impl GlobalFlags {
 
         if let Some(cli_home) = &self.home {
             options.home_dir = cli_home.clone();
+        }
+
+        // Explicit per-command storage flags override this after config loading.
+        if let Some(directory) = std::env::var_os("BOXLITE_CHECKPOINTS_DIR") {
+            options.checkpoints_dir = Some(directory.into());
         }
 
         if !self.registry.is_empty() {

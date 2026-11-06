@@ -17,6 +17,7 @@ type RuntimeOption func(*runtimeConfig)
 
 type runtimeConfig struct {
 	homeDir              string
+	checkpointsDir       string
 	imageRegistries      []ImageRegistry
 	experimentalFeatures []string
 }
@@ -56,6 +57,12 @@ type ImageRegistry struct {
 // WithHomeDir sets the BoxLite data directory.
 func WithHomeDir(dir string) RuntimeOption {
 	return func(c *runtimeConfig) { c.homeDir = dir }
+}
+
+// WithCheckpointDir selects independent managed checkpoint storage. Empty uses
+// BOXLITE_CHECKPOINTS_DIR or the directory under the runtime home.
+func WithCheckpointDir(dir string) RuntimeOption {
+	return func(c *runtimeConfig) { c.checkpointsDir = dir }
 }
 
 // WithImageRegistry configures transport, TLS, search, and auth for a registry.
@@ -410,7 +417,7 @@ func WithAutoStopInterval(seconds uint32) BoxOption {
 }
 
 // WithAutoDeleteInterval configures the cloud AutoDelete TTL in seconds.
-// A value of 0 disables AutoDelete. Local runtimes return Unsupported.
+// Zero disables AutoDelete. Locally, a positive value means remove on stop.
 func WithAutoDeleteInterval(seconds uint32) BoxOption {
 	return func(c *boxConfig) { c.autoDelete = &seconds }
 }

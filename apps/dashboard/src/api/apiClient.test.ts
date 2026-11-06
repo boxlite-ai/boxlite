@@ -84,7 +84,13 @@ async function makeClient(
   // AxiosError carrying `.response`, exactly like the built-in adapters.
   axios.defaults.adapter = (async (cfg: unknown) => {
     requests.push(cfg)
-    const response = { data: body, status, statusText: '', headers, config: cfg }
+    const response = {
+      data: typeof body === 'function' ? body(cfg) : body,
+      status,
+      statusText: '',
+      headers,
+      config: cfg,
+    }
     if (status >= 200 && status < 300) return response
     const err = new Error(`Request failed with status code ${status}`) as Error & Record<string, unknown>
     err.response = response
@@ -376,6 +382,67 @@ describe('ApiClient 401 -> bounded re-login recovery', () => {
     expect(error).toBeInstanceOf(BoxliteError)
     expect((error as Error).message).toBe(refusal)
     expect(onUnauthorized).not.toHaveBeenCalled()
+  })
+})
+
+describe('ApiClient checkpoints', () => {
+  it('uses scoped authenticated requests and omits execution overrides and absent names', async () => {
+    const requests: any[] = []
+    const api = await makeClient(vi.fn(), 200, { box_id: 'target' }, requests)
+    await api.createCheckpoint('org/one', 'source')
+    await api.createCheckpoint('org/one', 'source', 'base')
+    await api.createBoxFromCheckpoint('org/one', 'checkpoint')
+    await api.createBoxFromCheckpoint('org/one', 'checkpoint', 'worker')
+    await api.recoverBoxFromCheckpoint('org/one', 'checkpoint', 'target/name')
+    await api.removeCheckpoint('org/one', 'base/name')
+    expect(
+      requests.map(({ method, url, data, headers }) => ({
+        method,
+        url,
+        data: data && JSON.parse(data),
+        auth: headers.Authorization,
+      })),
+    ).toEqual([
+      { method: 'post', url: '/v1/org%2Fone/checkpoints', data: { source_box_id: 'source' }, auth: 'Bearer tok' },
+      {
+        method: 'post',
+        url: '/v1/org%2Fone/checkpoints',
+        data: { source_box_id: 'source', name: 'base' },
+        auth: 'Bearer tok',
+      },
+      { method: 'post', url: '/v1/org%2Fone/boxes', data: { checkpoint_id: 'checkpoint' }, auth: 'Bearer tok' },
+      {
+        method: 'post',
+        url: '/v1/org%2Fone/boxes',
+        data: { checkpoint_id: 'checkpoint', name: 'worker' },
+        auth: 'Bearer tok',
+      },
+      {
+        method: 'post',
+        url: '/v1/org%2Fone/boxes/target%2Fname/recover',
+        data: { checkpoint_id: 'checkpoint' },
+        auth: 'Bearer tok',
+      },
+      { method: 'delete', url: '/v1/org%2Fone/checkpoints/base%2Fname', data: undefined, auth: 'Bearer tok' },
+    ])
+  })
+
+  it('reads every page and refuses repeated continuation tokens', async () => {
+    const requests: any[] = []
+    const api = await makeClient(
+      vi.fn(),
+      200,
+      (cfg: any) =>
+        cfg.params?.page_token
+          ? { checkpoints: [{ id: 'second' }] }
+          : { checkpoints: [{ id: 'first' }], next_page_token: 'next /+' },
+      requests,
+    )
+    await expect(api.listCheckpoints('org-1')).resolves.toEqual([{ id: 'first' }, { id: 'second' }])
+    expect(requests[0].params).toBeUndefined()
+    expect(requests[1].params).toEqual({ page_token: 'next /+' })
+    const looping = await makeClient(vi.fn(), 200, { checkpoints: [], next_page_token: 'same' })
+    await expect(looping.listCheckpoints('org-1')).rejects.toThrow('repeated a pagination token')
   })
 })
 

@@ -665,6 +665,7 @@ Supported job types:
 CREATE_BOX, START_BOX, STOP_BOX, DESTROY_BOX,
 EXPORT_BOX, IMPORT_BOX,
 ROLLBACK_EXPORT_BOX, ROLLBACK_IMPORT_BOX, DISCARD_EXPORTED_BOX
+EXPORT_CHECKPOINT, UPLOAD_CHECKPOINT
 ```
 
 After the handler returns, `updateJobStatus` reports `COMPLETED` or
@@ -675,6 +676,82 @@ under the API-side trace.
 This is the production path. The HTTP routes under `/boxes/` and
 `/artifacts/` exist for direct/SDK use; v2 turns those into pull-based
 job execution.
+
+### Portable archive storage
+
+The [checkpoint design](https://github.com/boxlite-ai/boxlite/issues/2367)
+defines the capture, transfer and recovery contracts; the transfer helper alone
+does not provide target recovery ownership.
+
+Checkpoint capture separates native export from upload. `EXPORT_CHECKPOINT`
+owns the source `BOX` job slot; it reports an immutable archive record and never
+uploads. The API then releases the source and submits `UPLOAD_CHECKPOINT` in
+the checkpoint's own job slot. An upload does not hold the source's executor
+operation lease, so a later source start can proceed independently.
+
+Each capture uses `<BOXLITE_HOME_DIR>/work/checkpoints/<checkpoint-id>/<export-job-id>/`.
+Its record pins the image digest that built the source disk, archive size,
+SHA-256 and object URI. Redelivery reuses that capture; it never substitutes a
+fresh source export if the published file is missing or corrupt. Fixed lock
+files serialize duplicate deliveries across processes sharing the work directory.
+
+The accepted checkpoint job continues waiting for native export after caller
+cancellation. An upload retains its archive until the API acknowledges its
+terminal job status; a rejected callback leaves it for replay. Cleanup removes
+the large archive while retaining a small record that prevents a late export
+job from capturing the changed source again. These rules apply to checkpoint
+jobs; the migration job sequence keeps its existing export/upload contract.
+
+Checkpoint downloads use a private directory per import attempt, including
+duplicate deliveries of the same job. Transfer failures, unexpected lengths
+and link destinations are rejected and their staging is removed. Native
+checkpoint preparation performs the subsequent checksum, disk/configuration
+and pinned-image checks; the download helper alone does not certify an archive
+for recovery. Its owner must stay alive until that preparation finishes.
+
+`IMPORT_CHECKPOINT` composes download, shared archive preparation and native
+import; recovery removes the predecessor only after preflight succeeds. The
+request identifies a stable operation and a monotonically increasing target
+sequence, independently of individual job attempts. Its journal lives under
+`<BOXLITE_HOME_DIR>/work/checkpoint-operations/` and is keyed by the public box ID.
+Ordinary create, start, stop, destroy and archive operations use the same target
+lease. Accepted native work finishes under that lease after its caller cancels;
+canceling a queued lock acquisition has no effect.
+
+Retries reconcile the recorded predecessor and accepted native IDs before
+downloading or importing again. Import failure after removal leaves the target
+reserved for retry; preflight failure permits the original box to start.
+Ordinary create invalidates the previous checkpoint operation before changing
+the target. Explicit destroy durably retires the public target before native
+destruction, even when no import has arrived yet; all delayed checkpoint imports
+are then refused. Missing native targets count as successfully destroyed.
+Migration cleanup invalidates its previous operation while keeping the public
+target reusable. An accepted import can be
+replayed after the box starts without replacing it or reading the object again.
+The lease covers runner lifecycle entry points; callers directly using native
+runtime handles do not participate in this runner coordination.
+
+The runner shares `ArchiveStore` between archive producers and consumers.
+The control plane chooses each object's location: `gs://bucket/key` uses GCS,
+`s3://bucket/key` uses S3, and a bare key uses `AWS_DEFAULT_BUCKET`.
+Malformed locations and unsupported schemes fail before export begins.
+
+GCS uses Application Default Credentials and initializes its client on first
+use. Missing credentials can be retried on a later operation. S3 configuration
+is independent: an absent `AWS_DEFAULT_BUCKET` disables S3 transfers without
+preventing GCS transfers or runner startup. Operators must grant the runner's
+credentials access to the buckets selected by the control plane.
+
+A GCS upload succeeds only after its writer commits; a failed local read
+cancels the upload. GCS downloads use a unique, owner-only temporary file next
+to the destination, then rename the complete file into place. Download or
+rename failures preserve the prior destination and remove the staging file.
+Deleting an absent object is idempotent; permission failures remain errors.
+
+S3 retains MinIO's existing download/resume behavior. Callers must provide
+different local destinations for concurrent S3 downloads; close or rename
+failures may leave MinIO staging files. The GCS staging guarantees do not
+extend to S3. Callers own local archive retention and object removal.
 
 ### v2 healthcheck
 

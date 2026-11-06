@@ -10,6 +10,27 @@ and `SimpleBox.agents` for agent and turn methods, grouped options and error han
 [![npm version](https://badge.fury.io/js/%40boxlite%2Fcore.svg)](https://badge.fury.io/js/boxlite)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
+## Managed checkpoints
+
+The local and REST runtime's `checkpoints` handle exposes `create`, `list`,
+`get`, `remove`, `createBox` and `recoverBox` as promises. Checkpoints survive
+their source box and inherit its saved execution settings without overrides.
+
+```typescript
+const checkpoint = await runtime.checkpoints.create("source", "dev-base");
+const worker = await runtime.checkpoints.createBox(checkpoint.id, "worker");
+```
+
+Cloud capture may initially report `creating`; query until `ready` before use.
+`recoverBox(checkpointId, targetId)` requires an idle stopped or failed target.
+Local recovery preserves the name and returns a new native ID; REST recovery
+preserves the public Box ID. `remove(key, true)` ignores absence only.
+Create local recovery targets with `autoDelete: 0` so stopping retains them.
+
+Local archives default to `<BOXLITE_HOME>/checkpoints`. Supply `checkpointsDir`
+in runtime options, or set `BOXLITE_CHECKPOINTS_DIR`; explicit options take
+precedence. REST runtimes use server storage.
+
 ## Features
 
 - **Hardware-level VM isolation** (KVM on Linux, Hypervisor.framework on macOS)

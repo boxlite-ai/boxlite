@@ -61,6 +61,7 @@ const requestFor = (size: RunnerRequest['size'] = 'large'): RunnerRequest => ({
   apiUrl: 'https://api.example.invalid',
   otlpUrl: 'http://otel:4317',
   registryProxyHost: null,
+  checkpointBucket: null,
   environment: {},
   secrets: {},
 })
@@ -75,6 +76,24 @@ const gcpProvider = (output: (value: any) => any) =>
     volumePrefix: 'boxlite-volume',
     placement: { cloud: 'gcp', subnetwork: output('subnet'), serviceAccount: output('runner@example.invalid') } as any,
   })
+
+test('GCP checkpoint object access names only the configured archive bucket', (t) => {
+  const { resources, output } = captureResources(t)
+  const provider = gcpProvider(output)
+  const bucket = output('boxlite-app-dev-checkpoints')
+  provider({ ...requestFor(), checkpointBucket: bucket })
+
+  const grant = resources.get('RunnerCheckpointObjects')!
+  assert.ok(grant)
+  assert.equal(grant.args.bucket, bucket)
+  assert.equal(grant.args.role, 'roles/storage.objectUser')
+  assert.equal(grant.args.member.value, 'serviceAccount:runner@example.invalid')
+  assert.equal('project' in grant.args, false)
+
+  resources.clear()
+  provider(requestFor())
+  assert.equal(resources.has('RunnerCheckpointObjects'), false)
+})
 
 test('GCP keeps existing machine types while supplying the requested size for new hosts', (t) => {
   const { resources, output } = captureResources(t)

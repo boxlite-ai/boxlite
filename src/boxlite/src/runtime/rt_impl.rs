@@ -120,6 +120,8 @@ pub type SharedRuntimeImpl = Arc<RuntimeImpl>;
 /// - Immutable fields: No lock needed - never change after creation
 /// - Atomic fields: Lock-free (RuntimeMetricsStorage uses AtomicU64)
 pub struct RuntimeImpl {
+    /// Name and native-ID ownership during checkpoint replacement.
+    pub(crate) checkpoint_lifecycle: super::checkpoints::Lifecycle,
     /// Coordination lock for multi-step atomic operations.
     /// Acquire this BEFORE accessing box_manager/image_manager
     /// when you need atomicity across multiple operations.
@@ -245,6 +247,8 @@ impl RuntimeImpl {
         options: BoxliteOptions,
         experimental_features: ExperimentalFeatures,
     ) -> BoxliteResult<SharedRuntimeImpl> {
+        let checkpoint_lifecycle = super::checkpoints::Lifecycle::default();
+        checkpoint_lifecycle.register(options.checkpoints_directory()?);
         // Validate Early: Check preconditions before expensive work
         if !options.home_dir.is_absolute() {
             return Err(BoxliteError::Internal(format!(
@@ -351,6 +355,7 @@ impl RuntimeImpl {
         let guest_rootfs_mgr = GuestRootfsManager::new(base_disk_mgr.clone(), layout.temp_dir());
 
         let inner = Arc::new(Self {
+            checkpoint_lifecycle,
             sync_state: RwLock::new(SynchronizedState {
                 active_boxes_by_id: HashMap::new(),
                 active_boxes_by_name: HashMap::new(),
@@ -442,6 +447,7 @@ impl RuntimeImpl {
         name: Option<String>,
         reuse_existing: bool,
     ) -> BoxliteResult<(LiteBox, bool)> {
+        let _ownership = self.checkpoint_lifecycle.read(None, name.as_deref())?;
         // Check if runtime has been shut down
         if self.shutdown_token.is_cancelled() {
             return Err(BoxliteError::Stopped(
@@ -658,8 +664,24 @@ impl RuntimeImpl {
 
     /// Remove a box completely by ID or name.
     pub fn remove(&self, id_or_name: &str, force: bool) -> BoxliteResult<()> {
-        let box_id = self.resolve_id(id_or_name)?;
-        self.remove_box(&box_id, force)
+        let _selector = self.checkpoint_lifecycle.deleting(Some(id_or_name), None)?;
+        let box_id = match self.resolve_id(id_or_name) {
+            Err(BoxliteError::NotFound(_)) if self.checkpoint_lifecycle.cancel(id_or_name)? => {
+                return Ok(());
+            }
+            result => result?,
+        };
+        let config = self
+            .box_manager
+            .box_by_id(&box_id)?
+            .map(|(config, _)| config);
+        let _ownership = self.checkpoint_lifecycle.deleting(
+            Some(box_id.as_ref()),
+            config.as_ref().and_then(|config| config.name.as_deref()),
+        )?;
+        self.remove_box(&box_id, force)?;
+        self.checkpoint_lifecycle.cancel(box_id.as_ref())?;
+        Ok(())
     }
 
     // ========================================================================
@@ -1254,9 +1276,49 @@ impl RuntimeImpl {
         initial_status: BoxStatus,
         resolved_image: Option<crate::images::ResolvedImage>,
     ) -> BoxliteResult<LiteBox> {
+        let _ownership = self.checkpoint_lifecycle.read(None, name.as_deref())?;
+        self.provision_box_unlocked(
+            BoxIDMint::mint(),
+            staging_dir,
+            name,
+            options,
+            initial_status,
+            resolved_image,
+        )
+        .await
+    }
+
+    pub(crate) async fn provision_checkpoint_box(
+        self: &Arc<Self>,
+        staging_dir: std::path::PathBuf,
+        name: Option<String>,
+        options: BoxOptions,
+        import_id: BoxID,
+        ownership: &super::checkpoints::RecoveryLease,
+    ) -> BoxliteResult<LiteBox> {
+        ownership.check_name(name.as_deref())?;
+        self.provision_box_unlocked(
+            import_id,
+            staging_dir,
+            name,
+            options,
+            BoxStatus::Stopped,
+            None,
+        )
+        .await
+    }
+
+    async fn provision_box_unlocked(
+        self: &Arc<Self>,
+        box_id: BoxID,
+        staging_dir: std::path::PathBuf,
+        name: Option<String>,
+        options: BoxOptions,
+        initial_status: BoxStatus,
+        resolved_image: Option<crate::images::ResolvedImage>,
+    ) -> BoxliteResult<LiteBox> {
         use crate::litebox::config::ContainerRuntimeConfig;
 
-        let box_id = BoxIDMint::mint();
         let container_id = ContainerID::new();
         let now = Utc::now();
 

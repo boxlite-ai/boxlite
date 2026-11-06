@@ -93,6 +93,31 @@ func freeBoxliteStringPayload(value **C.char) {
 	freeBoxliteString(*value)
 }
 
+func freeCheckpointArchivePayload(value **C.CPreparedCheckpointArchive) {
+	if value != nil && *value != nil {
+		C.boxlite_prepared_checkpoint_archive_free(*value)
+	}
+}
+
+//export goBoxliteOnCheckpointArchive
+func goBoxliteOnCheckpointArchive(archive *C.CPreparedCheckpointArchive, errPtr *C.CBoxliteError, userData unsafe.Pointer) {
+	h := ptrToHandle(userData)
+	if h == 0 {
+		freeCheckpointArchivePayload(&archive)
+		return
+	}
+	if !claimOrFreePayload(h, &archive, freeCheckpointArchivePayload) {
+		return
+	}
+	defer h.Delete()
+	ch, ok := h.Value().(chan handleResult[*C.CPreparedCheckpointArchive])
+	if !ok {
+		freeCheckpointArchivePayload(&archive)
+		return
+	}
+	ch <- handleResult[*C.CPreparedCheckpointArchive]{value: archive, err: errorFromCError(errPtr)}
+}
+
 //export goBoxliteOnCreateBox
 func goBoxliteOnCreateBox(box *C.CBoxHandle, errPtr *C.CBoxliteError, userData unsafe.Pointer) {
 	h := ptrToHandle(userData)

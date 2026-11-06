@@ -22,6 +22,9 @@ import {
   Res,
   Req,
   ForbiddenException,
+  BadRequestException,
+  Optional,
+  ServiceUnavailableException,
 } from '@nestjs/common'
 import { ApiTags, ApiBearerAuth, ApiResponse, ApiExcludeController } from '@nestjs/swagger'
 import { Request, Response } from 'express'
@@ -48,6 +51,7 @@ import { AuditAction } from '../audit/enums/audit-action.enum'
 import { AuditTarget } from '../audit/enums/audit-target.enum'
 import { CommerceBoxLimitService } from './commerce-box-limit.service'
 import { Context } from '../common/context/context'
+import { CheckpointRecoverService } from '../box/services/checkpoint-recover.service'
 
 // Spec-first surface: the contract is openapi/box.openapi.yaml, not the
 // generated product spec (which `:prefix` routes would render invalid).
@@ -79,6 +83,7 @@ export class BoxliteBoxController {
     private readonly boxService: BoxService,
     private readonly boxStateWaiter: BoxStateWaiterService,
     private readonly commerceBoxLimitService: CommerceBoxLimitService,
+    @Optional() private readonly checkpointRecovery?: CheckpointRecoverService,
   ) {}
 
   @Post()
@@ -124,6 +129,22 @@ export class BoxliteBoxController {
     @UserContext() ctx: Context,
     @Req() request?: Request,
   ): Promise<BoxResponseDto> {
+    if (dto.checkpoint_id !== undefined) {
+      const overrides = Object.keys(dto).filter(
+        (key) => !['checkpoint_id', 'name'].includes(key) && dto[key] !== undefined,
+      )
+      if (overrides.length)
+        throw new BadRequestException('Checkpoint creation inherits its configuration; overrides are not supported')
+      if (!this.checkpointRecovery) throw new ServiceUnavailableException('Checkpoint creation is not configured')
+      const maxCreatedBoxes = await this.commerceBoxLimitService.resolveMaxCreatedBoxes(authContext.organizationId)
+      const box = await this.checkpointRecovery.createBox(
+        authContext.organization,
+        dto.checkpoint_id,
+        dto.name,
+        maxCreatedBoxes,
+      )
+      return boxToBoxResponse(await this.boxStateWaiter.waitForStarted(box.id, authContext.organizationId, 30))
+    }
     // Attaching a managed volume grants the box read/write access to its data,
     // so it is authorized independently of WRITE_BOXES: the caller must hold the
     // volume permissions too. WRITE_BOXES alone must not reach another key's

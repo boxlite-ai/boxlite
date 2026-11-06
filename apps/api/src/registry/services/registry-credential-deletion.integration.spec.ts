@@ -11,6 +11,7 @@ import { join } from 'node:path'
 import { DataSource, EntityManager } from 'typeorm'
 import { IsolationLevel } from 'typeorm/driver/types/IsolationLevel'
 import { Box } from '../../box/entities/box.entity'
+import { Checkpoint } from '../../box/entities/checkpoint.entity'
 import { BoxLastActivity } from '../../box/entities/box-last-activity.entity'
 import { BoxMigration } from '../../box/entities/box-migration.entity'
 import { BoxDesiredState } from '../../box/enums/box-desired-state.enum'
@@ -95,7 +96,7 @@ describeIfDatabase('Registry credential mutations (integration, real Postgres)',
     const options = {
       ...connection,
       database: databaseName,
-      entities: [Box, BoxLastActivity, BoxMigration, RegistryCredential, Image, ImageAlias, ImageVersion],
+      entities: [Box, BoxLastActivity, BoxMigration, RegistryCredential, Image, ImageAlias, ImageVersion, Checkpoint],
       namingStrategy: new CustomNamingStrategy(),
       entitySkipConstructor: true,
     }

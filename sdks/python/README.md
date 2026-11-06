@@ -5,6 +5,31 @@ Python bindings for BoxLite - an embeddable virtual machine runtime for secure, 
 Access the [agent API](../../docs/reference/agents.md) through `Box.agents`
 and `SimpleBox.agents`, including synchronous wrappers, grouped options and error handling.
 
+## Managed checkpoints
+
+`runtime.checkpoints` exposes async `create(source, name=None)`, `list()`,
+`get(key)`, `remove(key, force=False)`, `create_box(key, name=None)` and
+`recover_box(key, target)`. `SyncBoxlite.checkpoints` exposes the same operations
+synchronously. These independent archives survive source deletion.
+
+```python
+checkpoint = await runtime.checkpoints.create("source", "dev-base")
+worker = await runtime.checkpoints.create_box(checkpoint.id, "worker")
+```
+
+Creation and recovery inherit all saved execution settings; they accept no
+configuration overrides. Local recovery requires an idle stopped or failed
+target, preserves its name and returns a new native ID. REST recovery preserves
+the public Box ID. A cloud capture can initially report `creating`; query it
+until `ready` before use. Force removal only ignores absence.
+For a local target you intend to stop and recover, create it with
+`BoxOptions(auto_delete=0)` so stopping retains it.
+
+Local archives default to `<BOXLITE_HOME>/checkpoints`. Set
+`Options(checkpoints_dir="/data/checkpoints")` or `BOXLITE_CHECKPOINTS_DIR` to
+select another directory; explicit options take precedence. REST runtimes use
+server storage. See [CLI lifecycle details](../../src/cli/README.md#checkpoint-management).
+
 ## Overview
 
 The BoxLite Python SDK provides a Pythonic API for creating and managing isolated execution environments. Built with PyO3, it wraps the Rust BoxLite runtime with async-first Python bindings.

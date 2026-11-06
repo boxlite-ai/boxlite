@@ -153,6 +153,8 @@ tags:
     description: Runtime and per-box metrics
   - name: Images
     description: Container image management
+  - name: Checkpoints
+    description: Independent managed disk archives
   - name: Volumes
     description: Managed persistent volumes
   - name: Registries
@@ -305,6 +307,9 @@ paths:
         Creates a new box with the specified configuration.
         The box starts in `configured` status. Call `POST /start` to
         initialize the VM, or it will start lazily on first `exec`.
+        Alternatively, supply only `checkpoint_id` and optional `name` to
+        inherit a ready checkpoint's execution settings. Local imports start
+        stopped; cloud deployments may wait for the new Box to start.
       tags: [Boxes]
       parameters:
         - $ref: "#/components/parameters/idempotencyKey"
@@ -1590,6 +1595,143 @@ paths:
         "400":
           $ref: "#/components/responses/BadRequestError"
 
+  /{prefix}/checkpoints:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+    post:
+      operationId: createCheckpoint
+      summary: Capture an independent disk checkpoint
+      description: |
+        Export the source box directly, without a snapshot or temporary clone.
+        Requires Box write permission. Sources with volumes or secrets are
+        refused. A local capture returns ready after export; cloud capture
+        returns creating and becomes ready only after upload succeeds.
+      tags: [Checkpoints]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateCheckpointRequest"
+      responses:
+        "201":
+          description: Checkpoint record created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Checkpoint"
+        "400":
+          $ref: "#/components/responses/BadRequestError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailableError"
+    get:
+      operationId: listCheckpoints
+      summary: List checkpoints in the routing scope
+      tags: [Checkpoints]
+      parameters:
+        - $ref: "#/components/parameters/pageToken"
+      responses:
+        "200":
+          description: Checkpoint page
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CheckpointList"
+
+  /{prefix}/checkpoints/{checkpoint_key}:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+      - name: checkpoint_key
+        in: path
+        required: true
+        description: Checkpoint ID or name
+        schema:
+          type: string
+          minLength: 1
+          maxLength: 128
+          pattern: "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+    get:
+      operationId: getCheckpoint
+      summary: Get checkpoint metadata and state
+      tags: [Checkpoints]
+      responses:
+        "200":
+          description: Checkpoint metadata without environment values or object location
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Checkpoint"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+    delete:
+      operationId: removeCheckpoint
+      summary: Delete checkpoint storage and metadata
+      description: |
+        Requires Box write permission. Refuses active capture and unfinished
+        import use, including failed recoveries reserved for retry. Does not
+        remove boxes previously created from this checkpoint. Storage failure
+        retains deleting state and quota until a successful retry.
+      tags: [Checkpoints]
+      parameters:
+        - name: force
+          in: query
+          description: Ignore absence only; never bypass active use
+          schema:
+            type: boolean
+            default: false
+      responses:
+        "204":
+          description: Storage and metadata removed, or missing with force
+        "400":
+          $ref: "#/components/responses/BadRequestError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailableError"
+
+  /{prefix}/boxes/{box_id}/recover:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+      - $ref: "#/components/parameters/boxId"
+    post:
+      operationId: recoverBoxFromCheckpoint
+      summary: Replace an idle stopped or failed box from a checkpoint
+      description: |
+        Requires Box write permission. Accepts only checkpoint_id; all saved
+        execution settings are inherited. Preflight validates the archive and
+        pinned startup image before removal. Replacement is not atomic; failure
+        after removal retains ownership for retry with the same checkpoint.
+        Local recovery preserves the name and returns a new native ID. Cloud
+        recovery preserves the public Box ID and uses the existing runner.
+      tags: [Checkpoints]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RecoverBoxFromCheckpointRequest"
+      responses:
+        "200":
+          description: Recovered Box
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Box"
+        "400":
+          $ref: "#/components/responses/BadRequestError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailableError"
+
   /{prefix}/images/{image_name}:
     parameters:
       - $ref: "#/components/parameters/prefix"
@@ -2136,6 +2278,14 @@ components:
               type: boolean
               description: Whether snapshot create/list/get/remove/restore is supported
               example: true
+            checkpoints_enabled:
+              type: boolean
+              description: Whether managed checkpoint capture, use and deletion are supported
+              example: true
+            import_enabled:
+              type: boolean
+              description: Whether ordinary archive import is supported
+              example: true
             clone_enabled:
               type: boolean
               description: Whether box clone is supported
@@ -2490,6 +2640,68 @@ components:
         - failed
         - unknown
 
+    Checkpoint:
+      type: object
+      required: [id, name, source_box_id, created_at, size_bytes, state]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        source_box_id:
+          type: string
+          description: Recorded source identity; source deletion does not remove the checkpoint
+        created_at:
+          type: string
+          format: date-time
+        size_bytes:
+          type: integer
+          minimum: 0
+          description: Complete archive bytes; zero before an archive receipt is available
+        state:
+          type: string
+          enum: [creating, ready, failed, deleting]
+        error_reason:
+          type: string
+          description: Optional failure description without environment values or object locations
+
+    CheckpointList:
+      type: object
+      required: [checkpoints]
+      properties:
+        checkpoints:
+          type: array
+          items:
+            $ref: "#/components/schemas/Checkpoint"
+        next_page_token:
+          type: string
+          description: Opaque continuation token; omitted on the final page
+
+    CreateCheckpointRequest:
+      type: object
+      additionalProperties: false
+      required: [source_box_id]
+      properties:
+        source_box_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+        name:
+          type: string
+          minLength: 1
+          maxLength: 128
+          pattern: "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+
+    RecoverBoxFromCheckpointRequest:
+      type: object
+      additionalProperties: false
+      required: [checkpoint_id]
+      properties:
+        checkpoint_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+
     CreateBoxRequest:
       type: object
       description: |
@@ -2504,6 +2716,15 @@ components:
         quiet fall-through.
       additionalProperties: false
       properties:
+        checkpoint_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: |
+            Create from a ready checkpoint instead of an image. When supplied,
+            only name may accompany it; other configuration fields are rejected.
+            All execution settings are inherited, including image and resource
+            sizing, so ordinary field defaults do not apply to this mode.
         advanced:
           $ref: "#/components/schemas/CreateBoxAdvancedOptions"
         name:

@@ -20,6 +20,7 @@ if TYPE_CHECKING:
         RuntimeMetrics,
     )
     from ._box import SyncBox
+    from ._checkpoints import SyncCheckpointHandle
     from ._domains import SyncDomainHandle
     from ._images import SyncImageHandle
 
@@ -364,6 +365,14 @@ class SyncBoxlite:
         from ._images import SyncImageHandle
 
         return SyncImageHandle(self, self._boxlite.images)
+
+    @property
+    def checkpoints(self) -> "SyncCheckpointHandle":
+        """Managed disk checkpoints for this local or REST runtime."""
+        self._require_started()
+        from ._checkpoints import SyncCheckpointHandle
+
+        return SyncCheckpointHandle(self, self._boxlite.checkpoints)
 
     @property
     def domains(self) -> "SyncDomainHandle":

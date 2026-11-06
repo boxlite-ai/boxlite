@@ -40,6 +40,114 @@ impl RestRuntime {
 }
 
 #[async_trait::async_trait]
+impl crate::runtime::checkpoints::CheckpointBackend for RestRuntime {
+    async fn create(
+        &self,
+        source: &str,
+        name: Option<String>,
+    ) -> BoxliteResult<crate::CheckpointInfo> {
+        #[derive(serde::Serialize)]
+        struct Capture<'a> {
+            source_box_id: &'a str,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            name: Option<String>,
+        }
+        self.client
+            .post(
+                "/checkpoints",
+                &Capture {
+                    source_box_id: source,
+                    name,
+                },
+            )
+            .await
+    }
+
+    async fn list(&self) -> BoxliteResult<Vec<crate::CheckpointInfo>> {
+        #[derive(serde::Deserialize)]
+        struct Page {
+            checkpoints: Vec<crate::CheckpointInfo>,
+            #[serde(default)]
+            next_page_token: Option<String>,
+        }
+        let mut result = Vec::new();
+        let mut token = None::<String>;
+        let mut seen = std::collections::HashSet::new();
+        loop {
+            let query = token
+                .as_deref()
+                .map(|value| vec![("page_token", value)])
+                .unwrap_or_default();
+            let page: Page = self.client.get_with_query("/checkpoints", &query).await?;
+            result.extend(page.checkpoints);
+            match page.next_page_token.filter(|value| !value.is_empty()) {
+                Some(value) if seen.insert(value.clone()) => token = Some(value),
+                Some(_) => {
+                    return Err(BoxliteError::Internal(
+                        "checkpoint server repeated a pagination token".into(),
+                    ));
+                }
+                None => return Ok(result),
+            }
+        }
+    }
+
+    async fn get(&self, key: &str) -> BoxliteResult<crate::CheckpointInfo> {
+        self.client.get(&format!("/checkpoints/{key}")).await
+    }
+
+    async fn remove(&self, key: &str, force: bool) -> BoxliteResult<()> {
+        let path = format!("/checkpoints/{key}");
+        let result = if force {
+            self.client
+                .delete_with_query(&path, &[("force", "true")])
+                .await
+        } else {
+            self.client.delete(&path).await
+        };
+        match result {
+            Err(BoxliteError::NotFound(_)) if force => Ok(()),
+            result => result,
+        }
+    }
+
+    async fn create_box(&self, key: &str, name: Option<String>) -> BoxliteResult<LiteBox> {
+        #[derive(serde::Serialize)]
+        struct Create<'a> {
+            checkpoint_id: &'a str,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            name: Option<String>,
+        }
+        let response: BoxResponse = self
+            .client
+            .post(
+                "/boxes",
+                &Create {
+                    checkpoint_id: key,
+                    name,
+                },
+            )
+            .await?;
+        Ok(litebox_from_rest(Arc::new(RestBox::new(
+            self.client.clone(),
+            response.to_box_info()?,
+        ))))
+    }
+
+    async fn recover_box(&self, key: &str, target: &str) -> BoxliteResult<LiteBox> {
+        let path = format!("/boxes/{}/recover", urlencoding::encode(target));
+        let response: BoxResponse = self
+            .client
+            .post(&path, &serde_json::json!({"checkpoint_id": key}))
+            .await?;
+        Ok(litebox_from_rest(Arc::new(RestBox::new(
+            self.client.clone(),
+            response.to_box_info()?,
+        ))))
+    }
+}
+
+#[async_trait::async_trait]
 impl AuthBackend for RestRuntime {
     async fn whoami(&self) -> BoxliteResult<Principal> {
         self.client.get_me().await

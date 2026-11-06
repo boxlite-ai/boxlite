@@ -20,6 +20,9 @@ use crate::advanced_options::PyAdvancedBoxOptions;
 pub(crate) struct PyOptions {
     #[pyo3(get, set)]
     pub(crate) home_dir: Option<String>,
+    /// Managed checkpoint directory; defaults to the selected home.
+    #[pyo3(get, set)]
+    pub(crate) checkpoints_dir: Option<String>,
     /// Registry transport, TLS, search, and auth configuration.
     #[pyo3(get, set)]
     pub(crate) image_registries: Vec<PyImageRegistry>,
@@ -28,11 +31,16 @@ pub(crate) struct PyOptions {
 #[pymethods]
 impl PyOptions {
     #[new]
-    #[pyo3(signature = (home_dir=None, image_registries=vec![]))]
-    fn new(home_dir: Option<String>, image_registries: Vec<PyImageRegistry>) -> Self {
+    #[pyo3(signature = (home_dir=None, image_registries=vec![], *, checkpoints_dir=None))]
+    fn new(
+        home_dir: Option<String>,
+        image_registries: Vec<PyImageRegistry>,
+        checkpoints_dir: Option<String>,
+    ) -> Self {
         Self {
             home_dir,
             image_registries,
+            checkpoints_dir,
         }
     }
 
@@ -46,7 +54,10 @@ impl PyOptions {
 
 impl PyOptions {
     pub(crate) fn into_core(self) -> PyResult<BoxliteOptions> {
-        let mut config = BoxliteOptions::default();
+        let mut config = BoxliteOptions {
+            checkpoints_dir: self.checkpoints_dir.map(PathBuf::from),
+            ..BoxliteOptions::default()
+        };
 
         if let Some(home_dir) = self.home_dir {
             config.home_dir = PathBuf::from(home_dir);
