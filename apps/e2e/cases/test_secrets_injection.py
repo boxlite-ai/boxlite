@@ -112,7 +112,7 @@ async def test_the_proxy_injects_only_the_configured_header(
     is graded by a grep inside the guest. Short-exec stdout is dropped
     intermittently on a stage running without #1569 — this case read an empty
     string from a `curl` that had exited 0 — and a lost byte stream would
-    otherwise read as "the substitution did not happen".
+    otherwise read as "the injection did not happen".
     """
     # The control has to sit outside the mechanism under test, so it goes to a
     # host the secret does not bind. Configuring any secret makes gvproxy mint

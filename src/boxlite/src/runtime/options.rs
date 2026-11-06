@@ -789,12 +789,12 @@ impl BoxOptions {
             }
 
             let effective = secret.effective_header();
-            if let Some(explicit) = &secret.header {
-                if explicit.is_empty() {
-                    return Err(BoxliteError::InvalidArgument(format!(
-                        "secret {name:?} header cannot be empty string"
-                    )));
-                }
+            if let Some(explicit) = &secret.header
+                && explicit.is_empty()
+            {
+                return Err(BoxliteError::InvalidArgument(format!(
+                    "secret {name:?} header cannot be empty string"
+                )));
             }
 
             // Must be a valid HTTP header name

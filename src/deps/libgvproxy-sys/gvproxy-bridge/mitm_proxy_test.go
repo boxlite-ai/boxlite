@@ -162,7 +162,7 @@ func TestMitmProxy_HTTP1_PostWithBody(t *testing.T) {
 
 	secrets := testSecrets()
 
-	// Upstream echoes request body; the body is forwarded verbatim without substitution.
+	// Upstream echoes request body; the body is forwarded verbatim.
 	addr, cleanup := startTestUpstream(t, func(w http.ResponseWriter, r *http.Request) {
 		b, _ := io.ReadAll(r.Body)
 		w.Write(b)
@@ -754,7 +754,7 @@ func TestMitmProxy_HeaderInjection_CustomAndDefault(t *testing.T) {
 
 	// Body must stay unchanged: Must keep verbatim placeholder.
 	if strings.Contains(respStr, `"body":"{\"echo\":\"sk-real-openai-key\"}"`) {
-		t.Errorf("LEAK: secret was substituted in request body! Response: %s", respStr)
+		t.Errorf("LEAK: secret was written into the request body! Response: %s", respStr)
 	}
 	if !strings.Contains(respStr, `"body":"{\"echo\":\"<BOXLITE_SECRET:openai>\"}"`) {
 		t.Errorf("expected verbatim placeholder in body, got response: %s", respStr)

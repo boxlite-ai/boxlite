@@ -1,10 +1,10 @@
 """
-Tests for Secret type and MITM secret substitution.
+Tests for Secret type and header injection.
 
 Test coverage:
   1. PyO3 binding: Secret constructor, field access, mutation, repr
   2. BoxOptions integration: secrets coexist with other fields
-  3. Integration: env var injection, CA cert, upstream substitution (requires VM)
+  3. Integration: env var injection, CA cert, upstream header injection (requires VM)
 
 Requirements:
   - make dev:python (build Python SDK)
@@ -173,7 +173,7 @@ def runtime(shared_sync_runtime):
 
 @pytest.mark.integration
 class TestSecretIntegration:
-    """End-to-end secret substitution via MITM proxy."""
+    """End-to-end secret header injection via MITM proxy."""
 
     def test_secret_env_vars_and_ca_injection(self, runtime):
         """With secrets: placeholder env vars present, real values hidden, CA cert injected."""

@@ -1,4 +1,4 @@
-//! Tests for secret substitution types, config propagation, and value redaction.
+//! Tests for secret header injection types, config propagation, and value redaction.
 //!
 //! These tests verify:
 //! - JSON serialization matches what Go gvproxy expects
