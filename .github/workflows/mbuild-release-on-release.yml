@@ -1,5 +1,5 @@
 name: Publish Release Images
-run-name: publish ${{ github.event.release.tag_name }} images to dev
+run-name: publish ${{ github.event.release.tag_name }} images to GHCR
 
 on:
   release:
@@ -15,7 +15,7 @@ jobs:
       actions: write
     runs-on: ubuntu-latest
     steps:
-      - name: Publish release images to dev
+      - name: Publish release images to GHCR
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.event.release.tag_name }}

@@ -66,7 +66,11 @@ gh workflow run mdeploy-all.yml --ref main -f stage=stage -f ref='#123' -f compo
 
 Run a preview of the chosen ref first. `components=api` or `runner` narrows artifact preparation,
 not the entire infrastructure graph. Runs queue per stage; do not cancel a healthy apply to start another.
-Image releases are published/promoted through [mbuild-release](../../../.github/workflows/mbuild-release.yml).
+Image releases are published to GHCR through [mbuild-release](../../../.github/workflows/mbuild-release.yml).
+Release deployment imports these existing images into the target stage's AR/ECR repository,
+verifies manifest digests and enforces the target scan policy. It never starts a release build.
+Missing GHCR images stop planning and print the manual publication command; authentication and
+network failures remain registry errors. See the [release runbook](release.md).
 
 ### Caller attribution
 
@@ -84,8 +88,8 @@ is separate from current mdeploy orchestration.
 
 ## Deploy an existing stack
 
-Local deployment uses the same stage configuration and artifact identities. Publish or promote
-images first with [mbuild](../mbuild/README.md), and prepare the selected [runner artifact](runners.md).
+Local deployment uses the same stage configuration and artifact identities. Prepare images first
+with [mbuild](../mbuild/README.md), and prepare the selected [runner artifact](runners.md).
 The following example assumes release images `vX.Y.Z-<sha>` and runner release `X.Y.Z` already exist:
 
 ```bash
@@ -93,6 +97,7 @@ export BOXLITE_IMAGE_TAG='vX.Y.Z-<full-commit-sha>'
 export VERSION='X.Y.Z'
 npm run mstage login -- --stage dev
 npm run mstage env digest -- --stage dev
+npm run mbuild import-release -- --tag <full-commit-sha> --version vX.Y.Z --ghcr boxlite-ai/boxlite --stage dev
 npm run mbuild verify -- --tag <full-commit-sha> --version vX.Y.Z --stage dev
 npm run mdeploy -- --stage dev --diff
 npm run mdeploy -- --stage dev
