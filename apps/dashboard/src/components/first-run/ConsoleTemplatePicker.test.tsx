@@ -104,9 +104,7 @@ it('retires Coder Universal from selection and search and falls back to Python f
   expect(host.querySelector('[aria-label="Select Coder Universal"]')).toBeNull()
   expect(host.querySelector('[aria-label="Select Python"]')?.getAttribute('aria-pressed')).toBe('true')
   await click('Create Box')
-  expect(state.create).toHaveBeenCalledWith(
-    expect.objectContaining({ image: 'docker.io/library/python:3.12-slim' }),
-  )
+  expect(state.create).toHaveBeenCalledWith(expect.objectContaining({ image: 'docker.io/library/python:3.12-slim' }))
   await input('Search templates', 'coder')
   expect(host.textContent).toContain('No templates found')
 })

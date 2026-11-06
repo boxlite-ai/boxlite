@@ -129,7 +129,12 @@ export class TunnelService {
       .andWhere('box.state NOT IN (:...excluded)', { excluded: ['destroyed', 'destroying', 'archived', 'archiving'] })
       .getOne()
     const active = tunnel
-      ? { id: tunnel.id, accessMode: tunnel.accessMode, tokenHash: tunnel.tokenHash, authGeneration: tunnel.authGeneration }
+      ? {
+          id: tunnel.id,
+          accessMode: tunnel.accessMode,
+          tokenHash: tunnel.tokenHash,
+          authGeneration: tunnel.authGeneration,
+        }
       : null
     await this.redis.setex(cacheKey, ACCESS_CACHE_TTL_SECONDS, JSON.stringify(active))
     return active
