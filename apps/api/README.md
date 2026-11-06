@@ -220,6 +220,8 @@ An event names its entity only by `correlation.id` (the user id or the box id). 
 
 The producer uses the existing `POSTHOG_API_KEY`, `POSTHOG_HOST` and `POSTHOG_ENVIRONMENT` settings.
 Without the key or host, analytics is disabled while business operations and operational logs continue.
+AnalyticsService owns disabled-source and capture-error handling; the interceptor skips request extraction
+when analytics is disabled.
 Delivery is queued and best effort; application shutdown waits up to five seconds for the shared client.
 SDK diagnostics are separate from the sanitized business-event payload. Retention follows the PostHog
 project; BoxLite does not provision a second store or guarantee 400 days of history.
