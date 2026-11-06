@@ -4,6 +4,20 @@ One runner service manages many BoxLite VMs and exposes their lifecycle, executi
 
 # BoxLite Runner
 
+## Nested virtualization capability
+
+`BOXLITE_EXPERIMENTAL=nested-virtualization` authorizes the Runner runtime.
+Its V0 `/info` reports `nestedVirtualizationEnabled` from the feature set parsed
+and validated when the runtime starts. It reuses the saved authorization flag;
+it does not re-read process ENV or run an additional hardware probe.
+Physical host support remains checked by the existing native VM startup path,
+and startup errors retain their existing behavior.
+
+The control plane's [organization-policy PR](https://github.com/boxlite-ai/boxlite/pull/2360)
+decides whether a new box should use that capability. Saved requirements travel
+through create replay and recovery; recovery checks runtime authorization before
+destruction. The Runner flag does not establish hardware availability or L2 execution.
+
 The runner is the Go HTTP server that fronts a single `BoxliteRuntime` (the
 Rust SDK in [`sdks/go/`](../../sdks/go/) via FFI) and exposes a REST + WebSocket
 API for SDK clients and the control-plane API. One runner process hosts many
@@ -28,6 +42,48 @@ variable. See [cloud kernel operations](../infra/docs/runners.md#cloud-kernel).
 The health response includes `custom_kernel: "supported"` to identify binaries
 that implement this setting. It describes build capability; deployment also
 checks the running process's kernel environment and listening socket.
+
+## Nested virtualization
+
+Set `BOXLITE_EXPERIMENTAL=nested-virtualization` on the **Runner process** to
+authorize this release-candidate capability. The control plane decides each new box;
+an internal Runner create payload carries the saved `"nestedVirtualization":true`.
+The Runner uses an internal managed Go/C bridge to preserve each saved decision.
+Build Runner binaries with `-tags boxlite_runner`; development builds also use
+`boxlite_dev`. Ordinary SDK builds expose no per-box nesting setter.
+The managed runtime never applies local ENV defaults to all organizations.
+Unauthorized requests return HTTP 400 before volume mounts. Guest environment variables
+cannot authorize nesting, and enabling nesting does not grant guest privilege.
+
+Comma-separated features are validated at startup. Existing boxes and archive
+imports keep their saved options; requesting nesting when replaying a plain box
+fails, so create a new box instead. Host and guest kernels must support nesting;
+the flag alone does not establish hardware availability or a performance guarantee.
+
+Cloud stages deliver process settings through
+[`BOXLITE_RUNNER_ENV`](../infra/mdeploy/README.md#runner-process-environment).
+Public REST create requests have no nesting option. Cloud organization admission
+is supplied by the dependent [policy PR](https://github.com/boxlite-ai/boxlite/pull/2360).
+Upgrade Runners before enabling that control-plane policy.
+
+When both settings are enabled, the Runner combines their RC permissions and
+preserves kernel, privilege and nesting options together during create and replay.
+
+Startup uses one private configuration builder to preserve the operator's feature
+allowlist alongside registry, storage and logging settings. Its tests decode the
+process environment and pass the resulting settings through the real Go/C SDK;
+unknown features must fail native validation before host initialization.
+
+The Linux x86_64 Go CI job preserves full-suite coverage, grants KVM access, and
+then runs only `NestedVirtualization` tests with
+`BOXLITE_REQUIRE_NESTED_RUNTIME_TESTS=1`. In that qualification pass, an unavailable
+local runtime fails instead of skipping. Both atomic coverage profiles are merged
+before upload. This verifies metadata creation/replay and authorization, without
+booting a box or establishing nested guest execution.
+
+General startup authorization tests use the same typed `ErrUnsupported` prerequisite
+classification as other runtime tests; every other constructor error fails. Setting
+`BOXLITE_REQUIRE_NESTED_RUNTIME_TESTS=1` also makes these startup tests mandatory.
 
 For the system-wide context (CDN, load balancers, where the runner fits in
 the request path), see the [hosted platform](../../docs/contributing/architecture/platform/README.md).
@@ -778,18 +834,17 @@ that the guest listener restarts.
 
 ```bash
 # All runner tests
-cd apps/runner && go test -tags boxlite_dev ./...
+make test:apps:runner
 
 # Just the attach + exec_manager suites
-cd apps/runner && go test -tags boxlite_dev ./pkg/api/controllers/... ./pkg/boxlite/...
+make test:apps:runner FILTER='Attach|ExecManager'
 
 # With race detector (recommended; cleanupLoop ticker + attach goroutines)
-cd apps/runner && go test -tags boxlite_dev -race ./...
+make test:apps:runner GOTEST_FILTER='-race'
 ```
 
-The `boxlite_dev` build tag is required because the Go SDK uses FFI
-symbols that aren't in the released `libboxlite.a`. The dev tag links
-against the local cargo-built version.
+These make targets configure both required tags: `boxlite_dev` links the local
+C library, and `boxlite_runner` enables the private control-plane bridge.
 
 If you hit "libboxlite.a not found" or unresolved-symbol errors:
 

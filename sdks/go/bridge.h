@@ -7,6 +7,13 @@
 
 #include "boxlite.h"
 
+// Private Runner ABI, deliberately excluded from the public SDK header.
+extern enum BoxliteErrorCode boxlite_internal_runtime_new_runner(
+    const char *, const struct BoxliteImageRegistry *, int, const char *,
+    CBoxliteRuntime **, CBoxliteError *);
+extern enum BoxliteErrorCode boxlite_internal_advanced_options_set_nested_virtualization(
+    CAdvancedBoxOptions *, int);
+
 extern CBoxStdoutCb cbStdout(void);
 extern CBoxStderrCb cbStderr(void);
 extern CBoxExitCb cbExit(void);

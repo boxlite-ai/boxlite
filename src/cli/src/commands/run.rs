@@ -67,8 +67,6 @@ pub struct RunArgs {
 /// `std::process::exit` would bypass that Drop chain and leak the shim (#622).
 pub async fn execute(args: RunArgs, global: &GlobalFlags) -> anyhow::Result<i32> {
     args.boot.require_enabled(global.experimental_features())?;
-    args.management
-        .require_enabled(global.experimental_features())?;
     args.management.require_sweeper(global.targets_rest()?)?;
     let (rootfs, command_args) = args.rootfs_and_command()?;
     let command_args = command_args.to_vec();

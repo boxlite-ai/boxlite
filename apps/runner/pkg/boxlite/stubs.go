@@ -20,6 +20,9 @@ func (c *Client) RecoverBox(ctx context.Context, boxId string, recoverDto dto.Re
 	// Check before Destroy: a request that cannot be recreated must not cost
 	// the box it was meant to recover.
 	createDto := recoverCreateDto(boxId, recoverDto)
+	if createDto.NestedVirtualization && !c.nestedVirtualizationAllowed {
+		return errdefs.ErrInvalidArgument.WithMessage("nested virtualization requires BOXLITE_EXPERIMENTAL=nested-virtualization on the Runner")
+	}
 	if _, err := networkSpec(createDto); err != nil {
 		return err
 	}
@@ -69,20 +72,21 @@ func validateRecreatableSecrets(secrets []dto.SecretDTO) error {
 // runtime: a field not copied here is silently lost on a recovered box.
 func recoverCreateDto(boxId string, recoverDto dto.RecoverBoxDTO) dto.CreateBoxDTO {
 	return dto.CreateBoxDTO{
-		Id:               boxId,
-		Image:            "alpine:latest",
-		OsUser:           recoverDto.OsUser,
-		CpuQuota:         recoverDto.CpuQuota,
-		GpuQuota:         recoverDto.GpuQuota,
-		MemoryQuota:      recoverDto.MemoryQuota,
-		StorageQuota:     recoverDto.StorageQuota,
-		Env:              recoverDto.Env,
-		Privileged:       recoverDto.Privileged,
-		Volumes:          recoverDto.Volumes,
-		Secrets:          recoverDto.Secrets,
-		OutboundEnabled:  recoverDto.OutboundEnabled,
-		OutboundAllowNet: recoverDto.OutboundAllowNet,
-		FromVolumeId:     recoverDto.FromVolumeId,
+		NestedVirtualization: recoverDto.NestedVirtualization,
+		Id:                   boxId,
+		Image:                "alpine:latest",
+		OsUser:               recoverDto.OsUser,
+		CpuQuota:             recoverDto.CpuQuota,
+		GpuQuota:             recoverDto.GpuQuota,
+		MemoryQuota:          recoverDto.MemoryQuota,
+		StorageQuota:         recoverDto.StorageQuota,
+		Env:                  recoverDto.Env,
+		Privileged:           recoverDto.Privileged,
+		Volumes:              recoverDto.Volumes,
+		Secrets:              recoverDto.Secrets,
+		OutboundEnabled:      recoverDto.OutboundEnabled,
+		OutboundAllowNet:     recoverDto.OutboundAllowNet,
+		FromVolumeId:         recoverDto.FromVolumeId,
 	}
 }
 

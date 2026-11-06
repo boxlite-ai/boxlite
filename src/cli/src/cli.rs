@@ -4,9 +4,7 @@
 
 use anyhow::Context;
 use boxlite::experimental::custom_kernel::{KernelFormat, KernelOptions, configure};
-use boxlite::experimental::{
-    EXPERIMENTAL_FEATURES_ENV, ExperimentalFeature, ExperimentalFeatures, RuntimeBuilder,
-};
+use boxlite::experimental::{ExperimentalFeature, ExperimentalFeatures, RuntimeBuilder};
 use boxlite::runtime::options::{
     InboundNetworkConfig, NetworkMode, OutboundNetworkConfig, PortProtocol, PortSpec, VolumeSpec,
 };
@@ -927,18 +925,7 @@ fn without_hidden_arguments(command: Command) -> Command {
 }
 
 pub(crate) fn experimental_features_from_env() -> boxlite::BoxliteResult<ExperimentalFeatures> {
-    match std::env::var(EXPERIMENTAL_FEATURES_ENV) {
-        Ok(value) => ExperimentalFeatures::parse(&value).map_err(|error| match error {
-            boxlite::BoxliteError::Config(message) => {
-                boxlite::BoxliteError::Config(format!("{EXPERIMENTAL_FEATURES_ENV}: {message}"))
-            }
-            error => error,
-        }),
-        Err(std::env::VarError::NotPresent) => Ok(ExperimentalFeatures::default()),
-        Err(std::env::VarError::NotUnicode(_)) => Err(boxlite::BoxliteError::Config(format!(
-            "{EXPERIMENTAL_FEATURES_ENV} must contain valid UTF-8"
-        ))),
-    }
+    ExperimentalFeatures::from_env()
 }
 
 // ============================================================================
@@ -1054,8 +1041,7 @@ impl GlobalFlags {
         options: BoxliteOptions,
     ) -> anyhow::Result<BoxliteRuntime> {
         RuntimeBuilder::new(options)
-            .with_features(self.experimental_features.clone())
-            .build()
+            .build_with_environment_snapshot(self.experimental_features.clone())
             .map_err(Into::into)
     }
 
@@ -1712,22 +1698,9 @@ pub struct ManagementFlags {
     /// off (master switch + all sub-protections) when debugging.
     #[arg(long, env = "BOXLITE_SECURITY")]
     pub security: Option<String>,
-
-    /// Require nested virtualization for workloads in the box.
-    /// Starting the box fails if the host cannot provide it.
-    #[arg(long = "nested-virtualization", hide = true)]
-    pub nested_virtualization: bool,
 }
 
 impl ManagementFlags {
-    pub fn require_enabled(&self, features: &ExperimentalFeatures) -> boxlite::BoxliteResult<()> {
-        if !self.nested_virtualization {
-            return Ok(());
-        }
-
-        features.require(ExperimentalFeature::NestedVirtualization)
-    }
-
     /// Refuse a deadline nothing will act on.
     ///
     /// Both deadlines need a sweeper, which only a server runs. Against the
@@ -1781,9 +1754,6 @@ impl ManagementFlags {
             // CLI exit so the operator sees the offending value.
             opts.advanced.security =
                 boxlite::SecurityOptions::from_preset(preset).map_err(anyhow::Error::from)?;
-        }
-        if self.nested_virtualization {
-            opts.advanced.nested_virtualization = true;
         }
         Ok(())
     }
@@ -2407,30 +2377,6 @@ mod tests {
         );
 
         let enabled = ExperimentalFeatures::parse("custom-kernel").unwrap();
-        flags.require_enabled(&enabled).unwrap();
-    }
-
-    #[test]
-    fn nested_virtualization_gate_uses_explicit_feature_state() {
-        let flags = ManagementFlags {
-            nested_virtualization: true,
-            auto_stop: None,
-            auto_delete: None,
-            no_auto_resume: false,
-            name: None,
-            security: None,
-        };
-
-        let error = flags
-            .require_enabled(&ExperimentalFeatures::default())
-            .expect_err("nested virtualization must be disabled by default");
-        assert!(
-            error
-                .to_string()
-                .contains("ExperimentalFeature::NestedVirtualization")
-        );
-
-        let enabled = ExperimentalFeatures::parse("nested-virtualization").unwrap();
         flags.require_enabled(&enabled).unwrap();
     }
 
@@ -3107,7 +3053,6 @@ mod tests {
         ManagementFlags {
             name: None,
             security: None,
-            nested_virtualization: false,
             auto_stop,
             auto_delete,
             no_auto_resume,
@@ -3249,7 +3194,6 @@ mod tests {
         let flags = ManagementFlags {
             name: None,
             security: Some("disable".to_string()),
-            nested_virtualization: false,
             auto_stop: None,
             auto_delete: None,
             no_auto_resume: false,
@@ -3268,7 +3212,6 @@ mod tests {
         let flags = ManagementFlags {
             name: None,
             security: None,
-            nested_virtualization: false,
             auto_stop: None,
             auto_delete: None,
             no_auto_resume: false,
@@ -3289,7 +3232,6 @@ mod tests {
         let flags = ManagementFlags {
             name: None,
             security: Some("ultra".to_string()),
-            nested_virtualization: false,
             auto_stop: None,
             auto_delete: None,
             no_auto_resume: false,
@@ -3300,23 +3242,5 @@ mod tests {
             .expect_err("unknown preset must reject at apply_to");
         let msg = err.to_string();
         assert!(msg.contains("ultra"), "got {msg}");
-    }
-
-    #[test]
-    fn nested_virtualization_flag_applies_to_box_options() {
-        let cli =
-            Cli::try_parse_from(["boxlite", "run", "--nested-virtualization", "alpine:latest"])
-                .expect("nested virtualization flag should parse");
-        let Commands::Run(args) = cli.command else {
-            panic!("expected run command");
-        };
-
-        let mut opts = BoxOptions::default();
-        assert!(!opts.advanced.nested_virtualization);
-        args.management
-            .apply_to(&mut opts)
-            .expect("nested virtualization should apply");
-
-        assert!(opts.advanced.nested_virtualization);
     }
 }

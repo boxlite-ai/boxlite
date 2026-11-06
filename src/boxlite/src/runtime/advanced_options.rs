@@ -815,13 +815,9 @@ pub struct AdvancedBoxOptions {
     #[serde(default)]
     pub kernel: Option<crate::experimental::custom_kernel::KernelOptions>,
 
-    /// Release-candidate nested virtualization.
-    ///
-    /// The runtime must explicitly enable
-    /// [`ExperimentalFeature::NestedVirtualization`](crate::experimental::ExperimentalFeature::NestedVirtualization).
-    #[doc(hidden)]
+    /// Persisted runtime policy; local callers cannot choose this per box.
     #[serde(default)]
-    pub nested_virtualization: bool,
+    pub(crate) nested_virtualization: bool,
 
     /// Release-candidate engine choice; `None` keeps the default engine.
     ///

@@ -69,8 +69,6 @@ pub async fn execute(args: CreateArgs, global: &GlobalFlags) -> anyhow::Result<(
 impl CreateArgs {
     fn to_box_options(&self, global: &GlobalFlags) -> anyhow::Result<BoxOptions> {
         self.boot.require_enabled(global.experimental_features())?;
-        self.management
-            .require_enabled(global.experimental_features())?;
         self.management.require_sweeper(global.targets_rest()?)?;
         let mut options = BoxOptions::default();
         self.resource.apply_to(&mut options);

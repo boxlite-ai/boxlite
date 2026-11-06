@@ -458,7 +458,7 @@ mod plan_tests {
         assert!(
             error
                 .to_string()
-                .contains("ExperimentalFeature::NestedVirtualization")
+                .contains("BOXLITE_EXPERIMENTAL=nested-virtualization")
         );
 
         let enabled = ExperimentalFeatures::parse("nested-virtualization").unwrap();

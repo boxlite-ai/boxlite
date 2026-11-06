@@ -688,6 +688,10 @@ const docTemplate = `{
                         "type": "string"
                     }
                 },
+                "nestedVirtualization": {
+                    "description": "Requires explicit authorization on the Runner process; omitted means off.",
+                    "type": "boolean"
+                },
                 "organizationId": {
                     "description": "Nullable for backward compatibility",
                     "type": "string"
@@ -831,6 +835,9 @@ const docTemplate = `{
                     "type": "integer",
                     "minimum": 1
                 },
+                "nestedVirtualization": {
+                    "type": "boolean"
+                },
                 "osUser": {
                     "type": "string"
                 },
@@ -893,6 +900,9 @@ const docTemplate = `{
                 },
                 "metrics": {
                     "$ref": "#/definitions/RunnerMetrics"
+                },
+                "nestedVirtualizationEnabled": {
+                    "type": "boolean"
                 },
                 "serviceHealth": {
                     "type": "array",

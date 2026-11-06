@@ -52,6 +52,22 @@ pub unsafe extern "C" fn boxlite_advanced_options_set_kernel_path(
     }
 }
 
+/// Internal Runner bridge for the control plane's saved decision.
+///
+/// # Safety
+/// `opts` must be null or a live, exclusively accessible advanced-options handle.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_internal_advanced_options_set_nested_virtualization(
+    opts: *mut CAdvancedBoxOptions,
+    enabled: c_int,
+) -> BoxliteErrorCode {
+    let Some(handle) = (unsafe { opts.as_mut() }) else {
+        return BoxliteErrorCode::InvalidArgument;
+    };
+    boxlite::experimental::runner::set_nested_virtualization(&mut handle.options, enabled != 0);
+    BoxliteErrorCode::Ok
+}
+
 /// Opaque handle wrapping an `AdvancedBoxOptions`. Allocated via
 /// `boxlite_advanced_options_new`, freed via `boxlite_advanced_options_free`.
 pub struct AdvancedBoxOptionsHandle {

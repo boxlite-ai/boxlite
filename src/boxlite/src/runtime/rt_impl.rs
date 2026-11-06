@@ -149,6 +149,7 @@ pub struct RuntimeImpl {
 
     /// Immutable release-candidate capability opt-ins for this runtime.
     pub(crate) experimental_features: ExperimentalFeatures,
+    runner_managed: bool,
 
     /// Base disk manager for clone base lifecycle and ref-count tracking.
     pub(crate) base_disk_mgr: crate::disk::BaseDiskManager,
@@ -222,15 +223,20 @@ impl RuntimeImpl {
     ///
     /// Performs all initialization: filesystem setup, locks, managers, and box recovery.
     pub fn new(options: BoxliteOptions) -> BoxliteResult<SharedRuntimeImpl> {
-        Self::new_with_experimental_features(options, ExperimentalFeatures::default())
+        Self::new_with_experimental_features(
+            options,
+            ExperimentalFeatures::default().with_local_nesting()?,
+            false,
+        )
     }
 
     pub(crate) fn new_with_experimental_features(
         options: BoxliteOptions,
         experimental_features: ExperimentalFeatures,
+        runner_managed: bool,
     ) -> BoxliteResult<SharedRuntimeImpl> {
         let _sys = crate::system_check::SystemCheck::run()?;
-        Self::initialize(options, experimental_features)
+        Self::initialize(options, experimental_features, runner_managed)
     }
 
     /// Build a runtime without host validation, so unit tests also run on hosts
@@ -238,12 +244,17 @@ impl RuntimeImpl {
     /// not exercise VM or hypervisor operations.
     #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn new_for_test(options: BoxliteOptions) -> BoxliteResult<SharedRuntimeImpl> {
-        Self::initialize(options, ExperimentalFeatures::default())
+        Self::initialize(
+            options,
+            ExperimentalFeatures::default().with_local_nesting()?,
+            false,
+        )
     }
 
     pub(super) fn initialize(
         options: BoxliteOptions,
         experimental_features: ExperimentalFeatures,
+        runner_managed: bool,
     ) -> BoxliteResult<SharedRuntimeImpl> {
         // Validate Early: Check preconditions before expensive work
         if !options.home_dir.is_absolute() {
@@ -363,6 +374,7 @@ impl RuntimeImpl {
             guest_rootfs: Arc::new(OnceCell::new()),
             runtime_metrics: RuntimeMetricsStorage::new(),
             experimental_features,
+            runner_managed,
             base_disk_mgr,
             snapshot_mgr,
             lock_manager,
@@ -1770,6 +1782,18 @@ impl std::fmt::Debug for RuntimeImpl {
 /// Trait methods use `&self`. This newtype holds the Arc as a field to bridge the gap.
 pub(crate) struct LocalRuntime(pub(crate) SharedRuntimeImpl);
 
+impl LocalRuntime {
+    fn apply_creation_policy(&self, mut options: BoxOptions) -> BoxOptions {
+        if !self.0.runner_managed {
+            options.advanced.nested_virtualization = self
+                .0
+                .experimental_features
+                .is_enabled(crate::experimental::ExperimentalFeature::NestedVirtualization);
+        }
+        options
+    }
+}
+
 fn reject_local_unsupported_options(options: &BoxOptions) -> BoxliteResult<()> {
     // Local runtimes support auto_delete as a remove-on-stop policy, but AutoStop
     // needs a sweeper that the local runtime does not have, so it stays REST-only.
@@ -1826,6 +1850,7 @@ async fn sanitize_local_options(
 #[async_trait::async_trait]
 impl super::backend::RuntimeBackend for LocalRuntime {
     async fn create(&self, options: BoxOptions, name: Option<String>) -> BoxliteResult<LiteBox> {
+        let options = self.apply_creation_policy(options);
         let options = sanitize_local_options(&self.0.experimental_features, options).await?;
         self.0.create(options, name).await
     }
@@ -1835,6 +1860,7 @@ impl super::backend::RuntimeBackend for LocalRuntime {
         options: BoxOptions,
         name: Option<String>,
     ) -> BoxliteResult<(LiteBox, bool)> {
+        let options = self.apply_creation_policy(options);
         let options = sanitize_local_options(&self.0.experimental_features, options).await?;
         self.0.get_or_create(options, name).await
     }
@@ -2344,6 +2370,129 @@ mod tests {
 
         let enabled = ExperimentalFeatures::parse("nested-virtualization").unwrap();
         sanitize_local_options(&enabled, options).await.unwrap();
+    }
+
+    #[test]
+    fn nested_virtualization_environment_policy_is_captured() {
+        const CASE: &str = "BOXLITE_NESTED_POLICY_TEST_CASE";
+        let Ok(case) = std::env::var(CASE) else {
+            for (case, value) in [
+                ("enabled", "custom-kernel,nested-virtualization"),
+                ("disabled", ""),
+                ("invalid", "unknown"),
+            ] {
+                let output = std::process::Command::new(std::env::current_exe().unwrap())
+                    .args(["--exact", "runtime::rt_impl::tests::nested_virtualization_environment_policy_is_captured", "--nocapture"])
+                    .env(CASE, case)
+                    .env("BOXLITE_EXPERIMENTAL", value)
+                    .output().unwrap();
+                assert!(
+                    output.status.success(),
+                    "{case}: {}{}",
+                    String::from_utf8_lossy(&output.stdout),
+                    String::from_utf8_lossy(&output.stderr)
+                );
+            }
+            return;
+        };
+        let executor = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        executor.block_on(async {
+            let dir = TempDir::new().unwrap();
+            let options = BoxliteOptions {
+                home_dir: dir.path().join("home"),
+                ..Default::default()
+            };
+            let result = RuntimeImpl::new_for_test(options);
+            if case == "invalid" {
+                assert!(
+                    matches!(result, Err(BoxliteError::Config(_))),
+                    "invalid ENV must fail before setup"
+                );
+                assert!(!dir.path().join("home").exists());
+                return;
+            }
+            let runtime = result.unwrap();
+            // This child owns its environment; no other test runs here.
+            unsafe {
+                std::env::set_var(
+                    "BOXLITE_EXPERIMENTAL",
+                    if case == "enabled" {
+                        ""
+                    } else {
+                        "nested-virtualization"
+                    },
+                );
+            }
+            let local = LocalRuntime(runtime.clone());
+            let box_ = RuntimeBackend::create(&local, BoxOptions::default(), Some("policy".into()))
+                .await
+                .unwrap();
+            let (config, _) = runtime.box_manager.box_by_id(box_.id()).unwrap().unwrap();
+            assert_eq!(
+                config.options.advanced.nested_virtualization,
+                case == "enabled",
+                "new box must use initialization-time ENV"
+            );
+            assert!(
+                !runtime
+                    .experimental_features
+                    .is_enabled(crate::experimental::ExperimentalFeature::CustomKernel)
+            );
+            if case == "enabled" {
+                let mut kernel = BoxOptions::default();
+                kernel.advanced.kernel = Some(KernelOptions::new("/definitely/missing/vmlinux"));
+                let error = RuntimeBackend::create(&local, kernel, None)
+                    .await
+                    .err()
+                    .unwrap();
+                assert!(
+                    error
+                        .to_string()
+                        .contains("BOXLITE_EXPERIMENTAL=custom-kernel")
+                );
+
+                // Existing ordinary metadata must not satisfy the enabled policy.
+                runtime
+                    .create(BoxOptions::default(), Some("legacy".into()))
+                    .await
+                    .unwrap();
+                let error = RuntimeBackend::get_or_create(
+                    &local,
+                    BoxOptions::default(),
+                    Some("legacy".into()),
+                )
+                .await
+                .err()
+                .unwrap();
+                assert!(matches!(error, BoxliteError::Unsupported(_)));
+            }
+        });
+    }
+
+    #[tokio::test]
+    async fn nested_virtualization_managed_policy_preserves_each_saved_decision() {
+        let dir = TempDir::new().unwrap();
+        let features = ExperimentalFeatures::parse("nested-virtualization").unwrap();
+        let runtime = RuntimeImpl::initialize(
+            BoxliteOptions {
+                home_dir: dir.path().to_path_buf(),
+                ..Default::default()
+            },
+            features,
+            true,
+        )
+        .unwrap();
+        let local = LocalRuntime(runtime.clone());
+        for enabled in [false, true] {
+            let mut options = BoxOptions::default();
+            options.advanced.nested_virtualization = enabled;
+            let box_ = RuntimeBackend::create(&local, options, None).await.unwrap();
+            let (config, _) = runtime.box_manager.box_by_id(box_.id()).unwrap().unwrap();
+            assert_eq!(config.options.advanced.nested_virtualization, enabled);
+        }
     }
 
     #[tokio::test]

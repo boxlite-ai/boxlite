@@ -20,21 +20,13 @@ use tracing_subscriber::{EnvFilter, Layer, fmt, layer::SubscriberExt, util::Subs
 static FILE_LOG_GUARD: OnceLock<WorkerGuard> = OnceLock::new();
 
 fn main() {
-    let mut cli = cli::parse();
+    let cli = cli::parse();
 
     // Handle shell completion before starting tokio or tracing
     if let cli::Commands::Completion(args) = &cli.command {
         cli::generate_completion(&args.shell, "boxlite", &mut std::io::stdout());
         process::exit(0);
     }
-
-    cli.global.experimental_features = match cli::experimental_features_from_env() {
-        Ok(features) => features,
-        Err(error) => {
-            eprintln!("Error: {error}");
-            process::exit(1);
-        }
-    };
 
     // Start tokio runtime manually to ensure environment is set up safely
     let rt = tokio::runtime::Builder::new_multi_thread()
@@ -59,6 +51,16 @@ async fn run_cli(mut cli: Cli) -> i32 {
     if let Err(error) = contexts::initialize(&mut cli) {
         eprintln!("Error: {error:#}");
         return 1;
+    }
+    if matches!(cli.command, cli::Commands::Serve(_)) || !cli.global.targets_rest().unwrap_or(false)
+    {
+        cli.global.experimental_features = match cli::experimental_features_from_env() {
+            Ok(features) => features,
+            Err(error) => {
+                eprintln!("Error: {error}");
+                return 1;
+            }
+        };
     }
     // Per-layer filters: stderr stays peer-CLI quiet (warn), the optional file
     // layer carries richer info-level data for triage. Precedence (docker

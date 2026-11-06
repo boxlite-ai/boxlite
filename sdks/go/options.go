@@ -19,12 +19,13 @@ type runtimeConfig struct {
 	homeDir              string
 	imageRegistries      []ImageRegistry
 	experimentalFeatures []string
+	runnerManaged        bool
 }
 
 // WithExperimentalFeatures opts this local runtime into named RC features.
 // Each argument is one nonempty feature name, without commas or NUL bytes.
-// Calling with no arguments enables no experimental features.
-// Unknown names fail at construction. This does not read BOXLITE_EXPERIMENTAL.
+// Calling with no arguments clears explicit features; nesting still follows ENV.
+// Unknown names fail at construction. Local nesting follows BOXLITE_EXPERIMENTAL.
 func WithExperimentalFeatures(features ...string) RuntimeOption {
 	return func(c *runtimeConfig) { c.experimentalFeatures = append([]string(nil), features...) }
 }

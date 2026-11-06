@@ -19,7 +19,10 @@ exceptions go away as each device lands.
 The engine takes its kernel from the custom-kernel RC until the runtime bundles
 one: build it with `make vmm:boot` and pass `target/vmm/boot/x86_64/vmlinux`.
 Opt in to both capabilities for every process that creates, starts, or restarts
-the box. The library does not read `BOXLITE_EXPERIMENTAL`:
+the box. Authorize these capabilities explicitly in the SDK; their tokens in
+`BOXLITE_EXPERIMENTAL` do not grant them to SDK runtimes. The library captures
+that environment variable only to apply local nesting policy automatically.
+Keep `nested-virtualization` disabled when using the native engine:
 
 ```rust
 use boxlite::experimental::custom_kernel::{self, KernelFormat, KernelOptions};
