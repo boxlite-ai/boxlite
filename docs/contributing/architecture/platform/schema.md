@@ -5,7 +5,7 @@ to false: `organization.nestedVirtualizationEnabled` is Admin-controlled, while
 `box.nestedVirtualization` records the actual immutable create-time decision.
 The owner-writable `experimentalConfig` does not grant this capability. Existing
 Cloud rows remain ordinary. Rollback refuses to drop these columns while nested
-boxes remain; see [rollout and API](API.md#organization-nested-virtualization-allowlist-rc).
+boxes remain; see [rollout and API](api.md#organization-nested-virtualization-allowlist-rc).
 
 This catalog describes the durable state owned by the applications in this
 directory: the control-plane Postgres schema, and the satellite stores that

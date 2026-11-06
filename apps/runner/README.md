@@ -13,7 +13,7 @@ it does not re-read process ENV or run an additional hardware probe.
 Physical host support remains checked by the existing native VM startup path,
 and startup errors retain their existing behavior.
 
-The control plane's [organization allowlist](../API.md#organization-nested-virtualization-allowlist-rc)
+The control plane's [organization allowlist](../../docs/contributing/architecture/platform/api.md#organization-nested-virtualization-allowlist-rc)
 decides whether a new box should use that capability. Saved requirements travel
 through create replay and recovery; recovery checks runtime authorization before
 destruction. The Runner flag does not establish hardware availability or L2 execution.

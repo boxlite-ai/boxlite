@@ -1198,6 +1198,7 @@ fn box_info_to_response(info: &BoxInfo) -> BoxResponse {
         cpus: info.cpus,
         memory_mib: info.memory_mib,
         privileged: info.privileged,
+        reuse_error: None,
         labels: info.labels.clone(),
         auto_stop: info.auto_stop,
         auto_delete: info.auto_delete,
@@ -2110,6 +2111,7 @@ mod tests {
     use std::time::Duration;
 
     mod executions;
+    mod nested_reuse;
     mod ssh;
 
     #[test]

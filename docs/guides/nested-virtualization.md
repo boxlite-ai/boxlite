@@ -32,7 +32,7 @@ box. Missing, false, malformed, failed or timed-out declarations refuse creation
 they never produce an ordinary box as a fallback. The Runner environment alone
 cannot enable boxes for other organizations on the same host.
 
-See the [organization rollout contract](../../apps/API.md#organization-nested-virtualization-allowlist-rc).
+See the [organization rollout contract](../contributing/architecture/platform/api.md#organization-nested-virtualization-allowlist-rc).
 Runner declarations express authorization; hardware support is checked by the
 existing native VM startup path. Unsupported hardware returns an error, without
 software emulation or disabling nesting.
@@ -49,6 +49,13 @@ and cannot downgrade it.
 `created=false`. A missing name creates a box using the current runtime policy.
 Other security and engine compatibility checks still apply. Nested archive
 import and migration remain unsupported.
+
+REST detail GET responses carry an optional, read-only `reuse_error` when the
+current policy prevents reuse. Updated SDKs report it from `get_or_create`
+without a creation request. Older servers omit this metadata and retain their
+previous reuse behavior: upgrade the API/server and calling SDKs before enabling
+this RC. Local server policy is captured at startup; Cloud evaluates the
+authenticated organization's policy. Client ENV does not change either decision.
 
 ## Supported hosts
 

@@ -74,6 +74,13 @@ export class BoxResponseDto {
   })
   privileged?: boolean
 
+  @ApiPropertyOptional({
+    description:
+      'Detail GET only: current server policy prevents get_or_create from reusing this box; ordinary reads remain available',
+    readOnly: true,
+  })
+  reuse_error?: string
+
   @ApiProperty({
     description: 'Labels attached to the box',
     type: 'object',

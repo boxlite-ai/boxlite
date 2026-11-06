@@ -383,6 +383,9 @@ impl RuntimeBackend for RestRuntime {
             let path = format!("/boxes/{box_name}");
             match self.client.get::<BoxResponse>(&path).await {
                 Ok(response) => {
+                    if let Some(reason) = &response.reuse_error {
+                        return Err(BoxliteError::Unsupported(reason.clone()));
+                    }
                     let actual = response.privileged.ok_or_else(|| {
                         BoxliteError::Unsupported(format!(
                             "cannot reuse box {box_name:?}: the server did not report its \

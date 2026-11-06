@@ -30,6 +30,14 @@ Missing or non-true values, failed requests and timeouts refuse creation before
 inserting or dispatching a box. The rejection log includes
 `organizationId`, `boxId`, `runnerId`, `apiVersion`, and a stable reason.
 
+Detail `GET /api/v1[/{prefix}]/boxes/{boxId}` adds the read-only `reuse_error`
+when organization policy requires nesting but the saved box is ordinary.
+Updated SDK `get_or_create` reports that error without a creation request;
+ordinary `get` and `get_info` remain available. Local `boxlite serve` supplies
+the same metadata from its captured ENV policy. Other responses omit it.
+Upgrade API/server instances and calling SDKs before enabling this RC; older
+versions retain their previous reuse behavior.
+
 Allowlisted creates bypass ordinary warm boxes because their VM options are
 already fixed. The saved box decision survives replay, restart and recovery;
 changing the organization switch affects future creates only. Nested boxes do
