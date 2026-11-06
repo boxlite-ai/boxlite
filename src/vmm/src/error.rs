@@ -25,6 +25,12 @@ pub enum Error {
     Hypervisor(boxlite_hypervisor::Error),
     /// The kernel command line is too long or not printable ASCII.
     InvalidCommandLine(&'static str),
+    /// More disks than `config::MAX_DISKS`.
+    InvalidDiskCount(usize),
+    /// Opening a disk image failed.
+    OpenDisk { path: PathBuf, source: io::Error },
+    /// Every virtio-mmio window and interrupt line is taken.
+    VirtioSlotsExhausted,
     /// Devices claimed resources the chipset cannot give them.
     ChipsetConflicts(Vec<crate::chipset::Conflict>),
     /// A device constructor raised interrupt `line` before the chipset was
@@ -51,6 +57,8 @@ pub enum Error {
     },
     /// Creating the vCPU event loop failed, or waiting on it did.
     EventLoop(io::Error),
+    /// Creating the reporting balloon failed.
+    CreateBalloon(io::Error),
     /// Starting the thread that writes the guest console failed.
     SpawnConsole(io::Error),
     /// Starting the thread of vCPU `vcpu` failed.
@@ -76,6 +84,11 @@ impl fmt::Display for Error {
             Self::InvalidCommandLine(reason) => {
                 write!(f, "invalid kernel command line: {reason}")
             }
+            Self::InvalidDiskCount(count) => write!(f, "too many disks: {count}"),
+            Self::OpenDisk { path, .. } => {
+                write!(f, "failed to open the disk image {}", path.display())
+            }
+            Self::VirtioSlotsExhausted => f.write_str("no virtio-mmio slot is free"),
             Self::ChipsetConflicts(conflicts) => {
                 write!(f, "{} chipset conflict(s):", conflicts.len())?;
                 for conflict in conflicts {
@@ -103,6 +116,7 @@ impl fmt::Display for Error {
                 write!(f, "failed to write the {what} into guest RAM")
             }
             Self::EventLoop(_) => f.write_str("the VM event loop failed"),
+            Self::CreateBalloon(_) => f.write_str("failed to create the reporting balloon"),
             Self::SpawnConsole(_) => f.write_str("failed to start the console thread"),
             Self::SpawnVcpu { vcpu, .. } => write!(f, "failed to start vCPU {vcpu}"),
             Self::UnexpectedExit { vcpu, exit } => {
@@ -120,6 +134,8 @@ impl error::Error for Error {
             Self::InvalidVcpuCount(_)
             | Self::InvalidMemorySize(_)
             | Self::InvalidCommandLine(_)
+            | Self::InvalidDiskCount(_)
+            | Self::VirtioSlotsExhausted
             | Self::ChipsetConflicts(_)
             | Self::LineNotArmed(_)
             | Self::VirtioDevice { .. }
@@ -127,11 +143,13 @@ impl error::Error for Error {
             | Self::VcpuPanicked { .. }
             | Self::AlreadyRan => None,
             Self::AllocateMemory { source, .. }
+            | Self::OpenDisk { source, .. }
             | Self::LoadKernel { source, .. }
             | Self::LoadInitramfs { source, .. }
             | Self::WriteBootData { source, .. }
             | Self::SpawnVcpu { source, .. }
             | Self::EventLoop(source)
+            | Self::CreateBalloon(source)
             | Self::SpawnConsole(source)
             | Self::VirtioWorker(source) => Some(source),
             Self::Hypervisor(source) => Some(source),

@@ -25,6 +25,8 @@ type AdminOrganizationCreator struct {
 	// Current email, not necessarily the email at registration.
 	Email NullableString `json:"email"`
 	DisplayName string `json:"displayName"`
+	// Current verification state from the creator account.
+	EmailVerified *bool `json:"emailVerified,omitempty"`
 	AdditionalProperties map[string]interface{}
 }
 
@@ -124,6 +126,38 @@ func (o *AdminOrganizationCreator) SetDisplayName(v string) {
 	o.DisplayName = v
 }
 
+// GetEmailVerified returns the EmailVerified field value if set, zero value otherwise.
+func (o *AdminOrganizationCreator) GetEmailVerified() bool {
+	if o == nil || IsNil(o.EmailVerified) {
+		var ret bool
+		return ret
+	}
+	return *o.EmailVerified
+}
+
+// GetEmailVerifiedOk returns a tuple with the EmailVerified field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+func (o *AdminOrganizationCreator) GetEmailVerifiedOk() (*bool, bool) {
+	if o == nil || IsNil(o.EmailVerified) {
+		return nil, false
+	}
+	return o.EmailVerified, true
+}
+
+// HasEmailVerified returns a boolean if a field has been set.
+func (o *AdminOrganizationCreator) HasEmailVerified() bool {
+	if o != nil && !IsNil(o.EmailVerified) {
+		return true
+	}
+
+	return false
+}
+
+// SetEmailVerified gets a reference to the given bool and assigns it to the EmailVerified field.
+func (o *AdminOrganizationCreator) SetEmailVerified(v bool) {
+	o.EmailVerified = &v
+}
+
 func (o AdminOrganizationCreator) MarshalJSON() ([]byte, error) {
 	toSerialize,err := o.ToMap()
 	if err != nil {
@@ -137,6 +171,9 @@ func (o AdminOrganizationCreator) ToMap() (map[string]interface{}, error) {
 	toSerialize["userId"] = o.UserId
 	toSerialize["email"] = o.Email.Get()
 	toSerialize["displayName"] = o.DisplayName
+	if !IsNil(o.EmailVerified) {
+		toSerialize["emailVerified"] = o.EmailVerified
+	}
 
 	for key, value := range o.AdditionalProperties {
 		toSerialize[key] = value
@@ -185,6 +222,7 @@ func (o *AdminOrganizationCreator) UnmarshalJSON(data []byte) (err error) {
 		delete(additionalProperties, "userId")
 		delete(additionalProperties, "email")
 		delete(additionalProperties, "displayName")
+		delete(additionalProperties, "emailVerified")
 		o.AdditionalProperties = additionalProperties
 	}
 

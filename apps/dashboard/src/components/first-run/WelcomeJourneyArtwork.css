@@ -1,0 +1,135 @@
+/* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
+.welcome-journey-form {
+  width: 100%;
+  max-width: 480px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.welcome-journey-backdrop {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  user-select: none;
+}
+
+.welcome-journey-art {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: none;
+  width: 420px;
+  transform-origin: top left;
+}
+
+.welcome-journey-grain {
+  display: none;
+  position: absolute;
+  inset: 0;
+  background-image: radial-gradient(hsl(var(--foreground) / 0.09) 0.65px, transparent 0.65px);
+  background-size: 24px 24px;
+  mask-image: linear-gradient(to right, black, transparent 36%, transparent 64%, black);
+}
+
+.welcome-journey-ground {
+  --welcome-ground-tile: hsl(var(--background));
+  position: absolute;
+  top: 0;
+  left: -220px;
+  width: 660px;
+  height: 440px;
+  color: hsl(var(--foreground));
+  transform-origin: 430px 177px;
+}
+
+.welcome-ground-connections {
+  opacity: 0.16;
+}
+
+.welcome-ground-signals {
+  opacity: 0;
+}
+
+.welcome-journey-backdrop[data-step='organization'] .welcome-journey-ground {
+  opacity: 0.55;
+}
+
+.welcome-journey-backdrop:not([data-step='credits']) .welcome-box-floor {
+  opacity: 0;
+}
+
+.welcome-journey-backdrop[data-step='credits'] .welcome-journey-ground {
+  display: none;
+}
+
+@media (min-width: 1180px) and (max-width: 1359px) {
+  .welcome-journey-ground {
+    transform: scale(0.8);
+  }
+}
+
+.welcome-journey-backdrop[data-step='credits'] .welcome-journey-grain {
+  opacity: 0;
+}
+
+@media (min-width: 1180px) {
+  .welcome-journey-form {
+    margin-right: 0;
+  }
+
+  .welcome-journey-art,
+  .welcome-journey-grain {
+    display: block;
+  }
+}
+
+@media (min-width: 1024px) {
+  .welcome-journey-backdrop[data-step='credits'] .welcome-journey-art {
+    display: block;
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .welcome-journey-art {
+    transition: transform 800ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+  .welcome-journey-grain {
+    transition: opacity 600ms ease;
+  }
+  .welcome-journey-ground {
+    transition: opacity 600ms ease;
+  }
+}
+
+@media (min-width: 1180px) and (prefers-reduced-motion: no-preference) {
+  .welcome-journey-backdrop:not([data-step='credits']) .welcome-ground-signals {
+    opacity: 0.6;
+  }
+  .welcome-journey-backdrop:not([data-step='credits']) .welcome-ground-signals path {
+    stroke-dasharray: 0.06 0.94;
+    stroke-dashoffset: 0.06;
+    animation: welcome-ground-travel 8s linear var(--welcome-ground-delay, 0s) infinite;
+  }
+  .welcome-ground-signals path:nth-child(2) {
+    --welcome-ground-delay: -2.8s;
+  }
+  .welcome-ground-signals path:nth-child(3) {
+    --welcome-ground-delay: -5.6s;
+  }
+}
+
+@keyframes welcome-ground-travel {
+  0% {
+    stroke-dashoffset: 0.06;
+    opacity: 0;
+  }
+  10%,
+  70% {
+    opacity: 1;
+  }
+  85%,
+  100% {
+    stroke-dashoffset: -1;
+    opacity: 0;
+  }
+}

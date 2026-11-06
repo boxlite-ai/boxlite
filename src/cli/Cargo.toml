@@ -35,6 +35,7 @@ axum = { version = "0.8", features = ["macros", "ws"] }
 # crate through axum and reqwest, so this adds an edge, not a new crate.
 percent-encoding = "2"
 base64 = "0.22"
+sha2 = "0.10"
 tar = "0.4"
 tempfile = "3"
 tower-http = { version = "0.6", features = [

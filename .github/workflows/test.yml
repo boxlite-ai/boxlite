@@ -454,7 +454,7 @@ jobs:
         # server can name the class. stdlib only — no extra setup.
         run: make test:unit:openapi
 
-      - name: Run guest ownership tests
+      - name: Run guest mount tests
         if: runner.os == 'Linux'
         run: make test:guest-perms
 

@@ -302,7 +302,7 @@ Handle to a running or stopped box.
 | `id` | `string` | Unique box identifier (ULID) |
 | `name` | `string \| null` | User-defined name |
 | `network` | `JsNetworkHandle` | Box-scoped tunnel operations |
-| `ssh` | `JsSshHandle` | Configure, query, or disable guest SSH |
+| `ssh` | `JsSshHandle` | Configure, enable, query, or disable guest SSH |
 
 #### Methods
 
@@ -415,6 +415,7 @@ connections from ordinary host applications.
 | Operation | Signature | Description |
 |-----------|-----------|-------------|
 | Configure | `await box.ssh.configure(config)` | Apply `SshConfig` and return `SshStatus` |
+| Enable | `await box.ssh.enable()` | Enable saved configuration on a running box and return `SshStatus`; preserve healthy connections |
 | Observe | `await box.ssh.status()` | Return `SshStatus` |
 | Disable | `await box.ssh.disable()` | Disable SSH and return `SshStatus` |
 
@@ -447,8 +448,9 @@ interface SshStatus {
 
 On a `SimpleBox`, a first `configure` call lazily creates or fetches the box
 before validating the configuration: a wrong-typed configuration can leave the
-created box behind, but no SSH operation is sent for it. `status` and
-`disable` never start the VM.
+created box behind, but no SSH operation is sent for it. `status`, `enable` and
+`disable` never start the VM. Enable works locally and over REST and requires
+saved configuration.
 
 Invalid configuration field types report `InvalidArg` with the message
 `invalid SSH configuration`, without echoing rejected values. Other errors

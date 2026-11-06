@@ -9,7 +9,7 @@ import { join } from 'node:path'
 import { TypedConfigService } from '../../config/typed-config.service'
 
 /**
- * Where a registry password goes when a credential is added.
+ * Where a registry password goes when a credential is added or rotated.
  *
  * Write-only on purpose: there is no `get`. The API stores a password and
  * destroys it; reading one back is the registry proxy's job alone. On GCP the
@@ -18,10 +18,10 @@ import { TypedConfigService } from '../../config/typed-config.service'
  */
 export interface SecretStore {
   /**
-   * Stores `password` in a secret named after the credential and returns the
-   * name of the version holding it, which is what the credential row records.
+   * Stores `password` under a fresh storage ID and returns its version name.
+   * Rotation keeps the credential ID but uses a new storage ID for each write.
    */
-  put(credentialId: string, password: string): Promise<string>
+  put(storageId: string, password: string): Promise<string>
   /** Destroys the version `put` returned. One that is already gone resolves. */
   destroy(secretVersion: string): Promise<void>
 }
@@ -75,9 +75,9 @@ class GcpSecretManagerStore implements SecretStore {
   // service runs in, which is where the stack binds the API's role.
   private readonly client = new SecretManagerServiceClient()
 
-  async put(credentialId: string, password: string): Promise<string> {
+  async put(storageId: string, password: string): Promise<string> {
     const project = await this.client.getProjectId()
-    const secretId = `${REGISTRY_SECRET_PREFIX}${credentialId}`
+    const secretId = `${REGISTRY_SECRET_PREFIX}${storageId}`
     const [secret] = await this.client.createSecret({
       parent: `projects/${project}`,
       secretId,
@@ -112,14 +112,14 @@ class GcpSecretManagerStore implements SecretStore {
 }
 
 /**
- * One file per credential under a directory, for a local stack that has no
+ * One file per secret write under a directory, for a local stack that has no
  * Secret Manager. The registry proxy's file store reads the same directory.
  */
 class FileSecretStore implements SecretStore {
   constructor(private readonly directory: string) {}
 
-  async put(credentialId: string, password: string): Promise<string> {
-    const name = `${REGISTRY_SECRET_PREFIX}${credentialId}`
+  async put(storageId: string, password: string): Promise<string> {
+    const name = `${REGISTRY_SECRET_PREFIX}${storageId}`
     await mkdir(this.directory, { recursive: true, mode: 0o700 })
     // Readable by this user alone, and `wx` so a put never overwrites a
     // password an earlier one left.

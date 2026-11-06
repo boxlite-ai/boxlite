@@ -354,6 +354,10 @@ fmt.Println(current.Enabled)
 disabled, err := box.SSH().Disable(ctx)
 if err != nil { log.Fatal(err) }
 fmt.Println(disabled.Enabled, disabled.Generation) // false, generation kept
+
+enabled, err := box.SSH().Enable(ctx) // reuse saved configuration
+if err != nil { log.Fatal(err) }
+fmt.Println(enabled.Enabled) // true
 ```
 
 `SSH` has no `Close`: it refers to its `Box` and shares the box's and
@@ -361,9 +365,11 @@ runtime's lifetime.
 
 - **Lifecycle:** `Configure` replaces the whole configuration, restarts the
   listener, and may start the box. With `WithCmd` or `WithEntrypoint`, call
-  `box.Start` first or `Configure` returns `ErrInvalidState`. `Status` and
-  `Disable` never start the box; a box that is not running reports disabled
-  with generation zero. `Disable` is safe to repeat and keeps the generation.
+  `box.Start` first or `Configure` returns `ErrInvalidState`. `Status`, `Enable` and
+  `Disable` never start the box. `Enable` requires a running box and saved
+  configuration, works locally and over REST, and preserves healthy connections. On an idle local box, `Status` reports disabled
+  with generation zero, and `Disable` returns `ErrInvalidState`. On a running
+  box, `Disable` is safe to repeat and keeps the generation.
 - **Keys:** the guest validates keys and stores them on the container disk. A
   rejected configuration returns `ErrInvalidArgument` without echoing key
   material. `%v`, `%+v`, `%s`, and `%#v` redact keys and CA values; JSON
@@ -376,7 +382,7 @@ runtime's lifetime.
   with `WithPort(boxlite.PortSpec{Guest: 2222})` on a local runtime, or a
   [service tunnel](#service-tunnels) such as `network.Tunnel(ctx, &net.TCPAddr{Port: 2222}, boxlite.DefaultTunnelOptions())`.
 - **Native library:** SSH needs a `boxlite.h` and native library that export
-  `boxlite_box_ssh_configure`, `_status`, and `_disable`. `cmd/setup` fetches
+  `boxlite_box_ssh_configure`, `_enable`, `_status`, and `_disable`. `cmd/setup` fetches
   the pair matching your module version; an older library fails to link.
 
 See the [SSH guide](../../docs/guides/ssh.md) for listener behavior,

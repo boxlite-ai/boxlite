@@ -11,24 +11,27 @@ import * as React from 'react'
 import { cn } from '@/lib/utils'
 
 const buttonVariants = cva(
-  "inline-flex shrink-0 items-center justify-center gap-2 whitespace-nowrap border border-transparent text-sm font-medium tracking-tight transition-colors disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg:not([class*='size-'])]:size-4 [&_svg]:shrink-0 outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/20 aria-invalid:border-destructive",
+  "inline-flex shrink-0 items-center justify-center gap-2 whitespace-nowrap rounded-none border border-transparent font-mono text-meta font-medium leading-none shadow-none transition-colors disabled:cursor-not-allowed disabled:opacity-40 [&_svg]:pointer-events-none [&_svg:not([class*='size-'])]:size-4 [&_svg]:shrink-0 outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-foreground aria-invalid:border-destructive",
   {
     variants: {
       variant: {
-        default: 'bg-primary text-primary-foreground hover:bg-primary/92',
-        destructive: 'bg-destructive text-white hover:bg-destructive/92',
-        outline: 'border-input bg-background hover:bg-accent hover:text-accent-foreground',
-        secondary: 'border-input bg-secondary text-secondary-foreground hover:bg-accent',
-        ghost: 'border-transparent hover:bg-accent hover:text-accent-foreground',
-        link: 'text-primary underline-offset-4 hover:underline',
+        default: 'bg-primary font-semibold text-primary-foreground hover:[&:not(:disabled)]:opacity-85',
+        destructive: 'bg-destructive font-semibold text-white hover:[&:not(:disabled)]:opacity-85',
+        outline:
+          'border-border bg-transparent text-foreground hover:[&:not(:disabled)]:border-brand hover:[&:not(:disabled)]:bg-card aria-expanded:[&:not(:disabled)]:border-brand aria-expanded:[&:not(:disabled)]:bg-card',
+        secondary: 'border-border bg-secondary text-secondary-foreground hover:[&:not(:disabled)]:border-brand',
+        danger:
+          'border-border bg-transparent text-destructive hover:[&:not(:disabled)]:border-destructive hover:[&:not(:disabled)]:bg-destructive/10',
+        ghost: 'border-transparent hover:[&:not(:disabled)]:bg-accent hover:[&:not(:disabled)]:text-accent-foreground',
+        link: 'text-primary underline-offset-4 hover:[&:not(:disabled)]:underline',
       },
       size: {
         default: 'h-9 px-4',
-        sm: 'h-8 gap-1.5 px-3 text-xs',
+        sm: 'h-7 gap-1.5 px-2.5 text-meta',
         lg: 'h-10 px-6',
         icon: 'size-9',
         'icon-xs': 'size-6 text-xs',
-        'icon-sm': 'size-8 has-[>svg]:px-2',
+        'icon-sm': 'size-7 p-0',
         'icon-lg': 'size-10',
       },
     },
@@ -39,19 +42,22 @@ const buttonVariants = cva(
   },
 )
 
-function Button({
-  className,
-  variant,
-  size,
-  asChild = false,
-  ...props
-}: React.ComponentProps<'button'> &
+type ButtonProps = React.ComponentPropsWithoutRef<'button'> &
   VariantProps<typeof buttonVariants> & {
     asChild?: boolean
-  }) {
+  }
+
+/**
+ * Owns shared action styles while forwarding native props and the DOM ref.
+ * With asChild, Radix Slot composes them onto the supplied navigation or trigger element.
+ */
+const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(function Button(
+  { className, variant, size, asChild = false, ...props },
+  ref,
+) {
   const Comp = asChild ? Slot : 'button'
 
-  return <Comp data-slot="button" className={cn(buttonVariants({ variant, size, className }))} {...props} />
-}
+  return <Comp ref={ref} data-slot="button" className={cn(buttonVariants({ variant, size, className }))} {...props} />
+})
 
 export { Button, buttonVariants }

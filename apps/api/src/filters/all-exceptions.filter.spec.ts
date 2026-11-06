@@ -12,6 +12,27 @@ import { BoxPreparingImageTimeoutError } from '../box/errors/box-preparing-image
 import { BoxProgressPhase } from '../box/enums/box-progress-phase.enum'
 
 describe('AllExceptionsFilter', () => {
+  it.each(['box-1', undefined, '', 123, { id: 'box-1' }])('only forwards a valid timeout Box ID: %p', async (boxId) => {
+    const json = jest.fn()
+    const status = jest.fn().mockReturnValue({ json })
+    const filter = new AllExceptionsFilter({ incrementFailedAuth: jest.fn() } as never)
+    const host = {
+      switchToHttp: () => ({
+        getResponse: () => ({ status }),
+        getRequest: () => ({ path: '/api/v1/org/boxes', url: '/api/v1/org/boxes' }),
+      }),
+    } as ArgumentsHost
+
+    await filter.catch(new RequestTimeoutException({ message: 'Startup is still pending', boxId }), host)
+
+    expect(status).toHaveBeenCalledWith(HttpStatus.REQUEST_TIMEOUT)
+    if (boxId === 'box-1') {
+      expect(json).toHaveBeenCalledWith(expect.objectContaining({ boxId: 'box-1' }))
+    } else {
+      expect(json.mock.calls[0][0]).not.toHaveProperty('boxId')
+    }
+  })
+
   it('serializes HttpException code fields into the JSON response', async () => {
     const json = jest.fn()
     const status = jest.fn().mockReturnValue({ json })

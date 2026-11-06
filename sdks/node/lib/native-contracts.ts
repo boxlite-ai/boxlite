@@ -591,6 +591,8 @@ export interface JsSshHandle {
   /** Validate and replace the configuration; the only operation that may
    *  start the box. */
   configure(config: JsSshConfig): Promise<JsSshStatus>;
+  /** Enable saved configuration on a running box; preserve healthy connections. */
+  enable(): Promise<JsSshStatus>;
   /** Observe SSH state without starting the VM or its main command. */
   status(): Promise<JsSshStatus>;
   /** Stop SSH idempotently without starting the VM or its main command. */

@@ -21,7 +21,7 @@ Dex environment for the dashboard. Drive this suite through the
 
 The wider REST API test flow, from the contract inventory and this suite to the
 CLI matrix and both authentication modes, is in
-[`rest-api-e2e.md`](rest-api-e2e.md).
+[REST API testing](../../docs/contributing/development/rest-api-testing.md).
 
 ## What the suite verifies
 

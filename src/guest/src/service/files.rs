@@ -5,6 +5,7 @@
 //! running inside the guest.
 
 use crate::service::server::GuestServer;
+use crate::storage::attach::Attacher;
 use boxlite_shared::{
     files_server::Files, BoxByteStream, DownloadChunk, DownloadRequest, UploadChunk, UploadResponse,
 };
@@ -16,7 +17,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::fs::File;
 use tokio::io::AsyncWriteExt;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, OwnedRwLockReadGuard};
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status, Streaming};
 use tracing::info;
@@ -341,8 +342,12 @@ struct CopyTarget {
     in_container: PathBuf,
     /// Where that path lands on the guest-side rootfs directory.
     on_rootfs: PathBuf,
-    /// Destinations of every mount the container was created with.
+    /// Destinations of every mount in the container, including those added
+    /// after creation by `Container.Mount`.
     mounts: Vec<PathBuf>,
+    /// Keeps `Container.Mount` out until the copy ends, so `mounts` stays
+    /// true for the whole transfer.
+    _mount_gate: OwnedRwLockReadGuard<Attacher>,
 }
 
 impl CopyTarget {
@@ -365,7 +370,7 @@ impl CopyTarget {
     #[allow(clippy::result_large_err)]
     async fn resolve(server: &GuestServer, container_id: &str, path: &str) -> Result<Self, Status> {
         let in_container = to_container_path(path)?;
-        let mounts = server.container_mounts(container_id).await?;
+        let (mounts, mount_gate) = server.container_mounts(container_id).await?;
 
         if let Some(mount) = deepest_covering(&in_container, &mounts) {
             return Err(Status::failed_precondition(unreachable_mount_message(
@@ -386,6 +391,7 @@ impl CopyTarget {
             in_container,
             on_rootfs,
             mounts,
+            _mount_gate: mount_gate,
         })
     }
 
@@ -829,23 +835,33 @@ impl GuestServer {
         }
     }
 
-    /// Mount destinations of the container, from the OCI spec it was created
-    /// with.
+    /// Mount destinations of the container: those of the OCI spec it was
+    /// created with, plus those `Container.Mount` added since.
     ///
     /// Asked once per copy, by [`CopyTarget::resolve`], which then answers
     /// every later question from the list it holds. The answer costs only the
-    /// clone: `Container` resolved the list at creation, so nothing here reads
-    /// a file while holding the container's lock on the guest's async runtime.
+    /// clone: `Container` keeps the list in memory, so nothing here reads a
+    /// file while holding the container's lock on the guest's async runtime.
+    ///
+    /// Also returns the read side of the container's mount lock, taken before
+    /// the list is read and without holding the container's own lock, the same
+    /// order `Container.Mount` takes them. While a copy holds it, no mount can
+    /// land under a path the list said was reachable.
     #[allow(clippy::result_large_err)]
-    async fn container_mounts(&self, container_id: &str) -> Result<Vec<PathBuf>, Status> {
+    async fn container_mounts(
+        &self,
+        container_id: &str,
+    ) -> Result<(Vec<PathBuf>, OwnedRwLockReadGuard<Attacher>), Status> {
         let container_arc = {
             let containers = self.containers.lock().await;
             containers.get(container_id).cloned().ok_or_else(|| {
                 Status::failed_precondition(format!("container not found: {container_id}"))
             })?
         };
-        let container = container_arc.lock().await;
-        Ok(container.mount_destinations().to_vec())
+        let attacher = container_arc.lock().await.attacher();
+        let mount_gate = attacher.read_owned().await;
+        let mounts = container_arc.lock().await.mount_destinations().to_vec();
+        Ok((mounts, mount_gate))
     }
 }
 
@@ -885,7 +901,42 @@ mod tests {
             in_container: PathBuf::from(in_container),
             on_rootfs: PathBuf::from("/unused"),
             mounts: mounts.iter().map(PathBuf::from).collect(),
+            _mount_gate: Arc::new(tokio::sync::RwLock::new(Attacher::default()))
+                .try_read_owned()
+                .unwrap(),
         }
+    }
+
+    /// A copy holds the mount lock from reading the mount list until it ends,
+    /// so a `Container.Mount` cannot land under the copy meanwhile.
+    #[tokio::test]
+    async fn a_mount_waits_for_a_copy_in_progress() {
+        let dir = tempfile::tempdir().unwrap();
+        let server = GuestServer::new(crate::layout::GuestLayout::with_base(dir.path()));
+        let container = crate::container::Container::for_unit_test(
+            "c1",
+            dir.path().join("state"),
+            dir.path().join("bundle"),
+        );
+        let mount_lock = container.attacher();
+        server.containers.lock().await.insert(
+            "c1".to_string(),
+            Arc::new(tokio::sync::Mutex::new(container)),
+        );
+
+        let copy = CopyTarget::resolve(&server, "c1", "/srv/data")
+            .await
+            .unwrap();
+        assert!(
+            Arc::clone(&mount_lock).try_write_owned().is_err(),
+            "a mount waits while the copy runs"
+        );
+
+        drop(copy);
+        assert!(
+            mount_lock.try_write_owned().is_ok(),
+            "and goes ahead once the copy ends"
+        );
     }
 
     /// A reachable destination does not make its payload reachable:

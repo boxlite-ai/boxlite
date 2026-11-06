@@ -75,10 +75,8 @@ func requireStillStopped(t *testing.T, client *Client, boxID string) {
 	}
 }
 
-// Status and disable on a stopped box answer the complete disabled status from
-// persisted state: no boot, and no handle fetched (each fetch for a down box
-// evicts and leaks one). Configure refuses instead of booting it, even on the
-// image's default command, which the SDK would start through a fresh handle.
+// Status on a stopped box reports no live listener. Mutations refuse it
+// without booting it or fetching a handle that would be evicted and leaked.
 func TestIntegrationSSHOnStoppedBoxNeverStartsIt(t *testing.T) {
 	client, boxID := newSSHTestBox(t, "ssh-stopped-box", "", enums.BoxStateStarted)
 	ctx := context.Background()
@@ -88,19 +86,19 @@ func TestIntegrationSSHOnStoppedBoxNeverStartsIt(t *testing.T) {
 	}
 	waitForBoxState(ctx, t, client, boxID, enums.BoxStateStopped)
 
-	for name, call := range map[string]func(context.Context, string) (*boxlite.SSHStatus, error){
-		"status": client.SSHStatus, "disable": client.SSHDisable,
-	} {
-		status, err := call(ctx, boxID)
-		if err != nil {
-			t.Fatalf("%s on a stopped box: %v", name, err)
-		}
-		if *status != (boxlite.SSHStatus{}) {
-			t.Fatalf("%s on a stopped box = %+v, want the zero disabled status", name, *status)
-		}
+	status, err := client.SSHStatus(ctx, boxID)
+	if err != nil || status == nil || *status != (boxlite.SSHStatus{}) {
+		t.Fatalf("status on a stopped box = %+v, err = %v", status, err)
+	}
+	if _, err := client.SSHDisable(ctx, boxID); !errors.Is(err, ErrBoxNotRunning) {
+		t.Fatalf("disable on a stopped box: err = %v, want ErrBoxNotRunning", err)
 	}
 	if _, err := client.SSHConfigure(ctx, boxID, boxlite.SSHConfig{}); !errors.Is(err, ErrBoxNotRunning) {
 		t.Fatalf("configure on a stopped box: err = %v, want ErrBoxNotRunning", err)
+	}
+
+	if _, err := client.SSHEnable(ctx, boxID); !errors.Is(err, ErrBoxNotRunning) {
+		t.Fatalf("enable on a stopped box: err = %v, want ErrBoxNotRunning", err)
 	}
 
 	client.mu.RLock()
@@ -183,6 +181,18 @@ func TestIntegrationSSHServesTheRealClient(t *testing.T) {
 		t.Fatalf("disable status = %+v, want disabled with generation 2 kept", *status)
 	}
 	session.requireClosed(t, "disable")
+	enabled, err := client.SSHEnable(ctx, boxID)
+	if err != nil || !enabled.Enabled || enabled.Generation != 3 {
+		t.Fatalf("enable: status = %+v, err = %v", enabled, err)
+	}
+	out, err = keys.ssh(ctx, port, "alice", "echo ssh-over-runner").CombinedOutput()
+	if err != nil || strings.TrimSpace(string(out)) != "ssh-over-runner" {
+		t.Fatalf("ssh after enable: err = %v, output %q", err, out)
+	}
+	repeated, err := client.SSHEnable(ctx, boxID)
+	if err != nil || *repeated != *enabled {
+		t.Fatalf("repeat enable: status = %+v, err = %v", repeated, err)
+	}
 }
 
 // sshTestKeys holds disposable keys: "host" for the guest, "alice" for the

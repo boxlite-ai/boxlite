@@ -19,6 +19,30 @@ pub(crate) const MAX_VCPUS: u8 = 64;
 /// (`COMMAND_LINE_SIZE` in `arch/x86/include/asm/setup.h`).
 pub(crate) const MAX_CMDLINE_BYTES: usize = 2048;
 
+/// How many disks a VM may have.
+pub(crate) const MAX_DISKS: usize = 8;
+
+/// The format of a disk image.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DiskFormat {
+    /// A flat image: byte `n` of the file is byte `n` of the disk.
+    Raw,
+    /// A qcow2 image; the backing file its header names is read through.
+    Qcow2,
+}
+
+/// A disk image the guest sees as a virtio-blk device.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DiskConfig {
+    /// The image file.
+    pub path: PathBuf,
+    /// The image format, stated rather than probed: the runtime always knows
+    /// what it created.
+    pub format: DiskFormat,
+    /// Whether the guest may write to it.
+    pub read_only: bool,
+}
+
 /// The machine the VMM builds. The M2 engine adapter fills it from the
 /// runtime's `InstanceSpec`, whose `memory_mib` field shares the name.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -33,17 +57,25 @@ pub struct VmConfig {
     pub cmdline: String,
     /// The uncompressed newc archive to load as the initramfs, if any.
     pub initramfs: Option<PathBuf>,
+    /// The disks, in order: disk 0 is `vda`, disk 1 is `vdb`, and so on;
+    /// `Vm::new` names each one on the command line so the kernel probes it.
+    pub disks: Vec<DiskConfig>,
 }
 
 impl VmConfig {
-    /// Rejects counts, sizes and command lines the layout or the kernel cannot
-    /// take, before any host call.
+    /// Rejects counts, sizes and command-line text the layout or the kernel
+    /// cannot take, before any host call. The budget for the
+    /// `virtio_mmio.device=` arguments that `devices::add_all` appends is
+    /// checked in `add_all`, after the host VM and the disk images exist.
     pub(crate) fn validate(&self) -> Result<()> {
         if !(1..=MAX_VCPUS).contains(&self.vcpu_count) {
             return Err(Error::InvalidVcpuCount(self.vcpu_count));
         }
         if !(1..=MAX_MEMORY_MIB).contains(&self.memory_mib) {
             return Err(Error::InvalidMemorySize(self.memory_mib));
+        }
+        if self.disks.len() > MAX_DISKS {
+            return Err(Error::InvalidDiskCount(self.disks.len()));
         }
         if self.cmdline.len() >= MAX_CMDLINE_BYTES {
             return Err(Error::InvalidCommandLine("2048 bytes or longer"));
@@ -65,7 +97,7 @@ impl VmConfig {
 mod tests {
     use std::error::Error as _;
 
-    use super::{MAX_CMDLINE_BYTES, MAX_VCPUS, VmConfig};
+    use super::{DiskConfig, DiskFormat, MAX_CMDLINE_BYTES, MAX_DISKS, MAX_VCPUS, VmConfig};
     use crate::{error::Error, memory::MAX_MEMORY_MIB};
 
     fn config(vcpu_count: u8, memory_mib: u32) -> VmConfig {
@@ -75,7 +107,32 @@ mod tests {
             kernel: "vmlinux".into(),
             cmdline: "console=ttyS0".into(),
             initramfs: None,
+            disks: Vec::new(),
         }
+    }
+
+    #[test]
+    fn rejects_more_disks_than_the_slots_and_names_can_take() {
+        let disk = DiskConfig {
+            path: "disk.raw".into(),
+            format: DiskFormat::Raw,
+            read_only: false,
+        };
+        VmConfig {
+            disks: vec![disk.clone(); MAX_DISKS],
+            ..config(1, 1)
+        }
+        .validate()
+        .unwrap();
+        let error = VmConfig {
+            disks: vec![disk; MAX_DISKS + 1],
+            ..config(1, 1)
+        }
+        .validate()
+        .unwrap_err();
+        assert!(matches!(error, Error::InvalidDiskCount(n) if n == MAX_DISKS + 1));
+        assert_eq!(error.to_string(), "too many disks: 9");
+        assert!(error.source().is_none());
     }
 
     #[test]

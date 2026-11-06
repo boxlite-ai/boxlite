@@ -51,6 +51,7 @@ const EXPECTED: Record<string, OrganizationResourcePermission[] | null> = {
   revokeNetworkTunnel: [WRITE_BOXES],
   configureSsh: [WRITE_BOXES],
   disableSsh: [WRITE_BOXES],
+  enableSsh: [WRITE_BOXES],
   proxyExecStatus: null,
   proxyExecList: null,
   proxyMetrics: null,

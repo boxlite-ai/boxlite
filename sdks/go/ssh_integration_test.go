@@ -101,8 +101,8 @@ func TestIntegrationSSHConfigureReconfigureAndDisable(t *testing.T) {
 	// Observing SSH must not boot the box.
 	status, err := ssh.Status(ctx)
 	requireSSHDisabled(t, status, err)
-	status, err = ssh.Disable(ctx)
-	requireSSHDisabled(t, status, err)
+	_, err = ssh.Disable(ctx)
+	requireErrorCode(t, err, ErrInvalidState, "")
 	requireNotRunning(t, box)
 
 	config := vmSSHConfig(t)
@@ -184,7 +184,7 @@ func TestIntegrationSSHExplicitCommandRequiresStart(t *testing.T) {
 	requireErrorCode(t, err, ErrInvalidState, "")
 	status, err = fresh.SSH().Status(ctx)
 	requireSSHDisabled(t, status, err)
-	status, err = fresh.SSH().Disable(ctx)
-	requireSSHDisabled(t, status, err)
+	_, err = fresh.SSH().Disable(ctx)
+	requireErrorCode(t, err, ErrInvalidState, "")
 	requireNotRunning(t, fresh)
 }

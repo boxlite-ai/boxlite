@@ -40,6 +40,22 @@ pub(in crate::commands::serve) async fn configure_ssh(
     }
 }
 
+/// Enable saved configuration without starting the VM or its main command.
+pub(in crate::commands::serve) async fn enable_ssh(
+    State(state): State<Arc<AppState>>,
+    Path(box_id): Path<String>,
+) -> Response {
+    let litebox = match get_or_fetch_box(&state, &box_id).await {
+        Ok(litebox) => litebox,
+        Err(response) => return response,
+    };
+
+    match litebox.ssh().enable().await {
+        Ok(status) => Json(status).into_response(),
+        Err(error) => error_from_boxlite(&error),
+    }
+}
+
 /// Observe SSH state without starting the VM or its main command.
 pub(in crate::commands::serve) async fn status_ssh(
     State(state): State<Arc<AppState>>,

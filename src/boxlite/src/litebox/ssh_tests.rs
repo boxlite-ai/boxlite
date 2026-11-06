@@ -110,6 +110,13 @@ impl proto::Container for MockService {
             )),
         }))
     }
+
+    async fn mount(
+        &self,
+        _: Request<proto::ContainerMountRequest>,
+    ) -> Result<Response<proto::ContainerMountResponse>, Status> {
+        Err(Status::unimplemented("not used by these tests"))
+    }
 }
 
 struct TestHandler;
@@ -287,12 +294,20 @@ async fn ssh_requests_and_responses_cross_wire() {
     );
 }
 
+#[tokio::test]
+async fn ssh_enable_crosses_wire() {
+    let f = fixture().await;
+    assert!(f.ssh.enable().await.unwrap().enabled);
+    assert_eq!(*f.mock.updates.lock().unwrap(), [(Some(true), None)]);
+    assert_eq!(*f.mock.requests.lock().unwrap(), ["control"]);
+}
+
 /// Guest rejections retain their error categories; missing status is an error, and
 /// neither failure causes an extra request that could repeat a configuration change.
 #[tokio::test]
 async fn ssh_errors_missing_status_and_no_retry() {
     let f = fixture().await;
-    for operation in 0..3 {
+    for operation in 0..4 {
         for code in [
             tonic::Code::InvalidArgument,
             tonic::Code::FailedPrecondition,
@@ -300,12 +315,7 @@ async fn ssh_errors_missing_status_and_no_retry() {
             tonic::Code::Unavailable,
         ] {
             *f.mock.error.lock().unwrap() = Some(code);
-            let error = match operation {
-                0 => f.ssh.configure(config()).await,
-                1 => f.ssh.status().await,
-                _ => f.ssh.disable().await,
-            }
-            .unwrap_err();
+            let error = operate(f.ssh.clone(), operation).await.unwrap_err();
             assert!(match code {
                 tonic::Code::InvalidArgument => matches!(error, BoxliteError::InvalidArgument(_)),
                 tonic::Code::FailedPrecondition => matches!(error, BoxliteError::InvalidState(_)),
@@ -313,19 +323,14 @@ async fn ssh_errors_missing_status_and_no_retry() {
                 _ => matches!(error, BoxliteError::Rpc(_)),
             });
             assert!(error.to_string().contains("mock rejection"));
-            let name = ["configure", "status", "disable"][operation];
+            let name = ["configure", "status", "disable", "enable"][operation];
             assert!(error.to_string().contains(&format!("SSH {name}:")));
         }
         *f.mock.error.lock().unwrap() = None;
         *f.mock.missing.lock().unwrap() = true;
-        let error = match operation {
-            0 => f.ssh.configure(config()).await,
-            1 => f.ssh.status().await,
-            _ => f.ssh.disable().await,
-        }
-        .unwrap_err();
+        let error = operate(f.ssh.clone(), operation).await.unwrap_err();
         assert!(matches!(error, BoxliteError::Internal(_)));
-        let name = ["configure", "status", "disable"][operation];
+        let name = ["configure", "status", "disable", "enable"][operation];
         assert!(
             error
                 .to_string()
@@ -333,15 +338,17 @@ async fn ssh_errors_missing_status_and_no_retry() {
         );
         *f.mock.missing.lock().unwrap() = false;
     }
-    assert_eq!(f.mock.requests.lock().unwrap().len(), 15);
+    assert_eq!(f.mock.requests.lock().unwrap().len(), 20);
 }
 
-/// Apply the same lifecycle assertions to configure (0), status (1), and disable (2).
+/// Apply shared lifecycle assertions to every public SSH operation.
 async fn operate(ssh: SshHandle, operation: usize) -> BoxliteResult<SshStatus> {
     match operation {
         0 => ssh.configure(config()).await,
         1 => ssh.status().await,
-        _ => ssh.disable().await,
+        2 => ssh.disable().await,
+        3 => ssh.enable().await,
+        _ => unreachable!(),
     }
 }
 
@@ -373,9 +380,9 @@ async fn ssh_observation_does_not_start_idle_boxes() {
                 f.backend.runtime.shutdown_token.child_token(),
             ));
             let ssh = SshHandle::new(backend.clone());
-            for operation in 1..3 {
+            for operation in [1, 2, 3] {
                 let result = operate(ssh.clone(), operation).await;
-                if matches!(status, BoxStatus::Configured | BoxStatus::Stopped) {
+                if operation == 1 && matches!(status, BoxStatus::Configured | BoxStatus::Stopped) {
                     assert_eq!(
                         result.unwrap(),
                         SshStatus {
@@ -395,7 +402,7 @@ async fn ssh_observation_does_not_start_idle_boxes() {
                 assert!(!backend.container_start.initialized());
             }
             backend.shutdown_token.cancel();
-            for operation in 1..3 {
+            for operation in [1, 2, 3] {
                 assert!(matches!(
                     operate(ssh.clone(), operation).await,
                     Err(BoxliteError::Stopped(_))
@@ -418,22 +425,19 @@ async fn ssh_observation_uses_existing_vm_without_container_start() {
     ));
     for backend in [&f.backend, &recovered] {
         let ssh = SshHandle::new(backend.clone());
-        for operation in 1..3 {
+        for operation in [1, 2, 3] {
             assert_eq!(operate(ssh.clone(), operation).await.unwrap().generation, 7);
             assert!(!backend.container_start.initialized());
         }
     }
     assert!(!recovered.live.initialized());
-    assert_eq!(
-        *f.mock.requests.lock().unwrap(),
-        ["control", "control", "control", "control"]
-    );
+    assert_eq!(*f.mock.requests.lock().unwrap(), ["control"; 6]);
 }
 
 /// Allow legitimate guest work beyond five seconds and preserve its drain error.
 #[tokio::test]
 async fn ssh_waits_for_guest_response_within_total_deadline() {
-    for operation in 0..3 {
+    for operation in 0..4 {
         for (seconds, code) in [(6, None), (10, Some(tonic::Code::DeadlineExceeded))] {
             let f = fixture().await;
             *f.mock.block.lock().unwrap() = true;
@@ -483,7 +487,7 @@ async fn ssh_configure_waits_for_container_start_without_charging_rpc_deadline()
     }
     // Running is already published, but configure is still waiting for main startup.
     *f.mock.block.lock().unwrap() = false;
-    for operation in 1..3 {
+    for operation in [1, 2, 3] {
         tokio::time::timeout(Duration::from_secs(1), operate(f.ssh.clone(), operation))
             .await
             .unwrap()
@@ -559,7 +563,7 @@ async fn ssh_configure_shutdown_cancels_container_start() {
 async fn ssh_spent_and_cancelled_handles_send_nothing() {
     let f = fixture().await;
     f.backend.state.write().status = BoxStatus::Stopped;
-    for operation in 0..3 {
+    for operation in 0..4 {
         assert!(matches!(
             operate(f.ssh.clone(), operation).await,
             Err(BoxliteError::Stopped(_))
@@ -567,10 +571,10 @@ async fn ssh_spent_and_cancelled_handles_send_nothing() {
     }
     f.backend.state.write().status = BoxStatus::Running;
     f.backend.shutdown_token.cancel();
-    for operation in 0..3 {
+    for operation in 0..4 {
         let error = operate(f.ssh.clone(), operation).await.unwrap_err();
         assert!(matches!(error, BoxliteError::Stopped(_)));
-        let name = ["configure", "status", "disable"][operation];
+        let name = ["configure", "status", "disable", "enable"][operation];
         assert!(error.to_string().contains(&format!("SSH {name}:")));
     }
     assert!(f.mock.requests.lock().unwrap().is_empty());
@@ -579,18 +583,12 @@ async fn ssh_spent_and_cancelled_handles_send_nothing() {
 /// Bound an unanswered RPC by the deadline or shutdown signal, without retrying it.
 #[tokio::test]
 async fn ssh_timeout_and_runtime_shutdown() {
-    for operation in 0..3 {
+    for operation in 0..4 {
         for cancel in [false, true] {
             let f = fixture().await;
             *f.mock.block.lock().unwrap() = true;
             let ssh = f.ssh.clone();
-            let call = tokio::spawn(async move {
-                match operation {
-                    0 => ssh.configure(config()).await,
-                    1 => ssh.status().await,
-                    _ => ssh.disable().await,
-                }
-            });
+            let call = tokio::spawn(operate(ssh, operation));
             f.mock.entered.notified().await;
             if cancel {
                 f.backend.runtime.shutdown_token.cancel();
@@ -606,7 +604,7 @@ async fn ssh_timeout_and_runtime_shutdown() {
                 .expect("SSH operation must finish within its 15-second deadline")
                 .unwrap()
                 .unwrap_err();
-            let name = ["configure", "status", "disable"][operation];
+            let name = ["configure", "status", "disable", "enable"][operation];
             assert!(error.to_string().contains(&format!("SSH {name}:")));
             if cancel {
                 assert!(matches!(error, BoxliteError::Stopped(_)));
@@ -631,7 +629,7 @@ fn ssh_debug_redacts_credentials() {
 /// or shutdown cancellation while the interface is being acquired.
 #[tokio::test]
 async fn ssh_deadline_and_shutdown_include_connection_handshake() {
-    for operation in 0..3 {
+    for operation in 0..4 {
         for cancel in [false, true] {
             let mut f = fixture().await;
             f.server.abort();

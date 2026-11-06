@@ -94,6 +94,9 @@ func (s *sshServer) answer(method string, reply sshReply) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.replies[method+" "+sshRestRoute] = reply
+	if method == http.MethodPost {
+		s.replies[method+" "+sshRestRoute+"/enable"] = reply
+	}
 }
 
 func (s *sshServer) answerAll(reply sshReply) {
@@ -157,6 +160,7 @@ var sshOperations = []struct {
 	{"configure", http.MethodPost, func(ssh *SSH, ctx context.Context) (*SSHStatus, error) {
 		return ssh.Configure(ctx, sshTestConfig())
 	}},
+	{"enable", http.MethodPost, (*SSH).Enable},
 	{"status", http.MethodGet, (*SSH).Status},
 	{"disable", http.MethodDelete, (*SSH).Disable},
 }
@@ -205,6 +209,7 @@ func TestRestSSHSendsEachOperationAsOneRequest(t *testing.T) {
 	}
 	wants := map[string]*SSHStatus{
 		"configure": enabled,
+		"enable":    enabled,
 		"status":    enabled,
 		"disable":   {Generation: math.MaxUint64},
 	}
@@ -220,11 +225,18 @@ func TestRestSSHSendsEachOperationAsOneRequest(t *testing.T) {
 	}
 
 	requests := server.received()
-	if len(requests) != 3 {
-		t.Fatalf("requests: got %d, want 3: %+v", len(requests), requests)
+	if len(requests) != len(sshOperations) {
+		t.Fatalf("requests: got %d, want %d: %+v", len(requests), len(sshOperations), requests)
 	}
 	for i, op := range sshOperations {
-		if requests[i].method != op.method || requests[i].path != sshRestRoute {
+		path := sshRestRoute
+		if op.name == "enable" {
+			path += "/enable"
+		}
+		if op.name != "configure" && requests[i].body != "" {
+			t.Errorf("%s must send no body: %q", op.name, requests[i].body)
+		}
+		if requests[i].method != op.method || requests[i].path != path {
 			t.Errorf("%s request: got %s %s", op.name, requests[i].method, requests[i].path)
 		}
 	}

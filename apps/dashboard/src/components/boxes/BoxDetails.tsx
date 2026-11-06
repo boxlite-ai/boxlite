@@ -50,6 +50,8 @@ import { BoxNetworkSection } from './BoxNetworkSection'
 import { BoxCube } from '@/components/BoxCube'
 import { boxCubeState } from '@/lib/box-shape'
 import { BoxTerminalTab } from './BoxTerminalTab'
+import { BoxSshTab } from './BoxSshTab'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 
 const STATUS = { running: '#5ad67d', idle: '#e0b341', stopped: '#8C919C', error: '#e0564a', dim: '#5b616e' } as const
@@ -121,6 +123,7 @@ export default function BoxDetails() {
   const [copied, setCopied] = useState(false)
   const [copiedName, setCopiedName] = useState(false)
   const [terminalRefreshSignal, setTerminalRefreshSignal] = useState(0)
+  const [sshVisited, setSshVisited] = useState(false)
   const refreshRef = useRef<HTMLSpanElement>(null)
 
   const updateOnboardingProgress = useCallback(
@@ -275,7 +278,7 @@ export default function BoxDetails() {
   }
 
   return (
-    <div className="flex h-[calc(100svh-60px)] min-h-0 flex-col gap-[14px] px-4 pb-[22px] pt-4 font-mono text-[13px] sm:px-6 lg:px-[40px]">
+    <div className="page-container flex h-[calc(100svh-60px)] min-h-0 flex-col gap-[14px] pb-[22px] pt-4 font-mono text-[13px]">
       {/* breadcrumb */}
       <div className="flex flex-none items-center gap-[9px] text-[12px] text-muted-foreground">
         <button type="button" onClick={() => navigate(RoutePath.BOXES)} className="hover:text-foreground">
@@ -522,20 +525,24 @@ export default function BoxDetails() {
             </div>
 
             {/* shell / terminal */}
-            <div className="flex h-[60vh] flex-none flex-col border border-border bg-[hsl(var(--code-background))] lg:h-auto lg:min-h-0 lg:flex-1">
-              <div className="flex flex-none items-center justify-between border-b border-dashed border-border px-5 py-[15px]">
-                <span className="flex items-center gap-[9px] text-[11px] uppercase tracking-[2px]">
-                  <span className="text-brand">▸</span>
-                  shell
-                  <span className="ml-0.5 tracking-[0.5px] text-muted-foreground normal-case">
-                    {getBoxPublicIdLabel(box)}
-                  </span>
-                </span>
-              </div>
-              <div className="flex min-h-0 flex-1 flex-col">
+            <Tabs
+              defaultValue="shell"
+              onValueChange={(value) => {
+                if (value === 'ssh') setSshVisited(true)
+              }}
+              className="h-[60vh] flex-none gap-0 border border-border bg-[hsl(var(--code-background))] lg:h-auto lg:min-h-0 lg:flex-1"
+            >
+              <TabsList variant="underline" aria-label="Box connection">
+                <TabsTrigger value="shell">Shell</TabsTrigger>
+                <TabsTrigger value="ssh">SSH</TabsTrigger>
+              </TabsList>
+              <TabsContent value="shell" forceMount className="flex min-h-0 flex-col data-[state=inactive]:hidden">
                 <BoxTerminalTab box={box} refreshSignal={terminalRefreshSignal} />
-              </div>
-            </div>
+              </TabsContent>
+              <TabsContent value="ssh" forceMount className="flex min-h-0 flex-col data-[state=inactive]:hidden">
+                {sshVisited && <BoxSshTab box={box} refreshSignal={terminalRefreshSignal} />}
+              </TabsContent>
+            </Tabs>
           </div>
         </>
       )}

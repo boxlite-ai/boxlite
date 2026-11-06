@@ -7,6 +7,7 @@ import type { SshConfig, SshStatus } from "../lib/simplebox.js";
 const mocks = vi.hoisted(() => ({
   create: vi.fn<() => Promise<unknown>>(),
   configure: vi.fn<() => Promise<SshStatus>>(),
+  enable: vi.fn<() => Promise<SshStatus>>(),
   status: vi.fn<() => Promise<SshStatus>>(),
   disable: vi.fn<() => Promise<SshStatus>>(),
 }));
@@ -81,6 +82,19 @@ describe("SimpleBox.ssh", () => {
     expect(status).toHaveBeenCalledTimes(1);
     expect(disable).toHaveBeenCalledTimes(1);
     expect(configure).not.toHaveBeenCalled();
+  });
+
+  test("enable forwards saved-configuration activation and errors", async () => {
+    const box = new SimpleBox({ image: "alpine:latest" });
+    const status = { ...disabledStatus(), enabled: true, generation: 7n };
+    mocks.enable.mockResolvedValueOnce(status);
+    await expect(box.ssh.enable()).resolves.toBe(status);
+    expect(mocks.enable).toHaveBeenCalledWith();
+    expect(mocks.configure).not.toHaveBeenCalled();
+    const error = new Error("box is not running");
+    mocks.enable.mockRejectedValueOnce(error);
+    await expect(box.ssh.enable()).rejects.toBe(error);
+    expect(mocks.create).toHaveBeenCalledTimes(1);
   });
 
   test("configure passes the configuration object through unchanged", async () => {

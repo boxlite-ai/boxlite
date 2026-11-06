@@ -3,7 +3,7 @@
 //! This module provides defense-in-depth security for the boxlite-shim process,
 //! implementing multiple isolation layers inspired by Firecracker's jailer.
 //!
-//! For the complete security design, see [`THREAT_MODEL.md`](./THREAT_MODEL.md).
+//! For the complete security design, see the [jailer guide](./README.md).
 //!
 //! # Architecture
 //!
