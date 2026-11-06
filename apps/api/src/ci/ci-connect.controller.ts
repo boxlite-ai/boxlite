@@ -12,7 +12,7 @@ import {
   ValidationPipe,
 } from '@nestjs/common'
 import { ApiExcludeController } from '@nestjs/swagger'
-import { Equals, IsBoolean, IsString, Matches, MaxLength, IsIn, IsInt, Min, Max } from 'class-validator'
+import { Equals, IsBoolean, IsString, Matches, MaxLength, IsIn, IsInt, Min, Max, IsOptional } from 'class-validator'
 import { CombinedAuthGuard } from '../auth/combined-auth.guard'
 import { AuthenticatedRateLimitGuard } from '../common/guards/authenticated-rate-limit.guard'
 import { AuthContext } from '../common/decorators/auth-context.decorator'
@@ -36,10 +36,22 @@ export class CiConnectInput {
 }
 
 export class CiWebConnectInput {
+  @IsOptional()
   @IsIn(['User', 'Organization'])
-  account_type: 'User' | 'Organization'
+  account_type?: 'User' | 'Organization'
+  @IsOptional()
+  @IsBoolean()
+  select_account?: boolean
   @Equals(true)
   follow_installation: true
+  @IsBoolean()
+  allow_public_repositories: boolean
+}
+export class CiWebAccountInput {
+  @IsInt()
+  @Min(1)
+  @Max(Number.MAX_SAFE_INTEGER)
+  account_id: number
   @IsBoolean()
   allow_public_repositories: boolean
 }
@@ -94,6 +106,21 @@ export class CiConnectController {
     return this.service.startWeb(actor, body)
   }
 
+  @Get(':id')
+  @RequiredOrganizationMemberRole(OrganizationMemberRole.OWNER)
+  getWeb(@AuthContext() actor: OrganizationAuthContext, @Param('id', new ParseUUIDPipe()) id: string) {
+    return this.service.getWeb(actor, id)
+  }
+  @Post(':id/accounts')
+  @RequiredOrganizationMemberRole(OrganizationMemberRole.OWNER)
+  selectAccount(
+    @AuthContext() actor: OrganizationAuthContext,
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body() body: CiWebAccountInput,
+  ) {
+    return this.service.selectAccount(actor, id, body)
+  }
+
   @Post(':id/complete')
   @RequiredOrganizationMemberRole(OrganizationMemberRole.OWNER)
   completeWeb(
@@ -120,7 +147,7 @@ export class CiConnectController {
     @Param('id', new ParseUUIDPipe()) id: string,
     @Body() body: CiWebInstallInput,
   ) {
-    return this.service.selectWeb(actor, id, body.installation_id, body.state)
+    return this.service.completeInstallation(actor, id, body.installation_id, body.state)
   }
 
   @Post(':id/poll')

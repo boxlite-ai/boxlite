@@ -778,7 +778,7 @@ the dialog and checkbox, and successful saves refresh only the original organiza
 
 Deleting a connection requires confirmation and waits for the server before removing
 the row. It stops new admissions, cancels stored unfinished authorizations for that
-account type, and preserves running-worker cleanup and the shared capacity setting.
+matching CI App plus every unfinished browser grant in this BoxLite organization, and preserves running-worker cleanup and the shared capacity setting.
 A new verified connection can reconnect later. Switching BoxLite organizations
 does not redirect an in-flight delete. Legacy Organization `?tab=ci` links and
 successful browser authorization lead to Connects. `start:mock` includes synthetic
@@ -786,18 +786,30 @@ JIT Boxes and deletable connections for local presentation checks.
 Neither tab has a manual Refresh control. Connects fetches on entry and after
 successful additions/updates/deletions; it does not poll the connection list.
 
-Connect uses the existing BoxLite login and GitHub App browser OAuth with S256
-PKCE. The original account ID survives in tab-scoped session metadata, so changing
-the selected account cannot redirect the binding. The bootstrap removes callback
-query/fragment data before dynamically loading the app and telemetry. Authorization
-codes and state stay in module memory; refreshing or losing login requires restart.
-The page-level completion promise also handles React StrictMode duplicate effects.
+Connect GitHub starts dedicated identity OAuth immediately. After login, the
+normal CI page opens an account dialog using shared AsciiButton, Dialog and pixel
+icons. OAuth-visible personal/owner choices show **Install**, **Connect**, or a
+green pixel Check for an existing connection. The Connects table contains only
+connections and has no redundant Status column. Switch account is clickable text
+beside Signed in as; it cancels the unfinished grant and forces GitHub's account
+picker. Committed connections remain intact. Closing, Escape, Back and browser
+restoration keep the UI usable and ignore obsolete asynchronous results.
 
-The API needs the optional `CI_GITHUB_APP_CLIENT_SECRET` secret reference and the
-exact `${DASHBOARD_URL}/settings/ci/callback` URL registered on its App. A missing
-secret leaves the scheduler and CLI Device Flow available while disabling the
-browser button. Install/authorize is followed by current-owner and installation
-verification on the API; an installation callback alone cannot claim an account.
+Missing organization? explains organization OAuth approval and SSO prerequisites;
+an installed CI App alone does not guarantee visibility. Review GitHub access,
+then reconnect. Provider errors never imply an organization is uninstalled.
+The API uses separate `CI_GITHUB_OAUTH_CLIENT_ID` and
+`CI_GITHUB_OAUTH_CLIENT_SECRET` configuration for identity, requesting only
+`read:user read:org`. Personal/Organization CI Apps supply runner permissions.
+The BoxLite login stays unchanged when choosing another GitHub identity.
+
+Only attempt ID, original BoxLite organization and expiry enter session storage.
+The bootstrap strips callback code/state before app and telemetry modules load.
+Code exchange runs once under StrictMode; authenticated resume supports reload
+without exchanging the code again. Installation state, selected App/account and
+user tokens stay on the API. The setup callback is verified before auto-binding.
+Sessions can connect several owned accounts within the same original five-minute
+window. Close/Switch cancels unfinished authorization; connected rows remain.
 
 Run `make test:apps:dashboard` and `make build:apps:dashboard` from the repository
 root. Local DOM/HTTP tests do not replace a real App connect and workflow run on
@@ -811,7 +823,8 @@ sequenceDiagram
     participant D as Dashboard
     participant A as BoxLite API
     participant P as PostgreSQL
-    participant G as GitHub App
+    participant G as Identity OAuth App
+    participant C as Selected CI GitHub App
     U->>D: Connect GitHub account and public-repository policy
     D->>A: Authenticated web start under original account
     A->>P: Store actor, App, state hash and encrypted verifier
@@ -822,7 +835,9 @@ sequenceDiagram
     D->>A: Complete under original BoxLite account
     A->>P: Validate state and atomically claim once, erase verifier
     A->>G: Exchange code with verifier and OAuth Client Secret
-    A->>G: Verify GitHub ownership and current App installation
+    A->>G: Read OAuth-visible owner memberships
+    D->>A: Select owned account
+    A->>C: Verify installation with the corresponding App JWT
     A->>P: Recheck owner and commit binding, default quota and wake
     A-->>D: Connected with durable Listener setup state
     Note over D,A: Browser metadata never grants binding authority

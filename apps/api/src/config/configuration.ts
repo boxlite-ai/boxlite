@@ -775,6 +775,8 @@ const configuration = {
     workerImage: process.env.CI_WORKER_IMAGE || 'ghcr.io/actions/actions-runner:latest',
     workerCPUs: Number(process.env.CI_WORKER_CPUS || '2'),
     workerMemoryGB: Number(process.env.CI_WORKER_MEMORY_GB || '2'),
+    githubOAuthClientId: process.env.CI_GITHUB_OAUTH_CLIENT_ID,
+    githubOAuthClientSecret: process.env.CI_GITHUB_OAUTH_CLIENT_SECRET,
     githubWebhookSecret: process.env.CI_GITHUB_WEBHOOK_SECRET,
     githubClientId: process.env.CI_GITHUB_APP_CLIENT_ID,
     githubClientSecret: process.env.CI_GITHUB_APP_CLIENT_SECRET,

@@ -9,6 +9,7 @@ import { BoxState } from '../box/enums/box-state.enum'
 import { CiSettingsService } from './ci-settings.service'
 import { CiNativeState } from './ci-native-state'
 import { AddCiWebConnect1793786400000 } from '../migrations/pre-deploy/1793786400000-add-ci-web-connect-migration'
+import { AddCiWebTarget1794000000000 } from '../migrations/pre-deploy/1794000000000-add-ci-web-target-migration'
 import { AddCiAccountSelection1793894400000 } from '../migrations/pre-deploy/1793894400000-add-ci-account-selection-migration'
 
 const url = process.env.CI_CONNECT_TEST_DATABASE_URL
@@ -54,6 +55,7 @@ integration('CI account settings (real Postgres)', () => {
       await new AddCiConnect1793664000000().up(runner)
       await new AddCiWebConnect1793786400000().up(runner)
       await new AddCiAccountSelection1793894400000().up(runner)
+      await new AddCiWebTarget1794000000000().up(runner)
       await new AddCiListenerState1793700000000().up(runner)
     } finally {
       await runner.release()

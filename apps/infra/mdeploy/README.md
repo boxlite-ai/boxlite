@@ -54,19 +54,20 @@ as ordinary mstage API settings. Configure `CI_GITHUB_APP_PRIVATE_KEY`,
 The committed catalog already places the credentials in both the optional `api`
 consumer group and the optional `secret` marker group; no additional enable flag is needed.
 A partial CI configuration or plaintext credential channel stops deployment.
-Dashboard browser connect additionally uses optional `CI_GITHUB_APP_CLIENT_SECRET`
-as a fourth secret reference. It is the App's OAuth Client Secret, not its RSA
-private key. Device Flow and the scheduler do not require it.
+Dashboard browser connect additionally uses optional `CI_GITHUB_OAUTH_CLIENT_ID`
+and a separate `CI_GITHUB_OAUTH_CLIENT_SECRET` reference. The identity OAuth App
+requests only profile and organization-membership reads; the CI Apps keep their
+runner permissions. Device Flow and the scheduler do not require identity OAuth.
 
 For a GCP stage, store reference documents rather than secret values:
 
 ```bash
-npm run mstage env set -- --stage dev CI_GITHUB_APP_CLIENT_ID=YOUR_CLIENT_ID CI_GITHUB_APP_SLUG=YOUR_APP_SLUG
+npm run mstage env set -- --stage dev CI_GITHUB_APP_CLIENT_ID=YOUR_CLIENT_ID CI_GITHUB_APP_SLUG=YOUR_APP_SLUG CI_GITHUB_OAUTH_CLIENT_ID=YOUR_IDENTITY_OAUTH_CLIENT_ID
 npm run mstage env set -- --stage dev --json \
   'CI_GITHUB_APP_PRIVATE_KEY={"address":"projects/PROJECT/secrets/ci-app-private-key/versions/1"}' \
   'CI_GITHUB_WEBHOOK_SECRET={"address":"projects/PROJECT/secrets/ci-webhook/versions/1"}' \
   'CI_SECRET_ENCRYPTION_KEY={"address":"projects/PROJECT/secrets/ci-connect-encryption/versions/1"}' \
-  'CI_GITHUB_APP_CLIENT_SECRET={"address":"projects/PROJECT/secrets/ci-oauth-client-secret/versions/1"}'
+  'CI_GITHUB_OAUTH_CLIENT_SECRET={"address":"projects/PROJECT/secrets/ci-identity-oauth-client-secret/versions/1"}'
 npm run mstage env list -- --stage dev --select-group api
 ```
 

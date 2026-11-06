@@ -461,6 +461,9 @@ also registered without `{prefix}`, using the authenticated organization.
 | `GET`       | `/api/v1/{prefix}/ci/connect/configuration` | Returns the public App installation link and browser-connect availability.                        |
 | `POST`      | `/api/v1/{prefix}/ci/connect/web`           | Starts five-minute browser authorization with independent state and S256 PKCE.                    |
 | `POST`      | `/api/v1/{prefix}/ci/connect/{id}/complete` | Validates original actor/state, claims one code exchange and uses the shared binding transaction. |
+| `GET`       | `/api/v1/{prefix}/ci/connect/{id}`              | Resumes an authenticated browser grant without exchanging its code again.                         |
+| `POST`      | `/api/v1/{prefix}/ci/connect/{id}/accounts`     | Selects a verified owned account; connects or returns the matching CI App install URL.            |
+| `POST`      | `/api/v1/{prefix}/ci/connect/{id}/installation` | Verifies installation state, original target/App and current ownership before binding.            |
 | `GET/PATCH` | `/api/v1/{prefix}/ci/settings`              | Reads/updates the account-wide CI maximum; null inherits Commerce and zero pauses new workers.    |
 
 Every operation requires an organization owner or the explicit platform-admin exception;

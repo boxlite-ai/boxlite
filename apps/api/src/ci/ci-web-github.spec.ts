@@ -114,3 +114,72 @@ describe('CI browser GitHub transport', () => {
     expect(() => registry.byClientId('unknown')).toThrow('no longer configured')
   })
 })
+
+describe('CI dedicated identity registry', () => {
+  const original = global.fetch
+  afterEach(() => {
+    global.fetch = original
+  })
+  it('discovers an owned Organization CI installation without a Personal CI installation', async () => {
+    const { generateKeyPairSync, verify } = await import('node:crypto')
+    const personal = generateKeyPairSync('rsa', { modulusLength: 2048 }),
+      org = generateKeyPairSync('rsa', { modulusLength: 2048 })
+    const values = {
+      'ci.githubClientId': 'personal-ci',
+      'ci.githubOrgClientId': 'organization-ci',
+      'ci.githubAppSlug': 'personal-app',
+      'ci.githubOrgAppSlug': 'org-app',
+      'ci.githubPrivateKey': personal.privateKey.export({ type: 'pkcs8', format: 'pem' }).toString(),
+      'ci.githubOrgPrivateKey': org.privateKey.export({ type: 'pkcs8', format: 'pem' }).toString(),
+      'ci.githubOAuthClientId': 'identity-client',
+      'ci.githubOAuthClientSecret': 'private-identity-secret',
+      dashboardUrl: 'https://console.test',
+    }
+    const registry = new CiGitHubService({ get: (key: string) => values[key] } as any)
+    const visited: string[] = []
+    global.fetch = jest.fn(async (address, options) => {
+      const path = new URL(String(address)).pathname
+      visited.push(path)
+      const auth = (options!.headers as Record<string, string>).Authorization
+      if (path === '/user') {
+        expect(auth).toBe('Bearer identity-token')
+        return new Response(JSON.stringify({ id: 456, login: 'alice', type: 'User' }))
+      }
+      if (path === '/user/memberships/orgs')
+        return new Response(
+          JSON.stringify([{ state: 'active', role: 'admin', organization: { id: 789, login: 'team' } }]),
+        )
+      const jwt = auth.slice(7).split('.'),
+        issuer = JSON.parse(Buffer.from(jwt[1], 'base64url').toString()).iss
+      const key = path.startsWith('/users/') ? personal.publicKey : org.publicKey
+      expect(issuer).toBe(path.startsWith('/users/') ? 'personal-ci' : 'organization-ci')
+      expect(verify('RSA-SHA256', Buffer.from(jwt[0] + '.' + jwt[1]), key, Buffer.from(jwt[2], 'base64url'))).toBe(true)
+      if (path === '/users/alice/installation') return new Response('{}', { status: 404 })
+      expect(path).toBe('/orgs/team/installation')
+      return new Response(
+        JSON.stringify({
+          id: 321,
+          account: { id: 789, login: 'team', type: 'Organization' },
+          suspended_at: null,
+          permissions: { organization_self_hosted_runners: 'write' },
+        }),
+      )
+    }) as typeof fetch
+    expect((await registry.availableAccounts('identity-client', 'identity-token')).accounts).toEqual([
+      { accountId: 456, accountLogin: 'alice', accountType: 'User', clientId: 'personal-ci', installationId: null },
+      {
+        accountId: 789,
+        accountLogin: 'team',
+        accountType: 'Organization',
+        clientId: 'organization-ci',
+        installationId: 321,
+      },
+    ])
+    expect(visited).not.toContain('/user/installations')
+    const authorization = new URL(registry.identity().authorizeWeb('state', 'A'.repeat(43), true))
+    expect(authorization.searchParams.get('client_id')).toBe('identity-client')
+    expect(authorization.searchParams.get('scope')).toBe('read:user read:org')
+    expect(authorization.searchParams.get('prompt')).toBe('select_account')
+    await expect(registry.availableAccounts('organization-ci', 'identity-token')).rejects.toThrow('Original identity')
+  })
+})

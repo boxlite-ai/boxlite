@@ -1,83 +1,173 @@
 /* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { CiConnectResult } from '@/api/ci-types'
 import type { ApiClient } from '@/api/apiClient'
-import { Button } from '@/components/ui/button'
-import { clearCiConnectSession } from '@/lib/ci-connect'
+import { AsciiButton } from '@/components/ascii'
+import { Building2, Check, ExternalLink, Github, Loader2 } from '@/components/ui/icon'
+import { githubAuthorizationSettingsUrl, prepareCiInstallationRedirect } from '@/lib/ci-connect'
 
 export function CiAccountPicker({
   api,
   organization,
   result,
   onResult,
+  onSwitch,
 }: {
-  api: Pick<ApiClient, 'selectCiConnect'>
+  api: Pick<ApiClient, 'selectCiAccount'>
   organization: string
   result: CiConnectResult
   onResult(result: CiConnectResult): void
+  onSwitch(selectAccount: boolean): void
 }) {
-  const accounts = result.accounts ?? []
-  const [selected, setSelected] = useState(''),
-    [busy, setBusy] = useState(false),
-    [error, setError] = useState(false)
-  const submitting = useRef(false)
-  const connect = async () => {
-    if (submitting.current || !result.id || !selected) return
+  const [busy, setBusy] = useState<number>(),
+    [allowPublic, setAllowPublic] = useState(false),
+    [error, setError] = useState('')
+  const generation = useRef(0),
+    submitting = useRef(false)
+  useEffect(
+    () => () => {
+      generation.current++
+      submitting.current = false
+    },
+    [organization, result.id],
+  )
+  const choose = async (account: number) => {
+    if (submitting.current || !result.id) return
+    const request = ++generation.current
     submitting.current = true
-    setBusy(true)
-    setError(false)
+    setBusy(account)
+    setError('')
     try {
-      const value = await api.selectCiConnect(organization, result.id, Number(selected))
-      if (value.status !== 'selection_required' && value.status !== 'pending') clearCiConnectSession()
+      const value = await api.selectCiAccount(organization, result.id, account, allowPublic)
+      if (request !== generation.current) return
+      if (value.status === 'installation_required' && value.installation_url)
+        window.location.assign(prepareCiInstallationRedirect(result.id, value.installation_url))
       onResult(value)
     } catch {
-      setError(true)
+      if (request === generation.current) setError('Unable to complete this connection. Reconnect GitHub to retry.')
     } finally {
-      submitting.current = false
-      setBusy(false)
+      if (request === generation.current) {
+        submitting.current = false
+        setBusy(undefined)
+      }
     }
   }
+  const switchAccount = (select: boolean) => {
+    generation.current++
+    submitting.current = false
+    setBusy(undefined)
+    onSwitch(select)
+  }
+  const settingsUrl = githubAuthorizationSettingsUrl(result.authorization_settings_url)
   return (
-    <section className="space-y-4">
-      <p>Choose the GitHub account to connect to this BoxLite account.</p>
-      <form
-        className="space-y-3"
-        onSubmit={(event) => {
-          event.preventDefault()
-          void connect()
-        }}
-      >
-        <fieldset disabled={busy} className="space-y-2">
-          <legend className="sr-only">Available GitHub accounts</legend>
-          {accounts.map((account) => (
-            <label key={account.installation_id} className="flex items-center gap-3 border border-border p-3">
-              <input
-                type="radio"
-                name="github-installation"
-                value={account.installation_id}
-                checked={selected === String(account.installation_id)}
-                onChange={(event) => setSelected(event.target.value)}
-              />
-              <span>
-                {account.github_account}{' '}
-                <span className="text-muted-foreground">
-                  {account.account_type === 'User' ? 'Personal account' : 'Organization'}
+    <>
+      <div className="flex items-center gap-2 font-mono text-meta text-muted-foreground">
+        <Github className="size-4 shrink-0" />
+        <span>
+          Signed in as <span className="text-foreground">{result.authenticated_account}</span>
+        </span>
+        <button
+          type="button"
+          onClick={() => switchAccount(true)}
+          className="ml-auto whitespace-nowrap underline underline-offset-4 hover:text-foreground"
+        >
+          Switch account
+        </button>
+      </div>
+      <div className="divide-y divide-border border-y border-border">
+        {(result.accounts ?? []).map((account) => (
+          <div key={account.account_id} data-account-id={account.account_id} className="flex items-center gap-3 py-3">
+            <div className="flex size-9 shrink-0 items-center justify-center border border-border bg-card text-muted-foreground">
+              {account.account_type === 'User' ? <Github className="size-4" /> : <Building2 className="size-4" />}
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="truncate font-mono text-body font-medium">{account.github_account}</div>
+              <div className="mt-1 flex items-center gap-2 font-mono text-meta text-muted-foreground">
+                {account.account_type === 'User' ? (
+                  'Personal account'
+                ) : (
+                  <>
+                    {'Organization'}
+                    <span className="text-label">OWNER</span>
+                  </>
+                )}
+              </div>
+            </div>
+            <div className="flex min-w-[96px] shrink-0 justify-end">
+              {account.connected ? (
+                <span className="inline-flex items-center gap-1.5 font-mono text-meta text-success">
+                  <Check className="size-4" />
+                  Connected
                 </span>
-              </span>
-            </label>
-          ))}
-        </fieldset>
-        {!accounts.length && <p>No installed account that you own is available. Install the App to continue.</p>}
-        <Button type="submit" disabled={busy || !selected}>
-          Connect selected account
-        </Button>
-      </form>
-      {error && <p role="alert">Unable to connect this account. Retry or restart authorization.</p>}
-      {result.installation_url && (
-        <a className="block underline" href={result.installation_url}>
-          Install on another account
-        </a>
+              ) : busy === account.account_id ? (
+                <span role="status" className="inline-flex items-center gap-2 text-meta text-muted-foreground">
+                  <Loader2 className="size-4 animate-spin" />
+                  Connecting…
+                </span>
+              ) : (
+                <AsciiButton size="sm" disabled={busy !== undefined} onClick={() => void choose(account.account_id)}>
+                  {account.installed ? (
+                    'Connect'
+                  ) : (
+                    <>
+                      {'Install'}
+                      <ExternalLink className="size-3.5" />
+                    </>
+                  )}
+                </AsciiButton>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+      <CiOrganizationRecovery settingsUrl={settingsUrl} reconnect={() => switchAccount(false)} />
+      <label className="flex items-center gap-2 text-body">
+        <input
+          type="checkbox"
+          checked={allowPublic}
+          disabled={busy !== undefined}
+          onChange={(event) => setAllowPublic(event.target.checked)}
+        />
+        Allow public repositories for new connections
+      </label>
+      {error && (
+        <p role="alert" className="text-body text-destructive">
+          {error}
+        </p>
       )}
-    </section>
+    </>
+  )
+}
+
+export function CiOrganizationRecovery({ settingsUrl, reconnect }: { settingsUrl?: string; reconnect?(): void }) {
+  return (
+    <details className="font-mono text-meta text-muted-foreground">
+      <summary className="cursor-pointer underline underline-offset-4 hover:text-foreground">
+        Missing an organization?
+      </summary>
+      <p className="mt-2">
+        Your organization may need to approve OAuth access, or require you to sign in with SSO before reconnecting.
+      </p>
+      <div className="mt-2 flex flex-wrap items-center gap-3">
+        {settingsUrl && (
+          <a href={settingsUrl} target="_blank" rel="noreferrer" className="underline underline-offset-4">
+            Review GitHub access
+          </a>
+        )}
+        {reconnect && (
+          <button type="button" onClick={reconnect} className="underline underline-offset-4">
+            Reconnect GitHub
+          </button>
+        )}
+        <a
+          href="https://docs.github.com/en/apps/oauth-apps/using-oauth-apps/authorizing-oauth-apps#oauth-apps-and-organizations"
+          target="_blank"
+          rel="noreferrer"
+          className="underline underline-offset-4"
+        >
+          GitHub help
+        </a>
+      </div>
+    </details>
   )
 }

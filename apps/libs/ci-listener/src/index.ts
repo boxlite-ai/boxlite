@@ -39,3 +39,6 @@ export { jitFileArchive } from './jit-file'
 export { CiGitHubApp, CiGitHubAppError, CiInstallationRequired } from './ci-gh-app'
 export type { CiGitHubAppOptions, VerifiedInstallation } from './ci-gh-app'
 export { ScopeApplications } from './app-scopes'
+
+export { CiGitHubOAuth } from './ci-github-oauth'
+export type { GitHubAccount } from './ci-github-oauth'
