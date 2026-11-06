@@ -131,7 +131,11 @@ export class Auth0McpConfigurator {
         const created = entry.created ?? (entry.attempted ? findCreated(client, entry) : undefined)
         if (created) client.request('delete', created)
       } else if (entry.method === 'delete') {
-        if (entry.attempted && entry.previous) client.request('post', collectionOf(entry.path), { data: entry.previous })
+        // A delete that failed before landing left the grant in place; re-creating it would duplicate it.
+        const sent = entry.attempted && entry.previous
+        if (sent && !findCreated(client, { ...entry, path: collectionOf(entry.path), data: entry.previous! })) {
+          client.request('post', collectionOf(entry.path), { data: entry.previous })
+        }
       } else if (entry.previous) {
         client.request('patch', entry.path, { data: entry.previous })
       }

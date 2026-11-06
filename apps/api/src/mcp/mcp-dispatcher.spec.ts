@@ -127,6 +127,16 @@ function mcpRequest(user: object): Request {
   } as unknown as Request
 }
 
+/** Expects `pending` to be cut off with an `McpResponseError` whose message matches `message`. */
+async function expectCutOff(pending: Promise<unknown>, message: RegExp) {
+  const error = await pending.then(
+    () => undefined,
+    (rejection: unknown) => rejection,
+  )
+  expect(error).toEqual(expect.objectContaining({ message: expect.stringMatching(message) }))
+  expect(error).toBeInstanceOf(McpResponseError)
+}
+
 describe('McpDispatcher', () => {
   const startExecution = catalog.get('startExecution') as McpOperation
 
@@ -181,18 +191,20 @@ describe('McpDispatcher', () => {
   it('stops reading a response past the binary limit', async () => {
     const { dispatcher } = setup()
 
-    await expect(
+    await expectCutOff(
       dispatcher.call(startExecution, { box_id: 'huge', body: { command: 'x' } }, mcpRequest({ userId: 'u' })),
-    ).rejects.toBeInstanceOf(McpResponseError)
+      /returned more than 8388608 bytes/,
+    )
   })
 
   it('gives up on a route that sends nothing for the idle limit', async () => {
     const { dispatcher, seen } = setup()
     Object.assign(dispatcher, { idleTimeoutMs: 100 })
 
-    await expect(
+    await expectCutOff(
       dispatcher.call(startExecution, { box_id: 'stalled', body: { command: 'x' } }, mcpRequest({ userId: 'u' })),
-    ).rejects.toBeInstanceOf(McpResponseError)
+      /sent nothing for 0.1 s/,
+    )
     await seen[0].closed
   })
 
@@ -218,7 +230,7 @@ describe('McpDispatcher', () => {
     while (seen.length === 0) await new Promise((resolve) => setTimeout(resolve, 10))
     request.socket.emit('close')
 
-    await expect(pending).rejects.toBeInstanceOf(McpResponseError)
+    await expectCutOff(pending, /MCP client disconnected/)
     await seen[0].closed
   })
 

@@ -25,9 +25,10 @@ function page<T>(items: T[], query: Record<string, string> = {}): T[] {
 /**
  * An in-memory tenant answering the Management API paths the configurator uses.
  * `lose` names one write (`post resource-servers`) whose change lands but whose
- * response is lost, as on a dropped connection.
+ * response is lost, as on a dropped connection; `refuse` names one that fails
+ * before it lands.
  */
-function fakeTenant(rules: object[] = [], lose?: string) {
+function fakeTenant(rules: object[] = [], lose?: string, refuse?: string) {
   const state = {
     settings: { resource_parameter_profile: 'audience', client_id_metadata_document_supported: false } as Record<string, any>,
     apis: [] as Record<string, any>[],
@@ -39,6 +40,7 @@ function fakeTenant(rules: object[] = [], lose?: string) {
   let next = 0
   const client = {
     request(method: string, path: string, options: RequestOptions = {}) {
+      if (`${method} ${path}` === refuse) throw new Error('503 Service Unavailable')
       const result = answer(method, path, options)
       if (`${method} ${path}` === lose) throw new Error('socket hang up')
       return result
@@ -207,6 +209,24 @@ test('revokes the grant of a client dropped from the list, sparing every other g
     Auth0McpConfigurator.rollback(applied.journal, () => tenant.client as never)
     const { id: _id, ...restored } = tenant.state.grants.find((g) => g.client_id === dropped && g.audience === RESOURCE) ?? {}
     assert.deepEqual(restored, { client_id: dropped, audience: RESOURCE, scope: SCOPES, subject_type: 'user' })
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('rollback re-creates only a revoked grant that is really gone', () => {
+  const tenant = fakeTenant([], undefined, 'delete client-grants/cgr_stale')
+  const dir = mkdtempSync(join(tmpdir(), 'mcp-'))
+  const dropped = 'https://old.example.test/oauth/client.json'
+  try {
+    configurator(tenant, true, dir).apply()
+    tenant.state.grants.push({ id: 'cgr_stale', client_id: dropped, audience: RESOURCE, scope: SCOPES, subject_type: 'user' })
+    assert.throws(() => configurator(tenant, true, dir).apply(), /503/)
+    const journal = readdirSync(dir).sort().at(-1)!
+
+    Auth0McpConfigurator.rollback(join(dir, journal), () => tenant.client as never)
+
+    assert.equal(tenant.state.grants.filter((g) => g.client_id === dropped).length, 1)
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
