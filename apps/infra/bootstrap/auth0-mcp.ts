@@ -125,20 +125,18 @@ export class Auth0McpConfigurator {
       throw new Error(`invalid Auth0 MCP journal '${journalPath}'`)
     }
     const client = clientFactory(journal.tenant)
+    // Every entry is attempted, so one failure leaves no later write applied; a
+    // rerun after fixing the cause finishes, since undoing twice is a no-op.
+    const failures: string[] = []
     for (const entry of [...(journal.entries as JournalEntry[])].reverse()) {
-      if (entry.method === 'post') {
-        // A `post` sent without a response may still have landed: find what it made.
-        const created = entry.created ?? (entry.attempted ? findCreated(client, entry) : undefined)
-        if (created) client.request('delete', created)
-      } else if (entry.method === 'delete') {
-        // A delete that failed before landing left the grant in place; re-creating it would duplicate it.
-        const sent = entry.attempted && entry.previous
-        if (sent && !findCreated(client, { ...entry, path: collectionOf(entry.path), data: entry.previous! })) {
-          client.request('post', collectionOf(entry.path), { data: entry.previous })
-        }
-      } else if (entry.previous) {
-        client.request('patch', entry.path, { data: entry.previous })
+      try {
+        undo(client, entry)
+      } catch (error) {
+        failures.push(`${entry.kind}: ${(error as Error).message}`)
       }
+    }
+    if (failures.length > 0) {
+      throw new Error(`rollback of '${journalPath}' left ${failures.length} write(s) in place:\n${failures.join('\n')}`)
     }
     return { mode: 'rolled-back', tenant: journal.tenant, entries: journal.entries.length }
   }
@@ -222,6 +220,23 @@ export class Auth0McpConfigurator {
   private list(path: string, query?: Record<string, string>): JsonObject[] {
     const result = this.client.request('get', path, { query })
     return Array.isArray(result) ? result : []
+  }
+}
+
+/** Reverts one journaled write; a resource already gone counts as undone. */
+function undo(client: Auth0ManagementClient, entry: JournalEntry): void {
+  if (entry.method === 'post') {
+    // A `post` sent without a response may still have landed: find what it made.
+    const created = entry.created ?? (entry.attempted ? findCreated(client, entry) : undefined)
+    if (created) client.request('delete', created, { allowNotFound: true })
+  } else if (entry.method === 'delete') {
+    // A delete that failed before landing left the grant in place; re-creating it would duplicate it.
+    const sent = entry.attempted && entry.previous
+    if (sent && !findCreated(client, { ...entry, path: collectionOf(entry.path), data: entry.previous! })) {
+      client.request('post', collectionOf(entry.path), { data: entry.previous })
+    }
+  } else if (entry.previous) {
+    client.request('patch', entry.path, { data: entry.previous })
   }
 }
 

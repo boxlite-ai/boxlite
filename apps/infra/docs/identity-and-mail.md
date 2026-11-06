@@ -187,7 +187,9 @@ Rules, since CIMD logins fail while Rules run. It writes a mode-`0600` journal
 under `.sst/auth0-backups/` before each write, and marks each write as sent before
 sending it. Undo a run with `npm run auth0:configure-mcp -- --rollback <journal-path>`:
 rollback deletes what a run created, looking up a create whose response never
-arrived, and re-creates a grant a run deleted unless it is still there. A rerun on a configured tenant
+arrived, and re-creates a grant a run deleted unless it is still there. It attempts
+every entry and then lists the ones it could not undo; rerun it once the cause is fixed,
+since undoing an entry twice is a no-op. A rerun of apply on a configured tenant
 writes nothing.
 
 So that MCP logins get the same email verification and account link as the
