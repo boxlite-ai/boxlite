@@ -13,6 +13,7 @@ import { SwaggerModule } from '@nestjs/swagger'
 import { INestApplication, Logger, ValidationPipe } from '@nestjs/common'
 import { AllExceptionsFilter } from './filters/all-exceptions.filter'
 import { MetricsInterceptor } from './interceptors/metrics.interceptor'
+import { AnalyticsService } from './analytics/services/analytics.service'
 import { HttpsOptions } from '@nestjs/common/interfaces/external/https-options.interface'
 import { TypedConfigService } from './config/typed-config.service'
 import { FailedAuthTrackerService } from './auth/failed-auth-tracker.service'
@@ -94,7 +95,7 @@ async function bootstrap() {
   app.set('trust proxy', true)
   app.useGlobalFilters(new AllExceptionsFilter(failedAuthTracker))
   app.useGlobalInterceptors(new LoggerErrorInterceptor())
-  app.useGlobalInterceptors(new MetricsInterceptor(configService))
+  app.useGlobalInterceptors(new MetricsInterceptor(configService, app.get(AnalyticsService)))
   app.useGlobalInterceptors(app.get(AuditInterceptor))
   app.useGlobalPipes(
     new ValidationPipe({

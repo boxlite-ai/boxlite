@@ -5,7 +5,7 @@
 
 const mockCapture = jest.fn()
 jest.mock('posthog-node', () => ({
-  PostHog: jest.fn(() => ({ capture: mockCapture, shutdown: jest.fn() })),
+  PostHog: jest.fn(() => ({ capture: mockCapture, shutdown: jest.fn(), on: jest.fn() })),
 }))
 
 import type { INestApplication } from '@nestjs/common'
@@ -19,6 +19,7 @@ import { ImageController } from '../image/controllers/image.controller'
 import { ImageCatalogService } from '../image/services/image-catalog.service'
 import { OrganizationResourceActionGuard } from '../organization/guards/organization-resource-action.guard'
 import { MetricsInterceptor } from './metrics.interceptor'
+import { AnalyticsService } from '../analytics/services/analytics.service'
 
 const ORGANIZATION = { id: 'org-123', imageCountLimit: 20 }
 const CONFIG: Record<string, string> = {
@@ -44,7 +45,11 @@ describe('MetricsInterceptor', () => {
 
     const moduleRef = await Test.createTestingModule({
       controllers: [ImageController],
-      providers: [{ provide: ImageCatalogService, useValue: catalog }],
+      providers: [
+        AnalyticsService,
+        { provide: TypedConfigService, useValue: { get: (key: string) => CONFIG[key] } },
+        { provide: ImageCatalogService, useValue: catalog },
+      ],
     })
       .overrideGuard(CombinedAuthGuard)
       .useValue({
@@ -70,7 +75,7 @@ describe('MetricsInterceptor', () => {
 
     app = moduleRef.createNestApplication()
     app.setGlobalPrefix('api')
-    app.useGlobalInterceptors(new MetricsInterceptor(configService))
+    app.useGlobalInterceptors(new MetricsInterceptor(configService, moduleRef.get(AnalyticsService)))
     await app.listen(0)
   })
 
