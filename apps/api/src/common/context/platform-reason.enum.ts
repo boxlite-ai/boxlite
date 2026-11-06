@@ -6,6 +6,7 @@
 /** Why the platform, rather than a user or an admin, started an operation. */
 export enum PlatformReason {
   AUTO_STOP = 'auto_stop',
+  BILLING_NEGATIVE = 'billing_negative',
   AUTO_DELETE = 'auto_delete',
   ORG_SUSPENSION = 'org_suspension',
   WARM_POOL = 'warm_pool',

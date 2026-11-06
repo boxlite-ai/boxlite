@@ -152,12 +152,9 @@ const oidcFrom = (environment: Environment, hosts: PublicHosts): Record<string, 
 /**
  * Where the dashboard's billing surface calls, and where finalized usage goes.
  *
- * `USAGE_EXPORT_URL` is derived from `BILLING_API_URL`'s origin rather than
- * taken as a second setting. The publisher appends `/internal/usage-events`,
- * which the billing service answers off its bare origin because that route
- * authenticates a service rather than a user — so sending the billing base path
- * would 404 every batch, and a second setting is a second thing that can be
- * pointed somewhere else.
+ * `USAGE_EXPORT_URL` explicitly selects the server-side base, including an
+ * optional path prefix. When absent, it defaults to `BILLING_API_URL`'s origin;
+ * clients append their internal routes to that base.
  *
  * No default for `BILLING_API_URL`: this stack deploys no billing service, so
  * a stage that names none keeps the dashboard's billing pages gated off, which

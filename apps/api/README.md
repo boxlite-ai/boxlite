@@ -45,6 +45,47 @@ Deploy the API after upgrading the package to apply the new list.
 Run `make test:apps:api TEST_FILES='user.service.registration-email|jwt.strategy'` for the registration checks,
 and `make build:apps:api` to validate the production bundle and dependency imports.
 
+## Background lifecycle requests
+
+Automated stop requests use `BoxService.stop` with a platform operation context.
+A stable `started` Box moves to `pending=true`, `desiredState=stopped`, and emits
+the normal Stop event. The existing manager and Runner complete the transition.
+Conditional repository updates serialize competing lifecycle requests and reject
+a Stop if the Box's organization changed after lookup.
+
+The worker processes candidates sequentially within a 30-second submission
+window. It waits for each submitted operation and saves the last attempted
+creation timestamp and ID in a shared Redis checkpoint before releasing its lease.
+The next run starts after that position and wraps around, including when a different
+worker acquires the lease or the previous Box no longer appears in the candidates.
+Only the current lease owner may save progress. Failed attempts advance it too.
+The checkpoint uses the lease key as a Redis hash tag, preserving the lease key
+while keeping both keys in one slot. Lease acquisition waits at most one second;
+cancellation releases any lease returned after that wait ends.
+
+Background Stop lookups and updates limit each database lock wait to 500 ms. A lock
+timeout rolls back the transaction before processing the next candidate; a later
+run can retry that Box. The setting ends with the transaction and does not affect
+ordinary user Stop requests. Bounded lookups bypass the query cache and retain
+ID-first lookup with name fallback. Candidate reads use a separate transaction with the
+same lock wait bound, so a table lock cannot keep the scan waiting indefinitely.
+
+The automatic stop worker cancels pending work in `beforeApplicationShutdown` and
+awaits submitted operations before releasing its lease. This finishes before HTTP
+connections drain, so a long request cannot keep a worker submitting new stops.
+Cancellation does not undo an accepted Stop intent. Integration tests check
+persisted intent and lifecycle events; physical Runner shutdown requires
+end-to-end verification.
+
+Use `make coverage:api TEST_FILES='<spec pattern>'` for focused coverage checks.
+This selects test files while retaining the configured coverage sources and exclusions.
+A pattern matching no test files fails. PostgreSQL/Redis integration suites require
+`DB_HOST`, `REDIS_HOST`, and the corresponding connection settings; they skip when
+either host is unset.
+The `api:test` cache includes PostgreSQL and Redis hosts, ports, usernames, passwords,
+and the database name, so changing connection settings invalidates cached results.
+Coverage runs bypass the cache.
+
 ## Box startup timeouts
 
 REST creation persists the Box before waiting up to 30 seconds for `STARTED`.
