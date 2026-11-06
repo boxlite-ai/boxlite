@@ -92,6 +92,7 @@ help:
 	@echo "    make test:apps:dashboard    - Run Dashboard tests (FILTER=<pattern>)"
 	@echo "    make test:apps:proxy        - Run proxy unit tests (FILTER=<pattern>)"
 	@echo "    make test:apps:mdeploy      - Type-check and test deployment scripts"
+	@echo "    make test:apps:mbuild       - Type-check and test image publication scripts"
 	@echo "    make test:e2e:drivers       - Test acceptance-client argument handling"
 	@echo "    make fmt:apps:proxy         - Format the proxy Go service"
 	@echo "    make test:skill:boxlite-diagrams - Run diagram skill validator tests"
