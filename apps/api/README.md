@@ -359,6 +359,7 @@ await this.stop(event.boxId, undefined, Context.platform(PlatformReason.ORG_SUSP
   operations. Rust, Python, Node, C, Go and the CLI use that transport; the label identifies
   the SDK transport, not a particular language or a verified caller. Guest tunnel traffic
   is not labeled. Older or third-party clients may still omit these optional headers.
+  HTTP test servers with explicit CORS allowlists must also permit `X-BoxLite-Source`.
 - The boot-time admin seed registers as `Context.platform(PlatformReason.BOOTSTRAP)`.
 - Job outcome events carry no context: the runner reports after the request has ended.
 - Admin box recovery and user creation retain the authenticated administrator in `Context.admin(actor)`.
