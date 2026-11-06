@@ -35,6 +35,7 @@
     "bootstrap": "tsx --conditions=development bootstrap/bootstrap.ts",
     "auth0:configure-email": "tsx bootstrap/configure-auth0-email.ts",
     "auth0:configure-login": "tsx bootstrap/configure-auth0-login.ts",
+    "auth0:configure-mcp": "tsx bootstrap/configure-auth0-mcp.ts",
     "verify-deploy-role": "tsx deployment/verify-role.ts",
     "runner:build-artifact:legacy": "tsx artifacts/runner-build.ts"
   },
