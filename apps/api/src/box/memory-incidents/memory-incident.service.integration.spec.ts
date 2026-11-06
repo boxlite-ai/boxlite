@@ -184,6 +184,7 @@ describeWithDatabase('Memory incident PostgreSQL persistence', () => {
   })
 
   it('cancels a blocked ranking query within five seconds and restores the session timeout', async () => {
+    const timeoutBefore = await db.query("SELECT current_setting('statement_timeout') AS timeout")
     const lock = db.createQueryRunner()
     await lock.connect()
     await lock.startTransaction()
@@ -201,7 +202,7 @@ describeWithDatabase('Memory incident PostgreSQL persistence', () => {
         }),
       ])
       expect(outcome).toBe('57014')
-      expect(await db.query("SELECT current_setting('statement_timeout') AS timeout")).toEqual([{ timeout: '0' }])
+      expect(await db.query("SELECT current_setting('statement_timeout') AS timeout")).toEqual(timeoutBefore)
     } finally {
       clearTimeout(timer)
       await lock.rollbackTransaction()
