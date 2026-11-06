@@ -178,7 +178,7 @@ Commands without shared options omit the global section.
 | `OIDC_CLIENT_ID` | `auth login` | OIDC client-id fallback after an explicit flag and server discovery |
 | `OIDC_AUDIENCE` | `auth login` | OIDC audience fallback after an explicit flag and server discovery |
 | `BOXLITE_LOG_FILE` | logging | Explicit JSON log-file path for any command; a bare filename is relative to the current directory. `serve` otherwise logs to `<BOXLITE_HOME>/logs/serve.log`. |
-| `BOXLITE_EXPERIMENTAL` | `run`, `create` | Comma-separated RC features: `custom-kernel`, `nested-virtualization` |
+| `BOXLITE_EXPERIMENTAL` | `run`, `create` | Comma-separated RC features: `custom-kernel`, `nested-virtualization`, `native-vmm` |
 | `BOXLITE_RECONNECT_GRACE` | `serve` | Reconnect grace before SIGHUP; default `5m` |
 | `BOXLITE_SHUTDOWN_GRACE` | `serve` | Grace between shutdown escalation stages; default `30s` |
 | `BOXLITE_MAX_SESSION_LIFETIME` | `serve` | Session hard cap; default `24h` |

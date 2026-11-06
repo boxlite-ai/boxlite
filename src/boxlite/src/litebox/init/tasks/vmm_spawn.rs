@@ -38,6 +38,7 @@ struct VmmSpawnInputs {
     prepared_kernel: Option<PreparedKernel>,
     container_disk_path: PathBuf,
     container_id: ContainerID,
+    engine_kind: VmmKind,
     runtime: SharedRuntimeImpl,
     reuse_rootfs: bool,
 }
@@ -73,6 +74,7 @@ impl VmmSpawnInputs {
             prepared_kernel,
             container_disk_path,
             container_id: ctx.config.container.id.clone(),
+            engine_kind: ctx.config.engine_kind,
             runtime: ctx.runtime.clone(),
             reuse_rootfs: ctx.reuse_rootfs,
         })
@@ -98,7 +100,7 @@ impl PipelineTask<InitCtx> for VmmSpawnTask {
                 .inspect_err(|e| log_task_error(&box_id, task_name, e))?;
 
         // Spawn VM
-        let handler = spawn_vm(&box_id, &instance_spec, &inputs.options, &inputs.layout)
+        let handler = spawn_vm(&box_id, &instance_spec, &inputs)
             .await
             .inspect_err(|e| log_task_error(&box_id, task_name, e))?;
 
@@ -141,6 +143,7 @@ async fn build_config(
         prepared_kernel,
         container_disk_path,
         container_id,
+        engine_kind,
         runtime,
         reuse_rootfs,
     } = inputs;
@@ -240,7 +243,7 @@ async fn build_config(
 
     // Assemble VMM instance spec
     let instance_spec = InstanceSpec {
-        engine: VmmKind::Libkrun, // only engine — will be dynamic when others are added
+        engine: *engine_kind,
         // Box identification and security
         box_id: box_id.to_string(),
         security: options.advanced.security.clone(),
@@ -425,15 +428,14 @@ fn warn_cpus_beyond_guest_kernel(options: &BoxOptions) {
 async fn spawn_vm(
     box_id: &BoxID,
     config: &InstanceSpec,
-    options: &BoxOptions,
-    layout: &BoxFilesystemLayout,
+    inputs: &VmmSpawnInputs,
 ) -> BoxliteResult<Box<dyn VmmHandler>> {
     let mut controller = ShimController::new(
         find_binary("boxlite-shim")?,
-        VmmKind::Libkrun,
+        inputs.engine_kind,
         box_id.clone(),
-        options.clone(),
-        layout.clone(),
+        inputs.options.clone(),
+        inputs.layout.clone(),
     )?;
 
     controller.start(config).await
