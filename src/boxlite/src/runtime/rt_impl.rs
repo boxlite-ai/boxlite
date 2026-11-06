@@ -560,10 +560,10 @@ impl RuntimeImpl {
             )));
         }
         // The engine is fixed at creation: a box on one VMM cannot serve a
-        // request for another, so compare against the persisted kind.
-        if let Some(engine) = requested.advanced.engine
-            && engine != actual.engine_kind
-        {
+        // request for another, so compare against the persisted kind. An
+        // unset engine is the default one, as at creation.
+        let engine = requested.advanced.engine.unwrap_or_default();
+        if engine != actual.engine_kind {
             return Err(BoxliteError::Unsupported(format!(
                 "box '{box_name}' runs on the {:?} engine and cannot satisfy a request for the {engine:?} engine; use a different name or recreate the box",
                 actual.engine_kind
@@ -2251,6 +2251,23 @@ mod tests {
             RuntimeImpl::check_options_compatibility(&requested, &actual),
             Err(BoxliteError::Unsupported(_))
         ));
+    }
+
+    #[test]
+    fn check_options_compatibility_rejects_a_default_request_reusing_a_native_box() {
+        // An unset engine means the default engine, so a native box cannot
+        // satisfy it any more than a request that names Libkrun.
+        let mut actual = test_box_config(false);
+        actual.engine_kind = crate::vmm::VmmKind::Native;
+        let requested = BoxOptions::default();
+
+        match RuntimeImpl::check_options_compatibility(&requested, &actual) {
+            Err(BoxliteError::Unsupported(message)) => {
+                assert!(message.contains("Native"), "{message}");
+                assert!(message.contains("Libkrun"), "{message}");
+            }
+            other => panic!("expected Unsupported, got {other:?}"),
+        }
     }
 
     #[tokio::test]

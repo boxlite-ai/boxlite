@@ -20,6 +20,7 @@ use boxlite_vmm::{DiskConfig, Vm, VmConfig};
 const DEFAULT_CMDLINE: &str = "console=ttyS0 panic=-1 reboot=k";
 
 /// The native engine. Stateless: everything lives in the instance.
+#[derive(Debug)]
 pub struct Native;
 
 impl Native {
@@ -131,8 +132,9 @@ pub(crate) fn build_config(spec: &InstanceSpec) -> BoxliteResult<VmConfig> {
 }
 
 /// The kernel command line: the custom or default base, the root disk, the
-/// agent as `init`, its environment, and its arguments after `--` with the
-/// Unix socket URIs rewritten to the guest's vsock ports.
+/// agent as `init`, its environment as quoted `"KEY=value"` parameters, and
+/// its arguments after `--` with the Unix socket URIs rewritten to the guest's
+/// vsock ports.
 pub(crate) fn build_cmdline(spec: &InstanceSpec, custom: Option<&str>) -> String {
     let mut parts = vec![custom.unwrap_or(DEFAULT_CMDLINE).to_string()];
     if let Strategy::Disk {
@@ -143,12 +145,19 @@ pub(crate) fn build_cmdline(spec: &InstanceSpec, custom: Option<&str>) -> String
         parts.push(format!("root={device} rootfstype=ext4 ro"));
     }
     parts.push(format!("init={}", spec.guest_entrypoint.executable));
-    parts.extend(
-        spec.guest_entrypoint
-            .env
-            .iter()
-            .map(|(key, value)| format!("{key}={value}")),
-    );
+    // Each entry is one quoted parameter, as libkrun writes it, so a space in
+    // a value cannot split off a kernel parameter such as `root=`. The kernel
+    // has no escape for `"`, so an entry holding one is dropped.
+    parts.extend(spec.guest_entrypoint.env.iter().filter_map(|(key, value)| {
+        if key.contains('"') || value.contains('"') {
+            tracing::warn!(
+                env_key = %key,
+                "Skipping env var: the kernel command line cannot quote '\"'"
+            );
+            return None;
+        }
+        Some(format!("\"{key}={value}\""))
+    }));
     let args = guest_args::transform_guest_args(spec.guest_entrypoint.args.clone());
     if !args.is_empty() {
         parts.push("--".to_string());
