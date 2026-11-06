@@ -40,7 +40,7 @@ Use the deployment workflow to resolve a ref and prepare the matching source tre
 
 ### Release images in GHCR
 
-The GHCR release commands publish images independently of dev/prod cloud credentials:
+`mbuild-release` publishes release images independently of dev/prod cloud credentials:
 
 ```bash
 npm run mbuild publish -- --tag <full-commit-sha> --version vX.Y.Z --ghcr boxlite-ai/boxlite
@@ -54,8 +54,8 @@ Set `GHCR_USERNAME` and `GHCR_TOKEN`, or use `GITHUB_ACTOR` and `GH_TOKEN` in Ac
 Publishing needs package write access; verification/import needs package read access.
 `publish` and `verify` with `--ghcr` read the artifact declaration without a cloud stage file.
 For publication, use `MSTAGE_ENV_CONFIG` to select the release source's declaration and build context.
-`import-release` imports and verifies the artifacts required by its current declaration;
-an older release lacking a required artifact fails this import.
+Deployment imports and verifies the artifacts required by its current declaration;
+an older release lacking a required artifact cannot be deployed by that workflow.
 
 Publication audits dependencies and reuses existing images without overwriting them.
 Retry a partial publication to build only missing artifacts; success requires every selected image to exist.

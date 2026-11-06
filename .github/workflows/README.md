@@ -25,7 +25,7 @@ SDK TEST BUILDS (manual dispatch)       build-go ──▶ build-c ──▶ Go 
                                         build-runner-binary ──▶ build-c ──▶ Runner link
 
 RELEASE (release event)                 build-runtime · build-c · build-node · build-wheels
-                                        mbuild-release-on-release ──▶ mbuild-release (images, dev)
+                                        mbuild-release-on-release ──▶ mbuild-release (images, GHCR)
                                         apps/box-images/v* tag ──▶ release-box-images
 
 LEGACY AWS (manual dispatch)            deploy-infra ─┬─▶ build-apps-api-image
@@ -33,7 +33,7 @@ LEGACY AWS (manual dispatch)            deploy-infra ─┬─▶ build-apps-api
                                                       └─▶ e2e-cloud
                                         deploy-release   (no builds; consumes published artifacts)
 DEPLOY (manual dispatch)                mdeploy-all ─┬─▶ mbuild         (a commit or #<n> ──▶ <sha> images, dev)
-                                                     └─▶ mbuild-release (v<X.Y.Z> ──▶ v<X.Y.Z>-<sha>, dev then prod)
+                                                     └─▶ GHCR import    (v<X.Y.Z> ──▶ target AR/ECR, no build)
 
 CONFIG                                  ci-config action ◀── lint, test, config workflow
                                         config workflow ◀── build workflows
@@ -63,13 +63,13 @@ own.
 | `deploy-infra.yml` | dispatch | — | Builds and deploys one commit to a stage. Retained legacy AWS path |
 | `deploy-release.yml` | dispatch | — | Deploys already-published artifacts for one `X.Y.Z`. Compiles nothing. Retained legacy AWS path |
 | `e2e-cloud.yml` | dispatch, `workflow_call` | yes | End-to-end against a deployed stage: the whole suite on `dev`, `-m smoke` on `prod`. Run by `deploy-infra` after it applies, or dispatched with a `stage` |
-| `mdeploy-all.yml` | dispatch | — | Current mdeploy orchestration for prepared GCP/AWS stages. A commit SHA builds for dev, and so does `#<number>` — a pull request, by the commit it would merge to; a release tag publishes into dev or promotes to prod, and is all prod accepts. Applies the stack itself |
+| `mdeploy-all.yml` | dispatch | — | Current mdeploy orchestration for prepared GCP/AWS stages. A commit SHA builds for dev, and so does `#<number>` — a pull request, by the commit it would merge to; a release tag imports existing GHCR images into the target cloud registry, and is all prod accepts. Applies the stack itself |
 | `mbuild.yml` | `workflow_call` | call-only | The commit line's images, for a dev rollout. Callee only: nobody publishes a commit by hand |
-| `mbuild-release.yml` | dispatch, `workflow_call` | yes | The release line's images, tagged `v<X.Y.Z>-<sha>`: publish a version into dev, or promote it to prod. One job per artifact, and a version the target already holds is refused rather than skipped |
-| `mbuild-release-on-release.yml` | release | — | A stable published release dispatches `mbuild-release` from `main` to publish its application images into dev |
+| `mbuild-release.yml` | dispatch | — | Publishes `v<X.Y.Z>-<sha>` images to GHCR, one job per declared artifact. Reuses existing images when recovering partial releases |
+| `mbuild-release-on-release.yml` | release | — | A stable published release dispatches `mbuild-release` from `main` to publish its application images to GHCR |
 | `e2e-local.yml` | push, `pull_request_target`, dispatch | — | VM-based tests on a self-hosted GCP VM runner. Needs `/dev/kvm`; PRs need the `e2e-local` label |
 | `build-box-images.yml` | PR, push, dispatch | — | Builds changed flavors for both arches; shared inputs and manual runs build every flavor |
-| `release-box-images.yml` | `apps/box-images/v*` tag, dispatch | — | The only workflow that writes to GHCR |
+| `release-box-images.yml` | `apps/box-images/v*` tag, dispatch | — | Publishes the curated box image flavors to GHCR |
 
 Longer treatments live with their subject rather than here: [E2E local
 runbook](../../docs/contributing/development/e2e-local.md), [deployment](../../apps/infra/docs/deployment.md).
