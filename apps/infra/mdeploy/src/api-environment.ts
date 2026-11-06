@@ -88,6 +88,20 @@ const validateCiChannels = (values: Record<string, string>, addresses: Record<st
       if (!held(values, clientKey)) throw new ApiEnvironmentError(`${clientKey} is required for browser connect`)
     }
   }
+  const oauthClient = 'CI_GITHUB_OAUTH_CLIENT_ID',
+    oauthSecret = 'CI_GITHUB_OAUTH_CLIENT_SECRET'
+  if ([oauthClient, oauthSecret].some((key) => held(values, key) || held(addresses, key))) {
+    if (
+      !/^[A-Za-z0-9_-]{1,128}$/.test(values[oauthClient] || '') ||
+      held(addresses, oauthClient) ||
+      [values.CI_GITHUB_APP_CLIENT_ID, values.CI_GITHUB_ORG_APP_CLIENT_ID].includes(values[oauthClient])
+    )
+      throw new ApiEnvironmentError('Identity OAuth requires a distinct plain client ID')
+    if (!held(addresses, oauthSecret) || held(values, oauthSecret))
+      throw new ApiEnvironmentError(`${oauthSecret} requires a mstage secret ref`)
+    if (!held(values, 'CI_GITHUB_APP_CLIENT_ID'))
+      throw new ApiEnvironmentError('Identity OAuth requires the hosted CI storage anchor')
+  }
   const client = values.CI_GITHUB_APP_CLIENT_ID,
     slug = values.CI_GITHUB_APP_SLUG
   if (

@@ -138,3 +138,26 @@ describe('CI browser callback state', () => {
     expect(window.sessionStorage.length).toBe(0)
   })
 })
+
+it('resumes a scrubbed callback without exchanging a code a second time', async () => {
+  const module = await import('./ci-connect')
+  const organization = '12345678-1234-4234-8234-123456789def',
+    id = '12345678-1234-4234-8234-123456789abc'
+  module.prepareCiRedirect(organization, {
+    id,
+    expires_at: new Date(Date.now() + 300000).toISOString(),
+    authorization_url: 'https://github.com/login/oauth/authorize?state=' + id + '.' + 'A'.repeat(43),
+  })
+  const api = {
+    completeCiConnect: vi.fn(),
+    completeCiInstallation: vi.fn(),
+    getCiConnect: vi.fn(async () => ({ id, status: 'selection_required' })),
+  }
+  await expect(module.completeCiRedirect(api)).resolves.toMatchObject({
+    organization,
+    result: { status: 'selection_required' },
+  })
+  expect(api.getCiConnect).toHaveBeenCalledExactlyOnceWith(organization, id)
+  expect(api.completeCiConnect).not.toHaveBeenCalled()
+  expect(api.completeCiInstallation).not.toHaveBeenCalled()
+})

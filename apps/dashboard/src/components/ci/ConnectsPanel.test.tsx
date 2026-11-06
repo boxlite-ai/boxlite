@@ -2,6 +2,7 @@
 /* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
 import { act, StrictMode } from 'react'
 import { createRoot, Root } from 'react-dom/client'
+import { MemoryRouter } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ConnectsPanel } from './ConnectsPanel'
@@ -40,6 +41,7 @@ describe('CI connects panel', () => {
     mocks.selection.authenticatedUserOrganizationMember.role = 'owner'
     mocks.api.getCiSettings.mockResolvedValue(settings)
     mocks.api.getCiConnectConfiguration.mockResolvedValue({
+      web_connect_available: true,
       apps: [
         {
           account_type: 'User',
@@ -68,7 +70,9 @@ describe('CI connects panel', () => {
       root.render(
         <StrictMode>
           <QueryClientProvider client={cache}>
-            <ConnectsPanel />
+            <MemoryRouter>
+              <ConnectsPanel />
+            </MemoryRouter>
           </QueryClientProvider>
         </StrictMode>,
       )
@@ -79,6 +83,25 @@ describe('CI connects panel', () => {
   }
   const button = (text: string) =>
     [...document.querySelectorAll<HTMLButtonElement>('button')].find((item) => item.textContent === text)!
+  it('restores the connect action on browser back while authorization start is pending', async () => {
+    let fail!: (reason: unknown) => void
+    mocks.api.startCiConnect.mockImplementationOnce(
+      () =>
+        new Promise((_resolve, reject) => {
+          fail = reject
+        }),
+    )
+    await render()
+    await act(async () => button('Connect GitHub').click())
+    if (button('Authorize GitHub')) await act(async () => button('Authorize GitHub').click())
+    expect(mocks.api.startCiConnect).toHaveBeenCalledTimes(1)
+    try {
+      await act(async () => window.dispatchEvent(new Event('pageshow')))
+      expect(button('Connect GitHub').disabled).toBe(false)
+    } finally {
+      await act(async () => fail(Error('test completion')))
+    }
+  })
   it('shows connections without capacity controls', async () => {
     await render()
     expect(document.querySelector('tbody')?.textContent).toContain('alice')
@@ -182,9 +205,8 @@ describe('CI connects panel', () => {
     })
     await render()
     await act(async () => button('Connect GitHub').click())
-    expect(button('Authorize GitHub').disabled).toBe(true)
+    expect(button('Connect GitHub').disabled).toBe(true)
     expect(document.body.textContent).toContain('Browser connect is not configured')
-    await act(async () => button('Cancel').click())
     expect(document.querySelector('#ci-maximum')).toBeNull()
   })
 })

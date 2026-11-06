@@ -25,7 +25,7 @@ import {
 } from '@/components/ui/alert-dialog'
 import { useApi } from '@/hooks/useApi'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
-import { prepareCiRedirect } from '@/lib/ci-connect'
+import { CiConnectionFlow } from './CiConnectionFlow'
 
 export function ConnectsPanel() {
   const api = useApi(),
@@ -45,11 +45,8 @@ export function ConnectsPanel() {
     enabled: owner && settings.data?.available === true,
     retry: false,
   })
-  const [accountType, setAccountType] = useState<'User' | 'Organization'>('User'),
-    [allowPublic, setAllowPublic] = useState(false)
   const [busy, setBusy] = useState(false),
     [message, setMessage] = useState('')
-  const [connectOpen, setConnectOpen] = useState(false)
   const [pendingDelete, setPendingDelete] = useState<CiSettings['connections'][number] | null>(null)
   const [editing, setEditing] = useState<CiSettings['connections'][number] | null>(null)
   const [editAllowPublic, setEditAllowPublic] = useState(false)
@@ -65,28 +62,6 @@ export function ConnectsPanel() {
     )
   const value = settings.data!
   if (!value.available) return <p>Hosted CI is not enabled on this deployment.</p>
-  const connect = async () => {
-    if (
-      submitting.current ||
-      !configuration.data?.apps.find((app) => app.account_type === accountType)?.web_connect_available
-    )
-      return
-    submitting.current = true
-    setBusy(true)
-    setMessage('')
-    try {
-      const attempt = await api.startCiConnect(organization, {
-        account_type: accountType,
-        follow_installation: true,
-        allow_public_repositories: allowPublic,
-      })
-      window.location.assign(prepareCiRedirect(organization, attempt))
-    } catch {
-      submitting.current = false
-      setBusy(false)
-      setMessage('Unable to start GitHub authorization. Try again.')
-    }
-  }
   const update = async () => {
     if (submitting.current || !editing) return
     const binding = editing.binding_id
@@ -123,20 +98,10 @@ export function ConnectsPanel() {
       setBusy(false)
     }
   }
-  const app = configuration.data?.apps.find((item) => item.account_type === accountType)
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="mb-[14px] flex flex-wrap justify-end gap-2">
-        <AsciiButton
-          variant="primary"
-          onClick={() => {
-            setMessage('')
-            setConnectOpen(true)
-          }}
-          disabled={busy}
-        >
-          Connect GitHub
-        </AsciiButton>
+        <CiConnectionFlow organization={organization} configuration={configuration.data} />
       </div>
       {configuration.isError && (
         <p role="alert" className="mb-3 text-body text-muted-foreground">
@@ -213,88 +178,9 @@ export function ConnectsPanel() {
         {!value.connections.length && (
           <div className="flex flex-col items-center gap-4 py-10 text-center">
             <p className="font-mono text-meta text-muted-foreground">No GitHub accounts connected.</p>
-            <AsciiButton
-              variant="primary"
-              onClick={() => {
-                setMessage('')
-                setConnectOpen(true)
-              }}
-            >
-              Connect GitHub
-            </AsciiButton>
           </div>
         )}
       </div>
-      <Dialog open={connectOpen} onOpenChange={(open) => !busy && setConnectOpen(open)}>
-        <DialogContent>
-          <form
-            onSubmit={(event) => {
-              event.preventDefault()
-              void connect()
-            }}
-          >
-            <DialogHeader>
-              <DialogTitle>Connect GitHub</DialogTitle>
-              <DialogDescription>
-                Authorize GitHub, then choose an installed account or install the App.
-              </DialogDescription>
-            </DialogHeader>
-            <div className="space-y-4 py-4">
-              <fieldset className="space-y-2" disabled={busy}>
-                <legend className="mb-2 font-mono text-meta">GitHub account type</legend>
-                {(['User', 'Organization'] as const).map((type) => (
-                  <label key={type} className="flex items-center gap-2 text-body">
-                    <input
-                      type="radio"
-                      name="ci-account-type"
-                      checked={accountType === type}
-                      onChange={() => setAccountType(type)}
-                    />
-                    {type === 'User' ? 'Personal account' : 'Organization (owner required)'}
-                  </label>
-                ))}
-              </fieldset>
-              <label className="flex items-center gap-2 text-body">
-                <input
-                  type="checkbox"
-                  checked={allowPublic}
-                  onChange={(event) => setAllowPublic(event.target.checked)}
-                  disabled={busy}
-                />
-                Allow installed public repositories to run CI
-              </label>
-              {!app?.web_connect_available && (
-                <p className="text-body text-muted-foreground">Browser connect is not configured on this deployment.</p>
-              )}
-              {app?.installation_url && (
-                <a
-                  className="font-mono text-meta text-foreground underline underline-offset-4"
-                  href={app.installation_url}
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  Install or manage GitHub App ↗
-                </a>
-              )}
-              <p className="font-mono text-meta text-muted-foreground">Workflow jobs use runs-on: boxlite-ci-runner.</p>
-              {message && (
-                <p role="alert" className="text-body text-muted-foreground">
-                  {message}
-                </p>
-              )}
-            </div>
-            <DialogFooter>
-              <AsciiButton type="button" onClick={() => setConnectOpen(false)} disabled={busy}>
-                Cancel
-              </AsciiButton>
-              <AsciiButton variant="primary" type="submit" disabled={busy || !app?.web_connect_available}>
-                Authorize GitHub
-              </AsciiButton>
-            </DialogFooter>
-          </form>
-        </DialogContent>
-      </Dialog>
-
       <Dialog open={!!editing} onOpenChange={(open) => !open && !busy && setEditing(null)}>
         <DialogContent>
           <form

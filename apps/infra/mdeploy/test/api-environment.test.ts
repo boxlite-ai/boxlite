@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs'
 import test from 'node:test'
 import { parseBase } from 'mstage/config'
 import { valuesOfGroup } from 'mstage/select-group'
+import { EnvError } from 'mstage/env'
 import { ApiEnvironmentError, BILLING_KEYS, STATUS_SYNC_KEYS, apiEnvironmentFrom } from '../src/api-environment.ts'
 import type { GroupDeclaration } from '../src/env.ts'
 
@@ -524,4 +525,42 @@ test('Organization App secrets use the workload channel with a distinct identity
   )
   for (const key of orgKeys) assert.ok(declared.envSelectGroup.api.includes(key))
   for (const key of orgSecrets) assert.ok(declared.envSelectGroup.secret.includes(key))
+})
+
+test('identity OAuth uses a distinct optional client and a secret reference without changing CI credentials', () => {
+  const identity = 'CI_GITHUB_OAUTH_CLIENT_ID',
+    secret = 'CI_GITHUB_OAUTH_CLIENT_SECRET'
+  const declaration = groups([...ciKeys, identity, secret], [...ciSecrets, secret])
+  const values = {
+    ...base,
+    ...ciValues('gcp'),
+    [identity]: 'identity-client',
+    [secret]: JSON.stringify({ address: 'projects/test-project/secrets/identity/versions/1' }),
+  }
+  const make = (environment: Record<string, string>) =>
+    apiEnvironmentFrom({ environment, declaration, region: 'us-east1', stage: 'dev', home: 'gcp' })
+  const result = make(values)
+  assert.equal(result.environment[identity], 'identity-client')
+  assert.equal(result.environment[secret], undefined)
+  assert.equal(result.secrets[secret], 'projects/test-project/secrets/identity/versions/1')
+  assert.equal(result.environment.CI_GITHUB_APP_CLIENT_ID, 'test-client')
+  for (const invalid of [
+    { ...values, [identity]: 'test-client' },
+    { ...values, [identity]: '' },
+  ])
+    assert.throws(
+      () => make(invalid),
+      (error) => error instanceof ApiEnvironmentError && !error.message.includes('private-do-not-echo'),
+    )
+  for (const invalidSecret of ['', 'private-do-not-echo'])
+    assert.throws(
+      () => make({ ...values, [secret]: invalidSecret }),
+      (error) => error instanceof EnvError && !error.message.includes('private-do-not-echo'),
+    )
+  const path = new URL('../../mstage.env.json', import.meta.url)
+  const catalog = parseBase(path.pathname, readFileSync(path, 'utf8'))
+  assert.ok(catalog.envOptional.api.includes(identity))
+  assert.ok(catalog.envOptional.api.includes(secret))
+  assert.ok(catalog.envSelectGroup.secret.includes(secret))
+  assert.equal(catalog.envSelectGroup.secret.includes(identity), false)
 })

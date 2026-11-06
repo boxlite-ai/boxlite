@@ -193,6 +193,36 @@ export class ApiClient {
   public async startCiConnect(organization: string, input: CiConnectInput): Promise<CiWebStart> {
     return (await this.http.post(`/v1/${encodeURIComponent(organization)}/ci/connect/web`, input, this.v1Config())).data
   }
+  public async getCiConnect(organization: string, id: string): Promise<CiConnectResult> {
+    return (
+      await this.http.get(
+        `/v1/${encodeURIComponent(organization)}/ci/connect/${encodeURIComponent(id)}`,
+        this.v1Config(),
+      )
+    ).data
+  }
+  public async cancelCiConnect(organization: string, id: string): Promise<CiConnectResult> {
+    return (
+      await this.http.delete(
+        `/v1/${encodeURIComponent(organization)}/ci/connect/${encodeURIComponent(id)}`,
+        this.v1Config(),
+      )
+    ).data
+  }
+  public async selectCiAccount(
+    organization: string,
+    id: string,
+    account: number,
+    allowPublic: boolean,
+  ): Promise<CiConnectResult> {
+    return (
+      await this.http.post(
+        `/v1/${encodeURIComponent(organization)}/ci/connect/${encodeURIComponent(id)}/accounts`,
+        { account_id: account, allow_public_repositories: allowPublic },
+        this.v1Config(),
+      )
+    ).data
+  }
   public async completeCiConnect(
     organization: string,
     id: string,

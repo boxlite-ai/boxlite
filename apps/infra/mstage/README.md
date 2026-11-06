@@ -103,9 +103,10 @@ Creating the secret and granting runtime read access remain the owner's responsi
 The base catalog declares hosted CI credentials as optional references consumed only
 by the API: `CI_GITHUB_APP_PRIVATE_KEY`, `CI_GITHUB_WEBHOOK_SECRET` and
 `CI_SECRET_ENCRYPTION_KEY`. They stay optional when CI is unconfigured; mdeploy
-requires all three references once the App identity is configured. Browser connect
-adds optional `CI_GITHUB_APP_CLIENT_SECRET`, also in both groups and always a
-reference when present. It is distinct from the App signing key. See the
+requires all three references once the App identity is configured. Browser connect uses optional `CI_GITHUB_OAUTH_CLIENT_ID` as a plain API value and
+`CI_GITHUB_OAUTH_CLIENT_SECRET` in both API/secret groups as a reference. This is
+a separate identity OAuth App from the CI Apps. Existing CI App client-secret
+fields remain optional for legacy grants. See the
 [hosted CI setup](../mdeploy/README.md#hosted-github-ci-listener).
 
 On AWS, check execution-role policy, permissions boundary and any customer-managed KMS key;

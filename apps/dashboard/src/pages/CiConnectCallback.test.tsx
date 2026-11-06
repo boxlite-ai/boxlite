@@ -49,3 +49,43 @@ it('CI callback performs one authenticated completion under real React StrictMod
     window.sessionStorage.clear()
   }
 })
+
+it('keeps an exit available while GitHub completion is pending', async () => {
+  globalThis.IS_REACT_ACT_ENVIRONMENT = true
+  const id = '12345678-1234-4234-8234-123456789abc',
+    organization = '12345678-1234-4234-8234-123456789def'
+  const state = id + '.' + 'A'.repeat(43)
+  let finish!: (value: any) => void
+  api.completeCiConnect.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        finish = resolve
+      }),
+  )
+  prepareCiRedirect(organization, {
+    id,
+    authorization_url: 'https://github.com/login/oauth/authorize?' + new URLSearchParams({ state }),
+    expires_at: new Date(Date.now() + 300000).toISOString(),
+    installation_url: '',
+  })
+  window.history.replaceState({}, '', '/settings/ci/callback?' + new URLSearchParams({ code: 'private-code', state }))
+  captureCiCallback()
+  const host = document.createElement('div')
+  document.body.append(host)
+  const root = createRoot(host)
+  try {
+    await act(async () =>
+      root.render(
+        <MemoryRouter>
+          <CiConnectCallback />
+        </MemoryRouter>,
+      ),
+    )
+    expect(document.querySelector('a[href="/dashboard/ci/connects"]')).not.toBeNull()
+  } finally {
+    await act(async () => finish({ status: 'cancelled' }))
+    await act(async () => root.unmount())
+    host.remove()
+    sessionStorage.clear()
+  }
+})
