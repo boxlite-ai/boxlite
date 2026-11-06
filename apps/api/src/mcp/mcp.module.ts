@@ -11,6 +11,7 @@ import { BoxliteRestModule } from '../boxlite-rest/boxlite-rest.module'
 import { OrganizationModule } from '../organization/organization.module'
 import { McpAuthGuard } from './mcp-auth.guard'
 import { McpAuthMetadata } from './mcp-auth-metadata'
+import { McpBodyGuard } from './mcp-body'
 import { McpController, mcpStrategy } from './mcp.controller'
 import { McpDispatcher } from './mcp-dispatcher'
 import { McpMetadataController } from './mcp-metadata.controller'
@@ -24,6 +25,7 @@ import { McpTools } from './mcp-tools'
     { provide: MCP_STRATEGY, useValue: mcpStrategy },
     McpAuthGuard,
     McpAuthMetadata,
+    McpBodyGuard,
     McpDispatcher,
     McpScopeGuard,
     McpTools,
