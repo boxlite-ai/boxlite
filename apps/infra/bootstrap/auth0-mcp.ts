@@ -111,6 +111,11 @@ export class Auth0McpConfigurator {
     for (const write of writes) {
       write.attempted = true
       save()
+      // A client registered earlier in this run has its id only now.
+      if (write.path === 'client-grants' && write.method === 'post') {
+        write.data = { ...write.data, client_id: cimdClientId(this.client, write.data.client_id) }
+        save()
+      }
       const data = write.method === 'delete' ? undefined : write.data
       const result = this.client.request(write.method, write.path, { data }) as JsonObject | null
       if (write.method === 'post') write.created = createdPath(write, result)
@@ -182,23 +187,30 @@ export class Auth0McpConfigurator {
   private clientWrites(): JournalEntry[] {
     const writes: JournalEntry[] = []
     const grants = readAllPages(this.client, 'client-grants', 'client_grants', { audience: this.options.resourceUrl })
+    // Auth0 gives a CIMD client its own `tpc_` id and keeps the metadata URL as
+    // `external_client_id`; grants and the `clients/{id}` path take only the id.
+    const cimd = readAllPages(this.client, 'clients', 'clients').filter((c) => c.external_metadata_type === 'cimd')
+    const listedIds = new Set<string>()
     for (const url of this.sources.clients) {
-      const registered = this.client.request('get', `clients/${encodeURIComponent(url)}`, { allowNotFound: true })
+      const registered = cimd.find((c) => c.external_client_id === url)
       if (!registered) {
         // Preview fetches and validates the document; register only what it accepts.
         this.client.request('post', 'clients/cimd/preview', { data: { external_client_id: url } })
         writes.push({ kind: `client ${url}`, method: 'post', path: 'clients/cimd/register', data: { external_client_id: url } })
-      }
-      const grant = grants.find((g) => g.client_id === url && g.subject_type === 'user')
-      const data = { client_id: url, audience: this.options.resourceUrl, scope: this.sources.scopes, subject_type: 'user' }
+      } else listedIds.add(registered.client_id)
+      const grant = registered && grants.find((g) => g.client_id === registered.client_id && g.subject_type === 'user')
+      // An unregistered client's grant names its URL until apply resolves the id.
+      const clientId = registered?.client_id ?? url
+      const data = { client_id: clientId, audience: this.options.resourceUrl, scope: this.sources.scopes, subject_type: 'user' }
       if (!grant) writes.push({ kind: `grant ${url}`, method: 'post', path: 'client-grants', data })
       else writes.push(...patchIfChanged(`grant ${url}`, `client-grants/${grant.id}`, grant, { scope: this.sources.scopes }))
     }
-    // A CIMD client (its id is its metadata URL) dropped from the list keeps no
-    // user grant. Grants of other clients, and on other audiences, are not ours.
+    // A CIMD client dropped from the list keeps no user grant. Grants of other
+    // clients, and on other audiences, are not ours.
+    const cimdIds = new Set(cimd.map((c) => c.client_id))
     for (const grant of grants) {
-      const managed = grant.subject_type === 'user' && /^https:\/\//.test(String(grant.client_id))
-      if (!managed || this.sources.clients.includes(grant.client_id)) continue
+      const managed = grant.subject_type === 'user' && cimdIds.has(grant.client_id)
+      if (!managed || listedIds.has(grant.client_id)) continue
       const { client_id, audience, scope, subject_type } = grant
       writes.push({
         kind: `revoke grant ${client_id}`,
@@ -233,8 +245,8 @@ function findCreated(client: Auth0ManagementClient, entry: JournalEntry): string
     return api?.id ? `resource-servers/${api.id}` : undefined
   }
   if (entry.path === 'clients/cimd/register') {
-    const path = `clients/${encodeURIComponent(entry.data.external_client_id)}`
-    return client.request('get', path, { allowNotFound: true }) ? path : undefined
+    const id = findCimdClient(client, entry.data.external_client_id)?.client_id
+    return id ? `clients/${id}` : undefined
   }
   const { client_id, audience, subject_type } = entry.data
   const grants = readAllPages(client, 'client-grants', 'client_grants', { audience, client_id })
@@ -262,8 +274,25 @@ function patchIfChanged(kind: string, path: string, current: JsonObject, desired
   ]
 }
 
+/** The CIMD client Auth0 registered for a metadata URL, if any. */
+function findCimdClient(client: Auth0ManagementClient, url: string): JsonObject | undefined {
+  return readAllPages(client, 'clients', 'clients', { external_client_id: url }).find((c) => c.external_client_id === url)
+}
+
+/** A grant's client id: itself, or the `tpc_` id of the CIMD client its metadata URL names. */
+function cimdClientId(client: Auth0ManagementClient, clientId: string): string {
+  if (!/^https:\/\//.test(clientId)) return clientId
+  const id = findCimdClient(client, clientId)?.client_id
+  if (typeof id !== 'string' || !id) throw new Error(`CIMD client ${clientId} is not registered`)
+  return id
+}
+
 function createdPath(write: JournalEntry, result: JsonObject | null): string {
-  if (write.path === 'clients/cimd/register') return `clients/${encodeURIComponent(write.data.external_client_id)}`
+  if (write.path === 'clients/cimd/register') {
+    const clientId = result?.client_id
+    if (typeof clientId !== 'string' || !clientId) throw new Error(`${write.kind}: Auth0 returned no client_id`)
+    return `clients/${clientId}`
+  }
   const id = result?.id
   if (typeof id !== 'string' || !id) throw new Error(`${write.kind}: Auth0 returned no id`)
   return `${write.path}/${id}`
