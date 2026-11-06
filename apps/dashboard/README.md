@@ -5,57 +5,89 @@ through Nx as the `dashboard` project.
 
 ## SSH access
 
-Open a box's **SSH** tab beside **Shell**. Setup, Enable and Disable require a
-running box and permission to write boxes. Setup opens a dialog, generates
-independent Ed25519 host/client keys in the browser, and configures login `box`
-on guest address `0.0.0.0:22` through the existing SSH REST API. It replaces any
-previous accounts and host identity and disconnects current SSH clients.
-Before submitting the SSH configuration, Setup enables inbound access if it is
-disabled and refreshes the box's network state. If enabling inbound fails, Setup
-stops and retains the generated key for retry. Enable and Disable do not change
-inbound access; a later SSH configuration failure does not turn inbound off.
+The left **Network** section shows SSH state and its switch. The switch only
+enables or disables saved configuration; it does not generate keys or change
+inbound. Status refreshes on click, window focus, and every 30 seconds while
+visible and idle. Reads skip pending operations and preserve mutation errors.
+Unknown/loading states cannot be toggled. The header and sidebar share one
+controller and component-scoped private keys.
 
-Download the private key from the dialog before leaving the page. The client
-private key stays in component memory and the downloaded file; only its public
-key is sent to the server. The host private key is sent as part of the guest
-configuration. Closing and reopening the dialog preserves the current download;
-reloading, navigating away, or changing boxes/organizations discards it. A fresh
-Setup then creates new identities. Failed setup retains generated keys for a
-manual retry. Browser Ed25519 support and a secure context are required.
+**Connect via SSH**, beside start/stop, first opens an access confirmation.
+Opening or cancelling it changes nothing. The confirmation explains that SSH
+and inbound access will be enabled, and that missing configuration requires a
+new private key. It also discloses that setup replaces SSH accounts and host
+identity and disconnects existing clients.
 
-The dialog supplies an OpenSSH command using
-`ProxyCommand=boxlite --path-prefix=… ssh --proxy -- BOX`, matching the
-cloud CLI syntax in [#2327](https://github.com/boxlite-ai/boxlite/pull/2327).
-Use a CLI build containing that change. The command uses the current CLI context;
-it supplies neither `--context` nor `--url`. Run `boxlite context ls` to confirm
-the current context matches the API address shown in the dialog and can access
-the selected organization. Switch with `boxlite context use` if needed.
-From the download directory, run the
-displayed `chmod 600` and SSH commands; SSH starts and stops the proxy itself,
-without a separate forwarding terminal or local listening port. The
-organization argument survives shell quoting and OpenSSH percent expansion.
-Ordinary IDs need no inner quotes; special characters remain safely quoted.
-API credentials are loaded by the CLI, never embedded in the command.
+After confirmation, the controller reads fresh SSH status, enables inbound if
+needed through the existing network mutation, and enables saved SSH configuration
+when disabled. Only the verified missing-configuration server response permits
+initial setup. Other failures remain in the entry view with refresh/retry; they
+never trigger key generation. Existing enabled SSH is reused without a setup POST.
+The missing-config response is a point-in-time observation, not atomic
+create-if-absent: concurrent configuration can be replaced by the existing setup API.
+Partial success is retained; SSH failure does not undo an inbound change.
 
-Compare the displayed host fingerprint before accepting it; a fresh Setup may
-change it. The cloud proxy requires server tunnel support and inbound access.
-It opens a public tunnel protected by SSH authentication; exiting SSH leaves
-the tunnel declaration open.
-Setup itself does not open a tunnel.
+Setup still generates independent Ed25519 host/client keys in the browser and
+configures login `box` at guest address `0.0.0.0:22`. The client private key stays
+in memory and its downloaded file; only its public key is sent. The host private
+key is part of the guest configuration. Browser Ed25519 support and a secure
+context are required. The browser retains the generated host public key beside the
+client key so a fresh server response can identify the saved configuration. This
+public metadata is not added to the SSH POST body.
 
-The connection dialog scrolls as one document. Command blocks retain their full
-height and wrap long lines, including on narrow screens; wrapping does not insert
-newlines into copied commands.
+Failed setup retains generated credentials. Continuing always rechecks status and
+tries Enable when needed; only a new, verified missing-config response permits
+resubmitting the same generated configuration. A matching host identity recovers a
+configuration saved before a failed response, without another setup POST. An observed
+different enabled identity discards the obsolete cached private key and path; temporary
+disabled/empty identity status preserves them. Replacing existing configuration is
+available only through the separate Reset confirmation.
 
-Enable and Disable reuse saved credentials. SSH status errors remain visible;
-mutations are not automatically retried. Switching tabs preserves the shell.
-The SSH tests cover delayed reads and mutations completing after a refresh,
-and a box stopping during key generation: obsolete responses cannot overwrite
-the latest status, and obsolete generated credentials cannot configure the box.
-While setup is pending, the connection dialog stays open so the download is not
-lost through an accidental close.
-Mock preview simulates these actions with a clearly marked mock host fingerprint;
-it does not start an SSH server. See [the design](https://github.com/boxlite-ai/boxlite/issues/2325).
+Successful preparation opens the connection guide: CLI setup, private-key path,
+and a copyable command once the path is valid. It contains no Enable controls.
+CLI instructions start expanded every time the dialog is opened, regardless of SSH
+status or previously stored preferences. **I've signed in** collapses them only for
+the current opening; **Show commands** expands them again. Background status refreshes
+preserve this choice. The browser does not detect local CLI installation or auth.
+Download a new private key before leaving, then enter its actual path. A download
+click does not establish that saving succeeded or reveal the destination.
+
+The browser tab remembers only a validated key path and its host public key in
+sessionStorage, scoped to endpoint, authenticated user, organization and box.
+The saved path is bound to the observed host public key and cleared on a confirmed
+identity change; disabled status with an empty identity does not clear it. Private
+keys are never put in storage. Storage failures leave the connection guide usable.
+Leaving or reloading the page discards generated keys; closing/reopening the dialog
+keeps them in component memory. Resetting SSH is a separate explicit confirmation.
+Cancelling a reset preserves the current key and path.
+
+The command uses `ProxyCommand=boxlite --path-prefix=… ssh --proxy -- BOX`, matching
+[the cloud CLI syntax](https://github.com/boxlite-ai/boxlite/pull/2327). Login uses
+the selected API endpoint and current CLI context; the proxy supplies neither
+`--context` nor `--url`. Empty/invalid paths hide the command. `~/`, spaces, quotes,
+backslashes and literal percent signs are supported; control characters and
+`${...}` expansion are rejected. Relative paths resolve in the terminal's working
+directory. API credentials are loaded by the CLI, never embedded in commands.
+Compare the host fingerprint before accepting it. The cloud proxy requires server
+tunnel support and inbound access; exiting SSH leaves the tunnel declaration open.
+Setup itself opens no tunnel.
+
+Connection preparation and command presentation require a running box and
+WRITE_BOXES permission, because the SSH proxy creates a network tunnel. Read-only
+members can inspect SSH status, but cannot enter the connection guide even when
+SSH and inbound are already enabled. If access changes after preparation,
+the guide hides the command and returns users to **Review access**. Mutations are
+not automatically retried. Pending operations block overlapping actions and closing;
+stale responses after refresh, stop, account, endpoint or scope changes are ignored.
+The title/close control stays fixed while the dialog body scrolls. Command lines
+wrap without changing copied content. The terminal remains mounted throughout.
+
+Tests cover consent, conditional creation, request ordering, permissions, partial
+success, same-key retry, stale responses, storage isolation and reset cancellation.
+The local MSW preview echoes the generated host public key and fingerprint, retains
+saved configuration across Disable/Enable, and hides disabled listener identity like
+the real service. It exercises the real Dashboard but does not start an SSH server
+or prove a live cloud SSH handshake.
 
 ## ASCII action buttons
 

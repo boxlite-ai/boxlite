@@ -1,14 +1,26 @@
 /* Copyright 2026 BoxLite AI. SPDX-License-Identifier: AGPL-3.0 */
 
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import { Box, BoxState, NetworkMode, OrganizationRolePermissionsEnum } from '@boxlite-ai/api-client'
+import { createPortal } from 'react-dom'
+import { Switch } from '@/components/ui/switch'
+import { Input } from '@/components/ui/input'
+import { copyToClipboard } from '@/lib/copy-text'
 import { Button } from '@/components/ui/button'
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from '@/components/ui/dialog'
 import { useApi } from '@/hooks/useApi'
 import { useUpdateBoxInboundMutation } from '@/hooks/mutations/useUpdateBoxInboundMutation'
 import { useConfig } from '@/hooks/useConfig'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { getRestApiUrl } from '@/lib/environment'
+import { readSshPreferences, rememberSshPreferences, sshFailureReason } from '@/lib/ssh-connection-ui'
 import {
   generateSshCredentials,
   requestSsh,
@@ -17,14 +29,32 @@ import {
   type SshStatus,
 } from '@/lib/ssh'
 
-export function BoxSshTab({ box, refreshSignal = 0 }: { box: Box; refreshSignal?: number }) {
-  const { selectedOrganization } = useSelectedOrganization()
+export function BoxSshTab({
+  box,
+  refreshSignal = 0,
+  statusContainer,
+}: {
+  box: Box
+  refreshSignal?: number
+  statusContainer?: HTMLDivElement | null
+}) {
+  const { selectedOrganization, authenticatedUserOrganizationMember } = useSelectedOrganization()
+  const config = useConfig()
+  const scope = JSON.stringify([
+    config.apiUrl,
+    config.oidc?.issuer,
+    authenticatedUserOrganizationMember?.userId,
+    selectedOrganization?.id,
+    box.id,
+  ])
   return selectedOrganization ? (
     <SshControls
-      key={`${selectedOrganization.id}:${box.id}`}
+      key={scope}
+      preferenceKey={authenticatedUserOrganizationMember?.userId ? `boxlite:ssh:${scope}` : undefined}
       box={box}
       organizationId={selectedOrganization.id}
       refreshSignal={refreshSignal}
+      statusContainer={statusContainer}
     />
   ) : null
 }
@@ -33,10 +63,14 @@ function SshControls({
   box,
   organizationId,
   refreshSignal,
+  statusContainer,
+  preferenceKey,
 }: {
   box: Box
   organizationId: string
   refreshSignal: number
+  statusContainer?: HTMLDivElement | null
+  preferenceKey?: string
 }) {
   const api = useApi()
   const updateInbound = useUpdateBoxInboundMutation()
@@ -45,10 +79,22 @@ function SshControls({
   const [status, setStatus] = useState<SshStatus>()
   const [loading, setLoading] = useState(true)
   const [pending, setPending] = useState('')
-  const [error, setError] = useState('')
+  const [mutationError, setError] = useState('')
+  const [statusError, setStatusError] = useState('')
+  const error = mutationError || statusError
+  const reading = useRef(false)
   const [open, setOpen] = useState(false)
   const [credentials, setCredentials] = useState<SshCredentials>()
-  const [configured, setConfigured] = useState(false)
+  const credentialsRef = useRef<SshCredentials | undefined>(undefined)
+  const [identityNotice, setIdentityNotice] = useState('')
+  const [remembered] = useState(() => readSshPreferences(preferenceKey))
+  const [cliExpanded, setCliExpanded] = useState(true)
+  const [keyPath, setKeyPath] = useState(remembered.keyPath ?? '')
+  const [accessConfirmed, setAccessConfirmed] = useState(false)
+  const [confirmSetup, setConfirmSetup] = useState<'reset'>()
+  const pathHost = useRef(remembered.hostPublicKey ?? '')
+  const [statusRefresh, setStatusRefresh] = useState(0)
+  const keyPathId = useId()
   const busy = useRef(false)
   const requestVersion = useRef(0)
   const running = box.state === BoxState.STARTED
@@ -64,66 +110,172 @@ function SshControls({
     /* Invalid connection metadata must never become a shell command. */
   }
 
+  const cacheCredentials = useCallback((next: SshCredentials | undefined) => {
+    credentialsRef.current = next
+    setCredentials(next)
+  }, [])
+
+  const observeStatus = useCallback(
+    (next: SshStatus) => {
+      if (next.enabled && next.host_public_key) {
+        const obsoleteCredentials =
+          credentialsRef.current && credentialsRef.current.hostPublicKey !== next.host_public_key
+        if (obsoleteCredentials || (pathHost.current && next.host_public_key !== pathHost.current)) {
+          setKeyPath('')
+          rememberSshPreferences(preferenceKey, { keyPath: '', hostPublicKey: next.host_public_key })
+          setIdentityNotice('SSH configuration changed. Enter the private key path for the current configuration.')
+        }
+        // Clear synchronously: an async continuation must not reuse a superseded key.
+        if (obsoleteCredentials) cacheCredentials(undefined)
+        pathHost.current = next.host_public_key
+      }
+      setStatus(next)
+      setStatusError('')
+    },
+    [cacheCredentials, preferenceKey],
+  )
+
   useEffect(() => {
     const version = ++requestVersion.current
-    setStatus(undefined)
-    setError('')
+    reading.current = false
     if (!running && box.state !== BoxState.STOPPED) {
+      setStatus(undefined)
       setLoading(false)
       return
     }
     setLoading(true)
+    reading.current = true
     requestSsh(api, organizationId, box.id, 'status')
       .then(
         (next) => {
-          if (version === requestVersion.current) setStatus(next)
+          if (version === requestVersion.current) {
+            observeStatus(next)
+          }
         },
         () => {
-          if (version === requestVersion.current) setError('Unable to read SSH status. Refresh to retry.')
+          if (version === requestVersion.current) {
+            setStatus(undefined)
+            setStatusError('Unable to read SSH status. Refresh to retry.')
+          }
         },
       )
       .finally(() => {
-        if (version === requestVersion.current) setLoading(false)
+        if (version === requestVersion.current) {
+          reading.current = false
+          setLoading(false)
+        }
       })
     return () => {
       requestVersion.current++
     }
-  }, [api, organizationId, box.id, box.state, running, refreshSignal])
+  }, [api, organizationId, box.id, box.state, running, refreshSignal, statusRefresh, canManage, observeStatus])
 
-  async function run(operation: 'setup' | 'enable' | 'disable') {
-    if (busy.current || !running || !canManage) return
+  useEffect(() => {
+    const refresh = () => {
+      if (document.visibilityState === 'visible' && !busy.current && !reading.current)
+        setStatusRefresh((value) => value + 1)
+    }
+    const timer = window.setInterval(refresh, 30_000)
+    window.addEventListener('focus', refresh)
+    return () => {
+      window.clearInterval(timer)
+      window.removeEventListener('focus', refresh)
+    }
+  }, [])
+
+  async function run(operation: 'reset' | 'enable' | 'disable' | 'access') {
+    if (busy.current || loading || !running || !canManage) return
     busy.current = true
     const version = ++requestVersion.current
     setPending(operation)
     setError('')
+    let setupAttempted = false
     try {
-      let keys = credentials
-      if (operation === 'setup' && !keys) {
-        keys = await generateSshCredentials()
+      if (operation === 'access') {
+        let next = await requestSsh(api, organizationId, box.id, 'status')
         if (version !== requestVersion.current) return
-        setCredentials(keys)
-      }
-      if (operation === 'setup' && box.network?.inbound.mode === NetworkMode.DISABLED) {
-        try {
+        observeStatus(next)
+        if (box.network?.inbound.mode === NetworkMode.DISABLED) {
           await updateInbound.mutateAsync({ boxId: box.id, mode: NetworkMode.ENABLED })
-        } catch {
-          if (version === requestVersion.current)
-            setError('Unable to enable inbound access. SSH setup stopped; your key is kept here. Retry Setup.')
-          return
+          if (version !== requestVersion.current) return
+        }
+        if (!next.enabled) {
+          try {
+            next = await requestSsh(api, organizationId, box.id, 'enable')
+          } catch (error) {
+            if (version !== requestVersion.current) return
+            if (sshFailureReason(error) !== 'missing-config') throw error
+            const keys = credentialsRef.current ?? (await generateSshCredentials())
+            if (version !== requestVersion.current) return
+            cacheCredentials(keys)
+            pathHost.current = keys.hostPublicKey
+            setKeyPath('')
+            setIdentityNotice('')
+            rememberSshPreferences(preferenceKey, { keyPath: '', hostPublicKey: '' })
+            setupAttempted = true
+            next = await requestSsh(api, organizationId, box.id, 'setup', keys.config)
+          }
         }
         if (version !== requestVersion.current) return
+        observeStatus(next)
+        setAccessConfirmed(true)
+        return
       }
-      const next = await requestSsh(api, organizationId, box.id, operation, keys?.config)
+      if (operation === 'reset') {
+        const keys = await generateSshCredentials()
+        if (version !== requestVersion.current) return
+        cacheCredentials(keys)
+        pathHost.current = keys.hostPublicKey
+        setConfirmSetup(undefined)
+        setKeyPath('')
+        setIdentityNotice('')
+        rememberSshPreferences(preferenceKey, { keyPath: '', hostPublicKey: '' })
+        setupAttempted = true
+        if (box.network?.inbound.mode === NetworkMode.DISABLED) {
+          try {
+            await updateInbound.mutateAsync({ boxId: box.id, mode: NetworkMode.ENABLED })
+          } catch {
+            if (version === requestVersion.current) {
+              setAccessConfirmed(false)
+              setError(
+                'Unable to enable inbound access. Your key is kept here. Retry to check the current configuration.',
+              )
+            }
+            return
+          }
+          if (version !== requestVersion.current) return
+        }
+        const next = await requestSsh(api, organizationId, box.id, 'setup', keys.config)
+        if (version !== requestVersion.current) return
+        observeStatus(next)
+        setAccessConfirmed(true)
+        return
+      }
+      const next = await requestSsh(api, organizationId, box.id, operation)
       if (version !== requestVersion.current) return
-      setStatus(next)
-      if (operation === 'setup') setConfigured(true)
-    } catch {
-      if (version === requestVersion.current)
+      observeStatus(next)
+    } catch (error) {
+      if (version === requestVersion.current) {
+        if (operation === 'enable') {
+          if (!open) setCliExpanded(true)
+          setAccessConfirmed(false)
+          setOpen(true)
+        }
+        if (operation === 'reset') setConfirmSetup(undefined)
+        const reason = sshFailureReason(error)
+        if (setupAttempted) setAccessConfirmed(false)
         setError(
-          operation === 'setup'
-            ? 'SSH setup failed. Use a browser with Ed25519 support and retry. Any generated key is kept here for download and retry.'
-            : `Unable to ${operation} SSH. Enable requires a saved configuration; start the box and use Setup if needed.`,
+          reason === 'authentication'
+            ? 'Your session has expired. Sign in to the dashboard again.'
+            : reason === 'permission'
+              ? 'You do not have permission to change this box’s SSH or network settings.'
+              : operation === 'reset' || setupAttempted
+                ? 'SSH setup failed. Retry to check the current configuration.'
+                : operation === 'access'
+                  ? 'Unable to prepare SSH access. Refresh status and retry. Any completed changes remain in place.'
+                  : `Unable to ${operation} SSH. Refresh status and retry.`,
         )
+      }
     } finally {
       busy.current = false
       setPending('')
@@ -143,105 +295,311 @@ function SshControls({
   }
 
   const disabled = !running || !canManage || loading || !!pending
-  return (
-    <div className="flex-1 overflow-y-auto p-5 space-y-5">
-      <div>
-        <h2 className="text-base font-medium">SSH access</h2>
-        <p className="mt-2 text-muted-foreground">Connect from your terminal using a private key.</p>
-        <p className="mt-3" role="status">
-          {loading
-            ? 'Loading SSH status…'
-            : !running
-              ? 'Box is not running'
-              : status
-                ? `SSH ${status.enabled ? 'enabled' : 'disabled'}`
-                : 'SSH status unavailable'}
-        </p>
+  let connect = ''
+  let pathError = ''
+  if (keyPath) {
+    try {
+      connect = sshConnectionInstructions(
+        getRestApiUrl(config.apiUrl, undefined, config.oidc?.issuer),
+        organizationId,
+        box.id,
+        keyPath,
+      ).connect
+    } catch {
+      pathError = 'Use a file path without control characters or ${…} variables.'
+    }
+  }
+  const keyConfirmed = !credentials || credentials.hostPublicKey === status?.host_public_key
+  useEffect(() => {
+    if (!status?.enabled || pathError || !keyConfirmed) return
+    // Never associate an old path with a newly observed host identity.
+    if (pathHost.current && pathHost.current !== status.host_public_key) return
+    pathHost.current = status.host_public_key
+    rememberSshPreferences(preferenceKey, { keyPath, hostPublicKey: status.host_public_key })
+  }, [keyPath, pathError, status, keyConfirmed, preferenceKey])
+
+  const needsInbound = box.network?.inbound.mode === NetworkMode.DISABLED
+  const statusRow = (
+    <div className="mb-[6px]">
+      <div className="flex items-baseline gap-2">
+        <span className="text-muted-foreground">ssh</span>
+        <span className="-translate-y-1 min-w-[8px] flex-1 border-b border-dotted border-border" />
+        <button
+          type="button"
+          title="Refresh SSH status"
+          disabled={loading || !!pending}
+          onClick={() => setStatusRefresh((value) => value + 1)}
+          className="whitespace-nowrap text-muted-foreground hover:text-foreground"
+        >
+          {pending
+            ? 'updating…'
+            : loading
+              ? 'loading…'
+              : !running
+                ? 'not running'
+                : status
+                  ? status.enabled
+                    ? 'enabled'
+                    : 'disabled'
+                  : 'unavailable · retry'}
+        </button>
+        {canManage && (
+          <Switch
+            aria-label="SSH access"
+            checked={status?.enabled ?? false}
+            disabled={disabled || !status}
+            className="ml-1 scale-90 self-center"
+            onCheckedChange={(enabled) => void run(enabled ? 'enable' : 'disable')}
+          />
+        )}
       </div>
-      {!running && <p>Start the box before changing SSH.</p>}
-      {!canManage && <p>You need permission to write boxes to manage SSH.</p>}
-      <div className="flex flex-wrap gap-2">
-        <Button disabled={disabled || !instructions} onClick={() => setOpen(true)}>
-          Setup
-        </Button>
-        <Button variant="outline" disabled={disabled} onClick={() => void run('enable')}>
-          {pending === 'enable' ? 'Enabling…' : 'Enable'}
-        </Button>
-        <Button variant="outline" disabled={disabled} onClick={() => void run('disable')}>
-          {pending === 'disable' ? 'Disabling…' : 'Disable'}
-        </Button>
-      </div>
-      <p className="text-muted-foreground">
-        Setup replaces the SSH configuration and disconnects existing clients. Enable and Disable keep saved keys.
-      </p>
-      {status?.host_key_fingerprint && <p className="break-all">Host fingerprint: {status.host_key_fingerprint}</p>}
-      {!instructions && <p role="alert">Connection details are unavailable for this box.</p>}
       {error && !open && (
-        <p role="alert" className="text-destructive">
+        <p role="alert" className="mt-2 text-xs text-destructive">
           {error}
         </p>
       )}
+    </div>
+  )
+  return (
+    <>
+      {statusContainer ? createPortal(statusRow, statusContainer) : statusContainer === undefined ? statusRow : null}
       <Dialog
         open={open}
         onOpenChange={(value) => {
-          if (!busy.current) setOpen(value)
+          if (!busy.current) {
+            setOpen(value)
+            if (value) {
+              setCliExpanded(true)
+              setAccessConfirmed(false)
+              setConfirmSetup(undefined)
+            }
+          }
         }}
       >
-        {/* Normal flow keeps command blocks from shrinking inside the height-limited dialog. */}
-        <DialogContent className="block overflow-y-auto text-sm leading-6 sm:max-w-2xl">
-          <div className="space-y-4">
-            <DialogHeader>
-              <DialogTitle>{configured ? 'SSH connection details' : 'Set up SSH'}</DialogTitle>
-              <DialogDescription>
-                Login as box on guest address 0.0.0.0:22. Save your private key before leaving this page; it cannot be
-                recovered here after a reload.
-              </DialogDescription>
-            </DialogHeader>
-            {!configured && (
-              <>
-                <p>
-                  This replaces existing accounts and host identity, disconnecting SSH clients. A fresh setup after
-                  leaving this page generates new keys. Setup also enables inbound access if it is disabled.
-                </p>
-                <Button disabled={disabled} onClick={() => void run('setup')}>
-                  {pending === 'setup' ? 'Setting up…' : 'Set up SSH'}
-                </Button>
-              </>
-            )}
-            {error && (
-              <p role="alert" className="text-destructive">
-                {error}
+        <DialogTrigger asChild>
+          <Button variant="outline" className="min-h-10" disabled={!instructions}>
+            Connect via SSH
+          </Button>
+        </DialogTrigger>
+        <DialogContent className="w-[calc(100%_-_2rem)] gap-5 overflow-hidden text-sm leading-6 sm:max-w-2xl">
+          <DialogHeader className="shrink-0 pr-6">
+            <DialogTitle>{confirmSetup ? 'Reset SSH configuration?' : 'Connect via SSH'}</DialogTitle>
+            <DialogDescription className="sr-only">Connect from your local terminal.</DialogDescription>
+          </DialogHeader>
+          <div className="min-h-0 overflow-y-auto overscroll-contain pr-3 -mr-3 [scrollbar-width:thin] [scrollbar-color:hsl(var(--muted-foreground)/0.25)_transparent]">
+            {!running && (
+              <p className="mb-4" role="status">
+                Start the box to connect via SSH.
               </p>
             )}
-            {credentials && <Button onClick={download}>Download private key</Button>}
-            {configured && instructions && (
-              <>
-                <p className="break-all">
-                  Host fingerprint: {status?.host_key_fingerprint || 'Enable SSH to read the host fingerprint.'}
+            {!canManage && <p className="mb-4">You need permission to write boxes to connect via SSH.</p>}
+            <p role="status" className="sr-only">
+              {loading
+                ? 'Loading SSH status…'
+                : status
+                  ? `SSH ${status.enabled ? 'enabled' : 'disabled'}`
+                  : 'SSH status unavailable'}
+            </p>
+            {error && (
+              <div className="mb-5 space-y-2">
+                <p role="alert" className="text-destructive">
+                  {error}
                 </p>
+                <Button
+                  variant="outline"
+                  disabled={!!pending || loading}
+                  onClick={() => setStatusRefresh((n) => n + 1)}
+                >
+                  Refresh status
+                </Button>
+              </div>
+            )}
+            {confirmSetup ? (
+              <div className="space-y-5">
                 <p>
-                  1. Use a BoxLite CLI version with cloud SSH proxy support. Run <code>boxlite context ls</code> and
-                  confirm your current CLI context points to <code>{instructions.endpoint}</code> with access to this
-                  organization. Switch with <code>boxlite context use</code> if needed.
+                  This replaces SSH accounts and host identity and disconnects existing clients.
+                  {needsInbound && ' Inbound access will also be enabled.'}
                 </p>
-                <p>
-                  2. Open the folder containing the downloaded key and run. This command uses your current CLI context:
-                </p>
-                <pre className="whitespace-pre-wrap break-all bg-muted p-3 text-xs leading-6">
-                  {instructions.connect}
-                </pre>
-                <p>
-                  SSH starts the BoxLite proxy automatically. Compare the host fingerprint above before accepting it.
-                </p>
+                <div className="flex flex-wrap justify-end gap-3">
+                  <Button variant="outline" disabled={!!pending} onClick={() => setConfirmSetup(undefined)}>
+                    Cancel
+                  </Button>
+                  <Button disabled={disabled || !status} onClick={() => void run('reset')}>
+                    {pending === 'reset' ? 'Resetting…' : 'Reset SSH configuration'}
+                  </Button>
+                </div>
+              </div>
+            ) : !accessConfirmed || !canManage ? (
+              <div className="space-y-5">
+                <p>Enable SSH and inbound access for this box.</p>
                 <p className="text-muted-foreground">
-                  The proxy requires inbound access and opens a public tunnel protected by SSH authentication. Exiting
-                  SSH leaves that tunnel open.
+                  If SSH needs setup, a private key will be created. Setup replaces SSH accounts and host identity and
+                  disconnects existing clients.
                 </p>
+                {credentials && (
+                  <Button variant="outline" onClick={download}>
+                    Download private key
+                  </Button>
+                )}
+                <div className="flex flex-wrap justify-end gap-3">
+                  <Button variant="outline" disabled={!!pending} onClick={() => setOpen(false)}>
+                    Cancel
+                  </Button>
+                  <Button disabled={disabled || !status} onClick={() => void run('access')}>
+                    {pending ? 'Preparing…' : status?.enabled && !needsInbound ? 'Continue' : 'Enable and continue'}
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <>
+                {(!status?.enabled || needsInbound) && (
+                  <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
+                    <span className="text-muted-foreground">
+                      {loading ? 'Checking access…' : 'SSH or inbound access is unavailable.'}
+                    </span>
+                    <Button variant="outline" disabled={!!pending || loading} onClick={() => setAccessConfirmed(false)}>
+                      Review access
+                    </Button>
+                  </div>
+                )}
+                <ol>
+                  <SshStep
+                    number={1}
+                    title="Set up CLI"
+                    action={
+                      <Button variant={cliExpanded ? 'default' : 'link'} onClick={() => setCliExpanded(!cliExpanded)}>
+                        {cliExpanded ? "I've signed in" : 'Show commands'}
+                      </Button>
+                    }
+                  >
+                    {cliExpanded && (
+                      <>
+                        <SshCommand
+                          command={`curl -fsSL https://sh.boxlite.ai | sh\nexport PATH="$HOME/.local/bin:$PATH"\n${instructions?.login ?? ''}`}
+                        />
+                        <a
+                          href="/dashboard/keys"
+                          target="_blank"
+                          rel="noreferrer"
+                          className="mt-3 inline-block text-muted-foreground underline"
+                        >
+                          Get an API key ↗
+                        </a>
+                      </>
+                    )}
+                  </SshStep>
+                  <SshStep
+                    number={2}
+                    title={<label htmlFor={keyPathId}>Private key path</label>}
+                    action={credentials ? <Button onClick={download}>Download private key</Button> : undefined}
+                  >
+                    <div className="space-y-3">
+                      {credentials && (
+                        <p className="text-muted-foreground">
+                          Save the key before leaving this page, then enter its path below.
+                        </p>
+                      )}
+                      {identityNotice && (
+                        <p role="status" className="text-muted-foreground">
+                          {identityNotice}
+                        </p>
+                      )}
+                      <Input
+                        id={keyPathId}
+                        value={keyPath}
+                        onChange={(event) => {
+                          setKeyPath(event.target.value)
+                          setIdentityNotice('')
+                        }}
+                        placeholder="~/Downloads/boxlite-key"
+                        aria-invalid={!!pathError}
+                        disabled={!!pending}
+                        autoComplete="off"
+                        spellCheck={false}
+                      />
+                      {pathError && (
+                        <p role="alert" className="text-destructive">
+                          {pathError}
+                        </p>
+                      )}
+                    </div>
+                  </SshStep>
+                  {connect && status?.enabled && running && canManage && keyConfirmed && !needsInbound && (
+                    <SshStep number={3} title="Connect">
+                      <SshCommand command={connect} />
+                      {keyPath.startsWith('./') && (
+                        <p className="mt-2 text-muted-foreground">Run from the folder containing your key.</p>
+                      )}
+                      {status.host_key_fingerprint && (
+                        <details className="mt-3 text-xs text-muted-foreground">
+                          <summary className="cursor-pointer">Host fingerprint</summary>
+                          <p className="mt-2 break-all">{status.host_key_fingerprint}</p>
+                        </details>
+                      )}
+                    </SshStep>
+                  )}
+                </ol>
+                <div className="mt-5 flex flex-wrap items-center justify-between gap-3 border-t pt-4 text-muted-foreground">
+                  <a href="https://docs.boxlite.ai/cloud/ssh" target="_blank" rel="noreferrer">
+                    SSH guide ↗
+                  </a>
+                  {(status?.enabled || credentials) && (
+                    <Button
+                      variant="link"
+                      className="h-auto p-0 text-muted-foreground"
+                      disabled={disabled}
+                      onClick={() => setConfirmSetup('reset')}
+                    >
+                      Reset SSH configuration…
+                    </Button>
+                  )}
+                </div>
               </>
             )}
           </div>
         </DialogContent>
       </Dialog>
+    </>
+  )
+}
+
+function SshStep({
+  number,
+  title,
+  action,
+  children,
+}: {
+  number: number
+  title: React.ReactNode
+  action?: React.ReactNode
+  children: React.ReactNode
+}) {
+  return (
+    <li className="relative ml-4 border-l border-border pb-6 pl-7 last:border-0 last:pb-0">
+      <span className="absolute -left-4 -top-1 flex size-8 items-center justify-center rounded-full bg-muted">
+        {number}
+      </span>
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <h3 className="font-display text-base font-semibold">{title}</h3>
+        {action}
+      </div>
+      {children}
+    </li>
+  )
+}
+
+function SshCommand({ command }: { command: string }) {
+  const [result, setResult] = useState<'copied' | 'failed'>()
+  useEffect(() => setResult(undefined), [command])
+  return (
+    <div className="border border-border bg-[hsl(var(--code-background))]">
+      <div className="flex items-center justify-between border-b px-3 py-2 text-muted-foreground">
+        <span>Local terminal</span>
+        <button type="button" onClick={async () => setResult((await copyToClipboard(command)) ? 'copied' : 'failed')}>
+          {result === 'copied' ? 'Copied' : result === 'failed' ? 'Copy failed — retry' : 'Copy'}
+        </button>
+      </div>
+      <pre className="whitespace-pre-wrap break-all p-3 text-xs leading-6">{command}</pre>
     </div>
   )
 }

@@ -16,7 +16,7 @@ type SshConfig = {
   accounts: { login: string; authorized_keys: string[] }[]
 }
 
-export type SshCredentials = { privateKey: string; config: SshConfig }
+export type SshCredentials = { privateKey: string; hostPublicKey: string; config: SshConfig }
 
 function concat(...parts: Uint8Array[]): Uint8Array {
   const result = new Uint8Array(parts.reduce((size, part) => size + part.length, 0))
@@ -78,6 +78,7 @@ export async function generateSshCredentials(): Promise<SshCredentials> {
   const [client, host] = await Promise.all([generateKey(), generateKey()])
   return {
     privateKey: client.privateKey,
+    hostPublicKey: host.publicKey,
     config: {
       listen_address: '0.0.0.0:22',
       host_private_key: host.privateKey,
@@ -120,7 +121,7 @@ export async function requestSsh(
   return status
 }
 
-export function sshConnectionInstructions(apiUrl: string, organizationId: string, boxId: string) {
+export function sshConnectionInstructions(apiUrl: string, organizationId: string, boxId: string, keyPath?: string) {
   if (!/^[a-zA-Z0-9_-]+$/.test(boxId)) throw new Error('Invalid box ID')
   const quote = (value: string) => {
     if ([...value].some((character) => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127))
@@ -134,9 +135,25 @@ export function sshConnectionInstructions(apiUrl: string, organizationId: string
   // OpenSSH expands percent tokens before passing ProxyCommand to a shell.
   const proxy = `${cli} ssh --proxy -- ${quote(boxId)}`.replace(/%/g, '%%')
   const filename = `boxlite-${boxId}-key`
+  let chmodPath = filename
+  let identity = `-i ./${filename}`
+  if (keyPath !== undefined) {
+    if (!keyPath.trim() || keyPath.includes('${') || (keyPath.startsWith('~') && !keyPath.startsWith('~/')))
+      throw new Error('Use a literal key path or ~/path')
+    const path = keyPath.startsWith('-') ? `./${keyPath}` : keyPath
+    const shellPath = (value: string) => (value.startsWith('~/') ? `"$HOME"/${quote(value.slice(2))}` : quote(value))
+    chmodPath = shellPath(path)
+    // -i checks the literal file before expanding percent tokens. IdentityFile
+    // avoids that pre-check so a literal percent reaches the same file as chmod.
+    identity = path.includes('%')
+      ? `-o ${quote(`IdentityFile="${path.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/%/g, '%%')}"`)}`
+      : `-i ${shellPath(path)}`
+  }
+  const endpoint = url.href.replace(/\/$/, '')
   return {
     filename,
-    endpoint: url.href.replace(/\/$/, ''),
-    connect: `chmod 600 ${filename}\nssh -i ./${filename} -o IdentitiesOnly=yes -o ${quote(`ProxyCommand=${proxy}`)} box@boxlite-${boxId}`,
+    endpoint,
+    login: `boxlite auth login --url ${quote(endpoint)} --method api-key`,
+    connect: `chmod 600 ${chmodPath}\nssh ${identity} -o IdentitiesOnly=yes -o ${quote(`ProxyCommand=${proxy}`)} box@boxlite-${boxId}`,
   }
 }
