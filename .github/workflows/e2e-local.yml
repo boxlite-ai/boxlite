@@ -426,33 +426,6 @@ jobs:
           set -o pipefail
           make test:integration 2>&1 | tee "${LOG_DIR}/integration.log"
 
-      # The native engine boots the pinned vmlinux; rebuild it only when its
-      # pins or build script change (the same key as test.yml).
-      - name: Restore the VMM boot kernel
-        id: vmm-kernel
-        uses: actions/cache@v4
-        with:
-          path: target/vmm/boot/x86_64
-          key: vmm-kernel-${{ hashFiles('src/vmm/boot/kernel.lock', 'src/vmm/boot/kernel.config', 'scripts/build/build-vmm-boot.sh') }}
-
-      - name: Build the VMM boot kernel
-        if: steps.vmm-kernel.outputs.cache-hit != 'true'
-        timeout-minutes: 20
-        run: make vmm:boot:host
-
-      - name: Run native engine boot tests
-        env:
-          GH_RUN_ID: ${{ github.run_id }}
-          GH_RUN_ATTEMPT: ${{ github.run_attempt }}
-          BOXLITE_TEST_REGISTRIES: ${{ inputs.registries || 'local' }}
-        run: |
-          source "$HOME/.cargo/env" 2>/dev/null || true
-          export PATH="/usr/local/go/bin:$HOME/go/bin:$PATH"
-          LOG_DIR="/var/log/boxlite-ci/${GH_RUN_ID}-${GH_RUN_ATTEMPT}"
-          mkdir -p "$LOG_DIR"
-          set -o pipefail
-          make test:integration:vmm:native 2>&1 | tee "${LOG_DIR}/native-engine.log"
-
       - name: Upload test logs on failure or cancellation
         # `failure()` alone misses cancelled jobs (concurrency cancellation,
         # host reboot, timeout — all surface as `cancelled()`, not failure).
