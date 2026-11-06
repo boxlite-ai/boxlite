@@ -3,6 +3,8 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import WebSocket from 'ws'
+
 /** Per-stream output kept for a tool result; matches the runner's replay backlog. */
 export const MCP_ATTACH_STREAM_CAP = 256 * 1024
 

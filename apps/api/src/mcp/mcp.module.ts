@@ -7,6 +7,7 @@ import { Module } from '@nestjs/common'
 import { DiscoveryModule } from '@nestjs/core'
 import { MCP_STRATEGY } from '@rekog/mcp-nest'
 import { AuthModule } from '../auth/auth.module'
+import { BoxliteRestModule } from '../boxlite-rest/boxlite-rest.module'
 import { OrganizationModule } from '../organization/organization.module'
 import { McpAuthGuard } from './mcp-auth.guard'
 import { McpAuthMetadata } from './mcp-auth-metadata'
@@ -17,7 +18,7 @@ import { McpScopeGuard } from './mcp-scope.guard'
 import { McpTools } from './mcp-tools'
 
 @Module({
-  imports: [AuthModule, DiscoveryModule, OrganizationModule],
+  imports: [AuthModule, BoxliteRestModule, DiscoveryModule, OrganizationModule],
   controllers: [McpController, McpMetadataController],
   providers: [
     { provide: MCP_STRATEGY, useValue: mcpStrategy },

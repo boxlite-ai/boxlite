@@ -5,7 +5,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { parseArgs } from 'node:util'
 
-import type { Auth0ManagementClient } from './auth0-login-policy.js'
+import { type Auth0ManagementClient, readAllPages } from './auth0-login-policy.js'
 
 type JsonObject = Record<string, any>
 
@@ -29,11 +29,13 @@ export interface Auth0McpSources {
 /** One write, with what rollback needs to undo it. */
 interface JournalEntry {
   kind: string
-  method: 'post' | 'patch'
+  method: 'post' | 'patch' | 'delete'
   path: string
   data: JsonObject
-  /** The fields' values before a `patch`, restored by rollback. */
+  /** The fields' values before a `patch`, or the resource a `delete` removed; restored by rollback. */
   previous?: JsonObject
+  /** Set before the write is sent, so rollback knows a `post` may have landed even without a response. */
+  attempted?: boolean
   /** For a `post`, the path rollback deletes; filled after the write. */
   created?: string
 }
@@ -41,7 +43,14 @@ interface JournalEntry {
 const TENANT_SETTINGS = {
   resource_parameter_profile: 'compatibility',
   client_id_metadata_document_supported: true,
+  // RFC 9207: an `iss` in every authorization response. ChatGPT then uses its
+  // stable `https://chatgpt.com/oauth/client.json` client ID instead of a
+  // per-callback one this allowlist cannot name.
+  authorization_response_iss_parameter_supported: true,
 }
+
+/** What a tenant that never set a flag reports for it: Auth0 omits a setting that is off. */
+const TENANT_SETTINGS_DEFAULTS = { authorization_response_iss_parameter_supported: false }
 
 export function parseAuth0McpOptions(argv: string[]): Auth0McpOptions {
   const { values } = parseArgs({
@@ -100,7 +109,10 @@ export class Auth0McpConfigurator {
       })
     save()
     for (const write of writes) {
-      const result = this.client.request(write.method, write.path, { data: write.data }) as JsonObject | null
+      write.attempted = true
+      save()
+      const data = write.method === 'delete' ? undefined : write.data
+      const result = this.client.request(write.method, write.path, { data }) as JsonObject | null
       if (write.method === 'post') write.created = createdPath(write, result)
       save()
     }
@@ -114,15 +126,26 @@ export class Auth0McpConfigurator {
     }
     const client = clientFactory(journal.tenant)
     for (const entry of [...(journal.entries as JournalEntry[])].reverse()) {
-      if (entry.created) client.request('delete', entry.created)
-      else if (entry.previous) client.request('patch', entry.path, { data: entry.previous })
+      if (entry.method === 'post') {
+        // A `post` sent without a response may still have landed: find what it made.
+        const created = entry.created ?? (entry.attempted ? findCreated(client, entry) : undefined)
+        if (created) client.request('delete', created)
+      } else if (entry.method === 'delete') {
+        // A delete that failed before landing left the grant in place; re-creating it would duplicate it.
+        const sent = entry.attempted && entry.previous
+        if (sent && !findCreated(client, { ...entry, path: collectionOf(entry.path), data: entry.previous! })) {
+          client.request('post', collectionOf(entry.path), { data: entry.previous })
+        }
+      } else if (entry.previous) {
+        client.request('patch', entry.path, { data: entry.previous })
+      }
     }
     return { mode: 'rolled-back', tenant: journal.tenant, entries: journal.entries.length }
   }
 
   /** The writes that bring the tenant to the desired state; empty once it is there. */
   private plan(): JournalEntry[] {
-    const rules = this.list('rules', { enabled: 'true' })
+    const rules = readAllPages(this.client, 'rules', 'rules', { enabled: 'true' })
     if (rules.length > 0) {
       throw new Error(`${rules.length} active Rule(s) on ${this.options.tenant}: CIMD logins fail while Rules run`)
     }
@@ -130,7 +153,8 @@ export class Auth0McpConfigurator {
   }
 
   private tenantWrites(): JournalEntry[] {
-    const settings = (this.client.request('get', 'tenants/settings') ?? {}) as JsonObject
+    const read = (this.client.request('get', 'tenants/settings') ?? {}) as JsonObject
+    const settings = { ...TENANT_SETTINGS_DEFAULTS, ...read }
     return patchIfChanged('tenant settings', 'tenants/settings', settings, TENANT_SETTINGS)
   }
 
@@ -139,7 +163,9 @@ export class Auth0McpConfigurator {
       scopes: this.sources.scopes.map((value) => ({ value, description: `BoxLite ${value}` })),
       subject_type_authorization: { user: { policy: 'require_client_grant' }, client: { policy: 'deny_all' } },
     }
-    const existing = this.list('resource-servers').find((api) => api.identifier === this.options.resourceUrl)
+    // Read by its identifier, which the Management API accepts in place of the id.
+    const path = `resource-servers/${encodeURIComponent(this.options.resourceUrl)}`
+    const existing = this.client.request('get', path, { allowNotFound: true }) as JsonObject | null
     if (!existing) {
       return [
         {
@@ -155,7 +181,7 @@ export class Auth0McpConfigurator {
 
   private clientWrites(): JournalEntry[] {
     const writes: JournalEntry[] = []
-    const grants = this.list('client-grants', { audience: this.options.resourceUrl })
+    const grants = readAllPages(this.client, 'client-grants', 'client_grants', { audience: this.options.resourceUrl })
     for (const url of this.sources.clients) {
       const registered = this.client.request('get', `clients/${encodeURIComponent(url)}`, { allowNotFound: true })
       if (!registered) {
@@ -167,6 +193,20 @@ export class Auth0McpConfigurator {
       const data = { client_id: url, audience: this.options.resourceUrl, scope: this.sources.scopes, subject_type: 'user' }
       if (!grant) writes.push({ kind: `grant ${url}`, method: 'post', path: 'client-grants', data })
       else writes.push(...patchIfChanged(`grant ${url}`, `client-grants/${grant.id}`, grant, { scope: this.sources.scopes }))
+    }
+    // A CIMD client (its id is its metadata URL) dropped from the list keeps no
+    // user grant. Grants of other clients, and on other audiences, are not ours.
+    for (const grant of grants) {
+      const managed = grant.subject_type === 'user' && /^https:\/\//.test(String(grant.client_id))
+      if (!managed || this.sources.clients.includes(grant.client_id)) continue
+      const { client_id, audience, scope, subject_type } = grant
+      writes.push({
+        kind: `revoke grant ${client_id}`,
+        method: 'delete',
+        path: `client-grants/${grant.id}`,
+        data: {},
+        previous: { client_id, audience, scope, subject_type },
+      })
     }
     return writes
   }
@@ -183,6 +223,28 @@ export class Auth0McpConfigurator {
     const result = this.client.request('get', path, { query })
     return Array.isArray(result) ? result : []
   }
+}
+
+/** The resource an attempted `post` made, looked up by what it was created with; undefined if none. */
+function findCreated(client: Auth0ManagementClient, entry: JournalEntry): string | undefined {
+  if (entry.path === 'resource-servers') {
+    const path = `resource-servers/${encodeURIComponent(entry.data.identifier)}`
+    const api = client.request('get', path, { allowNotFound: true }) as JsonObject | null
+    return api?.id ? `resource-servers/${api.id}` : undefined
+  }
+  if (entry.path === 'clients/cimd/register') {
+    const path = `clients/${encodeURIComponent(entry.data.external_client_id)}`
+    return client.request('get', path, { allowNotFound: true }) ? path : undefined
+  }
+  const { client_id, audience, subject_type } = entry.data
+  const grants = readAllPages(client, 'client-grants', 'client_grants', { audience, client_id })
+  const grant = grants.find((g) => g.subject_type === subject_type)
+  return grant ? `client-grants/${grant.id}` : undefined
+}
+
+/** `client-grants/cgr_1` → `client-grants`. */
+function collectionOf(path: string): string {
+  return path.slice(0, path.lastIndexOf('/'))
 }
 
 /** A `patch` of the fields whose values differ, carrying their previous values for rollback. */

@@ -50,6 +50,16 @@ impl JsBox {
         Ok(JsBoxInfo::from(info))
     }
 
+    /// Get the live execution namespace without starting the box.
+    ///
+    /// Usage: `await box.executions().list()`, `await box.executions().get(id)`.
+    #[napi]
+    pub fn executions(&self) -> crate::executions::JsExecutions {
+        crate::executions::JsExecutions {
+            handle: Arc::clone(&self.handle),
+        }
+    }
+
     /// Execute a command inside the box.
     ///
     /// # Arguments

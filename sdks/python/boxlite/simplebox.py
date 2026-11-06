@@ -15,6 +15,8 @@ from .exec import ExecResult
 if TYPE_CHECKING:
     from .boxlite import (
         Boxlite,
+        Execution,
+        ExecutionInfo,
         InboundNetworkSpec,
         OutboundNetworkSpec,
         TunnelForwarder,
@@ -23,7 +25,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger("boxlite.simplebox")
 
-__all__ = ["BoxTunnel", "NetworkHandle", "SimpleBox"]
+__all__ = ["BoxTunnel", "Executions", "NetworkHandle", "SimpleBox"]
 
 
 class StreamType(IntEnum):
@@ -96,6 +98,36 @@ class NetworkHandle:
     async def revoke_tunnel(self, port: int) -> None:
         """Revoke the tunnel for a port; open connections are not closed."""
         await self._owner._revoke_tunnel(port)
+
+
+class Executions:
+    """Live execution sessions of a ``SimpleBox``.
+
+    Every operation reads the owner's box when it runs, so holding this wrapper
+    never creates or starts anything. An uncreated box lists nothing and cannot
+    recover or attach a session.
+    """
+
+    def __init__(self, box: "SimpleBox") -> None:
+        self._owner = box
+
+    async def list(self) -> "list[ExecutionInfo]":
+        """List live guest executions without creating or starting a box."""
+        if self._owner._box is None:
+            return []
+        return await self._owner._box.executions().list()
+
+    async def get(self, execution_id: str) -> "Execution":
+        """Recover control without claiming the session's output reader."""
+        if self._owner._box is None:
+            raise RuntimeError("Box not started. Call 'await box.start()' first.")
+        return await self._owner._box.executions().get(execution_id)
+
+    async def attach(self, execution_id: str, *, stdin: bool = True) -> "Execution":
+        """Attach to a listed live session without starting the box."""
+        if self._owner._box is None:
+            raise RuntimeError("Box not started. Call 'await box.start()' first.")
+        return await self._owner._box.executions().attach(execution_id, stdin=stdin)
 
 
 class SimpleBox:
@@ -274,6 +306,15 @@ class SimpleBox:
         if not hasattr(self, "_network"):
             self._network = NetworkHandle(self)
         return self._network
+
+    def executions(self) -> Executions:
+        """Get the live execution namespace without creating or starting the box.
+
+        Usage: ``await box.executions().list()``, ``await box.executions().get(id)``.
+        """
+        if not hasattr(self, "_executions"):
+            self._executions = Executions(self)
+        return self._executions
 
     async def exec(
         self,

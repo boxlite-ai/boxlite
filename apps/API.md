@@ -47,7 +47,7 @@ and private tunnels as enabled; clients check that before every private prepare.
 | ------------------------------------------------------------------------- | ---------------------------- | ------------------------------------------------------------------------------------ | ------------------------ |
 | [Control-plane API](#control-plane-api)                                   | `apps/api`                   | `/api`                                                                               | `3000`                   |
 | [Hosted BoxLite-compatible API](#hosted-boxlite-compatible-api)           | `apps/api`                   | `/api/v1`                                                                            | `3000`                   |
-| [MCP endpoint](#mcp-endpoint)                                             | `apps/api`                   | `/api/mcp`                                                                           | `3000`                   |
+| [MCP endpoint](#mcp-endpoint)                                             | `apps/api`                   | `/mcp`                                                                               | `3000`                   |
 | [Runner API](#runner-api)                                                 | `apps/runner`                | `/`                                                                                  | `3003`                   |
 | [Preview proxy API](#preview-proxy-api)                                   | `apps/proxy`                 | `proxy.<domain>`, `<port>-<box>.proxy.<domain>`                                      | `4000`                   |
 | [Registry proxy API](#registry-proxy-api)                                 | `apps/image-service`         | `/v2`                                                                                | `4100`                   |
@@ -485,6 +485,7 @@ organization membership.
 | Method   | Path                                                          | What it does                                            |
 | -------- | ------------------------------------------------------------- | ------------------------------------------------------- |
 | `POST`   | `/api/v1[/{prefix}]/boxes/{boxId}/exec`                       | Starts a command execution through the assigned runner. |
+| `GET`    | `/api/v1[/{prefix}]/boxes/{boxId}/executions`                 | Lists live guest executions, including the main session, without resuming the box or recording activity. |
 | `GET`    | `/api/v1[/{prefix}]/boxes/{boxId}/executions/{execId}`        | Gets execution status and exit information.             |
 | `DELETE` | `/api/v1[/{prefix}]/boxes/{boxId}/executions/{execId}`        | Kills an execution.                                     |
 | `WS`     | `/api/v1[/{prefix}]/boxes/{boxId}/executions/{execId}/attach` | Attaches a bidirectional WebSocket to an execution; a browser authenticates with `?ticket=`. |
@@ -503,6 +504,14 @@ organization membership.
 | `POST`   | `/api/v1[/{prefix}]/boxes/{boxId}/ssh/enable`                 | Enables saved SSH configuration on a running box; no auto-resume or activity. |
 | `GET`    | `/api/v1[/{prefix}]/boxes/{boxId}/ssh`                        | Reads guest SSH status without resuming the box or counting as activity. |
 | `DELETE` | `/api/v1[/{prefix}]/boxes/{boxId}/ssh`                        | Disables guest SSH on a running box; otherwise `409`. No auto-resume or activity. |
+
+Execution inventory is an organization-member read, like execution status; it
+does not require `write:boxes`. Box lookup remains scoped to that organization.
+The response is `{ "executions": [...] }`, with `execution_id`, `argv`,
+`started_at` (Unix milliseconds), `tty`, and `is_main_session` on each entry.
+Use the returned guest ID with the status, attach, signal, resize, and kill
+routes, including for the main session; terminating main can stop the box.
+Listing a stopped box returns an empty inventory and never starts it.
 
 The exec, signal, resize, files, and metrics handlers are registered as
 catch-all reverse proxies to the box's assigned runner; the methods shown are
@@ -788,8 +797,13 @@ for accounting scope and delivery limitations.
 
 ## MCP endpoint
 
-**Service:** `apps/api` · **Path:** `/api/mcp` · **Port:** `3000` in deployments
+**Service:** `apps/api` · **Path:** `/mcp` · **Port:** `3000` in deployments
 (shared with the control-plane API)
+
+The endpoint and its OAuth metadata sit outside the `api` global prefix
+([`MCP_ROOT_ROUTES`](./api/src/mcp/mcp-auth-metadata.ts)), so the URL a client
+connects to is also the OAuth resource that RFC 9728 discovery checks. The GCP URL
+map passes both paths through unchanged, and `/api/mcp` is not served.
 
 A Model Context Protocol server, served from [`mcp`](./api/src/mcp/) over
 Streamable HTTP. It speaks both protocol eras on one endpoint: the 2025
@@ -799,7 +813,7 @@ refused with `-32601`. A request that carries an `Origin` header is refused with
 `403`, because MCP hosts call from servers and CLIs, not browsers.
 
 ```
-claude mcp add --transport http boxlite https://<api-host>/api/mcp \
+claude mcp add --transport http boxlite https://<api-host>/mcp \
   --header "Authorization: Bearer $BOXLITE_API_KEY"
 ```
 
@@ -809,9 +823,10 @@ out `--header`: the client opens a browser sign-in instead.
 
 **Credentials.** A user API key, or an OAuth token whose audience is
 `MCP_RESOURCE_URL`. Dashboard tokens are refused, as are the API keys of machine
-principals (proxy, runner, collectors). A `401` carries
+principals (proxy, runner, collectors); without `MCP_RESOURCE_URL` every OAuth token
+is refused. A `401` carries
 `WWW-Authenticate: Bearer resource_metadata=...` naming the RFC 9728 document at
-`/.well-known/oauth-protected-resource/api/mcp`, which lists the API's OIDC issuer
+`/.well-known/oauth-protected-resource/mcp`, which lists the API's OIDC issuer
 as the authorization server; it is published only when `MCP_RESOURCE_URL` is set.
 
 **OAuth callers.** [`McpAuthGuard`](./api/src/mcp/mcp-auth.guard.ts) turns an OAuth
@@ -832,7 +847,8 @@ an OAuth caller before it runs, for direct tools and `invoke_api_endpoint` alike
   only, since each grants access that outlives the token. New operations are denied
   until listed, and a spec fails until each v1 operation is classified.
 - An operation whose route declares a permission the token lacks
-  (`RequiredOrganizationResourcePermissions`, read at startup) answers `403` with
+  (`RequiredOrganizationResourcePermissions`, read at startup; an `@All` route such
+  as the exec and file proxies decides every verb on its path) answers `403` with
   `WWW-Authenticate: Bearer error="insufficient_scope", scope="<granted> <missing>"`,
   so a client that re-authorizes keeps the scopes it had.
 
@@ -849,7 +865,7 @@ permissions apply in REST.
 | --- | --- |
 | `createBox`, `listBoxes`, `getBox`, `startBox`, `stopBox`, `removeBox` | The box operations of the same `operationId` |
 | `startExecution`, `getExecution` | Run a command; with `wait` (default) the result carries `stdout`, `stderr`, `exit_code` and `complete` |
-| `uploadFiles`, `downloadFiles` | Tar archives as base64 (`body_base64`), up to 8 MiB |
+| `uploadFiles`, `downloadFiles` | Tar archives as base64 (`body_base64`), up to 8 MiB; `/mcp` accepts JSON bodies up to 12 MiB for this, every other route keeps the default limit |
 | `list_api_endpoints`, `get_api_endpoint_schema`, `invoke_api_endpoint` | Find, describe and call any other catalog operation by `operationId` |
 
 The catalog is built at startup from [`openapi/box.openapi.yaml`](../openapi/box.openapi.yaml),
@@ -867,7 +883,7 @@ API's own Express app as the REST request for its operation, so that route's gua
 validation, throttles and audit run unchanged:
 
 ```
-POST /api/mcp ─▶ McpOriginGuard, McpAuthGuard ─▶ caller
+POST /mcp ─▶ McpOriginGuard, McpAuthGuard ─▶ caller
   tools/call ─▶ McpDispatcher ─▶ METHOD /api/... over a per-process Unix socket
                                  no Authorization, x-boxlite-mcp-delegation: <nonce>,
                                  X-Forwarded-For naming the MCP client
@@ -877,9 +893,12 @@ POST /api/mcp ─▶ McpOriginGuard, McpAuthGuard ─▶ caller
 The caller's token is never forwarded (MCP forbids token passthrough). The nonce is
 32 random bytes, valid for 30 seconds, consumed on first use and held only in the
 process's memory; the socket lives in a fresh `0700` temporary directory, so a
-request never reaches another cluster worker. `startExecution` with `wait` and
-`attachExecution` read output from the read-only attach WebSocket on the loopback,
-authenticated by a one-time attach ticket; output printed before the attach is
+request never reaches another cluster worker. A delegated call is cut off, and the
+tool answers with an error, when its response passes 8 MiB, when it sends nothing
+for five minutes, or when the MCP client disconnects. `startExecution` with `wait`
+and `attachExecution` read output from the read-only attach WebSocket over the same
+Unix socket (so no TLS name or port is involved), authenticated by a one-time
+attach ticket; output printed before the attach is
 replayed from the runner's 256 KiB per-stream backlog. A wait that runs out returns
 `complete: false` with the output so far.
 
@@ -927,6 +946,7 @@ runtime and its microVMs.
 | Method    | Path                                           | What it does                                          |
 | --------- | ---------------------------------------------- | ----------------------------------------------------- |
 | `POST`    | `/v1/boxes/{boxId}/exec`                       | Starts a command inside the local box.                |
+| `GET`     | `/v1/boxes/{boxId}/executions`                 | Lists live guest execution IDs, including main; stopped boxes return an empty list without booting. |
 | `GET`     | `/v1/boxes/{boxId}/executions/{execId}`        | Gets local execution status.                          |
 | `DELETE`  | `/v1/boxes/{boxId}/executions/{execId}`        | Kills a local execution.                              |
 | `WS`      | `/v1/boxes/{boxId}/executions/{execId}/attach` | Attaches a WebSocket to local execution I/O.          |

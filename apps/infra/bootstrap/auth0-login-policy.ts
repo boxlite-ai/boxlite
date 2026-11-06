@@ -148,9 +148,16 @@ export interface Auth0LoginPolicyOptions {
   /**
    * The MCP endpoint's resource URL (`MCP_RESOURCE_URL`). Logins asking for a
    * token for it get the dashboard's email verification and account link, since
-   * MCP clients sign in under their own client ids. Unset leaves them ungated.
+   * MCP clients sign in under their own client ids. Unset leaves them ungated, and
+   * an Action that gates them is refused unless `disableMcpLogin` turns that off.
    */
   mcpResourceUrl?: string
+  /**
+   * Stop gating MCP logins on a tenant whose Action gates them. Without this, an
+   * apply lacking `--mcp-resource-url` refuses such an Action rather than silently
+   * letting MCP logins skip verification and the account link.
+   */
+  disableMcpLogin?: boolean
   /**
    * Turn the account link off on a tenant whose Action runs it. Without this,
    * an apply lacking `--account-link-api-origin` refuses such an Action rather
@@ -177,10 +184,14 @@ export function parseAuth0LoginPolicyOptions(
       'account-link-api-origin': { type: 'string' },
       'disable-account-link': { type: 'boolean', default: false },
       'mcp-resource-url': { type: 'string' },
+      'disable-mcp-login': { type: 'boolean', default: false },
     },
   })
   if (values['disable-account-link'] && values['account-link-api-origin'] !== undefined) {
     throw new Error('--disable-account-link and --account-link-api-origin cannot be combined')
+  }
+  if (values['disable-mcp-login'] && values['mcp-resource-url'] !== undefined) {
+    throw new Error('--disable-mcp-login and --mcp-resource-url cannot be combined')
   }
 
   const tenant = requireExactValue('--tenant', values.tenant)
@@ -199,6 +210,7 @@ export function parseAuth0LoginPolicyOptions(
     ...accountLinkOptions(values['account-link-api-origin'], environment[ACCOUNT_LINK_SECRET_ENV]),
     disableAccountLink: values['disable-account-link'] ?? false,
     ...mcpResourceOption(values['mcp-resource-url']),
+    disableMcpLogin: values['disable-mcp-login'] ?? false,
   }
 }
 
@@ -456,6 +468,27 @@ function stampActionCode(code: string): string {
 function carriesOwnStamp(code: string): boolean {
   const at = code.lastIndexOf(ACTION_STAMP_PREFIX)
   return at > 0 && stampActionCode(code.slice(0, at)) === code
+}
+
+/**
+ * Every item of a paged Management API list, 100 per page (the API maximum), up to
+ * 1,000. `key` names the array when the response is the `include_totals` object.
+ */
+export function readAllPages(
+  client: Auth0ManagementClient,
+  path: string,
+  key: string,
+  filters: Record<string, string> = {},
+): JsonObject[] {
+  const resources: JsonObject[] = []
+  for (let page = 0; page < 10; page += 1) {
+    const response = client.request('get', path, { query: { ...filters, per_page: '100', page: String(page) } })
+    const batch = collection(response, key)
+    resources.push(...batch)
+    const total = objectOrNull(response)?.total
+    if (batch.length < 100 || (typeof total === 'number' && resources.length >= total)) return resources
+  }
+  throw new Error(`Auth0 ${path} discovery exceeded 1,000 resources`)
 }
 
 export interface Auth0ManagementClient {
@@ -880,17 +913,7 @@ export class Auth0LoginPolicyConfigurator {
   }
 
   private readAllResources(path: string, key: string): JsonObject[] {
-    const resources: JsonObject[] = []
-    for (let page = 0; page < 10; page += 1) {
-      const response = this.client.request('get', path, {
-        query: { per_page: '100', page: String(page) },
-      })
-      const batch = collection(response, key)
-      resources.push(...batch)
-      const total = objectOrNull(response)?.total
-      if (batch.length < 100 || (typeof total === 'number' && resources.length >= total)) return resources
-    }
-    throw new Error(`Auth0 ${path} discovery exceeded 1,000 resources`)
+    return readAllPages(this.client, path, key)
   }
 
   private readClientConnections(clientId: string = this.options.clientId): JsonObject[] {
@@ -962,6 +985,11 @@ export class Auth0LoginPolicyConfigurator {
     ) {
       throw new Error(
         `Auth0 Action '${RESOURCE_NAMES.action}' runs the account link; pass --account-link-api-origin to keep the link, or --disable-account-link to turn it off`,
+      )
+    }
+    if (state.action && gatesMcpLogins(state.action) && !this.options.mcpResourceUrl && !this.options.disableMcpLogin) {
+      throw new Error(
+        `Auth0 Action '${RESOURCE_NAMES.action}' gates MCP logins; pass --mcp-resource-url to keep that, or --disable-mcp-login to stop it`,
       )
     }
     if (state.vaultConnection) {
@@ -1719,6 +1747,10 @@ function bindingsSnapshot(bindings: JsonObject[]): JsonObject[] {
 /** Whether the Action the tenant runs names a link Form, the account link's switch. */
 function runsAccountLink(action: JsonObject): boolean {
   return /const ACCOUNT_LINK_FORM_ID = "[^"]+"/.test(String(action.deployed_version?.code ?? action.code ?? ''))
+}
+
+function gatesMcpLogins(action: JsonObject): boolean {
+  return /const MCP_RESOURCE_URL = "[^"]+"/.test(String(action.deployed_version?.code ?? action.code ?? ''))
 }
 
 function secretNames(action: JsonObject): string[] {

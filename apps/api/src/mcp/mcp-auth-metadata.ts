@@ -9,21 +9,24 @@ import { JwtStrategy } from '../auth/jwt.strategy'
 import { TypedConfigService } from '../config/typed-config.service'
 import { MCP_OAUTH_SCOPES } from './mcp-oauth-policy'
 
-/** Where this API serves MCP: the `mcp` controller under the `api` global prefix. */
-const MCP_ROUTE = '/api/mcp'
+/** Where this API serves MCP: the `mcp` controller, outside the `api` global prefix. */
+export const MCP_ROUTE = '/mcp'
+
+/** The RFC 9728 metadata route for {@link MCP_ROUTE}: the well-known prefix goes before the route path. */
+export const MCP_METADATA_PATH = `.well-known/oauth-protected-resource${MCP_ROUTE}`
 
 /**
- * The RFC 9728 metadata route for {@link MCP_ROUTE}. The well-known prefix goes
- * before the whole route path, so the route sits outside the `api` prefix and
- * `main.ts` excludes it.
+ * The routes `main.ts` keeps out of the `api` global prefix. RFC 9728 puts the
+ * metadata at the origin root, and serving MCP there too makes the public URL,
+ * the container route and the OAuth resource one path.
  */
-export const MCP_METADATA_PATH = `.well-known/oauth-protected-resource${MCP_ROUTE}`
+export const MCP_ROOT_ROUTES = [MCP_ROUTE, MCP_METADATA_PATH]
 
 /**
  * OAuth discovery for the MCP endpoint.
  *
  * `MCP_RESOURCE_URL` is the public URL hosts connect to, so it is the resource
- * the metadata names. Without it the endpoint still takes bearer tokens but
+ * the metadata names. Without it the endpoint takes only API keys and
  * publishes no metadata.
  */
 @Injectable()

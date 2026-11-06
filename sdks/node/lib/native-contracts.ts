@@ -512,6 +512,16 @@ export interface JsExecStdin {
   close(): Promise<void>;
 }
 
+/** Live guest execution metadata. IDs are canonical guest IDs. */
+export interface ExecutionInfo {
+  executionId: string;
+  argv: string[];
+  /** Start time in Unix milliseconds. */
+  startedAt: number;
+  tty: boolean;
+  isMainSession: boolean;
+}
+
 export interface JsExecution {
   id(): Promise<string>;
   stdin(): Promise<JsExecStdin>;
@@ -574,6 +584,17 @@ export interface JsSshStatus {
   listenAddress: string;
   hostPublicKey: string;
   hostKeyFingerprint: string;
+}
+
+/** Internal contract implemented by the native N-API executions namespace.
+ *  Reached as `box.executions()`; creating it never starts the box. */
+export interface JsExecutionsHandle {
+  /** Snapshot live guest sessions; a created or stopped box lists none. */
+  list(): Promise<ExecutionInfo[]>;
+  /** Recover control without claiming the session's output reader. */
+  get(executionId: string): Promise<JsExecution>;
+  /** Attach output to a discovered session; never starts the box. */
+  attach(executionId: string, stdin?: boolean): Promise<JsExecution>;
 }
 
 /** Internal contract implemented by the native N-API SSH binding. */
@@ -694,6 +715,7 @@ export interface JsBox {
   readonly id: string;
   readonly name: string | null;
   info(): Promise<JsBoxInfo>;
+  executions(): JsExecutionsHandle;
   exec(
     command: string,
     args?: string[] | null,

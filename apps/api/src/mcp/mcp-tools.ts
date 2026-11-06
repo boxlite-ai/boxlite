@@ -12,10 +12,15 @@ import { CombinedAuthGuard } from '../auth/combined-auth.guard'
 import { RunnerAuthGuard } from '../auth/runner-auth.guard'
 import { ProxyGuard } from '../box/guards/proxy.guard'
 import { RequiredOrganizationResourcePermissions } from '../organization/decorators/required-organization-resource-permissions.decorator'
-import { TypedConfigService } from '../config/typed-config.service'
 import { collectAttach } from './mcp-attach'
 import { McpCatalog, type McpCatalogSources, type McpOperation } from './mcp-catalog'
-import { McpArgumentError, McpDispatcher, MCP_MAX_BINARY_BYTES, type McpRestResponse } from './mcp-dispatcher'
+import {
+  McpArgumentError,
+  McpDispatcher,
+  McpResponseError,
+  MCP_MAX_BINARY_BYTES,
+  type McpRestResponse,
+} from './mcp-dispatcher'
 import { routeShape } from './mcp-routes'
 
 type ToolResult = {
@@ -62,7 +67,6 @@ export class McpTools {
     private readonly dispatcher: McpDispatcher,
     private readonly discovery: DiscoveryService,
     private readonly scanner: MetadataScanner,
-    private readonly configService: TypedConfigService,
     private readonly reflector: Reflector,
   ) {}
 
@@ -78,7 +82,9 @@ export class McpTools {
     this.catalog = catalog
     const routes = this.routePermissions()
     for (const op of catalog.all()) {
-      this.permissions.set(op.operationId, routes.get(`${op.method} ${routeShape(op.path)}`) ?? [])
+      const shape = routeShape(op.path)
+      // An `@All` route serves every verb, so it decides any operation on its path.
+      this.permissions.set(op.operationId, routes.get(`${op.method} ${shape}`) ?? routes.get(`all ${shape}`) ?? [])
     }
     for (const [operationId, description] of Object.entries(DIRECT_TOOLS)) {
       const op = catalog.get(operationId)
@@ -163,7 +169,7 @@ export class McpTools {
       }
       return restResult(response)
     } catch (error) {
-      if (error instanceof McpArgumentError) return errorResult(error.message)
+      if (error instanceof McpArgumentError || error instanceof McpResponseError) return errorResult(error.message)
       throw error
     }
   }
@@ -175,10 +181,11 @@ export class McpTools {
     const ticket = await this.dispatcher.call(ticketOp, { boxIdOrName: boxId, body: { executionId } }, request)
     const value = (ticket.json as { ticket?: string })?.ticket
     if (ticket.status >= 300 || !value) return restResult(ticket)
-    const scheme = process.env.CERT_PATH ? 'wss' : 'ws'
-    const url =
-      `${scheme}://127.0.0.1:${this.configService.get('port')}/api/v1/boxes/${encodeURIComponent(boxId)}` +
-      `/executions/${encodeURIComponent(executionId)}/attach?stdin=0&ticket=${encodeURIComponent(value)}`
+    // Over the dispatcher's private socket, so no TLS name or port is involved.
+    const url = await this.dispatcher.webSocketUrl(
+      `/api/v1/boxes/${encodeURIComponent(boxId)}` +
+        `/executions/${encodeURIComponent(executionId)}/attach?stdin=0&ticket=${encodeURIComponent(value)}`,
+    )
     const seconds = Math.min(Number(args.wait_timeout_seconds) || WAIT_DEFAULT_SECONDS, WAIT_MAX_SECONDS)
     const result = await collectAttach(url, executionId, seconds * 1000)
     if (result.error) {

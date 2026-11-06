@@ -81,8 +81,11 @@ function needsAccountLink(event) {
   )
 }
 
+// Every login, including a third-party MCP client's, for which Auth0 can leave
+// `event.authorization` unset. The names are the IANA-registered OpenID Connect
+// ones (RFC 9068 section 2.2.2); the API refuses a database user's token without
+// `email_verified: true`.
 function setIdentityClaims(event, api, emailVerified = event.user?.email_verified === true) {
-  if (!event.authorization) return
   api.accessToken.setCustomClaim('email_verified', emailVerified)
   api.accessToken.setCustomClaim('email', event.user?.email)
   api.accessToken.setCustomClaim('name', event.user?.name)

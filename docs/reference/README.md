@@ -9,6 +9,7 @@ step-by-step tasks, see [Guides](../guides/README.md).
 - [Configuration](configuration.md): `BoxOptions` parameters, runtime options, and environment variables.
 - [Error codes and handling](errors.md): error types and patterns for handling them.
 - [File formats](file-formats.md): the `~/.boxlite` home directory, QCOW2 and ext4 disk images, the OCI image cache, and the SQLite database.
+- [API changelog](#api-changelog): unreleased interface changes and migration notes.
 
 ## SDK API references
 
@@ -31,13 +32,13 @@ Complete API documentation for each SDK:
 
 | Surface | Documentation | Description |
 |---------|---------------|-------------|
-| **Box API** | [`openapi/box.openapi.yaml`](../../openapi/box.openapi.yaml) | The portable REST contract, 32 paths. Groups: configuration & discovery, authentication, volumes, boxes, box lifecycle, snapshot/portability, execution, files, network, metrics, images, registries |
+| **Box API** | [`openapi/box.openapi.yaml`](../../openapi/box.openapi.yaml) | The portable REST contract. Groups: configuration & discovery, authentication, volumes, boxes, box lifecycle, snapshot/portability, execution, files, network, metrics, images, registries |
 | **Agent REST design** | [Agents and turns](../contributing/investigations/2026-10-28-agent-rest-api-design.md) | Nine proposed HTTP operations covering the agent SDK API; no server routes or OpenAPI paths are added yet |
 | **Admin API** | [`openapi/admin.openapi.yaml`](../../openapi/admin.openapi.yaml) | Cloud-only contract for organization members and invitations, 4 paths, meant for the CLI and SDKs, which do not call it yet. Shares the Box API's host and credentials, but uses the hosted service's flat error response; local servers do not serve it |
 | **Reference server** | [`openapi/reference-server/`](../../openapi/reference-server/README.md) | A partial implementation used as a client test fixture, not a conformance target |
 
 The spec is the contract, not an inventory of any one server, and no
-implementation currently serves all 32 paths:
+implementation currently serves all 35 paths:
 
 | Server | Serves | Does not serve |
 |--------|--------|----------------|
@@ -66,6 +67,8 @@ runner, preview proxy, telemetry collector — catalogued separately in
 [`apps/API.md`](../../apps/API.md). Those are deployment internals, not part of
 the portable contract above.
 
+## API changelog
+
 ### Unreleased: exec command rejections
 
 For `exec`, missing executables now complete with exit status `127`;
@@ -78,6 +81,23 @@ process exit codes are unchanged. `126` and `127` are the special cases for an
 Rejection of the box's init command during `start()` remains an error, so
 `boxlite run` prints an error and exits `1`. See
 [execution error handling](errors.md#executionstring).
+
+### Unreleased: execution inventory (POL-485, additive)
+
+Boxes expose live executions through the SDK `executions` namespace
+(`box.executions().list()` in Python, Node, and Rust; `box.Executions().List(ctx)`
+in Go; `boxlite_box_executions_list(box, cb, user_data, &error)` in C), CLI
+`boxlite top BOX`, and REST `GET /{prefix}/boxes/{box_id}/executions`. The main
+command is included.
+Discovered IDs work with attach and control operations; listing never starts
+a box and retains no completed-session history. Existing status schemas and
+request defaults are unchanged.
+
+REST main-session attachment accepts a box name or ID. Session ownership uses
+the canonical box ID, so status queries work with either spelling.
+
+See [recovering a lost handle](../guides/ai-agent-integration.md#recovering-control-after-losing-the-handle)
+for usage and the bounded exit-status/output retention policy.
 
 ### Image API migration (breaking change)
 

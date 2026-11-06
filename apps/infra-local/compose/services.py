@@ -206,7 +206,7 @@ staticClients:
     public: true
   # The MCP endpoint's token audience (MCP_RESOURCE_URL in api.env). `boxlite`
   # gets a token for it with the scope `audience:server:client_id:<this id>`.
-  - id: 'http://localhost:3001/api/mcp'
+  - id: 'http://localhost:3001/mcp'
     name: 'BoxLite MCP'
     public: true
     trustedPeers: ['boxlite']

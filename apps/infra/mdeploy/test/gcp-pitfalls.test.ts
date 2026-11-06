@@ -582,6 +582,18 @@ test('the control plane’s own host is called without the prefix the container 
   assert.equal(throughBalancer('/api/boxes'), '/api/boxes')
   assert.equal(throughBalancer('/api'), '/api')
 
+  /*
+   * The MCP endpoint and its RFC 9728 metadata sit outside the prefix in the
+   * container, so the public URL is also the OAuth resource. Rewritten, they
+   * would 404 as `/api/mcp`. Only those exact paths pass: `/mcpx` still gains it.
+   */
+  assert.equal(throughBalancer('/mcp'), '/mcp')
+  assert.equal(
+    throughBalancer('/.well-known/oauth-protected-resource/mcp'),
+    '/.well-known/oauth-protected-resource/mcp',
+  )
+  assert.equal(throughBalancer('/mcpx'), '/api/mcpx')
+
   // Both forms reach the backend this balancer fronts, and only it.
   assert.deepEqual(new Set(apiPrefixRouteRules('backend-1').map((rule) => rule.service)), new Set(['backend-1']))
 })
