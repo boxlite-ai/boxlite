@@ -10,7 +10,7 @@ import {
   UsePipes,
   ValidationPipe,
 } from '@nestjs/common'
-import { ApiBearerAuth, ApiOkResponse, ApiOperation, ApiParam, ApiTags } from '@nestjs/swagger'
+import { ApiBearerAuth, ApiBody, ApiOkResponse, ApiOperation, ApiParam, ApiTags } from '@nestjs/swagger'
 import { Audit, TypedRequest } from '../../audit/decorators/audit.decorator'
 import { AuditAction } from '../../audit/enums/audit-action.enum'
 import { AuditTarget } from '../../audit/enums/audit-target.enum'
@@ -44,6 +44,19 @@ export class AdminOrganizationNestedVirtualizationController {
   }
 
   @Put()
+  @ApiBody({
+    schema: {
+      type: 'object',
+      required: ['enabled'],
+      additionalProperties: false,
+      properties: {
+        enabled: {
+          type: 'boolean',
+          description: 'Allow new boxes to use nesting when their selected Runner supports it.',
+        },
+      },
+    },
+  })
   @ApiOperation({
     operationId: 'adminSetOrganizationNestedVirtualization',
     summary: 'Set organization nesting allowlist',
@@ -52,6 +65,7 @@ export class AdminOrganizationNestedVirtualizationController {
   @Audit({
     action: AuditAction.UPDATE,
     targetType: AuditTarget.ORGANIZATION,
+    organizationIdFromRequest: (req) => req.params.organizationId,
     targetIdFromRequest: (req) => req.params.organizationId,
     requestMetadata: {
       body: (req: TypedRequest<AdminOrganizationNestedVirtualizationDto>) => ({ enabled: req.body?.enabled }),

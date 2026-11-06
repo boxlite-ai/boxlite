@@ -46,6 +46,8 @@ import type { AdminRegionOverviewPage } from '../models';
 // @ts-ignore
 import type { AdminRunner } from '../models';
 // @ts-ignore
+import type { AdminSetOrganizationNestedVirtualizationRequest } from '../models';
+// @ts-ignore
 import type { AdminUsageError } from '../models';
 // @ts-ignore
 import type { AdminUsagePage } from '../models';
@@ -899,15 +901,15 @@ export const AdminApiAxiosParamCreator = function (configuration?: Configuration
          * 
          * @summary Set organization nesting allowlist
          * @param {string} organizationId 
-         * @param {AdminOrganizationNestedVirtualization} adminOrganizationNestedVirtualization 
+         * @param {AdminSetOrganizationNestedVirtualizationRequest} adminSetOrganizationNestedVirtualizationRequest 
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        adminSetOrganizationNestedVirtualization: async (organizationId: string, adminOrganizationNestedVirtualization: AdminOrganizationNestedVirtualization, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+        adminSetOrganizationNestedVirtualization: async (organizationId: string, adminSetOrganizationNestedVirtualizationRequest: AdminSetOrganizationNestedVirtualizationRequest, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
             // verify required parameter 'organizationId' is not null or undefined
             assertParamExists('adminSetOrganizationNestedVirtualization', 'organizationId', organizationId)
-            // verify required parameter 'adminOrganizationNestedVirtualization' is not null or undefined
-            assertParamExists('adminSetOrganizationNestedVirtualization', 'adminOrganizationNestedVirtualization', adminOrganizationNestedVirtualization)
+            // verify required parameter 'adminSetOrganizationNestedVirtualizationRequest' is not null or undefined
+            assertParamExists('adminSetOrganizationNestedVirtualization', 'adminSetOrganizationNestedVirtualizationRequest', adminSetOrganizationNestedVirtualizationRequest)
             const localVarPath = `/admin/organizations/{organizationId}/nested-virtualization`
                 .replace('{organizationId}', encodeURIComponent(String(organizationId)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
@@ -931,7 +933,7 @@ export const AdminApiAxiosParamCreator = function (configuration?: Configuration
             setSearchParams(localVarUrlObj, localVarQueryParameter);
             let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
             localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
-            localVarRequestOptions.data = serializeDataIfNeeded(adminOrganizationNestedVirtualization, localVarRequestOptions, configuration)
+            localVarRequestOptions.data = serializeDataIfNeeded(adminSetOrganizationNestedVirtualizationRequest, localVarRequestOptions, configuration)
 
             return {
                 url: toPathString(localVarUrlObj),
@@ -1238,12 +1240,12 @@ export const AdminApiFp = function(configuration?: Configuration) {
          * 
          * @summary Set organization nesting allowlist
          * @param {string} organizationId 
-         * @param {AdminOrganizationNestedVirtualization} adminOrganizationNestedVirtualization 
+         * @param {AdminSetOrganizationNestedVirtualizationRequest} adminSetOrganizationNestedVirtualizationRequest 
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        async adminSetOrganizationNestedVirtualization(organizationId: string, adminOrganizationNestedVirtualization: AdminOrganizationNestedVirtualization, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<AdminOrganizationNestedVirtualization>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.adminSetOrganizationNestedVirtualization(organizationId, adminOrganizationNestedVirtualization, options);
+        async adminSetOrganizationNestedVirtualization(organizationId: string, adminSetOrganizationNestedVirtualizationRequest: AdminSetOrganizationNestedVirtualizationRequest, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<AdminOrganizationNestedVirtualization>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.adminSetOrganizationNestedVirtualization(organizationId, adminSetOrganizationNestedVirtualizationRequest, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['AdminApi.adminSetOrganizationNestedVirtualization']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
@@ -1471,12 +1473,12 @@ export const AdminApiFactory = function (configuration?: Configuration, basePath
          * 
          * @summary Set organization nesting allowlist
          * @param {string} organizationId 
-         * @param {AdminOrganizationNestedVirtualization} adminOrganizationNestedVirtualization 
+         * @param {AdminSetOrganizationNestedVirtualizationRequest} adminSetOrganizationNestedVirtualizationRequest 
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        adminSetOrganizationNestedVirtualization(organizationId: string, adminOrganizationNestedVirtualization: AdminOrganizationNestedVirtualization, options?: RawAxiosRequestConfig): AxiosPromise<AdminOrganizationNestedVirtualization> {
-            return localVarFp.adminSetOrganizationNestedVirtualization(organizationId, adminOrganizationNestedVirtualization, options).then((request) => request(axios, basePath));
+        adminSetOrganizationNestedVirtualization(organizationId: string, adminSetOrganizationNestedVirtualizationRequest: AdminSetOrganizationNestedVirtualizationRequest, options?: RawAxiosRequestConfig): AxiosPromise<AdminOrganizationNestedVirtualization> {
+            return localVarFp.adminSetOrganizationNestedVirtualization(organizationId, adminSetOrganizationNestedVirtualizationRequest, options).then((request) => request(axios, basePath));
         },
         /**
          * 
@@ -1713,12 +1715,12 @@ export class AdminApi extends BaseAPI {
      * 
      * @summary Set organization nesting allowlist
      * @param {string} organizationId 
-     * @param {AdminOrganizationNestedVirtualization} adminOrganizationNestedVirtualization 
+     * @param {AdminSetOrganizationNestedVirtualizationRequest} adminSetOrganizationNestedVirtualizationRequest 
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
      */
-    public adminSetOrganizationNestedVirtualization(organizationId: string, adminOrganizationNestedVirtualization: AdminOrganizationNestedVirtualization, options?: RawAxiosRequestConfig) {
-        return AdminApiFp(this.configuration).adminSetOrganizationNestedVirtualization(organizationId, adminOrganizationNestedVirtualization, options).then((request) => request(this.axios, this.basePath));
+    public adminSetOrganizationNestedVirtualization(organizationId: string, adminSetOrganizationNestedVirtualizationRequest: AdminSetOrganizationNestedVirtualizationRequest, options?: RawAxiosRequestConfig) {
+        return AdminApiFp(this.configuration).adminSetOrganizationNestedVirtualization(organizationId, adminSetOrganizationNestedVirtualizationRequest, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**

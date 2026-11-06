@@ -91,6 +91,9 @@ describe('Admin organization nesting HTTP boundary', () => {
   it('exports typed Admin-only operations without adding public per-box input', () => {
     const spec = SwaggerModule.createDocument(app, new DocumentBuilder().addBearerAuth().build())
     const path = spec.paths['/api/admin/organizations/{organizationId}/nested-virtualization']
+    expect(path.put.requestBody).toMatchObject({
+      content: { 'application/json': { schema: { additionalProperties: false } } },
+    })
     expect(path.get.operationId).toBe('adminGetOrganizationNestedVirtualization')
     expect(path.put.operationId).toBe('adminSetOrganizationNestedVirtualization')
     expect(spec.components.schemas.AdminOrganizationNestedVirtualization).toMatchObject({

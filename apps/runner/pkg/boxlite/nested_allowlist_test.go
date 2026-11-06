@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"sync/atomic"
 	"testing"
 
@@ -25,7 +26,10 @@ func TestNestedAllowlistCapabilityUsesValidatedStartupFeatures(t *testing.T) {
 		t.Run(features, func(t *testing.T) {
 			client, err := NewClient(t.Context(), ClientConfig{HomeDir: t.TempDir(), ExperimentalFeatures: features})
 			if err != nil {
-				t.Fatal(err)
+				if os.Getenv("BOXLITE_REQUIRE_NESTED_RUNTIME_TESTS") == "1" {
+					t.Fatalf("nested runtime qualification requires a usable local runtime: %v", err)
+				}
+				skipOrFailRuntimeStart(t, err)
 			}
 			defer client.Close()
 			expected := features != ""

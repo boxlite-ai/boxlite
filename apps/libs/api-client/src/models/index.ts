@@ -27,6 +27,7 @@ export * from './admin-organization-verified-creator';
 export * from './admin-region-overview';
 export * from './admin-region-overview-page';
 export * from './admin-runner';
+export * from './admin-set-organization-nested-virtualization-request';
 export * from './admin-usage-coverage';
 export * from './admin-usage-dimensions';
 export * from './admin-usage-error';

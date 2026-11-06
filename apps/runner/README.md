@@ -77,6 +77,10 @@ local runtime fails instead of skipping. Both atomic coverage profiles are merge
 before upload. This verifies metadata creation/replay and authorization, without
 booting a box or establishing nested guest execution.
 
+General startup authorization tests use the same typed `ErrUnsupported` prerequisite
+classification as other runtime tests; every other constructor error fails. Setting
+`BOXLITE_REQUIRE_NESTED_RUNTIME_TESTS=1` also makes these startup tests mandatory.
+
 For the system-wide context (CDN, load balancers, where the runner fits in
 the request path), see [`apps/README.md`](../README.md).
 

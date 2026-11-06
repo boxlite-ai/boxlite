@@ -9,6 +9,8 @@ export class AddNestedVirtualizationAllowlist1793870400000 implements MigrationI
   }
 
   async down(queryRunner: QueryRunner): Promise<void> {
+    // Hold the DROP lock across the check so concurrent writes cannot lose their saved decision.
+    await queryRunner.query('LOCK TABLE "box" IN ACCESS EXCLUSIVE MODE')
     const [nested] = await queryRunner.query(
       'SELECT EXISTS (SELECT 1 FROM "box" WHERE "nestedVirtualization") AS present',
     )

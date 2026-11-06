@@ -2337,11 +2337,11 @@ type AdminAPIAdminSetOrganizationNestedVirtualizationRequest struct {
 	ctx context.Context
 	ApiService AdminAPI
 	organizationId string
-	adminOrganizationNestedVirtualization *AdminOrganizationNestedVirtualization
+	adminSetOrganizationNestedVirtualizationRequest *AdminSetOrganizationNestedVirtualizationRequest
 }
 
-func (r AdminAPIAdminSetOrganizationNestedVirtualizationRequest) AdminOrganizationNestedVirtualization(adminOrganizationNestedVirtualization AdminOrganizationNestedVirtualization) AdminAPIAdminSetOrganizationNestedVirtualizationRequest {
-	r.adminOrganizationNestedVirtualization = &adminOrganizationNestedVirtualization
+func (r AdminAPIAdminSetOrganizationNestedVirtualizationRequest) AdminSetOrganizationNestedVirtualizationRequest(adminSetOrganizationNestedVirtualizationRequest AdminSetOrganizationNestedVirtualizationRequest) AdminAPIAdminSetOrganizationNestedVirtualizationRequest {
+	r.adminSetOrganizationNestedVirtualizationRequest = &adminSetOrganizationNestedVirtualizationRequest
 	return r
 }
 
@@ -2385,8 +2385,8 @@ func (a *AdminAPIService) AdminSetOrganizationNestedVirtualizationExecute(r Admi
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}
 	localVarFormParams := url.Values{}
-	if r.adminOrganizationNestedVirtualization == nil {
-		return localVarReturnValue, nil, reportError("adminOrganizationNestedVirtualization is required and must be specified")
+	if r.adminSetOrganizationNestedVirtualizationRequest == nil {
+		return localVarReturnValue, nil, reportError("adminSetOrganizationNestedVirtualizationRequest is required and must be specified")
 	}
 
 	// to determine the Content-Type header
@@ -2407,7 +2407,7 @@ func (a *AdminAPIService) AdminSetOrganizationNestedVirtualizationExecute(r Admi
 		localVarHeaderParams["Accept"] = localVarHTTPHeaderAccept
 	}
 	// body params
-	localVarPostBody = r.adminOrganizationNestedVirtualization
+	localVarPostBody = r.adminSetOrganizationNestedVirtualizationRequest
 	req, err := a.client.prepareRequest(r.ctx, localVarPath, localVarHTTPMethod, localVarPostBody, localVarHeaderParams, localVarQueryParams, localVarFormParams, formFiles)
 	if err != nil {
 		return localVarReturnValue, nil, err

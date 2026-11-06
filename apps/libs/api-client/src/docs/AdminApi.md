@@ -967,7 +967,7 @@ const { status, data } = await apiInstance.adminRecoverBox(
 [[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
 
 # **adminSetOrganizationNestedVirtualization**
-> AdminOrganizationNestedVirtualization adminSetOrganizationNestedVirtualization(adminOrganizationNestedVirtualization)
+> AdminOrganizationNestedVirtualization adminSetOrganizationNestedVirtualization(adminSetOrganizationNestedVirtualizationRequest)
 
 
 ### Example
@@ -976,18 +976,18 @@ const { status, data } = await apiInstance.adminRecoverBox(
 import {
     AdminApi,
     Configuration,
-    AdminOrganizationNestedVirtualization
+    AdminSetOrganizationNestedVirtualizationRequest
 } from './api';
 
 const configuration = new Configuration();
 const apiInstance = new AdminApi(configuration);
 
 let organizationId: string; //
-let adminOrganizationNestedVirtualization: AdminOrganizationNestedVirtualization; //
+let adminSetOrganizationNestedVirtualizationRequest: AdminSetOrganizationNestedVirtualizationRequest; //
 
 const { status, data } = await apiInstance.adminSetOrganizationNestedVirtualization(
     organizationId,
-    adminOrganizationNestedVirtualization
+    adminSetOrganizationNestedVirtualizationRequest
 );
 ```
 
@@ -995,7 +995,7 @@ const { status, data } = await apiInstance.adminSetOrganizationNestedVirtualizat
 
 |Name | Type | Description  | Notes|
 |------------- | ------------- | ------------- | -------------|
-| **adminOrganizationNestedVirtualization** | **AdminOrganizationNestedVirtualization**|  | |
+| **adminSetOrganizationNestedVirtualizationRequest** | **AdminSetOrganizationNestedVirtualizationRequest**|  | |
 | **organizationId** | [**string**] |  | |
 
 

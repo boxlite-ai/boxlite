@@ -192,6 +192,14 @@ export class BoxService {
     boxId: string,
   ): Promise<boolean> {
     if (organization.nestedVirtualizationEnabled !== true) return false
+    return this.runnerSupportsNestedVirtualization(runner, organization.id, boxId)
+  }
+
+  private async runnerSupportsNestedVirtualization(
+    runner: Runner,
+    organizationId: string,
+    boxId: string,
+  ): Promise<boolean> {
     let reason = 'unsupported_runner_api'
     if (runner.apiVersion === '0') {
       const controller = new AbortController()
@@ -219,7 +227,7 @@ export class BoxService {
     }
     this.logger.warn({
       event: 'box.nested_virtualization.fallback',
-      organizationId: organization.id,
+      organizationId,
       boxId,
       runnerId: runner.id,
       apiVersion: runner.apiVersion,
@@ -1063,8 +1071,14 @@ export class BoxService {
     }
     const runner = await this.runnerService.findOneOrFail(box.runnerId)
 
+    if (
+      box.nestedVirtualization === true &&
+      !(await this.runnerSupportsNestedVirtualization(runner, organization.id, box.id))
+    ) {
+      throw new BoxError('Nested boxes require a compatible V0 Runner with nesting enabled')
+    }
+
     if (runner.apiVersion === '2') {
-      if (box.nestedVirtualization === true) throw new BoxError('Nested boxes require a compatible V0 Runner')
       // TODO: we need "recovering" state that can be set after calling recover
       // Once in recovering, we abort further processing and let the manager/job handler take care of it
       throw new ForbiddenException('Recovering boxes with runner API version 2 is not supported')

@@ -4263,7 +4263,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/AdminOrganizationNestedVirtualization"
+              $ref: "#/components/schemas/adminSetOrganizationNestedVirtualization_request"
         required: true
       responses:
         "200":
@@ -10222,6 +10222,16 @@ components:
           type: array
       required:
       - series
+      type: object
+    adminSetOrganizationNestedVirtualization_request:
+      additionalProperties: false
+      properties:
+        enabled:
+          description: Allow new boxes to use nesting when their selected Runner supports
+            it.
+          type: boolean
+      required:
+      - enabled
       type: object
     WebhookController_getStatus_200_response:
       example:
