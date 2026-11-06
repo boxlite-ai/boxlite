@@ -9,3 +9,6 @@ The Linux guest agent receives volume instructions through the guest initializat
 The driver calls the same `storage::mount_volumes` as the initialization RPC. It checks SHARED and nested directory, writable single-file and read-only single-file exports with colliding filenames. It reads through resolved guest paths, requires EROFS on read-only write-open, writes and syncs writable files, and verifies rollback after both a partial mount failure and dropping an uncommitted initialization guard. It then remounts and commits successfully. The host harness checks write-through to the original hardlinked file and snapshot isolation. A successful guest prints `GUEST-MOUNTS-OK` and reboots; an error or panic must fail host acceptance.
 
 This test establishes the guest mount adapter and native device working together. Production runtime startup still uses legacy per-tag guest instructions: a native runtime engine adapter, container target binding, copy RPCs and full Box lifecycle acceptance remain separate integration work.
+
+The acceptance init lives in `tests/support/mount_init.rs` and is included only
+with `integration-test-init`. It is not a standalone Cargo integration test.

@@ -12,7 +12,7 @@ mod staging;
 mod store;
 
 pub use container_volume::{ContainerMount, ContainerVolumeManager};
-pub use guest_volume::{AggregateMountConfig, GuestVolumeManager};
+pub use guest_volume::GuestVolumeManager;
 pub use share::{VolumeShare, classify_volume_share};
 pub use staging::stage_single_file;
 pub use store::VolumeInfo;
