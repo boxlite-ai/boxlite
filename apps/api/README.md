@@ -19,6 +19,8 @@ corepack enable
 
 The disposable-email dependency requires this runtime range. The Jest adapter uses
 Node's native loader to exercise the published ESM package and its bundled domain list.
+The API test configuration repeats the shared CI Listener aliases alongside that
+dependency's type mapping because TypeScript replaces inherited `paths` as a whole.
 
 Account-link flow tests load the Auth0 Action template with every deployment placeholder filled.
 Their SPA fixtures leave the optional MCP resource URL empty, matching the deployment default.
@@ -1164,9 +1166,9 @@ final limit. Existing workers continue and recover after the limit is lowered.
 
 The hosted `CiSettingsService` implements `CapacityProvider.resolve()`, while standalone
 uses its fixed environment adapter. Policy versions and the execution index are
-checked in the reservation transaction. Dashboard → CI → Connects configures this
-account total and shows connected-account setup state. Repository-specific limits
-are not available yet.
+checked in the reservation transaction. Dashboard → CI → Runners shows and edits
+this account total; Connects shows connected-account setup state.
+Repository-specific limits are not available yet.
 
 If another Box consumes the last Commerce slot after CI admission, the native
 adapter records a definitive refusal for `BoxCreationLimitExceededError`
