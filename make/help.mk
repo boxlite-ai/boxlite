@@ -55,6 +55,7 @@ help:
 	@echo "    make test:integration:sdk   - Run SDK integration suites (Python + Node + C)"
 	@echo "    make test:unit:rust         - Run Rust unit tests (nextest when available)"
 	@echo "    make test:docker:dind       - Run real Docker/Compose acceptance (DOCKER_ACCEPTANCE_ARGS)"
+	@echo "    make test:docker:swarm      - Run Swarm single/same-runner/cross-runner acceptance"
 	@echo "    make fmt:docker / lint:docker - Format/check Docker acceptance scripts"
 	@echo "    make test:unit:scripts      - Test build and coverage script contracts without native builds"
 	@echo "    make test:unit:vmm          - Run only the hypervisor and VMM crate unit tests"

@@ -71,6 +71,11 @@ of changed lines**, with no tolerance below that target. Total project coverage
 is reported as an informational status. The local collection command checks
 test success; Codecov evaluates changed lines against the pull request's base.
 
+Codecov excludes test sources in both root and nested `tests/` directories.
+`make/acceptance.mk` and `make/help.mk` dispatch commands and print help, so they
+are also excluded from language line coverage. Docker acceptance runs through
+`make test:docker:dind` and `make test:docker:swarm` with real guests.
+
 The Rust report combines core, shared, REST, CLI (including authentication,
 loopback cloud SSH and custom-kernel opt-in process tests), C/Node/Python native
 bindings, native VMM, and the runtime/shutdown/network tests that need no VM.

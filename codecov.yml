@@ -48,6 +48,7 @@ ignore:
   # when no coverage job ran. Directories first, then the naming conventions in
   # tree: the `.test.`/`.spec.` infix, Go's `_test.go`, a `test_` prefix, and the
   # `tests.rs` and `*_tests.rs` modules.
+  - "tests/**"
   - "**/tests/**"
   - "**/test/**"
   # The whole app is the end-to-end suite, so no naming convention marks its
@@ -60,6 +61,9 @@ ignore:
   - "**/tests.rs"
   - "**/*_tests.rs"
   - "src/test-utils/**"   # Test scaffolding pulled in by the core crate's tests
+  # Make command entry points and help do not produce language line coverage.
+  - "make/acceptance.mk"
+  - "make/help.mk"
   # `coverage:go` measures the whole runner module with -coverpkg=./..., and
   # this package is generated. Codecov resolves the module's import paths back
   # to repo-relative ones, which is what the glob matches.

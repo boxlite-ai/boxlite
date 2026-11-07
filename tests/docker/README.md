@@ -33,6 +33,24 @@ D1 requires `docker info`, a pulled image, a Dockerfile build with a unique
 marker and execution with `--pull=never`. D2 requires a two-service Compose
 application and HTTP 200 with that marker through the backend service name.
 
+## Swarm topologies
+
+Two Boxes in one worker exercise the same-runner topology; separate workers on
+different physical hosts exercise the cross-runner topology. Use the same
+checkout path and built SDK on both hosts for cross-runner tests.
+
+Run `make test:docker:swarm` with the same arguments and one of
+`--topology single`, `--topology same-runner`, or `--topology cross-runner`.
+The cross-runner case also requires `--runner-b user@host-b` and
+`--peer-address host-a-address`. Each topology produces its own evidence.
+
+The [Swarm guide](../../docs/guides/docker-swarm.md) describes the guest IP
+link, port exposure and network assertions. Single-node checks cover D3–D10;
+both two-node topologies independently cover M1–M6, including constrained
+cross-node VIP/DNSRR requests and ingress through a node without a backend task.
+Apple Silicon acceptance covers `--topology single` with `--runner-a local`;
+the two-node topologies are validated on Linux x86_64.
+
 ## Evidence and cleanup
 
 Each run creates a unique output directory containing `result.json`,
