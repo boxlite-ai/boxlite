@@ -47,9 +47,12 @@ Choose one GitHub mode. Both use a standard BoxLite API Key for worker operation
 
 Use a dedicated App whose installations you intend to service with your BoxLite
 account. Personal installations produce one repository runner pool per eligible
-repository. Organizations share the configured runner group. That group currently
-must already exist, use selected repositories, and match the eligible installed
-repository set; automatic group provisioning remains to be implemented.
+repository. Organizations share the configured runner group, which BoxLite creates
+and synchronizes automatically. The configured name is dedicated to BoxLite;
+default and inherited groups cannot be adopted. With public repositories enabled,
+the group includes installed private and public repositories. Otherwise it includes
+only installed private repositories. Installation repository access still limits
+both modes. No manual runner-group configuration is needed.
 
 The App needs Metadata: Read, Actions: Read, and repository Administration: Write.
 Organization runner groups additionally require organization Self-hosted runners:
@@ -306,5 +309,6 @@ transactions, real inbound HTTP verification, and image build/load. Standalone A
 webhook execution and multi-job artifact transfer have
 [live playground evidence](https://github.com/DefeatMan/boxlite-ci-playground/actions/runs/41820205537/attempts/1).
 The final image still needs deployment acceptance; live organization-group and
-hosted dev CI acceptance also remain pending. Use the organization-group setup
-requirements above when preparing those checks.
+hosted dev acceptance for automatic group provisioning remains pending. Verify
+first creation, mixed public/private repositories, policy updates, and empty
+membership after deploying the updated Listener.

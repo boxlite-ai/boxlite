@@ -255,7 +255,50 @@ export class SelfHost implements ListenerHost {
     })
     this.pending.set(id, provider)
     try {
-      const scopes = await new InstallationCatalog(provider, binding, binding.policy).load(signal)
+      const authorize = async () => {
+        if (!(await this.replayAuthority(client, lease, id, signal)))
+          throw new Error('Original App installation unavailable')
+        const [root, current] = await this.state.read(['backend/github', 'binding/self/current'])
+        if (
+          !root ||
+          !object(root.payload) ||
+          root.payload.kind !== 'app' ||
+          this.config.github.kind !== 'app' ||
+          root.payload.issuer !== this.config.github.issuer ||
+          !Array.isArray(root.payload.applications) ||
+          !root.payload.applications.includes(client) ||
+          !current ||
+          !object(current.payload) ||
+          !object(current.payload.accounts) ||
+          !object(current.payload.applications) ||
+          current.payload.accounts[String(id)] !== binding.installation.account.id ||
+          current.payload.applications[String(id)] !== client
+        )
+          throw new Error('Original App installation mapping unavailable')
+        return [root, current].map((row) => ({ key: row.key, version: row.version }))
+      }
+      const scopes = await new InstallationCatalog(provider, binding, binding.policy, async (effect) => {
+        const checks = await authorize(),
+          key = 'group-sync/' + id,
+          [prior] = await this.state.read([key])
+        await this.state.commit(
+          lease,
+          [
+            {
+              key,
+              expected: prior?.version ?? null,
+              payload: {
+                application: client,
+                binding: binding.binding,
+                generation: binding.generation,
+                effect: { ...effect },
+              },
+            },
+          ],
+          checks,
+        )
+      }).load(signal)
+      await authorize()
       for (const scope of scopes) await this.scopes().define(lease, scope, client)
       return scopes
     } finally {

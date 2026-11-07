@@ -143,12 +143,22 @@ export function getCiConnectSession(): { attempt: string; organization: string; 
 }
 export function prepareCiInstallationRedirect(id: string, address: string): string {
   const pending = getCiConnectSession(),
-    url = new URL(address)
+    url = new URL(address),
+    targeted = /^\/apps\/[a-zA-Z0-9-]+\/installations\/new\/permissions$/.test(url.pathname),
+    allowed = targeted ? ['state', 'target_id', 'target_type'] : ['state'],
+    targetId = url.searchParams.get('target_id') || ''
   if (
     !pending ||
     pending.attempt !== id ||
     url.origin !== 'https://github.com' ||
-    !/^\/apps\/[a-zA-Z0-9-]+\/installations\/new$/.test(url.pathname) ||
+    (!targeted && !/^\/apps\/[a-zA-Z0-9-]+\/installations\/new$/.test(url.pathname)) ||
+    [...url.searchParams.keys()].some((key) => !allowed.includes(key)) ||
+    (targeted &&
+      (url.searchParams.getAll('target_id').length !== 1 ||
+        !/^[1-9][0-9]*$/.test(targetId) ||
+        !Number.isSafeInteger(Number(targetId)) ||
+        url.searchParams.getAll('target_type').length !== 1 ||
+        !['User', 'Organization'].includes(url.searchParams.get('target_type') || ''))) ||
     url.username ||
     url.password ||
     url.hash ||

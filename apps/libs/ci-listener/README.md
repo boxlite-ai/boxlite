@@ -299,10 +299,24 @@ webhooks persist an exact job ID, so their admission does not wait for that scan
 `InstallationCatalog` enumerates a complete, bounded installation inventory using
 a metadata-only token. Personal accounts receive one repository scope per eligible
 repository. Organization accounts share a configured selected, non-inherited
-runner group. Its selected repositories must equal the eligible installed set;
-a missing group or changed policy blocks discovery. The catalog currently
-validates an existing group; automatic group provisioning is not implemented.
-Both hosts assemble catalog and execution through this library.
+runner group managed by BoxLite. The public-repository option includes installed
+private and public repositories when enabled, and only installed private
+repositories when disabled. Both hosts authorize and journal each group write
+before the catalog creates or synchronizes the configured group. Membership is
+exactly the eligible installed set; public access is enabled only after membership
+converges. Existing default or inherited groups cannot be adopted, and other group
+names are untouched. The configured name is reserved for BoxLite to manage.
+
+The catalog reads back policy and complete membership before publishing scopes.
+Provider failures withhold admission and retry from actual GitHub state, including
+after an uncertain create response. No eligible repositories clears an existing
+group but does not create a missing one. Correct groups require no mutation.
+Standalone intents use SQLite; hosted intents use the current binding generation,
+owner authority, execution lease and existing PostgreSQL state. Callers without a
+mutation-authority callback can inspect matching groups but cannot provision or
+repair them. Lease checks cannot fence an already-dispatched GitHub request;
+subsequent reconciliation repairs drift. Existing runner identities remain usable
+for original cleanup; group access changes may affect queued or unassigned jobs.
 
 `InstallationDirectory` runs complete installation-index reads and individual
 catalog refreshes in one background slot per App. The scheduler keeps processing

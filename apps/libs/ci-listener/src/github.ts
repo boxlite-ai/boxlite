@@ -25,7 +25,7 @@ interface GitHubRequest {
   url: string
   token?: string
   json?: Json
-  method?: 'GET' | 'POST' | 'DELETE'
+  method?: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE'
   response?: 'json' | 'empty' | 'page'
   signal?: AbortSignal
 }

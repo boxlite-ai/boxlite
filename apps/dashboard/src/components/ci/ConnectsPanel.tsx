@@ -209,12 +209,10 @@ export function ConnectsPanel() {
                 />
                 Allow installed public repositories to run CI
               </label>
-              {editing?.account_type === 'Organization' && (
-                <p className="text-body text-muted-foreground">
-                  The GitHub runner group's public-repository setting must match this policy. Repository access granted
-                  to the App still applies.
-                </p>
-              )}
+              <p className="text-body text-muted-foreground">
+                Private repositories are included. Enable this option to also include public repositories authorized for
+                the App.
+              </p>
               {message && (
                 <p role="alert" className="text-body text-muted-foreground">
                   {message}
