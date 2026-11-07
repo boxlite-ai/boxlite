@@ -85,7 +85,7 @@ struct ServerOidcConfig {
 ///   matching the Go CLI's build-info defaults.
 ///
 /// `server_url` is expected to be the same value passed to `--url` (e.g.
-/// `https://api.boxlite.ai/api`). When the server lookup fails (offline,
+/// `https://api.boxlite.ai`). When the server lookup fails (offline,
 /// older boxlite serve that doesn't expose `/config`) we silently fall
 /// through to env vars; if nothing supplies an issuer the caller gets an
 /// `anyhow::Error` with the list of sources we tried.
@@ -226,7 +226,7 @@ async fn fetch_server_oidc(server_url: &str, http: &reqwest::Client) -> Option<S
 }
 
 /// Compute the `/config` URL from a server base URL, preserving any prefix
-/// (e.g. `https://api.boxlite.ai/api/config`). `reqwest::Url::join` would
+/// (e.g. `https://boxlite.example.com/api/config`). `reqwest::Url::join` would
 /// strip the trailing path segment when the base lacks a trailing slash, so
 /// we append explicitly.
 fn join_config_url(server_url: &str) -> Result<url::Url> {
@@ -290,15 +290,15 @@ mod tests {
     /// Appending `/config` must preserve the control plane's existing path prefix.
     #[test]
     fn join_config_url_appends_to_prefix() {
-        let u = join_config_url("https://api.boxlite.ai/api").unwrap();
-        assert_eq!(u.as_str(), "https://api.boxlite.ai/api/config");
+        let u = join_config_url("https://boxlite.example.com/api").unwrap();
+        assert_eq!(u.as_str(), "https://boxlite.example.com/api/config");
     }
 
     /// A trailing slash on the server URL must not introduce a doubled path separator.
     #[test]
     fn join_config_url_strips_trailing_slash() {
-        let u = join_config_url("https://api.boxlite.ai/api/").unwrap();
-        assert_eq!(u.as_str(), "https://api.boxlite.ai/api/config");
+        let u = join_config_url("https://boxlite.example.com/api/").unwrap();
+        assert_eq!(u.as_str(), "https://boxlite.example.com/api/config");
     }
 
     /// Toggle is an involution — runs once to add, again to remove.

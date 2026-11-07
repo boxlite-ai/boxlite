@@ -679,7 +679,7 @@ function provisionAuth0({ stackDomain, dashboardDomain }: any) {
   console.log('==> Auth0 SPA application')
   console.log(`    created (client_id ${clientId})`)
 
-  const api = auth0Json(customApiArgs({ stackDomain }))
+  const api = auth0Json(customApiArgs({ apiHost: publicHostsFor({ domain: stackDomain }).api }))
   console.log('==> Auth0 custom API')
   console.log(`    created (audience ${api.identifier})`)
 
