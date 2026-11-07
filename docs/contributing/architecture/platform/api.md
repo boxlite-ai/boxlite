@@ -73,10 +73,10 @@ organizations without Boxes, and opt-in sections. Registration fields are always
 usage and activation are read only when explicitly included. Upgrade all producers before
 enabling consumers of this contract.
 
-| Method | Path | Behavior |
-| --- | --- | --- |
-| `GET` | `/api/admin/organizations` | Lists registration metadata, counts and impact without usage reads. |
-| `GET` | `/api/admin/organizations/{organizationId}` | Flat registration, member, Box and impact detail; `include=usage,activation` selects optional sections. |
+| Method | Path                                        | Behavior                                                                                                |
+| ------ | ------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| `GET`  | `/api/admin/organizations`                  | Lists registration metadata, counts and impact without usage reads.                                     |
+| `GET`  | `/api/admin/organizations/{organizationId}` | Flat registration, member, Box and impact detail; `include=usage,activation` selects optional sections. |
 
 ## Control-plane API
 
@@ -166,7 +166,7 @@ organization boundaries.
 | `GET`    | `/api/organizations/{organizationId}/invitations`                        | Lists pending invitations, including expired ones.       |
 | `POST`   | `/api/organizations/{organizationId}/invitations`                        | Creates an organization invitation.                      |
 | `PUT`    | `/api/organizations/{organizationId}/invitations/{invitationId}`         | Changes a pending invitation.                            |
-| `POST`   | `/api/organizations/{organizationId}/invitations/{invitationId}/cancel`  | Cancels a pending invitation, even after expiry.          |
+| `POST`   | `/api/organizations/{organizationId}/invitations/{invitationId}/cancel`  | Cancels a pending invitation, even after expiry.         |
 
 </details>
 
@@ -241,22 +241,22 @@ List and detail responses expose aliases only for READY versions, matching the
 versions a box can resolve. Aliases of non-ready versions remain stored but are
 omitted from those responses.
 
-| Method   | Path                               | What it does                                                                                                                |
-| -------- | ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| `GET`    | `/api/images`                      | Lists the organization's images together with the operator's curated set.                                                   |
-| `GET`    | `/api/images/usage`                | Counts held images against the limit and sums the sizes their versions declared.                                            |
-| `GET`    | `/api/images/{idOrRef}`            | Gets an image, its versions with their aliases, last-use and upstream-missing timestamps, and the last 100 alias events. |
-| `POST` | `/api/images/{idOrRef}/aliases` | Creates an alias for a ready version; existing names return 409, even for the same target. |
-| `DELETE` | `/api/images/{idOrRef}/aliases/{alias}` | Deletes only the alias; versions and existing boxes remain. |
-| `DELETE` | `/api/images/{idOrRef}`            | Removes the catalog entry, not the bytes, unless a box can still boot from it (409 lists the boxes).                        |
+| Method   | Path                                    | What it does                                                                                                             |
+| -------- | --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `GET`    | `/api/images`                           | Lists the organization's images together with the operator's curated set.                                                |
+| `GET`    | `/api/images/usage`                     | Counts held images against the limit and sums the sizes their versions declared.                                         |
+| `GET`    | `/api/images/{idOrRef}`                 | Gets an image, its versions with their aliases, last-use and upstream-missing timestamps, and the last 100 alias events. |
+| `POST`   | `/api/images/{idOrRef}/aliases`         | Creates an alias for a ready version; existing names return 409, even for the same target.                               |
+| `DELETE` | `/api/images/{idOrRef}/aliases/{alias}` | Deletes only the alias; versions and existing boxes remain.                                                              |
+| `DELETE` | `/api/images/{idOrRef}`                 | Removes the catalog entry, not the bytes, unless a box can still boot from it (409 lists the boxes).                     |
 
 </details>
 
 <details>
 <summary><b>Registry credentials</b> · 4 routes</summary>
 
-| Method   | Path                   | What it does                                                                          |
-| -------- | ---------------------- | ------------------------------------------------------------------------------------- |
+| Method   | Path                          | What it does                                                                          |
+| -------- | ----------------------------- | ------------------------------------------------------------------------------------- |
 | `GET`    | `/api/images/registries`      | Lists the organization's private registry logins, without passwords.                  |
 | `POST`   | `/api/images/registries`      | Adds a login; the password is stored where the API cannot read it and never returned. |
 | `PUT`    | `/api/images/registries/{id}` | Replaces username/password while preserving scope and dependent Boxes; requires `write:registries`. |
@@ -384,7 +384,7 @@ release fetched over HTTPS.
 
 | Protocol                 | Path, topic, or event          | What it does                                                                                                                           |
 | ------------------------ | ------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------- |
-| Socket.IO over WebSocket | `/api/socket.io/`              | Authenticates a JWT or API key and joins the user room, plus the organization room for members only; removal ejects the member. |
+| Socket.IO over WebSocket | `/api/socket.io/`              | Authenticates a JWT or API key and joins the user room, plus the organization room for members only; removal ejects the member.        |
 | Socket.IO event          | `box.created`                  | Notifies an organization that a box was created.                                                                                       |
 | Socket.IO event          | `box.state.updated`            | Notifies an organization that a box's observed state changed.                                                                          |
 | Socket.IO event          | `box.desired-state.updated`    | Notifies an organization that a box's desired state changed.                                                                           |
@@ -412,6 +412,55 @@ The `template.*` values remain in the `WebhookEvent` enum but nothing emits
 them.
 
 </details>
+
+## Experimental GitHub CI webhook
+
+`POST /api/v1/ci/github/webhook` uses GitHub HMAC-SHA256 authentication over the raw
+request body, not platform API-key authentication. Only supported, verified notifications
+matching an established installation binding persist a wake hint. Success is 204;
+invalid signatures are 401, conflicting delivery bodies 409, unsupported media/compression
+415, bodies above 1 MiB 413, and unavailable persistence/capacity 503. See the
+[ingress contract and recovery limitations](../../../../apps/api/README.md#github-ci-webhook-ingress-in-development).
+
+## Experimental GitHub CI connect
+
+Registered by `apps/api/src/ci/ci-connect.controller.ts`; excluded from generated
+clients while the scheduler integration is in development. The same handlers are
+also registered without `{prefix}`, using the authenticated organization.
+
+| Method      | Path                                        | Behavior                                                                                          |
+| ----------- | ------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| `POST`      | `/api/v1/{prefix}/ci/connect`               | Starts GitHub device authorization for an installation binding.                                   |
+| `POST`      | `/api/v1/{prefix}/ci/connect/{id}/poll`     | Polls authorization and atomically establishes verified installation ownership.                   |
+| `DELETE`    | `/api/v1/{prefix}/ci/connect/{id}`          | Cancels pending authorization; preserves an already completed binding.                            |
+| `GET`       | `/api/v1/{prefix}/ci/connect/configuration` | Returns the public App installation link and browser-connect availability.                        |
+| `POST`      | `/api/v1/{prefix}/ci/connect/web`           | Starts five-minute browser authorization with independent state and S256 PKCE.                    |
+| `POST`      | `/api/v1/{prefix}/ci/connect/{id}/complete` | Validates original actor/state, claims one code exchange and uses the shared binding transaction. |
+| `GET`       | `/api/v1/{prefix}/ci/connect/{id}`              | Resumes an authenticated browser grant without exchanging its code again.                         |
+| `POST`      | `/api/v1/{prefix}/ci/connect/{id}/accounts`     | Selects a verified owned account; connects or returns the matching CI App install URL.            |
+| `POST`      | `/api/v1/{prefix}/ci/connect/{id}/installation` | Verifies installation state, original target/App and current ownership before binding.            |
+| `GET/PATCH` | `/api/v1/{prefix}/ci/settings`              | Reads/updates the account-wide CI maximum; null inherits Commerce and zero pauses new workers.    |
+
+Every operation requires an organization owner or the explicit platform-admin exception;
+API keys also need `write:boxes` and `delete:boxes`. A connected binding reports
+its durable `listener_status`; authorization success can precede runner setup. See [API behavior and limits](../../../../apps/api/README.md#github-ci-installation-connect-in-development).
+
+## Experimental GitHub CI management
+
+Registered by `ci-management.controller.ts`; these routes also accept the
+authenticated-organization form without `{prefix}` and are excluded from generated clients.
+
+| Method | Path | Behavior |
+| --- | --- | --- |
+| `GET` | `/api/v1/{prefix}/ci/runners` | Lists original JIT Boxes with name filtering, pagination and organization-wide capacity. |
+| `PATCH` | `/api/v1/{prefix}/ci/connections/{id}` | Updates the existing connection's public-repository policy. |
+| `DELETE` | `/api/v1/{prefix}/ci/connections/{id}` | Disables a connection while retaining original worker cleanup identities. |
+
+Runner reads use existing organization Box access. Connection writes require the
+current owner and both Box write/delete key scopes. Policy updates retain delivered
+jobs; workers awaiting JIT may retire under the new policy. Connection deletion is
+separate from cancelling a pending authorization attempt above. See
+[management contracts](../../../../apps/api/README.md#hosted-ci-management).
 
 ## Hosted BoxLite-compatible API
 
@@ -543,14 +592,14 @@ forwarding configuration; the runner checks that the box is running and returns
 <details>
 <summary><b>Images</b> · 6 routes</summary>
 
-| Method   | Path                                          | What it does                                                                                           |
-| -------- | --------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
-| `GET`    | `/api/v1[/{prefix}]/images`                   | Lists one row per reference the organization can boot from; curated images are left out.               |
-| `GET`    | `/api/v1[/{prefix}]/images/usage`             | Counts held images against the limit and sums the sizes their versions declared.                       |
-| `GET`    | `/api/v1[/{prefix}]/images/{name}`            | Gets an image: its versions with their aliases, last use and upstream state, and the last 100 alias events. |
-| `POST` | `/api/v1[/{prefix}]/images/{name}/aliases` | Creates an alias from `alias` and `digest`; existing names return `already_exists`. |
-| `DELETE` | `/api/v1[/{prefix}]/images/{name}/aliases/{alias}` | Removes only the alias; needs `write:images`. |
-| `DELETE` | `/api/v1[/{prefix}]/images/{name}`            | Removes the catalog entry, not the bytes, unless a box can still boot from it.                         |
+| Method   | Path                                               | What it does                                                                                                |
+| -------- | -------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `GET`    | `/api/v1[/{prefix}]/images`                        | Lists one row per reference the organization can boot from; curated images are left out.                    |
+| `GET`    | `/api/v1[/{prefix}]/images/usage`                  | Counts held images against the limit and sums the sizes their versions declared.                            |
+| `GET`    | `/api/v1[/{prefix}]/images/{name}`                 | Gets an image: its versions with their aliases, last use and upstream state, and the last 100 alias events. |
+| `POST`   | `/api/v1[/{prefix}]/images/{name}/aliases`         | Creates an alias from `alias` and `digest`; existing names return `already_exists`.                         |
+| `DELETE` | `/api/v1[/{prefix}]/images/{name}/aliases/{alias}` | Removes only the alias; needs `write:images`.                                                               |
+| `DELETE` | `/api/v1[/{prefix}]/images/{name}`                 | Removes the catalog entry, not the bytes, unless a box can still boot from it.                              |
 
 The same catalog as `/api/images`, in the box API's snake_case shapes and with
 versions named by digest, for SDK clients.
@@ -560,8 +609,8 @@ versions named by digest, for SDK clients.
 <details>
 <summary><b>Registries</b> · 3 routes</summary>
 
-| Method   | Path                                 | What it does                                                                     |
-| -------- | ------------------------------------ | -------------------------------------------------------------------------------- |
+| Method   | Path                                        | What it does                                                                     |
+| -------- | ------------------------------------------- | -------------------------------------------------------------------------------- |
 | `GET`    | `/api/v1[/{prefix}]/images/registries`      | Lists the organization's private registry logins, without passwords.             |
 | `POST`   | `/api/v1[/{prefix}]/images/registries`      | Adds a login; a second one for the same registry and prefix is `already_exists`. |
 | `DELETE` | `/api/v1[/{prefix}]/images/registries/{id}` | Removes a login, unless a box still pulls through it (409 lists the boxes).      |
@@ -587,13 +636,13 @@ and user JWTs can call it; a platform administrator account is not required.
 Dedicated Admin SDK methods are not yet available. Existing Cloud API SDK methods
 continue to manage organizations and invitations.
 
-| Method | Path | Required API-key scope | Membership rule |
-| --- | --- | --- | --- |
-| `GET` | `/api/v1/organizations/users` | `read:members` | Member |
-| `DELETE` | `/api/v1/organizations/users/{user_id}` | `write:members` | Owner |
-| `GET` | `/api/v1/organizations/invites` | `read:members` | Member |
-| `POST` | `/api/v1/organizations/invites` | `write:members` | Owner |
-| `DELETE` | `/api/v1/organizations/invites/{invite_id}` | `write:members` | Owner |
+| Method   | Path                                        | Required API-key scope | Membership rule |
+| -------- | ------------------------------------------- | ---------------------- | --------------- |
+| `GET`    | `/api/v1/organizations/users`               | `read:members`         | Member          |
+| `DELETE` | `/api/v1/organizations/users/{user_id}`     | `write:members`        | Owner           |
+| `GET`    | `/api/v1/organizations/invites`             | `read:members`         | Member          |
+| `POST`   | `/api/v1/organizations/invites`             | `write:members`        | Owner           |
+| `DELETE` | `/api/v1/organizations/invites/{invite_id}` | `write:members`        | Owner           |
 
 The key selects its organization. JWT callers select an organization with
 `X-BoxLite-Organization-ID`, or use their default organization. Read and write
@@ -669,16 +718,22 @@ curl --get "$BOXLITE_API_URL/api/admin/runner-cpu-incidents" \
 
 ```json
 {
-  "items": [{
-    "id": "42", "runnerId": "11111111-1111-4111-8111-111111111111",
-    "eventId": "22222222-2222-4222-8222-222222222222",
-    "highCpuSince": "2026-10-29T00:00:00.000Z",
-    "windowStartedAt": "2026-10-29T00:05:00.000Z",
-    "windowEndedAt": "2026-10-29T00:07:00.000Z",
-    "runnerCpuPercent": 85, "boxId": "example-box", "image": "ubuntu:24.04",
-    "cpuSeconds": 240, "samplingComplete": true,
-    "receivedAt": "2026-10-29T00:12:01.000Z"
-  }]
+  "items": [
+    {
+      "id": "42",
+      "runnerId": "11111111-1111-4111-8111-111111111111",
+      "eventId": "22222222-2222-4222-8222-222222222222",
+      "highCpuSince": "2026-10-29T00:00:00.000Z",
+      "windowStartedAt": "2026-10-29T00:05:00.000Z",
+      "windowEndedAt": "2026-10-29T00:07:00.000Z",
+      "runnerCpuPercent": 85,
+      "boxId": "example-box",
+      "image": "ubuntu:24.04",
+      "cpuSeconds": 240,
+      "samplingComplete": true,
+      "receivedAt": "2026-10-29T00:12:01.000Z"
+    }
+  ]
 }
 ```
 
@@ -947,16 +1002,16 @@ runtime and its microVMs.
 <details>
 <summary><b>Box lifecycle</b> · 8 routes</summary>
 
-| Method | Path                               | What it does                                                                                    |
-| ------ | ---------------------------------- | ----------------------------------------------------------------------------------------------- |
-| `POST` | `/boxes`                           | Creates a box in the embedded BoxLite runtime.                                                  |
-| `GET`  | `/boxes/{boxId}`                   | Gets local box information.                                                                     |
-| `POST` | `/boxes/{boxId}/destroy`           | Destroys a local box.                                                                           |
-| `POST` | `/boxes/{boxId}/start`             | Starts a local box.                                                                             |
-| `POST` | `/boxes/{boxId}/stop`              | Stops a local box.                                                                              |
-| `POST` | `/boxes/{boxId}/recover`           | Recovers a local box.                                                                           |
-| `POST` | `/boxes/{boxId}/is-recoverable`    | Checks whether a local box can be recovered.                                                    |
-| `POST` | `/boxes/{boxId}/network-settings`  | Changes a local box's network settings.                                                         |
+| Method | Path                              | What it does                                   |
+| ------ | --------------------------------- | ---------------------------------------------- |
+| `POST` | `/boxes`                          | Creates a box in the embedded BoxLite runtime. |
+| `GET`  | `/boxes/{boxId}`                  | Gets local box information.                    |
+| `POST` | `/boxes/{boxId}/destroy`          | Destroys a local box.                          |
+| `POST` | `/boxes/{boxId}/start`            | Starts a local box.                            |
+| `POST` | `/boxes/{boxId}/stop`             | Stops a local box.                             |
+| `POST` | `/boxes/{boxId}/recover`          | Recovers a local box.                          |
+| `POST` | `/boxes/{boxId}/is-recoverable`   | Checks whether a local box can be recovered.   |
+| `POST` | `/boxes/{boxId}/network-settings` | Changes a local box's network settings.        |
 
 </details>
 
@@ -1001,15 +1056,15 @@ and tunnels them to guest ports is in [`proxy/README.md`](../../../../apps/proxy
 <details>
 <summary><b>Proxy routes</b> · 7 routes</summary>
 
-| Method    | Host and path                                              | What it does                                                                                     |
-| --------- | ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
-| `GET`     | `proxy.<domain>/health`                                    | Reports proxy health and version.                                                                |
-| `GET`     | `proxy.<domain>/login`                                     | Starts OIDC login with a host-only PKCE cookie and signed target state. |
-| `GET`     | `proxy.<domain>/callback`                                  | Completes the OIDC preview authentication flow.                                                  |
-| `GET`     | `<port>-<box>.proxy.<domain>/__boxlite/auth/callback`       | Consumes the login handoff and issues a host-only tunnel session cookie. |
-| `POST`    | `<any host>/accept-boxlite-preview-warning`                | Records preview-warning acceptance and redirects to the `redirect` form field (the query form is still accepted). |
-| `ANY`     | `<port>-<box>.proxy.<domain>/{path...}`                    | Reverse-proxies HTTP and WebSocket traffic to the selected box port after preview access checks. |
-| `CONNECT` | `<port>-<box>.proxy.<domain>`                              | Opens a TCP stream after inbound and tunnel authorization; SDK/CLI sends its organization bearer. |
+| Method    | Host and path                                         | What it does                                                                                                      |
+| --------- | ----------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `GET`     | `proxy.<domain>/health`                               | Reports proxy health and version.                                                                                 |
+| `GET`     | `proxy.<domain>/login`                                | Starts OIDC login with a host-only PKCE cookie and signed target state.                                           |
+| `GET`     | `proxy.<domain>/callback`                             | Completes the OIDC preview authentication flow.                                                                   |
+| `GET`     | `<port>-<box>.proxy.<domain>/__boxlite/auth/callback` | Consumes the login handoff and issues a host-only tunnel session cookie.                                          |
+| `POST`    | `<any host>/accept-boxlite-preview-warning`           | Records preview-warning acceptance and redirects to the `redirect` form field (the query form is still accepted). |
+| `ANY`     | `<port>-<box>.proxy.<domain>/{path...}`               | Reverse-proxies HTTP and WebSocket traffic to the selected box port after preview access checks.                  |
+| `CONNECT` | `<port>-<box>.proxy.<domain>`                         | Opens a TCP stream after inbound and tunnel authorization; SDK/CLI sends its organization bearer.                 |
 
 </details>
 
@@ -1032,12 +1087,12 @@ which upstreams are reachable, and how redirects are judged is in
 <details>
 <summary><b>Registry proxy routes</b> · 4 routes</summary>
 
-| Method       | Path                                                  | What it does                                                                             |
-| ------------ | ----------------------------------------------------- | ---------------------------------------------------------------------------------------- |
-| `GET`        | `/health`                                             | Reports registry proxy health and version.                                               |
-| `GET` `HEAD` | `/v2/`                                                | The distribution version check; answers an unauthenticated caller with a Basic challenge. |
-| `GET` `HEAD` | `/v2/{org}/{host}/{repository...}/manifests/{ref}`    | Relays the upstream manifest unmodified, with its digest and media type.                 |
-| `GET` `HEAD` | `/v2/{org}/{host}/{repository...}/blobs/{digest}`     | Streams the upstream blob, following a registry's redirect to a permitted address.        |
+| Method       | Path                                               | What it does                                                                              |
+| ------------ | -------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| `GET`        | `/health`                                          | Reports registry proxy health and version.                                                |
+| `GET` `HEAD` | `/v2/`                                             | The distribution version check; answers an unauthenticated caller with a Basic challenge. |
+| `GET` `HEAD` | `/v2/{org}/{host}/{repository...}/manifests/{ref}` | Relays the upstream manifest unmodified, with its digest and media type.                  |
+| `GET` `HEAD` | `/v2/{org}/{host}/{repository...}/blobs/{digest}`  | Streams the upstream blob, following a registry's redirect to a permitted address.        |
 
 </details>
 

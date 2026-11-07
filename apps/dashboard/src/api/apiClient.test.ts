@@ -77,6 +77,65 @@ describe('ApiClient 401 -> bounded re-login recovery', () => {
   afterEach(() => {
     vi.restoreAllMocks()
   })
+  it('CI methods use the explicitly supplied original organization, current token and REST paths', async () => {
+    const requests: any[] = []
+    const api = await makeClient(vi.fn(), 200, { status: 'connected' }, requests)
+    api.setAccessToken('new-token')
+    await api.getCiRunners('original-org', 2, 25)
+    await api.deleteCiConnection('original-org', 'binding-id')
+    await api.getCiSettings('original-org')
+    await api.setCiCapacity('original-org', null)
+    await api.getCiConnectConfiguration('original-org')
+    await api.startCiConnect('original-org', {
+      account_type: 'User',
+      follow_installation: true,
+      allow_public_repositories: true,
+    })
+    await api.completeCiConnect('original-org', 'attempt-id', { code: 'private-code', state: 'private-state' })
+    expect(requests.map((request) => request.url)).toEqual([
+      '/v1/original-org/ci/runners',
+      '/v1/original-org/ci/connections/binding-id',
+      '/v1/original-org/ci/settings',
+      '/v1/original-org/ci/settings',
+      '/v1/original-org/ci/connect/configuration',
+      '/v1/original-org/ci/connect/web',
+      '/v1/original-org/ci/connect/attempt-id/complete',
+    ])
+    expect(requests[0].params).toEqual({ page: 2, limit: 25 })
+    expect(requests[1].method).toBe('delete')
+    expect(requests[1].data).toBeUndefined()
+    expect(requests.every((request) => request.headers.Authorization === 'Bearer new-token')).toBe(true)
+    expect(JSON.parse(requests[3].data)).toEqual({ max_concurrent_jobs: null })
+    expect(JSON.parse(requests[6].data)).toEqual({ code: 'private-code', state: 'private-state' })
+  })
+  it('adds a normalized literal runner name filter without changing the unfiltered request', async () => {
+    const requests: any[] = []
+    const api = await makeClient(vi.fn(), 200, {}, requests)
+    await api.getCiRunners('org/one', 2, 25)
+    await api.getCiRunners('org/one', 1, 25, ' CI-JIT-% ')
+    expect(requests.map((request) => request.url)).toEqual(['/v1/org%2Fone/ci/runners', '/v1/org%2Fone/ci/runners'])
+    expect(requests[0].params).toEqual({ page: 2, limit: 25 })
+    expect(requests[1].params).toEqual({ page: 1, limit: 25, name: 'CI-JIT-%' })
+  })
+  it('updates only a connection policy using its captured organization and encoded binding', async () => {
+    const requests: any[] = []
+    const api = await makeClient(vi.fn(), 200, {}, requests)
+    api.setAccessToken('current-token')
+    await api.updateCiConnection('org/one', 'binding/id', false)
+    expect(requests).toHaveLength(1)
+    expect(requests[0].url).toBe('/v1/org%2Fone/ci/connections/binding%2Fid')
+    expect(requests[0].method).toBe('patch')
+    expect(requests[0].headers.Authorization).toBe('Bearer current-token')
+    expect(JSON.parse(requests[0].data)).toEqual({ allow_public_repositories: false })
+  })
+  it('CI completion discards Axios request bodies from surfaced errors', async () => {
+    const api = await makeClient(vi.fn(), 403, { message: 'private-code private-token' })
+    const error = await api
+      .completeCiConnect('original-org', 'attempt-id', { code: 'private-code', state: 'private-state' })
+      .catch((error) => error)
+    expect(error.message).toBe('GitHub authorization could not be completed. Restart connect.')
+    expect(error.cause).toBeUndefined()
+  })
 
   it('first 401 triggers onUnauthorized once and suspends the caller (no error flash)', async () => {
     const onUnauthorized = vi.fn(() => Promise.resolve())

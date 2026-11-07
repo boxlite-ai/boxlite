@@ -1,6 +1,7 @@
 pub mod agent;
 pub mod attach;
 pub mod auth;
+pub mod ci;
 pub mod cp;
 pub mod create;
 pub mod domain;

@@ -19,6 +19,8 @@ corepack enable
 
 The disposable-email dependency requires this runtime range. The Jest adapter uses
 Node's native loader to exercise the published ESM package and its bundled domain list.
+The API test configuration repeats the shared CI Listener aliases alongside that
+dependency's type mapping because TypeScript replaces inherited `paths` as a whole.
 
 Account-link flow tests load the Auth0 Action template with every deployment placeholder filled.
 Their SPA fixtures leave the optional MCP resource URL empty, matching the deployment default.
@@ -137,6 +139,177 @@ described in the [DinD guide](../../docs/guides/docker-in-docker.md).
 
 Migration-backed integration suites that query `Box`, including usage accounting,
 run `AddGuestPrivileged1792540800000` so their schema includes the persisted field.
+
+## GitHub CI installation connect (in development)
+
+The CI controller implements `POST /api/v1/{prefix}/ci/connect`,
+`POST /api/v1/{prefix}/ci/connect/{id}/poll`, and
+`DELETE /api/v1/{prefix}/ci/connect/{id}`. Browser connect adds
+`GET /api/v1/{prefix}/ci/connect/configuration`,
+`POST /api/v1/{prefix}/ci/connect/web`, and
+`POST /api/v1/{prefix}/ci/connect/{id}/complete`,
+`POST /api/v1/{prefix}/ci/connect/{id}/select`, and
+`POST /api/v1/{prefix}/ci/connect/{id}/installation`. Routes without `{prefix}` use the existing
+authenticated organization. These experimental routes are excluded from generated clients.
+
+Start accepts `github_account`, `follow_installation: true`, and
+`allow_public_repositories`. Existing platform authentication and organization guards
+require an owner or the explicit platform-admin exception; API keys additionally need
+`write:boxes` and `delete:boxes`. Transactions remain scoped to the initiating user and
+organization. GitHub device authorization proves personal-account ownership or active
+organization-admin membership and cross-checks the installation through App authentication.
+
+The Dashboard uses a dedicated GitHub **OAuth App** for identity discovery. It
+requests exactly `read:user read:org` with independent state and S256 PKCE; it
+rejects missing or excess granted scopes. The two **CI GitHub Apps** supply runner
+permissions separately. CLI Device Flow keeps its existing App-specific contract.
+New browser starts accept `follow_installation: true`,
+`allow_public_repositories: false`, and optional `select_account: true` to force
+GitHub's account picker. The optional legacy `account_type` field does not choose
+the identity client. The original OAuth client remains pinned to each attempt.
+
+Set `CI_GITHUB_OAUTH_CLIENT_ID` as a plain API setting and
+`CI_GITHUB_OAUTH_CLIENT_SECRET` as a workload secret reference. They must be distinct
+from the CI Apps. Without both, new browser connect is unavailable; scheduling and
+CLI connect remain independent. Existing `CI_GITHUB_APP_CLIENT_SECRET` and
+`CI_GITHUB_ORG_APP_CLIENT_SECRET` settings only support legacy web grants during
+transition, rather than new Dashboard sign-in. No Auth0 identity-provider tokens
+are needed, and switching the CI GitHub identity does not switch the BoxLite login.
+
+The OAuth App callback is `${DASHBOARD_URL}/settings/ci/callback`; use an exact
+HTTPS origin, or explicit localhost HTTP for local development. Both CI Apps use
+that URL as their **Setup URL**, with automatic OAuth during installation disabled.
+The bootstrap removes callback parameters before loading app/telemetry code.
+Only attempt ID, original BoxLite organization ID and expiry enter tab-scoped
+session storage; codes/state stay in memory and verifiers/tokens stay on the API.
+An uncertain code exchange is terminal and never retried. An authenticated
+`GET /api/v1/{prefix}/ci/connect/{id}` resumes the same grant after reload.
+
+After login, the API reads the personal identity and paginated active organization
+memberships. Only owner (`admin`) memberships become choices. It checks each
+choice using the corresponding CI App JWT, independently of the OAuth client's
+installation inventory. A verified installation offers **Connect**; an actual
+installation lookup 404 offers **Install**. Other upstream errors remain failures.
+`POST /api/v1/{prefix}/ci/connect/{id}/accounts` accepts only numeric `account_id`
+and boolean `allow_public_repositories`. Existing connection policy is preserved;
+use Update to change it. Legacy `/select` still accepts installation IDs and
+consumes its original App-specific grant once.
+
+OAuth-visible memberships are not a complete organization inventory. Organization
+OAuth approval or an active SAML session may be required even if the CI App is
+installed. The picker retains a **Missing organization?** recovery action linking
+to GitHub access settings/help and fresh authorization. Never infer “uninstalled”
+from an omitted membership or claim the user owns no organizations.
+
+For Install, persist the selected account, CI App and fresh installation state in
+an encrypted target context. The install URL uses that CI App; returning to the
+picker never automatically repeats the redirect. `/installation` verifies state,
+current owner membership, target App/account and the returned installation ID
+before binding. A naked callback cannot claim an account. Successful account-based
+connections return refreshed choices with green checks and retain the encrypted
+user token for additional choices only within the original five-minute deadline.
+The deadline is never extended. Close/Switch clears the unfinished grant while
+preserving committed bindings. Expiry blocks authorization immediately; abandoned
+ciphertext/context is physically cleared on the next start or authenticated read,
+without a promised five-minute background deletion job. Refresh tokens are discarded.
+
+Delete cancels all unfinished browser grants in the original BoxLite organization,
+including grants issued by a separate OAuth client, plus matching-App Device Flow
+attempts. It clears temporary credentials, target context and leases before
+locking/disabling the binding. Finalization uses the same attempt-before-binding
+lock order and rechecks cancellation/deadlines before commit. If Delete wins,
+an old callback cannot reactivate or wake inventory; a new verified grant may
+reconnect. Independent completed bindings and original worker cleanup remain.
+
+Apply `1794000000000-add-ci-web-target-migration` after the existing connect/web/
+selection migrations before deploying this flow. New OAuth fields are optional
+in the mstage API catalog; the secret belongs to both API and secret groups.
+
+```mermaid
+sequenceDiagram
+    actor User
+    participant UI as Dashboard
+    participant API as CI API
+    participant OAuth as Identity OAuth App
+    participant CI as Selected CI App
+    User->>UI: Connect GitHub
+    UI->>OAuth: Authorize identity and membership reads with PKCE
+    OAuth-->>UI: Code and state
+    UI->>API: Complete original grant after scrubbing URL
+    API-->>UI: Personal and OAuth-visible owned accounts
+    User->>UI: Choose account
+    UI->>API: Account ID and public repository policy
+    API->>CI: Verify installation with target App JWT
+    alt Already installed
+        API-->>UI: Bind and show green check
+    else Missing installation
+        API-->>UI: Matching CI App install URL with fresh state
+        User->>CI: Install
+        CI-->>UI: Setup callback
+        UI->>API: Verify original target, owner, state and installation
+        API-->>UI: Bind and show green check
+    end
+```
+
+Design: [Account-first CI connect](https://linear.app/polygala/issue/BUI-1511/github-ci-account-first-connect-flow).
+
+## GitHub CI webhook ingress (in development)
+
+`POST /api/v1/ci/github/webhook` (Personal App) and
+`POST /api/v1/ci/github/webhook/organization` (Organization App) accept GitHub's signed notifications without a
+BoxLite API Key. Only this route uses raw bytes, capped at 1 MiB; compressed bodies
+and non-JSON content types are rejected. `CI_GITHUB_WEBHOOK_SECRET` is injected by
+the deployment platform from a secret reference. Its trimmed UTF-8 value must be
+32–256 bytes; raw configuration is capped at 64 KiB. Configure the same trimmed
+value as the GitHub App webhook secret, separately from the App private key.
+
+HMAC-SHA256 verification precedes JSON parsing and database access. The shared
+`Listener.receive` and `ListenerInbox` store receipts, notices and wakes in
+`ci_listener_state`. Each ingress read/write transaction rechecks the configured
+App, live installation binding and original actor's current owner/admin authority.
+Unbound or revoked workflow notifications return 503 without storing a receipt.
+An unconnected installation does not enqueue inventory: connect itself commits
+the authoritative binding and wake together. Job notifications cannot create or
+claim a connection, and revoked authority or known account mismatches store no inbox work.
+Signed installation changes may record discovery hints even after a binding is
+removed; those hints grant no execution authority.
+
+Delivery UUID and body/event digest prevent conflicting replay. Distinct deliveries
+update opaque record versions; settlement matches the captured version so an older
+observation cannot erase newer work. Repository/run/job identity conflicts return
+409 and roll back all inbox writes. A notice is demand to verify through GitHub,
+not an exclusive job assignment or executable instructions.
+
+HTTP 204 follows durable commit, duplicate recognition or a valid ignored event.
+HTTP 503 retains unsettled work on database failure or capacity exhaustion. Requests,
+secret reads and unsettled persistence operations are bounded; a response timeout
+does not free a still-running operation. A late commit remains idempotent on retry.
+Receipts are currently retained; automatic retention pruning is not implemented.
+
+GitHub does not automatically retry failed webhook deliveries. The shared controller
+uses App-wide delivery recovery when the webhook secret is configured, alongside
+bounded compensation scans. The shared controller saves exact delivery IDs, GUIDs,
+scan checkpoints and retry intents in PostgreSQL, then rechecks the current connect
+binding and owner before requesting replay. Missing or revoked bindings cannot send
+a replay or obtain execution authority. POST 202 only confirms a request; a local
+receipt or later successful delivery observation stops transport retries. Recovery
+metadata expires after the available history window; business receipts and unknown
+resource allocations are not pruned by that cleanup.
+A normal queued-job webhook supplies its exact job ID; it does not trigger short
+polling of every repository. Apply the
+connect and shared-state migrations before enabling this receiver. Real hosted App
+CI and recovery acceptance are still pending.
+
+### JIT Box deletion and capacity recovery
+
+Hosted worker recovery checks the recorded Box ID and organization before
+interpreting its lifecycle state. Platform soft deletion renames the Box; a
+confirmed `DESTROYED` record for that original ID releases its physical capacity
+even after the rename. Pending deletion retains capacity until confirmation.
+Unknown IDs, conflicting ledgers, foreign organizations and renamed live Boxes
+remain denied. Confirmed Box absence makes its physical capacity available; the
+allocation remains recorded until the original runner cleanup also finishes.
+A successful CI job alone does not prove that cleanup finished.
 
 ## Admin Box image
 
@@ -469,3 +642,226 @@ R2 reuses successful `user.login` records from `LoginEventRecorder`, with the us
 first API use of each newly issued token, including refreshed tokens. R2 therefore treats a
 qualifying token-use record as return activity; it does not require a new interactive login.
 No additional event or issuer-claim configuration is required. Redis/log failures can omit records.
+
+## Box creation and readiness
+
+`POST /v1/{prefix}/boxes` returns the persisted Box identity with HTTP 201 without
+waiting for runner startup. A new Box can report `configured`; an already running
+warm Box reports `running`. Cloud startup continues in the background.
+
+Callers retain `box_id` and observe that same Box until it is ready. The explicit
+start endpoint retains its existing startup wait; the Listener observes the original
+ID and registers a JIT runner only after `running`. A lost creation response remains
+an uncertain outcome and must not trigger a blind retry or adoption by name.
+
+## Native hosted CI Listener (in development)
+
+`CiListenerService` imports the shared TypeScript `Listener` directly. Every API
+replica can receive signed webhooks; a PostgreSQL execution lease selects one
+scheduler. No CI process, private RPC channel or API-container state volume is
+required. The shared journal retains original execution identities across restarts.
+
+The host modules divide responsibilities:
+
+| Module                   | Responsibility                                                                              |
+| ------------------------ | ------------------------------------------------------------------------------------------- |
+| `ci-native-state.ts`     | Existing PostgreSQL pool, fixed App namespace, original binding and current owner authority |
+| `ci-native-host.ts`      | Connected installation discovery, scoped GitHub credentials and binding-authorized inbox    |
+| `ci-native-workers.ts`   | Internal BoxService creation/lifecycle and one-attempt JIT delivery                         |
+| `ci-listener.service.ts` | API lifecycle, shared controller startup, ingress and shutdown                              |
+
+Connect fixes the BoxLite organization/actor and GitHub installation. Jobs cannot
+select another tenant. Discovery publishes catalog scopes before marking that binding
+ready; readiness describes initialization, not available execution capacity.
+Personal accounts use one runner pool per repository; organizations use the configured
+selected, non-inherited runner group with the exact eligible repository inventory.
+The group must already exist; automatic group provisioning remains unfinished.
+The shared installation directory publishes successful catalogs independently.
+An installation failure withholds that installation's new admissions and retains
+its hints; other initialized accounts continue. Catalog requests run outside the
+scheduler tick, with per-installation retry deadlines. A failed complete binding
+index withholds admission until index recovery. This has local integration checks;
+deployed dev acceptance is still pending.
+
+### Original-resource and execution fencing
+
+The shared journal keeps historical scopes, active allocations, quotas and external
+operation intents. The native ledger uses `box-native/<allocation-id>` in the same
+state table. BoxService's `onPersist` callback checks the current execution epoch,
+original binding and owner, and records the actual Box ID in the Box transaction.
+A denied or stale callback rolls back both rows. Commerce limits still apply;
+providing the callback forces fresh Box creation.
+
+Cleanup uses the known original Box ID and scope, even after admission is revoked.
+A missing ownership record is an error. Only absence of the known original Box row
+or a confirmed destroyed state permits the shared controller to mark it absent;
+failed destruction does not. Physical capacity returns after original Box absence
+is confirmed. Runner cleanup debt and the same-job dedup record remain until
+GitHub runner absence is confirmed. An elapsed timeout or a completed notice does not prove
+a running Box is idle.
+
+The shared controller reconciles historical allocations before new demand.
+One ordinary cleanup failure does not skip other workers; an absent Box's pending
+runner cleanup does not hold physical capacity. Query failures retain capacity
+and block that scope's admission. Lease loss, corrupt/conflicting state, abort
+and pending credential retirement stop further work. These rules match standalone
+Listener Boxes and recover from the existing PostgreSQL journal after restart.
+
+API logs receive shared worker events with original binding, tenant, Box/runner,
+trigger repository/run/job, state phases and effect. Clean exit 0 is informational;
+unknown stop, error, unexpected deletion and deferred cleanup warn. Logs exclude
+credentials and upstream error messages. They do not cancel CI, modify GitHub job
+logs or infer a job's final status. See the
+[event contract](../libs/ci-listener/README.md#worker-recovery-and-logs).
+
+JIT configuration remains in memory until one delivery attempt. A durable claim in
+the native ledger precedes private `.boxlite-jitconfig` content and its `.ready`
+marker. Each upload rechecks the lease, original binding/owner, Box ID and runner
+assignment after asynchronous resource lookup. Closing allocations reject admission.
+Failed, cancelled and uncertain delivery attempts retain their claim. Requests reject
+redirects and have a 30-second deadline. Runner credentials stay inside the API;
+execution Boxes receive neither the App private key nor a BoxLite API Key.
+
+### Personal and Organization Apps
+
+`CiGitHubApp` shares authentication, connect verification and credential issuance
+between both hosts. Hosted `CiGitHubService` selects a CI App by verified account type for binding and by persisted CI client
+ID for existing work. Browser identity discovery uses the separate OAuth client. The Personal
+App requests repository Administration: Write and Actions: Read. The Organization
+App requests organization Self-hosted runners: Write and Actions: Read, without
+repository Administration. Both retain GitHub's default Metadata: Read and
+subscribe to Workflow job events; neither needs Members: Read.
+
+Both Apps share one PostgreSQL namespace, scheduling lease and BoxLite account
+quota. Adding the Organization App does not double concurrency. Each scope has an
+immutable original App association; missing or conflicting associations deny
+execution. Original scopes are assigned to the original CI App once before the
+association protocol activates. Do not replace that App or remove its credentials
+while original cleanup work remains. New-connect role restrictions do not prevent
+cleanup using the original App. Delivery recovery keeps separate App checkpoints.
+
+### Hosted configuration and deployment
+
+| Setting                                                          | Hosted API behavior                                                                                                                |
+| ---------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `CI_GITHUB_OAUTH_CLIENT_ID`                                      | Separate OAuth App identity for new Dashboard connect; plain API setting                                                       |
+| `CI_GITHUB_OAUTH_CLIENT_SECRET`                                  | OAuth App client secret reference; required with the identity client ID                                                        |
+| `CI_GITHUB_APP_CLIENT_ID` / `CI_GITHUB_APP_SLUG`                 | Personal App identity; required storage anchor when hosted CI is enabled                                                           |
+| `CI_GITHUB_APP_CLIENT_SECRET`                                    | Optional secret reference for legacy browser grants; opaque single-line OAuth client secret, distinct from the RSA private key |
+| `CI_GITHUB_APP_PRIVATE_KEY`                                      | Secret reference resolving to a private RSA PEM, at most 64 KiB; held in API memory                                                |
+| `CI_GITHUB_WEBHOOK_SECRET`                                       | Secret reference resolving to the HMAC value described above; also enables delivery recovery                                       |
+| `CI_GITHUB_ORG_APP_CLIENT_ID` / `CI_GITHUB_ORG_APP_SLUG`         | Optional Organization App identity, distinct from the Personal App                                                                 |
+| `CI_GITHUB_ORG_APP_PRIVATE_KEY` / `CI_GITHUB_ORG_WEBHOOK_SECRET` | Organization App private-key and HMAC secret references; required together when that App is configured                             |
+| `CI_GITHUB_ORG_APP_CLIENT_SECRET`                                | Optional Organization App OAuth secret reference for legacy browser grants                                                     |
+| `CI_SECRET_ENCRYPTION_KEY`                                       | Secret reference resolving to a canonical base64 encoding of 32 bytes for temporary connect state                                  |
+| `CI_WORKER_CPUS` / `CI_WORKER_MEMORY_GB`                         | Defaults 2 CPUs / 2 GB; 1 GB = 1024 MiB                                                                                            |
+| `CI_WORKER_IMAGE` / `CI_WORKER_GROUP_NAME`                       | Defaults `ghcr.io/actions/actions-runner:latest` / `boxlite-ci-runner`                                                             |
+
+Hosted execution requires neither `BOXLITE_API_KEY` nor `CI_STATE_DIR`. The worker
+label is fixed to `boxlite-ci-runner`; existing BoxLite authentication remains on
+connect and Box APIs. Shared scheduling state uses the existing DataSource and
+migration `1793700000000-add-ci-listener-state-migration.ts`, alongside the connect
+migration `1793664000000`.
+
+The committed mstage catalog declares these CI fields as optional API inputs.
+When CI is configured, App identity and slug must be plain settings; all three
+credentials must use mstage secret references. The deployment platform resolves
+them into the API environment. Standalone Listener Boxes use their own private-file
+configuration; the hosted API does not load secret files or accept their file inputs.
+See [mdeploy CI configuration](../infra/mdeploy/README.md#hosted-github-ci-listener)
+for reference syntax and deployment behavior.
+
+Run Node 24 and use `make build:apps:api`. On GCP Cloud Run, background scheduling
+requires CPU allocation while idle and at least one minimum instance. mdeploy adds
+`cpuIdle: false` and a service-level minimum of one instance when hosted CI is configured;
+unconfigured API deployments retain their existing defaults. This incurs idle instance
+costs. The database lease handles restarts and overlapping replicas; minimum instances
+do not guarantee that a process never restarts. These settings and formal hosted-App CI
+still require dev deployment acceptance.
+
+Apply `1793786400000-add-ci-web-connect-migration` and
+`1793894400000-add-ci-account-selection-migration` before deploying the browser
+connect endpoints, in addition to the existing connect/state migrations. The new
+columns expand the same attempt table; Device Flow rows default to `device`.
+Build both API and Dashboard artifacts for browser connect. On GCP, the API
+Dockerfile bundles and serves both, so deploying that image updates the API and
+Dashboard in one Cloud Run revision. The optional
+`CI_GITHUB_OAUTH_CLIENT_SECRET` reference enables the Dashboard grant without making
+it mandatory for CLI-only deployments. GCP dev acceptance still needs the real
+browser authorization, webhook and CI workflow checks after deployment.
+
+### Hosted CI capacity
+
+`GET/PATCH /api/v1/{organization-prefix}/ci/settings` uses the existing owner identity
+and, for API keys, both Box write/delete permissions. Set `max_concurrent_jobs` to
+`null` to inherit Commerce, `0` to pause new workers, or a nonnegative integer no
+greater than the account allowance. A later plan downgrade clamps the configured
+value. One BoxLite account shares this total across every connected installation
+and repository; hosted capacity does not read `CI_WORKER_MAX`. Ordinary Boxes also
+consume Commerce capacity, and the native Box creation transaction enforces that
+final limit. Existing workers continue and recover after the limit is lowered.
+
+The hosted `CiSettingsService` implements `CapacityProvider.resolve()`, while standalone
+uses its fixed environment adapter. Policy versions and the execution index are
+checked in the reservation transaction. Dashboard → CI → Runners shows and edits
+this account total; Connects shows connected-account setup state.
+Repository-specific limits are not available yet.
+
+If another Box consumes the last Commerce slot after CI admission, the native
+adapter records a definitive refusal for `BoxCreationLimitExceededError`
+before `onPersist` starts. It also fences revocation before dispatch or a rejected
+native persistence transaction. The durable original-operation fact shares the Box-ID
+ledger key, preventing conflicting outcomes. The shared kernel can return the CI
+reservation while keeping its queued notice, including after restart. A failed
+proof write, generic HTTP error or uncertain persistence outcome keeps the
+reservation for recovery. See the shared [worker recovery contract](../libs/ci-listener/README.md#worker-recovery-and-logs).
+
+### Hosted CI management
+
+`GET /api/v1/{organization-prefix}/ci/runners` uses existing organization Box-read
+access: membership permits reading without a separate Box-read permission enum.
+It accepts `page` (default 1) and `limit` (default 25, maximum 200), returns
+`items`, `total`, `page`, `totalPages`, and `capacity`, and reuses the safe Box DTO conversion.
+Optional `name` is a string of at most 128 characters. It trims outer whitespace
+and matches a case-insensitive literal substring before count and pagination;
+SQL wildcard characters have no special meaning. Capacity remains unfiltered.
+Original native CI ledger IDs establish JIT identity; matching names do not.
+Both original scope and current Box organization must match. Destroyed Boxes are
+excluded; stopped/error/transitional Boxes remain visible until cleanup completes.
+
+`capacity` contains `available`, `used`, `max_concurrent_jobs`, `commerce_limit`,
+and `effective_limit`. Members may read this aggregate without owner settings access.
+It contains no connection identities or credentials. `used` counts catalog-referenced
+active allocations in this hosted namespace and original organization whose Box
+phase is not `absent`, including reserved creation and cleanup. It is independent
+of inventory pagination and Box row existence. The read-only repeatable-read
+transaction validates scope and allocation records without borrowing a leader lease;
+broken references or provider failures return errors rather than a zero/unlimited guess.
+Owner writes retain the existing PATCH settings endpoint and authority checks.
+
+`PATCH /api/v1/{organization-prefix}/ci/connections/{bindingId}` accepts only
+`{ "allow_public_repositories": boolean }`, with the same owner and Box write/delete
+key authorization as settings. It returns 204; a changed policy advances generation,
+sets provisioning and writes the existing durable inventory wake in one transaction.
+An identical value preserves state and generation but still rechecks key expiry.
+Unknown/foreign bindings return 404; disabled connections return 409. Binding,
+verified GitHub identity, original actor, quota, authorization attempts and workers
+remain intact. Delivered jobs continue through original-resource recovery and
+cleanup; workers not yet given JIT may retire when old admission is rejected.
+Organization runner-group public access must still match on GitHub. The endpoint
+does not mutate GitHub configuration. See the [update design](../../docs/contributing/investigations/2026-11-06-ci-connection-update.md).
+
+`DELETE /api/v1/{organization-prefix}/ci/connections/{bindingId}` requires the
+current owner and both Box write/delete key scopes. Unknown or foreign bindings
+return 404. Success returns 204, disables the binding, and advances its generation
+once; repeated deletion is idempotent. Settings omit disabled connections.
+The transaction cancels all unfinished browser attempts for the organization and matching-App Device Flow attempts
+and clears temporary credentials, locking attempts before the binding to match
+finalization. A subsequent verified request may reactivate that same organization's
+binding with a fresh generation; another tenant cannot claim it.
+
+Admission already holding its binding lock may finish before deletion commits.
+Later admissions fail; original workers retain cleanup authority and the shared
+quota remains unchanged. Deletion does not uninstall the GitHub App or cancel a
+GitHub workflow. These management routes also support `/api/v1/ci/...` with the
+authenticated organization. Design: [CI Dashboard navigation and connection lifecycle](https://linear.app/polygala/issue/BUI-1471/ci-dashboard-navigation-and-connection-lifecycle).

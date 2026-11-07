@@ -17,6 +17,8 @@ import { useCopyToClipboard } from 'usehooks-ts'
 import { useSearchParams } from 'react-router-dom'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import OrganizationMembers from './OrganizationMembers'
+import { Navigate } from 'react-router-dom'
+import { RoutePath } from '@/enums/RoutePath'
 
 const DEFAULT_ORGANIZATION_DISPLAY_NAME = 'Default Organization'
 
@@ -137,6 +139,8 @@ const OrganizationSettings: React.FC = () => {
   const [searchParams, setSearchParams] = useSearchParams()
   const tab = searchParams.get('tab') === 'member' ? 'member' : 'general'
 
+  if (searchParams.get('tab') === 'ci') return <Navigate to={RoutePath.CI_CONNECTS} replace />
+
   if (!selectedOrganization) return null
 
   return (
@@ -149,7 +153,7 @@ const OrganizationSettings: React.FC = () => {
         value={tab}
         onValueChange={(value) => {
           const next = new URLSearchParams(searchParams)
-          if (value === 'member') next.set('tab', 'member')
+          if (value === 'member') next.set('tab', value)
           else next.delete('tab')
           setSearchParams(next)
         }}

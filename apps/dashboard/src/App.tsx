@@ -39,6 +39,7 @@ import { BoxSessionProvider } from './providers/BoxSessionProvider'
 // load on demand under the dashboard <Outlet> Suspense boundary, so the initial
 // /boxes paint no longer ships Admin/Billing/Settings/Keys/box-details and their
 // recharts/terminal deps. Boxes + the Dashboard shell stay eager (first paint).
+const CiConnectCallback = React.lazy(() => import('./pages/CiConnectCallback'))
 const Keys = React.lazy(() => import('./pages/Keys'))
 // Billing pulls in the plan/wallet/usage sections (and recharts) behind this one chunk.
 const Billing = React.lazy(() => import('./pages/Billing'))
@@ -50,6 +51,7 @@ const FirstBoxQuickstart = React.lazy(() =>
   import('./components/first-run/FirstBoxOnboarding').then((m) => ({ default: m.FirstBoxQuickstart })),
 )
 const Images = React.lazy(() => import('./pages/ImagesPage'))
+const CiPage = React.lazy(() => import('./pages/CiPage'))
 const ImageDetails = React.lazy(() => import('./pages/ImageDetails'))
 const EmailVerify = React.lazy(() => import('./pages/EmailVerify'))
 const OrganizationSettings = React.lazy(() => import('@/pages/OrganizationSettings'))
@@ -153,6 +155,16 @@ function App() {
     <Routes>
       <Route path={RoutePath.LANDING} element={<LandingPage />} />
       <Route path="/lander" element={<Navigate to={RoutePath.LANDING} replace />} />
+      <Route
+        path="/settings/ci/callback"
+        element={
+          <Suspense fallback={<LoadingFallback />}>
+            <ApiProvider>
+              <CiConnectCallback />
+            </ApiProvider>
+          </Suspense>
+        }
+      />
       <Route path={RoutePath.LOGOUT} element={<Logout />} />
       <Route path={RoutePath.DOCS} element={<DocsRedirect />} />
       <Route path={RoutePath.SLACK} element={<SlackRedirect />} />
@@ -188,6 +200,8 @@ function App() {
         <Route path={getRouteSubPath(RoutePath.VOLUMES)} element={<Volumes />} />
         <Route path={getRouteSubPath(RoutePath.DOMAINS)} element={<Domains />} />
         <Route path={getRouteSubPath(RoutePath.IMAGES)} element={<Images tab="images" />} />
+        <Route path={getRouteSubPath(RoutePath.CI)} element={<CiPage tab="runners" />} />
+        <Route path={getRouteSubPath(RoutePath.CI_CONNECTS)} element={<CiPage tab="connects" />} />
         {/* The static segment is declared before `:idOrRef`, as the API orders its routes. */}
         <Route path={getRouteSubPath(RoutePath.IMAGE_REGISTRIES)} element={<Images tab="registries" />} />
         <Route path={getRouteSubPath(RoutePath.IMAGE_DETAILS)} element={<ImageDetails />} />

@@ -61,7 +61,7 @@ const CREATION_ADMISSION_RETRY_AFTER_SECONDS = 5
 // committed; give up on the best-effort update rather than delay its response.
 const ORGANIZATION_ACTIVITY_LOCK_TIMEOUT_MS = 1000
 
-const BOX_CREATION_LIMIT_EXCLUDED_STATES = [
+export const BOX_CREATION_LIMIT_EXCLUDED_STATES = [
   BoxState.ERROR,
   BoxState.DESTROYING,
   BoxState.DESTROYED,
@@ -134,7 +134,11 @@ export class BoxRepository extends BaseRepository<Box> {
     super(dataSource, eventEmitter, Box)
   }
 
-  async insert(box: Box, maxCreatedBoxes?: number): Promise<Box> {
+  async insert(
+    box: Box,
+    maxCreatedBoxes?: number,
+    onPersist?: (manager: EntityManager, box: Box) => Promise<void>,
+  ): Promise<Box> {
     const now = new Date()
     if (!box.createdAt) {
       box.createdAt = now
@@ -149,6 +153,8 @@ export class BoxRepository extends BaseRepository<Box> {
     await this.withCreationAdmission(box.organizationId, maxCreatedBoxes, async (entityManager) => {
       await this.lockRegistryCredential(box, entityManager)
       await entityManager.insert(Box, box)
+      // Resource ownership and admission must commit with the Box itself.
+      await onPersist?.(entityManager, box)
       await this.upsertLastActivity(entityManager, box.id, box.createdAt)
     })
 

@@ -152,12 +152,12 @@ refetch this list.
 
 Run these from `apps/`:
 
-| Command | What it does |
-| --- | --- |
-| `yarn nx run dashboard:dev` | Dev server on `:3000`, proxying `/api` to `http://localhost:3001` |
-| `yarn nx run dashboard:build` | Production build, with a typecheck pass |
-| `yarn nx run dashboard:test` | Vitest suite |
-| `yarn nx run dashboard:test --coverage` | Same, writing lcov to `target/coverage/dashboard` |
+| Command                                 | What it does                                                      |
+| --------------------------------------- | ----------------------------------------------------------------- |
+| `yarn nx run dashboard:dev`             | Dev server on `:3000`, proxying `/api` to `http://localhost:3001` |
+| `yarn nx run dashboard:build`           | Production build, with a typecheck pass                           |
+| `yarn nx run dashboard:test`            | Vitest suite                                                      |
+| `yarn nx run dashboard:test --coverage` | Same, writing lcov to `target/coverage/dashboard`                 |
 
 `npm run start:mock` (from `apps/`) serves the console against the MSW handlers
 in `src/mocks`, with no backend and no login. Its `VITE_BASE_API_URL` must end in
@@ -502,3 +502,107 @@ without showing a success notification in the current organization.
 
 Run `make test:apps:dashboard` for page/client tests and
 `make build:apps:dashboard` for the production build and type check.
+
+## GitHub CI dashboard and browser connect
+
+The primary **CI** page follows Images' two-tab layout. **Runners** (`/dashboard/ci`)
+lists actual JIT Boxes, with state, image, resources and links to Box details.
+It uses Box socket events and three-second polling during transitions, with a
+five-second fallback during socket loss or errors and ten-second refresh for
+journal-only capacity changes. It uses the same organization
+access as Box reads. Each JIT Box row has a 28px isometric BoxCube beside its name,
+matching the Boxes table. Running workers have a brand-colored play symbol;
+transitions, stopped workers and errors use the corresponding cube treatment.
+The CI cube is also used in the empty runner view; the page title has no icon.
+Name filtering sits immediately below the capacity strip in the same dashed
+search field as Images. It searches case-insensitive literal substrings across
+all pages, resets pagination on edits and preserves organization-wide capacity.
+Clearing the input restores the inventory; matching count is independent of page size.
+**Connects** (`/dashboard/ci/connects`) uses a registry-style table for GitHub accounts;
+owners can connect a personal account or organization. Capacity is shown above the
+Runners table using Images' panel spacing and segmented meter, with a plain **Edit**
+text action beside the count for owners; the strip has no visible title or explanatory footer.
+It shows occupied scheduler slots against the effective shared limit; reservations
+and workers awaiting Box cleanup count, even before a Box row exists. Confirmed
+Box absence releases a slot even if GitHub runner cleanup remains pending.
+Zero displays Paused, unlimited capacity has no percentage, and lowering the limit
+below current usage preserves the actual count without terminating existing jobs.
+Leave the maximum blank to inherit Commerce, or use zero to pause new workers.
+Other Boxes consume the same commercial account allowance. Repository limits are
+not exposed. GitHub owns job logs; use existing Box tools for worker inspection.
+
+Each connection has a Registries-style **UPDATE** action beside its trash control.
+It edits public-repository permission on the existing verified binding; changing
+GitHub account identity still requires authorization. A changed policy refreshes
+the listener catalog. Delivered jobs continue and original cleanup remains available;
+workers awaiting JIT configuration may be retired under the new policy.
+For Organization accounts, the GitHub runner group's public-repository setting must
+match the policy; the update does not modify GitHub settings. Failed saves retain
+the dialog and checkbox, and successful saves refresh only the original organization.
+
+Deleting a connection requires confirmation and waits for the server before removing
+the row. It stops new admissions, cancels stored unfinished authorizations for that
+matching CI App plus every unfinished browser grant in this BoxLite organization, and preserves running-worker cleanup and the shared capacity setting.
+A new verified connection can reconnect later. Switching BoxLite organizations
+does not redirect an in-flight delete. Legacy Organization `?tab=ci` links and
+successful browser authorization lead to Connects. `start:mock` includes synthetic
+JIT Boxes and deletable connections for local presentation checks.
+Neither tab has a manual Refresh control. Connects fetches on entry and after
+successful additions/updates/deletions; it does not poll the connection list.
+
+Connect GitHub starts dedicated identity OAuth immediately. After login, the
+normal CI page opens an account dialog using shared AsciiButton, Dialog and pixel
+icons. OAuth-visible personal/owner choices show **Install**, **Connect**, or a
+green pixel Check for an existing connection. The Connects table contains only
+connections and has no redundant Status column. Switch account is clickable text
+beside Signed in as; it cancels the unfinished grant and forces GitHub's account
+picker. Committed connections remain intact. Closing, Escape, Back and browser
+restoration keep the UI usable and ignore obsolete asynchronous results.
+
+Missing organization? explains organization OAuth approval and SSO prerequisites;
+an installed CI App alone does not guarantee visibility. Review GitHub access,
+then reconnect. Provider errors never imply an organization is uninstalled.
+The API uses separate `CI_GITHUB_OAUTH_CLIENT_ID` and
+`CI_GITHUB_OAUTH_CLIENT_SECRET` configuration for identity, requesting only
+`read:user read:org`. Personal/Organization CI Apps supply runner permissions.
+The BoxLite login stays unchanged when choosing another GitHub identity.
+
+Only attempt ID, original BoxLite organization and expiry enter session storage.
+The bootstrap strips callback code/state before app and telemetry modules load.
+Code exchange runs once under StrictMode; authenticated resume supports reload
+without exchanging the code again. Installation state, selected App/account and
+user tokens stay on the API. The setup callback is verified before auto-binding.
+Sessions can connect several owned accounts within the same original five-minute
+window. Close/Switch cancels unfinished authorization; connected rows remain.
+
+Run `make test:apps:dashboard` and `make build:apps:dashboard` from the repository
+root. Local DOM/HTTP tests do not replace a real App connect and workflow run on
+the deployed API and Dashboard.
+
+Capacity design and verification plan: [Runners capacity meter](../../docs/contributing/investigations/2026-11-06-ci-capacity-meter.md).
+
+```mermaid
+sequenceDiagram
+    actor U as Account owner
+    participant D as Dashboard
+    participant A as BoxLite API
+    participant P as PostgreSQL
+    participant G as Identity OAuth App
+    participant C as Selected CI GitHub App
+    U->>D: Connect GitHub account and public-repository policy
+    D->>A: Authenticated web start under original account
+    A->>P: Store actor, App, state hash and encrypted verifier
+    A-->>D: Fixed authorize URL with S256 challenge
+    D->>G: Authorize in browser
+    G-->>D: Fixed callback with code and state
+    D->>D: Scrub URL before app and telemetry load
+    D->>A: Complete under original BoxLite account
+    A->>P: Validate state and atomically claim once, erase verifier
+    A->>G: Exchange code with verifier and OAuth Client Secret
+    A->>G: Read OAuth-visible owner memberships
+    D->>A: Select owned account
+    A->>C: Verify installation with the corresponding App JWT
+    A->>P: Recheck owner and commit binding, default quota and wake
+    A-->>D: Connected with durable Listener setup state
+    Note over D,A: Browser metadata never grants binding authority
+```
