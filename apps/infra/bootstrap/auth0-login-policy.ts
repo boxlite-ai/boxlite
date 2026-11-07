@@ -1795,17 +1795,33 @@ export function assertStageApiAudience(apiAudience: string, environment: NodeJS.
 }
 
 /**
- * Whether the deployed Action version is the one configure-login generated (its
- * stamp proves the verification gate is intact) for exactly this API audience and
- * MCP resource.
+ * Whether the deployed Action version is the login policy `template` hydrated for
+ * exactly this API audience and MCP resource. Every byte outside the placeholder
+ * values must match the template, so an Action edited in Auth0, even one
+ * re-stamped by hand, cannot pass with its verification gate removed.
  */
-export function deployedActionGatesBoxLite(action: JsonObject, apiAudience: string, mcpResourceUrl: string): boolean {
+export function deployedActionGatesBoxLite(
+  action: JsonObject,
+  template: string,
+  apiAudience: string,
+  mcpResourceUrl: string,
+): boolean {
   const code = String(action.deployed_version?.code ?? '')
-  return (
-    carriesOwnStamp(code) &&
-    code.includes(`const API_AUDIENCE = ${JSON.stringify(apiAudience)}`) &&
-    code.includes(`const MCP_RESOURCE_URL = ${JSON.stringify(mcpResourceUrl)}`)
-  )
+  if (!carriesOwnStamp(code)) return false
+  const body = code.slice(0, code.lastIndexOf(ACTION_STAMP_PREFIX))
+  const names: string[] = []
+  const source = (template.endsWith('\n') ? template : `${template}\n`)
+    .split(/(__[A-Z0-9_]+_JSON__)/)
+    .map((part, index) => {
+      if (index % 2 === 0) return part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+      names.push(part)
+      return '("(?:[^"\\\\]|\\\\.)*")'
+    })
+    .join('')
+  const match = new RegExp(`^${source}$`).exec(body)
+  if (!match) return false
+  const value = (name: string) => JSON.parse(match[names.indexOf(name) + 1])
+  return value('__API_AUDIENCE_JSON__') === apiAudience && value('__MCP_RESOURCE_URL_JSON__') === mcpResourceUrl
 }
 
 function gatesMcpLogins(action: JsonObject): boolean {

@@ -30,6 +30,8 @@ export interface Auth0McpSources {
   scopes: string[]
   /** Client ID Metadata Document URLs of the reviewed MCP clients. */
   clients: string[]
+  /** The login Action template (`auth0/login-policy.js`) the deployed Action must be generated from. */
+  loginPolicySource: string
   journalDirectory: string
 }
 
@@ -85,7 +87,11 @@ export function parseAuth0McpOptions(argv: string[]): Auth0McpOptions {
 
 export function loadMcpSources(bootstrapRoot: string): Omit<Auth0McpSources, 'journalDirectory'> {
   const file = JSON.parse(readFileSync(join(bootstrapRoot, 'auth0', 'mcp-clients.json'), 'utf8'))
-  return { scopes: file.scopes, clients: file.clients }
+  return {
+    scopes: file.scopes,
+    clients: file.clients,
+    loginPolicySource: readFileSync(join(bootstrapRoot, 'auth0', 'login-policy.js'), 'utf8'),
+  }
 }
 
 /**
@@ -181,7 +187,7 @@ export class Auth0McpConfigurator {
     const bindings = (response?.bindings ?? []) as JsonObject[]
     const bound = action !== undefined && bindings.some((binding) => binding.action?.id === action.id)
     const { apiAudience, resourceUrl, tenant } = this.options
-    if (!bound || !deployedActionGatesBoxLite(action, apiAudience, resourceUrl)) {
+    if (!bound || !deployedActionGatesBoxLite(action, this.sources.loginPolicySource, apiAudience, resourceUrl)) {
       throw new Error(
         `Auth0 Action '${LOGIN_POLICY_ACTION_NAME}' on ${tenant} does not gate MCP logins for ${resourceUrl} and the API ${apiAudience}; ` +
           `run auth0:configure-login with --api-audience ${apiAudience} --mcp-resource-url ${resourceUrl} first`,

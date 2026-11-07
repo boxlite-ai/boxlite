@@ -15,10 +15,9 @@ const CLIENT = 'https://claude.ai/oauth/claude-code-client-metadata'
 const SCOPES = ['write:boxes', 'delete:boxes']
 const API_AUDIENCE = 'https://api.example.test/api'
 // The Action exactly as configure-login generates and stamps it for this stage.
-const GENERATED_ACTION = hydrateLoginPolicyAction(
-  readFileSync(new URL('./auth0/login-policy.js', import.meta.url), 'utf8'),
-  { clientId: 'spa_123', connectionName: 'boxlite-users', formId: 'ap_verify', mcpResourceUrl: RESOURCE, apiAudience: API_AUDIENCE },
-)
+const POLICY_TEMPLATE = readFileSync(new URL('./auth0/login-policy.js', import.meta.url), 'utf8')
+const HYDRATION = { clientId: 'spa_123', connectionName: 'boxlite-users', formId: 'ap_verify', mcpResourceUrl: RESOURCE, apiAudience: API_AUDIENCE }
+const GENERATED_ACTION = hydrateLoginPolicyAction(POLICY_TEMPLATE, HYDRATION)
 
 type RequestOptions = { data?: any; query?: Record<string, string>; allowNotFound?: boolean }
 
@@ -148,7 +147,7 @@ function configurator(tenant: ReturnType<typeof fakeTenant>, apply: boolean, jou
       apply,
     },
     tenant.client as never,
-    { scopes: SCOPES, clients: [CLIENT], journalDirectory },
+    { scopes: SCOPES, clients: [CLIENT], loginPolicySource: POLICY_TEMPLATE, journalDirectory },
   )
 }
 
@@ -165,6 +164,15 @@ test('refuses before any write while the live login Action does not gate this re
     [
       'gate removed',
       (t) => (t.state.actions[0].deployed_version.code = GENERATED_ACTION.replace("api.access.deny('Email verification required')", 'void 0')),
+    ],
+    // The same edit with a recomputed stamp: only a match against the template tells.
+    [
+      'gate removed, re-stamped',
+      (t) =>
+        (t.state.actions[0].deployed_version.code = hydrateLoginPolicyAction(
+          POLICY_TEMPLATE.replace("api.access.deny('Email verification required')", 'void 0'),
+          HYDRATION,
+        )),
     ],
     ['not deployed', (t) => delete t.state.actions[0].deployed_version],
     ['not bound', (t) => (t.state.bindings = [])],

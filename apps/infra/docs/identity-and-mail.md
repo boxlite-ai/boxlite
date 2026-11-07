@@ -209,10 +209,10 @@ do not read it.
 
 The preview calls `clients/cimd/preview`, which validates a document without
 creating anything, and otherwise only reads. Preview and apply refuse a tenant
-whose deployed, post-login-bound `boxlite-login-policy` Action is not the stamped
-code `auth0:configure-login` generated for this exact `--resource-url` and
+whose deployed, post-login-bound `boxlite-login-policy` Action is not the repo template, stamped and
+hydrated by `auth0:configure-login`, for this exact `--resource-url` and
 `--api-audience`, because that Action is the only email-verification gate: the API
-never refuses a token over `email_verified`. An Action edited by hand fails the stamp.
+never refuses a token over `email_verified`. An Action edited by hand fails, even when re-stamped.
 Apply also refuses a tenant with active Rules, since CIMD logins fail while Rules run. It writes a mode-`0600` journal
 under `.sst/auth0-backups/` before each write, and marks each write as sent before
 sending it. Undo a run with `npm run auth0:configure-mcp -- --rollback <journal-path>`:
