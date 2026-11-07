@@ -8,6 +8,8 @@ import { BadRequestException, Logger } from '@nestjs/common'
 import { Transform, Type, plainToInstance } from 'class-transformer'
 import {
   ArrayMaxSize,
+  ArrayNotEmpty,
+  IsDefined,
   IsNotEmpty,
   IsOptional,
   IsString,
@@ -220,10 +222,12 @@ export class SecretSpecDto {
   @IsNotEmpty()
   value: string
 
-  @IsOptional()
+  @IsDefined()
   @IsArray()
+  @ArrayNotEmpty()
   @IsString({ each: true })
-  hosts?: string[]
+  @IsNotEmpty({ each: true })
+  hosts: string[]
 
   @IsOptional()
   @IsString()

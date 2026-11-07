@@ -214,7 +214,7 @@ Configuration options for creating a box.
 | `volumes` | `List[Tuple \| Dict]` | `[]` | Volume mounts; tuple = host bind, dict = `managed_volume` or `host_path` |
 | `network` | `NetworkSpec \| None` | `None` | Structured network configuration. Omit for default enabled networking. |
 | `ports` | `List[Tuple \| Dict]` | `[]` | Local TCP forwarding; omit `host_port` in a dict for automatic allocation |
-| `secrets` | `List[Secret]` | `[]` | Outbound HTTPS secret substitution rules |
+| `secrets` | `List[Secret]` | `[]` | Secrets injected into the `Authorization` header of outbound HTTPS requests |
 | `advanced` | `AdvancedBoxOptions \| None` | `None` | Expert-only options, including `capabilities.add` and `capabilities.drop` |
 | `auto_delete` | `int \| None` | `None` | `0` keeps the box after stop; above `0`, a REST runtime deletes it that many seconds after stop and a local runtime at stop. `None` keeps the runtime's default (`auto_remove` locally) |
 | `auto_remove` | `bool` | `True` | Deprecated: use `auto_delete`. Auto cleanup when stopped |
@@ -308,7 +308,7 @@ secrets=[
         name="openai",
         value="sk-...",
         hosts=["api.openai.com"],
-        # placeholder defaults to "<BOXLITE_SECRET:openai>"
+        # placeholder is a dummy guest value, default "<BOXLITE_SECRET:openai>"
     )
 ]
 ```

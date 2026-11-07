@@ -16,7 +16,7 @@ import (
 // rather than a const only so tests can shorten it.
 var upstreamDialTimeout = 30 * time.Second
 
-// mitmAndForward handles a MITM'd connection: TLS termination, reverse proxy, secret substitution.
+// mitmAndForward handles a MITM'd connection: TLS termination, reverse proxy, secret header injection.
 // dial opens each upstream transport connection; the forwarder binds it to
 // the peeked hostname, so the credential travels to the host the name resolves
 // to, never to an address the guest picked.
@@ -45,17 +45,16 @@ func mitmAndForward(guestConn net.Conn, hostname string, dial upstreamDial, ca *
 	}
 
 	proxy := &httputil.ReverseProxy{
-		Director: func(req *http.Request) {
-			req.URL.Scheme = "https"
-			req.URL.Host = hostname
-			req.Host = hostname // HTTP/1.1 Host header must match
-			// Headers substituted here; body substituted in secretTransport.RoundTrip
-			substituteHeaders(req, secrets)
+		// Rewrite runs after hop-by-hop headers are stripped, so a guest's
+		// `Connection: Authorization` cannot remove an injected header.
+		Rewrite: func(pr *httputil.ProxyRequest) {
+			pr.Out.URL.Scheme = "https"
+			pr.Out.URL.Host = hostname
+			pr.Out.Host = hostname // HTTP/1.1 Host header must match
+			pr.Out.URL.RawQuery = pr.In.URL.RawQuery
+			injectSecretHeaders(pr.Out, secrets)
 		},
-		Transport: &secretTransport{
-			inner:   upstreamTransport,
-			secrets: secrets,
-		},
+		Transport:     upstreamTransport,
 		FlushInterval: -1,
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
 			logrus.WithFields(logrus.Fields{
@@ -124,18 +123,3 @@ func (l *singleConnListener) Close() error {
 }
 
 func (l *singleConnListener) Addr() net.Addr { return l.addr }
-
-// secretTransport wraps http.RoundTripper to inject streaming body replacement.
-type secretTransport struct {
-	inner   http.RoundTripper
-	secrets []SecretConfig
-}
-
-func (t *secretTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	if req.Body != nil && len(t.secrets) > 0 {
-		req.Body = newStreamingReplacer(req.Body, t.secrets)
-		req.ContentLength = -1
-		req.Header.Del("Content-Length")
-	}
-	return t.inner.RoundTrip(req)
-}

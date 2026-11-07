@@ -576,6 +576,7 @@ pub unsafe fn options_add_secret(
             hosts,
             placeholder,
             value,
+            header: None,
         });
     }
 }

@@ -150,10 +150,10 @@ func TestMitmProxy_HTTP1_BasicRequest(t *testing.T) {
 
 	got := string(body)
 	if !strings.Contains(got, "real-value") {
-		t.Errorf("expected upstream to receive substituted value, got: %s", got)
+		t.Errorf("expected upstream to receive injected value, got: %s", got)
 	}
 	if strings.Contains(got, "BOXLITE_SECRET") {
-		t.Errorf("placeholder was not substituted in upstream request: %s", got)
+		t.Errorf("placeholder was not replaced in upstream request: %s", got)
 	}
 }
 
@@ -162,7 +162,7 @@ func TestMitmProxy_HTTP1_PostWithBody(t *testing.T) {
 
 	secrets := testSecrets()
 
-	// Upstream echoes request body
+	// Upstream echoes request body; the body is forwarded verbatim.
 	addr, cleanup := startTestUpstream(t, func(w http.ResponseWriter, r *http.Request) {
 		b, _ := io.ReadAll(r.Body)
 		w.Write(b)
@@ -193,7 +193,7 @@ func TestMitmProxy_HTTP1_PostWithBody(t *testing.T) {
 	}
 
 	got := string(body)
-	expected := `{"key":"real-value"}`
+	expected := `{"key":"<BOXLITE_SECRET:k>"}`
 	if got != expected {
 		t.Errorf("expected body %q, got %q", expected, got)
 	}
@@ -240,7 +240,7 @@ func TestMitmProxy_HTTP1_KeepAlive(t *testing.T) {
 
 		got := string(body)
 		if !strings.Contains(got, "real-value") {
-			t.Errorf("request %d: expected substitution, got: %s", i, got)
+			t.Errorf("request %d: expected injection, got: %s", i, got)
 		}
 	}
 
@@ -289,7 +289,7 @@ func TestMitmProxy_HTTP2_BasicRequest(t *testing.T) {
 
 	got := string(body)
 	if !strings.Contains(got, "real-value") {
-		t.Errorf("expected substitution, got: %s", got)
+		t.Errorf("expected injection, got: %s", got)
 	}
 }
 
@@ -333,7 +333,7 @@ func TestMitmProxy_HTTP2_MultiplexedStreams(t *testing.T) {
 
 			got := string(body)
 			if !strings.Contains(got, "real-value") {
-				return fmt.Errorf("request %d: expected substitution, got: %s", i, got)
+				return fmt.Errorf("request %d: expected injection, got: %s", i, got)
 			}
 			return nil
 		})
@@ -362,8 +362,6 @@ func TestMitmProxy_ChunkedRequestBody(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	// Chunked body with placeholder split across chunks won't happen here,
-	// but the placeholder is embedded in a chunk.
 	body := strings.NewReader("chunk1-<BOXLITE_SECRET:k>-chunk2")
 	req, err := http.NewRequestWithContext(ctx, "POST", "https://api.example.com/data", body)
 	if err != nil {
@@ -383,7 +381,7 @@ func TestMitmProxy_ChunkedRequestBody(t *testing.T) {
 		t.Fatal("failed to read response:", err)
 	}
 
-	expected := "chunk1-real-value-chunk2"
+	expected := "chunk1-<BOXLITE_SECRET:k>-chunk2"
 	if string(got) != expected {
 		t.Errorf("expected %q, got %q", expected, string(got))
 	}
@@ -433,7 +431,7 @@ func TestMitmProxy_StreamingRequestBody(t *testing.T) {
 
 	select {
 	case got := <-received:
-		expected := "prefix-real-value-suffix"
+		expected := "prefix-<BOXLITE_SECRET:k>-suffix"
 		if got != expected {
 			t.Errorf("expected %q, got %q", expected, got)
 		}
@@ -496,7 +494,7 @@ func TestMitmProxy_LargeResponseStreaming(t *testing.T) {
 
 // --- Content-Length Tests ---
 
-func TestMitmProxy_ContentLengthAdjustment(t *testing.T) {
+func TestMitmProxy_ContentLengthPreserved(t *testing.T) {
 	ca := newTestCA(t)
 
 	secrets := testSecrets()
@@ -513,7 +511,7 @@ func TestMitmProxy_ContentLengthAdjustment(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	// Body with placeholder - after substitution length changes
+	// Body with placeholder - body is left unchanged, so content length remains original
 	bodyStr := `{"token":"<BOXLITE_SECRET:k>"}`
 	req, err := http.NewRequestWithContext(ctx, "POST", "https://api.example.com/data", strings.NewReader(bodyStr))
 	if err != nil {
@@ -530,9 +528,9 @@ func TestMitmProxy_ContentLengthAdjustment(t *testing.T) {
 	got, _ := io.ReadAll(resp.Body)
 	gotStr := string(got)
 
-	// Upstream should have received the substituted body completely
-	if !strings.Contains(gotStr, `body={"token":"real-value"}`) {
-		t.Errorf("expected substituted body at upstream, got: %s", gotStr)
+	expected := fmt.Sprintf("body=%s;cl=%d", bodyStr, len(bodyStr))
+	if gotStr != expected {
+		t.Errorf("expected %q, got %q", expected, gotStr)
 	}
 }
 
@@ -687,5 +685,88 @@ func TestMitmProxy_NoSecretHost_Passthrough(t *testing.T) {
 	// random.example.com is NOT in any secret's Hosts list
 	if matcher.Matches("random.example.com") {
 		t.Error("expected random.example.com to NOT match as a secret host")
+	}
+}
+
+func TestMitmProxy_HeaderInjection_CustomAndDefault(t *testing.T) {
+	ca := newTestCA(t)
+
+	secrets := []SecretConfig{
+		{
+			Name:        "openai",
+			Hosts:       []string{"api.example.com"},
+			Placeholder: "<BOXLITE_SECRET:openai>",
+			Value:       "sk-real-openai-key",
+			Header:      "Authorization",
+		},
+		{
+			Name:        "gemini",
+			Hosts:       []string{"api.example.com"},
+			Placeholder: "<BOXLITE_SECRET:gemini>",
+			Value:       "AIza-real-key",
+			Header:      "x-goog-api-key",
+		},
+	}
+
+	addr, cleanup := startTestUpstream(t, func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		auth := r.Header.Get("Authorization")
+		xDebug := r.Header.Get("X-Debug")
+		googKey := r.Header.Get("x-goog-api-key")
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"auth":%q,"xDebug":%q,"googKey":%q,"body":%q}`, auth, xDebug, googKey, string(body))
+	})
+	defer cleanup()
+
+	client := dialThroughMITM(t, ca, "api.example.com", addr, secrets)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	bodyStr := `{"echo":"<BOXLITE_SECRET:openai>"}`
+	req, err := http.NewRequestWithContext(ctx, "POST", "https://api.example.com/test", strings.NewReader(bodyStr))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer fake-token")
+	req.Header.Set("X-Debug", "<BOXLITE_SECRET:openai>")
+	req.Header.Set("x-goog-api-key", "wrong-key")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatal("request failed:", err)
+	}
+	defer resp.Body.Close()
+
+	respBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal("failed to read response:", err)
+	}
+	respStr := string(respBytes)
+
+	// X-Debug must stay unchanged: Must keep verbatim placeholder.
+	if strings.Contains(respStr, `"xDebug":"sk-real-openai-key"`) {
+		t.Errorf("LEAK: secret was injected into unconfigured X-Debug header! Response: %s", respStr)
+	}
+	if !strings.Contains(respStr, `"xDebug":"<BOXLITE_SECRET:openai>"`) {
+		t.Errorf("expected verbatim placeholder in X-Debug, got response: %s", respStr)
+	}
+
+	// Body must stay unchanged: Must keep verbatim placeholder.
+	if strings.Contains(respStr, `"body":"{\"echo\":\"sk-real-openai-key\"}"`) {
+		t.Errorf("LEAK: secret was written into the request body! Response: %s", respStr)
+	}
+	if !strings.Contains(respStr, `"body":"{\"echo\":\"<BOXLITE_SECRET:openai>\"}"`) {
+		t.Errorf("expected verbatim placeholder in body, got response: %s", respStr)
+	}
+
+	// Authorization was overwritten with Bearer + real value
+	if !strings.Contains(respStr, `"auth":"Bearer sk-real-openai-key"`) {
+		t.Errorf("expected Authorization to be overwritten with 'Bearer sk-real-openai-key', got: %s", respStr)
+	}
+
+	// x-goog-api-key was overwritten with verbatim real value
+	if !strings.Contains(respStr, `"googKey":"AIza-real-key"`) {
+		t.Errorf("expected x-goog-api-key to be overwritten with 'AIza-real-key', got: %s", respStr)
 	}
 }

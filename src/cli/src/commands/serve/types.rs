@@ -53,7 +53,7 @@ pub(super) struct CreateBoxRequest {
     pub auto_resume: Option<bool>,
     #[serde(default)]
     pub detach: Option<bool>,
-    /// Secret placeholder rules for outbound HTTPS requests. Placeholder
+    /// Secrets injected into outbound HTTPS request headers. Placeholder
     /// defaults to `<BOXLITE_SECRET:{name}>` when omitted — applied in
     /// `build_box_options`, matching the Go SDK's own default.
     #[serde(default)]

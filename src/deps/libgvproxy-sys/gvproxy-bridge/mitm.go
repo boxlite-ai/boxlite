@@ -175,26 +175,20 @@ func (ca *BoxCA) generateHostCert(hostname string, now time.Time) (*tls.Certific
 	return tlsCert, nil
 }
 
-// substituteHeaders replaces secret placeholders in request headers and URL query.
-func substituteHeaders(req *http.Request, secrets []SecretConfig) {
-	if len(secrets) == 0 {
-		return
-	}
-
-	pairs := make([]string, 0, len(secrets)*2)
+// injectSecretHeaders injects configured secret headers for the matching host.
+// It overwrites any existing header sent by the guest.
+// If Header is "Authorization" (case-insensitive) or empty, the value is prefixed with "Bearer ".
+func injectSecretHeaders(req *http.Request, secrets []SecretConfig) {
 	for _, s := range secrets {
-		pairs = append(pairs, s.Placeholder, s.Value)
-	}
-	r := strings.NewReplacer(pairs...)
-
-	for key, vals := range req.Header {
-		for i, v := range vals {
-			req.Header[key][i] = r.Replace(v)
+		headerName := s.Header
+		if headerName == "" {
+			headerName = "Authorization"
 		}
-	}
-
-	if req.URL != nil && req.URL.RawQuery != "" {
-		req.URL.RawQuery = r.Replace(req.URL.RawQuery)
+		val := s.Value
+		if strings.EqualFold(headerName, "Authorization") {
+			val = "Bearer " + val
+		}
+		req.Header.Set(headerName, val)
 	}
 }
 

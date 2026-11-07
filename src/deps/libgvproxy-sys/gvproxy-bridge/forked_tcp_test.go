@@ -3,7 +3,7 @@ package main
 // Tests for the MITM wiring in the TCP forwarding layer.
 // Since TCPWithFilter/inspectAndForward require a gVisor stack,
 // these tests verify the routing decisions at the network level:
-// - Secret hosts on port 443 → MITM'd (TLS intercepted, secrets substituted)
+// - Secret hosts on port 443 → MITM'd (TLS intercepted, secrets injected)
 // - Non-secret hosts on port 443 → relayed unchanged
 // - Secret hosts on port 80 → NOT MITM'd (HTTPS only)
 
@@ -24,7 +24,7 @@ func dialTo(addr string) upstreamDial {
 }
 
 // TestMitmRouting_SecretHostGetsMitmd verifies that when a TLS connection
-// targets a secret host, mitmAndForward is called and secrets are substituted.
+// targets a secret host, mitmAndForward is called and secrets are injected.
 func TestMitmRouting_SecretHostGetsMitmd(t *testing.T) {
 	ca := newTestCA(t)
 
@@ -72,7 +72,7 @@ func TestMitmRouting_SecretHostGetsMitmd(t *testing.T) {
 
 	// Verify: the upstream received the REAL secret, not the placeholder
 	if !strings.Contains(got, "sk-real-key-123") {
-		t.Errorf("expected substituted value in upstream, got: %s", got)
+		t.Errorf("expected injected value in upstream, got: %s", got)
 	}
 	if strings.Contains(got, "BOXLITE_SECRET") {
 		t.Errorf("placeholder should not reach upstream, got: %s", got)
@@ -176,7 +176,7 @@ func TestMitmRouting_AllowlistAndSecrets_MitmPriority(t *testing.T) {
 
 	body, _ := io.ReadAll(resp.Body)
 	if !strings.Contains(string(body), "real-value") {
-		t.Errorf("MITM should substitute even when host is also in allowlist, got: %s", body)
+		t.Errorf("MITM should inject even when host is also in allowlist, got: %s", body)
 	}
 }
 

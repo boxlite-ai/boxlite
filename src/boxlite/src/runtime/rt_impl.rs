@@ -468,6 +468,7 @@ impl RuntimeImpl {
         // Only a new box is held to the vCPU ceiling: reuse above ignores
         // general options, so a box persisted with more vCPUs stays reachable.
         options.validate_cpus()?;
+        options.validate_secrets()?;
 
         // Initialize box variables with defaults
         let (config, mut state) = self.init_box_variables(&options, name.clone());
@@ -2340,6 +2341,55 @@ mod tests {
         };
         let runtime = RuntimeImpl::new_for_test(options).expect("Failed to create runtime");
         (runtime, temp_dir)
+    }
+
+    fn secret_without_hosts() -> crate::runtime::options::Secret {
+        crate::runtime::options::Secret {
+            name: "legacy".to_string(),
+            hosts: vec![],
+            placeholder: "<BOXLITE_SECRET:legacy>".to_string(),
+            value: "real-value".to_string(),
+            header: None,
+        }
+    }
+
+    /// A replayed create names a box that already exists. It must adopt that
+    /// box even when the secrets it carries predate the create-time rules.
+    #[tokio::test]
+    async fn get_or_create_adopts_an_existing_box_despite_a_pre_rule_secret() {
+        let (runtime, _dir) = create_test_runtime();
+        let local = LocalRuntime(Arc::clone(&runtime));
+        RuntimeBackend::create(&local, BoxOptions::default(), Some("replayed".into()))
+            .await
+            .expect("create a box without secrets");
+
+        let options = BoxOptions {
+            secrets: vec![secret_without_hosts()],
+            ..Default::default()
+        };
+        let (_, created) = RuntimeBackend::get_or_create(&local, options, Some("replayed".into()))
+            .await
+            .expect("adopting an existing box must not validate the request's secrets");
+        assert!(!created);
+    }
+
+    #[tokio::test]
+    async fn create_rejects_a_new_box_with_a_secret_without_hosts() {
+        let (runtime, _dir) = create_test_runtime();
+        let local = LocalRuntime(Arc::clone(&runtime));
+        let options = BoxOptions {
+            secrets: vec![secret_without_hosts()],
+            ..Default::default()
+        };
+        let error = RuntimeBackend::get_or_create(&local, options, Some("new-box".into()))
+            .await
+            .err()
+            .expect("a new box must hold to the secret rules");
+        assert!(
+            matches!(error, BoxliteError::InvalidArgument(_)),
+            "{error:?}"
+        );
+        assert!(!error.to_string().contains("real-value"), "{error}");
     }
 
     /// Create a minimal BoxConfig for testing.

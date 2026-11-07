@@ -70,16 +70,16 @@ export class BoxSecret {
   })
   value: string
 
-  @ApiPropertyOptional({
-    description: 'Matching hosts for this secret. Empty means no host restriction.',
+  @ApiProperty({
+    description: 'Hosts where this secret is injected. Required for new boxes, at least one host.',
     example: ['api.openai.com'],
     isArray: true,
     type: String,
   })
-  hosts?: string[]
+  hosts: string[]
 
   @ApiPropertyOptional({
-    description: 'Placeholder visible inside the guest. Defaults to `<BOXLITE_SECRET:{name}>` when omitted.',
+    description: 'Dummy value for the guest environment; the proxy never parses it. Defaults to `<BOXLITE_SECRET:{name}>` when omitted.',
     example: '<BOXLITE_SECRET:openai>',
   })
   placeholder?: string
