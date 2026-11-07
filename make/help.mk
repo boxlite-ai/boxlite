@@ -22,6 +22,7 @@ help:
 	@echo "    make clippy                - Run Rust clippy checks (includes macOS cross-target guest)"
 	@echo "    make clippy:vmm            - Lint only the hypervisor and VMM crates"
 	@echo "    make lint:apps             - Lint the apps workspace TypeScript (eslint)"
+	@echo "    make audit:apps            - Audit production app dependencies at high severity"
 	@echo ""
 	@echo "  Build:"
 	@echo "    make cli            - Build the CLI (boxlite command)"

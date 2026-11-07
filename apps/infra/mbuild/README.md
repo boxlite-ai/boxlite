@@ -70,6 +70,10 @@ For this repository, reproduce the gate from `apps/` with:
 corepack yarn npm audit --severity high --environment production
 ```
 
+From the repository root, `make audit:apps` runs the same gate without installing
+dependencies. Release version PRs run it through the
+[title-selected preflight](../../../.github/workflows/README.md#release-dependency-preflight).
+
 Upgrade affected dependencies and commit both `package.json` and `yarn.lock` before
 rerunning publication. If the audit could not reach its registry, resolve connectivity
 and rerun deliberately; the workflow will not retry the failed audit automatically.
