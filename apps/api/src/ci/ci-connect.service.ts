@@ -733,6 +733,9 @@ export class CiConnectService {
         if (current.web_target_ciphertext) {
           const target = this.webTarget(current)
           const url = new URL(this.github.byClientId(target.clientId).settings().installationUrl)
+          url.pathname += '/permissions'
+          url.searchParams.set('target_id', String(target.account.accountId))
+          url.searchParams.set('target_type', target.account.accountType)
           url.searchParams.set('state', target.state)
           installationUrl = url.href
         }

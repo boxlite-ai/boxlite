@@ -192,7 +192,27 @@ export class CiNativeHost implements ListenerHost {
     this.pending.set(id, provider)
     let scopes: ExecutionScope[]
     try {
-      scopes = await new InstallationCatalog(provider, { ...binding, installation }, binding.policy).load(signal)
+      scopes = await new InstallationCatalog(provider, { ...binding, installation }, binding.policy, async (effect) => {
+        signal.throwIfAborted()
+        await this.store.transaction(async (tx, state) => {
+          await this.store.root(state)
+          await this.store.admit(tx, original, client)
+          const key = 'group-sync/' + id,
+            [prior] = await state.read([key])
+          await state.commit(lease, [
+            {
+              key,
+              expected: prior?.version ?? null,
+              payload: {
+                application: client,
+                binding: binding.binding,
+                generation: binding.generation,
+                effect: { ...effect },
+              },
+            },
+          ])
+        })
+      }).load(signal)
     } finally {
       await provider.close()
       this.pending.delete(id)

@@ -46,6 +46,43 @@ describe('CI browser callback state', () => {
     expect(api.completeCiConnect).toHaveBeenCalledExactlyOnceWith(organization, id, { code: 'private-code', state })
     expect(window.sessionStorage.getItem('boxlite.ci.connect')).toBeNull()
   })
+  it.each(['User', 'Organization'])('accepts the selected %s installation permissions page', async (type) => {
+    const module = await import('./ci-connect')
+    module.prepareCiRedirect(organization, attempt())
+    const address =
+      'https://github.com/apps/test/installations/new/permissions?' +
+      new URLSearchParams({ state, target_id: '789', target_type: type })
+    expect(module.prepareCiInstallationRedirect(id, address)).toBe(address)
+  })
+  it.each([
+    'target_id=0&target_type=Organization',
+    'target_id=01&target_type=Organization',
+    'target_id=9007199254740992&target_type=Organization',
+    'target_id=1.5&target_type=Organization',
+    'target_id=789&target_type=Enterprise',
+    'target_type=Organization',
+    'target_id=789',
+    'target_id=789&target_id=456&target_type=Organization',
+    'target_id=789&target_type=Organization&target_type=User',
+    'target_id=789&target_type=Organization&redirect_uri=https://evil.test',
+    'target_id=789&target_type=Organization&state=other',
+  ])('rejects malformed installation target query: %s', async (query) => {
+    const module = await import('./ci-connect')
+    module.prepareCiRedirect(organization, attempt())
+    expect(() =>
+      module.prepareCiInstallationRedirect(
+        id,
+        'https://github.com/apps/test/installations/new/permissions?state=' + state + '&' + query,
+      ),
+    ).toThrow('Invalid GitHub installation')
+  })
+  it('keeps the legacy accountless install route but rejects unrelated query fields', async () => {
+    const module = await import('./ci-connect')
+    module.prepareCiRedirect(organization, attempt())
+    const address = 'https://github.com/apps/test/installations/new?state=' + state
+    expect(module.prepareCiInstallationRedirect(id, address)).toBe(address)
+    expect(() => module.prepareCiInstallationRedirect(id, address + '&redirect_uri=https://evil.test')).toThrow()
+  })
   it('cannot reuse a callback after a reload loses its in-memory code', async () => {
     const module = await import('./ci-connect')
     module.prepareCiRedirect(organization, attempt())

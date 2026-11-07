@@ -26,15 +26,21 @@ describe('CI shared installation directory', () => {
     group: Record<string, unknown>,
     countChange: boolean,
     failClose: boolean,
-    calls: { path: string; body?: { permissions: object } }[]
+    calls: { path: string; method: string; body?: Record<string, unknown> }[],
+    groupExists: boolean,
+    duplicateGroup: boolean,
+    denyWrite: boolean,
+    readbackMismatch: boolean,
+    failAfterWrite: string | undefined,
+    authorize: jest.Mock<Promise<void>, [unknown]>
   let gate: { entered(): void; wait: Promise<void> } | undefined
-  const make = () => {
+  const make = (allowPublic = false) => {
     provider = new ListenerCredentials(state, lease, 'catalog/1', {
       kind: 'app',
       app,
       installation: binding.installation,
     })
-    return new InstallationCatalog(provider, binding, { allowPublic: false, group: 'boxlite-ci-runner' })
+    return new InstallationCatalog(provider, binding, { allowPublic, group: 'boxlite-ci-runner' }, authorize)
   }
   beforeEach(async () => {
     directory = mkdtempSync(join(tmpdir(), 'ci-catalog-'))
@@ -58,6 +64,7 @@ describe('CI shared installation directory', () => {
     selected = repositories
     group = {
       id: 5,
+      default: false,
       name: 'boxlite-ci-runner',
       visibility: 'selected',
       inherited: false,
@@ -65,14 +72,20 @@ describe('CI shared installation directory', () => {
       allows_public_repositories: false,
     }
     countChange = failClose = false
+    groupExists = true
+    duplicateGroup = denyWrite = readbackMismatch = false
+    failAfterWrite = undefined
+    authorize = jest.fn(async (_effect: unknown) => {})
     gate = undefined
     calls = []
     global.fetch = jest.fn(async (input, options) => {
       const url = new URL(String(input)),
         path = url.pathname,
-        body = options?.body ? JSON.parse(String(options.body)) : undefined
-      calls.push({ path, body })
+        body = options?.body ? JSON.parse(String(options.body)) : undefined,
+        method = options?.method || 'GET'
+      calls.push({ path, method, body })
       const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status })
+      if (denyWrite && method !== 'GET' && path.startsWith('/orgs/')) return json({}, 403)
       if (path === '/app/installations/1') return json({ ...binding.installation, suspended_at: null })
       if (path.endsWith('/access_tokens'))
         return json(
@@ -93,7 +106,30 @@ describe('CI shared installation directory', () => {
           repositories: repositories.slice((page - 1) * 100, page * 100),
         })
       }
-      if (path === '/orgs/owner/actions/runner-groups') return json({ total_count: 1, runner_groups: [group] })
+      if (path === '/orgs/owner/actions/runner-groups' && method === 'POST') {
+        groupExists = true
+        Object.assign(group, body)
+        selected = repositories.filter((repository) => body.selected_repository_ids.includes(repository.id))
+      } else if (path === '/orgs/owner/actions/runner-groups/5' && method === 'PATCH') Object.assign(group, body)
+      else if (path === '/orgs/owner/actions/runner-groups/5/repositories' && method === 'PUT') {
+        selected = repositories.filter((repository) => body.selected_repository_ids.includes(repository.id))
+      }
+      if (['POST', 'PATCH', 'PUT'].includes(method) && path.startsWith('/orgs/')) {
+        if (failAfterWrite === method) {
+          failAfterWrite = undefined
+          return json({}, 500)
+        }
+        return method === 'PUT' ? new Response(null, { status: 204 }) : json(group, method === 'POST' ? 201 : 200)
+      }
+      if (path === '/orgs/owner/actions/runner-groups') {
+        const groups = groupExists ? [group] : []
+        if (duplicateGroup) groups.push({ ...group, id: 6 })
+        return json({ total_count: groups.length, runner_groups: groups })
+      }
+      if (path === '/orgs/owner/actions/runner-groups/5')
+        return json(
+          readbackMismatch ? { ...group, allows_public_repositories: !group.allows_public_repositories } : group,
+        )
       if (path === '/orgs/owner/actions/runner-groups/5/repositories')
         return json({ total_count: selected.length, repositories: selected })
       throw new Error('Unexpected catalog HTTP request')
@@ -140,21 +176,138 @@ describe('CI shared installation directory', () => {
     ])
     expect(calls.filter((call) => call.path === '/installation/token')).toHaveLength(2)
   })
-  it.each(['all', 'inherited', 'public', 'workflows', 'foreign-repo', 'missing-repo'])(
-    'rejects unsafe or incomplete organization policy: %s',
+  it.each([false, true])('synchronizes a mixed organization with allowPublic=%s', async (allowPublic) => {
+    binding.installation.account.type = 'Organization'
+    repositories[1].private = false
+    group.allows_public_repositories = !allowPublic
+    catalog = make(allowPublic)
+    const scopes = await catalog.load()
+    expect(scopes[0].runners).toMatchObject({ repositories: allowPublic ? [21, 22] : [21], allowPublic })
+    expect(selected.map((repository) => repository.id)).toEqual(allowPublic ? [21, 22] : [21])
+    expect(group.allows_public_repositories).toBe(allowPublic)
+    expect(authorize).toHaveBeenCalled()
+  })
+  it('creates a missing managed organization group', async () => {
+    binding.installation.account.type = 'Organization'
+    groupExists = false
+    catalog = make()
+    expect((await catalog.load())[0].runners).toMatchObject({ group: 5, repositories: [21, 22] })
+    expect(calls.find((call) => call.method === 'POST' && call.path.endsWith('/runner-groups'))?.body).toMatchObject({
+      name: 'boxlite-ci-runner',
+      visibility: 'selected',
+      selected_repository_ids: [21, 22],
+      allows_public_repositories: false,
+    })
+    expect(authorize).toHaveBeenCalledTimes(1)
+  })
+  it('repairs managed group membership and narrows broad visibility', async () => {
+    binding.installation.account.type = 'Organization'
+    selected = [repositories[0], { ...repositories[0], id: 99 }]
+    group.visibility = 'all'
+    group.restricted_to_workflows = true
+    catalog = make()
+    expect(await catalog.load()).toHaveLength(1)
+    expect(group).toMatchObject({ visibility: 'selected', restricted_to_workflows: false })
+    expect(selected.map((repository) => repository.id)).toEqual([21, 22])
+  })
+  it('clears a managed group when all installed repositories are public and excluded', async () => {
+    binding.installation.account.type = 'Organization'
+    for (const repository of repositories) repository.private = false
+    group.allows_public_repositories = true
+    catalog = make()
+    expect(await catalog.load()).toEqual([])
+    expect(selected).toEqual([])
+    expect(group.allows_public_repositories).toBe(false)
+  })
+  it('refuses to mutate or adopt the default organization group', async () => {
+    binding.installation.account.type = 'Organization'
+    group.default = true
+    catalog = make()
+    await expect(catalog.load()).rejects.toThrow('managed')
+    expect(authorize).not.toHaveBeenCalled()
+  })
+  it.each(['all', 'public', 'workflows', 'foreign-repo', 'missing-repo'])(
+    'repairs managed policy drift: %s',
     async (kind) => {
       binding.installation.account.type = 'Organization'
       catalog = make()
       if (kind === 'all') group.visibility = 'all'
-      if (kind === 'inherited') group.inherited = true
       if (kind === 'public') group.allows_public_repositories = true
       if (kind === 'workflows') group.restricted_to_workflows = true
       if (kind === 'foreign-repo') selected = [...repositories, { ...repositories[0], id: 99 }]
       if (kind === 'missing-repo') selected = [repositories[0]]
-      await expect(catalog.load()).rejects.toThrow()
+      expect(await catalog.load()).toHaveLength(1)
+      expect(group).toMatchObject({
+        visibility: 'selected',
+        allows_public_repositories: false,
+        restricted_to_workflows: false,
+      })
+      expect(selected.map((repository) => repository.id)).toEqual([21, 22])
       expect(calls.filter((call) => call.path === '/installation/token')).toHaveLength(2)
     },
   )
+  it.each(['inherited', 'ambiguous'])('rejects an unmanaged organization group: %s', async (kind) => {
+    binding.installation.account.type = 'Organization'
+    if (kind === 'inherited') group.inherited = true
+    else duplicateGroup = true
+    catalog = make()
+    await expect(catalog.load()).rejects.toThrow()
+    expect(authorize).not.toHaveBeenCalled()
+  })
+  it('does not rewrite an already synchronized group', async () => {
+    binding.installation.account.type = 'Organization'
+    catalog = make()
+    expect(await catalog.load()).toHaveLength(1)
+    expect(authorize).not.toHaveBeenCalled()
+    expect(calls.filter((call) => call.path.startsWith('/orgs/') && call.method !== 'GET')).toEqual([])
+  })
+  it('does not create a group without eligible repositories', async () => {
+    binding.installation.account.type = 'Organization'
+    repositories = []
+    groupExists = false
+    catalog = make()
+    expect(await catalog.load()).toEqual([])
+    expect(authorize).not.toHaveBeenCalled()
+  })
+  it('checks host authorization before a group mutation', async () => {
+    binding.installation.account.type = 'Organization'
+    selected = []
+    authorize.mockRejectedValue(Error('owner revoked'))
+    catalog = make()
+    await expect(catalog.load()).rejects.toThrow('owner revoked')
+    expect(calls.filter((call) => call.path.startsWith('/orgs/') && call.method !== 'GET')).toEqual([])
+  })
+  it('does not publish a group after GitHub denies a write', async () => {
+    binding.installation.account.type = 'Organization'
+    selected = []
+    denyWrite = true
+    catalog = make()
+    await expect(catalog.load()).rejects.toMatchObject({ status: 403 })
+    expect(selected).toEqual([])
+  })
+  it('does not publish a group whose policy readback differs', async () => {
+    binding.installation.account.type = 'Organization'
+    selected = []
+    readbackMismatch = true
+    catalog = make()
+    await expect(catalog.load()).rejects.toThrow('policy')
+  })
+  it.each(['POST', 'PATCH', 'PUT'])('recovers a lost %s response by reading remote state', async (method) => {
+    binding.installation.account.type = 'Organization'
+    if (method === 'POST') groupExists = false
+    if (method === 'PATCH') group.allows_public_repositories = true
+    if (method === 'PUT') selected = []
+    failAfterWrite = method
+    catalog = make()
+    await expect(catalog.load()).rejects.toMatchObject({ status: 500 })
+    const afterFailure = calls.length
+    expect(await catalog.load()).toHaveLength(1)
+    const next = calls.slice(afterFailure).filter((call) => call.path.startsWith('/orgs/'))
+    expect(next[0]).toMatchObject({ method: 'GET', path: '/orgs/owner/actions/runner-groups' })
+    expect(group).toMatchObject({ visibility: 'selected', allows_public_repositories: false })
+    expect(selected.map((repository) => repository.id)).toEqual([21, 22])
+    expect(calls.filter((call) => call.path.startsWith('/orgs/') && call.method === method)).toHaveLength(1)
+  })
   it('does not admit transferred repositories even when a catalog response lists them', async () => {
     repositories[0].owner.id = 8
     await expect(catalog.load()).rejects.toThrow('installation account')

@@ -567,7 +567,9 @@ integration('CI connect persistence (real Postgres)', () => {
     expect(result.status).toBe('installation_required')
     const url = new URL(result.installation_url),
       state = url.searchParams.get('state')!
-    expect(url.pathname).toBe('/apps/org-ci/installations/new')
+    expect(url.pathname).toBe('/apps/org-ci/installations/new/permissions')
+    expect(url.searchParams.get('target_id')).toBe('789')
+    expect(url.searchParams.get('target_type')).toBe('Organization')
     expect(state).not.toBe(attempt.state)
     expect((await service.getWeb(actor, attempt.id)).installation_url).toBe(url.href)
     await expect(service.completeInstallation(actor, attempt.id, 321, attempt.state)).rejects.toThrow('state mismatch')
@@ -576,6 +578,16 @@ integration('CI connect persistence (real Postgres)', () => {
     expect(completed.accounts.find((account) => account.account_id === 789).connected).toBe(true)
     expect((await db.query('SELECT app_client_id FROM ci_installation_binding'))[0].app_client_id).toBe('org-client')
     await expect(service.completeInstallation(actor, attempt.id, 321, state)).rejects.toThrow('No pending')
+  })
+  it('targets the selected personal account on the installation permissions page', async () => {
+    const { attempt, installed } = await accountSession()
+    installed.delete(456)
+    const result = await service.selectAccount(actor, attempt.id, { account_id: 456, allow_public_repositories: true })
+    const url = new URL(result.installation_url)
+    expect(url.pathname).toBe('/apps/example/installations/new/permissions')
+    expect(url.searchParams.get('target_id')).toBe('456')
+    expect(url.searchParams.get('target_type')).toBe('User')
+    expect((await service.getWeb(actor, attempt.id)).installation_url).toBe(url.href)
   })
   it.each(['owner-revoked', 'wrong-installation', 'wrong-account'])(
     'denies installation completion after %s',

@@ -3,6 +3,13 @@ import { ListenerCredentials } from './credentials'
 import { GitHubCredential, GitHubInstallation } from './github-app'
 import { decodeRepository, GitHubRepository } from './jobs'
 import { decodeScope, ExecutionScope, object, positive } from './execution/model'
+import { Json } from './state/database'
+
+export interface RunnerGroupMutation {
+  method: 'POST' | 'PATCH' | 'PUT'
+  path: string
+  body: Json
+}
 
 export interface InstallationBinding {
   binding: string
@@ -20,6 +27,7 @@ export class InstallationCatalog {
     private readonly credentials: ListenerCredentials,
     binding: InstallationBinding,
     policy: { allowPublic: boolean; group: string },
+    private readonly beforeMutation?: (effect: RunnerGroupMutation) => Promise<void>,
   ) {
     this.binding = {
       ...binding,
@@ -57,51 +65,18 @@ export class InstallationCatalog {
       return eligible.map((repository) =>
         decodeScope({ ...base, runners: { kind: 'repository', repository, allowPublic: this.policy.allowPublic } }),
       )
-    if (!eligible.length) return []
     const borrow = await this.credentials.open({ kind: 'organization-runners' }, signal)
     try {
-      const route = `/orgs/${original.installation.account.login}`,
-        groups = await this.list(borrow.credential, `${route}/actions/runner-groups`, 'runner_groups', signal),
-        matches = groups.filter((group) => object(group) && group.name === this.policy.group)
-      if (matches.length !== 1 || !object(matches[0]))
-        throw new Error('Configured CI runner group is missing or ambiguous')
-      const group = matches[0]
-      if (
-        !positive(group.id) ||
-        group.visibility !== 'selected' ||
-        group.inherited !== false ||
-        group.restricted_to_workflows !== false ||
-        group.allows_public_repositories !== this.policy.allowPublic
-      )
-        throw new Error('CI runner group must match the explicit repository policy')
-      const selected = (
-        await this.list(
-          borrow.credential,
-          `${route}/actions/runner-groups/${group.id}/repositories`,
-          'repositories',
-          signal,
-        )
-      ).map((value) => this.repository(value))
-      const expected = new Map(eligible.map((repository) => [repository.id, repository]))
-      for (const repository of selected) {
-        const installed = expected.get(repository.id)
-        if (
-          !installed ||
-          installed.name.toLowerCase() !== repository.name.toLowerCase() ||
-          installed.private !== repository.private
-        )
-          throw new Error('CI runner group differs from installed repositories')
-        expected.delete(repository.id)
-      }
-      if (expected.size) throw new Error('CI runner group omits installed repositories')
+      const group = await this.synchronizeGroup(borrow.credential, eligible, signal)
+      if (group === undefined || !eligible.length) return []
       return [
         decodeScope({
           ...base,
           runners: {
             kind: 'organization',
             account: original.installation.account,
-            group: group.id,
-            repositories: selected.map((repository) => repository.id),
+            group,
+            repositories: eligible.map((repository) => repository.id),
             allowPublic: this.policy.allowPublic,
           },
         }),
@@ -109,6 +84,114 @@ export class InstallationCatalog {
     } finally {
       await borrow.close()
     }
+  }
+  private managedGroup(value: unknown): Record<string, unknown> & { id: number } {
+    if (
+      !object(value) ||
+      !positive(value.id) ||
+      value.name !== this.policy.group ||
+      value.default !== false ||
+      value.inherited !== false ||
+      !['selected', 'all', 'private'].includes(value.visibility as string) ||
+      typeof value.allows_public_repositories !== 'boolean' ||
+      typeof value.restricted_to_workflows !== 'boolean'
+    )
+      throw new Error('CI managed runner group is invalid, default or inherited')
+    return value as Record<string, unknown> & { id: number }
+  }
+  private async synchronizeGroup(
+    credential: GitHubCredential,
+    eligible: GitHubRepository[],
+    signal?: AbortSignal,
+  ): Promise<number | undefined> {
+    const route = `/orgs/${this.binding.installation.account.login}/actions/runner-groups`,
+      groups = await this.list(credential, route, 'runner_groups', signal),
+      matches = groups.filter((group) => object(group) && group.name === this.policy.group),
+      ids = eligible.map((repository) => repository.id)
+    if (matches.length > 1) throw new Error('CI managed runner group is ambiguous')
+    if (!matches.length && !ids.length) return undefined
+    const policy = (allowPublic: boolean) => ({
+      name: this.policy.group,
+      visibility: 'selected',
+      allows_public_repositories: allowPublic,
+      restricted_to_workflows: false,
+      selected_workflows: [],
+    })
+    let group = this.managedGroup(
+      matches[0] ??
+        (await this.mutateGroup(
+          credential,
+          {
+            method: 'POST',
+            path: route,
+            body: { ...policy(this.policy.allowPublic), selected_repository_ids: ids },
+          },
+          signal,
+        )),
+    )
+    const id = group.id,
+      path = `${route}/${id}`,
+      readRepositories = async () =>
+        (await this.list(credential, path + '/repositories', 'repositories', signal)).map((value) =>
+          this.repository(value),
+        ),
+      selected = await readRepositories(),
+      expected = new Set(ids)
+    // Revoke broad access before changing membership; enable public access only after membership converges.
+    if (
+      group.visibility !== 'selected' ||
+      group.restricted_to_workflows ||
+      (group.allows_public_repositories && !this.policy.allowPublic)
+    )
+      group = this.managedGroup(
+        await this.mutateGroup(credential, { method: 'PATCH', path, body: policy(false) }, signal),
+      )
+    if (selected.length !== ids.length || selected.some((repository) => !expected.has(repository.id)))
+      await this.mutateGroup(
+        credential,
+        { method: 'PUT', path: path + '/repositories', body: { selected_repository_ids: ids } },
+        signal,
+      )
+    if (group.allows_public_repositories !== this.policy.allowPublic)
+      await this.mutateGroup(credential, { method: 'PATCH', path, body: policy(this.policy.allowPublic) }, signal)
+    group = this.managedGroup(await credential.request(path, { signal }))
+    if (
+      group.id !== id ||
+      group.visibility !== 'selected' ||
+      group.restricted_to_workflows ||
+      group.allows_public_repositories !== this.policy.allowPublic
+    )
+      throw new Error('CI runner group policy readback differs from the connection')
+    const actual = await readRepositories(),
+      installed = new Map(eligible.map((repository) => [repository.id, repository]))
+    for (const repository of actual) {
+      const original = installed.get(repository.id)
+      if (
+        !original ||
+        original.name.toLowerCase() !== repository.name.toLowerCase() ||
+        original.private !== repository.private
+      )
+        throw new Error('CI runner group policy readback differs from installed repositories')
+      installed.delete(repository.id)
+    }
+    if (installed.size) throw new Error('CI runner group policy readback omits installed repositories')
+    return id
+  }
+  private async mutateGroup(
+    credential: GitHubCredential,
+    effect: RunnerGroupMutation,
+    signal?: AbortSignal,
+  ): Promise<unknown> {
+    if (!this.beforeMutation) throw new Error('CI managed runner group synchronization requires host authority')
+    signal?.throwIfAborted()
+    await this.beforeMutation(effect)
+    signal?.throwIfAborted()
+    return credential.request(effect.path, {
+      method: effect.method,
+      json: effect.body,
+      signal,
+      response: effect.method === 'PUT' ? 'empty' : 'json',
+    })
   }
   private repository(value: unknown): GitHubRepository {
     const repository = decodeRepository(value),

@@ -1138,7 +1138,13 @@ select another tenant. Discovery publishes catalog scopes before marking that bi
 ready; readiness describes initialization, not available execution capacity.
 Personal accounts use one runner pool per repository; organizations use the configured
 selected, non-inherited runner group with the exact eligible repository inventory.
-The group must already exist; automatic group provisioning remains unfinished.
+BoxLite creates or synchronizes its dedicated group automatically. The public
+option includes installed private and public repositories when enabled, and only
+installed private repositories when disabled. Each write requires a current
+binding generation, owner and execution lease, with a durable intent recorded
+before the GitHub request. Policy and repository membership are read back before
+readiness. Default and inherited groups cannot be adopted; other groups are not
+modified. An UPDATE saves desired policy and wakes this asynchronous synchronization.
 The shared installation directory publishes successful catalogs independently.
 An installation failure withholds that installation's new admissions and retains
 its hints; other initialized accounts continue. Catalog requests run outside the

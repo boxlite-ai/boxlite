@@ -147,6 +147,116 @@ describe('Standalone App binding and HTTP ingress', () => {
     if (!address || typeof address === 'string') throw new Error('Missing server address')
     base = 'http://127.0.0.1:' + address.port
   }
+  function managedOrganization(beforeGroupRead?: () => Promise<void>) {
+    const previous = global.fetch,
+      writes: string[] = [],
+      installation = {
+        id: 1,
+        account: { id: 7, login: 'owner', type: 'Organization' },
+        suspended_at: null as string | null,
+        permissions: { metadata: 'read', actions: 'read', organization_self_hosted_runners: 'write' },
+      },
+      group = {
+        id: 5,
+        name: 'boxlite-ci-runner',
+        default: false,
+        inherited: false,
+        visibility: 'selected',
+        restricted_to_workflows: false,
+        allows_public_repositories: true,
+      }
+    repositories[1] = { ...repositories[1], private: false }
+    let selected = [21, 22]
+    global.fetch = jest.fn(async (input, options) => {
+      const path = new URL(String(input)).pathname,
+        method = options?.method || 'GET',
+        body = options?.body ? JSON.parse(String(options.body)) : undefined,
+        json = (value: unknown) => new Response(JSON.stringify(value))
+      if (path === '/app/installations') return json([installation])
+      if (path === '/app/installations/1') return json(installation)
+      if (path === '/orgs/owner/actions/runner-groups') {
+        const hook = beforeGroupRead
+        beforeGroupRead = undefined
+        await hook?.()
+        return json({ total_count: 1, runner_groups: [group] })
+      }
+      if (path.startsWith('/orgs/') && ['PATCH', 'PUT'].includes(method)) {
+        expect((await state.read(['group-sync/1']))[0]?.payload).toMatchObject({
+          application: 'test-client',
+          effect: { method, path, body },
+        })
+        writes.push(method)
+        if (method === 'PATCH') {
+          Object.assign(group, body)
+          return json(group)
+        }
+        selected = body.selected_repository_ids
+        return new Response(null, { status: 204 })
+      }
+      if (path === '/orgs/owner/actions/runner-groups/5') return json(group)
+      if (path.endsWith('/5/repositories'))
+        return json({
+          total_count: selected.length,
+          repositories: repositories.filter((repository) => selected.includes((repository as { id: number }).id)),
+        })
+      return previous(input, options)
+    }) as typeof fetch
+    return { writes, group, installation }
+  }
+  it('synchronizes a managed organization group with durable SQLite intents', async () => {
+    const { writes, group } = managedOrganization(),
+      reports = jest.spyOn(host, 'report').mockImplementation(() => {})
+    try {
+      const view = await discover((value) => value.ready || reports.mock.calls.length > 0)
+      expect(view.scopes).toHaveLength(1)
+      expect(reports).not.toHaveBeenCalled()
+      expect(view.scopes[0].runners).toMatchObject({ repositories: [21], allowPublic: false })
+      expect(writes).toEqual(['PATCH', 'PUT'])
+      expect(group.allows_public_repositories).toBe(false)
+    } finally {
+      reports.mockRestore()
+    }
+  })
+  it.each(['root', 'root-race', 'mapping', 'suspended'])(
+    'refuses managed group writes after standalone %s revocation',
+    async (kind) => {
+      const current = managedOrganization(async () => {
+          if (kind === 'root-race') {
+            const read = state.read.bind(state)
+            let roots = 0
+            const hook = jest.spyOn(state, 'read').mockImplementation(async (keys) => {
+              const rows = await read(keys)
+              if (keys.length === 1 && keys[0] === 'backend/github' && ++roots === 2) {
+                hook.mockRestore()
+                await state.commit(lease, [{ key: rows[0].key, expected: rows[0].version, payload: {} }])
+              }
+              return rows
+            })
+            return
+          }
+          if (kind === 'suspended') {
+            current.installation.suspended_at = new Date().toISOString()
+            return
+          }
+          const key = kind === 'root' ? 'backend/github' : 'binding/self/current',
+            [record] = await state.read([key])
+          await state.commit(lease, [{ key, expected: record.version, payload: {} }])
+        }),
+        reports = jest.spyOn(host, 'report').mockImplementation(() => {})
+      try {
+        const view = await discover((value) => value.ready || reports.mock.calls.length > 0).catch((error) => {
+          if (kind !== 'root' && kind !== 'root-race') throw error
+          expect(error.message).toBe('Original GitHub App identity unavailable')
+          return { scopes: [] }
+        })
+        expect(view.scopes).toEqual([])
+        expect(current.writes).toEqual([])
+        expect(await state.read(['group-sync/1'])).toEqual([])
+      } finally {
+        reports.mockRestore()
+      }
+    },
+  )
   it.each([0, 137])('writes a real pool exit %s as JSON with original CI identity', async (exit_code) => {
     const scope = (await discover()).scopes[0],
       journal = new ExecutionJournal(state)
@@ -253,6 +363,15 @@ describe('Standalone App binding and HTTP ingress', () => {
       permissions: { metadata: 'read', actions: 'read', organization_self_hosted_runners: 'write' },
     }
     const repo = { id: 31, name: 'org-repo', owner: { id: 8, login: 'team' }, private: true }
+    const orgGroup = {
+      id: 9,
+      name: 'boxlite-ci-runner',
+      default: false,
+      visibility: 'selected',
+      inherited: false,
+      restricted_to_workflows: false,
+      allows_public_repositories: false,
+    }
     global.fetch = jest.fn(async (input, options) => {
       const url = new URL(String(input)),
         path = url.pathname,
@@ -280,17 +399,9 @@ describe('Standalone App binding and HTTP ingress', () => {
       if (path === '/orgs/team/actions/runner-groups')
         return json({
           total_count: 1,
-          runner_groups: [
-            {
-              id: 9,
-              name: 'boxlite-ci-runner',
-              visibility: 'selected',
-              inherited: false,
-              restricted_to_workflows: false,
-              allows_public_repositories: false,
-            },
-          ],
+          runner_groups: [orgGroup],
         })
+      if (path === '/orgs/team/actions/runner-groups/9') return json(orgGroup)
       if (path === '/orgs/team/actions/runner-groups/9/repositories')
         return json({ total_count: 1, repositories: [repo] })
       return previous(input, options)

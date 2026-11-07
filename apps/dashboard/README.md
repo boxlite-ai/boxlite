@@ -786,9 +786,14 @@ It edits public-repository permission on the existing verified binding; changing
 GitHub account identity still requires authorization. A changed policy refreshes
 the listener catalog. Delivered jobs continue and original cleanup remains available;
 workers awaiting JIT configuration may be retired under the new policy.
-For Organization accounts, the GitHub runner group's public-repository setting must
-match the policy; the update does not modify GitHub settings. Failed saves retain
-the dialog and checkbox, and successful saves refresh only the original organization.
+The option includes installed private and public repositories when enabled, and
+only installed private repositories when disabled. For Organization accounts,
+BoxLite automatically creates or synchronizes its dedicated GitHub runner group;
+users do not repeat the setting in GitHub. The existing inventory wake performs
+this asynchronously; the connection remains provisioning until remote policy and
+repository membership pass readback. A GitHub failure retries with the saved
+desired policy. Failed API saves retain the dialog and checkbox, and successful
+saves refresh only the original organization.
 
 Deleting a connection requires confirmation and waits for the server before removing
 the row. It stops new admissions, cancels stored unfinished authorizations for that
@@ -808,6 +813,14 @@ connections and has no redundant Status column. Switch account is clickable text
 beside Signed in as; it cancels the unfinished grant and forces GitHub's account
 picker. Committed connections remain intact. Closing, Escape, Back and browser
 restoration keep the UI usable and ignore obsolete asynchronous results.
+
+Install sends the verified selected account ID and type to GitHub's account-specific
+permissions page, avoiding another account/organization picker. GitHub still asks
+for installation permissions and repository selection. Resume retains the selected
+target and fresh installation state; completion independently rechecks ownership,
+the installed account and matching CI App. Existing installations bind directly.
+The browser allows only the fixed GitHub installation routes and validates target
+ID/type, attempt-bound state and query uniqueness before redirecting.
 
 Missing organization? explains organization OAuth approval and SSO prerequisites;
 an installed CI App alone does not guarantee visibility. Review GitHub access,
