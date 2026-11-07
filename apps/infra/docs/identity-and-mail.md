@@ -192,6 +192,9 @@ reviewed documents in [`auth0/mcp-clients.json`](../bootstrap/auth0/mcp-clients.
 are registered, and dynamic client registration stays off. Clients with no fixed
 document (Cursor, Windsurf, Gemini CLI, MCP Inspector) use an API key instead.
 
+Loomy uses its [published metadata document](https://loomy.im/oauth/client-metadata/boxlite.json).
+New BoxLite users sign in to the dashboard once before connecting Loomy.
+
 mdeploy sets `MCP_RESOURCE_URL` to `https://<api host>/mcp`, for example
 `https://api.dev.boxlite.ai/mcp`; a stage value overrides it. Each stage then runs,
 in this order:
@@ -236,7 +239,11 @@ Clients that do not check `iss` ignore it; the dashboard and the `boxlite` CLI
 do not read it.
 
 The preview calls `clients/cimd/preview`, which validates a document without
-creating anything, and otherwise only reads. Preview and apply refuse a tenant
+creating anything, and otherwise only reads. For a client-only rollout, apply
+only when every planned write belongs to that client. Check tenant capacity if
+the plan includes a new registration.
+
+Preview and apply refuse a tenant
 whose deployed, post-login-bound `boxlite-login-policy` Action is not the repo template, stamped and
 hydrated by `auth0:configure-login`, for this exact `--resource-url` and
 `--api-audience`, because that Action is the only email-verification gate: the API
