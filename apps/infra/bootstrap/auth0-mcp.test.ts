@@ -28,8 +28,9 @@ function page<T>(items: T[], query: Record<string, string> = {}): T[] {
  * `external_client_id`, refuses a metadata URL where a client id belongs (400
  * `invalid_uri`), and grants only to client ids.
  * `lose` names one write (`post resource-servers`) whose change lands but whose
- * response is lost, as on a dropped connection; `refuse` names one that fails
- * before it lands.
+ * response is lost, as on a dropped connection; `refusals` holds writes that fail
+ * before they land. Deleting what is already gone answers 404, as Auth0 does,
+ * unless the caller passes `allowNotFound`.
  */
 function fakeTenant(rules: object[] = [], lose?: string, refuse?: string) {
   const state = {
@@ -40,10 +41,11 @@ function fakeTenant(rules: object[] = [], lose?: string, refuse?: string) {
     connections: [{ id: 'con_1', name: 'Username-Password-Authentication', is_domain_connection: false }],
   }
   const writes: string[] = []
+  const refusals = new Set<string>(refuse ? [refuse] : [])
   let next = 0
   const client = {
     request(method: string, path: string, options: RequestOptions = {}) {
-      if (`${method} ${path}` === refuse) throw new Error('503 Service Unavailable')
+      if (refusals.has(`${method} ${path}`)) throw new Error('503 Service Unavailable')
       const result = answer(method, path, options)
       if (`${method} ${path}` === lose) throw new Error('socket hang up')
       return result
@@ -68,7 +70,11 @@ function fakeTenant(rules: object[] = [], lose?: string, refuse?: string) {
           if (!api && !options.allowNotFound) throw new Error(`404 ${path}`)
           return api ?? null
         }
-        if (method === 'delete') state.apis = state.apis.filter((a) => a !== api)
+        if (method === 'delete') {
+          if (!api) return gone(path, options)
+          state.apis = state.apis.filter((a) => a !== api)
+          return null
+        }
         else Object.assign(api!, data)
         return api
       }
@@ -90,6 +96,7 @@ function fakeTenant(rules: object[] = [], lose?: string, refuse?: string) {
         if (!/^[\w-]+$/.test(id)) throw new Error(`400 invalid_uri ${path}`)
         const found = state.clients.find((c) => c.client_id === id)
         if (method === 'delete') {
+          if (!found) return gone(path, options)
           state.clients = state.clients.filter((c) => c !== found)
           return null
         }
@@ -110,14 +117,22 @@ function fakeTenant(rules: object[] = [], lose?: string, refuse?: string) {
         return grant
       }
       if (path.startsWith('client-grants/')) {
+        if (!state.grants.some((g) => path.endsWith(g.id))) return gone(path, options)
         state.grants = state.grants.filter((g) => !path.endsWith(g.id))
         return null
       }
       if (path === 'connections') return state.connections.filter((c) => c.name === options.query?.name)
-      if (path.startsWith('connections/')) return Object.assign(state.connections.find((c) => path.endsWith(c.id))!, data)
+      if (path.startsWith('connections/')) {
+        const connection = state.connections.find((c) => path.endsWith(c.id))
+        return connection ? Object.assign(connection, data) : gone(path, options)
+      }
       throw new Error(`unexpected ${method} ${path}`)
   }
-  return { state, writes, client }
+  function gone(path: string, options: RequestOptions) {
+    if (options.allowNotFound) return null
+    throw new Error(`404 ${path}`)
+  }
+  return { state, writes, client, refusals }
 }
 
 function configurator(tenant: ReturnType<typeof fakeTenant>, apply: boolean, journalDirectory: string) {
@@ -267,6 +282,47 @@ test('rollback deletes an API whose create response was lost', () => {
     Auth0McpConfigurator.rollback(join(dir, journal), () => tenant.client as never)
 
     assert.equal(tenant.state.apis.length, 0)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('rollback undoes every entry it can, names the failures, and a rerun finishes', () => {
+  const tenant = fakeTenant()
+  const dir = mkdtempSync(join(tmpdir(), 'mcp-'))
+  try {
+    const applied = configurator(tenant, true, dir).apply()
+    const [registered] = tenant.state.clients
+    tenant.refusals.add(`delete clients/${registered.client_id}`)
+
+    assert.throws(
+      () => Auth0McpConfigurator.rollback(applied.journal, () => tenant.client as never),
+      (error: Error) => error.message.includes(`client ${CLIENT}`),
+    )
+    assert.equal(tenant.state.apis.length, 0)
+    assert.equal(tenant.state.settings.resource_parameter_profile, 'audience')
+    assert.deepEqual(tenant.state.clients, [registered])
+
+    tenant.refusals.clear()
+    Auth0McpConfigurator.rollback(applied.journal, () => tenant.client as never)
+    assert.equal(tenant.state.clients.length, 0)
+    assert.equal(tenant.state.grants.length, 0)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('rollback counts a patched resource that is already gone as undone', () => {
+  const tenant = fakeTenant()
+  const dir = mkdtempSync(join(tmpdir(), 'mcp-'))
+  try {
+    const applied = configurator(tenant, true, dir).apply()
+    tenant.state.connections.length = 0
+
+    Auth0McpConfigurator.rollback(applied.journal, () => tenant.client as never)
+
+    assert.equal(tenant.state.apis.length, 0)
+    assert.equal(tenant.state.settings.resource_parameter_profile, 'audience')
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }

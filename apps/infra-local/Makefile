@@ -8,38 +8,50 @@
 VENV ?= ../../.venv-infra
 PY ?= $(VENV)/bin/python
 
-.PHONY: help install up down status logs restart reset nuke
+READY := $(VENV)/.infra-local-installed
+
+.PHONY: help install up down status logs restart reset nuke test test-storage test-storage-client
 
 help:      ## show this help
 	@awk -F':.*## ' '/^[a-zA-Z][a-zA-Z0-9_-]*:.*## / { printf "  %-9s %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
 
-# Create the repo-local venv + install the compose package. A file target, so
-# it runs only when the venv's python is missing (idempotent). Everything below
-# depends on it, so a fresh checkout's first `make <anything>` bootstraps once.
+# Keep environment creation separate from a successful package installation:
+# an interrupted pip invocation must be retried even if Python already exists.
 $(VENV)/bin/python:
-	@echo "[infra-local] creating repo-local venv + installing compose package (first run only)..."
 	python3 -m venv $(VENV)
-	$(VENV)/bin/pip install -q -e .
 
-install: $(VENV)/bin/python   ## create the venv + install the package (editable)
+$(READY): pyproject.toml $(VENV)/bin/python
+	$(VENV)/bin/python -m pip install -q -e .
+	touch $(READY)
 
-up: $(VENV)/bin/python   ## ensure L1 boxes + start L2 (COMPONENTS="api runner")
+install: $(READY)   ## create the venv + install the package (editable)
+
+up: $(READY)   ## ensure L1 boxes + start L2 (COMPONENTS="api runner")
 	$(PY) -m compose up $(COMPONENTS)
 
-down: $(VENV)/bin/python   ## stop L2 procs (ARGS=--all also stops L1 boxes)
+down: $(READY)   ## stop L2 procs (ARGS=--all also stops L1 boxes)
 	$(PY) -m compose down $(ARGS) $(COMPONENTS)
 
-status: $(VENV)/bin/python   ## one-screen L1 + L2 health
+status: $(READY)   ## one-screen L1 + L2 health
 	$(PY) -m compose status
 
-logs: $(VENV)/bin/python   ## tail a component log (COMPONENT=api|all)
+logs: $(READY)   ## tail a component log (COMPONENT=api|all)
 	$(PY) -m compose logs $(COMPONENT)
 
-restart: $(VENV)/bin/python   ## restart L2 proc(s) / recreate L1 box(es) (COMPONENTS="runner dex")
+restart: $(READY)   ## restart L2 proc(s) / recreate L1 box(es) (COMPONENTS="runner dex")
 	$(PY) -m compose restart $(COMPONENTS)
 
-reset: $(VENV)/bin/python   ## wipe L2 runtime state (ARGS=--hard also rebuilds the schema)
+reset: $(READY)   ## wipe L2 runtime state (ARGS=--hard also rebuilds the schema)
 	$(PY) -m compose reset $(ARGS)
 
-nuke: $(VENV)/bin/python   ## tear down EVERYTHING (L1 boxes + data + logs)
+nuke: $(READY)   ## tear down EVERYTHING (L1 boxes + data + logs)
 	$(PY) -m compose nuke
+
+test: $(READY)   ## run deterministic startup regressions (no VMs)
+	$(PY) -m unittest discover -s tests -p 'test_*.py' -v $(if $(FILTER),-k '$(FILTER)',)
+
+test-storage: $(READY)   ## isolated real S3 VM: CRUD + recreate + persistence
+	$(PY) tests/smoke_storage.py
+
+test-storage-client: $(READY)   ## verify signed CRUD using a temporary object on local S3
+	$(PY) tests/smoke_storage.py --client-only

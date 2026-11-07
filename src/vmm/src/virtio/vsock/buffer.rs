@@ -3,10 +3,7 @@
 
 //! Writable guest buffers retained until a packet or event can be delivered.
 
-use super::{
-    bad_queue,
-    packet::{HEADER_LEN, Packet},
-};
+use super::bad_queue;
 use crate::{memory::GuestMemoryMmap, virtio::DeviceError};
 use virtio_queue::{DescriptorChain, desc::split::Descriptor};
 use vm_memory::{Bytes, GuestMemory, Permissions};
@@ -14,7 +11,7 @@ use vm_memory::{Bytes, GuestMemory, Permissions};
 pub(super) struct Buffer {
     pub head: u16,
     descriptors: Vec<Descriptor>,
-    capacity: usize,
+    pub capacity: usize,
 }
 
 impl Buffer {
@@ -43,29 +40,6 @@ impl Buffer {
             descriptors,
             capacity,
         })
-    }
-
-    /// Writes the stream prefix that fits, returning its wire length. A header-only
-    /// buffer is returned unused when data is pending, leaving that data queued.
-    pub fn write_packet(
-        &self,
-        memory: &GuestMemoryMmap,
-        packet: &Packet,
-    ) -> Result<usize, DeviceError> {
-        let capacity = self
-            .capacity
-            .checked_sub(HEADER_LEN)
-            .ok_or_else(bad_queue)?;
-        let count = packet.payload.len().min(capacity);
-        if count == 0 && !packet.payload.is_empty() {
-            return Ok(0);
-        }
-        let mut header = packet.header.clone();
-        header.len = count as u32;
-        let mut bytes = header.encode().to_vec();
-        bytes.extend_from_slice(&packet.payload[..count]);
-        self.write(memory, &bytes)?;
-        Ok(bytes.len())
     }
 
     pub fn write(&self, memory: &GuestMemoryMmap, mut bytes: &[u8]) -> Result<(), DeviceError> {

@@ -3,22 +3,23 @@
 Brings up the full cloud-MVP control plane on one Apple Silicon Mac, dogfooding
 BoxLite. One Python orchestrator (`compose`) drives both layers:
 
-- **L1 — 12 BoxLite microVM boxes**: postgres, redis, minio (+ a one-shot bucket
-  init), registry, dex, jaeger, pgadmin, registry-ui, maildev, otel-collector, caddy —
+- **L1 — 11 BoxLite microVM boxes**: postgres, redis, minio (RustFS S3),
+  registry, dex, jaeger, pgadmin, registry-ui, maildev, otel-collector, caddy —
   via the BoxLite SDK (`orchestrator.py` / `services.py`).
 - **L2 — 5 native macOS processes**: API (NestJS, `:3001`), registry proxy (Go,
   `:4100`), Runner (Go, `:3003`), Proxy (Go, `:4000`), Dashboard (Vite, `:3000`) —
   via `subprocess` supervision (`native.py`).
 
-All generated state lives under one gitignored dir, `<repo>/.apps-local/`
-(`data/` volumes, `boxlite/` L1 SDK home, `boxlite-runner/` L3 home, `bin/`
-binaries, `logs/`, and `registry-secrets/`, where the API and the registry
-proxy keep registry passwords in plain files).
+Generated data, binaries, logs, and registry secrets live under the gitignored
+`<repo>/.apps-local/`. Socket-bearing SDK homes use `~/.bl/<worktree-hash>/h`
+(L1) and `/r` (runner), keeping macOS socket paths short and checkouts isolated.
+`BOXLITE_LOCAL_STATE_ROOT` overrides that short parent directory.
 
 ## Quick start
 
-Prereqs: macOS Apple Silicon; the BoxLite Python SDK (`pip install -e
-../../sdks/python`); Go 1.25+; Node + yarn (corepack); Python 3.10+.
+Prereqs: macOS Apple Silicon; Go 1.25+; Node + yarn (corepack); Python 3.10+.
+Make creates `.venv-infra` and installs the package; `up` builds the local SDK.
+An interrupted package installation is retried on the next command.
 
 ```bash
 cd apps/infra-local
@@ -27,7 +28,7 @@ make status    # one-screen health across L1 + L2
 make down      # stop L2 (add ARGS=--all to also stop L1)
 ```
 
-First run pulls 12 images (~5–7 min); later runs reuse the cache (~30–60 s). Log
+First run pulls 11 images; later runs reuse their cache. Log
 in at <http://localhost:3000> through Dex (`admin@boxlite.dev` / `password`).
 
 ## Commands
@@ -51,7 +52,7 @@ source of truth — `python -m compose --help`):
 |---|---|---|
 | postgres | `postgresql://boxlite:boxlite@127.0.0.1:25432/boxlite` | trust auth (local only) |
 | redis | `redis://127.0.0.1:26379` | none |
-| minio (S3 / console) | `http://127.0.0.1:29000` / `:29001` | `minioadmin` / `minioadmin` |
+| minio (RustFS S3 / console) | `http://127.0.0.1:29000` / `:29001` | `minioadmin` / `minioadmin` |
 | registry | `http://127.0.0.1:25000/v2/` | none |
 | dex (OIDC) | `http://localhost:25556/dex` | `admin@boxlite.dev` / `password` (also `test01@boxlite.dev`) |
 | jaeger | `http://127.0.0.1:26686/` | — |
@@ -69,16 +70,59 @@ fixed** as the `ServiceSpec.ports` literals in `services.py`.
 
 ## Validating it works
 
-There is no infra-local test suite — the stack is its own smoke test:
-
 ```bash
-make up && make status   # every L1 + L2 row green
+make test               # deterministic SDK/process/HTTP boundary tests; no VMs
+make test-storage       # isolated S3 VM on a free port; preserves another running stack
+make test-storage-client # signed CRUD on existing S3; temporary object removed
+make up && make status  # full-stack smoke when fixed ports are available
 ```
 
-The app's browser E2E (`npm run e2e:local` from `apps/`) covers the SDK → API →
-runner path against a separate Docker stack. The direct-SDK capability this stack
-relies on — read-write host volumes + host port mapping — is pinned by
-`sdks/python/tests/test_volume_port_persistence.py`.
+From the repository root, `make test:apps:infra-local` runs the same unit suite.
+`test-storage` checks signed bucket initialization, object write/read/delete,
+healthy-box reuse, and persistence after recreation with the same host directory.
+These checks establish component behavior; full app startup and Box lifecycle
+still require the full-stack smoke and API/runner end-to-end checks.
+
+### Startup and recovery
+
+`up` reconciles every L1 daemon in dependency order. Healthy running boxes stay;
+failed, stopped, or unhealthy boxes are recreated once, retaining host volumes.
+An unsuccessful replacement fails startup before native apps start.
+
+The legacy `minio` service now uses pinned RustFS 1.0.4. Host-side Boto3 creates
+and verifies the `boxlite` bucket, replacing the unavailable `minio/mc` image.
+Only a missing bucket permits creation; authentication and other errors fail
+startup. Storage lives in `data/rustfs`; existing `data/minio` remains untouched
+and needs an explicit object migration if its contents matter.
+
+RustFS runs as root inside its development VM to support a host-owned writable
+directory without changing host ownership. The credentials and ports retain the
+`BOXLITE_MINIO_*` names and defaults for compatibility.
+
+Before linking the runner, startup asks the existing C build target to check
+Rust inputs and prepares changed Go symbols. The archive digest becomes a cgo
+input, preventing Go's cache from retaining a binary linked to an old archive.
+Only requested native components are rebuilt. A requested stale runner stops
+before rebuilding; API-only startup keeps the existing runner process running.
+
+Native pidfiles record PID and process start time. Stops verify both and require
+a detached process-group leader before signaling; legacy numeric records and
+reused PIDs are unverified. Occupied ports fail with a conflict instead of
+killing another checkout. After upgrading with old pidfiles, inspect the listener
+and stop it explicitly before retrying. Start times have one-second precision;
+this protects against accidental reuse, not hostile process replacement.
+
+`status` exits nonzero for missing, failed, stopped, or unhealthy dependencies,
+and uses HTTP probes for native services that expose them.
+
+### Local MCP testing
+
+Use an API key with `Authorization: Bearer <key>` at `http://localhost:3001/mcp`.
+Dex remains the dashboard's login provider; Dex 2.42 lacks the MCP permission
+scopes and client-metadata discovery needed for MCP browser sign-in.
+
+Postgres intentionally retains `statement_timeout=30s`. Incident integration
+tests compare the restored setting with the database's configured baseline.
 
 ## Troubleshooting
 
@@ -89,22 +133,15 @@ relies on — read-write host volumes + host port mapping — is pinned by
 | All API calls `401` | `PROXY_API_KEY` empty in `apps/api/.env` | set it non-empty |
 | Runner: `Another BoxliteRuntime is already using directory` | a stale runner holds `.apps-local/boxlite-runner/.lock` | `lsof` the lock, kill the stale PID |
 | Any L1 box misbehaving | its stateful in-box process is wedged | `make restart COMPONENTS=<box>` |
-| "Create Box" from the UI only offers three images | the picker is hardcoded (`CreateBoxDialog.tsx:30-34`); a catalog-backed one is a later change | `POST /api/box` for any other ref |
+| Native port conflict after upgrade | another checkout owns the port, or an old numeric pidfile cannot establish ownership | inspect with `lsof -nP -iTCP:<port> -sTCP:LISTEN`; stop the identified process explicitly |
 
-> **Box boot is unverified on this stack** — the UI picker offers only the three
-> curated images hardcoded in `CreateBoxDialog.tsx`, so any other ref goes
-> through the API. Image resolution itself is in place: a curated name resolves
-> from the curated set, a ref a registered login covers is routed through the
-> registry proxy, and any other is checked against the registry allowlist.
-> This stack sets no `BOXLITE_IMAGE_REGISTRY_ALLOWLIST`, so the API
-> falls back to the public registries and refuses the local registry at
-> `127.0.0.1:25000` — set the variable in `apps/api/.env` to boot a box from it.
-> (`INSECURE_REGISTRIES` in `compose/native.py` is the runner's own setting, not
-> this gate.) L1 services, API, runner, auth, and the dashboard all work.
+The API's image registry allowlist is separate from the runner's
+`INSECURE_REGISTRIES`. Booting from `127.0.0.1:25000` requires explicitly allowing
+that registry in `apps/api/.env`.
 
 ## Layout
 
-Everything is the `compose` package + four root files (no `scripts/`, no `configs/`):
+The `compose` package owns orchestration; `tests/` holds boundary and VM checks:
 
 ```text
 apps/infra-local/
@@ -112,13 +149,16 @@ apps/infra-local/
 ├── README.md
 ├── pyproject.toml
 ├── api.env           # API .env template (copied to apps/api/.env on first `up`)
+├── tests/            # deterministic regressions + isolated storage smoke
 └── compose/
     ├── __main__.py   # the `python -m compose` CLI (up/down/status/logs/restart/reset/nuke)
     ├── config.py     # InfraConfig (single source of truth)
     ├── services.py   # the L1 ServiceSpec registry + SERVICES
     ├── orchestrator.py  # L1 box lifecycle (BoxLite SDK)
     ├── native.py     # L2 native-process supervision (subprocess/pidfiles/signals)
+    ├── _local_arm64.py  # SDK/bootstrap and native-archive preparation
     ├── doctor.py     # preflight checks
+    ├── storage.py    # signed host-side S3 bucket initialization
     └── _sdk.py       # BoxLite SDK import shim
 ```
 

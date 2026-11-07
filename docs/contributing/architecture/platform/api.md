@@ -9,31 +9,31 @@ to see its routes.
 The inventory is implementation-grounded:
 
 - Control-plane product routes come from the controllers under
-  [`api/src`](./api/src/), match the generated
-  [`openapi.yaml`](./libs/api-client-go/api/openapi.yaml), and use the `/api`
-  prefix applied in [`main.ts`](./api/src/main.ts).
+  [`api/src`](../../../../apps/api/src/), match the generated
+  [`openapi.yaml`](../../../../apps/libs/api-client-go/api/openapi.yaml), and use the `/api`
+  prefix applied in [`main.ts`](../../../../apps/api/src/main.ts).
 - Hosted BoxLite-compatible routes come from the controllers in
-  [`boxlite-rest`](./api/src/boxlite-rest/). They are excluded from the product
-  OpenAPI document because their contracts live in [`openapi/box.openapi.yaml`](../openapi/box.openapi.yaml)
-  and, for cloud-only members and invitations, [`openapi/admin.openapi.yaml`](../openapi/admin.openapi.yaml).
+  [`boxlite-rest`](../../../../apps/api/src/boxlite-rest/). They are excluded from the product
+  OpenAPI document because their contracts live in [`openapi/box.openapi.yaml`](../../../../openapi/box.openapi.yaml)
+  and, for cloud-only members and invitations, [`openapi/admin.openapi.yaml`](../../../../openapi/admin.openapi.yaml).
 - The registry proxy's runner credential lookup is an internal service route.
   It is excluded from the Cloud OpenAPI document and generated customer clients;
   the proxy owns its request and response handling.
 - Runner, proxy, and collector routes come from their runtime registration in
-  [`server.go`](./runner/pkg/api/server.go),
-  [`proxy.go`](./proxy/pkg/proxy/proxy.go), and
-  [`config.yaml`](./otel-collector/config.yaml).
+  [`server.go`](../../../../apps/runner/pkg/api/server.go),
+  [`proxy.go`](../../../../apps/proxy/pkg/proxy/proxy.go), and
+  [`config.yaml`](../../../../apps/otel-collector/config.yaml).
 - Static asset trees come from the `ServeStaticModule` registrations in
-  [`app.module.ts`](./api/src/app.module.ts).
+  [`app.module.ts`](../../../../apps/api/src/app.module.ts).
 - Outbound and asynchronous interfaces come from
-  [`notification.gateway.ts`](./api/src/notification/gateways/notification.gateway.ts),
-  [`webhook-events.constants.ts`](./api/src/webhook/constants/webhook-events.constants.ts),
-  and [`kafka-exception.filter.ts`](./api/src/filters/kafka-exception.filter.ts).
+  [`notification.gateway.ts`](../../../../apps/api/src/notification/gateways/notification.gateway.ts),
+  [`webhook-events.constants.ts`](../../../../apps/api/src/webhook/constants/webhook-events.constants.ts),
+  and [`kafka-exception.filter.ts`](../../../../apps/api/src/filters/kafka-exception.filter.ts).
 - Local-stack listeners come from the service specs in
-  [`services.py`](./infra-local/compose/services.py) and
-  [`native.py`](./infra-local/compose/native.py); the container-based
+  [`services.py`](../../../../apps/infra-local/compose/services.py) and
+  [`native.py`](../../../../apps/infra-local/compose/native.py); the container-based
   environment's come from
-  [`local-dex-env.mjs`](./scripts/local-dex-env.mjs).
+  [`local-dex-env.mjs`](../../../../apps/scripts/local-dex-env.mjs).
 
 `openapi/box.openapi.yaml` also describes portable capabilities that the hosted
 service does not currently register, including snapshots, clone, export,
@@ -59,14 +59,14 @@ and private tunnels as enabled; clients check that before every private prepare.
 
 Ports are the values used in deployments. Service ports and the collector's
 OTLP and HTTP health ports come from
-[`settings.ts`](./infra/stack/settings.ts); the collector's gRPC health port
-comes from its own [`config.yaml`](./otel-collector/config.yaml). Where an
+[`settings.ts`](../../../../apps/infra/stack/settings.ts); the collector's gRPC health port
+comes from its own [`config.yaml`](../../../../apps/otel-collector/config.yaml). Where an
 in-code default differs, the section notes it.
 
 ## Admin organization metadata
 
 These read-only views require system administrator authorization. Registration filters,
-creator semantics and live pagination are documented in [the API README](api/README.md#admin-organization-metadata).
+creator semantics and live pagination are documented in [the API README](../../../../apps/api/README.md#admin-organization-metadata).
 Existing JWT organization reads and the Admin-key `by-box-id` lookup already return creation
 fields; the existing admin routes now add cross-organization date filtering, coverage of
 organizations without Boxes, and opt-in sections. Registration fields are always returned;
@@ -266,7 +266,7 @@ Update requires both `username` and `password` (or token); host/prefix and other
 The response is the same password-free credential as creation; missing credentials in the authenticated organization return 404.
 Concurrent mutations can return 409; retry after the other request finishes.
 
-See [rotation ordering and recovery](api/README.md#registry-credential-rotation) for secret retirement and cache limits.
+See [rotation ordering and recovery](../../../../apps/api/README.md#registry-credential-rotation) for secret retirement and cache limits.
 
 </details>
 
@@ -362,19 +362,19 @@ See [rotation ordering and recovery](api/README.md#registry-credential-rotation)
 | `GET`  | `/`             | Serves the dashboard single-page app and its hashed `/assets/*` bundles. |
 
 Both trees are registered by `ServeStaticModule` in
-[`app.module.ts`](./api/src/app.module.ts) and exclude `/api/{*path}`, so they
+[`app.module.ts`](../../../../apps/api/src/app.module.ts) and exclude `/api/{*path}`, so they
 never shadow the routes above. The dashboard tree applies a content-addressed
-cache policy from [`serve-static-cache.ts`](./api/src/serve-static-cache.ts):
+cache policy from [`serve-static-cache.ts`](../../../../apps/api/src/serve-static-cache.ts):
 hashed `/assets/*` files are `immutable` for a year, HTML is `no-cache`, and
 everything else must revalidate.
 
 The file that route resolves to is the runner binary
-[`project.json`](./runner/project.json) builds at `dist/apps/runner-amd64`, so
+[`project.json`](../../../../apps/runner/project.json) builds at `dist/apps/runner-amd64`, so
 the path serves something only in a full local build: the deployed image stages
 just `dist/apps/api` and `dist/apps/dashboard`
-([`Dockerfile`](./api/Dockerfile)). No in-repo client fetches it either — runners
+([`Dockerfile`](../../../../apps/api/Dockerfile)). No in-repo client fetches it either — runners
 take their binary from the artifact source resolved in
-[`source.ts`](./infra/artifacts/source.ts), which defaults to a published
+[`source.ts`](../../../../apps/infra/artifacts/source.ts), which defaults to a published
 release fetched over HTTPS.
 
 </details>
@@ -406,7 +406,7 @@ broadcasts to the organization's room over the authenticated WebSocket, while
 webhook events are delivered as signed HTTP requests through Svix to endpoints
 the organization manages in its consumer portal. Payload schemas are published
 in a `webhooks` block that
-[`openapi-webhooks.ts`](./api/src/openapi-webhooks.ts) adds to the generated
+[`openapi-webhooks.ts`](../../../../apps/api/src/openapi-webhooks.ts) adds to the generated
 `openapi.3.1.0.json` only — not to the checked-in `openapi.yaml` named above.
 The `template.*` values remain in the `WebhookEvent` enum but nothing emits
 them.
@@ -581,7 +581,7 @@ registry host, then matches each box in memory using the longest repository pref
 <details>
 <summary><b>Members and invitations</b> · 5 routes</summary>
 
-Contract: [`openapi/admin.openapi.yaml`](../openapi/admin.openapi.yaml). This cloud-only
+Contract: [`openapi/admin.openapi.yaml`](../../../../openapi/admin.openapi.yaml). This cloud-only
 Admin API manages an organization's users and invitations. Ordinary scoped API keys
 and user JWTs can call it; a platform administrator account is not required.
 Dedicated Admin SDK methods are not yet available. Existing Cloud API SDK methods
@@ -642,7 +642,7 @@ Invitees accept through the JWT-only Console endpoint
 `/api/organizations/invitations/{invitationId}/accept`. Acceptance requires the
 invited email and does not require member scopes or prior membership. Email links
 resolve `/dashboard/user/invitations` against `DASHBOARD_URL` and accept after
-sign-in. See [invitation link lifetime](./infra/docs/configuration.md#invitation-link-lifetime).
+sign-in. See [invitation link lifetime](../../../../apps/infra/docs/configuration.md#invitation-link-lifetime).
 
 </details>
 
@@ -722,8 +722,8 @@ This internal route is excluded from customer OpenAPI and generated SDKs;
 the admin route is described by Nest Swagger.
 
 Deploy the pre-deploy migration, then the API, then runners. See the
-[runner monitoring contract](runner/README.md#sustained-cpu-incidents) for sampling,
-retry and restart limitations and [the table schema](SCHEMA.md#runner_cpu_incident)
+[runner monitoring contract](../../../../apps/runner/README.md#sustained-cpu-incidents) for sampling,
+retry and restart limitations and [the table schema](schema.md#runner_cpu_incident)
 for persistence guarantees.
 
 ### Runner memory incidents
@@ -791,8 +791,8 @@ There is no pagination; repeated queries with the same limit do not enumerate
 additional rows. Late retries retain their original `sampledAt`, so historical
 ranges can gain records. Box deletion does not remove evidence.
 
-Deploy the [pre-deploy table migration](SCHEMA.md#runner_memory_incident), then
-the API, then Runners. See the [sampling and retry contract](runner/README.md#memory-incident-snapshots)
+Deploy the [pre-deploy table migration](schema.md#runner_memory_incident), then
+the API, then Runners. See the [sampling and retry contract](../../../../apps/runner/README.md#memory-incident-snapshots)
 for accounting scope and delivery limitations.
 
 ## MCP endpoint
@@ -801,11 +801,11 @@ for accounting scope and delivery limitations.
 (shared with the control-plane API)
 
 The endpoint and its OAuth metadata sit outside the `api` global prefix
-([`MCP_ROOT_ROUTES`](./api/src/mcp/mcp-auth-metadata.ts)), so the URL a client
+([`MCP_ROOT_ROUTES`](../../../../apps/api/src/mcp/mcp-auth-metadata.ts)), so the URL a client
 connects to is also the OAuth resource that RFC 9728 discovery checks. The GCP URL
 map passes both paths through unchanged, and `/api/mcp` is not served.
 
-A Model Context Protocol server, served from [`mcp`](./api/src/mcp/) over
+A Model Context Protocol server, served from [`mcp`](../../../../apps/api/src/mcp/) over
 Streamable HTTP. It speaks both protocol eras on one endpoint: the 2025
 `initialize` handshake, served statelessly, and the session-less 2026-07-28
 revision. Every POST is answered with one JSON body; `subscriptions/listen` is
@@ -818,7 +818,7 @@ claude mcp add --transport http boxlite https://<api-host>/mcp \
 ```
 
 On a stage with `MCP_RESOURCE_URL` set and its tenant configured
-([MCP client sign-in](./infra/docs/identity-and-mail.md#mcp-client-sign-in)), leave
+([MCP client sign-in](../../../../apps/infra/docs/identity-and-mail.md#mcp-client-sign-in)), leave
 out `--header`: the client opens a browser sign-in instead.
 
 **Credentials.** A user API key, or an OAuth token whose audience is
@@ -827,9 +827,10 @@ principals (proxy, runner, collectors); without `MCP_RESOURCE_URL` every OAuth t
 is refused. A `401` carries
 `WWW-Authenticate: Bearer resource_metadata=...` naming the RFC 9728 document at
 `/.well-known/oauth-protected-resource/mcp`, which lists the API's OIDC issuer
-as the authorization server; it is published only when `MCP_RESOURCE_URL` is set.
+as the authorization server; it is published only when `MCP_RESOURCE_URL` is set,
+and otherwise answers 404 (no `/.well-known/` path falls back to the dashboard page).
 
-**OAuth callers.** [`McpAuthGuard`](./api/src/mcp/mcp-auth.guard.ts) turns an OAuth
+**OAuth callers.** [`McpAuthGuard`](../../../../apps/api/src/mcp/mcp-auth.guard.ts) turns an OAuth
 token into an API-key-shaped caller, so the REST guards apply their API-key rules
 unchanged:
 
@@ -837,9 +838,9 @@ unchanged:
 | --- | --- |
 | Organization | The user's default organization, read on every request; changing the default moves existing tokens with it |
 | System role | Always `USER`, so no admin exemption applies to a token |
-| Permissions | The token's `scope` limited to [`MCP_OAUTH_SCOPES`](./api/src/mcp/mcp-oauth-policy.ts) (box, volume, image and template permissions), then to what the user's role holds; an owner holds all |
+| Permissions | The token's `scope` limited to [`MCP_OAUTH_SCOPES`](../../../../apps/api/src/mcp/mcp-oauth-policy.ts) (box, volume, image and template permissions), then to what the user's role holds; an owner holds all |
 
-[`McpScopeGuard`](./api/src/mcp/mcp-scope.guard.ts) checks every `tools/call` from
+[`McpScopeGuard`](../../../../apps/api/src/mcp/mcp-scope.guard.ts) checks every `tools/call` from
 an OAuth caller before it runs, for direct tools and `invoke_api_endpoint` alike:
 
 - An operation off `MCP_OAUTH_OPERATIONS` answers `403`: SSH keys, tunnels, network
@@ -865,11 +866,11 @@ permissions apply in REST.
 | --- | --- |
 | `createBox`, `listBoxes`, `getBox`, `startBox`, `stopBox`, `removeBox` | The box operations of the same `operationId` |
 | `startExecution`, `getExecution` | Run a command; with `wait` (default) the result carries `stdout`, `stderr`, `exit_code` and `complete` |
-| `uploadFiles`, `downloadFiles` | Tar archives as base64 (`body_base64`), up to 8 MiB; `/mcp` accepts JSON bodies up to 12 MiB for this, every other route keeps the default limit |
+| `uploadFiles`, `downloadFiles` | Tar archives as base64 (`body_base64`), up to 8 MiB; `/mcp` accepts JSON bodies up to 12 MiB for this, read only after the caller is authenticated, so an unauthenticated call gets its `401` (or `403` if it carries an `Origin` header) before any of the body is buffered; every other route keeps the default limit |
 | `list_api_endpoints`, `get_api_endpoint_schema`, `invoke_api_endpoint` | Find, describe and call any other catalog operation by `operationId` |
 
 Each box tool sets all four MCP tool annotations in
-[`DIRECT_TOOLS`](./api/src/mcp/mcp-tools.ts), so hosts can prompt before destructive
+[`DIRECT_TOOLS`](../../../../apps/api/src/mcp/mcp-tools.ts), so hosts can prompt before destructive
 calls and keep the read-only ones in a read-only mode:
 
 | Tool | Read-only | Destructive | Idempotent | Open world |
@@ -887,8 +888,8 @@ describes the effect on the box, so a repeated `removeBox` counts even though it
 `invoke_api_endpoint` carries no annotations because it reaches reads and deletes alike,
 so hosts treat it as destructive.
 
-The catalog is built at startup from [`openapi/box.openapi.yaml`](../openapi/box.openapi.yaml),
-[`openapi/admin.openapi.yaml`](../openapi/admin.openapi.yaml) and the product Swagger
+The catalog is built at startup from [`openapi/box.openapi.yaml`](../../../../openapi/box.openapi.yaml),
+[`openapi/admin.openapi.yaml`](../../../../openapi/admin.openapi.yaml) and the product Swagger
 document. Tool names and argument schemas are the operations' own; the v1 specs win
 an `operationId` both define. An operation is in the catalog only when this API
 registered a route for it, so spec operations only `boxlite serve` implements
@@ -995,7 +996,7 @@ The proxy is host-routed: a host whose first label parses as `<port>-<box>`
 selects the preview forwarding paths, and any other host serves the base-host
 utility routes. The preview-warning acceptance route is handled before host
 routing, so it works on every host. How the proxy authenticates these requests
-and tunnels them to guest ports is in [`proxy/README.md`](./proxy/README.md).
+and tunnels them to guest ports is in [`proxy/README.md`](../../../../apps/proxy/README.md).
 
 <details>
 <summary><b>Proxy routes</b> · 7 routes</summary>
@@ -1026,7 +1027,7 @@ because one proxy serves every registry and the path is what says which. A
 manifest is relayed byte for byte and a blob is streamed, so the digest a client
 verifies still covers what the upstream served. How callers are authenticated,
 which upstreams are reachable, and how redirects are judged is in
-[`image-service/README.md`](./image-service/README.md).
+[`image-service/README.md`](../../../../apps/image-service/README.md).
 
 <details>
 <summary><b>Registry proxy routes</b> · 4 routes</summary>
@@ -1068,11 +1069,11 @@ Only the OTLP/HTTP receiver is enabled; OTLP gRPC is not configured.
 **Service:** `apps/infra-local` · **Unified entry:** `http://localhost:28080` ·
 **Ports:** fixed host ports, local only
 
-`make up` in [`infra-local`](./infra-local/) starts the dependency services as
+`make up` in [`infra-local`](../../../../apps/infra-local/) starts the dependency services as
 BoxLite boxes and the application processes on the host. Every listener below is
 bound on the developer's machine; the host ports are fixed literals in
-[`services.py`](./infra-local/compose/services.py) and
-[`native.py`](./infra-local/compose/native.py), not deployment values. From
+[`services.py`](../../../../apps/infra-local/compose/services.py) and
+[`native.py`](../../../../apps/infra-local/compose/native.py), not deployment values. From
 inside a box the same listeners are reachable as `host.boxlite.internal:<port>`.
 
 <details>
@@ -1122,11 +1123,11 @@ well as HTTP, exports traces to the Jaeger box, and answers health at `/`
 instead of `/health/status`.
 
 This Dex box serves the inline `_DEX_CONFIG` from
-[`services.py`](./infra-local/compose/services.py), written to
+[`services.py`](../../../../apps/infra-local/compose/services.py), written to
 `/tmp/dex-config.yaml` at boot: one public static client, `boxlite`, whose
 redirect URIs cover the dashboard, the Vite dev server, and the CLI loopback
 callback at `http://127.0.0.1:5555/callback`, plus a password database holding
-two static users. [`dex/config.yaml`](./dex/config.yaml) is a separate file for
+two static users. [`dex/config.yaml`](../../../../apps/dex/config.yaml) is a separate file for
 a separate environment — see
 [Container-based local environment](#container-based-local-environment).
 `apps/infra` deploys no Dex service; deployed stacks point
@@ -1157,10 +1158,10 @@ sends — the organization invitation — is caught rather than dropped.
 
 **Service:** `apps/scripts` · **Entry points:** `yarn dev:dex`, `yarn e2e:local`
 
-A second local environment: [`local-dex-env.mjs`](./scripts/local-dex-env.mjs)
+A second local environment: [`local-dex-env.mjs`](../../../../apps/scripts/local-dex-env.mjs)
 starts four Docker containers, then runs the same four application processes on
 the host through the `serve-slim` target. It is the only environment here that
-runs [`dex/config.yaml`](./dex/config.yaml), which it renders to
+runs [`dex/config.yaml`](../../../../apps/dex/config.yaml), which it renders to
 `.boxlite-home/dex/config.local.yaml` and mounts read-only into the Dex
 container.
 
@@ -1204,15 +1205,15 @@ is unset; the same document carries PostHog's key and host to the browser.
 
 | Interface     | Client                                                                                  | Base URL source                  | What it covers                                                                                                                                                                                             |
 | ------------- | --------------------------------------------------------------------------------------- | -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Analytics API | [`libs/analytics-api-client`](./libs/analytics-api-client/), generated                  | `analyticsApiUrl`                | 8 routes: per-box and organization usage, aggregates, and charts, plus box logs, metrics, and traces.                                                                                                      |
-| Billing API   | [`billingApiClient.ts`](./dashboard/src/billing-api/billingApiClient.ts), hand-written  | `billingApiUrl`                  | 22 routes: wallet and top-ups, signup credit delivery, plans, payment methods, invoices, usage series and prices, coupons, billing emails, portal and checkout URLs.                                                               |
-| Box admission | [`commerce-box-limit.service.ts`](./api/src/boxlite-rest/commerce-box-limit.service.ts) | `billingApiUrl`                  | 2 server-side reads on Commerce: `GET /plan` and `GET /organization/{organizationId}/plan`, bearer `USAGE_EXPORT_TOKEN`, used by hosted CREATE BOX.                                                        |
-| Usage export  | [`api/src/usage/services`](./api/src/usage/services/), hand-written                     | `usageExport.url`                | 2 routes on the same Commerce service, server-side: `POST /internal/usage-events` and `POST /internal/allocation-snapshot`, bearer `USAGE_EXPORT_TOKEN`, which must equal Commerce's `USAGE_INGEST_TOKEN`. |
+| Analytics API | [`libs/analytics-api-client`](../../../../apps/libs/analytics-api-client/), generated                  | `analyticsApiUrl`                | 8 routes: per-box and organization usage, aggregates, and charts, plus box logs, metrics, and traces.                                                                                                      |
+| Billing API   | [`billingApiClient.ts`](../../../../apps/dashboard/src/billing-api/billingApiClient.ts), hand-written  | `billingApiUrl`                  | 22 routes: wallet and top-ups, signup credit delivery, plans, payment methods, invoices, usage series and prices, coupons, billing emails, portal and checkout URLs.                                                               |
+| Box admission | [`commerce-box-limit.service.ts`](../../../../apps/api/src/boxlite-rest/commerce-box-limit.service.ts) | `billingApiUrl`                  | 2 server-side reads on Commerce: `GET /plan` and `GET /organization/{organizationId}/plan`, bearer `USAGE_EXPORT_TOKEN`, used by hosted CREATE BOX.                                                        |
+| Usage export  | [`api/src/usage/services`](../../../../apps/api/src/usage/services/), hand-written                     | `usageExport.url`                | 2 routes on the same Commerce service, server-side: `POST /internal/usage-events` and `POST /internal/allocation-snapshot`, bearer `USAGE_EXPORT_TOKEN`, which must equal Commerce's `USAGE_INGEST_TOKEN`. |
 | PostHog       | `posthog-js` in the dashboard; `posthog-node` in the API                                | `posthog.apiKey`, `posthog.host` | Browser product analytics; server-side `api_*` operation events from the global metrics interceptor, two `groupIdentify` calls, and feature-flag evaluation.                                               |
-| Pylon         | [`App.tsx`](./dashboard/src/App.tsx) widget, production builds only                     | `pylonAppId`                     | Outbound support-chat widget; it registers no route here.                                                                                                                                                  |
+| Pylon         | [`App.tsx`](../../../../apps/dashboard/src/App.tsx) widget, production builds only                     | `pylonAppId`                     | Outbound support-chat widget; it registers no route here.                                                                                                                                                  |
 
 The analytics client is generated from
-[`swagger.json`](./libs/analytics-api-client/swagger.json). Its four telemetry
+[`swagger.json`](../../../../apps/libs/analytics-api-client/swagger.json). Its four telemetry
 routes duplicate the control plane's own [box telemetry](#control-plane-api)
 routes, and the dashboard's box telemetry views call the analytics client only —
 they disable themselves when `analyticsApiUrl` is unset rather than falling back.
@@ -1230,9 +1231,9 @@ Successful per-organization resolutions are cached in Redis for 30 seconds. The
 internal usage routes are served off the bare origin. The API itself requires
 `USAGE_EXPORT_URL` whenever export is on
 and never derives it
-([`configuration.ts`](./api/src/config/configuration.ts)); it is the SST stack
+([`configuration.ts`](../../../../apps/api/src/config/configuration.ts)); it is the SST stack
 that supplies a default of `BILLING_API_URL`'s origin
-([`api.ts`](./infra/stack/api.ts)), so a deployment outside that stack must set
+([`api.ts`](../../../../apps/infra/stack/api.ts)), so a deployment outside that stack must set
 it explicitly. The two stay separate settings because pointing the dashboard at
 a billing service and shipping usage to it remain separate decisions. One
 caveat on the credential: a `USAGE_EXPORT_URL` carrying userinfo makes Axios
@@ -1249,7 +1250,7 @@ Admission applies the plan value to the organization's non-finalized Box total.
 than generated, so neither side detects its divergence. Five of its 20 routes —
 the billing-email group — have no
 implementation in Commerce, of which only `email/verify` has a live caller here
-([`EmailVerify.tsx`](./dashboard/src/pages/EmailVerify.tsx)); Commerce in turn
+([`EmailVerify.tsx`](../../../../apps/dashboard/src/pages/EmailVerify.tsx)); Commerce in turn
 serves card default/delete, `plan/pay-open-charge`, and a credit admission API
 that nothing in this repository calls.
 

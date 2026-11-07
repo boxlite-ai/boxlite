@@ -10,6 +10,8 @@ How the code fits together.
 
 - [Architecture](architecture/README.md): components, the VMM abstraction, host-guest RPC,
   concurrency, and error handling.
+- [Hosted platform](architecture/platform/README.md): how the `apps/` services fit together,
+  their interfaces, and their data model.
 - [VMM design](architecture/vmm/README.md): BoxLite's own VMM, which is replacing libkrun, with
   background on [Hypervisor.framework](architecture/vmm/hvf.md), [KVM](architecture/vmm/kvm.md),
   the [Windows Hypervisor Platform](architecture/vmm/whp.md), and

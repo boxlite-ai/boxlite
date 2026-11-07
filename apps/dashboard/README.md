@@ -398,7 +398,7 @@ permission group. A non-owner's key can include assigned member read access,
 but never member write. Existing keys receive no additional permissions.
 
 Create restricted keys through the API or SDK by supplying an explicit
-`permissions` array; see [API key delegation and member scopes](../API.md).
+`permissions` array; see [API key delegation and member scopes](../../docs/contributing/architecture/platform/api.md).
 The scopes are independent, and an API key can only create keys with the same
 or fewer permissions. Invitation acceptance in the console continues to use
 the signed-in user's JWT.

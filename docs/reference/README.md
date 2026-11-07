@@ -64,7 +64,7 @@ options. Treat the segment as server-supplied configuration; never hardcode one.
 
 A deployed BoxLite platform also runs services of its own — control plane,
 runner, preview proxy, telemetry collector — catalogued separately in
-[`apps/API.md`](../../apps/API.md). Those are deployment internals, not part of
+[service interfaces](../contributing/architecture/platform/api.md). Those are deployment internals, not part of
 the portable contract above.
 
 ## API changelog
