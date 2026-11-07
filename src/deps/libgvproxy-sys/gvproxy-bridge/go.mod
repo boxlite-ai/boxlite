@@ -3,6 +3,7 @@ module github.com/boxlite/gvproxy-bridge
 go 1.25.0
 
 require (
+	github.com/boxlite-ai/tcprelay v0.0.0
 	github.com/containers/gvisor-tap-vsock v0.8.7
 	github.com/sirupsen/logrus v1.9.3
 	golang.org/x/net v0.57.0
@@ -30,3 +31,5 @@ require (
 	golang.org/x/time v0.12.0 // indirect
 	golang.org/x/tools v0.47.0 // indirect
 )
+
+replace github.com/boxlite-ai/tcprelay => ../../../../apps/libs/tcprelay

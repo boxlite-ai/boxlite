@@ -4,6 +4,7 @@ use (
 	../sdks/go
 	./image-service
 	./libs/api-client-go
+	./libs/tcprelay
 	./libs/common-go
 	./otel-collector/exporter
 	./proxy

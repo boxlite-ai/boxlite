@@ -3,6 +3,7 @@ module github.com/boxlite-ai/proxy
 go 1.25.4
 
 require (
+	github.com/boxlite-ai/tcprelay v0.0.0 // indirect
 	github.com/coreos/go-oidc/v3 v3.12.0
 	github.com/gin-contrib/cors v1.7.5
 	github.com/gin-gonic/gin v1.10.1
@@ -57,3 +58,5 @@ require (
 	google.golang.org/protobuf v1.36.11 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
+
+replace github.com/boxlite-ai/tcprelay => ../libs/tcprelay

@@ -50,10 +50,9 @@ func newOutboundPolicyController(vn *virtualnetwork.VirtualNetwork, config *type
 	for id := range nics {
 		p.nic = id
 	}
-	if len(initial.AllowNet) > 0 || secrets != nil || initial.Mode == "disabled" {
-		if err := p.apply(initial); err != nil {
-			return nil, err
-		}
+	// Install the BoxLite relay for unrestricted traffic as well as filtered traffic.
+	if err := p.apply(initial); err != nil {
+		return nil, err
 	}
 	return p, nil
 }
