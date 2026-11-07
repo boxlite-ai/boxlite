@@ -7,11 +7,17 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 
+import { hydrateLoginPolicyAction } from './auth0-login-policy.js'
 import { Auth0McpConfigurator, parseAuth0McpOptions } from './auth0-mcp.js'
 
 const RESOURCE = 'https://api.example.test/mcp'
 const CLIENT = 'https://claude.ai/oauth/claude-code-client-metadata'
 const SCOPES = ['write:boxes', 'delete:boxes']
+const API_AUDIENCE = 'https://api.example.test/api'
+// The Action exactly as configure-login generates and stamps it for this stage.
+const POLICY_TEMPLATE = readFileSync(new URL('./auth0/login-policy.js', import.meta.url), 'utf8')
+const HYDRATION = { clientId: 'spa_123', connectionName: 'boxlite-users', formId: 'ap_verify', mcpResourceUrl: RESOURCE, apiAudience: API_AUDIENCE }
+const GENERATED_ACTION = hydrateLoginPolicyAction(POLICY_TEMPLATE, HYDRATION)
 
 type RequestOptions = { data?: any; query?: Record<string, string>; allowNotFound?: boolean }
 
@@ -39,6 +45,15 @@ function fakeTenant(rules: object[] = [], lose?: string, refuse?: string) {
     clients: [] as Record<string, any>[],
     grants: [] as Record<string, any>[],
     connections: [{ id: 'con_1', name: 'Username-Password-Authentication', is_domain_connection: false }],
+    // The login Action as configure-login deploys it for this stage, bound to post-login.
+    actions: [
+      {
+        id: 'act_1',
+        name: 'boxlite-login-policy',
+        deployed_version: { code: GENERATED_ACTION },
+      },
+    ] as Record<string, any>[],
+    bindings: [{ id: 'bnd_1', action: { id: 'act_1' } }] as Record<string, any>[],
   }
   const writes: string[] = []
   const refusals = new Set<string>(refuse ? [refuse] : [])
@@ -55,6 +70,8 @@ function fakeTenant(rules: object[] = [], lose?: string, refuse?: string) {
       if (method !== 'get') writes.push(`${method} ${path}`)
       const data = options.data
       if (method === 'get' && path === 'rules') return page(rules, options.query)
+      if (method === 'get' && path === 'actions/actions') return { actions: page(state.actions, options.query) }
+      if (method === 'get' && path === 'actions/triggers/post-login/bindings') return { bindings: state.bindings }
       if (path === 'tenants/settings') return method === 'get' ? state.settings : Object.assign(state.settings, data)
       if (path === 'resource-servers') {
         if (method === 'get') return page(state.apis, options.query)
@@ -137,11 +154,58 @@ function fakeTenant(rules: object[] = [], lose?: string, refuse?: string) {
 
 function configurator(tenant: ReturnType<typeof fakeTenant>, apply: boolean, journalDirectory: string) {
   return new Auth0McpConfigurator(
-    { tenant: 't.example.auth0.com', resourceUrl: RESOURCE, connections: ['Username-Password-Authentication'], apply },
+    {
+      tenant: 't.example.auth0.com',
+      resourceUrl: RESOURCE,
+      apiAudience: 'https://api.example.test/api',
+      connections: ['Username-Password-Authentication'],
+      apply,
+    },
     tenant.client as never,
-    { scopes: SCOPES, clients: [CLIENT], journalDirectory },
+    { scopes: SCOPES, clients: [CLIENT], loginPolicySource: POLICY_TEMPLATE, journalDirectory },
   )
 }
+
+// The API no longer checks email verification itself (#2404): the login Action is
+// the only gate, so MCP must not be configured on a tenant whose live Action does
+// not gate this exact resource.
+test('refuses before any write while the live login Action does not gate this resource', () => {
+  const drifts: Array<[string, (tenant: ReturnType<typeof fakeTenant>) => void]> = [
+    ['no MCP URL', (t) => (t.state.actions[0].deployed_version.code = 'const API_AUDIENCE = "a"\nconst MCP_RESOURCE_URL = ""')],
+    ['another URL', (t) => (t.state.actions[0].deployed_version.code = 'const API_AUDIENCE = "a"\nconst MCP_RESOURCE_URL = "https://other.test/mcp"')],
+    ['no API audience', (t) => (t.state.actions[0].deployed_version.code = `const API_AUDIENCE = ""\nconst MCP_RESOURCE_URL = ${JSON.stringify(RESOURCE)}`)],
+    ['stale API audience', (t) => (t.state.actions[0].deployed_version.code = `const API_AUDIENCE = "https://old.test/api"\nconst MCP_RESOURCE_URL = ${JSON.stringify(RESOURCE)}`)],
+    // Both declarations intact, the denial removed: only the generator's stamp tells.
+    [
+      'gate removed',
+      (t) => (t.state.actions[0].deployed_version.code = GENERATED_ACTION.replace("api.access.deny('Email verification required')", 'void 0')),
+    ],
+    // The same edit with a recomputed stamp: only a match against the template tells.
+    [
+      'gate removed, re-stamped',
+      (t) =>
+        (t.state.actions[0].deployed_version.code = hydrateLoginPolicyAction(
+          POLICY_TEMPLATE.replace("api.access.deny('Email verification required')", 'void 0'),
+          HYDRATION,
+        )),
+    ],
+    ['not deployed', (t) => delete t.state.actions[0].deployed_version],
+    ['not bound', (t) => (t.state.bindings = [])],
+    ['missing', (t) => (t.state.actions = [])],
+  ]
+  for (const [name, drift] of drifts) {
+    const tenant = fakeTenant()
+    drift(tenant)
+    const dir = mkdtempSync(join(tmpdir(), 'mcp-'))
+    try {
+      assert.throws(() => configurator(tenant, true, dir).apply(), /does not gate MCP logins/, name)
+      assert.deepEqual(tenant.writes, [], name)
+      assert.deepEqual(readdirSync(dir), [], name)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  }
+})
 
 test('preview lists every write and changes nothing', () => {
   const tenant = fakeTenant()
@@ -338,9 +402,14 @@ test('refuses a tenant with active Rules', () => {
 })
 
 test('parseAuth0McpOptions requires an exact https resource URL and a connection', () => {
-  const base = ['--tenant', 't.example.auth0.com', '--resource-url', RESOURCE]
+  const base = ['--tenant', 't.example.auth0.com', '--resource-url', RESOURCE, '--api-audience', 'https://api.example.test/api']
 
   assert.equal(parseAuth0McpOptions([...base, '--connection', 'db']).apply, false)
+  assert.equal(parseAuth0McpOptions([...base, '--connection', 'db']).apiAudience, 'https://api.example.test/api')
   assert.throws(() => parseAuth0McpOptions(base), /--connection/)
+  assert.throws(
+    () => parseAuth0McpOptions(['--tenant', 't.example.auth0.com', '--resource-url', RESOURCE, '--connection', 'db']),
+    /--api-audience/,
+  )
   assert.throws(() => parseAuth0McpOptions(['--tenant', 't.example.auth0.com', '--resource-url', 'http://x/mcp', '--connection', 'db']))
 })

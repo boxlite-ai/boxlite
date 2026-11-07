@@ -88,12 +88,14 @@ Preview the login policy, inspect the tenant/client/connection/resource plan, th
 npm run auth0:configure-login -- \
   --tenant <tenant.auth0.com> \
   --client-id <boxlite-spa-client-id> \
-  --connection <database-connection-name>
+  --connection <database-connection-name> \
+  --api-audience <OIDC_AUDIENCE>
 
 npm run auth0:configure-login -- \
   --tenant <tenant.auth0.com> \
   --client-id <boxlite-spa-client-id> \
   --connection <database-connection-name> \
+  --api-audience <OIDC_AUDIENCE> \
   --apply
 ```
 
@@ -139,9 +141,19 @@ the Auth0 tenant:
 5. Social login remains unchanged.
 
 The deployment order is intentional: Auth0 apply -> live canaries -> BoxLite
-API deploy. The API then rejects old unverified `auth0|...` access tokens across
-HTTP, Socket.IO, and the WebSocket proxy. It does not revoke refresh tokens or
-retroactively gate independently validating Commerce/Analytics services.
+API deploy. The Action is the only email-verification gate: it denies an
+unverified database user on every grant, refresh and device code included, so
+no token reaches the API for one. Beyond the dashboard client and the MCP resource,
+it covers any client asking for the API audience (`--api-audience`) and every
+database connection. The API stores `email_verified` when a token carries it but
+never refuses a token over it, since Auth0 leaves it out of tokens for third-party
+MCP clients. On every stage, apply the Action and wait one access-token lifetime
+before deploying an API without its own check: tokens issued earlier to an
+unverified database user, for the MCP resource or for the API through another
+client, must expire first, because the old Action did not gate them.
+Both `auth0:configure-login` and `auth0:configure-mcp` load the stage `.env` and
+refuse an `--api-audience` other than its `OIDC_AUDIENCE`; `auth0:configure-login`
+also refuses one that names no Auth0 API on the tenant.
 
 ## MCP client sign-in
 
@@ -170,10 +182,12 @@ path is not `/mcp` at boot. Its Auth0 API can stay; the API refuses its tokens.
 
 ```bash
 npm run auth0:configure-mcp -- --tenant <tenant.auth0.com> \
-  --resource-url <MCP_RESOURCE_URL> --connection <connection-a> --connection <connection-b>
+  --resource-url <MCP_RESOURCE_URL> --api-audience <OIDC_AUDIENCE> \
+  --connection <connection-a> --connection <connection-b>
 
 npm run auth0:configure-mcp -- --tenant <tenant.auth0.com> \
-  --resource-url <MCP_RESOURCE_URL> --connection <connection-a> --connection <connection-b> --apply
+  --resource-url <MCP_RESOURCE_URL> --api-audience <OIDC_AUDIENCE> \
+  --connection <connection-a> --connection <connection-b> --apply
 ```
 
 | Step | Auth0 default | Set by apply |
@@ -194,8 +208,12 @@ Clients that do not check `iss` ignore it; the dashboard and the `boxlite` CLI
 do not read it.
 
 The preview calls `clients/cimd/preview`, which validates a document without
-creating anything, and otherwise only reads. Apply refuses a tenant with active
-Rules, since CIMD logins fail while Rules run. It writes a mode-`0600` journal
+creating anything, and otherwise only reads. Preview and apply refuse a tenant
+whose deployed, post-login-bound `boxlite-login-policy` Action is not the repo template, stamped and
+hydrated by `auth0:configure-login`, for this exact `--resource-url` and
+`--api-audience`, because that Action is the only email-verification gate: the API
+never refuses a token over `email_verified`. An Action edited by hand fails, even when re-stamped.
+Apply also refuses a tenant with active Rules, since CIMD logins fail while Rules run. It writes a mode-`0600` journal
 under `.sst/auth0-backups/` before each write, and marks each write as sent before
 sending it. Undo a run with `npm run auth0:configure-mcp -- --rollback <journal-path>`:
 rollback deletes what a run created, looking up a create whose response never

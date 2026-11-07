@@ -36,6 +36,9 @@ const AUTH0_DOMAIN = __AUTH0_DOMAIN_JSON__
 // id, so a login is recognized as BoxLite's by the API it asks for instead.
 // Empty leaves MCP logins out of the checks below.
 const MCP_RESOURCE_URL = __MCP_RESOURCE_URL_JSON__
+// The BoxLite API's audience. The API does not check email verification itself,
+// so no token for it may reach an unverified database user.
+const API_AUDIENCE = __API_AUDIENCE_JSON__
 
 // The API refuses a request signed for any audience but the one it serves.
 const ADOPT_AUDIENCE = 'boxlite-account-link-adopt'
@@ -54,6 +57,18 @@ function isBoxLiteLogin(event) {
 
 function isBoxLiteBrowserLogin(event) {
   return isBoxLiteLogin(event) && BROWSER_PROTOCOLS.has(event.transaction?.protocol)
+}
+
+/**
+ * A database login, on any database connection, that yields a token BoxLite
+ * accepts: the dashboard client's, or any client's for the API or MCP audience.
+ */
+function isBoxLiteDatabaseLogin(event) {
+  const audience = event.resource_server?.identifier
+  return (
+    event.connection?.strategy === 'auth0' &&
+    (isBoxLiteLogin(event) || (API_AUDIENCE !== '' && audience === API_AUDIENCE))
+  )
 }
 
 function isManagedDatabaseLogin(event) {
@@ -83,8 +98,8 @@ function needsAccountLink(event) {
 
 // Every login, including a third-party MCP client's, for which Auth0 can leave
 // `event.authorization` unset. The names are the IANA-registered OpenID Connect
-// ones (RFC 9068 section 2.2.2); the API refuses a database user's token without
-// `email_verified: true`.
+// ones (RFC 9068 section 2.2.2). Auth0 drops them for third-party clients, so
+// the API stores them when present and never refuses a token for lacking them.
 function setIdentityClaims(event, api, emailVerified = event.user?.email_verified === true) {
   api.accessToken.setCustomClaim('email_verified', emailVerified)
   api.accessToken.setCustomClaim('email', event.user?.email)
@@ -488,6 +503,12 @@ exports.onExecutePostLogin = async (event, api) => {
   }
 
   if (!isManagedDatabaseLogin(event)) {
+    // Only the BoxLite connection has the verification Form; other database
+    // logins that would reach BoxLite are refused until the address is verified.
+    if (isBoxLiteDatabaseLogin(event) && event.user?.email_verified !== true) {
+      api.access.deny('Email verification required')
+      return
+    }
     setIdentityClaims(event, api)
     return
   }
