@@ -25,6 +25,7 @@ import { AddImageCatalog1787100000000 } from '../../migrations/pre-deploy/178710
 import { ReplaceBoxNetworkFlags1791000000000 } from '../../migrations/pre-deploy/1791000000000-replace-box-network-flags-migration'
 import { DropBoxNetworkFlags1791000000000 } from '../../migrations/post-deploy/1791000000000-drop-box-network-flags-migration'
 import { AddGuestPrivileged1792540800000 } from '../../migrations/pre-deploy/1792540800000-add-guest-privileged-migration'
+import { AddCheckpoints1793923200000 } from '../../migrations/pre-deploy/1793923200000-add-checkpoints-migration'
 import { FractionalBoxCpus1794405600000 } from '../../migrations/pre-deploy/1794405600000-fractional-box-cpus-migration'
 import { BoxUsagePeriod } from '../entities/box-usage-period.entity'
 import { BoxUsagePeriodArchive } from '../entities/box-usage-period-archive.entity'
@@ -277,6 +278,7 @@ describeIfDatabase('UsageService (integration, real Postgres + Redis)', () => {
       await new ReplaceBoxNetworkFlags1791000000000().up(queryRunner)
       await new DropBoxNetworkFlags1791000000000().up(queryRunner)
       await new AddGuestPrivileged1792540800000().up(queryRunner)
+      await new AddCheckpoints1793923200000().up(queryRunner)
       await queryRunner.startTransaction()
       try {
         await new FractionalBoxCpus1794405600000().up(queryRunner)

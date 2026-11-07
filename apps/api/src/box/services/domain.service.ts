@@ -28,7 +28,7 @@ import {
  * The controller spec derives this list from registered routes to keep that
  * naming policy consistent when a collection is added.
  */
-export const REST_COLLECTION_NAMES: readonly string[] = ['boxes', 'domains', 'images', 'volumes']
+export const REST_COLLECTION_NAMES: readonly string[] = ['boxes', 'checkpoints', 'domains', 'images', 'volumes']
 
 /**
  * Names under the app domain that would read as the platform's own or whose

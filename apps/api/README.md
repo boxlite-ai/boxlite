@@ -126,6 +126,9 @@ prefix. Capture requires Box write permission; reads require organization
 membership, following the existing Box read policy. List/detail responses omit stored environment values and
 internal object locations.
 
+Checkpoint operations stay outside the MCP OAuth allowlist, like export/import.
+The `checkpoints` collection name is reserved and cannot be claimed as an application subdomain.
+
 A source must be idle on a ready v2 runner, either started or stopped, without
 volumes or secrets. Creating a checkpoint takes the source's `BOX` job slot
 until native export completes. The completion transaction clears its checkpoint
@@ -192,8 +195,9 @@ native target counts as successful destruction.
 Run the transaction and HTTP admission checks with
 `make test:apps:api TEST_FILES='checkpoint|job-state-handler'`, providing
 `DB_HOST`, `DB_PORT`, `DB_USERNAME`, `DB_PASSWORD` and `DB_DATABASE` for a test
-PostgreSQL instance. Without `DB_HOST`, the database suites are skipped. The
-transaction tests inject a failure after the Box write and before operation
+PostgreSQL instance. Without `DB_HOST`, the database suites are skipped.
+Fixtures that load the Box entity must also apply the checkpoint migration.
+The transaction tests inject a failure after the Box write and before operation
 completion; they verify rollback and concurrent replay against PostgreSQL.
 
 Set `CHECKPOINT_ARCHIVE_PREFIX=gs://<bucket>/checkpoints/` to enable capture and

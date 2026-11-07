@@ -3,6 +3,16 @@ import type { AddressInfo } from "node:net";
 import { expect, test } from "vitest";
 import { BoxliteRestOptions, JsBoxlite } from "../lib/index.js";
 
+test("checkpoint native methods reject an unwrapped receiver", async () => {
+  const runtime = JsBoxlite.rest(
+    new BoxliteRestOptions({ url: "http://127.0.0.1:1" }),
+  );
+  const list = runtime.checkpoints.list;
+  await expect(async () => await list.call({})).rejects.toThrow(
+    "Illegal invocation",
+  );
+});
+
 test("checkpoint native REST calls preserve configuration inheritance and result identity", async () => {
   const requests: Array<{ method?: string; path?: string; body?: unknown }> =
     [];
