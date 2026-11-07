@@ -171,7 +171,6 @@ export function CiConnectionFlow({
     <>
       <div className="flex flex-col items-end gap-2">
         <div className="flex items-center gap-2">
-          {starting && <AsciiButton onClick={close}>Cancel</AsciiButton>}
           <AsciiButton
             variant="primary"
             disabled={starting || !configuration?.web_connect_available}
