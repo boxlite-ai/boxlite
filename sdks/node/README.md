@@ -545,28 +545,43 @@ other error. See [the Node.js reference](../../docs/reference/nodejs/README.md#e
 
 ## Building from Source
 
+Use Node.js 22 or later for development tooling, as installed by
+`make setup:build`. The built SDK supports Node.js 18 or later.
+
 ```bash
 # Clone repository
 git clone https://github.com/boxlite-ai/boxlite.git
-cd boxlite/sdks/node
+cd boxlite
 
-# Initialize submodules (critical!)
-git submodule update --init --recursive
+# Install build tools and initialize submodules
+make setup:build
 
-# Install dependencies
-npm install
+# Build the native bindings and TypeScript, and link examples
+make dev:node
 
-# Build (Rust + TypeScript)
-npm run build
+# Check the SDK
+make lint:node fmt:check:node test:unit:node
 
-# Link to examples
-npm link
-cd ../../examples/node
-npm link @boxlite-ai/boxlite
-
-# Run examples
+# Run an example
+cd examples/node
 node simplebox.js
 ```
+
+### Maintaining the native bindings
+
+The Rust bindings require `napi` 3.16.1+, `napi-derive` 3.7.0+, and
+`napi-build` 2.6.0+. Update the runtime and macro generator together:
+`napi-derive` selects `napi-derive-backend`, whose generated reference
+conversions call the runtime's class identity and native borrow checks.
+The npm `@napi-rs/cli` builds and packages the addon; its version does not
+select the Rust macro backend.
+
+Keep the `napi8` feature for Node.js 18 compatibility, and commit the Cargo
+lockfile with dependency changes. After rebuilding, run `make test:unit:node`
+and `make test:integration:node` on a VM-capable host to exercise native
+class conversion and asynchronous calls. TypeScript checks alone do not
+exercise the generated Rust bindings. Assess CodeQL findings with a fresh
+scan; a successful build or a dismissed alert does not prove a finding is fixed.
 
 ## TypeScript Support
 
