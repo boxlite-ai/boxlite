@@ -54,7 +54,20 @@ vi.mock('./BoxNetworkSection', () => ({
   BoxNetworkSection: () => null,
 }))
 
-vi.mock('./BoxSshTab', () => ({ BoxSshTab: () => <div>SSH controls</div> }))
+vi.mock('./BoxSshTab', async () => {
+  const { useState } = await import('react')
+  return {
+    BoxSshTab: () => {
+      const [open, setOpen] = useState(false)
+      return (
+        <>
+          <button onClick={() => setOpen(!open)}>Connect via SSH</button>
+          {open && <div>SSH controls</div>}
+        </>
+      )
+    },
+  }
+})
 
 vi.mock('@/hooks/useConfig', () => ({
   useConfig: () => ({}),
@@ -185,14 +198,18 @@ describe('BoxDetails refresh', () => {
     await flushReactWork()
   }
 
-  it('opens the SSH tab without remounting the shell', async () => {
+  it('opens SSH before the lifecycle action without tabs or remounting the shell', async () => {
     await renderBoxDetails()
-    const sshTab = [...document.querySelectorAll<HTMLButtonElement>('[role="tab"]')].find(
-      (tab) => tab.textContent === 'SSH',
-    )!
-    await act(async () => sshTab.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0 })))
-    expect(sshTab.getAttribute('aria-selected')).toBe('true')
+    const buttons = [...document.querySelectorAll<HTMLButtonElement>('button')]
+    const ssh = buttons.find((button) => button.textContent === 'Connect via SSH')!
+    const stop = buttons.find((button) => button.textContent?.trim() === 'stop')!
+    expect(ssh).toBeDefined()
+    expect(buttons.indexOf(ssh)).toBeLessThan(buttons.indexOf(stop))
+    expect(document.querySelector('[role="tab"]')).toBeNull()
+    await act(async () => ssh.click())
     expect(document.body.textContent).toContain('SSH controls')
+    await act(async () => ssh.click())
+    expect(document.body.textContent).not.toContain('SSH controls')
     expect(mocks.terminalMounts).toHaveBeenCalledTimes(1)
   })
 

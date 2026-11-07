@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from 'node:child_process'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -27,6 +27,8 @@ describe('SSH credentials', () => {
       expect(credentials.config.accounts).toEqual([{ login: 'box', authorized_keys: [client] }])
       expect(credentials.config.listen_address).toBe('0.0.0.0:22')
       expect(host).not.toBe(client)
+      expect(credentials.hostPublicKey).toBe(host)
+      expect(credentials.config).not.toHaveProperty('hostPublicKey')
       expect(JSON.stringify(credentials.config)).not.toContain(credentials.privateKey.trim())
     } finally {
       rmSync(directory, { recursive: true, force: true })
@@ -79,6 +81,55 @@ describe('SSH REST boundary', () => {
 })
 
 describe('SSH connection instructions', () => {
+  it.each([
+    '~/space key',
+    "./quote'key",
+    './percent%h-key',
+    './back\\slash"%key',
+    '-leading-key',
+    './$(touch injected)',
+  ])('loads the exact SSH key at %s', async (path) => {
+    vi.stubGlobal('window', { location: { origin: 'http://localhost:3000' } })
+    const directory = mkdtempSync(join(tmpdir(), 'boxlite-ssh-path-'))
+    try {
+      const credentials = await generateSshCredentials()
+      const file = join(directory, path.replace(/^(~|\.)\//, ''))
+      writeFileSync(file, credentials.privateKey, { mode: 0o644 })
+      const commands = sshConnectionInstructions('/api', 'org', 'box-1', path)
+      writeFileSync(join(directory, 'boxlite'), '#!/bin/sh\nexit 1\n', { mode: 0o700 })
+      const result = spawnSync(
+        '/bin/sh',
+        ['-c', commands.connect.replace('\nssh ', '\nssh -vv -F /dev/null -o BatchMode=yes ')],
+        {
+          cwd: directory,
+          env: { ...process.env, HOME: directory, PATH: `${directory}:${process.env.PATH}` },
+          encoding: 'utf8',
+          timeout: 5000,
+        },
+      )
+      expect(result.error).toBeUndefined()
+      expect(statSync(file).mode & 0o777).toBe(0o600)
+      expect(result.stderr).toMatch(/identity file .* type 3/)
+      expect(result.stderr).not.toContain('not accessible')
+    } finally {
+      rmSync(directory, { recursive: true, force: true })
+    }
+  })
+
+  it.each(['', ' ', '~/bad\nkey', '~other/key', '${HOME}/key'])('rejects ambiguous SSH key path %j', (path) => {
+    vi.stubGlobal('window', { location: { origin: 'http://localhost:3000' } })
+    expect(() => sshConnectionInstructions('/api', 'org', 'box-1', path)).toThrow()
+  })
+
+  it('uses the supplied private key path without selecting a different CLI context', () => {
+    vi.stubGlobal('window', { location: { origin: 'http://localhost:3000' } })
+    const build = sshConnectionInstructions as (...args: string[]) => ReturnType<typeof sshConnectionInstructions>
+    const commands = build('/api', 'org', 'box-1', '/tmp/my private key')
+    expect(commands.connect).toContain("chmod 600 '/tmp/my private key'")
+    expect(commands.connect).toContain("ssh -i '/tmp/my private key'")
+    expect(commands.connect).not.toContain('--context')
+  })
+
   it('keeps ordinary IDs readable with only the outer ProxyCommand quotes', () => {
     vi.stubGlobal('window', { location: { origin: 'http://localhost:3000' } })
     const commands = sshConnectionInstructions('https://api.example.test', 'mock-org-00000000', 'mock-box-running')
