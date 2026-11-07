@@ -23,6 +23,34 @@ Keep the asset filename aligned with [Auth0 branding](../auth0/branding/README.m
 The invitation email tests check both the branding path and the referenced public file, so a
 branding migration cannot silently leave emails pointing to a deleted asset.
 
+## Auth0 Bot Detection
+
+The [stage policy](../auth0/bot-detection.json) sets dev and prod to `when_risky`. Auth0 can challenge
+risky email/password signup and login requests. Social connections are outside
+[Bot Detection coverage](https://auth0.com/docs/secure/attack-protection/bot-detection#limitations).
+
+Run from `apps/infra` with an Auth0 CLI session for the target tenant. Preview
+requires `read:attack_protection`, and apply also requires `update:attack_protection`.
+
+```bash
+npm run auth0:bot-detection -- preview --stage dev
+npm run auth0:bot-detection -- apply --stage dev
+```
+
+Use `--stage prod` for the production Auth0 tenant.
+
+Preview shows the tenant, current policy, desired policy and monitoring mode. Apply
+requires monitoring mode off for an active challenge policy. It updates only the
+password challenge field and reads it back. Each stage needs its own policy entry.
+
+Check new signup, returning password login, and password-backed account linking in dev.
+Linking uses a noninteractive password grant, which can fail if Auth0 requires a
+challenge. A successful normal login leaves risk-triggered linking unverified.
+
+To roll back, restore the previous policy printed by the apply command to the stage entry and apply
+again. A restore to `never` can run in monitoring mode. If a write result is uncertain,
+preview the tenant again before retrying.
+
 ## Auth0 email-first login policy
 
 Run this only for a dedicated BoxLite Auth0 tenant. Identifier First is a
