@@ -647,7 +647,8 @@ func (c *Client) Start(ctx context.Context, boxId string, authToken *string, met
 		return "", err
 	}
 	defer operation.Close()
-	ctx = context.WithoutCancel(ctx)	if err := c.ensureVolumeMountsFromMetadata(ctx, boxId, metadata); err != nil {
+	ctx = context.WithoutCancel(ctx)
+	if err := c.ensureVolumeMountsFromMetadata(ctx, boxId, metadata); err != nil {
 		c.logger.ErrorContext(ctx, "failed to ensure volume FUSE mounts", "error", err)
 	}
 

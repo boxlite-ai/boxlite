@@ -1228,7 +1228,8 @@ impl BoxImpl {
         let _ownership = self
             .runtime
             .checkpoint_lifecycle
-            .read(Some(self.config.id.as_ref()), self.config.name.as_deref())?;        if self.live.initialized() && self.state.read().status != BoxStatus::Running {
+            .read(Some(self.config.id.as_ref()), self.config.name.as_deref())?;
+        if self.live.initialized() && self.state.read().status != BoxStatus::Running {
             return Err(BoxliteError::Stopped(format!(
                 "Box {} is no longer running and this handle is spent — it still holds the \
                  stopped VM, and cannot boot another. Drop it and call runtime.get() for a \
