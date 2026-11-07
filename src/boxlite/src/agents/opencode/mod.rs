@@ -87,13 +87,19 @@ pub(super) struct Server {
 impl Server {
     /// Reach the Box's managed OpenCode service, starting it when none runs.
     /// BoxLite never stops or signals a service: one it cannot use is reported.
+    ///
+    /// `bin_dir`, a folder holding an installed `opencode`, goes first on the
+    /// commands' `PATH`. The service re-runs its own executable, so it then
+    /// runs that copy too.
     pub(super) async fn attach(
         box_backend: Arc<dyn BoxBackend>,
         network: Arc<dyn BoxNetworkBackend>,
+        bin_dir: Option<&str>,
     ) -> BoxliteResult<Arc<Self>> {
         let lock = setup_lock(box_backend.id());
         let _setup = lock.lock().await;
-        let (state, password) = setup(box_backend.as_ref()).await?;
+        let shell = Shell { bin_dir };
+        let (state, password) = setup(box_backend.as_ref(), &shell).await?;
         let server = Self::new(network, &password);
         match server.version().await {
             Ok(version) => check_version(&version)?,
@@ -109,7 +115,7 @@ impl Server {
                     "the OpenCode service in the Box is not responding: {error}"
                 )));
             }
-            Err(_) => server.start(box_backend.as_ref()).await?,
+            Err(_) => server.start(box_backend.as_ref(), &shell).await?,
         }
         Ok(Arc::new(server))
     }
@@ -122,9 +128,9 @@ impl Server {
 
     /// Start the service with OpenCode's own launcher, which spawns it
     /// detached and returns once it answers, then wait for the tunnel.
-    async fn start(&self, box_backend: &dyn BoxBackend) -> BoxliteResult<()> {
-        let command = BoxCommand::new("sh")
-            .args(["-c", "opencode service start 2>&1"])
+    async fn start(&self, box_backend: &dyn BoxBackend, shell: &Shell<'_>) -> BoxliteResult<()> {
+        let command = shell
+            .command("opencode service start 2>&1")
             .timeout(START_TIMEOUT);
         let (exit_code, output) = run(box_backend, command).await?;
         if exit_code != 0 {
@@ -960,7 +966,10 @@ enum ServiceState {
 /// signal. So a pid counts only while it runs `opencode serve --service`, and a
 /// stale registration is deleted before any setting changes. A live service at
 /// another address is left alone and reported.
-async fn setup(box_backend: &dyn BoxBackend) -> BoxliteResult<(ServiceState, String)> {
+async fn setup(
+    box_backend: &dyn BoxBackend,
+    shell: &Shell<'_>,
+) -> BoxliteResult<(ServiceState, String)> {
     // Assignments let `set -e` stop on a failing `opencode`; a pid that exits
     // before its cmdline is read counts as not running.
     let script = format!(
@@ -991,9 +1000,7 @@ else
 fi
 opencode service get password"#
     );
-    let command = BoxCommand::new("sh")
-        .args(["-c", script.as_str()])
-        .timeout(SETUP_TIMEOUT);
+    let command = shell.command(&script).timeout(SETUP_TIMEOUT);
     let (exit_code, reply) = run(box_backend, command).await?;
     if exit_code != 0 {
         return Err(BoxliteError::Execution(format!(
@@ -1001,6 +1008,23 @@ opencode service get password"#
         )));
     }
     parse_setup(&reply)
+}
+
+/// Runs `sh` scripts that call `opencode`, with an installed copy's folder
+/// first on `PATH` when there is one.
+struct Shell<'a> {
+    bin_dir: Option<&'a str>,
+}
+
+impl Shell<'_> {
+    fn command(&self, script: &str) -> BoxCommand {
+        // The folder is BoxLite's `/opt/boxlite/agents/opencode/<sha256>`; no quoting needed.
+        let script = match self.bin_dir {
+            Some(dir) => format!("PATH={dir}:$PATH; export PATH\n{script}"),
+            None => script.to_owned(),
+        };
+        BoxCommand::new("sh").args(["-c", script.as_str()])
+    }
 }
 
 /// Read the setup reply: a state line, then the service password.

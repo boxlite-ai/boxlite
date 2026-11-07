@@ -689,3 +689,214 @@ async fn remote_access_is_refused_before_a_service_starts() {
         .await
         .unwrap();
 }
+
+/// A started Box like [`opencode_box`], but with OpenCode removed from the image
+/// and installed from the host into the share instead.
+#[cfg(feature = "test-support")]
+async fn delivered_box(home: &common::home::PerTestBoxHome) -> (BoxliteRuntime, LiteBox) {
+    let (runtime, sandbox, _) = opencode_box(home).await;
+    run(&sandbox, "rm /usr/local/bin/opencode").await;
+    install(&sandbox).await;
+    (runtime, sandbox)
+}
+
+#[cfg(feature = "test-support")]
+async fn install(sandbox: &LiteBox) {
+    let binary = std::env::var(BINARY_ENV).unwrap_or_else(|_| panic!("set {BINARY_ENV}"));
+    sandbox
+        .agents()
+        .install_from_host("opencode", std::path::Path::new(&binary))
+        .await
+        .unwrap();
+}
+
+/// How many mounts the container has at the agents mount point.
+#[cfg(feature = "test-support")]
+async fn agent_mounts(sandbox: &LiteBox) -> String {
+    output(
+        sandbox,
+        r#"awk '$2 == "/opt/boxlite/agents"' /proc/mounts | wc -l"#,
+    )
+    .await
+}
+
+/// Create an agent, complete one turn, and return the agent ID that turn names.
+#[cfg(feature = "test-support")]
+async fn agent_with_a_completed_turn(sandbox: &LiteBox) -> String {
+    let agent = sandbox
+        .agents()
+        .create("opencode", fake_model_options())
+        .await
+        .unwrap();
+    let turn = agent
+        .send("ping", AgentSendOptions::default())
+        .await
+        .unwrap();
+    assert_eq!(
+        turn.wait(WAIT).await.unwrap().status,
+        AgentTurnStatus::Completed
+    );
+    turn.state().unwrap().agent_id
+}
+
+#[cfg(feature = "test-support")]
+async fn restart(runtime: &BoxliteRuntime, sandbox: LiteBox) -> LiteBox {
+    sandbox.stop().await.unwrap();
+    // stop() invalidates the handle; a restarted Box comes from the runtime.
+    let sandbox = runtime.get(sandbox.id().as_ref()).await.unwrap().unwrap();
+    sandbox.start().await.unwrap();
+    sandbox
+}
+
+#[cfg(feature = "test-support")]
+#[tokio::test]
+#[ignore = "needs a VM, network and BOXLITE_TEST_OPENCODE_BINARY; see the module docs"]
+async fn an_installed_opencode_runs_in_an_image_without_one() {
+    let home = common::home::PerTestBoxHome::new();
+    let (runtime, sandbox) = delivered_box(&home).await;
+
+    let agent = sandbox
+        .agents()
+        .create("opencode", fake_model_options())
+        .await
+        .unwrap();
+    let turn = agent
+        .send("ping", AgentSendOptions::default())
+        .await
+        .unwrap();
+    assert_eq!(
+        turn.wait(WAIT).await.unwrap().status,
+        AgentTurnStatus::Completed
+    );
+
+    // The image gained nothing on its PATH, and the delivered folder is read-only.
+    assert_eq!(
+        output(&sandbox, "command -v opencode || echo none").await,
+        "none"
+    );
+    let write = output(
+        &sandbox,
+        "touch /opt/boxlite/agents/x 2>&1 && echo written || true",
+    )
+    .await;
+    assert!(write.contains("Read-only file system"), "{write}");
+    runtime
+        .shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT))
+        .await
+        .unwrap();
+}
+
+#[cfg(feature = "test-support")]
+#[tokio::test]
+#[ignore = "needs a VM, network and BOXLITE_TEST_OPENCODE_BINARY; see the module docs"]
+async fn installing_again_reuses_the_one_mount() {
+    let home = common::home::PerTestBoxHome::new();
+    let (runtime, sandbox) = delivered_box(&home).await;
+
+    install(&sandbox).await;
+    sandbox
+        .agents()
+        .create("opencode", fake_model_options())
+        .await
+        .unwrap();
+
+    assert_eq!(agent_mounts(&sandbox).await, "1");
+    runtime
+        .shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT))
+        .await
+        .unwrap();
+}
+
+/// Later installs reach the running container through the mount it already
+/// has. A failed lookup the guest made before the file existed must not hide it.
+#[cfg(feature = "test-support")]
+#[tokio::test]
+#[ignore = "needs a VM, network and BOXLITE_TEST_OPENCODE_BINARY; see the module docs"]
+async fn an_agent_installed_after_a_failed_lookup_is_found_at_once() {
+    let home = common::home::PerTestBoxHome::new();
+    let (runtime, sandbox) = delivered_box(&home).await;
+    assert_eq!(
+        output(
+            &sandbox,
+            "stat /opt/boxlite/agents/probe >/dev/null 2>&1 || echo missing"
+        )
+        .await,
+        "missing"
+    );
+    let probe = home.path.join("probe");
+    std::fs::write(&probe, "#!/bin/sh\necho probe-ran\n").unwrap();
+
+    sandbox
+        .agents()
+        .install_from_host("probe", &probe)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        output(
+            &sandbox,
+            "stat /opt/boxlite/agents/probe >/dev/null && /opt/boxlite/agents/probe/*/probe"
+        )
+        .await,
+        "probe-ran"
+    );
+    assert_eq!(agent_mounts(&sandbox).await, "1");
+    runtime
+        .shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT))
+        .await
+        .unwrap();
+}
+
+#[cfg(feature = "test-support")]
+#[tokio::test]
+#[ignore = "needs a VM, network and BOXLITE_TEST_OPENCODE_BINARY; see the module docs"]
+async fn a_restart_mounts_the_recorded_agent_on_first_use() {
+    let home = common::home::PerTestBoxHome::new();
+    let (runtime, sandbox) = delivered_box(&home).await;
+    let agent_id = agent_with_a_completed_turn(&sandbox).await;
+
+    let sandbox = restart(&runtime, sandbox).await;
+    // A stop drops the mount; the empty mount point stays in the reused rootfs.
+    assert_eq!(agent_mounts(&sandbox).await, "0");
+    assert_eq!(output(&sandbox, "ls -A /opt/boxlite/agents").await, "");
+
+    let agent = sandbox.agents().get(&agent_id).await.unwrap();
+    let turn = agent
+        .send("ping", AgentSendOptions::default())
+        .await
+        .unwrap();
+    assert_eq!(
+        turn.wait(WAIT).await.unwrap().status,
+        AgentTurnStatus::Completed
+    );
+    assert_eq!(agent_mounts(&sandbox).await, "1");
+    runtime
+        .shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT))
+        .await
+        .unwrap();
+}
+
+#[cfg(feature = "test-support")]
+#[tokio::test]
+#[ignore = "needs a VM, network and BOXLITE_TEST_OPENCODE_BINARY; see the module docs"]
+async fn a_failed_mount_after_a_restart_is_reported_and_retried() {
+    let home = common::home::PerTestBoxHome::new();
+    let (runtime, sandbox) = delivered_box(&home).await;
+    let agent_id = agent_with_a_completed_turn(&sandbox).await;
+    let sandbox = restart(&runtime, sandbox).await;
+
+    // A destination with entries is refused: the Box keeps running and the
+    // agents call reports the mount error.
+    run(&sandbox, "touch /opt/boxlite/agents/blocker").await;
+    let error = sandbox.agents().get(&agent_id).await.err().unwrap();
+    assert!(error.to_string().contains("/opt/boxlite/agents"), "{error}");
+    assert_eq!(agent_mounts(&sandbox).await, "0");
+
+    run(&sandbox, "rm /opt/boxlite/agents/blocker").await;
+    sandbox.agents().get(&agent_id).await.unwrap();
+    assert_eq!(agent_mounts(&sandbox).await, "1");
+    runtime
+        .shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT))
+        .await
+        .unwrap();
+}

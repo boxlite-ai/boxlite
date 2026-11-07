@@ -10,6 +10,7 @@
 //! Each implementation is one module whose agent type implements
 //! [`AgentBackend`]; `Agents::create` maps the implementation name to it.
 
+mod install;
 mod opencode;
 mod types;
 pub use types::*;
@@ -166,25 +167,42 @@ impl Agents {
         Ok(Agent::new(server.get_session(agent_id).await?))
     }
 
-    /// Checked before any validation, so remote runtimes always see `Unsupported`.
-    /// A cloud tunnel can publish the agent's server; a local one stays on this host.
-    fn require_local_runtime(&self) -> BoxliteResult<()> {
-        let is_local = Arc::clone(&self.box_backend)
-            .as_any_arc()
-            .downcast::<BoxImpl>()
-            .is_ok();
-        if is_local {
-            return Ok(());
-        }
-        Err(BoxliteError::Unsupported(
-            "agents require a local runtime".into(),
-        ))
+    /// Copy the agent binary at `host_file` into the Box and mount it, as the
+    /// agent catalog will (design #2322). For tests until that catalog lands.
+    #[cfg(feature = "test-support")]
+    #[doc(hidden)]
+    pub async fn install_from_host(
+        &self,
+        agent: &str,
+        host_file: &std::path::Path,
+    ) -> BoxliteResult<()> {
+        let local = self.require_local_runtime()?;
+        install::AgentInstaller::new(local)
+            .install(agent, host_file)
+            .await?;
+        Ok(())
     }
 
+    /// Checked before any validation, so remote runtimes always see `Unsupported`.
+    /// A cloud tunnel can publish the agent's server; a local one stays on this host.
+    fn require_local_runtime(&self) -> BoxliteResult<Arc<BoxImpl>> {
+        Arc::clone(&self.box_backend)
+            .as_any_arc()
+            .downcast::<BoxImpl>()
+            .map_err(|_| BoxliteError::Unsupported("agents require a local runtime".into()))
+    }
+
+    /// Reach OpenCode, using the installed copy when one is recorded and the
+    /// image's `opencode` otherwise.
     async fn opencode_server(&self) -> BoxliteResult<Arc<opencode::Server>> {
+        let local = self.require_local_runtime()?;
+        let bin_dir = install::AgentInstaller::new(local)
+            .installed(opencode::IMPLEMENTATION)
+            .await?;
         opencode::Server::attach(
             Arc::clone(&self.box_backend),
             Arc::clone(&self.network_backend),
+            bin_dir.as_deref(),
         )
         .await
     }

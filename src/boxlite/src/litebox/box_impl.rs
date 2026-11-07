@@ -79,6 +79,18 @@ pub(crate) struct LiveState {
     #[cfg(target_os = "linux")]
     #[allow(dead_code)]
     bind_mount: Option<BindMountHandle>,
+
+    /// Agent installs of this VM run: one at a time, and the agents folder
+    /// mounted at most once. A stop drops the mount along with this state.
+    #[cfg_attr(
+        not(feature = "test-support"),
+        allow(
+            dead_code,
+            reason = "first production installer is the agent catalog (#2322)"
+        )
+    )]
+    agent_installs: tokio::sync::Mutex<()>,
+    agents_mounted: OnceCell<()>,
 }
 
 impl LiveState {
@@ -103,6 +115,8 @@ impl LiveState {
             guest_rootfs_disk,
             #[cfg(target_os = "linux")]
             bind_mount,
+            agent_installs: tokio::sync::Mutex::new(()),
+            agents_mounted: OnceCell::new(),
         }
     }
 }
@@ -1197,6 +1211,46 @@ impl BoxImpl {
         self.live
             .get_or_try_init(|| self.init_live_state(true))
             .await
+    }
+
+    /// Hold the agent-install lock of this VM run, booting the Box if needed.
+    #[cfg_attr(
+        not(feature = "test-support"),
+        allow(
+            dead_code,
+            reason = "first production installer is the agent catalog (#2322)"
+        )
+    )]
+    pub(crate) async fn lock_agent_installs(
+        &self,
+    ) -> BoxliteResult<tokio::sync::MutexGuard<'_, ()>> {
+        Ok(self.live_state().await?.agent_installs.lock().await)
+    }
+
+    /// Mount the share folder `source` read-only at `destination` in the
+    /// container, at most once per VM run. A failed mount is retried by the
+    /// next call; it never stops the Box.
+    pub(crate) async fn mount_agents_once(
+        &self,
+        source: &str,
+        destination: &str,
+    ) -> BoxliteResult<()> {
+        let live = self.live_state().await?;
+        live.agents_mounted
+            .get_or_try_init(|| async {
+                live.guest_session
+                    .container()
+                    .await?
+                    .mount(self.container_id(), source, destination)
+                    .await
+                    .map_err(|error| {
+                        BoxliteError::InvalidState(format!(
+                            "could not mount the agents folder at {destination}: {error}"
+                        ))
+                    })
+            })
+            .await?;
+        Ok(())
     }
 
     /// Run the container's init exactly once. Booting only creates the container;
