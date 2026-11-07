@@ -322,11 +322,15 @@ export class BoxRepository extends BaseRepository<Box> {
     params: {
       updateData: Partial<Box>
       whereCondition: FindOptionsWhere<Box>
+      lockTimeoutMs?: number
     },
   ): Promise<Box> {
-    const { updateData, whereCondition } = params
+    const { updateData, whereCondition, lockTimeoutMs } = params
 
     const [updatedBox, previousBox] = await this.manager.transaction(async (entityManager) => {
+      if (lockTimeoutMs !== undefined) {
+        await entityManager.query("SELECT set_config('lock_timeout', $1, true)", [`${lockTimeoutMs}ms`])
+      }
       const whereClause = {
         ...whereCondition,
         id,

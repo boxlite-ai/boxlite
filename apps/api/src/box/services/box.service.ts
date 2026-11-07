@@ -990,6 +990,7 @@ export class BoxService {
     const updatedBox = await this.boxRepository.updateWhere(box.id, {
       updateData,
       whereCondition: { pending: false, state: box.state },
+      lockTimeoutMs: ctx.lockTimeoutMs,
     })
 
     recordBoxRequested('box.stop', updatedBox.id, ctx)

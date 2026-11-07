@@ -45,6 +45,34 @@ Deploy the API after upgrading the package to apply the new list.
 Run `make test:apps:api TEST_FILES='user.service.registration-email|jwt.strategy'` for the registration checks,
 and `make build:apps:api` to validate the production bundle and dependency imports.
 
+## Background lifecycle requests
+
+Automated stop requests use `BoxService.stop` with a platform operation context.
+A stable `started` Box moves to `pending=true`, `desiredState=stopped`, and emits
+the normal Stop event. The existing manager and Runner complete the transition.
+Conditional repository updates serialize competing lifecycle requests.
+
+The worker processes candidates sequentially within a 30-second submission
+window. It waits for each submitted operation; when the window expires, remaining
+candidates are reconsidered on a later scheduled run.
+
+Background Stop transactions limit each database lock wait to 500 ms. A lock
+timeout rolls back the transaction before processing the next candidate; a later
+run can retry that Box. The setting ends with the transaction and does not affect
+ordinary user Stop requests.
+
+The automatic stop worker cancels pending work in `beforeApplicationShutdown` and
+awaits submitted operations before releasing its lease. This finishes before HTTP
+connections drain, so a long request cannot keep a worker submitting new stops.
+Cancellation does not undo an accepted Stop intent. Integration tests check
+persisted intent and lifecycle events; physical Runner shutdown requires
+end-to-end verification.
+
+Use `make coverage:api TEST_FILES='<spec pattern>'` for focused coverage checks.
+This selects test files while retaining the configured coverage sources and exclusions.
+The `api:test` cache includes `DB_HOST` and `REDIS_HOST`, so changing either
+service setting invalidates cached results. Coverage runs bypass the cache.
+
 ## Box startup timeouts
 
 REST creation persists the Box before waiting up to 30 seconds for `STARTED`.

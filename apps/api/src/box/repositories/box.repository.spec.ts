@@ -26,12 +26,14 @@ function makeQueryBuilder(execute: jest.Mock) {
 // over repository.manager) and the cache-invalidation hook are exercised here.
 function makeRepository(execute: jest.Mock) {
   const query = jest.fn().mockResolvedValue(undefined)
+  const findOne = jest.fn()
   const queryBuilder = makeQueryBuilder(execute)
   // create() hydrates the RETURNING * raw row into a Box; the stub echoes the
   // row back so return-shape assertions stay on the same object.
   const create = jest.fn((_entity, raw) => raw)
   const entityManager = {
     query,
+    findOne,
     createQueryBuilder: jest.fn(() => queryBuilder),
     create,
   }
@@ -43,8 +45,40 @@ function makeRepository(execute: jest.Mock) {
   // invalidateLookupCacheOnUpdate touches the real cache service; stub it out —
   // it is incidental to the lock-timeout behavior under test.
   jest.spyOn(repo as any, 'invalidateLookupCacheOnUpdate').mockImplementation(() => undefined)
-  return { repo, query, execute, create }
+  return { repo, query, execute, create, findOne }
 }
+
+describe('BoxRepository.updateWhere', () => {
+  it.each([500, undefined])(
+    'uses the optional lock timeout (%s) and propagates a row-lock failure',
+    async (lockTimeoutMs) => {
+      const { repo, query, findOne } = makeRepository(jest.fn())
+      const lockTimeout = Object.assign(new Error('canceling statement due to lock timeout'), { code: '55P03' })
+      findOne.mockRejectedValue(lockTimeout)
+      const params = {
+        updateData: { pending: true, desiredState: BoxDesiredState.STOPPED },
+        whereCondition: { pending: false, state: BoxState.STARTED },
+        lockTimeoutMs,
+      }
+
+      await expect(repo.updateWhere('box-1', params)).rejects.toBe(lockTimeout)
+
+      expect(findOne).toHaveBeenCalledWith(
+        Box,
+        expect.objectContaining({
+          where: { id: 'box-1', pending: false, state: BoxState.STARTED },
+          lock: { mode: 'pessimistic_write' },
+        }),
+      )
+      if (lockTimeoutMs === undefined) {
+        expect(query).not.toHaveBeenCalled()
+      } else {
+        expect(query).toHaveBeenCalledWith("SELECT set_config('lock_timeout', $1, true)", ['500ms'])
+        expect(query.mock.invocationCallOrder[0]).toBeLessThan(findOne.mock.invocationCallOrder[0])
+      }
+    },
+  )
+})
 
 const startedRow = {
   id: 'box-1',
