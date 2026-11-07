@@ -97,7 +97,12 @@ jobs:
   tag-go-module:
     name: Tag Go Module
     needs: test
-    if: github.event_name == 'workflow_run' && github.event.workflow_run.event == 'release'
+    # The manual C build is skipped on releases; publication must also override implicit success().
+    if: >-
+      !cancelled() &&
+      needs.test.result == 'success' &&
+      github.event_name == 'workflow_run' &&
+      github.event.workflow_run.event == 'release'
     runs-on: ubuntu-latest
     permissions:
       contents: write
