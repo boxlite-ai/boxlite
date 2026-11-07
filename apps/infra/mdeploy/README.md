@@ -55,11 +55,16 @@ There is no repository-wide cloud default. Read the separate [GCP](../docs/gcp/a
 ## CI orchestration
 
 [mdeploy-all.yml](../../../.github/workflows/mdeploy-all.yml) resolves the requested ref, ensures
-its artifacts exist, checks the stage digest, then previews or applies. Its `components` input
+its artifacts exist, checks the stage digest, then previews or applies. Release images must already
+exist in GHCR; the workflow imports their digests into the target stage's AR/ECR repository and
+enforces that stage's scan policy before deployment. Missing GHCR images stop the run and print
+a manual `mbuild-release` dispatch command. Deployment never starts a release build.
+GCP imports and scans use `GCP_IMAGE_PUBLISHER`; the job restores `GCP_DEPLOYER` before image verification and apply.
+Its `components` input
 selects artifact preparation; it is not a promise that the resource graph targets only those services.
 
 A commit or open PR merge commit is accepted for `dev`. `prod` requires a published release;
-release dispatches run from `main`. The reusable image workflow and runner build job bind the stage's
+release dispatches run from `main`. The commit image workflow and runner build job bind the stage's
 GitHub Environment. Check actual environment reviewers and branch protections separately: source
 configuration is not evidence of the live GitHub settings.
 
