@@ -102,6 +102,30 @@ impl PidRecord {
         }
         pos
     }
+
+    /// Whether `pid` is still the process this record names.
+    ///
+    /// A record with no start-time cannot disprove identity, so it answers
+    /// `true`: the behaviour from before the fingerprint existed, kept so a
+    /// legacy file degrades to the old semantics rather than silently
+    /// disabling teardown.
+    pub(crate) fn identity_holds(&self) -> bool {
+        match self.start_time {
+            Some(expected) => crate::util::process_start_time(self.pid) == Some(expected),
+            None => true,
+        }
+    }
+
+    /// Whether the process this record names is still running.
+    ///
+    /// Not the same question as bare liveness, and anything that signals a
+    /// recorded pid must ask this one: a pid recycled since the record was
+    /// written is alive, yet answering "yes" for it lets a wait loop run its
+    /// full course and then escalate onto a stranger. A recycled pid has to
+    /// read as gone.
+    pub(crate) fn still_running(&self) -> bool {
+        crate::util::is_process_alive(self.pid) && self.identity_holds()
+    }
 }
 
 /// Internal shim lifecycle record: process identity plus capabilities written
@@ -217,32 +241,33 @@ impl PidFileReader {
     /// to a recycled PID or attribute resources to the wrong VM lifecycle.
     pub(crate) fn verified_shim(&self) -> Option<ShimPidRecord> {
         let record = self.read_shim().ok()?;
-        let identity = record.identity();
-        let expected_start_time = identity.start_time?;
-        if !crate::util::is_process_alive(identity.pid)
-            || crate::util::process_start_time(identity.pid) != Some(expected_start_time)
-        {
-            return None;
-        }
-        Some(record)
+        // Stricter than `actionable_record`: a legacy file carries no
+        // fingerprint, and this caller attributes resources to an exact VM
+        // lifecycle, which an unprovable identity cannot support.
+        record.identity().start_time?;
+        record.identity().still_running().then_some(record)
+    }
+
+    /// The recorded identity, when the live pid still matches it.
+    ///
+    /// The trust anchor for anything that will act on the pid *later*:
+    /// [`process_identity`](Self::process_identity) answers "is there anything
+    /// to act on", this answers "which identity may I carry forward". The
+    /// distinction is the whole guard — a fingerprint sampled at the moment of
+    /// use is no check at all, since a recycled pid fingerprints as itself.
+    pub(crate) fn actionable_record(&self) -> Option<PidRecord> {
+        let record = self.read().ok()?;
+        record.still_running().then_some(record)
     }
 
     /// Read the PID file and classify the recorded process against the
     /// live OS view. `Absent` collapses three failure modes (file gone,
     /// process dead, fingerprint mismatch) — all map to "nothing to act on".
     pub fn process_identity(&self) -> ProcessIdentity {
-        let Ok(record) = self.read() else {
-            return ProcessIdentity::Absent;
-        };
-        if !crate::util::is_process_alive(record.pid) {
-            return ProcessIdentity::Absent;
-        }
-        match record.start_time {
-            None => ProcessIdentity::Legacy(record.pid),
-            Some(expected) if crate::util::process_start_time(record.pid) == Some(expected) => {
-                ProcessIdentity::Verified(record.pid)
-            }
-            Some(_) => ProcessIdentity::Absent,
+        match self.actionable_record() {
+            Some(record) if record.start_time.is_some() => ProcessIdentity::Verified(record.pid),
+            Some(record) => ProcessIdentity::Legacy(record.pid),
+            None => ProcessIdentity::Absent,
         }
     }
 }
