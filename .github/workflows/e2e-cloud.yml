@@ -234,8 +234,8 @@ jobs:
       API_URL: >-
         ${{ inputs.api_url
             || ((inputs.stage || 'dev') == 'prod'
-                && (vars.BOXLITE_PROD_API_URL || 'https://api.boxlite.ai/api')
-                || (vars.BOXLITE_DEV_API_URL || 'https://api.dev.boxlite.ai/api')) }}
+                && (vars.BOXLITE_PROD_API_URL || 'https://api.boxlite.ai')
+                || (vars.BOXLITE_DEV_API_URL || 'https://api.dev.boxlite.ai')) }}
       # Blank keeps apps/e2e/lib/images.py deriving the ref from
       # apps/box-images/VERSION, which is right whenever the stage runs the
       # commit under test. A stage pinned to an older box image needs this.

@@ -238,7 +238,7 @@ test('validateDotenvSyntax accepts ordinary dotenv configuration', () => {
     validateDotenvSyntax(`
 # a comment
 STACK_DOMAIN=dev.boxlite.ai
-OIDC_AUDIENCE=https://dev.boxlite.ai/api
+OIDC_AUDIENCE=https://api.dev.boxlite.ai
 RUNNERS=1
 BLANK=
 `),

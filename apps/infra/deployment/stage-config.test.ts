@@ -65,7 +65,7 @@ test('hydrateStageConfig applies only the keys the manifest names', () => {
     stored: {
       [STAGE_CONFIG_MANIFEST_KEY]: 'STACK_DOMAIN,OIDC_AUDIENCE',
       STACK_DOMAIN: 'dev.boxlite.ai',
-      OIDC_AUDIENCE: 'https://dev.boxlite.ai/api',
+      OIDC_AUDIENCE: 'https://api.dev.boxlite.ai',
       // A key .env once defined and no longer does: `sst secret load` merges, so it is still in the
       // store. Off the manifest, so it must not reach the deploy.
       PROXY_DOMAIN: 'stale.boxlite.ai',
@@ -76,7 +76,7 @@ test('hydrateStageConfig applies only the keys the manifest names', () => {
     environment: {},
   })
 
-  assert.deepEqual(apply, { OIDC_AUDIENCE: 'https://dev.boxlite.ai/api', STACK_DOMAIN: 'dev.boxlite.ai' })
+  assert.deepEqual(apply, { OIDC_AUDIENCE: 'https://api.dev.boxlite.ai', STACK_DOMAIN: 'dev.boxlite.ai' })
   assert.deepEqual(unlisted, ['OIDC_CLIENT_ID', 'PROXY_DOMAIN'])
 })
 

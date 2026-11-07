@@ -94,7 +94,7 @@ No bootstrap or fixture_setup needed — just set environment variables:
 
 ```bash
 # Required:
-export BOXLITE_E2E_API_URL=https://dev.boxlite.ai/api
+export BOXLITE_E2E_API_URL=https://api.dev.boxlite.ai
 export BOXLITE_E2E_API_KEY=blk_live_...        # your API key for the remote env
 export BOXLITE_E2E_AUTH=api-key
 
@@ -153,7 +153,7 @@ picks it up (one-time per machine):
 mkdir -p ~/.boxlite
 cat > ~/.boxlite/credentials.toml << 'EOF'
 [profiles.p1]
-url = "https://dev.boxlite.ai/api"
+url = "https://api.dev.boxlite.ai"
 api_key = "blk_live_..."
 auth_method = "api_key"
 path_prefix = ""
@@ -231,8 +231,8 @@ stage. It is dispatch-only, plus one call from `deploy-infra.yml`:
 
 | Stage | Target | Selection | Sweep |
 | --- | --- | --- | --- |
-| `dev` | `api.dev.boxlite.ai/api` | everything | yes |
-| `prod` | `api.boxlite.ai/api` | `-m smoke` | no |
+| `dev` | `api.dev.boxlite.ai` | everything | yes |
+| `prod` | `api.boxlite.ai` | `-m smoke` | no |
 
 The workflow writes the selected stage's credentials to
 `~/.boxlite/credentials.toml` with mode `0600`. Each key's organization is

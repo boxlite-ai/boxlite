@@ -42,7 +42,7 @@ describe('AuthModule JwtStrategy provider', () => {
           case 'skipConnections':
             return false
           case 'oidc.audience':
-            return 'https://dev.boxlite.ai/api'
+            return 'https://api.dev.boxlite.ai'
           case 'oidc.publicIssuer':
             return 'https://auth.dev.boxlite.ai'
           default:
@@ -60,7 +60,7 @@ describe('AuthModule JwtStrategy provider', () => {
     const strategy = await createJwtStrategy({} as any, oidcMetadataService as any, configService as any, {} as any)
 
     expect((strategy as any).options).toMatchObject({
-      audience: 'https://dev.boxlite.ai/api',
+      audience: 'https://api.dev.boxlite.ai',
       issuer: 'https://auth.dev.boxlite.ai/',
       jwksUri: 'https://dev-j60pjpmu6neaeaga.us.auth0.com/.well-known/jwks.json',
     })
