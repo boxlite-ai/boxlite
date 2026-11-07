@@ -119,6 +119,9 @@ fn options_from_manifest(
     if options.advanced.nested_virtualization {
         return Err(rejected_upload("nested virtualization"));
     }
+    if options.advanced.engine.is_some() {
+        return Err(rejected_upload("engine selection"));
+    }
     if options.advanced.privileged {
         return Err(rejected_upload("privileged mode"));
     }
@@ -347,6 +350,23 @@ mod tests {
 
         assert!(matches!(error, BoxliteError::Unsupported(_)), "{error:?}");
         assert!(error.to_string().contains("nested virtualization"));
+    }
+
+    #[test]
+    fn untrusted_import_rejects_engine_selection() {
+        let mut advanced = crate::runtime::advanced_options::AdvancedBoxOptions::default();
+        advanced.engine = Some(crate::vmm::VmmKind::Native);
+        let options = BoxOptions {
+            advanced,
+            ..Default::default()
+        };
+
+        let error =
+            options_from_manifest(&v3_manifest(options), ArchiveImportPolicy::UntrustedRemote)
+                .unwrap_err();
+
+        assert!(matches!(error, BoxliteError::Unsupported(_)), "{error:?}");
+        assert!(error.to_string().contains("engine selection"));
     }
 
     #[test]

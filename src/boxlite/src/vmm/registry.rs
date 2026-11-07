@@ -32,7 +32,8 @@ inventory::collect!(EngineFactoryRegistration);
 ///
 /// # Returns
 /// * `Ok(Box<dyn Vmm>)` - Successfully created engine instance
-/// * `Err(BoxliteError::Engine)` - Engine kind not registered or creation failed
+/// * `Err(BoxliteError::Unsupported)` - Engine kind not registered in this build
+/// * `Err(BoxliteError::Engine)` - Engine creation failed
 ///
 /// # Example
 /// ```rust,no_run
@@ -56,9 +57,8 @@ pub fn create_engine(kind: VmmKind, options: VmmConfig) -> BoxliteResult<Box<dyn
         .map(|r| r.kind)
         .collect();
 
-    Err(BoxliteError::Engine(format!(
-        "Engine {:?} is not registered. Available engines: {:?}",
-        kind, available
+    Err(BoxliteError::Unsupported(format!(
+        "engine {kind:?} is not available in this build; available engines: {available:?}"
     )))
 }
 
@@ -96,8 +96,20 @@ mod tests {
         // Firecracker might not be implemented yet
         if !is_registered(VmmKind::Firecracker) {
             let result = create_engine(VmmKind::Firecracker, options);
-            assert!(result.is_err());
+            match result {
+                Err(BoxliteError::Unsupported(message)) => {
+                    assert!(message.contains("not available in this build"), "{message}");
+                }
+                other => panic!("expected Unsupported, got {:?}", other.map(|_| ())),
+            }
         }
+    }
+
+    #[test]
+    #[cfg(all(feature = "native", target_os = "linux", target_arch = "x86_64"))]
+    fn the_native_engine_is_registered() {
+        assert!(is_registered(VmmKind::Native));
+        assert!(create_engine(VmmKind::Native, VmmConfig::default()).is_ok());
     }
 
     #[test]
