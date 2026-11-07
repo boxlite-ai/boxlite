@@ -96,6 +96,10 @@ cargo build --release -p boxlite-cli
 boxlite run python:slim python -c 'print("Hello from BoxLite!")'
 ```
 
+The quotes are that way round on purpose: `!` inside **double** quotes triggers history
+expansion in an interactive `bash`, which fails with `event not found` before `boxlite`
+ever runs. Single outer quotes keep it literal.
+
 ### Run interactively with a TTY
 
 ```bash
