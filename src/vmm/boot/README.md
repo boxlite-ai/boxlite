@@ -52,6 +52,15 @@ disabled by the pinned driver under `init_on_free=1` without PAGE_POISON
 negotiation; tests preserve that security policy rather than forcing reporting
 on.
 
+The fragment also provides the [guest agent's PID 1 bootstrap](../../guest/README.md):
+tmpfs and PTYs, Unix and IP sockets, container namespaces, cgroup v2 controllers,
+seccomp, overlayfs, and built-in virtio-fs, virtio-net and virtio-vsock drivers.
+Netlink and Unix sockets are needed even with external networking disabled, for
+loopback setup and zygote IPC respectively.
+Driver availability does not attach a VMM device; native Box readiness still
+depends on the remaining device integration.
+`make test:integration:vmm:native` verifies the actual agent with this kernel.
+
 ## Default: building inside a BoxLite box
 
 `boxlite.lock` pins a BoxLite CLI release, its SHA-256 for each host and a

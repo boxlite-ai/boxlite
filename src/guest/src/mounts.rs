@@ -1,4 +1,4 @@
-//! Essential tmpfs mounts for guest filesystem
+//! Guest init filesystems and writable runtime directories.
 //!
 //! Mounts tmpfs on directories that require local filesystem semantics
 //! (e.g., open-unlink-fstat pattern) which virtio-fs doesn't support.
@@ -8,6 +8,119 @@ use nix::mount::{mount, MsFlags};
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
+
+/// Mount the filesystems normally supplied by init.krun. Only guest PID 1 calls
+/// this, before the zygote forks, so its descendants inherit the writable paths.
+pub(crate) fn mount_init_filesystems() -> BoxliteResult<()> {
+    use nix::sys::statfs::{statfs, PROC_SUPER_MAGIC};
+    let restricted =
+        MsFlags::MS_NOSUID | MsFlags::MS_NOEXEC | MsFlags::MS_NODEV | MsFlags::MS_RELATIME;
+
+    // /proc must exist before mountinfo can validate the other mount points.
+    // statx also detects a bind mount here, even on the root filesystem.
+    fs::create_dir_all("/proc")?;
+    let proc_type = statfs("/proc")
+        .map_err(|e| BoxliteError::Internal(format!("statfs /proc: {e}")))?
+        .filesystem_type();
+    if proc_type != PROC_SUPER_MAGIC {
+        if mount_id("/proc")? != mount_id("/")? {
+            return Err(BoxliteError::Internal(format!(
+                "/proc has an unexpected filesystem: {proc_type:?}"
+            )));
+        }
+        mount(
+            Some("proc"),
+            "/proc",
+            Some("proc"),
+            restricted,
+            None::<&str>,
+        )
+        .map_err(|e| BoxliteError::Internal(format!("mount proc on /proc: {e}")))?;
+    }
+
+    for (path, filesystem, flags, data) in [
+        ("/dev", "devtmpfs", MsFlags::MS_RELATIME, None),
+        ("/sys", "sysfs", restricted, None),
+        ("/sys/fs/cgroup", "cgroup2", restricted, None),
+        (
+            "/dev/pts",
+            "devpts",
+            MsFlags::MS_NOSUID | MsFlags::MS_NOEXEC | MsFlags::MS_RELATIME,
+            Some("mode=0620,ptmxmode=0666"),
+        ),
+        ("/dev/shm", "tmpfs", restricted, Some("mode=1777")),
+    ] {
+        fs::create_dir_all(path)?;
+        if !mounted_as(path, filesystem)? {
+            mount(Some(filesystem), path, Some(filesystem), flags, data).map_err(|e| {
+                BoxliteError::Internal(format!("mount {filesystem} on {path}: {e}"))
+            })?;
+        }
+    }
+
+    match std::os::unix::fs::symlink("/proc/self/fd", "/dev/fd") {
+        Ok(()) => (),
+        Err(e)
+            if e.kind() == std::io::ErrorKind::AlreadyExists
+                && fs::read_link("/dev/fd")? == Path::new("/proc/self/fd") => {}
+        Err(e) => {
+            return Err(BoxliteError::Internal(format!(
+                "create /dev/fd symlink: {e}"
+            )))
+        }
+    }
+    mount(
+        None::<&str>,
+        "/",
+        None::<&str>,
+        MsFlags::MS_REC | MsFlags::MS_SHARED,
+        None::<&str>,
+    )
+    .map_err(|e| BoxliteError::Internal(format!("make guest root shared: {e}")))?;
+
+    // Keep libkrun's existing tmpfs behavior. Init additionally rejects an
+    // unexpected mount rather than hiding it under another filesystem.
+    for cfg in TMPFS_MOUNTS {
+        fs::create_dir_all(cfg.path)?;
+        mounted_as(cfg.path, "tmpfs")?;
+    }
+    mount_essential_tmpfs()
+}
+
+fn mounted_as(path: &str, expected: &str) -> BoxliteResult<bool> {
+    let id = mount_id(path)?;
+    let mounts = procfs::process::Process::myself()
+        .and_then(|p| p.mountinfo())
+        .map_err(|e| BoxliteError::Internal(format!("read mountinfo for {path}: {e}")))?;
+    let mounted = mounts
+        .iter()
+        .find(|m| m.mnt_id as u64 == id)
+        .ok_or_else(|| {
+            BoxliteError::Internal(format!("mount {id} for {path} missing from mountinfo"))
+        })?;
+    if mounted.mount_point != Path::new(path) {
+        return Ok(false);
+    }
+    if mounted.fs_type != expected {
+        return Err(BoxliteError::Internal(format!(
+            "{path} is mounted as {}, expected {expected}",
+            mounted.fs_type
+        )));
+    }
+    Ok(true)
+}
+
+fn mount_id(path: &str) -> BoxliteResult<u64> {
+    use rustix::fs::{statx, AtFlags, StatxFlags, CWD};
+    let stat = statx(CWD, path, AtFlags::empty(), StatxFlags::MNT_ID)
+        .map_err(|e| BoxliteError::Internal(format!("statx mount ID for {path}: {e}")))?;
+    if !StatxFlags::from_bits_retain(stat.stx_mask).contains(StatxFlags::MNT_ID) {
+        return Err(BoxliteError::Internal(format!(
+            "kernel did not return a mount ID for {path}"
+        )));
+    }
+    Ok(stat.stx_mnt_id)
+}
 
 /// tmpfs mount configuration
 struct TmpfsMount {
