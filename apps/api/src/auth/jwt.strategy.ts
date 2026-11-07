@@ -14,7 +14,6 @@ import { AuthContext } from '../common/interfaces/auth-context.interface'
 import { Request } from 'express'
 import { CustomHeaders } from '../common/constants/header.constants'
 import { TypedConfigService } from '../config/typed-config.service'
-import { EmailVerificationRequiredException } from '../exceptions/email-verification-required.exception'
 import { LoginEventRecorder } from './login-event.recorder'
 import { Context } from '../common/context/context'
 
@@ -22,25 +21,6 @@ interface JwtStrategyConfig {
   jwksUri: string
   audience: string
   issuer: string
-}
-
-/**
- * Auth0 database identities use the `auth0|` subject prefix. Social and
- * enterprise identities have provider-specific prefixes and stay outside this
- * database-account policy.
- *
- * Rejects with 403, not 401: the token itself is valid, so a client that
- * recovers from 401 by re-authenticating would loop forever against a state
- * only the user can clear. See EmailVerificationRequiredException.
- */
-export function requireVerifiedAuth0DatabaseEmail(
-  payload: Pick<JWTPayload, 'sub'> & {
-    email_verified?: unknown
-  },
-): void {
-  if (payload.sub?.startsWith('auth0|') && payload.email_verified !== true) {
-    throw new EmailVerificationRequiredException()
-  }
 }
 
 /**
@@ -81,11 +61,6 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
   }
 
   async validate(request: Request, payload: any): Promise<AuthContext> {
-    // Keep this before JIT user creation: an already-issued unverified Auth0
-    // database token must not create local state while the Auth0 Action rollout
-    // is converging.
-    requireVerifiedAuth0DatabaseEmail(payload)
-
     // OKTA does not return the userId in access_token sub claim
     // real userId is in the uid claim and email is in the sub claim
     let userId = payload.sub
@@ -122,17 +97,22 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
         Context.user(),
       )
       this.logger.debug(`Created new user with ID: ${userId}`)
-    } else if (user.name === 'Unknown' || !user.email) {
-      await this.userService.update(user.id, {
-        name: payload.name || payload.username || 'Unknown',
-        email: email || '',
-      })
-      this.logger.debug(`Updated name and email address for existing user with ID: ${userId}`)
-    } else if (user.email !== email) {
-      await this.userService.update(user.id, {
-        email: email || '',
-      })
-      this.logger.debug(`Updated email address for existing user with ID: ${userId}`)
+    } else {
+      // Only what the token states replaces stored profile data: tokens for
+      // third-party MCP clients carry no profile claims, and their absence must
+      // not erase a known user's email or name.
+      const changes: { name?: string; email?: string } = {}
+      const tokenName = payload.name || payload.username
+      if (tokenName && user.name === 'Unknown') {
+        changes.name = tokenName
+      }
+      if (typeof email === 'string' && email.trim() && user.email !== email) {
+        changes.email = email
+      }
+      if (Object.keys(changes).length > 0) {
+        await this.userService.update(user.id, changes)
+        this.logger.debug(`Updated ${Object.keys(changes).join(' and ')} for existing user with ID: ${userId}`)
+      }
     }
 
     await this.loginEvents.recordFirstUse(user.id, payload)
@@ -159,9 +139,6 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       issuer: this.options.issuer,
       algorithms: ['RS256'],
     })
-    // Gate direct verification consumers (Socket.IO and the WebSocket proxy),
-    // which do not enter Passport's validate callback.
-    requireVerifiedAuth0DatabaseEmail(payload)
     return payload
   }
 }

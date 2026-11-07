@@ -103,22 +103,6 @@ describe('ApiClient 401 -> bounded re-login recovery', () => {
   // A 403 is not an authentication failure, so none of the recovery machinery
   // above may engage: the token is valid and re-logging in cannot change the
   // account state the API is objecting to.
-  it('a coded 403 becomes a typed error and never triggers re-login', async () => {
-    const onUnauthorized = vi.fn(() => Promise.resolve())
-    const api = await makeClient(onUnauthorized, 403, {
-      message: 'Email verification required',
-      code: 'email_verification_required',
-    })
-
-    // Imported after makeClient's vi.resetModules() so these are the same class
-    // objects the freshly-imported apiClient constructs.
-    const { EmailVerificationRequiredError } = await import('./errors')
-
-    await expect(api.organizationsApi.listOrganizations()).rejects.toBeInstanceOf(EmailVerificationRequiredError)
-    expect(onUnauthorized).not.toHaveBeenCalled()
-    expect(window.sessionStorage.getItem('boxlite.reauth-attempted')).toBeNull()
-  })
-
   it.each([
     { status: 403, code: 'disposable_email' },
     { status: 403, code: 'email_required' },
@@ -138,11 +122,13 @@ describe('ApiClient 401 -> bounded re-login recovery', () => {
     const onUnauthorized = vi.fn(() => Promise.resolve())
     const api = await makeClient(onUnauthorized, 403, { message: 'Forbidden' })
 
-    const { BoxliteError, EmailVerificationRequiredError } = await import('./errors')
+    // Imported after makeClient's vi.resetModules() so these are the same class
+    // objects the freshly-imported apiClient constructs.
+    const { BoxliteError, RegistrationEmailError } = await import('./errors')
 
     const error = await api.organizationsApi.listOrganizations().catch((e: unknown) => e)
     expect(error).toBeInstanceOf(BoxliteError)
-    expect(error).not.toBeInstanceOf(EmailVerificationRequiredError)
+    expect(error).not.toBeInstanceOf(RegistrationEmailError)
     expect(onUnauthorized).not.toHaveBeenCalled()
   })
 

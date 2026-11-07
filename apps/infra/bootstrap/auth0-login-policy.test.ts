@@ -14,6 +14,7 @@ import {
   assertDatabaseConnectionCompatible,
   assertEmailDeliveryReady,
   assertJournalSnapshotSafe,
+  assertStageApiAudience,
   buildDatabaseConnectionUpdate,
   buildLoginPolicyBindings,
   buildPromptUpdate,
@@ -319,11 +320,14 @@ test('parseAuth0LoginPolicyOptions defaults to preview and requires exact tenant
       'spa_123',
       '--connection',
       'boxlite-users',
+      '--api-audience',
+      'https://api.example.test/api',
     ]),
     {
       tenant: 'tenant.us.auth0.com',
       clientId: 'spa_123',
       connectionName: 'boxlite-users',
+      apiAudience: 'https://api.example.test/api',
       apply: false,
       allowTestEmailProvider: false,
       replaceAction: false,
@@ -342,6 +346,8 @@ test('parseAuth0LoginPolicyOptions defaults to preview and requires exact tenant
       'spa_123',
       '--connection',
       'boxlite-users',
+      '--api-audience',
+      'https://api.example.test/api',
       '--replace-action',
     ]).replaceAction,
     true,
@@ -354,17 +360,24 @@ test('parseAuth0LoginPolicyOptions defaults to preview and requires exact tenant
       'spa_123',
       '--connection',
       'boxlite-users',
+      '--api-audience',
+      'https://api.example.test/api',
       '--replace-link-form',
     ]).replaceLinkForm,
     true,
   )
   assert.throws(() => parseAuth0LoginPolicyOptions(['--tenant', 'tenant.us.auth0.com']), /--client-id is required/)
+  // The Action is the only email-verification gate, so it must know the API it guards.
+  assert.throws(
+    () => parseAuth0LoginPolicyOptions(['--tenant', 't.example.auth0.com', '--client-id', 'spa', '--connection', 'db']),
+    /--api-audience is required/,
+  )
 })
 
 const LINK_KEY = 'k'.repeat(32)
 
 test('parseAuth0LoginPolicyOptions takes the account link API origin only as a bare https origin', () => {
-  const required = ['--tenant', 'tenant.us.auth0.com', '--client-id', 'spa_123', '--connection', 'boxlite-users']
+  const required = ['--tenant', 'tenant.us.auth0.com', '--client-id', 'spa_123', '--connection', 'boxlite-users', '--api-audience', 'https://api.example.test/api']
   const origin = (value: string) =>
     parseAuth0LoginPolicyOptions([...required, '--account-link-api-origin', value], {
       AUTH0_ACCOUNT_LINK_SECRET: LINK_KEY,
@@ -389,6 +402,8 @@ test('parseAuth0LoginPolicyOptions reads the account link key from the environme
     'spa_123',
     '--connection',
     'boxlite-users',
+    '--api-audience',
+    'https://api.example.test/api',
     '--account-link-api-origin',
     'https://api.example.com',
   ]
@@ -882,6 +897,10 @@ function fakeTenant() {
           'actions/actions': state.action ? [state.action] : [],
           'actions/actions/act_policy': state.action,
           'actions/triggers/post-login/bindings': { bindings: state.bindings },
+          [`resource-servers/${encodeURIComponent('https://api.example.test/api')}`]: {
+            id: 'rs_api',
+            identifier: 'https://api.example.test/api',
+          },
         }
         return reads[path]
       }
@@ -1060,9 +1079,12 @@ test('Auth0LoginPolicyConfigurator applies, binds last, reads back, and journals
 
 type ActionHandler = (event: any, api: any) => Promise<void>
 
+const API_AUDIENCE = 'https://api.example.test/api'
+
 function loadAction(
   context: Record<string, unknown> = {},
   mcpResourceUrl?: string,
+  apiAudience?: string,
 ): {
   onExecutePostLogin: ActionHandler
   onContinuePostLogin: ActionHandler
@@ -1072,6 +1094,7 @@ function loadAction(
     connectionName: 'boxlite-users',
     formId: 'ap_verify',
     mcpResourceUrl,
+    apiAudience,
   })
   const exports: Record<string, ActionHandler> = {}
   runInNewContext(source, { exports, ...context })
@@ -1212,9 +1235,45 @@ test('login policy gates an MCP client login for the MCP resource like a dashboa
   assert.equal(otherApi.claims.email_verified, false)
 })
 
+// The API trusts every token for its audience (#2404), so no path to one may skip
+// verification: not another client, not another database connection.
+test('login policy denies an unverified database user on any path to the BoxLite API', async () => {
+  const { onExecutePostLogin } = loadAction({}, 'https://api.example.test/mcp', API_AUDIENCE)
+  const otherClient = actionApi()
+  const otherConnection = actionApi()
+  const verified = actionApi()
+  const elsewhere = actionApi()
+
+  await onExecutePostLogin(
+    managedEvent({ client: { client_id: 'other_app' }, resource_server: { identifier: API_AUDIENCE } }),
+    otherClient.api,
+  )
+  await onExecutePostLogin(
+    managedEvent({ connection: { name: 'Username-Password-Authentication', strategy: 'auth0' } }),
+    otherConnection.api,
+  )
+  await onExecutePostLogin(
+    managedEvent({
+      client: { client_id: 'other_app' },
+      resource_server: { identifier: API_AUDIENCE },
+      user: { ...managedEvent().user, email_verified: true },
+    }),
+    verified.api,
+  )
+  await onExecutePostLogin(
+    managedEvent({ client: { client_id: 'other_app' }, resource_server: { identifier: 'https://elsewhere.test' } }),
+    elsewhere.api,
+  )
+
+  assert.match(otherClient.denied[0] ?? '', /Email verification required/)
+  assert.match(otherConnection.denied[0] ?? '', /Email verification required/)
+  assert.deepEqual(verified.denied, [])
+  assert.equal(verified.claims.email_verified, true)
+  assert.deepEqual(elsewhere.denied, [])
+})
+
 test('login policy puts the plain identity claims on an MCP token Auth0 issues with no authorization', async () => {
-  // Auth0 can leave `event.authorization` unset for a third-party MCP client. The
-  // API refuses a database user's token whose `email_verified` is not true.
+  // Auth0 can leave `event.authorization` unset for a third-party MCP client.
   const { onExecutePostLogin } = loadAction({}, 'https://api.example.test/mcp')
   const capture = actionApi()
 
@@ -1248,7 +1307,7 @@ test('login policy without an MCP resource leaves MCP client logins ungated', as
 })
 
 test('parseAuth0LoginPolicyOptions accepts only an exact https MCP resource URL', () => {
-  const base = ['--tenant', 't.example.auth0.com', '--client-id', 'spa', '--connection', 'db']
+  const base = ['--tenant', 't.example.auth0.com', '--client-id', 'spa', '--connection', 'db', '--api-audience', 'https://api.example.test/api']
 
   assert.equal(
     parseAuth0LoginPolicyOptions([...base, '--mcp-resource-url', 'https://api.example.test/mcp']).mcpResourceUrl,
@@ -1290,6 +1349,46 @@ test('login policy apply keeps MCP login checks unless told to drop them', () =>
     configure({ disableMcpLogin: true }).apply()
     assert.match(tenant.state.action.deployed_version.code, /const MCP_RESOURCE_URL = ""/)
     assert.doesNotThrow(() => upgradeConfigurator(tenant).apply())
+  } finally {
+    rmSync(tenant.journalDirectory, { recursive: true, force: true })
+  }
+})
+
+// Another real API on the tenant passes the existence check; only the stage's own
+// value, which the API itself reads, proves the right audience is gated.
+test('assertStageApiAudience accepts only the stage OIDC_AUDIENCE', () => {
+  assert.doesNotThrow(() => assertStageApiAudience(API_AUDIENCE, { OIDC_AUDIENCE: API_AUDIENCE }))
+  assert.doesNotThrow(() => assertStageApiAudience(API_AUDIENCE, { OID_AUDIENCE: API_AUDIENCE }))
+  assert.throws(
+    () => assertStageApiAudience(API_AUDIENCE, { OIDC_AUDIENCE: 'https://other.example.test/api' }),
+    /differs from this stage/,
+  )
+  assert.throws(() => assertStageApiAudience(API_AUDIENCE, {}), /OIDC_AUDIENCE is unset/)
+})
+
+// A mistyped audience would gate an API nobody calls and leave the real one open.
+test('login policy refuses an API audience the tenant does not serve', () => {
+  const tenant = fakeTenant()
+  const configure = (apiAudience: string) =>
+    new Auth0LoginPolicyConfigurator(
+      {
+        tenant: 'tenant.us.auth0.com',
+        clientId: 'spa_123',
+        connectionName: 'boxlite-users',
+        apiAudience,
+        apply: false,
+        allowTestEmailProvider: false,
+      },
+      tenant.client,
+      {
+        actionCode: POLICY_SOURCE,
+        emailVerificationTemplate: tenant.template,
+        journalDirectory: tenant.journalDirectory,
+      },
+    )
+  try {
+    assert.throws(() => configure('https://api.example.test/apl').preview(), /names no Auth0 API/)
+    assert.doesNotThrow(() => configure('https://api.example.test/api').preview())
   } finally {
     rmSync(tenant.journalDirectory, { recursive: true, force: true })
   }
