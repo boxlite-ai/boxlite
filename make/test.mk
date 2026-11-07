@@ -447,10 +447,10 @@ test\:integration\:agents: $(if $(SETUP_DONE),,runtime\:debug)
 		echo "❌ Set BOXLITE_TEST_OPENCODE_BINARY to the OpenCode 2.2.2 glibc Linux binary"; exit 1; }
 	@echo "🧪 Running OpenCode agent tests (requires VM)..."
 	@if command -v cargo-nextest >/dev/null 2>&1; then \
-		cargo nextest run -p boxlite --features krun,gvproxy --test agents_opencode --run-ignored only \
+		cargo nextest run -p boxlite --features krun,gvproxy,test-support --test agents_opencode --run-ignored only \
 			--no-fail-fast --profile vm $(NEXTEST_FILTER); \
 	else \
-		cargo test -p boxlite --features krun,gvproxy --test agents_opencode --no-fail-fast -- \
+		cargo test -p boxlite --features krun,gvproxy,test-support --test agents_opencode --no-fail-fast -- \
 			--ignored --test-threads=1 --nocapture $(CARGOTEST_FILTER); \
 	fi
 
