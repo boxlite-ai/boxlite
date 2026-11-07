@@ -66,6 +66,7 @@ interface NavItem {
 
 const PRIMARY_NAV_ITEMS: NavItem[] = [
   { label: 'Boxes', icon: <Container className="size-[18px] shrink-0" aria-hidden="true" />, path: RoutePath.BOXES },
+  { label: 'CI', icon: <Play className="size-[18px] shrink-0" aria-hidden="true" />, path: RoutePath.CI },
   {
     label: 'Images',
     icon: <Layers className="size-[18px] shrink-0" aria-hidden="true" />,
@@ -83,7 +84,6 @@ const PRIMARY_NAV_ITEMS: NavItem[] = [
       },
     ],
   },
-  { label: 'CI', icon: <Play className="size-[18px] shrink-0" aria-hidden="true" />, path: RoutePath.CI },
   {
     label: 'Volumes',
     icon: <HardDrive className="size-[18px] shrink-0" aria-hidden="true" />,

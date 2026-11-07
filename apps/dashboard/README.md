@@ -755,7 +755,8 @@ data and actions while removing excess whitespace and dotted leaders.
 
 ## GitHub CI dashboard and browser connect
 
-The primary **CI** page follows Images' two-tab layout. **Runners** (`/dashboard/ci`)
+Primary navigation places **CI** between **Boxes** and **Images** in both the header
+and mobile menu. The CI page follows Images' two-tab layout. **Runners** (`/dashboard/ci`)
 lists actual JIT Boxes, with state, image, resources and links to Box details.
 It uses Box socket events and three-second polling during transitions, with a
 five-second fallback during socket loss or errors and ten-second refresh for
@@ -805,7 +806,10 @@ JIT Boxes and deletable connections for local presentation checks.
 Neither tab has a manual Refresh control. Connects fetches on entry and after
 successful additions/updates/deletions; it does not poll the connection list.
 
-Connect GitHub starts dedicated identity OAuth immediately. After login, the
+Connect GitHub starts dedicated identity OAuth immediately. While requesting the
+authorization URL, the existing button shows its loading state without adding a
+temporary Cancel beside it. Failures release the button for retry, and browser
+restoration invalidates late start results. After login, the
 normal CI page opens an account dialog using shared AsciiButton, Dialog and pixel
 icons. OAuth-visible personal/owner choices show **Install**, **Connect**, or a
 green pixel Check for an existing connection. The Connects table contains only

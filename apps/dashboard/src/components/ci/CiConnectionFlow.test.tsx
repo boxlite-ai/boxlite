@@ -106,7 +106,31 @@ describe('CI browser connection lifecycle', () => {
     expect(button('Connect GitHub').disabled).toBe(false)
     expect(prepareCiRedirect).toHaveBeenCalledOnce()
   })
-  it('cancels a late start without redirecting after the user closes it', async () => {
+  it('keeps one connect action during startup and restores it after failure', async () => {
+    let fail!: (reason: unknown) => void
+    api.startCiConnect.mockImplementationOnce(
+      () =>
+        new Promise((_resolve, reject) => {
+          fail = reject
+        }),
+    )
+    await render()
+    const connect = button('Connect GitHub')
+    await act(async () => connect.click())
+    try {
+      expect(button('Cancel')).toBeUndefined()
+      expect(button('Connect GitHub')).toBe(connect)
+      expect(connect.disabled).toBe(true)
+      expect(connect.querySelector('svg.animate-spin')).not.toBeNull()
+      await act(async () => connect.click())
+      expect(api.startCiConnect).toHaveBeenCalledTimes(1)
+    } finally {
+      await act(async () => fail(Error('Authorization request failed')))
+    }
+    expect(button('Connect GitHub').disabled).toBe(false)
+    expect(document.querySelector('[role=alert]')?.textContent).toContain('Unable to start')
+  })
+  it('cancels a late start without redirecting after browser restoration', async () => {
     let finish!: (value: ReturnType<typeof grant>) => void
     api.startCiConnect.mockImplementationOnce(
       () =>
@@ -116,7 +140,7 @@ describe('CI browser connection lifecycle', () => {
     )
     await render()
     await act(async () => button('Connect GitHub').click())
-    await act(async () => button('Cancel').click())
+    await act(async () => window.dispatchEvent(new Event('pageshow')))
     await act(async () => finish(grant()))
     expect(prepareCiRedirect).not.toHaveBeenCalled()
     expect(api.cancelCiConnect).toHaveBeenCalledWith(organization, id)
