@@ -824,16 +824,20 @@ async fn attach_by_exec_id_on_a_configured_box_does_not_boot() {
         .await
         .expect("create box");
 
-    let msg = match handle
+    let error = match handle
         .attach(AttachOptions::execution("some-exec-id"))
         .await
     {
         Ok(_) => panic!("a configured box must not accept an execution attach"),
-        Err(e) => e.to_string(),
+        Err(e) => e,
     };
     assert!(
-        msg.contains("Configured"),
-        "the error must name the box state, got: {msg}"
+        matches!(
+            &error,
+            boxlite::BoxliteError::InvalidState(message)
+                if message.contains(boxlite::BoxStatus::Configured.as_str())
+        ),
+        "the error must be InvalidState naming the box state, got: {error}"
     );
     assert_eq!(
         handle.info().await.expect("box info").status,
