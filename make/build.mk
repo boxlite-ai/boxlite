@@ -3,6 +3,13 @@ PHONY_TARGETS += guest shim runtime vmm vmm\:boot vmm\:boot\:host cli cli\:relea
 vmm:
 	@cargo build -p boxlite-hypervisor -p boxlite-vmm
 
+# Keep the test init separate from guest binaries assembled into product runtimes.
+PHONY_TARGETS += vmm\:guest-mount-init
+vmm\:guest-mount-init:
+	@bash -ec 'source "$(SCRIPT_DIR)/build/build-libseccomp.sh"; \
+	ensure_libseccomp_for_target x86_64-unknown-linux-musl; \
+	cargo build -p boxlite-guest --bin boxlite-guest --features integration-test-init --target x86_64-unknown-linux-musl --release --target-dir "$(PROJECT_ROOT)/target/vmm/guest-mount"'
+
 vmm\:boot: export _BOXLITE_BOOT_OUTPUT_ARG := $(value BOOT_OUTPUT)
 vmm\:boot: export _BOXLITE_BOOT_JOBS_ARG := $(value BOOT_JOBS)
 vmm\:boot:

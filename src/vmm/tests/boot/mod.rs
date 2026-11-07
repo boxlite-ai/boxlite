@@ -42,6 +42,10 @@ mod balloon;
 #[path = "virtio_blk.rs"]
 mod virtio_blk;
 
+#[cfg(target_os = "linux")]
+#[path = "guest_mounts.rs"]
+mod guest_mounts;
+
 const MEMORY_MIB: u32 = 2;
 const CMDLINE: &str = "console=ttyS0 panic=-1";
 
@@ -70,6 +74,7 @@ fn config(kernel: PathBuf, cmdline: &str) -> VmConfig {
         cmdline: cmdline.into(),
         initramfs: None,
         disks: Vec::new(),
+        filesystem: None,
     }
 }
 
@@ -200,6 +205,7 @@ fn linux_config(vcpu_count: u8, cmdline: &str, initramfs: Option<PathBuf>) -> Vm
         cmdline: cmdline.into(),
         initramfs,
         disks: Vec::new(),
+        filesystem: None,
     };
     config.validate().unwrap();
     config
@@ -932,4 +938,386 @@ fn stops_a_guest_that_sleeps_forever() {
     assert_eq!(exit.unwrap(), VmExit::StopRequested, "{log}");
     let took = returned.duration_since(stopped);
     assert!(took < Duration::from_secs(2), "{took:?}");
+}
+
+/// A tiny syscall-only init keeps the mount test independent of a guest libc.
+fn filesystem_init(
+    source_export: &str,
+    destination_export: &str,
+    await_host_byte: Option<u8>,
+) -> Vec<u8> {
+    let created = format!("/aggregate/{destination_export}/created");
+    let input = format!("/aggregate/{source_export}/input");
+    let output = format!("/aggregate/{destination_export}/output");
+    let mut code = Vec::new();
+    let mut strings = Vec::new();
+    let mut patches = Vec::new();
+    let mut failures = Vec::new();
+    fn immediate(code: &mut Vec<u8>, opcode: u8, value: u32) {
+        code.push(opcode);
+        code.extend_from_slice(&value.to_le_bytes());
+    }
+    // Reserve a writable read buffer on the process stack.
+    code.extend_from_slice(&[0x48, 0x81, 0xec, 0x00, 0x10, 0, 0]);
+    // syscall(number, rdi, rsi, rdx, r10, r8). String pointers are patched
+    // once the code length and therefore the data addresses are known.
+    for (number, args) in [
+        (83u32, [Some("/aggregate"), None, None]),
+        (165, [Some("boxlite"), Some("/aggregate"), Some("virtiofs")]),
+        (83, [Some(created.as_str()), None, None]),
+        (2, [Some(input.as_str()), None, None]),
+    ] {
+        immediate(&mut code, 0xb8, number);
+        for (opcode, arg) in [0xbf, 0xbe, 0xba].into_iter().zip(args) {
+            if let Some(value) = arg {
+                code.push(opcode);
+                patches.push((code.len(), strings.len()));
+                code.extend_from_slice(&[0; 4]);
+                strings.extend_from_slice(value.as_bytes());
+                strings.push(0);
+            } else {
+                immediate(&mut code, opcode, if number == 83 { 0o755 } else { 0 });
+            }
+        }
+        code.extend_from_slice(&[0x45, 0x31, 0xd2, 0x45, 0x31, 0xc0, 0x0f, 0x05]);
+        code.extend_from_slice(&[0x48, 0x85, 0xc0, 0x0f, 0x88]);
+        failures.push(code.len());
+        code.extend_from_slice(&[0; 4]);
+    }
+    // A cross-export copy uses a read-only source. Check the Linux driver's
+    // actual errno before reading it again through its original open descriptor.
+    if source_export != destination_export {
+        code.extend_from_slice(&[0x49, 0x89, 0xc5]); // save input fd in r13
+        immediate(&mut code, 0xb8, 2);
+        code.push(0xbf);
+        patches.push((code.len(), strings.len()));
+        code.extend_from_slice(&[0; 4]);
+        strings.extend_from_slice(input.as_bytes());
+        strings.push(0);
+        immediate(&mut code, 0xbe, 1); // O_WRONLY
+        code.extend_from_slice(&[0x0f, 0x05, 0x48, 0x83, 0xf8, 0xe2, 0x0f, 0x85]); // -EROFS
+        failures.push(code.len());
+        code.extend_from_slice(&[0; 4]);
+        code.extend_from_slice(&[0x4c, 0x89, 0xe8]); // restore input fd
+    }
+    // Direct-I/O exports do not negotiate shared mmap support. Check the
+    // driver's error rather than treating shared mappings as coherent access.
+    code.extend_from_slice(&[0x49, 0x89, 0xc5]); // input fd in r13
+    immediate(&mut code, 0xb8, 9); // mmap(NULL, 4096, PROT_READ, MAP_SHARED, fd, 0)
+    immediate(&mut code, 0xbf, 0);
+    immediate(&mut code, 0xbe, 4096);
+    immediate(&mut code, 0xba, 1);
+    code.extend_from_slice(&[0x41, 0xba, 1, 0, 0, 0, 0x4d, 0x89, 0xe8]);
+    code.extend_from_slice(&[0x45, 0x31, 0xc9, 0x0f, 0x05]);
+    code.extend_from_slice(&[0x48, 0x83, 0xf8, 0xed, 0x0f, 0x85]); // -ENODEV
+    failures.push(code.len());
+    code.extend_from_slice(&[0; 4]);
+    // Linux permits a private, read-only mapping of a direct-I/O file. Fault
+    // the first byte and compare it with the following read, then unmap it.
+    immediate(&mut code, 0xb8, 9);
+    immediate(&mut code, 0xbf, 0);
+    immediate(&mut code, 0xbe, 4096);
+    immediate(&mut code, 0xba, 1);
+    code.extend_from_slice(&[0x41, 0xba, 2, 0, 0, 0, 0x4d, 0x89, 0xe8]);
+    code.extend_from_slice(&[0x45, 0x31, 0xc9, 0x0f, 0x05]);
+    code.extend_from_slice(&[0x48, 0x85, 0xc0, 0x0f, 0x88]);
+    failures.push(code.len());
+    code.extend_from_slice(&[0; 4]);
+    code.extend_from_slice(&[0x44, 0x0f, 0xb6, 0x30, 0x48, 0x89, 0xc7]); // byte in r14
+    immediate(&mut code, 0xb8, 11); // munmap(address, 4096)
+    code.extend_from_slice(&[0x0f, 0x05, 0x48, 0x85, 0xc0, 0x0f, 0x88]);
+    failures.push(code.len());
+    code.extend_from_slice(&[0; 4]);
+    // Read the host input into the stack; retain the actual byte count in r12.
+    code.extend_from_slice(&[0x4c, 0x89, 0xe8]); // restore input fd
+    code.extend_from_slice(&[0x89, 0xc7, 0x31, 0xc0, 0x48, 0x89, 0xe6]);
+    immediate(&mut code, 0xba, 4096);
+    code.extend_from_slice(&[0x0f, 0x05, 0x49, 0x89, 0xc4]);
+    code.extend_from_slice(&[0x48, 0x85, 0xc0, 0x0f, 0x8e]);
+    failures.push(code.len());
+    code.extend_from_slice(&[0; 4]);
+    code.extend_from_slice(&[0x44, 0x38, 0x34, 0x24, 0x0f, 0x85]); // mapped byte == read byte
+    failures.push(code.len());
+    code.extend_from_slice(&[0; 4]);
+    if let Some(expected) = await_host_byte {
+        // Publishing ready after the first read lets the host update the source
+        // without racing that read. Keep using the same fd and positioned reads.
+        immediate(&mut code, 0xb8, 83);
+        code.push(0xbf);
+        patches.push((code.len(), strings.len()));
+        code.extend_from_slice(&[0; 4]);
+        strings.extend_from_slice(format!("/aggregate/{destination_export}/ready\0").as_bytes());
+        immediate(&mut code, 0xbe, 0o755);
+        code.extend_from_slice(&[0x0f, 0x05]);
+        let retry = code.len();
+        immediate(&mut code, 0xb8, 17); // pread64
+        code.extend_from_slice(&[0x4c, 0x89, 0xef, 0x48, 0x89, 0xe6]);
+        immediate(&mut code, 0xba, 4096);
+        code.extend_from_slice(&[0x45, 0x31, 0xd2, 0x0f, 0x05]); // offset=0
+        code.extend_from_slice(&[0x49, 0x89, 0xc4]);
+        code.extend_from_slice(&[0x80, 0x3c, 0x24, expected, 0x0f, 0x85]);
+        let branch = code.len();
+        let displacement = retry as i32 - (branch as i32 + 4);
+        code.extend_from_slice(&displacement.to_le_bytes());
+    }
+    immediate(&mut code, 0xb8, 2); // open output with O_CREAT|O_WRONLY|O_TRUNC
+    code.push(0xbf);
+    patches.push((code.len(), strings.len()));
+    code.extend_from_slice(&[0; 4]);
+    strings.extend_from_slice(output.as_bytes());
+    strings.push(0);
+    immediate(&mut code, 0xbe, 0x241);
+    immediate(&mut code, 0xba, 0o644);
+    code.extend_from_slice(&[0x0f, 0x05, 0x89, 0xc7]);
+    immediate(&mut code, 0xb8, 1);
+    code.extend_from_slice(&[0x48, 0x89, 0xe6, 0x4c, 0x89, 0xe2, 0x0f, 0x05]);
+    code.extend_from_slice(&[0x4c, 0x39, 0xe0, 0x0f, 0x85]);
+    failures.push(code.len());
+    code.extend_from_slice(&[0; 4]);
+    immediate(&mut code, 0xb8, 74); // fsync output
+    code.extend_from_slice(&[0x0f, 0x05, 0x48, 0x85, 0xc0, 0x0f, 0x88]);
+    failures.push(code.len());
+    code.extend_from_slice(&[0; 4]);
+    // Rename and unlink the output while its fd remains open, then read its
+    // attributes and synchronize through that retained object.
+    code.extend_from_slice(&[0x49, 0x89, 0xfd]); // retain output fd in r13
+    let renamed = format!("/aggregate/{destination_export}/renamed");
+    for (number, arguments) in [
+        (82, vec![output.as_str(), renamed.as_str()]),
+        (87, vec![renamed.as_str()]),
+    ] {
+        immediate(&mut code, 0xb8, number);
+        for (register, argument) in [0xbf, 0xbe].into_iter().zip(arguments) {
+            code.push(register);
+            patches.push((code.len(), strings.len()));
+            code.extend_from_slice(&[0; 4]);
+            strings.extend_from_slice(argument.as_bytes());
+            strings.push(0);
+        }
+        code.extend_from_slice(&[0x0f, 0x05, 0x48, 0x85, 0xc0, 0x0f, 0x88]);
+        failures.push(code.len());
+        code.extend_from_slice(&[0; 4]);
+    }
+    code.extend_from_slice(&[0x4c, 0x89, 0xef, 0x48, 0x89, 0xe6]); // fd, stat buffer
+    immediate(&mut code, 0xb8, 5); // fstat after unlink
+    code.extend_from_slice(&[0x0f, 0x05, 0x48, 0x85, 0xc0, 0x0f, 0x88]);
+    failures.push(code.len());
+    code.extend_from_slice(&[0; 4]);
+    immediate(&mut code, 0xb8, 74); // fsync after unlink
+    code.extend_from_slice(&[0x0f, 0x05, 0x48, 0x85, 0xc0, 0x0f, 0x88]);
+    failures.push(code.len());
+    code.extend_from_slice(&[0; 4]);
+    immediate(&mut code, 0xb8, 3); // close output before unmount
+    code.extend_from_slice(&[0x0f, 0x05]);
+    // umount2(aggregate, MNT_DETACH): the input descriptor remains open until
+    // reboot, so detach also exercises shutdown with a live open object.
+    immediate(&mut code, 0xb8, 166);
+    code.push(0xbf);
+    patches.push((code.len(), strings.len()));
+    code.extend_from_slice(&[0; 4]);
+    strings.extend_from_slice(b"/aggregate\0");
+    immediate(&mut code, 0xbe, 2);
+    code.extend_from_slice(&[0x0f, 0x05, 0x48, 0x85, 0xc0, 0x0f, 0x88]);
+    failures.push(code.len());
+    code.extend_from_slice(&[0; 4]);
+    // Finish using the existing console marker and restart program.
+    let restart = print_and_restart("VIRTIOFS-MOUNT-OK");
+    let mut finish = restart[PROGRAM_HEADERS as usize..].to_vec();
+    // Its absolute message pointer moves by the preceding code length.
+    let pointer = u32::from_le_bytes(finish[11..15].try_into().unwrap());
+    finish[11..15].copy_from_slice(&(pointer + code.len() as u32).to_le_bytes());
+    code.extend_from_slice(&finish);
+    let failure = code.len();
+    code.extend_from_slice(&[0xbf, 1, 0, 0, 0, 0xb8, 231, 0, 0, 0, 0x0f, 0x05]);
+    for offset in failures {
+        let displacement = failure as i32 - (offset as i32 + 4);
+        code[offset..offset + 4].copy_from_slice(&displacement.to_le_bytes());
+    }
+    let base = (PROGRAM_BASE + PROGRAM_HEADERS + code.len() as u64) as u32;
+    for (offset, string) in patches {
+        code[offset..offset + 4].copy_from_slice(&(base + string as u32).to_le_bytes());
+    }
+    code.extend_from_slice(&strings);
+    static_program(&code)
+}
+
+#[test]
+#[ignore = "requires KVM and VMM_KERNEL with built-in virtio-mmio and virtio-fs"]
+fn mounts_virtiofs_and_copies_host_bytes_through_the_linux_driver() {
+    let directory = std::env::temp_dir().join(format!("boxlite-guest-fs-{}", process::id()));
+    fs::create_dir(&directory).unwrap();
+    struct Cleanup(PathBuf);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+    let _cleanup = Cleanup(directory.clone());
+    let input = b"host bytes copied by the real Linux virtio-fs driver\n";
+    fs::write(directory.join("input"), input).unwrap();
+    fs::write(directory.join("retained-output"), b"").unwrap();
+    fs::hard_link(directory.join("retained-output"), directory.join("output")).unwrap();
+    let archive = newc_archive(
+        "init",
+        &filesystem_init("BoxLiteShared", "BoxLiteShared", None),
+    );
+    let initramfs = TempFile::new("virtiofs.cpio", &archive);
+    let mut config = linux_config(1, CONSOLE_CMDLINE, Some(initramfs.0.clone()));
+    config.filesystem = Some(crate::FsConfig {
+        tag: "boxlite".into(),
+        shares: vec![crate::FsShareConfig {
+            name: "BoxLiteShared".into(),
+            path: directory.clone(),
+            read_only: false,
+        }],
+    });
+    let log = SerialLog::default();
+    let mut vm = crate::Vm::new(config, Box::new(log.clone())).unwrap();
+    let (exit, elapsed) = run_with_watchdog(&mut vm, BOOT_TIMEOUT);
+    assert!(
+        matches!(exit, Ok(VmExit::GuestReset)),
+        "{exit:?} {elapsed:?}\n{}",
+        log.text()
+    );
+    assert!(log.text().contains("VIRTIOFS-MOUNT-OK"), "{}", log.text());
+    assert_eq!(fs::read(directory.join("retained-output")).unwrap(), input);
+    assert!(!directory.join("output").exists());
+    assert!(!directory.join("renamed").exists());
+    assert!(directory.join("created").is_dir());
+    drop(vm);
+    let retained: Vec<_> = fs::read_dir("/proc/self/fd")
+        .unwrap()
+        .filter_map(|entry| fs::read_link(entry.ok()?.path()).ok())
+        .filter(|target| target.starts_with(&directory))
+        .collect();
+    assert!(
+        retained.is_empty(),
+        "export descriptors retained: {retained:?}"
+    );
+}
+
+#[test]
+#[ignore = "requires KVM and VMM_KERNEL with built-in virtio-mmio and virtio-fs"]
+fn an_open_guest_file_observes_coordinated_host_rewrites() {
+    let directory = std::env::temp_dir().join(format!("boxlite-cache-fs-{}", process::id()));
+    fs::create_dir(&directory).unwrap();
+    struct Cleanup(PathBuf);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+    let _cleanup = Cleanup(directory.clone());
+    fs::write(directory.join("input"), b"old bytes").unwrap();
+    fs::write(directory.join("retained-output"), b"").unwrap();
+    fs::hard_link(directory.join("retained-output"), directory.join("output")).unwrap();
+    let archive = newc_archive("init", &filesystem_init("shared", "shared", Some(b'n')));
+    let initramfs = TempFile::new("cache-fs.cpio", &archive);
+    let mut config = linux_config(1, CONSOLE_CMDLINE, Some(initramfs.0.clone()));
+    config.filesystem = Some(crate::FsConfig {
+        tag: "boxlite".into(),
+        shares: vec![crate::FsShareConfig {
+            name: "shared".into(),
+            path: directory.clone(),
+            read_only: false,
+        }],
+    });
+    let log = SerialLog::default();
+    let mut vm = crate::Vm::new(config, Box::new(log.clone())).unwrap();
+    let host_directory = directory.clone();
+    let update = thread::spawn(move || {
+        let deadline = Instant::now() + BOOT_TIMEOUT;
+        while !host_directory.join("ready").exists() {
+            assert!(
+                Instant::now() < deadline,
+                "guest never completed its first read"
+            );
+            thread::sleep(Duration::from_millis(5));
+        }
+        fs::write(host_directory.join("input"), b"new bytes").unwrap();
+    });
+    let (exit, elapsed) = run_with_watchdog(&mut vm, BOOT_TIMEOUT);
+    update.join().unwrap();
+    assert!(
+        matches!(exit, Ok(VmExit::GuestReset)),
+        "{exit:?} {elapsed:?}\n{}",
+        log.text()
+    );
+    assert!(log.text().contains("VIRTIOFS-MOUNT-OK"), "{}", log.text());
+    assert_eq!(
+        fs::read(directory.join("retained-output")).unwrap(),
+        b"new bytes"
+    );
+}
+
+#[test]
+#[ignore = "requires KVM and VMM_KERNEL with built-in virtio-mmio and virtio-fs"]
+fn copies_between_readonly_snapshot_and_writable_file_exports() {
+    let directory = std::env::temp_dir().join(format!("boxlite-mixed-fs-{}", process::id()));
+    fs::create_dir(&directory).unwrap();
+    struct Cleanup(PathBuf);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+    let _cleanup = Cleanup(directory.clone());
+    let shared = directory.join("shared");
+    let snapshot = directory.join("snapshot");
+    let writable = directory.join("writable");
+    for export in [&shared, &snapshot, &writable] {
+        fs::create_dir(export).unwrap();
+        fs::write(
+            export.join("input"),
+            export.file_name().unwrap().as_encoded_bytes(),
+        )
+        .unwrap();
+    }
+    let original = directory.join("original");
+    fs::write(&original, b"before guest write").unwrap();
+    fs::hard_link(&original, writable.join("output")).unwrap();
+    let archive = newc_archive("init", &filesystem_init("snapshot", "writable", None));
+    let initramfs = TempFile::new("mixed-fs.cpio", &archive);
+    let mut config = linux_config(1, CONSOLE_CMDLINE, Some(initramfs.0.clone()));
+    config.filesystem = Some(crate::FsConfig {
+        tag: "boxlite".into(),
+        shares: vec![
+            crate::FsShareConfig {
+                name: "shared".into(),
+                path: shared.clone(),
+                read_only: false,
+            },
+            crate::FsShareConfig {
+                name: "snapshot".into(),
+                path: snapshot.clone(),
+                read_only: true,
+            },
+            crate::FsShareConfig {
+                name: "writable".into(),
+                path: writable.clone(),
+                read_only: false,
+            },
+        ],
+    });
+    let log = SerialLog::default();
+    let mut vm = crate::Vm::new(config, Box::new(log.clone())).unwrap();
+    let (exit, elapsed) = run_with_watchdog(&mut vm, BOOT_TIMEOUT);
+    assert!(
+        matches!(exit, Ok(VmExit::GuestReset)),
+        "{exit:?} {elapsed:?}\n{}",
+        log.text()
+    );
+    assert!(log.text().contains("VIRTIOFS-MOUNT-OK"), "{}", log.text());
+    assert_eq!(fs::read(&original).unwrap(), b"snapshot");
+    assert_eq!(fs::read(shared.join("input")).unwrap(), b"shared");
+    assert_eq!(fs::read(snapshot.join("input")).unwrap(), b"snapshot");
+    assert!(!snapshot.join("output").exists());
+    assert!(writable.join("created").is_dir());
+    drop(vm);
+    let retained: Vec<_> = fs::read_dir("/proc/self/fd")
+        .unwrap()
+        .filter_map(|entry| fs::read_link(entry.ok()?.path()).ok())
+        .filter(|target| target.starts_with(&directory))
+        .collect();
+    assert!(retained.is_empty(), "mixed exports retained: {retained:?}");
 }

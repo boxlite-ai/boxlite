@@ -141,6 +141,47 @@ mod tests {
     }
 
     #[test]
+    fn snapshot_retains_startup_bytes_and_rw_edits_reach_original() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("config");
+        std::fs::write(&source, b"startup").unwrap();
+        let snapshot =
+            stage_single_file(&directory.path().join("readonly"), &source, "config", true).unwrap();
+        let writable =
+            stage_single_file(&directory.path().join("writable"), &source, "config", false)
+                .unwrap();
+        std::fs::write(&source, b"host update").unwrap();
+        assert_eq!(std::fs::read(&snapshot).unwrap(), b"startup");
+        assert_eq!(std::fs::read(&writable).unwrap(), b"host update");
+        std::fs::write(&writable, b"guest update").unwrap();
+        assert_eq!(std::fs::read(&source).unwrap(), b"guest update");
+        assert_eq!(std::fs::read(&snapshot).unwrap(), b"startup");
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn writable_file_on_another_filesystem_fails_without_copy_fallback() {
+        // Linux provides a tmpfs independent of the worktree filesystem.
+        let source_directory = tempfile::tempdir_in("/dev/shm").unwrap();
+        let staging_directory = tempfile::tempdir().unwrap();
+        assert_ne!(
+            std::fs::metadata(source_directory.path()).unwrap().dev(),
+            std::fs::metadata(staging_directory.path()).unwrap().dev(),
+            "this qualification requires separate host filesystems",
+        );
+        let source = source_directory.path().join("config");
+        std::fs::write(&source, b"original").unwrap();
+        let error =
+            stage_single_file(staging_directory.path(), &source, "config", false).unwrap_err();
+        assert!(
+            error.to_string().contains("different filesystem"),
+            "{error}"
+        );
+        assert!(!staging_directory.path().join("config").exists());
+        assert_eq!(std::fs::read(&source).unwrap(), b"original");
+    }
+
+    #[test]
     fn re_staging_replaces_existing_entry() {
         let tmp = tempfile::tempdir().unwrap();
         let staging = tmp.path().join("staging");

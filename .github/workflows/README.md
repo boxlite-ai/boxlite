@@ -137,6 +137,13 @@ build and its Make recipes), and on the weekly and manual runs, the job also run
 the VMM's real-kernel boot tests with `make coverage:vmm:boot`. It restores the
 pinned `vmlinux` from the Actions cache, keyed on the kernel pins and build
 script, or builds it with `make vmm:boot:host` on a miss.
+The boot coverage target also builds the static production guest mount test
+init with `make vmm:guest-mount-init` and exports `VMM_GUEST_MOUNT_INIT` to
+the tests. This keeps the guest mount test in the boot coverage suite rather
+than skipping it. The selected Linux x64 job installs the musl Rust target,
+musl compiler and gperf, and uses the musl compiler for Rust linking and C
+dependencies. The boot step's five-minute budget includes the release build
+of this init; its guest execution remains bounded by the test watchdog.
 
 `Dashboard Tests` runs the dashboard's vitest suite on one Linux runner and
 uploads v8 coverage under the `dashboard` flag. `@nx/vite` infers the project's

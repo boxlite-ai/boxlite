@@ -55,6 +55,8 @@ arm64 and macOS arm64 remain required M2 qualification gates, blocked by their
 boot dependencies (#1698/#2103); unit tests or x86_64 evidence do not qualify
 those platforms or complete M2. The BoxLite engine adapter, engine selection
 and `native` feature wiring are separate M2 work.
+The Linux virtio-fs device is also composed when configured; its native Box
+engine adapter remains pending.
 Neither new crate depends on `boxlite-shared`, and both are unpublished while
 their interfaces are being established.
 
@@ -633,6 +635,97 @@ port and shares `ConsoleWriter`/`ConsoleWorker` with COM1.
   becomes the default path. A stalled sink cannot block TX, but its backlog
   is bounded by the 64 KiB pending queue plus the batch the worker is writing,
   so up to about 128 KiB can be outstanding.
+
+## Virtio-fs implementation
+
+`virtio::fs::device::Fs::new(tag, shares)` constructs one Linux x86_64 device
+for all exports ([design and stages](https://github.com/boxlite-ai/boxlite/issues/2274)).
+It ports the FUSE interfaces, dispatcher and Linux file operations from
+[libkrun e12b9b3](https://github.com/boxlite-ai/libkrun/tree/e12b9b3780ffa8df9f3e1797b217d13453479167/src/devices/src/virtio/fs),
+with the synthetic namespace following
+[OpenVMM 998904f](https://github.com/microsoft/openvmm/blob/998904f2debee98416c5d007a17f05be1b7dad34/vm/devices/virtio/virtiofs/src/aggregate.rs).
+The port keeps its BSD attribution and local license; libkrun stays unchanged.
+Both production filesystems explicitly implement the migrated `FileSystem`
+operations and lifecycle. The trait keeps only the shared batch-forget loop;
+missing operations fail compilation rather than silently inheriting unsupported
+or no-op defaults.
+
+| Layer | Ownership and contract |
+| --- | --- |
+| Device | Type 26; 36-byte tag plus one request-queue count; priority and request queues of 1024 entries; EVENT_IDX only; both queues required |
+| Descriptor adapter | One traversal builds readable/writable views from the same validated addresses; bounds, directions and incomplete chains fail before host operations |
+| FUSE server | Version 7.27; bounded frame/payload decoding and reply capacity checks; AUTO requires READDIRPLUS; no unimplemented capabilities advertised |
+| AggregateFs | Immutable root 1; global node/handle IDs, per-share policy and routing; cross-share rename/link/copy fail with EXDEV |
+| PassthroughFs | Each share owns its local inode/handle objects and host operations; O_PATH/proc-FD anchors preserve files after rename/unlink |
+| Lifetime | Separate lookup, open and in-flight references; mapping locks do not span file I/O; zero-reference identities are collected; checked IDs are not reused |
+
+The Linux backend requires a returned `STATX_MNT_ID` (Linux 5.8+); a missing
+mount identity fails explicitly rather than merging bind-mount aliases. Xattr
+mutations on write-only files/directories use pinned proc-FD paths, preserving
+host xattr authority without requiring unrelated data-read permission. ACCESS
+selects one guest permission class - owner, else group, else other - and then
+bounds success by the host effective identity; guest root bypasses the read and
+write bits and needs one execute bit for `X_OK`.
+If a directory-plus listing fails after accepting complete entries, the reply
+returns that prefix; an empty listing still returns the host error. A later
+queue error cannot suppress notification of earlier published completions.
+
+Regular OPEN/CREATE return `DIRECT_IO`, not host `O_DIRECT`; entry/attribute
+timeouts are zero and writeback is not negotiated. Directory handles do not
+enable data caching. Linux boot tests check coordinated host rewrites through an
+open guest descriptor, reject shared mappings with ENODEV and read private mappings.
+
+Operations run under the host's existing authority, without changing credentials,
+capabilities or umask. CREATE/MKDIR/MKNOD/SYMLINK accept each uid/gid only when
+it is zero or matches the host; other identities get EPERM. SETATTR retains the
+source's host-authority semantics.
+Read-only enforcement also covers truncating opens and metadata changes.
+Raw parent lookup is refused for every export directory; nested listings omit
+host `..`, so an anchored directory moved outside an export cannot expose its
+new host parent. Symlink contents are resolved in the guest.
+FIFO/device/socket creation and data opens, credential switching, killpriv and
+creation security contexts are unsupported.
+
+FSYNC/FSYNCDIR finish the host sync before replying and propagate errors;
+FLUSH and RELEASE (including RELEASE_FLUSH) do not promise durability.
+FORGET/BATCH_FORGET/DESTROY use zero reply
+bytes but still complete the descriptor. Reset clears session state and objects
+after the caller has stopped callbacks; it keeps export roots and ID counters.
+
+Unsupported POLL/IOCTL requests return ENOSYS for Linux's standard opt-out;
+these do not claim a backend operation succeeded. Other unsupported operations,
+including SYNCFS, return EOPNOTSUPP rather than a kernel-cached success.
+Implemented FSYNC/FSYNCDIR always perform host synchronization and propagate errors.
+
+`VmConfig::filesystem` optionally configures one aggregate device with a mount
+tag and named `FsShareConfig` exports. `devices::add_all` attaches it after the
+disks through the same slot allocator, transport and worker runtime, preserving
+disk order and announcing every device on the kernel command line. Export setup
+errors retain their I/O cause through `Error::Filesystem`. The pinned kernel
+fragment includes both virtio-blk and FUSE/virtio-fs.
+
+A slow synchronous filesystem call stalls every callback on the shared worker;
+a batch budget cannot cancel a blocked host syscall. macOS filesystem support
+and broader user-volume qualification remain follow-ups.
+
+```sh
+make test:unit:vmm FILTER=virtio::fs
+make test:unit:vmm
+make clippy:vmm
+make fmt:check:rust
+```
+
+The filesystem suite uses real files through production backends and memory
+queues: read/write/sync, host sync failure, malformed frames/descriptors, split
+transfers, large-directory pagination, credentials, per-share policy, handle
+survival and reclamation, full queues, reply-free requests and stale-session IDs.
+`make test:integration:vmm:linux` boots the Linux driver to mount exports, copy
+and synchronize files, retain descriptors after rename/unlink, and check cache
+visibility and mixed read-only policies. The separate
+`make test:integration:vmm:mounts` target packages the static production guest
+mount test init supplied as `VMM_GUEST_MOUNT_INIT`. It exercises the guest volume
+adapter's failed-batch rollback, guard rollback and committed mounts, with host
+checks for writable hardlink propagation, snapshot isolation and descriptor cleanup.
 
 ## Reporting balloon and shared dispatch
 
