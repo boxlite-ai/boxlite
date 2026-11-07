@@ -147,25 +147,25 @@ async fn test_exec_user_invalid_spec_is_invalid_argument() {
     tb.teardown().await;
 }
 
-/// A non-root exec-user image (grafana/grafana, User="472") must satisfy two
-/// properties inside the running box:
+/// A non-root image (`nginxinc/nginx-unprivileged:alpine`, `USER "101"`) must
+/// satisfy two properties inside the running box:
 ///
-/// 1. **Exec user** — `id -u` returns 472 (resolved from OCI config User field
-///    via /etc/passwd inside the image).
-/// 2. **Inode ownership** — `/etc/grafana` is owned by uid=472 in the ext4
-///    filesystem. This is the regression guard: before commit 5f23beec the ext4
-///    build stamped all inodes as uid=0, so grafana (uid=472) could not write
-///    its own config. `normalize_inodes_with_debugfs` fixes this at build time
-///    by reading `user.containers.override_stat` xattr per inode.
+/// 1. **Exec user** — `id -u` returns 101, taken from the numeric OCI config
+///    `User` field.
+/// 2. **Inode ownership** — `/var/cache/nginx`, which the image's layer owns as
+///    uid 101, keeps that owner in the ext4 filesystem. This is the regression
+///    guard for #1177: `mke2fs -d` records the host uid, and
+///    `normalize_inodes_with_debugfs` restores each layer-declared owner at
+///    build time.
 ///
-/// Both assertions use the image-declared uid (472), not the host process uid,
-/// which is intentionally different from 472 on any normal developer machine.
+/// Both assertions use the image-declared uid (101), not the host process uid,
+/// which is different from 101 on developer machines and CI runners.
 #[tokio::test]
 async fn test_non_root_image_user_exec_uid_and_inode_ownership() {
-    // The test proves that the box runs as the *image-declared* uid (472), not
+    // The test proves that the box runs as the *image-declared* uid (101), not
     // the host process uid.  If they happen to be equal the assertion is
     // tautological — skip rather than give a false green.
-    const IMAGE_UID: u32 = 472;
+    const IMAGE_UID: u32 = 101;
     let host_uid = unsafe { libc::getuid() };
     if host_uid == IMAGE_UID {
         eprintln!(
@@ -187,7 +187,7 @@ async fn test_non_root_image_user_exec_uid_and_inode_ownership() {
         .create(
             boxlite::runtime::options::BoxOptions {
                 rootfs: boxlite::runtime::options::RootfsSpec::Image(
-                    "grafana/grafana:latest".into(),
+                    "nginxinc/nginx-unprivileged:alpine".into(),
                 ),
                 auto_delete: Some(0),
                 ..Default::default()
@@ -195,32 +195,29 @@ async fn test_non_root_image_user_exec_uid_and_inode_ownership() {
             None,
         )
         .await
-        .expect("create grafana box");
-    handle.start().await.expect("start grafana box");
+        .expect("create nginx-unprivileged box");
+    handle.start().await.expect("start nginx-unprivileged box");
 
-    // 1. Exec user must be uid=472, not the host uid.
+    // 1. Exec user must be the image-declared uid, not the host uid.
     let exec_uid = exec_stdout(&handle, BoxCommand::new("id").arg("-u")).await;
     assert_eq!(
         exec_uid.trim(),
-        "472",
-        "exec uid must be 472 (OCI User=\"472\"), got: {exec_uid:?}"
+        IMAGE_UID.to_string(),
+        "exec uid must be {IMAGE_UID} (OCI User=\"{IMAGE_UID}\"), got: {exec_uid:?}"
     );
 
-    // 2. /var/lib/grafana inode must be owned by uid=472 — normalize_inodes guarantee.
-    //    The grafana image explicitly chowns this dir to uid=472 so the process
-    //    can write its database. If normalize_inodes regresses (all inodes → uid=0),
-    //    grafana gets EACCES trying to write /var/lib/grafana and crashes on startup.
-    //    Note: /etc/grafana is root-owned by design; /var/lib/grafana is the
-    //    canonical uid=472 path in the official grafana/grafana image.
+    // 2. /var/cache/nginx must keep the uid its layer declared. nginx writes its
+    //    temp files there; if the ext4 build loses per-inode ownership, the
+    //    directory carries another uid and nginx cannot write it.
     let inode_uid = exec_stdout(
         &handle,
-        BoxCommand::new("stat").args(["-c", "%u", "/var/lib/grafana"]),
+        BoxCommand::new("stat").args(["-c", "%u", "/var/cache/nginx"]),
     )
     .await;
     assert_eq!(
         inode_uid.trim(),
-        "472",
-        "/var/lib/grafana inode must be uid=472 (image-declared), not uid=0 (root): \
+        IMAGE_UID.to_string(),
+        "/var/cache/nginx inode must be uid={IMAGE_UID} (image-declared), got: {inode_uid:?}; \
          normalize_inodes_with_debugfs stamps ownership at ext4 build time"
     );
 
