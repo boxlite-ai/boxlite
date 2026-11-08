@@ -42,7 +42,7 @@
 - High-cohesion facade (the shared Design rule's exemplar here): [`ImageManager`](src/boxlite/src/images/manager.rs) exposes `new`/`pull`/`list`/`load_from_local` and hides `Arc<ImageStore>`, blob sources, and manifest handling.
 - Facade exception — stateless utilities: [`jailer/common/`](src/boxlite/src/jailer/common/) async-signal-safe helpers.
 
-<!-- agent-tooling:guidance:begin rev=d6868e436379 sha256=81e96b54b5f9 -->
+<!-- agent-tooling:guidance:begin rev=dbd3c454bb77 sha256=c111ec225cda -->
 
 > Managed by **boxlite-ai/agent-tooling** — do not edit between the markers. Change `plugins/boxlite-agent-tooling/guidance/workflow.md` there, then rerun `./.agent-tooling/install.sh` here.
 
@@ -51,6 +51,8 @@
 Every change goes: understand → research → design → implement → test → verify.
 
 Apply the `boxlite-clean-code` skill for design, implementation, refactoring, and maintainability review.
+
+MANDATORY: File all agent-tooling issues from any consumer in [upstream GitHub Issues](https://github.com/boxlite-ai/agent-tooling/issues).
 
 ### Understand
 
@@ -137,6 +139,7 @@ For each test added with a fix, run these steps manually, in order:
 - Verify external findings against the working tree with `git grep` and `git diff` before acting; reviews, lint, and PR comments may reference stale code.
 - Stay inside the ask: do and discuss only what the request needs; "drop X" means drop X.
 - File adjacent bugs, cleanup, or topics in a GitHub/Linear issue or docs note; mention them in one closing line, never a change or section.
+- If SessionStart supplies a follow-up queue, record verified unresolved findings there. Acknowledge the exact pending revisions before Stop, including an empty list.
 - Fix every evidenced site of the same defect in one pass; do not speculate.
 - Different nearby defects are adjacent work; one site does not resolve a systemic bug.
 - When behavior changes, remove superseded code, comments, prose, old-contract tests, and broken references in the same change.
