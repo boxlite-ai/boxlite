@@ -55,7 +55,7 @@ own.
 | `author-review.yml` | PR (target), issue_comment, merge_group | — | Converts unacknowledged PRs to draft, posts author instructions, and publishes `Author reviewed the PR` on the current head. Merge queues carry forward the required PR admission check |
 | `build-runtime.yml` | weekly, release, dispatch | — | Builds runtime/CLI artifacts and populates sccache together; publishes crates on release |
 | `build-c.yml` | release, dispatch, `workflow_call` | yes | C SDK archives |
-| `build-go.yml` | `workflow_run`, dispatch | — | Tests the released C archive and tags the Go module on release; manual tests build a matching C archive first |
+| `build-go.yml` | `workflow_run`, dispatch | — | Pins release tests and the Go tag to the C build commit. Compares public archives with that run before testing. Manual tests build their own C archive. |
 | `build-node.yml` | release, dispatch | — | Node.js SDK, napi-rs addon and platform packages |
 | `build-wheels.yml` | release, dispatch | — | Builds Python wheels and verifies their native extension in cibuildwheel before publishing |
 | `build-runner-binary.yml` | `workflow_run`, dispatch, `workflow_call` | yes | Linux amd64 runner binary; manual builds first produce the selected commit's C archive |
@@ -334,6 +334,10 @@ silently stops the chain — no error, the downstream workflow simply never fire
 | `name:` | Depended on by |
 | --- | --- |
 | `Build C SDK` | `build-go.yml`, `build-runner-binary.yml` |
+
+Go release tests require the canonical C workflow and read the platform matrix and toolchain
+at that run's commit. A missing or different C run archive stops testing. Before creating
+the Go module tag, the workflow checks that the remote product tag still points to the tested commit.
 
 ## Adding a stage
 
