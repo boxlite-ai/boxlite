@@ -1491,7 +1491,7 @@ test('manual Runner identity uses its own C artifact while reusable callers keep
 test('Go builds select their C artifact by trigger', () => {
   const workflow = load(readFileSync(BUILD_GO_WORKFLOW, 'utf8'))
   const steps = workflow.jobs.test.steps
-  const download = steps.find((step: any) => step.uses?.startsWith('actions/download-artifact@'))
+  const download = steps.find((step: any) => step.name === 'Download commit libboxlite.a')
   assert.ok(download, 'manual Go tests must consume their same-run C SDK artifact')
   const extract = steps.find((step: any) => step.name === 'Extract commit libboxlite.a')
   assert.ok(extract, 'manual Go tests must extract their same-run C SDK artifact')
@@ -1516,6 +1516,170 @@ test('Go builds select their C artifact by trigger', () => {
   assert.equal(workflowExpression(download.if, context), false)
   assert.equal(workflowExpression(extract.if, context), false)
   assert.equal(workflowExpression(release.if, context), true)
+})
+
+test('Go release checkout and archive follow the C run when main has advanced', () => {
+  const workflow = load(readFileSync(BUILD_GO_WORKFLOW, 'utf8'))
+  const releaseSha = 'a'.repeat(40)
+  const mainSha = 'b'.repeat(40)
+  const github = { event_name: 'workflow_run', sha: mainSha, run_id: 20, event: { workflow_run: { head_sha: releaseSha, id: 10 } } }
+  const configJob = workflow.jobs.config.uses
+    ? load(readFileSync(join(REPO_ROOT, '.github/workflows/config.yml'), 'utf8')).jobs.config
+    : workflow.jobs.config
+  const checkout = configJob.steps.find((step: any) => step.uses?.startsWith('actions/checkout@'))
+  assert.equal(checkout.with?.ref ? workflowExpression(checkout.with.ref, { github }) : github.sha, releaseSha)
+  const testCheckout = workflow.jobs.test.steps.find((step: any) => step.uses?.startsWith('actions/checkout@'))
+  assert.equal(workflowExpression(testCheckout.with?.ref ?? 'github.sha', {
+    github,
+    needs: { config: { outputs: { sha: releaseSha } } },
+  }), releaseSha)
+  const tagCheckout = workflow.jobs['tag-go-module'].steps.find((step: any) => step.uses?.startsWith('actions/checkout@'))
+  assert.equal(workflowExpression(tagCheckout.with?.ref ?? 'github.sha', { github }), releaseSha)
+  const artifact = workflow.jobs.test.steps.find((step: any) => step.name === 'Download C release run artifact')
+  assert.equal(workflowExpression(artifact?.with?.['run-id'] ?? 'github.run_id', { github }), 10)
+})
+
+test('Go release refuses a same-name workflow before trusting its run', () => {
+  const workflow = load(readFileSync(BUILD_GO_WORKFLOW, 'utf8'))
+  const github = {
+    event_name: 'workflow_run',
+    event: { workflow_run: { conclusion: 'success', event: 'release' } },
+  }
+  const step = workflow.jobs.config.steps?.find((candidate: any) => candidate.name === 'Verify C release producer')
+  if (!step) {
+    assert.equal(workflowExpression(workflow.jobs.config.if, { github }), false, 'a name-only producer enters Go configuration')
+    return
+  }
+  const fixture = mkdtempSync(join(tmpdir(), 'boxlite-go-producer-'))
+  try {
+    writeFileSync(join(fixture, 'gh'), '#!/bin/sh\nprintf "245927919\\n"\n', { mode: 0o755 })
+    const env = {
+      ...process.env,
+      PATH: fixture + ':' + process.env.PATH,
+      GITHUB_REPOSITORY: 'boxlite-ai/boxlite',
+      C_REPOSITORY: 'boxlite-ai/boxlite',
+      C_WORKFLOW_PATH: '.github/workflows/build-c.yml',
+      C_SHA: 'a'.repeat(40),
+      C_RUN_ID: '10',
+    }
+    const run = (id: string, path = env.C_WORKFLOW_PATH) => spawnSync('bash', ['-c', step.run], {
+      env: { ...env, C_WORKFLOW_ID: id, C_WORKFLOW_PATH: path },
+      encoding: 'utf8',
+    })
+    const accepted = run('245927919')
+    assert.equal(accepted.status, 0, accepted.stderr)
+    assert.notEqual(run('245927920').status, 0, 'the producer ID must match')
+    assert.notEqual(run('245927919', '.github/workflows/other.yml').status, 0, 'the producer path must match')
+  } finally {
+    rmSync(fixture, { recursive: true, force: true })
+  }
+})
+
+test('Go publication refuses a product tag that moves during the matrix', () => {
+  const workflow = load(readFileSync(BUILD_GO_WORKFLOW, 'utf8'))
+  const step = workflow.jobs['tag-go-module'].steps.find((candidate: any) => candidate.name === 'Create Go module tag')
+  const fixture = mkdtempSync(join(tmpdir(), 'boxlite-go-release-tag-'))
+  const origin = join(fixture, 'remote.git')
+  // Git hooks export repository selectors that override the fixture's cwd.
+  const fixtureEnvironment = Object.fromEntries(
+    Object.entries(process.env).filter(([name]) => !name.startsWith('GIT_')),
+  )
+  const git = (...args: string[]) => {
+    const result = spawnSync('git', args, { cwd: fixture, encoding: 'utf8', env: fixtureEnvironment })
+    assert.equal(result.status, 0, result.stderr)
+    return result.stdout.trim()
+  }
+  try {
+    git('init', '--quiet', '-b', 'main')
+    git('init', '--quiet', '--bare', origin)
+    git('config', 'user.name', 'BoxLite test')
+    git('config', 'user.email', 'test@example.invalid')
+    writeFileSync(join(fixture, 'Cargo.toml'), '[workspace.package]\nversion = "0.12.0"\n')
+    git('add', 'Cargo.toml')
+    git('commit', '--quiet', '-m', 'release')
+    const releaseSha = git('rev-parse', 'HEAD')
+    git('remote', 'add', 'origin', origin)
+    git('tag', 'v0.12.0', releaseSha)
+    git('push', '--quiet', 'origin', 'refs/tags/v0.12.0')
+    git('commit', '--quiet', '--allow-empty', '-m', 'new main')
+    git('push', '--quiet', '--force', 'origin', 'HEAD:refs/tags/v0.12.0')
+    git('checkout', '--quiet', '--detach', releaseSha)
+    const run = () => spawnSync('bash', ['-c', step.run], {
+      cwd: fixture,
+      env: { ...fixtureEnvironment, C_SHA: releaseSha, RELEASE_TAG: 'v0.12.0' },
+      encoding: 'utf8',
+    })
+    assert.notEqual(run().status, 0, 'a moved product tag must block the Go module tag')
+    assert.equal(git('ls-remote', 'origin', 'refs/tags/sdks/go/v0.12.0'), '')
+    git('push', '--quiet', 'origin', ':refs/tags/v0.12.0')
+    assert.notEqual(run().status, 0, 'a deleted product tag must block publication')
+    git('push', '--quiet', 'origin', 'refs/tags/v0.12.0')
+    const published = run()
+    assert.equal(published.status, 0, published.stderr)
+    assert.equal(git('ls-remote', 'origin', 'refs/tags/sdks/go/v0.12.0').split(/\s/)[0], releaseSha)
+    const retry = run()
+    assert.equal(retry.status, 0, retry.stderr)
+    git('tag', '-a', 'sdks/go/v0.12.0', '-m', 'annotated release', releaseSha)
+    git('push', '--quiet', '--force', 'origin', 'refs/tags/sdks/go/v0.12.0')
+    const annotated = git('ls-remote', '--refs', 'origin', 'refs/tags/sdks/go/v0.12.0')
+    git('remote', 'set-url', '--push', 'origin', join(fixture, 'read-only-remote'))
+    const annotatedRetry = run()
+    assert.equal(annotatedRetry.status, 0, annotatedRetry.stderr)
+    assert.equal(git('ls-remote', '--refs', 'origin', 'refs/tags/sdks/go/v0.12.0'), annotated)
+  } finally {
+    rmSync(fixture, { recursive: true, force: true })
+  }
+})
+
+test('Go release compares the public tarball before extracting the C library', () => {
+  const workflow = load(readFileSync(BUILD_GO_WORKFLOW, 'utf8'))
+  const step = workflow.jobs.test.steps.find((candidate: any) => candidate.name === 'Download prebuilt library')
+  const fixture = mkdtempSync(join(tmpdir(), 'boxlite-go-archive-'))
+  const version = `9000.${process.pid}.${Date.now()}`
+  const target = 'linux-x64-gnu'
+  const archiveDir = `boxlite-c-v${version}-${target}`
+  const publicArchive = join(fixture, 'public.tar.gz')
+  const runArchive = join(fixture, 'c-release-run', `${archiveDir}.tar.gz`)
+  const library = join(fixture, 'sdks/go/libboxlite.a')
+  try {
+    mkdirSync(join(fixture, 'payload', archiveDir, 'lib'), { recursive: true })
+    mkdirSync(join(fixture, 'c-release-run'))
+    mkdirSync(join(fixture, 'sdks/go'), { recursive: true })
+    writeFileSync(join(fixture, 'payload', archiveDir, 'lib/libboxlite.a'), 'public C bytes')
+    writeFileSync(join(fixture, 'Cargo.toml'), `[workspace.package]\nversion = "${version}"\n`)
+    const tar = spawnSync('tar', ['czf', publicArchive, '-C', join(fixture, 'payload'), archiveDir], { encoding: 'utf8' })
+    assert.equal(tar.status, 0, tar.stderr)
+    writeFileSync(join(fixture, 'curl'), [
+      '#!/bin/sh',
+      'while [ "$#" -gt 0 ]; do',
+      '  if [ "$1" = "-o" ]; then exec cp "$PUBLIC_ARCHIVE" "$2"; fi',
+      '  shift',
+      'done',
+      'exec cat "$PUBLIC_ARCHIVE"',
+      '',
+    ].join('\n'), { mode: 0o755 })
+    const run = () => spawnSync('bash', ['-c', step.run.replaceAll('${{ matrix.target }}', target)], {
+      cwd: fixture,
+      env: {
+        ...process.env, PATH: fixture + ':' + process.env.PATH, PUBLIC_ARCHIVE: publicArchive,
+        RUNNER_TEMP: fixture, GITHUB_REPOSITORY: 'boxlite-ai/boxlite', RELEASE_TAG: `v${version}`, PLATFORM: target,
+      },
+      encoding: 'utf8',
+    })
+    writeFileSync(runArchive, 'different C run bytes')
+    assert.notEqual(run().status, 0, 'different public bytes must not enter Go tests')
+    assert.equal(existsSync(library), false)
+    rmSync(runArchive)
+    assert.notEqual(run().status, 0, 'the C run tarball is required')
+    assert.equal(existsSync(library), false)
+    writeFileSync(runArchive, readFileSync(publicArchive))
+    const verified = run()
+    assert.equal(verified.status, 0, verified.stderr)
+    assert.equal(readFileSync(library, 'utf8'), 'public C bytes')
+  } finally {
+    rmSync(join(tmpdir(), archiveDir), { recursive: true, force: true })
+    rmSync(fixture, { recursive: true, force: true })
+  }
 })
 
 test('the cloud E2E suite is reachable only from a deploy or a human', () => {
@@ -1813,11 +1977,11 @@ test('a job calling a reusable workflow grants at least what that workflow asks 
       checked += 1
     }
   }
-  // The same fifteen the input sweep below counts: six `config.yml` loads,
+  // The same fourteen the input sweep below counts: five `config.yml` loads,
   // deploy-infra's four, mdeploy-all's three, and two manual SDK builds. The exact count, not a
   // floor, so a call that stops being swept fails here rather than being
   // absorbed — and adding one means changing this number in the same commit.
-  assert.equal(checked, 15, `expected every local reusable call to be swept, saw ${checked}`)
+  assert.equal(checked, 14, `expected every local reusable call to be swept, saw ${checked}`)
 })
 
 test('every reusable workflow is called with the inputs it declares', () => {
@@ -1857,14 +2021,14 @@ test('every reusable workflow is called with the inputs it declares', () => {
       checked += 1
     }
   }
-  // Every local `uses:` in the directory, not just the deploy path's: six
+  // Every local `uses:` in the directory, not just the deploy path's: five
   // build workflows load `config.yml`, `deploy-infra.yml` calls four, and
   // mdeploy-all makes three, and the manual Runner and Go builds each call
   // build-c to pair their SDK sources with the native library from that commit.
   // The exact count, not a floor: a call that stops being swept is the drop
   // this exists to catch, and one that appears is a caller nobody reviewed.
   // Adding a legitimate one means changing this number in the same commit.
-  assert.equal(checked, 15, `expected every reusable-workflow call swept, saw ${checked}`)
+  assert.equal(checked, 14, `expected every reusable-workflow call swept, saw ${checked}`)
 })
 
 /**
