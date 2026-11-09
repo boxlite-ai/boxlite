@@ -27,7 +27,17 @@ test('the declared API group delivers the organization invitation lifetime on bo
   )
   for (const home of ['aws', 'gcp'] as const) {
     const { environment } = apiEnvironmentFrom({
-      environment: { ...base, ...required, ORGANIZATION_INVITATION_TTL_SECONDS: '3600' },
+      environment: {
+        ...base,
+        ...required,
+        TURNSTILE_SECRET_KEY: JSON.stringify({
+          address:
+            home === 'aws'
+              ? 'arn:aws:secretsmanager:us-east-1:123456789012:secret:turnstile-AbCdEf'
+              : 'projects/boxlite-dev/secrets/turnstile',
+        }),
+        ORGANIZATION_INVITATION_TTL_SECONDS: '3600',
+      },
       declaration: { groups: declared.envSelectGroup, optional: declared.envOptional, where: path.pathname },
       region: 'us-east1',
       stage: 'dev',
