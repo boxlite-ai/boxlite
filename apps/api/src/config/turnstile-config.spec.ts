@@ -1,0 +1,59 @@
+import { turnstileConfig } from './turnstile-config'
+import { ConfigurationDto } from './dto/configuration.dto'
+
+const fixture = {
+  TURNSTILE_SITEKEY: 'public-key',
+  TURNSTILE_SECRET_KEY: 'private-server-value',
+  TURNSTILE_EXPECTED_HOSTNAMES: 'dashboard.example.test, localhost, dashboard.example.test',
+}
+
+describe('Turnstile configuration', () => {
+  it('parses allowed hosts and supplies the default timeout and action', () => {
+    expect(turnstileConfig(fixture)).toEqual({
+      sitekey: 'public-key',
+      secretKey: 'private-server-value',
+      expectedHostnames: ['dashboard.example.test', 'localhost'],
+      timeoutMs: 5000,
+      action: 'signup',
+    })
+  })
+
+  it.each(['TURNSTILE_SITEKEY', 'TURNSTILE_SECRET_KEY', 'TURNSTILE_EXPECTED_HOSTNAMES'])(
+    'requires %s at startup',
+    (name) => {
+      for (const value of [undefined, '', '  ']) {
+        expect(() => turnstileConfig({ ...fixture, [name]: value })).toThrow(name)
+      }
+    },
+  )
+
+  it.each(['', '0', '-1', '1.5', 'abc'])('rejects timeout %s without logging its value', (value) => {
+    expect(() => turnstileConfig({ ...fixture, TURNSTILE_TIMEOUT_MS: value })).toThrow(
+      'TURNSTILE_TIMEOUT_MS must be a positive integer',
+    )
+  })
+
+  it.each(['https://example.test', 'example.test:443', 'example.test/path', 'example.test,'])(
+    'rejects non-hostname configuration %s',
+    (value) => {
+      expect(() => turnstileConfig({ ...fixture, TURNSTILE_EXPECTED_HOSTNAMES: value })).toThrow(
+        'TURNSTILE_EXPECTED_HOSTNAMES',
+      )
+    },
+  )
+
+  it('projects only public widget fields and observes the next configuration value', () => {
+    const config = turnstileConfig(fixture)
+    const get = (key: string) =>
+      key.startsWith('turnstile.') ? config[key.slice(10) as keyof typeof config] : undefined
+    const service = { get, getOrThrow: get }
+    const dto = new ConfigurationDto(service as never, { endSessionState: 'present' })
+    expect(dto.turnstile).toEqual({ sitekey: 'public-key', action: 'signup' })
+    expect(JSON.stringify(dto)).not.toContain(config.secretKey)
+    expect(JSON.stringify(dto)).not.toContain('dashboard.example.test')
+    config.sitekey = 'next-public-key'
+    expect(new ConfigurationDto(service as never, { endSessionState: 'present' }).turnstile.sitekey).toBe(
+      'next-public-key',
+    )
+  })
+})

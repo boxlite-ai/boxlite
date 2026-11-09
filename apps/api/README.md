@@ -31,6 +31,20 @@ Their SPA fixtures leave the optional MCP resource URL empty, matching the deplo
 with infrastructure dependencies mocked and checks the address passed to Nest's
 listener for all three cases. It does not start PostgreSQL or a VM.
 
+## Registration configuration
+
+Set `TURNSTILE_SITEKEY`, `TURNSTILE_SECRET_KEY`, and
+`TURNSTILE_EXPECTED_HOSTNAMES` before starting the API. Hostnames are a comma-separated
+list without schemes, ports or paths. `TURNSTILE_TIMEOUT_MS` defaults to 5000 and
+must be a positive integer. Invalid settings stop startup and identify the setting
+without printing its value.
+
+`GET /api/config` publishes only `turnstile.sitekey` and `turnstile.action` (`signup`).
+The secret, allowed hostnames and verification timeout remain server-side. Restart
+the API to change a widget configuration; the dashboard reads it at runtime.
+Test and OpenAPI-generation fixtures supply explicit placeholder credentials.
+
+
 ## Registration email policy
 
 The first API request from a new OIDC identity requires an email address.

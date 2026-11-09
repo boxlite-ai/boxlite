@@ -124,6 +124,7 @@ export * from './send-webhook-dto';
 export * from './storage-access-dto';
 export * from './trace-span';
 export * from './trace-summary';
+export * from './turnstile-config';
 export * from './update-box-state-dto';
 export * from './update-job-status';
 export * from './update-organization-default-region';
