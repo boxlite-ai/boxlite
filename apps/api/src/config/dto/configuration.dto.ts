@@ -9,6 +9,15 @@ import { IsBoolean, IsNumber, IsOptional, IsString } from 'class-validator'
 import { TypedConfigService } from '../typed-config.service'
 import { EndSessionState, isValidHttpUrl } from '../oidc-metadata.service'
 
+@ApiSchema({ name: 'TurnstileConfig' })
+export class TurnstileConfig {
+  @ApiProperty({ description: 'Public Turnstile widget sitekey' })
+  sitekey: string
+
+  @ApiProperty({ description: 'Turnstile challenge action', enum: ['signup'] })
+  action: 'signup'
+}
+
 @ApiSchema({ name: 'Announcement' })
 export class Announcement {
   @ApiProperty({
@@ -130,6 +139,9 @@ export class OidcConfig {
 @ApiExtraModels(Announcement)
 @ApiSchema({ name: 'BoxliteConfiguration' })
 export class ConfigurationDto {
+  @ApiProperty({ type: TurnstileConfig })
+  turnstile: TurnstileConfig
+
   @ApiProperty({
     description: 'BoxLite version',
     example: '0.0.1',
@@ -231,6 +243,10 @@ export class ConfigurationDto {
   rateLimit?: RateLimitConfig
 
   constructor(configService: TypedConfigService, options: { endSessionState: EndSessionState }) {
+    this.turnstile = {
+      sitekey: configService.getOrThrow('turnstile.sitekey'),
+      action: configService.getOrThrow('turnstile.action'),
+    }
     this.version = configService.getOrThrow('version')
 
     this.oidc = {
