@@ -112,14 +112,14 @@ fn main() -> BoxliteResult<()> {
     );
 
     // Start zygote BEFORE tokio creates any threads.
-    // The zygote handles all clone3() calls in a single-threaded context,
+    // The zygote builds container processes in a single-threaded context,
     // avoiding musl's __malloc_lock deadlock. See docs/contributing/investigations/concurrent-exec-deadlock.md
     use container::zygote::{Zygote, ZYGOTE};
     let zygote = Zygote::start()?;
     ZYGOTE.set(zygote).expect("zygote already initialized");
     eprintln!("[guest] T+{}ms: zygote started", boot_elapsed_ms());
 
-    // Now start tokio runtime — threads are safe since clone3 goes through zygote
+    // Now start tokio runtime — threads are safe since the zygote builds container processes
     let rt = tokio::runtime::Runtime::new().map_err(|e| {
         boxlite_shared::errors::BoxliteError::Internal(format!("tokio runtime: {e}"))
     })?;

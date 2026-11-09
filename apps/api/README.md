@@ -1,7 +1,49 @@
 # API
 
-The NestJS control-plane service. See the [apps hub](../README.md) for how it fits with the
-other services and [`API.md`](../API.md) for its interfaces.
+The NestJS control-plane service. See the
+[hosted platform](../../docs/contributing/architecture/platform/README.md) for how it fits with
+the other services and [service interfaces](../../docs/contributing/architecture/platform/api.md)
+for its interfaces.
+
+## Development runtime
+
+API development and tests require Node.js 22.14+ within the 22.x line, or 24.10+,
+as declared in [`../package.json`](../package.json).
+Use Node.js 24 locally to match the production image:
+
+```bash
+nvm install 24
+nvm use 24
+corepack enable
+```
+
+The disposable-email dependency requires this runtime range. The Jest adapter uses
+Node's native loader to exercise the published ESM package and its bundled domain list.
+
+Account-link flow tests load the Auth0 Action template with every deployment placeholder filled.
+Their SPA fixtures leave the optional MCP resource URL empty, matching the deployment default.
+
+## Registration email policy
+
+The first API request from a new OIDC identity requires an email address.
+`UserService.create` trims and lowercases each non-empty email, validates its syntax,
+then rejects disposable domains before generating keys, persisting the user or creating a default organization.
+This covers database, social and enterprise OIDC identities, CLI authentication and administrator-created users.
+
+| Rejection | HTTP status | Error code |
+| --- | --- | --- |
+| New OIDC identity has no email | 403 | `email_required` |
+| Provided email has invalid syntax | 400 | `invalid_email` |
+| Disposable domain or its subdomain | 403 | `disposable_email` |
+
+Existing users can still log in, update their email and link identities; the email-free bootstrap administrator is preserved.
+Auth0 signup and verification emails are unchanged: this policy rejects local BoxLite account creation after authentication.
+The API uses the bundled list from `@visulima/disposable-email-domains/edge`, pinned to version `2.0.20`.
+The list includes `drtall.com` and `emailkeep.com` and matches their subdomains.
+Deploy the API after upgrading the package to apply the new list.
+
+Run `make test:apps:api TEST_FILES='user.service.registration-email|jwt.strategy'` for the registration checks,
+and `make build:apps:api` to validate the production bundle and dependency imports.
 
 ## Box startup timeouts
 

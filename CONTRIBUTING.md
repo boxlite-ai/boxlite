@@ -80,7 +80,7 @@ still validates the host. Linux also collects guest unit coverage. Run guest tes
 `make test:unit:guest` as a normal user. SSH tests require `unshare` and a
 working unprivileged user and mount namespace; missing or restricted namespace
 support is a test error. Nextest 0.9.116 or newer is required. Ordinary guest
-ownership tests remain outside that namespace. Vendored
+mount tests remain outside that namespace. Vendored
 dependencies, standalone tests, and test scaffolding are excluded; production guest and SDK
 paths are not ignored by Codecov. SDK language wrappers, cloud apps, and shim
 subprocess execution are separate from the Rust unit report.
@@ -326,16 +326,21 @@ first rule that matches:
 
 1. **A dated record** — a root-cause analysis, investigation, or design study — goes in
    [`docs/contributing/investigations/`](./docs/contributing/investigations/), whichever code it
-   covers.
+   covers. Name it `YYYY-MM-DD-slug.md` after the day work started, and open it with a
+   `**Status:**` line: Proposed, Accepted, Implemented, Rejected, or Superseded by a linked
+   record.
 2. **One directory's code** — what it is, how to build and test it, how it works inside — goes in
    that directory's `README.md`: `src/<crate>/`, `sdks/<lang>/`, `apps/<app>/`,
    `examples/<name>/`. A topic too long for the README gets its own file beside it, linked from
    the README. A README that a package registry publishes (`src/cli/`, `sdks/<lang>/`) is
    written for that package's users first; a contributor guide too long for it goes in
    `docs/contributing/development/`.
-3. **Several hosted-platform services** go in the [`apps/`](./apps/README.md) hub:
-   `apps/README.md` for architecture, `apps/API.md` for interfaces, `apps/SCHEMA.md` for the data
-   model, and `apps/infra/docs/` for deployment and operations.
+3. **Several hosted-platform services** — how they fit together, their interfaces, and their
+   data model — go in
+   [`docs/contributing/architecture/platform/`](./docs/contributing/architecture/platform/README.md):
+   `README.md`, `api.md`, and `schema.md`. A migration, entity, or route change updates
+   `schema.md` or `api.md` in the same pull request. Deployment and operations describe the infra
+   code, so they stay beside it in `apps/infra/docs/` under rule 2.
 4. **Using BoxLite** — the runtime, CLI, and SDKs — goes in [`docs/`](./docs/README.md), by what
    the reader needs:
 
@@ -361,19 +366,24 @@ first rule that matches:
    [`SECURITY.md`](./SECURITY.md) for vulnerability reports, and
    [`docs/legal/CLA.md`](./docs/legal/CLA.md) for the CLA, whose URL is published.
 
-Apart from dated records (rule 1), `docs/` never explains how an `apps/` service works: those
-services are deployment internals, not the portable contract
-([reference](./docs/reference/README.md#http-api-reference)).
+Sections split by audience, not by code location. The user sections (rule 4) never explain how
+an `apps/` service works: those services are deployment internals, not the portable contract
+([reference](./docs/reference/README.md#http-api-reference)). Contributor sections (rules 1, 3,
+and 5) may.
 
 The four user-facing sections follow [uv's documentation](https://github.com/astral-sh/uv/tree/main/docs),
 and the top-level contributor section follows [Deno's](https://github.com/denoland/docs).
 
 When you add or change a doc:
 
-- Link every page from its section's `README.md`, a landing page that introduces each page in a
-  sentence.
+- Link every page from its section's `README.md`, a landing page that reads as an overview and
+  introduces each page in a sentence; group the list under headings once it passes about seven
+  pages.
 - Create a directory only when its second doc arrives; until then, use the closest existing one.
-- Name files in lowercase kebab-case, such as `guest-networking.md`.
+- Name files in lowercase kebab-case, such as `guest-networking.md`. Keep uppercase only for
+  names that tools or published URLs look up: `README.md`, `CONTRIBUTING.md`, `SECURITY.md`,
+  `CODE_OF_CONDUCT.md`, `CHANGELOG.md`, `LICENSE`, `AGENTS.md`, `CLAUDE.md`, `SKILL.md`, and
+  `docs/legal/CLA.md`. Generated files keep the names their generator sets.
 - Write headings under `docs/` in sentence case: capitalize the first word and proper nouns only.
 - Keep an experimental feature's page in the section its content belongs to, and state its
   status, such as release candidate, in the title or the first paragraph.

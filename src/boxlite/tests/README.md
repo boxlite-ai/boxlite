@@ -127,6 +127,12 @@ registry (`registry::local_registry()`, plain HTTP on `127.0.0.1`), as designed 
 - It serves manifests and blobs recorded under `target/boxlite-test/registry/`. A miss is fetched
   once from whichever `UPSTREAM_REGISTRIES` entry answers first, then replayed.
 - A recorded tag never moves. Delete `target/boxlite-test/registry/` to record current builds.
+- A fresh checkout has no recordings, so its first run downloads each image inside the test,
+  under the `vm` profile's 600 s limit (`.config/nextest.toml`). Pick the smallest image that
+  has the property under test. For example, the non-root ownership test in `exec_user.rs` uses
+  `nginxinc/nginx-unprivileged:alpine` (26 MB, numeric `USER "101"`) instead of
+  `grafana/grafana`, whose 463 MB pull exceeded the limit
+  ([#2446](https://github.com/boxlite-ai/boxlite/issues/2446)).
 - CLI tests pass it through `common::write_registry_config`, since `--registry` takes HTTPS hosts
   only. `src/cli/tests/registry.rs` tests that flag, so it still reaches a public mirror.
 - `make test:integration:python` and `make test:integration:node` run their suites under

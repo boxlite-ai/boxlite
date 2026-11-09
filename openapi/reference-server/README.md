@@ -102,6 +102,11 @@ curl -s -X DELETE http://localhost:8080/v1/demo/boxes/$BOX_ID \
 | `/{prefix}/boxes/{id}/metrics` | GET | Box metrics |
 | `/{prefix}/metrics` | GET | Runtime metrics |
 
+Execution status, signal, and resize resolve a live session from the guest
+registry when this server holds no local handle — for example the main command,
+or a session started before a server restart. A 404 means the guest does not
+list it either, not merely that the local handle is missing.
+
 **Not implemented:** the `/{prefix}/images…` and `/{prefix}/images/registries…` routes, WebSocket TTY.
 
 ## CLI Options

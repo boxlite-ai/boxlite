@@ -679,7 +679,7 @@ function provisionAuth0({ stackDomain, dashboardDomain }: any) {
   console.log('==> Auth0 SPA application')
   console.log(`    created (client_id ${clientId})`)
 
-  const api = auth0Json(customApiArgs({ stackDomain }))
+  const api = auth0Json(customApiArgs({ apiHost: publicHostsFor({ domain: stackDomain }).api }))
   console.log('==> Auth0 custom API')
   console.log(`    created (audience ${api.identifier})`)
 
@@ -695,7 +695,7 @@ function provisionAuth0({ stackDomain, dashboardDomain }: any) {
   console.log(
     'preview the email provider and email-first login policy from apps/infra:\n' +
       `  npm run auth0:configure-email -- --tenant ${activeTenants[0].name} --from <verified-sender> --region <ses-region>\n` +
-      `  npm run auth0:configure-login -- --tenant ${activeTenants[0].name} --client-id ${clientId} --connection <database-connection-name>`,
+      `  npm run auth0:configure-login -- --tenant ${activeTenants[0].name} --client-id ${clientId} --connection <database-connection-name> --api-audience <OIDC_AUDIENCE>`,
   )
 
   // OIDC_CLIENT_ID is an SST secret, not a .env key — seeded below by

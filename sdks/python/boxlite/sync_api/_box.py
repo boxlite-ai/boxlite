@@ -12,6 +12,7 @@ if TYPE_CHECKING:
     from ..boxlite import Box, BoxMetrics, TunnelOptions
     from ._boxlite import SyncBoxlite
     from ._execution import SyncExecution
+    from ._executions import SyncExecutions
     from ._network import SyncNetworkHandle
     from ._ssh import SyncSshHandle
 
@@ -66,6 +67,7 @@ class SyncBox:
         self._sync_helper = SyncBase(box, runtime.loop, runtime.dispatcher_fiber)
         self._network = None
         self._ssh = None
+        self._executions = None
 
     def _sync(self, coro):
         """Run async operation synchronously."""
@@ -153,6 +155,14 @@ class SyncBox:
 
             self._network = SyncNetworkHandle(self)
         return self._network
+
+    def executions(self) -> "SyncExecutions":
+        """Get the live execution namespace without starting the box."""
+        from ._executions import SyncExecutions
+
+        if self._executions is None:
+            self._executions = SyncExecutions(lambda: self)
+        return self._executions
 
     @property
     def ssh(self) -> "SyncSshHandle":

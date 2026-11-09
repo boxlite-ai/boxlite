@@ -66,6 +66,7 @@ model_box.go
 model_box_class.go
 model_box_desired_state.go
 model_box_labels.go
+model_box_memory_usage_dto.go
 model_box_progress.go
 model_box_progress_phase.go
 model_box_state.go
@@ -99,6 +100,7 @@ model_job.go
 model_job_status.go
 model_job_type.go
 model_log_entry.go
+model_memory_incident_list_dto.go
 model_metric_data_point.go
 model_metric_series.go
 model_metrics_response.go
@@ -137,6 +139,7 @@ model_runner_cpu_incident.go
 model_runner_full.go
 model_runner_health_metrics.go
 model_runner_healthcheck.go
+model_runner_memory_incident.go
 model_runner_service_health.go
 model_runner_state.go
 model_save_onboarding_dto.go

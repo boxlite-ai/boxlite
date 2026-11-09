@@ -1,10 +1,12 @@
 # Architecture
 
-How the BoxLite runtime's code fits together, for contributors. The user-level picture is in
-[Concepts](../../concepts/README.md).
+How BoxLite's code fits together, for contributors: the runtime, and the hosted platform under
+`apps/`. The user-level picture is in [Concepts](../../concepts/README.md).
 
 ## Design documents
 
+- [Hosted platform](platform/README.md): how the `apps/` services fit together, their
+  [interfaces](platform/api.md), and their [data model](platform/schema.md).
 - [VMM](vmm/README.md): BoxLite's own VMM, which is replacing libkrun.
 - [Jailer network permissions](jailer-network-permissions.md): guest networking, host IP grants,
   and the AF_UNIX control plane.
@@ -131,7 +133,15 @@ Runs inside the Box, receives commands from host via gRPC.
 **Services:**
 
 - `Guest`: Environment initialization (mounts, rootfs, network)
-- `Container`: OCI container lifecycle management (via libcontainer)
+- `Container`: OCI container lifecycle management (via libcontainer). `Mount`
+  binds a folder of the container's share (`source`, a folder name, never a path)
+  read-only at `destination` in the running container: the agent clones a child
+  with exit signal 0 and a pidfd, which closes every other descriptor, joins the
+  container's mount namespace and moves an `open_tree` clone there
+  (`storage/attach.rs`). The agent lets it mount only within 30 s and kills it
+  otherwise. It refuses a destination that already has entries or is reached
+  through a link, so no image content is hidden. File copies into the container
+  wait for a `Mount` in progress.
 - `Execution`: Command execution with streaming I/O
 
 **Guest-side modules:**
@@ -244,6 +254,30 @@ naming the adapter before anything reaches the Box.
 4. Before release, decide how `Agents::get` routes an agent ID to it. Today the
    OpenCode `ses_` prefix picks the adapter, and a second adapter's IDs could
    share that shape.
+
+### Installed agents
+
+`agents/install/` delivers an agent binary into an unchanged image
+([design #2322](https://github.com/boxlite-ai/boxlite/issues/2322)):
+
+```text
+host file ──sha256──► mounts_dir/containers/<id>/volumes/agents/<agent>/<sha256>/<agent>  (0555)
+          └─record──► <box>/agents.json  {"<agent>": "<sha256>"}  (outside the share)
+first agents call of a VM run ──Container.Mount──► /opt/boxlite/agents (read-only)
+OpenCode commands run with /opt/boxlite/agents/opencode/<sha256> first on PATH
+```
+
+- **Placement.** The guest can write the share, so `AgentShare::place` opens
+  each folder below the share root from its parent with `O_NOFOLLOW` and refuses
+  a link at any level. It copies into a staging folder and renames it to the
+  digest; a folder already named by the digest is kept.
+- **Mount.** `LiveState` holds a once-per-VM-run cell. `AgentInstaller::installed`
+  mounts the folder when the record names the agent, so a restart mounts again
+  on the next `agents.create` or `agents.get`, not in the start path. A failed
+  mount fails that call, never the start, and the next call retries it.
+- **Source.** Only tests install today, through `Agents::install_from_host`
+  under the `test-support` feature; the agent catalog of #2322 will be the first
+  public source. Without an install, OpenCode runs from the image's `PATH`.
 
 ## Host-guest communication
 

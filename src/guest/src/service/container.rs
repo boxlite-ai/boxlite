@@ -3,15 +3,16 @@
 //!
 //! Handles OCI container lifecycle (Init RPC).
 
-use std::path::Path;
+use std::path::{Component, Path, PathBuf};
 
 use crate::service::server::GuestServer;
+use crate::storage::attach::{validate_destination, Target};
 use boxlite_shared::errors::BoxliteError;
 use boxlite_shared::{
     container_init_response, container_start_response, rootfs_init, Container as ContainerService,
     ContainerInitError, ContainerInitErrorKind, ContainerInitRequest, ContainerInitResponse,
-    ContainerInitSuccess, ContainerStartRequest, ContainerStartResponse, ContainerStartSuccess,
-    Filesystem, RootfsInit,
+    ContainerInitSuccess, ContainerMountRequest, ContainerMountResponse, ContainerStartRequest,
+    ContainerStartResponse, ContainerStartSuccess, Filesystem, RootfsInit,
 };
 use nix::mount::{mount, MsFlags};
 use tonic::{Request, Response, Status};
@@ -40,6 +41,45 @@ fn init_error(context: &str, error: &BoxliteError) -> ContainerInitError {
     ContainerInitError {
         reason: format!("{context}: {error}"),
         kind: kind as i32,
+    }
+}
+
+/// Check a `Container.Mount` request: read-only, a source that is one share
+/// folder name so it stays inside `containers/<id>/volumes/`, and a valid
+/// container path. Returns the destination.
+#[allow(clippy::result_large_err)]
+fn checked_mount(request: &ContainerMountRequest) -> Result<PathBuf, Status> {
+    if !request.read_only {
+        return Err(Status::invalid_argument(
+            "Container.Mount mounts share folders read-only",
+        ));
+    }
+    let one_component = matches!(
+        Path::new(&request.source).components().collect::<Vec<_>>()[..],
+        [Component::Normal(_)]
+    );
+    if !one_component {
+        return Err(Status::invalid_argument(format!(
+            "source must be one share folder name, not a path: {:?}",
+            request.source
+        )));
+    }
+    let destination = PathBuf::from(&request.destination);
+    validate_destination(&destination).map_err(BoxliteError::into_validation_status)?;
+    Ok(destination)
+}
+
+/// Report a failed attach: caller mistakes stay `INVALID_ARGUMENT`; a
+/// non-empty destination, a link on the way to it, an earlier attach still
+/// being stopped, or init exiting since the running check, is
+/// `FAILED_PRECONDITION`; anything else, a timeout included, is `INTERNAL`.
+fn mount_status(error: BoxliteError) -> Status {
+    match error {
+        BoxliteError::InvalidArgument(message) => Status::invalid_argument(message),
+        BoxliteError::InvalidState(message) | BoxliteError::NotFound(message) => {
+            Status::failed_precondition(message)
+        }
+        error => Status::internal(error.to_string()),
     }
 }
 
@@ -281,10 +321,9 @@ impl ContainerService for GuestServer {
             }
         }
 
-        // Convert proto BindMount to UserMount for OCI spec
-        // Construct full source path from convention: /run/boxlite/shared/containers/{id}/volumes/{name}
-        let guest_layout = boxlite_shared::layout::SharedGuestLayout::new("/run/boxlite/shared");
-        let container_layout = guest_layout.container(&container_id);
+        // Convert proto BindMount to UserMount for OCI spec. Each source is the
+        // container's volume folder in the share: <shared>/containers/{id}/volumes/{name}
+        let container_layout = self.layout.shared().container(&container_id);
 
         let user_mounts: Vec<UserMount> = init_req
             .mounts
@@ -345,6 +384,12 @@ impl ContainerService for GuestServer {
             entrypoint = ?config.entrypoint,
             "Starting OCI container with pipe-based stdio"
         );
+        let init_argv = config.entrypoint.clone();
+        let init_tty = config.tty;
+        let init_started_at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
         match Container::start(
             &container_id,
             &bundle_rootfs,
@@ -496,7 +541,14 @@ impl ContainerService for GuestServer {
                             handle,
                             exit.clone(),
                             process,
-                        );
+                        )
+                        .with_metadata(boxlite_shared::ExecutionInfo {
+                            execution_id: init_execution_id.clone(),
+                            argv: init_argv,
+                            started_at: init_started_at,
+                            tty: init_tty,
+                            is_main_session: true,
+                        });
                         if !self
                             .registry
                             .register(init_execution_id.clone(), state.clone())
@@ -629,6 +681,64 @@ impl ContainerService for GuestServer {
             })),
         }
     }
+
+    async fn mount(
+        &self,
+        request: Request<ContainerMountRequest>,
+    ) -> Result<Response<ContainerMountResponse>, Status> {
+        let request = request.into_inner();
+        let destination = checked_mount(&request)?;
+
+        let container_id = request.container_id;
+        let Some(container_arc) = self.containers.lock().await.get(&container_id).cloned() else {
+            return Err(Status::not_found(format!(
+                "No such container: {container_id}"
+            )));
+        };
+        let (target, attacher) = {
+            let container = container_arc.lock().await;
+            let init = container
+                .init_pid()
+                .filter(|_| container.is_running())
+                .ok_or_else(|| {
+                    Status::failed_precondition(format!("container {container_id} is not running"))
+                })?;
+            // Opened right after the check, before any wait: the attach then
+            // uses init's namespace even if init exits and its PID is reused.
+            let target = Target::open(init).map_err(mount_status)?;
+            (target, container.attacher())
+        };
+        let source = self
+            .layout
+            .shared()
+            .container(&container_id)
+            .volume_dir(&request.source);
+        let mount_point = destination.clone();
+        // Attach and record in a task of their own, so a caller that gives up
+        // cannot leave a mount the container does not know about. The write
+        // lock is held until the mount is recorded: a copy waits for both.
+        let attach = tokio::spawn(async move {
+            let mut attacher = attacher.write_owned().await;
+            let attacher = tokio::task::spawn_blocking(move || {
+                attacher.attach_read_only(&source, &target, &mount_point)?;
+                Ok::<_, BoxliteError>(attacher)
+            })
+            .await
+            .map_err(|error| Status::internal(format!("attach task failed: {error}")))?
+            .map_err(mount_status)?;
+            container_arc
+                .lock()
+                .await
+                .record_mount_destination(destination);
+            drop(attacher);
+            Ok::<_, Status>(())
+        });
+        attach
+            .await
+            .map_err(|error| Status::internal(format!("attach task failed: {error}")))??;
+        info!(container_id = %container_id, destination = %request.destination, "Mounted a share folder read-only");
+        Ok(Response::new(ContainerMountResponse {}))
+    }
 }
 
 impl GuestServer {
@@ -659,5 +769,70 @@ impl GuestServer {
 
         info!(container_id = %container_id, "✅ Container started successfully and ready for exec");
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tonic::Code;
+
+    fn share_folder(source: &str, destination: &str) -> ContainerMountRequest {
+        ContainerMountRequest {
+            container_id: "box".to_string(),
+            source: source.to_string(),
+            destination: destination.to_string(),
+            read_only: true,
+        }
+    }
+
+    #[test]
+    fn mount_accepts_a_read_only_share_folder() {
+        let destination = checked_mount(&share_folder("agents", "/opt/boxlite/agents")).unwrap();
+        assert_eq!(destination, PathBuf::from("/opt/boxlite/agents"));
+    }
+
+    #[test]
+    fn mount_keeps_the_source_inside_one_share_folder() {
+        for source in ["..", "a/b", "", ".", "/agents"] {
+            let status =
+                checked_mount(&share_folder(source, "/opt/boxlite/agents")).expect_err(source);
+            assert_eq!(status.code(), Code::InvalidArgument, "{source:?}");
+        }
+    }
+
+    #[test]
+    fn mount_refuses_writable_or_misplaced_mounts() {
+        let writable = ContainerMountRequest {
+            read_only: false,
+            ..share_folder("agents", "/opt/boxlite/agents")
+        };
+        let relative = share_folder("agents", "opt/boxlite/agents");
+        for request in [writable, relative] {
+            let status = checked_mount(&request).unwrap_err();
+            assert_eq!(status.code(), Code::InvalidArgument, "{}", status.message());
+        }
+    }
+
+    #[test]
+    fn attach_failures_keep_their_grpc_codes() {
+        let cases = [
+            (
+                BoxliteError::InvalidArgument("bad".into()),
+                Code::InvalidArgument,
+            ),
+            (
+                BoxliteError::InvalidState("has entries".into()),
+                Code::FailedPrecondition,
+            ),
+            (
+                BoxliteError::NotFound("init gone".into()),
+                Code::FailedPrecondition,
+            ),
+            (BoxliteError::Storage("move_mount".into()), Code::Internal),
+        ];
+        for (error, code) in cases {
+            assert_eq!(mount_status(error).code(), code);
+        }
     }
 }

@@ -32,6 +32,13 @@ const ACCOUNT_LINK_FORM_ID = __ACCOUNT_LINK_FORM_ID_JSON__
 // The tenant's own domain: its token endpoint and Management API answer there
 // whichever domain the login itself runs on.
 const AUTH0_DOMAIN = __AUTH0_DOMAIN_JSON__
+// The MCP endpoint's resource URL. An MCP client signs in under its own client
+// id, so a login is recognized as BoxLite's by the API it asks for instead.
+// Empty leaves MCP logins out of the checks below.
+const MCP_RESOURCE_URL = __MCP_RESOURCE_URL_JSON__
+// The BoxLite API's audience. The API does not check email verification itself,
+// so no token for it may reach an unverified database user.
+const API_AUDIENCE = __API_AUDIENCE_JSON__
 
 // The API refuses a request signed for any audience but the one it serves.
 const ADOPT_AUDIENCE = 'boxlite-account-link-adopt'
@@ -40,13 +47,33 @@ const PASSWORD_REALM_GRANT = 'http://auth0.com/oauth/grant-type/password-realm'
 // Gmail addresses, whose mail Google itself serves.
 const GMAIL_DOMAINS = new Set(['gmail.com', 'googlemail.com'])
 
+/** The dashboard client, or any client asking for a token for the MCP endpoint. */
+function isBoxLiteLogin(event) {
+  return (
+    event.client?.client_id === BOXLITE_CLIENT_ID ||
+    (MCP_RESOURCE_URL !== '' && event.resource_server?.identifier === MCP_RESOURCE_URL)
+  )
+}
+
 function isBoxLiteBrowserLogin(event) {
-  return event.client?.client_id === BOXLITE_CLIENT_ID && BROWSER_PROTOCOLS.has(event.transaction?.protocol)
+  return isBoxLiteLogin(event) && BROWSER_PROTOCOLS.has(event.transaction?.protocol)
+}
+
+/**
+ * A database login, on any database connection, that yields a token BoxLite
+ * accepts: the dashboard client's, or any client's for the API or MCP audience.
+ */
+function isBoxLiteDatabaseLogin(event) {
+  const audience = event.resource_server?.identifier
+  return (
+    event.connection?.strategy === 'auth0' &&
+    (isBoxLiteLogin(event) || (API_AUDIENCE !== '' && audience === API_AUDIENCE))
+  )
 }
 
 function isManagedDatabaseLogin(event) {
   return (
-    event.client?.client_id === BOXLITE_CLIENT_ID &&
+    isBoxLiteLogin(event) &&
     event.connection?.strategy === 'auth0' &&
     event.connection?.name === BOXLITE_DB_CONNECTION
   )
@@ -69,8 +96,11 @@ function needsAccountLink(event) {
   )
 }
 
+// Every login, including a third-party MCP client's, for which Auth0 can leave
+// `event.authorization` unset. The names are the IANA-registered OpenID Connect
+// ones (RFC 9068 section 2.2.2). Auth0 drops them for third-party clients, so
+// the API stores them when present and never refuses a token for lacking them.
 function setIdentityClaims(event, api, emailVerified = event.user?.email_verified === true) {
-  if (!event.authorization) return
   api.accessToken.setCustomClaim('email_verified', emailVerified)
   api.accessToken.setCustomClaim('email', event.user?.email)
   api.accessToken.setCustomClaim('name', event.user?.name)
@@ -473,6 +503,12 @@ exports.onExecutePostLogin = async (event, api) => {
   }
 
   if (!isManagedDatabaseLogin(event)) {
+    // Only the BoxLite connection has the verification Form; other database
+    // logins that would reach BoxLite are refused until the address is verified.
+    if (isBoxLiteDatabaseLogin(event) && event.user?.email_verified !== true) {
+      api.access.deny('Email verification required')
+      return
+    }
     setIdentityClaims(event, api)
     return
   }

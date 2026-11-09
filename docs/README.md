@@ -1,7 +1,8 @@
 # BoxLite documentation
 
 Documentation for using BoxLite, the embeddable micro-VM runtime, and for working on it. The hosted
-platform under `apps/` is documented from [`apps/README.md`](../apps/README.md).
+platform under `apps/` is documented for contributors in
+[Hosted platform](contributing/architecture/platform/README.md).
 
 ## Using BoxLite
 

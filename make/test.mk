@@ -2,6 +2,7 @@ PHONY_TARGETS += test test\:unit\:cli test\:unit\:vmm test\:unit\:guest test\:gu
 PHONY_TARGETS += test\:integration\:vmm\:kvm test\:integration\:vmm\:elf test\:integration\:vmm\:linux _ensure-kvm _ensure-vmm-kernel test\:vmm\:boot
 PHONY_TARGETS += test\:integration\:vmm\:hvf _ensure-hvf
 PHONY_TARGETS += test\:apps\:runner
+PHONY_TARGETS += test\:apps\:infra-local
 PHONY_TARGETS += test\:apps\:proxy test\:apps\:dashboard
 PHONY_TARGETS += test\:apps\:mdeploy test\:e2e\:drivers
 PHONY_TARGETS += _local-registry
@@ -356,16 +357,16 @@ test\:unit\:guest:
 		cargo test -p boxlite-guest --bins -- --test-threads=1 capabilit spec::tests sysctl::tests; \
 	fi
 
-# Keep ordinary ownership tests unprivileged. Only explicitly ignored tests
+# Keep ordinary guest mount tests unprivileged. Only explicitly ignored tests
 # whose names contain `privileged_` run as root, inside a private mount
 # namespace so bind mounts cannot escape into the host namespace.
 test\:guest-perms:
 	@if [ "$$(uname)" != "Linux" ]; then \
-		echo "⏭️  Guest ownership tests require Linux"; \
+		echo "⏭️  Guest mount tests require Linux"; \
 		exit 0; \
 	fi; \
-	echo "🧪 Running guest ownership tests..."; \
-	cargo test -p boxlite-guest --bin boxlite-guest 'storage::perms::tests' -- \
+	echo "🧪 Running guest mount tests..."; \
+	cargo test -p boxlite-guest --bin boxlite-guest 'storage::attach::tests' -- \
 		--test-threads=1 --skip privileged_ || exit $$?; \
 	if ! command -v jq >/dev/null 2>&1; then \
 		echo "❌ jq is required to locate the prebuilt guest test executable"; \
@@ -391,17 +392,17 @@ test\:guest-perms:
 		echo "❌ Could not locate the prebuilt boxlite-guest test executable"; \
 		exit 1; \
 	fi; \
-	echo "🔐 Running privileged guest ownership tests..."; \
+	echo "🔐 Running privileged guest mount tests..."; \
 	if [ "$$(id -u)" -eq 0 ]; then \
 		unshare --mount --propagation private -- \
-			"$$test_binary" 'storage::perms::tests::privileged_' \
+			"$$test_binary" 'storage::attach::tests::privileged_' \
 			--ignored --test-threads=1; \
 	elif command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then \
 		sudo -n unshare --mount --propagation private -- \
-			"$$test_binary" 'storage::perms::tests::privileged_' \
+			"$$test_binary" 'storage::attach::tests::privileged_' \
 			--ignored --test-threads=1; \
 	else \
-		echo "❌ Privileged ownership tests require root or passwordless sudo"; \
+		echo "❌ Privileged guest mount tests require root or passwordless sudo"; \
 		exit 1; \
 	fi
 
@@ -446,10 +447,10 @@ test\:integration\:agents: $(if $(SETUP_DONE),,runtime\:debug)
 		echo "❌ Set BOXLITE_TEST_OPENCODE_BINARY to the OpenCode 2.2.2 glibc Linux binary"; exit 1; }
 	@echo "🧪 Running OpenCode agent tests (requires VM)..."
 	@if command -v cargo-nextest >/dev/null 2>&1; then \
-		cargo nextest run -p boxlite --features krun,gvproxy --test agents_opencode --run-ignored only \
+		cargo nextest run -p boxlite --features krun,gvproxy,test-support --test agents_opencode --run-ignored only \
 			--no-fail-fast --profile vm $(NEXTEST_FILTER); \
 	else \
-		cargo test -p boxlite --features krun,gvproxy --test agents_opencode --no-fail-fast -- \
+		cargo test -p boxlite --features krun,gvproxy,test-support --test agents_opencode --no-fail-fast -- \
 			--ignored --test-threads=1 --nocapture $(CARGOTEST_FILTER); \
 	fi
 
@@ -627,6 +628,9 @@ _ensure-infra-deps:
 # Type-check first: the suite runs under `tsx --test`, which strips types without checking them, so
 # a signature change that no longer compiles still leaves every test green. tsconfig.tooling.json
 # is the subset that checks without `sst install`; test:apps:infra-config below covers the rest.
+test\:apps\:infra-local:
+	@$(MAKE) -C apps/infra-local test
+
 test\:apps\:infra: _ensure-infra-deps
 	@echo "🧪 Type-checking infrastructure scripts..."
 	@cd apps/infra && npm run --silent typecheck:tooling

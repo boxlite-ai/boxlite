@@ -57,7 +57,7 @@ pub struct DomainList {
 /// Backend abstraction for the organization's domains.
 ///
 /// Implemented by the REST backend only; a local runtime publishes nothing.
-#[expect(
+#[allow(
     clippy::double_must_use,
     reason = "async_trait generates a must-use boxed future"
 )]

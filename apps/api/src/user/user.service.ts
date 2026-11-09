@@ -4,7 +4,9 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { Injectable, NotFoundException } from '@nestjs/common'
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common'
+import { isDisposableEmail } from '@visulima/disposable-email-domains/edge'
+import { isEmail } from 'class-validator'
 import { InjectRepository } from '@nestjs/typeorm'
 import { User, UserSSHKeyPair } from './user.entity'
 import { DataSource, ILike, In, Repository } from 'typeorm'
@@ -18,6 +20,8 @@ import { UserDeletedEvent } from './events/user-deleted.event'
 import { UserEmailVerifiedEvent } from './events/user-email-verified.event'
 import { recordOutcomes } from '../common/utils/business-event.util'
 import { Context } from '../common/context/context'
+import { EmailUtils } from '../common/utils/email.util'
+import { DisposableEmailException } from '../exceptions/disposable-email.exception'
 
 const PG_UNIQUE_VIOLATION = '23505'
 
@@ -32,6 +36,16 @@ export class UserService {
 
   /** Records the user.registration events of the new user, started by ctx. */
   async create(createUserDto: CreateUserDto, ctx: Context): Promise<User> {
+    const email = createUserDto.email ? EmailUtils.normalize(createUserDto.email) : undefined
+    if (email !== undefined) {
+      if (!isEmail(email)) {
+        throw new BadRequestException({ message: 'Invalid email address', code: 'invalid_email' })
+      }
+      if (isDisposableEmail(email)) {
+        throw new DisposableEmailException()
+      }
+    }
+
     const defaultOrganizationDefaultRegionId =
       createUserDto.defaultOrganizationDefaultRegionId ?? createUserDto.personalOrganizationDefaultRegionId
     let user = new User()
@@ -42,8 +56,8 @@ export class UserService {
     user.publicKeys = []
     user.emailVerified = createUserDto.emailVerified
 
-    if (createUserDto.email) {
-      user.email = createUserDto.email
+    if (email) {
+      user.email = email
     }
 
     if (createUserDto.role) {

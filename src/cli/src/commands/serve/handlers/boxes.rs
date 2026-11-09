@@ -148,6 +148,13 @@ pub(in crate::commands::serve) async fn start_box(
         Ok(b) => b,
         Err(resp) => return resp,
     };
+    let before = match litebox.info().await {
+        Ok(info) => info,
+        Err(error) => return error_from_boxlite(&error),
+    };
+    if !before.status.is_active() {
+        state.forget_recovered(before.id.as_ref()).await;
+    }
 
     if let Err(e) = litebox.start().await {
         return error_from_boxlite(&e);

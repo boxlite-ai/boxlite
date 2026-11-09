@@ -142,6 +142,11 @@ func TestBoxliteGetExecutionReturnsRunningThenExited(t *testing.T) {
 // Phase 2.1: missing exec id returns 404 instead of 200/empty body.
 func TestBoxliteGetExecutionNotFound(t *testing.T) {
 	withFreshExecManager(t)
+	previous := getExecutionBox
+	getExecutionBox = func(_ *gin.Context, _ string) (*sdkboxlite.Box, error) {
+		return nil, &sdkboxlite.Error{Code: sdkboxlite.ErrNotFound, Message: "box not found"}
+	}
+	defer func() { getExecutionBox = previous }()
 
 	w := runHandler(http.MethodGet,
 		"/v1/boxes/:boxId/executions/:execId",

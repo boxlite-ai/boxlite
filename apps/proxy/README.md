@@ -10,8 +10,8 @@ the box through the box's runner. GCP runs two replicas on GKE Autopilot; AWS us
 Both expose port 4000 behind a load balancer that terminates public TLS.
 See [infrastructure networking](../infra/docs/networking.md) and [architecture](../infra/docs/architecture.md).
 
-- Routes: [`apps/API.md`](../API.md#preview-proxy-api)
-- Place in the platform: [`apps/README.md`](../README.md)
+- Routes: [service interfaces](../../docs/contributing/architecture/platform/api.md#preview-proxy-api)
+- Place in the platform: [hosted platform](../../docs/contributing/architecture/platform/README.md)
 
 ## Architecture
 
@@ -65,7 +65,7 @@ The first label of the host is `<port>-<id>`, where `<id>` takes one of two form
 | `<box ID>` | Raw box ID, still accepted from URLs minted before the encoding   | nothing current                                                              |
 
 A host without a `<port>-` label serves only the utility routes listed in
-[`apps/API.md`](../API.md#preview-proxy-api).
+[service interfaces](../../docs/contributing/architecture/platform/api.md#preview-proxy-api).
 
 ### Platform subdomains
 

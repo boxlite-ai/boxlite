@@ -13,7 +13,6 @@ import (
 	"time"
 
 	boxlite "github.com/boxlite-ai/boxlite/sdks/go"
-	"github.com/google/uuid"
 )
 
 // Reaping policy defaults (Phase 4.1). Operators override via env vars
@@ -71,6 +70,34 @@ func (s sdkExec) ResizeTTY(ctx context.Context, rows, cols int) error {
 func (s sdkExec) Close() error                          { return s.inner.Close() }
 func (s sdkExec) Wait(ctx context.Context) (int, error) { return s.inner.Wait(ctx) }
 
+type executionSource interface {
+	list(context.Context) ([]boxlite.ExecutionInfo, error)
+	get(context.Context, string) (execHandle, error)
+	attach(context.Context, string, io.Writer, io.Writer) (execHandle, io.Writer, error)
+}
+
+type sdkExecutionSource struct{ box *boxlite.Box }
+
+func (s sdkExecutionSource) list(ctx context.Context) ([]boxlite.ExecutionInfo, error) {
+	return s.box.Executions().List(ctx)
+}
+
+func (s sdkExecutionSource) get(ctx context.Context, id string) (execHandle, error) {
+	execution, err := s.box.Executions().Get(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	return sdkExec{inner: execution}, nil
+}
+
+func (s sdkExecutionSource) attach(ctx context.Context, id string, stdout, stderr io.Writer) (execHandle, io.Writer, error) {
+	execution, err := s.box.Executions().Attach(ctx, id, &boxlite.ExecutionOptions{Stdout: stdout, Stderr: stderr})
+	if err != nil {
+		return nil, nil, err
+	}
+	return sdkExec{inner: execution}, execution.Stdin, nil
+}
+
 type ExecManager struct {
 	mu    sync.RWMutex
 	execs map[string]*ManagedExec
@@ -89,15 +116,17 @@ type ExecManager struct {
 }
 
 type ManagedExec struct {
-	ID        string
-	BoxID     string
-	stdinW    io.Writer
-	execution execHandle
-	Done      chan struct{}
-	ExitCode  int
-	Err       error
-	TTY       bool
-	created   time.Time
+	ID              string
+	BoxID           string
+	stdinW          io.Writer
+	execution       execHandle
+	Done            chan struct{}
+	ExitCode        int
+	Err             error
+	TTY             bool
+	created         time.Time
+	recovered       bool
+	streamExecution execHandle
 
 	// handleMu serializes all operations on `execution` and `stdinW`
 	// against the deferred Close in the wait goroutine. Without this,
@@ -347,11 +376,9 @@ type StartOptions struct {
 }
 
 func (m *ExecManager) Start(ctx context.Context, bx *boxlite.Box, boxID string, opts StartOptions) (string, error) {
-	id := uuid.New().String()
-
 	now := time.Now()
 	exec := &ManagedExec{
-		ID:        id,
+		ID:        "",
 		BoxID:     boxID,
 		stdoutBus: newStreamBus(streamBusBacklogCap),
 		stderrBus: newStreamBus(streamBusBacklogCap),
@@ -382,6 +409,8 @@ func (m *ExecManager) Start(ctx context.Context, bx *boxlite.Box, boxID string, 
 	if err != nil {
 		return "", fmt.Errorf("failed to start execution: %w", err)
 	}
+	id := execution.ID()
+	exec.ID = id
 	handle := sdkExec{inner: execution}
 	exec.execution = handle
 	exec.stdinW = execution.Stdin
@@ -443,6 +472,118 @@ func (m *ExecManager) GetForBox(id, boxID string) (*ManagedExec, error) {
 	return e, nil
 }
 
+// Resolve recovers control without acquiring the guest's output reader.
+func (m *ExecManager) Resolve(ctx context.Context, bx *boxlite.Box, id, boxID string) (*ManagedExec, error) {
+	return m.resolve(ctx, sdkExecutionSource{box: bx}, id, boxID)
+}
+
+func (m *ExecManager) resolve(ctx context.Context, source executionSource, id, boxID string) (*ManagedExec, error) {
+	cached, err := m.GetForBox(id, boxID)
+	if err != nil && !errors.Is(err, ErrExecNotFound) {
+		return nil, err
+	}
+	if cached != nil && !cached.isDone() {
+		return cached, nil
+	}
+	// The main session uses the container ID again after a box restart.
+	// Keep its terminal status until the guest reports that ID live again.
+	sessions, err := source.list(ctx)
+	if err != nil {
+		if cached != nil {
+			return cached, nil
+		}
+		return nil, err
+	}
+	var info *boxlite.ExecutionInfo
+	for i := range sessions {
+		if sessions[i].ExecutionID == id {
+			info = &sessions[i]
+			break
+		}
+	}
+	if info == nil {
+		if cached != nil {
+			return cached, nil
+		}
+		return nil, fmt.Errorf("%w: %s", ErrExecNotFound, id)
+	}
+	handle, err := source.get(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	execution := &ManagedExec{
+		ID: id, BoxID: boxID, execution: handle,
+		TTY: info.TTY, created: time.UnixMilli(int64(info.StartedAt)),
+		recovered: true, Done: make(chan struct{}),
+		stdoutBus: newStreamBus(streamBusBacklogCap),
+		stderrBus: newStreamBus(streamBusBacklogCap),
+	}
+	m.mu.Lock()
+	if current, exists := m.execs[id]; exists && current != cached {
+		m.mu.Unlock()
+		_ = handle.Close()
+		if current.BoxID != boxID {
+			return nil, fmt.Errorf("%w: %s", ErrBoxMismatch, id)
+		}
+		return current, nil
+	}
+	m.execs[id] = execution
+	m.mu.Unlock()
+	go m.watchRecovered(execution)
+	return execution, nil
+}
+
+// Attach lazily acquires output for an adopted execution. Repeated WebSocket
+// connections share its existing broadcaster rather than claiming a second reader.
+func (m *ExecManager) Attach(ctx context.Context, bx *boxlite.Box, id, boxID string) (*ManagedExec, error) {
+	source := sdkExecutionSource{box: bx}
+	execution, err := m.resolve(ctx, source, id, boxID)
+	if err != nil {
+		return nil, err
+	}
+	return m.attach(ctx, source, execution)
+}
+
+func (m *ExecManager) attach(ctx context.Context, source executionSource, execution *ManagedExec) (*ManagedExec, error) {
+	execution.handleMu.Lock()
+	defer execution.handleMu.Unlock()
+	if !execution.recovered || execution.streamExecution != nil {
+		return execution, nil
+	}
+	if execution.closed {
+		return nil, fmt.Errorf("%w: %s", ErrExecClosed, execution.ID)
+	}
+	stream, stdin, err := source.attach(ctx, execution.ID, execution.stdoutBus, execution.stderrBus)
+	if err != nil {
+		return nil, err
+	}
+	execution.streamExecution = stream
+	execution.stdinW = stdin
+	return execution, nil
+}
+
+func (m *ExecManager) watchRecovered(execution *ManagedExec) {
+	code, err := execution.execution.Wait(context.Background())
+	execution.handleMu.Lock()
+	execution.closed = true
+	stream := execution.streamExecution
+	execution.handleMu.Unlock()
+	if stream != nil {
+		_, drainErr := stream.Wait(context.Background())
+		if err == nil {
+			err = drainErr
+		}
+		_ = stream.Close()
+	}
+	execution.handleMu.Lock()
+	_ = execution.execution.Close()
+	execution.handleMu.Unlock()
+	execution.ExitCode, execution.Err = code, err
+	execution.stdoutBus.close()
+	execution.stderrBus.close()
+	close(execution.Done)
+}
+
 func (m *ExecManager) Signal(id string, sig int) error {
 	m.mu.RLock()
 	e, ok := m.execs[id]
@@ -495,7 +636,9 @@ func (m *ExecManager) Kill(id string) error {
 	}
 
 	m.mu.Lock()
-	delete(m.execs, id)
+	if m.execs[id] == e {
+		delete(m.execs, id)
+	}
 	m.mu.Unlock()
 
 	if e.stdoutBus != nil {
@@ -606,6 +749,18 @@ func (m *ExecManager) evaluateExec(now time.Time, e *ManagedExec, reconnectGrace
 		}
 		return
 	default:
+	}
+
+	// Merely discovering an existing session must not adopt the server's
+	// orphan/lifetime policy: the session may be the box's main command.
+	if e.recovered {
+		e.attachMu.Lock()
+		pendingKill := e.ReapingKill
+		e.attachMu.Unlock()
+		if pendingKill {
+			m.killAndEvict(e)
+		}
+		return
 	}
 
 	// 2) Hard cap — kill regardless of attach state.
@@ -735,9 +890,9 @@ func (m *ExecManager) escalate(e *ManagedExec, sig syscall.Signal, name string) 
 // the map). The map delete is idempotent.
 func (m *ExecManager) killAndEvict(e *ManagedExec) {
 	m.mu.RLock()
-	_, stillTracked := m.execs[e.ID]
+	current, stillTracked := m.execs[e.ID]
 	m.mu.RUnlock()
-	if !stillTracked {
+	if !stillTracked || current != e {
 		return
 	}
 
@@ -757,7 +912,9 @@ func (m *ExecManager) killAndEvict(e *ManagedExec) {
 	}
 
 	m.mu.Lock()
-	delete(m.execs, e.ID)
+	if m.execs[e.ID] == e {
+		delete(m.execs, e.ID)
+	}
 	m.mu.Unlock()
 
 	if e.stdoutBus != nil {
@@ -776,7 +933,7 @@ func (m *ExecManager) evictExited(e *ManagedExec) {
 	e.attachMu.Unlock()
 
 	m.mu.Lock()
-	if _, stillTracked := m.execs[e.ID]; !stillTracked {
+	if m.execs[e.ID] != e {
 		m.mu.Unlock()
 		return
 	}
