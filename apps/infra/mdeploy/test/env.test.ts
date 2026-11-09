@@ -111,6 +111,9 @@ test('a service reads its optional keys when present and boots without them when
     OIDC_CLIENT_ID: 'd',
     OTEL_COLLECTOR_API_KEY: 'e',
     PROXY_API_KEY: 'f',
+    TURNSTILE_EXPECTED_HOSTNAMES: 'app.example.com',
+    TURNSTILE_SECRET_KEY: JSON.stringify({ address: 'arn:aws:ssm:us-east-1:123456789012:parameter/turnstile' }),
+    TURNSTILE_SITEKEY: 'sitekey',
   }
   const bare = serviceSecretsFrom({ group: 'api', declaration, environment: withoutOptional })
   assert.deepEqual(Object.keys(bare).sort(), [
@@ -120,6 +123,9 @@ test('a service reads its optional keys when present and boots without them when
     'OIDC_CLIENT_ID',
     'OTEL_COLLECTOR_API_KEY',
     'PROXY_API_KEY',
+    'TURNSTILE_EXPECTED_HOSTNAMES',
+    'TURNSTILE_SECRET_KEY',
+    'TURNSTILE_SITEKEY',
   ])
 
   const withOne = serviceSecretsFrom({
@@ -142,6 +148,9 @@ test('the API receives the account-link secret a stage holds, and deploys withou
     OIDC_CLIENT_ID: 'd',
     OTEL_COLLECTOR_API_KEY: 'e',
     PROXY_API_KEY: 'f',
+    TURNSTILE_EXPECTED_HOSTNAMES: 'app.example.com',
+    TURNSTILE_SECRET_KEY: JSON.stringify({ address: 'arn:aws:ssm:us-east-1:123456789012:parameter/turnstile' }),
+    TURNSTILE_SITEKEY: 'sitekey',
   }
   const key = 'k'.repeat(32)
   const held = narrow('api', { ...required, OIDC_ACCOUNT_LINK_SECRET: key })
@@ -157,7 +166,7 @@ test('the API receives the account-link secret a stage holds, and deploys withou
 test('a required service key that never arrived still stops the deploy', () => {
   assert.throws(
     () => serviceSecretsFrom({ group: 'api', declaration, environment: { ADMIN_API_KEY: 'a' } }),
-    /ENCRYPTION_KEY, ENCRYPTION_SALT, OIDC_CLIENT_ID, OTEL_COLLECTOR_API_KEY, PROXY_API_KEY must reach the deploy/,
+    /ENCRYPTION_KEY, ENCRYPTION_SALT, OIDC_CLIENT_ID, OTEL_COLLECTOR_API_KEY, PROXY_API_KEY, TURNSTILE_EXPECTED_HOSTNAMES, TURNSTILE_SECRET_KEY, TURNSTILE_SITEKEY must reach the deploy/,
   )
 })
 
