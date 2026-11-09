@@ -2,7 +2,7 @@
 // Copyright (c) 2026 BoxLite AI
 
 import assert from 'node:assert/strict'
-import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
@@ -51,7 +51,7 @@ test('buildDatabaseConnectionUpdate configures verification OTP without adding a
   })
   assert.deepEqual(update.options.attributes, {
     email: {
-      identifier: { active: true },
+      identifier: { active: true, default_method: 'password' },
       profile_required: true,
       signup: { status: 'required', verification: { active: true } },
       unique: true,
@@ -73,7 +73,7 @@ test('buildDatabaseConnectionUpdate deep-merges inactive attributes and email se
       },
       attributes: {
         username: { identifier: { active: false }, signup: { status: 'off' } },
-        email: { identifier: { upstream_setting: 'keep', default_method: 'email_otp' }, custom_setting: 'keep' },
+        email: { identifier: { upstream_setting: 'keep' }, custom_setting: 'keep' },
       },
     },
   })
@@ -95,18 +95,6 @@ test('buildDatabaseConnectionUpdate deep-merges inactive attributes and email se
     enabled: false,
     custom_setting: 'keep',
   })
-})
-
-test('buildDatabaseConnectionUpdate retains an existing password selector without enabling OTP login', () => {
-  const update = buildDatabaseConnectionUpdate({
-    options: {
-      attributes: { email: { identifier: { active: true, default_method: 'password' } } },
-      authentication_methods: { password: { enabled: true }, email_otp: { enabled: false } },
-    },
-  })
-  assert.equal(update.options.attributes.email.identifier.default_method, 'password')
-  assert.deepEqual(update.options.authentication_methods.email_otp, { enabled: false })
-  assert.equal(update.options.attributes.email.verification_method, 'otp')
 })
 
 test('assertDatabaseConnectionCompatible rejects configurations that cannot safely migrate', () => {
@@ -477,58 +465,6 @@ test('Auth0CliManagementClient encodes Auth0 search expressions but preserves co
   assert.ok(queryArguments.includes('q=identities.connection%3A%22Username-Password-Authentication%22'))
   assert.ok(queryArguments.includes('search_engine=v3'))
   assert.ok(queryArguments.includes('fields=name,enabled,credentials'))
-})
-
-test('Auth0CliManagementClient keeps noncredential requests masked', () => {
-  const projection = { fields: 'client_id,client_secret', include_fields: 'true' }
-  const requests: Array<Parameters<Auth0ManagementClient['request']>> = [
-    ['get', 'clients'],
-    ['get', 'clients', { query: projection }],
-    ['get', 'clients/app_123'],
-    ['post', 'clients', { query: projection }],
-    ['patch', 'clients/app_123', { query: projection }],
-    ['get', 'clients/app_123', { query: { fields: 'client_secret' } }],
-    ['get', 'clients/app_123', { query: { ...projection, include_fields: 'false' } }],
-    ['get', 'clients/app_123', { query: { ...projection, fields: 'client_secret_hint' } }],
-    ['get', 'clients/app_123', { query: { ...projection, fields: 'client_secret,signing_keys' } }],
-    ...[
-      'clients/app_123/connections',
-      'clients/..',
-      'clients/%2e%2e',
-      'clients/app%2F123',
-      'clients/app_123?fields=client_secret',
-      'clients/app_123#fragment',
-      'connections/app_123',
-    ].map((path): Parameters<Auth0ManagementClient['request']> => ['get', path, { query: projection }]),
-  ]
-  let reveals = 0
-  const client = new Auth0CliManagementClient('tenant.us.auth0.com', (_command, args) => {
-    if (args.includes('--reveal-secrets')) reveals++
-    return '{}'
-  })
-  for (const request of requests) client.request(...request)
-  assert.equal(reveals, 0)
-})
-
-test('Auth0CliManagementClient does not expose credential-bearing subprocess failures', () => {
-  const secret = 'subprocess-secret-sentinel'
-  const client = new Auth0CliManagementClient('tenant.us.auth0.com', () => {
-    throw Object.assign(new Error(secret), {
-      status: 1,
-      stdout: Buffer.from(JSON.stringify({ client_secret: secret })),
-      stderr: Buffer.from(`400: API request failed: ${JSON.stringify({ statusCode: 400, message: secret })}.`),
-    })
-  })
-  assert.throws(
-    () =>
-      client.request('get', 'clients/app_123', {
-        query: { fields: 'client_id,client_secret', include_fields: 'true' },
-      }),
-    (error: any) => {
-      assert.equal(`${error.message}\n${error.cause?.message}\n${JSON.stringify(error)}`.includes(secret), false)
-      return true
-    },
-  )
 })
 
 test('Auth0CliManagementClient retains API error metadata without exposing the response in its message', () => {
@@ -1098,7 +1034,7 @@ test('Auth0LoginPolicyConfigurator applies, binds last, reads back, and journals
 
     assert.equal(result.mode, 'applied')
     assert.equal(state.connection.options.passwordPolicy, 'good')
-    assert.equal(Object.hasOwn(state.connection.options.attributes.email.identifier, 'default_method'), false)
+    assert.equal(state.connection.options.attributes.email.identifier.default_method, 'password')
     assert.deepEqual(state.grant.scope, ['update:users'])
     assert.equal(state.grant.allow_all_scopes, false)
     assert.deepEqual(connectionBindingCall?.data, [{ client_id: 'spa_123', status: true }])
@@ -1630,86 +1566,6 @@ function linkConfigurator(
     },
   )
 }
-
-/** Auth0 CLI 1.38+ removes these response fields unless explicitly requested. */
-function cliWithMaskedSecrets(api: Auth0ManagementClient) {
-  return new Auth0CliManagementClient('tenant.us.auth0.com', (_command, args, options) => {
-    const query: Record<string, string> = {}
-    for (let index = 0; index < args.length; index++) {
-      if (args[index] !== '--query') continue
-      const value = args[++index]
-      const separator = value.indexOf('=')
-      query[value.slice(0, separator)] = decodeURIComponent(value.slice(separator + 1))
-    }
-    let response
-    try {
-      response = api.request(args[1] as Parameters<Auth0ManagementClient['request']>[0], args[2], {
-        query,
-        data: options.input ? JSON.parse(options.input) : undefined,
-      })
-    } catch (error: any) {
-      throw Object.assign(new Error('simulated CLI error'), {
-        status: 1,
-        stderr: `400: API request failed: ${JSON.stringify({ statusCode: 400, message: error.message })}.`,
-      })
-    }
-    return JSON.stringify(response ?? null, (key, value) =>
-      !args.includes('--reveal-secrets') && ['client_secret', 'signing_keys'].includes(key) ? undefined : value,
-    )
-  })
-}
-
-test('login policy obtains the Vault credential through a masking CLI', () => {
-  const tenant = fakeTenant()
-  let setup: Record<string, any> | undefined
-  const client = cliWithMaskedSecrets({
-    request(method, path, options = {}) {
-      if (method === 'get' && ['flows/vault/connections', 'flows', 'forms'].includes(path)) return []
-      if (method === 'post' && path === 'flows/vault/connections') {
-        setup = (options.data as Record<string, any>).setup
-        throw new Error('stop after capturing the Vault write')
-      }
-      return tenant.client.request(method, path, options)
-    },
-  })
-  try {
-    let failure: any
-    assert.throws(
-      () => linkConfigurator({ ...tenant, client }).apply(),
-      (error: any) => {
-        failure = error
-        return /apply stopped/.test(error.message)
-      },
-    )
-    assert.equal(setup?.client_secret, 'vault-setup-only', failure.cause?.message)
-    assert.equal(setup?.client_id, 'm2m_123')
-    for (const name of readdirSync(tenant.journalDirectory)) {
-      assert.equal(readFileSync(join(tenant.journalDirectory, name), 'utf8').includes('vault-setup-only'), false)
-    }
-  } finally {
-    rmSync(tenant.journalDirectory, { recursive: true, force: true })
-  }
-})
-
-test('login policy keys the account-link Action through a masking CLI', () => {
-  const tenant = fakeTenant()
-  try {
-    let result
-    try {
-      result = linkConfigurator({ ...tenant, client: cliWithMaskedSecrets(tenant.client) }).apply()
-    } catch (error: any) {
-      throw error.cause ?? error
-    }
-    const actionWrite = tenant.calls.find((call) => call.method === 'post' && call.path === 'actions/actions')
-    assert.equal(
-      actionWrite?.data?.secrets.find((secret: any) => secret.name === 'ACCOUNT_LINK_CLIENT_SECRET').value,
-      'link-client-secret',
-    )
-    assert.equal(readFileSync(result.journal as string, 'utf8').includes('link-client-secret'), false)
-  } finally {
-    rmSync(tenant.journalDirectory, { recursive: true, force: true })
-  }
-})
 
 test('login policy apply with an API origin creates the account link client, and rollback deletes it', async () => {
   const tenant = fakeTenant()

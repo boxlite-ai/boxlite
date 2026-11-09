@@ -1038,7 +1038,13 @@ const grantPromotionReads = async ({
  * `gcloud compute project-info add-metadata --metadata-from-file` semantics for
  * a whole map would drop the SSH keys and anything else the project carries.
  */
-const ensureOsConfigAgent = async ({ gcloud, log }: { gcloud: Gcloud; log: (line: string) => void }): Promise<void> => {
+const ensureOsConfigAgent = async ({
+  gcloud,
+  log,
+}: {
+  gcloud: Gcloud
+  log: (line: string) => void
+}): Promise<void> => {
   log('==> enable-osconfig')
   await gcloud.apply('Could not turn the OS Config agent on for the project', [
     'compute',

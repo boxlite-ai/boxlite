@@ -43,12 +43,6 @@ Promotion copies existing image bytes within one registry kind. Cross-cloud prom
 The caller needs source read and destination write access; `promoteFrom` lets bootstrap prepare
 those permissions. On AWS, the current CLI uses one resolved account for both registry addresses.
 
-Promotion requires Docker Buildx. It inspects the selected source digest, copies that manifest/index with
-`imagetools create --prefer-index=false`, then verifies destination digest equality and the destination scan policy.
-An existing target with the same digest is idempotent and still scanned; a different digest fails without overwriting it.
-This preserves content referenced by that manifest/index, including embedded attestations, but does not migrate detached OCI referrers or signatures.
-The existing scanner's manifest/index coverage is unchanged; this is not a new per-platform scan guarantee.
-
 Release workflows select `source=dev` (default) or `source=stage`, bind that source's Environment declaration and use prod's identity for copying.
 They retain the stricter existing refusal when the destination already holds a requested release artifact.
 The deployment planner retains its existing skip when all destination images already exist; that no-op does not revalidate the chosen source.

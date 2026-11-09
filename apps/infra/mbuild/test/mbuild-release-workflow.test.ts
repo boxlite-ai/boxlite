@@ -32,7 +32,9 @@ const shippedVersion = (
 
 // Hooks export repository selectors that override cwd. Fixture Git commands
 // and resolver shells must discover their temporary repository instead.
-const fixtureEnvironment = Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith('GIT_')))
+const fixtureEnvironment = Object.fromEntries(
+  Object.entries(process.env).filter(([name]) => !name.startsWith('GIT_')),
+)
 
 const git = (cwd: string, ...args: string[]): string => {
   const result = spawnSync('git', args, { cwd, encoding: 'utf8', env: fixtureEnvironment })
@@ -41,7 +43,8 @@ const git = (cwd: string, ...args: string[]): string => {
 }
 
 /** An mbuild manifest declaring one version, as a released commit holds it. */
-const manifestFor = (version: string): string => `${JSON.stringify({ name: 'mbuild', version }, undefined, 2)}\n`
+const manifestFor = (version: string): string =>
+  `${JSON.stringify({ name: 'mbuild', version }, undefined, 2)}\n`
 
 /**
  * A commit as a release sees it: whatever mbuild manifest it carries, and one
@@ -166,7 +169,10 @@ test('every job that binds an Environment waits for resolve first', () => {
   // to read one variable and is the easy one to forget.
   for (const [name, job] of Object.entries(workflow.jobs as Record<string, any>)) {
     if (job.environment === undefined) continue
-    assert.ok((job.needs ?? []).includes('resolve'), `${name} binds ${job.environment} without waiting for resolve`)
+    assert.ok(
+      (job.needs ?? []).includes('resolve'),
+      `${name} binds ${job.environment} without waiting for resolve`,
+    )
   }
 })
 
@@ -289,9 +295,7 @@ test('a version already in the registry is refused rather than skipped', () => {
    * that landed instead of resolving to one answer about the set.
    */
   const gates = [
-    ...commands.matchAll(
-      /mbuild verify -- ([^\n]+) \|\| held=\$\?\n\s*if \[ "\$held" -eq 0 \]; then\n(\s*echo[^\n]+)/g,
-    ),
+    ...commands.matchAll(/mbuild verify -- ([^\n]+) \|\| held=\$\?\n\s*if \[ "\$held" -eq 0 \]; then\n(\s*echo[^\n]+)/g),
   ]
   assert.equal(gates.length, 2, 'one refusal per command, before it acts')
   for (const [, invocation, refusal] of gates) {

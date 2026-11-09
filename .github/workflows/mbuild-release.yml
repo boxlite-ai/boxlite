@@ -516,9 +516,6 @@ jobs:
           stage-config: ${{ vars.BOXLITE_MSTAGE_BOXLITE_APP_CONFIG }}
           stage-config-from: ${{ needs.source.outputs.config }}
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4
-
       - name: Keep registry credentials out of HOME
         run: |
           set -Eeuo pipefail
