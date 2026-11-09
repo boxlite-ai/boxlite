@@ -516,7 +516,7 @@ integration('CI native host (Postgres binding and shared inbox)', () => {
       box: { phase: 'requested', id: null },
       effect: { id: randomUUID(), kind: 'box-create' },
     })
-    row = await journal.advance(lease, row.record.key, row.record.version, {
+    await journal.advance(lease, row.record.key, row.record.version, {
       box: { phase: 'known', id: 'original-log-box' },
     })
     const unexpected = async (): Promise<never> => {

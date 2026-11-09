@@ -490,6 +490,65 @@ integration('CI connect persistence (real Postgres)', () => {
     const [binding] = await db.query('SELECT state,generation FROM ci_installation_binding')
     expect(binding).toEqual({ state: 'provisioning', generation: '3' })
   })
+  it.each(['ready', 'disabled'])('refreshes a verified renamed account on %s reconnect', async (state) => {
+    const first = await begin()
+    await service.poll(actor, first.id)
+    const [original] = await db.query('SELECT id FROM ci_installation_binding')
+    await db.query('UPDATE ci_installation_binding SET account_login=$1,state=$2,generation=2', ['old-alice', state])
+    const second = await begin()
+    expect(await service.poll(actor, second.id)).toMatchObject({ status: 'connected' })
+    const rows = await db.query('SELECT id,account_login,state,generation,allow_public FROM ci_installation_binding')
+    expect(rows).toEqual([
+      { id: original.id, account_login: 'alice', state: 'provisioning', generation: '3', allow_public: false },
+    ])
+  })
+  async function fillBindings(count: number) {
+    await settings.ensure(db.manager, org)
+    await db.query(
+      `INSERT INTO ci_installation_binding
+      (id,github_host,app_client_id,installation_id,account_id,account_login,account_type,organization_id,actor_id,follow_installation,allow_public,state)
+      SELECT gen_random_uuid(),'github.com','app-client',1000+n,2000+n,'account-'||n,'User',$1,'owner',true,false,'ready'
+      FROM generate_series(1,$2::int) n`,
+      [org, count],
+    )
+  }
+  it('denies a new binding beyond discovery capacity without changing existing bindings', async () => {
+    await fillBindings(10000)
+    const attempt = await begin()
+    expect(await service.poll(actor, attempt.id)).toMatchObject({ status: 'failed' })
+    expect((await db.query('SELECT count(*) FROM ci_installation_binding'))[0].count).toBe('10000')
+  })
+  it('preserves an existing reconnect at discovery capacity', async () => {
+    await service.poll(actor, (await begin()).id)
+    await fillBindings(9999)
+    expect(await service.poll(actor, (await begin()).id)).toMatchObject({ status: 'connected' })
+    expect((await db.query('SELECT count(*) FROM ci_installation_binding'))[0].count).toBe('10000')
+  })
+  it('denies reactivation beyond discovery capacity without changing the disabled generation', async () => {
+    await service.poll(actor, (await begin()).id)
+    await db.query("UPDATE ci_installation_binding SET state='disabled',generation=2")
+    await fillBindings(10000)
+    expect(await service.poll(actor, (await begin()).id)).toMatchObject({ status: 'failed' })
+    expect(
+      (await db.query('SELECT state,generation FROM ci_installation_binding WHERE installation_id=123'))[0],
+    ).toEqual({ state: 'disabled', generation: '2' })
+  })
+  it('admits only one concurrent tenant into the final discovery slot', async () => {
+    await settings.ensure(db.manager, otherOrg)
+    await fillBindings(9999)
+    github.verifyUserInstallation.mockImplementation(async (_token, login) => ({
+      installationId: login === 'alice' ? 123 : 124,
+      accountId: login === 'alice' ? 456 : 457,
+      accountLogin: login,
+      accountType: 'User',
+    }))
+    const other = { organizationId: otherOrg, userId: 'other-owner' }
+    const first = await begin()
+    const second = await begin(other, { ...input, github_account: 'bob' })
+    const responses = await Promise.all([service.poll(actor, first.id), service.poll(other, second.id)])
+    expect(responses.map((response) => response.status).sort()).toEqual(['connected', 'failed'])
+    expect((await db.query('SELECT count(*) FROM ci_installation_binding'))[0].count).toBe('10000')
+  })
   async function accountSession() {
     const personal = { accountId: 456, accountLogin: 'alice', accountType: 'User' as const }
     const team = { accountId: 789, accountLogin: 'team', accountType: 'Organization' as const }

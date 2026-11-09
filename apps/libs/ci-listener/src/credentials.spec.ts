@@ -134,6 +134,21 @@ describe('CI shared credential ownership', () => {
     await Promise.all([borrow.close(), borrow.close()])
     expect(deletes()).toHaveLength(1)
   })
+  it('retries durable retirement after revocation succeeded but deletion failed', async () => {
+    const borrow = await provider.open({ kind: 'jobs', repository: 11 })
+    const commit = jest.spyOn(state, 'commit').mockRejectedValueOnce(new Error('retirement commit failed'))
+    await expect(borrow.close()).rejects.toThrow('retirement commit failed')
+    expect(deletes()).toHaveLength(1)
+    expect(
+      (await db.transaction(namespace, (tx) => tx.page('', 100))).some((row) => row.key.startsWith('credential/')),
+    ).toBe(true)
+    commit.mockRestore()
+    await provider.close()
+    expect(
+      (await db.transaction(namespace, (tx) => tx.page('', 100))).filter((row) => row.key.startsWith('credential/')),
+    ).toEqual([])
+    expect(deletes()).toHaveLength(1)
+  })
   it('renews by retiring an expired local window and issuing a fresh credential', async () => {
     const first = await provider.open({ kind: 'jobs', repository: 11 })
     clock += 61000

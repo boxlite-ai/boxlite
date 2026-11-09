@@ -131,7 +131,7 @@ export class GitHubRunners {
       group.inherited !== false ||
       group.restricted_to_workflows !== false ||
       typeof group.allows_public_repositories !== 'boolean' ||
-      (group.allows_public_repositories && !scope.allowPublic)
+      group.allows_public_repositories !== scope.allowPublic
     )
       throw new Error('Runner group must have an explicit selected-repository policy')
     const selected = await this.inventory(

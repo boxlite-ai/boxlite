@@ -153,6 +153,21 @@ describe('CI shared Listener orchestration', () => {
     }
   }
   const ingressRows = () => state.recover(lease, 1000, ['notice/', 'wake/', 'receipt/'])
+  it('retries a transient journal initialization failure before scheduling', async () => {
+    await listener.receive(notification())
+    const initialize = jest.spyOn(state, 'initialize').mockRejectedValueOnce(new Error('initialization unavailable'))
+    try {
+      await runUntil(delivered.promise)
+      expect(initialize.mock.calls.length).toBeGreaterThan(1)
+      expect(host.report).toHaveBeenCalledWith(
+        expect.objectContaining({ message: 'initialization unavailable' }),
+        'listener-session',
+      )
+      expect(backend.workers.create).toHaveBeenCalledTimes(1)
+    } finally {
+      initialize.mockRestore()
+    }
+  })
   it('persists a verified notification before any scheduler owns the lease and deduplicates a retry', async () => {
     const event = notification()
     expect(await listener.receive(event)).toBe('stored')

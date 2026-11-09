@@ -36,12 +36,13 @@ export function createHttp(
     try {
       const chunks: Buffer[] = []
       let bytes = 0
-      for await (const data of request) {
+      for await (const data of request.iterator({ destroyOnReturn: false })) {
         const chunk = Buffer.from(data)
         bytes += chunk.length
         if (bytes > 1048576) {
+          response.setHeader('Connection', 'close')
+          request.resume()
           reply(response, 413, { error: 'payload_limit' })
-          request.destroy()
           return
         }
         chunks.push(chunk)

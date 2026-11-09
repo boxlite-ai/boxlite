@@ -144,6 +144,13 @@ coverage\:node\:integration: dev\:node _local-registry
 coverage\:api: _ensure-apps-deps
 	@cd apps && yarn nx run api:test --coverage --skip-nx-cache $(if $(TEST_FILES),--runInBand --passWithNoTests=false --testPathPatterns '$(TEST_FILES)',) $(if $(FILTER),--testNamePattern '$(FILTER)',)
 
+PHONY_TARGETS += coverage\:ci-listener coverage\:github-ci-runner
+coverage\:ci-listener: _ensure-apps-deps
+	@cd apps && yarn nx run ci-listener:test --coverage --skip-nx-cache --runInBand $(if $(FILTER),--testNamePattern '$(FILTER)',)
+
+coverage\:github-ci-runner: _ensure-apps-deps
+	@cd apps && yarn nx run github-ci-runner:test --coverage --skip-nx-cache --runInBand $(if $(FILTER),--testNamePattern '$(FILTER)',)
+
 # Add VM integration coverage to the unit profiles instead of erasing them.
 # Run coverage:lcov first for a combined report; BOXLITE_DEPS_STUB must be unset.
 coverage\:integration: $(if $(SETUP_DONE),,runtime\:debug)

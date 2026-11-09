@@ -1136,6 +1136,12 @@ The host modules divide responsibilities:
 Connect fixes the BoxLite organization/actor and GitHub installation. Jobs cannot
 select another tenant. Discovery publishes catalog scopes before marking that binding
 ready; readiness describes initialization, not available execution capacity.
+Reconnecting the same verified installation refreshes a renamed GitHub account
+without changing its binding ID or public-repository policy. A rename advances
+the generation and schedules catalog initialization again. Connect serializes
+admission across tenants and refuses a new or reactivated binding beyond the
+hosted Apps' 10,000 active-binding discovery limit; an existing active reconnect
+does not consume another slot.
 Personal accounts use one runner pool per repository; organizations use the configured
 selected, non-inherited runner group with the exact eligible repository inventory.
 BoxLite creates or synchronizes its dedicated group automatically. The public
@@ -1170,11 +1176,18 @@ GitHub runner absence is confirmed. An elapsed timeout or a completed notice doe
 a running Box is idle.
 
 The shared controller reconciles historical allocations before new demand.
+Transient journal initialization failures retry through the existing session
+loop. An unexpectedly stopped hosted scheduler rejects new webhook ingress
+instead of acknowledging work that this replica cannot schedule.
 One ordinary cleanup failure does not skip other workers; an absent Box's pending
 runner cleanup does not hold physical capacity. Query failures retain capacity
 and block that scope's admission. Lease loss, corrupt/conflicting state, abort
 and pending credential retirement stop further work. These rules match standalone
 Listener Boxes and recover from the existing PostgreSQL journal after restart.
+
+The CI state migration refuses rollback while its table contains any records.
+Stop the Listener and reconcile retained resource and credential state before
+attempting rollback; the migration never silently discards the cleanup ledger.
 
 API logs receive shared worker events with original binding, tenant, Box/runner,
 trigger repository/run/job, state phases and effect. Clean exit 0 is informational;

@@ -22,6 +22,9 @@ const signed = (value: unknown = payload(), delivery: string = randomUUID(), eve
   return { raw, signature: 'sha256=' + createHmac('sha256', secret).update(raw).digest('hex'), delivery, event }
 }
 describe('CI shared webhook verification', () => {
+  it.each([[], ['signed body'], '{}', { length: 1 }, null])('rejects a non-Buffer request body %j', (raw) => {
+    expect(() => verifyWebhook({ ...signed(), raw: raw as Buffer }, secret)).toThrow('Raw webhook body required')
+  })
   it('verifies original bytes and normalizes a GitHub delivery identifier', () => {
     const notification = verifyWebhook(signed(payload(), 'A1234567-1111-2222-3333-444444444444'), secret)!
     expect(notification).toMatchObject({

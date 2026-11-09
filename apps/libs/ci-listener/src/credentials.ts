@@ -143,8 +143,8 @@ export class ListenerCredentials {
     if (entry.retiring) return entry.retiring
     const retirement = (async () => {
       await entry.credential.close()
-      if (this.held.get(key) === entry) this.held.delete(key)
       await this.state.commit(this.lease, [{ key: entry.record.key, expected: entry.record.version }])
+      if (this.held.get(key) === entry) this.held.delete(key)
     })()
     entry.retiring = retirement
     try {

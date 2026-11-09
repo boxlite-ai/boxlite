@@ -89,6 +89,10 @@ replacement or release the replacement's purpose lock; concurrent retirement
 shares one operation. Tokens remain private and failed/unknown issuance records
 contain metadata only. PAT retirement closes the local handle without revoking
 the user's token. Hosts must close borrows and the provider during shutdown.
+Revocation alone does not complete retirement: the held entry remains available
+until its durable issuance record is deleted successfully. A failed deletion
+retries without revoking the already-closed token again. Lease loss still fences
+the state write and preserves the cleanup debt for reconciliation.
 
 `GitHubJobs` verifies the original repository identity before and after reading a
 job. A job notice must match the repository, run and job IDs returned by GitHub.

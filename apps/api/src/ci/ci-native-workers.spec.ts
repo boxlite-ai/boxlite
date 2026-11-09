@@ -363,6 +363,7 @@ integration('CI native workers (shared lease, actual PostgreSQL and HTTP)', () =
     expect(failure).toBeInstanceOf(BoxCreationLimitExceededError)
     expect(failure.rejectedCreationEffect).toBeUndefined()
     expect(await store.state.read(['box-native/' + config.name.slice(7)])).toEqual([])
+    expect(await db.getRepository(Box).count()).toBe(0)
     expect((await journal.load(lease)).allocations.get(row.record.key)!.value.box.phase).toBe('requested')
     expect((await journal.load(lease)).workers).toHaveLength(1)
   })

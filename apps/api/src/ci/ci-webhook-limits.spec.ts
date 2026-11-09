@@ -16,6 +16,15 @@ function barrier() {
 }
 
 describe('CI webhook resource bounds', () => {
+  it.each([[], ['signed body'], '{}', { length: 1 }, null])(
+    'rejects non-Buffer ingress before persistence: %j',
+    async (raw) => {
+      const listener = { receive: jest.fn() }
+      const service = new CiWebhookService(listener as any, { get: () => undefined } as any)
+      await expect(service.receive(raw, '', '', '')).rejects.toThrow('Raw webhook body required')
+      expect(listener.receive).not.toHaveBeenCalled()
+    },
+  )
   it('keeps the HTTP slot while a complete body waits for verification', async () => {
     const entered = barrier(),
       release = barrier()

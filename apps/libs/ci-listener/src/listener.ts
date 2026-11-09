@@ -81,9 +81,9 @@ export class Listener {
     if (this.running) throw new Error('Listener is already running')
     this.running = true
     try {
-      await this.journal.initialize()
       while (!signal.aborted) {
         try {
+          await this.journal.initialize()
           await this.retireKnown()
           const lease = await this.options.state.acquire(randomUUID(), this.timing.leaseMs)
           if (lease) await this.session(lease, signal)

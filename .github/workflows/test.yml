@@ -47,6 +47,8 @@ on:
       - 'rust-toolchain.toml'
       - 'sdks/**'
       - 'apps/api/**'
+      - 'apps/libs/ci-listener/**'
+      - 'apps/github-ci-runner/**'
       - 'apps/image-service/**'
       - 'apps/dashboard/**'
       - 'apps/libs/api-client/**'
@@ -270,6 +272,8 @@ jobs:
               - '.github/workflows/lint.yml'
             api:
               - 'apps/api/**/!(*.md)'
+              - 'apps/libs/ci-listener/**/!(*.md)'
+              - 'apps/github-ci-runner/**/!(*.md)'
               - 'openapi/box.openapi.yaml'
               - 'openapi/admin.openapi.yaml'
               - 'apps/package.json'
@@ -825,6 +829,7 @@ jobs:
       DB_USERNAME: postgres
       DB_PASSWORD: postgres
       DB_DATABASE: boxlite
+      CI_CONNECT_TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/boxlite
     defaults: # Keep package-manager commands inside the apps workspace.
       run: # Applies only to shell steps, not actions.
         working-directory: "apps"
@@ -844,11 +849,14 @@ jobs:
         run: "yarn install --immutable"
       - name: Run API unit tests
         run: "yarn nx run api:test --coverage --skip-nx-cache"
+      - name: Run shared and standalone CI Listener tests
+        working-directory: .
+        run: make coverage:ci-listener coverage:github-ci-runner
 
       - name: Upload API coverage to Codecov
         uses: codecov/codecov-action@v5
         with:
-          files: target/coverage/api/lcov.info
+          files: target/coverage/api/lcov.info,target/coverage/ci-listener/lcov.info,target/coverage/github-ci-runner/lcov.info
           flags: api
           use_oidc: true
           disable_search: true

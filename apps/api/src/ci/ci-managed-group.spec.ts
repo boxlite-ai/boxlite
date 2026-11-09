@@ -150,9 +150,12 @@ integration('CI managed organization group (real Postgres)', () => {
     }) as typeof fetch
   })
   afterEach(async () => {
-    await host.close()
-    global.fetch = originalFetch
-    reports.mockRestore()
+    try {
+      await host.close()
+    } finally {
+      global.fetch = originalFetch
+      reports.mockRestore()
+    }
   })
   async function discover(
     until: (view: { scopes: ExecutionScope[]; ready: boolean }) => boolean = (view) => view.ready,
@@ -184,6 +187,7 @@ integration('CI managed organization group (real Postgres)', () => {
   it.each(['owner', 'generation', 'disabled', 'root', 'lease'])(
     'refuses writes after %s authority changes during inventory reads',
     async (kind) => {
+      const [originalOwner] = await db.query("SELECT payload FROM ci_listener_state WHERE record_key='@owner'")
       beforeGroupRead = async () => {
         if (kind === 'owner') await db.query('DELETE FROM organization_user')
         if (kind === 'generation') await db.query('UPDATE ci_installation_binding SET generation=2')
@@ -203,6 +207,21 @@ integration('CI managed organization group (real Postgres)', () => {
       expect(mutations).toEqual([])
       expect(await store.state.read(['group-sync/1'])).toEqual([])
       expect((await db.query('SELECT state FROM ci_installation_binding'))[0].state).not.toBe('ready')
+      if (kind === 'lease') {
+        try {
+          await expect(host.close()).rejects.toThrow('credential retirement failed')
+          expect(
+            await db.query("SELECT record_key FROM ci_listener_state WHERE record_key LIKE 'credential/%'"),
+          ).not.toEqual([])
+        } finally {
+          // Restore only the fixture's original lease after checking fencing, so teardown can retire its retained debt.
+          await db.query("UPDATE ci_listener_state SET payload=$1 WHERE record_key='@owner'", [originalOwner.payload])
+        }
+        await host.close()
+        expect(await db.query("SELECT record_key FROM ci_listener_state WHERE record_key LIKE 'credential/%'")).toEqual(
+          [],
+        )
+      }
     },
   )
 })

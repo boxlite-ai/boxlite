@@ -155,6 +155,14 @@ dashboard-only change reaches Codecov with no report — which the patch status
 rejects as a missing report rather than as low coverage. Specs choose their own
 environment with a `// @vitest-environment jsdom` pragma.
 
+`API Tests` also runs the shared CI Listener and standalone host suites, using
+the job's disposable PostgreSQL service through `CI_CONNECT_TEST_DATABASE_URL`.
+Changes to either CI project select this job on drafts and ready PRs. Their
+LCOV reports are uploaded with the API report under the `api` flag; local checks
+use `make coverage:ci-listener` and `make coverage:github-ci-runner`. Leaving the
+database URL unset skips the PostgreSQL contracts locally, so that run cannot
+certify hosted persistence or rollback behavior.
+
 When none of the coverage suites is selected on a PR or merge group, the
 `Codecov (no coverage changes)` job runs a validated `empty-upload`. Codecov
 checks the changed files before publishing a passing or failing status; the

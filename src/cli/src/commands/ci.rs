@@ -34,6 +34,7 @@ struct ConnectArgs {
 
 pub async fn execute(args: CiArgs, global: &GlobalFlags) -> anyhow::Result<()> {
     let CiCommand::Connect(args) = args.command;
+    // Match the Connect API's bounded account-name input before issuing HTTP.
     if args.github_account.is_empty()
         || args.github_account.len() > 100
         || !args
@@ -47,6 +48,7 @@ pub async fn execute(args: CiArgs, global: &GlobalFlags) -> anyhow::Result<()> {
         .selected_rest_options()?
         .context("CI connect requires a remote context; run boxlite auth login first")?;
     let endpoint = endpoint(&options)?;
+    // Allow authorization work to settle while bounding each CLI HTTP request.
     let http = Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .timeout(Duration::from_secs(75))
@@ -123,6 +125,7 @@ async fn wait_for_connection(
     let remaining = (expires.with_timezone(&chrono::Utc) - chrono::Utc::now())
         .to_std()
         .unwrap_or_default();
+    // Cap one interactive authorization session at fifteen minutes, even if the server asks for longer.
     let deadline = Instant::now() + remaining.min(Duration::from_secs(900));
     tokio::pin!(interrupt);
     loop {
@@ -138,6 +141,7 @@ async fn wait_for_connection(
         match field(&response, "status")? {
             "connected" => return Ok(response),
             "pending" => {
+                // A server-requested interval cannot exceed the entire session's fifteen-minute cap.
                 interval = response
                     .get("interval")
                     .and_then(Value::as_u64)
@@ -166,6 +170,7 @@ async fn cancel_attempt(
     url: Url,
     reason: &str,
 ) -> anyhow::Error {
+    // Ctrl-C and expiry get a bounded five-second best-effort cancellation.
     match tokio::time::timeout(
         Duration::from_secs(5),
         request(http, options, Method::DELETE, url, None),
@@ -255,6 +260,7 @@ async fn request(
         .await
         .map_err(|_| anyhow::anyhow!("CI response interrupted"))?
     {
+        // Connect returns metadata only; cap buffering at 64 KiB before parsing JSON.
         if bytes.len() + chunk.len() > 65_536 {
             bail!("CI response exceeds limit");
         }
