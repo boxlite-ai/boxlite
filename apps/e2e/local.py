@@ -75,12 +75,15 @@ def compose(args, env, *, capture=False):
         raise Failure("docker-compose or docker compose is required")
     env = dict(env)
     env["COMPOSE_PROJECT_NAME"] = PROJECT
-    if not env.get("DOCKER_HOST") and shutil.which("podman"):
-        socket = subprocess.run(
-            ["podman", "info", "--format", "{{.Host.RemoteSocket.Path}}"],
-            capture_output=True, text=True).stdout.strip()
-        if socket and Path(socket).exists():
-            env["DOCKER_HOST"] = f"unix://{socket}"
+    # Keep connection settings stable even if the caller's environment changes.
+    selection = STATE / "compose-engine.json"
+    keys = ("DOCKER_HOST", "DOCKER_CONTEXT", "DOCKER_TLS_VERIFY", "DOCKER_CERT_PATH")
+    if not selection.exists():
+        atomic_json(selection, {key: env[key] for key in keys if key in env})
+    engine = json.loads(selection.read_text())
+    for key in keys:
+        env.pop(key, None)
+    env.update(engine)
     command = [*argv, "-p", PROJECT, "--project-directory", str(ROOT), "-f", str(COMPOSE),
                "--env-file", str(STATE / ".env"), *args]
     if capture:
@@ -199,8 +202,8 @@ def state_dirs():
         directory.mkdir(parents=True, exist_ok=True, mode=0o700)
 
 
-def checked_directory(path, *, private=False, create=False):
-    """Reject symlinks, foreign owners and directories writable by other users."""
+def checked_directory(path, *, private=False, create=False, repair=False):
+    """Reject unsafe paths; repair owned box modes only inside a private root."""
     try:
         if create:
             path.mkdir(mode=0o700, exist_ok=True)
@@ -211,11 +214,11 @@ def checked_directory(path, *, private=False, create=False):
         raise Failure(f"unsafe runtime directory: {path}") from error
     try:
         info = os.fstat(fd)
-        if info.st_uid != os.getuid() or info.st_mode & 0o022:
+        if info.st_uid != os.getuid() or (info.st_mode & 0o022 and not repair):
             raise Failure(f"unsafe runtime directory ownership or permissions: {path}")
-        # Older launchers created the owned parent with 0755. Tighten only
-        # verified, non-writable directories, through the no-follow descriptor.
-        if private:
+        # Runtime parents must already be non-writable by others. Box modes
+        # inside the private parent may come from the Runner's older umask.
+        if private or repair:
             os.fchmod(fd, 0o700)
     finally:
         os.close(fd)
@@ -291,7 +294,7 @@ def start_process(name, argv, cwd, health, env, timeout):
     with logs.open("ab") as output:
         process = subprocess.Popen(
             [str(item) for item in argv], cwd=cwd, env=env,
-            stdout=output, stderr=subprocess.STDOUT, start_new_session=True)
+            stdout=output, stderr=subprocess.STDOUT, start_new_session=True, umask=0o077)
     pids = load_pids()
     pids[name] = {"pid": process.pid, "starttime": process_starttime(process.pid)}
     save_pids(pids)
@@ -333,7 +336,13 @@ def stop_host(records=None):
             continue
         deadline = time.monotonic() + 10
         while time.monotonic() < deadline:
-            if not process_matches(pid, entry["starttime"]):
+            try:
+                os.waitpid(pid, os.WNOHANG)
+            except ChildProcessError:
+                pass  # A later launcher invocation is not the child's parent.
+            try:
+                os.killpg(pid, 0)
+            except ProcessLookupError:
                 break
             time.sleep(0.1)
         else:
@@ -423,14 +432,14 @@ def box_dirs(home=RUNTIME_HOME):
     root = home / "boxes"
     try:
         checked_directory(home, private=True)
-        checked_directory(root)
+        checked_directory(root, repair=True)
         result = []
         for path in sorted(root.iterdir()):
             mode = path.lstat().st_mode
             if stat.S_ISLNK(mode):
                 raise Failure(f"symlink in runtime boxes directory: {path}")
             if stat.S_ISDIR(mode):
-                checked_directory(path)
+                checked_directory(path, repair=True)
                 result.append(path)
         return result
     except FileNotFoundError:
@@ -584,7 +593,7 @@ def pytest(env, extra):
 
 
 @contextlib.contextmanager
-def stack_lock(home=COORDINATION):
+def stack_lock(home=COORDINATION, *, reserve=True):
     """Reserve fixed host ports for one checkout/state until successful down."""
     checked_directory(home, private=True, create=True)
     handle = os.fdopen(os.open(home / "stack.lock",
@@ -599,7 +608,8 @@ def stack_lock(home=COORDINATION):
         if owner.exists() and json.loads(owner.read_text()) != identity:
             raise Failure("another checkout/state owns the local E2E stack; "
                           "run down with its original checkout and E2E_STATE_DIR")
-        atomic_json(owner, identity)
+        if reserve:
+            atomic_json(owner, identity)
         yield
     finally:
         handle.close()
@@ -610,6 +620,12 @@ def up(env):
     build(env)
     existing = compose_services(env)
     previous = load_pids()
+    guests = {}
+    for pid in box_processes():
+        try:
+            guests[pid] = process_starttime(pid)
+        except FileNotFoundError:
+            pass
     host_starting = False
     try:
         compose(["up", "-d"], env)
@@ -626,7 +642,9 @@ def up(env):
                    if entry != previous.get(name)}
             stop_host(new)
             if host_starting:
-                leftover = stop_orphaned_boxes()
+                created = [pid for pid in box_processes()
+                           if pid not in guests or not process_matches(pid, guests[pid])]
+                leftover = stop_orphaned_boxes(pids=created)
                 if leftover:
                     print("[e2e] leftover box processes; run down to retry cleanup", file=sys.stderr)
             if not existing:
@@ -660,6 +678,7 @@ def down(env):
     if removed:
         print(f"[e2e] removed {removed} leftover box director"
               f"{'y' if removed == 1 else 'ies'}", flush=True)
+    (STATE / "compose-engine.json").unlink(missing_ok=True)
     (COORDINATION / "owner.json").unlink(missing_ok=True)
 
 
@@ -720,7 +739,7 @@ def main(argv=None):
         if args.command == "doctor":
             doctor(dict(os.environ))
         else:
-            with stack_lock():
+            with stack_lock(reserve=args.command in ("setup", "up", "run")):
                 env = base_env()
                 if args.command == "down":
                     down(env)

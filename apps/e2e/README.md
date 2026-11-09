@@ -53,12 +53,15 @@ make test:e2e:down
 
 `make test:e2e:down` also terminates `bwrap`/`boxlite-shim` processes left in this checkout's runtime home by an interrupted run, removes their box directories, and fails if any process survives. The jailer starts every shim with `setsid()`, so signalling the runner's process group never reaches them.
 
-The fixed host ports support one managed stack per user on a host. Lifecycle commands share a user-wide lock and persist the owning checkout and state directory until a successful `down`. Another checkout or `E2E_STATE_DIR` fails before changing resources; stop the owner using its original checkout and state directory first. Compose projects and runtime homes include the user, checkout and state identity and cannot be overridden by inherited Compose settings. Switching state after teardown therefore does not reuse volumes encrypted with another state's keys. PID records are published atomically.
+The fixed host ports support one managed stack at a time on a host, including across users; coordinate shared hosts and run stacks sequentially. `status` takes the lifecycle lock without reserving an unused stack. Lifecycle commands share a user-wide lock and persist the owning checkout and state directory until a successful `down`. Another checkout or `E2E_STATE_DIR` fails before changing resources; stop the owner using its original checkout and state directory first. Compose projects and runtime homes include the user, checkout and state identity and cannot be overridden by inherited Compose settings. Switching state after teardown therefore does not reuse volumes encrypted with another state's keys. PID records are published atomically.
 
 Runtime roots and the coordination directory are opened without following symlinks,
 checked for the current user's ownership, and made private. Foreign-owned or
-group/other-writable directories are refused rather than repaired. Safe owned
-0755 parents from older launchers are tightened to 0700. Teardown also verifies
+group/other-writable runtime parents are refused rather than repaired. Safe owned
+0755 parents from older launchers are tightened to 0700. Inside that private root,
+owned Runner-created box directories are tightened to 0700, including directories
+from earlier runs with umask 002; foreign owners and symlinks remain rejected.
+Host services inherit umask 077. Teardown also verifies
 the `boxes` directory and its children before recursively removing anything.
 
 Before replacing the Runner, startup reaps owned box process trees only when
@@ -70,7 +73,9 @@ This does not replace the runtime's database reconciliation or VM adoption.
 
 An existing virtual environment created with `--without-pip` is supported:
 dependency setup bootstraps pip through that interpreter's bundled `ensurepip`
-before installing the pinned uv version.
+before installing the pinned uv version. To select another Python version, create
+its virtual environment first and point `E2E_PYTHON` at its existing interpreter;
+unsupported executable names are rejected before creating a new environment.
 
 Host API, Runner and proxy listeners bind to loopback through `BOXLITE_LISTEN_HOST=127.0.0.1`. Other deployments retain their existing all-interface default when this variable is unset. Credentials and encryption keys are generated once in `target/e2e/credentials.json` (mode 0600); preserve this file with the stack's data. Initial `POSTGRES_PASSWORD` and `MINIO_PASSWORD` overrides are persisted and later environment changes do not rotate existing credentials. Generated Compose `.env` files contain no passwords.
 
@@ -78,7 +83,7 @@ Every `setup`, `up` and `test:e2e` currently syncs dependencies, builds and rest
 
 This invalidation follows [Go's documented external C-library cache limitation](https://pkg.go.dev/cmd/go#hdr-Build_and_test_caching). Compose isolation follows its [project-name boundary](https://docs.docker.com/compose/how-tos/project-name/); a separate user-wide owner reservation is still needed because project names do not isolate host ports.
 
-Startup failure or interruption stops newly started host services and box processes, removes newly created dependency containers, and preserves existing dependency containers, volumes and logs. Build failures occur before stopping existing services. A restart intentionally replaces the old host processes; failed replacements are stopped rather than left half-running. Failed startup retains ownership so recovery or teardown uses the same checkout/state.
+Startup failure or interruption stops newly started host services and box processes, preserves pre-existing guest process identities, removes newly created dependency containers, and preserves existing dependency containers, volumes and logs. Build failures occur before stopping existing services. A restart intentionally replaces the old host processes; failed replacements are stopped rather than left half-running. Failed startup retains ownership so recovery or teardown uses the same checkout/state.
 
 Each dependency-readiness subprocess shares its check's remaining deadline, so
 a connected but unresponsive Redis or PostgreSQL cannot block startup forever.
@@ -93,6 +98,12 @@ make test:e2e E2E_ARGS='cases/test_lifecycle.py -x'
 ```
 
 Stacks created before checkout-specific Compose projects used the shared `boxlite-e2e` project and fixed encryption keys. Stop those stacks with the old launcher before upgrading. Their volumes are not adopted or deleted automatically; keep their original state and keys if data must be migrated. The new launcher creates a separate project and must not be used to clean up an old project's resources.
+
+Compose uses the configured Docker connection; Podman users must explicitly set
+`DOCKER_HOST=unix:///path/to/podman.sock`. The launcher saves Docker connection
+environment variables in `target/e2e/compose-engine.json` and reuses them for all
+lifecycle commands. Keep the selected Docker context unchanged until teardown;
+a newly available Podman socket never changes the selected engine automatically.
 
 Nix is optional: install the same tools with the distro and run the same commands. Host prerequisites remain Docker with Compose v2, `/dev/kvm`, and (for volumes) `/dev/fuse`, `mount-s3` and `user_allow_other` in `/etc/fuse.conf`. The devshell includes `docker-compose`; Ubuntu can use `docker-compose-v2`. The bootstrap instructions below are the legacy Ubuntu system-service path and are no longer used by `make test:e2e:setup`.
 

@@ -26,6 +26,10 @@ def prepare(value):
     if home.exists() and not (home / "pyvenv.cfg").is_file():
         raise ValueError("E2E_PYTHON must point into a virtual environment")
     if not home.exists():
+        supported = {"python", "python3", f"python{sys.version_info.major}.{sys.version_info.minor}"}
+        if python.parent.name != "bin" or python.name not in supported:
+            raise ValueError("Create the requested virtual environment first with its Python version; "
+                             "then set E2E_PYTHON to its existing bin/python executable")
         subprocess.run([sys.executable, "-m", "venv", str(home)], check=True)
     subprocess.run([str(python), "-c",
                     "import sys; sys.exit(0 if sys.version_info >= (3, 11) "

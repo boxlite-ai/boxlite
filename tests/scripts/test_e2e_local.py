@@ -103,6 +103,80 @@ class LocalE2ETest(unittest.TestCase):
                 pass
         self.assertEqual(list(outside.iterdir()), [])
 
+    def test_compose_does_not_switch_to_new_podman_socket(self):
+        with patch.object(local.shutil, "which", side_effect=lambda name: "/bin/" + name), \
+                patch.object(local.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, stdout="/tmp")), \
+                patch.object(local, "run") as run:
+            local.compose(["down"], {"PATH": "/bin"})
+        self.assertNotIn("DOCKER_HOST", run.call_args.kwargs["env"])
+        with patch.object(local.shutil, "which", return_value="/bin/docker-compose"), \
+                patch.object(local, "run") as run:
+            local.compose(["down"], {"DOCKER_HOST": "unix:///different.sock"})
+        self.assertNotIn("DOCKER_HOST", run.call_args.kwargs["env"])
+
+    def test_failed_start_preserves_preexisting_guest_processes(self):
+        with patch.object(local, "write_files"), patch.object(local, "build"), \
+                patch.object(local, "compose_services", return_value=set()), \
+                patch.object(local, "compose"), patch.object(local, "wait_dependencies"), \
+                patch.object(local, "create_bucket"), patch.object(local, "stop_host"), \
+                patch.object(local, "box_processes", side_effect=[[111], [111, 222]]), \
+                patch.object(local, "process_starttime", return_value="123"), \
+                patch.object(local, "process_matches", return_value=True), \
+                patch.object(local, "stop_orphaned_boxes", return_value=[]) as stop, \
+                patch.object(local, "start", side_effect=local.Failure("readiness")):
+            with self.assertRaisesRegex(local.Failure, "readiness"):
+                local.up({})
+        self.assertEqual(stop.call_args.kwargs.get("pids"), [222])
+
+    def test_missing_versioned_python_is_rejected_before_venv_creation(self):
+        import python_env
+        home = self.state / "new-venv"
+        try:
+            python_env.prepare(str(home / "bin/python99.99"))
+        except (ValueError, OSError):
+            pass
+        self.assertFalse(home.exists(), "setup left a venv with the wrong Python version")
+
+    def test_status_does_not_reserve_stack(self):
+        coordination = self.state / "coordination"
+        original = local.stack_lock
+        with patch.object(local, "stack_lock", side_effect=lambda **kw: original(coordination, **kw)), \
+                patch.object(local, "status"), patch.object(local, "base_env", return_value={}):
+            self.assertEqual(local.main(["status"]), 0)
+        with patch.object(local, "ROOT", self.state / "other-checkout"):
+            with original(coordination):
+                pass
+
+    def test_runner_directories_under_group_umask_allow_teardown(self):
+        home = self.state / "runtime"
+        with patch.object(local, "RUNTIME_HOME", home):
+            local.state_dirs()
+        previous = os.umask(0o002)
+        try:
+            box = home / "boxes/guest"
+            box.mkdir(parents=True)
+        finally:
+            os.umask(previous)
+        self.assertEqual(local.prune_box_dirs(local.box_dirs(home)), 1)
+        self.assertFalse(box.exists())
+
+    def test_stop_host_reaps_exited_direct_child(self):
+        process = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"],
+                                   start_new_session=True)
+        local.save_pids({"api": {"pid": process.pid,
+                                 "starttime": local.process_starttime(process.pid)}})
+        try:
+            import time
+            before = time.monotonic()
+            local.stop_host()
+            self.assertLess(time.monotonic() - before, 3,
+                            "cleanup waited for an unreaped zombie")
+            self.assertFalse(Path(f"/proc/{process.pid}").exists())
+        finally:
+            if process.poll() is None:
+                process.kill()
+            process.wait()
+
     def test_readiness_subprocess_cannot_outlive_deadline(self):
         script = (
             "import importlib.util, sys;"
