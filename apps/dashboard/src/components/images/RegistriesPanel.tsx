@@ -10,7 +10,7 @@ import {
   FormDialogFooter as DialogFooter,
   FormDialogBody,
 } from '@/components/ui/form-dialog'
-import { AsciiButton, PanelNote } from '@/components/ascii'
+import { AsciiButton } from '@/components/ascii'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -391,13 +391,6 @@ export function RegistriesPanel() {
                 </AsciiButton>
               </div>
             )}
-
-            {credentials.length > 0 && (
-              <PanelNote>
-                Credentials are write-only: BoxLite can pull with them and will never show them again. When several
-                cover one image, the longest repository prefix wins.
-              </PanelNote>
-            )}
           </>
         )}
       </div>
@@ -410,7 +403,7 @@ export function RegistriesPanel() {
               <DialogDescription>
                 {editing
                   ? 'Replace the login for this scope. Existing boxes are preserved.'
-                  : 'Stored write-only. BoxLite uses it only to pull.'}
+                  : 'Connect credentials to pull private images.'}
               </DialogDescription>
             </DialogHeader>
 
@@ -459,15 +452,20 @@ export function RegistriesPanel() {
                   id="registry-password"
                   type="password"
                   autoComplete="new-password"
+                  aria-describedby="registry-secret-help"
                   value={form.password}
                   onChange={(event) => setForm({ ...form, password: event.target.value })}
                   required
                 />
+                <p id="registry-secret-help" className="font-mono text-meta text-muted-foreground">
+                  Cannot be viewed after saving.
+                </p>
               </div>
               <div className="space-y-1">
                 <Label htmlFor="registry-prefix">Only for</Label>
                 <Input
                   id="registry-prefix"
+                  aria-describedby="registry-prefix-help"
                   disabled={!!editing}
                   value={form.repositoryPrefix}
                   onChange={(event) => setForm({ ...form, repositoryPrefix: event.target.value })}
@@ -475,10 +473,10 @@ export function RegistriesPanel() {
                   spellCheck={false}
                   className="font-mono"
                 />
-                <PanelNote>
-                  Repositories under this path; leave empty for the whole registry. This credential will cover{' '}
-                  <span className="text-foreground">{scope}</span>.
-                </PanelNote>
+                <p id="registry-prefix-help" className="font-mono text-meta leading-relaxed text-muted-foreground">
+                  Covers <span className="text-foreground">{scope}</span>. Leave empty for the whole registry. Longest
+                  matching prefix takes precedence.
+                </p>
               </div>
             </FormDialogBody>
 
