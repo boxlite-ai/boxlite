@@ -183,7 +183,7 @@ followed by POST `/ssh/enable`, without a Setup POST, and preserves the key down
 and path. The screenshots below use local mock data and contain no private keys.
 This verification does not establish a live cloud SSH handshake.
 
-On the main-based branch, the Dashboard suite with coverage passed all 97 test files
+On the main-based branch, the Dashboard suite passed all 97 test files
 and 839 tests. `make build:apps:dashboard` and `git diff --check` also passed. Validation
 reused the existing local dependency installation without changing the lockfile.
 Browser measurements confirm the scrolling body's right edge meets the dialog's
