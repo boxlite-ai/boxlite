@@ -230,20 +230,13 @@ mod tests {
         let home = PerTestBoxHome::isolated();
         let home_path = home.path.clone();
 
-        // Stand-in for a detached shim. argv[0] override + own
-        // pgroup match what a real shim spawn looks like.
-        let argv0 = "boxlite-shim testbox123abc".to_string();
+        // The leak check uses the PID file and liveness, not argv[0].
         let child = Command::new("sleep")
             .arg("30")
-            .arg0(&argv0)
             .process_group(0)
             .spawn()
             .expect("spawn stand-in shim");
         let shim_pid = child.id();
-
-        // Forget Child so its own Drop doesn't kill the stand-in
-        // before PerTestBoxHome::drop runs.
-        std::mem::forget(child);
 
         // Write a fake shim.pid into a BoxID-shaped dir.
         let box_dir = home_path.join("boxes").join("boxtestabc12");

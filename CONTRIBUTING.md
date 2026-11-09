@@ -43,6 +43,11 @@ Key test entry points:
 - `make test:apps:runner FILTER=NetworkPolicy` - runner Go tests with the local C/Go SDK
 - `make fmt:apps FILES='api/src/path.ts'` - format selected files relative to `apps/`
 
+Rust process tests use host `sleep` and `kill` executables from PATH rather
+than fixed `/bin` locations. Keep stand-ins' argv[0] unchanged: multicall
+coreutils uses it to select the command. Recovery and leak-check fixtures
+that record only a PID need a live process, not a shim-shaped command line.
+
 Python SDK tests run in two environments. Without the native extension
 (`make test:unit:python`, `make coverage:python` — the shape of the CI unit
 job, which never builds it), extension-dependent tests skip and everything
