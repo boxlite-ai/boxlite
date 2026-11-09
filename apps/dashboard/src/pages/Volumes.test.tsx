@@ -9,6 +9,7 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import Volumes from './Volumes'
+import { toast } from 'sonner'
 
 const READY_VOLUME = {
   id: 'f0f2f2b6-0b1e-4a1a-9c0a-1c2f3a4b5c6d',
@@ -73,6 +74,7 @@ describe('Volumes row action "+ Box"', () => {
   })
 
   beforeEach(() => {
+    vi.clearAllMocks()
     state.loading = false
     state.error = undefined
     state.empty = false
@@ -83,6 +85,7 @@ describe('Volumes row action "+ Box"', () => {
     act(() => root?.unmount())
     root = null
     document.body.innerHTML = ''
+    vi.unstubAllGlobals()
   })
 
   function renderPage() {
@@ -160,6 +163,60 @@ describe('Volumes row action "+ Box"', () => {
     const dialog = document.querySelector('[data-testid="create-box-dialog"]')
     expect(dialog).not.toBeNull()
     expect(dialog?.getAttribute('data-open')).toBe('true')
+  })
+
+  it.each([false, true])('copies the volume id and reports clipboard failure (%s)', async (fails) => {
+    const writeText = fails ? vi.fn().mockRejectedValue(new Error('denied')) : vi.fn().mockResolvedValue(undefined)
+    vi.stubGlobal('navigator', { clipboard: { writeText } })
+    renderPage()
+    await act(async () => document.querySelector<HTMLButtonElement>('button[title="Copy volume ID"]')!.click())
+    expect(writeText).toHaveBeenCalledWith(READY_VOLUME.id)
+    expect(fails ? toast.error : toast.success).toHaveBeenCalledWith(
+      fails ? 'Could not copy to clipboard' : 'Volume ID copied',
+    )
+    expect(fails ? toast.success : toast.error).not.toHaveBeenCalled()
+  })
+
+  it('requires the exact volume name before allowing deletion', () => {
+    state.permissions.push(OrganizationRolePermissionsEnum.DELETE_VOLUMES)
+    renderPage()
+    act(() => document.querySelector<HTMLButtonElement>(`button[aria-label="Delete ${READY_VOLUME.name}"]`)!.click())
+    const dialog = document.querySelector('[role="alertdialog"]')!
+    const confirm = [...dialog.querySelectorAll('button')].find((button) => button.textContent === 'Delete')!
+    expect(confirm.disabled).toBe(true)
+    const input = dialog.querySelector<HTMLInputElement>('input[aria-label="Confirm volume name"]')!
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, READY_VOLUME.name)
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    expect(confirm.disabled).toBe(false)
+    act(() => [...dialog.querySelectorAll('button')].find((button) => button.textContent === 'Cancel')!.click())
+    expect(document.querySelector('[role="alertdialog"]')).toBeNull()
+  })
+
+  it('clears a filter miss without treating the organization as empty', () => {
+    renderPage()
+    const input = document.querySelector<HTMLInputElement>('input[placeholder="Filter volumes…"]')!
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, 'missing')
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    expect(document.body.textContent).toContain('No volume matches “missing”')
+    expect(document.body.textContent).not.toContain('No volumes yet')
+    act(() => rowAction('Clear filter')?.click())
+    expect(input.value).toBe('')
+    expect(document.body.textContent).toContain(READY_VOLUME.name)
+    expect(rowAction('Clear filter')).toBeUndefined()
+  })
+
+  it('opens and cancels volume creation from the empty toolbar', () => {
+    state.empty = true
+    renderPage()
+    act(() => rowAction('New Volume')?.click())
+    expect(document.querySelector('[role="dialog"]')?.textContent).toContain('Storage that outlives a box')
+    expect(document.querySelector('input[aria-label="Volume name"]')).not.toBeNull()
+    act(() => rowAction('Cancel')?.click())
+    expect(document.querySelector('[role="dialog"]')).toBeNull()
   })
 
   it('hands the form the volume id, never the display name', () => {

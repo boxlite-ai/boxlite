@@ -521,12 +521,6 @@ body {
   .resource-toolbar {
     @apply flex flex-wrap items-center justify-between gap-3;
   }
-  .resource-search {
-    @apply flex h-10 w-full items-center gap-3 border border-border bg-background px-3 transition-colors sm:max-w-[380px] focus-within:border-foreground/50 focus-within:ring-2 focus-within:ring-foreground/10;
-  }
-  .resource-search input {
-    @apply w-full min-w-0 border-0 bg-transparent p-0 text-body text-foreground outline-none placeholder:text-muted-foreground;
-  }
   .resource-empty {
     @apply flex min-h-[280px] flex-col items-center justify-start gap-3 px-6 py-12 text-center;
   }

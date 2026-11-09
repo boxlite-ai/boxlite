@@ -41,7 +41,7 @@ Start the mock dashboard using the commands in [dashboard development](../../../
 
 ## Verification
 
-- Final dashboard suite: 98 files / 870 tests passed using the existing Nx dashboard target with `--run --maxWorkers=2`. Default-concurrency `make test:apps:dashboard` hit the existing five-second Quickstart interaction timeout; no timeout or assertion was relaxed.
+- Final dashboard suite: 99 files / 878 tests passed using the existing Nx dashboard target with `--run --maxWorkers=2`. Default-concurrency `make test:apps:dashboard` hit the existing five-second Quickstart interaction timeout; no timeout or assertion was relaxed.
 - Regression assertions were also run with all production files at main: the single Registry empty action, accurate inbound label and explicitly labelled image quota fail before the changes and pass with the final implementation.
 - Dashboard production build and whitespace validation passed. Formatting used `make fmt:apps FILES=...` for changed dashboard sources.
 - Proxy tunnel tests and API tunnel-service tests passed; preview-controller tests are blocked by incompatible locally linked Axios types. These screenshots do not verify deployed authentication, payment processing or SSH establishment.

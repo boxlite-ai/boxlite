@@ -311,6 +311,11 @@ describe('WalletSection top-up checkout', () => {
     await flush()
     expect(document.querySelector('[role="alert"]')?.textContent).toContain('Could not load billing history')
     expect(document.body.textContent).not.toContain('No billing documents yet')
+    await act(async () => {
+      ;[...document.querySelectorAll('button')].find((x) => x.textContent === 'Retry')!.click()
+    })
+    expect(mocks.refetchHistory).toHaveBeenCalledOnce()
+    mocks.refetchHistory.mockClear()
     const creditTab = [...document.querySelectorAll<HTMLElement>('[role="tab"]')].find((x) =>
       x.textContent?.includes('Credit activity'),
     )!
