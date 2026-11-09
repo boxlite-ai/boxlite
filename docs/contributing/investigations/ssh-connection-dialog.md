@@ -106,7 +106,12 @@ Optional sessionStorage remembers a validated key path and its host public key,
 scoped to API endpoint, authenticated identity, organization and box. A confirmed
 host change invalidates the path. Disabled status alone does not. Missing identity
 or unavailable storage falls back to component state. A remembered path is not proof
-that the file exists or that authentication will succeed.
+that the file exists or that authentication will succeed. Restoring a saved path
+shows a neutral reminder to confirm that the key remains authorized. A matching
+host cannot establish whether authorization changed while the page was closed;
+the reminder does not claim that any configuration change was detected. Fresh
+manual paths and keys from acknowledged Setup do not trigger this restored-path
+reminder. It shares the existing authorization notice's lifetime.
 
 The proxy command retains the existing
 `boxlite --path-prefix=… ssh --proxy -- BOX` operation with an explicit context
@@ -185,7 +190,7 @@ and path. The screenshots below use local mock data and contain no private keys.
 This verification does not establish a live cloud SSH handshake.
 
 On the main-based branch, the Dashboard suite passed all 97 test files
-and 855 tests. `make build:apps:dashboard` and `git diff --check` also passed. Validation
+and 856 tests. `make build:apps:dashboard` and `git diff --check` also passed. Validation
 reused the existing local dependency installation without changing the lockfile.
 Browser measurements confirm the scrolling body's right edge meets the dialog's
 inner border at desktop and narrow widths, with no horizontal content overflow;

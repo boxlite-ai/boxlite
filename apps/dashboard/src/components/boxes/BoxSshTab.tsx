@@ -89,8 +89,10 @@ function SshControls({
   const credentialsRef = useRef<SshCredentials | undefined>(undefined)
   const [replacementCredentials, setReplacementCredentials] = useState<SshCredentials>()
   const replacementRef = useRef<SshCredentials | undefined>(undefined)
-  const [identityNotice, setIdentityNotice] = useState<'path' | 'authorization'>()
   const [remembered] = useState(() => readSshPreferences(preferenceKey))
+  const [identityNotice, setIdentityNotice] = useState<'path' | 'authorization' | undefined>(
+    remembered.keyPath ? 'authorization' : undefined,
+  )
   const [cliExpanded, setCliExpanded] = useState(true)
   const [keyPath, setKeyPath] = useState(remembered.keyPath ?? '')
   const [accessConfirmed, setAccessConfirmed] = useState(false)
@@ -562,7 +564,7 @@ function SshControls({
                       {identityNotice && (
                         <p role="status" className="text-muted-foreground">
                           {identityNotice === 'authorization'
-                            ? 'SSH settings changed. Make sure this key is still authorized for this box.'
+                            ? 'Make sure this key is still authorized for this box.'
                             : 'SSH configuration changed. Enter the private key path for the current configuration.'}
                         </p>
                       )}
