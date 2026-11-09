@@ -1,90 +1,14 @@
-//! Exercise real CLI dispatch without a runtime, credentials, or a guest VM.
+//! CLI dispatch for `boxlite agent`: parsing and completion without a VM, and
+//! ignored real-VM tests that drive OpenCode through separate CLI processes.
+
+mod common;
+#[path = "../../boxlite/tests/common/opencode.rs"]
+mod opencode;
 
 use assert_cmd::Command;
 use predicates::str::contains;
-
-#[test]
-fn agents_flat_targets_fail_before_runtime_setup() {
-    let directory = tempfile::tempdir().unwrap();
-    let home = directory.path().join("runtime-must-not-exist");
-    let config = directory.path().join("missing-config.json");
-    let cases: &[(&[&str], &str)] = &[
-        (&["create", "box", "--agent", "coder"], "agents.create"),
-        (&["create", "--agent", "coder", "box"], "agents.create"),
-        (&["close", "box", "--agent", "agent"], "agent.close"),
-        (&["send", "box", "--agent", "agent", "hello"], "agent.send"),
-        (
-            &["inspect", "box", "--agent", "agent", "--turn", "turn"],
-            "turn.state",
-        ),
-        (&["events", "box", "--agent", "agent"], "agent.events"),
-        (
-            &["inspect", "box", "--agent", "agent", "--view", "requests"],
-            "agent.requests",
-        ),
-        (
-            &[
-                "respond",
-                "box",
-                "--agent",
-                "agent",
-                "--request",
-                "request",
-                r#"{"type":"answer","text":"yes"}"#,
-            ],
-            "agent.respond",
-        ),
-        (&["inspect", "box", "--agent", "agent"], "agent.state"),
-        (
-            &["inspect", "box", "--agent", "agent", "--view", "config"],
-            "agent.config",
-        ),
-        (
-            &[
-                "inspect",
-                "box",
-                "--agent",
-                "agent",
-                "--view",
-                "capabilities",
-            ],
-            "agent.capabilities",
-        ),
-        (
-            &["wait", "box", "--agent", "agent", "--turn", "turn"],
-            "turn.wait",
-        ),
-        (
-            &["events", "box", "--agent", "agent", "--turn", "turn"],
-            "turn.events",
-        ),
-        (
-            &[
-                "steer", "box", "--agent", "agent", "--turn", "turn", "use Rust",
-            ],
-            "turn.steer",
-        ),
-        (
-            &["interrupt", "box", "--agent", "agent", "--turn", "turn"],
-            "turn.interrupt",
-        ),
-    ];
-    for (args, operation) in cases {
-        Command::new(assert_cmd::cargo::cargo_bin!("boxlite"))
-            .env_clear()
-            .arg("--home")
-            .arg(&home)
-            .arg("--config")
-            .arg(&config)
-            .args(["--url", "not-a-valid-url", "agent"])
-            .args(*args)
-            .assert()
-            .code(1)
-            .stdout("")
-            .stderr(contains(format!("{operation} is not implemented")));
-        assert!(!home.exists(), "{operation} created runtime state");
-    }
-}
+use serde_json::Value;
+use std::time::Duration;
 
 #[test]
 fn agents_binary_help_works_and_malformed_input_is_a_usage_error() {
@@ -226,4 +150,163 @@ fn agents_fish_completion_uses_command_paths_not_message_words() {
             "unexpected {forbidden} for {input}: {output}"
         );
     }
+}
+
+/// A detached Box with OpenCode and a provider config for the fake model, set
+/// up through the CLI so later `boxlite agent` processes find it running.
+fn opencode_box(ctx: &common::TestContext, name: &str, model_port: u16) {
+    let binary = std::env::var(opencode::BINARY_ENV)
+        .unwrap_or_else(|_| panic!("set {}", opencode::BINARY_ENV));
+    ctx.new_cmd()
+        .args([
+            "create",
+            "--name",
+            name,
+            "debian:bookworm-slim",
+            "sleep",
+            "infinity",
+        ])
+        .assert()
+        .success();
+    ctx.new_cmd().args(["start", name]).assert().success();
+    let config = ctx.home.join("opencode.json");
+    std::fs::write(&config, opencode::provider_config(model_port).to_string()).unwrap();
+    ctx.new_cmd()
+        .args(["exec", name, "--", "mkdir", "-p", "/root/.config/opencode"])
+        .assert()
+        .success();
+    ctx.new_cmd()
+        .arg("cp")
+        .arg(&binary)
+        .arg(format!("{name}:/usr/local/bin/opencode"))
+        .assert()
+        .success();
+    ctx.new_cmd()
+        .arg("cp")
+        .arg(&config)
+        .arg(format!("{name}:/root/.config/opencode/opencode.json"))
+        .assert()
+        .success();
+    ctx.new_cmd()
+        .args([
+            "exec",
+            name,
+            "--",
+            "chmod",
+            "755",
+            "/usr/local/bin/opencode",
+        ])
+        .assert()
+        .success();
+}
+
+/// Run `boxlite agent ARGS` and parse its single JSON record.
+fn agent_json(ctx: &common::TestContext, args: &[&str]) -> Value {
+    let output = ctx
+        .new_cmd()
+        .timeout(Duration::from_secs(180))
+        .arg("agent")
+        .args(args)
+        .assert()
+        .success();
+    serde_json::from_slice(&output.get_output().stdout).unwrap()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs a VM, network and BOXLITE_TEST_OPENCODE_BINARY; run make test:integration:agents"]
+async fn agents_drive_opencode_across_cli_processes() {
+    let (model_port, _log) = opencode::start_fake_model().await;
+    let ctx = common::boxlite();
+    let name = "cli-agent";
+    opencode_box(&ctx, name, model_port);
+
+    let created = agent_json(
+        &ctx,
+        &[
+            "create",
+            name,
+            "--agent",
+            "opencode",
+            "--agent-config",
+            r#"{"model":"fake/fake-model"}"#,
+        ],
+    );
+    let agent_id = created["id"].as_str().unwrap().to_owned();
+    assert!(agent_id.starts_with("ses_"), "{created}");
+
+    let turn = agent_json(&ctx, &["send", name, "--agent", &agent_id, "hello"]);
+    let turn_id = turn["id"].as_str().unwrap().to_owned();
+    assert_eq!(turn["agent_id"], agent_id.as_str());
+    let result = agent_json(
+        &ctx,
+        &[
+            "wait",
+            name,
+            "--agent",
+            &agent_id,
+            "--turn",
+            &turn_id,
+            "--timeout-seconds",
+            "120",
+        ],
+    );
+    assert_eq!(result["status"], "completed", "{result}");
+    assert_eq!(result["text"], "pong: hello", "{result}");
+    let inspected = agent_json(
+        &ctx,
+        &["inspect", name, "--agent", &agent_id, "--turn", &turn_id],
+    );
+    assert_eq!(inspected["status"], "completed", "{inspected}");
+    let config = agent_json(
+        &ctx,
+        &["inspect", name, "--agent", &agent_id, "--view", "config"],
+    );
+    assert_eq!(config["model"], "fake/fake-model", "{config}");
+
+    ctx.cleanup_box(name);
+}
+
+#[test]
+#[ignore = "needs a VM and network; run make test:integration:agents"]
+fn agents_reach_the_local_runtime_and_report_a_box_without_opencode() {
+    let ctx = common::boxlite();
+    let name = "cli-agent-missing";
+    ctx.new_cmd()
+        .args([
+            "create",
+            "--name",
+            name,
+            "debian:bookworm-slim",
+            "sleep",
+            "infinity",
+        ])
+        .assert()
+        .success();
+    ctx.new_cmd().args(["start", name]).assert().success();
+    ctx.new_cmd()
+        .timeout(Duration::from_secs(180))
+        .args(["agent", "create", name, "--agent", "opencode"])
+        .assert()
+        .code(1)
+        .stdout("")
+        .stderr(contains("must provide OpenCode 2.2.2"));
+    ctx.cleanup_box(name);
+}
+
+#[test]
+#[ignore = "needs a VM and network; run make test:integration:agents"]
+fn agents_on_a_rest_profile_report_unsupported() {
+    let serve = common::serve::ServeChild::start();
+    let created = serve.client(&["create", "--name", "cli-agent-rest", "alpine:latest"]);
+    assert!(created.status.success(), "{created:?}");
+    let output = serve.client(&["agent", "create", "cli-agent-rest", "--agent", "opencode"]);
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert!(output.stdout.is_empty());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("agents require a local runtime"),
+        "{output:?}"
+    );
+    let removed = serve.client(&["rm", "--force", "cli-agent-rest"]);
+    assert!(removed.status.success(), "{removed:?}");
+    serve.wait_until_no_boxes();
 }

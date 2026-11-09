@@ -1011,10 +1011,17 @@ configured. A forwarding failure leaves the preceding configuration unchanged.
 
 ### `boxlite agent`
 
-Agent commands address a Box, an agent and, where needed, a turn. See the
-[failure contract](../agents.md#failure-contract) for operation availability.
-Unsupported operations report an error on stderr and exit with code 1 before
-runtime initialization. Malformed arguments use the normal CLI usage error (code 2).
+Agent commands address a Box, an agent and, where needed, a turn. Each run
+reconnects to the agent by ID, so separate processes share one agent. They work on a
+local runtime with [OpenCode in the Box](../agents.md#opencode-on-a-local-runtime);
+a `--url` profile and operations OpenCode lacks report `Unsupported`. Runtime errors
+go to stderr with exit code 1. Malformed arguments use the normal CLI usage error
+(code 2).
+
+Use a running Box created with `boxlite create` and `boxlite start`, or `boxlite run -d`:
+a Box that is not detached stops when the CLI process that started it exits, which cuts
+off a running turn. Each local `boxlite` process holds the BoxLite home for its whole
+run, so while `events` streams, other commands on that home fail until it ends.
 
 | Purpose | Command after `boxlite agent` | Operation |
 |---|---|---|
@@ -1029,8 +1036,8 @@ runtime initialization. Malformed arguments use the normal CLI usage error (code
 | Interact | `respond BOX --agent AGENT --request REQUEST JSON` | Answer a question or approve/deny a permission request. |
 
 `BOX` is positional, as in `boxlite exec`. Creation requires `--agent IMPLEMENTATION`.
-For example, `boxlite agent create dev --agent coder` selects implementation
-`coder` inside Box `dev`. Other commands use `--agent ID` for a created instance.
+For example, `boxlite agent create dev --agent opencode` selects implementation
+`opencode` inside Box `dev`. Other commands use `--agent ID` for a created instance.
 Mutations never infer an active turn. `inspect --view config|capabilities|requests` selects an agent-only
 read and cannot be combined with `--turn`; omission reads state. The SDK's
 `get`/`get_turn` handle lookups are implicit in CLI targeting.
@@ -1052,12 +1059,33 @@ data and response arguments must be valid JSON. Response JSON uses either
 `{"type":"permission","approved":false}`. The
 [agent API reference](../agents.md#inputs-and-records) describes other record fields.
 
+Output is JSON on stdout, in the
+[record shapes of the C API](../agents.md#c-api-and-ownership):
+
+| Command | Prints | Exit code |
+|---|---|---|
+| `create` | `{"id":"ses_…"}`, the ID later commands pass as `--agent` | 0 |
+| `send`, `respond`, `inspect --turn` | Turn snapshot | 0 |
+| `inspect` | Agent snapshot | 0 |
+| `inspect --view config\|capabilities\|requests` | Config, capabilities, request array | 0 |
+| `wait` | Result, including for `failed` and `cancelled` turns; branch on its `status` | 0; 1 when `--timeout-seconds` expires or the turn is `unknown`, which never interrupts it |
+| `steer` | Steering receipt | 0 |
+| `events` | One event record per line, flushed as it arrives, until the stream ends | 1 when the stream ends with an error, after every earlier record |
+| `close`, `interrupt` | Nothing | 0 |
+
+The agent-level OpenCode stream always ends with a `Network` error, for example
+when its Box stops, so `events` without `--turn` exits with code 1.
+
 ```bash
-boxlite agent create dev --agent coder --cwd /workspace --agent-config '{"model":"model-id"}'
-boxlite agent send dev --agent agent-id "Review this code" --mode reject
-boxlite agent inspect dev --agent agent-id --view requests
-boxlite agent steer dev --agent agent-id --turn turn-id "Focus on tests" --idempotency-key steer-1
-boxlite agent events dev --agent agent-id --turn turn-id --after cursor-1
+boxlite create --name dev debian:bookworm-slim sleep infinity
+boxlite start dev
+boxlite agent create dev --agent opencode --cwd /workspace --agent-config '{"model":"provider/model"}'
+# {"id":"ses_01K…"}
+boxlite agent send dev --agent ses_01K… "Review this code"
+# {"id":"msg_01K…","agent_id":"ses_01K…","status":"queued",…}
+boxlite agent wait dev --agent ses_01K… --turn msg_01K… --timeout-seconds 600
+# {"turn_id":"msg_01K…","status":"completed","outcome":"answer","text":"…",…}
+boxlite agent events dev --agent ses_01K…   # until the stream ends; exit 1
 ```
 
 Agent commands accept the usual Box

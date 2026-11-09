@@ -243,6 +243,10 @@ impl AgentBackend for Session {
         ADAPTER
     }
 
+    fn id(&self) -> &str {
+        &self.id
+    }
+
     fn config(&self) -> &AgentConfig {
         &self.config
     }

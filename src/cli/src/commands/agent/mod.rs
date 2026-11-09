@@ -1,11 +1,22 @@
 //! Agent instance and turn commands.
 
-use anyhow::Result;
-use boxlite::BoxliteError;
+use crate::cli::GlobalFlags;
+use anyhow::{Result, anyhow};
+use boxlite::agents::{
+    AgentConfig, AgentControlOptions as AgentControlOptionsCore,
+    AgentCreateOptions as AgentCreateOptionsCore, AgentEventStream,
+    AgentEventsOptions as AgentEventsOptionsCore, AgentSendMode,
+    AgentSendOptions as AgentSendOptionsCore, AgentWaitOptions as AgentWaitOptionsCore,
+};
+use boxlite::{Agent, AgentTurn, BoxliteRuntime, LiteBox};
 use clap::{Args, Subcommand, ValueEnum};
+use futures::StreamExt;
 use serde_json::Value;
+use std::io::Write;
 use std::path::PathBuf;
+use std::time::Duration;
 
+mod records;
 #[cfg(test)]
 mod tests;
 
@@ -198,24 +209,170 @@ fn parse_json(input: &str) -> serde_json::Result<Value> {
     serde_json::from_str(input)
 }
 
-pub fn execute(args: AgentArgs) -> Result<()> {
-    let operation = match args.command {
-        AgentCommand::Create { .. } => "agents.create",
-        AgentCommand::Close { .. } => "agent.close",
-        AgentCommand::Send { .. } => "agent.send",
-        AgentCommand::Respond { .. } => "agent.respond",
-        AgentCommand::Inspect { target, options } => match options.view {
-            Some(AgentView::Config) => "agent.config",
-            Some(AgentView::Capabilities) => "agent.capabilities",
-            Some(AgentView::Requests) => "agent.requests",
-            None if target.turn.is_some() => "turn.state",
-            None => "agent.state",
-        },
-        AgentCommand::Events { target, .. } if target.turn.is_some() => "turn.events",
-        AgentCommand::Events { .. } => "agent.events",
-        AgentCommand::Wait { .. } => "turn.wait",
-        AgentCommand::Steer { .. } => "turn.steer",
-        AgentCommand::Interrupt { .. } => "turn.interrupt",
-    };
-    Err(BoxliteError::Unsupported(format!("{operation} is not implemented")).into())
+/// Run one agent command and print its JSON record on stdout.
+///
+/// Each run reconnects by ID (`Agents::get`, `Agent::get_turn`), which is how
+/// separate CLI processes share one agent.
+pub async fn execute(args: AgentArgs, global: &GlobalFlags) -> Result<()> {
+    let runtime = global.create_runtime()?;
+    match args.command {
+        AgentCommand::Create {
+            target,
+            agent,
+            options,
+        } => {
+            let agents = find_box(&runtime, &target).await?.agents();
+            let created = agents.create(&agent, options.into_core()?).await?;
+            // Only the ID: later commands target it, and not every adapter
+            // reports state (OpenCode does not).
+            print(&serde_json::json!({ "id": created.id() }))
+        }
+        AgentCommand::Close { target, options } => {
+            let agent = open_agent(&runtime, &target).await?;
+            Ok(agent.close(options.into_core()).await?)
+        }
+        AgentCommand::Send {
+            target,
+            text,
+            options,
+        } => {
+            let agent = open_agent(&runtime, &target).await?;
+            let turn = agent.send(&text, options.into_core()).await?;
+            print(&records::turn_state(&turn.state()?))
+        }
+        AgentCommand::Respond {
+            target,
+            request,
+            response,
+            options,
+        } => {
+            let agent = open_agent(&runtime, &target).await?;
+            let response = records::parse_response(response)?;
+            let turn = agent
+                .respond(&request, response, options.into_core())
+                .await?;
+            print(&records::turn_state(&turn.state()?))
+        }
+        AgentCommand::Inspect { target, options } => {
+            let agent = open_agent(&runtime, &target.agent).await?;
+            let record = match (target.turn, options.view) {
+                (Some(turn), _) => records::turn_state(&agent.get_turn(&turn).await?.state()?),
+                (None, None) => records::agent_state(&agent.state()?),
+                (None, Some(AgentView::Config)) => records::config(&agent.config()?),
+                (None, Some(AgentView::Capabilities)) => {
+                    records::capabilities(&agent.capabilities()?)
+                }
+                (None, Some(AgentView::Requests)) => records::requests(&agent.requests().await?),
+            };
+            print(&record)
+        }
+        AgentCommand::Events { target, options } => {
+            let agent = open_agent(&runtime, &target.agent).await?;
+            let options = AgentEventsOptionsCore {
+                after: options.after,
+            };
+            let events = match target.turn {
+                Some(turn) => agent.get_turn(&turn).await?.events(options).await?,
+                None => agent.events(options).await?,
+            };
+            print_events(events, &mut std::io::stdout().lock()).await
+        }
+        AgentCommand::Wait { target, options } => {
+            let turn = open_turn(&runtime, &target).await?;
+            let options = AgentWaitOptionsCore {
+                timeout: options.timeout_seconds.map(Duration::from_secs),
+            };
+            print(&records::result(&turn.wait(options).await?))
+        }
+        AgentCommand::Steer {
+            target,
+            text,
+            options,
+        } => {
+            let turn = open_turn(&runtime, &target).await?;
+            print(&records::receipt(
+                &turn.steer(&text, options.into_core()).await?,
+            ))
+        }
+        AgentCommand::Interrupt { target, options } => {
+            let turn = open_turn(&runtime, &target).await?;
+            Ok(turn.interrupt(options.into_core()).await?)
+        }
+    }
+}
+
+async fn find_box(runtime: &BoxliteRuntime, target: &BoxTarget) -> Result<LiteBox> {
+    runtime
+        .get(&target.target)
+        .await?
+        .ok_or_else(|| anyhow!("No such box: {}", target.target))
+}
+
+async fn open_agent(runtime: &BoxliteRuntime, target: &AgentTarget) -> Result<Agent> {
+    let agents = find_box(runtime, &target.sandbox).await?.agents();
+    Ok(agents.get(&target.agent_id).await?)
+}
+
+async fn open_turn(runtime: &BoxliteRuntime, target: &TurnTarget) -> Result<AgentTurn> {
+    let agent = open_agent(runtime, &target.agent).await?;
+    Ok(agent.get_turn(&target.turn).await?)
+}
+
+fn print(record: &Value) -> Result<()> {
+    println!("{record}");
+    Ok(())
+}
+
+/// Print one event per line as it arrives. A stream that ends with an error
+/// (the agent-level OpenCode stream always does) still delivers every earlier
+/// record before the error reaches stderr.
+async fn print_events(mut events: AgentEventStream, out: &mut impl Write) -> Result<()> {
+    while let Some(event) = events.next().await {
+        writeln!(out, "{}", records::event(&event?))?;
+        out.flush()?;
+    }
+    Ok(())
+}
+
+impl AgentCreateOptions {
+    fn into_core(self) -> Result<AgentCreateOptionsCore> {
+        let cwd = self
+            .cwd
+            .map(|cwd| {
+                cwd.into_os_string()
+                    .into_string()
+                    .map_err(|cwd| anyhow!("--cwd is not UTF-8: {}", cwd.to_string_lossy()))
+            })
+            .transpose()?;
+        let config = match self.agent_config {
+            Some(value) => records::parse_config(value)?,
+            None => AgentConfig::default(),
+        };
+        Ok(AgentCreateOptionsCore {
+            cwd,
+            config,
+            idempotency_key: self.control.idempotency_key,
+        })
+    }
+}
+
+impl AgentSendOptions {
+    fn into_core(self) -> AgentSendOptionsCore {
+        AgentSendOptionsCore {
+            mode: match self.mode {
+                SendMode::Queue => AgentSendMode::Queue,
+                SendMode::Reject => AgentSendMode::Reject,
+            },
+            data: self.data,
+            idempotency_key: self.control.idempotency_key,
+        }
+    }
+}
+
+impl AgentControlOptions {
+    fn into_core(self) -> AgentControlOptionsCore {
+        AgentControlOptionsCore {
+            idempotency_key: self.idempotency_key,
+        }
+    }
 }

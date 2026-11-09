@@ -41,6 +41,9 @@ trait AgentBackend: Send + Sync + std::fmt::Debug {
     /// Implementation and version named in errors, such as `OpenCode 2.2`.
     fn adapter(&self) -> &str;
 
+    /// The native agent ID that `Agents::get` accepts.
+    fn id(&self) -> &str;
+
     /// The configuration the agent reported when this handle was obtained.
     fn config(&self) -> &AgentConfig;
 
@@ -213,6 +216,11 @@ impl Agent {
         Self {
             backend: Arc::new(backend),
         }
+    }
+
+    /// The agent ID to pass to [`Agents::get`], such as from another process.
+    pub fn id(&self) -> &str {
+        self.backend.id()
     }
 
     /// Stop admissions and close the agent loop.
