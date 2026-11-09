@@ -435,8 +435,6 @@ pub struct Jailer<S: Sandbox> {
     pub(crate) additional_path_access: Vec<PathAccess>,
     /// Whether the shim runs a network backend and needs its AF_UNIX endpoints.
     pub(crate) network_backend_enabled: bool,
-    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
-    pub(crate) require_cpu_cgroup: bool,
 }
 
 impl<S: Sandbox> Jail for Jailer<S> {
@@ -533,14 +531,6 @@ impl<S: Sandbox> Jail for Jailer<S> {
             tracing::warn!("Sandbox not available, falling back to direct command");
         } else {
             tracing::info!("Jailer disabled, running shim without sandbox isolation");
-        }
-
-        #[cfg(target_os = "linux")]
-        if self.require_cpu_cgroup {
-            cgroup::require_membership(
-                &mut cmd,
-                &cgroup::cgroup_path(&self.box_id).join("cgroup.procs"),
-            );
         }
 
         // Pre-exec hook: PID file, FD preservation, FD cleanup, rlimits. The

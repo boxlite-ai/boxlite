@@ -299,29 +299,6 @@ fn cpu_quota_us(cpu_limit: crate::CpuLimit, limits: &ResourceLimits) -> u64 {
     })
 }
 
-/// Require membership before the jailer's FD cleanup closes the spawn error pipe.
-pub(crate) fn require_membership(cmd: &mut std::process::Command, path: &Path) {
-    use std::os::{fd::AsRawFd, unix::process::CommandExt};
-    let membership = std::fs::OpenOptions::new().write(true).open(path);
-    // SAFETY: only write and errno retrieval run after fork. The FD is opened
-    // in the parent; writing zero moves the calling process to this cgroup.
-    unsafe {
-        cmd.pre_exec(move || {
-            let file = membership.as_ref().map_err(|error| {
-                std::io::Error::from_raw_os_error(error.raw_os_error().unwrap_or(libc::EIO))
-            })?;
-            let written = libc::write(file.as_raw_fd(), b"0".as_ptr().cast(), 1);
-            if written == 1 {
-                Ok(())
-            } else if written < 0 {
-                Err(std::io::Error::last_os_error())
-            } else {
-                Err(std::io::Error::from_raw_os_error(libc::EIO))
-            }
-        });
-    }
-}
-
 /// Apply resource limits to a cgroup.
 fn apply_limits(cgroup_path: &Path, config: &CgroupConfig) -> Result<(), JailerError> {
     // Memory limit
@@ -537,28 +514,6 @@ mod tests {
             cpu_quota_us(crate::CpuLimit::new(0.5).unwrap(), &limits),
             50_000
         );
-    }
-
-    #[test]
-    fn cpu_limit_membership_failure_prevents_child_exec() {
-        // Exercise the real pre-exec write, including an FD that opens but cannot accept data.
-        let dir = tempfile::tempdir().unwrap();
-        let marker = dir.path().join("executed");
-        for path in [dir.path().join("missing"), PathBuf::from("/dev/full")] {
-            let mut command = std::process::Command::new("touch");
-            command.arg(&marker);
-            require_membership(&mut command, &path);
-            assert!(command.spawn().is_err());
-            assert!(
-                !marker.exists(),
-                "exec must not run after failed membership"
-            );
-        }
-        let mut command = std::process::Command::new("touch");
-        command.arg(&marker);
-        require_membership(&mut command, Path::new("/dev/null"));
-        assert!(command.status().unwrap().success());
-        assert!(marker.exists());
     }
 
     #[test]
