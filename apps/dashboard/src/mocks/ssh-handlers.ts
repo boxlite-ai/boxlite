@@ -13,15 +13,56 @@ const empty: SshStatus = {
 const route = '*/v1/:organizationId/boxes/:boxId/ssh'
 const scope = (params: PathParams) => `${params.organizationId}:${params.boxId}`
 
+// The preview must echo the generated host identity so the real UI can match keys.
+function hostPublicBlob(privateKey: string) {
+  const decoded = atob(privateKey.replace(/-----[^\n]+-----/g, '').replace(/\s/g, ''))
+  if (!decoded.startsWith('openssh-key-v1\0')) throw new Error('Invalid mock SSH key')
+  const bytes = Uint8Array.from(decoded, (character) => character.charCodeAt(0))
+  const view = new DataView(bytes.buffer)
+  let offset = 15
+  const uint32 = () => {
+    const value = view.getUint32(offset)
+    offset += 4
+    return value
+  }
+  const string = () => {
+    const size = uint32()
+    if (offset + size > bytes.length) throw new Error('Invalid mock SSH key')
+    const value = bytes.slice(offset, offset + size)
+    offset += size
+    return value
+  }
+  if (new TextDecoder().decode(string()) !== 'none') throw new Error('Encrypted mock SSH key')
+  string() // KDF name.
+  string() // KDF options.
+  if (uint32() !== 1) throw new Error('Invalid mock SSH key count')
+  const publicBlob = string()
+  if (!string().length) throw new Error('Missing mock SSH private-key block')
+  return publicBlob
+}
+
+function visibleStatus(saved: SshStatus = empty): SshStatus {
+  return saved.enabled ? saved : { ...empty, generation: saved.generation }
+}
+
 export const sshHandlers = [
-  http.get(route, ({ params }) => HttpResponse.json(states.get(scope(params)) ?? empty)),
-  http.post(route, ({ params }) => {
+  http.get(route, ({ params }) => HttpResponse.json(visibleStatus(states.get(scope(params))))),
+  http.post(route, async ({ params, request }) => {
+    let publicBlob: Uint8Array<ArrayBuffer>
+    try {
+      const config = (await request.json()) as { host_private_key?: unknown }
+      if (typeof config.host_private_key !== 'string') throw new Error('Missing mock SSH key')
+      publicBlob = hostPublicBlob(config.host_private_key)
+    } catch {
+      return HttpResponse.json({ message: 'Invalid SSH configuration' }, { status: 400 })
+    }
+    const fingerprint = new Uint8Array(await crypto.subtle.digest('SHA-256', publicBlob))
     const state = {
       enabled: true,
       generation: (states.get(scope(params))?.generation ?? 0) + 1,
       listen_address: '0.0.0.0:22',
-      host_public_key: 'mock-host-public-key',
-      host_key_fingerprint: 'SHA256:mock-preview-only',
+      host_public_key: `ssh-ed25519 ${btoa(String.fromCharCode(...publicBlob))}`,
+      host_key_fingerprint: `SHA256:${btoa(String.fromCharCode(...fingerprint)).replace(/=+$/, '')}`,
     }
     states.set(scope(params), state)
     return HttpResponse.json(state)
@@ -36,6 +77,6 @@ export const sshHandlers = [
   http.delete(route, ({ params }) => {
     const saved = states.get(scope(params))
     if (saved) states.set(scope(params), { ...saved, enabled: false })
-    return HttpResponse.json({ ...(saved ?? empty), enabled: false })
+    return HttpResponse.json(visibleStatus({ ...(saved ?? empty), enabled: false }))
   }),
 ]
