@@ -9,6 +9,7 @@ import { Response } from 'express'
 import { RegistrationJwtGuard, RegistrationRequest } from './registration-jwt.guard'
 import { registrationToken } from './registration-request'
 import { RegistrationService } from './registration.service'
+import { RegistrationRateLimitGuard } from './registration-rate-limit.guard'
 
 @ApiExcludeController()
 @Controller('auth/register')
@@ -16,7 +17,7 @@ export class RegistrationController {
   constructor(private readonly registration: RegistrationService) {}
 
   @Post()
-  @UseGuards(RegistrationJwtGuard)
+  @UseGuards(RegistrationRateLimitGuard, RegistrationJwtGuard)
   async register(
     @Req() request: RegistrationRequest,
     @Body() body: unknown,

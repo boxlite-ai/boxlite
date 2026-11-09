@@ -84,6 +84,30 @@ Existing users, including MCP tokens without profile claims, keep their local pr
 and existing permissions. New MCP users first complete registration in Dashboard.
 Notification connections check local user existence before joining rooms.
 
+## Registration request limits
+
+`RATE_LIMIT_REGISTRATION_LIMIT` defaults to 10 and `RATE_LIMIT_REGISTRATION_TTL`
+to 600 seconds. Both must be positive integers. Each registration POST consumes
+one source-IP slot before JWT verification, including invalid JWTs and retries for
+existing users. Instances share a Redis DB 1 fixed window starting at its first
+request; later requests do not extend it. This route uses the registration limiter
+instead of the general failed-auth limiter.
+
+Users sharing an egress IP share that allowance. A passed challenge does not
+guarantee a unique person or account. Protection starts at local BoxLite account
+creation; Auth0 identity creation and email delivery can already have occurred.
+
+Excess requests return `429 registration_rate_limited` and the remaining window in
+`Retry-After`, exposed through CORS. Redis failure returns
+`503 registration_rate_limit_unavailable`. Configuration reads, local-account checks
+and other business requests do not consume registration slots.
+
+Set `TRUST_PROXY_CIDRS` to the verified proxy IPs/CIDRs for the deployment's ingress;
+an empty value means direct connections only. The API uses Express's resolved
+client IP and combines IPv4-mapped IPv6 with the corresponding IPv4 bucket.
+Changes to the window length apply to new windows after redeployment; existing
+keys retain their remaining TTL.
+
 ## Box startup timeouts
 
 REST creation persists the Box before waiting up to 30 seconds for `STARTED`.

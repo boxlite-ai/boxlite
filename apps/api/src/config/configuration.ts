@@ -5,6 +5,7 @@
  */
 
 import { turnstileConfig } from './turnstile-config'
+import { registrationRateLimitConfig } from './registration-rate-limit-config'
 
 /**
  * A whole number at least 1, or a hard failure.
@@ -685,6 +686,7 @@ const configuration = {
     },
   },
   rateLimit: {
+    registration: registrationRateLimitConfig(),
     anonymous: {
       ttl: process.env.RATE_LIMIT_ANONYMOUS_TTL ? parseInt(process.env.RATE_LIMIT_ANONYMOUS_TTL, 10) : undefined,
       limit: process.env.RATE_LIMIT_ANONYMOUS_LIMIT ? parseInt(process.env.RATE_LIMIT_ANONYMOUS_LIMIT, 10) : undefined,

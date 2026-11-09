@@ -232,7 +232,10 @@ import { McpModule } from './mcp/mcp.module'
 export class AppModule implements NestModule {
   configure(consumer: MiddlewareConsumer) {
     consumer.apply(VersionHeaderMiddleware).forRoutes({ path: '{*path}', method: RequestMethod.ALL })
-    consumer.apply(FailedAuthRateLimitMiddleware).forRoutes({ path: '{*path}', method: RequestMethod.ALL })
+    consumer
+      .apply(FailedAuthRateLimitMiddleware)
+      .exclude({ path: 'auth/register', method: RequestMethod.POST })
+      .forRoutes({ path: '{*path}', method: RequestMethod.ALL })
     consumer.apply(MaintenanceMiddleware).forRoutes({ path: '{*path}', method: RequestMethod.ALL })
   }
 }

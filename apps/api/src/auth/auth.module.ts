@@ -26,6 +26,7 @@ import { RegistrationController } from './registration.controller'
 import { RegistrationService } from './registration.service'
 import { RegistrationJwtGuard } from './registration-jwt.guard'
 import { TurnstileService } from './turnstile.service'
+import { RegistrationRateLimitGuard } from './registration-rate-limit.guard'
 @Module({
   imports: [
     PassportModule.register({
@@ -44,6 +45,7 @@ import { TurnstileService } from './turnstile.service'
     RegistrationService,
     RegistrationJwtGuard,
     TurnstileService,
+    RegistrationRateLimitGuard,
     AccountLinkService,
     ApiKeyStrategy,
     {
