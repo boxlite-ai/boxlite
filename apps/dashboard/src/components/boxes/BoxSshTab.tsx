@@ -126,8 +126,12 @@ function SshControls({
   }, [])
 
   const observeStatus = useCallback(
-    (next: SshStatus, ownMutation = false) => {
-      if (!ownMutation && observedGeneration.current !== undefined && observedGeneration.current !== next.generation) {
+    (next: SshStatus, source: 'read' | 'mutation' | 'setup' = 'read') => {
+      if (
+        source === 'read' &&
+        observedGeneration.current !== undefined &&
+        observedGeneration.current !== next.generation
+      ) {
         authorizationChanged.current = true
       }
       if (next.enabled && next.host_public_key) {
@@ -138,7 +142,8 @@ function SshControls({
           pathHost.current = next.host_public_key
           rememberSshPreferences(preferenceKey, { keyPath: '', hostPublicKey: next.host_public_key })
           setIdentityNotice('')
-          authorizationChanged.current = false
+          // A matching host selects the key; only acknowledged Setup confirms its authorization.
+          authorizationChanged.current = source !== 'setup'
         }
         const obsoleteCredentials =
           credentialsRef.current && credentialsRef.current.hostPublicKey !== next.host_public_key
@@ -254,7 +259,7 @@ function SshControls({
           }
         }
         if (version !== requestVersion.current) return
-        observeStatus(next, true)
+        observeStatus(next, setupAttempted ? 'setup' : 'mutation')
         setAccessConfirmed(true)
         return
       }
@@ -278,13 +283,13 @@ function SshControls({
         setupAttempted = true
         const next = await requestSsh(api, organizationId, box.id, 'setup', keys.config)
         if (version !== requestVersion.current) return
-        observeStatus(next, true)
+        observeStatus(next, 'setup')
         setAccessConfirmed(true)
         return
       }
       const next = await requestSsh(api, organizationId, box.id, operation)
       if (version !== requestVersion.current) return
-      observeStatus(next, true)
+      observeStatus(next, 'mutation')
     } catch (error) {
       if (version === requestVersion.current) {
         if (operation === 'enable') {

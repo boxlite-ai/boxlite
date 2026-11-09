@@ -797,6 +797,47 @@ describe('BoxSshTab access and connection', () => {
     expect(document.querySelector('input')!.value).toBe('/tmp/saved-key')
   })
 
+  it.each(['status', 'enable'])(
+    'warns that recovered replacement authorization is unverified after %s',
+    async (recovery) => {
+      await firstSetup()
+      const replacement = {
+        ...credentials,
+        hostPublicKey: 'replacement-host',
+        config: { ...credentials.config, host_private_key: 'replacement-host-key' },
+      }
+      mocks.generate.mockResolvedValueOnce(replacement)
+      mocks.post.mockRejectedValueOnce(new Error('response lost'))
+      await click('Reset SSH configuration…')
+      await click('Reset SSH configuration')
+      const recoveredStatus = { ...status, host_public_key: replacement.hostPublicKey, generation: 4 }
+      if (recovery === 'status') {
+        mocks.get.mockResolvedValue({ data: recoveredStatus })
+      } else {
+        disabledStatus()
+        mocks.post.mockResolvedValueOnce({ data: recoveredStatus })
+      }
+      const writesBefore = mocks.post.mock.calls.length
+      await confirmAccess()
+      expect(document.body.textContent).toContain('Make sure this key is still authorized')
+      expect(button('Download private key')).toBeDefined()
+      expect(document.body.textContent).not.toContain('Download replacement key')
+      expect(mocks.post.mock.calls.slice(writesBefore).map(([path]) => path)).toEqual(
+        recovery === 'status' ? [] : ['v1/org-1/boxes/box-1/ssh/enable'],
+      )
+    },
+  )
+
+  it('accepts an acknowledged replacement Setup without an unverified-authorization warning', async () => {
+    await firstSetup()
+    mocks.generate.mockResolvedValueOnce({ ...credentials, hostPublicKey: 'replacement-host' })
+    mocks.post.mockResolvedValueOnce({ data: { ...status, host_public_key: 'replacement-host', generation: 2 } })
+    await click('Reset SSH configuration…')
+    await click('Reset SSH configuration')
+    expect(button('Download private key')).toBeDefined()
+    expect(document.body.textContent).not.toContain('Make sure this key is still authorized')
+  })
+
   it('offers an explicit confirmed reset after Enable fails without replacing configuration on cancel', async () => {
     disabledStatus()
     await render()

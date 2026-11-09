@@ -150,9 +150,14 @@ export function sshConnectionInstructions(apiUrl: string, organizationId: string
     chmodPath = shellPath(path)
     // -i checks the literal file before expanding percent tokens. IdentityFile
     // avoids that pre-check so a literal percent reaches the same file as chmod.
-    identity = path.includes('%')
-      ? `-o ${quote(`IdentityFile="${path.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/%/g, '%%')}"`)}`
-      : `-i ${shellPath(path)}`
+    // OpenSSH tilde expansion uses the account home, which may differ from HOME.
+    // Its environment expansion runs after percent expansion, preserving literal
+    // percent characters in HOME as well as in the supplied filename.
+    const identityPath = path.startsWith('~/') ? '${HOME}/' + path.slice(2) : path
+    identity =
+      path.includes('%') || path.startsWith('~/')
+        ? `-o ${quote(`IdentityFile="${identityPath.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/%/g, '%%')}"`)}`
+        : `-i ${shellPath(path)}`
   }
   return {
     filename,

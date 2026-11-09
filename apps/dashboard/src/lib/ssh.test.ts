@@ -86,6 +86,8 @@ describe('SSH connection instructions', () => {
     'NONE',
     'NoNe',
     '~/space key',
+    '~/percent%h-key',
+    '~/back\\slash"%key',
     "./quote'key",
     './percent%h-key',
     './back\\slash"%key',
@@ -93,7 +95,7 @@ describe('SSH connection instructions', () => {
     './$(touch injected)',
   ])('loads the exact SSH key at %s', async (path) => {
     vi.stubGlobal('window', { location: { origin: 'http://localhost:3000' } })
-    const directory = mkdtempSync(join(tmpdir(), 'boxlite-ssh-path-'))
+    const directory = mkdtempSync(join(tmpdir(), path.startsWith('~/') ? 'boxlite-home %h \"-' : 'boxlite-ssh-path-'))
     try {
       const credentials = await generateSshCredentials()
       const file = join(directory, path.replace(/^(~|\.)\//, ''))

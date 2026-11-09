@@ -110,7 +110,9 @@ credentials, including for generated commands; check it if authentication fails.
 
 Empty/invalid paths hide the command. `~/`, spaces, quotes,
 backslashes and literal percent signs are supported; control characters and
-`${...}` expansion are rejected. Relative paths resolve in the terminal's working
+`${...}` expansion in user input are rejected. `~/` resolves against the terminal's
+`HOME` for both chmod and SSH, including when it differs from the account home or
+contains literal percent signs. Relative paths resolve in the terminal's working
 directory. A relative filename equal to `none`, case-insensitively, is prefixed with
 `./` so OpenSSH loads it as a key file. API credentials are loaded by the CLI, never
 embedded in commands. Copy feedback belongs to the displayed command; a late copy

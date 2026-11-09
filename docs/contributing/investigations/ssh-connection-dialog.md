@@ -185,7 +185,7 @@ and path. The screenshots below use local mock data and contain no private keys.
 This verification does not establish a live cloud SSH handshake.
 
 On the main-based branch, the Dashboard suite passed all 97 test files
-and 850 tests. `make build:apps:dashboard` and `git diff --check` also passed. Validation
+and 855 tests. `make build:apps:dashboard` and `git diff --check` also passed. Validation
 reused the existing local dependency installation without changing the lockfile.
 Browser measurements confirm the scrolling body's right edge meets the dialog's
 inner border at desktop and narrow widths, with no horizontal content overflow;
@@ -221,6 +221,23 @@ indeterminate Setup followed by either old or replacement host identity, retaine
 downloads, and matching explicit contexts despite ambient overrides. OpenSSH identity
 checks verify the generated public key and actual identity-file loading without relying
 on the version-specific numeric key-type enum.
+
+### Host identity and local home expansion
+
+Recovering a replacement by host identity selects the matching download, but does
+not prove that its client key is still authorized. Adoption after an indeterminate
+Setup therefore retains a conservative authorization warning, whether recovery
+comes from GET or Enable. Only the acknowledged Setup response for the submitted
+configuration clears that warning.
+
+For a key path beginning with `~/`, both chmod and OpenSSH must resolve the same
+home directory, including when the path or HOME contains percent signs. The
+IdentityFile branch uses OpenSSH's
+`${HOME}` environment expansion for the leading home segment; shell chmod already
+uses `$HOME`. User-supplied variable expressions remain rejected. Real OpenSSH
+regressions use an isolated HOME different from the account home, including home
+directory names with spaces and percent signs, and verify identity loading and
+permissions on the same generated key.
 
 ### Before
 
