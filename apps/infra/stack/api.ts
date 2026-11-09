@@ -223,6 +223,9 @@ export function buildApi(input: ApiInputs) {
               TURNSTILE_TIMEOUT_MS: envOr('TURNSTILE_TIMEOUT_MS', '5000'),
             }
           : {}),
+        RATE_LIMIT_REGISTRATION_LIMIT: envOr('RATE_LIMIT_REGISTRATION_LIMIT', '10'),
+        RATE_LIMIT_REGISTRATION_TTL: envOr('RATE_LIMIT_REGISTRATION_TTL', '600'),
+        TRUST_PROXY_CIDRS: envOr('TRUST_PROXY_CIDRS', ''),
 
         // Encryption
         ENCRYPTION_KEY: envOr('ENCRYPTION_KEY', encryptionKey.result),
