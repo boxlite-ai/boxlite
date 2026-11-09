@@ -86,6 +86,21 @@ describe('attach audit over real WebSocket connections', () => {
         return row
       },
     }
+    Object.assign(repo, {
+      manager: {
+        connection: {
+          createQueryRunner: () => ({
+            connect: async () => ({ end: async () => undefined, connection: { stream: { destroy: () => undefined } } }),
+            startTransaction: async () => undefined,
+            query: async () => [],
+            commitTransaction: async () => undefined,
+            rollbackTransaction: async () => undefined,
+            release: async () => undefined,
+            manager: { getRepository: () => repo },
+          }),
+        },
+      },
+    })
     audit = new AuditService(repo as never, { get: () => false } as never, {} as never, {} as never, {} as never)
     runnerWs = new WebSocketServer({ noServer: true })
     runner = createServer()

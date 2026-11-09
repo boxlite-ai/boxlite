@@ -530,6 +530,18 @@ Process termination can leave no detach record; this does not infer a disconnect
 API Key, JWT and one-time ticket authentication share this lifecycle and retain their
 existing authorization policy. Completed detach inserts also honor `audit.consoleLogEnabled`.
 
+Each attach audit write has a five-second deadline, including pool acquisition and
+transaction cleanup. A timeout refuses an initial upgrade or emits a diagnostic for
+completion/detach. Active database connections are closed on expiry; transaction-local
+SQL timeouts bound server work. A timed-out commit can have an uncertain result and
+is not retried. Completion logs are emitted only after a successful commit.
+At most eight bounded audit writes per API instance may remain unfinished, including
+timed-out callers still waiting for a pool connection. Excess writes fail immediately.
+Late pool acquisitions are released without executing SQL. If pool acquisition never
+settles, those slots remain occupied; this bounds retention rather than guaranteeing
+pool recovery. Closed attach sessions remove their listeners and socket/request references
+without waiting for persistence. Ordinary HTTP auditing retains its existing behavior.
+
 Account-link adoption audits only after signature and identity validation. It records
 the primary/secondary IDs and the local ownership migration result, without an arbitrary
 organization association. Local success does not claim that subsequent Auth0 linking
@@ -537,7 +549,7 @@ succeeded. Retry attempts are recorded even when adoption is already complete.
 
 Run `make test:apps:api TEST_FILES='audit-refine.spec|audit-targets.spec|audit-special-writes.spec|audit-backfill.integration.spec|1794196800000'`;
 set the normal `DB_*` variables to include PostgreSQL concurrency and migration tests.
-Run `make test:apps:api TEST_FILES='attach-audit.spec|boxlite-ws-proxy.service.spec'`
+Run `make test:apps:api TEST_FILES='attach-audit.*spec|audit-write-deadline.*spec|audit-backfill.*spec|boxlite-ws-proxy.service.spec'`
 for real local WebSocket lifecycle and authentication tests.
 See the [audit schema](../../docs/contributing/architecture/platform/schema.md#audit_log)
 for backfill limits and index details.

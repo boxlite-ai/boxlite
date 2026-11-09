@@ -371,10 +371,13 @@ describes.
 `idx_audit_log_pending_created_at` on `(createdAt) WHERE "statusCode" IS NULL`.
 
 The pending index is built concurrently before deployment. Every minute the resolver
-claims at most four batches of 500 expired pending rows with `FOR UPDATE SKIP LOCKED`.
-Each batch atomically changes only null statuses to zero, with a five-second statement
-budget and one-second lock timeout; remaining or locked rows are eligible next run.
-The cutoff has no lower time bound, so downtime cannot strand old pending records.
+claims batches of 500 expired pending rows with `FOR UPDATE SKIP LOCKED`, until a
+batch returns fewer than 500 rows. The run renews its 30-second Redis lease and stops
+starting batches or issuing updates after detecting lost ownership. Each batch
+atomically changes only null statuses to zero, with a five-second statement budget
+and one-second lock timeout; locked rows remain eligible next run. The cutoff stays
+fixed at 30 minutes before the run started and has no lower time bound, so downtime
+cannot strand old pending records. Cron invocations on the same instance do not overlap.
 This dedicated SQL transition preserves final statuses without the ORM subscriber;
 ordinary per-record updates still use that subscriber.
 

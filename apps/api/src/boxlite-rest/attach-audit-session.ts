@@ -12,15 +12,20 @@ import { AuditService } from '../audit/services/audit.service'
 import { AuditAction } from '../audit/enums/audit-action.enum'
 import { AuditTarget } from '../audit/enums/audit-target.enum'
 
+const WRITE_TIMEOUT_MS = 5000
+const logger = new Logger('AttachAuditSession')
+const reportCompletionFailure = () => logger.warn('Failed to complete attach audit')
+const reportDisconnectFailure = () => logger.warn('Failed to persist attach disconnect audit')
+
 type AttachIdentity = { actorId: string; actorEmail: string; organizationId: string; targetId: string }
 
 /** Owns one upgrade's audit lifecycle, independent of the shared proxy. */
 export class AttachAuditSession {
-  private readonly logger = new Logger(AttachAuditSession.name)
   private readonly metadata: { connectionId: string; executionId: string }
   private logId?: string
   private request?: ClientRequest
   private upstream?: Socket
+  private client?: Socket
   private connected?: { at: string; started: number }
   private closed = false
   private completed = false
@@ -28,11 +33,12 @@ export class AttachAuditSession {
 
   private constructor(
     private readonly audit: AuditService,
-    private readonly client: Socket,
+    client: Socket,
     private readonly identity: AttachIdentity,
     executionId: string,
   ) {
     this.metadata = { connectionId: randomUUID(), executionId }
+    this.client = client
     client.once('close', this.onClose)
     client.once('end', this.onClientEnd)
     client.on('error', this.onError)
@@ -46,13 +52,16 @@ export class AttachAuditSession {
   ): Promise<AttachAuditSession | undefined> {
     const session = new AttachAuditSession(audit, client, identity, executionId)
     try {
-      const log = await audit.createLog({
-        ...identity,
-        action: AuditAction.ATTACH,
-        targetType: AuditTarget.BOX,
-        source: 'websocket-attach',
-        metadata: session.metadata,
-      })
+      const log = await audit.createLog(
+        {
+          ...identity,
+          action: AuditAction.ATTACH,
+          targetType: AuditTarget.BOX,
+          source: 'websocket-attach',
+          metadata: session.metadata,
+        },
+        WRITE_TIMEOUT_MS,
+      )
       session.logId = log.id
     } catch (error) {
       session.cleanup()
@@ -79,14 +88,14 @@ export class AttachAuditSession {
   }
 
   private readonly onUpgrade = (_response: IncomingMessage, upstream: Socket): void => {
-    if (this.closed || this.client.destroyed || this.client.readableEnded) {
+    if (!this.client || this.closed || this.client.destroyed || this.client.readableEnded) {
       upstream.destroy()
       this.onClose()
       return
     }
     // This precedes httpxy's write of 101: it proves Runner acceptance, not client receipt.
     this.connected = { at: new Date().toISOString(), started: performance.now() }
-    this.client.removeListener('end', this.onClientEnd)
+    this.client?.removeListener('end', this.onClientEnd)
     this.upstream = upstream
     upstream.once('close', this.onClose)
     upstream.on('error', this.onError)
@@ -106,7 +115,7 @@ export class AttachAuditSession {
 
   private readonly onClientEnd = (): void => {
     // Before piping starts, a peer FIN leaves this half-open socket alive.
-    this.client.destroy()
+    this.client?.destroy()
   }
 
   private readonly onRequestError = (): void => {
@@ -118,40 +127,48 @@ export class AttachAuditSession {
     // Claim closure before any persistence; both sockets may emit it in the same turn.
     this.closed = true
     this.hadError ||= hadError
+    const request = this.request
     this.cleanup()
     if (!this.connected) {
-      this.request?.destroy()
+      request?.destroy()
       this.completeAttach(0)
       return
     }
     void this.audit
-      .createLog({
-        ...this.identity,
-        action: AuditAction.DETACH,
-        targetType: AuditTarget.BOX,
-        source: 'websocket-attach',
-        // Internal event success, not an HTTP response or WebSocket close code.
-        statusCode: 200,
-        metadata: {
-          ...this.metadata,
-          connectedAt: this.connected.at,
-          disconnectedAt: new Date().toISOString(),
-          durationMs: Math.max(0, Math.round(performance.now() - this.connected.started)),
-          hadError: this.hadError,
+      .createLog(
+        {
+          ...this.identity,
+          action: AuditAction.DETACH,
+          targetType: AuditTarget.BOX,
+          source: 'websocket-attach',
+          // Internal event success, not an HTTP response or WebSocket close code.
+          statusCode: 200,
+          metadata: {
+            ...this.metadata,
+            connectedAt: this.connected.at,
+            disconnectedAt: new Date().toISOString(),
+            durationMs: Math.max(0, Math.round(performance.now() - this.connected.started)),
+            hadError: this.hadError,
+          },
         },
-      })
-      .catch(() => this.logger.warn('Failed to persist attach disconnect audit'))
+        WRITE_TIMEOUT_MS,
+      )
+      .catch(reportDisconnectFailure)
   }
 
   private completeAttach(statusCode: number): void {
     if (this.completed || !this.logId) return
     this.completed = true
     void this.audit
-      .updateLog(this.logId, {
-        statusCode,
-        ...(this.connected ? { metadata: { connectedAt: this.connected.at } } : {}),
-      })
-      .catch(() => this.logger.warn('Failed to complete attach audit'))
+      .updateLog(
+        this.logId,
+        {
+          statusCode,
+          ...(this.connected ? { metadata: { connectedAt: this.connected.at } } : {}),
+        },
+        WRITE_TIMEOUT_MS,
+      )
+      .catch(reportCompletionFailure)
   }
 
   private removeRequestListeners(): void {
@@ -162,10 +179,13 @@ export class AttachAuditSession {
 
   private cleanup(): void {
     this.removeRequestListeners()
-    this.client.removeListener('close', this.onClose)
-    this.client.removeListener('end', this.onClientEnd)
-    this.client.removeListener('error', this.onError)
+    this.client?.removeListener('close', this.onClose)
+    this.client?.removeListener('end', this.onClientEnd)
+    this.client?.removeListener('error', this.onError)
     this.upstream?.removeListener('close', this.onClose)
     this.upstream?.removeListener('error', this.onError)
+    this.client = undefined
+    this.upstream = undefined
+    this.request = undefined
   }
 }

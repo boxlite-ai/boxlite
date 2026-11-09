@@ -31,7 +31,7 @@ databaseSuite('audit backfill on PostgreSQL', () => {
     service = new (AuditService as any)(
       db.getRepository(AuditLog),
       { get: () => false },
-      { lock: async () => true, unlock: async () => undefined },
+      { acquireLease: async () => ({ signal: new AbortController().signal, release: async () => undefined }) },
     )
   })
 
@@ -42,19 +42,26 @@ databaseSuite('audit backfill on PostgreSQL', () => {
     }
   })
 
-  it('bounds a run to 2000 expired pending rows and drains the rest on replay', async () => {
-    await db.query(`INSERT INTO audit_log (id, "actorId", "actorEmail", action, "createdAt")
+  it.each([2100, 2500])(
+    'drains %i rows in one run and is safe to replay',
+    async (count) => {
+      await db.query(
+        `INSERT INTO audit_log (id, "actorId", "actorEmail", action, "createdAt")
       SELECT md5(n::text)::uuid, 'actor', '', 'create', now() - interval '1 hour'
-      FROM generate_series(1, 2100) n`)
-    await service.resolveDanglingLogs()
-    expect(await db.query('SELECT count(*)::int AS pending FROM audit_log WHERE "statusCode" IS NULL')).toEqual([
-      { pending: 100 },
-    ])
-    await service.resolveDanglingLogs()
-    expect(await db.query('SELECT count(*)::int AS pending FROM audit_log WHERE "statusCode" IS NULL')).toEqual([
-      { pending: 0 },
-    ])
-  }, 30000)
+      FROM generate_series(1, $1::int) n`,
+        [count],
+      )
+      await service.resolveDanglingLogs()
+      expect(await db.query('SELECT count(*)::int AS pending FROM audit_log WHERE "statusCode" IS NULL')).toEqual([
+        { pending: 0 },
+      ])
+      await service.resolveDanglingLogs()
+      expect(await db.query('SELECT count(*)::int AS pending FROM audit_log WHERE "statusCode" IS NULL')).toEqual([
+        { pending: 0 },
+      ])
+    },
+    30000,
+  )
 
   it('preserves recent pending and finalized rows, and persists explicit unknown status', async () => {
     const repo = db.getRepository(AuditLog)
