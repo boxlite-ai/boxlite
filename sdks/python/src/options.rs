@@ -532,6 +532,9 @@ pub(crate) struct PyBoxOptions {
     pub(crate) rootfs_path: Option<String>,
     #[pyo3(get, set)]
     pub(crate) cpus: Option<u8>,
+    /// Creation-only aggregate CPU limit in cores (Linux).
+    #[pyo3(get, set)]
+    pub(crate) cpu_limit: Option<f64>,
     #[pyo3(get, set)]
     pub(crate) memory_mib: Option<u32>,
     #[pyo3(get, set)]
@@ -610,6 +613,7 @@ impl PyBoxOptions {
         tty=None,
         advanced=None,
         secrets=vec![],
+        cpu_limit=None,
     ))]
     #[allow(clippy::too_many_arguments)]
     fn new(
@@ -634,11 +638,13 @@ impl PyBoxOptions {
         tty: Option<bool>,
         advanced: Option<PyAdvancedBoxOptions>,
         secrets: Vec<PySecret>,
+        cpu_limit: Option<f64>,
     ) -> Self {
         Self {
             image,
             rootfs_path,
             cpus,
+            cpu_limit,
             memory_mib,
             disk_size_gb,
             working_dir,
@@ -702,6 +708,7 @@ impl TryFrom<PyBoxOptions> for BoxOptions {
 
         let mut opts = BoxOptions {
             cpus: py_opts.cpus,
+            cpu_limit: py_opts.cpu_limit.map(boxlite::CpuLimit::new).transpose()?,
             memory_mib: py_opts.memory_mib,
             disk_size_gb: py_opts.disk_size_gb,
             working_dir: py_opts.working_dir,
@@ -1188,6 +1195,7 @@ mod tests {
             image: None,
             rootfs_path: None,
             cpus: None,
+            cpu_limit: None,
             memory_mib: None,
             disk_size_gb: None,
             working_dir: None,
@@ -1216,6 +1224,7 @@ mod tests {
             image: None,
             rootfs_path: None,
             cpus: None,
+            cpu_limit: None,
             memory_mib: None,
             disk_size_gb: None,
             working_dir: None,
@@ -1234,6 +1243,29 @@ mod tests {
             tty,
             advanced: None,
             secrets: vec![],
+        }
+    }
+
+    #[test]
+    fn cpu_limit_python_conversion_validates_and_preserves_absence() {
+        assert!(
+            BoxOptions::try_from(py_box_options_with_tty(None))
+                .unwrap()
+                .cpu_limit
+                .is_none()
+        );
+        for cores in [0.01, 0.125, 2.0] {
+            let mut py = py_box_options_with_tty(None);
+            py.cpu_limit = Some(cores);
+            assert_eq!(
+                BoxOptions::try_from(py).unwrap().cpu_limit.unwrap().cores(),
+                cores
+            );
+        }
+        for cores in [0.0, -0.5, 0.001, 0.1255, f64::NAN, f64::INFINITY] {
+            let mut py = py_box_options_with_tty(None);
+            py.cpu_limit = Some(cores);
+            assert!(BoxOptions::try_from(py).is_err());
         }
     }
 

@@ -234,6 +234,7 @@ type Secret struct {
 type boxConfig struct {
 	name       string
 	cpus       int
+	cpuLimit   *float64
 	memoryMiB  int
 	diskSizeGB int
 	rootfsPath string
@@ -272,6 +273,12 @@ func WithName(name string) BoxOption {
 // WithCPUs sets the number of virtual CPUs.
 func WithCPUs(n int) BoxOption {
 	return func(c *boxConfig) { c.cpus = n }
+}
+
+// WithCPULimit sets a creation-only aggregate CPU time limit in cores (Linux).
+// Use 0.01 through CPUs in 0.001 increments; omitting it keeps the existing limit.
+func WithCPULimit(cores float64) BoxOption {
+	return func(c *boxConfig) { c.cpuLimit = &cores }
 }
 
 // WithMemory sets the memory limit in MiB.
@@ -501,6 +508,12 @@ func buildCOptions(image string, cfg *boxConfig) (*C.CBoxliteOptions, error) {
 	}
 	if cfg.cpus > 0 {
 		C.boxlite_options_set_cpus(cOpts, C.int(cfg.cpus))
+	}
+	if cfg.cpuLimit != nil {
+		if C.boxlite_options_set_cpu_limit(cOpts, C.double(*cfg.cpuLimit), &cerr) != C.Ok {
+			C.boxlite_options_free(cOpts)
+			return nil, freeError(&cerr)
+		}
 	}
 	if cfg.memoryMiB > 0 {
 		C.boxlite_options_set_memory(cOpts, C.int(cfg.memoryMiB))

@@ -1274,6 +1274,10 @@ pub struct ResourceFlags {
     #[arg(long, value_parser = clap::value_parser!(u8).range(1..))]
     pub cpus: Option<u8>,
 
+    /// Creation-only aggregate CPU limit in cores (Linux; e.g. 0.5)
+    #[arg(long)]
+    pub cpu_limit: Option<boxlite::CpuLimit>,
+
     /// Memory limit (in MiB)
     #[arg(long)]
     pub memory: Option<u32>,
@@ -1293,6 +1297,9 @@ impl ResourceFlags {
     pub fn apply_to(&self, opts: &mut BoxOptions) {
         if let Some(cpus) = self.cpus {
             opts.cpus = Some(cpus);
+        }
+        if let Some(limit) = self.cpu_limit {
+            opts.cpu_limit = Some(limit);
         }
         if let Some(mem) = self.memory {
             opts.memory_mib = Some(mem);
@@ -2338,6 +2345,32 @@ mod tests {
     }
 
     #[test]
+    fn cpu_limit_flag_is_creation_only_and_keeps_integer_cpus() {
+        let cli = Cli::try_parse_from([
+            "boxlite",
+            "run",
+            "--cpus",
+            "2",
+            "--cpu-limit",
+            "0.125",
+            "alpine",
+        ])
+        .unwrap();
+        let Commands::Run(run) = cli.command else {
+            panic!("expected run")
+        };
+        let mut options = BoxOptions::default();
+        run.resource.apply_to(&mut options);
+        assert_eq!(options.cpus, Some(2));
+        assert_eq!(options.cpu_limit.unwrap().cores(), 0.125);
+        for invalid in ["0", "-0.5", "NaN", "inf", "0.001", "0.1255"] {
+            assert!(
+                Cli::try_parse_from(["boxlite", "run", "--cpu-limit", invalid, "alpine"]).is_err()
+            );
+        }
+    }
+
+    #[test]
     fn test_resource_flags_disk_size_plumbed() {
         // --disk-size <GB> must reach BoxOptions.disk_size_gb verbatim so the
         // COW overlay in container_rootfs::create_cow_disk picks up
@@ -2346,6 +2379,7 @@ mod tests {
         // they'd silently ENOSPC mid-`docker pull`.
         let flags = ResourceFlags {
             cpus: None,
+            cpu_limit: None,
             memory: None,
             disk_size_gb: Some(10),
         };
@@ -2365,6 +2399,7 @@ mod tests {
         // refactor that injects a fallback (`unwrap_or(N)`) would fail.
         let flags = ResourceFlags {
             cpus: None,
+            cpu_limit: None,
             memory: None,
             disk_size_gb: None,
         };

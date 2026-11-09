@@ -19,6 +19,7 @@ export FAIL_FAST
 # native name selector, so match semantics are per-runner (nextest/ctest/
 # go: regex, pytest -k / vitest -t: expression/substring).
 export FILTER
+PHONY_TARGETS += test\:cpu-limit\:acceptance
 
 # Advanced nextest-only filter expression. Use this for CI-specific exclusions
 # that cannot be expressed as a simple positive FILTER pattern.
@@ -280,6 +281,10 @@ test\:unit\:vmm:
 test\:vmm\:boot:
 	@python3 "$(PROJECT_ROOT)/src/vmm/boot/tests/test_build.py"
 	@python3 "$(PROJECT_ROOT)/src/vmm/boot/tests/test_box_build.py"
+
+# CPU bandwidth acceptance requires a delegated CPU controller (or root).
+test\:cpu-limit\:acceptance: _ensure-kvm $(if $(SETUP_DONE),,runtime\:debug)
+	@cargo test -p boxlite --test cpu_limit $(CARGOTEST_FILTER) -- --ignored --test-threads=1 --nocapture
 
 # Missing /dev/kvm must fail hardware qualification, not report skipped tests as a pass.
 _ensure-kvm:

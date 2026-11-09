@@ -227,7 +227,7 @@ processes. Both lists default to empty, preserving BoxLite's Docker-compatible
 
 ### `cpus: int`
 
-Number of CPU cores allocated to the box.
+Integer number of virtual CPUs allocated to the box.
 
 **Default:** 1
 
@@ -241,9 +241,19 @@ cpus=4  # 4 CPU cores
 ```
 
 **Notes:**
-- CPU scheduling is proportional (shares-based)
-- Does not reserve physical cores, just scheduling weight
+- `cpus` sets integer virtual CPU topology; `cpu_limit` optionally bounds aggregate host CPU time.
+- Does not reserve physical cores.
 - Monitor actual usage with `box.metrics().cpu_time_ms`
+
+### `cpu_limit: float | None`
+
+Optional creation-only aggregate CPU time limit in cores, independent of integer `cpus`.
+For example, `cpus=2, cpu_limit=0.5` shares half a core across both vCPUs and VMM threads.
+Accepts `0.01` through resolved `cpus`, in `0.001` increments; the default `None` preserves existing behavior.
+
+Requires Linux, enabled jailer, and cgroup v2 CPU enforcement; explicit macOS local limits return `Unsupported`.
+The value persists across supported lifecycle operations and cannot be changed after creation.
+See [CPU time limits](../guides/resource-limits.md#creation-only-cpu-time-limit-linux) for SDK mappings, REST capability checks, and rootless requirements.
 
 ### `memory_mib: int`
 

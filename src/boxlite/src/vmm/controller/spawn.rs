@@ -64,6 +64,24 @@ impl<'a> ShimSpawner<'a> {
         }
     }
 
+    #[cfg(target_os = "linux")]
+    fn apply_cpu_quota(&self) -> BoxliteResult<()> {
+        let Some(limit) = self.options.cpu_limit else {
+            return Ok(());
+        };
+        let security = &self.options.advanced.security;
+        if !security.jailer_enabled {
+            return Err(BoxliteError::Engine("CPU limit requires the jailer".into()));
+        }
+        crate::jailer::cgroup::set_cpu_max(self.box_id, limit, &security.resource_limits).map_err(
+            |error| {
+                BoxliteError::Engine(format!(
+                    "cannot apply CPU limit before starting VM: {error}"
+                ))
+            },
+        )
+    }
+
     /// Grant the confined shim the host files libkrun probes before enabling
     /// nested virtualization. The caller passes the value from the VM request
     /// it is about to serialize, which is the authority on what the shim runs.
@@ -119,6 +137,7 @@ impl<'a> ShimSpawner<'a> {
             .with_box_id(self.box_id)
             .with_layout(self.layout.clone())
             .with_security(self.options.advanced.security.clone())
+            .with_required_cpu_cgroup(self.options.cpu_limit.is_some())
             .with_volumes(self.options.volumes.clone())
             .with_mounts(self.options.mounts.clone())
             .with_additional_path_access(self.additional_path_access())
@@ -136,6 +155,8 @@ impl<'a> ShimSpawner<'a> {
 
         // 3. Setup pre-spawn isolation (cgroups on Linux, no-op on macOS)
         jail.prepare()?;
+        #[cfg(target_os = "linux")]
+        self.apply_cpu_quota()?;
 
         // 4. Build isolated command — no CLI args, config sent via stdin pipe
         let no_args: &[String] = &[];
@@ -240,6 +261,33 @@ mod tests {
             FsLayoutConfig::without_bind_mount(),
             false,
         )
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn cpu_limit_requires_enforcement_before_start() {
+        let layout = test_layout();
+        let mut options = BoxOptions::default();
+        options.advanced.security.jailer_enabled = false;
+        let unlimited = ShimSpawner::new(Path::new("/unused"), &layout, "test-box", &options);
+        assert!(unlimited.apply_cpu_quota().is_ok());
+        options.cpu_limit = Some(crate::CpuLimit::new(0.125).unwrap());
+        let limited = ShimSpawner::new(Path::new("/unused"), &layout, "test-box", &options);
+        assert!(
+            limited.apply_cpu_quota().is_err(),
+            "disabled jailer must fail closed"
+        );
+        options.advanced.security.jailer_enabled = true;
+        let limited = ShimSpawner::new(
+            Path::new("/unused"),
+            &layout,
+            "missing-cpu-limit-test",
+            &options,
+        );
+        assert!(
+            limited.apply_cpu_quota().is_err(),
+            "absent cgroup must fail closed"
+        );
     }
 
     #[test]

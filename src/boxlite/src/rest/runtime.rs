@@ -222,6 +222,7 @@ impl BoxOptions {
     /// types (`CreateBoxRequest::from_options`), in `boxlite serve`
     /// (`src/cli/src/commands/serve/types.rs`), and in the spec.
     fn sanitize_remote(&self) -> BoxliteResult<()> {
+        self.validate_cpu_limit()?;
         self.advanced.validate_privileged_capability_conflict()?;
         if !self.ports.is_empty() {
             return Err(BoxliteError::Unsupported(
@@ -339,6 +340,9 @@ impl RuntimeBackend for RestRuntime {
     async fn create(&self, options: BoxOptions, name: Option<String>) -> BoxliteResult<LiteBox> {
         options.sanitize_remote()?;
         options.validate_secrets()?;
+        if options.cpu_limit.is_some() {
+            self.client.require_cpu_limit_enabled().await?;
+        }
 
         // Validate only the caller's requested policy. An unset auto_stop means
         // "no auto-stop", so it must not borrow the server's default here —
@@ -381,6 +385,7 @@ impl RuntimeBackend for RestRuntime {
             let path = format!("/boxes/{box_name}");
             match self.client.get::<BoxResponse>(&path).await {
                 Ok(response) => {
+                    options.check_reused_cpu_limit(response.cpu_limit)?;
                     let actual = response.privileged.ok_or_else(|| {
                         BoxliteError::Unsupported(format!(
                             "cannot reuse box {box_name:?}: the server did not report its \
@@ -755,6 +760,116 @@ mod tests {
             .expect("create without a capability policy");
 
         assert_eq!(server.await.unwrap(), ["POST /v1/boxes HTTP/1.1"]);
+    }
+
+    async fn recording_json_server(
+        replies: Vec<&'static str>,
+    ) -> (
+        u16,
+        tokio::task::JoinHandle<Vec<(String, serde_json::Value)>>,
+    ) {
+        let (port, server) =
+            exchange_server(replies.into_iter().map(|body| (200, body)).collect()).await;
+        let parsed = tokio::spawn(async move {
+            server
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|(line, body)| {
+                    let body = if body.is_empty() {
+                        serde_json::Value::Null
+                    } else {
+                        serde_json::from_str(&body).unwrap()
+                    };
+                    (line, body)
+                })
+                .collect()
+        });
+        (port, parsed)
+    }
+
+    #[tokio::test]
+    async fn cpu_limit_requests_omit_absence_and_send_cores_after_fresh_capability() {
+        let (port, server) = recording_json_server(vec![
+            BOX_RESPONSE,
+            r#"{"capabilities":{"cpu_limit_enabled":true}}"#,
+            BOX_RESPONSE,
+            r#"{"capabilities":{"cpu_limit_enabled":false}}"#,
+        ])
+        .await;
+        let runtime =
+            RestRuntime::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}"))).unwrap();
+        RuntimeBackend::create(&runtime, BoxOptions::default(), None)
+            .await
+            .unwrap();
+        let options = BoxOptions {
+            cpus: Some(2),
+            cpu_limit: Some(crate::CpuLimit::new(0.125).unwrap()),
+            ..Default::default()
+        };
+        RuntimeBackend::create(&runtime, options.clone(), None)
+            .await
+            .unwrap();
+        assert!(matches!(
+            RuntimeBackend::create(&runtime, options, None).await,
+            Err(BoxliteError::Unsupported(_))
+        ));
+        let requests = server.await.unwrap();
+        assert_eq!(
+            requests.iter().map(|r| r.0.as_str()).collect::<Vec<_>>(),
+            [
+                "POST /v1/boxes HTTP/1.1",
+                "GET /v1/config HTTP/1.1",
+                "POST /v1/boxes HTTP/1.1",
+                "GET /v1/config HTTP/1.1"
+            ]
+        );
+        assert!(requests[0].1.get("cpu_limit").is_none());
+        assert_eq!(requests[2].1["cpu_limit"], 0.125);
+        assert_eq!(requests[2].1["cpus"], 2);
+        assert!(requests[2].1.get("cpu_limit_millicpu").is_none());
+    }
+
+    #[tokio::test]
+    async fn cpu_limit_unknown_server_never_receives_create() {
+        for config in [
+            "{}",
+            r#"{"capabilities":{}}"#,
+            r#"{"capabilities":{"cpu_limit_enabled":false}}"#,
+        ] {
+            let (port, server) = recording_json_server(vec![config]).await;
+            let runtime =
+                RestRuntime::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}")))
+                    .unwrap();
+            let options = BoxOptions {
+                cpu_limit: Some(crate::CpuLimit::new(0.5).unwrap()),
+                ..Default::default()
+            };
+            assert!(matches!(
+                RuntimeBackend::create(&runtime, options, None).await,
+                Err(BoxliteError::Unsupported(_))
+            ));
+            let requests = server.await.unwrap();
+            assert_eq!(requests.len(), 1);
+            assert_eq!(requests[0].0, "GET /v1/config HTTP/1.1");
+        }
+    }
+
+    #[tokio::test]
+    async fn cpu_limit_reuse_checks_immutable_value() {
+        let (port, server) = recording_json_server(vec![BOX_RESPONSE]).await;
+        let runtime =
+            RestRuntime::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}"))).unwrap();
+        let options = BoxOptions {
+            cpu_limit: Some(crate::CpuLimit::new(0.5).unwrap()),
+            ..Default::default()
+        };
+        assert!(matches!(
+            RuntimeBackend::get_or_create(&runtime, options, Some("named".into())).await,
+            Err(BoxliteError::InvalidArgument(_))
+        ));
+        let requests = server.await.unwrap();
+        assert!(requests.iter().all(|r| r.0.starts_with("GET /v1/boxes/")));
     }
 
     /// A server that does not honor `ExecRequest.user` would run the command

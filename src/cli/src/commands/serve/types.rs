@@ -21,6 +21,8 @@ pub(super) struct CreateBoxRequest {
     #[serde(default)]
     pub cpus: Option<u8>,
     #[serde(default)]
+    pub cpu_limit: Option<boxlite::CpuLimit>,
+    #[serde(default)]
     pub memory_mib: Option<u32>,
     #[serde(default)]
     pub disk_size_gb: Option<u64>,
@@ -162,6 +164,7 @@ pub(super) struct BoxResponse {
     pub pid: Option<u32>,
     pub image: String,
     pub cpus: u8,
+    pub cpu_limit: Option<boxlite::CpuLimit>,
     pub memory_mib: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub privileged: Option<bool>,
@@ -354,6 +357,7 @@ pub(super) struct ServerConfig {
 #[derive(Serialize)]
 pub(super) struct ServerCapabilities {
     pub linux_capabilities_enabled: bool,
+    pub cpu_limit_enabled: bool,
     pub privileged_enabled: bool,
     pub snapshots_enabled: bool,
     pub clone_enabled: bool,

@@ -60,6 +60,7 @@ help:
 	@echo "    make fmt:docker / lint:docker - Format/check Docker acceptance scripts"
 	@echo "    make test:unit:scripts      - Test build and coverage script contracts without native builds"
 	@echo "    make test:unit:vmm          - Run only the hypervisor and VMM crate unit tests"
+	@echo "    make test:cpu-limit:acceptance - Verify aggregate CPU throttling and persistence (needs KVM and writable CPU cgroups)"
 	@echo "    make test:vmm:boot          - Test the kernel build contracts with stubbed tools"
 	@echo "    make test:integration:vmm:elf - Load VMM_KERNEL into guest RAM and verify through KVM"
 	@echo "    make test:integration:vmm:linux - Boot VMM_KERNEL on KVM and the legacy devices"

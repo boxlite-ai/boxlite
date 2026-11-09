@@ -462,6 +462,9 @@ pub struct BoxInfo {
     /// Allocated CPU count
     pub cpus: u8,
 
+    /// Immutable aggregate CPU limit in cores (Linux), if configured
+    pub cpu_limit: Option<CpuLimit>,
+
     /// Allocated memory in MiB
     pub memory_mib: u32,
 
@@ -793,6 +796,9 @@ Options for constructing a box.
 pub struct BoxOptions {
     /// Number of CPUs (default: 2)
     pub cpus: Option<u8>,
+
+    /// Creation-only CPU time limit; e.g. Some(CpuLimit::new(0.5)?)
+    pub cpu_limit: Option<CpuLimit>,
 
     /// Memory in MiB (default: 512)
     pub memory_mib: Option<u32>,

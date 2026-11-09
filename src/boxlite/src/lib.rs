@@ -43,6 +43,7 @@ pub use litebox::{
     TunnelOptions,
 };
 pub use portal::GuestSession;
+pub use runtime::cpu_limit::CpuLimit;
 pub use runtime::{
     AuthHandle, BoxliteRuntime, Domain, DomainHandle, DomainList, DomainTarget, ImageHandle,
     Principal,
