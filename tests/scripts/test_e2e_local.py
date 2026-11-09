@@ -1,7 +1,8 @@
-"""Exercise the Compose launcher's pure configuration boundaries."""
+"""Exercise managed E2E configuration and lifecycle boundaries without a VM."""
 import importlib.util
 import os
 from pathlib import Path
+import signal
 import shutil
 import subprocess
 import sys
@@ -24,6 +25,169 @@ class LocalE2ETest(unittest.TestCase):
         self.patcher = patch.object(local, "STATE", self.state)
         self.patcher.start()
         self.addCleanup(self.patcher.stop)
+
+    def test_teardown_rejects_symlinked_boxes_without_deleting_target(self):
+        home = self.state / "runtime"
+        home.mkdir()
+        outside = self.state / "projects"
+        important = outside / "important"
+        important.mkdir(parents=True)
+        (important / "file").write_text("keep")
+        (home / "boxes").symlink_to(outside, target_is_directory=True)
+        rejected = False
+        try:
+            local.prune_box_dirs(local.box_dirs(home))
+        except local.Failure:
+            rejected = True
+        self.assertTrue(important.exists(), "teardown deleted through the boxes symlink")
+        self.assertTrue(rejected, "unsafe boxes directory was accepted")
+
+    def test_runtime_setup_rejects_symlinked_parent(self):
+        outside = self.state / "outside"
+        outside.mkdir()
+        parent = self.state / "runtime"
+        parent.symlink_to(outside, target_is_directory=True)
+        with patch.object(local, "RUNTIME_HOME", parent / "r"):
+            with self.assertRaises(local.Failure):
+                local.state_dirs()
+        self.assertEqual(list(outside.iterdir()), [])
+
+    def test_runtime_setup_rejects_symlinked_boxes(self):
+        home = self.state / "runtime"
+        home.mkdir()
+        outside = self.state / "projects"
+        outside.mkdir()
+        (home / "boxes").symlink_to(outside, target_is_directory=True)
+        with patch.object(local, "RUNTIME_HOME", home):
+            with self.assertRaises(local.Failure):
+                local.state_dirs()
+
+    def test_runtime_setup_rejects_world_writable_parent(self):
+        parent = self.state / "runtime"
+        parent.mkdir(mode=0o777)
+        parent.chmod(0o777)
+        with patch.object(local, "RUNTIME_HOME", parent / "r"):
+            with self.assertRaises(local.Failure):
+                local.state_dirs()
+
+    def test_runtime_setup_makes_owned_legacy_parent_private(self):
+        parent = self.state / "runtime"
+        parent.mkdir(mode=0o755)
+        parent.chmod(0o755)
+        with patch.object(local, "RUNTIME_HOME", parent / "r"):
+            local.state_dirs()
+        self.assertEqual(parent.stat().st_mode & 0o777, 0o700)
+        self.assertEqual((parent / "r").stat().st_mode & 0o777, 0o700)
+
+    def test_runtime_setup_rejects_foreign_ownership(self):
+        real_fstat = os.fstat
+
+        def foreign_owner(fd):
+            info = list(real_fstat(fd))
+            info[4] = os.getuid() + 1
+            return os.stat_result(info)
+
+        parent = self.state / "runtime"
+        with patch.object(local, "RUNTIME_HOME", parent / "r"), \
+                patch.object(local.os, "fstat", side_effect=foreign_owner):
+            with self.assertRaises(local.Failure):
+                local.state_dirs()
+
+    def test_stack_lock_rejects_symlinked_coordination_directory(self):
+        outside = self.state / "outside"
+        outside.mkdir()
+        coordination = self.state / "coordination"
+        coordination.symlink_to(outside, target_is_directory=True)
+        with self.assertRaises(local.Failure):
+            with local.stack_lock(coordination):
+                pass
+        self.assertEqual(list(outside.iterdir()), [])
+
+    def test_readiness_subprocess_cannot_outlive_deadline(self):
+        script = (
+            "import importlib.util, sys;"
+            "spec=importlib.util.spec_from_file_location('local',sys.argv[1]);"
+            "local=importlib.util.module_from_spec(spec);spec.loader.exec_module(local)\n"
+            "try:\n"
+            " local.wait_command([sys.executable,'-c','import time; time.sleep(30)'],"
+            "dict(__import__('os').environ),timeout=0.1)\n"
+            "except local.Failure:\n"
+            " sys.exit(0)\n"
+            "sys.exit(1)\n")
+        process = subprocess.Popen(
+            [sys.executable, "-c", script, str(local.E2E / "local.py")],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
+        expired = False
+        try:
+            _, stderr = process.communicate(timeout=3)
+        except subprocess.TimeoutExpired:
+            expired = True
+            os.killpg(process.pid, signal.SIGKILL)
+            _, stderr = process.communicate()
+        self.assertFalse(expired, "readiness subprocess exceeded the startup deadline")
+        self.assertEqual(process.returncode, 0, stderr.decode())
+
+    def test_environment_file_selection_does_not_collect_whole_suite(self):
+        with patch.dict(os.environ, {"E2E_ARGS": "cases/test_lifecycle.py -x", "FILTER": ""}), \
+                patch.object(local, "run") as run:
+            local.pytest({}, [])
+        command = run.call_args.args[0]
+        self.assertIn("cases/test_lifecycle.py", command)
+        self.assertNotIn("cases/", command)
+
+    def test_status_rejects_missing_required_host_records(self):
+        for pids in ({}, {"api": {"pid": 123, "starttime": "456"}}):
+            local.save_pids(pids)
+            with self.subTest(pids=pids), patch.object(local, "write_files"), \
+                    patch.object(local, "compose"), patch.object(local, "process_matches", return_value=True), \
+                    patch.object(local, "box_processes", return_value=[]):
+                with self.assertRaises(local.Failure):
+                    local.status({})
+
+    def test_start_reaps_only_unrecoverable_box_processes(self):
+        home = self.state / "runtime"
+        boxes = home / "boxes"
+        processes = {}
+        for name in ("lost", "recoverable", "legacy", "padded", "stale", "garbled"):
+            box = boxes / name
+            (box / "bin").mkdir(parents=True)
+            binary = box / "bin/boxlite-shim"
+            binary.symlink_to(sys.executable)
+            process = subprocess.Popen(
+                [str(binary), "-c", "import time; time.sleep(30)"],
+                start_new_session=True)
+            processes[name] = process
+            starttime = local.process_starttime(process.pid)
+            records = {
+                "recoverable": f"{process.pid}\n{starttime}\n",
+                "legacy": f"{process.pid}\n",
+                "padded": f"{process.pid}\n000{starttime}\n",
+                "stale": f"{process.pid}\n0\n",
+                "garbled": f"{process.pid}\n1_2\n",
+            }
+            if name in records:
+                (box / "shim.pid").write_text(records[name])
+        try:
+            def check_before_start(*args, **kwargs):
+                for name, process in processes.items():
+                    if name in ("lost", "stale"):
+                        self.assertIsNotNone(process.poll(), f"{name} guest survived startup cleanup")
+                    else:
+                        self.assertIsNone(process.poll(), f"{name} recoverable guest was killed")
+
+            def owned_pids():
+                return [process.pid for process in processes.values() if process.poll() is None]
+
+            with patch.object(local, "RUNTIME_HOME", home), patch.object(local, "stop_host"), \
+                    patch.object(local, "box_processes", side_effect=owned_pids), \
+                    patch.object(local, "start_process", side_effect=check_before_start), \
+                    patch.object(local, "request", return_value=[{"name": "boxlite-e2e", "state": "ready"}]):
+                local.start({})
+        finally:
+            for process in processes.values():
+                if process.poll() is None:
+                    os.killpg(process.pid, signal.SIGKILL)
+                process.wait()
 
     def test_compose_declares_all_dependency_services(self):
         compose = (local.E2E / "compose.yaml").read_text()
@@ -187,6 +351,30 @@ class E2EMakefileTest(unittest.TestCase):
         return subprocess.run(
             ["make", "--no-print-directory", *argv], cwd=local.ROOT,
             env=env, capture_output=True, text=True, check=True).stdout
+
+    def test_dependency_setup_bootstraps_a_pipless_virtualenv(self):
+        import python_env
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp) / "venv"
+            subprocess.run([sys.executable, "-m", "venv", "--without-pip", str(home)], check=True)
+            python = home / "bin/python"
+            real_run = subprocess.run
+
+            def without_network(argv, **kwargs):
+                if argv[1:4] == ["-m", "pip", "install"]:
+                    return real_run([argv[0], "-m", "pip", "--version"], check=True,
+                                    capture_output=True)
+                if argv[1:3] == ["-m", "uv"]:
+                    return subprocess.CompletedProcess(argv, 0)
+                return real_run(argv, **kwargs)
+
+            with patch.object(python_env.subprocess, "run", side_effect=without_network):
+                try:
+                    python_env.prepare(str(python))
+                except subprocess.CalledProcessError as error:
+                    self.fail(error.stderr.decode() if error.stderr else str(error))
+            result = real_run([str(python), "-m", "pip", "--version"], capture_output=True)
+            self.assertEqual(result.returncode, 0, result.stderr.decode())
 
     def test_relative_state_dir_builds_into_repo_root_paths(self):
         out = self.run_make("-n", "test:e2e:build:runner", "E2E_STATE_DIR=target/e2e-rel")

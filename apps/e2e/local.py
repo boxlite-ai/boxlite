@@ -13,6 +13,7 @@ import secrets
 import shlex
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
@@ -189,9 +190,35 @@ def load_credentials():
 
 
 def state_dirs():
+    """Verify the private runtime root before creating launcher state."""
+    checked_directory(RUNTIME_HOME.parent, private=True, create=True)
+    checked_directory(RUNTIME_HOME, private=True, create=True)
+    box_dirs(RUNTIME_HOME)  # Validate existing boxes before the Runner can use them.
     for directory in (STATE, STATE / "logs", STATE / "client-home",
-                      STATE / "registry-secrets", RUNTIME_HOME):
+                      STATE / "registry-secrets"):
         directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+
+
+def checked_directory(path, *, private=False, create=False):
+    """Reject symlinks, foreign owners and directories writable by other users."""
+    try:
+        if create:
+            path.mkdir(mode=0o700, exist_ok=True)
+        fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    except FileNotFoundError:
+        raise
+    except OSError as error:
+        raise Failure(f"unsafe runtime directory: {path}") from error
+    try:
+        info = os.fstat(fd)
+        if info.st_uid != os.getuid() or info.st_mode & 0o022:
+            raise Failure(f"unsafe runtime directory ownership or permissions: {path}")
+        # Older launchers created the owned parent with 0755. Tighten only
+        # verified, non-writable directories, through the no-follow descriptor.
+        if private:
+            os.fchmod(fd, 0o700)
+    finally:
+        os.close(fd)
 
 
 def write_files():
@@ -326,8 +353,9 @@ def _argv(pid):
     return [part.decode("utf-8", "replace") for part in raw.split(b"\0") if part]
 
 
-def owned_process(argv, home=RUNTIME_HOME):
+def owned_process(argv, home=None):
     """Return True for a bwrap/shim process belonging to this checkout."""
+    home = RUNTIME_HOME if home is None else home
     if not argv:
         return False
     if f"{home}/boxes/" not in "\0".join(argv):
@@ -349,6 +377,8 @@ def box_processes():
 def _signal_owned(pid, sig):
     """Signal a process, and its group only when it leads one."""
     try:
+        if not owned_process(_argv(pid)):
+            return
         if os.getpgid(pid) == pid:
             os.killpg(pid, sig)
         else:
@@ -357,35 +387,52 @@ def _signal_owned(pid, sig):
         pass
 
 
-def stop_orphaned_boxes(grace=8.0):
+def stop_orphaned_boxes(grace=8.0, *, pids=None):
     """Kill bwrap/boxlite-shim pairs left behind by an earlier runner.
 
     The jailer starts every shim with setsid(), so signalling the runner's
     process group never reaches it. Terminate the shim's own pid/group, then
     escalate to SIGKILL and return whatever is still alive.
+    When pids is supplied, leave every unselected tree untouched.
     """
-    pids = box_processes()
+    selected = None if pids is None else set(pids)
+
+    def remaining():
+        current = box_processes()
+        return current if selected is None else [pid for pid in current if pid in selected]
+
+    pids = remaining()
     if not pids:
         return []
     print(f"[e2e] stopping {len(pids)} leftover box process(es)", flush=True)
     for pid in pids:
         _signal_owned(pid, signal.SIGTERM)
     deadline = time.monotonic() + grace
-    while time.monotonic() < deadline and box_processes():
+    while time.monotonic() < deadline and remaining():
         time.sleep(0.1)
-    for pid in box_processes():
+    for pid in remaining():
         _signal_owned(pid, signal.SIGKILL)
     deadline = time.monotonic() + 2
-    while time.monotonic() < deadline and box_processes():
+    while time.monotonic() < deadline and remaining():
         time.sleep(0.05)
-    return box_processes()
+    return remaining()
 
 
 def box_dirs(home=RUNTIME_HOME):
-    """Box directories left in this checkout's runtime home."""
+    """Validate the boxes root and return owned, non-symlink box directories."""
     root = home / "boxes"
     try:
-        return sorted(path for path in root.iterdir() if path.is_dir())
+        checked_directory(home, private=True)
+        checked_directory(root)
+        result = []
+        for path in sorted(root.iterdir()):
+            mode = path.lstat().st_mode
+            if stat.S_ISLNK(mode):
+                raise Failure(f"symlink in runtime boxes directory: {path}")
+            if stat.S_ISDIR(mode):
+                checked_directory(path)
+                result.append(path)
+        return result
     except FileNotFoundError:
         return []
 
@@ -395,6 +442,8 @@ def prune_box_dirs(dirs=None):
     removed = 0
     for path in dirs if dirs is not None else box_dirs():
         try:
+            checked_directory(path.parent)
+            checked_directory(path)
             shutil.rmtree(path)
         except FileNotFoundError:
             continue
@@ -402,8 +451,58 @@ def prune_box_dirs(dirs=None):
     return removed
 
 
+def adoptable_box(box):
+    """Mirror runtime recovery's live/fingerprinted or legacy shim PID rule."""
+    try:
+        checked_directory(box)
+        lines = (box / "shim.pid").read_text().splitlines()
+        pid_text = lines[0].strip().removeprefix("+")
+        if not pid_text.isascii() or not pid_text.isdecimal():
+            return False
+        pid_text = pid_text.lstrip("0") or "0"
+        if len(pid_text) > 10:
+            return False
+        pid = int(pid_text)
+        if not 0 < pid < 2**31:
+            return False
+        os.kill(pid, 0)
+        raw = Path(f"/proc/{pid}/stat").read_text()
+        fields = raw[raw.rfind(")") + 2:].split()
+        if fields[0] == "Z":
+            return False
+        expected = lines[1].strip().removeprefix("+") if len(lines) > 1 else ""
+        # As PidFileReader does, accept missing/unparseable legacy fingerprints.
+        fingerprint = -1
+        if expected.isascii() and expected.isdecimal():
+            expected = expected.lstrip("0") or "0"
+            if len(expected) <= 20:
+                fingerprint = int(expected)
+        return not 0 <= fingerprint < 2**64 or fingerprint == int(fields[19])
+    except (FileNotFoundError, ProcessLookupError, PermissionError, ValueError, IndexError):
+        return False
+
+
+def reap_unrecoverable_boxes():
+    """Reap only owned trees that runtime recovery cannot identify as live."""
+    prefix = str(RUNTIME_HOME / "boxes") + "/"
+    unrecoverable = []
+    for pid in box_processes():
+        names = {arg[len(prefix):].split("/", 1)[0]
+                 for arg in _argv(pid) if arg.startswith(prefix)}
+        if not names or any(name in ("", ".", "..") for name in names):
+            continue  # Ambiguous ownership is not permission to kill.
+        if not any(adoptable_box(RUNTIME_HOME / "boxes" / name) for name in names):
+            unrecoverable.append(pid)
+    if unrecoverable:
+        remaining = stop_orphaned_boxes(pids=unrecoverable)
+        if remaining:
+            raise Failure("unrecoverable box processes survived startup cleanup")
+
+
 def start(env):
+    """Restart host services after reaping only unrecoverable owned guests."""
     stop_host()
+    reap_unrecoverable_boxes()
     start_process(
         "api",
         [ROOT / "apps/node_modules/.bin/ts-node", "--transpile-only",
@@ -431,11 +530,18 @@ def start(env):
 
 
 def wait_command(argv, env, timeout=60):
+    """Bound command execution and retries by one readiness deadline."""
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        if subprocess.run(argv, env=env, capture_output=True).returncode == 0:
-            return
-        time.sleep(0.25)
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        try:
+            if subprocess.run(argv, env=env, capture_output=True, timeout=remaining).returncode == 0:
+                return
+        except subprocess.TimeoutExpired:
+            break
+        time.sleep(min(0.25, max(0, deadline - time.monotonic())))
     raise Failure(f"{argv[0]} did not become ready")
 
 
@@ -466,13 +572,13 @@ def fixture(env):
 
 
 def pytest(env, extra):
-    args = list(extra)
+    """Honor explicit paths from both CLI arguments and E2E_ARGS."""
+    args = [*extra, *shlex.split(os.environ.get("E2E_ARGS", ""))]
     if not any(arg.startswith("cases/") or arg.endswith(".py") or "::" in arg for arg in args):
         args.insert(0, "cases/")
     selector = os.environ.get("FILTER", "")
     if selector:
         args += ["-k", selector]
-    args += shlex.split(os.environ.get("E2E_ARGS", ""))
     run([str(PYTHON), "-m", "pytest", *args, "-v", "--tb=short",
          "--timeout=180", "-p", "no:cacheprovider"], cwd=E2E, env=env)
 
@@ -480,8 +586,9 @@ def pytest(env, extra):
 @contextlib.contextmanager
 def stack_lock(home=COORDINATION):
     """Reserve fixed host ports for one checkout/state until successful down."""
-    home.mkdir(parents=True, exist_ok=True, mode=0o700)
-    handle = (home / "stack.lock").open("a+")
+    checked_directory(home, private=True, create=True)
+    handle = os.fdopen(os.open(home / "stack.lock",
+                              os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600), "a+")
     try:
         try:
             fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -586,14 +693,20 @@ def doctor(env):
 
 
 def status(env):
+    """Fail when any required host service is missing or no longer matches."""
     write_files()
     compose(["ps"], env)
-    for name, entry in load_pids().items():
+    pids = load_pids()
+    missing = []
+    for name in ("api", "registry-proxy", "runner", "proxy"):
+        entry = pids.get(name)
         if isinstance(entry, dict) and process_matches(entry.get("pid"), entry.get("starttime")):
             print(f"{name}: running (pid {entry['pid']})")
         else:
             print(f"{name}: stopped")
-            raise Failure(f"{name} is not running")
+            missing.append(name)
+    if missing:
+        raise Failure("host services not running: " + ", ".join(missing))
     print(f"box processes: {len(box_processes())} running")
 
 

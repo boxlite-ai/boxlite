@@ -20,6 +20,7 @@ def interpreter(value):
 
 
 def prepare(value):
+    """Prepare one isolated interpreter, bootstrapping pip only when absent."""
     python = interpreter(value)
     home = python.parent.parent
     if home.exists() and not (home / "pyvenv.cfg").is_file():
@@ -29,6 +30,8 @@ def prepare(value):
     subprocess.run([str(python), "-c",
                     "import sys; sys.exit(0 if sys.version_info >= (3, 11) "
                     "else 'E2E requires Python 3.11+')"], check=True)
+    if subprocess.run([str(python), "-m", "pip", "--version"], capture_output=True).returncode:
+        subprocess.run([str(python), "-m", "ensurepip", "--upgrade"], check=True)
     version = json.loads((ROOT / "apps/e2e/dependencies.json").read_text())["uv"]
     subprocess.run([str(python), "-m", "pip", "install", "--quiet", f"uv=={version}"], check=True)
     subprocess.run(
