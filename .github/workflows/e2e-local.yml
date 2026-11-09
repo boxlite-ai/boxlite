@@ -317,13 +317,22 @@ jobs:
           find /opt/actions-runner/_diag -maxdepth 1 -type f -name 'Runner_*.log' -mtime +1 -delete 2>/dev/null || true
 
       - name: Checkout code
+        if: github.event_name != 'pull_request_target'
+        uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+          submodules: recursive
+          clean: false
+
+      - name: Checkout approved PR
+        if: github.event_name == 'pull_request_target'
         uses: actions/checkout@v5
         with:
           # pull_request_target resolves to the BASE branch by default, which
           # would silently test main instead of the PR. Pin the head SHA the
-          # maintainer approved when labeling; push/dispatch keep github.sha.
+          # maintainer approved when labeling.
           # No credentials persist on the runner: fork code runs after this.
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
           submodules: recursive
           clean: false

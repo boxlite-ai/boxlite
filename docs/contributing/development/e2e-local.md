@@ -71,6 +71,11 @@ online runner, `start` stops it and boots it again with a new token.
   A dispatch runs the selected branch's workflow, which is how a change to this
   workflow is tested before it merges.
 
+Checkout follows the triggering event: pushes and manual dispatches use that event's
+commit, while a separate `pull_request_target` step selects the approved PR head SHA.
+The PR-head expression is confined to that step, keeping the event and cache contexts
+explicit for static analysis.
+
 ### Docker and Swarm acceptance
 
 After ordinary integration passes, the job prepares the pinned DinD firmware with

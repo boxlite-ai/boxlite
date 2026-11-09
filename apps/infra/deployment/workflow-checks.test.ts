@@ -144,6 +144,25 @@ for (const event of ['push', 'pull_request_target']) {
   })
 }
 
+for (const event of ['push', 'workflow_dispatch', 'pull_request_target']) {
+  test(`E2E checkout uses the commit approved by ${event}`, () => {
+    const github = { event_name: event, sha: 'event-commit', event: event === 'pull_request_target'
+      ? { pull_request: { head: { sha: 'pr-commit' } } } : {} }
+    const evaluate = (expression: string) => runInNewContext(
+      expression.replace(/^\$\{\{\s*|\s*\}\}$/g, ''), { github }, { timeout: 1000 })
+    const checkouts = workflow('e2e-local.yml').jobs['e2e-tests'].steps.filter((step: any) =>
+      step.uses?.startsWith('actions/checkout@') && (!step.if || evaluate(step.if)))
+    assert.equal(checkouts.length, 1)
+    const selected = checkouts[0].with
+    assert.equal(selected.ref?.includes('github.event.pull_request') ?? false, event === 'pull_request_target')
+    assert.equal(selected.ref ? evaluate(selected.ref) : github.sha,
+      event === 'pull_request_target' ? 'pr-commit' : 'event-commit')
+    assert.equal(selected['persist-credentials'], false)
+    assert.equal(selected.submodules, 'recursive')
+    assert.equal(selected.clean, false)
+  })
+}
+
 for (const [failure, expectedCalls] of [
   ['', 3], ['test:docker:dind', 1], ['--topology single', 2], ['--topology same-runner', 3],
 ] as const) {
