@@ -85,14 +85,14 @@ const PRIMARY_NAV_ITEMS: NavItem[] = [
     ],
   },
   {
-    label: 'Checkpoints',
-    icon: <Database className="size-[18px] shrink-0" aria-hidden="true" />,
-    path: RoutePath.CHECKPOINTS,
-  },
-  {
     label: 'Volumes',
     icon: <HardDrive className="size-[18px] shrink-0" aria-hidden="true" />,
     path: RoutePath.VOLUMES,
+  },
+  {
+    label: 'Checkpoints',
+    icon: <Database className="size-[18px] shrink-0" aria-hidden="true" />,
+    path: RoutePath.CHECKPOINTS,
   },
   { label: 'Domains', icon: <Globe className="size-[18px] shrink-0" aria-hidden="true" />, path: RoutePath.DOMAINS },
 ]

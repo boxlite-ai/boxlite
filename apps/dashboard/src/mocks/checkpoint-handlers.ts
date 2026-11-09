@@ -73,6 +73,7 @@ export function createMockCheckpointBox(org: string, key: string, name?: string)
 }
 
 export const checkpointHandlers = [
+  http.get('*/v1/config', () => HttpResponse.json({ capabilities: { checkpoints_enabled: true } })),
   http.get('*/v1/:organizationId/checkpoints', ({ params }) => {
     const rows = [...recordsFor(String(params.organizationId)).values()]
     const checkpoints = rows.map((record) => ({ ...record.info }))
@@ -114,28 +115,5 @@ export const checkpointHandlers = [
       return HttpResponse.json({ message: 'Checkpoint is being captured' }, { status: 409 })
     if (!rows.delete(String(params.key))) return HttpResponse.json({ message: 'Checkpoint not found' }, { status: 404 })
     return new HttpResponse(null, { status: 204 })
-  }),
-  http.post('*/v1/:organizationId/boxes/:boxId/recover', async ({ params, request }) => {
-    const body = (await request.json()) as { checkpoint_id: string }
-    const source = readySource(String(params.organizationId), body.checkpoint_id)
-    if (!source) return HttpResponse.json({ message: 'Checkpoint is not ready' }, { status: 409 })
-    const target = MOCK_BOXES.find((box) => box.id === params.boxId || box.name === params.boxId)
-    if (!target) return HttpResponse.json({ message: 'Target Box not found' }, { status: 404 })
-    if (target.state !== BoxState.STOPPED && target.state !== BoxState.ERROR)
-      return HttpResponse.json({ message: 'Target Box must be idle and stopped or failed' }, { status: 409 })
-    const identity = {
-      id: target.id,
-      name: target.name,
-      organizationId: target.organizationId,
-      desiredState: target.desiredState,
-      createdAt: target.createdAt,
-    }
-    Object.assign(target, structuredClone(source), identity, {
-      state: target.desiredState === BoxDesiredState.STOPPED ? BoxState.STOPPED : BoxState.STARTED,
-      errorReason: undefined,
-      recoverable: false,
-      updatedAt: new Date().toISOString(),
-    })
-    return HttpResponse.json(boxResponse(target))
   }),
 ]
