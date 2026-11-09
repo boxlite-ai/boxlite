@@ -5,14 +5,20 @@ use boxlite_shared::{GuestClient, PingRequest};
 use nix::{
     libc,
     mount::{mount, MsFlags},
+    sys::stat::{umask, Mode},
     unistd::{fork, ForkResult},
 };
 use std::{
     fs,
-    os::unix::{fs::PermissionsExt, process::CommandExt},
+    os::{
+        fd::AsRawFd,
+        unix::{fs::PermissionsExt, process::CommandExt},
+    },
     process::Command,
     time::Duration,
 };
+
+const MOUNTPOINT_VIEW: &str = "/dev/boot-mountpoints";
 
 fn main() {
     assert_eq!(
@@ -92,6 +98,22 @@ fn main() {
             agent.args(["--listen", "unix:///run/guest.sock"]);
         }
         "fresh" | "premounted" => {
+            if scenario == "fresh" {
+                // Expose the agent's mkdir mode even when the inherited umask
+                // is permissive. This launcher runs only inside its test VM.
+                umask(Mode::empty());
+                fs::create_dir_all(MOUNTPOINT_VIEW).unwrap();
+                // A nonrecursive bind keeps the underlying mountpoint
+                // directories visible after the agent mounts devpts and shm.
+                mount(
+                    Some("/dev"),
+                    MOUNTPOINT_VIEW,
+                    None::<&str>,
+                    MsFlags::MS_BIND,
+                    None::<&str>,
+                )
+                .unwrap();
+            }
             if scenario == "premounted" {
                 premount();
                 fs::write(
@@ -186,6 +208,38 @@ async fn verify(scenario: &str) {
         .unwrap()
         .mountinfo()
         .unwrap();
+    if scenario == "fresh" {
+        let shm = mounts
+            .iter()
+            .find(|mount| mount.mount_point == std::path::Path::new("/dev/shm"))
+            .unwrap();
+        let master = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open("/dev/ptmx")
+            .unwrap();
+        let mut index: libc::c_uint = 0;
+        // SAFETY: master is a live PTY descriptor and index is a writable
+        // unsigned integer. Do not grantpt/chmod before checking initial modes.
+        assert_eq!(
+            unsafe { libc::ioctl(master.as_raw_fd(), libc::TIOCGPTN, &mut index) },
+            0,
+            "PTY index: {}",
+            std::io::Error::last_os_error()
+        );
+        let modes = [
+            "/dev/pts/ptmx".to_string(),
+            format!("/dev/pts/{index}"),
+            format!("{MOUNTPOINT_VIEW}/pts"),
+            format!("{MOUNTPOINT_VIEW}/shm"),
+        ]
+        .map(|path| fs::metadata(path).unwrap().permissions().mode() & 0o7777);
+        assert_eq!(
+            (shm.mount_options.contains_key("nodev"), modes),
+            (false, [0o000, 0o600, 0o755, 0o755]),
+            "libkrun defaults: shm nodev; modes of ptmx, slave, pts directory, shm directory"
+        );
+    }
     for (path, kind) in [
         ("/proc", "proc"),
         ("/dev", "devtmpfs"),
@@ -204,11 +258,14 @@ async fn verify(scenario: &str) {
         assert_eq!(entries.len(), 1, "no stacked mounts at {path}");
         assert_eq!(entries[0].fs_type, kind, "{path}");
         if scenario == "fresh" && ["/proc", "/sys", "/sys/fs/cgroup", "/dev/shm"].contains(&path) {
-            for flag in ["nosuid", "nodev", "noexec"] {
+            for flag in ["nosuid", "noexec", "relatime"] {
                 assert!(
                     entries[0].mount_options.contains_key(flag),
                     "{path}: missing {flag}"
                 );
+            }
+            if path != "/dev/shm" {
+                assert!(entries[0].mount_options.contains_key("nodev"), "{path}");
             }
         }
         if scenario == "premounted" {

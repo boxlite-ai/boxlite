@@ -16,6 +16,9 @@ The same guest agent bootstraps itself as native PID 1 or as a child of libkrun'
 
 Bootstrap mounts proc, devtmpfs, sysfs, cgroup2, devpts and `/dev/shm`, creates
 `/dev/fd -> /proc/self/fd`, then makes root propagation shared.
+New system mounts match the pinned `init.krun` flags and use its default filesystem options;
+mount-point directories are created with mode `0755`, subject to umask.
+Devpts uses the kernel's default slave and ptmx permissions; `/dev/shm` uses its default mode without `nodev`.
 Existing mounts of the expected type are reused; a different type fails before it can be hidden by an overmount.
 Mount IDs identify the visible mount, including bind mounts and stacked mounts.
 Bootstrap uses `rustix` directly for `statx`, reusing the crate already included through `tempfile`.
@@ -42,6 +45,7 @@ make test:unit:guest
 The native suite boots the actual agent from a read-only ext4 root, without an initramfs.
 A test-only launcher runs from that disk and execs the agent as PID 1.
 Its child checks the ext4 root and rejected writes, mount reuse, writable paths, hostname, limits, zygote inheritance, localhost TCP and Unix RPC.
+Fresh boot also checks libkrun-compatible mount flags, initial PTY permissions and mount-point creation under a permissive umask.
 Separate boots check argument errors and incorrect filesystem types; namespace tests check panic and child exit policies.
 Host namespace and shutdown unit tests deny global `sync` with a test-only seccomp filter; KVM boots exercise the unfiltered sync/reset path.
 The probe is an explicitly built Cargo example and is excluded from runtime artifacts.

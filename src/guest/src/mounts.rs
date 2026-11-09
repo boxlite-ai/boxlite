@@ -6,7 +6,7 @@
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use nix::mount::{mount, MsFlags};
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::path::Path;
 
 /// Mount the filesystems normally supplied by init.krun. Only guest PID 1 calls
@@ -15,10 +15,12 @@ pub(crate) fn mount_init_filesystems() -> BoxliteResult<()> {
     use nix::sys::statfs::{statfs, PROC_SUPER_MAGIC};
     let restricted =
         MsFlags::MS_NOSUID | MsFlags::MS_NOEXEC | MsFlags::MS_NODEV | MsFlags::MS_RELATIME;
+    let mut directories = fs::DirBuilder::new();
+    directories.recursive(true).mode(0o755);
 
     // /proc must exist before mountinfo can validate the other mount points.
     // statx also detects a bind mount here, even on the root filesystem.
-    fs::create_dir_all("/proc")?;
+    directories.create("/proc")?;
     let proc_type = statfs("/proc")
         .map_err(|e| BoxliteError::Internal(format!("statfs /proc: {e}")))?
         .filesystem_type();
@@ -38,23 +40,31 @@ pub(crate) fn mount_init_filesystems() -> BoxliteResult<()> {
         .map_err(|e| BoxliteError::Internal(format!("mount proc on /proc: {e}")))?;
     }
 
-    for (path, filesystem, flags, data) in [
-        ("/dev", "devtmpfs", MsFlags::MS_RELATIME, None),
-        ("/sys", "sysfs", restricted, None),
-        ("/sys/fs/cgroup", "cgroup2", restricted, None),
+    for (path, filesystem, flags) in [
+        ("/dev", "devtmpfs", MsFlags::MS_RELATIME),
+        ("/sys", "sysfs", restricted),
+        ("/sys/fs/cgroup", "cgroup2", restricted),
         (
             "/dev/pts",
             "devpts",
             MsFlags::MS_NOSUID | MsFlags::MS_NOEXEC | MsFlags::MS_RELATIME,
-            Some("mode=0620,ptmxmode=0666"),
         ),
-        ("/dev/shm", "tmpfs", restricted, Some("mode=1777")),
+        (
+            "/dev/shm",
+            "tmpfs",
+            MsFlags::MS_NOSUID | MsFlags::MS_NOEXEC | MsFlags::MS_RELATIME,
+        ),
     ] {
-        fs::create_dir_all(path)?;
+        directories.create(path)?;
         if !mounted_as(path, filesystem)? {
-            mount(Some(filesystem), path, Some(filesystem), flags, data).map_err(|e| {
-                BoxliteError::Internal(format!("mount {filesystem} on {path}: {e}"))
-            })?;
+            mount(
+                Some(filesystem),
+                path,
+                Some(filesystem),
+                flags,
+                None::<&str>,
+            )
+            .map_err(|e| BoxliteError::Internal(format!("mount {filesystem} on {path}: {e}")))?;
         }
     }
 
@@ -81,7 +91,7 @@ pub(crate) fn mount_init_filesystems() -> BoxliteResult<()> {
     // Keep libkrun's existing tmpfs behavior. Init additionally rejects an
     // unexpected mount rather than hiding it under another filesystem.
     for cfg in TMPFS_MOUNTS {
-        fs::create_dir_all(cfg.path)?;
+        directories.create(cfg.path)?;
         mounted_as(cfg.path, "tmpfs")?;
     }
     mount_essential_tmpfs()
