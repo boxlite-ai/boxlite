@@ -2,11 +2,12 @@ package main
 
 import (
 	"context"
+	"io"
 	"net"
 	"net/http"
 	"strconv"
 
-	"github.com/containers/gvisor-tap-vsock/pkg/tcpproxy"
+	"github.com/boxlite-ai/tcprelay"
 )
 
 // controlMux is what the control socket serves: gvproxy's ServicesMux with
@@ -44,29 +45,36 @@ func dialFirstTunnel(dial func(ctx context.Context, addr string) (net.Conn, erro
 			http.Error(w, "cannot dial guest: "+err.Error(), http.StatusBadGateway)
 			return
 		}
+		defer guest.Close()
 		hj, ok := w.(http.Hijacker)
 		if !ok {
-			guest.Close()
 			http.Error(w, "webserver doesn't support hijacking", http.StatusInternalServerError)
 			return
 		}
 		conn, bufrw, err := hj.Hijack()
 		if err != nil {
-			guest.Close()
 			return
 		}
 		defer conn.Close()
 		if err := bufrw.Flush(); err != nil {
-			guest.Close()
 			return
 		}
 		if _, err := conn.Write([]byte(`OK`)); err != nil {
-			guest.Close()
 			return
 		}
-		// Same relay as gvproxy's /tunnel, fed the connection dialed above.
-		(&tcpproxy.DialProxy{
-			DialContext: func(context.Context, string, string) (net.Conn, error) { return guest, nil },
-		}).HandleConn(conn)
+		// Never read beyond HTTP's buffered prefix: its reader cancels the
+		// request context on EOF, even after the connection has been hijacked.
+		clientReader := io.MultiReader(io.LimitReader(bufrw.Reader, int64(bufrw.Reader.Buffered())), conn)
+		relayTunnel(r.Context(), conn, guest, clientReader)
 	}
+}
+
+func relayTunnel(ctx context.Context, client, guest net.Conn, clientReader io.Reader) {
+	_ = tcprelay.Relay(ctx, &bufferedConn{Conn: client, reader: clientReader}, guest)
+}
+
+// serveControl makes instance cancellation reach hijacked tunnel handlers too.
+func serveControl(ctx context.Context, listener net.Listener, handler http.Handler) error {
+	server := &http.Server{Handler: handler, BaseContext: func(net.Listener) context.Context { return ctx }}
+	return server.Serve(listener)
 }

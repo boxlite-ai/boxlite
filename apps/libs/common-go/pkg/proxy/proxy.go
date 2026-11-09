@@ -15,17 +15,22 @@ import (
 	"net/url"
 	"time"
 
+	"github.com/boxlite-ai/tcprelay"
 	"github.com/gin-gonic/gin"
 )
 
 type bufferedConn struct {
 	net.Conn
-	reader *bufio.Reader
+	reader io.Reader
 }
 
-// NewBufferedConn preserves bytes already read from conn into reader.
+// NewBufferedConn drains reader's buffered bytes, then reads conn directly.
 func NewBufferedConn(conn net.Conn, reader *bufio.Reader) net.Conn {
-	return &bufferedConn{Conn: conn, reader: reader}
+	// A hijacked net/http reader cancels the request context on EOF. Retain
+	// its read-ahead bytes without letting it observe the tunnel's half-close.
+	return &bufferedConn{Conn: conn, reader: io.MultiReader(
+		io.LimitReader(reader, int64(reader.Buffered())), conn,
+	)}
 }
 
 func (c *bufferedConn) Read(payload []byte) (int, error) {
@@ -39,45 +44,10 @@ func (c *bufferedConn) CloseWrite() error {
 	return errors.ErrUnsupported
 }
 
-// ProxyBidirectionalStream relays both directions until both streams close.
+// ProxyBidirectionalStream owns both streams and preserves replies after EOF.
+// Half-closed streams close after ten minutes without forwarded payload.
 func ProxyBidirectionalStream(ctx context.Context, left, right net.Conn) error {
-	copyStream := func(dst, src net.Conn) error {
-		_, err := io.Copy(dst, src)
-		if closeWriter, ok := dst.(interface{ CloseWrite() error }); ok {
-			_ = closeWriter.CloseWrite()
-		}
-		return err
-	}
-
-	results := make(chan error, 2)
-	go func() { results <- copyStream(left, right) }()
-	go func() { results <- copyStream(right, left) }()
-
-	select {
-	case <-ctx.Done():
-		_ = left.Close()
-		_ = right.Close()
-		<-results
-		<-results
-		return ctx.Err()
-	case err := <-results:
-		if err != nil {
-			_ = left.Close()
-			_ = right.Close()
-			<-results
-			return err
-		}
-	}
-
-	select {
-	case <-ctx.Done():
-		_ = left.Close()
-		_ = right.Close()
-		<-results
-		return ctx.Err()
-	case err := <-results:
-		return err
-	}
+	return tcprelay.Relay(ctx, left, right)
 }
 
 var proxyTransport = &http.Transport{

@@ -23,6 +23,15 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/ws":
             self._websocket_echo()
             return
+        if path == "/after-eof":
+            # A response is evidence that FIN traversed every tunnel hop.
+            self.connection.settimeout(3)
+            try:
+                if self.rfile.read():
+                    raise ValueError("unexpected payload after request headers")
+            except (TimeoutError, OSError):
+                self.close_connection = True
+                return
         body = LARGE_BODY if path in ("/large", "/slow") else self.server.marker
         if path == "/inspect":
             body = json.dumps({"marker": self.server.marker.decode(), "path": self.path,

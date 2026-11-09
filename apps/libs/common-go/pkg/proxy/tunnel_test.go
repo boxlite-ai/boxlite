@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"strings"
 	"testing"
 	"time"
 )
@@ -173,5 +174,27 @@ func TestBufferedConnPreservesBufferedBytes(t *testing.T) {
 	}
 	if string(payload) != "buffered" {
 		t.Fatalf("payload = %q", payload)
+	}
+}
+
+func TestBufferedConnReadsRawConnectionAfterBufferedBytes(t *testing.T) {
+	conn, peer := tcpConnPair(t)
+	defer conn.Close()
+	defer peer.Close()
+	conn.SetDeadline(time.Now().Add(time.Second))
+	// The old HTTP reader must never be consulted beyond its current buffer.
+	reader := bufio.NewReader(strings.NewReader("buffered"))
+	if _, err := reader.Peek(len("buffered")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.WriteString(peer, "-raw"); err != nil {
+		t.Fatal(err)
+	}
+	if err := peer.CloseWrite(); err != nil {
+		t.Fatal(err)
+	}
+	payload, err := io.ReadAll(NewBufferedConn(conn, reader))
+	if err != nil || string(payload) != "buffered-raw" {
+		t.Fatalf("payload = %q, error = %v", payload, err)
 	}
 }
