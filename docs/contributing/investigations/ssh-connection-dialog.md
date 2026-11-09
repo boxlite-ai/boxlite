@@ -228,7 +228,10 @@ Recovering a replacement by host identity selects the matching download, but doe
 not prove that its client key is still authorized. Adoption after an indeterminate
 Setup therefore retains a conservative authorization warning, whether recovery
 comes from GET or Enable. Only the acknowledged Setup response for the submitted
-configuration clears that warning.
+configuration clears that warning. Editing the local key path dismisses only the
+path-entry hint; it does not establish client authorization. The authorization
+warning survives path edits and unchanged status refreshes until an acknowledged
+Setup replaces the configuration.
 
 For a key path beginning with `~/`, both chmod and OpenSSH must resolve the same
 home directory, including when the path or HOME contains percent signs. The

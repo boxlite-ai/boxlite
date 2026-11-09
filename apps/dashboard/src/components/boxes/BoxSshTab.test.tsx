@@ -336,6 +336,7 @@ describe('BoxSshTab access and connection', () => {
       expect(document.body.textContent).not.toContain('box@boxlite-box-1')
       await fillPath('/tmp/current-key')
       expect(document.body.textContent).toContain('box@boxlite-box-1')
+      expect(document.body.textContent).not.toContain('Enter the private key path for the current configuration')
     },
   )
 
@@ -825,6 +826,18 @@ describe('BoxSshTab access and connection', () => {
       expect(mocks.post.mock.calls.slice(writesBefore).map(([path]) => path)).toEqual(
         recovery === 'status' ? [] : ['v1/org-1/boxes/box-1/ssh/enable'],
       )
+      await fillPath('/tmp/recovered-replacement-key')
+      expect(document.body.textContent).toContain('Make sure this key is still authorized')
+      mocks.get.mockResolvedValue({ data: recoveredStatus })
+      await render(BoxState.STARTED, 'box-1', 1)
+      expect(document.body.textContent).toContain('Make sure this key is still authorized')
+      mocks.generate.mockResolvedValueOnce({ ...replacement, hostPublicKey: 'acknowledged-host' })
+      mocks.post.mockResolvedValueOnce({
+        data: { ...status, host_public_key: 'acknowledged-host', generation: 5 },
+      })
+      await click('Reset SSH configuration…')
+      await click('Reset SSH configuration')
+      expect(document.body.textContent).not.toContain('Make sure this key is still authorized')
     },
   )
 

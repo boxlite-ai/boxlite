@@ -89,7 +89,7 @@ function SshControls({
   const credentialsRef = useRef<SshCredentials | undefined>(undefined)
   const [replacementCredentials, setReplacementCredentials] = useState<SshCredentials>()
   const replacementRef = useRef<SshCredentials | undefined>(undefined)
-  const [identityNotice, setIdentityNotice] = useState('')
+  const [identityNotice, setIdentityNotice] = useState<'path' | 'authorization'>()
   const [remembered] = useState(() => readSshPreferences(preferenceKey))
   const [cliExpanded, setCliExpanded] = useState(true)
   const [keyPath, setKeyPath] = useState(remembered.keyPath ?? '')
@@ -141,7 +141,7 @@ function SshControls({
           setKeyPath('')
           pathHost.current = next.host_public_key
           rememberSshPreferences(preferenceKey, { keyPath: '', hostPublicKey: next.host_public_key })
-          setIdentityNotice('')
+          setIdentityNotice(undefined)
           // A matching host selects the key; only acknowledged Setup confirms its authorization.
           authorizationChanged.current = source !== 'setup'
         }
@@ -150,9 +150,9 @@ function SshControls({
         if (obsoleteCredentials || (pathHost.current && next.host_public_key !== pathHost.current)) {
           setKeyPath('')
           rememberSshPreferences(preferenceKey, { keyPath: '', hostPublicKey: next.host_public_key })
-          setIdentityNotice('SSH configuration changed. Enter the private key path for the current configuration.')
+          setIdentityNotice('path')
         } else if (pathHost.current === next.host_public_key && authorizationChanged.current) {
-          setIdentityNotice('SSH settings changed. Make sure this key is still authorized for this box.')
+          setIdentityNotice('authorization')
         }
         // Clear synchronously: an async continuation must not reuse a superseded key.
         if (obsoleteCredentials) cacheCredentials(undefined)
@@ -251,7 +251,7 @@ function SshControls({
               cacheCredentials(keys)
               pathHost.current = keys.hostPublicKey
               setKeyPath('')
-              setIdentityNotice('')
+              setIdentityNotice(undefined)
               rememberSshPreferences(preferenceKey, { keyPath: '', hostPublicKey: '' })
             }
             setupAttempted = true
@@ -561,7 +561,9 @@ function SshControls({
                       </p>
                       {identityNotice && (
                         <p role="status" className="text-muted-foreground">
-                          {identityNotice}
+                          {identityNotice === 'authorization'
+                            ? 'SSH settings changed. Make sure this key is still authorized for this box.'
+                            : 'SSH configuration changed. Enter the private key path for the current configuration.'}
                         </p>
                       )}
                       <Input
@@ -570,7 +572,7 @@ function SshControls({
                         value={keyPath}
                         onChange={(event) => {
                           setKeyPath(event.target.value)
-                          setIdentityNotice('')
+                          setIdentityNotice((notice) => (notice === 'path' ? undefined : notice))
                         }}
                         placeholder="~/Downloads/boxlite-key"
                         aria-invalid={!!pathError}
