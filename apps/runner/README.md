@@ -49,8 +49,9 @@ Set `BOXLITE_EXPERIMENTAL=nested-virtualization` on the **Runner process** to
 authorize this release-candidate capability. The control plane decides each new box;
 an internal Runner create payload carries the saved `"nestedVirtualization":true`.
 The Runner uses an internal managed Go/C bridge to preserve each saved decision.
-Build Runner binaries with `-tags boxlite_runner`; development builds also use
-`boxlite_dev`. Ordinary SDK builds expose no per-box nesting setter.
+Every Runner build, including dev artifacts and E2E bootstrap, needs
+`-tags boxlite_runner`. Local host builds also use `boxlite_dev` to select this
+worktree's native library. Ordinary SDK builds expose no per-box nesting setter.
 The managed runtime never applies local ENV defaults to all organizations.
 Unauthorized requests return HTTP 400 before volume mounts. Guest environment variables
 cannot authorize nesting, and enabling nesting does not grant guest privilege.

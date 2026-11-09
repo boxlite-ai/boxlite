@@ -60,7 +60,7 @@ ARG VERSION_IDENTITY
 RUN test -n "${BUILD_REF}" \
   && test -n "${VERSION}" \
   && test -n "${VERSION_IDENTITY}" \
-  && CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build -C apps \
+  && CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build -C apps -tags boxlite_runner \
     -ldflags "-X 'github.com/boxlite-ai/runner/internal.Version=${VERSION_IDENTITY}'" \
     -o /tmp/boxlite-runner \
     ./runner/cmd/runner/ \

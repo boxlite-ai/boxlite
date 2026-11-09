@@ -28,7 +28,7 @@ build_runner() {
     cargo build --release -p boxlite-c >/dev/null 2>&1
     cp target/release/libboxlite.a sdks/go/libboxlite.a
     cd "$REPO/apps/runner"
-    CGO_ENABLED=1 go build -o "$out" ./cmd/runner
+    CGO_ENABLED=1 go build -tags boxlite_runner -o "$out" ./cmd/runner
 }
 
 swap_and_restart() {

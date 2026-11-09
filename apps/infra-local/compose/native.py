@@ -487,7 +487,7 @@ def _pg_count(cfg: InfraConfig, sql: str) -> int:
 # sdks/go via go.work) instead of a downloaded prebuilt — otherwise a
 # locally-changed FFI surface fails to link.
 _GO_BUILDS = {
-    "runner": ("runner", "./cmd/runner", ["-tags", "boxlite_dev"]),
+    "runner": ("runner", "./cmd/runner", ["-tags", "boxlite_dev,boxlite_runner"]),
     "proxy": ("proxy", "./cmd/proxy", []),
     "registry-proxy": ("image-service", "./cmd/registry-proxy", []),
 }

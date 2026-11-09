@@ -260,7 +260,7 @@ make dist:c
 cp target/release/libboxlite.a sdks/go/libboxlite.a
 
 cd "$REPO/apps/runner"
-CGO_ENABLED=1 go build -o /tmp/boxlite-runner-build ./cmd/runner
+CGO_ENABLED=1 go build -tags boxlite_runner -o /tmp/boxlite-runner-build ./cmd/runner
 sudo install -m 0755 /tmp/boxlite-runner-build /usr/local/bin/boxlite-runner
 rm -f /tmp/boxlite-runner-build
 cd "$REPO"
