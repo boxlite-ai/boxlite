@@ -52,5 +52,8 @@ missing, including older installs that already have `node_modules`. CI uploads t
 infrastructure changes cannot use the empty-upload path. The wheel smoke fixture copies Python
 sources while omitting native extensions, so unrelated missing modules cannot mask a broken wheel.
 `test:apps:infra-config` installs SST's platform and typechecks the full configuration.
+Registration synthesis tests execute `deployStack()` through the API service constructor with
+recording cloud-resource doubles and real Pulumi secret Outputs. They verify required Turnstile
+settings, timeout defaults and stage-secret delivery without contacting cloud providers.
 For documentation-only edits, check local links,
 anchors, Mermaid rendering and existing documentation contracts; a cloud apply is not validation.

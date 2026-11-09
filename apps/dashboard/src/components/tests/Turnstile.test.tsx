@@ -2,16 +2,18 @@
 import { act, StrictMode } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { Turnstile } from '../Turnstile'
 
 type Options = Parameters<NonNullable<Window['turnstile']>['render']>[1]
+let Turnstile: (typeof import('../Turnstile'))['Turnstile']
 let options: Options
 const api = { render: vi.fn(), reset: vi.fn(), remove: vi.fn() }
 const onToken = vi.fn()
 let root: Root
 
-beforeEach(() => {
+beforeEach(async () => {
   globalThis.IS_REACT_ACT_ENVIRONMENT = true
+  vi.resetModules()
+  Turnstile = (await import('../Turnstile')).Turnstile
   vi.clearAllMocks()
   api.render.mockImplementation((_host, value) => {
     options = value
@@ -37,29 +39,49 @@ async function render(strict = false) {
 }
 
 describe('Turnstile', () => {
-  it('shares the official script in StrictMode and retries a failed load', async () => {
+  it.each(['error', 'load'])(
+    'shares the official script and retries when %s leaves the API unavailable',
+    async (event) => {
+      delete window.turnstile
+      await render(true)
+      expect(document.body.textContent).toContain('Loading verification')
+      let scripts = document.querySelectorAll<HTMLScriptElement>('script[src*="challenges.cloudflare.com"]')
+      expect(scripts).toHaveLength(1)
+      expect(scripts[0].src).toBe('https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit')
+      await act(async () => {
+        scripts[0].dispatchEvent(new Event(event))
+      })
+      expect(document.body.textContent).toContain('Verification could not load')
+      await act(async () => {
+        document.querySelector<HTMLButtonElement>('button')!.click()
+      })
+      scripts = document.querySelectorAll('script[src*="challenges.cloudflare.com"]')
+      expect(scripts).toHaveLength(1)
+      window.turnstile = api
+      await act(async () => {
+        scripts[0].dispatchEvent(new Event('load'))
+      })
+      expect(api.render).toHaveBeenCalledTimes(1)
+      expect(document.body.textContent).not.toContain('Loading verification')
+      expect(options).toMatchObject({ sitekey: 'public-key', action: 'signup' })
+    },
+  )
+
+  it.each(['load', 'error'])('ignores a script %s event after unmount', async (event) => {
     delete window.turnstile
-    await render(true)
-    expect(document.body.textContent).toContain('Loading verification')
-    let scripts = document.querySelectorAll<HTMLScriptElement>('script[src*="challenges.cloudflare.com"]')
-    expect(scripts).toHaveLength(1)
-    expect(scripts[0].src).toBe('https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit')
+    await render()
+    const script = document.querySelector<HTMLScriptElement>('script[src*="challenges.cloudflare.com"]')!
+    act(() => root.render(null))
+    expect(onToken).toHaveBeenLastCalledWith(null)
+    onToken.mockClear()
+    if (event === 'load') window.turnstile = api
     await act(async () => {
-      scripts[0].dispatchEvent(new Event('error'))
+      script.dispatchEvent(new Event(event))
     })
-    expect(document.body.textContent).toContain('Verification could not load')
-    await act(async () => {
-      document.querySelector<HTMLButtonElement>('button')!.click()
-    })
-    scripts = document.querySelectorAll('script[src*="challenges.cloudflare.com"]')
-    expect(scripts).toHaveLength(1)
-    window.turnstile = api
-    await act(async () => {
-      scripts[0].dispatchEvent(new Event('load'))
-    })
-    expect(api.render).toHaveBeenCalledTimes(1)
-    expect(document.body.textContent).not.toContain('Loading verification')
-    expect(options).toMatchObject({ sitekey: 'public-key', action: 'signup' })
+    expect(api.render).not.toHaveBeenCalled()
+    expect(api.remove).not.toHaveBeenCalled()
+    expect(onToken).not.toHaveBeenCalled()
+    expect(document.body.textContent).toBe('')
   })
 
   it('clears expired and timed-out tokens and resets the same widget', async () => {

@@ -110,6 +110,22 @@ describe('UserService registration events', () => {
     expect(logged[1][1]).toEqual(expect.objectContaining({ 'exception.type': 'internal' }))
   })
 
+  it.each([
+    new Error('Connection closed'),
+    new QueryFailedError(
+      'INSERT INTO "user"',
+      [],
+      Object.assign(new Error('canceling statement due to statement timeout'), { code: '57014' }),
+    ),
+  ])('preserves an unrelated insert failure as internal: %s', async (failure) => {
+    const service = makeService(committingTransaction(failure))
+
+    await expect(service.create({ id: 'user-1', name: 'User One' }, Context.user())).rejects.toBe(failure)
+
+    expect(logged.map(([message]) => message)).toEqual(['user.registration requested', 'user.registration exception'])
+    expect(logged[1][1]).toEqual(expect.objectContaining({ 'exception.type': 'internal' }))
+  })
+
   it('records any other failure as internal', async () => {
     const service = makeService(jest.fn().mockRejectedValue(new Error('connection reset')))
 

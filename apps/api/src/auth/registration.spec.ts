@@ -167,7 +167,7 @@ describe('POST /api/auth/register', () => {
     expect(loginEvents.recordFirstUse).not.toHaveBeenCalled()
   })
 
-  it.each([{}, { other: CHALLENGE }])('requires a challenge field even for an existing user', async (body) => {
+  it.each([null, {}, { other: CHALLENGE }])('requires a challenge field even for an existing user', async (body) => {
     users.findOne.mockResolvedValue(storedUser)
     const response = await post(body)
     expect(response.status).toBe(400)

@@ -31,9 +31,26 @@ function buildStrategy() {
 }
 
 describe('JwtStrategy.validate — local account access', () => {
+  it.each([undefined, '', '   ', 42])(
+    'rejects an unusable identity before accessing local accounts (%s)',
+    async (sub) => {
+      const { strategy, userService, loginEvents } = buildStrategy()
+      const request = { get: jest.fn() } as unknown as Request
+
+      await expect(strategy.validate(request, { sub })).rejects.toMatchObject({ status: 401 })
+
+      expect(userService.findOne).not.toHaveBeenCalled()
+      expect(userService.create).not.toHaveBeenCalled()
+      expect(userService.update).not.toHaveBeenCalled()
+      expect(loginEvents.recordFirstUse).not.toHaveBeenCalled()
+    },
+  )
+
   it('hands the resolved user and the token claims to the login recorder', async () => {
     const { strategy, userService, loginEvents } = buildStrategy()
-    jest.mocked(userService.findOne).mockResolvedValue({ id: 'user-1', name: 'Existing', email: 'new@boxlite.dev', emailVerified: true } as never)
+    jest
+      .mocked(userService.findOne)
+      .mockResolvedValue({ id: 'user-1', name: 'Existing', email: 'new@boxlite.dev', emailVerified: true } as never)
     const request = { get: jest.fn().mockReturnValue(undefined) } as unknown as Request
     const payload = { sub: 'user-1', email: 'new@boxlite.dev', email_verified: true, iat: 1000, exp: 4600 }
 

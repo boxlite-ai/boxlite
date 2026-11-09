@@ -174,18 +174,6 @@ test('keeps every ClickHouse IAM resource inside the deploy-role namespace and p
   }
 })
 
-test('the legacy API receives Turnstile configuration and its stage-scoped secret', () => {
-  const api = liveText('script', readFileSync(new URL('./api.ts', import.meta.url), 'utf8'))
-  const deploy = liveText('script', readFileSync(new URL('./deploy.ts', import.meta.url), 'utf8'))
-  assert.match(deploy, /const turnstileSecretKey = new sst\.Secret\('TURNSTILE_SECRET_KEY'\)/)
-  assert.match(deploy, /buildApi\(\{[\s\S]*?turnstileSecretKey,/)
-  assert.match(api, /TURNSTILE_SECRET_KEY: turnstileSecretKey\.value/)
-  assert.match(api, /TURNSTILE_SITEKEY: requireEnv\('TURNSTILE_SITEKEY'/)
-  assert.match(api, /TURNSTILE_EXPECTED_HOSTNAMES: requireEnv\('TURNSTILE_EXPECTED_HOSTNAMES'/)
-  assert.match(api, /TURNSTILE_TIMEOUT_MS: envOr\('TURNSTILE_TIMEOUT_MS', '5000'\)/)
-  assert.doesNotMatch(api, /process\.env\.TURNSTILE_SECRET_KEY/)
-})
-
 test('uses the shared AWS region resolver and waits for the critical API service', () => {
   assert.match(liveConfig, /await import\('\.\.\/deployment\/environment\.js'\)/)
   assert.match(liveConfig, /const REGION = resolveAwsRegion\(\)/)

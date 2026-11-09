@@ -214,4 +214,15 @@ describe('RegistrationGate', () => {
     expect(businessMount).not.toHaveBeenCalled()
     consoleError.mockRestore()
   })
+
+  it('offers sign-out recovery when the initial account check rejects the email', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    api.userApi.getAuthenticatedUser.mockRejectedValue(new RegistrationEmailError('Email required', 'email_required'))
+    await render()
+    expect(document.body.textContent).toContain('Sign out and use another email')
+    expect(api.register).not.toHaveBeenCalled()
+    expect(widgetMount).not.toHaveBeenCalled()
+    expect(businessMount).not.toHaveBeenCalled()
+    consoleError.mockRestore()
+  })
 })
