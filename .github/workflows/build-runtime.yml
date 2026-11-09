@@ -241,7 +241,8 @@ jobs:
   # Runtime tarballs must exist first because crates.io consumers download them
   # via boxlite/build.rs (auto_detect_registry -> download_prebuilt_runtime).
   #
-  # Publish order matters: leaf crates (Tier 1) before boxlite (Tier 2).
+  # Publish order matters: leaf crates (Tier 1: boxlite-shared, the -sys crates
+  # and the VMM crates) before boxlite (Tier 2).
   # BOXLITE_DEPS_STUB=1 skips native builds during cargo publish verification.
   publish_crates:
     name: Publish to crates.io
@@ -292,6 +293,12 @@ jobs:
           publish_crate e2fsprogs-sys --no-verify
           publish_crate libgvproxy-sys --no-verify
           publish_crate bubblewrap-sys --no-verify
+
+          # boxlite-vmm resolves boxlite-hypervisor from crates.io. Give the
+          # index time before publishing the dependent crate.
+          publish_crate boxlite-hypervisor
+          sleep 60
+          publish_crate boxlite-vmm
 
       - name: Wait for crates.io indexing
         run: sleep 60

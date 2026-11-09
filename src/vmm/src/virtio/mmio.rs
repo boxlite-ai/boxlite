@@ -99,24 +99,30 @@ impl Slots {
     }
 }
 
-/// Appends each slot's argument to `cmdline`, which must leave room for them
-/// under `MAX_CMDLINE_BYTES`: the kernel probes a virtio-mmio device only
-/// when the command line names it, and copies at most that many bytes.
+/// Puts each slot's argument at the front of `cmdline`, which must leave room
+/// for them under `MAX_CMDLINE_BYTES`: the kernel probes a virtio-mmio device
+/// only when the command line names it, and copies at most that many bytes.
+/// The front is always before a `--`, after which the kernel hands everything
+/// to the init program, so the caller's text is never parsed.
 pub(crate) fn announce(cmdline: &mut String, slots: &[Slot]) -> Result<()> {
-    for slot in slots {
-        let argument = slot.cmdline_arg();
-        if cmdline.len() + argument.len() + usize::from(!cmdline.is_empty())
-            >= crate::config::MAX_CMDLINE_BYTES
-        {
-            return Err(Error::InvalidCommandLine(
-                "leaves no room for the virtio device arguments",
-            ));
-        }
-        if !cmdline.is_empty() {
-            cmdline.push(' ');
-        }
-        cmdline.push_str(&argument);
+    if slots.is_empty() {
+        return Ok(());
     }
+    let mut announced = slots
+        .iter()
+        .map(Slot::cmdline_arg)
+        .collect::<Vec<_>>()
+        .join(" ");
+    if !cmdline.is_empty() {
+        announced.push(' ');
+        announced.push_str(cmdline);
+    }
+    if announced.len() >= crate::config::MAX_CMDLINE_BYTES {
+        return Err(Error::InvalidCommandLine(
+            "leaves no room for the virtio device arguments",
+        ));
+    }
+    *cmdline = announced;
     Ok(())
 }
 

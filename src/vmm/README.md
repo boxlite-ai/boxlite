@@ -46,19 +46,21 @@ boxlite-vmm
 The x86_64 KVM boot and lifecycle are in place. The virtio common
 infrastructure (`virtio`) is in place for M2: the device contract, queue
 adapter, MMIO transport, interrupt handle and the shared virtio workers are
-tested with test devices, and `Vm` owns them. The first production device
-(`virtio::blk`, composed by `devices::add_all`) is tested with a real kernel.
-The output-only virtio console device is implemented and tested against real
-guest RAM and split virtqueues, but it is not wired into `Vm` yet; neither is
-the reporting balloon, so `Vm` composes only the block device for now. Linux
-arm64 and macOS arm64 remain required M2 qualification gates, blocked by their
-boot dependencies (#1698/#2103); unit tests or x86_64 evidence do not qualify
-those platforms or complete M2. The BoxLite engine adapter, engine selection
-and `native` feature wiring are separate M2 work.
-The Linux virtio-fs device is also composed when configured; its native Box
-engine adapter remains pending.
-Neither new crate depends on `boxlite-shared`, and both are unpublished while
-their interfaces are being established.
+tested with test devices, and `Vm` owns them. `devices::add_all` composes one
+`virtio::blk` device per disk and then the reporting balloon, and both are
+tested with a real kernel. The output-only virtio console device is implemented
+and tested against real guest RAM and split virtqueues, but it is not wired
+into `Vm` yet. Linux arm64 and macOS arm64 remain required M2 qualification
+gates, blocked by their boot dependencies; unit tests or x86_64 evidence do not
+qualify those platforms or complete M2. The BoxLite engine adapter
+(`src/boxlite/src/vmm/native/`, behind the runtime's `native` feature)
+builds a `VmConfig` from the box specification and runs `Vm`; the pinned kernel
+also mounts an ext4 root disk and devtmpfs for a disk-root boot, so a box boots
+to `boxlite-guest` as PID 1. The vsock and virtio-fs devices and the virtio-net
+wiring follow in M2.
+Neither new crate depends on `boxlite-shared`; the release workflow publishes
+`boxlite-hypervisor`, then `boxlite-vmm`, before `boxlite`, now that the engine
+adapter depends on `boxlite-vmm`.
 
 ## Virtio network device
 
@@ -645,7 +647,8 @@ replace the shared one without changing the transport, the devices or `Vm`.
 `devices::add_all` is the one place that names device types. `Vm::new` calls it
 through `Vm::with_devices`; the helper adds the legacy platform devices, then
 each configured device type in slot order, and finally announces every slot on
-the kernel command line.
+the front of the kernel command line, which is always before any `--` that
+starts the init arguments, so the caller's text is never parsed.
 
 - **One line per device.** `add_slot_device` takes the next `Slot`, runs the
   device's attach function, and records the slot for `announce`. Adding a
@@ -674,7 +677,7 @@ took, and then announces that slot on the kernel command line.
   19 slots in all (the legacy range above COM1 and below the MSI space, as
   Firecracker and libkrun allocate it). `Slot::cmdline_arg` renders the
   `virtio_mmio.device=4K@<base>:<gsi>` argument the kernel probes, and
-  `announce` appends one per slot under the command-line budget, so the
+  `announce` puts one per slot at the front under the command-line budget, so the
   chipset claim and the kernel's view come from the same value. Disks take
   slots in `VmConfig::disks` order, so disk 0 is `/dev/vda`, disk 1 is
   `/dev/vdb`, and so on.

@@ -464,4 +464,21 @@ mod plan_tests {
         let enabled = ExperimentalFeatures::parse("nested-virtualization").unwrap();
         validate_persisted_options(&enabled, &options).unwrap();
     }
+
+    #[test]
+    fn persisted_engine_choice_uses_injected_feature_state() {
+        let mut advanced = crate::runtime::advanced_options::AdvancedBoxOptions::default();
+        advanced.engine = Some(crate::vmm::VmmKind::Native);
+        let options = crate::BoxOptions {
+            advanced,
+            ..Default::default()
+        };
+
+        let error = validate_persisted_options(&ExperimentalFeatures::default(), &options)
+            .expect_err("a persisted engine choice must be disabled by default");
+        assert!(error.to_string().contains("ExperimentalFeature::NativeVmm"));
+
+        let enabled = ExperimentalFeatures::parse("native-vmm").unwrap();
+        validate_persisted_options(&enabled, &options).unwrap();
+    }
 }
