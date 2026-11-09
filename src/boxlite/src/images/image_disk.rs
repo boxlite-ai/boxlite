@@ -8,6 +8,7 @@ use std::path::PathBuf;
 
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
+use crate::disk::constants::ext4::EXT4_BUILDER_FORMAT_VERSION;
 use crate::disk::{Disk, DiskFormat, create_ext4_from_dir};
 use crate::rootfs::RootfsBuilder;
 
@@ -16,10 +17,10 @@ use super::ImageObject;
 /// Builds and caches ext4 disk images from OCI images.
 ///
 /// Image disks are pure: only OCI image content, no guest binary injected.
-/// Cache key is the image digest (SHA256 of layer digests) plus the
-/// manager's `reserve_bytes` — see the field doc — so a disk cached by an
-/// older build (before headroom existed, or under a smaller budget) is never
-/// mistaken for one sized under the current budget.
+/// Cache key is the image digest, the ext4 builder format version
+/// (`EXT4_BUILDER_FORMAT_VERSION`), and the manager's `reserve_bytes` — see
+/// the field doc — so a disk cached by a build whose ext4 output or headroom
+/// budget differs is never mistaken for one built under the current contract.
 ///
 /// Follows the staged install pattern: build in temp → atomic rename to cache.
 /// No half-written files ever appear in the cache directory.
@@ -166,11 +167,22 @@ impl ImageDiskManager {
 
     /// Compute the cache path for a given image digest.
     ///
-    /// Includes `reserve_bytes` — see the field doc for why that's safe.
+    /// Includes the ext4 builder format version and `reserve_bytes` — see the
+    /// field doc for why including the latter is safe.
     fn disk_path(&self, digest: &str) -> PathBuf {
+        self.disk_path_for_builder_version(digest, EXT4_BUILDER_FORMAT_VERSION)
+    }
+
+    /// Cache path under an explicit ext4 builder format version.
+    ///
+    /// Split out so tests can prove two versions cannot collide; production
+    /// always passes `EXT4_BUILDER_FORMAT_VERSION`.
+    fn disk_path_for_builder_version(&self, digest: &str, builder_version: u32) -> PathBuf {
         let filename = digest.replace(':', "-");
-        self.cache_dir
-            .join(format!("{}-r{}.ext4", filename, self.reserve_bytes))
+        self.cache_dir.join(format!(
+            "{}-b{}-r{}.ext4",
+            filename, builder_version, self.reserve_bytes
+        ))
     }
 }
 
@@ -188,7 +200,7 @@ mod tests {
         let path = mgr.disk_path("sha256:abc123def456");
         assert_eq!(
             path,
-            PathBuf::from("/cache/disk-images/sha256-abc123def456-r0.ext4")
+            PathBuf::from("/cache/disk-images/sha256-abc123def456-b1-r0.ext4")
         );
     }
 
@@ -196,7 +208,7 @@ mod tests {
     fn test_disk_path_no_colon() {
         let mgr = ImageDiskManager::new(PathBuf::from("/cache"), PathBuf::from("/tmp"), 0);
         let path = mgr.disk_path("plaindigest");
-        assert_eq!(path, PathBuf::from("/cache/plaindigest-r0.ext4"));
+        assert_eq!(path, PathBuf::from("/cache/plaindigest-b1-r0.ext4"));
     }
 
     /// Two different `reserve_bytes` values must produce two different cache
@@ -214,6 +226,40 @@ mod tests {
             large.disk_path("sha256:abc123"),
             "the same digest under a different reserve_bytes must not collide \
              on the same cache path"
+        );
+    }
+
+    /// Two builder format versions must produce two cache paths for the same
+    /// digest and reserve budget.
+    #[test]
+    fn test_disk_path_varies_with_builder_version() {
+        let mgr = ImageDiskManager::new(PathBuf::from("/cache"), PathBuf::from("/tmp"), 0);
+
+        assert_eq!(
+            mgr.disk_path_for_builder_version("sha256:abc123", 1),
+            PathBuf::from("/cache/sha256-abc123-b1-r0.ext4")
+        );
+        assert_eq!(
+            mgr.disk_path_for_builder_version("sha256:abc123", 2),
+            PathBuf::from("/cache/sha256-abc123-b2-r0.ext4")
+        );
+    }
+
+    /// A disk cached by another ext4 builder version must not be returned for
+    /// the same digest and reserve budget.
+    #[test]
+    fn find_does_not_reuse_a_disk_cached_under_a_different_builder_version() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let mgr = ImageDiskManager::new(dir.path().to_path_buf(), dir.path().to_path_buf(), 0);
+
+        let cached =
+            mgr.disk_path_for_builder_version("sha256:abc123", EXT4_BUILDER_FORMAT_VERSION + 1);
+        std::fs::create_dir_all(cached.parent().unwrap()).unwrap();
+        std::fs::write(&cached, "other-builder disk").unwrap();
+
+        assert!(
+            mgr.find("sha256:abc123").is_none(),
+            "a disk cached under another builder format version must not be reused"
         );
     }
 
