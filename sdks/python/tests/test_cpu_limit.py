@@ -82,11 +82,11 @@ async def test_cpu_limit_requests_and_info(kwargs):
 
 
 def test_cpu_limit_simple_wrappers_preserve_positional_arguments():
-    from boxlite import SimpleBox, SyncSimpleBox
+    import boxlite
 
     # Supplying an inert runtime keeps construction lazy and independent of KVM.
-    async_box = SimpleBox("alpine", None, 512, 2, object(), cpu_limit=0.125)
-    sync_box = SyncSimpleBox("alpine", None, 512, 2, object(), cpu_limit=0.125)
+    async_box = boxlite.SimpleBox("alpine", None, 512, 2, object(), cpu_limit=0.125)
+    sync_box = boxlite.SyncSimpleBox("alpine", None, 512, 2, object(), cpu_limit=0.125)
     for options in [async_box._box_options, sync_box._box_opts]:
         assert options.cpus == 2 and options.memory_mib == 512
         assert options.cpu_limit == 0.125
