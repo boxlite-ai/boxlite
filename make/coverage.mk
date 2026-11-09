@@ -133,7 +133,7 @@ coverage\:integration: $(if $(SETUP_DONE),,runtime\:debug)
 	@echo "📊 Generating integration test coverage..."
 	@rc=0; \
 	cargo llvm-cov nextest \
-		-p boxlite --features krun,gvproxy --test '*' \
+		-p boxlite --features krun,gvproxy,native --test '*' \
 		--profile vm --no-report $(NEXTEST_FILTER) || rc=$$?; \
 	cargo llvm-cov nextest -p boxlite-cli --test '*' \
 		--profile vm --no-report $(NEXTEST_CLI_FILTER) || rc=$$?; \

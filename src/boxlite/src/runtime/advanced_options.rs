@@ -823,6 +823,16 @@ pub struct AdvancedBoxOptions {
     #[serde(default)]
     pub nested_virtualization: bool,
 
+    /// Release-candidate engine choice; `None` keeps the default engine.
+    ///
+    /// The runtime must explicitly enable
+    /// [`ExperimentalFeature::NativeVmm`](crate::experimental::ExperimentalFeature::NativeVmm).
+    /// Omitted from the manifest when unset, so an ordinary box's export is
+    /// byte-identical to before (the same premise `capabilities` documents).
+    #[doc(hidden)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub engine: Option<crate::vmm::VmmKind>,
+
     /// Docker-style privileged OCI spec shape for DinD.
     ///
     /// Mirrors how moby itself resolves this (`oci/caps.TweakCapabilities`):
@@ -865,6 +875,7 @@ impl Clone for AdvancedBoxOptions {
             network_rate_limit: self.network_rate_limit,
             kernel: self.kernel.clone(),
             nested_virtualization: self.nested_virtualization,
+            engine: self.engine,
             privileged: self.privileged,
             resolved: std::sync::atomic::AtomicBool::new(false),
         }
