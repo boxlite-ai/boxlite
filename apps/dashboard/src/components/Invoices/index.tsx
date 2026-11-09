@@ -4,6 +4,8 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { ResourceEmptyState, StatusIndicator } from '@/components/ResourceLayout'
+import { FileText } from '@/components/ui/icon'
 import type { Invoice } from '@/billing-api'
 import type { InvoicesTableProps } from './types'
 import { invoiceLabel, invoiceStatus, type InvoiceStatus } from './columns'
@@ -74,9 +76,11 @@ export function InvoicesTable({ data, loading }: InvoicesTableProps) {
 
   if (data.length === 0) {
     return (
-      <div className="border-b border-border/40 py-[13px] font-mono text-[13px] text-muted-foreground">
-        No billing documents yet.
-      </div>
+      <ResourceEmptyState
+        title="No billing documents yet."
+        icon={<FileText className="size-6" />}
+        description="Billing documents appear here after charges are processed."
+      />
     )
   }
 
@@ -88,9 +92,7 @@ export function InvoicesTable({ data, loading }: InvoicesTableProps) {
     // width the moment one appeared. `max-h` rather than a fixed height so an
     // account with three invoices does not get a box of empty rows.
     <div className="scrollbar-elevated max-h-[420px] overflow-y-auto">
-      <div
-        className={`${ROW} sticky top-0 z-10 border-b border-border bg-background pb-2 font-mono text-[10px] uppercase tracking-[1px] text-muted-foreground`}
-      >
+      <div className={`${ROW} sticky top-0 z-10 resource-list-head bg-background`}>
         <span data-invoice-header>Date</span>
         <span data-invoice-header>Type</span>
         <span data-invoice-header>Number</span>
@@ -104,10 +106,7 @@ export function InvoicesTable({ data, loading }: InvoicesTableProps) {
       {data.map((invoice) => {
         const status = statusMark(invoiceStatus(invoice))
         return (
-          <div
-            key={invoice.id}
-            className={`${ROW} border-b border-border/40 py-[13px] font-mono text-[13px] transition-colors hover:bg-muted/30`}
-          >
+          <div key={invoice.id} className={`${ROW} resource-list-row font-mono`}>
             <span data-invoice-date className="text-foreground">
               {invoiceDate(invoice)}
             </span>
@@ -124,17 +123,7 @@ export function InvoicesTable({ data, loading }: InvoicesTableProps) {
               {invoiceAmount(invoice)}
             </span>
             <span className="text-right">
-              <span className="inline-flex items-center gap-1.5">
-                <span className="size-[9px]" style={{ background: status.color }} />
-                <span
-                  data-invoice-status
-                  className={
-                    invoice.paymentStatus === 'failed' && !invoice.voided ? 'text-destructive' : 'text-foreground'
-                  }
-                >
-                  {status.label}
-                </span>
-              </span>
+              <StatusIndicator data-invoice-status label={status.label} color={status.color} />
             </span>
           </div>
         )

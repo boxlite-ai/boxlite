@@ -4,15 +4,14 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { AsciiButton } from '@/components/ascii'
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-} from '@/components/ui/dialog'
+  FormDialogContent as DialogContent,
+  FormDialogHeader as DialogHeader,
+  FormDialogFooter as DialogFooter,
+  FormDialogBody,
+} from '@/components/ui/form-dialog'
+import { AsciiButton } from '@/components/ascii'
+import { Dialog, DialogDescription, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { useCreateApiKeyMutation } from '@/hooks/mutations/useCreateApiKeyMutation'
 import { useCopyToClipboard } from '@/hooks/useCopyToClipboard'
@@ -97,59 +96,59 @@ export const CreateApiKeyDialog: React.FC<CreateApiKeyDialogProps> = ({
         </AsciiButton>
       </DialogTrigger>
 
-      <DialogContent className="gap-0 p-0 sm:max-w-[560px]">
+      <DialogContent>
         {revealKey ? (
           <>
-            <DialogHeader className="px-[26px] pb-0 pt-6">
-              <DialogTitle className="text-[20px] font-bold">API Key Created</DialogTitle>
+            <DialogHeader>
+              <DialogTitle>API Key Created</DialogTitle>
               <DialogDescription className="text-[13px] leading-relaxed text-muted-foreground">
                 Copy your key now. For security, you won&apos;t be able to see it again.
               </DialogDescription>
             </DialogHeader>
-            <div className="px-[26px] py-[22px]">
+            <FormDialogBody>
               <div className="flex items-center gap-3 border border-brand bg-card px-4 py-[14px]">
                 <span className="flex-1 break-all font-mono text-[13px] text-brand">{revealKey}</span>
                 <AsciiButton variant="primary" type="button" onClick={() => copy(revealKey)}>
                   {keyCopied ? 'Copied' : 'Copy'}
                 </AsciiButton>
               </div>
-            </div>
-            <div className="flex justify-end border-t border-border px-[26px] py-4">
+            </FormDialogBody>
+            <DialogFooter>
               <AsciiButton type="button" onClick={() => setOpen(false)}>
                 Done
               </AsciiButton>
-            </div>
+            </DialogFooter>
           </>
         ) : (
           <>
-            <DialogHeader className="px-[26px] pb-0 pt-6">
-              <DialogTitle className="text-[21px] font-bold tracking-[-0.3px]">Create New API Key</DialogTitle>
+            <DialogHeader>
+              <DialogTitle>Create New API Key</DialogTitle>
               <DialogDescription className="text-[13px] text-muted-foreground">
                 Create a key with your available API permissions.
               </DialogDescription>
             </DialogHeader>
 
-            <form id="create-api-key-form" onSubmit={handleCreate}>
-              <div className="flex flex-col gap-[22px] px-[26px] py-6">
+            <form className="form-dialog-body" id="create-api-key-form" onSubmit={handleCreate}>
+              <div className="space-y-5">
                 {/* name */}
                 <div className="flex flex-col gap-[10px]">
-                  <div className="text-[13px] font-semibold">Key Name</div>
+                  <div className="form-field-label">Key Name</div>
                   <input
                     value={name}
                     onChange={(e) => setName(e.target.value)}
                     placeholder="Name"
                     autoFocus
-                    className="border border-border bg-card px-[14px] py-[13px] font-mono text-[13px] text-foreground outline-none focus:border-brand"
+                    className="form-field-input"
                   />
                 </div>
 
                 {/* expires */}
                 <div className="flex flex-col gap-[10px]">
-                  <div className="text-[13px] font-semibold">Expires</div>
+                  <div className="form-field-label">Expires</div>
                   <DropdownMenu>
                     <DropdownMenuTrigger
                       className={cn(
-                        'flex items-center gap-[11px] border border-border bg-card px-[14px] py-[13px] font-mono text-[13px] outline-none data-[state=open]:border-brand',
+                        'flex items-center gap-[11px] border border-border bg-card h-10 px-3 font-mono text-[13px] outline-none data-[state=open]:border-brand',
                         expiryIdx === 0 ? 'text-muted-foreground' : 'text-foreground',
                       )}
                     >
@@ -189,7 +188,7 @@ export const CreateApiKeyDialog: React.FC<CreateApiKeyDialogProps> = ({
               </div>
             </form>
 
-            <div className="flex justify-end gap-[10px] border-t border-border px-[26px] py-4">
+            <DialogFooter>
               <AsciiButton type="button" onClick={() => setOpen(false)}>
                 Close
               </AsciiButton>
@@ -201,7 +200,7 @@ export const CreateApiKeyDialog: React.FC<CreateApiKeyDialogProps> = ({
               >
                 {submitting ? 'Creating…' : 'Create'}
               </AsciiButton>
-            </div>
+            </DialogFooter>
           </>
         )}
       </DialogContent>

@@ -390,7 +390,7 @@ function SshControls({
             aria-label="SSH access"
             checked={status?.enabled ?? false}
             disabled={disabled || !status}
-            className="ml-1 scale-90 self-center"
+            className="ml-1 mr-3 shrink-0 scale-90 self-center"
             onCheckedChange={(enabled) => void run(enabled ? 'enable' : 'disable')}
           />
         )}

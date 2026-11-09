@@ -181,19 +181,43 @@ function MoneyHistorySection() {
         </TabsList>
 
         <TabsContent value="invoices" className="mt-5">
-          <InvoicesTable
-            data={invoicesQuery.data?.items ?? []}
-            loading={Boolean(invoicesQuery.isLoading || invoicesQuery.isFetching)}
-          />
+          {invoicesQuery.isError ? (
+            <div
+              role="alert"
+              className="flex items-center justify-between gap-4 border border-border px-4 py-6 text-body"
+            >
+              <p>Could not load billing history. Try again.</p>
+              <AsciiButton onClick={() => void invoicesQuery.refetch()} disabled={invoicesQuery.isFetching}>
+                Retry
+              </AsciiButton>
+            </div>
+          ) : (
+            <InvoicesTable
+              data={invoicesQuery.data?.items ?? []}
+              loading={Boolean(invoicesQuery.isLoading || invoicesQuery.isFetching)}
+            />
+          )}
           <Pager page={invoicePage} totalPages={invoiceTotalPages} onPage={setInvoicePage} />
           <PanelNote>Amounts charged to your payment method.</PanelNote>
         </TabsContent>
 
         <TabsContent value="credits" className="mt-5">
-          <WalletTransactionsTable
-            data={transactionsQuery.data?.items ?? []}
-            loading={Boolean(transactionsQuery.isLoading || transactionsQuery.isFetching)}
-          />
+          {transactionsQuery.isError ? (
+            <div
+              role="alert"
+              className="flex items-center justify-between gap-4 border border-border px-4 py-6 text-body"
+            >
+              <p>Could not load credit activity. Try again.</p>
+              <AsciiButton onClick={() => void transactionsQuery.refetch()} disabled={transactionsQuery.isFetching}>
+                Retry
+              </AsciiButton>
+            </div>
+          ) : (
+            <WalletTransactionsTable
+              data={transactionsQuery.data?.items ?? []}
+              loading={Boolean(transactionsQuery.isLoading || transactionsQuery.isFetching)}
+            />
+          )}
           <Pager page={creditPage} totalPages={creditTotalPages} onPage={setCreditPage} />
           {/* Says what these are, which is the job the fold used to do badly:
               quota granted, not money taken. */}

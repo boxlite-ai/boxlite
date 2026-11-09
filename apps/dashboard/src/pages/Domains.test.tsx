@@ -96,6 +96,16 @@ describe('Domains page', () => {
     await settle()
   }
 
+  it.each([list, { ...list, domains: [], used: 0, remaining: 5 }])(
+    'does not append a redundant connection-help footer',
+    async (data) => {
+      state.list.mockResolvedValue(data)
+      await render()
+      expect(document.body.textContent).toContain('Domains')
+      expect(document.body.textContent).not.toContain('How to connect a domain')
+    },
+  )
+
   it('lists full names with Box/port, App, and unbound targets', async () => {
     await render()
     expect(state.list).toHaveBeenCalledWith('org-1')

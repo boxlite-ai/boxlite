@@ -498,8 +498,8 @@ function InlineCodeSteps({
         <section key={part.id} className="quickstart-step min-w-0">
           <QuickstartStepHeading title={part.title} />
           <p className="mt-2 max-w-[900px] font-display text-sm leading-relaxed text-muted-foreground">{part.note}</p>
-          <div className="mt-4 overflow-hidden rounded-none bg-[hsl(var(--code-background))]">
-            <div className="flex items-center justify-between border-b border-border/60 px-4 py-2">
+          <div className="mt-4 overflow-hidden rounded-none quickstart-code-surface">
+            <div className="flex items-center justify-between border-b border-[hsl(var(--quickstart-code-border))] bg-card px-4 py-2">
               <span className="font-mono text-xs tracking-normal text-muted-foreground">
                 {EXAMPLE_FILES[language]} · part {index + 1}
               </span>
@@ -655,7 +655,7 @@ function OnboardingGuideContent({
               in your terminal to use an existing key.
             </p>
             {createdKey ? (
-              <div className="mt-4 flex items-start gap-3 rounded-none bg-[hsl(var(--code-background))] p-3">
+              <div className="mt-4 flex items-start gap-3 rounded-none quickstart-code-surface p-3">
                 <code className="quickstart-code min-w-0 flex-1 break-all">{createdKey.value}</code>
                 <QuickstartCopyButton
                   quiet
@@ -700,8 +700,8 @@ function OnboardingGuideContent({
                   ? 'Use curl and jq to call the BoxLite REST API directly, without an SDK. The requests below create a Box and execute a command using your API key.'
                   : `Install the ${activeInterface.label} SDK in your local project to create Boxes, run commands and read results from your code. Run the installation command below in your terminal.`}
             </p>
-            <div className="mt-4 overflow-hidden rounded-none border border-border/60 bg-[hsl(var(--code-background))]">
-              <div className="flex items-center justify-between border-b border-border/60 px-4 py-2">
+            <div className="mt-4 overflow-hidden rounded-none quickstart-code-surface">
+              <div className="flex items-center justify-between border-b border-[hsl(var(--quickstart-code-border))] bg-card px-4 py-2">
                 <span className="font-mono text-xs tracking-normal text-muted-foreground">Local terminal</span>
                 <QuickstartCopyButton
                   quiet
@@ -724,7 +724,7 @@ function OnboardingGuideContent({
             copiedTarget={copiedTarget}
             onCopy={copyText}
           />
-          <div className="flex flex-wrap items-center justify-between gap-3 rounded-none bg-[hsl(var(--code-background))] px-4 py-3">
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-none quickstart-code-surface px-4 py-3">
             <pre className="quickstart-code min-w-0 overflow-x-auto whitespace-pre">
               ${' '}
               {language === 'cli'
@@ -875,7 +875,7 @@ function OnboardingGuideContent({
                 <div className="mb-[9px] text-label uppercase tracking-[1.5px] text-muted-foreground">
                   {createdKey ? 'Your API key' : 'Key name'}
                 </div>
-                <div className="flex items-center gap-[10px] border border-border bg-[hsl(var(--code-background))] px-[14px] py-3 focus-within:border-brand">
+                <div className="flex items-center gap-[10px] quickstart-code-surface px-[14px] py-3 focus-within:border-brand">
                   <KeyRound className={cn('size-4 flex-none', createdKey ? 'text-brand' : 'text-muted-foreground')} />
                   {createdKey ? (
                     <span className="flex-1 break-all text-meta leading-relaxed text-foreground">
@@ -946,7 +946,7 @@ function OnboardingGuideContent({
                 <div className="mb-[9px] text-label uppercase tracking-[1.5px] text-muted-foreground">
                   {activeExample.setupLabel ?? 'Run in your local terminal'}
                 </div>
-                <div className="flex items-start gap-3 border border-border bg-[hsl(var(--code-background))] px-[14px] py-3">
+                <div className="flex items-start gap-3 quickstart-code-surface px-[14px] py-3">
                   <span className="flex-none pt-[1px] text-success">$</span>
                   <pre className="quickstart-code scrollbar-elevated min-w-0 flex-1 overflow-x-auto whitespace-pre text-foreground">
                     {activeExample.install}
@@ -997,7 +997,7 @@ function OnboardingGuideContent({
                       code={renderedExample}
                       language={activeExample.codeLanguage}
                       showCopy={false}
-                      className="h-full rounded-none"
+                      className="h-full rounded-none quickstart-code-surface"
                       codeAreaClassName="quickstart-code h-full overflow-auto whitespace-pre pr-24"
                     />
                   </Suspense>

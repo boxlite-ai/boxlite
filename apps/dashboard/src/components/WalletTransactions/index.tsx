@@ -4,6 +4,8 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { ResourceEmptyState } from '@/components/ResourceLayout'
+import { CreditCardIcon } from '@/components/ui/icon'
 import type { WalletTransaction } from '@/billing-api'
 import type { WalletTransactionsTableProps } from './types'
 import { walletTransactionLabel } from './columns'
@@ -63,6 +65,15 @@ export function WalletTransactionsTable({ data, loading }: WalletTransactionsTab
   if (loading) {
     return <div className="border-b border-border/40 py-[13px] font-mono text-[13px]">Loading...</div>
   }
+
+  if (!data.length)
+    return (
+      <ResourceEmptyState
+        title="No credit activity yet"
+        icon={<CreditCardIcon className="size-6" />}
+        description="Credit purchases, grants and usage appear here after they are recorded."
+      />
+    )
 
   return (
     // Bounded like its sibling in Billing history, and for the same reason: a

@@ -1,0 +1,49 @@
+# Desktop dashboard consistency
+
+## Problem
+
+Resource pages use different title sizes, status treatments, row feedback, empty-state illustrations and creation-dialog layouts. The dark palette has a blue cast, while Quickstart code boundaries disappear against its background. The desktop template picker traps a long catalog in a short nested scroll area and stretches its adjacent form.
+
+Comparison baseline: `a4a7b8296e6920b08c79cab4e257bf28eb6b3fe0` on main.
+
+## Scope
+
+Improve presentation in the existing dashboard without replacing page implementations, changing APIs or removing permission checks. Keep existing feature descriptions and help links, except the redundant Domains footer. Images remains a catalog: remove its independent New box action and preserve creation from individual images.
+
+## Design
+
+| Area | Contract |
+| --- | --- |
+| Theme | Neutral near-black structural surfaces; retain semantic and brand hues and the light theme. |
+| Resources | Shared 28px page titles, 14px names, 12px status labels with semantic marks, consistent row hover and keyboard focus. |
+| Empty states | Shared 48px icon tile, 24px pixel glyph, title, description and supplementary guide; one primary action in the toolbar where creation applies. |
+| Forms | Shared header, scrollable body and footer; preserve existing fields, validation, submission and permissions. |
+| Icons | Pixel glyphs identify resource types; separate status labels convey state. Payment and Quickstart environment brands retain their own artwork. |
+| Quickstart | Explicit code-surface border; natural page scrolling for templates; content-sized detail form, sticky only where desktop height permits. |
+| Image usage | `Custom images 3 / 20 · Total image size 456 MiB`: independent count quota and aggregate size labels, with quota warnings affecting only the count. |
+| Network | Three compact rows; accurate enabled/disabled values, wrapping outbound values and room for switch hit targets. Explain policy only in the enable confirmation. |
+
+`knownBytes` sums declared sizes across ready versions of organization-owned images. It is neither deduplicated physical storage nor a billing measurement. Curated images do not consume the organization's count quota.
+
+Inbound disabled is a proxy gate: `get_box_target.go` and `tunnel.go` reject traffic before tunnel authorization. When enabled, public/private policy applies; private access accepts a valid token or organization authentication. This corrects the former `disabled · your organization` label without changing backend authorization.
+
+## Mechanism and failure handling
+
+`ResourceEmptyState`, `StatusIndicator`, resource CSS classes and form-dialog wrappers centralize presentation while callers retain business decisions. Loading, failed requests, empty successful results and filtered no-results remain distinct. Billing histories and Volumes expose retryable errors instead of showing successful empty states after a request fails.
+
+Mock-only fixtures provide repeatable empty-resource previews. A separate members fixture avoids removing organization permissions while checking other empty pages. Production responses are unchanged.
+
+## Related work and trade-offs
+
+- [Carbon empty states](https://www.carbondesignsystem.com/building-blocks/core/patterns/empty-states) separates next-step guidance and secondary links. Adapt that distinction to the existing centered resource layout.
+- [Payment SVG assets](https://github.com/aaronfagan/svg-credit-card-payment-icons/tree/6dd023ae32415ed7b01bf809f15a25613a52098c) provide bundled brand artwork; retain their Apache-2.0 license and avoid runtime image lookups.
+- Reuse the existing pixel icon shim and dialog primitive. Preserve recognizable branding without mixing wireframe and pixel resource icons.
+- Keep surface levels and a stronger local code border rather than making every dark surface identical black.
+
+## Validation and evidence
+
+See [desktop screenshots and reproduction](assets/desktop-dashboard-review/README.md) and [dashboard presentation contracts](../../../apps/dashboard/README.md#desktop-review-code-surfaces-payment-identity-and-empty-resources).
+
+Component checks cover creation actions, error-versus-empty results, payment identities, image usage, network labels and dialog behavior. Browser review covers populated and empty desktop pages, both code themes, short-height templates and Box details at 1280/1440/1920 widths. The details column's measured content width changes from 349px to its 340px viewport width.
+
+Proxy tunnel tests and API tunnel-service tests passed locally. The preview-controller suite could not compile because local linked dependencies resolved incompatible Axios types. No deployed authorization, real payment, SSH connection or backend resource mutation is claimed by these mock screenshots.

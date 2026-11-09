@@ -143,6 +143,15 @@ describe('BoxTable pagination controls', () => {
     expect(props.onRowClick).not.toHaveBeenCalled()
   })
 
+  it('provides a native detail link without dispatching row navigation twice', () => {
+    const onRowClick = vi.fn()
+    renderBoxTable({ onRowClick, data: [makeBox('1')] })
+    const link = document.querySelector<HTMLAnchorElement>('a[href="/dashboard/boxes/1"]')
+    expect(link).not.toBeNull()
+    act(() => link?.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })))
+    expect(onRowClick).toHaveBeenCalledTimes(1)
+  })
+
   it('keeps a transitioning box action disabled', () => {
     const props = renderBoxTable({ data: [{ ...makeBox('busy'), state: BoxState.STARTING }] })
     const actions = document.querySelectorAll<HTMLButtonElement>('button[title="Working…"]')
@@ -296,14 +305,14 @@ describe('BoxTable first pull', () => {
       progress: { phase: BoxProgressPhase.PREPARING_IMAGE, retryAfterMs: 5000 },
     })
 
-    expect(document.body.textContent).toContain('PULLING IMAGE')
+    expect(document.body.textContent).toContain('Pulling image')
   })
 
   it('says a creating box is starting when no pull is reported', () => {
     renderRow({ ...makeBox('1'), state: BoxState.CREATING })
 
-    expect(document.body.textContent).toContain('STARTING')
-    expect(document.body.textContent).not.toContain('PULLING IMAGE')
+    expect(document.body.textContent).toContain('Starting')
+    expect(document.body.textContent).not.toContain('Pulling image')
   })
 })
 

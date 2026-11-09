@@ -3,9 +3,15 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import {
+  FormDialogContent as DialogContent,
+  FormDialogHeader as DialogHeader,
+  FormDialogFooter as DialogFooter,
+  FormDialogBody,
+} from '@/components/ui/form-dialog'
 import { AsciiButton } from '@/components/ascii'
 import { AsciiChip, BRAND, PanelNote } from '@/components/ascii'
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
+import { Dialog, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { Switch } from '@/components/ui/switch'
 import { RoutePath } from '@/enums/RoutePath'
@@ -218,7 +224,7 @@ function BoxPriceRow({ cpu, memory, disk }: BoxSpec) {
   const [breakdownOpen, setBreakdownOpen] = useState(false)
 
   const ROW = 'flex shrink-0 flex-col gap-1 border-t border-border px-4 py-4 sm:px-6'
-  const LABEL = 'font-mono text-[10px] uppercase tracking-[1.2px] text-muted-foreground'
+  const LABEL = 'form-field-label'
   const FIGURE = 'font-mono text-[20px] font-bold tracking-[-0.5px] sm:text-[24px]'
 
   if (!config.billingApiUrl) {
@@ -779,29 +785,24 @@ export const CreateBoxDialog = ({
     <Dialog open={open} onOpenChange={setOpen}>
       {children && <DialogTrigger asChild>{children}</DialogTrigger>}
 
-      <DialogContent
-        className={cn(
-          'flex max-h-[92svh] w-[calc(100vw-1rem)] flex-col gap-0 overflow-hidden p-0 sm:max-h-[88vh] sm:max-w-[540px]',
-          className,
-        )}
-      >
-        <DialogHeader className="shrink-0 border-b border-border px-4 py-[18px] sm:px-6">
-          <DialogTitle className="text-[18px] font-bold tracking-[-0.3px]">Create a box for your agent</DialogTitle>
+      <DialogContent className={cn('sm:max-w-[560px]', className)}>
+        <DialogHeader>
+          <DialogTitle>Create a box for your agent</DialogTitle>
         </DialogHeader>
 
-        <div className="flex min-h-0 flex-1 flex-col gap-[22px] overflow-y-auto px-4 py-5 sm:px-6 sm:py-6">
+        <FormDialogBody>
           {/* name + image — two short single-line controls; a full-width row
               each was pure vertical waste. */}
           <div className="grid grid-cols-1 gap-[14px] sm:grid-cols-2">
             <div className="flex flex-col gap-[9px]">
-              <div className="font-mono text-[10px] uppercase tracking-[1.2px] text-muted-foreground">Name</div>
+              <div className="form-field-label">Name</div>
               <input
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 placeholder="my-new-box"
                 aria-invalid={!nameValid}
                 aria-describedby="create-box-name-hint"
-                className="w-full border border-border bg-card px-[13px] py-[11px] font-mono text-[13px] text-foreground outline-none focus:border-brand aria-[invalid=true]:border-destructive"
+                className="form-field-input"
               />
               {/* Submitting an empty name is a real, supported path — the API then assigns
                   an adjective-animal name of its own. Say so here, or the placeholder reads
@@ -812,7 +813,7 @@ export const CreateBoxDialog = ({
             </div>
 
             <div className="flex flex-col gap-[9px]">
-              <div className="font-mono text-[10px] uppercase tracking-[1.2px] text-muted-foreground">Image</div>
+              <div className="form-field-label">Image</div>
               {/* Free text with the catalog as suggestions, not a closed list:
                   any reference the operator's allowlist admits is valid here,
                   and an image only enters the catalog after something has
@@ -869,7 +870,7 @@ export const CreateBoxDialog = ({
                 label scale is 10px/1.2px (Name, Image), and SectionTitle's
                 11px/1.5px heading would read as a different tier from its own
                 siblings. */}
-            <div className="font-mono text-[10px] uppercase tracking-[1.2px] text-muted-foreground">
+            <div className="form-field-label">
               <span style={{ color: BRAND }}>▸</span> Size
             </div>
 
@@ -980,7 +981,7 @@ export const CreateBoxDialog = ({
               cost. */}
               <div className="flex flex-col gap-[11px] border-t border-border pt-5">
                 <div className="flex items-center justify-between gap-3">
-                  <div className="font-mono text-[10px] uppercase tracking-[1.2px] text-muted-foreground">
+                  <div className="form-field-label">
                     <span style={{ color: BRAND }}>▸</span> Volumes
                   </div>
                   <button
@@ -1018,7 +1019,7 @@ export const CreateBoxDialog = ({
               changes. Three flat rows, always visible: no presets to learn,
               no "Custom" panel hiding the real controls. */}
               <div className="flex flex-col gap-[13px] border-t border-border pt-5">
-                <div className="font-mono text-[10px] uppercase tracking-[1.2px] text-muted-foreground">
+                <div className="form-field-label">
                   <span style={{ color: BRAND }}>▸</span> Lifecycle
                 </div>
 
@@ -1078,7 +1079,7 @@ export const CreateBoxDialog = ({
               </div>
             </>
           )}
-        </div>
+        </FormDialogBody>
 
         {/* price — quoted from Commerce's published rates for the size above */}
         <BoxPriceRow cpu={cpu} memory={memory} disk={disk} />
@@ -1090,7 +1091,7 @@ export const CreateBoxDialog = ({
             {lifecycleError ?? mountError}
           </p>
         )}
-        <div className="grid shrink-0 grid-cols-2 gap-[10px] border-t border-border px-4 py-4 sm:flex sm:justify-end sm:px-6">
+        <DialogFooter>
           <AsciiButton className="h-11 sm:h-9" type="button" onClick={() => setOpen(false)}>
             Cancel
           </AsciiButton>
@@ -1105,7 +1106,7 @@ export const CreateBoxDialog = ({
           >
             {submitting ? 'Creating…' : 'Create Box'}
           </AsciiButton>
-        </div>
+        </DialogFooter>
       </DialogContent>
     </Dialog>
   )

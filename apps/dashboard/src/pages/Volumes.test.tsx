@@ -27,7 +27,12 @@ vi.mock('@/components/Box/CreateBoxDialog', () => ({
 }))
 
 // Each test sets the permissions its member holds.
-const state = vi.hoisted(() => ({ permissions: [] as string[] }))
+const state = vi.hoisted(() => ({
+  permissions: [] as string[],
+  empty: false,
+  loading: false,
+  error: undefined as Error | undefined,
+}))
 
 vi.mock('@/hooks/useSelectedOrganization', () => ({
   useSelectedOrganization: () => ({
@@ -36,7 +41,7 @@ vi.mock('@/hooks/useSelectedOrganization', () => ({
   }),
 }))
 vi.mock('@/hooks/queries/useVolumesQuery', () => ({
-  useVolumesQuery: () => ({ data: [READY_VOLUME], isLoading: false, error: undefined }),
+  useVolumesQuery: () => ({ data: state.empty ? [] : [READY_VOLUME], isLoading: state.loading, error: state.error }),
 }))
 vi.mock('@/hooks/mutations/useCreateVolumeMutation', () => ({
   useCreateVolumeMutation: () => ({ mutateAsync: vi.fn(), isPending: false }),
@@ -68,6 +73,9 @@ describe('Volumes row action "+ Box"', () => {
   })
 
   beforeEach(() => {
+    state.loading = false
+    state.error = undefined
+    state.empty = false
     state.permissions = [OrganizationRolePermissionsEnum.WRITE_VOLUMES, OrganizationRolePermissionsEnum.WRITE_BOXES]
   })
 
@@ -85,6 +93,26 @@ describe('Volumes row action "+ Box"', () => {
       root.render(<Volumes />)
     })
   }
+
+  it('distinguishes volume loading and failure from successful empty data', () => {
+    state.empty = true
+    state.error = new Error('unavailable')
+    renderPage()
+    expect(document.querySelector('[role="alert"]')?.textContent).toContain('Volumes are unavailable')
+    expect(document.body.textContent).not.toContain('No volumes yet')
+    state.error = undefined
+    state.loading = true
+    act(() => root!.render(<Volumes />))
+    expect(document.querySelector('[role="status"]')?.textContent).toContain('Loading volumes')
+    expect(document.body.textContent).not.toContain('No volume matches')
+  })
+
+  it('keeps the filter and creation toolbar when no volumes exist', () => {
+    state.empty = true
+    renderPage()
+    expect(document.querySelector('input[placeholder="Filter volumes…"]')).not.toBeNull()
+    expect(rowAction('New Volume')).toBeDefined()
+  })
 
   it('opens and cancels volume creation through the shared buttons', async () => {
     renderPage()

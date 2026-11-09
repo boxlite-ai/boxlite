@@ -93,7 +93,7 @@ function Billing() {
     <Tabs value={tab} onValueChange={setTab} className="w-full gap-0">
       <div className="page-container">
         <div className="pt-6">
-          <h1 className="font-display text-2xl font-semibold leading-none tracking-tight">Billing</h1>
+          <h1 className="resource-title">Billing</h1>
           <p className="mt-2 text-body leading-relaxed text-muted-foreground">
             Track resource usage, manage your plan, and top up your balance.
           </p>

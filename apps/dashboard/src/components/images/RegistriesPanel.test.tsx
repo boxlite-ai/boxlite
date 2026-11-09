@@ -112,6 +112,15 @@ async function fillAndSubmit(values: { prefix?: string; username?: string; passw
 }
 
 describe('the credential list', () => {
+  it('keeps one connection action in an empty credential list', async () => {
+    state.credentials = []
+    await renderPanel()
+    const actions = [...host.querySelectorAll('button')].filter((button) => button.textContent === 'Connect a registry')
+    expect(actions).toHaveLength(1)
+    await act(async () => actions[0].click())
+    expect(document.querySelector('[role="dialog"]')).not.toBeNull()
+  })
+
   it('lists a credential by what it covers, who it pulls as, and who added it', async () => {
     await renderPanel()
 

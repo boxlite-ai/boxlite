@@ -148,19 +148,17 @@ export function BoxNetworkPanel({
       <div className="mb-[6px] flex items-baseline gap-2">
         <span className="whitespace-nowrap text-muted-foreground">outbound</span>
         <span className="-translate-y-1 min-w-[8px] flex-1 border-b border-dotted border-border" />
-        <span className="whitespace-nowrap">{network ? outboundLabel(network.outbound) : 'unknown'}</span>
+        <span className="min-w-0 max-w-[66%] break-words text-right">
+          {network ? outboundLabel(network.outbound) : 'unknown'}
+        </span>
       </div>
 
-      {/* Inbound access only lets the proxy skip sign-in for the services the
-          box exposes; with it disabled a non-member is bounced through OIDC and
-          refused by the org-membership check in preview.controller.ts. Access
-          is credential-based, not network-based: no layer enforces an inbound
-          allowlist yet. */}
+      {/* Disabled is a proxy-level block; enabled tunnels retain their own access policy. */}
       <div className="mb-[6px] flex items-baseline gap-2">
         <span className="whitespace-nowrap text-muted-foreground">inbound</span>
         <span className="-translate-y-1 min-w-[8px] flex-1 border-b border-dotted border-border" />
         <span className="whitespace-nowrap" style={inboundEnabled ? { color: STATUS.idle } : undefined}>
-          {network ? (inboundEnabled ? 'enabled · anyone' : 'disabled · your organization') : 'unknown'}
+          {network ? (inboundEnabled ? 'enabled' : 'disabled') : 'unknown'}
         </span>
         {canManage && network ? (
           <Switch
@@ -170,7 +168,7 @@ export function BoxNetworkPanel({
             onCheckedChange={(next) => (next ? setConfirmingInbound(true) : onToggleInbound(NetworkMode.DISABLED))}
             // A text-less button's baseline is its bottom edge, so the row's
             // baseline alignment would lift it above the text; center it.
-            className="ml-1 scale-90 self-center"
+            className="ml-1 mr-3 shrink-0 scale-90 self-center"
           />
         ) : null}
       </div>
@@ -195,7 +193,7 @@ export function BoxNetworkPanel({
               signing in to your organization.
               <br />
               <br />
-              If a port serves API keys or customer data, leave this restricted.
+              If a port serves API keys or customer data, leave inbound disabled.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

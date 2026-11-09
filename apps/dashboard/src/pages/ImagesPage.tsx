@@ -76,7 +76,10 @@ const Images: React.FC<{ tab: ImagesTab }> = ({ tab }) => {
               </Link>
               . Public images need no credentials.
             </li>
-            <li>With Box creation permission, choose New box and enter your container image reference.</li>
+            <li>
+              On the Boxes page, choose New box and enter your container image reference. Box creation permission is
+              required.
+            </li>
             <li>The image appears here after the Box starts successfully.</li>
           </ol>
           <a

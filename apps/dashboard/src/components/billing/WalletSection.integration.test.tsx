@@ -4,6 +4,8 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import visaLogo from '@/assets/payment-brands/visa.svg'
+import mastercardLogo from '@/assets/payment-brands/mastercard.svg'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -29,6 +31,8 @@ const mocks = vi.hoisted(() => ({
   totalsUnknown: false,
   // The query itself has not answered at all.
   historiesPending: false,
+  historiesError: false,
+  refetchHistory: vi.fn(),
   // The wallet query has not answered yet.
   walletPending: false,
   // A top-up request is in flight.
@@ -57,6 +61,7 @@ vi.mock('@/hooks/queries/billingQueries', () => ({
   useOwnerBillingPortalUrlQuery: () => ({ data: undefined, isLoading: false }),
   useOwnerInvoicesQuery: (page = 1, perPage?: number) => {
     mocks.invoicesQuery(page, perPage)
+    if (mocks.historiesError) return { data: undefined, isLoading: false, isError: true, refetch: mocks.refetchHistory }
     if (mocks.historiesPending) return { data: undefined, isLoading: true }
     return {
       data: {
@@ -82,6 +87,7 @@ vi.mock('@/hooks/queries/billingQueries', () => ({
   },
   useOwnerWalletTransactionsQuery: (page = 1, perPage?: number) => {
     mocks.walletTransactionsQuery(page, perPage)
+    if (mocks.historiesError) return { data: undefined, isLoading: false, isError: true, refetch: mocks.refetchHistory }
     if (mocks.historiesPending) return { data: undefined, isLoading: true }
     return {
       data: {
@@ -154,6 +160,8 @@ describe('WalletSection top-up checkout', () => {
     mocks.topUpWallet.mockResolvedValue({ url: 'https://checkout.stripe.com/pay/cs_top_up' })
     mocks.fetchCheckoutUrl.mockResolvedValue('https://checkout.stripe.com/c/pay/cs_connect')
     mocks.totalsUnknown = false
+    mocks.historiesError = false
+    mocks.refetchHistory.mockClear()
     mocks.historiesPending = false
     mocks.walletPending = false
     mocks.topUpPending = false
@@ -292,6 +300,33 @@ describe('WalletSection top-up checkout', () => {
     expect(document.body.textContent).not.toContain('BOX-2026-0002')
   })
 
+  it('keeps failed money histories distinct from empty records and retries', async () => {
+    mocks.historiesError = true
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    await act(async () => {
+      root = createRoot(host)
+      root.render(<WalletSection />)
+    })
+    await flush()
+    expect(document.querySelector('[role="alert"]')?.textContent).toContain('Could not load billing history')
+    expect(document.body.textContent).not.toContain('No billing documents yet')
+    const creditTab = [...document.querySelectorAll<HTMLElement>('[role="tab"]')].find((x) =>
+      x.textContent?.includes('Credit activity'),
+    )!
+    await act(async () => {
+      creditTab.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0 }))
+      creditTab.click()
+    })
+    await flush()
+    expect(document.querySelector('[role="alert"]')?.textContent).toContain('Could not load credit activity')
+    expect(document.body.textContent).not.toContain('No credit activity yet')
+    await act(async () => {
+      ;[...document.querySelectorAll('button')].find((x) => x.textContent === 'Retry')!.click()
+    })
+    expect(mocks.refetchHistory).toHaveBeenCalledOnce()
+  })
+
   it('loads older invoices when the billing history exceeds the first page', async () => {
     const host = document.createElement('div')
     document.body.appendChild(host)
@@ -427,6 +462,9 @@ describe('WalletSection top-up checkout', () => {
     const list = document.querySelector('ul[aria-label="Saved payment methods"]')
     const rows = [...(list?.querySelectorAll('li') ?? [])]
     expect(rows).toHaveLength(3)
+    expect(rows[0].querySelector('img')?.getAttribute('src')).toBe(visaLogo)
+    expect(rows[1].querySelector('img')?.getAttribute('src')).toBe(mastercardLogo)
+    expect(rows[2].querySelector('[aria-label="CARD"]')).not.toBeNull()
     expect(list?.textContent).toContain('VISA')
     expect(list?.textContent).toContain('•••• 4242')
     expect(list?.textContent).toContain('exp 08/27')

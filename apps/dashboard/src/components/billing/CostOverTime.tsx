@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { ResourceEmptyState } from '@/components/ResourceLayout'
 import { Panel, PanelNote, SectionTitle } from '@/components/ascii'
 import { ChartConfig, ChartContainer, ChartTooltip, ChartTooltipContent } from '@/components/ui/chart'
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty'
@@ -121,15 +122,11 @@ export function CostOverTime() {
             <Spinner className="size-6" />
           </div>
         ) : view === 'chart' && total === 0 ? (
-          <Empty className="py-12">
-            <EmptyHeader>
-              <EmptyMedia variant="icon">
-                <BarChart3 />
-              </EmptyMedia>
-              <EmptyTitle>No cost yet</EmptyTitle>
-              <EmptyDescription>Settled cost appears here once boxes run — quota-covered first.</EmptyDescription>
-            </EmptyHeader>
-          </Empty>
+          <ResourceEmptyState
+            title="No cost yet"
+            icon={<BarChart3 className="size-6" />}
+            description="Settled cost appears here once boxes run — quota-covered first."
+          />
         ) : view === 'chart' ? (
           <div className="px-[22px] py-5">
             <div className="mb-3 flex flex-wrap items-center gap-4">

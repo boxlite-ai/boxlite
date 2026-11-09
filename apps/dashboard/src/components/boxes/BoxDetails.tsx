@@ -47,8 +47,6 @@ import { useAuth } from 'react-oidc-context'
 import { generatePath, Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { BoxNetworkSection } from './BoxNetworkSection'
-import { BoxCube } from '@/components/BoxCube'
-import { boxCubeState } from '@/lib/box-shape'
 import { BoxTerminalTab } from './BoxTerminalTab'
 import { BoxSshTab } from './BoxSshTab'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
@@ -322,7 +320,7 @@ export default function BoxDetails() {
           <div className="flex flex-none flex-col gap-4 border-b border-dashed border-border pb-[14px] lg:flex-row lg:items-center lg:gap-[18px]">
             <div className="flex min-w-0 flex-1 flex-col gap-3 sm:flex-row sm:items-center sm:gap-[14px]">
               <span className="flex min-w-0 items-center gap-[12px]">
-                <BoxCube state={boxCubeState(box)} size={28} className="text-foreground" />
+                <Container className="size-6 shrink-0 text-muted-foreground" />
                 <span
                   className="max-w-full truncate font-display text-section font-semibold sm:max-w-[360px]"
                   title={getBoxDisplayName(box)}
@@ -430,7 +428,7 @@ export default function BoxDetails() {
           {/* body */}
           <div className="flex min-h-0 flex-1 flex-col gap-[14px] overflow-y-auto pb-2 lg:flex-row lg:overflow-hidden lg:pb-0">
             {/* spec readout */}
-            <div className="w-full lg:w-[340px] lg:flex-none lg:overflow-y-auto lg:pr-6">
+            <div className="w-full min-w-0 lg:w-[340px] lg:flex-none lg:overflow-y-auto lg:pr-6">
               <SectionHeader title="general" />
               <SpecRow label="box id">
                 <span className="flex items-center gap-[7px]">

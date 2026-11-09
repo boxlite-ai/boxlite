@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { ResourceEmptyState } from '@/components/ResourceLayout'
 import { AsciiButton } from '@/components/ascii'
 import { CREATE_API_KEY_PERMISSIONS_GROUPS } from '@/constants/CreateApiKeyPermissionsGroups'
 import { getRelativeTimeString } from '@/lib/utils'
@@ -43,9 +44,7 @@ export function ApiKeyTable({ data, loading, isLoadingKey, onRevoke }: DataTable
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       {/* header */}
-      <div
-        className={`grid ${GRID} flex-none items-center border-b border-border px-[18px] pb-[11px] font-mono text-[10px] uppercase tracking-[1.2px] text-muted-foreground`}
-      >
+      <div className={`grid ${GRID} resource-list-head flex-none items-center`}>
         <span>Name</span>
         <span>Key</span>
         <span>Permissions</span>
@@ -64,28 +63,22 @@ export function ApiKeyTable({ data, loading, isLoadingKey, onRevoke }: DataTable
             </div>
           ))
         ) : data.length === 0 ? (
-          <div className="flex h-full flex-col items-center justify-center px-6 text-center">
-            <KeyRound className="size-14 text-muted-foreground opacity-70" strokeWidth={1.4} />
-            <div className="mt-[22px] text-[17px] font-semibold">No API Keys yet.</div>
-            <div className="mt-[18px] max-w-[440px] text-[13.5px] leading-relaxed text-muted-foreground">
-              Create a key to get started.{' '}
-              <a
-                href="https://docs.boxlite.ai"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="font-semibold text-foreground underline decoration-brand underline-offset-2"
-              >
-                Setup guide →
-              </a>
-            </div>
-          </div>
+          <ResourceEmptyState
+            title="No API Keys yet."
+            icon={<KeyRound className="size-6" />}
+            description="Create a key to get started."
+          >
+            <a href="https://docs.boxlite.ai" target="_blank" rel="noopener noreferrer" className="resource-guide-link">
+              Setup guide →
+            </a>
+          </ResourceEmptyState>
         ) : (
           data.map((key) => {
             const busy = isLoadingKey(key)
             return (
               <div
                 key={`${key.userId}-${key.name}`}
-                className={`grid ${GRID} items-center border-b border-border px-[18px] py-3 text-[13px] transition-colors hover:bg-card ${
+                className={`grid ${GRID} resource-list-row items-center ${
                   busy ? 'pointer-events-none opacity-50' : ''
                 }`}
               >

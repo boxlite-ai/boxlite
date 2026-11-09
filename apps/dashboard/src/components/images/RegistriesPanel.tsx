@@ -3,6 +3,13 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { ResourceEmptyState } from '@/components/ResourceLayout'
+import {
+  FormDialogContent as DialogContent,
+  FormDialogHeader as DialogHeader,
+  FormDialogFooter as DialogFooter,
+  FormDialogBody,
+} from '@/components/ui/form-dialog'
 import { AsciiButton, PanelNote } from '@/components/ascii'
 import {
   AlertDialog,
@@ -15,15 +22,8 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog'
-import { Trash } from '@/components/ui/icon'
+import { Dialog, DialogDescription, DialogTitle } from '@/components/ui/dialog'
+import { KeyRound, Trash } from '@/components/ui/icon'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
@@ -142,7 +142,7 @@ export const PROVIDERS: Provider[] = [
 
 export const REGISTRY_HOSTS = PROVIDERS.map((p) => p.host)
 
-const ROW_GRID = 'grid grid-cols-[1fr_1fr_1fr_1.2fr_110px] items-center gap-3 px-2'
+const ROW_GRID = 'grid grid-cols-[1fr_1fr_1fr_1.2fr_110px] items-center gap-3'
 
 const EMPTY_FORM = { registryHost: 'ghcr.io', repositoryPrefix: '', username: '', password: '' }
 
@@ -303,12 +303,7 @@ export function RegistriesPanel() {
           </div>
         ) : (
           <>
-            <div
-              className={cn(
-                ROW_GRID,
-                'border-b border-border pb-2 font-mono text-label uppercase text-muted-foreground',
-              )}
-            >
+            <div className={cn(ROW_GRID, 'resource-list-head')}>
               <span>Registry</span>
               <span>Covers</span>
               <span>Username</span>
@@ -317,8 +312,8 @@ export function RegistriesPanel() {
             </div>
 
             {credentials.map((credential) => (
-              <div key={credential.id} className={cn(ROW_GRID, 'border-b border-border/60 py-[13px] text-body')}>
-                <span className="truncate font-mono font-medium text-foreground">{credential.registryHost}</span>
+              <div key={credential.id} className={cn(ROW_GRID, 'resource-list-row')}>
+                <span className="resource-name">{credential.registryHost}</span>
                 <span className="truncate font-mono text-meta text-muted-foreground">
                   {credential.repositoryPrefix ? `${credential.repositoryPrefix}*` : 'every repository'}
                 </span>
@@ -370,14 +365,11 @@ export function RegistriesPanel() {
             ) : (
               !isLoading &&
               credentials.length === 0 && (
-                <div className="flex flex-col items-center gap-4 py-10 text-center">
-                  <p className="font-mono text-meta text-muted-foreground">No private registries connected.</p>
-                  {canWrite && (
-                    <AsciiButton variant="primary" onClick={() => setFormOpen(true)}>
-                      Connect a registry
-                    </AsciiButton>
-                  )}
-                </div>
+                <ResourceEmptyState
+                  title="No private registries connected"
+                  icon={<KeyRound className="size-6" />}
+                  description="Connect a registry to pull private images. Public images work without credentials."
+                />
               )
             )}
 
@@ -393,7 +385,7 @@ export function RegistriesPanel() {
 
       <Dialog open={formOpen} onOpenChange={(open) => !open && closeForm()}>
         <DialogContent>
-          <form onSubmit={handleSave}>
+          <form onSubmit={handleSave} className="flex min-h-0 flex-1 flex-col">
             <DialogHeader>
               <DialogTitle>{editing ? 'Update credential' : 'Connect a registry'}</DialogTitle>
               <DialogDescription>
@@ -403,7 +395,7 @@ export function RegistriesPanel() {
               </DialogDescription>
             </DialogHeader>
 
-            <div className="space-y-4 py-4">
+            <FormDialogBody>
               <div className="space-y-1">
                 <Label htmlFor="registry-host">Registry</Label>
                 <Select
@@ -411,7 +403,7 @@ export function RegistriesPanel() {
                   value={form.registryHost}
                   onValueChange={(value) => setForm({ ...form, registryHost: value })}
                 >
-                  <SelectTrigger id="registry-host" className="h-9 w-full font-mono">
+                  <SelectTrigger id="registry-host" className="h-10 w-full font-mono">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -469,7 +461,7 @@ export function RegistriesPanel() {
                   <span className="text-foreground">{scope}</span>.
                 </PanelNote>
               </div>
-            </div>
+            </FormDialogBody>
 
             <DialogFooter>
               <Button type="button" variant="outline" onClick={closeForm}>
