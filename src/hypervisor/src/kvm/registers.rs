@@ -9,6 +9,9 @@ use crate::{Error, Result, X86BootRegisters, X86Segment};
 impl KvmVcpu {
     /// Installs caller-selected architectural state before the first guest entry.
     ///
+    /// Call [`set_cpu_features`](Self::set_cpu_features) first: KVM validates
+    /// register state against the guest CPUID, including long-mode support in EFER.
+    ///
     /// This is not transactional: discard the vCPU if any register write fails.
     /// CPUID and MSR configuration are separate from these entry registers.
     pub fn set_boot_registers(&mut self, state: &X86BootRegisters) -> Result<()> {
