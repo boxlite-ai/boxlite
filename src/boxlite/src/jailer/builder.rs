@@ -34,6 +34,7 @@ pub struct JailerBuilder {
     detach: bool,
     additional_path_access: Vec<PathAccess>,
     network_backend_enabled: bool,
+    require_cpu_cgroup: bool,
 }
 
 impl Default for JailerBuilder {
@@ -43,6 +44,11 @@ impl Default for JailerBuilder {
 }
 
 impl JailerBuilder {
+    pub(crate) fn with_required_cpu_cgroup(mut self, required: bool) -> Self {
+        self.require_cpu_cgroup = required;
+        self
+    }
+
     /// Create a new JailerBuilder with default settings.
     pub fn new() -> Self {
         Self {
@@ -55,6 +61,7 @@ impl JailerBuilder {
             detach: false,
             additional_path_access: Vec::new(),
             network_backend_enabled: false,
+            require_cpu_cgroup: false,
         }
     }
 
@@ -359,6 +366,7 @@ impl JailerBuilder {
             detach: self.detach,
             additional_path_access: self.additional_path_access,
             network_backend_enabled: self.network_backend_enabled,
+            require_cpu_cgroup: self.require_cpu_cgroup,
         })
     }
 }

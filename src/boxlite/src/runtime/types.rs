@@ -476,6 +476,10 @@ pub struct BoxInfo {
     /// Allocated CPU count.
     pub cpus: u8,
 
+    /// Explicit creation-time CPU bandwidth; None preserves legacy behavior.
+    #[serde(default)]
+    pub cpu_limit: Option<crate::CpuLimit>,
+
     /// Allocated memory in MiB.
     pub memory_mib: u32,
 
@@ -570,6 +574,7 @@ impl BoxInfo {
                 RootfsSpec::Image(r) => r.clone(),
                 RootfsSpec::RootfsPath(p) => format!("rootfs:{}", p),
             },
+            cpu_limit: config.options.cpu_limit,
             cpus: config.options.cpus.unwrap_or(DEFAULT_CPUS),
             memory_mib: config.options.memory_mib.unwrap_or(DEFAULT_MEMORY_MIB),
             privileged: Some(config.options.advanced.privileged),
@@ -608,6 +613,7 @@ impl PartialEq for BoxInfo {
             && self.pid == other.pid
             && self.image == other.image
             && self.cpus == other.cpus
+            && self.cpu_limit == other.cpu_limit
             && self.memory_mib == other.memory_mib
             && self.privileged == other.privileged
             && self.network == other.network

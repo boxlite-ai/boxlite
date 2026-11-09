@@ -580,6 +580,12 @@ if (boxlite_options_new("alpine:3.19", &opts, &error) != Ok) {
     // Handle error
 }
 boxlite_options_set_cpus(opts, 2);
+// Optional creation-only Linux CPU budget, shared by both vCPUs.
+if (boxlite_options_set_cpu_limit(opts, 0.5, &error) != Ok) {
+    boxlite_error_free(&error);
+    boxlite_options_free(opts);
+    return 1;
+}
 boxlite_options_set_memory(opts, 512);
 boxlite_options_set_network_enabled(opts);
 CAdvancedBoxOptions* advanced = NULL;

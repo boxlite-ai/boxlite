@@ -402,10 +402,10 @@ impl RuntimeImpl {
     ///
     /// Returns `(LiteBox, true)` if a new box was created, or `(LiteBox, false)`
     /// if an existing box with the given name was found. When an existing box is
-    /// returned, general options are ignored, but its capability policy must
-    /// match exactly and it must already provide any required nested
-    /// virtualization, so reuse cannot silently weaken privileges or drop a
-    /// requested capability.
+    /// returned, general options are ignored, but an explicit CPU limit and
+    /// its capability policy must match the saved configuration. It must
+    /// already provide any required nested virtualization, so reuse cannot
+    /// silently weaken privileges or drop a requested capability.
     pub async fn get_or_create(
         self: &Arc<Self>,
         options: BoxOptions,
@@ -541,12 +541,12 @@ impl RuntimeImpl {
 
     /// Reject reuse when the request disagrees with the box's stored options.
     ///
-    /// Only the capability policy is compared: silently adopting a box whose
-    /// privileges differ from the request is the case that matters for safety.
+    /// Explicit CPU limits and guest privilege policies must survive reuse.
     fn check_options_compatibility(
         requested: &BoxOptions,
         actual: &BoxConfig,
     ) -> BoxliteResult<()> {
+        requested.check_reused_cpu_limit(actual.options.cpu_limit)?;
         let box_name = actual.name.as_deref().unwrap_or_else(|| actual.id.as_str());
 
         // One-way: a nested-capable box satisfies any request, but a plain box
@@ -2293,6 +2293,51 @@ mod tests {
             .await;
 
         assert!(matches!(result, Err(BoxliteError::InvalidArgument(_))));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn cpu_limit_create_persists_and_checks_reuse() {
+        let (runtime, _dir) = create_test_runtime();
+        let local = LocalRuntime(Arc::clone(&runtime));
+        let limit = crate::CpuLimit::new(0.125).unwrap();
+        let options = BoxOptions {
+            cpus: Some(1),
+            cpu_limit: Some(limit),
+            ..Default::default()
+        };
+        let bx = RuntimeBackend::create(&local, options.clone(), Some("limited".into()))
+            .await
+            .unwrap();
+        assert_eq!(bx.info().await.unwrap().cpu_limit, Some(limit));
+        let (persisted, _) = runtime.box_manager.box_by_id(bx.id()).unwrap().unwrap();
+        assert_eq!(persisted.options.cpu_limit, Some(limit));
+        assert_eq!(
+            RuntimeBackend::get_info(&local, bx.id().as_str())
+                .await
+                .unwrap()
+                .unwrap()
+                .cpu_limit,
+            Some(limit)
+        );
+        let (_, created) =
+            RuntimeBackend::get_or_create(&local, options.clone(), Some("limited".into()))
+                .await
+                .unwrap();
+        assert!(!created);
+        let (_, created) =
+            RuntimeBackend::get_or_create(&local, BoxOptions::default(), Some("limited".into()))
+                .await
+                .unwrap();
+        assert!(!created);
+        let changed = BoxOptions {
+            cpu_limit: Some(crate::CpuLimit::new(0.5).unwrap()),
+            ..options
+        };
+        assert!(matches!(
+            RuntimeBackend::get_or_create(&local, changed, Some("limited".into())).await,
+            Err(BoxliteError::InvalidArgument(_))
+        ));
     }
 
     #[tokio::test]

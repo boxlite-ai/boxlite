@@ -2092,6 +2092,10 @@ components:
               type: boolean
               description: Whether Docker-style Linux capability add/drop policy is supported
               example: true
+            cpu_limit_enabled:
+              type: boolean
+              description: Whether creation-only CPU time limits are supported; clients require a fresh true value before sending cpu_limit. Absent means unsupported.
+              example: true
             privileged_enabled:
               type: boolean
               description: Whether privileged containers inside the guest are supported; host sandbox policy is unchanged
@@ -2389,6 +2393,12 @@ components:
           maximum: 32
           description: Allocated vCPU cores
           example: 2
+        cpu_limit:
+          type: [number, "null"]
+          minimum: 0.01
+          multipleOf: 0.001
+          description: Configured creation-only aggregate CPU limit in cores; absent or null when unset. This is neither CPU usage nor a reservation.
+          example: 0.5
         memory_mib:
           type: integer
           minimum: 128
@@ -2524,6 +2534,12 @@ components:
           maximum: 16
           description: Number of vCPUs to allocate
           example: 2
+        cpu_limit:
+          type: [number, "null"]
+          minimum: 0.01
+          multipleOf: 0.001
+          description: Creation-only aggregate CPU time limit in cores, at most resolved cpus. Requires Linux, jailer and cgroup v2 CPU enforcement. Omitted or null preserves existing behavior; unsupported servers must reject explicit limits.
+          example: 0.5
         memory_mib:
           type: integer
           minimum: 128

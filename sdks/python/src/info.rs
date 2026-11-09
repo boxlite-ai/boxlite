@@ -386,6 +386,8 @@ pub(crate) struct PyBoxInfo {
     #[pyo3(get)]
     pub(crate) cpus: u8,
     #[pyo3(get)]
+    pub(crate) cpu_limit: Option<f64>,
+    #[pyo3(get)]
     pub(crate) memory_mib: u32,
     #[pyo3(get)]
     pub(crate) privileged: Option<bool>,
@@ -416,6 +418,7 @@ impl PyBoxInfo {
             },
             "image": self.image,
             "cpus": self.cpus,
+            "cpu_limit": self.cpu_limit,
             "memory_mib": self.memory_mib,
             "privileged": self.privileged,
             "network": network,
@@ -453,6 +456,7 @@ impl From<BoxInfo> for PyBoxInfo {
             last_activity_at: info.last_activity_at.map(|at| at.to_rfc3339()),
             image: info.image,
             cpus: info.cpus,
+            cpu_limit: info.cpu_limit.map(boxlite::CpuLimit::cores),
             memory_mib: info.memory_mib,
             privileged: info.privileged,
             network: info.network.map(PyNetworkInfo::from),
@@ -487,6 +491,7 @@ mod tests {
             pid: Some(1234),
             image: "alpine:latest".to_string(),
             cpus: 2,
+            cpu_limit: None,
             memory_mib: 512,
             privileged: None,
             network,

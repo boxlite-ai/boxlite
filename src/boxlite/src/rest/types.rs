@@ -91,6 +91,7 @@ pub(crate) struct ServerConfig {
 pub(crate) struct ServerCapabilities {
     pub privileged_enabled: Option<bool>,
     pub linux_capabilities_enabled: Option<bool>,
+    pub cpu_limit_enabled: Option<bool>,
     pub snapshots_enabled: Option<bool>,
     pub clone_enabled: Option<bool>,
     pub export_enabled: Option<bool>,
@@ -113,6 +114,8 @@ pub(crate) struct CreateBoxRequest {
     pub rootfs_path: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cpus: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cpu_limit: Option<crate::CpuLimit>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub memory_mib: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -199,6 +202,7 @@ impl CreateBoxRequest {
             image,
             rootfs_path,
             cpus: options.cpus,
+            cpu_limit: options.cpu_limit,
             memory_mib: options.memory_mib,
             disk_size_gb: options.disk_size_gb,
             working_dir: options.working_dir.clone(),
@@ -388,6 +392,8 @@ pub(crate) struct BoxResponse {
     pub pid: Option<u32>,
     pub image: String,
     pub cpus: u8,
+    #[serde(default)]
+    pub cpu_limit: Option<crate::CpuLimit>,
     pub memory_mib: u32,
     /// The stored guest privilege mode, unknown when an older server omits it.
     #[serde(default)]
@@ -452,6 +458,7 @@ impl BoxResponse {
             pid: self.pid,
             image: self.image.clone(),
             cpus: self.cpus,
+            cpu_limit: self.cpu_limit,
             memory_mib: self.memory_mib,
             privileged: self.privileged,
             // Local host bindings never travel over REST, so a published
@@ -1423,6 +1430,7 @@ mod tests {
             pid: Some(1234),
             image: "python:3.11".to_string(),
             cpus: 2,
+            cpu_limit: None,
             memory_mib: 512,
             privileged: None,
             labels: HashMap::new(),
@@ -1454,6 +1462,7 @@ mod tests {
             pid: None,
             image: "python:3.11".to_string(),
             cpus: 2,
+            cpu_limit: None,
             memory_mib: 512,
             privileged: None,
             labels: HashMap::new(),
@@ -1492,6 +1501,7 @@ mod tests {
             pid: Some(5678),
             image: "alpine:latest".to_string(),
             cpus: 1,
+            cpu_limit: None,
             memory_mib: 256,
             privileged: None,
             labels: HashMap::new(),
@@ -1523,6 +1533,7 @@ mod tests {
             pid: None,
             image: "alpine:latest".to_string(),
             cpus: 1,
+            cpu_limit: None,
             memory_mib: 256,
             privileged: None,
             labels: HashMap::new(),
@@ -1599,6 +1610,7 @@ mod tests {
             pid: Some(1234),
             image: "python:3.11".to_string(),
             cpus: 2,
+            cpu_limit: None,
             memory_mib: 512,
             privileged: None,
             labels: HashMap::new(),

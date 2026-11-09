@@ -318,6 +318,8 @@ export interface JsBoxOptions {
   image?: string;
   rootfsPath?: string;
   cpus?: number;
+  /** Creation-only aggregate CPU limit in cores (Linux). */
+  cpuLimit?: number;
   memoryMib?: number;
   diskSizeGb?: number;
   workingDir?: string;
@@ -455,6 +457,8 @@ export interface JsBoxInfo {
   lastActivityAt?: string;
   image: string;
   cpus: number;
+  /** Creation-only CPU limit in cores; absent when unset. */
+  cpuLimit?: number;
   memoryMib: number;
   privileged?: boolean;
   network: JsNetworkInfo | null;

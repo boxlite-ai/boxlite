@@ -645,6 +645,10 @@ typedef struct CBoxInfo {
 // for callback dispatch only; on failure the metadata pointer is null.
 typedef void (*CBoxInfoCb)(struct CBoxInfo*, CBoxliteError*, void*);
 
+// Configured CPU limit in cores. When has_limit is false, cores is ignored.
+// The error pointer is borrowed for callback dispatch only.
+typedef void (*CBoxCpuLimitCb)(double, bool, CBoxliteError*, void*);
+
 typedef struct CBoxInfoList {
   struct CBoxInfo *items;
   int count;
@@ -1539,6 +1543,15 @@ enum BoxliteErrorCode boxlite_get_info(CBoxliteRuntime *runtime,
                                        void *user_data,
                                        CBoxliteError *out_error);
 
+// Query the immutable creation-time CPU limit by Box ID or name.
+// Completion is delivered by boxlite_runtime_drain; missing boxes return NotFound.
+// This separate getter preserves the existing CBoxInfo ABI.
+enum BoxliteErrorCode boxlite_get_cpu_limit(CBoxliteRuntime *runtime,
+                                            const char *id_or_name,
+                                            CBoxCpuLimitCb cb,
+                                            void *user_data,
+                                            CBoxliteError *out_error);
+
 enum BoxliteErrorCode boxlite_list_info(CBoxliteRuntime *runtime,
                                         CBoxInfoListCb cb,
                                         void *user_data,
@@ -1680,6 +1693,13 @@ void boxlite_options_set_rootfs_path(CBoxliteOptions *opts, const char *path);
 void boxlite_options_set_name(CBoxliteOptions *opts, const char *name);
 
 void boxlite_options_set_cpus(CBoxliteOptions *opts, int cpus);
+
+// Set the creation-only aggregate CPU limit in cores (Linux).
+// Accepts 0.01 or more, in 0.001 increments; creation also checks against cpus.
+// Invalid input leaves the previous option unchanged.
+enum BoxliteErrorCode boxlite_options_set_cpu_limit(CBoxliteOptions *opts,
+                                                    double cores,
+                                                    CBoxliteError *out_error);
 
 void boxlite_options_set_memory(CBoxliteOptions *opts, int memory_mib);
 

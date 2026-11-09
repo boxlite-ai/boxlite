@@ -69,7 +69,7 @@ range fails with an invalid-argument error. A box created with a custom kernel
 vCPUs before this check still starts, logs a warning, and runs on 16.
 
 **Behavior:**
-- Proportional scheduling (shares-based)
+- `cpus` sets integer virtual CPU topology; `cpu_limit` optionally bounds aggregate host CPU time.
 - Does not reserve physical cores
 - Multiple boxes can exceed host CPU count
 
@@ -79,6 +79,57 @@ vCPUs before this check still starts, logs a warning, and runs on 16.
 metrics = await box.metrics()
 print(f"CPU time: {metrics.cpu_time_ms}ms")
 ```
+
+### Creation-only CPU time limit (Linux)
+
+Keep `cpus` as the integer number of virtual CPUs and set `cpu_limit` to bound their shared CPU time:
+
+```python
+options = boxlite.BoxOptions(image="alpine:latest", cpus=2, cpu_limit=0.5)
+box = await runtime.create(options)
+print((await box.info()).cpu_limit)  # 0.5
+```
+
+Both vCPUs and host VMM/device threads share this budget; it does not reserve physical cores or guarantee latency.
+Linux uses a 100 ms period: `0.5` writes `50000 100000` to `cpu.max`.
+Concurrent work can consume the budget early and then wait for the next period.
+Boot and device I/O share the budget, so very low limits can reach existing startup or operation timeouts.
+
+| Setting | Contract |
+| --- | --- |
+| Valid values | `0.01 <= cpu_limit <= cpus`, in increments of `0.001`; omitted CPUs use the existing default |
+| Omitted/null | Preserve existing CPU behavior |
+| Invalid numbers | Reject zero, negatives, NaN, infinity, excessive precision, and values above resolved CPUs |
+| Host requirements | Linux, enabled jailer, and writable cgroup v2 CPU controller; rootless hosts need CPU delegation |
+| Enforcement failure | Refuse startup before Guest execution if the quota or process membership cannot be applied |
+| macOS | Explicit local limits return `Unsupported`; a REST client follows the server's capabilities |
+| Existing host limits | The stricter `max_cpu_time` quota still applies; its cumulative `RLIMIT_CPU` meaning is unchanged |
+| Information queries | Report the configured limit, not CPU usage or a stricter effective ancestor/legacy limit |
+
+The limit is immutable after creation; changing or clearing it requires a new Box.
+Restart, reconnect, disk snapshot restore, clone, and archive import retain it.
+Disk-only `restore_from_archive` keeps the destination Box's existing configuration, including its CPU limit.
+An explicit limit on `get_or_create` must equal the saved limit; omission preserves ordinary reuse.
+
+| Interface | Creation | Query |
+| --- | --- | --- |
+| Rust | `cpu_limit: Some(CpuLimit::new(0.5)?)` | `BoxInfo.cpu_limit` / `CpuLimit::cores()` |
+| Python | `BoxOptions(cpu_limit=0.5)` or `SimpleBox(cpu_limit=0.5)` | `BoxInfo.cpu_limit` |
+| Node | `{ cpus: 2, cpuLimit: 0.5 }` | `JsBoxInfo.cpuLimit` |
+| Go | `WithCPUs(2), WithCPULimit(0.5)` | `BoxInfo.CPULimit` (`nil` when unset) |
+| C | `boxlite_options_set_cpu_limit(opts, 0.5, &error)` | Async `boxlite_get_cpu_limit`, delivered by runtime drain |
+| CLI | `boxlite create --cpus 2 --cpu-limit 0.5 alpine` | `boxlite inspect` → `CpuLimit` |
+| REST/serve | `{"image":"alpine","cpus":2,"cpu_limit":0.5}` | Box response `cpu_limit` |
+
+REST clients require a fresh `cpu_limit_enabled: true` capability before sending an explicit limit.
+Older or Cloud servers without that capability are rejected; this feature does not add Cloud scheduling or billing support.
+The C query preserves existing structure layouts; Go info/list methods perform an additional lookup per Box using its immutable ID.
+
+Immutable configuration stores integer `cpu_limit_millicpu`; public requests and queries use numeric cores.
+Archives containing limits use version 6 so older importers refuse them; ordinary exports retain their previous versions.
+Downgrading the local database to older runtimes is unsupported.
+
+Run `make test:cpu-limit:acceptance` on a KVM host with CPU controller delegation to verify aggregate throttling and lifecycle preservation.
 
 ## Memory management
 

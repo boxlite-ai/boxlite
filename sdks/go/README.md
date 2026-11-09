@@ -280,6 +280,13 @@ Port publication is local-only. Remote runtimes reject it with guidance to use
 the existing network tunnel API. Each tunnel handle is one-shot.
 OCI `EXPOSE` metadata does not publish ports.
 
+### Linux CPU time limits
+
+Use `WithCPUs(2), WithCPULimit(0.5)` at creation to share half a CPU across two vCPUs and the Box's VMM threads.
+`BoxInfo.CPULimit` is a `*float64`, with `nil` meaning unset; information queries perform a separate lookup to preserve the native C ABI.
+This limit cannot be changed after creation; macOS local runtimes reject it.
+See [CPU time limits](../../docs/guides/resource-limits.md#creation-only-cpu-time-limit-linux) for validation, cgroup delegation, and REST support.
+
 ## Service Tunnels
 
 The same route workflow works with local and remote runtimes:

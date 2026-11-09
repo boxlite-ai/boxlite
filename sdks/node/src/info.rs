@@ -254,6 +254,9 @@ pub struct JsBoxInfo {
     /// Allocated CPU count
     pub cpus: u8,
 
+    /// Creation-only aggregate CPU limit in cores, absent when unset.
+    pub cpu_limit: Option<f64>,
+
     /// Allocated memory in MiB
     pub memory_mib: u32,
 
@@ -297,6 +300,7 @@ impl From<BoxInfo> for JsBoxInfo {
             last_activity_at: info.last_activity_at.map(|at| at.to_rfc3339()),
             image: info.image,
             cpus: info.cpus,
+            cpu_limit: info.cpu_limit.map(boxlite::CpuLimit::cores),
             memory_mib: info.memory_mib,
             privileged: info.privileged,
             network: match info.network {
@@ -336,6 +340,7 @@ mod tests {
             pid: Some(1234),
             image: "alpine:latest".to_string(),
             cpus: 2,
+            cpu_limit: None,
             memory_mib: 512,
             privileged: None,
             network,

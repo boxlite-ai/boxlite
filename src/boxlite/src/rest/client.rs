@@ -571,6 +571,15 @@ impl ApiClient {
         ensure_capability("snapshots", capabilities.snapshots_enabled)
     }
 
+    pub async fn require_cpu_limit_enabled(&self) -> BoxliteResult<()> {
+        // Recheck each create: an older server could silently ignore the limit.
+        let config = self.fetch_config().await?;
+        ensure_capability(
+            "CPU limit",
+            config.capabilities.and_then(|caps| caps.cpu_limit_enabled),
+        )
+    }
+
     pub async fn require_linux_capabilities_enabled(&self) -> BoxliteResult<()> {
         // This gate protects a security policy, so a cached positive response
         // is insufficient after a server rollback or replacement. Recheck the

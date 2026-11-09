@@ -207,6 +207,7 @@ Configuration options for creating a box.
 |-------|------|---------|-------------|
 | `image` | `str` | Required | OCI image URI (e.g., `"python:slim"`, `"alpine:latest"`) |
 | `cpus` | `int` | `1` | Number of CPU cores (1–16, the guest kernel's limit) |
+| `cpu_limit` | `float \| None` | `None` | Creation-only aggregate CPU time limit in cores, Linux; see [resource limits](../../guides/resource-limits.md#creation-only-cpu-time-limit-linux) |
 | `memory_mib` | `int` | `512` | Memory limit in MiB (128-65536) |
 | `disk_size_gb` | `int \| None` | `None` | Container disk size in GB, never smaller than the image (None = image size) |
 | `working_dir` | `str` | `"/root"` | Working directory inside container |
@@ -386,6 +387,7 @@ Metadata about a box.
 | `last_activity_at` | `str \| None` | Time the box was last active (RFC 3339), the clock AutoStop measures idleness against; `None` for a local box, which records no activity |
 | `image` | `str` | OCI image used |
 | `cpus` | `int` | Allocated CPU cores |
+| `cpu_limit` | `float \| None` | Configured immutable aggregate CPU limit, or `None` |
 | `memory_mib` | `int` | Allocated memory in MiB |
 | `network` | `NetworkInfo \| None` | Current network configuration and resolved local publications |
 

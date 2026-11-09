@@ -34,18 +34,21 @@ pub(crate) const CAPABILITY_POLICY_ARCHIVE_VERSION: u32 = 4;
 /// v5, and the importer canonicalizes anything below it.
 pub(crate) const PUBLISHED_PORTS_ARCHIVE_VERSION: u32 = 5;
 
+/// Older importers must refuse a CPU limit they cannot enforce.
+pub(crate) const CPU_LIMIT_ARCHIVE_VERSION: u32 = 6;
+
 /// Maximum archive version this build can import.
-pub(crate) const MAX_SUPPORTED_VERSION: u32 = PUBLISHED_PORTS_ARCHIVE_VERSION;
+pub(crate) const MAX_SUPPORTED_VERSION: u32 = CPU_LIMIT_ARCHIVE_VERSION;
 
 /// Pick the archive format an exported box needs.
 ///
-/// Any explicit policy — including an explicitly empty one — is stamped v4:
-/// `capabilities()` returning `Some` means the caller configured something,
-/// which a pre-capability importer has no way to represent and must refuse
-/// rather than silently drop. Only `None` (the caller never touched the
-/// field) is indistinguishable from what a v3 importer already does.
+/// Use the oldest format that can represent all configured policies.
+/// An explicitly empty capability policy still requires v4; ports require v5,
+/// and CPU limits require v6 so older readers cannot silently discard them.
 pub(crate) fn archive_version_for_options(options: &crate::runtime::options::BoxOptions) -> u32 {
-    if !options.ports.is_empty() {
+    if options.cpu_limit.is_some() {
+        CPU_LIMIT_ARCHIVE_VERSION
+    } else if !options.ports.is_empty() {
         PUBLISHED_PORTS_ARCHIVE_VERSION
     } else if options.advanced.capabilities().is_none() {
         ARCHIVE_VERSION
@@ -61,9 +64,10 @@ pub(crate) fn archive_version_for_options(options: &crate::runtime::options::Box
 /// v3: adds `box_options` for full configuration preservation
 /// v4: `box_options.advanced` carries a custom capability policy
 /// v5: `ports` carry publication semantics (automatic host port, bind IP)
+/// v6: `box_options.cpu_limit_millicpu` requires host CPU bandwidth enforcement
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ArchiveManifest {
-    /// Archive format version (1 through 5).
+    /// Archive format version (1 through 6).
     pub version: u32,
     /// Original box name (optional, may be renamed on import).
     pub box_name: Option<String>,
@@ -330,6 +334,14 @@ mod tests {
 
         let ordinary = crate::runtime::options::BoxOptions::default();
         assert_eq!(archive_version_for_options(&ordinary), ARCHIVE_VERSION);
+        let limited = crate::BoxOptions {
+            cpu_limit: Some(crate::CpuLimit::new(0.125).unwrap()),
+            ..ordinary.clone()
+        };
+        assert_eq!(
+            archive_version_for_options(&limited),
+            CPU_LIMIT_ARCHIVE_VERSION
+        );
 
         let mut custom_advanced = crate::runtime::advanced_options::AdvancedBoxOptions::default();
         custom_advanced

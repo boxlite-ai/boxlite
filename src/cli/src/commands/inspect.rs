@@ -44,6 +44,8 @@ struct InspectPresenter {
     state: InspectStatePresenter,
     #[serde(rename = "Cpus")]
     cpus: u8,
+    #[serde(rename = "CpuLimit")]
+    cpu_limit: Option<boxlite::CpuLimit>,
     #[serde(rename = "Memory")]
     memory: u64,
     /// Both directions of the network policy; `null` when the runtime does
@@ -120,6 +122,7 @@ impl From<&BoxInfo> for InspectPresenter {
                 last_activity_at: info.last_activity_at.as_ref().map(|at| at.to_rfc3339()),
             },
             cpus: info.cpus,
+            cpu_limit: info.cpu_limit,
             memory: info.memory_mib as u64 * 1024 * 1024,
             network: info.network.as_ref().map(InspectNetworkPresenter::from),
         }
@@ -291,6 +294,7 @@ mod tests {
             pid: None,
             image: "alpine:latest".into(),
             cpus: 1,
+            cpu_limit: None,
             memory_mib: 512,
             privileged: None,
             network: None,
