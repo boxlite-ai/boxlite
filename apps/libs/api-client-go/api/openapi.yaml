@@ -4957,6 +4957,23 @@ components:
       required:
       - text
       type: object
+    TurnstileConfig:
+      example:
+        sitekey: sitekey
+        action: signup
+      properties:
+        sitekey:
+          description: Public Turnstile widget sitekey
+          type: string
+        action:
+          description: Turnstile challenge action
+          enum:
+          - signup
+          type: string
+      required:
+      - action
+      - sitekey
+      type: object
     PosthogConfig:
       properties:
         apiKey:
@@ -5027,6 +5044,9 @@ components:
       type: object
     BoxliteConfiguration:
       example:
+        turnstile:
+          sitekey: sitekey
+          action: signup
         version: 0.0.1
         posthog: ""
         oidc: ""
@@ -5044,6 +5064,8 @@ components:
         analyticsApiUrl: https://analytics.example.com
         rateLimit: ""
       properties:
+        turnstile:
+          $ref: "#/components/schemas/TurnstileConfig"
         version:
           description: BoxLite version
           example: 0.0.1
@@ -5109,6 +5131,7 @@ components:
       - maintananceMode
       - oidc
       - proxyTemplateUrl
+      - turnstile
       - version
       type: object
     CreateApiKey:

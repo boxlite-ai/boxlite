@@ -21,6 +21,7 @@ var _ MappedNullable = &BoxliteConfiguration{}
 
 // BoxliteConfiguration struct for BoxliteConfiguration
 type BoxliteConfiguration struct {
+	Turnstile TurnstileConfig `json:"turnstile"`
 	// BoxLite version
 	Version string `json:"version"`
 	// PostHog configuration
@@ -56,8 +57,9 @@ type _BoxliteConfiguration BoxliteConfiguration
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewBoxliteConfiguration(version string, oidc OidcConfig, linkedAccountsEnabled bool, announcements map[string]Announcement, proxyTemplateUrl string, dashboardUrl string, maintananceMode bool, environment string) *BoxliteConfiguration {
+func NewBoxliteConfiguration(turnstile TurnstileConfig, version string, oidc OidcConfig, linkedAccountsEnabled bool, announcements map[string]Announcement, proxyTemplateUrl string, dashboardUrl string, maintananceMode bool, environment string) *BoxliteConfiguration {
 	this := BoxliteConfiguration{}
+	this.Turnstile = turnstile
 	this.Version = version
 	this.Oidc = oidc
 	this.LinkedAccountsEnabled = linkedAccountsEnabled
@@ -75,6 +77,30 @@ func NewBoxliteConfiguration(version string, oidc OidcConfig, linkedAccountsEnab
 func NewBoxliteConfigurationWithDefaults() *BoxliteConfiguration {
 	this := BoxliteConfiguration{}
 	return &this
+}
+
+// GetTurnstile returns the Turnstile field value
+func (o *BoxliteConfiguration) GetTurnstile() TurnstileConfig {
+	if o == nil {
+		var ret TurnstileConfig
+		return ret
+	}
+
+	return o.Turnstile
+}
+
+// GetTurnstileOk returns a tuple with the Turnstile field value
+// and a boolean to check if the value has been set.
+func (o *BoxliteConfiguration) GetTurnstileOk() (*TurnstileConfig, bool) {
+	if o == nil {
+		return nil, false
+	}
+	return &o.Turnstile, true
+}
+
+// SetTurnstile sets field value
+func (o *BoxliteConfiguration) SetTurnstile(v TurnstileConfig) {
+	o.Turnstile = v
 }
 
 // GetVersion returns the Version field value
@@ -439,6 +465,7 @@ func (o BoxliteConfiguration) MarshalJSON() ([]byte, error) {
 
 func (o BoxliteConfiguration) ToMap() (map[string]interface{}, error) {
 	toSerialize := map[string]interface{}{}
+	toSerialize["turnstile"] = o.Turnstile
 	toSerialize["version"] = o.Version
 	if !IsNil(o.Posthog) {
 		toSerialize["posthog"] = o.Posthog
@@ -475,6 +502,7 @@ func (o *BoxliteConfiguration) UnmarshalJSON(data []byte) (err error) {
 	// by unmarshalling the object into a generic map with string keys and checking
 	// that every required field exists as a key in the generic map.
 	requiredProperties := []string{
+		"turnstile",
 		"version",
 		"oidc",
 		"linkedAccountsEnabled",
@@ -512,6 +540,7 @@ func (o *BoxliteConfiguration) UnmarshalJSON(data []byte) (err error) {
 	additionalProperties := make(map[string]interface{})
 
 	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "turnstile")
 		delete(additionalProperties, "version")
 		delete(additionalProperties, "posthog")
 		delete(additionalProperties, "oidc")

@@ -44,6 +44,10 @@ The secret, allowed hostnames and verification timeout remain server-side. Resta
 the API to change a widget configuration; the dashboard reads it at runtime.
 Test and OpenAPI-generation fixtures supply explicit placeholder credentials.
 
+The generated TypeScript and Go configuration models require `turnstile`. Go's
+`NewBoxliteConfiguration` takes `TurnstileConfig` as its first argument, and decoding
+requires that field in the response.
+
 ## Registration email policy
 
 New OIDC identities complete local registration through `POST /api/auth/register`,
