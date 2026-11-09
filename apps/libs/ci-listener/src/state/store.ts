@@ -142,7 +142,11 @@ export class ListenerState {
     )
   }
 
-  async commit(lease: ExecutionLease, changes: StateChange[], checks: readonly StateCheck[] = []): Promise<StateRecord[]> {
+  async commit(
+    lease: ExecutionLease,
+    changes: StateChange[],
+    checks: readonly StateCheck[] = [],
+  ): Promise<StateRecord[]> {
     lease = { ...lease }
     const prepared = this.prepare(changes)
     if (!Array.isArray(checks) || checks.length > 100) throw new Error('Invalid Listener state checks')
@@ -167,9 +171,10 @@ export class ListenerState {
     })
   }
 
-  /** Read-only ingress lookup. A final conditional batch still decides whether a write can commit. */
-  async read(keys: readonly string[]): Promise<StateRecord[]> {
+  /** Point lookup, optionally fenced by an execution lease. Writes still require a conditional batch. */
+  async read(keys: readonly string[], lease?: ExecutionLease): Promise<StateRecord[]> {
     keys = [...keys]
+    lease = lease ? { ...lease } : undefined
     if (
       !keys.length ||
       keys.length > 100 ||
@@ -180,6 +185,7 @@ export class ListenerState {
     return this.database.transaction(
       this.namespace,
       async (tx) => {
+        if (lease) await this.assertLease(tx, lease)
         this.anchor(await tx.get('@anchor'))
         this.owner(await tx.get('@owner'))
         const rows: StateRecord[] = []
@@ -190,6 +196,7 @@ export class ListenerState {
             rows.push(row)
           }
         }
+        if (lease) await this.assertLease(tx, lease)
         return rows
       },
       'snapshot',

@@ -1,4 +1,5 @@
 /* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
+import { inspectJournal } from '@boxlite-ai/ci-listener/testing'
 import { testCapacity } from '@boxlite-ai/ci-listener/testing'
 import { randomUUID } from 'node:crypto'
 import { createServer, Server } from 'node:http'
@@ -180,7 +181,7 @@ integration('CI native workers (shared lease, actual PostgreSQL and HTTP)', () =
     lease = (await store.state.acquire(randomUUID(), 30000))!
   })
   async function prepared(job?: number) {
-    await journal.define(lease, scope())
+    await store.applications().define(lease, scope(), app)
     const allocation = await journal.reserve(
       lease,
       scopeKey(scope()),
@@ -260,7 +261,7 @@ integration('CI native workers (shared lease, actual PostgreSQL and HTTP)', () =
     expect(admit).not.toHaveBeenCalled()
     expect(platform.stop).not.toHaveBeenCalled()
     expect(platform.destroy).not.toHaveBeenCalled()
-    const current = (await journal.load(lease)).allocations.get(row.record.key)!
+    const current = (await inspectJournal(store.state, lease)).allocations.get(row.record.key)!
     expect(current.value).toMatchObject({
       delivery: 'done',
       closing: false,
@@ -364,8 +365,10 @@ integration('CI native workers (shared lease, actual PostgreSQL and HTTP)', () =
     expect(failure.rejectedCreationEffect).toBeUndefined()
     expect(await store.state.read(['box-native/' + config.name.slice(7)])).toEqual([])
     expect(await db.getRepository(Box).count()).toBe(0)
-    expect((await journal.load(lease)).allocations.get(row.record.key)!.value.box.phase).toBe('requested')
-    expect((await journal.load(lease)).workers).toHaveLength(1)
+    expect((await inspectJournal(store.state, lease)).allocations.get(row.record.key)!.value.box.phase).toBe(
+      'requested',
+    )
+    expect((await inspectJournal(store.state, lease)).workers).toHaveLength(1)
   })
   it('disconnect creation refusal survives restart and releases capacity once', async () => {
     const { host, config, row } = await prepared()
@@ -404,7 +407,7 @@ integration('CI native workers (shared lease, actual PostgreSQL and HTTP)', () =
     )
     await pool.tick(lease, testCapacity({ account: 4, tenant: 4 }))
     await pool.tick(lease, testCapacity({ account: 4, tenant: 4 }))
-    expect((await journal.load(lease)).workers).toHaveLength(0)
+    expect((await inspectJournal(store.state, lease)).workers).toHaveLength(0)
     expect(jest.mocked(platform.create).mock.calls.length).toBe(createCalls)
   })
   it('records a fenced refusal when disconnect wins before backend create dispatch', async () => {
@@ -477,7 +480,7 @@ integration('CI native workers (shared lease, actual PostgreSQL and HTTP)', () =
     const [ledger] = await store.state.read(['box-native/' + config.name.slice(7)])
     expect(typeof (ledger.payload as any).box).toBe('string')
     expect(await host.get(config.name)).toMatchObject({ box_id: (ledger.payload as any).box })
-    expect((await journal.load(lease)).workers).toHaveLength(1)
+    expect((await inspectJournal(store.state, lease)).workers).toHaveLength(1)
   })
   it('creation refusal boundary: a stale rejection ledger does not grant cleanup', async () => {
     const { host, config } = await prepared()
@@ -489,7 +492,7 @@ integration('CI native workers (shared lease, actual PostgreSQL and HTTP)', () =
       },
     ])
     await expect(host.get(config.name)).rejects.toThrow('rejection operation changed')
-    expect((await journal.load(lease)).workers).toHaveLength(1)
+    expect((await inspectJournal(store.state, lease)).workers).toHaveLength(1)
     expect(await db.getRepository(Box).count()).toBe(0)
   })
   it('creation refusal boundary: a known Box cannot also carry a rejection fact', async () => {
@@ -504,7 +507,7 @@ integration('CI native workers (shared lease, actual PostgreSQL and HTTP)', () =
     ])
     await expect(host.get(config.name)).rejects.toThrow('ledger changed')
     expect(await db.getRepository(Box).count()).toBe(1)
-    expect((await journal.load(lease)).workers).toHaveLength(1)
+    expect((await inspectJournal(store.state, lease)).workers).toHaveLength(1)
   })
   it('creation refusal boundary: failed proof persistence preserves the unknown reservation', async () => {
     limits.resolveMaxCreatedBoxes.mockResolvedValue(0)
@@ -521,7 +524,7 @@ integration('CI native workers (shared lease, actual PostgreSQL and HTTP)', () =
       gate.mockRestore()
     }
     expect(await store.state.read(['box-native/' + config.name.slice(7)])).toEqual([])
-    expect((await journal.load(lease)).workers).toHaveLength(1)
+    expect((await inspectJournal(store.state, lease)).workers).toHaveLength(1)
     await expect(host.get(config.name)).rejects.toThrow('ID is not durably known')
     expect(await db.getRepository(Box).count()).toBe(0)
   })
@@ -550,7 +553,7 @@ integration('CI native workers (shared lease, actual PostgreSQL and HTTP)', () =
     await expect(host.create(config)).rejects.toBeInstanceOf(ConfirmedWorkerCreationRejected)
     expect(await db.getRepository(Box).count()).toBe(0)
     expect(await store.state.read(['box-native/' + config.name.slice(7)])).toHaveLength(1)
-    expect((await journal.load(lease)).allocations.size).toBe(1)
+    expect((await inspectJournal(store.state, lease)).allocations.size).toBe(1)
   })
   it('rechecks the execution epoch inside Box persistence after a real lease takeover', async () => {
     // Short lease deliberately expires during provisioning, before onPersist.
@@ -569,7 +572,7 @@ integration('CI native workers (shared lease, actual PostgreSQL and HTTP)', () =
     expect(replacement!.epoch).toBe(lease.epoch + 1)
     expect(await db.getRepository(Box).count()).toBe(0)
     expect(await store.state.read(['box-native/' + config.name.slice(7)])).toHaveLength(0)
-    expect((await journal.load(replacement!)).allocations.size).toBe(1)
+    expect((await inspectJournal(store.state, replacement!)).allocations.size).toBe(1)
   })
   it('rejects a changed platform organization at the real persistence boundary', async () => {
     const { host, config } = await prepared()
@@ -656,7 +659,7 @@ integration('CI native workers (shared lease, actual PostgreSQL and HTTP)', () =
     )
     try {
       await pool.tick(lease, capacity)
-      expect((await journal.load(lease)).allocations.has(row.record.key)).toBe(false)
+      expect((await inspectJournal(store.state, lease)).allocations.has(row.record.key)).toBe(false)
       const next = await journal.reserve(lease, scopeKey(scope()), nextJob, capacity)
       expect(next?.value.job).toEqual(nextJob)
       expect(next?.record.key).not.toBe(row.record.key)

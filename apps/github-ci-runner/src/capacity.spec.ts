@@ -1,4 +1,5 @@
 /* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
+import { inspectJournal } from '@boxlite-ai/ci-listener/testing'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -46,7 +47,7 @@ describe('CI standalone ENV capacity provider', () => {
       expect(await reserve(2)).toBeUndefined()
       await journal.advance(lease, first.record.key, first.record.version, { box: { phase: 'absent', id: null } })
       expect(await reserve(2)).toBeDefined()
-      expect((await journal.load(lease)).workers.map((worker) => worker.organization)).toEqual(['tenant-2'])
+      expect((await inspectJournal(state, lease)).workers.map((worker) => worker.organization)).toEqual(['tenant-2'])
     } finally {
       await database.close()
       rmSync(directory, { recursive: true, force: true })

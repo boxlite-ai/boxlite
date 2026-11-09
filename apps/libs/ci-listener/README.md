@@ -21,7 +21,8 @@ shared by the hosted registry and standalone host. An optional account type
 restricts new connect/admission; original cleanup retains the original App source.
 Self-owned Apps can omit that type and serve both personal and organization accounts.
 `ScopeApplications` atomically associates each execution scope with its original
-App. Missing or conflicting associations fail closed after the one-time bootstrap.
+App when the scope is first defined. Missing or conflicting associations fail closed;
+there is no legacy association backfill.
 Multiple Apps retain one journal, scheduling lease and host capacity provider.
 `AppDeliveryRecovery.prefix` separates each App's delivery history without
 creating another execution namespace or quota.
@@ -136,13 +137,13 @@ in a private directory supplied by the standalone host.
 Execution writes require a lease bound to the namespace, owner and epoch. Ingress
 can commit receipts and notices without the scheduling lease. Batches use UUID
 versions and atomic conditional writes; expired leases, stale versions, missing
-roots and unsupported schemas reject admission. Complete recovery uses a database
-snapshot and reports an error when its configured record bound is exceeded.
+roots and unsupported schemas reject admission. Point reads can carry the same
+lease fence; recovery reads bounded pages from active indexes.
 Permanent business roots can be seeded atomically during namespace initialization;
 subsequent initialization checks their presence and never overwrites them. Recovery
-can select indexed key prefixes so retained delivery receipts do not consume the
-controller's active-record bound. Unleased reads serve ingress CAS lookups and
-never grant permission to execute jobs.
+selects indexed key prefixes so retained delivery receipts and inactive historical
+scopes are not enumerated. Unleased reads serve ingress CAS lookups and dashboard
+aggregates; they never grant permission to execute jobs.
 
 Admission commits may include read-only record-version checks. The transaction
 locks those records and rejects a missing or changed version before writing any
@@ -154,10 +155,12 @@ policy authorization and resolution.
 admission-policy port. The standalone host always returns its `CI_WORKER_MAX` total;
 the hosted API resolves account settings and Commerce. The controller does not
 branch on the host or know account/repository quota rules. Each policy supplies
-one or more pure membership predicates and maxima; the kernel counts original
-reserved worker scopes against every rule, then atomically reserves using the
-global index CAS and policy record-version checks. Zero pauses new admission;
-null has no numeric ceiling. Missing or invalid policies fail closed.
+one or more explicit `global`, `organization` or GitHub `account` limits. Every
+reservation atomically increments all three usage counters, even if the current
+policy selects only one. Counter CAS and policy record-version checks prevent
+concurrent overspending. Zero pauses new admission; null has no numeric ceiling.
+Missing or invalid policies fail closed. The capacity API reads the organization
+counter directly, without reading scope or worker history.
 
 Every candidate asks the provider separately, including its repository identity;
 a policy is never cached across different repositories by the controller.
@@ -175,8 +178,8 @@ flowchart TD
     P --> H[Hosted: CiSettingsService]
     E -->|CI_WORKER_MAX total| R[Capacity policy and version checks]
     H -->|Account setting clamped by Commerce| R
-    R --> K[ExecutionJournal: count matching reservations]
-    K -->|Index CAS and policy version checks| S[(SQLite or PostgreSQL)]
+    R --> K[ExecutionJournal: read selected usage counters]
+    K -->|Counter CAS and policy version checks| S[(SQLite or PostgreSQL)]
     S -->|Reservation committed| B[Create JIT Box]
 ```
 
@@ -186,12 +189,28 @@ and execution adapters must enforce authorization at the actual side-effect
 boundary. Both hosts implement those checks; deployed hosted acceptance remains pending.
 Temporary GitHub tokens and JIT configuration must never be written as payloads.
 
-The internal execution kernel keeps a permanent scope index and per-scope active
-allocation references. Recovery validates both directions of that graph before
-admission; missing children or orphan records block admission. Reservations touch
-the index version so concurrent scopes cannot overspend the returned capacity
-policy. Historical generations and uncertain creates remain counted until their
-original Box is confirmed absent.
+The execution journal retains immutable scope definitions addressed by their hash.
+Known worker lookups, App authorization and quota checks use point reads; none
+enumerates historical scopes. `active-scope/<scope>` and
+`active-worker/<scope>/<worker>` index only unfinished allocations. A separate
+`job/<installation>/<repository>/<job>` record prevents duplicate reservations
+across scope generations until both resources are cleaned up. Reservation and
+final release update these memberships and the scope activity version atomically.
+There is no global historical-scope catalog or 10,000-scope ceiling.
+
+Usage includes uncertain creates and all historical generations whose original
+Box is not yet confirmed absent. Each quota domain keeps a permanent marker and
+counter, including at zero. Losing either member of an established pair fails
+closed; initialization never silently repairs it. Point reads validate referenced
+records, not arbitrary unreferenced historical debris. Coordinated loss of both
+a domain marker and its counter cannot always be distinguished from a new domain.
+
+The journal format is version 2 and requires a fresh CI execution namespace. Old
+namespaces fail initialization; there is no migration, compatibility read or
+backfill. For the current dev-only rollout, stop the Listener and explicitly reset
+its CI execution state before starting this version, after accounting for any
+remaining Boxes/runners. This is not an instruction to clear shared application
+data or Box storage. Neither startup nor this change resets dev state automatically.
 Each effect records an operation UUID first. Resource IDs are immutable, and an
 unknown create cannot be reset, retried or settled through a missing-resource result.
 
@@ -210,7 +229,17 @@ points use this kernel; runtime acceptance remains a separate deployment check.
 
 ### Worker recovery and logs
 
-Every scheduler cycle checks recorded workers before admitting new demand.
+The scheduler rotates through at most eight active scopes per recovery page. Each
+pool processes at most 32 active workers per page and keeps its cursor across ticks.
+An exact full page requires another page to establish the end; deleted cursor keys
+remain valid keyset boundaries. A scope must complete a clean recovery round before
+one admission attempt is allowed. Incomplete rounds and Box lookup failures block
+that scope, including across cursor wraps. Lease changes or membership changes
+invalidate readiness; the final reservation checks the captured membership version.
+A stable completed round must enumerate exactly the recorded active count; a
+missing worker membership fails closed instead of silently omitting its cleanup.
+A newly empty scope can complete recovery immediately. Large active sets may need
+several ticks, but retained inactive scopes add no recovery work.
 The native API can also record a definitive creation refusal when the typed
 Box creation-limit error occurs before `onPersist` begins. It stores the original
 scope and creation-operation UUID in the same ledger key that would hold a Box ID;
@@ -240,8 +269,10 @@ conflicting state, abort and unretired credential handles stop further work.
 An absent Box's allocation remains in the journal until runner cleanup is confirmed.
 The same installation/repository/job cannot create a duplicate while that debt exists.
 Unknown Box creation still occupies capacity and is never repeated. Cleanup debt
-survives restart and remains subject to the existing recovery-record bound; the
-controller blocks admission if that bound is exceeded.
+survives restart and remains in the paged active indexes. Runner-only cleanup debt
+does not charge physical capacity or block fresh admission after a clean Box
+recovery round. Final release removes memberships and deduplication without
+decrementing capacity a second time.
 
 Both production hosts write the same structured `WorkerEvent` facts: standalone
 JSON on stderr, hosted API `Logger.log`/`warn`. Each includes binding/generation,
@@ -266,14 +297,14 @@ commit can omit a line, while the journal still retains the recovery state.
 reader, runner registry and host execution adapter. It rejects mismatched App
 installations or PAT repositories before issuing credentials. Admission and
 cleanup have separate host checks; each check also validates the current lease
-and allocation graph. This permits original-resource cleanup after admission is
+and the known scope/allocation references by ID. This permits original-resource cleanup after admission is
 revoked without permitting new runner registration or JIT delivery. Native hosts
 must additionally fence Box persistence in their storage transaction. The backend
 is an internal building block used by the standalone host. The API host uses the same backend.
 
 `Listener` exposes `run(signal)` and `receive(verifiedNotification)`. It owns the
-execution lease, renews it while GitHub/Box operations wait, validates historical
-allocation references before admission, and drives the shared worker pools. The
+execution lease, renews it while GitHub/Box operations wait, pages active
+allocations for recovery, and drives the shared worker pools. The
 host supplies an authoritative scope directory, bound execution adapters and an
 ingress transaction that checks the current binding. Receiving a notification
 stores its receipt and job before waking the scheduler; it needs no execution
@@ -289,7 +320,9 @@ or tenant quota is full. Skipping a scan does not advance its deadline or settle
 pending jobs; other tenants with capacity can still scan. The final reservation
 rechecks the same usage atomically.
 A recovery error blocks that scope's new admissions while other accounts
-can proceed; a corrupt historical allocation graph blocks all admission. Known
+can proceed; corrupt shared journal state still blocks admission. Invalid discovered
+scope definitions withhold that binding without restoring old authority or blocking
+healthy bindings. Known
 credential handles survive failed shutdown retirement, and another session cannot
 start until retirement succeeds.
 

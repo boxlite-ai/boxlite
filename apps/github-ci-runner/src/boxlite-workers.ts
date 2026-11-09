@@ -66,8 +66,7 @@ export class BoxLiteWorkers {
       if (!/^ci-jit-[a-f0-9]{32}$/.test(name)) throw new Error('Original CI allocation name required')
       await this.http.verify()
       await this.identity()
-      const snapshot = await journal.load(lease),
-        allocation = snapshot.allocations.get('worker/' + name.slice(7))
+      const allocation = await journal.allocation(lease, 'worker/' + name.slice(7))
       if (!allocation || allocation.value.scope !== key || allocation.value.name !== name)
         throw new Error('Original CI allocation unavailable')
       return allocation

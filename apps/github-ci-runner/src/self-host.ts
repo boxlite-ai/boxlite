@@ -105,7 +105,7 @@ export class SelfHost implements ListenerHost {
     signal: AbortSignal,
   ): Promise<boolean> {
     signal.throwIfAborted()
-    await new ExecutionJournal(this.state).load(lease)
+    await new ExecutionJournal(this.state).check(lease)
     const [root] = await this.state.read(['backend/github'])
     if (
       !root ||

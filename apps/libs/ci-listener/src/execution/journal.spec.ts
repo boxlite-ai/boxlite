@@ -1,4 +1,5 @@
 /* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
+import { inspectJournal } from '../../tests/journal'
 import { testCapacity } from '../../tests/capacity'
 import { randomUUID } from 'node:crypto'
 import { mkdtempSync, rmSync } from 'node:fs'
@@ -64,7 +65,7 @@ for (const backend of ['sqlite', 'postgres'] as const) {
       journal = new ExecutionJournal(state)
       await journal.initialize()
       lease = (await state.acquire(randomUUID(), 300000))!
-      key = await journal.define(lease, definition)
+      key = await journal.define(lease, definition, 'personal')
     })
     afterEach(async () => {
       await sqlite?.close()
@@ -82,7 +83,210 @@ for (const backend of ['sqlite', 'postgres'] as const) {
         }
       }
     })
-    it('pins original App provenance for legacy scopes and rejects missing mappings after activation', async () => {
+    it('defines known and new scopes without enumerating retained history', async () => {
+      for (let generation = 2; generation <= 6; generation++) await journal.define(lease, { ...definition, generation })
+      const pages: string[] = []
+      const observed: StateDatabase = {
+        transaction: (namespace, work, mode) =>
+          db.transaction(
+            namespace,
+            (tx) =>
+              work({
+                now: () => tx.now(),
+                get: (key, lock) => tx.get(key, lock),
+                put: (record, expected) => tx.put(record, expected),
+                remove: (key, expected) => tx.remove(key, expected),
+                page: (after, limit, prefix) => {
+                  pages.push(prefix ?? '')
+                  return tx.page(after, limit, prefix)
+                },
+              }),
+            mode,
+          ),
+      }
+      const measured = new ExecutionJournal(new ListenerState(observed, namespace))
+      expect(await measured.define(lease, definition)).toBe(key)
+      await measured.define(lease, { ...definition, generation: 7 })
+      expect(pages).toEqual([])
+    })
+    it('uses only point reads for worker, authorization, quota and allocation lifecycle regardless of history', async () => {
+      await state.commit(lease, [{ key: 'backend/test', expected: null, payload: { app: 'personal' } }])
+      const pages: string[] = []
+      let reads = 0
+      const observed: StateDatabase = {
+        transaction: (namespace, work, mode) =>
+          db.transaction(
+            namespace,
+            (tx) =>
+              work({
+                now: () => tx.now(),
+                get: (key, lock) => {
+                  reads++
+                  return tx.get(key, lock)
+                },
+                put: (record, expected) => tx.put(record, expected),
+                remove: (key, expected) => tx.remove(key, expected),
+                page: (after, limit, prefix) => {
+                  pages.push(prefix ?? '')
+                  return tx.page(after, limit, prefix)
+                },
+              }),
+            mode,
+          ),
+      }
+      const measuredState = new ListenerState(observed, namespace)
+      const measured = new ExecutionJournal(measuredState)
+      const apps = new ScopeApplications(measuredState, 'backend/test', 'personal')
+      const exercise = async () => {
+        reads = 0
+        let row = (await measured.reserve(lease, key, demand, limits))!
+        expect((await measured.allocation(lease, row.record.key))?.value.job).toEqual(demand)
+        expect(await apps.application(lease, definition)).toBe('personal')
+        expect(await measured.used(definition.organization)).toBe(1)
+        expect(await measured.hasCapacity(lease, key, limits)).toBe(false)
+        row = await measured.advance(lease, row.record.key, row.record.version, {
+          box: { phase: 'absent', id: null },
+          runner: { phase: 'absent', id: null },
+        })
+        await measured.release(lease, row.record.key, row.record.version)
+        return reads
+      }
+      const before = await exercise()
+      for (let generation = 2; generation <= 40; generation++)
+        await journal.define(lease, { ...definition, generation })
+      expect(await exercise()).toBe(before)
+      expect(pages).toEqual([])
+    })
+    it('rolls back every reservation record when the final worker write fails', async () => {
+      let injected = false
+      const failing: StateDatabase = {
+        transaction: (namespace, work, mode) =>
+          db.transaction(
+            namespace,
+            (tx) =>
+              work({
+                now: () => tx.now(),
+                get: (key, lock) => tx.get(key, lock),
+                page: (after, limit, prefix) => tx.page(after, limit, prefix),
+                remove: (key, expected) => tx.remove(key, expected),
+                put: (record, expected) => {
+                  if (record.key.startsWith('worker/')) {
+                    injected = true
+                    throw Error('worker storage interrupted')
+                  }
+                  return tx.put(record, expected)
+                },
+              }),
+            mode,
+          ),
+      }
+      const before = await state.recover(lease)
+      await expect(
+        new ExecutionJournal(new ListenerState(failing, namespace)).reserve(lease, key, demand, limits),
+      ).rejects.toThrow('worker storage interrupted')
+      expect(injected).toBe(true)
+      expect(await state.recover(lease)).toEqual(before)
+      expect(await journal.reserve(lease, key, demand, limits)).toBeDefined()
+    })
+    it('keeps active membership when final release races a new reservation', async () => {
+      let old = (await journal.reserve(lease, key, demand, limits))!
+      old = await journal.advance(lease, old.record.key, old.record.version, {
+        box: { phase: 'absent', id: null },
+        runner: { phase: 'absent', id: null },
+      })
+      const attempts = await Promise.allSettled([
+        journal.release(lease, old.record.key, old.record.version),
+        journal.reserve(lease, key, { ...demand, job: 56 }, limits),
+      ])
+      for (const result of attempts)
+        if (result.status === 'rejected') expect(result.reason).toBeInstanceOf(StateConflict)
+      if (attempts[0].status === 'rejected') await journal.release(lease, old.record.key, old.record.version)
+      if (attempts[1].status === 'rejected') await journal.reserve(lease, key, { ...demand, job: 56 }, limits)
+      const active = await journal.activeScopes(lease)
+      expect(active.rows).toHaveLength(1)
+      expect(active.rows[0].active).toBe(1)
+      expect((await journal.workers(lease, key)).rows.map((row) => row.value.job.job)).toEqual([56])
+      expect(await journal.used(definition.organization)).toBe(1)
+    })
+    it('continues keyset recovery after a deleted cursor at an exact page boundary', async () => {
+      const capacity = testCapacity({ account: 10, tenant: 10 })
+      for (let job = 100; job < 104; job++) await journal.reserve(lease, key, { ...demand, job }, capacity)
+      const first = await journal.workers(lease, key, '', 2)
+      expect(first.rows).toHaveLength(2)
+      expect(first.after).not.toBe('')
+      let cursor = first.rows[1]
+      cursor = await journal.advance(lease, cursor.record.key, cursor.record.version, {
+        box: { phase: 'absent', id: null },
+        runner: { phase: 'absent', id: null },
+      })
+      await journal.release(lease, cursor.record.key, cursor.record.version)
+      const second = await journal.workers(lease, key, first.after, 2)
+      expect(second.rows).toHaveLength(2)
+      expect(new Set([...first.rows, ...second.rows].map((row) => row.record.key)).size).toBe(4)
+      expect(await journal.workers(lease, key, second.after, 2)).toEqual({ rows: [], after: '' })
+    })
+    it('rejects a job deduplication record pointing at a different valid allocation', async () => {
+      const row = (await journal.reserve(lease, key, demand, limits))!
+      await state.commit(lease, [
+        {
+          key: 'job/' + definition.installation.id + '/' + demand.repository + '/999',
+          expected: null,
+          payload: { worker: row.record.key },
+        },
+      ])
+      await expect(journal.reserve(lease, key, { ...demand, job: 999 }, limits)).rejects.toBeInstanceOf(StateCorrupt)
+    })
+    it('keeps all capacity domains counted when the selected policy changes', async () => {
+      await journal.reserve(lease, key, demand, { limits: [{ domain: 'organization', maximum: 5 }] })
+      for (const domain of ['global', 'organization', 'account'] as const)
+        expect(await journal.hasCapacity(lease, key, { limits: [{ domain, maximum: 1 }] })).toBe(false)
+      const next = await journal.define(lease, { ...definition, generation: 2 })
+      expect(await journal.reserve(lease, next, demand, testCapacity({ account: 5, tenant: 5 }))).toBeUndefined()
+      expect(await journal.used(definition.organization)).toBe(1)
+    })
+    it('returns capacity exactly once and keeps domain records at zero after final release', async () => {
+      let row = (await journal.reserve(lease, key, demand, limits))!
+      row = await journal.advance(lease, row.record.key, row.record.version, { box: { phase: 'absent', id: null } })
+      row = await journal.advance(lease, row.record.key, row.record.version, { box: { phase: 'absent', id: null } })
+      expect(await journal.used(definition.organization)).toBe(0)
+      expect(await journal.reserve(lease, key, demand, limits)).toBeUndefined()
+      row = await journal.advance(lease, row.record.key, row.record.version, { runner: { phase: 'absent', id: null } })
+      await journal.release(lease, row.record.key, row.record.version)
+      expect((await state.scan(lease, { prefix: 'usage/' })).map((row) => row.payload)).toEqual([
+        { used: 0 },
+        { used: 0 },
+        { used: 0 },
+      ])
+      expect(await state.scan(lease, { prefix: 'domain/' })).toHaveLength(3)
+      expect(await state.scan(lease, { prefix: 'active-scope/' })).toEqual([])
+      expect(await state.scan(lease, { prefix: 'active-worker/' })).toEqual([])
+      expect(await state.scan(lease, { prefix: 'job/' })).toEqual([])
+      expect(await journal.reserve(lease, key, demand, limits)).toBeDefined()
+    })
+    it.each(['domain/global', 'usage/global'])('does not recreate a missing established %s', async (missing) => {
+      const [row] = await state.read([missing])
+      await state.commit(lease, [{ key: row.key, expected: row.version }])
+      await expect(journal.define(lease, definition)).rejects.toBeInstanceOf(StateCorrupt)
+      await expect(journal.define(lease, { ...definition, generation: 2 })).rejects.toBeInstanceOf(StateCorrupt)
+      await expect(journal.reserve(lease, key, demand, limits)).rejects.toBeInstanceOf(StateCorrupt)
+      expect(await state.read([missing])).toEqual([])
+    })
+    it('rejects an existing namespace without the new format rather than backfilling it', async () => {
+      const legacy = new ListenerState(db, namespace + '-legacy')
+      await legacy.initialize([{ key: 'catalog/scopes', payload: { keys: [] } }])
+      await expect(new ExecutionJournal(legacy).initialize()).rejects.toBeInstanceOf(StateCorrupt)
+      expect(await legacy.read(['journal/format'])).toEqual([])
+    })
+    if (backend === 'sqlite')
+      it('accepts more than 10000 retained scopes without deleting history', async () => {
+        for (let generation = 2; generation <= 10002; generation++)
+          await journal.define(lease, { ...definition, generation })
+        expect((await journal.scope(lease, key)).scope).toEqual(definition)
+        expect(await journal.define(lease, { ...definition, generation: 10003 })).toBeDefined()
+        expect(await journal.activeScopes(lease)).toEqual({ rows: [], after: '' })
+        expect(await state.read(['catalog/scopes'])).toEqual([])
+      }, 60000)
+    it('pins original App provenance at definition and rejects missing mappings', async () => {
       await state.commit(lease, [{ key: 'backend/test', expected: null, payload: { app: 'personal' } }])
       const apps = new ScopeApplications(state, 'backend/test', 'personal')
       expect(await apps.application(lease, definition)).toBe('personal')
@@ -124,14 +328,14 @@ for (const backend of ['sqlite', 'postgres'] as const) {
       }
       const broken = new ScopeApplications(new ListenerState(failing, namespace), 'backend/test', 'personal')
       const candidate = { ...definition, binding: 'new-app-scope' }
-      const before = (await journal.load(lease)).index
+      const before = (await inspectJournal(state, lease)).usage
       await expect(broken.define(lease, candidate, 'organization')).rejects.toThrow('association storage interrupted')
       expect(blocked).toBe(true)
-      expect((await journal.load(lease)).index).toEqual(before)
-      expect((await journal.load(lease)).scopes.size).toBe(1)
+      expect((await inspectJournal(state, lease)).usage).toEqual(before)
+      expect((await inspectJournal(state, lease)).scopes.size).toBe(1)
       expect(await state.scan(lease, { prefix: 'app-scope/' })).toHaveLength(1)
       await new ScopeApplications(state, 'backend/test', 'personal').define(lease, candidate, 'organization')
-      expect((await journal.load(lease)).scopes.size).toBe(2)
+      expect((await inspectJournal(state, lease)).scopes.size).toBe(2)
     })
     it('captures a scope and lease before asynchronous App association initialization', async () => {
       await state.commit(lease, [{ key: 'backend/test', expected: null, payload: { app: 'personal' } }])
@@ -157,12 +361,12 @@ for (const backend of ['sqlite', 'postgres'] as const) {
         journal.reserve(lease, otherKey, { ...demand, job: 56 }, limits),
       ])
       expect(attempts.filter((result) => result.status === 'fulfilled' && result.value)).toHaveLength(1)
-      expect((await journal.load(lease)).allocations.size).toBe(1)
+      expect((await inspectJournal(state, lease)).allocations.size).toBe(1)
       expect(await apps.application(lease, other)).toBe('organization')
     })
     it('hosted quota zero pauses new admission without an allocation intent', async () => {
       expect(await journal.reserve(lease, key, demand, testCapacity({ account: null, tenant: 0 }))).toBeUndefined()
-      expect((await journal.load(lease)).allocations.size).toBe(0)
+      expect((await inspectJournal(state, lease)).allocations.size).toBe(0)
     })
     it('hosted quota null preserves an unlimited Commerce resolution', async () => {
       const first = await journal.reserve(lease, key, demand, testCapacity({ account: null, tenant: null }))
@@ -175,7 +379,8 @@ for (const backend of ['sqlite', 'postgres'] as const) {
       expect(first).toBeDefined()
       expect(second).toBeDefined()
       expect(
-        (await journal.load(lease)).workers.filter((worker) => worker.organization === definition.organization).length,
+        (await inspectJournal(state, lease)).workers.filter((worker) => worker.organization === definition.organization)
+          .length,
       ).toBe(2)
     })
     it('hosted quota aggregates different GitHub installations under one BoxLite account', async () => {
@@ -198,12 +403,13 @@ for (const backend of ['sqlite', 'postgres'] as const) {
         ),
       ).toBeUndefined()
       expect(
-        (await journal.load(lease)).workers.filter((worker) => worker.organization === definition.organization).length,
+        (await inspectJournal(state, lease)).workers.filter((worker) => worker.organization === definition.organization)
+          .length,
       ).toBe(1)
     })
     it('hosted quota applies the settings version fence to the reservation transaction', async () => {
       const [policy] = await state.commit(lease, [{ key: 'quota/tenant-a', expected: null, payload: { maximum: 2 } }])
-      const index = (await journal.load(lease)).index
+      const usage = (await inspectJournal(state, lease)).usage
       await state.commit(lease, [{ key: policy.key, expected: policy.version, payload: { maximum: 0 } }])
       await expect(
         journal.reserve(
@@ -217,9 +423,9 @@ for (const backend of ['sqlite', 'postgres'] as const) {
           }),
         ),
       ).rejects.toBeInstanceOf(StateConflict)
-      const snapshot = await journal.load(lease)
+      const snapshot = await inspectJournal(state, lease)
       expect(snapshot.allocations.size).toBe(0)
-      expect(snapshot.index).toEqual(index)
+      expect(snapshot.usage).toEqual(usage)
     })
     it('hosted quota captures nested settings checks before loading the journal', async () => {
       const [policy] = await state.commit(lease, [{ key: 'quota/tenant-a', expected: null, payload: { maximum: 2 } }])
@@ -227,7 +433,7 @@ for (const backend of ['sqlite', 'postgres'] as const) {
       const pending = journal.reserve(lease, key, demand, testCapacity({ account: null, tenant: 2, checks }))
       checks[0].version = policy.version
       await expect(pending).rejects.toBeInstanceOf(StateConflict)
-      expect((await journal.load(lease)).allocations.size).toBe(0)
+      expect((await inspectJournal(state, lease)).allocations.size).toBe(0)
     })
     it('hosted quota accepts finite Commerce limits above the former static ceiling', async () => {
       expect(await journal.reserve(lease, key, demand, testCapacity({ account: null, tenant: 1001 }))).toBeDefined()
@@ -235,46 +441,47 @@ for (const backend of ['sqlite', 'postgres'] as const) {
     it('hosted quota rejects negative, nonfinite and unsafe limits', async () => {
       for (const tenant of [-1, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1])
         await expect(journal.reserve(lease, key, demand, testCapacity({ account: null, tenant }))).rejects.toThrow()
-      expect((await journal.load(lease)).allocations.size).toBe(0)
+      expect((await inspectJournal(state, lease)).allocations.size).toBe(0)
     })
-    it('enforces all supplied membership rules without recognizing their policy dimensions', async () => {
-      const shared = { maximum: 3, includes: () => true }
+    it('enforces global and organization limits using original allocation domains', async () => {
+      const shared = { maximum: 3, domain: 'global' as const }
       const isolated = {
         maximum: 1,
-        includes: (worker: ExecutionScope, candidate: ExecutionScope) => worker.binding === candidate.binding,
+        domain: 'organization' as const,
       }
       const policy = { limits: [shared, isolated] }
       await journal.reserve(lease, key, demand, policy)
       expect(await journal.reserve(lease, key, { ...demand, job: 56 }, policy)).toBeUndefined()
       const other = structuredClone(definition)
       other.binding = 'independent-policy-group'
+      other.organization = 'independent-organization'
       if (other.runners.kind !== 'repository') throw Error('Repository fixture required')
       other.runners.repository.id = 22
       const next = await journal.define(lease, other)
       expect(await journal.reserve(lease, next, { ...demand, repository: 22, job: 57 }, policy)).toBeDefined()
-      expect((await journal.load(lease)).workers).toHaveLength(2)
+      expect((await inspectJournal(state, lease)).workers).toHaveLength(2)
     })
     it('captures each rule maximum before the asynchronous journal read', async () => {
-      const rule = { maximum: 0, includes: () => true }
+      const rule = { maximum: 0, domain: 'global' as const }
       const pending = journal.reserve(lease, key, demand, { limits: [rule] })
       rule.maximum = 100
       expect(await pending).toBeUndefined()
-      expect((await journal.load(lease)).allocations.size).toBe(0)
+      expect((await inspectJournal(state, lease)).allocations.size).toBe(0)
     })
     it('rejects absent, invalid or inapplicable rules without persisting an allocation', async () => {
       for (const policy of [
         { limits: [] },
-        { limits: [{ maximum: 1, includes: () => false }] },
-        { limits: [{ maximum: 1, includes: null as any }] },
-        { limits: Array.from({ length: 101 }, () => ({ maximum: 1, includes: () => true })) },
+        { limits: [{ maximum: 1, domain: 'unknown' as any }] },
+        { limits: [{ maximum: 1, domain: null as any }] },
+        { limits: Array.from({ length: 101 }, () => ({ maximum: 1, domain: 'global' as const })) },
       ])
         await expect(journal.reserve(lease, key, demand, policy)).rejects.toThrow()
-      expect((await journal.load(lease)).allocations.size).toBe(0)
+      expect((await inspectJournal(state, lease)).allocations.size).toBe(0)
     })
     it('persists canonical original scope metadata and strips unrelated secret-shaped fields', async () => {
       const extra = { ...structuredClone(definition), privateToken: 'test-only-sensitive-extra' }
       expect(await journal.define(lease, extra)).toBe(key)
-      const rows = await journal.load(lease)
+      const rows = await inspectJournal(state, lease)
       expect(rows.scopes.get(key)!.scope).toEqual(definition)
       expect(JSON.stringify(await state.recover(lease))).not.toContain('test-only-sensitive-extra')
     })
@@ -288,7 +495,7 @@ for (const backend of ['sqlite', 'postgres'] as const) {
         actor: 'owner-b',
       })
       expect(await journal.reserve(lease, next, { ...demand, job: 56 }, limits)).toBeUndefined()
-      const snapshot = await journal.load(lease)
+      const snapshot = await inspectJournal(state, lease)
       expect(snapshot.scopes.get(key)!.scope.actor).toBe('owner-a')
       expect(snapshot.allocations.get(first!.record.key)!.value.scope).toBe(key)
     })
@@ -304,7 +511,7 @@ for (const backend of ['sqlite', 'postgres'] as const) {
       ])
       for (const result of results)
         if (result.status === 'rejected') expect(result.reason).toBeInstanceOf(StateConflict)
-      const snapshot = await journal.load(lease)
+      const snapshot = await inspectJournal(state, lease)
       expect(snapshot.allocations.size).toBe(1)
       expect([...snapshot.scopes.values()].reduce((sum, row) => sum + row.active.length, 0)).toBe(1)
     })
@@ -327,7 +534,7 @@ for (const backend of ['sqlite', 'postgres'] as const) {
     it('preserves an opaque provider subject rather than requiring an identifier format', async () => {
       const actor = 'provider|Case-Sensitive-Account',
         target = await journal.define(lease, { ...definition, actor })
-      expect((await journal.load(lease)).scopes.get(target)?.scope.actor).toBe(actor)
+      expect((await inspectJournal(state, lease)).scopes.get(target)?.scope.actor).toBe(actor)
     })
     it('does not settle or reset an unknown create intent', async () => {
       const reserved = (await journal.reserve(lease, key, demand, limits))!
@@ -353,7 +560,7 @@ for (const backend of ['sqlite', 'postgres'] as const) {
       await change({ runner: { phase: 'requested', id: null }, effect: { id: randomUUID(), kind: 'runner-register' } })
       await change({ runner: { phase: 'known', id: 91 } })
       await change({ box: { phase: 'absent', id: 'original-box' }, closing: true })
-      const recovered = await new ExecutionJournal(state).load(lease)
+      const recovered = await inspectJournal(state, lease)
       expect(recovered.workers.filter((worker) => worker.installation.account.id === 7).length).toBe(0)
       expect(recovered.workers.filter((worker) => worker.organization === 'tenant-a').length).toBe(0)
       expect(recovered.allocations.get(row.record.key)?.value.runner).toEqual({ phase: 'known', id: 91 })
@@ -379,7 +586,7 @@ for (const backend of ['sqlite', 'postgres'] as const) {
         closing: true,
       })
       await journal.release(lease, row.record.key, row.record.version)
-      const recovered = await journal.load(lease)
+      const recovered = await inspectJournal(state, lease)
       expect(recovered.scopes.get(key)!.active).toEqual([])
       expect(recovered.allocations.size).toBe(0)
       expect(await journal.reserve(lease, key, { ...demand, job: 56 }, limits)).toBeDefined()
@@ -390,11 +597,11 @@ for (const backend of ['sqlite', 'postgres'] as const) {
         journal.advance(lease, reserved.record.key, reserved.record.version, { box: { phase: 'requested', id: null } }),
       ).rejects.toBeInstanceOf(StateCorrupt)
     })
-    it('does not heal a missing permanent business index during restart', async () => {
-      const [index] = await state.read(['catalog/scopes'])
+    it('does not heal a missing journal format marker during restart', async () => {
+      const [index] = await state.read(['journal/format'])
       await state.commit(lease, [{ key: index.key, expected: index.version }])
       await expect(journal.initialize()).rejects.toBeInstanceOf(StateCorrupt)
-      await expect(journal.load(lease)).rejects.toBeInstanceOf(StateCorrupt)
+      await expect(journal.check(lease)).rejects.toBeInstanceOf(StateCorrupt)
     })
   })
 }

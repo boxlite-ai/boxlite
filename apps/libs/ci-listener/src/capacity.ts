@@ -12,8 +12,7 @@ export interface CapacityRequest {
 }
 export interface CapacityLimit {
   maximum: number | null
-  /** Pure, synchronous membership test over original worker scopes. */
-  includes(worker: ExecutionScope, candidate: ExecutionScope): boolean
+  domain: 'global' | 'organization' | 'account'
 }
 export interface CapacityPolicy {
   limits: readonly CapacityLimit[]
@@ -26,24 +25,17 @@ export interface CapacityProvider {
 export function captureCapacity(value: CapacityPolicy): CapacityPolicy {
   if (!Array.isArray(value.limits) || !value.limits.length || value.limits.length > 100)
     throw new Error('Invalid CI capacity policy')
-  const limits = value.limits.map(({ maximum, includes }) => {
-    if ((maximum !== null && (!Number.isSafeInteger(maximum) || maximum < 0)) || typeof includes !== 'function')
+  const limits = value.limits.map(({ maximum, domain }) => {
+    if (
+      (maximum !== null && (!Number.isSafeInteger(maximum) || maximum < 0)) ||
+      !['global', 'organization', 'account'].includes(domain)
+    )
       throw new Error('Invalid CI capacity limit')
-    return { maximum, includes }
+    return { maximum, domain }
   })
   if (value.checks && (!Array.isArray(value.checks) || value.checks.length > 100))
     throw new Error('Invalid CI capacity checks')
   return { limits, checks: value.checks?.map((check) => ({ ...check })) }
 }
 
-export function hasCapacity(
-  candidate: ExecutionScope,
-  workers: readonly ExecutionScope[],
-  policy: CapacityPolicy,
-): boolean {
-  return policy.limits.every(({ maximum, includes }) => {
-    if (!includes(candidate, candidate)) throw new Error('CI capacity policy excludes its candidate')
-    return maximum === null || workers.filter((worker) => includes(worker, candidate)).length < maximum
-  })
-}
-export const closedCapacity: CapacityPolicy = { limits: [{ maximum: 0, includes: () => true }] }
+export const closedCapacity: CapacityPolicy = { limits: [{ maximum: 0, domain: 'global' }] }

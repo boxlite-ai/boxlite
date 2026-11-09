@@ -11,7 +11,7 @@ import { ExecutionLease, ListenerState } from './state/store'
 import { FairSelection, matches, pendingJob, repositories } from './scheduling'
 import { VerifiedWebhook } from './webhook'
 import type { AppDeliveryRecovery } from './replay/recovery'
-import { CapacityPolicy, CapacityProvider, captureCapacity, closedCapacity, hasCapacity } from './capacity'
+import { CapacityPolicy, CapacityProvider, captureCapacity, closedCapacity } from './capacity'
 
 export interface ListenerBackend extends PoolBackend {
   queued(repository: number, signal?: AbortSignal): Promise<WorkflowJob[]>
@@ -32,6 +32,7 @@ interface Runtime {
 }
 interface Session {
   lease: ExecutionLease
+  recoveryAfter: string
   runtimes: Map<string, Runtime>
   current: Map<string, ExecutionScope>
   discoveryAt: number
@@ -102,6 +103,7 @@ export class Listener {
       signal = AbortSignal.any([external, stop.signal]),
       session: Session = {
         lease,
+        recoveryAfter: '',
         runtimes: new Map(),
         current: new Map(),
         discoveryAt: 0,
@@ -183,16 +185,18 @@ export class Listener {
   }
   private async cycle(session: Session, signal: AbortSignal): Promise<void> {
     const { lease } = session,
-      snapshot = await this.journal.load(lease),
+      recovery = await this.journal.activeScopes(lease, session.recoveryAfter),
       blocked = new Set<string>()
-    // Historical generations are reconciled and counted before any new admission.
-    for (const [key, row] of snapshot.scopes) {
-      if (!row.active.length) continue
+    session.recoveryAfter = recovery.after
+    // Only outstanding work is paged; each pool separately fences admission until
+    // its worker recovery round completes without a blocking resource failure.
+    for (const row of recovery.rows) {
+      const key = row.record.key
       try {
         // Recovery consumes an existing reservation, even when policy lookup is unavailable.
         await (await this.runtime(session, key, row.scope)).pool.tick(lease, closedCapacity, undefined, signal)
       } catch (error) {
-        if (error instanceof LeaseLost) throw error
+        if (error instanceof LeaseLost || error instanceof StateCorrupt) throw error
         blocked.add(key)
         this.options.host.report(error, 'worker-recovery')
       }
@@ -229,19 +233,46 @@ export class Listener {
             }
           }),
         }),
-        scopes = discovery.scopes.map(decodeScope),
-        targets = new Set<string>(),
+        scopes: ExecutionScope[] = [],
+        rejected = new Set<string>(),
+        targets = new Map<string, string>(),
         next = new Map<string, ExecutionScope>()
+      for (const definition of discovery.scopes) {
+        try {
+          scopes.push(decodeScope(definition))
+        } catch (error) {
+          if (typeof definition?.binding === 'string') rejected.add(definition.binding)
+          this.options.host.report(error, 'scope-definition')
+        }
+      }
       for (const scope of scopes) {
         for (const repository of repositories(scope)) {
           const target = `${scope.installation.id}/${repository}`
-          if (targets.has(target)) throw new Error('Current CI scopes overlap an installation repository')
-          targets.add(target)
+          const previous = targets.get(target)
+          if (previous !== undefined) {
+            rejected.add(previous)
+            rejected.add(scope.binding)
+            this.options.host.report(
+              new Error('Current CI scopes overlap an installation repository'),
+              'scope-definition',
+            )
+          }
+          targets.set(target, scope.binding)
         }
-        const key = scopeKey(scope)
-        if (!session.current.has(key)) await this.journal.define(lease, scope)
-        next.set(key, scope)
       }
+      for (const scope of scopes) {
+        if (rejected.has(scope.binding)) continue
+        const key = scopeKey(scope)
+        try {
+          if (!session.current.has(key)) await this.journal.define(lease, scope)
+          next.set(key, scope)
+        } catch (error) {
+          if (error instanceof LeaseLost || error instanceof StateCorrupt || error instanceof StateConflict) throw error
+          rejected.add(scope.binding)
+          this.options.host.report(error, 'scope-definition')
+        }
+      }
+      for (const [key, scope] of next) if (rejected.has(scope.binding)) next.delete(key)
       session.current = next
       session.discoveryPending = discovery.pending
       if (refresh) session.discoveryAt = Date.now() + this.timing.discoveryMs
@@ -281,9 +312,8 @@ export class Listener {
     for (const { key, scope, job } of session.jobs.take(candidates, 32)) {
       signal.throwIfAborted()
       try {
-        const capacity = await this.journal.load(lease),
-          policy = await resolveCapacity(scope, job.notice.repository, job.notice)
-        if (!hasCapacity(scope, capacity.workers, policy)) continue
+        const policy = await resolveCapacity(scope, job.notice.repository, job.notice)
+        if (!(await this.journal.hasCapacity(lease, key, policy))) continue
         const runtime = await this.runtime(session, key, scope),
           current = await runtime.backend.job(job.notice, signal)
         if (
@@ -323,10 +353,9 @@ export class Listener {
             })),
       )
       .filter(({ value }) => (session.scans.get(value.scanKey) ?? 0) <= Date.now())
-    const capacity = scans.length ? (await this.journal.load(lease)).workers : snapshot.workers
     // Resolve only the selected scope; a large directory must not poll Commerce for every tenant.
     for (const { key, scope, repository, scanKey } of session.compensation.take(scans, 1)) {
-      if (!hasCapacity(scope, capacity, await resolveCapacity(scope, repository))) continue
+      if (!(await this.journal.hasCapacity(lease, key, await resolveCapacity(scope, repository)))) continue
       const runtime = await this.runtime(session, key, scope),
         bounded = AbortSignal.any([signal, AbortSignal.timeout(45000)])
       const jobs = await runtime.backend.queued(repository, bounded)
@@ -356,7 +385,7 @@ export class Listener {
       session.scans.set(scanKey, Date.now() + this.timing.compensationMs)
     }
     for (const [key, runtime] of session.runtimes) {
-      if (session.current.has(key) || snapshot.scopes.get(key)?.active.length) continue
+      if (session.current.has(key) || (await this.journal.scope(lease, key)).active) continue
       await runtime.pool.close()
       await runtime.backend.close()
       session.runtimes.delete(key)
