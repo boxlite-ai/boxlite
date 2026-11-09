@@ -14,6 +14,9 @@ import { CustomHeaders } from '../../common/constants/header.constants'
 import { OrganizationResourceActionGuard } from '../../organization/guards/organization-resource-action.guard'
 import { AuthContext } from '../../common/decorators/auth-context.decorator'
 import { AuthenticatedRateLimitGuard } from '../../common/guards/authenticated-rate-limit.guard'
+import { Audit } from '../../audit/decorators/audit.decorator'
+import { AuditAction } from '../../audit/enums/audit-action.enum'
+import { AuditTarget } from '../../audit/enums/audit-target.enum'
 
 @ApiTags('object-storage')
 @Controller('object-storage')
@@ -26,6 +29,12 @@ export class ObjectStorageController {
 
   @Get('push-access')
   @HttpCode(200)
+  @Audit({
+    action: AuditAction.ISSUE_STORAGE_ACCESS,
+    targetType: AuditTarget.ORGANIZATION,
+    targetIdFromRequest: (req) => (req.user as OrganizationAuthContext).organizationId,
+    errorMessage: 'Storage access issuance failed.',
+  })
   @ApiOperation({
     summary: 'Get temporary storage access for pushing objects',
     operationId: 'getPushAccess',

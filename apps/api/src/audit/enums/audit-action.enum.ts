@@ -50,4 +50,5 @@ export enum AuditAction {
   CREATE_TUNNEL = 'create_tunnel',
   REVOKE_TUNNEL = 'revoke_tunnel',
   ISSUE_ATTACH_TICKET = 'issue_attach_ticket',
+  ISSUE_STORAGE_ACCESS = 'issue_storage_access',
 }

@@ -315,8 +315,10 @@ export class BoxController {
   async recoverBox(
     @AuthContext() authContext: OrganizationAuthContext,
     @Param('boxIdOrName') boxIdOrName: string,
+    @Req() request?: Request,
   ): Promise<BoxDto> {
     const recoveredBox = await this.boxService.recover(boxIdOrName, authContext.organization)
+    if (request) request[AUDIT_TARGET_ID] = recoveredBox.id
     let boxDto = await this.boxService.toBoxDto(recoveredBox)
 
     if (boxDto.state !== BoxState.STARTED) {

@@ -19,6 +19,8 @@ export interface AuditContext {
   action: AuditAction
   methods?: readonly string[]
   completion?: 'response'
+  // Override only the audit error text when upstream failures may contain secrets.
+  errorMessage?: string
   targetType?: AuditTarget
   targetIdFromRequest?: (req: Request) => AuditTargetId
   targetIdFromResult?: (result: any) => AuditTargetId

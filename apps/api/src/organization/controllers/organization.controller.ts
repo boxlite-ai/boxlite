@@ -397,6 +397,8 @@ export class OrganizationController {
   @UseGuards(AuthGuard('jwt'), OrganizationActionGuard)
   @Audit({
     action: AuditAction.LEAVE_ORGANIZATION,
+    targetType: AuditTarget.ORGANIZATION,
+    targetIdFromRequest: (req) => req.params.organizationId,
   })
   async leave(
     @AuthContext() authContext: IAuthContext,

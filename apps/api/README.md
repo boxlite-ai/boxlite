@@ -482,6 +482,18 @@ configuration/enable/disable, and tunnel creation/revocation. Organization exper
 configuration and attach-ticket issuance are audited too. Resource names resolved by
 handlers become canonical target IDs without another lookup.
 
+`GET /api/object-storage/push-access` audits temporary storage credential issuance
+against the authenticated organization, despite using GET. Audit insertion must succeed
+before STS is called. Audit records omit returned credentials and use a fixed failure
+description without changing the API's error response.
+
+Box creation, startup and recovery retain the resolved target ID before subsequent
+conversion or waiting can fail. Failures before a Box is returned or resolved retain
+the original request identifier, or no target for creation. Recovery still returns its
+current DTO on timeout; a reported error remains a failed operation.
+Leaving an organization targets that organization; linking or unlinking an account
+targets the secondary `provider|userId`. Invalid identity fields leave the target empty.
+
 Proxy operations use response completion: `finish` records the response status;
 `close` before completion or a response error records unknown (`0`). Completion is
 claimed once before persisting, and its listeners are removed. A client disconnect
@@ -503,7 +515,7 @@ The obsolete Toolbox URL endpoint, DTO/configuration fields and SMS MFA enrollme
 endpoint are removed from the API and generated clients. Existing Auth0 management
 operations and v1 execution/file/attach routes remain available.
 
-Run `make test:apps:api TEST_FILES='audit-refine.spec|audit-special-writes.spec|audit-backfill.integration.spec|1794196800000'`;
+Run `make test:apps:api TEST_FILES='audit-refine.spec|audit-targets.spec|audit-special-writes.spec|audit-backfill.integration.spec|1794196800000'`;
 set the normal `DB_*` variables to include PostgreSQL concurrency and migration tests.
 See the [audit schema](../../docs/contributing/architecture/platform/schema.md#audit_log)
 for backfill limits, index deployment and rollback order.

@@ -41,6 +41,13 @@ import { AuditTarget } from '../audit/enums/audit-target.enum'
 import { AuthenticatedRateLimitGuard } from '../common/guards/authenticated-rate-limit.guard'
 import { Context } from '../common/context/context'
 
+// Audit resolvers run before validation pipes; malformed input has no target identity.
+function linkedAccountTargetId(provider: unknown, userId: unknown): string | null {
+  return typeof provider === 'string' && provider.length > 0 && typeof userId === 'string' && userId.length > 0
+    ? `${provider}|${userId}`
+    : null
+}
+
 @ApiTags('users')
 @Controller('users')
 @UseGuards(CombinedAuthGuard, AuthenticatedRateLimitGuard, SystemActionGuard)
@@ -181,6 +188,8 @@ export class UserController {
   })
   @Audit({
     action: AuditAction.LINK_ACCOUNT,
+    targetType: AuditTarget.USER,
+    targetIdFromRequest: (req) => linkedAccountTargetId(req.body?.provider, req.body?.userId),
     requestMetadata: {
       body: (req: TypedRequest<CreateLinkedAccountDto>) => ({
         provider: req.body?.provider,
@@ -257,6 +266,8 @@ export class UserController {
   })
   @Audit({
     action: AuditAction.UNLINK_ACCOUNT,
+    targetType: AuditTarget.USER,
+    targetIdFromRequest: (req) => linkedAccountTargetId(req.params.provider, req.params.providerUserId),
     requestMetadata: {
       params: (req) => ({
         provider: req.params.provider,
