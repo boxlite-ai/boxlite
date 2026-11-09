@@ -27,6 +27,7 @@ import {
   WebhooksApi,
   UsageApi as CoreUsageApi,
   NetworkMode,
+  User,
 } from '@boxlite-ai/api-client'
 import axios, { AxiosError, AxiosInstance } from 'axios'
 import { BoxliteError } from './errors'
@@ -86,6 +87,10 @@ export interface PromptDraft {
   updatedAt: string
 }
 export class ApiClient {
+  public async register(turnstileToken: string): Promise<User> {
+    return (await this.http.post<User>('/auth/register', { turnstileToken }, this.v1Config())).data
+  }
+
   public async getOrganizationOnboarding(org: string): Promise<OrganizationOnboarding | null> {
     return (await this.http.get(`/organizations/${encodeURIComponent(org)}/onboarding`, this.v1Config())).data
   }
@@ -187,10 +192,12 @@ export class ApiClient {
         // message is only for display. A rejection the API describes (say, an
         // unverified email) must not be flattened into an anonymous error here.
         const responseCode = error?.response?.data?.code
+        const retryAfter = Number(error?.response?.headers?.['retry-after'])
 
         throw BoxliteError.fromString(String(errorMessage), {
           cause: error instanceof Error ? error : undefined,
           code: typeof responseCode === 'string' ? responseCode : undefined,
+          retryAfterSeconds: Number.isSafeInteger(retryAfter) && retryAfter > 0 ? retryAfter : undefined,
         })
       },
     )

@@ -35,6 +35,7 @@ import {
   MOCK_IMAGE_LIMIT,
   MOCK_ORGANIZATION,
   MOCK_ORGANIZATION_MEMBER,
+  MOCK_USER,
   MOCK_PAGINATED_BOXES,
   MOCK_REGISTRY_CREDENTIALS,
   buildBox,
@@ -93,6 +94,15 @@ export const handlers = [
   // Core dashboard surface — fully self-contained so `start:mock` needs no
   // backend and no login (see MockAuthProvider for the fake session).
   http.get(`${API_URL}/config`, () => HttpResponse.json(buildMockConfig(BILLING_API_URL))),
+  http.get(`${API_URL}/users/me`, () =>
+    HttpResponse.json({
+      id: MOCK_USER.sub,
+      name: MOCK_USER.name,
+      email: MOCK_USER.email,
+      publicKeys: [],
+      createdAt: new Date(0).toISOString(),
+    }),
+  ),
   http.get(`${API_URL}/organizations`, () => HttpResponse.json([MOCK_ORGANIZATION])),
   http.get(`${API_URL}/organizations/:organizationId`, ({ params }) =>
     params.organizationId === MOCK_ORGANIZATION.id

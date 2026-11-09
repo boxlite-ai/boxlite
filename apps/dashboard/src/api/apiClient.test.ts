@@ -50,6 +50,7 @@ async function makeClient(
   status = 401,
   body: unknown = {},
   requests: any[] = [],
+  headers: Record<string, string> = {},
 ) {
   vi.resetModules()
   const axios = (await import('axios')).default
@@ -58,7 +59,7 @@ async function makeClient(
   // AxiosError carrying `.response`, exactly like the built-in adapters.
   axios.defaults.adapter = (async (cfg: unknown) => {
     requests.push(cfg)
-    const response = { data: body, status, statusText: '', headers: {}, config: cfg }
+    const response = { data: body, status, statusText: '', headers, config: cfg }
     if (status >= 200 && status < 300) return response
     const err = new Error(`Request failed with status code ${status}`) as Error & Record<string, unknown>
     err.response = response
@@ -69,6 +70,52 @@ async function makeClient(
   const { ApiClient } = await import('./apiClient')
   return new ApiClient(config, 'tok', onUnauthorized)
 }
+
+describe('ApiClient registration', () => {
+  it.each([200, 201])('returns the user for HTTP %i using the current access token', async (status) => {
+    const user = { id: 'auth0|new-user', name: 'User' }
+    const requests: any[] = []
+    const api = await makeClient(vi.fn(), status, user, requests)
+    api.setAccessToken('renewed-token')
+    await expect(api.register('challenge-token')).resolves.toEqual(user)
+    expect(requests[0]).toMatchObject({
+      method: 'post',
+      url: '/auth/register',
+      baseURL: 'http://api.test/api',
+      data: JSON.stringify({ turnstileToken: 'challenge-token' }),
+      headers: { Authorization: 'Bearer renewed-token' },
+    })
+  })
+
+  it.each([
+    [403, 'registration_required'],
+    [400, 'turnstile_token_required'],
+    [400, 'turnstile_token_invalid'],
+    [403, 'turnstile_verification_failed'],
+    [503, 'turnstile_unavailable'],
+    [503, 'registration_rate_limit_unavailable'],
+  ])('preserves %i/%s without restarting authentication', async (status, code) => {
+    const onUnauthorized = vi.fn()
+    const api = await makeClient(onUnauthorized, Number(status), { code, message: 'Please retry' })
+    await expect(api.register('token')).rejects.toMatchObject({ code, message: 'Please retry' })
+    expect(onUnauthorized).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['42', 42],
+    ['0', undefined],
+    ['invalid', undefined],
+    ['1.5', undefined],
+  ])('preserves a valid Retry-After: %s', async (header, seconds) => {
+    const api = await makeClient(vi.fn(), 429, { code: 'registration_rate_limited' }, [], {
+      'retry-after': String(header),
+    })
+    await expect(api.register('token')).rejects.toMatchObject({
+      code: 'registration_rate_limited',
+      retryAfterSeconds: seconds,
+    })
+  })
+})
 
 describe('ApiClient 401 -> bounded re-login recovery', () => {
   beforeEach(() => {
