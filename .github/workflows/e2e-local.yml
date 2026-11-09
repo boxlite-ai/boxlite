@@ -248,6 +248,7 @@ jobs:
   e2e-tests:
     name: E2E Integration Tests
     needs: start-runner
+    cache-mode: read
     runs-on:
       - self-hosted
       - gcp-e2e

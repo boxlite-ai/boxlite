@@ -75,6 +75,8 @@ Checkout follows the triggering event: pushes and manual dispatches use that eve
 commit, while a separate `pull_request_target` step selects the approved PR head SHA.
 The PR-head expression is confined to that step, keeping the event and cache contexts
 explicit for static analysis.
+The test job uses `cache-mode: read`, so its scoped GitHub Actions cache token cannot
+save or poison caches. Its native build and image caches remain on the persistent VM disk.
 
 ### Docker and Swarm acceptance
 

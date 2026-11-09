@@ -163,6 +163,10 @@ for (const event of ['push', 'workflow_dispatch', 'pull_request_target']) {
   })
 }
 
+test('E2E guest tests cannot write GitHub Actions caches', () => {
+  assert.equal(workflow('e2e-local.yml').jobs['e2e-tests']['cache-mode'], 'read')
+})
+
 for (const [failure, expectedCalls] of [
   ['', 3], ['test:docker:dind', 1], ['--topology single', 2], ['--topology same-runner', 3],
 ] as const) {
