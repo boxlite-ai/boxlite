@@ -5,6 +5,18 @@ through Nx as the `dashboard` project.
 
 ## New-account email policy
 
+After OIDC sign-in, the console checks `GET /users/me` before loading organizations
+or connecting notifications. A `registration_required` response opens the first-account
+verification screen at the current URL. Turnstile produces a single-use challenge;
+`POST /auth/register` validates it on the server before creating the local account.
+Existing accounts enter the console without a challenge. Email ownership verification
+remains in the Auth0 login Action.
+
+The console reads the public widget sitekey and `signup` action from `/config`.
+Failed or expired challenges are discarded. A lost registration response triggers
+another user check before a new challenge is requested. Service failures allow
+retry or sign-out without restarting the Auth0 login flow.
+
 When the API rejects account creation with `disposable_email`, `email_required`,
 or `invalid_email`, the console explains the email problem and offers
 **Sign out and use another email**. These responses do not restart authentication
