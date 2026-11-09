@@ -31,6 +31,11 @@ import type {
   JsOptions,
 } from "./native-contracts.js";
 export type {
+  Domain,
+  DomainHandle,
+  DomainList,
+  DomainTarget,
+  ExecutionInfo,
   ImageDetail,
   ImageHandle,
   ImageInfo,
@@ -109,6 +114,7 @@ export {
   BoxTunnel,
   TunnelForwarder,
   NetworkHandle,
+  Executions,
   SshHandle,
   type NetworkSpec,
   type InboundNetworkSpec,

@@ -73,6 +73,19 @@ async function flush() {
 }
 
 describe('EmailVerify', () => {
+  it('lets a failed verification return to billing with the action button', async () => {
+    mocks.verifyOrganizationEmail.mockReset().mockRejectedValue(new Error('expired token'))
+    await act(async () => root.render(<EmailVerify />))
+    await flush()
+    const button = container.querySelector<HTMLButtonElement>('button')!
+    expect(button.textContent).toBe('Go to billing')
+
+    act(() => button.click())
+
+    expect(mocks.navigate).toHaveBeenCalledWith(RoutePath.BILLING)
+    expect(mocks.onSelectOrganization).not.toHaveBeenCalled()
+  })
+
   it('redirects to billing after verifying, even when the effect re-runs', async () => {
     await act(async () => {
       root.render(<EmailVerify />)

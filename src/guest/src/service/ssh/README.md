@@ -14,7 +14,7 @@ flowchart TB
     CONTROL["Host control client"]
     CLIENT["SSH client"]
     subgraph GUEST["Guest VM"]
-        MANAGER["SshManager<br/>configure / status / disable"]
+        MANAGER["SshManager<br/>control / restore"]
         LISTENER["TCP listener<br/>accept connections"]
         RUSSH["russh<br/>SSH protocol engine"]
         HANDLER["SshConnection<br/>authorize and route requests"]
@@ -27,7 +27,7 @@ flowchart TB
         RUSSH -->|"callbacks"| HANDLER
         HANDLER --> BRIDGE --> WORK
     end
-    CONTROL -->|"Configure / Status / Disable<br/>gRPC over box.sock → vsock"| MANAGER
+    CONTROL -->|"Control<br/>gRPC over box.sock → vsock"| MANAGER
     CLIENT <-->|"SSH over TCP"| LISTENER
 ```
 
@@ -83,7 +83,15 @@ channel execution, forwarding, and shutdown through their completion points.
 
 ## Control API
 
-- SSH starts disabled; `Guest.Init` must finish before `Configure`.
+- SSH defaults to disabled. `Control` with no fields queries live status without
+  initialization or disk I/O. Mutations require `Guest.Init` and a ready container rootfs.
+- Desired state is stored in `/etc/boxlite/ssh.cfg`; Container.Init restores it.
+  Guest shutdown drains the live listener without changing the saved switch.
+  Restore failures log the container ID and sanitized error; task failures log
+  whether the task panicked or was cancelled, without its panic payload.
+- Supplying both fields replaces saved content without loading it. Explicit
+  `enable=false` drains live SSH before storage access; storage errors still
+  return failure, and the saved switch may restore SSH after a restart.
 - Host port forwarding is configured separately from the guest SSH listener.
 - The Rust runtime exposes `LiteBox::ssh()` for local boxes and for REST-backed
   boxes served by `boxlite serve`. The local runtime's guest RPC client is
@@ -215,12 +223,31 @@ session's forwarding permission; normal shell/exec sessions need none of them.
 | One channel | EOF ends input; CLOSE ends the channel and triggers bridge termination. Normal command completion sends exit status/signal, EOF, then CLOSE. |
 | One connection | `SshConnection::drop()` cancels connection tasks and terminates bridges. |
 | One forwarding listener | `cancel_tcpip_forward()` / `cancel_streamlocal_forward()` stop the selected listener. |
-| Whole SSH service | `SshManager::disable()` cancels and drains SSH work; valid `configure()` drains the previous generation before binding another listener. |
+| Whole SSH service | `SshManager::shutdown()` cancels and drains SSH work; a configuration update through `control()` drains the previous generation before binding another listener. |
 
 `TaskGroup` combines **CancellationToken** (request shutdown) with **TaskTracker**
 (account for completion). Task counts depend on active work. A drain timeout
 leaves cleanup tracked for a later control call. SSH restart leaves the container's
 main process and non-SSH executions running.
+
+## Tests
+
+Lifecycle and Control RPC tests live in [tests.rs](tests.rs). Storage tests in
+[tests/persistence.rs](tests/persistence.rs) exercise production `save`/`load`
+with a complete configuration, including accounts, authorized keys, and CA
+credentials, while checking ownership, permissions, and whole-state replacement.
+Shared wire compatibility and credential redaction tests remain inline in
+[the shared crate](../../../../shared/src/lib.rs).
+
+On Linux, run `make test:unit:guest FILTER=ssh` with nextest 0.9.116 or newer.
+The scoped [runner](tests/runner.sh) isolates `service::ssh::tests::*` and
+`service::ssh::persistence::tests::*` in private mount namespaces, mapping the
+current user to root when needed. Missing namespace support is a test error.
+This target skips execution on macOS; `make clippy` cross-compiles guest tests
+there but does not run them.
+
+Run `BOXLITE_DEPS_STUB=1 make test:unit:rust FILTER=ssh` for host and shared
+SSH tests.
 
 ## Source map
 

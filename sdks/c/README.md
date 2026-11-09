@@ -362,8 +362,9 @@ See [Registries in the C reference](../../docs/reference/c/README.md#registries)
 
 ### Guest SSH Control
 
-`boxlite_box_ssh_configure()`, `boxlite_box_ssh_status()`, and
-`boxlite_box_ssh_disable()` configure, query, and disable guest SSH through
+`boxlite_box_ssh_configure()`, `boxlite_box_ssh_status()`,
+`boxlite_box_ssh_enable()`, and `boxlite_box_ssh_disable()` configure, query,
+enable saved configuration, and disable guest SSH through
 the Native API. See the [C SSH reference](../../docs/reference/c/README.md#guest-ssh-control)
 for configuration fields, callbacks, and `CSshStatus`.
 
@@ -565,6 +566,37 @@ if (boxlite_execute(box, &cmd, my_callback, NULL, &execution, &error) == Ok) {
 }
 ```
 
+#### Live Execution Discovery and Recovery
+
+`boxlite_box_executions_list(box, cb, user_data, &error)` queues a live guest query.
+Drain the runtime as for other async operations. On success the callback owns
+the `CExecutionInfoList*` and must free it with
+`boxlite_free_execution_info_list`. Each record has `execution_id` (canonical
+guest ID), `argv`/`argc`, `started_at` (Unix milliseconds), `tty`, and
+`is_main_session`. The main process is included; completed executions disappear.
+Listing never boots a box; a stopped/unstarted box returns an empty list, and
+a paused box returns an invalid-state error.
+
+`boxlite_execution_id(execution)` returns an owned ID string; release it with
+`boxlite_free_string`. `boxlite_box_executions_get(box, id, &execution, &error)`
+synchronously recovers control without taking stdin/stdout/stderr. The existing
+wait, kill, signal, and TTY resize callback APIs work on that handle, even while
+another client reads output. Freeing recovered controls does not kill the
+process.
+
+`boxlite_box_executions_attach(box, id, &execution, &error)` synchronously opens
+live streams for an existing ID without starting the box. Register stdout,
+stderr, and exit callbacks as for `boxlite_box_exec`. If a reader is already
+active, attach reports a conflict without stealing its output. A new client can
+attach after the former reader disconnects. Attachment includes available buffered
+output; it does not guarantee a complete historical log.
+Freeing an attached handle releases its reader without killing the process.
+
+`boxlite_box_executions_attach_read_only` is the same attach without a stdin
+channel. Prefer it when the client only reads: freeing a stdin attach sends a
+stdin close to the guest, which a process reading stdin sees as EOF and may act
+on.
+
 #### Network Tunnels
 
 ```c
@@ -643,6 +675,58 @@ the runtime's API key or JWT; it never recreates a revoked tunnel.
 
 This differs from `boxlite_options_add_port()`, which creates a persistent,
 local-only host listener that accepts repeated connections.
+
+#### Domains
+
+On a hosted runtime the organization can route a name of its own
+(`demo.apps.example`) to a box port; see
+[Domains](../../docs/concepts/networking.md#domains). These calls block until
+the server answers.
+
+```c
+BoxliteErrorCode boxlite_runtime_domains(
+    CBoxliteRuntime* runtime,
+    CBoxliteDomainHandle** out_handle,
+    CBoxliteError* out_error
+);
+BoxliteErrorCode boxlite_domain_list(
+    CBoxliteDomainHandle* handle,
+    CDomainList** out_list,
+    CBoxliteError* out_error
+);
+BoxliteErrorCode boxlite_domain_bind(
+    CBoxliteDomainHandle* handle,
+    const char* domain,
+    const CDomainTarget* target,
+    CDomain** out_domain,
+    CBoxliteError* out_error
+);
+BoxliteErrorCode boxlite_domain_unbind(
+    CBoxliteDomainHandle* handle,
+    const char* domain,
+    CBoxliteError* out_error
+);
+void boxlite_free_domain_handle(CBoxliteDomainHandle* handle);
+void boxlite_free_domain(CDomain* domain);
+void boxlite_free_domain_list(CDomainList* list);
+```
+
+A target is `{ .type = BoxliteDomainTargetBox, .box = "web-a", .port = 3000 }`;
+`box` takes an id or name. In a returned `CDomain`, `hostname` is the full hostname
+and there is no short `name`. Box targets have `target.box` and `target.port`;
+reserved `BoxliteDomainTargetApp` targets have `target.app`. Inactive reference
+pointers are NULL; both are NULL while unbound. Initialize unused input fields
+to zero. App binding currently returns `app_target_not_supported`.
+`boxlite_domain_bind()` and `boxlite_domain_unbind()` require an owned full hostname.
+Request new names in Dashboard > Domains before binding. A local runtime answers
+`Unsupported`. The changed domain structures require rebuilding C consumers.
+
+Release the management handle with `boxlite_free_domain_handle()`, the result
+of `boxlite_domain_bind()` with `boxlite_free_domain()`, and the result of
+`boxlite_domain_list()` with `boxlite_free_domain_list()`. The list owns its
+entries; do not free them individually. These functions release local SDK
+resources and leave domain bindings intact. Use `boxlite_domain_unbind()` to
+stop routing a domain.
 
 #### Discovery & Introspection
 

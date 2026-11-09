@@ -52,6 +52,14 @@ Run a preview of that release first. `components=api` or `runner` narrows artifa
 not the entire infrastructure graph. Runs queue per stage; do not cancel a healthy apply to start another.
 Image releases are published/promoted through [mbuild-release](../../../.github/workflows/mbuild-release.yml).
 
+### Caller attribution
+
+Automation callers may supply the optional string inputs `requested_by` (a public GitHub username) and
+`request_id` (an opaque operation ID). When both are present, the run title appends
+` · @<public-login> · <opaque-operation-id>`. Omitting either preserves the native run title.
+These fields provide display and correlation metadata; they do not grant reviewer authority.
+Keep email addresses and credentials out of both inputs. Existing `apply`, `confirm` and Environment approval requirements still apply.
+
 ## Retained legacy AWS deployment
 
 The [AWS deployment guide](aws/deployment.md#retained-legacy-aws-deployment) owns the retained SST path
@@ -87,8 +95,17 @@ protected stage. For a commit runner build, use the selectors in the [runner run
 ### Cloudflare API token
 
 Provide an account-owned token with **Zone:Read** and **DNS:Edit**, restricted to the zone used by
-`STACK_DOMAIN` and `PROXY_DOMAIN`. Set `CLOUDFLARE_DEFAULT_ACCOUNT_ID` and `CLOUDFLARE_ZONE_ID`
+`STACK_DOMAIN` and `PROXY_DOMAIN`, plus the user domain's zone when the stage sets one (below). Set `CLOUDFLARE_DEFAULT_ACCOUNT_ID` and `CLOUDFLARE_ZONE_ID`
 to the intended account/zone. Both are required by the current deployment group, alongside the token.
+Users' named apps (`demo.<STACK_USER_DOMAIN>`) live under a registrable domain of their own, so a
+named app is never same-site with the dashboard and a blocklisted one does not take the platform's
+domain with it. Generated box URLs still sit under `PROXY_DOMAIN`; moving them is separate work. A stage that sets `STACK_USER_DOMAIN` also sets `CLOUDFLARE_USER_ZONE_ID`, the zone
+holding that domain. On GCP the edge writes
+`*.<STACK_USER_DOMAIN>` into that zone and issues its certificate through its own DNS authorization;
+the apex is not used. The API and the proxy learn the domain as `PROXY_APP_DOMAIN`. Unset, the stage
+offers no named apps. The deploy refuses a user domain under the same registrable domain as
+`STACK_DOMAIN` or an overridden `DASHBOARD_DOMAIN` (a sibling such as `apps.boxlite.ai` beside `dev.boxlite.ai` included), and refuses one
+on AWS, whose edge serves none.
 The token is created in Cloudflare's dashboard; a provider login does not generate it.
 
 Follow the selected cloud’s [deployment guide](#bootstrap-a-stage) for credential storage and rotation destinations.

@@ -79,6 +79,18 @@ pub(crate) struct LiveState {
     #[cfg(target_os = "linux")]
     #[allow(dead_code)]
     bind_mount: Option<BindMountHandle>,
+
+    /// Agent installs of this VM run: one at a time, and the agents folder
+    /// mounted at most once. A stop drops the mount along with this state.
+    #[cfg_attr(
+        not(feature = "test-support"),
+        allow(
+            dead_code,
+            reason = "first production installer is the agent catalog (#2322)"
+        )
+    )]
+    agent_installs: tokio::sync::Mutex<()>,
+    agents_mounted: OnceCell<()>,
 }
 
 impl LiveState {
@@ -103,6 +115,8 @@ impl LiveState {
             guest_rootfs_disk,
             #[cfg(target_os = "linux")]
             bind_mount,
+            agent_installs: tokio::sync::Mutex::new(()),
+            agents_mounted: OnceCell::new(),
         }
     }
 }
@@ -519,25 +533,9 @@ impl BoxImpl {
         ))
     }
 
-    /// Make the main command's exit code survive the VM's power-off.
-    ///
-    /// The guest powers the VM off the moment init exits, which can cut the
-    /// in-flight `Wait` RPC — and the portal then reports `-1`
-    /// (`portal/interfaces/exec.rs::spawn_wait`), so `boxlite run` would give
-    /// the user a status the process never returned. That is the headline
-    /// behaviour of this whole change, and it must not hang on an RPC beating a
-    /// reboot.
-    ///
-    /// It does not have to. The guest writes the real code to the exit file
-    /// *before* powering off, so it is already on disk — just read it back.
-    ///
-    /// The trigger is any **negative** code, not the `-1` specifically. A real
-    /// process exit is 0-255, so a negative value always means the portal had no
-    /// exit code to give: either it lost the Wait, or it is encoding a signal
-    /// death as `-signal` (`map_wait_response`) — and those two overlap exactly
-    /// at `-1`, since SIGHUP is signal 1. The exit file is the right answer to
-    /// both, because the guest records the docker-convention code (`128 + n` for
-    /// a signal), which is what every consumer of this already expects.
+    /// The guest writes init's exit code before powering the VM off. Recover
+    /// that record if Wait loses its transport or reports a negative signal;
+    /// ordinary exec sessions retain their original signal convention.
     fn exit_code_from_file_when_portal_has_none(
         &self,
         mut upstream: tokio::sync::mpsc::UnboundedReceiver<crate::litebox::ExecResult>,
@@ -546,22 +544,29 @@ impl BoxImpl {
         let exit_file = self.layout.container_exit_file(self.container_id());
 
         tokio::spawn(async move {
-            while let Some(mut result) = upstream.recv().await {
-                if result.exit_code < 0
-                    && let Some(record) = Self::read_exit_record_soon(&exit_file).await
-                {
-                    tracing::debug!(
-                        portal_code = result.exit_code,
-                        recovered = record.exit_code,
-                        "portal had no exit code for the main command; took it from the exit file"
-                    );
-                    result.exit_code = record.exit_code;
-                    // error_message is left alone: if the portal had something
-                    // to say about how the wait ended, it is still true.
+            let mut result = tokio::select! {
+                _ = tx.closed() => return,
+                result = upstream.recv() => result,
+            };
+            if result.as_ref().is_none_or(|result| result.exit_code < 0) {
+                let record = tokio::select! {
+                    _ = tx.closed() => return,
+                    record = Self::read_exit_record_soon(&exit_file) => record,
+                };
+                if let Some(record) = record {
+                    match &mut result {
+                        Some(result) => result.exit_code = record.exit_code,
+                        None => {
+                            result = Some(crate::litebox::ExecResult {
+                                exit_code: record.exit_code,
+                                error_message: None,
+                            })
+                        }
+                    }
                 }
-                if tx.send(result).is_err() {
-                    break;
-                }
+            }
+            if let Some(result) = result {
+                let _ = tx.send(result);
             }
         });
 
@@ -591,24 +596,10 @@ impl BoxImpl {
         None
     }
 
-    /// Attach to a session in the box. Only the main command session (`None`) is
-    /// attachable locally: an in-process exec keeps the `Execution` it was created
-    /// with and never drops its stream, so there is nothing to reattach to by id.
-    ///
-    /// For `None`, the guest registers the container init under execution_id =
-    /// container_id — this is how `run` follows the user command now that it *is*
-    /// init (docker semantics), reusing the exact stream plumbing of exec().
-    /// Boots the box if needed but only *creates* the container — it does not run
-    /// init. That is what lets `run` be create → attach → start: attach here,
-    /// then `start()`, so a command that finishes instantly cannot outrun the
-    /// stream. Because attaching never runs the user's command, it needs no
-    /// re-run guard (unlike `exec`/`cp`, which do start it).
+    /// Attach to a session. Main attachment retains create-before-start for
+    /// foreground run; explicit IDs may only use an already-running guest.
     pub(crate) async fn attach(&self, options: AttachOptions) -> BoxliteResult<Execution> {
-        if options.execution_id().is_some() {
-            return Err(BoxliteError::Unsupported(
-                "the local backend does not support reattaching to executions by id".into(),
-            ));
-        }
+        let existing_id = options.execution_id().map(str::to_owned);
 
         if self.shutdown_token.is_cancelled() {
             return Err(BoxliteError::Stopped(
@@ -622,27 +613,43 @@ impl BoxImpl {
         // would be a surprise — refuse it, as docker refuses attaching to a
         // stopped container.
         let status = self.state.read().status;
-        if !matches!(
-            status,
-            BoxStatus::Configured | BoxStatus::Running | BoxStatus::Paused
-        ) {
+        if (existing_id.is_some() && status != BoxStatus::Running)
+            || (existing_id.is_none()
+                && !matches!(
+                    status,
+                    BoxStatus::Configured | BoxStatus::Running | BoxStatus::Paused
+                ))
+        {
             return Err(BoxliteError::InvalidState(format!(
                 "Cannot attach to box {}: it is {}",
                 self.config.id, status
             )));
         }
 
-        let live = self.ensure_booted().await?;
+        let live = if existing_id.is_some() {
+            self.existing_live_state().await?
+        } else {
+            self.ensure_booted().await?
+        };
         let mut exec_interface = live.guest_session.execution().await?;
         let components = exec_interface
             .attach_existing(
-                self.container_id(),
+                existing_id
+                    .as_deref()
+                    .unwrap_or_else(|| self.container_id()),
                 options.wants_stdin(),
                 self.shutdown_token.clone(),
             )
             .await?;
 
-        let result_rx = self.exit_code_from_file_when_portal_has_none(components.result_rx);
+        let result_rx = if existing_id
+            .as_deref()
+            .is_none_or(|id| id == self.container_id())
+        {
+            self.exit_code_from_file_when_portal_has_none(components.result_rx)
+        } else {
+            components.result_rx
+        };
 
         Ok(Execution::new(
             components.execution_id,
@@ -652,6 +659,64 @@ impl BoxImpl {
             Some(ExecStdout::new(components.stdout_rx)),
             Some(ExecStderr::new(components.stderr_rx)),
         ))
+    }
+
+    /// Live sessions in the box. Inactive boxes have none; paused boxes reject
+    /// discovery until resumed. Listing never starts or resumes a VM.
+    pub(crate) async fn list_executions(&self) -> BoxliteResult<Vec<crate::ExecutionInfo>> {
+        if self.shutdown_token.is_cancelled() || !self.state.read().status.is_active() {
+            return Ok(Vec::new());
+        }
+        let live = self.existing_live_state().await?;
+        live.guest_session
+            .execution()
+            .await?
+            .list_executions()
+            .await
+    }
+
+    pub(crate) async fn get_execution(&self, execution_id: &str) -> BoxliteResult<Execution> {
+        let live = self.existing_live_state().await?;
+        let mut interface = live.guest_session.execution().await?;
+        if !interface
+            .list_executions()
+            .await?
+            .iter()
+            .any(|info| info.execution_id == execution_id)
+        {
+            return Err(BoxliteError::NotFound(format!(
+                "Live execution {execution_id} not found in box {}",
+                self.config.id
+            )));
+        }
+        if execution_id != self.container_id() {
+            return Ok(interface.control_existing(execution_id, self.shutdown_token.clone()));
+        }
+        let result_rx = self.exit_code_from_file_when_portal_has_none(
+            interface.wait_existing(execution_id, self.shutdown_token.clone()),
+        );
+        Ok(Execution::new(
+            execution_id.to_owned(),
+            Box::new(interface),
+            result_rx,
+            None,
+            None,
+            None,
+        ))
+    }
+
+    /// Recover a running VM only. Unlike ensure_booted, this path can never
+    /// select a create/restart pipeline, even if status changes during attach.
+    async fn existing_live_state(&self) -> BoxliteResult<&LiveState> {
+        if self.shutdown_token.is_cancelled() || self.state.read().status != BoxStatus::Running {
+            return Err(BoxliteError::InvalidState(format!(
+                "Box {} is not running",
+                self.config.id
+            )));
+        }
+        self.live
+            .get_or_try_init(|| self.init_live_state(false))
+            .await
     }
 
     pub(crate) async fn metrics(&self) -> BoxliteResult<BoxMetrics> {
@@ -1143,7 +1208,49 @@ impl BoxImpl {
             )));
         }
 
-        self.live.get_or_try_init(|| self.init_live_state()).await
+        self.live
+            .get_or_try_init(|| self.init_live_state(true))
+            .await
+    }
+
+    /// Hold the agent-install lock of this VM run, booting the Box if needed.
+    #[cfg_attr(
+        not(feature = "test-support"),
+        allow(
+            dead_code,
+            reason = "first production installer is the agent catalog (#2322)"
+        )
+    )]
+    pub(crate) async fn lock_agent_installs(
+        &self,
+    ) -> BoxliteResult<tokio::sync::MutexGuard<'_, ()>> {
+        Ok(self.live_state().await?.agent_installs.lock().await)
+    }
+
+    /// Mount the share folder `source` read-only at `destination` in the
+    /// container, at most once per VM run. A failed mount is retried by the
+    /// next call; it never stops the Box.
+    pub(crate) async fn mount_agents_once(
+        &self,
+        source: &str,
+        destination: &str,
+    ) -> BoxliteResult<()> {
+        let live = self.live_state().await?;
+        live.agents_mounted
+            .get_or_try_init(|| async {
+                live.guest_session
+                    .container()
+                    .await?
+                    .mount(self.container_id(), source, destination)
+                    .await
+                    .map_err(|error| {
+                        BoxliteError::InvalidState(format!(
+                            "could not mount the agents folder at {destination}: {error}"
+                        ))
+                    })
+            })
+            .await?;
+        Ok(())
     }
 
     /// Run the container's init exactly once. Booting only creates the container;
@@ -1222,11 +1329,17 @@ impl BoxImpl {
     ///
     /// Note: Lock is allocated in create(), not here. DB persistence also
     /// happens in create().
-    async fn init_live_state(&self) -> BoxliteResult<LiveState> {
+    async fn init_live_state(&self, allow_start: bool) -> BoxliteResult<LiveState> {
         use super::BoxBuilder;
         use std::sync::Arc;
 
         let state = self.state.read().clone();
+        if !allow_start && state.status != BoxStatus::Running {
+            return Err(BoxliteError::InvalidState(format!(
+                "Box {} is not running",
+                self.config.id
+            )));
+        }
         let is_first_start = state.status == BoxStatus::Configured;
         // Reattaching to a live box: its init is already running, so mark the
         // container-start done up front — `ensure_container_started` must not try
@@ -1253,9 +1366,8 @@ impl BoxImpl {
         let _guard = LockGuard::new(&*locker);
 
         // Build the box (lock is held)
-        // The returned cleanup_guard stays armed until we disarm it after all
-        // operations succeed. If any operation fails, the guard's Drop will
-        // cleanup the VM process and directory.
+        // New and restarted VMs remain guarded until DB persistence succeeds.
+        // Running adoption disarms cleanup before reconnecting to the live VM.
         let mut state = state;
         state.outbound_policy = self
             .runtime
@@ -1309,6 +1421,20 @@ impl BoxImpl {
             let pid = record.pid;
 
             let mut state = self.state.write();
+            // An adopted box can lose its shim between the build's last live
+            // operation and this publish: the exit-only watcher armed when the
+            // box was first handed out records `Stopped` here first. Publishing
+            // `Running` over that would report a live box with a dead PID, and
+            // the watcher's cell is already taken — nothing would observe the
+            // death again. A fresh start always publishes from `Configured` or
+            // `Stopped`, so this check is adoption-only; its cleanup guard is
+            // already disarmed, so returning here does not tear the box down.
+            if adopting_running && state.status != BoxStatus::Running {
+                return Err(BoxliteError::InvalidState(format!(
+                    "Box {} stopped while it was being adopted ({})",
+                    self.config.id, state.status
+                )));
+            }
             state.set_pid(Some(pid));
             state.set_status(BoxStatus::Running);
             // A box entering Running publishes its PID, status, and `started_at`
@@ -1576,6 +1702,14 @@ impl crate::runtime::backend::BoxBackend for BoxImpl {
         self.exec(command).await
     }
 
+    async fn list_executions(&self) -> BoxliteResult<Vec<crate::ExecutionInfo>> {
+        self.list_executions().await
+    }
+
+    async fn get_execution(&self, execution_id: &str) -> BoxliteResult<Execution> {
+        self.get_execution(execution_id).await
+    }
+
     async fn attach(&self, options: AttachOptions) -> BoxliteResult<Execution> {
         self.attach(options).await
     }
@@ -1633,6 +1767,10 @@ impl crate::runtime::backend::BoxBackend for BoxImpl {
 
     async fn ssh_configure(&self, config: SshConfig) -> BoxliteResult<SshStatus> {
         BoxImpl::ssh_configure(self, config).await
+    }
+
+    async fn ssh_enable(&self) -> BoxliteResult<SshStatus> {
+        BoxImpl::ssh_enable(self).await
     }
 
     async fn ssh_status(&self) -> BoxliteResult<SshStatus> {
@@ -1741,6 +1879,8 @@ mod tests {
     use tonic::transport::{Endpoint, Server};
     use tonic::{Request, Response, Status};
 
+    mod execution_recovery;
+
     fn published_ports(info: &BoxInfo) -> Option<&[PublishedPort]> {
         info.network
             .as_ref()
@@ -1847,6 +1987,13 @@ mod tests {
                     ContainerStartSuccess { container_id },
                 )),
             }))
+        }
+
+        async fn mount(
+            &self,
+            _: Request<boxlite_shared::ContainerMountRequest>,
+        ) -> Result<Response<boxlite_shared::ContainerMountResponse>, Status> {
+            Err(Status::unimplemented("not used by these tests"))
         }
     }
 

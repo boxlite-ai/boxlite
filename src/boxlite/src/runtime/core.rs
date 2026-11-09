@@ -73,6 +73,9 @@ pub struct BoxliteRuntime {
     /// Registry-login capability — `Some` only for REST, like `auth_backend`.
     /// Surfaced via `registries()`.
     registry_backend: Option<Arc<dyn RegistryBackend>>,
+    /// Organization domains — `Some` only for REST, like `auth_backend`.
+    /// Surfaced via `domains()`.
+    domain_backend: Option<Arc<dyn crate::runtime::domains::DomainBackend>>,
 }
 
 // ============================================================================
@@ -115,6 +118,16 @@ impl BoxliteRuntime {
         Ok(Self::from_local(local))
     }
 
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn new_for_test_with_features(
+        options: BoxliteOptions,
+        features: ExperimentalFeatures,
+    ) -> BoxliteResult<Self> {
+        Ok(Self::from_local(LocalRuntime(RuntimeImpl::initialize(
+            options, features,
+        )?)))
+    }
+
     fn from_local(local: LocalRuntime) -> Self {
         let backend_arc = Arc::new(local);
         let image_backend = Arc::clone(&backend_arc) as Arc<dyn ImageBackend>;
@@ -125,6 +138,7 @@ impl BoxliteRuntime {
             volume_backend: Some(volume_backend),
             auth_backend: None,
             registry_backend: None,
+            domain_backend: None,
         }
     }
 
@@ -152,12 +166,15 @@ impl BoxliteRuntime {
         let image_backend = Arc::clone(&rest_runtime) as Arc<dyn ImageBackend>;
         let volume_backend = Arc::clone(&rest_runtime) as Arc<dyn VolumeBackend>;
         let registry_backend = Arc::clone(&rest_runtime) as Arc<dyn RegistryBackend>;
+        let domain_backend =
+            Arc::clone(&rest_runtime) as Arc<dyn crate::runtime::domains::DomainBackend>;
         Ok(Self {
             backend: rest_runtime,
             image_backend,
             volume_backend: Some(volume_backend),
             auth_backend: Some(auth_backend),
             registry_backend: Some(registry_backend),
+            domain_backend: Some(domain_backend),
         })
     }
 
@@ -535,6 +552,21 @@ impl BoxliteRuntime {
             Some(backend) => Ok(crate::runtime::auth::AuthHandle::new(Arc::clone(backend))),
             None => Err(BoxliteError::Unsupported(
                 "identity (auth) is only available on REST runtimes".to_string(),
+            )),
+        }
+    }
+
+    /// Get a handle for the organization's domains.
+    ///
+    /// Returns a [`DomainHandle`](crate::DomainHandle) that lists the domains
+    /// the organization holds, binds one to a box port and unbinds it, all by
+    /// name. Mirrors `auth()`: an `Arc` view of the same REST backend, and
+    /// `Unsupported` on a local runtime, which publishes nothing.
+    pub fn domains(&self) -> BoxliteResult<crate::runtime::DomainHandle> {
+        match &self.domain_backend {
+            Some(backend) => Ok(crate::runtime::DomainHandle::new(Arc::clone(backend))),
+            None => Err(BoxliteError::Unsupported(
+                "domains are only available on REST runtimes".to_string(),
             )),
         }
     }

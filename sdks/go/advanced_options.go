@@ -13,12 +13,15 @@ package boxlite
 
 /*
 #include "boxlite.h"
+#include <stdlib.h>
 */
 import "C"
 
 import (
 	"fmt"
 	"runtime"
+	"strings"
+	"unsafe"
 )
 
 // ContainerCapabilities is the requested Linux capability policy.
@@ -26,6 +29,24 @@ import (
 type ContainerCapabilities struct {
 	Add  []string
 	Drop []string
+}
+
+// SetKernelPath selects a local kernel file (RC). The runtime must explicitly
+// enable "custom-kernel" with WithExperimentalFeatures, including on restart.
+func (a *AdvancedBoxOptions) SetKernelPath(path string) error {
+	if a == nil || a.handle == nil {
+		return fmt.Errorf("boxlite: advanced options handle is closed")
+	}
+	if strings.IndexByte(path, 0) >= 0 {
+		return fmt.Errorf("boxlite: kernel path cannot contain NUL")
+	}
+	cPath := toCString(path)
+	defer C.free(unsafe.Pointer(cPath))
+	var cerr C.CBoxliteError
+	if C.boxlite_advanced_options_set_kernel_path(a.handle, cPath, &cerr) != C.Ok {
+		return freeError(&cerr)
+	}
+	return nil
 }
 
 // AdvancedBoxOptions is the Go-side handle for a `CAdvancedBoxOptions`.
@@ -92,6 +113,18 @@ func (a *AdvancedBoxOptions) SetCapabilities(capabilities ContainerCapabilities)
 	a.capabilities = ContainerCapabilities{
 		Add:  append([]string(nil), capabilities.Add...),
 		Drop: append([]string(nil), capabilities.Drop...),
+	}
+	return nil
+}
+
+// SetPrivileged enables privileged operation inside the guest. It does not
+// disable the runner's VM sandbox. Explicit capability policies conflict with it.
+func (a *AdvancedBoxOptions) SetPrivileged(enabled bool) error {
+	if a == nil || a.handle == nil {
+		return fmt.Errorf("boxlite: advanced options handle is closed")
+	}
+	if C.boxlite_advanced_options_set_privileged(a.handle, boolToCInt(enabled)) != C.Ok {
+		return fmt.Errorf("boxlite: privileged conflicts with explicit capabilities")
 	}
 	return nil
 }

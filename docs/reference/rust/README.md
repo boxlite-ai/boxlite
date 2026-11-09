@@ -293,15 +293,17 @@ pub struct LiteBox {
 
 `LiteBox::ssh()` returns an owned, cloneable `SshHandle` without starting the box.
 It works for local boxes and for REST-backed boxes whose server implements SSH
-control, as the local `boxlite serve` does. Only `configure()` uses the
+control, as the local `boxlite serve` does. `enable()` sends a bodyless
+`POST /ssh/enable` on REST-backed handles. `configure()` uses the
 implicit-start guard of exec, metrics, and file copying. `Configured` and
 `Stopped` boxes using image defaults can start implicitly. With an explicit
 `BoxOptions.cmd` or `entrypoint`, configuration returns `InvalidState` in these
 states; call `start()` first; on a REST server a stopped box with
-`auto_resume=false` is refused instead of resumed. `status()` and `disable()`
-never start the VM or main command: valid `Configured` and `Stopped` handles
-return disabled status with generation zero and empty address and host identity
-fields. Running handles use the existing guest, including after attach before
+`auto_resume=false` is refused instead of resumed. `status()`, `enable()` and
+`disable()` never start the VM or main command. On valid `Configured` and
+`Stopped` local handles, status returns generation zero and empty address and
+host identity fields; enable/disable return `InvalidState` without changing saved
+state. Running handles use the existing guest, including after attach before
 start or runtime recovery. Other lifecycle states return `InvalidState`. These
 observations do not prevent concurrent configuration. Deployments without SSH
 control answer `NotFound` or `Unsupported`; there is no capability negotiation.
@@ -309,6 +311,7 @@ control answer `NotFound` or `Unsupported`; there is no capability negotiation.
 | Method | Signature |
 |--------|-----------|
 | Configure | `async fn configure(&self, config: SshConfig) -> BoxliteResult<SshStatus>` |
+| Enable | `async fn enable(&self) -> BoxliteResult<SshStatus>` |
 | Query | `async fn status(&self) -> BoxliteResult<SshStatus>` |
 | Disable | `async fn disable(&self) -> BoxliteResult<SshStatus>` |
 
@@ -321,8 +324,12 @@ These types are exported directly from `boxlite`, independently of protobuf:
 | `SshCaConfig` | `public_key: String`, `principal: String` |
 | `SshStatus` | `enabled: bool`, `generation: u64`, `listen_address: String`, `host_public_key: String`, `host_key_fingerprint: String` |
 
-Configuration fields are explicit; the runtime neither generates keys nor stores
-configuration nor publishes ports. All types are `Clone + Debug + Send + Sync`;
+Complete configuration fields are explicit. Configure enables SSH and disconnects
+existing clients. Enable uses saved credentials, errors when none exist, and
+preserves healthy connections. Automatic key generation is a CLI-only convenience;
+the Rust SDK has no setup method.
+The guest persists credentials on the container disk; port forwarding is separate. All types are
+`Clone + Debug + Send + Sync`;
 configuration Debug output redacts credentials, and status supports `PartialEq + Eq`.
 The configuration types implement `Deserialize` but not `Serialize`;
 `SshStatus` implements `Serialize` + `Deserialize`. Unknown fields are refused in
@@ -347,7 +354,8 @@ and gRPC status context. Missing response status is `Internal`.
 
 A REST-backed `SshHandle` sends `POST`, `GET`, and `DELETE` to
 `/v1/boxes/{box_id}/ssh` (`/{prefix}/boxes/{box_id}/ssh` with a path prefix
-set). Each call is one request — every accepted configure restarts the guest
+set), plus a bodyless `POST` to the corresponding `/ssh/enable` route.
+Each call is one request — every accepted configure restarts the guest
 listener, so neither layer retries it — and errors cross the standard
 `BoxliteError::http()` envelope (for example an upstream guest failure comes
 back as `503 upstream_unavailable`, which the client reports as `Portal`).
@@ -362,12 +370,43 @@ HTTP contract, reconfiguration, disable, and generation semantics.
 | `id` | `fn id(&self) -> &BoxID` | Get box ID |
 | `name` | `fn name(&self) -> Option<&str>` | Get optional box name |
 | `info` | `async fn info(&self) -> Result<BoxInfo>` | Get box info (no VM init) |
-| `ssh` | `fn ssh(&self) -> SshHandle` | Control SSH (local or REST-backed); only configure may implicitly start the box |
+| `ssh` | `fn ssh(&self) -> SshHandle` | Control SSH (local or REST-backed); only configure may implicitly start or resume the box |
 | `network` | `fn network(&self) -> NetworkHandle` | Get box-scoped policy and tunnel operations |
 | `start` | `async fn start(&self) -> BoxliteResult<()>` | Start the box |
 | `run` | `async fn run(&self, command: BoxCommand) -> BoxliteResult<Execution>` | Run command |
 | `metrics` | `async fn metrics(&self) -> BoxliteResult<BoxMetrics>` | Get box metrics |
 | `stop` | `async fn stop(&self) -> BoxliteResult<()>` | Stop the box |
+| `executions` | `fn executions(&self) -> ExecutionsHandle` | Live session inventory and control recovery; never boots a box |
+| `attach` | `async fn attach(&self, options: AttachOptions) -> BoxliteResult<Execution>` | Attach to init or a named live session; only one output reader is allowed |
+
+#### ExecutionsHandle
+
+`LiteBox::executions()` returns an owned, cloneable `ExecutionsHandle` without
+starting the box.
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `list` | `async fn list(&self) -> BoxliteResult<Vec<ExecutionInfo>>` | Snapshot live guest sessions, including init; never boots a box |
+| `get` | `async fn get(&self, execution_id: &str) -> BoxliteResult<Execution>` | Recover control and wait for a known session without taking its output reader |
+
+`executions().list()` is a live-process inventory, not history: sessions disappear
+once the guest reaper records their exit, before registry cleanup. Existing wait
+status/output may remain available in bounded guest retention after a session
+disappears from the list. Calling it on a created or stopped box returns an
+empty vector and does not start or restart the box. A paused box returns an
+invalid-state error instead of claiming its sessions disappeared.
+`ExecutionInfo` carries the canonical guest execution ID, argv, Unix-millisecond
+spawn time, PTY flag, and `is_main_session`.
+
+`executions().get(id)` returns a control-only handle (no stdin/stdout/stderr).
+The local runtime verifies the ID against the live guest inventory; a
+REST-backed runtime asks the server's by-id endpoint, so a retained terminal
+session can still be recovered after it leaves the inventory. Its `wait`,
+`kill`, `signal`, and PTY resize methods remain usable while another handle
+owns output.
+To recover streams after a client process exits, call
+`attach(AttachOptions::execution(id))`; an existing reader is reported as a
+conflict rather than silently returning no output.
 
 #### Lifecycle
 
@@ -553,6 +592,7 @@ pub struct BoxState {
 | Tunnel | `async fn tunnel(&self, target: SocketAddr, options: TunnelOptions) -> BoxliteResult<BoxTunnel>` | Prepare a one-shot tunnel to a TCP service; `target` must be localhost (`127.0.0.1:3000`) or the guest IP for now. `TunnelOptions::default()` is public, `TunnelOptions { is_public: false }` requests a private cloud tunnel |
 | Token | `BoxTunnel::token(&self) -> Option<&str>` | Full on creation, masked on later preparations; `is_public()` reports the mode |
 | Revoke | `async fn revoke_tunnel(&self, port: u16) -> BoxliteResult<()>` | Withdraw the port's tunnel; a no-op on a local box |
+| Domains | `BoxliteRuntime::domains(&self) -> BoxliteResult<DomainHandle>` | `list().await -> DomainList` returns full `hostname` values, no short `name`, and quota fields (`limit`/`used`/`remaining`/`min_length`). `target` is `None` while unbound. `bind(domain, &DomainTarget::Box { box_ref, port }).await` requires an owned full hostname; request new names in Dashboard > Domains first; `unbind(hostname).await` requires the full hostname and retains ownership. `DomainTarget::App { app_ref }` is reserved; App binding is rejected. REST only; see [Domains](../../concepts/networking.md#domains). |
 | Forward | `async fn BoxTunnel::forward(self, listen: SocketAddress) -> BoxliteResult<TunnelForwarder>` | Consume the tunnel into a TCP or Unix listener |
 | Inspect | `BoxTunnel::uri(&self) -> Option<&str>` | Read the prepared public URL; `None` for a local box |
 | Descriptor | `BoxConnection::raw_fd(&self) -> Option<RawFd>` | Borrowed fd; `None` for a remotely served connection |

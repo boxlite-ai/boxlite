@@ -88,7 +88,7 @@ const Dashboard: React.FC = () => {
           {isWelcome ? (
             <header className="flex h-[60px] items-center justify-between border-b border-border px-6 sm:px-10">
               <LogoText className="h-[40px] w-auto" />
-              <span className="font-mono text-[10px] text-muted-foreground">SET UP YOUR WORKSPACE</span>
+              <span className="font-mono text-[10px] text-muted-foreground">GET STARTED WITH BOXLITE</span>
             </header>
           ) : (
             <Sidebar isBannerVisible={isBannerVisible} version={config.version} />

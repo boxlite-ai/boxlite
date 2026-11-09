@@ -27,7 +27,11 @@ import { Trash } from '@/components/ui/icon'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { useCreateRegistryMutation, useDeleteRegistryMutation } from '@/hooks/mutations/useRegistryMutations'
+import {
+  useCreateRegistryMutation,
+  useDeleteRegistryMutation,
+  useUpdateRegistryMutation,
+} from '@/hooks/mutations/useRegistryMutations'
 import { useBoxesByImageQuery } from '@/hooks/queries/useBoxesByImageQuery'
 import { useRegistriesQuery } from '@/hooks/queries/useRegistriesQuery'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
@@ -37,7 +41,7 @@ import { timeAgo } from '@/lib/format'
 import { conflictBoxIds } from '@/lib/image-ref'
 import { cn } from '@/lib/utils'
 import { OrganizationRolePermissionsEnum, RegistryCredential } from '@boxlite-ai/api-client'
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 
@@ -138,7 +142,7 @@ export const PROVIDERS: Provider[] = [
 
 export const REGISTRY_HOSTS = PROVIDERS.map((p) => p.host)
 
-const ROW_GRID = 'grid grid-cols-[1fr_1fr_1fr_1.2fr_60px] items-center gap-3 px-2'
+const ROW_GRID = 'grid grid-cols-[1fr_1fr_1fr_1.2fr_110px] items-center gap-3 px-2'
 
 const EMPTY_FORM = { registryHost: 'ghcr.io', repositoryPrefix: '', username: '', password: '' }
 
@@ -163,6 +167,7 @@ export function RegistriesPanel() {
   const { data: credentials = [], error: listError, isLoading } = useRegistriesQuery()
   const { byId } = useBoxesByImageQuery()
   const createRegistry = useCreateRegistryMutation()
+  const updateRegistry = useUpdateRegistryMutation()
   const deleteRegistry = useDeleteRegistryMutation()
   const canWrite = authenticatedUserHasPermission(OrganizationRolePermissionsEnum.WRITE_REGISTRIES)
   const canDelete = authenticatedUserHasPermission(OrganizationRolePermissionsEnum.DELETE_REGISTRIES)
@@ -174,16 +179,20 @@ export function RegistriesPanel() {
     if (listError && !unsupported) handleApiError(listError, 'Failed to fetch registry credentials')
   }, [listError, unsupported])
 
-  const [adding, setAdding] = useState(false)
+  const [formOpen, setFormOpen] = useState(false)
+  const [editing, setEditing] = useState<RegistryCredential | null>(null)
   const [form, setForm] = useState(EMPTY_FORM)
   const [pendingDelete, setPendingDelete] = useState<RegistryCredential | null>(null)
+  const [saving, setSaving] = useState(false)
+  const saveInFlight = useRef(false)
+  const formSession = useRef(0)
 
   // A box's pull error links here with the host it failed on.
   useEffect(() => {
     const host = searchParams.get('connect')
     if (host && canWrite && REGISTRY_HOSTS.includes(host)) {
       setForm({ ...EMPTY_FORM, registryHost: host })
-      setAdding(true)
+      setFormOpen(true)
       setSearchParams({}, { replace: true })
     }
   }, [searchParams, canWrite, setSearchParams])
@@ -197,18 +206,38 @@ export function RegistriesPanel() {
   // Closing the dialog, saved or not, clears the form and the mutation's state,
   // which would otherwise keep the submitted variables, secret included.
   const closeForm = () => {
-    setAdding(false)
+    formSession.current++
+    setFormOpen(false)
+    setEditing(null)
     setForm(EMPTY_FORM)
     createRegistry.reset()
+    updateRegistry.reset()
   }
 
   const provider = PROVIDERS.find((p) => p.host === form.registryHost) ?? PROVIDERS[0]
   const prefix = normalizePrefix(form.repositoryPrefix)
   const scope = `${form.registryHost}/${prefix}*`
 
-  const handleCreate = async (event: React.FormEvent) => {
+  const handleSave = async (event: React.FormEvent) => {
     event.preventDefault()
+    // Resetting the mutation observer clears its password but does not cancel its request.
+    if (saveInFlight.current) return
+    saveInFlight.current = true
+    setSaving(true)
+    const session = formSession.current
     try {
+      if (editing) {
+        await updateRegistry.mutateAsync({
+          id: editing.id,
+          credential: { username: form.username.trim(), password: form.password },
+          organizationId: selectedOrganization?.id,
+        })
+        toast.success('Credential updated', {
+          description: 'New pulls use the updated login. Pulls already in progress may finish with the previous login.',
+        })
+        if (session === formSession.current) closeForm()
+        return
+      }
       await createRegistry.mutateAsync({
         credential: {
           registryHost: form.registryHost,
@@ -221,13 +250,21 @@ export function RegistriesPanel() {
       toast.success('Connected', {
         description: `Boxes can now pull from ${scope}. The first private pull is the test: nothing here can verify the token.`,
       })
-      closeForm()
+      if (session === formSession.current) closeForm()
     } catch (error) {
       if (error instanceof BoxliteError && /already exists/.test(error.message)) {
-        toast.error(`${scope} already has a credential`, { description: 'Remove it first to replace it.' })
+        toast.error(`${scope} already has a credential`, {
+          description: 'Use Update on the existing credential to replace the login.',
+        })
         return
       }
-      handleApiError(error, `Could not connect ${form.registryHost}`)
+      handleApiError(
+        error,
+        editing ? `Could not update the credential for ${form.registryHost}` : `Could not connect ${form.registryHost}`,
+      )
+    } finally {
+      saveInFlight.current = false
+      setSaving(false)
     }
   }
 
@@ -251,16 +288,13 @@ export function RegistriesPanel() {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="mb-[14px] flex flex-wrap items-center justify-between gap-3">
-        <p className="font-mono text-meta text-muted-foreground">
-          A credential lets your boxes pull private images. Public images need none.
-        </p>
-        {canWrite && !unsupported && (
-          <AsciiButton variant="primary" onClick={() => setAdding(true)}>
+      {canWrite && !unsupported && (
+        <div className="mb-[14px] flex justify-end">
+          <AsciiButton variant="primary" onClick={() => setFormOpen(true)}>
             Connect a registry
           </AsciiButton>
-        )}
-      </div>
+        </div>
+      )}
 
       <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
         {unsupported ? (
@@ -295,17 +329,35 @@ export function RegistriesPanel() {
                     ? ` by ${membersById.get(credential.createdBy)}`
                     : ''}
                 </span>
-                <div className="flex items-center justify-end">
+                <div className="flex items-center justify-end gap-1">
+                  {canWrite && (
+                    <AsciiButton
+                      size="sm"
+                      type="button"
+                      onClick={() => {
+                        setEditing(credential)
+                        setForm({ ...credential, password: '' })
+                        setFormOpen(true)
+                      }}
+                      disabled={saving || updateRegistry.isPending || deleteRegistry.isPending}
+                      title={`Update the credential for ${credential.registryHost}`}
+                      className="uppercase"
+                    >
+                      Update
+                    </AsciiButton>
+                  )}
                   {canDelete && (
-                    <button
+                    <AsciiButton
+                      variant="danger"
+                      size="icon"
+                      aria-label={`Remove the credential for ${credential.registryHost}`}
                       type="button"
                       onClick={() => setPendingDelete(credential)}
-                      disabled={deleteRegistry.isPending}
+                      disabled={saving || deleteRegistry.isPending || updateRegistry.isPending}
                       title={`Remove the credential for ${credential.registryHost}`}
-                      className="p-[5px] text-muted-foreground transition-colors hover:text-destructive disabled:opacity-40"
                     >
                       <Trash className="size-[15px]" />
-                    </button>
+                    </AsciiButton>
                   )}
                 </div>
               </div>
@@ -319,11 +371,9 @@ export function RegistriesPanel() {
               !isLoading &&
               credentials.length === 0 && (
                 <div className="flex flex-col items-center gap-4 py-10 text-center">
-                  <p className="font-mono text-meta text-muted-foreground">
-                    No private registry connected. Boxes can start from any public image already.
-                  </p>
+                  <p className="font-mono text-meta text-muted-foreground">No private registries connected.</p>
                   {canWrite && (
-                    <AsciiButton variant="primary" onClick={() => setAdding(true)}>
+                    <AsciiButton variant="primary" onClick={() => setFormOpen(true)}>
                       Connect a registry
                     </AsciiButton>
                   )}
@@ -341,18 +391,26 @@ export function RegistriesPanel() {
         )}
       </div>
 
-      <Dialog open={adding} onOpenChange={(open) => !open && closeForm()}>
+      <Dialog open={formOpen} onOpenChange={(open) => !open && closeForm()}>
         <DialogContent>
-          <form onSubmit={handleCreate}>
+          <form onSubmit={handleSave}>
             <DialogHeader>
-              <DialogTitle>Connect a registry</DialogTitle>
-              <DialogDescription>Stored write-only. BoxLite uses it only to pull.</DialogDescription>
+              <DialogTitle>{editing ? 'Update credential' : 'Connect a registry'}</DialogTitle>
+              <DialogDescription>
+                {editing
+                  ? 'Replace the login for this scope. Existing boxes are preserved.'
+                  : 'Stored write-only. BoxLite uses it only to pull.'}
+              </DialogDescription>
             </DialogHeader>
 
             <div className="space-y-4 py-4">
               <div className="space-y-1">
                 <Label htmlFor="registry-host">Registry</Label>
-                <Select value={form.registryHost} onValueChange={(value) => setForm({ ...form, registryHost: value })}>
+                <Select
+                  disabled={!!editing}
+                  value={form.registryHost}
+                  onValueChange={(value) => setForm({ ...form, registryHost: value })}
+                >
                   <SelectTrigger id="registry-host" className="h-9 w-full font-mono">
                     <SelectValue />
                   </SelectTrigger>
@@ -399,6 +457,7 @@ export function RegistriesPanel() {
                 <Label htmlFor="registry-prefix">Only for</Label>
                 <Input
                   id="registry-prefix"
+                  disabled={!!editing}
                   value={form.repositoryPrefix}
                   onChange={(event) => setForm({ ...form, repositoryPrefix: event.target.value })}
                   placeholder="acme/"
@@ -416,8 +475,8 @@ export function RegistriesPanel() {
               <Button type="button" variant="outline" onClick={closeForm}>
                 Cancel
               </Button>
-              <Button type="submit" disabled={createRegistry.isPending}>
-                Connect
+              <Button type="submit" disabled={saving || createRegistry.isPending || updateRegistry.isPending}>
+                {editing ? 'Save changes' : 'Connect'}
               </Button>
             </DialogFooter>
           </form>

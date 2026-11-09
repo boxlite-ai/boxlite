@@ -75,6 +75,20 @@ test('a stage may serve its dashboard off the stage domain, and only the dashboa
   assert.equal(pinned.environment.DASHBOARD_URL, 'https://console.example.com')
 })
 
+test('the MCP resource defaults to /mcp on the control plane host, and a stage may pin its own', () => {
+  // The URL an MCP client connects to is the OAuth resource (RFC 9728), so it
+  // follows the API host rather than a value set by hand per stage.
+  assert.equal(assemble(base).environment.MCP_RESOURCE_URL, 'https://api.dev.boxlite.ai/mcp')
+  assert.equal(
+    assemble({ ...base, DASHBOARD_DOMAIN: 'app.dev.boxlite.ai' }).environment.MCP_RESOURCE_URL,
+    'https://api.dev.boxlite.ai/mcp',
+  )
+  assert.equal(
+    assemble({ ...base, MCP_RESOURCE_URL: 'https://mcp.example.com/mcp' }).environment.MCP_RESOURCE_URL,
+    'https://mcp.example.com/mcp',
+  )
+})
+
 test('a dashboard host that is the control plane’s own is refused at the boundary', () => {
   /*
    * The two names become one Cloudflare record and one certificate each. Left
@@ -82,10 +96,7 @@ test('a dashboard host that is the control plane’s own is refused at the bound
    * with a resource collision, which names neither the setting nor the stage
    * that holds it.
    */
-  assert.throws(
-    () => assemble({ ...base, DASHBOARD_DOMAIN: 'api.dev.boxlite.ai' }),
-    /control plane answers/,
-  )
+  assert.throws(() => assemble({ ...base, DASHBOARD_DOMAIN: 'api.dev.boxlite.ai' }), /control plane answers/)
 })
 
 test('an issuer is required, because a placeholder would let the stack look healthy', () => {

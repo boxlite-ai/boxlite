@@ -15,10 +15,14 @@ use std::{
 use boxlite_hypervisor::VcpuExit;
 use vm_memory::GuestAddress;
 
-use super::{MMIO_WINDOW_LEN, MmioResources, MmioTransport};
+use super::{
+    DeviceContext, MMIO_WINDOW_LEN, MmioResources, MmioTransport, Slot, Slots, add_device, announce,
+};
+use crate::virtio::worker::VirtioWorkers;
 use crate::{
     bus::BusDevice,
     chipset::ChipsetBuilder,
+    config::MAX_CMDLINE_BYTES,
     error::Error,
     events::{Event, EventLoop},
     irq::IrqLine,
@@ -27,7 +31,7 @@ use crate::{
     virtio::{
         ActivationContext, DeviceError, DeviceEvent, DeviceSpec, EventError, EventRegistrar,
         EventSource, FeatureError, SnapshotSupport, SourceId, VirtioDevice, VirtioInterrupt,
-        WorkerControl, interrupt::MmioInterrupt,
+        WorkerContext, WorkerControl, interrupt::MmioInterrupt,
     },
 };
 
@@ -154,11 +158,7 @@ impl VirtioDevice for TransportDevice {
 struct Registrar;
 
 impl EventRegistrar for Registrar {
-    fn register(
-        &self,
-        _event: DeviceEvent,
-        _source: Box<dyn EventSource>,
-    ) -> Result<SourceId, EventError> {
+    fn register(&self, _source: Box<dyn EventSource>) -> Result<SourceId, EventError> {
         Ok(SourceId(1))
     }
 
@@ -167,25 +167,48 @@ impl EventRegistrar for Registrar {
 
 struct RecordingWorker {
     log: Arc<Mutex<Vec<&'static str>>>,
+    prepare_error: Mutex<Option<DeviceError>>,
     start_error: Mutex<Option<DeviceError>>,
     stop_error: Mutex<Option<DeviceError>>,
     starts: AtomicUsize,
     stops: AtomicUsize,
+    kicks: Mutex<Vec<u16>>,
 }
 
 impl RecordingWorker {
     fn new(log: Arc<Mutex<Vec<&'static str>>>) -> Self {
         Self {
             log,
+            prepare_error: Mutex::new(None),
             start_error: Mutex::new(None),
             stop_error: Mutex::new(None),
             starts: AtomicUsize::new(0),
             stops: AtomicUsize::new(0),
+            kicks: Mutex::new(Vec::new()),
         }
     }
 }
 
 impl WorkerControl for RecordingWorker {
+    fn prepare(&self) -> Result<WorkerContext, DeviceError> {
+        self.log.lock().unwrap().push("prepare");
+        match *self.prepare_error.lock().unwrap() {
+            Some(error) => Err(error),
+            None => Ok(WorkerContext {
+                events: Arc::new(Registrar),
+                waker: Arc::new(|| {}),
+            }),
+        }
+    }
+
+    fn kick(&self, index: u16) {
+        self.kicks.lock().unwrap().push(index);
+    }
+
+    fn cancel_prepare(&self) {
+        self.log.lock().unwrap().push("cancel");
+    }
+
     fn start(&self) -> Result<(), DeviceError> {
         self.starts.fetch_add(1, Ordering::SeqCst);
         self.log.lock().unwrap().push("start");
@@ -211,7 +234,6 @@ struct Fixture {
     interrupt: Arc<MmioInterrupt>,
     worker: Arc<RecordingWorker>,
     events: EventLoop,
-    waker_calls: Arc<AtomicUsize>,
     log: Arc<Mutex<Vec<&'static str>>>,
 }
 
@@ -231,11 +253,6 @@ fn make(spec: DeviceSpec) -> Fixture {
     let interrupt = Arc::new(MmioInterrupt::new(IrqLine::new(vm, LINE)));
     let log = Arc::new(Mutex::new(Vec::new()));
     let worker = Arc::new(RecordingWorker::new(Arc::clone(&log)));
-    let waker_calls = Arc::new(AtomicUsize::new(0));
-    let waker_calls_for_waker = Arc::clone(&waker_calls);
-    let waker = Arc::new(move || {
-        waker_calls_for_waker.fetch_add(1, Ordering::SeqCst);
-    });
     let events = EventLoop::new().unwrap();
     let (device, state) = device(spec, Arc::clone(&log));
     let transport = MmioTransport::new(
@@ -243,8 +260,6 @@ fn make(spec: DeviceSpec) -> Fixture {
         Arc::clone(&interrupt),
         MmioResources {
             memory,
-            events: Arc::new(Registrar),
-            waker,
             sender: events.sender(),
             worker: Arc::clone(&worker) as Arc<dyn WorkerControl>,
         },
@@ -256,7 +271,6 @@ fn make(spec: DeviceSpec) -> Fixture {
         interrupt,
         worker,
         events,
-        waker_calls,
         log,
     }
 }
@@ -267,7 +281,6 @@ fn try_make(spec: DeviceSpec) -> crate::error::Result<MmioTransport> {
     let interrupt = Arc::new(MmioInterrupt::new(IrqLine::new(vm, LINE)));
     let log = Arc::new(Mutex::new(Vec::new()));
     let worker = Arc::new(RecordingWorker::new(log));
-    let waker = Arc::new(|| {});
     let events = EventLoop::new().unwrap();
     let (device, _) = device(spec, Arc::new(Mutex::new(Vec::new())));
     MmioTransport::new(
@@ -275,8 +288,6 @@ fn try_make(spec: DeviceSpec) -> crate::error::Result<MmioTransport> {
         interrupt,
         MmioResources {
             memory,
-            events: Arc::new(Registrar),
-            waker,
             sender: events.sender(),
             worker,
         },
@@ -509,7 +520,10 @@ fn activation_builds_a_dense_queue_vector() {
     assert_eq!(queues[0].used, 0x9000);
     assert!(!queues[1].ready);
     assert_eq!(fixture.worker.starts.load(Ordering::SeqCst), 1);
-    assert_eq!(*fixture.log.lock().unwrap(), ["activate", "start"]);
+    assert_eq!(
+        *fixture.log.lock().unwrap(),
+        ["prepare", "activate", "start"]
+    );
     assert_eq!(
         fixture.status(),
         ACKNOWLEDGE | DRIVER | FEATURES_OK | DRIVER_OK
@@ -531,7 +545,28 @@ fn activation_failure_rolls_back_and_needs_reset() {
     assert_eq!(fixture.status() & DRIVER_OK, 0);
     assert_ne!(fixture.status() & NEEDS_RESET, 0);
     assert_eq!(fixture.worker.starts.load(Ordering::SeqCst), 0);
+    assert_eq!(*fixture.log.lock().unwrap(), ["prepare", "cancel", "reset"]);
     assert_ne!(fixture.read(0x060) & 0x2, 0);
+}
+
+#[test]
+fn a_prepare_failure_needs_reset_without_activating() {
+    let mut fixture = make(spec(0b111));
+    *fixture.worker.prepare_error.lock().unwrap() = Some(DeviceError::Fatal("worker"));
+    fixture.negotiate();
+    fixture.activate();
+
+    assert!(fixture.state.lock().unwrap().activation.is_none());
+    assert_eq!(*fixture.log.lock().unwrap(), ["prepare"]);
+    assert_eq!(fixture.status() & DRIVER_OK, 0);
+    assert_ne!(fixture.status() & NEEDS_RESET, 0);
+    assert_ne!(fixture.read(0x060) & 0x2, 0);
+    assert!(matches!(
+        fixture.events.wait(Some(Duration::ZERO)).unwrap(),
+        Some(Event::DeviceFailed(Error::VirtioDevice { .. }))
+    ));
+    fixture.write(0x050, 0);
+    assert!(fixture.worker.kicks.lock().unwrap().is_empty());
 }
 
 #[test]
@@ -624,7 +659,7 @@ fn status_zero_stops_the_worker_then_resets() {
     assert_eq!(fixture.state.lock().unwrap().resets, 1);
     assert_eq!(
         *fixture.log.lock().unwrap(),
-        ["activate", "start", "stop", "reset"]
+        ["prepare", "activate", "start", "stop", "reset"]
     );
     assert_eq!(fixture.read(0x0fc), 1);
     assert_eq!(fixture.read(0x034), 8);
@@ -637,19 +672,17 @@ fn status_zero_stops_the_worker_then_resets() {
 }
 
 #[test]
-fn queue_notify_wakes_only_when_active() {
+fn queue_notify_kicks_in_range_queues_once_active() {
     let mut fixture = make(spec(0b111));
     fixture.write(0x050, 0);
-    assert_eq!(fixture.waker_calls.load(Ordering::SeqCst), 0);
+    assert!(fixture.worker.kicks.lock().unwrap().is_empty());
 
     fixture.negotiate();
     fixture.activate();
     fixture.write(0x050, 0);
-    assert_eq!(fixture.waker_calls.load(Ordering::SeqCst), 1);
     fixture.write(0x050, 0x1_0001);
-    assert_eq!(fixture.waker_calls.load(Ordering::SeqCst), 2);
     fixture.write(0x050, 9);
-    assert_eq!(fixture.waker_calls.load(Ordering::SeqCst), 2);
+    assert_eq!(*fixture.worker.kicks.lock().unwrap(), [0, 1]);
 }
 
 #[test]
@@ -694,11 +727,18 @@ fn worker_start_failure_needs_reset_and_ends_the_vm() {
     fixture.activate();
 
     assert_eq!(fixture.worker.starts.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        *fixture.log.lock().unwrap(),
+        ["prepare", "activate", "start", "cancel"]
+    );
+    assert_eq!(fixture.state.lock().unwrap().resets, 0);
     assert_ne!(fixture.status() & NEEDS_RESET, 0);
     assert!(matches!(
         fixture.events.wait(Some(Duration::ZERO)).unwrap(),
         Some(Event::DeviceFailed(Error::VirtioDevice { .. }))
     ));
+    fixture.write(0x050, 0);
+    assert!(fixture.worker.kicks.lock().unwrap().is_empty());
 }
 
 #[test]
@@ -780,7 +820,6 @@ fn a_chipset_dispatches_mmio_to_the_transport() {
     let log = Arc::new(Mutex::new(Vec::new()));
     let worker = Arc::new(RecordingWorker::new(Arc::clone(&log)));
     let (device, _state) = device(spec(0b111), log);
-    let waker = Arc::new(|| {});
     let interrupt_slot = Arc::new(Mutex::new(None));
     let slot = Arc::clone(&interrupt_slot);
 
@@ -795,8 +834,6 @@ fn a_chipset_dispatches_mmio_to_the_transport() {
                 interrupt,
                 MmioResources {
                     memory,
-                    events: Arc::new(Registrar),
-                    waker,
                     sender: resources.event_sender(),
                     worker,
                 },
@@ -844,4 +881,93 @@ fn a_chipset_dispatches_mmio_to_the_transport() {
 #[test]
 fn the_transport_claims_a_four_kib_window() {
     assert_eq!(MMIO_WINDOW_LEN, 0x1000);
+}
+
+#[test]
+fn slots_hand_out_consecutive_windows_and_lines_until_exhausted() {
+    let mut slots = Slots::new();
+    for index in 0..Slots::CAPACITY {
+        let slot = slots.take().unwrap();
+        assert_eq!(slot.base, 0xd000_0000 + u64::from(index) * MMIO_WINDOW_LEN);
+        assert_eq!(slot.gsi, 5 + index);
+    }
+    assert_eq!(Slots::CAPACITY, 19);
+    assert!(matches!(slots.take(), Err(Error::VirtioSlotsExhausted)));
+    assert_eq!(
+        Error::VirtioSlotsExhausted.to_string(),
+        "no virtio-mmio slot is free"
+    );
+}
+
+#[test]
+fn a_slot_names_itself_the_way_the_kernel_parses_it() {
+    let slot = Slots::new().take().unwrap();
+    assert_eq!(slot.cmdline_arg(), "virtio_mmio.device=4K@0xd0000000:5");
+    let second = Slot {
+        base: 0xd000_1000,
+        gsi: 6,
+    };
+    assert_eq!(second.cmdline_arg(), "virtio_mmio.device=4K@0xd0001000:6");
+}
+
+#[test]
+fn announcing_appends_each_slot_within_the_command_line_budget() {
+    let mut slots = Slots::new();
+    let taken = [slots.take().unwrap(), slots.take().unwrap()];
+    let mut cmdline = String::from("console=ttyS0");
+    announce(&mut cmdline, &taken).unwrap();
+    assert_eq!(
+        cmdline,
+        "console=ttyS0 virtio_mmio.device=4K@0xd0000000:5 virtio_mmio.device=4K@0xd0001000:6"
+    );
+    let mut empty = String::new();
+    announce(&mut empty, &taken[..1]).unwrap();
+    assert_eq!(empty, "virtio_mmio.device=4K@0xd0000000:5");
+
+    let argument = taken[0].cmdline_arg();
+    let mut full = "a".repeat(MAX_CMDLINE_BYTES - argument.len() - 1);
+    assert!(matches!(
+        announce(&mut full, &taken[..1]),
+        Err(Error::InvalidCommandLine(
+            "leaves no room for the virtio device arguments"
+        ))
+    ));
+    let mut fits = "a".repeat(MAX_CMDLINE_BYTES - argument.len() - 2);
+    announce(&mut fits, &taken[..1]).unwrap();
+    assert_eq!(fits.len(), MAX_CMDLINE_BYTES - 1);
+}
+
+#[test]
+fn add_device_puts_each_device_in_its_own_slot() {
+    let vm = Arc::new(MockVm::new());
+    let events = EventLoop::new().unwrap();
+    let memory = Arc::new(GuestMemoryMmap::from_ranges(&[(GuestAddress(0), 0x10000)]).unwrap());
+    let workers = VirtioWorkers::new(events.sender()).unwrap();
+    let ctx = DeviceContext {
+        memory: &memory,
+        workers: &workers,
+    };
+
+    let mut slots = Slots::new();
+    let taken = [slots.take().unwrap(), slots.take().unwrap()];
+    let mut builder = ChipsetBuilder::new(vm, events.sender());
+    for (name, slot) in [("virtio-a", taken[0]), ("virtio-b", taken[1])] {
+        let (device, _state) = device(spec(0b111), Arc::new(Mutex::new(Vec::new())));
+        add_device(&mut builder, &ctx, name, slot, device).unwrap();
+    }
+    let chipset = builder.build().unwrap();
+
+    for slot in taken {
+        let mut magic = [0u8; 4];
+        assert!(
+            chipset
+                .dispatch(VcpuExit::MmioRead {
+                    guest_addr: slot.base,
+                    bytes: &mut magic,
+                })
+                .is_none()
+        );
+        assert_eq!(u32::from_le_bytes(magic), 0x7472_6976);
+    }
+    workers.shutdown().unwrap();
 }

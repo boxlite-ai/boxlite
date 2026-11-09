@@ -223,6 +223,10 @@ impl SshStub {
                     .get(ssh_route)
                     .delete(ssh_route),
             )
+            .route(
+                &format!("/v1{prefix}/boxes/{{id}}/ssh/enable"),
+                axum::routing::post(ssh_route),
+            )
             .with_state(state.clone());
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
@@ -314,6 +318,65 @@ async fn ssh_rest_public_api_round_trips_over_the_wire() {
     assert!(requests[2].body.is_empty(), "DELETE must send no body");
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ssh_enable_rest_sends_one_bodyless_request() {
+    let active = SshStatus {
+        enabled: true,
+        generation: u64::MAX,
+        ..disabled()
+    };
+    let stub = SshStub::start(vec![(200, status_json(&active))]).await;
+    let sandbox = prefixed_runtime(&stub.url)
+        .get("box-1")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(sandbox.ssh().enable().await.unwrap(), active);
+    let requests = stub.requests();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].method, "POST");
+    assert_eq!(requests[0].path, "/v1/acme/team/boxes/box-1/ssh/enable");
+    assert_eq!(
+        requests[0].authorization.as_deref(),
+        Some("Bearer ssh-stub-key")
+    );
+    assert!(requests[0].body.is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ssh_enable_serve_preserves_errors_without_activity_or_resume() {
+    for (code, expected) in [
+        ("invalid_state", StatusCode::CONFLICT),
+        ("upstream_unavailable", StatusCode::SERVICE_UNAVAILABLE),
+    ] {
+        let upstream = SshStub::local(
+            "stopped",
+            true,
+            vec![(expected.as_u16(), error_envelope(code))],
+        )
+        .await;
+        let (base, state, server) = serve_over(&upstream, Some("key")).await;
+        let url = format!("{base}/v1/boxes/{STUB_BOX_ID}/ssh/enable");
+        assert_eq!(
+            ssh_call("POST", &url, None, None).await.status(),
+            StatusCode::UNAUTHORIZED
+        );
+        assert!(upstream.requests().is_empty());
+        let response = ssh_call("POST", &url, Some("key"), None).await;
+        assert_eq!(response.status(), expected);
+        assert_eq!(
+            response.json::<serde_json::Value>().await.unwrap()["error"]["code"],
+            code
+        );
+        assert!(state.last_activity.read().await.is_empty());
+        let requests = upstream.requests();
+        assert_eq!(requests.len(), 1);
+        assert!(requests[0].path.ends_with("/ssh/enable"));
+        assert!(requests[0].body.is_empty());
+        server.abort();
+    }
+}
+
 /// A failed configure is sent exactly once: the guest restarts SSH on every
 /// accepted call, so a client retry would disconnect clients a second time.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -389,6 +452,7 @@ async fn serve_over(
         api_key: api_key.map(str::to_string),
         lifecycle: RwLock::new(HashMap::new()),
         last_activity: RwLock::new(HashMap::new()),
+        recovered_terminals: RwLock::new(HashMap::new()),
     });
     let (base, server) = serve_router(Arc::clone(&state)).await;
     (base, state, server)
@@ -421,10 +485,15 @@ async fn ssh_routes_report_a_missing_box_as_404_for_every_method() {
     let upstream = SshStub::local("running", true, Vec::new()).await;
     let (base, _state, server) = serve_over(&upstream, None).await;
 
-    for method in ["POST", "GET", "DELETE"] {
+    for (method, suffix) in [
+        ("POST", ""),
+        ("GET", ""),
+        ("DELETE", ""),
+        ("POST", "/enable"),
+    ] {
         let response = ssh_call(
             method,
-            &format!("{base}/v1/boxes/no-such-box/ssh"),
+            &format!("{base}/v1/boxes/no-such-box/ssh{suffix}"),
             None,
             Some(("application/json", &config_body())),
         )
@@ -438,6 +507,39 @@ async fn ssh_routes_report_a_missing_box_as_404_for_every_method() {
         upstream.requests().is_empty(),
         "no SSH request may reach the backend for an unknown box"
     );
+    server.abort();
+    upstream.task.abort();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ssh_enable_serve_returns_status_without_recording_activity() {
+    let active = SshStatus {
+        enabled: true,
+        generation: 7,
+        listen_address: "0.0.0.0:2222".into(),
+        host_public_key: "ssh-ed25519 host-key".into(),
+        host_key_fingerprint: "SHA256:host-fingerprint".into(),
+    };
+    let upstream = SshStub::local("running", true, vec![(200, status_json(&active))]).await;
+    let (base, state, server) = serve_over(&upstream, None).await;
+    let response = ssh_call(
+        "POST",
+        &format!("{base}/v1/boxes/{STUB_BOX_ID}/ssh/enable"),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.json::<SshStatus>().await.unwrap(), active);
+    assert!(state.last_activity.read().await.is_empty());
+    let requests = upstream.requests();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].method, "POST");
+    assert_eq!(
+        requests[0].path,
+        format!("/v1/boxes/{STUB_BOX_ID}/ssh/enable")
+    );
+    assert!(requests[0].body.is_empty());
     server.abort();
     upstream.task.abort();
 }

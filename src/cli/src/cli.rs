@@ -64,7 +64,7 @@ where
 #[derive(Parser, Debug)]
 #[command(name = "boxlite", author, version, about = "BoxLite CLI")]
 pub struct Cli {
-    #[command(flatten)]
+    #[command(flatten, next_help_heading = "Global options")]
     pub global: GlobalFlags,
 
     #[command(subcommand)]
@@ -238,25 +238,20 @@ const NETWORK_SCOPES: &[CommandScope] = &[
         children: &[],
     },
 ];
-const SSH_SCOPES: &[CommandScope] = &[
+const DOMAIN_SCOPES: &[CommandScope] = &[
     CommandScope {
-        name: "configure",
-        globals: BOX_GLOBALS,
+        name: "bind",
+        globals: VOLUME_GLOBALS,
         children: &[],
     },
     CommandScope {
-        name: "status",
-        globals: BOX_GLOBALS,
+        name: "ls",
+        globals: VOLUME_GLOBALS,
         children: &[],
     },
     CommandScope {
-        name: "disable",
-        globals: BOX_GLOBALS,
-        children: &[],
-    },
-    CommandScope {
-        name: "forward",
-        globals: BOX_GLOBALS,
+        name: "unbind",
+        globals: VOLUME_GLOBALS,
         children: &[],
     },
 ];
@@ -310,6 +305,26 @@ const COMMAND_SCOPES: &[CommandScope] = &[
     },
     CommandScope {
         name: "exec",
+        globals: BOX_GLOBALS,
+        children: &[],
+    },
+    CommandScope {
+        name: "top",
+        globals: BOX_GLOBALS,
+        children: &[],
+    },
+    CommandScope {
+        name: "attach",
+        globals: BOX_GLOBALS,
+        children: &[],
+    },
+    CommandScope {
+        name: "kill",
+        globals: BOX_GLOBALS,
+        children: &[],
+    },
+    CommandScope {
+        name: "signal",
         globals: BOX_GLOBALS,
         children: &[],
     },
@@ -386,7 +401,7 @@ const COMMAND_SCOPES: &[CommandScope] = &[
     CommandScope {
         name: "ssh",
         globals: BOX_GLOBALS,
-        children: SSH_SCOPES,
+        children: &[],
     },
     CommandScope {
         name: "serve",
@@ -407,6 +422,11 @@ const COMMAND_SCOPES: &[CommandScope] = &[
         name: "volume",
         globals: VOLUME_GLOBALS,
         children: VOLUME_SCOPES,
+    },
+    CommandScope {
+        name: "domain",
+        globals: VOLUME_GLOBALS,
+        children: DOMAIN_SCOPES,
     },
     CommandScope {
         name: "completion",
@@ -533,7 +553,7 @@ where
         ));
     }
 
-    for id in ["url", "profile", "path_prefix", "config"] {
+    for id in ["url", "profile", "config"] {
         if scope.globals.iter().any(|option| option.id() == id)
             && matches.value_source(id) == Some(ValueSource::CommandLine)
             && matches.get_one::<String>(id).is_some_and(String::is_empty)
@@ -704,6 +724,14 @@ pub enum Commands {
     Run(crate::commands::run::RunArgs),
     /// Execute a command in a running box
     Exec(crate::commands::exec::ExecArgs),
+    /// Show live guest executions in a box
+    Top(crate::commands::top::TopArgs),
+    /// Reattach to a guest execution by ID
+    Attach(crate::commands::attach::AttachArgs),
+    /// Kill a guest execution by ID
+    Kill(crate::commands::kill::KillArgs),
+    /// Send a signal to a guest execution by ID
+    Signal(crate::commands::signal::SignalArgs),
     /// Create a new box
     Create(crate::commands::create::CreateArgs),
 
@@ -747,7 +775,13 @@ pub enum Commands {
     /// Manage box networking
     Network(crate::commands::network::NetworkArgs),
 
-    /// Configure, inspect, disable, or forward to guest SSH
+    /// Set up guest SSH and print a connection command
+    ///
+    /// With no operation option, generate or reuse client and host keys,
+    /// enable box on guest port 22, and print the server fingerprint and SSH command.
+    /// Setup replaces the complete configuration and disconnects existing clients.
+    /// Use --configure, --status, --enable, --disable, --tunnel, or --proxy
+    /// for another operation. All operations support local and cloud contexts.
     Ssh(crate::commands::ssh::SshArgs),
 
     /// Agent instances and turns
@@ -761,6 +795,9 @@ pub enum Commands {
 
     /// Manage named volumes on a REST server
     Volume(crate::commands::volume::VolumeArgs),
+
+    /// Bind, list or unbind the organization's domains on a REST server
+    Domain(crate::commands::domain::DomainArgs),
 
     /// Generate shell completion script (hidden from help)
     #[command(hide = true)]
@@ -891,7 +928,12 @@ fn without_hidden_arguments(command: Command) -> Command {
 
 pub(crate) fn experimental_features_from_env() -> boxlite::BoxliteResult<ExperimentalFeatures> {
     match std::env::var(EXPERIMENTAL_FEATURES_ENV) {
-        Ok(value) => ExperimentalFeatures::parse(&value),
+        Ok(value) => ExperimentalFeatures::parse(&value).map_err(|error| match error {
+            boxlite::BoxliteError::Config(message) => {
+                boxlite::BoxliteError::Config(format!("{EXPERIMENTAL_FEATURES_ENV}: {message}"))
+            }
+            error => error,
+        }),
         Err(std::env::VarError::NotPresent) => Ok(ExperimentalFeatures::default()),
         Err(std::env::VarError::NotUnicode(_)) => Err(boxlite::BoxliteError::Config(format!(
             "{EXPERIMENTAL_FEATURES_ENV} must contain valid UTF-8"
@@ -953,7 +995,7 @@ pub struct GlobalFlags {
     /// has scope over multiple routing values (e.g. multiple orgs on
     /// the same account). Unset → uses the stored context's
     /// path_prefix, then empty (URL skips the segment —
-    /// `/v1/boxes/...`).
+    /// `/v1/boxes/...`). An explicit empty value clears the stored prefix.
     #[arg(long = "path-prefix", global = true, env = "BOXLITE_REST_PATH_PREFIX")]
     pub path_prefix: Option<String>,
 
@@ -1022,18 +1064,20 @@ impl GlobalFlags {
     ///
     /// Uses the same context snapshot as `create_runtime`, including credentials.
     pub fn targets_rest(&self) -> anyhow::Result<bool> {
-        let stored = self.load_selected_profile()?;
-        let env_api_key = std::env::var("BOXLITE_API_KEY").ok();
-        Ok(self.resolve_rest_options(stored, env_api_key).is_some())
+        Ok(self.rest_options()?.is_some())
     }
 
-    pub fn create_runtime(&self) -> anyhow::Result<BoxliteRuntime> {
+    pub(crate) fn rest_options(&self) -> anyhow::Result<Option<BoxliteRestOptions>> {
         let stored = self.load_selected_profile()?;
         // Clap reads BOXLITE_REST_URL into `self.url`; BOXLITE_API_KEY is the
         // one credential env we still consult directly here.
         let env_api_key = std::env::var("BOXLITE_API_KEY").ok();
 
-        match self.resolve_rest_options(stored, env_api_key) {
+        Ok(self.resolve_rest_options(stored, env_api_key))
+    }
+
+    pub fn create_runtime(&self) -> anyhow::Result<BoxliteRuntime> {
+        match self.rest_options()? {
             Some(opts) => BoxliteRuntime::rest(opts).map_err(Into::into),
             None => {
                 // No URL anywhere → local runtime, unchanged behavior.
@@ -1100,9 +1144,9 @@ impl GlobalFlags {
         // `--path-prefix` flag (or `BOXLITE_REST_PATH_PREFIX`, both filled by
         // clap into `self.path_prefix`) overrides the profile's routing slot.
         // Leaving it alone when the flag is unset means the profile's value
-        // wins; if neither is set the URL builder skips the segment entirely
-        // (`/v1/boxes/...`, the empty-prefix single-tenant shape).
-        if let Some(path_prefix) = self.path_prefix.as_ref().filter(|s| !s.is_empty()) {
+        // wins. An explicitly empty value clears it, so the URL builder skips
+        // the segment (`/v1/boxes/...`, the single-tenant shape).
+        if let Some(path_prefix) = &self.path_prefix {
             opts.path_prefix = Some(path_prefix.clone());
         }
 
@@ -1797,7 +1841,6 @@ mod tests {
         }
 
         for args in [
-            &["boxlite", "run", "--path-prefix", "", "alpine"][..],
             &["boxlite", "run", "--profile", "", "alpine"][..],
             &["boxlite", "run", "--registry", "", "alpine"][..],
             &["boxlite", "run", "--config", "", "alpine"][..],
@@ -1920,6 +1963,15 @@ mod tests {
         (&["boxlite", "volume", "inspect", "volume"], 2, VOLUME),
         (&["boxlite", "volume", "rm", "volume"], 2, VOLUME),
         (&["boxlite", "volume", "delete", "volume"], 2, VOLUME),
+        (
+            &[
+                "boxlite", "domain", "bind", "demo", "--type", "box", "--box", "b", "--port", "1",
+            ],
+            2,
+            VOLUME,
+        ),
+        (&["boxlite", "domain", "ls"], 2, VOLUME),
+        (&["boxlite", "domain", "unbind", "demo"], 2, VOLUME),
         (&["boxlite", "completion", "bash"], 1, ALL_GLOBALS),
     ];
 

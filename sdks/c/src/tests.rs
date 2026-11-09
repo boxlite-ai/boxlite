@@ -10,6 +10,8 @@ use std::ptr;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+mod kernel;
+
 extern "C" fn noop_shutdown_cb(_err: *mut FFIError, _ud: *mut c_void) {}
 extern "C" fn noop_image_pull_cb(
     _r: *mut crate::images::CImagePullResult,
@@ -640,6 +642,89 @@ fn set_advanced_applies_security_profile_to_options() {
     );
 
     unsafe { boxlite_options_free(opts) };
+}
+
+#[test]
+fn guest_privileged_options_preserve_host_security() {
+    let options = unsafe { new_test_options() };
+    let advanced = unsafe { new_test_advanced_options() };
+    for enabled in [1, 0] {
+        assert_eq!(
+            unsafe { boxlite_advanced_options_set_privileged(advanced, enabled) },
+            BoxliteErrorCode::Ok
+        );
+        unsafe { boxlite_options_set_advanced(options, advanced) };
+        let applied = unsafe { &(*options).options.advanced };
+        assert_eq!(applied.privileged, enabled != 0);
+        assert!(applied.capabilities().is_none());
+        assert_eq!(applied.security, boxlite::SecurityOptions::default());
+    }
+    unsafe {
+        boxlite_advanced_options_free(advanced);
+        boxlite_options_free(options);
+    }
+}
+
+#[test]
+fn guest_privileged_accepts_canonical_full_capabilities() {
+    for capability in ["ALL", "all", "CAP_ALL", "cap_all"] {
+        let advanced = unsafe { new_test_advanced_options() };
+        let name = CString::new(capability).unwrap();
+        let names = [name.as_ptr()];
+        assert_eq!(
+            unsafe { boxlite_advanced_options_set_capabilities_add(advanced, names.as_ptr(), 1) },
+            BoxliteErrorCode::Ok
+        );
+        assert_eq!(
+            unsafe { boxlite_advanced_options_set_privileged(advanced, 1) },
+            BoxliteErrorCode::Ok,
+            "canonical full capability policy: {capability}"
+        );
+        let applied = unsafe { &(*advanced).options };
+        assert!(applied.privileged);
+        assert_eq!(applied.capabilities().unwrap().add, [capability]);
+        assert_eq!(applied.security, boxlite::SecurityOptions::default());
+        unsafe { boxlite_advanced_options_free(advanced) };
+    }
+}
+
+#[test]
+fn guest_privileged_rejects_conflicting_capabilities_without_mutation() {
+    for (add, drop) in [
+        (vec![], vec![]),
+        (vec!["NET_ADMIN"], vec![]),
+        (vec!["ALL", "ALL"], vec![]),
+        (vec!["ALL"], vec!["NET_RAW"]),
+    ] {
+        let advanced = unsafe { new_test_advanced_options() };
+        for (values, setter) in [
+            (
+                add,
+                boxlite_advanced_options_set_capabilities_add as unsafe extern "C" fn(_, _, _) -> _,
+            ),
+            (
+                drop,
+                boxlite_advanced_options_set_capabilities_drop
+                    as unsafe extern "C" fn(_, _, _) -> _,
+            ),
+        ] {
+            let names: Vec<_> = values
+                .into_iter()
+                .map(|name| CString::new(name).unwrap())
+                .collect();
+            let pointers: Vec<_> = names.iter().map(|name| name.as_ptr()).collect();
+            assert_eq!(
+                unsafe { setter(advanced, pointers.as_ptr(), pointers.len() as i32) },
+                BoxliteErrorCode::Ok
+            );
+        }
+        assert_eq!(
+            unsafe { boxlite_advanced_options_set_privileged(advanced, 1) },
+            BoxliteErrorCode::InvalidArgument
+        );
+        assert!(!unsafe { &(*advanced).options }.privileged);
+        unsafe { boxlite_advanced_options_free(advanced) };
+    }
 }
 
 #[test]

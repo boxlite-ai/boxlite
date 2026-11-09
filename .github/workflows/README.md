@@ -21,6 +21,9 @@ BUILD + CACHE (weekly)                  build-runtime
 RELEASE CHAIN (workflow_run)            build-c ──▶ build-go
                                                 └──▶ build-runner-binary
 
+SDK TEST BUILDS (manual dispatch)       build-go ──▶ build-c ──▶ Go SDK tests
+                                        build-runner-binary ──▶ build-c ──▶ Runner link
+
 RELEASE (release event)                 build-runtime · build-c · build-node · build-wheels
                                         mbuild-release-on-release ──▶ mbuild-release (images, dev)
                                         apps/box-images/v* tag ──▶ release-box-images
@@ -52,10 +55,10 @@ own.
 | `author-review.yml` | PR (target), issue_comment, merge_group | — | Converts unacknowledged PRs to draft, posts author instructions, and publishes `Author reviewed the PR` on the current head. Merge queues carry forward the required PR admission check |
 | `build-runtime.yml` | weekly, release, dispatch | — | Builds runtime/CLI artifacts and populates sccache together; publishes crates on release |
 | `build-c.yml` | release, dispatch, `workflow_call` | yes | C SDK archives |
-| `build-go.yml` | `workflow_run`, dispatch | — | Tests the released C archive and tags the Go module; automatic builds follow successful C SDK releases |
+| `build-go.yml` | `workflow_run`, dispatch | — | Pins release tests and the Go tag to the C build commit. Compares public archives with that run before testing. Manual tests build their own C archive. |
 | `build-node.yml` | release, dispatch | — | Node.js SDK, napi-rs addon and platform packages |
 | `build-wheels.yml` | release, dispatch | — | Builds Python wheels and verifies their native extension in cibuildwheel before publishing |
-| `build-runner-binary.yml` | `workflow_run`, dispatch, `workflow_call` | yes | Linux amd64 runner binary; automatic builds follow successful C SDK releases |
+| `build-runner-binary.yml` | `workflow_run`, dispatch, `workflow_call` | yes | Linux amd64 runner binary; manual builds first produce the selected commit's C archive |
 | `build-apps-api-image.yml` | dispatch, `workflow_call` | yes | The `apps/api` image: build a commit, build a release, or promote one between stages. Retained legacy AWS path |
 | `deploy-infra.yml` | dispatch | — | Builds and deploys one commit to a stage. Retained legacy AWS path |
 | `deploy-release.yml` | dispatch | — | Deploys already-published artifacts for one `X.Y.Z`. Compiles nothing. Retained legacy AWS path |
@@ -74,6 +77,8 @@ runbook](../../docs/contributing/development/e2e-local.md), [deployment](../../a
 Cloud dev E2E also requires the three-profile [identity configuration](../../apps/e2e/README.md#the-cloud-legs-ci).
 Its separate identity step verifies cross-organization isolation and same-organization
 read-only access; missing or mis-scoped credentials fail setup. Prod keeps its single-key smoke suite.
+The p1 dev suite reads `BOXLITE_E2E_DOMAIN` from repository Actions Variables
+for [subdomain acceptance](../../apps/e2e/README.md#subdomain-acceptance).
 
 ## Routine checks
 
@@ -113,6 +118,11 @@ Python runs all four supported versions on Linux x64 and the latest on macOS and
 and bypass change filters. Combined Rust and CLI coverage runs on all three platforms, including
 non-VM integration tests and Linux guest tests. Codecov requires 90% coverage of changed lines
 and reports total coverage.
+
+The Linux Rust jobs enable unprivileged user namespaces on their disposable runners
+so SSH guest tests can create private user/mount namespaces. This temporarily disables
+Ubuntu's AppArmor user-namespace restriction, as the Nix job does for its jailer.
+Namespace setup failures remain test errors.
 
 `make coverage:bindings:external` runs `make test:unit:scripts` before collecting
 native SDK profiles. The infra job also runs `make test:unit:scripts` whenever
@@ -296,6 +306,26 @@ The `analyze` job is a matrix over `actions`, `c-cpp`, `go`, `javascript-typescr
 `rust`. All use `build-mode: none` (source only, no compile) except `go`, whose extractor has to
 observe a real build and therefore uses `autobuild`.
 
+## Manual SDK and Runner builds
+
+Dispatching `build-runner-binary.yml` builds the selected full commit SHA's Linux x64 C SDK,
+then links the Runner against that same-run artifact. Its archive and version identity include
+the commit SHA. Dispatching `build-go.yml` builds the selected workflow ref's C SDK on all
+supported platforms, then tests each Go SDK against its matching artifact. Neither manual
+path requires a published release for the current `Cargo.toml` version.
+
+The release chain still downloads the published C archives. Reusable Runner callers retain their explicit
+`libboxlite_source` selection: `deploy-infra.yml` supplies its existing C artifact without a
+second C build. A C build failure stops its consumers; manual runs publish no releases or tags.
+
+Runner release uploads and Go module tagging run only after successful release-origin C SDK
+builds, followed by a successful Runner build or Go test matrix respectively.
+The manual `build-c` job is intentionally skipped on that path, so each publication job uses
+`!cancelled()` and explicit prerequisite-result checks to override the implicit `success()`
+check inherited through the dependency chain. Failed or skipped prerequisites and workflow
+cancellation still prevent publication; manual builds, reusable deployment builds, and
+non-release upstream runs do not publish through these jobs.
+
 ## Do not rename these
 
 Two workflows chain off another's **display name**, not its filename. Changing the `name:` below
@@ -304,6 +334,10 @@ silently stops the chain — no error, the downstream workflow simply never fire
 | `name:` | Depended on by |
 | --- | --- |
 | `Build C SDK` | `build-go.yml`, `build-runner-binary.yml` |
+
+Go release tests require the canonical C workflow and read the platform matrix and toolchain
+at that run's commit. A missing or different C run archive stops testing. Before creating
+the Go module tag, the workflow checks that the remote product tag still points to the tested commit.
 
 ## Adding a stage
 

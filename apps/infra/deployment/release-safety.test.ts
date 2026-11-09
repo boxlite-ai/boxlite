@@ -7,6 +7,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, 
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { runInNewContext } from 'node:vm'
 import test from 'node:test'
 import { load as loadYaml } from 'js-yaml'
 
@@ -28,6 +29,7 @@ const RELEASE_DEPLOY_WORKFLOW = join(REPO_ROOT, '.github/workflows/deploy-releas
 const API_IMAGE_BUILD_WORKFLOW = join(REPO_ROOT, '.github/workflows/build-apps-api-image.yml')
 const BUILD_C_WORKFLOW = join(REPO_ROOT, '.github/workflows/build-c.yml')
 const BUILD_RUNNER_WORKFLOW = join(REPO_ROOT, '.github/workflows/build-runner-binary.yml')
+const BUILD_GO_WORKFLOW = join(REPO_ROOT, '.github/workflows/build-go.yml')
 const E2E_CLOUD_WORKFLOW = join(REPO_ROOT, '.github/workflows/e2e-cloud.yml')
 const DEV_DEPLOY_ROLE_TRUST = join(REPO_ROOT, 'apps/infra/bootstrap/aws/deploy-role-trust.json')
 const DEV_DEPLOY_ROLE_POLICY = join(REPO_ROOT, 'apps/infra/bootstrap/aws/deploy-role-policy.json')
@@ -1016,8 +1018,8 @@ test('deployment previews and reconciles the full stack in guarded GitHub CI', (
   assert.deepEqual(workflow.jobs['resolve-ref'].outputs, { sha: '${{ steps.ref.outputs.sha }}' })
 
   // The reusable builds and what they are told to build: `with:` values decide which commit and
-  // which C SDK the Runner links, and build-runner-binary.yml defaults libboxlite_source to the
-  // published release, so an absent input silently links the wrong artifact.
+  // which C SDK the Runner links. The reusable workflow_call input defaults to the published
+  // release, so this commit-build caller must explicitly select its artifact.
   assert.equal(workflow.jobs['build-c'].uses, './.github/workflows/build-c.yml')
   assert.equal(workflow.jobs['build-c'].with.linux_x64_only, true)
   assert.equal(workflow.jobs['build-c'].with.ref, '${{ needs.resolve-ref.outputs.sha }}')
@@ -1347,6 +1349,339 @@ test('commit Runner builds consume the C SDK artifact from the same reusable run
   assert.doesNotMatch(liveShell(extractRun), /find \/tmp\b(?!\/c-sdk)/, 'the library must not be searched for under /tmp')
 })
 
+function workflowExpression(expression: string, context: Record<string, unknown>) {
+  return runInNewContext(expression.replace(/^\s*\$\{\{|\}\}\s*$/g, ''), context)
+}
+
+for (const [file, consumer, linuxOnly, name] of [
+  [BUILD_RUNNER_WORKFLOW, 'build', true, 'Runner'],
+  [BUILD_GO_WORKFLOW, 'test', false, 'Go'],
+] as const) {
+  test(`${name} manual builds produce their commit C SDK before consuming it`, () => {
+    const workflow = load(readFileSync(file, 'utf8'))
+    const producer = workflow.jobs['build-c']
+    assert.ok(producer, 'manual builds must produce a C SDK instead of linking the published version')
+    assert.equal(producer.uses, './.github/workflows/build-c.yml')
+    assert.equal(producer.with.linux_x64_only ?? false, linuxOnly)
+    assert.ok(workflow.jobs[consumer].needs.includes('build-c'))
+    const sha = 'a'.repeat(40)
+    const context = {
+      github: { event_name: 'workflow_dispatch', sha },
+      inputs: {},
+      needs: {
+        config: { result: 'success' },
+        'resolve-ref': { result: 'success', outputs: { sha } },
+        'build-c': { result: 'success' },
+      },
+      cancelled: () => false,
+    }
+    assert.equal(workflowExpression(producer.if, context), true)
+    assert.equal(workflowExpression(producer.with.ref, context), sha)
+    assert.equal(workflowExpression(workflow.jobs[consumer].if, context), true)
+    for (const result of ['failure', 'cancelled']) {
+      context.needs['build-c'].result = result
+      assert.equal(workflowExpression(workflow.jobs[consumer].if, context), false, result)
+    }
+    context.github.event_name = 'workflow_run'
+    context.needs['build-c'].result = 'skipped'
+    assert.equal(workflowExpression(producer.if, context), false)
+    assert.equal(workflowExpression(workflow.jobs[consumer].if, context), true)
+    assert.equal(workflowExpression(workflow.jobs[consumer].if, { ...context, cancelled: () => true }), false)
+  })
+}
+
+for (const [file, publication, requiredJobs, name] of [
+  [BUILD_RUNNER_WORKFLOW, 'upload-to-release', ['config', 'resolve-ref', 'build'], 'Runner'],
+  [BUILD_GO_WORKFLOW, 'tag-go-module', ['test'], 'Go'],
+] as const) {
+  test(`${name} release publication survives a skipped manual C build without widening publication`, () => {
+    const workflow = load(readFileSync(file, 'utf8'))
+    const job = workflow.jobs[publication]
+    for (const prerequisite of requiredJobs) {
+      assert.ok([job.needs].flat().includes(prerequisite), `publication must wait for ${prerequisite}`)
+    }
+    const context = {
+      github: { event_name: 'workflow_run', event: { workflow_run: { event: 'release' } } },
+      inputs: {},
+      needs: Object.fromEntries(requiredJobs.map((prerequisite) => [prerequisite, { result: 'success' }])),
+      cancelled: () => false,
+      always: () => true,
+      success: () => false,
+      failure: () => false,
+    }
+    assert.equal(workflowExpression(workflow.jobs['build-c'].if, context), false)
+    // Actions adds success() when no status function is present. A skipped ancestor
+    // makes that default false even after the immediate build/test job succeeds.
+    assert.match(
+      job.if,
+      /\b(?:always|cancelled|success|failure)\s*\(/,
+      'release publication must override implicit success() after the manual C build is skipped',
+    )
+    assert.equal(workflowExpression(job.if, context), true, 'a successful release must publish')
+    assert.equal(workflowExpression(job.if, { ...context, cancelled: () => true }), false)
+
+    for (const prerequisite of requiredJobs) {
+      for (const result of ['failure', 'cancelled', 'skipped']) {
+        assert.equal(
+          workflowExpression(job.if, {
+            ...context,
+            needs: { ...context.needs, [prerequisite]: { result } },
+          }),
+          false,
+          `${prerequisite}=${result} must prevent publication`,
+        )
+      }
+    }
+    for (const [event, upstreamEvent] of [
+      ['workflow_dispatch', 'release'],
+      ['workflow_call', 'release'],
+      ['push', 'release'],
+      ['workflow_run', 'push'],
+      ['workflow_run', 'pull_request'],
+      ['workflow_run', 'workflow_dispatch'],
+      ['workflow_run', 'schedule'],
+    ]) {
+      assert.equal(
+        workflowExpression(job.if, {
+          ...context,
+          github: { event_name: event, event: { workflow_run: { event: upstreamEvent } } },
+        }),
+        false,
+        `${event}/${upstreamEvent} must not publish`,
+      )
+    }
+  })
+}
+
+test('manual Runner identity uses its own C artifact while reusable callers keep their selected source', () => {
+  const workflow = load(readFileSync(BUILD_RUNNER_WORKFLOW, 'utf8'))
+  const step = workflow.jobs.build.steps.find((step: any) => step.name === 'Resolve artifact identity')
+  const fixture = mkdtempSync(join(tmpdir(), 'boxlite-runner-source-'))
+  try {
+    for (const [event, inputSource, expected] of [
+      ['workflow_dispatch', '', 'artifact'],
+      ['workflow_dispatch', 'artifact', 'artifact'],
+      ['workflow_dispatch', 'release', 'release'],
+      ['workflow_run', '', 'release'],
+    ]) {
+      const output = join(fixture, `${event}-${inputSource || 'direct'}`)
+      const context = { github: { event_name: event }, inputs: { libboxlite_source: inputSource } }
+      const source = workflowExpression(step.env.INPUT_SOURCE, context) ?? ''
+      const result = spawnSync('bash', ['-euo', 'pipefail', '-c', step.run], {
+        cwd: REPO_ROOT,
+        env: { ...process.env, BUILD_SHA: 'a'.repeat(40), INPUT_SOURCE: source, GITHUB_OUTPUT: output },
+        encoding: 'utf8',
+      })
+      assert.equal(result.status, 0, result.stderr)
+      const fields = Object.fromEntries(
+        readFileSync(output, 'utf8')
+          .trim()
+          .split('\n')
+          .map((line) => line.split('=')),
+      )
+      assert.equal(fields.source, expected, `${event}: ${inputSource || 'direct'}`)
+      assert.equal(fields.archive.includes('a'.repeat(40)), expected === 'artifact')
+      if (inputSource) assert.equal(workflowExpression(workflow.jobs['build-c'].if, context), false)
+    }
+  } finally {
+    rmSync(fixture, { recursive: true, force: true })
+  }
+})
+
+test('Go builds select their C artifact by trigger', () => {
+  const workflow = load(readFileSync(BUILD_GO_WORKFLOW, 'utf8'))
+  const steps = workflow.jobs.test.steps
+  const download = steps.find((step: any) => step.name === 'Download commit libboxlite.a')
+  assert.ok(download, 'manual Go tests must consume their same-run C SDK artifact')
+  const extract = steps.find((step: any) => step.name === 'Extract commit libboxlite.a')
+  assert.ok(extract, 'manual Go tests must extract their same-run C SDK artifact')
+  assertShellLine(
+    extract.run,
+    /cp "\/tmp\/\$\(basename "\$archive" \.tar\.gz\)\/lib\/libboxlite\.a" sdks\/go\/libboxlite\.a/,
+  )
+  const release = steps.find((step: any) => step.name === 'Download prebuilt library')
+  const context = {
+    github: { event_name: 'workflow_dispatch' },
+  }
+  assert.equal(workflowExpression(download.if, context), true)
+  assert.equal(workflowExpression(extract.if, context), true)
+  assert.equal(workflowExpression(release.if, context), false)
+  for (const target of ['linux-x64-gnu', 'linux-arm64-gnu', 'darwin-arm64']) {
+    const name = download.with.name.replace(/\$\{\{(.*?)\}\}/g, (_match: string, expression: string) =>
+      workflowExpression(expression, { matrix: { target } }),
+    )
+    assert.equal(name, `c-sdk-${target}`)
+  }
+  context.github.event_name = 'workflow_run'
+  assert.equal(workflowExpression(download.if, context), false)
+  assert.equal(workflowExpression(extract.if, context), false)
+  assert.equal(workflowExpression(release.if, context), true)
+})
+
+test('Go release checkout and archive follow the C run when main has advanced', () => {
+  const workflow = load(readFileSync(BUILD_GO_WORKFLOW, 'utf8'))
+  const releaseSha = 'a'.repeat(40)
+  const mainSha = 'b'.repeat(40)
+  const github = { event_name: 'workflow_run', sha: mainSha, run_id: 20, event: { workflow_run: { head_sha: releaseSha, id: 10 } } }
+  const configJob = workflow.jobs.config.uses
+    ? load(readFileSync(join(REPO_ROOT, '.github/workflows/config.yml'), 'utf8')).jobs.config
+    : workflow.jobs.config
+  const checkout = configJob.steps.find((step: any) => step.uses?.startsWith('actions/checkout@'))
+  assert.equal(checkout.with?.ref ? workflowExpression(checkout.with.ref, { github }) : github.sha, releaseSha)
+  const testCheckout = workflow.jobs.test.steps.find((step: any) => step.uses?.startsWith('actions/checkout@'))
+  assert.equal(workflowExpression(testCheckout.with?.ref ?? 'github.sha', {
+    github,
+    needs: { config: { outputs: { sha: releaseSha } } },
+  }), releaseSha)
+  const tagCheckout = workflow.jobs['tag-go-module'].steps.find((step: any) => step.uses?.startsWith('actions/checkout@'))
+  assert.equal(workflowExpression(tagCheckout.with?.ref ?? 'github.sha', { github }), releaseSha)
+  const artifact = workflow.jobs.test.steps.find((step: any) => step.name === 'Download C release run artifact')
+  assert.equal(workflowExpression(artifact?.with?.['run-id'] ?? 'github.run_id', { github }), 10)
+})
+
+test('Go release refuses a same-name workflow before trusting its run', () => {
+  const workflow = load(readFileSync(BUILD_GO_WORKFLOW, 'utf8'))
+  const github = {
+    event_name: 'workflow_run',
+    event: { workflow_run: { conclusion: 'success', event: 'release' } },
+  }
+  const step = workflow.jobs.config.steps?.find((candidate: any) => candidate.name === 'Verify C release producer')
+  if (!step) {
+    assert.equal(workflowExpression(workflow.jobs.config.if, { github }), false, 'a name-only producer enters Go configuration')
+    return
+  }
+  const fixture = mkdtempSync(join(tmpdir(), 'boxlite-go-producer-'))
+  try {
+    writeFileSync(join(fixture, 'gh'), '#!/bin/sh\nprintf "245927919\\n"\n', { mode: 0o755 })
+    const env = {
+      ...process.env,
+      PATH: fixture + ':' + process.env.PATH,
+      GITHUB_REPOSITORY: 'boxlite-ai/boxlite',
+      C_REPOSITORY: 'boxlite-ai/boxlite',
+      C_WORKFLOW_PATH: '.github/workflows/build-c.yml',
+      C_SHA: 'a'.repeat(40),
+      C_RUN_ID: '10',
+    }
+    const run = (id: string, path = env.C_WORKFLOW_PATH) => spawnSync('bash', ['-c', step.run], {
+      env: { ...env, C_WORKFLOW_ID: id, C_WORKFLOW_PATH: path },
+      encoding: 'utf8',
+    })
+    const accepted = run('245927919')
+    assert.equal(accepted.status, 0, accepted.stderr)
+    assert.notEqual(run('245927920').status, 0, 'the producer ID must match')
+    assert.notEqual(run('245927919', '.github/workflows/other.yml').status, 0, 'the producer path must match')
+  } finally {
+    rmSync(fixture, { recursive: true, force: true })
+  }
+})
+
+test('Go publication refuses a product tag that moves during the matrix', () => {
+  const workflow = load(readFileSync(BUILD_GO_WORKFLOW, 'utf8'))
+  const step = workflow.jobs['tag-go-module'].steps.find((candidate: any) => candidate.name === 'Create Go module tag')
+  const fixture = mkdtempSync(join(tmpdir(), 'boxlite-go-release-tag-'))
+  const origin = join(fixture, 'remote.git')
+  // Git hooks export repository selectors that override the fixture's cwd.
+  const fixtureEnvironment = Object.fromEntries(
+    Object.entries(process.env).filter(([name]) => !name.startsWith('GIT_')),
+  )
+  const git = (...args: string[]) => {
+    const result = spawnSync('git', args, { cwd: fixture, encoding: 'utf8', env: fixtureEnvironment })
+    assert.equal(result.status, 0, result.stderr)
+    return result.stdout.trim()
+  }
+  try {
+    git('init', '--quiet', '-b', 'main')
+    git('init', '--quiet', '--bare', origin)
+    git('config', 'user.name', 'BoxLite test')
+    git('config', 'user.email', 'test@example.invalid')
+    writeFileSync(join(fixture, 'Cargo.toml'), '[workspace.package]\nversion = "0.12.0"\n')
+    git('add', 'Cargo.toml')
+    git('commit', '--quiet', '-m', 'release')
+    const releaseSha = git('rev-parse', 'HEAD')
+    git('remote', 'add', 'origin', origin)
+    git('tag', 'v0.12.0', releaseSha)
+    git('push', '--quiet', 'origin', 'refs/tags/v0.12.0')
+    git('commit', '--quiet', '--allow-empty', '-m', 'new main')
+    git('push', '--quiet', '--force', 'origin', 'HEAD:refs/tags/v0.12.0')
+    git('checkout', '--quiet', '--detach', releaseSha)
+    const run = () => spawnSync('bash', ['-c', step.run], {
+      cwd: fixture,
+      env: { ...fixtureEnvironment, C_SHA: releaseSha, RELEASE_TAG: 'v0.12.0' },
+      encoding: 'utf8',
+    })
+    assert.notEqual(run().status, 0, 'a moved product tag must block the Go module tag')
+    assert.equal(git('ls-remote', 'origin', 'refs/tags/sdks/go/v0.12.0'), '')
+    git('push', '--quiet', 'origin', ':refs/tags/v0.12.0')
+    assert.notEqual(run().status, 0, 'a deleted product tag must block publication')
+    git('push', '--quiet', 'origin', 'refs/tags/v0.12.0')
+    const published = run()
+    assert.equal(published.status, 0, published.stderr)
+    assert.equal(git('ls-remote', 'origin', 'refs/tags/sdks/go/v0.12.0').split(/\s/)[0], releaseSha)
+    const retry = run()
+    assert.equal(retry.status, 0, retry.stderr)
+    git('tag', '-a', 'sdks/go/v0.12.0', '-m', 'annotated release', releaseSha)
+    git('push', '--quiet', '--force', 'origin', 'refs/tags/sdks/go/v0.12.0')
+    const annotated = git('ls-remote', '--refs', 'origin', 'refs/tags/sdks/go/v0.12.0')
+    git('remote', 'set-url', '--push', 'origin', join(fixture, 'read-only-remote'))
+    const annotatedRetry = run()
+    assert.equal(annotatedRetry.status, 0, annotatedRetry.stderr)
+    assert.equal(git('ls-remote', '--refs', 'origin', 'refs/tags/sdks/go/v0.12.0'), annotated)
+  } finally {
+    rmSync(fixture, { recursive: true, force: true })
+  }
+})
+
+test('Go release compares the public tarball before extracting the C library', () => {
+  const workflow = load(readFileSync(BUILD_GO_WORKFLOW, 'utf8'))
+  const step = workflow.jobs.test.steps.find((candidate: any) => candidate.name === 'Download prebuilt library')
+  const fixture = mkdtempSync(join(tmpdir(), 'boxlite-go-archive-'))
+  const version = `9000.${process.pid}.${Date.now()}`
+  const target = 'linux-x64-gnu'
+  const archiveDir = `boxlite-c-v${version}-${target}`
+  const publicArchive = join(fixture, 'public.tar.gz')
+  const runArchive = join(fixture, 'c-release-run', `${archiveDir}.tar.gz`)
+  const library = join(fixture, 'sdks/go/libboxlite.a')
+  try {
+    mkdirSync(join(fixture, 'payload', archiveDir, 'lib'), { recursive: true })
+    mkdirSync(join(fixture, 'c-release-run'))
+    mkdirSync(join(fixture, 'sdks/go'), { recursive: true })
+    writeFileSync(join(fixture, 'payload', archiveDir, 'lib/libboxlite.a'), 'public C bytes')
+    writeFileSync(join(fixture, 'Cargo.toml'), `[workspace.package]\nversion = "${version}"\n`)
+    const tar = spawnSync('tar', ['czf', publicArchive, '-C', join(fixture, 'payload'), archiveDir], { encoding: 'utf8' })
+    assert.equal(tar.status, 0, tar.stderr)
+    writeFileSync(join(fixture, 'curl'), [
+      '#!/bin/sh',
+      'while [ "$#" -gt 0 ]; do',
+      '  if [ "$1" = "-o" ]; then exec cp "$PUBLIC_ARCHIVE" "$2"; fi',
+      '  shift',
+      'done',
+      'exec cat "$PUBLIC_ARCHIVE"',
+      '',
+    ].join('\n'), { mode: 0o755 })
+    const run = () => spawnSync('bash', ['-c', step.run.replaceAll('${{ matrix.target }}', target)], {
+      cwd: fixture,
+      env: {
+        ...process.env, PATH: fixture + ':' + process.env.PATH, PUBLIC_ARCHIVE: publicArchive,
+        RUNNER_TEMP: fixture, GITHUB_REPOSITORY: 'boxlite-ai/boxlite', RELEASE_TAG: `v${version}`, PLATFORM: target,
+      },
+      encoding: 'utf8',
+    })
+    writeFileSync(runArchive, 'different C run bytes')
+    assert.notEqual(run().status, 0, 'different public bytes must not enter Go tests')
+    assert.equal(existsSync(library), false)
+    rmSync(runArchive)
+    assert.notEqual(run().status, 0, 'the C run tarball is required')
+    assert.equal(existsSync(library), false)
+    writeFileSync(runArchive, readFileSync(publicArchive))
+    const verified = run()
+    assert.equal(verified.status, 0, verified.stderr)
+    assert.equal(readFileSync(library, 'utf8'), 'public C bytes')
+  } finally {
+    rmSync(join(tmpdir(), archiveDir), { recursive: true, force: true })
+    rmSync(fixture, { recursive: true, force: true })
+  }
+})
+
 test('the cloud E2E suite is reachable only from a deploy or a human', () => {
   const workflow = load(readFileSync(E2E_CLOUD_WORKFLOW, 'utf8'))
 
@@ -1642,11 +1977,11 @@ test('a job calling a reusable workflow grants at least what that workflow asks 
       checked += 1
     }
   }
-  // The same thirteen the input sweep below counts: six `config.yml` loads,
-  // deploy-infra's four, and mdeploy-all's three. The exact count, not a
+  // The same fourteen the input sweep below counts: five `config.yml` loads,
+  // deploy-infra's four, mdeploy-all's three, and two manual SDK builds. The exact count, not a
   // floor, so a call that stops being swept fails here rather than being
   // absorbed — and adding one means changing this number in the same commit.
-  assert.equal(checked, 13, `expected every local reusable call to be swept, saw ${checked}`)
+  assert.equal(checked, 14, `expected every local reusable call to be swept, saw ${checked}`)
 })
 
 test('every reusable workflow is called with the inputs it declares', () => {
@@ -1686,14 +2021,14 @@ test('every reusable workflow is called with the inputs it declares', () => {
       checked += 1
     }
   }
-  // Every local `uses:` in the directory, not just the deploy path's: six
+  // Every local `uses:` in the directory, not just the deploy path's: five
   // build workflows load `config.yml`, `deploy-infra.yml` calls four, and
-  // mdeploy-all makes three — one commit-line publish and the release line's
-  // two, where it made four until the apply and the runner build went inline.
+  // mdeploy-all makes three, and the manual Runner and Go builds each call
+  // build-c to pair their SDK sources with the native library from that commit.
   // The exact count, not a floor: a call that stops being swept is the drop
   // this exists to catch, and one that appears is a caller nobody reviewed.
   // Adding a legitimate one means changing this number in the same commit.
-  assert.equal(checked, 13, `expected every reusable-workflow call swept, saw ${checked}`)
+  assert.equal(checked, 14, `expected every reusable-workflow call swept, saw ${checked}`)
 })
 
 /**

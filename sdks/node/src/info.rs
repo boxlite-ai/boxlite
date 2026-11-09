@@ -257,6 +257,9 @@ pub struct JsBoxInfo {
     /// Allocated memory in MiB
     pub memory_mib: u32,
 
+    /// Guest privilege recorded at creation, when the producer reported it.
+    pub privileged: Option<bool>,
+
     /// Network configuration and resolved local publications, when available.
     pub network: Either<JsNetworkInfo, Null>,
 
@@ -295,6 +298,7 @@ impl From<BoxInfo> for JsBoxInfo {
             image: info.image,
             cpus: info.cpus,
             memory_mib: info.memory_mib,
+            privileged: info.privileged,
             network: match info.network {
                 Some(network) => Either::A(JsNetworkInfo::from(network)),
                 None => Either::B(Null),
@@ -333,6 +337,7 @@ mod tests {
             image: "alpine:latest".to_string(),
             cpus: 2,
             memory_mib: 512,
+            privileged: None,
             network,
             labels: HashMap::new(),
             auto_stop: 0,

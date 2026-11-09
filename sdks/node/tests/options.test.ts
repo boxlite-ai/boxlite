@@ -54,6 +54,14 @@ describe("SimpleBoxOptions", () => {
     ]);
   });
 
+  test("forwards guest privileged without capability overrides", async () => {
+    const { SimpleBox } = await import("../lib/simplebox.js");
+    const box = new SimpleBox({ advanced: { privileged: true } });
+    const nativeOptions = (box as any)._boxOpts;
+    expect(nativeOptions.advanced.privileged).toBe(true);
+    expect(nativeOptions.advanced.capabilities).toBeUndefined();
+  });
+
   test("accepts cmd array", () => {
     const opts: SimpleBoxOptions = {
       image: "docker:dind",

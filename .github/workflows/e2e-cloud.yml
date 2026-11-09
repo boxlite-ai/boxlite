@@ -5,9 +5,8 @@
 # matter inside the runner, not the SDK client), then runs the REST
 # e2e pytest suite against the stage selected by `stage`.
 #
-# C and Go SDK tests are excluded — those SDKs wrap libboxlite.a over
-# REST purely to test FFI bindings, not a real user path. Python,
-# Node, and CLI cover the actual user-facing REST surface.
+# Dev also builds C, Go and Rust clients for the shared subdomain cases.
+# Legacy C/Go entry and coverage cases remain excluded below.
 #
 # Does NOT build or deploy the API or runner — the stage is assumed to
 # be already running the version you want to test against.
@@ -53,6 +52,9 @@
 # Optional repo variables (Settings → Variables → Actions):
 #   - BOXLITE_DEV_API_URL    dev target;  defaults to api.dev.boxlite.ai
 #   - BOXLITE_PROD_API_URL   prod target; defaults to api.boxlite.ai
+#
+# Required repository variable for dev subdomain tests:
+#   - BOXLITE_E2E_DOMAIN    full test hostname for p1's organization
 #
 # A key is issued to a maintainer, deliberately. It is therefore
 # mortal: API keys are primary-keyed on (organizationId, userId, name)
@@ -198,9 +200,9 @@ permissions:
 # now bound that damage rather than one: every box the pytest cases create
 # carries auto_stop/auto_delete (apps/e2e/cases/conftest.py), so the stage
 # reclaims it within minutes; and the sweep step below clears what an older
-# run left behind. Boxes from the polyglot drivers and the CLI have neither —
-# they rely on their own teardown, and apps/e2e/README.md says what that
-# leaves open. Note this still bounds rather than eliminates: GitHub retains
+# run left behind. Older standalone polyglot and CLI cases rely on their own
+# teardown; subdomain clients use the bounded pytest service-box fixture.
+# apps/e2e/README.md describes recovery. This still bounds the risk: GitHub retains
 # only the newest *pending* run per group, so intermediate queued runs are
 # superseded before they ever start.
 #
@@ -218,11 +220,11 @@ env:
   STAGE: ${{ inputs.stage || 'dev' }}
 
 jobs:
-  # No trigger gate: workflow_dispatch needs write access and
-  # workflow_call only reaches here from deploy-infra, which is itself
-  # dispatch-only. There is no untrusted event left to filter.
+  # workflow_call has a string stage; restrict it to supported test stages.
+  # Both call and dispatch remain deliberate runs by repository writers.
   e2e:
     name: E2E suite (${{ inputs.stage || 'dev' }})
+    if: ${{ contains(fromJSON('["dev", "prod"]'), inputs.stage || 'dev') }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
@@ -232,8 +234,8 @@ jobs:
       API_URL: >-
         ${{ inputs.api_url
             || ((inputs.stage || 'dev') == 'prod'
-                && (vars.BOXLITE_PROD_API_URL || 'https://api.boxlite.ai/api')
-                || (vars.BOXLITE_DEV_API_URL || 'https://api.dev.boxlite.ai/api')) }}
+                && (vars.BOXLITE_PROD_API_URL || 'https://api.boxlite.ai')
+                || (vars.BOXLITE_DEV_API_URL || 'https://api.dev.boxlite.ai')) }}
       # Blank keeps apps/e2e/lib/images.py deriving the ref from
       # apps/box-images/VERSION, which is right whenever the stage runs the
       # commit under test. A stage pinned to an older box image needs this.
@@ -246,6 +248,12 @@ jobs:
           # UI — the same commit either way, never the caller's default.
           ref: ${{ inputs.ref || github.sha }}
           persist-credentials: false
+
+      - name: Require the shared subdomain (dev)
+        if: ${{ (inputs.stage || 'dev') == 'dev' }}
+        env:
+          BOXLITE_E2E_DOMAIN: ${{ vars.BOXLITE_E2E_DOMAIN }}
+        run: test -n "$BOXLITE_E2E_DOMAIN" || { echo 'Set BOXLITE_E2E_DOMAIN in repository Actions Variables'; exit 1; }
 
       # ── Health check ──────────────────────────────────────────────
       - name: Probe API health
@@ -270,8 +278,8 @@ jobs:
       # quotas — a deployed stage is expected to already have both, and
       # silently UPDATE-ing a shared environment's rows from CI would be
       # worse than failing. Its only writes go through the public API: the
-      # boxes the suite creates and deletes, and the stale ones the sweep
-      # step reclaims.
+      # boxes the suite creates and deletes, the stale ones the sweep
+      # step reclaims, and bindings on its configured test domain.
       - name: Configure pytest profiles
         env:
           BOXLITE_DEV_API_KEY: ${{ (inputs.stage || 'dev') == 'dev' && secrets.BOXLITE_DEV_API_KEY || '' }}
@@ -338,6 +346,19 @@ jobs:
           npm run build
           ls -lh native/ dist/
 
+      - name: Setup Go for subdomain clients
+        if: ${{ (inputs.stage || 'dev') == 'dev' }}
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: sdks/go/go.mod
+          cache: false
+
+      - name: Build C, Go and Rust subdomain clients
+        if: ${{ (inputs.stage || 'dev') == 'dev' }}
+        run: |
+          sudo apt-get install -y --no-install-recommends llvm
+          make build:e2e:drivers SETUP_DONE=1
+
       # ── Python SDK (maturin + PyO3) ──────────────────────────────
       - name: Build & install Python SDK
         run: |
@@ -345,11 +366,12 @@ jobs:
           pip install --break-system-packages --quiet maturin
           maturin build --release
           pip install --break-system-packages --force-reinstall ../../target/wheels/boxlite-*.whl
-          pip install --break-system-packages --quiet pytest pytest-asyncio pytest-timeout
+          pip install --break-system-packages --quiet pytest pytest-asyncio pytest-timeout greenlet
 
       # ── Run pytest ───────────────────────────────────────────────
       # --ignore rationale:
-      #  - C/Go entry+coverage: FFI-binding tests whose SDKs aren't built here.
+      #  - Legacy C/Go entry+coverage: separate drivers not built here;
+      #    test_subdomain uses the current-checkout clients built above.
       #  - node-entry: needs runner journal access (unreachable from GHA
       #    against a remote stage); node-coverage already covers the Node REST
       #    surface without journal checks.
@@ -387,6 +409,7 @@ jobs:
         env:
           BOXLITE_E2E_SKIP_PATH_VERIFY: '1'
           BOXLITE_E2E_PROFILE: p1
+          BOXLITE_E2E_DOMAIN: ${{ (inputs.stage || 'dev') == 'dev' && vars.BOXLITE_E2E_DOMAIN || '' }}
           PYTEST_ADDOPTS: >-
             --ignore=cases/test_c_entry.py --ignore=cases/test_c_coverage.py
             --ignore=cases/test_go_entry.py --ignore=cases/test_go_coverage.py

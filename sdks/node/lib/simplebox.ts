@@ -17,6 +17,7 @@ import type {
   JsBox,
   JsBoxInfo,
   JsBoxOptions,
+  ExecutionInfo,
   JsSshAccount,
   JsSshCaConfig,
   JsSshConfig,
@@ -29,6 +30,7 @@ import type {
   TunnelOptions,
   JsExecStderr,
   JsExecStdout,
+  JsExecution,
 } from "./native-contracts.js";
 
 export type { SocketAddress, TunnelOptions } from "./native-contracts.js";
@@ -383,6 +385,8 @@ export interface ContainerCapabilities {
 }
 
 export interface AdvancedBoxOptions {
+  /** Guest privilege; requires privileged_enabled from a REST server. */
+  privileged?: boolean;
   capabilities?: ContainerCapabilities;
 }
 
@@ -456,9 +460,41 @@ function validateNetworkReplacement(
 }
 
 /**
+ * Box-scoped live executions for a SimpleBox.
+ *
+ * The wrapper resolves the box only when an operation runs, so holding it never
+ * creates or starts anything. An uncreated box lists nothing and cannot recover
+ * or attach a session.
+ */
+export class Executions {
+  /** @internal */
+  constructor(private readonly existingBox: () => Promise<BoxLike | null>) {}
+
+  /** List live executions without creating or starting a box. */
+  async list(): Promise<ExecutionInfo[]> {
+    const box = await this.existingBox();
+    return box ? box.executions().list() : [];
+  }
+
+  /** Recover control without taking output from its current reader. */
+  async get(executionId: string): Promise<JsExecution> {
+    const box = await this.existingBox();
+    if (!box) throw new Error("Box has not been created");
+    return box.executions().get(executionId);
+  }
+
+  /** Attach to a discovered live session; never creates or starts a box. */
+  async attach(executionId: string, stdin = true): Promise<JsExecution> {
+    const box = await this.existingBox();
+    if (!box) throw new Error("Box has not been created");
+    return box.executions().attach(executionId, stdin);
+  }
+}
+
+/**
  * Box-scoped guest SSH control for a SimpleBox.
  *
- * Only `configure` may start the box; `status` and `disable` never start the
+ * Only `configure` may start the box; `status`, `enable` and `disable` never start the
  * VM or its main command. Status results carry no credentials.
  */
 export class SshHandle {
@@ -469,6 +505,12 @@ export class SshHandle {
   async configure(config: SshConfig): Promise<SshStatus> {
     const box = await this.ensureBox();
     return box.ssh.configure(config);
+  }
+
+  /** Enable saved configuration on a running box; preserve healthy connections. */
+  async enable(): Promise<SshStatus> {
+    const box = await this.ensureBox();
+    return box.ssh.enable();
   }
 
   /** Query SSH state without starting the VM or its main command. */
@@ -581,6 +623,7 @@ export class SimpleBox {
   protected _created: boolean | null = null;
   readonly network: NetworkHandle;
   readonly ssh: SshHandle;
+  private readonly _executions: Executions;
 
   /**
    * Create a new SimpleBox.
@@ -643,6 +686,7 @@ export class SimpleBox {
       user: options.user,
       advanced: options.advanced
         ? {
+            privileged: options.advanced.privileged,
             capabilities: options.advanced.capabilities
               ? {
                   add: [...(options.advanced.capabilities.add ?? [])],
@@ -669,6 +713,20 @@ export class SimpleBox {
       },
     );
     this.ssh = new SshHandle(() => this._ensureBox());
+    this._executions = new Executions(async () => {
+      if (this._box) return this._box;
+      if (this._boxPromise) return await this._boxPromise;
+      return null;
+    });
+  }
+
+  /**
+   * Get the live execution namespace without creating or starting the box.
+   *
+   * Usage: `await box.executions().list()`, `await box.executions().get(id)`.
+   */
+  executions(): Executions {
+    return this._executions;
   }
 
   /**

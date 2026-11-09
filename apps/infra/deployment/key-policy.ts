@@ -20,10 +20,11 @@ import { CLICKHOUSE_STAGE_CONFIG_KEYS } from './clickhouse.js'
  * nothing is hydrated unless the deploy demonstrably reads it.
  *
  * Derived from the source that reads them — every *direct* `envOr` / `requireEnv` / `process.env.X`
- * under stack/, deployment/, artifacts/, runner/ and shared/, minus the keys isLocalOnlyDeploymentKey
- * refuses. The test beside this file re-derives that set and fails when the two disagree, so adding a
- * config key to the stack fails until it is added here. That failure is the point: it makes widening
- * what a store can inject a decision someone makes, not something that happens.
+ * under stack/, deployment/, artifacts/, runner/ and shared/, plus mdeploy's exported retention helper,
+ * minus the keys isLocalOnlyDeploymentKey refuses. The test beside this file re-derives that set and
+ * fails when the two disagree, so adding a config key to the stack fails until it is added here. That
+ * failure is the point: it makes widening what a store can inject a decision someone makes, not
+ * something that happens.
  *
  * Direct is the operative word, and errs toward refusing. A name passed to a helper that reads it —
  * `runnerEndpoint('DEFAULT_RUNNER_DOMAIN', …)` — is not derived, so it is not storable; the test says
@@ -72,6 +73,7 @@ export const STORABLE_STAGE_CONFIG_KEYS: readonly string[] = [
   'INCIDENT_IO_HEARTBEAT_ID',
   'INSTANCE_IDS',
   'MAIL_DOMAIN',
+  'MCP_RESOURCE_URL',
   'OIDC_AUDIENCE',
   'OIDC_END_SESSION_ENDPOINT',
   'OIDC_ISSUER_BASE_URL',

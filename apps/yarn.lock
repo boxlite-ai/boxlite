@@ -4780,6 +4780,15 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@hono/node-server@npm:^1.19.9 || ^2.1.3":
+  version: 2.1.5
+  resolution: "@hono/node-server@npm:2.1.5"
+  peerDependencies:
+    hono: ^4 || ^5.0.0-0
+  checksum: 10c0/3c3d5ffcc4a229e532530729b64db623493171bcda7b40ffbac3a46489884f700c881439d8c0d0413cd18793458ca252acedf6a9c13c8c3a024037e47974cacb
+  languageName: node
+  linkType: hard
+
 "@humanfs/core@npm:^0.19.2":
   version: 0.19.2
   resolution: "@humanfs/core@npm:0.19.2"
@@ -6213,6 +6222,37 @@ __metadata:
   version: 0.16.0
   resolution: "@microsoft/tsdoc@npm:0.16.0"
   checksum: 10c0/8883bb0ed22753af7360e9222687fda4eb448f0a574ea34b4596c11e320148b3ae0d24e00f8923df8ba7bc62a46a6f53b9343243a348640d923dfd55d52cd6bb
+  languageName: node
+  linkType: hard
+
+"@modelcontextprotocol/core@npm:2.4.0":
+  version: 2.4.0
+  resolution: "@modelcontextprotocol/core@npm:2.4.0"
+  dependencies:
+    zod: "npm:^4.2.0"
+  checksum: 10c0/4dd07f18c7eee3f3cf7bcea9a7dd11799f13ce2255fda9ae77aff9978a21d16ee4026f63e5a3e13d5d91209acc3e7d6b97d459c1ff1b78f3b872eb0597b3dd53
+  languageName: node
+  linkType: hard
+
+"@modelcontextprotocol/node@npm:2.1.2":
+  version: 2.1.2
+  resolution: "@modelcontextprotocol/node@npm:2.1.2"
+  dependencies:
+    "@hono/node-server": "npm:^1.19.9 || ^2.1.3"
+    hono: "npm:^4.11.4"
+  peerDependencies:
+    "@modelcontextprotocol/server": ^2.4.0
+  checksum: 10c0/0aebe06454b9e583658f702fd1c8af4eddb91f91a7b5dd7b7ffdbe19d0b8503400e2cbcf8b6511c14767fde5ffcfc73154921c52644269b5e4eb41d600be2594
+  languageName: node
+  linkType: hard
+
+"@modelcontextprotocol/server@npm:2.4.0":
+  version: 2.4.0
+  resolution: "@modelcontextprotocol/server@npm:2.4.0"
+  dependencies:
+    "@modelcontextprotocol/core": "npm:2.4.0"
+    zod: "npm:^4.2.0"
+  checksum: 10c0/e52966e6f115296c6dbfd08550e81773f5f71fb4809c7411b11fcc619b3bd621b07f296a5571de777ea2351eca7003e6b3f4d172fe8c21563be1205b1ee4f0ec
   languageName: node
   linkType: hard
 
@@ -10678,6 +10718,31 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@rekog/mcp-nest@npm:2.0.9":
+  version: 2.0.9
+  resolution: "@rekog/mcp-nest@npm:2.0.9"
+  dependencies:
+    multer: "npm:^2.3.0"
+    path-to-regexp: "npm:^8.4.2"
+  peerDependencies:
+    "@modelcontextprotocol/core": ^2.0.0-beta.5
+    "@modelcontextprotocol/node": ^2.0.0-beta.5
+    "@modelcontextprotocol/server": ^2.0.0-beta.5
+    "@nestjs/common": ">=9.0.0"
+    "@nestjs/core": ">=9.0.0"
+    "@nestjs/microservices": ">=9.0.0"
+    "@nestjs/platform-fastify": ^11.1.5 || ^12.0.0
+    express: ">=4.0.0"
+    reflect-metadata: ^0.2.2
+    rxjs: ^7.1.0
+    zod: ^4.3.5
+  peerDependenciesMeta:
+    "@nestjs/platform-fastify":
+      optional: true
+  checksum: 10c0/1df759b88240b026415eda556d7f4a193184dbb3a3d435ec1d488292cefdd8f72a8b187a6af4ac1d1207d7e2d8f94003d1e0a5c6964a9f431b732098eb750e04
+  languageName: node
+  linkType: hard
+
 "@remix-run/router@npm:1.22.0":
   version: 1.22.0
   resolution: "@remix-run/router@npm:1.22.0"
@@ -14715,6 +14780,13 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@visulima/disposable-email-domains@npm:2.0.20":
+  version: 2.0.20
+  resolution: "@visulima/disposable-email-domains@npm:2.0.20"
+  checksum: 10c0/5d3453d48a41e46fe1788ace4324e19c7ac823ac933405c040b27e75c77490dcf791cc564558024f7d6c9487371ad35f9e9a1bb3dad1454c2849aadc3a972eff
+  languageName: node
+  linkType: hard
+
 "@vitejs/plugin-react@npm:^4.2.0, @vitejs/plugin-react@npm:^4.3.3":
   version: 4.7.0
   resolution: "@vitejs/plugin-react@npm:4.7.0"
@@ -16992,6 +17064,9 @@ __metadata:
     "@iarna/toml": "npm:^2.2.5"
     "@iconify-json/pixelarticons": "npm:^1.2.6"
     "@iconify/react": "npm:^6.0.2"
+    "@modelcontextprotocol/core": "npm:2.4.0"
+    "@modelcontextprotocol/node": "npm:2.1.2"
+    "@modelcontextprotocol/server": "npm:2.4.0"
     "@nest-lab/throttler-storage-redis": "npm:^1.1.0"
     "@nestjs-modules/ioredis": "npm:^2.0.2"
     "@nestjs/axios": "npm:^4.0.0"
@@ -17071,6 +17146,7 @@ __metadata:
     "@radix-ui/react-tabs": "npm:^1.1.3"
     "@radix-ui/react-toggle-group": "npm:^1.1.11"
     "@radix-ui/react-tooltip": "npm:^1.1.8"
+    "@rekog/mcp-nest": "npm:2.0.9"
     "@scalar/astro": "npm:0.1.8"
     "@socket.io/redis-adapter": "npm:^8.3.0"
     "@socket.io/redis-emitter": "npm:^5.1.0"
@@ -17104,6 +17180,8 @@ __metadata:
     "@types/react-instantsearch-dom": "npm:^6.12.9"
     "@types/shell-quote": "npm:^1.7.5"
     "@types/tar": "npm:^6.1.13"
+    "@types/ws": "npm:^8.5.12"
+    "@visulima/disposable-email-domains": "npm:2.0.20"
     "@vitejs/plugin-react": "npm:^4.2.0"
     "@vitest/coverage-v8": "npm:^4.1.8"
     "@vitest/ui": "npm:^1.3.1"
@@ -17245,6 +17323,7 @@ __metadata:
     vite-plugin-svgr: "npm:^4.3.0"
     vitest: "npm:^4.1.8"
     webpack-cli: "npm:^5.1.4"
+    ws: "npm:^8.21.3"
     xdg-basedir: "npm:^5.1.0"
     xml2js: "npm:^0.6.2"
     yaml: "npm:^2.8.0"
@@ -24072,6 +24151,13 @@ __metadata:
   languageName: node
   linkType: hard
 
+"hono@npm:^4.11.4":
+  version: 4.13.14
+  resolution: "hono@npm:4.13.14"
+  checksum: 10c0/fdedcb49186e3a5eb0fff39c4fd66112718dc1a98c6df9a385f2fc4799c0e59140e3c45fbac12929d658b659d9eb9ddb9ac09161104336023c23f335668c93fd
+  languageName: node
+  linkType: hard
+
 "hosted-git-info@npm:^7.0.0":
   version: 7.0.2
   resolution: "hosted-git-info@npm:7.0.2"
@@ -29540,6 +29626,17 @@ __metadata:
   languageName: node
   linkType: hard
 
+"multer@npm:^2.3.0":
+  version: 2.5.0
+  resolution: "multer@npm:2.5.0"
+  dependencies:
+    append-field: "npm:^1.0.0"
+    busboy: "npm:^1.6.0"
+    type-is: "npm:^1.6.18"
+  checksum: 10c0/a89df3eae74ec2e9bfcbf272c8ce7e7f18597bd855ac193568103d83fbd8cb26d4539025a19df1bd52dc05aa0090745949f0ec90aecf479ca0fdc8a1d80121ee
+  languageName: node
+  linkType: hard
+
 "multicast-dns@npm:^7.2.5":
   version: 7.2.5
   resolution: "multicast-dns@npm:7.2.5"
@@ -31131,7 +31228,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"path-to-regexp@npm:8.4.2, path-to-regexp@npm:^8.0.0":
+"path-to-regexp@npm:8.4.2, path-to-regexp@npm:^8.0.0, path-to-regexp@npm:^8.4.2":
   version: 8.4.2
   resolution: "path-to-regexp@npm:8.4.2"
   checksum: 10c0/05b115c49b47ad252ce05faa32930f643f23769c68b8bcfe78ad833545140c48bbffb3266986d6c8d5db13a64cf12e07e0d72d9882cab830efeefa553533ebaf
@@ -40112,9 +40209,9 @@ __metadata:
   languageName: node
   linkType: hard
 
-"ws@npm:8.18.0":
-  version: 8.18.0
-  resolution: "ws@npm:8.18.0"
+"ws@npm:^8.21.3":
+  version: 8.22.0
+  resolution: "ws@npm:8.22.0"
   peerDependencies:
     bufferutil: ^4.0.1
     utf-8-validate: ">=5.0.2"
@@ -40123,37 +40220,7 @@ __metadata:
       optional: true
     utf-8-validate:
       optional: true
-  checksum: 10c0/25eb33aff17edcb90721ed6b0eb250976328533ad3cd1a28a274bd263682e7296a6591ff1436d6cbc50fa67463158b062f9d1122013b361cec99a05f84680e06
-  languageName: node
-  linkType: hard
-
-"ws@npm:^8.13.0, ws@npm:^8.18.0, ws@npm:^8.2.3":
-  version: 8.20.1
-  resolution: "ws@npm:8.20.1"
-  peerDependencies:
-    bufferutil: ^4.0.1
-    utf-8-validate: ">=5.0.2"
-  peerDependenciesMeta:
-    bufferutil:
-      optional: true
-    utf-8-validate:
-      optional: true
-  checksum: 10c0/ce162433218399cdedeb76fd33363d4d86a7d910058d4e3c679dce08cea65d6da6b39f11baa4d7808d024cf46ed88f6a05c17611621aaad8fc5e62edacc30c5d
-  languageName: node
-  linkType: hard
-
-"ws@npm:~8.18.3":
-  version: 8.18.3
-  resolution: "ws@npm:8.18.3"
-  peerDependencies:
-    bufferutil: ^4.0.1
-    utf-8-validate: ">=5.0.2"
-  peerDependenciesMeta:
-    bufferutil:
-      optional: true
-    utf-8-validate:
-      optional: true
-  checksum: 10c0/eac918213de265ef7cb3d4ca348b891a51a520d839aa51cdb8ca93d4fa7ff9f6ccb339ccee89e4075324097f0a55157c89fa3f7147bde9d8d7e90335dc087b53
+  checksum: 10c0/7304d14ef38898dd366a528a85e2da389c4eebf30f4ce8a007bd2dce6025f9b619cefe44fe2354f0bad0ec541b1c9a4da06a3f3e046ab56f01fd52d5784ecfb2
   languageName: node
   linkType: hard
 
@@ -40406,7 +40473,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"zod@npm:^3.25.76 || ^4, zod@npm:^4.1.11, zod@npm:^4.3.6, zod@npm:^4.6.6":
+"zod@npm:^3.25.76 || ^4, zod@npm:^4.1.11, zod@npm:^4.2.0, zod@npm:^4.3.6, zod@npm:^4.6.6":
   version: 4.6.7
   resolution: "zod@npm:4.6.7"
   checksum: 10c0/4ce2eb14034317b7254e347ca37b5ad591cf8333147030cf05b9b5d31692d45073f7f2747aa50cf8c6b29012194d2b22978cecc89969cf34a0d18e89d0ee7d7b

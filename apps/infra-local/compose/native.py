@@ -5,8 +5,8 @@ processes (API, registry proxy, runner, proxy, dashboard) up/down/status/restart
 builds the Go binaries, tails logs, resets DB state, seeds init data, and rebuilds stuck L1
 boxes. Daemons are spawned DETACHED (`start_new_session=True`) so they outlive
 this process; stopped via SIGTERM→SIGKILL on the process **group**, which reaps
-the `nx serve`/go grandchildren cleanly (the bash needed a pkill-by-name sweep
-for this; we keep that only as a belt-and-suspenders fallback).
+the `nx serve`/go grandchildren. Start-time records prevent accidental PID
+reuse; unverified listeners are reported as conflicts and left untouched.
 
 This is the L2 half of the orchestrator; L1 (the BoxLite boxes) lives in
 `orchestrator.py` + `services.py`. `up`/`down`/`status`/`reset`/`rebuild` tie the
@@ -16,6 +16,7 @@ two together.
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import shutil
 import signal
@@ -156,32 +157,31 @@ def _port_listening(port: int) -> bool:
         return False
 
 
-def _kill_port_listeners(port: int) -> None:
-    out = subprocess.run(
-        ["lsof", "-ti", f":{port}", "-sTCP:LISTEN"], capture_output=True, text=True
-    ).stdout
-    for token in out.split():
-        try:
-            os.kill(int(token), signal.SIGKILL)
-        except (ValueError, OSError):
-            continue  # PID already gone or unparseable — skip it, keep killing the rest
+def _process_started_at(pid: int) -> str:
+    return subprocess.run(
+        ["ps", "-p", str(pid), "-o", "lstart="], capture_output=True, text=True, check=False
+    ).stdout.strip()
 
 
 def _component_pid(p: _Paths, name: str) -> int | None:
-    """Recorded PID if still alive, else None (cleaning a stale pidfile)."""
+    """Verify birth time and detached-group identity; legacy records fail closed.
+
+    ps has one-second precision and signaling follows a separate identity read:
+    this prevents accidental reuse, not hostile process replacement.
+    """
     pf = _pid_file(p, name)
     if not pf.exists():
         return None
     try:
-        pid = int(pf.read_text().strip())
-    except (ValueError, OSError):
+        record = json.loads(pf.read_text())
+        pid, started_at = record["pid"], record["started_at"]
+        if type(pid) is not int or pid <= 1 or not isinstance(started_at, str) or not started_at:
+            return None
+        if os.getpgid(pid) != pid or _process_started_at(pid) != started_at:
+            return None
+    except (ValueError, OSError, KeyError, TypeError):
         return None
-    try:
-        os.kill(pid, 0)
-        return pid
-    except OSError:
-        pf.unlink(missing_ok=True)
-        return None
+    return pid
 
 
 def _wait_port(port: int, timeout_s: int) -> bool:
@@ -234,7 +234,6 @@ class _Component:
     argv: list[str]
     cwd: Path | None
     env: dict[str, str]   # extra env layered on top of os.environ
-    pkill_pattern: str    # orphan-sweep fallback (matches the bash pkill -f)
 
 
 def _components(p: _Paths) -> dict[str, _Component]:
@@ -259,7 +258,7 @@ def _components(p: _Paths) -> dict[str, _Component]:
     return {
         "api": _Component(
             "api", PORT_API, "http", f"http://localhost:{PORT_API}/api/health", 180,
-            ["corepack", "yarn", "nx", "serve", "api"], apps, api_env, "nx.*serve.*api",
+            ["corepack", "yarn", "nx", "serve", "api"], apps, api_env,
         ),
         "runner": _Component(
             "runner", PORT_RUNNER, "tcp", "", 60,
@@ -284,7 +283,6 @@ def _components(p: _Paths) -> dict[str, _Component]:
                 "OTEL_TRACING_ENABLED": "true",
                 "OTEL_EXPORTER_OTLP_ENDPOINT": _OTEL_OTLP_HTTP_URL,
             },
-            "boxlite-runner$",
         ),
         "proxy": _Component(
             "proxy", PORT_PROXY, "tcp", "", 30,
@@ -293,6 +291,9 @@ def _components(p: _Paths) -> dict[str, _Component]:
                 "PROXY_PORT": str(PORT_PROXY),
                 "PROXY_PROTOCOL": "http",
                 "PROXY_API_KEY": "boxlite-proxy-key",
+                # Same value the API mints named-tunnel URLs with (apps/api/.env);
+                # the proxy routes `<name>.app.localhost` through the API's lookup.
+                "PROXY_APP_DOMAIN": f"app.localhost:{PORT_PROXY}",
                 "BOXLITE_API_URL": f"http://localhost:{PORT_API}/api",
                 "OIDC_CLIENT_ID": "boxlite",
                 "OIDC_AUDIENCE": "boxlite",
@@ -304,7 +305,6 @@ def _components(p: _Paths) -> dict[str, _Component]:
                 "OTEL_TRACING_ENABLED": "true",
                 "OTEL_EXPORTER_OTLP_ENDPOINT": _OTEL_OTLP_HTTP_URL,
             },
-            "boxlite-proxy$",
         ),
         # Presents the logins the API stored in the shared directory. It refuses
         # a private address as an upstream, so the local registry box is not a
@@ -325,14 +325,12 @@ def _components(p: _Paths) -> dict[str, _Component]:
                 "OTEL_TRACING_ENABLED": "true",
                 "OTEL_EXPORTER_OTLP_ENDPOINT": _OTEL_OTLP_HTTP_URL,
             },
-            "boxlite-registry-proxy$",
         ),
         # VITE_API_URL=/api routes dashboard API calls through the Vite dev proxy
         # (→ localhost:3001) instead of the hard-coded prod default.
         "dashboard": _Component(
             "dashboard", PORT_DASHBOARD, "http", f"http://localhost:{PORT_DASHBOARD}", 120,
             ["corepack", "yarn", "nx", "serve", "dashboard"], apps, {"VITE_API_URL": "/api"},
-            "nx.*serve.*dashboard",
         ),
     }
 
@@ -340,12 +338,15 @@ def _components(p: _Paths) -> dict[str, _Component]:
 # ── single-process supervision ─────────────────────────────────────────────
 def start_component(p: _Paths, comp: _Component) -> bool:
     if _component_pid(p, comp.name) is not None:
-        ok(f"{comp.name} already running")
-        return True
-    if _port_listening(comp.port):  # stale listener from a crashed prior session
-        warn(f"port {comp.port} already in use — killing prior listener")
-        _kill_port_listeners(comp.port)
-        time.sleep(1)
+        ready = orchestrator._http_probe(comp.health_url) if comp.health == "http" else _port_listening(comp.port)
+        if ready:
+            ok(f"{comp.name} already healthy")
+            return True
+        warn(f"{comp.name} is alive but unhealthy — restarting its recorded process")
+        stop_component(p, comp.name)
+    if _port_listening(comp.port):
+        err(f"{comp.name}: port {comp.port} belongs to an unverified process; stop it explicitly before retrying")
+        return False
     log(f"starting {comp.name}...")
     p.logs.mkdir(parents=True, exist_ok=True)
     with open(_log_file(p, comp.name), "ab") as logf:
@@ -357,7 +358,11 @@ def start_component(p: _Paths, comp: _Component) -> bool:
             stderr=subprocess.STDOUT,
             start_new_session=True,  # detach: survives our exit + own process group
         )
-    _pid_file(p, comp.name).write_text(str(proc.pid))
+    started_at = _process_started_at(proc.pid)
+    if not started_at:
+        err(f"{comp.name} exited before its process identity could be recorded — see {_log_file(p, comp.name)}")
+        return False
+    _pid_file(p, comp.name).write_text(json.dumps({"pid": proc.pid, "started_at": started_at}))
     healthy = (
         _wait_http(comp.health_url, comp.timeout_s)
         if comp.health == "http"
@@ -371,24 +376,22 @@ def start_component(p: _Paths, comp: _Component) -> bool:
     return False
 
 
-def _terminate_group(pid: int) -> None:
-    """SIGTERM the process group, then SIGKILL after 5s if still alive."""
-    try:
-        pgid = os.getpgid(pid)
-    except OSError:
+def _terminate_group(p: _Paths, name: str, pid: int) -> None:
+    """Revalidate the recorded identity before TERM and any KILL escalation."""
+    if _component_pid(p, name) != pid:
         return
     try:
-        os.killpg(pgid, signal.SIGTERM)
+        os.killpg(pid, signal.SIGTERM)
     except OSError:
         pass  # best-effort: the group may already be gone (race) — fall through to the wait
     for _ in range(5):
         time.sleep(1)
-        try:
-            os.kill(pid, 0)
-        except OSError:
-            return  # gone
+        if _component_pid(p, name) != pid:
+            return
+    if _component_pid(p, name) != pid:
+        return
     try:
-        os.killpg(pgid, signal.SIGKILL)
+        os.killpg(pid, signal.SIGKILL)
     except OSError:
         pass  # best-effort final kill: nothing to do if it already exited
 
@@ -399,13 +402,9 @@ def stop_component(p: _Paths, name: str) -> None:
         ok(f"{name} not running")
     else:
         log(f"stopping {name} (PID {pid})...")
-        _terminate_group(pid)
+        _terminate_group(p, name, pid)
         _pid_file(p, name).unlink(missing_ok=True)
         ok(f"{name} stopped")
-    # belt-and-suspenders: sweep any orphan by name (only for this component)
-    comp = _components(p).get(name)
-    if comp:
-        subprocess.run(["pkill", "-TERM", "-f", comp.pkill_pattern], check=False)
 
 
 # ── L1 helpers (talk to the BoxLite SDK via orchestrator) ──────────────────
@@ -416,30 +415,34 @@ def _l1_running(cfg: InfraConfig) -> bool:
     async def go() -> bool:
         orchestrator.ensure_home_env(cfg)
         infos = await orchestrator.get_runtime().list_info()
-        return any((i.name or "") == "boxlite-local-postgres" for i in infos)
+        return any((i.name or "") == "boxlite-local-postgres" and i.state.status.lower() == "running" for i in infos)
 
     return asyncio.run(go())
 
 
 async def _ensure_l1_async(cfg: InfraConfig) -> bool:
-    """Bring the whole L1 up if postgres isn't running. True if (re)created."""
-    orchestrator.ensure_home_env(cfg)
-    infos = await orchestrator.get_runtime().list_info()
-    if any((i.name or "") == "boxlite-local-postgres" for i in infos):
-        ok("L1 boxes already running")
-        return False
-    log("L1 boxes not running — starting...")
-    await orchestrator.up(cfg, SERVICES)
-    return True
+    """Reconcile every dependency and its health before starting native apps."""
+    changed = await orchestrator.up(cfg, SERVICES)
+    ok("L1 boxes reconciled and healthy")
+    return changed
 
 
 def _l1_rows(cfg: InfraConfig) -> list[tuple[str, str]]:
     async def go() -> list[tuple[str, str]]:
         orchestrator.ensure_home_env(cfg)
-        infos = await orchestrator.get_runtime().list_info()
-        return [
-            (i.name, i.state.status) for i in infos if (i.name or "").startswith("boxlite-local-")
-        ]
+        runtime = orchestrator.get_runtime()
+        infos = {i.name: i for i in await runtime.list_info()}
+        rows = []
+        for name, spec in SERVICES.items():
+            box_name = f"boxlite-local-{name}"
+            item = infos.get(box_name)
+            state = item.state.status.lower() if item else "missing"
+            if state == "running" and spec.healthcheck:
+                box = await runtime.get(box_name)
+                if not await orchestrator.probe_health(box, spec.healthcheck, cfg):
+                    state = "unhealthy"
+            rows.append((box_name, state))
+        return rows
 
     return asyncio.run(go())
 
@@ -500,18 +503,23 @@ def _go_build(p: _Paths, comp: str) -> None:
     out = _bin_for(p, comp)
     p.bin.mkdir(parents=True, exist_ok=True)
     log(f"go build {comp} → {out}")
+    env = {**os.environ, "GOTOOLCHAIN": "auto"}
+    if comp == "runner":
+        # Go's cache does not track external .a files. Include their content in
+        # cgo inputs so a rebuilt C archive forces a new executable to link.
+        digest = _local_arm64.archive_digest(p.repo_root / "target/debug/libboxlite.a")
+        env["CGO_CFLAGS"] = f"{env.get('CGO_CFLAGS', '')} -DBOXLITE_LOCAL_NATIVE_{digest}=1"
     subprocess.run(["go", "build", *tags, "-o", str(out), command],
-                   cwd=str(p.apps / module), env={**os.environ, "GOTOOLCHAIN": "auto"}, check=True)
+                   cwd=str(p.apps / module), env=env, check=True)
 
 
-def build(cfg: InfraConfig) -> int:
-    """Build every native Go binary (used by `up` when any is missing)."""
+def build(cfg: InfraConfig, *, only: list[str] | None = None) -> int:
+    """Build requested native binaries; standalone callers default to all."""
     p = _paths(cfg)
-    if not (p.apps / "node_modules").is_dir():
-        log("yarn install (node_modules missing)")
-        subprocess.run(["corepack", "yarn", "install"], cwd=str(p.apps), check=True)
+    subprocess.run(["make", "_ensure-apps-deps"], cwd=str(p.repo_root), check=True)
     for comp in _GO_BUILDS:
-        _go_build(p, comp)
+        if only is None or comp in only:
+            _go_build(p, comp)
     ok("binaries ready")
     return 0
 
@@ -598,14 +606,19 @@ def up(cfg: InfraConfig, components: list[str] | None = None) -> int:
         if name not in ALL_COMPONENTS:
             err(f"unknown component: {name} (valid: {' '.join(ALL_COMPONENTS)})")
             return 2
+        if _component_pid(p, name) is None and _port_listening(_PORTS[name]):
+            err(f"{name}: port {_PORTS[name]} belongs to an unverified process; stop it explicitly before retrying")
+            return 1
     # 0. Apple-Silicon bootstrap (idempotent no-ops once done): thread docker.io
     # creds through to L1, build the native lib.
     _local_arm64.ensure_tools_on_path()
     _local_arm64.export_dockerhub_env()
     _ensure_installed(p)
     _local_arm64.ensure_native_lib()
+    if any(name in comps for name in ("api", "dashboard")):
+        subprocess.run(["make", "_ensure-apps-deps"], cwd=str(p.repo_root), check=True)
 
-    # 1. ensure L1 boxes (single asyncio.run; brings L1 up if postgres is down)
+    # 1. Reconcile every L1 daemon inside one SDK event loop.
     l1_recreated = asyncio.run(_ensure_l1_async(cfg))
 
     # 2. a surviving L2 proc is stale once L1 was just (re)created — restart fresh
@@ -614,10 +627,22 @@ def up(cfg: InfraConfig, components: list[str] | None = None) -> int:
         for name in reversed(comps):
             stop_component(p, name)
 
-    # 3. binaries present? (auto-build the missing ones)
-    if any(not _bin_for(p, comp).exists() for comp in _GO_BUILDS):
-        log("native binaries missing — building")
-        build(cfg)
+    # 3. Rebuild only selected components; stop a selected stale runner before
+    # any build branch so its existing process cannot retain the old archive.
+    library = p.repo_root / "target/debug/libboxlite.a"
+    runner_stale = "runner" in comps and (
+        not p.runner_bin.exists()
+        or library.stat().st_mtime_ns > p.runner_bin.stat().st_mtime_ns
+    )
+    targets = [
+        comp for comp in _GO_BUILDS
+        if comp in comps and (not _bin_for(p, comp).exists() or (comp == "runner" and runner_stale))
+    ]
+    if "runner" in targets:
+        stop_component(p, "runner")
+    if targets:
+        log(f"building missing or stale native binaries: {' '.join(targets)}")
+        build(cfg, only=targets)
 
     # 3.5 box base image: the published agent image is multi-arch and public, so
     # the runner pulls the host-matching arch straight from ghcr — no local build,
@@ -631,16 +656,21 @@ def up(cfg: InfraConfig, components: list[str] | None = None) -> int:
     table = _components(p)
     healthy = True
     for name in comps:
-        healthy &= start_component(p, table[name])
+        if not start_component(p, table[name]):
+            healthy = False
+            break
 
     # 6. ensure init data + a registered runner (the dashboard needs both)
-    if any(c in comps for c in ("api", "runner")):
+    if healthy and any(c in comps for c in ("api", "runner")):
         log("ensuring init data + registered runner...")
         if seed(cfg, no_bounce=True) != 0:
             healthy = False  # a hard seed failure (pg down / never seeded) → up exits non-zero
 
     print()
-    ok("stack up — see status with: make status")
+    if healthy:
+        ok("stack up — see status with: make status")
+    else:
+        err("stack incomplete — inspect make status and component logs")
     print(f"  Dashboard:    http://localhost:{PORT_DASHBOARD}")
     print(f"  API:          http://localhost:{PORT_API}/api")
     print(f"  Dex (OIDC):   http://localhost:25556/dex")
@@ -662,10 +692,14 @@ def down(cfg: InfraConfig, components: list[str] | None = None, *, include_l1: b
 
 def status(cfg: InfraConfig) -> int:
     p = _paths(cfg)
+    table = _components(p)
     exit_code = 0
 
     print(f"{_BOLD}L1 — infra-local boxes{_RESET}")
     rows = _l1_rows(cfg)
+    expected = {f"boxlite-local-{name}" for name in SERVICES}
+    if expected - {name for name, _ in rows} or any(state != "running" for _, state in rows):
+        exit_code = 1
     if rows:
         for name, state in rows:
             print(f"  {name:<26} {state}")
@@ -683,10 +717,11 @@ def status(cfg: InfraConfig) -> int:
         if pid is None:
             print(f"  {comp:<{width}} {'-':<8} {port:<8} {_DIM}down{_RESET}")
             exit_code = 1
-        elif _port_listening(port):
+        elif (orchestrator._http_probe(table[comp].health_url)
+              if table[comp].health == "http" else _port_listening(port)):
             print(f"  {comp:<{width}} {pid:<8} {port:<8} {_GREEN}up{_RESET}")
         else:
-            print(f"  {comp:<{width}} {pid:<8} {port:<8} {_YELLOW}alive but not listening{_RESET}")
+            print(f"  {comp:<{width}} {pid:<8} {port:<8} {_YELLOW}unhealthy{_RESET}")
             exit_code = 1
 
     print()
@@ -744,6 +779,8 @@ def restart(cfg: InfraConfig, names: list[str]) -> int:
     for name in l2:
         stop_component(p, name)
         if name in _GO_BUILDS:  # native Go binaries — no watch mode, rebuild
+            if name == "runner":
+                _local_arm64.ensure_native_lib()
             _go_build(p, name)
         healthy &= start_component(p, table[name])
 

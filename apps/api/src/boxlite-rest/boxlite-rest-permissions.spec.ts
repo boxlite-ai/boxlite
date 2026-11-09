@@ -4,12 +4,14 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { type ExecutionContext } from '@nestjs/common'
 import { METHOD_METADATA } from '@nestjs/common/constants'
 import { Reflector } from '@nestjs/core'
 import { RequiredOrganizationResourcePermissions } from '../organization/decorators/required-organization-resource-permissions.decorator'
 import { OrganizationResourcePermission } from '../organization/enums/organization-resource-permission.enum'
 import { BoxliteBoxController } from './boxlite-box.controller'
 import { BoxliteProxyController } from './boxlite-proxy.controller'
+import { OrganizationResourceActionGuard } from '../organization/guards/organization-resource-action.guard'
 
 // http-proxy-middleware ships ESM only and the proxy controller imports it at
 // module scope; mock it the way the routing spec does so the class can load.
@@ -49,7 +51,9 @@ const EXPECTED: Record<string, OrganizationResourcePermission[] | null> = {
   revokeNetworkTunnel: [WRITE_BOXES],
   configureSsh: [WRITE_BOXES],
   disableSsh: [WRITE_BOXES],
+  enableSsh: [WRITE_BOXES],
   proxyExecStatus: null,
+  proxyExecList: null,
   proxyMetrics: null,
   getSshStatus: null,
 }
@@ -79,5 +83,52 @@ describe('REST box/proxy permission coverage (GHSA-2qqv-7cwv-mj8h)', () => {
   it.each(handlers)('enforces the expected box permission on %s', (_name, controller, method) => {
     const got = reflector.get(RequiredOrganizationResourcePermissions, controller.prototype[method]) ?? null
     expect(got).toEqual(EXPECTED[method])
+  })
+})
+
+describe('execution inventory authorization', () => {
+  const memberKey = {
+    userId: 'member',
+    role: 'user',
+    organizationId: 'org-1',
+    apiKey: { organizationId: 'org-1', permissions: [] },
+  }
+
+  function inventoryGuard(member: boolean) {
+    const guard = new OrganizationResourceActionGuard(
+      { findOne: async (id: string) => ({ id }) } as never,
+      {
+        findOne: async (organizationId: string, userId: string) =>
+          member ? { organizationId, userId, role: 'member' } : null,
+      } as never,
+      reflector,
+    )
+    Object.assign(guard, { redis: { get: async () => null, set: async () => 'OK' } })
+    return guard
+  }
+
+  function inventoryContext(user: unknown, prefix?: string): ExecutionContext {
+    const request = { user, params: { prefix } }
+    return {
+      switchToHttp: () => ({ getRequest: () => request }),
+      getHandler: () => BoxliteProxyController.prototype.proxyExecList,
+      getClass: () => BoxliteProxyController,
+    } as unknown as ExecutionContext
+  }
+
+  it('allows an organization member with no box write permission to discover executions', async () => {
+    await expect(inventoryGuard(true).canActivate(inventoryContext(memberKey))).resolves.toBe(true)
+  })
+
+  it('refuses a key whose user no longer belongs to the organization', async () => {
+    await expect(inventoryGuard(false).canActivate(inventoryContext(memberKey))).resolves.toBe(false)
+  })
+
+  it('does not let an organization key select a different organization', async () => {
+    await expect(inventoryGuard(true).canActivate(inventoryContext(memberKey, 'org-2'))).resolves.toBe(false)
+  })
+
+  it('does not expose inventory to a machine credential without organization membership', async () => {
+    await expect(inventoryGuard(true).canActivate(inventoryContext({ role: 'runner' }))).resolves.toBe(false)
   })
 })

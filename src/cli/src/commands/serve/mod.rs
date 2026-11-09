@@ -20,6 +20,7 @@ use axum::routing::{get, post, put};
 use axum::{Json, Router};
 use clap::Args;
 use futures::StreamExt;
+use tokio::sync::OnceCell;
 use tokio::sync::RwLock;
 use tower_http::catch_panic::CatchPanicLayer;
 use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer};
@@ -113,6 +114,24 @@ struct AppState {
     /// measured against `BoxInfo.last_updated`, which tracks state transitions
     /// and would report a long-running busy box as idle since boot.
     last_activity: RwLock<HashMap<String, Instant>>,
+    /// Recovered exit status, scoped by canonical box ID and retained for the
+    /// same grace period as executions whose output this server owns.
+    recovered_terminals: RwLock<HashMap<TerminalKey, TerminalSlot>>,
+}
+
+/// Scope of a terminal record: the box a client addresses plus the execution.
+type TerminalKey = (String, String);
+
+/// One recovered session's terminal status, shared between its watcher and the
+/// status handler. Unset means the watcher is still waiting.
+type TerminalSlot = Arc<OnceCell<RecoveredTerminal>>;
+
+/// A recovered wait outcome. Transport failures are not process exits.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(in crate::commands::serve) struct RecoveredTerminal {
+    pub(in crate::commands::serve) exit_code: Option<i32>,
+    pub(in crate::commands::serve) error: Option<String>,
+    recorded_at: Instant,
 }
 
 /// The deadlines `serve` enforces for one box. `0` disables either.
@@ -129,6 +148,65 @@ impl LifecyclePolicy {
 }
 
 impl AppState {
+    /// Start one wait observer without claiming an output reader.
+    pub(in crate::commands::serve) async fn watch_recovered(
+        &self,
+        box_id: &str,
+        exec_id: &str,
+        execution: boxlite::Execution,
+    ) {
+        let key = (box_id.to_string(), exec_id.to_string());
+        let slot = {
+            let mut terminals = self.recovered_terminals.write().await;
+            if terminals.contains_key(&key) {
+                return;
+            }
+            let slot = Arc::new(OnceCell::new());
+            terminals.insert(key, Arc::clone(&slot));
+            slot
+        };
+        tokio::spawn(async move {
+            let terminal = match execution.wait().await {
+                Ok(result) => RecoveredTerminal {
+                    exit_code: Some(result.code()),
+                    error: None,
+                    recorded_at: Instant::now(),
+                },
+                Err(error) => RecoveredTerminal {
+                    exit_code: None,
+                    error: Some(error.to_string()),
+                    recorded_at: Instant::now(),
+                },
+            };
+            let _ = slot.set(terminal);
+        });
+    }
+
+    /// The terminal status of a previously recovered execution, if it ended.
+    pub(in crate::commands::serve) async fn recovered_terminal(
+        &self,
+        box_id: &str,
+        exec_id: &str,
+    ) -> Option<RecoveredTerminal> {
+        let terminals = self.recovered_terminals.read().await;
+        terminals
+            .get(&(box_id.to_string(), exec_id.to_string()))
+            .and_then(|slot| slot.get().cloned())
+    }
+
+    /// A new box lifecycle must not reuse the previous main session's status
+    /// or output reader: its execution ID is the persistent container ID.
+    async fn forget_recovered(&self, box_id: &str) {
+        self.recovered_terminals
+            .write()
+            .await
+            .retain(|(owner, _), _| owner != box_id);
+        self.executions
+            .write()
+            .await
+            .retain(|_, active| active.box_id() != box_id);
+    }
+
     /// Remember a box's deadlines. A policy with neither set is not stored.
     pub(in crate::commands::serve) async fn set_lifecycle(
         &self,
@@ -190,6 +268,7 @@ impl AppState {
     pub(in crate::commands::serve) async fn forget_box(&self, box_id: &str) {
         self.lifecycle.write().await.remove(box_id);
         self.last_activity.write().await.remove(box_id);
+        self.forget_recovered(box_id).await;
     }
 
     /// Drop idle clocks for spellings that name no box.
@@ -987,6 +1066,11 @@ async fn run_reap_once(
     shutdown_grace: std::time::Duration,
     max_lifetime: std::time::Duration,
 ) {
+    state.recovered_terminals.write().await.retain(|_, slot| {
+        slot.get().is_none_or(|terminal| {
+            now.saturating_duration_since(terminal.recorded_at) <= COMPLETED_RETENTION_GRACE
+        })
+    });
     let candidates: Vec<(String, Arc<ActiveExecution>)> = {
         let map = state.executions.read().await;
         map.iter()
@@ -1113,6 +1197,7 @@ fn box_info_to_response(info: &BoxInfo) -> BoxResponse {
         image: info.image.clone(),
         cpus: info.cpus,
         memory_mib: info.memory_mib,
+        privileged: info.privileged,
         labels: info.labels.clone(),
         auto_stop: info.auto_stop,
         auto_delete: info.auto_delete,
@@ -1263,6 +1348,7 @@ fn build_box_options(req: &CreateBoxRequest) -> Result<BoxOptions, boxlite::Boxl
                 }
             });
             advanced.set_capabilities(capabilities)?;
+            advanced.set_privileged(req.advanced.privileged);
             advanced
         },
         // Neither deadline is forwarded; `serve` holds both and sweeps them.
@@ -1398,7 +1484,8 @@ fn auth_allows(expected: Option<&str>, path: &str, bearer: Option<&str>) -> bool
 ///   box — a client watching `status` once a second would otherwise reset the
 ///   idle window before every sweep and AutoStop would never fire;
 /// - `GET`/`HEAD`/`DELETE` on `/ssh`, which observe or disable SSH without
-///   starting the box. `POST /ssh` configures it and does count;
+///   starting the box; `/ssh/enable` also never starts it or counts as activity.
+///   `POST /ssh` configures it and does count;
 /// - `DELETE`, which is removing the box, not using it.
 ///
 /// `/stop` is excluded because it cannot matter: AutoStop ignores a box that is
@@ -1409,7 +1496,7 @@ fn activity_box_id<'a>(method: &Method, path: &'a str) -> Option<&'a str> {
         Some((box_id, tail)) => (box_id, tail),
         None => (rest, ""),
     };
-    if box_id.is_empty() || matches!(tail, "metrics" | "stop") {
+    if box_id.is_empty() || matches!(tail, "metrics" | "stop" | "ssh/enable") {
         return None;
     }
     // A read of the box resource itself is metadata, not use.
@@ -1418,6 +1505,9 @@ fn activity_box_id<'a>(method: &Method, path: &'a str) -> Option<&'a str> {
     }
     // SSH observations and disable must not hold a box open; configure does.
     if tail == "ssh" && matches!(*method, Method::GET | Method::HEAD | Method::DELETE) {
+        return None;
+    }
+    if tail == "executions" && matches!(*method, Method::GET | Method::HEAD) {
         return None;
     }
     Some(box_id)
@@ -1567,6 +1657,9 @@ async fn get_or_resume_box(state: &AppState, box_id: &str) -> Result<Arc<LiteBox
             "ConflictError",
             "conflict",
         ));
+    }
+    if !info.status.is_active() {
+        state.forget_recovered(info.id.as_ref()).await;
     }
 
     get_or_fetch_box(state, box_id).await
@@ -1770,11 +1863,11 @@ async fn get_or_attach_main_session(
     state: &AppState,
     box_id: &str,
 ) -> Result<Arc<ActiveExecution>, Response> {
-    if let Some(active) = find_main_session(&*state.executions.read().await, box_id) {
+    let litebox = get_or_resume_box(state, box_id).await?;
+    let canonical = litebox.id().as_ref();
+    if let Some(active) = find_main_session(&*state.executions.read().await, canonical) {
         return Ok(active);
     }
-
-    let litebox = get_or_resume_box(state, box_id).await?;
 
     // Attaching boots the box (creating its container) and subscribes to the main
     // command's session, but does *not* run init — `POST /start` does. So a client
@@ -1788,7 +1881,7 @@ async fn get_or_attach_main_session(
     // second Attach, so the loser would get a permanently silent Execution. A
     // per-box open lock would scope that to the same box; worth doing, not here.
     let mut executions = state.executions.write().await;
-    register_main_session(&mut executions, box_id, || async {
+    register_main_session(&mut executions, canonical, || async {
         litebox.attach(boxlite::AttachOptions::main()).await
     })
     .await
@@ -1855,7 +1948,11 @@ fn build_router(state: Arc<AppState>) -> Router {
             "/v1/boxes/{box_id}/stop",
             post(boxes::stop_box),
         )
-        // Guest SSH control. POST may start the box; GET/DELETE only observe.
+        // Guest SSH control. Only configuration may start the box.
+        .route(
+            "/v1/boxes/{box_id}/ssh/enable",
+            post(ssh::enable_ssh),
+        )
         .route(
             "/v1/boxes/{box_id}/ssh",
             post(ssh::configure_ssh)
@@ -1877,6 +1974,10 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route(
             "/v1/boxes/{box_id}/exec",
             post(executions::start_execution),
+        )
+        .route(
+            "/v1/boxes/{box_id}/executions",
+            get(executions::list_executions),
         )
         .route(
             "/v1/boxes/{box_id}/executions/{exec_id}",
@@ -1972,6 +2073,7 @@ pub async fn execute(args: ServeArgs, global: &GlobalFlags) -> anyhow::Result<()
         api_key: args.api_key.clone(),
         lifecycle: RwLock::new(HashMap::new()),
         last_activity: RwLock::new(HashMap::new()),
+        recovered_terminals: RwLock::new(HashMap::new()),
     });
 
     // Phase 5.7: spawn the orphan reaper. Same escalation policy as the
@@ -2006,6 +2108,7 @@ mod tests {
     use boxlite::runtime::options::NetworkSpec;
     use std::time::Duration;
 
+    mod executions;
     mod ssh;
 
     // --- API-key auth decision (pure; no runtime/network needed) ---
@@ -2322,6 +2425,7 @@ mod tests {
             api_key: None,
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
+            recovered_terminals: RwLock::new(HashMap::new()),
         }
     }
 
@@ -2347,6 +2451,21 @@ mod tests {
             "exit_code": null,
         }))
         .expect("box info")
+    }
+
+    #[test]
+    fn privileged_reuse_response_preserves_known_and_unknown_mode() {
+        for privileged in [Some(false), Some(true), None] {
+            let mut metadata =
+                serde_json::to_value(info_as_the_runtime_reports_it("configured")).unwrap();
+            metadata["privileged"] = serde_json::to_value(privileged).unwrap();
+            let info = serde_json::from_value(metadata).unwrap();
+            let response = serde_json::to_value(box_info_to_response(&info)).unwrap();
+            assert_eq!(response["privileged"].as_bool(), privileged);
+            if privileged.is_none() {
+                assert!(response.get("privileged").is_none());
+            }
+        }
     }
 
     /// Every box response must report the deadlines `serve` holds, not the
@@ -2964,6 +3083,41 @@ mod tests {
     }
 
     #[test]
+    fn build_box_options_guest_privilege_preserves_host_security() {
+        for privileged in [false, true] {
+            let req: CreateBoxRequest = serde_json::from_value(serde_json::json!({
+                "image": "docker:27.5.1-dind",
+                "advanced": {"privileged": privileged}
+            }))
+            .unwrap();
+            let mut options = build_box_options(&req).unwrap();
+            assert_eq!(options.advanced.security, Default::default());
+            options.sanitize().unwrap();
+            assert_eq!(options.advanced.privileged, privileged);
+            assert!(options.advanced.capabilities().is_none());
+        }
+    }
+
+    #[test]
+    fn serve_guest_privilege_rejects_explicit_capability_overrides() {
+        for capabilities in [
+            serde_json::json!({}),
+            serde_json::json!({"drop": ["NET_RAW"]}),
+        ] {
+            let req: CreateBoxRequest = serde_json::from_value(serde_json::json!({
+                "image": "docker:27.5.1-dind",
+                "advanced": {"privileged": true, "capabilities": capabilities}
+            }))
+            .unwrap();
+            let mut options = build_box_options(&req).unwrap();
+            assert!(matches!(
+                options.sanitize(),
+                Err(boxlite::BoxliteError::InvalidArgument(_))
+            ));
+        }
+    }
+
+    #[test]
     fn build_box_options_empty_body_lands_on_server_default_security() {
         // Bog-standard REST body. Server resolves security from its
         // own default; on Linux/macOS that's jailer-on (the standard
@@ -3102,6 +3256,7 @@ mod tests {
             api_key: None,
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
+            recovered_terminals: RwLock::new(HashMap::new()),
         });
         let (control_status, control_error) =
             upload_v3_archive(state.clone(), serde_json::json!({})).await;
@@ -3503,6 +3658,7 @@ mod tests {
             api_key: None,
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
+            recovered_terminals: RwLock::new(HashMap::new()),
         });
         let (url, server) = serve_router(state).await;
         let remote =
@@ -3570,6 +3726,7 @@ mod tests {
             api_key: None,
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
+            recovered_terminals: RwLock::new(HashMap::new()),
         });
         state
             .set_lifecycle(
@@ -3635,6 +3792,7 @@ mod tests {
             api_key: None,
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
+            recovered_terminals: RwLock::new(HashMap::new()),
         });
         state
             .set_lifecycle(
@@ -3692,6 +3850,7 @@ mod tests {
             api_key: None,
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
+            recovered_terminals: RwLock::new(HashMap::new()),
         };
         state
             .set_lifecycle(
@@ -3736,6 +3895,7 @@ mod tests {
             api_key: None,
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
+            recovered_terminals: RwLock::new(HashMap::new()),
         });
         let (base, server) = serve_router(Arc::clone(&state)).await;
 
@@ -3789,6 +3949,7 @@ mod tests {
             api_key: None,
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
+            recovered_terminals: RwLock::new(HashMap::new()),
         });
         let (base, server) = serve_router(Arc::clone(&state)).await;
 
@@ -3851,6 +4012,7 @@ mod tests {
             api_key: None,
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
+            recovered_terminals: RwLock::new(HashMap::new()),
         });
         let (base, server) = serve_router(Arc::clone(&state)).await;
         let client = reqwest::Client::new();
@@ -3961,6 +4123,7 @@ mod tests {
             api_key: None,
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
+            recovered_terminals: RwLock::new(HashMap::new()),
         });
         let (base, server) = serve_router(Arc::clone(&state)).await;
 
@@ -4006,6 +4169,7 @@ mod tests {
             api_key: None,
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
+            recovered_terminals: RwLock::new(HashMap::new()),
         };
         state
             .set_lifecycle(
@@ -4048,6 +4212,7 @@ mod tests {
             api_key: None,
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
+            recovered_terminals: RwLock::new(HashMap::new()),
         };
         state
             .set_lifecycle(
@@ -4090,6 +4255,7 @@ mod tests {
             api_key: None,
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
+            recovered_terminals: RwLock::new(HashMap::new()),
         };
         // The canned box's `last_updated` is a fixed date in the past, so its
         // time at rest grows as the calendar does. A century-long window
@@ -4140,6 +4306,7 @@ mod tests {
             api_key: None,
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
+            recovered_terminals: RwLock::new(HashMap::new()),
         });
         state
             .set_lifecycle(
@@ -4198,6 +4365,7 @@ mod tests {
             api_key: Some("expected-key".to_string()),
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
+            recovered_terminals: RwLock::new(HashMap::new()),
         });
 
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -4245,6 +4413,7 @@ mod tests {
             api_key: None,
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
+            recovered_terminals: RwLock::new(HashMap::new()),
         });
 
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -4529,6 +4698,7 @@ mod tests {
             api_key: None,
             lifecycle: RwLock::new(HashMap::new()),
             last_activity: RwLock::new(HashMap::new()),
+            recovered_terminals: RwLock::new(HashMap::new()),
         };
 
         // The box's main command, and an ordinary exec running beside it.

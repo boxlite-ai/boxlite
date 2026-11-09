@@ -2,6 +2,8 @@
 
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useState } from 'react'
+import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
+import { OrganizationRolePermissionsEnum } from '@boxlite-ai/api-client'
 import { useCreateBoxMutation } from '@/hooks/mutations/useCreateBoxMutation'
 import { useNavigate, generatePath, useSearchParams } from 'react-router-dom'
 import { RoutePath } from '@/enums/RoutePath'
@@ -11,7 +13,10 @@ import { AsciiButton } from '@/components/ascii'
 import { BOX_TEMPLATES, TEMPLATE_CATEGORIES, boxTemplateFor, validTemplateImage } from '@/lib/quickstart/box-templates'
 import { cn } from '@/lib/utils'
 
+/** Select a public template and create a Box only after membership grants write access. */
 export function ConsoleTemplatePicker() {
+  const { authenticatedUserHasPermission, authenticatedUserOrganizationMember } = useSelectedOrganization()
+  const canCreate = authenticatedUserHasPermission(OrganizationRolePermissionsEnum.WRITE_BOXES)
   const [params] = useSearchParams()
   const [selection, setSelection] = useState<string | null>(
     () => boxTemplateFor(params.get('template') ?? '')?.id ?? null,
@@ -22,7 +27,7 @@ export function ConsoleTemplatePicker() {
   const [credential] = useState<string>(() => crypto.randomUUID())
   const [search, setSearch] = useState('')
   const [category, setCategory] = useState('All')
-  const [name, setName] = useState('first-box')
+  const [name, setName] = useState(() => params.get('boxName') ?? 'first-box')
   const selected = boxTemplateFor(activeId)
   const envVars = selected?.requiredEnv ? { [selected.requiredEnv.key]: credential } : undefined
   const image = selected?.image ?? ''
@@ -32,7 +37,16 @@ export function ConsoleTemplatePicker() {
       (category === 'All' || item.category === category) &&
       `${item.name} ${item.description} ${item.image}`.toLowerCase().includes(search.toLowerCase()),
   )
+  // A full navigation reloads permissions while keeping the current console draft.
+  const reloadWithSelection = () => {
+    const search = new URLSearchParams(params)
+    search.set('method', 'console')
+    search.set('template', activeId)
+    search.set('boxName', name)
+    location.assign(`${RoutePath.QUICKSTART}?${search.toString()}`)
+  }
   const deploy = async () => {
+    if (!canCreate) return
     try {
       const box = await createBox.mutateAsync({
         name,
@@ -158,11 +172,25 @@ export function ConsoleTemplatePicker() {
           <AsciiButton
             variant="primary"
             className="w-full justify-center py-2.5"
-            disabled={busy || !validTemplateImage(image) || !/^[a-z0-9][a-z0-9-]{0,39}$/.test(name)}
+            disabled={!canCreate || busy || !validTemplateImage(image) || !/^[a-z0-9][a-z0-9-]{0,39}$/.test(name)}
             onClick={() => void deploy()}
           >
             {busy ? 'Creating Box…' : 'Create Box'}
           </AsciiButton>
+          {!canCreate && (
+            <div className="mt-2 text-xs text-muted-foreground">
+              {authenticatedUserOrganizationMember ? (
+                <p>You need Box write permission to create a Box.</p>
+              ) : (
+                <>
+                  <p>Permissions are unavailable. Reload to try again.</p>
+                  <AsciiButton type="button" size="sm" className="mt-2" onClick={reloadWithSelection}>
+                    Reload page
+                  </AsciiButton>
+                </>
+              )}
+            </div>
+          )}
           {createBox.isError && (
             <p role="alert" className="mt-2 text-xs text-destructive">
               Could not complete the action. Check the configuration and try again.

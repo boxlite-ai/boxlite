@@ -28,12 +28,19 @@
  */
 
 import type { Placement } from './network.ts'
+import type { UserDomain } from './hosts.ts'
 import type { WorkloadHost } from './cluster.ts'
 
 export type EdgeRequest = {
   image: $util.Input<string>
   /** The zone `*.<domain>` is written into. Every box is a name under it. */
   domain: string
+  /**
+   * The parent of platform subdomains and its zone, or null for a stage
+   * that offers none. Its wildcard gets a record and a certificate beside the
+   * box domain's; nothing is created per name.
+   */
+  userDomain: UserDomain | null
   /** What the proxy speaks to a box: `http` or `https`. */
   protocol: string
   /** Where it asks which runner holds a box. */

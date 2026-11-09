@@ -148,6 +148,7 @@ func (a *ApiServer) Start(ctx context.Context) error {
 	boxliteApi := protected.Group("/v1/boxes")
 	{
 		boxliteApi.POST("/:boxId/exec", controllers.BoxliteExec)
+		boxliteApi.GET("/:boxId/executions", controllers.BoxliteListExecutions)
 		boxliteApi.GET("/:boxId/executions/:execId", controllers.BoxliteGetExecution)
 		boxliteApi.DELETE("/:boxId/executions/:execId", controllers.BoxliteExecKill)
 		boxliteApi.GET("/:boxId/executions/:execId/attach", controllers.BoxliteExecAttach)
@@ -158,6 +159,7 @@ func (a *ApiServer) Start(ctx context.Context) error {
 		boxliteApi.GET("/:boxId/metrics", controllers.BoxliteMetrics)
 		boxliteApi.PUT("/:boxId/network/outbound", controllers.BoxliteSetOutboundNetwork)
 		boxliteApi.POST("/:boxId/ssh", controllers.BoxliteSSHConfigure)
+		boxliteApi.POST("/:boxId/ssh/enable", controllers.BoxliteSSHEnable)
 		boxliteApi.GET("/:boxId/ssh", controllers.BoxliteSSHStatus)
 		boxliteApi.DELETE("/:boxId/ssh", controllers.BoxliteSSHDisable)
 		boxliteApi.Handle(http.MethodConnect, "/:boxId/network/tunnel", controllers.BoxliteNetworkTunnel(boxControllerLogger))

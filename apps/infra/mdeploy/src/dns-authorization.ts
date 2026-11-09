@@ -109,6 +109,7 @@ export const assertAuthorizationsConverge = ({
   project,
   apiHost,
   proxyDomain,
+  appDomain,
   lookup,
   log,
 }: {
@@ -117,6 +118,8 @@ export const assertAuthorizationsConverge = ({
   project: string
   apiHost: string
   proxyDomain: string | null
+  /** The platform tunnel parent, whose authorization follows the proxy's rule. */
+  appDomain: string | null
   lookup: LookupAuthorizations
   log: (line: string) => void
 }): void => {
@@ -139,14 +142,20 @@ export const assertAuthorizationsConverge = ({
 
   // The name is the stage's, so the question is the other way round: not who
   // holds this domain, but what the resource under this name already proves.
-  const proxyAuthorization = instanceFor({ app, stage, artifact: 'proxy' })
-  const proxy = answer.held.find((authorization) => authorization.name === proxyAuthorization)
-  if (proxyDomain && proxy && proxy.domain !== proxyDomain) {
-    throw new DnsAuthorizationError(
-      `${project} holds ${proxyAuthorization}, which proves ${proxy.domain}, and this apply needs it to prove ` +
-        `${proxyDomain}. An authorization's domain is immutable and its name is this stage's own, so the ` +
-        'replacement cannot be created while the original holds the name, and the original cannot be deleted ' +
-        `while its certificate — and the proxy above that — still reference it. ${RECOVERY}`,
-    )
+  // The platform tunnel authorization is named and asked the same way.
+  for (const [artifact, domain] of [
+    ['proxy', proxyDomain],
+    ['proxy-app', appDomain],
+  ] as const) {
+    const stageAuthorization = instanceFor({ app, stage, artifact })
+    const held = answer.held.find((authorization) => authorization.name === stageAuthorization)
+    if (domain && held && held.domain !== domain) {
+      throw new DnsAuthorizationError(
+        `${project} holds ${stageAuthorization}, which proves ${held.domain}, and this apply needs it to prove ` +
+          `${domain}. An authorization's domain is immutable and its name is this stage's own, so the ` +
+          'replacement cannot be created while the original holds the name, and the original cannot be deleted ' +
+          `while its certificate — and the proxy above that — still reference it. ${RECOVERY}`,
+      )
+    }
   }
 }

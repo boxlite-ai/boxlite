@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { ArgumentsHost, HttpStatus, RequestTimeoutException } from '@nestjs/common'
+import { ArgumentsHost, HttpStatus, NotFoundException, RequestTimeoutException } from '@nestjs/common'
 import { AllExceptionsFilter } from './all-exceptions.filter'
 import { RunnerApiError } from '../box/errors/runner-api-error'
 import { BoxCreationAdmissionUnavailableError } from '../box/errors/box-creation-limit.error'
@@ -12,6 +12,50 @@ import { BoxPreparingImageTimeoutError } from '../box/errors/box-preparing-image
 import { BoxProgressPhase } from '../box/enums/box-progress-phase.enum'
 
 describe('AllExceptionsFilter', () => {
+  it.each(['box-1', undefined, '', 123, { id: 'box-1' }])('only forwards a valid timeout Box ID: %p', async (boxId) => {
+    const json = jest.fn()
+    const status = jest.fn().mockReturnValue({ json })
+    const filter = new AllExceptionsFilter({ incrementFailedAuth: jest.fn() } as never)
+    const host = {
+      switchToHttp: () => ({
+        getResponse: () => ({ status }),
+        getRequest: () => ({ path: '/api/v1/org/boxes', url: '/api/v1/org/boxes' }),
+      }),
+    } as ArgumentsHost
+
+    await filter.catch(new RequestTimeoutException({ message: 'Startup is still pending', boxId }), host)
+
+    expect(status).toHaveBeenCalledWith(HttpStatus.REQUEST_TIMEOUT)
+    if (boxId === 'box-1') {
+      expect(json).toHaveBeenCalledWith(expect.objectContaining({ boxId: 'box-1' }))
+    } else {
+      expect(json.mock.calls[0][0]).not.toHaveProperty('boxId')
+    }
+  })
+
+  it.each([
+    ['/.well-known/oauth-protected-resource/mcp', false],
+    // Express routes ignore case, so this reaches the metadata route too.
+    ['/.WELL-KNOWN/oauth-protected-resource/mcp', false],
+    ['/boxes/some-client-route', true],
+  ])('answers a missing %s with the dashboard: %p', async (path, dashboard) => {
+    const json = jest.fn()
+    const status = jest.fn().mockReturnValue({ json })
+    const sendFile = jest.fn()
+    const filter = new AllExceptionsFilter({ incrementFailedAuth: jest.fn() } as never)
+    const host = {
+      switchToHttp: () => ({
+        getResponse: () => ({ status, sendFile }),
+        getRequest: () => ({ path, url: path }),
+      }),
+    } as ArgumentsHost
+
+    await filter.catch(new NotFoundException(), host)
+
+    expect(sendFile).toHaveBeenCalledTimes(dashboard ? 1 : 0)
+    if (!dashboard) expect(status).toHaveBeenCalledWith(HttpStatus.NOT_FOUND)
+  })
+
   it('serializes HttpException code fields into the JSON response', async () => {
     const json = jest.fn()
     const status = jest.fn().mockReturnValue({ json })

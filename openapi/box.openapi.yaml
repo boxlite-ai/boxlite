@@ -84,12 +84,22 @@ info:
 
     ## Execution Model
 
-    Command execution is two-step:
-    1. `POST /exec` creates the execution and returns an `execution_id`.
+    Command execution has three related operations:
+    1. `POST /exec` creates the execution and returns its guest-assigned `execution_id`.
     2. `GET /executions/{exec_id}/attach` upgrades to a bidirectional
        WebSocket carrying stdin, stdout, stderr, and in-band control
-       (resize, signal, exit). One attach at a time per exec; the exec
+       (resize, signal, exit). One attach at a time per session; the exec
        continues running across WebSocket close so a client can reattach.
+    3. `GET /executions` lists current live sessions from the guest registry,
+       including the main command. Use their IDs with the existing attach and
+       control endpoints to recover a session after losing a client handle.
+
+    Finished sessions disappear from the live list once the guest reaper
+    records their exit. Wait status and output may remain available in the
+    guest's bounded retention window, but this API does not promise durable
+    execution history.
+    Listing does not start or restart a box. Configured and stopped boxes
+    answer `{"executions": []}`; paused boxes return an invalid-state error.
 
     Out-of-band control endpoints exist for clients that prefer a
     request/response style: `GET /executions/{exec_id}` (status),
@@ -147,6 +157,8 @@ tags:
     description: Managed persistent volumes
   - name: Registries
     description: Logins the server pulls private images with
+  - name: Domains
+    description: Names the organization holds and the box ports they route to
 
 # ===========================================================================
 # Paths
@@ -460,6 +472,35 @@ paths:
         "409":
           $ref: "#/components/responses/ConflictError"
 
+  /{prefix}/boxes/{box_id}/ssh/enable:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+      - $ref: "#/components/parameters/boxId"
+    post:
+      operationId: enableSsh
+      summary: Enable saved guest SSH configuration
+      description: |
+        Enables the saved SSH configuration on a running box. Requires existing
+        configuration; repeated calls preserve a healthy listener and its connections.
+        Never starts or resumes the box or its main command, and does not count
+        as activity. Requires write:boxes permission on hosted servers.
+      tags: [Boxes]
+      responses:
+        "200":
+          description: SSH enabled or already enabled
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SshStatus"
+        "400":
+          $ref: "#/components/responses/BadRequestError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailableError"
+
   /{prefix}/boxes/{box_id}/ssh:
     parameters:
       - $ref: "#/components/parameters/prefix"
@@ -522,11 +563,16 @@ paths:
     delete:
       operationId: disableSsh
       summary: Disable guest SSH
-      description: Stops guest SSH and disconnects clients; idempotent, and never starts the VM or its main command.
+      description: |
+        Stops guest SSH and disconnects clients on a running box. Repeated calls
+        succeed when SSH is already disabled and the box is still running.
+        A configured or stopped box returns 409 invalid_state without changing
+        saved SSH intent. Never starts or resumes the VM or its main command,
+        and does not count as activity.
       tags: [Boxes]
       responses:
         "200":
-          description: SSH disabled or already disabled
+          description: SSH disabled or already disabled on a running box
           content:
             application/json:
               schema:
@@ -749,6 +795,11 @@ paths:
         - Send signal: `POST /executions/{exec_id}/signal`
         - Resize PTY: `POST /executions/{exec_id}/resize`
         - Kill: `DELETE /executions/{exec_id}`
+
+        An `execution_id` is not the only way back in: `GET
+        /executions` enumerates the sessions that are still running, so a
+        client that lost its handle — a crashed process, a dropped
+        connection — can recover the id and attach or kill it.
       tags: [Execution]
       parameters:
         - $ref: "#/components/parameters/idempotencyKey"
@@ -776,6 +827,38 @@ paths:
           $ref: "#/components/responses/NotFoundError"
         "409":
           $ref: "#/components/responses/ConflictError"
+
+  /{prefix}/boxes/{box_id}/executions:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+      - $ref: "#/components/parameters/boxId"
+    get:
+      operationId: listExecutions
+      summary: List live executions
+      description: |
+        Returns the guest registry's live-session snapshot, not a parsed
+        process listing. The main command session is included with
+        `is_main_session: true`; each returned guest execution ID is usable with the
+        existing attach and control endpoints. Sessions are excluded once the
+        guest reaper records their exit, which can lag process exit briefly, and
+        before registry cleanup. Existing wait status/output retention is bounded
+        and is not durable history.
+
+        Listing never starts or resumes a box. Configured and stopped boxes
+        answer `{"executions": []}`; paused boxes return an invalid-state
+        error. Polling does not refresh the box's idle clock.
+      tags: [Execution]
+      responses:
+        "200":
+          description: Live executions, oldest first
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListExecutionsResponse"
+        "409":
+          $ref: "#/components/responses/ConflictError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
 
   /{prefix}/boxes/{box_id}/executions/{exec_id}:
     parameters:
@@ -1140,6 +1223,10 @@ paths:
         Returns 409 while the box's inbound access is `disabled`. Enable it
         with `network.inbound.mode` at create, or later with
         `PUT /{prefix}/boxes/{box_id}/network/inbound`.
+
+        The URI is always the port's generated one. Domains bound to the
+        port (`bindDomain`) start answering once it is declared here; list
+        them with `listDomains`.
       tags: [Network]
       parameters:
         - name: port
@@ -1185,7 +1272,9 @@ paths:
         ports of the box are unaffected.
 
         Safe to repeat, and succeeds for a port that was never opened.
-        Calling `prepareTunnel` again reopens the port at the same URI.
+        Calling `prepareTunnel` again reopens the port at the same URI. A
+        platform hostname bound to the port stays bound: it answers `404`
+        while the port is revoked and serves again once it is reopened.
       tags: [Network]
       parameters:
         - name: port
@@ -1289,6 +1378,128 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+
+  /{prefix}/domains:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+    get:
+      operationId: listDomains
+      summary: List the domains the organization holds
+      description: |
+        Every held hostname and its Box/App target, or null while unbound,
+        with the organization's allowance. Unbound domains still occupy slots.
+        `domain_suffix` is the configured platform hostname suffix, or null
+        when requests are unavailable; `min_length` applies to new claims only.
+      tags: [Domains]
+      responses:
+        "200":
+          description: Held domains and the organization's allowance
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DomainList"
+    post:
+      operationId: claimDomain
+      summary: Request a platform domain using a short name
+      description: |
+        Claims a short name for the organization and returns its full hostname,
+        initially unbound. Dashboard > Domains uses this operation. A repeated
+        claim by the owner returns the held domain without changing its target.
+        Only new claims check the minimum length and domain count allowance.
+        Names use letters, digits and hyphens, cannot start/end with a hyphen,
+        match `<digits>-…`, or use a reserved platform or REST collection name.
+        Error codes: `platform_domain_not_configured`, `subdomain_too_short`,
+        `domain_count_limit_reached` (400), `subdomain_taken` (409).
+      tags: [Domains]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [name]
+              properties:
+                name:
+                  type: string
+                  minLength: 1
+                  maxLength: 63
+                  description: A short label, not a full hostname; normalized to lowercase.
+                  example: demo-app
+      responses:
+        "201":
+          description: The acquired domain, preserving any existing binding
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Domain"
+        "400":
+          $ref: "#/components/responses/BadRequestError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
+
+  /{prefix}/domains/{domain}/target:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+      - name: domain
+        in: path
+        required: true
+        description: An owned full hostname; short names and URLs are rejected, case and a trailing root dot are normalized.
+        schema:
+          type: string
+          minLength: 3
+          maxLength: 254
+          pattern: '^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)+\.?$'
+        example: demo-app.apps.example
+    put:
+      operationId: bindDomain
+      summary: Route an owned domain to a box port
+      description: |
+        Updates a full hostname already owned by the organization; never claims
+        or expands a short name. Unknown names and names owned by another
+        organization return `domain_not_owned` (404), directing the caller to
+        Dashboard > Domains to request a domain first. Owned names remain
+        bindable independently of the configured suffix, minimum, or quota.
+        The port is not declared public: the domain answers once the tunnel is
+        public and the Box allows inbound access, in either order.
+        A name bound to another port moves here; other names stay in place.
+        Error codes: `region_not_supported` and `app_target_not_supported` (400).
+        App binding is reserved and remains unsupported.
+      tags: [Domains]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DomainTarget"
+      responses:
+        "200":
+          description: The domain as now bound
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Domain"
+        "400":
+          $ref: "#/components/responses/BadRequestError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+    delete:
+      operationId: unbindDomain
+      summary: Stop routing a domain
+      description: |
+        Stops routing the exact full hostname, independently of the configured
+        suffix. The organization keeps the name and it still occupies a slot.
+        New requests get 404; existing connections run until they close.
+        The port's own URL stays public until revokeTunnel.
+        Safe to repeat for an owned name; a name not owned by the caller is 404.
+      tags: [Domains]
+      responses:
+        "204":
+          description: The domain routes nowhere
+        "400":
+          $ref: "#/components/responses/BadRequestError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
 
   # -------------------------------------------------------------------------
   # Metrics
@@ -1881,6 +2092,10 @@ components:
               type: boolean
               description: Whether Docker-style Linux capability add/drop policy is supported
               example: true
+            privileged_enabled:
+              type: boolean
+              description: Whether privileged containers inside the guest are supported; host sandbox policy is unchanged
+              example: true
             max_cpus:
               type: integer
               description: Maximum allowed vCPUs per box
@@ -2179,6 +2394,12 @@ components:
           minimum: 128
           description: Allocated memory in MiB
           example: 512
+        privileged:
+          type: boolean
+          description: |
+            Persisted guest privilege mode. Older servers may omit this field;
+            absence means unknown, not false. Named get_or_create reuse requires
+            a reported mode equal to the requested advanced.privileged value.
         labels:
           type: object
           additionalProperties:
@@ -2394,6 +2615,10 @@ components:
       description: Expert-only container options.
       additionalProperties: false
       properties:
+        privileged:
+          type: boolean
+          default: false
+          description: Full guest capabilities and writable guest kernel mounts. Does not relax the host sandbox. Conflicts with explicit capabilities; requires privileged_enabled.
         capabilities:
           $ref: "#/components/schemas/CreateContainerCapabilities"
 
@@ -2804,6 +3029,45 @@ components:
           type: [string, "null"]
           description: Diagnostic message if process died unexpectedly
 
+    ListExecutionsResponse:
+      type: object
+      required: [executions]
+      properties:
+        executions:
+          type: array
+          items:
+            $ref: "#/components/schemas/ExecutionSummary"
+
+    ExecutionSummary:
+      type: object
+      description: |
+        Metadata captured when a session was spawned. The SDKs expose this same
+        object as `ExecutionInfo`; the wire schema keeps a distinct name
+        because `ExecutionInfo` here is the status shape returned by
+        `GET /executions/{exec_id}`.
+      required: [execution_id, argv, started_at, tty, is_main_session]
+      properties:
+        execution_id:
+          type: string
+          description: Identifier accepted by attach and kill
+        argv:
+          type: array
+          items:
+            type: string
+          description: The command as it was requested, program first
+        started_at:
+          type: integer
+          format: int64
+          description: Spawn time, Unix epoch milliseconds
+        tty:
+          type: boolean
+          description: Whether the session owns a PTY
+        is_main_session:
+          type: boolean
+          description: |
+            True for the box's main command session (the container init),
+            which is registered under the container id.
+
     SignalRequest:
       type: object
       required: [signal]
@@ -2832,7 +3096,7 @@ components:
 
     SshConfig:
       type: object
-      description: Complete replacement SSH configuration; never persisted or logged by the runtime.
+      description: Complete replacement SSH configuration; credentials persist on the container disk and are included in clones, snapshots, exports and imports. Key material is never logged.
       required: [listen_address, host_private_key, accounts]
       additionalProperties: false
       properties:
@@ -2930,6 +3194,103 @@ components:
         token:
           type: [string, "null"]
           description: Null for public tunnels; complete on private creation, masked on subsequent calls.
+
+    DomainTarget:
+      description: A Box port or a reserved App reference. App binding currently returns 400 app_target_not_supported.
+      oneOf:
+        - $ref: "#/components/schemas/BoxDomainTarget"
+        - $ref: "#/components/schemas/AppDomainTarget"
+      discriminator:
+        propertyName: type
+        mapping:
+          box: "#/components/schemas/BoxDomainTarget"
+          app: "#/components/schemas/AppDomainTarget"
+
+    BoxDomainTarget:
+      type: object
+      additionalProperties: false
+      description: |
+        A Box port. `box` selects the resource and `port` the guest service.
+      required: [type, box, port]
+      properties:
+        type:
+          type: string
+          enum: [box]
+        box:
+          type: string
+          description: |
+            The box, by id or name, when binding; the box id when read back.
+          example: web-a
+        port:
+          type: integer
+          minimum: 1
+          maximum: 65535
+          example: 3000
+
+    AppDomainTarget:
+      type: object
+      additionalProperties: false
+      description: Reserved App identity; App binding is unavailable until the App resource exists.
+      required: [type, app]
+      properties:
+        type:
+          type: string
+          enum: [app]
+        app:
+          type: string
+          minLength: 1
+          maxLength: 255
+          pattern: '\S'
+          description: An opaque App reference.
+          example: shop
+
+    Domain:
+      type: object
+      description: A domain the organization holds and what it currently routes to.
+      required: [hostname, url, target]
+      properties:
+        hostname:
+          type: string
+          example: demo-app.app.example.test
+        url:
+          type: string
+          example: https://demo-app.app.example.test
+        target:
+          description: Where the domain routes; null while it is held but unbound.
+          oneOf:
+            - $ref: "#/components/schemas/DomainTarget"
+            - type: "null"
+
+    DomainList:
+      type: object
+      required: [domains, limit, used, remaining, min_length, domain_suffix]
+      properties:
+        domains:
+          type: array
+          items:
+            $ref: "#/components/schemas/Domain"
+        limit:
+          type: integer
+          description: How many domains the organization may hold, bound or not.
+          example: 1
+        used:
+          type: integer
+          description: How many it holds now.
+          example: 1
+        remaining:
+          type: integer
+          minimum: 0
+          example: 0
+        domain_suffix:
+          type: [string, "null"]
+          description: Platform hostname suffix for new requests; null when unavailable.
+          example: apps.example
+        min_length:
+          type: integer
+          minimum: 1
+          maximum: 63
+          description: The shortest platform name a new claim may use.
+          example: 5
 
     # =======================================================================
     # Metrics

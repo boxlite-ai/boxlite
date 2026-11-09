@@ -86,6 +86,33 @@ describe('Volumes row action "+ Box"', () => {
     })
   }
 
+  it('opens and cancels volume creation through the shared buttons', async () => {
+    renderPage()
+    await act(async () => rowAction('New Volume')!.click())
+    expect(document.querySelector('input[aria-label="Volume name"]')).not.toBeNull()
+    expect((rowAction('Create') as HTMLButtonElement).disabled).toBe(true)
+
+    await act(async () => rowAction('Cancel')!.click())
+
+    expect(document.querySelector('input[aria-label="Volume name"]')).toBeNull()
+    expect(document.body.textContent).toContain(READY_VOLUME.name)
+  })
+
+  it('restores the volume list when clearing an unmatched filter', () => {
+    renderPage()
+    const input = document.querySelector<HTMLInputElement>('input[placeholder="Filter volumes…"]')!
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, 'no-match')
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    expect(document.body.textContent).not.toContain(READY_VOLUME.name)
+
+    act(() => rowAction('Clear filter')!.click())
+
+    expect(input.value).toBe('')
+    expect(document.body.textContent).toContain(READY_VOLUME.name)
+  })
+
   it('opens the create-box form on this page rather than linking away to a new tab', () => {
     renderPage()
 

@@ -43,6 +43,7 @@
  */
 
 import { spawnSync } from 'node:child_process'
+import { kernelDeployment } from 'mdeploy/runner-kernel'
 import { realpathSync } from 'node:fs'
 import { pathToFileURL } from 'node:url'
 
@@ -55,26 +56,28 @@ const RUNNER_PORT = process.env.RUNNER_PORT || '3003'
 const NAME_TAG_PATTERN = 'boxlite-runner-*'
 // ~5 min at 10s apart — covers SSM agent registration on a freshly created instance.
 const SSM_REGISTRATION_ATTEMPTS = 30
-// ~30 min at 5s apart. This has to stay above the payload's own worst case: giving up first
+// ~40 min at 5s apart. This has to stay above the payload's own worst case: giving up first
 // would be worse than slow — nothing cancels an accepted SSM command, so the deployer would
 // report failure while the host went on to stop and swap the unit anyway. The bound the payload
 // can actually reach is derived below rather than guessed, so raising a fetch timeout that
 // crosses this line fails a test instead of stranding a fleet.
 const SSM_POLL_INTERVAL_SECONDS = 5
-const SSM_COMPLETION_ATTEMPTS = 360
+const SSM_COMPLETION_ATTEMPTS = 480
 
 // The payload's bounded steps, in seconds, taken from the timeouts it is actually emitted with.
 // Exported so the supervision budget above is checked against them rather than assumed.
 //
 // This is a floor, not the true worst case: the payload also runs apt-get, unzip and the AWS CLI
 // installer, none of which take a timeout, plus tar/sha256sum/systemctl. The window above keeps
-// roughly seventeen minutes of slack over this floor to cover them. Read it as "supervision must
+// over twenty minutes of slack over this floor to cover them. Read it as "supervision must
 // exceed everything we can bound, with room for what we cannot".
 export const PAYLOAD_WORST_CASE_SECONDS = {
   awsCliInstall: 120,
   tarballFetch: 300,
   checksumFetch: 300,
-  readinessGate: 60,
+  kernelFetch: 120,
+  readinessGate: 150,
+  kernelReadinessGate: 150,
 }
 export const ssmSupervisionSeconds = () => SSM_COMPLETION_ATTEMPTS * SSM_POLL_INTERVAL_SECONDS
 export const payloadWorstCaseSeconds = () =>
@@ -87,7 +90,8 @@ export const payloadWorstCaseSeconds = () =>
 function runAws(args: any) {
   const result = spawnSync('aws', args, { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 })
   if (result.error) {
-    if ((result.error as NodeJS.ErrnoException).code === 'ENOENT') throw new Error('the `aws` CLI is required but was not found on PATH')
+    if ((result.error as NodeJS.ErrnoException).code === 'ENOENT')
+      throw new Error('the `aws` CLI is required but was not found on PATH')
     throw new Error(`could not launch aws: ${result.error.message}`)
   }
   return { ok: result.status === 0, stdout: (result.stdout || '').trim(), stderr: (result.stderr || '').trim() }
@@ -177,7 +181,10 @@ export function resolveUpgrade(
 
 // ── remote upgrade script ────────────────────────────────────────────────────
 
-export function buildRemoteScript(upgrade: any, { runnerPort = RUNNER_PORT, allowDowngrade = false, region = REGION } = {}) {
+export function buildRemoteScript(
+  upgrade: any,
+  { runnerPort = RUNNER_PORT, allowDowngrade = false, region = REGION } = {},
+) {
   const { artifact, expectedVersion } = upgrade
   const { tarballUrl, checksumUrl, tarballName } = artifact
   // The port reaches the remote script body verbatim, so reject a malformed one here
@@ -257,7 +264,7 @@ fi
       : `# Build mode: no version ordering to guard, the requested commit is the requested commit.
 `
 
-  return `set -euo pipefail
+  const binary = `set -euo pipefail
 
 TARGET="${expectedVersion}"
 HEALTH="http://127.0.0.1:${runnerPort}/"
@@ -276,15 +283,14 @@ probe_version() {
 # installs this very version. Bail out BEFORE the probe, because "not serving" here means
 # "not built yet", and stopping/installing/starting against a missing unit would fail and
 # roll back a runner that was coming up fine.
-# is-enabled is the last of the three to become true (user-data writes the unit, then
-# daemon-reloads, enables, and only then starts), so it also covers the window where the
-# unit exists but cloud-init has not started it yet — swapping the binary there could race
-# the install cloud-init is doing. A runner that was enabled and later died still reports
-# enabled, so the repair path below stays reachable.
+# A unit that is neither enabled nor active is still waiting for cloud-init. An enabled
+# runner that died still needs repair, and an active runner remains managed even if an
+# operator disabled its automatic start at boot.
 if [ ! -x /usr/local/bin/boxlite-runner ] ||
   [ ! -f /etc/systemd/system/boxlite-runner.service ] ||
-  ! systemctl is-enabled --quiet boxlite-runner 2>/dev/null; then
-  echo "still bootstrapping (binary/unit not in place or not enabled); user-data installs v$TARGET itself — nothing to do"
+  { ! systemctl is-enabled --quiet boxlite-runner 2>/dev/null &&
+    ! systemctl is-active --quiet boxlite-runner; }; then
+  echo "still bootstrapping (binary/unit not in place, or neither enabled nor active); user-data installs v$TARGET itself — nothing to do"
   exit 0
 fi
 
@@ -355,6 +361,7 @@ else
   exit 1
 fi
 `
+  return `set -euo pipefail\n(\n${binary}\n)\n${kernelDeployment(undefined, Number(runnerPort)).enforce}`
 }
 
 // ── one host ─────────────────────────────────────────────────────────────────
@@ -377,7 +384,12 @@ const sleepSeconds = (seconds: any) => spawnSync('sleep', [String(seconds)])
 // would strand the fleet half-upgraded. A bad id, a denied permission, anything else,
 // fails immediately.
 const RETRYABLE_SEND_ERRORS = /InvalidInstanceId|ThrottlingException|TooManyUpdates|RequestLimitExceeded/
-export function sendCommand(instanceId: any, version: any, payload: any, { run = runAws, sleep = sleepSeconds }: any = {}) {
+export function sendCommand(
+  instanceId: any,
+  version: any,
+  payload: any,
+  { run = runAws, sleep = sleepSeconds }: any = {},
+) {
   const args = [
     'ssm',
     'send-command',
@@ -411,12 +423,16 @@ export function sendCommand(instanceId: any, version: any, payload: any, { run =
 
 // `aws ssm wait command-executed` gives up after 100s (delay 5 × 20 attempts) and treats
 // InProgress as retryable, so on a host whose upgrade legitimately runs longer — the
-// readiness gate alone allows 60s on top of the download — it returns with the command
+// readiness gates allow up to 300s on top of the downloads — it returns with the command
 // still running. Reading that as a verdict would abort the roll on a host that is
 // upgrading fine, so poll to a terminal status instead of using the waiter at all.
 export const TERMINAL_SSM_STATUSES = new Set(['Success', 'Failed', 'Cancelled', 'TimedOut'])
 
-export function waitForTerminalStatus(invocation: any, instanceId: any, { run = runAws, sleep = sleepSeconds }: any = {}) {
+export function waitForTerminalStatus(
+  invocation: any,
+  instanceId: any,
+  { run = runAws, sleep = sleepSeconds }: any = {},
+) {
   // A poll can legitimately fail for a moment — InvocationDoesNotExist is normal right
   // after send-command — so a single failure is not fatal. But the cause must survive:
   // a persistent AccessDeniedException otherwise looks identical to a slow upgrade and

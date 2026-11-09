@@ -1,10 +1,20 @@
 use assert_cmd::Command;
 use predicates::prelude::PredicateBooleanExt;
+use rstest::rstest;
 
 const GLOBAL_OPTIONS: &[&str] = &[
     "--debug",
     "--home",
     "--registry",
+    "--config",
+    "--url",
+    "--context",
+    "--path-prefix",
+];
+
+const BOX_GLOBAL_OPTIONS: &[&str] = &[
+    "--debug",
+    "--home",
     "--config",
     "--url",
     "--context",
@@ -32,18 +42,85 @@ fn declares_option(help: &str, option: &str) -> bool {
     })
 }
 
+#[rstest]
+#[case::root(&[], &["--help", "--version"], GLOBAL_OPTIONS)]
+#[case::list(&["list"], &["--all", "--quiet", "--format"], BOX_GLOBAL_OPTIONS)]
+#[case::ls(&["ls"], &["--all", "--quiet", "--format"], BOX_GLOBAL_OPTIONS)]
+#[case::ps(&["ps"], &["--all", "--quiet", "--format"], BOX_GLOBAL_OPTIONS)]
+#[case::run(&["run"], &["--rootfs", "--detach", "--rm"], GLOBAL_OPTIONS)]
+#[case::create(&["create"], &["--rootfs", "--name"], GLOBAL_OPTIONS)]
+#[case::pull(&["pull"], &[], &["--debug", "--home", "--registry", "--config"])]
+#[case::auth(&["auth"], &[], &["--debug", "--home", "--context"])]
+#[case::login(
+    &["auth", "login"],
+    &["--url", "--method", "--api-key-stdin"],
+    &["--debug", "--home", "--context"]
+)]
+#[case::auth_status(
+    &["auth", "status"],
+    &[],
+    &["--debug", "--home", "--url", "--context"]
+)]
+#[case::agent_wait(
+    &["agent", "wait"],
+    &["--agent", "--turn", "--timeout-seconds"],
+    BOX_GLOBAL_OPTIONS
+)]
+#[case::volume_create(
+    &["volume", "create"],
+    &[],
+    &["--debug", "--home", "--url", "--context", "--path-prefix"]
+)]
+fn command_help_groups_global_options(
+    #[case] path: &[&str],
+    #[case] command_options: &[&str],
+    #[case] global_options: &[&str],
+    #[values("-h", "--help")] help_flag: &str,
+) {
+    let help = help_for(path, help_flag);
+    let (command_help, global_help) = help
+        .split_once("\nGlobal options:\n")
+        .unwrap_or_else(|| panic!("missing Global options section:\n{help}"));
+    assert_eq!(help.matches("\nGlobal options:\n").count(), 1, "{help}");
+    assert!(command_help.contains("\nOptions:\n"), "{help}");
+
+    for option in command_options.iter().chain([&"--help"]) {
+        assert!(declares_option(command_help, option), "{option}:\n{help}");
+        assert!(!declares_option(global_help, option), "{option}:\n{help}");
+    }
+    for option in global_options {
+        assert!(!declares_option(command_help, option), "{option}:\n{help}");
+    }
+
+    let mut actual_globals: Vec<_> = global_help
+        .lines()
+        .filter(|line| line.trim_start().starts_with('-'))
+        .filter_map(|line| {
+            line.split_ascii_whitespace()
+                .find(|token| token.starts_with("--"))
+        })
+        .collect();
+    let mut expected_globals = global_options.to_vec();
+    actual_globals.sort_unstable();
+    expected_globals.sort_unstable();
+    assert_eq!(actual_globals, expected_globals, "{help}");
+}
+
 #[test]
-fn command_help_ssh_only_advertises_separate_operations() {
+fn command_help_ssh_advertises_default_setup_and_operation_options() {
     for flag in ["--help", "-h"] {
         let help = help_for(&["ssh"], flag);
-        assert!(
-            !help
-                .lines()
-                .any(|line| line.split_whitespace().next() == Some("run")),
-            "{help}"
-        );
+        assert!(help.contains("<BOX>"), "{help}");
+        assert!(!help.contains("Commands:"), "{help}");
         assert!(!help.contains("configure-and-forward"), "{help}");
-        for name in ["configure", "status", "disable", "forward"] {
+        for name in [
+            "--configure",
+            "--proxy",
+            "--status",
+            "--enable",
+            "--disable",
+            "--tunnel",
+        ] {
             assert!(
                 help.lines()
                     .any(|line| line.split_whitespace().next() == Some(name)),
@@ -69,6 +146,50 @@ fn command_help_only_advertises_meaningful_global_options() {
             ],
         ),
         (&["create"], GLOBAL_OPTIONS),
+        (
+            &["top"],
+            &[
+                "--debug",
+                "--home",
+                "--config",
+                "--url",
+                "--context",
+                "--path-prefix",
+            ],
+        ),
+        (
+            &["attach"],
+            &[
+                "--debug",
+                "--home",
+                "--config",
+                "--url",
+                "--context",
+                "--path-prefix",
+            ],
+        ),
+        (
+            &["kill"],
+            &[
+                "--debug",
+                "--home",
+                "--config",
+                "--url",
+                "--context",
+                "--path-prefix",
+            ],
+        ),
+        (
+            &["signal"],
+            &[
+                "--debug",
+                "--home",
+                "--config",
+                "--url",
+                "--context",
+                "--path-prefix",
+            ],
+        ),
         (
             &["list"],
             &[
@@ -217,7 +338,7 @@ fn command_help_only_advertises_meaningful_global_options() {
             ],
         ),
         (
-            &["ssh", "configure"],
+            &["ssh", "dev", "--configure"],
             &[
                 "--debug",
                 "--home",
@@ -228,7 +349,7 @@ fn command_help_only_advertises_meaningful_global_options() {
             ],
         ),
         (
-            &["ssh", "status"],
+            &["ssh", "dev", "--status"],
             &[
                 "--debug",
                 "--home",
@@ -239,7 +360,7 @@ fn command_help_only_advertises_meaningful_global_options() {
             ],
         ),
         (
-            &["ssh", "disable"],
+            &["ssh", "dev", "--disable"],
             &[
                 "--debug",
                 "--home",
@@ -250,7 +371,7 @@ fn command_help_only_advertises_meaningful_global_options() {
             ],
         ),
         (
-            &["ssh", "forward"],
+            &["ssh", "dev", "--tunnel"],
             &[
                 "--debug",
                 "--home",
@@ -330,6 +451,21 @@ fn command_help_only_advertises_meaningful_global_options() {
     for help_flag in ["-h", "--help"] {
         for (path, visible) in cases {
             let help = help_for(path, help_flag);
+            if *path == ["completion"] {
+                assert!(!help.contains("\nGlobal options:\n"), "{help}");
+            }
+            if matches!(*path, ["run"] | ["create"]) {
+                assert!(!help.contains("\nAdvanced boot options:\n"), "{help}");
+                for option in [
+                    "--kernel",
+                    "--kernel-format",
+                    "--initramfs",
+                    "--kernel-args",
+                    "--nested-virtualization",
+                ] {
+                    assert!(!declares_option(&help, option), "{option}:\n{help}");
+                }
+            }
             for option in GLOBAL_OPTIONS {
                 assert_eq!(
                     declares_option(&help, option),

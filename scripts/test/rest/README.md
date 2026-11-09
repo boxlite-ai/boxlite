@@ -28,7 +28,7 @@ make test:rest:cli AUTH=api-key SCOPE=smoke
 make test:rest:cli AUTH=oidc SCOPE=full
 ```
 
-See `scripts/test/rest/cli-matrix.md` for the command matrix, required
+See the [CLI matrix](cli-matrix.md) for the command matrix, required
 environment, skip policy, and artifacts.
 
 ## E2E auth matrix

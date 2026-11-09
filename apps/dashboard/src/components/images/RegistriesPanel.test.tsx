@@ -24,9 +24,12 @@ const state = vi.hoisted(() => ({
   credentials: [] as unknown[],
   listError: null as unknown,
   byId: new Map<string, unknown>(),
+  canWrite: true,
 }))
 const mocks = vi.hoisted(() => ({
   create: vi.fn(),
+  update: vi.fn(),
+  resetUpdate: vi.fn(),
   remove: vi.fn(),
   reset: vi.fn(),
   handleApiError: vi.fn(),
@@ -44,13 +47,14 @@ vi.mock('@/hooks/queries/useBoxesByImageQuery', () => ({
 }))
 vi.mock('@/hooks/mutations/useRegistryMutations', () => ({
   useCreateRegistryMutation: () => ({ mutateAsync: mocks.create, reset: mocks.reset, isPending: false }),
+  useUpdateRegistryMutation: () => ({ mutateAsync: mocks.update, reset: mocks.resetUpdate, isPending: false }),
   useDeleteRegistryMutation: () => ({ mutateAsync: mocks.remove, isPending: false }),
 }))
 vi.mock('@/hooks/useSelectedOrganization', () => ({
   useSelectedOrganization: () => ({
     selectedOrganization: { id: 'org-1' },
     organizationMembers: [{ userId: 'user-1', name: 'Chen Ming', email: 'chen@example.com' }],
-    authenticatedUserHasPermission: () => true,
+    authenticatedUserHasPermission: (permission: string) => permission !== 'write:registries' || state.canWrite,
   }),
 }))
 
@@ -81,8 +85,10 @@ beforeEach(() => {
   state.credentials = [CREDENTIAL]
   state.listError = null
   state.byId = new Map()
+  state.canWrite = true
   vi.resetAllMocks()
   mocks.create.mockResolvedValue({})
+  mocks.update.mockResolvedValue({})
   mocks.remove.mockResolvedValue(undefined)
 })
 
@@ -139,7 +145,111 @@ describe('the credential list', () => {
   })
 })
 
+describe('updating a credential', () => {
+  it('preloads the username, fixes its scope, and submits only the replacement login', async () => {
+    await renderPanel()
+    act(() => button('Update')?.click())
+    expect(field('registry-username').value).toBe(CREDENTIAL.username)
+    expect(field('registry-prefix').disabled).toBe(true)
+    expect(field('registry-host').hasAttribute('disabled')).toBe(true)
+    expect(field('registry-password').type).toBe('password')
+    expect(field('registry-password').value).toBe('')
+    expect(field('registry-password').required).toBe(true)
+    await fillAndSubmit({ username: 'new-bot' })
+    expect(mocks.update).toHaveBeenCalledWith({
+      id: CREDENTIAL.id,
+      organizationId: 'org-1',
+      credential: { username: 'new-bot', password: PASSWORD },
+    })
+    expect(mocks.create).not.toHaveBeenCalled()
+    expect(mocks.remove).not.toHaveBeenCalled()
+    expect(mocks.toastSuccess).toHaveBeenCalledWith('Credential updated', expect.anything())
+    expect(mocks.resetUpdate).toHaveBeenCalled()
+    expect(document.getElementById('registry-password')).toBeNull()
+  })
+
+  it('reports update failure and retains the entered login for retry', async () => {
+    const refusal = new BoxliteError('Registry credential is in use by another request; retry update')
+    mocks.update.mockRejectedValue(refusal)
+    await renderPanel()
+    act(() => button('Update')?.click())
+    await fillAndSubmit({})
+    expect(mocks.handleApiError).toHaveBeenCalledWith(refusal, 'Could not update the credential for ghcr.io')
+    expect(field('registry-password').value).toBe(PASSWORD)
+    expect(mocks.resetUpdate).not.toHaveBeenCalled()
+  })
+
+  it('clears the replacement secret on cancel', async () => {
+    await renderPanel()
+    act(() => button('Update')?.click())
+    act(() => typeInto(field('registry-password'), PASSWORD))
+    act(() => button('Cancel')?.click())
+    act(() => button('Update')?.click())
+    expect(field('registry-password').value).toBe('')
+    expect(mocks.resetUpdate).toHaveBeenCalled()
+  })
+
+  it('keeps update actions disabled after closing an in-flight update', async () => {
+    let complete!: () => void
+    mocks.update.mockReturnValueOnce(new Promise<void>((resolve) => (complete = resolve)))
+    await renderPanel()
+    act(() => button('Update')?.click())
+    await fillAndSubmit({})
+    try {
+      act(() => button('Cancel')?.click())
+      expect(mocks.resetUpdate).toHaveBeenCalled()
+      expect(button('Update')?.disabled).toBe(true)
+      open()
+      expect(button('Connect')?.disabled).toBe(true)
+    } finally {
+      await act(async () => complete())
+    }
+    expect(button('Update')?.disabled).toBe(false)
+  })
+
+  it.each(['create', 'update'] as const)('keeps a newer form open when an earlier %s completes', async (operation) => {
+    let complete!: () => void
+    mocks[operation].mockReturnValueOnce(new Promise<void>((resolve) => (complete = resolve)))
+    await renderPanel()
+    if (operation === 'create') open()
+    else act(() => button('Update')?.click())
+    await fillAndSubmit({})
+    act(() => button('Cancel')?.click())
+    open()
+    act(() => {
+      typeInto(field('registry-username'), 'next-bot')
+      typeInto(field('registry-password'), 'next-token')
+    })
+
+    await act(async () => complete())
+
+    expect(document.getElementById('registry-username')).not.toBeNull()
+    expect(field('registry-username').value).toBe('next-bot')
+    expect(field('registry-password').value).toBe('next-token')
+    expect(button('Connect')?.disabled).toBe(false)
+  })
+
+  it('hides update without write permission', async () => {
+    state.canWrite = false
+    await renderPanel()
+    expect(button('Update')).toBeUndefined()
+  })
+})
+
 describe('connecting a registry', () => {
+  it('connects the first registry from the empty-list action', async () => {
+    state.credentials = []
+    await renderPanel()
+    const actions = [...document.querySelectorAll('button')].filter((item) => item.textContent === 'Connect a registry')
+    act(() => actions.at(-1)?.click())
+    await fillAndSubmit({ prefix: 'acme/' })
+    expect(mocks.create).toHaveBeenCalledWith({
+      organizationId: 'org-1',
+      credential: { registryHost: 'ghcr.io', repositoryPrefix: 'acme/', username: 'acme-bot', password: PASSWORD },
+    })
+    expect(document.getElementById('registry-password')).toBeNull()
+  })
+
   it('takes the secret in a masked field, and sends it only in the create', async () => {
     await renderPanel()
     open()
@@ -183,7 +293,7 @@ describe('connecting a registry', () => {
 
   it('says which credential is in the way of a duplicate, and keeps the form', async () => {
     mocks.create.mockRejectedValue(
-      new BoxliteError('A credential for ghcr.io/acme/ already exists; remove it before adding another'),
+      new BoxliteError('A credential for ghcr.io/acme/ already exists; update it to replace the login'),
     )
     await renderPanel()
     open()

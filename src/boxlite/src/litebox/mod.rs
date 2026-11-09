@@ -10,6 +10,7 @@ pub(crate) mod config;
 pub mod copy;
 mod crash_report;
 mod exec;
+mod executions;
 mod init;
 pub(crate) mod local_snapshot;
 mod manager;
@@ -24,7 +25,11 @@ mod watcher;
 pub use attach::AttachOptions;
 pub use copy::{CopyOptions, CopySourceKind};
 pub(crate) use crash_report::CrashReport;
-pub use exec::{BoxCommand, ExecResult, ExecStderr, ExecStdin, ExecStdout, Execution, ExecutionId};
+pub use exec::{
+    BoxCommand, ExecResult, ExecStderr, ExecStdin, ExecStdout, Execution, ExecutionId,
+    ExecutionInfo,
+};
+pub use executions::ExecutionsHandle;
 pub(crate) use manager::BoxManager;
 pub use network::{
     BoxConnection, BoxReader, BoxTunnel, BoxWriter, NetworkHandle, SocketAddress, TunnelForwarder,
@@ -113,6 +118,12 @@ impl LiteBox {
         self.box_backend.exec(command).await
     }
 
+    /// Get the live execution namespace without starting the box.
+    /// See [`ExecutionsHandle`].
+    pub fn executions(&self) -> ExecutionsHandle {
+        ExecutionsHandle::new(Arc::clone(&self.box_backend))
+    }
+
     /// Attach to a session in the box.
     ///
     /// [`AttachOptions::main`] follows the box's main command session (`run
@@ -123,12 +134,11 @@ impl LiteBox {
     /// so a command that finishes instantly cannot outrun the stream and take
     /// its output and exit code with it.
     ///
-    /// [`AttachOptions::execution`] reattaches to a running exec session by id
-    /// (docker's `ContainerExecAttach`), returning a fresh `Execution` on a new
-    /// stream; the caller discards any previous handle for the same id. Used
-    /// after a transient WebSocket drop to resume stdio without restarting the
-    /// process. `BoxliteError::SessionReaped` if it is no longer attachable.
-    /// Only the REST backend models these; a local box supports `main()` only.
+    /// [`AttachOptions::execution`] attaches to an existing guest session,
+    /// including the main command, without booting or restarting the box.
+    /// Only one output reader is allowed. An eager pump from an existing exec
+    /// handle may still own it; that conflict is returned at this await point.
+    /// Use `executions().get(id)` for controls independently of output ownership.
     ///
     /// [`AttachOptions::read_only`] attaches without stdin — docker's
     /// `--no-stdin`. The returned `Execution` has no stdin sender.
@@ -227,7 +237,10 @@ impl LiteBox {
 
     /// Get the agent namespace without starting the Box.
     pub fn agents(&self) -> crate::Agents {
-        crate::Agents { _private: () }
+        crate::Agents::new(
+            Arc::clone(&self.box_backend),
+            Arc::clone(&self.network_backend),
+        )
     }
 
     /// Get a network handle for raw tunnel operations.

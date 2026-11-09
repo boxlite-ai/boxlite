@@ -111,6 +111,10 @@ async fn run_cli(mut cli: Cli) -> i32 {
     let result: anyhow::Result<i32> = match cli.command {
         cli::Commands::Run(args) => commands::run::execute(args, &global).await,
         cli::Commands::Exec(args) => commands::exec::execute(args, &global).await,
+        cli::Commands::Top(args) => commands::top::execute(args, &global).await.map(|_| 0),
+        cli::Commands::Attach(args) => commands::attach::execute(args, &global).await,
+        cli::Commands::Kill(args) => commands::kill::execute(args, &global).await.map(|_| 0),
+        cli::Commands::Signal(args) => commands::signal::execute(args, &global).await.map(|_| 0),
         cli::Commands::Create(args) => commands::create::execute(args, &global).await.map(|_| 0),
         cli::Commands::List(args) => commands::list::execute(args, &global).await.map(|_| 0),
         cli::Commands::Rm(args) => commands::rm::execute(args, &global).await.map(|_| 0),
@@ -131,6 +135,7 @@ async fn run_cli(mut cli: Cli) -> i32 {
         cli::Commands::Auth(args) => commands::auth::run(args, &global).await.map(|_| 0),
         cli::Commands::Context(args) => contexts::execute(args, &global).map(|_| 0),
         cli::Commands::Volume(args) => commands::volume::execute(args, &global).await.map(|_| 0),
+        cli::Commands::Domain(args) => commands::domain::execute(args, &global).await.map(|_| 0),
         // Handled in main() before tokio; never reaches run_cli
         cli::Commands::Completion(_) => {
             unreachable!("completion subcommand is handled before tokio in main()")

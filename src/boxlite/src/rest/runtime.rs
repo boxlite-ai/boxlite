@@ -21,6 +21,7 @@ use super::types::{
 };
 use crate::images::ImageObject;
 use crate::runtime::auth::{AuthBackend, Principal};
+use crate::runtime::domains::{Domain, DomainBackend, DomainList, DomainTarget};
 use crate::runtime::images::ImageBackend;
 use crate::runtime::registries::{NewRegistryCredential, RegistryBackend, RegistryCredential};
 use crate::runtime::types::{ImageDetail, ImageInfo, ImageUsage};
@@ -75,6 +76,25 @@ impl VolumeBackend for RestRuntime {
         } else {
             self.client.delete(&path).await
         }
+    }
+}
+
+#[async_trait::async_trait]
+impl DomainBackend for RestRuntime {
+    async fn list_domains(&self) -> BoxliteResult<DomainList> {
+        self.client.get("/domains").await
+    }
+
+    async fn bind_domain(&self, domain: &str, target: &DomainTarget) -> BoxliteResult<Domain> {
+        self.client
+            .put(&format!("/domains/{domain}/target"), target)
+            .await
+    }
+
+    async fn unbind_domain(&self, domain: &str) -> BoxliteResult<()> {
+        self.client
+            .delete(&format!("/domains/{domain}/target"))
+            .await
     }
 }
 
@@ -202,6 +222,7 @@ impl BoxOptions {
     /// types (`CreateBoxRequest::from_options`), in `boxlite serve`
     /// (`src/cli/src/commands/serve/types.rs`), and in the spec.
     fn sanitize_remote(&self) -> BoxliteResult<()> {
+        self.advanced.validate_privileged_capability_conflict()?;
         if !self.ports.is_empty() {
             return Err(BoxliteError::Unsupported(
                 "Host port publication (-p/ports) is local-only for remote runtimes. \
@@ -224,12 +245,6 @@ impl BoxOptions {
                 "sandbox security (advanced.security) is the remote server's own policy \
                  and is only configurable by the local runtime"
                     .to_string(),
-            ));
-        }
-
-        if self.advanced.privileged {
-            return Err(BoxliteError::Unsupported(
-                "privileged mode is only supported by the local runtime".to_string(),
             ));
         }
 
@@ -336,6 +351,9 @@ impl RuntimeBackend for RestRuntime {
         if options.advanced.capabilities().is_some() {
             self.client.require_linux_capabilities_enabled().await?;
         }
+        if options.advanced.privileged {
+            self.client.require_privileged_enabled().await?;
+        }
 
         let req = CreateBoxRequest::from_options(&options, name);
         let resp: BoxResponse = self.client.post("/boxes", &req).await?;
@@ -351,11 +369,30 @@ impl RuntimeBackend for RestRuntime {
     ) -> BoxliteResult<(LiteBox, bool)> {
         options.sanitize_remote()?;
 
-        // Try to get existing box by name first
-        if let Some(ref box_name) = name
-            && let Some(litebox) = self.get(box_name).await?
-        {
-            return Ok((litebox, false));
+        if let Some(ref box_name) = name {
+            let path = format!("/boxes/{box_name}");
+            match self.client.get::<BoxResponse>(&path).await {
+                Ok(response) => {
+                    let actual = response.privileged.ok_or_else(|| {
+                        BoxliteError::Unsupported(format!(
+                            "cannot reuse box {box_name:?}: the server did not report its \
+                             privileged mode; upgrade the server to expose privilege metadata"
+                        ))
+                    })?;
+                    if actual != options.advanced.privileged {
+                        return Err(BoxliteError::Unsupported(format!(
+                            "cannot reuse box {box_name:?}: requested privileged={}, but the \
+                             existing box has privileged={actual}; use a different name or recreate it",
+                            options.advanced.privileged
+                        )));
+                    }
+                    let info = response.to_box_info()?;
+                    let rest_box = Arc::new(RestBox::new(self.client.clone(), info));
+                    return Ok((litebox_from_rest(rest_box), false));
+                }
+                Err(BoxliteError::NotFound(_)) => {}
+                Err(error) => return Err(error),
+            }
         }
         // Create new box
         let litebox = self.create(options, name).await?;
@@ -535,6 +572,22 @@ mod tests {
     async fn exchange_server(
         replies: Vec<(u16, &'static str)>,
     ) -> (u16, tokio::task::JoinHandle<Vec<(String, String)>>) {
+        let (port, server) = capture_server(replies).await;
+        let requests = tokio::spawn(async move {
+            server
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|(headers, body)| (headers.lines().next().unwrap().to_string(), body))
+                .collect()
+        });
+        (port, requests)
+    }
+
+    /// Capture headers and bodies emitted by the production HTTP client.
+    async fn capture_server(
+        replies: Vec<(u16, &'static str)>,
+    ) -> (u16, tokio::task::JoinHandle<Vec<(String, String)>>) {
         let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
         let port = listener.local_addr().unwrap().port();
         let server = tokio::spawn(async move {
@@ -556,10 +609,7 @@ mod tests {
                     .unwrap_or(0);
                 let mut request_body = vec![0; length];
                 socket.read_exact(&mut request_body).await.unwrap();
-                requests.push((
-                    request.lines().next().unwrap().to_string(),
-                    String::from_utf8(request_body).unwrap(),
-                ));
+                requests.push((request, String::from_utf8(request_body).unwrap()));
                 socket
                     .write_all(
                         format!(
@@ -1062,8 +1112,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn create_rejects_privileged_mode_in_rest_mode() {
-        let options = BoxliteRestOptions::new("http://localhost:1");
+    async fn privileged_requires_server_advertisement() {
+        let (port, server) = json_server(vec![r#"{"capabilities":{}}"#]).await;
+        let options = BoxliteRestOptions::new(format!("http://127.0.0.1:{port}"));
         let runtime = RestRuntime::new(&options).expect("failed to create REST runtime");
         let mut advanced = crate::runtime::advanced_options::AdvancedBoxOptions::default();
         advanced.privileged = true;
@@ -1075,10 +1126,215 @@ mod tests {
         let error = RuntimeBackend::create(&runtime, box_options, None)
             .await
             .err()
-            .expect("REST privileged mode must be rejected before network I/O");
+            .expect("unadvertised guest privilege must be rejected");
 
         assert!(matches!(error, BoxliteError::Unsupported(_)));
-        assert!(error.to_string().contains("local runtime"));
+        assert!(error.to_string().contains("guest privileged"));
+        assert_eq!(server.await.unwrap(), ["GET /v1/config HTTP/1.1"]);
+    }
+
+    #[tokio::test]
+    async fn privileged_omitted_and_false_keep_the_existing_create_request() {
+        let (port, server) = capture_server(vec![(200, BOX_RESPONSE), (200, BOX_RESPONSE)]).await;
+        let runtime =
+            RestRuntime::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}"))).unwrap();
+        let mut options = BoxOptions {
+            rootfs: crate::RootfsSpec::Image("alpine:3.21".into()),
+            detach: true,
+            ..Default::default()
+        };
+        for explicit_default in [false, true] {
+            if explicit_default {
+                options.advanced.set_privileged(false);
+            }
+            RuntimeBackend::create(&runtime, options.clone(), Some("privilege-contract".into()))
+                .await
+                .unwrap();
+        }
+        for (headers, body) in server.await.unwrap() {
+            assert_eq!(headers.lines().next(), Some("POST /v1/boxes HTTP/1.1"));
+            assert!(
+                headers
+                    .to_ascii_lowercase()
+                    .contains("content-type: application/json\r\n")
+            );
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&body).unwrap(),
+                serde_json::json!({
+                    "name": "privilege-contract",
+                    "image": "alpine:3.21",
+                    "network": {"mode": "enabled"},
+                    "detach": true
+                })
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn advertised_privileged_creates_guest_box_and_rechecks_support() {
+        let (port, server) = capture_server(vec![
+            (200, r#"{"capabilities":{"privileged_enabled":true}}"#),
+            (200, BOX_RESPONSE),
+            (200, r#"{"capabilities":{"privileged_enabled":false}}"#),
+        ])
+        .await;
+        let runtime =
+            RestRuntime::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}"))).unwrap();
+        let mut opts = BoxOptions::default();
+        opts.advanced.set_privileged(true);
+        RuntimeBackend::create(&runtime, opts.clone(), None)
+            .await
+            .unwrap();
+        let error = RuntimeBackend::create(&runtime, opts, None)
+            .await
+            .err()
+            .unwrap();
+        assert!(matches!(error, BoxliteError::Unsupported(_)));
+        let requests = server.await.unwrap();
+        assert_eq!(
+            requests
+                .iter()
+                .map(|(headers, _)| headers.lines().next().unwrap())
+                .collect::<Vec<_>>(),
+            [
+                "GET /v1/config HTTP/1.1",
+                "POST /v1/boxes HTTP/1.1",
+                "GET /v1/config HTTP/1.1",
+            ]
+        );
+        assert!(
+            requests[1]
+                .0
+                .to_ascii_lowercase()
+                .contains("content-type: application/json\r\n")
+        );
+        let body: serde_json::Value = serde_json::from_str(&requests[1].1).unwrap();
+        assert_eq!(body["advanced"], serde_json::json!({"privileged": true}));
+    }
+
+    #[tokio::test]
+    async fn privileged_reuse_requires_matching_reported_mode() {
+        let mut failures = Vec::new();
+        for reported in [false, true] {
+            for requested in [false, true] {
+                let mut body: serde_json::Value = serde_json::from_str(BOX_RESPONSE).unwrap();
+                body["privileged"] = reported.into();
+                let response = Box::leak(body.to_string().into_boxed_str());
+                let (port, server) = json_server(vec![response]).await;
+                let runtime =
+                    RestRuntime::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}")))
+                        .unwrap();
+                let mut options = BoxOptions::default();
+                options.advanced.set_privileged(requested);
+                let result =
+                    RuntimeBackend::get_or_create(&runtime, options, Some("named".into())).await;
+                let correct = match result {
+                    Ok((litebox, created)) => {
+                        reported == requested
+                            && !created
+                            && litebox.id().as_str() == "01HJK4TNRPQSXYZ8WM6NCVT9R5"
+                    }
+                    Err(BoxliteError::Unsupported(message)) => {
+                        reported != requested && message.contains("privileged")
+                    }
+                    Err(_) => false,
+                };
+                if !correct {
+                    failures.push((reported, requested));
+                }
+                assert_eq!(server.await.unwrap(), ["GET /v1/boxes/named HTTP/1.1"]);
+            }
+        }
+        assert!(
+            failures.is_empty(),
+            "incorrect reuse for (reported, requested): {failures:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn privileged_reuse_rejects_unknown_mode_but_get_still_reads_it() {
+        for requested in [false, true] {
+            let (port, server) = json_server(vec![BOX_RESPONSE, BOX_RESPONSE]).await;
+            let runtime =
+                RestRuntime::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}")))
+                    .unwrap();
+            assert!(
+                RuntimeBackend::get(&runtime, "named")
+                    .await
+                    .unwrap()
+                    .is_some()
+            );
+            let mut options = BoxOptions::default();
+            options.advanced.set_privileged(requested);
+            let error = RuntimeBackend::get_or_create(&runtime, options, Some("named".into()))
+                .await
+                .err()
+                .expect("unknown privilege must not be reused");
+            assert!(matches!(error, BoxliteError::Unsupported(_)));
+            assert!(error.to_string().contains("privileged"));
+            assert_eq!(server.await.unwrap(), ["GET /v1/boxes/named HTTP/1.1"; 2]);
+        }
+    }
+
+    #[tokio::test]
+    async fn privileged_reuse_preserves_reported_metadata_in_info() {
+        for reported in [None, Some(false), Some(true)] {
+            let mut body: serde_json::Value = serde_json::from_str(BOX_RESPONSE).unwrap();
+            if let Some(value) = reported {
+                body["privileged"] = value.into();
+            }
+            let response = Box::leak(body.to_string().into_boxed_str());
+            let (port, server) = json_server(vec![response]).await;
+            let runtime =
+                RestRuntime::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}")))
+                    .unwrap();
+            let info = RuntimeBackend::get_info(&runtime, "named")
+                .await
+                .unwrap()
+                .unwrap();
+            let metadata = serde_json::to_value(info).unwrap();
+            assert_eq!(metadata["privileged"].as_bool(), reported);
+            assert_eq!(server.await.unwrap(), ["GET /v1/boxes/named HTTP/1.1"]);
+        }
+    }
+
+    #[tokio::test]
+    async fn privileged_reuse_creates_when_the_name_is_absent() {
+        let (port, server) = http_server(vec![
+            (
+                404,
+                r#"{"error":{"message":"missing","type":"NotFoundError","code":"not_found"}}"#,
+            ),
+            (200, r#"{"capabilities":{"privileged_enabled":true}}"#),
+            (200, BOX_RESPONSE),
+        ])
+        .await;
+        let runtime =
+            RestRuntime::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}"))).unwrap();
+        let mut options = BoxOptions::default();
+        options.advanced.set_privileged(true);
+        let (_, created) = RuntimeBackend::get_or_create(&runtime, options, Some("named".into()))
+            .await
+            .unwrap();
+        assert!(created);
+        assert_eq!(
+            server.await.unwrap(),
+            [
+                "GET /v1/boxes/named HTTP/1.1",
+                "GET /v1/config HTTP/1.1",
+                "POST /v1/boxes HTTP/1.1"
+            ]
+        );
+    }
+
+    #[test]
+    fn privileged_rejects_conflicting_remote_capabilities() {
+        let mut options = capability_options();
+        options.advanced.set_privileged(true);
+        assert!(matches!(
+            options.sanitize_remote(),
+            Err(BoxliteError::InvalidArgument(_))
+        ));
     }
 
     #[tokio::test]
@@ -1640,5 +1896,63 @@ mod tests {
         let error = registries_on(1).remove("../images").await.unwrap_err();
 
         assert!(matches!(error, BoxliteError::InvalidArgument(_)), "{error}");
+    }
+
+    /// Domains are organization routes: listed at `/domains`, bound and
+    /// unbound on the domain's `target`.
+    #[tokio::test]
+    async fn domains_use_the_organization_routes() {
+        const DOMAIN: &str = r#"{"hostname":"demo1.app.test","url":"https://demo1.app.test","target":{"type":"box","box":"box-id","port":3000}}"#;
+        let (port, server) = http_server(vec![
+            (
+                200,
+                r#"{"domains":[],"limit":1,"used":0,"remaining":1,"min_length":5}"#,
+            ),
+            (200, DOMAIN),
+            (204, ""),
+        ])
+        .await;
+        let runtime =
+            RestRuntime::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}"))).unwrap();
+        let target = DomainTarget::Box {
+            box_ref: "web-a".into(),
+            port: 3000,
+        };
+
+        assert_eq!(runtime.list_domains().await.unwrap().remaining, 1);
+        let bound = runtime
+            .bind_domain("demo1.app.test", &target)
+            .await
+            .unwrap();
+        runtime.unbind_domain("demo1.app.test").await.unwrap();
+
+        assert_eq!(bound.hostname, "demo1.app.test");
+        assert_eq!(
+            server.await.unwrap(),
+            [
+                "GET /v1/domains HTTP/1.1",
+                "PUT /v1/domains/demo1.app.test/target HTTP/1.1",
+                "DELETE /v1/domains/demo1.app.test/target HTTP/1.1",
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn domains_list_full_hostnames_and_typed_app_targets() {
+        let (port, server) = http_server(vec![(200, r#"{
+            "domains": [
+              {"hostname":"demo.apps.example","url":"https://demo.apps.example","target":null},
+              {"hostname":"shop.apps.example","url":"https://shop.apps.example","target":{"type":"app","app":"shop-id"}}
+            ], "limit":2,"used":2,"remaining":0,"min_length":5
+        }"#)]).await;
+        let runtime =
+            RestRuntime::new(&BoxliteRestOptions::new(format!("http://127.0.0.1:{port}"))).unwrap();
+        let held = runtime.list_domains().await.unwrap();
+        assert_eq!(held.domains[0].hostname, "demo.apps.example");
+        assert_eq!(
+            serde_json::to_value(held.domains[1].target.as_ref().unwrap()).unwrap(),
+            serde_json::json!({"type":"app", "app":"shop-id"})
+        );
+        assert_eq!(server.await.unwrap(), ["GET /v1/domains HTTP/1.1"]);
     }
 }

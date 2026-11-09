@@ -12,6 +12,7 @@ use std::sync::{Condvar, Mutex};
 
 use boxlite::BoxliteError;
 
+use crate::exec::CExecutionInfoList;
 use crate::images::{CImageDetail, CImageInfoList, CImagePullResult, CImageUsage};
 use crate::info::{CBoxInfo, CBoxInfoList};
 use crate::metrics::{CBoxMetrics, CRuntimeMetrics};
@@ -217,6 +218,12 @@ pub type CBoxSshStatusCb =
 pub(crate) type CBoxSshStatusFn =
     extern "C" fn(*mut crate::ssh::CSshStatus, *mut crate::CBoxliteError, *mut c_void);
 
+/// SSH enable completion with the same ownership contract as SSH configure.
+pub type CBoxSshEnableCb =
+    Option<extern "C" fn(*mut crate::ssh::CSshStatus, *mut crate::CBoxliteError, *mut c_void)>;
+pub(crate) type CBoxSshEnableFn =
+    extern "C" fn(*mut crate::ssh::CSshStatus, *mut crate::CBoxliteError, *mut c_void);
+
 /// SSH disable completion with the same ownership contract as SSH configure.
 pub type CBoxSshDisableCb =
     Option<extern "C" fn(*mut crate::ssh::CSshStatus, *mut crate::CBoxliteError, *mut c_void)>;
@@ -234,6 +241,13 @@ pub type CBoxInfoListCb =
     Option<extern "C" fn(*mut CBoxInfoList, *mut crate::CBoxliteError, *mut c_void)>;
 pub(crate) type CBoxInfoListFn =
     extern "C" fn(*mut CBoxInfoList, *mut crate::CBoxliteError, *mut c_void);
+
+/// Live execution inventory completion. The caller owns the returned list and
+/// must release it with `boxlite_free_execution_info_list`.
+pub type CExecutionInfoListCb =
+    Option<extern "C" fn(*mut CExecutionInfoList, *mut crate::CBoxliteError, *mut c_void)>;
+pub(crate) type CExecutionInfoListFn =
+    extern "C" fn(*mut CExecutionInfoList, *mut crate::CBoxliteError, *mut c_void);
 
 /// Per-box metrics completion.
 pub type CBoxMetricsCb =
@@ -505,6 +519,11 @@ pub enum RuntimeEvent {
         user_data: usize,
         result: Result<OwnedFfiPtr<crate::ssh::CSshStatus>, BoxliteError>,
     },
+    SshEnable {
+        cb: CBoxSshEnableFn,
+        user_data: usize,
+        result: Result<OwnedFfiPtr<crate::ssh::CSshStatus>, BoxliteError>,
+    },
     SshDisable {
         cb: CBoxSshDisableFn,
         user_data: usize,
@@ -519,6 +538,11 @@ pub enum RuntimeEvent {
         cb: CBoxInfoListFn,
         user_data: usize,
         result: Result<OwnedFfiPtr<CBoxInfoList>, BoxliteError>,
+    },
+    ExecutionInfoList {
+        cb: CExecutionInfoListFn,
+        user_data: usize,
+        result: Result<OwnedFfiPtr<CExecutionInfoList>, BoxliteError>,
     },
     Metrics {
         cb: CBoxMetricsFn,

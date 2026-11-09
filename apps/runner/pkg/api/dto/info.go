@@ -22,7 +22,8 @@ type RunnerServiceInfo struct {
 } // @name RunnerServiceInfo
 
 type RunnerInfoResponseDTO struct {
-	ServiceHealth []*RunnerServiceInfo `json:"serviceHealth,omitempty"`
-	Metrics       *RunnerMetrics       `json:"metrics,omitempty"`
-	AppVersion    string               `json:"appVersion"`
+	ServiceHealth      []*RunnerServiceInfo `json:"serviceHealth,omitempty"`
+	Metrics            *RunnerMetrics       `json:"metrics,omitempty"`
+	AppVersion         string               `json:"appVersion"`
+	SupportsPrivileged bool                 `json:"supportsPrivileged"`
 } //	@name	RunnerInfoResponseDTO

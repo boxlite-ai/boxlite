@@ -13,6 +13,7 @@ import { UserService } from './user.service'
 import { ApiKey } from '../api-key/api-key.entity'
 import { ApiKeyService } from '../api-key/api-key.service'
 import { RedisLockProvider } from '../box/common/redis-lock.provider'
+import { Domain } from '../box/entities/domain.entity'
 import { BoxRepository } from '../box/repositories/box.repository'
 import { BoxService } from '../box/services/box.service'
 import { TypedConfigService } from '../config/typed-config.service'
@@ -48,11 +49,15 @@ async function createServices(sharedDefault: boolean) {
   const keys = [key('default', 'deleted'), key('invited', 'deleted'), otherKey]
   const users = [Object.assign(new User(), { id: 'deleted' })]
   const organizations = [defaultOrg, invitedOrg]
+  const domains = organizations.map((organization) =>
+    Object.assign(new Domain(), { id: `${organization.id}-domain`, organizationId: organization.id }),
+  )
   const rows = new Map<unknown, object[]>([
     [User, users],
     [Organization, organizations],
     [OrganizationUser, memberships],
     [ApiKey, keys],
+    [Domain, domains],
   ])
   // Only the database boundary is replaced. Queries filter real entity rows and
   // remove uses object identity; organization deletion models its membership FK.
@@ -89,7 +94,10 @@ async function createServices(sharedDefault: boolean) {
     count: async (...args: Parameters<typeof find>) => (await find(...args)).length,
     save: async (entity: object) => entity,
     remove,
-    delete: async (entity: unknown, id: string) => remove(await find(entity, { where: { id } })),
+    delete: async (entity: unknown, criteria: string | Record<string, unknown>) =>
+      remove(await find(entity, { where: typeof criteria === 'string' ? { id: criteria } : criteria })),
+    // Nested callbacks share the manager; only the outer DataSource records a commit.
+    transaction: async <T>(work: (em: unknown) => Promise<T>): Promise<T> => work(entityManager),
   }
   const timeline: string[] = []
   const moduleRef = await Test.createTestingModule({
@@ -140,7 +148,7 @@ async function createServices(sharedDefault: boolean) {
     ],
   }).compile()
   await moduleRef.init()
-  return { moduleRef, keys, otherKey, users, memberships, organizations, remainingMember, timeline }
+  return { moduleRef, keys, otherKey, users, memberships, organizations, domains, remainingMember, timeline }
 }
 
 describe('review regressions: account deletion', () => {
@@ -155,6 +163,9 @@ describe('review regressions: account deletion', () => {
         expect(state.memberships).toEqual([state.remainingMember])
         expect(state.keys).toEqual([state.otherKey])
         expect(state.organizations.map((organization) => organization.id)).toEqual(
+          sharedDefault ? ['default', 'invited'] : ['invited'],
+        )
+        expect(state.domains.map((domain) => domain.organizationId)).toEqual(
           sharedDefault ? ['default', 'invited'] : ['invited'],
         )
         if (sharedDefault) expect(state.remainingMember.role).toBe(OrganizationMemberRole.OWNER)

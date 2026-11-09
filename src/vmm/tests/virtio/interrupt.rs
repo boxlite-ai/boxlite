@@ -9,7 +9,7 @@ use std::sync::Arc;
 use crate::{
     irq::IrqLine,
     mock_vm::{Call, MockVm},
-    virtio::{VirtioInterrupt, interrupt::MmioInterrupt},
+    virtio::{NEEDS_RESET, VirtioInterrupt, interrupt::MmioInterrupt},
 };
 
 fn set(line: u32, level: bool) -> Call {
@@ -94,6 +94,34 @@ fn device_status_is_shared_with_the_reader() {
 
     interrupt.set_device_status(0x8);
     assert_eq!(interrupt.device_status(), 0x8);
+}
+
+#[test]
+fn set_needs_reset_keeps_the_driver_bits() {
+    let interrupt = MmioInterrupt::new(IrqLine::new(Arc::new(MockVm::new()), 5));
+
+    interrupt.set_device_status(0x8);
+    interrupt.set_needs_reset();
+    interrupt.set_needs_reset();
+    assert_eq!(interrupt.device_status(), 0x8 | NEEDS_RESET);
+}
+
+#[test]
+fn a_status_update_adds_its_bits() {
+    let interrupt = MmioInterrupt::new(IrqLine::new(Arc::new(MockVm::new()), 5));
+
+    interrupt.set_device_status(0x8);
+    interrupt.update_device_status(0x1, NEEDS_RESET);
+    assert_eq!(interrupt.device_status(), 0x9);
+}
+
+#[test]
+fn a_blocked_status_update_changes_nothing() {
+    let interrupt = MmioInterrupt::new(IrqLine::new(Arc::new(MockVm::new()), 5));
+
+    interrupt.set_device_status(NEEDS_RESET);
+    interrupt.update_device_status(0x1, NEEDS_RESET);
+    assert_eq!(interrupt.device_status(), NEEDS_RESET);
 }
 
 #[test]

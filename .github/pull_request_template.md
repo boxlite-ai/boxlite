@@ -1,24 +1,23 @@
 <!-- Read and apply
-[boxlite-writing](https://github.com/boxlite-ai/agent-tooling/blob/main/plugins/boxlite-agent-tooling/.agents/skills/boxlite-writing/SKILL.md)
-to the PR description, including drafts and revisions.
-Follow the contributor guide before filling in this template:
+[boxlite-pr-preparation](https://github.com/boxlite-ai/agent-tooling/blob/main/plugins/boxlite-agent-tooling/.agents/skills/boxlite-pr-preparation/SKILL.md)
+before filling in this outline.
+Follow the contributor guide:
 https://github.com/boxlite-ai/boxlite/blob/main/CONTRIBUTING.md#commit--pr-messages
 Keep the whole body within 120 words, with no paragraph over 80 and no list
 item over 40. -->
 
 ## TL;DR
 
-<!-- Summarize the intended result. -->
+<!-- Problem and resulting behavior. -->
 
 Design doc: <!-- Full registered URL. -->
 
-Documentation: <!-- Link meaningful project docs added or updated in this PR;
-prefer existing docs. -->
+Documentation: <!-- Changed project docs. -->
 
 ## How it works
 
-<!-- Describe the mechanism or rationale. -->
+<!-- Explanation and illustration. -->
 
 ## Verification
 
-<!-- Decisive command → observed result, including red/green evidence for a fix. -->
+<!-- Commands, results, and coverage gaps. -->

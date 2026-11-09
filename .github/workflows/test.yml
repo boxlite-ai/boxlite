@@ -376,6 +376,12 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y jq libseccomp-dev protobuf-compiler util-linux
 
+      # SSH guest tests need user/mount namespaces; Ubuntu's AppArmor blocks
+      # them by default. This setting lasts only for the disposable runner.
+      - name: Enable unprivileged user namespaces (Linux)
+        if: runner.os == 'Linux'
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
       - name: Install system dependencies (macOS)
         if: runner.os == 'macOS'
         run: brew install protobuf
@@ -448,7 +454,7 @@ jobs:
         # server can name the class. stdlib only — no extra setup.
         run: make test:unit:openapi
 
-      - name: Run guest ownership tests
+      - name: Run guest mount tests
         if: runner.os == 'Linux'
         run: make test:guest-perms
 

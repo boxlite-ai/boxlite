@@ -38,6 +38,7 @@ extern void goBoxliteOnRegistryRemove(CBoxliteError *err, void *ud);
 
 extern void goBoxliteOnInfo(CBoxInfo *info, CBoxliteError *err, void *ud);
 extern void goBoxliteOnInfoList(CBoxInfoList *list, CBoxliteError *err, void *ud);
+extern void goBoxliteOnExecutionInfoList(CExecutionInfoList *list, CBoxliteError *err, void *ud);
 
 extern void goBoxliteOnBoxMetrics(CBoxMetrics *m, CBoxliteError *err, void *ud);
 extern void goBoxliteOnRuntimeMetrics(CRuntimeMetrics *m, CBoxliteError *err, void *ud);
@@ -90,6 +91,7 @@ CBoxRegistryRemoveCb cbRegistryRemove(void) { return (CBoxRegistryRemoveCb)goBox
 
 CBoxInfoCb cbInfo(void) { return (CBoxInfoCb)goBoxliteOnInfo; }
 CBoxInfoListCb cbInfoList(void) { return (CBoxInfoListCb)goBoxliteOnInfoList; }
+CExecutionInfoListCb cbExecutionInfoList(void) { return (CExecutionInfoListCb)goBoxliteOnExecutionInfoList; }
 
 CBoxMetricsCb cbBoxMetrics(void) { return (CBoxMetricsCb)goBoxliteOnBoxMetrics; }
 CRuntimeMetricsCb cbRuntimeMetrics(void) { return (CRuntimeMetricsCb)goBoxliteOnRuntimeMetrics; }
@@ -103,8 +105,9 @@ CExecutionResizeCb cbExecutionResize(void) { return (CExecutionResizeCb)goBoxlit
 CTunnelForwarderWaitCb cbTunnelForwarderWait(void) { return (CTunnelForwarderWaitCb)goBoxliteOnTunnelForwarderWait; }
 CTunnelForwarderCloseCb cbTunnelForwarderClose(void) { return (CTunnelForwarderCloseCb)goBoxliteOnTunnelForwarderClose; }
 
-// All three SSH operations deliver one CSshStatus, so they share the
+// All SSH operations deliver one CSshStatus, so they share the
 // goBoxliteOnSSHStatus trampoline (cast to their distinct typedef).
 CBoxSshConfigureCb cbSSHConfigure(void) { return (CBoxSshConfigureCb)goBoxliteOnSSHStatus; }
 CBoxSshStatusCb cbSSHStatus(void) { return (CBoxSshStatusCb)goBoxliteOnSSHStatus; }
 CBoxSshDisableCb cbSSHDisable(void) { return (CBoxSshDisableCb)goBoxliteOnSSHStatus; }
+CBoxSshEnableCb cbSSHEnable(void) { return (CBoxSshEnableCb)goBoxliteOnSSHStatus; }

@@ -1,4 +1,4 @@
-PHONY_TARGETS += guest shim runtime vmm vmm\:boot vmm\:boot\:host cli cli\:release skillbox-image build\:apps
+PHONY_TARGETS += guest shim runtime vmm vmm\:boot vmm\:boot\:host cli cli\:release skillbox-image build\:apps build\:apps\:api build\:apps\:dashboard
 
 vmm:
 	@cargo build -p boxlite-hypervisor -p boxlite-vmm
@@ -47,6 +47,12 @@ build\:apps: _ensure-apps-deps
 	@echo "🔨 Building apps workspace..."
 	@cd apps && yarn build
 	@echo "✅ apps workspace built → dist/apps"
+
+build\:apps\:api: _ensure-apps-deps
+	@cd apps && yarn nx run api:build --configuration=production
+
+build\:apps\:dashboard: _ensure-apps-deps
+	@cd apps && yarn nx run dashboard:build
 
 # Build SkillBox container image (all-in-one AI CLI with noVNC)
 # Usage: make skillbox-image [APT_SOURCE=mirrors.aliyun.com]

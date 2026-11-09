@@ -114,6 +114,8 @@ impl From<JsContainerCapabilities> for ContainerCapabilities {
 #[napi(object)]
 #[derive(Clone, Debug)]
 pub struct JsAdvancedBoxOptions {
+    /// Guest-only privilege; leaves host sandbox policy unchanged.
+    pub privileged: Option<bool>,
     pub capabilities: Option<JsContainerCapabilities>,
 }
 

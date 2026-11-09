@@ -164,6 +164,8 @@ function tenant(
     .replace('__ACCOUNT_LINK_API_ORIGIN_JSON__', JSON.stringify(API))
     .replace('__ACCOUNT_LINK_FORM_ID_JSON__', JSON.stringify('ap_link'))
     .replace('__AUTH0_DOMAIN_JSON__', JSON.stringify(DOMAIN))
+    .replace('__MCP_RESOURCE_URL_JSON__', JSON.stringify(''))
+    .replace('__API_AUDIENCE_JSON__', JSON.stringify(''))
   expect(source).not.toMatch(/__[A-Z_]+_JSON__/)
   const exports: Record<string, Handler> = {}
   runInNewContext(source, { exports, require, Buffer, URL, fetch, console: { log: () => undefined } })

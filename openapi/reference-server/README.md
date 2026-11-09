@@ -3,6 +3,10 @@
 Reference implementation of the [BoxLite Box API](../box.openapi.yaml).
 Use this to validate client implementations against the spec.
 
+Box responses include the native SDK's persisted `privileged` mode when known.
+REST clients use it to verify named `get_or_create` reuse; a missing value is
+unknown and cannot establish a match with either requested mode.
+
 **Not production-ready** — no persistence, single-tenant.
 
 ## Setup
@@ -97,6 +101,11 @@ curl -s -X DELETE http://localhost:8080/v1/demo/boxes/$BOX_ID \
 | `/{prefix}/boxes/{id}/files` | GET | Download files |
 | `/{prefix}/boxes/{id}/metrics` | GET | Box metrics |
 | `/{prefix}/metrics` | GET | Runtime metrics |
+
+Execution status, signal, and resize resolve a live session from the guest
+registry when this server holds no local handle — for example the main command,
+or a session started before a server restart. A 404 means the guest does not
+list it either, not merely that the local handle is missing.
 
 **Not implemented:** the `/{prefix}/images…` and `/{prefix}/images/registries…` routes, WebSocket TTY.
 

@@ -85,10 +85,18 @@ test('both clouds answer every module the stack asks about', () => {
     'registryCredentials',
     'registryProxy',
     'runners',
+    'servesUserDomain',
     'storage',
   ]
   assert.deepEqual(Object.keys(aws()).sort(), expected)
   assert.deepEqual(Object.keys(gcp()).sort(), expected)
+})
+
+test('only the cloud whose edge writes the wildcard serves a user domain', () => {
+  // The API mints `demo.<userDomain>` URLs wherever it is told the domain, so
+  // the cloud with no record or certificate for it must not claim to serve one.
+  assert.equal(gcp().servesUserDomain(), true)
+  assert.equal(aws().servesUserDomain(), false)
 })
 
 test('every entry is a function, so a bundle exists before the first resource does', () => {

@@ -6,6 +6,7 @@ import { execFile } from 'node:child_process'
 import type { Auth0BrandingGateway, BrandingTarget, JsonObject } from './universal-login.js'
 
 const DEFAULT_AUTH0_TIMEOUT_MS = 60_000
+const BOT_DETECTION_RESOURCE = 'attack-protection/bot-detection'
 const NOT_FOUND_PATTERN = /(?:status(?: code)?\s*[:=]?\s*404\b|HTTP(?:\/\d(?:\.\d)?)?\s+404\b|\b404 Not Found\b)/i
 
 interface Auth0CliError extends Error {
@@ -13,6 +14,7 @@ interface Auth0CliError extends Error {
 }
 
 export type Auth0CliExecute = (args: string[], signal?: AbortSignal) => Promise<unknown>
+export type PasswordChallengePolicy = 'never' | 'when_risky' | 'always'
 
 function executeAuth0(args: string[], signal?: AbortSignal): Promise<unknown> {
   return new Promise((resolve, reject) => {
@@ -83,6 +85,15 @@ export class Auth0ManagementCli implements Auth0BrandingGateway {
 
   async updateTenantSettings(target: BrandingTarget, settings: JsonObject, signal?: AbortSignal) {
     await this.request(target, ['api', 'patch', 'tenants/settings', '--data', JSON.stringify(settings)], signal)
+  }
+
+  async getBotDetection(target: BrandingTarget) {
+    return asObject(await this.request(target, ['api', 'get', BOT_DETECTION_RESOURCE]), BOT_DETECTION_RESOURCE)
+  }
+
+  async updatePasswordChallengePolicy(target: BrandingTarget, policy: PasswordChallengePolicy) {
+    const payload = JSON.stringify({ challenge_password_policy: policy })
+    await this.request(target, ['api', 'patch', BOT_DETECTION_RESOURCE, '--data', payload])
   }
 
   async createTheme(target: BrandingTarget, theme: JsonObject, signal?: AbortSignal) {

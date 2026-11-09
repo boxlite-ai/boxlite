@@ -1,0 +1,25 @@
+{
+  "scopes": [
+    "write:boxes",
+    "delete:boxes",
+    "read:volumes",
+    "write:volumes",
+    "delete:volumes",
+    "read:images",
+    "write:images",
+    "delete:images",
+    "write:templates",
+    "delete:templates"
+  ],
+  "clients": [
+    "https://claude.ai/oauth/claude-code-client-metadata",
+    "https://claude.ai/oauth/mcp-oauth-client-metadata",
+    "https://chatgpt.com/oauth/client.json",
+    "https://chatgpt.com/oauth/connectors/client.json",
+    "https://chatgpt.com/oauth/codex/client.json",
+    "https://vscode.dev/oauth/client-metadata.json",
+    "https://insiders.vscode.dev/oauth/client-metadata.json",
+    "https://zed.dev/oauth/client-metadata.json",
+    "https://loomy.im/oauth/client-metadata/boxlite.json"
+  ]
+}

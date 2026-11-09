@@ -11,11 +11,11 @@ without creating, starting, stopping, or deleting boxes.
 
 It calls:
 
-- `GET /api/health`
-- `GET /api/v1/config`
-- `GET /api/v1/me`
-- `GET /api/v1/<prefix>/boxes`
-- optionally `GET` and `HEAD /api/v1/<prefix>/boxes/<boxId>`
+- `GET /health`
+- `GET /v1/config`
+- `GET /v1/me`
+- `GET /v1/<prefix>/boxes`
+- optionally `GET` and `HEAD /v1/<prefix>/boxes/<boxId>`
 
 Install k6 first:
 
@@ -26,7 +26,7 @@ brew install k6
 Run:
 
 ```bash
-export BOXLITE_API_URL=https://api.dev.boxlite.ai/api
+export BOXLITE_API_URL=https://api.dev.boxlite.ai
 export BOXLITE_TOKEN=<api-key-or-oidc-access-token>
 export BOXLITE_PREFIX=<path-prefix-from-boxlite-auth-whoami>
 
@@ -74,12 +74,12 @@ Watch at least these production-side signals during a run:
 
 ## Box creation stress
 
-`api-create-box.k6.js` exercises `POST /api/v1/<prefix>/boxes` and then deletes
+`api-create-box.k6.js` exercises `POST /v1/<prefix>/boxes` and then deletes
 each created box. This is not read-only: it consumes runner capacity and can
 pull/start images. Use the local profile first:
 
 ```bash
-export BOXLITE_API_URL=https://api.dev.boxlite.ai/api
+export BOXLITE_API_URL=https://api.dev.boxlite.ai
 export BOXLITE_TOKEN=<api-key-or-oidc-access-token>
 export BOXLITE_PREFIX=<path-prefix-from-boxlite-auth-whoami>
 
@@ -131,7 +131,7 @@ For the current dev default runner (`c8i.2xlarge`, 8 vCPU), the hard ceiling is
 `64` simultaneous VMs. The local canary defaults to only `2`.
 
 ```bash
-export BOXLITE_API_URL=https://api.dev.boxlite.ai/api
+export BOXLITE_API_URL=https://api.dev.boxlite.ai
 export BOXLITE_TOKEN=<api-key-or-oidc-access-token>
 export BOXLITE_PREFIX=<path-prefix-from-boxlite-auth-whoami>
 

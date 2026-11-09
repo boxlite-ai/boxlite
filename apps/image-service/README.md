@@ -11,7 +11,7 @@ organization's, and streams the answer straight back. Nothing else about the
 pull changes — the manifest bytes a runner receives are the bytes the upstream
 served, so the digest a client verifies still holds.
 
-- Place in the platform: [`apps/README.md`](../README.md)
+- Place in the platform: [hosted platform](../../docs/contributing/architecture/platform/README.md)
 
 > **Private images.** An organization's login for ghcr.io, Docker Hub, quay.io
 > or one of Container Registry's gcr.io hosts is read from the credential store
@@ -79,10 +79,12 @@ GET /v2/acme/ghcr.io/acme/app/manifests/1.2   Authorization: Basic …
  ├─ authorize      is ghcr.io a host we pull from?          403
  ├─ meter          this runner's and organization's rate    429 + Retry-After
  │
+ ├─ login?         current metadata from the control plane 403 if no hosted box · 503 if unavailable
+ │                  └─ only negative lookups are cached; private lookups are fresh
+ ├─ token          reuse only when the secret version matches
  ├─ forward        GET https://ghcr.io/v2/acme/app/manifests/1.2
  │                  └─ 401 → read the challenge, fetch a token, retry once
- │                     the token is kept per (runner, org, endpoint, repository)
- │                     ├─ login?  control plane, as the runner, cached     403 if it hosts no box of the org · 503 if it cannot be asked
+ │                     the token is kept per (runner, org, endpoint, repository), with its secret version
  │                     ├─ secret  Secret Manager, only on a token miss
  │                     └─ token   bought with the login: kept ≤ 5 minutes   403 if the login is refused
  │
@@ -93,8 +95,8 @@ The caller's own credential stops at `authenticate`: it identifies a runner to
 this proxy and means nothing upstream, so it is never forwarded.
 
 A runner is given an organization's login only while it hosts a box of that
-organization, and both the answer and the token that login buys are kept per
-runner, so one runner's token never serves another's pull. A runner key alone is not enough: an organization can run
+organization. Lookups and cached tokens are scoped per runner, so one runner's token never serves another's pull.
+A runner key alone is not enough: an organization can run
 runners of its own, and one of those naming another organization in a pull
 path would otherwise be handed that organization's private images. A path
 whose organization is not an organization id is pulled anonymously without
@@ -112,7 +114,16 @@ and only when that endpoint is the registry's own host or one it is known to
 use (`auth.docker.io` for Docker Hub). The pull itself carries the token the
 login bought, never the login. A token bought with a login is kept five
 minutes at most, whatever the registry states — gcr.io states twelve hours —
-because that cache is how long a deleted login keeps working here.
+as an additional lifetime bound; credential versions are checked before private bearer reuse.
+
+Credential rotation commits the new username/secret pointer before retiring the old secret.
+Every private pull reads current metadata before selecting a bearer; a version mismatch forces a new token exchange with the replacement login.
+This works across replicas and when old-secret retirement fails; secret payloads are read only on token misses.
+Normally, each private manifest/blob request adds one API lookup and fails closed during control-plane lookup outages, even with a warm token.
+Anonymous/negative lookups retain their existing TTL; upstream-issued tokens themselves are not revoked.
+If a version is retired during an authentication challenge, the proxy refreshes authorized metadata and retries the secret read once.
+A failed refresh or second read fails the pull; in-flight requests may still need a caller retry.
+Upgrade all proxy replicas before relying on this behavior; older replicas retain the previous cache delay.
 
 Unmodified takes one deliberate act. Go's HTTP transport offers `gzip` on any
 request that did not ask for an encoding itself, then decodes the answer and

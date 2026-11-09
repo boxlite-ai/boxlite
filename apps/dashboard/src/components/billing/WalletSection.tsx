@@ -17,9 +17,8 @@ import { Spinner } from '@/components/ui/spinner'
 import { useRedeemCouponMutation } from '@/hooks/mutations/useRedeemCouponMutation'
 import { useSetAutomaticTopUpMutation } from '@/hooks/mutations/useSetAutomaticTopUpMutation'
 import { useTopUpWalletMutation } from '@/hooks/mutations/useTopUpWalletMutation'
+import { useConnectCard } from '@/hooks/useConnectCard'
 import {
-  useFetchOwnerCheckoutUrlQuery,
-  useIsOwnerCheckoutUrlFetching,
   useOwnerBillingPortalUrlQuery,
   useOwnerInvoicesQuery,
   useOwnerPaymentMethodsQuery,
@@ -237,8 +236,7 @@ export function WalletSection() {
   const paymentMethodsQuery = useOwnerPaymentMethodsQuery()
   const planQuery = useOwnerPlanQuery()
 
-  const isCheckoutUrlLoading = useIsOwnerCheckoutUrlFetching()
-  const fetchCheckoutUrl = useFetchOwnerCheckoutUrlQuery()
+  const { connectCard, isPending: isCheckoutUrlLoading } = useConnectCard()
   const wallet = walletQuery.data
   const billingPortalUrl = billingPortalUrlQuery.data
   const setAutomaticTopUpMutation = useSetAutomaticTopUpMutation()
@@ -251,21 +249,6 @@ export function WalletSection() {
     }
     setAutomaticTopUp(wallet.automaticTopUp ?? DEFAULT_AUTO_RELOAD)
   }, [wallet])
-
-  const handleUpdatePaymentMethod = useCallback(async () => {
-    const newWindow = window.open('', '_blank')
-    try {
-      const data = await fetchCheckoutUrl()
-      if (newWindow) {
-        newWindow.location.href = data
-      }
-    } catch (error) {
-      newWindow?.close()
-      toast.error('Failed to fetch checkout url', {
-        description: String(error),
-      })
-    }
-  }, [fetchCheckoutUrl])
 
   const handleSetAutomaticTopUp = useCallback(async () => {
     if (!selectedOrganization) {
@@ -405,7 +388,7 @@ export function WalletSection() {
             isError={paymentMethodsQuery.isError}
             hasConnectedCard={cardConnected}
             isActionLoading={isCheckoutUrlLoading}
-            onAction={handleUpdatePaymentMethod}
+            onAction={connectCard}
           />
 
           <section>

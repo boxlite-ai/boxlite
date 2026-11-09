@@ -19,9 +19,37 @@ Application invitation mail and the identity provider's verification/reset mail 
 Invitation emails reuse the black BoxLite wordmark at
 `<DASHBOARD_URL>/auth0/boxlite-black-3f7875da.png`, served by the dashboard's public assets.
 It displays at 32 pixels high with proportional width, matching the Auth0 reset email.
-Keep the asset filename aligned with [Auth0 branding](../auth0/branding/ASSETS.md) when updating the logo.
+Keep the asset filename aligned with [Auth0 branding](../auth0/branding/README.md) when updating the logo.
 The invitation email tests check both the branding path and the referenced public file, so a
 branding migration cannot silently leave emails pointing to a deleted asset.
+
+## Auth0 Bot Detection
+
+The [stage policy](../auth0/bot-detection.json) sets dev and prod to `when_risky`. Auth0 can challenge
+risky email/password signup and login requests. Social connections are outside
+[Bot Detection coverage](https://auth0.com/docs/secure/attack-protection/bot-detection#limitations).
+
+Run from `apps/infra` with an Auth0 CLI session for the target tenant. Preview
+requires `read:attack_protection`, and apply also requires `update:attack_protection`.
+
+```bash
+npm run auth0:bot-detection -- preview --stage dev
+npm run auth0:bot-detection -- apply --stage dev
+```
+
+Use `--stage prod` for the production Auth0 tenant.
+
+Preview shows the tenant, current policy, desired policy and monitoring mode. Apply
+requires monitoring mode off for an active challenge policy. It updates only the
+password challenge field and reads it back. Each stage needs its own policy entry.
+
+Check new signup, returning password login, and password-backed account linking in dev.
+Linking uses a noninteractive password grant, which can fail if Auth0 requires a
+challenge. A successful normal login leaves risk-triggered linking unverified.
+
+To roll back, restore the previous policy printed by the apply command to the stage entry and apply
+again. A restore to `never` can run in monitoring mode. If a write result is uncertain,
+preview the tenant again before retrying.
 
 ## Auth0 email-first login policy
 
@@ -88,12 +116,14 @@ Preview the login policy, inspect the tenant/client/connection/resource plan, th
 npm run auth0:configure-login -- \
   --tenant <tenant.auth0.com> \
   --client-id <boxlite-spa-client-id> \
-  --connection <database-connection-name>
+  --connection <database-connection-name> \
+  --api-audience <OIDC_AUDIENCE>
 
 npm run auth0:configure-login -- \
   --tenant <tenant.auth0.com> \
   --client-id <boxlite-spa-client-id> \
   --connection <database-connection-name> \
+  --api-audience <OIDC_AUDIENCE> \
   --apply
 ```
 
@@ -139,9 +169,104 @@ the Auth0 tenant:
 5. Social login remains unchanged.
 
 The deployment order is intentional: Auth0 apply -> live canaries -> BoxLite
-API deploy. The API then rejects old unverified `auth0|...` access tokens across
-HTTP, Socket.IO, and the WebSocket proxy. It does not revoke refresh tokens or
-retroactively gate independently validating Commerce/Analytics services.
+API deploy. The Action is the only email-verification gate: it denies an
+unverified database user on every grant, refresh and device code included, so
+no token reaches the API for one. Beyond the dashboard client and the MCP resource,
+it covers any client asking for the API audience (`--api-audience`) and every
+database connection. The API stores `email_verified` when a token carries it but
+never refuses a token over it, since Auth0 leaves it out of tokens for third-party
+MCP clients. On every stage, apply the Action and wait one access-token lifetime
+before deploying an API without its own check: tokens issued earlier to an
+unverified database user, for the MCP resource or for the API through another
+client, must expire first, because the old Action did not gate them.
+Both `auth0:configure-login` and `auth0:configure-mcp` load the stage `.env` and
+refuse an `--api-audience` other than its `OIDC_AUDIENCE`; `auth0:configure-login`
+also refuses one that names no Auth0 API on the tenant.
+
+## MCP client sign-in
+
+MCP clients such as Claude Code, ChatGPT, VS Code and Zed sign in to `/mcp`
+by browser with an OAuth token whose audience is the stage's `MCP_RESOURCE_URL`.
+Each client registers by its Client ID Metadata Document (CIMD); only the
+reviewed documents in [`auth0/mcp-clients.json`](../bootstrap/auth0/mcp-clients.json)
+are registered, and dynamic client registration stays off. Clients with no fixed
+document (Cursor, Windsurf, Gemini CLI, MCP Inspector) use an API key instead.
+
+Loomy uses its [published metadata document](https://loomy.im/oauth/client-metadata/boxlite.json).
+New BoxLite users sign in to the dashboard once before connecting Loomy.
+
+mdeploy sets `MCP_RESOURCE_URL` to `https://<api host>/mcp`, for example
+`https://api.dev.boxlite.ai/mcp`; a stage value overrides it. Each stage then runs,
+in this order:
+
+1. Deploy.
+2. `auth0:configure-login` with `--mcp-resource-url <MCP_RESOURCE_URL>` (see the end
+   of this section), so the login Action gates logins for that resource.
+3. `auth0:configure-mcp` (below), which creates the MCP API; pass the same
+   `--connection` list to both its commands, since apply configures only those. Until it does, Auth0
+   issues no token for the resource, so no MCP login can skip step 2's checks;
+   browser sign-in is down in between, and API keys keep working.
+
+Earlier builds served MCP at `/api/mcp`, and dev used `https://dev.boxlite.ai/api/mcp`.
+Remove such a stage value before deploying: the API refuses any resource URL whose
+path is not `/mcp` at boot. Its Auth0 API can stay; the API refuses its tokens.
+
+```bash
+npm run auth0:configure-mcp -- --tenant <tenant.auth0.com> \
+  --resource-url <MCP_RESOURCE_URL> --api-audience <OIDC_AUDIENCE> \
+  --connection <connection-a> --connection <connection-b>
+
+npm run auth0:configure-mcp -- --tenant <tenant.auth0.com> \
+  --resource-url <MCP_RESOURCE_URL> --api-audience <OIDC_AUDIENCE> \
+  --connection <connection-a> --connection <connection-b> --apply
+```
+
+| Step | Auth0 default | Set by apply |
+| --- | --- | --- |
+| Tenant | `audience` parameter profile, CIMD off, no `iss` in authorization responses | `resource_parameter_profile: "compatibility"`, `client_id_metadata_document_supported: true`, `authorization_response_iss_parameter_supported: true` |
+| MCP API | absent | identifier `MCP_RESOURCE_URL`; the `mcp-clients.json` scopes; user access needs a client grant, machine access denied |
+| Each listed client | unregistered | registered from its CIMD document (validated by `clients/cimd/preview` first) as a `tpc_` client, found again by its `external_client_id`, plus a user grant to that `tpc_` id for the scopes |
+| A CIMD client no longer listed | its user grant stays | the grant on the MCP API is deleted; grants of other clients and other APIs are left alone |
+| Each `--connection` | application-level | `is_domain_connection: true`, so third-party MCP clients can sign in with it |
+
+`authorization_response_iss_parameter_supported` adds the RFC 9207 `iss`
+parameter to every authorization response. ChatGPT signs in as its stable
+`https://chatgpt.com/oauth/client.json`, the document listed here, only from a
+server that advertises it; otherwise it uses a per-callback
+`https://chatgpt.com/oauth/{callback_id}/client.json` that no allowlist can name
+([OpenAI: Authentication – Plugins](https://developers.openai.com/plugins/build/auth)).
+Clients that do not check `iss` ignore it; the dashboard and the `boxlite` CLI
+do not read it.
+
+The preview calls `clients/cimd/preview`, which validates a document without
+creating anything, and otherwise only reads. For a client-only rollout, apply
+only when every planned write belongs to that client. Check tenant capacity if
+the plan includes a new registration.
+
+Preview and apply refuse a tenant
+whose deployed, post-login-bound `boxlite-login-policy` Action is not the repo template, stamped and
+hydrated by `auth0:configure-login`, for this exact `--resource-url` and
+`--api-audience`, because that Action is the only email-verification gate: the API
+never refuses a token over `email_verified`. An Action edited by hand fails, even when re-stamped.
+Apply also refuses a tenant with active Rules, since CIMD logins fail while Rules run. It writes a mode-`0600` journal
+under `.sst/auth0-backups/` before each write, and marks each write as sent before
+sending it. Undo a run with `npm run auth0:configure-mcp -- --rollback <journal-path>`:
+rollback deletes what a run created, looking up a create whose response never
+arrived, and re-creates a grant a run deleted unless it is still there. It attempts
+every entry, counts a resource that is already gone as undone, and then lists the ones
+it could not undo; rerun it once the cause is fixed,
+since undoing an entry twice is a no-op. A rerun of apply on a configured tenant
+writes nothing.
+
+So that MCP logins get the same email verification and account link as the
+dashboard, pass the same URL to the login policy:
+`npm run auth0:configure-login -- ... --mcp-resource-url <MCP_RESOURCE_URL> --apply`.
+The Action then treats any login asking for that resource as a BoxLite login.
+A later apply without `--mcp-resource-url` refuses an Action that gates MCP logins,
+rather than silently dropping the gate; pass `--disable-mcp-login` to stop gating
+them on purpose.
+The scopes the API accepts from a token are checked against `mcp-clients.json` by
+an API spec; see [MCP endpoint](../../../docs/contributing/architecture/platform/api.md#mcp-endpoint) for how they are enforced.
 
 ## Account linking at login
 
@@ -345,7 +470,7 @@ catalog is separate from the mstage declaration; update/review the intended tena
 using it for a new stage. Each target names its `apiOrigin`, where the identity check reads
 `/api/config`: prod serves the API at `api.boxlite.ai`, not under its dashboard host, so the origin
 cannot be derived from `stackOrigin`. It manages theme, tenant image and prompt text; widget geometry remains
-Auth0-managed. [ASSETS.md](../auth0/branding/ASSETS.md) records hashes, licenses and update steps.
+Auth0-managed. The [branding guide](../auth0/branding/README.md) records hashes, licenses and update steps.
 
 Prompt text lives in `auth0/branding/prompts/<language>/<prompt>.json`, one Auth0 prompt per file;
 keys starting with `_` are comments the command never sends. Identifier First serves `login-id` and

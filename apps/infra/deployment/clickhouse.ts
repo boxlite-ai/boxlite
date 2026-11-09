@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 BoxLite AI
 
-import { clickHouseRetentionHours } from '../shared/clickhouse-retention.ts'
+import { clickHouseRetentionHours } from 'mdeploy/clickhouse-retention'
 
 type ClickHouseMode = 'self-hosted' | 'managed' | 'disabled'
 
@@ -20,11 +20,7 @@ const MANAGED_KEYS = [
 ]
 /** Only a self-hosted backend owns its TTLs; anywhere else the value would be silently dropped. */
 const SELF_HOSTED_KEYS = ['CLICKHOUSE_RETENTION_HOURS']
-export const CLICKHOUSE_STAGE_CONFIG_KEYS = Object.freeze([
-  'CLICKHOUSE_MODE',
-  ...SELF_HOSTED_KEYS,
-  ...MANAGED_KEYS,
-])
+export const CLICKHOUSE_STAGE_CONFIG_KEYS = Object.freeze(['CLICKHOUSE_MODE', ...SELF_HOSTED_KEYS, ...MANAGED_KEYS])
 export const CLICKHOUSE_REMOVED_STAGE_CONFIG_KEYS = Object.freeze([
   'CLICKHOUSE_SELF_HOSTED_INSTANCE_TYPE',
   'CLICKHOUSE_SELF_HOSTED_DATA_GB',
@@ -72,9 +68,7 @@ function httpUrl(value: string, name: string) {
   if (!['http:', 'https:'].includes(parsed.protocol)) {
     throw new Error(`${name} must use http or https`)
   }
-  const hasCredentialQuery = [...parsed.searchParams.keys()].some((key) =>
-    CREDENTIAL_QUERY_KEYS.has(key.toLowerCase()),
-  )
+  const hasCredentialQuery = [...parsed.searchParams.keys()].some((key) => CREDENTIAL_QUERY_KEYS.has(key.toLowerCase()))
   if (parsed.username || parsed.password || hasCredentialQuery) {
     throw new Error(`${name} cannot contain credentials`)
   }

@@ -302,7 +302,7 @@ Handle to a running or stopped box.
 | `id` | `string` | Unique box identifier (ULID) |
 | `name` | `string \| null` | User-defined name |
 | `network` | `JsNetworkHandle` | Box-scoped tunnel operations |
-| `ssh` | `JsSshHandle` | Configure, query, or disable guest SSH |
+| `ssh` | `JsSshHandle` | Configure, enable, query, or disable guest SSH |
 
 #### Methods
 
@@ -310,6 +310,7 @@ Handle to a running or stopped box.
 |--------|-----------|-------------|
 | `info()` | `() => Promise<JsBoxInfo>` | Get box metadata |
 | `exec()` | `(cmd, args?, env?, tty?) => Promise<JsExecution>` | Execute command |
+| `executions()` | `() => JsExecutionsHandle` | Live session inventory and recovery; never starts a box |
 | `stop()` | `() => Promise<void>` | Stop the box |
 | `metrics()` | `() => Promise<JsBoxMetrics>` | Get resource metrics |
 
@@ -386,6 +387,7 @@ argument to `forward()`.
 | Tunnel | `await box.network.tunnel(target, options?)` | Prepare a `JsBoxTunnel` or `BoxTunnel`; `target` is `SocketAddress` imported from `node:net` (loopback or the guest IP), `options` is `{ isPublic?: boolean }`, public by default. Bare port and boolean arguments are rejected; invalid types throw synchronously on the native `JsBox.network` handle |
 | Token | `tunnel.token(): string \| null` | Full on creation, masked on later preparations; `isPublic()` reports the mode |
 | Revoke | `await box.network.revokeTunnel(port)` | Withdraw the port's tunnel; open connections stay open |
+| Domains | `runtime.domains` | `await list()` returns full `hostname` values, no short `name`, and quota fields (`limit`, `used`, `remaining`, `minLength`). `target` is null while unbound. `await bind(domain, { type: "box", box, port })` requires an owned full hostname; request new names in Dashboard > Domains first; `await unbind(hostname)` requires the full hostname and retains ownership. `{ type: "app", app }` is reserved; App binding is rejected. Hosted runtimes only; see [Domains](../../concepts/networking.md#domains). |
 | Forward | `await tunnel.forward(listen)` | Return a listener-backed `TunnelForwarder` |
 | Inspect | `tunnel.uri(): string \| null` | Read the prepared public URL; `null` for a local box |
 | Connect | `await tunnel.connect()` | Consume the prepared tunnel into its connection |
@@ -411,6 +413,7 @@ connections from ordinary host applications.
 | Operation | Signature | Description |
 |-----------|-----------|-------------|
 | Configure | `await box.ssh.configure(config)` | Apply `SshConfig` and return `SshStatus` |
+| Enable | `await box.ssh.enable()` | Enable saved configuration on a running box and return `SshStatus`; preserve healthy connections |
 | Observe | `await box.ssh.status()` | Return `SshStatus` |
 | Disable | `await box.ssh.disable()` | Disable SSH and return `SshStatus` |
 
@@ -443,8 +446,9 @@ interface SshStatus {
 
 On a `SimpleBox`, a first `configure` call lazily creates or fetches the box
 before validating the configuration: a wrong-typed configuration can leave the
-created box behind, but no SSH operation is sent for it. `status` and
-`disable` never start the VM.
+created box behind, but no SSH operation is sent for it. `status`, `enable` and
+`disable` never start the VM. Enable works locally and over REST and requires
+saved configuration.
 
 Invalid configuration field types report `InvalidArg` with the message
 `invalid SSH configuration`, without echoing rejected values. Other errors
@@ -485,6 +489,25 @@ while (true) {
 // Wait for completion
 const result = await execution.wait();
 console.log(`Exit code: ${result.exitCode}`);
+```
+
+---
+
+### `JsExecutionsHandle`
+
+Live execution namespace of one box, returned by `box.executions()`. Creating it
+never starts the box.
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `list()` | `() => Promise<ExecutionInfo[]>` | List live sessions, including the main command; never starts a box |
+| `get(id)` | `(executionId: string) => Promise<JsExecution>` | Recover control without taking the output reader |
+| `attach(id, stdin?)` | `(executionId: string, stdin?: boolean) => Promise<JsExecution>` | Recover streams for a listed live session |
+
+```typescript
+for (const execution of await box.executions().list()) {
+  console.log(execution.executionId, execution.isMainSession);
+}
 ```
 
 ---
@@ -588,6 +611,7 @@ interface SimpleBoxOptions {
 | `getInfo()` | `() => Promise<JsBoxInfo>` | Get box info (async) |
 | `exec()` | `(cmd, ...args) => Promise<ExecResult>` | Execute and wait (variadic) |
 | `exec()` | `(cmd, args[], env?, options?) => Promise<ExecResult>` | Execute with options (array form) |
+| `executions()` | `() => Executions` | Live session namespace; an uncreated box lists nothing |
 | `stop()` | `() => Promise<void>` | Stop the box |
 | `[Symbol.asyncDispose]()` | `() => Promise<void>` | Async disposal |
 
@@ -1053,6 +1077,28 @@ console.log(`Boot time: ${metrics.guestBootDurationMs}ms`);
 ---
 
 ## Type definitions
+
+### `ExecutionInfo`
+
+Returned by `JsBox.executions().list()` and `SimpleBox.executions().list()`.
+
+```typescript
+interface ExecutionInfo {
+  executionId: string;
+  argv: string[];
+  startedAt: number; // Unix epoch milliseconds
+  tty: boolean;
+  isMainSession: boolean;
+}
+```
+
+The list excludes completed sessions. A created or stopped box returns `[]`
+without starting; a paused box returns an invalid-state error. Use
+`executions().get(executionId)` for independent control, or
+`executions().attach(executionId)` for streams; an existing output reader is a
+conflict.
+See the [recovery guide](../../guides/ai-agent-integration.md#recovering-control-after-losing-the-handle)
+for retention semantics.
 
 ### `ExecResult` (wrapper)
 

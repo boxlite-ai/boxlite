@@ -1,7 +1,142 @@
 # API
 
-The NestJS control-plane service. See the [apps hub](../README.md) for how it fits with the
-other services and [`API.md`](../API.md) for its interfaces.
+The NestJS control-plane service. See the
+[hosted platform](../../docs/contributing/architecture/platform/README.md) for how it fits with
+the other services and [service interfaces](../../docs/contributing/architecture/platform/api.md)
+for its interfaces.
+
+## Development runtime
+
+API development and tests require Node.js 22.14+ within the 22.x line, or 24.10+,
+as declared in [`../package.json`](../package.json).
+Use Node.js 24 locally to match the production image:
+
+```bash
+nvm install 24
+nvm use 24
+corepack enable
+```
+
+The disposable-email dependency requires this runtime range. The Jest adapter uses
+Node's native loader to exercise the published ESM package and its bundled domain list.
+
+Account-link flow tests load the Auth0 Action template with every deployment placeholder filled.
+Their SPA fixtures leave the optional MCP resource URL empty, matching the deployment default.
+
+## Registration email policy
+
+The first API request from a new OIDC identity requires an email address.
+`UserService.create` trims and lowercases each non-empty email, validates its syntax,
+then rejects disposable domains before generating keys, persisting the user or creating a default organization.
+This covers database, social and enterprise OIDC identities, CLI authentication and administrator-created users.
+
+| Rejection | HTTP status | Error code |
+| --- | --- | --- |
+| New OIDC identity has no email | 403 | `email_required` |
+| Provided email has invalid syntax | 400 | `invalid_email` |
+| Disposable domain or its subdomain | 403 | `disposable_email` |
+
+Existing users can still log in, update their email and link identities; the email-free bootstrap administrator is preserved.
+Auth0 signup and verification emails are unchanged: this policy rejects local BoxLite account creation after authentication.
+The API uses the bundled list from `@visulima/disposable-email-domains/edge`, pinned to version `2.0.20`.
+The list includes `drtall.com` and `emailkeep.com` and matches their subdomains.
+Deploy the API after upgrading the package to apply the new list.
+
+Run `make test:apps:api TEST_FILES='user.service.registration-email|jwt.strategy'` for the registration checks,
+and `make build:apps:api` to validate the production bundle and dependency imports.
+
+## Box startup timeouts
+
+REST creation persists the Box before waiting up to 30 seconds for `STARTED`.
+If the wait expires, HTTP 408 includes the existing Box's public `boxId` in the
+flat error body. The Box continues starting; clients can read its state with
+their existing organization-scoped credentials instead of repeating creation.
+The same identity accompanies other Box state-wait timeouts.
+
+Image-preparation timeouts retain `progress` and `Retry-After`. The ID remains
+available even if the best-effort progress lookup fails. HTTP status, message,
+and synchronous SDK behavior are unchanged; a timeout is not a running Box.
+
+## Registry credential rotation
+
+`PUT /api/images/registries/{id}` replaces a stored username and password/token with `write:registries` permission.
+Both fields are required, with the same validation limits as creation; other fields are refused.
+The credential ID, registry host, repository prefix, creator and creation time remain unchanged, even while Boxes depend on it.
+
+Deletion still refuses credentials selected by non-destroyed Boxes.
+
+Rotation checks organization-scoped existence, then writes a fresh secret outside any database transaction.
+A short PostgreSQL transaction locks and rechecks the credential, reads its current secret version, and updates the login and pointer.
+After acknowledged commit, rotation retires the version read under lock; no secret-store call holds the update transaction open.
+This reuses Secret Manager and exclusive local files without a migration or new IAM permissions.
+Lock contention returns 409 for retry; another organization's credential returns 404 before any secret write.
+
+Deletion or another rotation can finish while the replacement is being written.
+A credential deleted before the locked recheck returns 404 and cleans up the replacement; a concurrent rotation retires the version current at the lock.
+Transaction-start, lock and pre-commit update failures clean up the replacement after the transaction rejects, preserving the original failure.
+An uncertain COMMIT outcome retains both secrets and emits an `update outcome is unknown` warning; reconcile the stored pointer before retiring either version.
+A failed old-secret retirement emits `Could not destroy unused registry secret`; the committed update remains successful and cleanup needs retrying.
+
+The warning identifies a version and the cleanup error cause, never its password; the API cannot read registry passwords or validate them upstream.
+
+Before reusing a private bearer, each proxy queries the current credential metadata and compares its secret version with the cached token's version.
+After update commits, newly started pulls reject old-version bearers even if old-secret retirement fails.
+Secret payloads are read only on authentication challenges; unchanged credentials still reuse their bearer token.
+
+Normally, each private manifest/blob request adds one control-plane lookup; lookup failures reject the pull even when a bearer is warm.
+If a secret read races retirement, the proxy refreshes authorized metadata and retries that read once before failing the pull.
+Requests whose lookup preceded update may finish; another rotation during the retry can still require a caller retry.
+The upstream token itself is not revoked, and anonymous lookup caching keeps its existing TTL.
+
+Deploy the API and proxy before the dashboard; older proxies retain the prior five-minute cache delay until upgraded.
+This operation is additive to the control-plane API and does not add portable SDK methods.
+
+Run `make test:apps:api TEST_FILES='registry/'`; set the normal `DB_*` variables to include the real-PostgreSQL mutation tests.
+These cover live/stopped Boxes, organization isolation, rollback, concurrent mutations and lost COMMIT acknowledgment with real secret files.
+Design: [registry credential updates](https://github.com/boxlite-ai/boxlite/issues/2304).
+
+## Account deletion tests
+
+`src/user/user-deletion-memberships.spec.ts` exercises account deletion through the real services
+and event handlers. Its database double runs nested transaction callbacks with the same manager
+and supports deletion by ID or field criteria; only the outer transaction records a commit.
+The assertions check domain cleanup, preservation of shared organizations and their domains,
+and membership revocation after the outer commit. Run it from the repository root with
+`make test:apps:api TEST_FILES=user-deletion-memberships.spec.ts`.
+The double checks callback execution and row selection; the real-Postgres organization-domain
+lifecycle tests cover database rollback.
+
+## Guest Docker privilege
+
+REST creation accepts `advanced.privileged` (default false) and advertises
+`privileged_enabled` in `/v1/config`. The option is stored on the Box and
+forwarded by both runner adapters on creation and by v0 recovery. Subsequent
+starts reuse the runtime's persisted guest settings. The
+pre-deploy migration initializes existing Boxes to false. Privileged requests
+require fresh Boxes, so a warm-pool Box cannot silently discard the requested
+guest policy.
+
+Runner v0 info and v2 health reports advertise `supportsPrivileged`. The API
+stores it with a false default and clears it when a report omits it or sends
+false. A failed v0 info read leaves the capability column untouched; a successful
+report with the field omitted still clears it. Timed-out checks recheck cancellation
+after reading the runner and before submitting a health update, so a delayed read
+cannot resume and overwrite a retry's report or emit a stale state event.
+Privileged creation and migration
+select only runners reporting support; create and v0 recovery also reject an
+unsupported target before dispatch.
+Ordinary Boxes retain the existing scheduling rules. `/v1/config` describes API
+support independently of current runner capacity. Run the pre-deploy migration
+before updating the API; each upgraded runner becomes eligible after reporting
+its capability.
+
+This enables guest capabilities and writable kernel mounts. Runner host sandbox
+settings remain independent; REST rejects host security options and explicit
+capability policies. Operators must supply a Docker-capable guest kernel as
+described in the [DinD guide](../../docs/guides/docker-in-docker.md).
+
+Migration-backed integration suites that query `Box`, including usage accounting,
+run `AddGuestPrivileged1792540800000` so their schema includes the persisted field.
 
 ## Admin Box image
 
@@ -17,12 +152,12 @@ accept this field before rolling out the added response property.
 `recordBusinessEvent` (`src/common/utils/business-event.util.ts`) writes one structured log record
 per business event; the attributes reach OTLP through nestjs-pino, where alerts query them.
 
-| Event | Recorded by | Outcomes |
-| --- | --- | --- |
-| `user.registration` | `UserService.create`, through `recordOutcomes` | requested, success, exception |
-| `user.login` | `LoginEventRecorder` | success |
-| `box.create`, `box.stop`, `box.delete` | `BoxService`, the auto-stop and auto-delete crons | requested |
-| `box.create`, `box.stop`, `box.delete` | `JobStateHandler`, when the runner job finishes | success, exception |
+| Event                                  | Recorded by                                       | Outcomes                      |
+| -------------------------------------- | ------------------------------------------------- | ----------------------------- |
+| `user.registration`                    | `UserService.create`, through `recordOutcomes`    | requested, success, exception |
+| `user.login`                           | `LoginEventRecorder`                              | success                       |
+| `box.create`, `box.stop`, `box.delete` | `BoxService`, the auto-stop and auto-delete crons | requested                     |
+| `box.create`, `box.stop`, `box.delete` | `JobStateHandler`, when the runner job finishes   | success, exception            |
 
 Box events go through `src/box/utils/box-business-event.util.ts`: the request and the outcome are
 recorded in different places, so one call cannot cover both.
@@ -40,11 +175,11 @@ return this.userService.create(createUserDto, Context.admin())
 await this.stop(event.boxId, undefined, Context.platform(PlatformReason.ORG_SUSPENSION))
 ```
 
-| Context | `actor.kind` | `event.reason` |
-| --- | --- | --- |
-| `Context.user()` | `user` | — |
-| `Context.admin()` | `admin` | — |
-| `Context.platform(reason)` | `platform` | the `PlatformReason`, such as `auto_stop` or `bootstrap` |
+| Context                    | `actor.kind` | `event.reason`                                           |
+| -------------------------- | ------------ | -------------------------------------------------------- |
+| `Context.user()`           | `user`       | —                                                        |
+| `Context.admin()`          | `admin`      | —                                                        |
+| `Context.platform(reason)` | `platform`   | the `PlatformReason`, such as `auto_stop` or `bootstrap` |
 
 - Only the platform gives a reason; user and admin contexts have none.
 - The boot-time admin seed registers as `Context.platform(PlatformReason.BOOTSTRAP)`.
@@ -55,8 +190,7 @@ await this.stop(event.boxId, undefined, Context.platform(PlatformReason.ORG_SUSP
 
 System administrators read registration fields on the existing organization routes.
 Authenticate with `Authorization: Bearer <admin-api-key>` or an administrator JWT;
-an ordinary organization's API key does not grant system-wide access. These internal
-routes use one contract: no view selector, capability probe, or capability response header.
+an ordinary organization's API key does not grant system-wide access.
 
 Upgrade every producer instance before enabling the updated consumer. Old list cursors
 must be discarded because the default ordering now uses creation time and ID. Existing
@@ -67,6 +201,14 @@ consumers before producers; mixed-version traffic is not supported during activa
   stored `createdBy`, nullable current `creator`, member/Box counts and impact.
   `q` searches name or exact ID. `createdFrom` is inclusive and `createdTo` exclusive;
   timestamps require an offset and at most millisecond precision. `limit` is 1–200 (default 50).
+  `boxCountScope=all` counts every retained state, including destroyed and archived,
+  while impact considers only non-destroyed, non-archived Boxes. Omitting this parameter
+  excludes destroyed and archived Boxes from the count.
+  `organizationId=<UUID>` selects an exact primary key; it cannot combine with `q`.
+  Registration collectors use the same full page with `boxCountScope=all` and date bounds.
+  Creator lookup and inventory aggregation are restricted to the page's organization IDs;
+  no separate per-organization inventory call is needed for the first observation.
+  The list always returns `AdminOrganizationOverviewPage`, including counts and impact.
 - `GET /api/admin/organizations/{organizationId}` returns flat organization
   details with registration, member/Box pages and impact. A missing organization returns 404.
   `memberCursor`, `boxCursor` and `sectionLimit` page each section. Explicit `include=usage`
@@ -74,16 +216,28 @@ consumers before producers; mixed-version traffic is not supported during activa
   evidence. Comma-separated `include=usage,activation` selects both. Omitting `include`
   reads neither section.
 
+Admin detail also returns the stored `suspended` boolean from the same organization
+lookup. This flag does not evaluate `suspendedUntil` or establish whether Boxes have
+stopped. The response property is optional and read-only in generated clients for
+older-server compatibility; an absent flag means unknown, never false. No schema
+migration or additional query is needed.
+
 `createdAt` is organization creation time, not user signup or first Box creation. `createdBy`
 is the stored creator association, independent of current membership. Account linking
 rewrites it to the primary user ID, so it is not an immutable historical identity.
 When a creator no longer exists and the organization survives, `creator` is null; an existing
 user without an email has `creator.email:null`. Names and email describe current identity.
+The list response includes `creator.emailVerified` when the account's
+current verification state is available. The organization detail response includes
+creator fields (`userId`, `email`, `displayName`) and does not query verification state.
 Pages read live data and exclude deleted organizations.
+All-state counts cover only retained rows, not lifetime successful creations: cleanup can
+remove destroyed rows and pending/failed rows can remain. `observedAt` remains the last
+business modification; consumers must measure successful-read freshness separately.
 
 List order and cursor seek both use creation time truncated to milliseconds plus
-UUID, ascending. Cursors bind `q` and date filters; changing them returns 400. Unknown
-parameters (including the removed view selector), invalid dates, UUIDs, and incompatible
+UUID, ascending. Cursors bind `q`, date filters and count scope and exact organization ID; changing them returns 400. Default-read cursors retain their prior encoding. Unknown
+parameters, invalid dates, UUIDs, and incompatible
 cursors return `400 invalid_organization_query`. Invalid credentials return 401;
 non-admin access returns 403. Consumers may ignore additive fields but must validate
 required fields and project their own allowed response fields.
@@ -103,7 +257,40 @@ and Box cursors independently on detail. Responses use `Cache-Control: private, 
 
 ### Generated clients
 
-Existing organization operation IDs and response models are retained. Registration fields
+The TypeScript organization-list method accepts Axios request options in the original
+sixth position or after the new filters in the eighth position. This applies to the class,
+factory, functional interface and request creator. For an initialized `admin` client:
+
+```typescript
+const options = { headers: { Authorization: `Bearer ${adminApiKey}` }, timeout: 5000 }
+// Existing callers keep their headers and other Axios options.
+await admin.adminListOrganizationsOverview(undefined, undefined, 50, undefined, undefined, options)
+// New callers can select all retained Box states and an exact organization.
+await admin.adminListOrganizationsOverview(
+  undefined,
+  undefined,
+  50,
+  undefined,
+  undefined,
+  'all',
+  organizationId,
+  options,
+)
+```
+
+Request options remain outside URL query parameters. The TypeScript generation
+postprocessor preserves both forms and fails if the expected generated signatures change.
+
+The Go client uses `AdminOrganizationCreator` and `NullableAdminOrganizationCreator`
+for both organization-list and detail models. Existing constructor and getter/setter
+signatures remain compatible. For example, a value from `NewAdminOrganizationCreator`
+can be passed directly to the overview's `SetCreator`.
+The optional `EmailVerified` field carries verification from list responses;
+`GetEmailVerifiedOk` distinguishes an absent state from `false`.
+The Go generation postprocessor preserves these model names and signatures while
+the HTTP schemas retain their separate list and detail fields.
+
+Existing organization operation IDs and top-level response models are retained. Registration fields
 are required; usage and activation remain optional, present only when selected. Query
 parameters have explicit Swagger string types; runtime validation still applies. Regenerate the committed
 clients from `apps/` with the pinned generator in `openapitools.json`:
@@ -267,5 +454,18 @@ for the source evidence, concurrency model and verification boundaries.
 
 ## Onboarding persistence
 
-See [organization onboarding](src/organization/ONBOARDING.md) for the profile, personal prompt
+See [organization onboarding](onboarding.md) for the profile, personal prompt
 draft and idempotent handoff API contracts, migration order, and frontend integration behavior.
+
+## Retention-policy reads and login activity
+
+Retention-policy workers reuse the existing Backoffice Admin credential for
+`GET /api/admin/organizations`. The endpoint retains its existing Admin authorization;
+no policy-specific key or role is required. Registration reads use `createdFrom`, `createdTo`
+and `boxCountScope=all`. Exact-org reads use `organizationId=<UUID>&boxCountScope=all`.
+
+R2 reuses successful `user.login` records from `LoginEventRecorder`, with the user ID in
+`correlation.id` and the observation time in `event.timestamp`. The existing recorder logs
+first API use of each newly issued token, including refreshed tokens. R2 therefore treats a
+qualifying token-use record as return activity; it does not require a new interactive login.
+No additional event or issuer-claim configuration is required. Redis/log failures can omit records.

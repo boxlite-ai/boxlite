@@ -52,6 +52,12 @@ pub(crate) enum Step {
         addr: u64,
         byte: u8,
     },
+    /// A four-byte MMIO write of `value` at `addr`, as a virtio-mmio driver
+    /// writes its control registers.
+    Write32 {
+        addr: u64,
+        value: u32,
+    },
     Shutdown,
     Reset,
     Halted,
@@ -191,7 +197,7 @@ impl Vm for MockVm {
             fail_setup: self.fail_setup == Some(id),
             entries: Arc::clone(&self.entries),
             kick: Arc::default(),
-            data: [0],
+            data: [0; 4],
         })
     }
 
@@ -207,7 +213,7 @@ pub(crate) struct MockVcpu {
     fail_setup: bool,
     entries: Arc<Mutex<Vec<u32>>>,
     kick: Arc<Kick>,
-    data: [u8; 1],
+    data: [u8; 4],
 }
 
 impl MockVcpu {
@@ -248,7 +254,14 @@ impl Vcpu for MockVcpu {
         self.entries.lock().unwrap().push(id);
         Ok(match self.steps.pop_front() {
             Some(Step::Write { addr, byte }) => {
-                self.data = [byte];
+                self.data[0] = byte;
+                VcpuExit::MmioWrite {
+                    guest_addr: addr,
+                    bytes: &self.data[..1],
+                }
+            }
+            Some(Step::Write32 { addr, value }) => {
+                self.data = value.to_le_bytes();
                 VcpuExit::MmioWrite {
                     guest_addr: addr,
                     bytes: &self.data,

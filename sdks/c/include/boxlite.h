@@ -98,6 +98,13 @@ typedef enum BoxliteCopySourceKind {
   BoxliteCopySourceKindDir = 2,
 } BoxliteCopySourceKind;
 
+// The kinds of target a domain can route to; `CDomainTarget.type` holds one.
+// `type` is an `int32_t` there because a C caller can pass any value.
+typedef enum BoxliteDomainTargetType {
+  BoxliteDomainTargetBox = 0,
+  BoxliteDomainTargetApp = 1,
+} BoxliteDomainTargetType;
+
 // Opaque handle wrapping an `AdvancedBoxOptions`. Allocated via
 // `boxlite_advanced_options_new`, freed via `boxlite_advanced_options_free`.
 typedef struct AdvancedBoxOptionsHandle AdvancedBoxOptionsHandle;
@@ -120,7 +127,7 @@ typedef struct BoxTunnelHandle BoxTunnelHandle;
 // Agent instance handle.
 typedef struct CAgent CAgent;
 
-// Journal subscription. Freeing it does not cancel agent work.
+// Event subscription. Freeing it does not cancel agent work.
 typedef struct CAgentEvents CAgentEvents;
 
 // Agent turn handle.
@@ -153,6 +160,10 @@ typedef struct CBoxCopyOutStream CBoxCopyOutStream;
 // behind one C type, matching the trait/interface surface in the other
 // SDKs.
 typedef struct CredentialHandle CredentialHandle;
+
+// Opaque handle to a REST runtime's domains, released with
+// `boxlite_free_domain_handle`.
+typedef struct DomainHandle DomainHandle;
 
 // Opaque handle to a running command execution.
 typedef struct ExecutionHandle ExecutionHandle;
@@ -279,6 +290,44 @@ typedef void (*CBoxStartBoxCb)(CBoxliteError*, void*);
 // Copy (into / out of) completion.
 typedef void (*CBoxCopyCb)(CBoxliteError*, void*);
 
+typedef struct DomainHandle CBoxliteDomainHandle;
+
+// What a domain routes to. For `BoxliteDomainTargetBox`, `box` is a box id or
+// name and `port` a guest port. Passed in, the strings are borrowed for the
+// call; inside a `CDomain`, they belong to it.
+//
+// App targets use `app` with a null `box` and zero `port`; binding is reserved.
+typedef struct CDomainTarget {
+  int32_t type;
+  const char *box;
+  uint16_t port;
+  const char *app;
+} CDomainTarget;
+
+// A domain the organization holds. Strings are heap-owned and non-null,
+// except inactive target references. Both references are null while unbound. Released
+// with `boxlite_free_domain`; list entries belong to their list.
+typedef struct CDomain {
+  char *hostname;
+  char *url;
+  struct CDomainTarget target;
+} CDomain;
+
+// `count` domains at `items` (null only when `count` is zero), with the
+// allowance they count against. Released, entries included, with
+// `boxlite_free_domain_list`.
+typedef struct CDomainList {
+  struct CDomain *items;
+  int count;
+  uint32_t limit;
+  uint32_t used;
+  uint32_t remaining;
+  // The shortest platform name a new claim may use.
+  uint32_t min_length;
+} CDomainList;
+
+typedef struct ExecutionHandle CExecutionHandle;
+
 // C-compatible command descriptor with all BoxCommand options.
 //
 // All string fields are nullable — NULL means "use default".
@@ -304,8 +353,6 @@ typedef struct BoxliteCommand {
   int tty;
 } BoxliteCommand;
 
-typedef struct ExecutionHandle CExecutionHandle;
-
 // Streaming stdout chunk callback.
 typedef void (*CBoxStdoutCb)(const uint8_t*, size_t, void*);
 
@@ -329,6 +376,27 @@ typedef void (*CExecutionSignalCb)(CBoxliteError*, void*);
 
 // Execution PTY resize completion.
 typedef void (*CExecutionResizeCb)(CBoxliteError*, void*);
+
+// Owned metadata for one live guest execution, including the main process.
+typedef struct CExecutionInfo {
+  char *execution_id;
+  char **argv;
+  int argc;
+  // Start time in Unix milliseconds.
+  uint64_t started_at;
+  bool tty;
+  bool is_main_session;
+} CExecutionInfo;
+
+// Owned list. Release it with `boxlite_free_execution_info_list`.
+typedef struct CExecutionInfoList {
+  struct CExecutionInfo *items;
+  int count;
+} CExecutionInfoList;
+
+// Live execution inventory completion. The caller owns the returned list and
+// must release it with `boxlite_free_execution_info_list`.
+typedef void (*CExecutionInfoListCb)(struct CExecutionInfoList*, CBoxliteError*, void*);
 
 typedef struct BoxRunner CBoxliteSimple;
 
@@ -722,6 +790,9 @@ typedef void (*CBoxSshConfigureCb)(struct CSshStatus*, CBoxliteError*, void*);
 // SSH status completion with the same ownership contract as SSH configure.
 typedef void (*CBoxSshStatusCb)(struct CSshStatus*, CBoxliteError*, void*);
 
+// SSH enable completion with the same ownership contract as SSH configure.
+typedef void (*CBoxSshEnableCb)(struct CSshStatus*, CBoxliteError*, void*);
+
 // SSH disable completion with the same ownership contract as SSH configure.
 typedef void (*CBoxSshDisableCb)(struct CSshStatus*, CBoxliteError*, void*);
 
@@ -778,6 +849,12 @@ typedef void (*CBoxVolumeRemoveCb)(CBoxliteError*, void*);
 extern "C" {
 #endif // __cplusplus
 
+// Set an absolute host kernel path (RC). The runtime must enable custom-kernel.
+// Copies the path; invalid input leaves the previous option unchanged.
+enum BoxliteErrorCode boxlite_advanced_options_set_kernel_path(CAdvancedBoxOptions *opts,
+                                                               const char *path,
+                                                               struct FFIError *out_error);
+
 // Allocate a `CAdvancedBoxOptions` initialized to `AdvancedBoxOptions::default()`
 // (secure-by-default security profile, mount isolation off, no health check).
 //
@@ -814,6 +891,12 @@ enum BoxliteErrorCode boxlite_advanced_options_set_capabilities_add(CAdvancedBox
 enum BoxliteErrorCode boxlite_advanced_options_set_capabilities_drop(CAdvancedBoxOptions *opts,
                                                                      const char *const *capabilities,
                                                                      int count);
+
+// Enable full capabilities and writable kernel mounts inside the guest only.
+// Runner sandbox security is unchanged. Returns InvalidArgument for a null
+// handle or a conflicting explicit capability policy.
+enum BoxliteErrorCode boxlite_advanced_options_set_privileged(CAdvancedBoxOptions *opts,
+                                                              int enabled);
 
 // Obtain a namespace without starting the Box.
 // handle must be live; out must be writable; out_error may be null.
@@ -905,7 +988,7 @@ enum BoxliteErrorCode boxlite_agent_turn_interrupt(struct CAgentTurn *_turn,
                                                    void *_user_data,
                                                    CBoxliteError *out_error);
 
-// Open the agent journal after an opaque cursor.
+// Open the agent's events, after an opaque cursor where the adapter supports it.
 // out and out_error may be null or writable. out is cleared on error.
 enum BoxliteErrorCode boxlite_agent_events(struct CAgent *_handle,
                                            const struct CAgentEventsOptions *_options,
@@ -914,7 +997,7 @@ enum BoxliteErrorCode boxlite_agent_events(struct CAgent *_handle,
                                            struct CAgentEvents **out,
                                            CBoxliteError *out_error);
 
-// Open this turn's view of the agent journal.
+// Open this turn's view of the agent's events.
 // out and out_error may be null or writable. out is cleared on error.
 enum BoxliteErrorCode boxlite_agent_turn_events(struct CAgentTurn *_handle,
                                                 const struct CAgentEventsOptions *_options,
@@ -1124,7 +1207,109 @@ enum BoxliteErrorCode boxlite_copy_in_abort(struct CBoxCopyInStream *stream,
 // full sequence.
 void boxlite_copy_in_free(struct CBoxCopyInStream *stream);
 
+// Get the organization's domains from a REST runtime. A local runtime
+// answers `Unsupported`. Release the handle with `boxlite_free_domain_handle`.
+//
+// # Safety
+//
+// `runtime` and `out_handle` must be non-null; `out_error` may be null.
+enum BoxliteErrorCode boxlite_runtime_domains(CBoxliteRuntime *runtime,
+                                              CBoxliteDomainHandle **out_handle,
+                                              CBoxliteError *out_error);
+
+// List every domain the organization holds, unbound ones included, with the
+// allowance. On `Ok`, `*out_list` must be released with
+// `boxlite_free_domain_list`.
+//
+// # Safety
+//
+// `handle` and `out_list` must be non-null; `out_error` may be null.
+enum BoxliteErrorCode boxlite_domain_list(CBoxliteDomainHandle *handle,
+                                          struct CDomainList **out_list,
+                                          CBoxliteError *out_error);
+
+// Route `domain` (an owned full hostname) to
+// `target`, requiring ownership; request names in Dashboard > Domains first. A domain bound elsewhere in the organization
+// moves. On `Ok`, `*out_domain` must be released with `boxlite_free_domain`.
+//
+// # Safety
+//
+// `handle`, `domain`, `target`, the selected target reference and `out_domain` must be
+// non-null and the strings UTF-8; they only need to stay valid for this
+// call. `out_error` may be null.
+enum BoxliteErrorCode boxlite_domain_bind(CBoxliteDomainHandle *handle,
+                                          const char *domain,
+                                          const struct CDomainTarget *target,
+                                          struct CDomain **out_domain,
+                                          CBoxliteError *out_error);
+
+// Stop routing a full hostname, keeping it for the organization. Safe to repeat; a
+// domain the organization does not hold is `NotFound`.
+//
+// # Safety
+//
+// `handle` and `domain` must be non-null; `domain` must be UTF-8 and only
+// needs to stay valid for this call. `out_error` may be null.
+enum BoxliteErrorCode boxlite_domain_unbind(CBoxliteDomainHandle *handle,
+                                            const char *domain,
+                                            CBoxliteError *out_error);
+
+// Free the local management handle returned by `boxlite_runtime_domains`.
+// Existing domain bindings are unaffected.
+//
+// # Safety
+//
+// `handle` must be null or a pointer from `boxlite_runtime_domains` that has
+// not been freed. It must not be used afterwards.
+void boxlite_free_domain_handle(CBoxliteDomainHandle *handle);
+
+// Free a domain `boxlite_domain_bind` returned.
+//
+// # Safety
+//
+// `domain` must be null or a pointer this library handed out that has not
+// been freed.
+void boxlite_free_domain(struct CDomain *domain);
+
+// Free a list `boxlite_domain_list` returned, and every domain in it.
+//
+// # Safety
+//
+// `list` must be null or a pointer this library handed out that has not been
+// freed.
+void boxlite_free_domain_list(struct CDomainList *list);
+
 void boxlite_error_free(CBoxliteError *error);
+
+// Recover control of a live execution without claiming its output reader.
+// Freeing this handle releases control only; it never kills the process.
+enum BoxliteErrorCode boxlite_box_executions_get(CBoxHandle *handle,
+                                                 const char *execution_id,
+                                                 CExecutionHandle **out_execution,
+                                                 CBoxliteError *out_error);
+
+// Attach live streams to an existing guest execution. A current reader causes
+// an immediate conflict error rather than stealing output. This never boots
+// the box; freeing the attached handle does not kill the guest process.
+enum BoxliteErrorCode boxlite_box_executions_attach(CBoxHandle *handle,
+                                                    const char *execution_id,
+                                                    CExecutionHandle **out_execution,
+                                                    CBoxliteError *out_error);
+
+// Attach output only, without opening a stdin channel.
+//
+// Use this for a client that never writes. Freeing a stdin-attached handle
+// sends a stdin close to the guest, which a process reading stdin observes as
+// EOF — it can exit or change state on it. A read-only attach sends nothing on
+// free. A current reader still causes an immediate conflict error.
+enum BoxliteErrorCode boxlite_box_executions_attach_read_only(CBoxHandle *handle,
+                                                              const char *execution_id,
+                                                              CExecutionHandle **out_execution,
+                                                              CBoxliteError *out_error);
+
+// Return an owned copy of the canonical guest execution ID. Null means an
+// invalid handle; release a non-null result with `boxlite_free_string`.
+char *boxlite_execution_id(CExecutionHandle *execution);
 
 enum BoxliteErrorCode boxlite_box_exec(CBoxHandle *handle,
                                        const struct BoxliteCommand *cmd,
@@ -1189,6 +1374,15 @@ enum BoxliteErrorCode boxlite_execution_tty_resize(CExecutionHandle *execution,
                                                    CBoxliteError *out_error);
 
 void boxlite_execution_free(CExecutionHandle *execution);
+
+// Callback owns the returned list; errors are borrowed during dispatch only.
+enum BoxliteErrorCode boxlite_box_executions_list(CBoxHandle *handle,
+                                                  CExecutionInfoListCb cb,
+                                                  void *user_data,
+                                                  CBoxliteError *out_error);
+
+// Free the list and all IDs/argv strings. Null is accepted.
+void boxlite_free_execution_info_list(struct CExecutionInfoList *list);
 
 enum BoxliteErrorCode boxlite_simple_new(const char *image,
                                          int cpus,
@@ -1785,6 +1979,16 @@ enum BoxliteErrorCode boxlite_runtime_new(const char *home_dir,
                                           CBoxliteRuntime **out_runtime,
                                           CBoxliteError *out_error);
 
+// Create a local runtime with an explicit comma-separated RC feature allowlist
+// (for example, "custom-kernel"). Null enables none; unknown tokens fail.
+// Does not read BOXLITE_EXPERIMENTAL. Ownership matches boxlite_runtime_new.
+enum BoxliteErrorCode boxlite_runtime_new_experimental(const char *home_dir,
+                                                       const struct BoxliteImageRegistry *image_registries,
+                                                       int image_registries_count,
+                                                       const char *features,
+                                                       CBoxliteRuntime **out_runtime,
+                                                       CBoxliteError *out_error);
+
 enum BoxliteErrorCode boxlite_runtime_images(CBoxliteRuntime *runtime,
                                              CBoxliteImageHandle **out_handle,
                                              CBoxliteError *out_error);
@@ -1857,6 +2061,17 @@ enum BoxliteErrorCode boxlite_box_ssh_configure(CBoxHandle *handle,
 // [`boxlite_box_ssh_configure`].
 enum BoxliteErrorCode boxlite_box_ssh_status(CBoxHandle *handle,
                                              CBoxSshStatusCb cb,
+                                             void *user_data,
+                                             struct FFIError *out_error);
+
+// Enable saved SSH configuration on a running box without restarting a healthy
+// listener. Requires existing configuration; never starts the box.
+//
+// # Safety
+//
+// As for [`boxlite_box_ssh_status`].
+enum BoxliteErrorCode boxlite_box_ssh_enable(CBoxHandle *handle,
+                                             CBoxSshEnableCb cb,
                                              void *user_data,
                                              struct FFIError *out_error);
 

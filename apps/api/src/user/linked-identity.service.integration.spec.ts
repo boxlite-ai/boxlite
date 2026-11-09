@@ -186,6 +186,23 @@ describeIfDatabase('LinkedIdentityService.adopt (integration, real Postgres)', (
     expect(await membershipsOf(SOCIAL)).toEqual([])
   })
 
+  it('preserves an existing account whose email domain is disposable when linking identities', async () => {
+    await user(SOCIAL, 'Existing User')
+    await dataSource.getRepository(User).update(SOCIAL, { email: 'existing@mailinator.com' })
+    const org = await organization(SOCIAL, 'Existing organization')
+    await member(org, SOCIAL, OrganizationMemberRole.OWNER, true)
+
+    await service.adopt(PRIMARY, SOCIAL)
+
+    expect(await dataSource.getRepository(User).findOneByOrFail({ id: PRIMARY })).toMatchObject({
+      email: 'existing@mailinator.com',
+    })
+    expect(await membershipsOf(PRIMARY)).toEqual([
+      expect.objectContaining({ organizationId: org, isDefaultForUser: true }),
+    ])
+    expect(await dataSource.getRepository(Organization).count()).toBe(1)
+  })
+
   it('merges a shared organization into one membership, keeping the stronger role and every assignment', async () => {
     await user(PRIMARY)
     await user(SOCIAL)

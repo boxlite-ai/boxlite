@@ -1,7 +1,6 @@
 """Apple-Silicon local-dev helpers, folded into `compose up` so a fresh arm64
-Mac can `make up` with no manual env/build steps. Every function is idempotent
-and a no-op when its work is already done (or its tools are absent), so it is
-safe to call on every `up`.
+Mac can `make up` with no manual env/build steps. Helpers reuse installed
+environments and build caches; make/Cargo checks native freshness on every up.
 
 Why these exist (gaps `compose up` otherwise assumes are pre-handled):
   • the orchestrator's own image pulls (L1) take docker.io creds, when present,
@@ -12,11 +11,12 @@ Why these exist (gaps `compose up` otherwise assumes are pre-handled):
   • the box base is pulled from the published multi-arch agent image
     (ghcr.io/boxlite-ai/boxlite-agent-base), which now carries linux/arm64 — so
     an arm64 Mac boots a usable box straight from ghcr, no local image build.
-  • the Go runner links the real libboxlite.a, which must be built once.
+  • the Go runner links libboxlite.a, which must match the Rust sources.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import subprocess
@@ -121,13 +121,24 @@ def ensure_submodules() -> None:
 
 
 def ensure_native_lib() -> None:
-    """Build the real libboxlite.a (the Go runner links it) if missing."""
-    if (REPO / "target" / "debug" / "libboxlite.a").is_file():
-        return
+    """Let Cargo check transitive inputs, then prepare changed Go symbols."""
     ensure_shared_target()
     ensure_submodules()
-    print("  building native libboxlite.a (real libkrun — slow on first run, shared cache after)...")
-    subprocess.run(["make", "dev:go"], cwd=str(REPO), check=True)
+    library = REPO / "target" / "debug" / "libboxlite.a"
+    subprocess.run(["make", "dev:c"], cwd=str(REPO), check=True)
+    prepared = library.with_suffix(".go-ready")
+    if not prepared.is_file() or prepared.read_text() != archive_digest(library):
+        # dev:c just prepared the runtime; only Go symbol/link work remains.
+        subprocess.run(["make", "dev:go", "SETUP_DONE=1"], cwd=str(REPO), check=True)
+        prepared.write_text(archive_digest(library))
+
+
+def archive_digest(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as archive:
+        for chunk in iter(lambda: archive.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _boxlite_is_local_build() -> bool:

@@ -644,7 +644,7 @@ test('upgrades every Runner through a dependsOn chain, one host per command', ()
   assert.match(upgrades, /`build:\$\{runnerArtifactSource\.version\}:\$\{runnerArtifactSource\.ref\}`/)
   assert.match(upgrades, /`release:\$\{runnerArtifactSource\.version\}`/)
   assert.match(upgrades, /RUNNER_VERSION: runnerTargetVersion/)
-  assert.match(upgrades, /triggers: \[runnerArtifactTrigger, instance\.id\]/)
+  assert.match(upgrades, /triggers: \[runnerArtifactTrigger, CLOUD_RUNNER_KERNEL\.sha256, instance\.id\]/)
   // `triggers` replaces the resource, so `create` must carry the same body as `update`.
   assert.match(
     upgrades,

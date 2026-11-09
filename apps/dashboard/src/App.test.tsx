@@ -43,6 +43,7 @@ vi.mock('./pages/ImagesPage', () => ({
     return <p>images page, {tab} tab</p>
   },
 }))
+vi.mock('./pages/Domains', () => ({ default: () => <p>domains page</p> }))
 vi.mock('./pages/ImageDetails', () => ({
   default: function ImageDetailsMarker() {
     return <p>image details page for {useParams().idOrRef}</p>
@@ -93,6 +94,10 @@ describe('App routes', () => {
   // mount their pages.
   it('opens the image catalog', async () => {
     expect(await renderAt('/dashboard/images')).toBe('images page, images tab')
+  })
+
+  it('opens Domains as a peer dashboard page', async () => {
+    expect(await renderAt('/dashboard/domains')).toBe('domains page')
   })
 
   // `registries` is a static segment under the same prefix as `:idOrRef`; it

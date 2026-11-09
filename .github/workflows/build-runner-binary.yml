@@ -9,7 +9,7 @@
 #
 # Triggers:
 # - workflow_run: After a successful release C SDK build (libboxlite.a is published)
-# - workflow_dispatch: Manual trigger for testing
+# - workflow_dispatch: Build the selected commit's C SDK and Runner together
 # - workflow_call: A deploy building a selected commit (deploy-infra.yml)
 name: Build Runner Binary
 
@@ -20,7 +20,7 @@ on:
   workflow_dispatch:
     inputs:
       ref:
-        description: 'Full commit SHA to build against its published C SDK version.'
+        description: 'Full commit SHA to build with its matching C SDK.'
         required: false
         type: string
   workflow_call:
@@ -77,12 +77,26 @@ jobs:
           git cat-file -e "$candidate^{commit}"
           echo "sha=$candidate" >> "$GITHUB_OUTPUT"
 
+  build-c:
+    name: Build manual commit C SDK
+    needs: resolve-ref
+    # Reusable callers supply a source, even when their event is workflow_dispatch.
+    if: github.event_name == 'workflow_dispatch' && !inputs.libboxlite_source
+    permissions:
+      contents: write
+    uses: ./.github/workflows/build-c.yml
+    with:
+      ref: ${{ needs['resolve-ref'].outputs.sha }}
+      linux_x64_only: true
+
   build:
     name: Build Runner (linux-amd64)
-    needs: [config, resolve-ref]
+    needs: [config, resolve-ref, build-c]
     if: >-
-      github.event_name != 'workflow_run' ||
-      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'release')
+      !cancelled() &&
+      needs.config.result == 'success' &&
+      needs['resolve-ref'].result == 'success' &&
+      (needs['build-c'].result == 'success' || needs['build-c'].result == 'skipped')
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -107,7 +121,7 @@ jobs:
         shell: bash
         env:
           BUILD_SHA: ${{ needs.resolve-ref.outputs.sha }}
-          INPUT_SOURCE: ${{ inputs.libboxlite_source }}
+          INPUT_SOURCE: ${{ inputs.libboxlite_source || (github.event_name == 'workflow_dispatch' && 'artifact' || 'release') }}
         run: |
           set -euo pipefail
           VERSION=$(grep '^version = ' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
@@ -207,7 +221,14 @@ jobs:
   upload-to-release:
     name: Upload to GitHub Release
     needs: [config, resolve-ref, build]
-    if: github.event_name == 'workflow_run' && github.event.workflow_run.event == 'release'
+    # The manual C build is skipped on releases; publication must also override implicit success().
+    if: >-
+      !cancelled() &&
+      needs.config.result == 'success' &&
+      needs['resolve-ref'].result == 'success' &&
+      needs.build.result == 'success' &&
+      github.event_name == 'workflow_run' &&
+      github.event.workflow_run.event == 'release'
     runs-on: ubuntu-latest
     permissions:
       contents: write

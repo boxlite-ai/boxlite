@@ -89,7 +89,7 @@ impl From<PySshAccount> for SshAccount {
     }
 }
 
-/// Complete guest SSH configuration; keys are never persisted by the runtime.
+/// Complete guest SSH configuration; credentials persist on the container disk.
 /// `repr()` keeps the listener address and redacts all key material.
 #[pyclass(name = "SshConfig")]
 #[derive(Clone)]
@@ -202,6 +202,15 @@ impl PySshHandle {
         let config = SshConfig::from(config);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let status = handle.configure(config).await.map_err(map_err)?;
+            Ok(PySshStatus::from(status))
+        })
+    }
+
+    /// Enable saved configuration on a running box; preserve healthy connections.
+    fn enable<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let handle = self.handle.clone();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let status = handle.enable().await.map_err(map_err)?;
             Ok(PySshStatus::from(status))
         })
     }

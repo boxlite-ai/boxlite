@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { AsciiButton } from '@/components/ascii'
 import {
   Dialog,
   DialogContent,
@@ -90,17 +91,10 @@ export const CreateApiKeyDialog: React.FC<CreateApiKeyDialogProps> = ({
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
-        <button
-          type="button"
-          title="Create Key"
-          className={cn(
-            'inline-flex h-[34px] items-center gap-2 bg-primary px-4 text-[12.5px] font-semibold text-primary-foreground transition-opacity hover:opacity-85',
-            className,
-          )}
-        >
-          <Plus className="size-3.5" strokeWidth={2.4} />
+        <AsciiButton variant="primary" title="Create Key" className={className}>
+          <Plus className="size-4" />
           Create Key
-        </button>
+        </AsciiButton>
       </DialogTrigger>
 
       <DialogContent className="gap-0 p-0 sm:max-w-[560px]">
@@ -115,23 +109,15 @@ export const CreateApiKeyDialog: React.FC<CreateApiKeyDialogProps> = ({
             <div className="px-[26px] py-[22px]">
               <div className="flex items-center gap-3 border border-brand bg-card px-4 py-[14px]">
                 <span className="flex-1 break-all font-mono text-[13px] text-brand">{revealKey}</span>
-                <button
-                  type="button"
-                  onClick={() => copy(revealKey)}
-                  className="flex-none bg-primary px-4 py-2 text-[12px] font-semibold text-primary-foreground transition-opacity hover:opacity-85"
-                >
+                <AsciiButton variant="primary" type="button" onClick={() => copy(revealKey)}>
                   {keyCopied ? 'Copied' : 'Copy'}
-                </button>
+                </AsciiButton>
               </div>
             </div>
             <div className="flex justify-end border-t border-border px-[26px] py-4">
-              <button
-                type="button"
-                onClick={() => setOpen(false)}
-                className="border border-border px-[22px] py-[11px] text-[13px] font-medium transition-colors hover:bg-card"
-              >
+              <AsciiButton type="button" onClick={() => setOpen(false)}>
                 Done
-              </button>
+              </AsciiButton>
             </div>
           </>
         ) : (
@@ -204,21 +190,17 @@ export const CreateApiKeyDialog: React.FC<CreateApiKeyDialogProps> = ({
             </form>
 
             <div className="flex justify-end gap-[10px] border-t border-border px-[26px] py-4">
-              <button
-                type="button"
-                onClick={() => setOpen(false)}
-                className="border border-border px-[22px] py-[11px] text-[13px] font-medium transition-colors hover:bg-card"
-              >
+              <AsciiButton type="button" onClick={() => setOpen(false)}>
                 Close
-              </button>
-              <button
+              </AsciiButton>
+              <AsciiButton
+                variant="primary"
                 type="submit"
                 form="create-api-key-form"
                 disabled={!name.trim() || submitting || !organizationId || availablePermissions.length === 0}
-                className="bg-primary px-[26px] py-[11px] text-[13px] font-semibold text-primary-foreground transition-opacity hover:opacity-85 disabled:cursor-not-allowed disabled:opacity-45"
               >
                 {submitting ? 'Creating…' : 'Create'}
-              </button>
+              </AsciiButton>
             </div>
           </>
         )}

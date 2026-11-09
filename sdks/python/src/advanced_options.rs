@@ -299,6 +299,9 @@ impl From<PyContainerCapabilities> for ContainerCapabilities {
 #[pyclass(name = "AdvancedBoxOptions")]
 #[derive(Clone, Debug)]
 pub struct PyAdvancedBoxOptions {
+    /// Full privilege inside the guest; host sandbox policy is unchanged.
+    #[pyo3(get, set)]
+    pub privileged: bool,
     /// Security isolation options.
     #[pyo3(get, set)]
     pub security: Option<PySecurityOptions>,
@@ -322,16 +325,18 @@ pub struct PyAdvancedBoxOptions {
 #[pymethods]
 impl PyAdvancedBoxOptions {
     #[new]
-    #[pyo3(signature = (security=None, health_check=None, capabilities=None))]
+    #[pyo3(signature = (security=None, health_check=None, capabilities=None, privileged=false))]
     fn new(
         security: Option<PySecurityOptions>,
         health_check: Option<PyHealthCheckOptions>,
         capabilities: Option<PyContainerCapabilities>,
+        privileged: bool,
     ) -> Self {
         Self {
             security,
             health_check,
             capabilities,
+            privileged,
         }
     }
 }

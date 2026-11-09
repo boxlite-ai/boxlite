@@ -91,7 +91,7 @@ class AgentResult(TypedDict):
 class AgentState(TypedDict):
     id: str
     status: AgentStatus
-    cursor: str
+    cursor: str | None
     active_turn_id: str | None
     queued_turn_ids: list[str]
     requests: list[AgentRequest]
@@ -102,7 +102,7 @@ class AgentTurnState(TypedDict):
     id: str
     agent_id: str
     status: AgentTurnStatus
-    cursor: str
+    cursor: str | None
     result: AgentResult | None
     requests: list[AgentRequest]
     steering: list[AgentSteeringReceipt]
@@ -111,13 +111,13 @@ class AgentTurnState(TypedDict):
 class AgentCapabilities(TypedDict):
     operations: list[str]
     input_kinds: list[str]
-    max_queued_turns: int
-    max_pending_steering: int
-    idempotency_retention_seconds: float
+    max_queued_turns: int | None
+    max_pending_steering: int | None
+    idempotency_retention_seconds: float | None
 
 
 class AgentEvent(TypedDict):
-    cursor: str
+    cursor: str | None
     agent_id: str
     turn_id: str | None
     kind: str
@@ -184,7 +184,7 @@ class Agent:
     def events(
         self, options: AgentEventsOptions | None = None
     ) -> AsyncIterator[AgentEvent]:
-        """Open the agent journal after an opaque cursor."""
+        """Open the agent's events, after an opaque cursor where the adapter supports it."""
         _not_implemented("agent.events")
 
     async def requests(self) -> list[AgentRequest]:

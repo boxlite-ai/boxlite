@@ -3,6 +3,45 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const config = { apiUrl: 'http://api.test/api' } as never
 
+describe('ApiClient domains', () => {
+  it('uses authenticated organization-scoped list and short-name claim requests', async () => {
+    const requests: any[] = []
+    const result = { hostname: 'my-app.apps.test', url: 'https://my-app.apps.test', target: null }
+    const api = await makeClient(vi.fn(), 201, result, requests)
+    await api.listDomains('org/one')
+    await expect(api.claimDomain('org/one', 'my-app')).resolves.toEqual(result)
+    expect(
+      requests.map(({ method, url, baseURL, data, headers }) => ({
+        method,
+        url,
+        baseURL,
+        data,
+        auth: headers.Authorization,
+      })),
+    ).toEqual([
+      {
+        method: 'get',
+        url: '/v1/org%2Fone/domains',
+        baseURL: 'http://api.test/api',
+        data: undefined,
+        auth: 'Bearer tok',
+      },
+      {
+        method: 'post',
+        url: '/v1/org%2Fone/domains',
+        baseURL: 'http://api.test/api',
+        data: JSON.stringify({ name: 'my-app' }),
+        auth: 'Bearer tok',
+      },
+    ])
+  })
+
+  it('keeps claim refusal messages through the shared interceptor', async () => {
+    const api = await makeClient(vi.fn(), 409, { message: 'my-app.apps.test is not available.' })
+    await expect(api.claimDomain('org-1', 'my-app')).rejects.toThrow('my-app.apps.test is not available.')
+  })
+})
+
 // Fresh module per test so the module-level `isHandlingUnauthorized` guard
 // doesn't leak across cases. A custom axios adapter makes every request resolve
 // to `status` with an empty body, so the response interceptor sees the 401.
@@ -64,18 +103,17 @@ describe('ApiClient 401 -> bounded re-login recovery', () => {
   // A 403 is not an authentication failure, so none of the recovery machinery
   // above may engage: the token is valid and re-logging in cannot change the
   // account state the API is objecting to.
-  it('a coded 403 becomes a typed error and never triggers re-login', async () => {
+  it.each([
+    { status: 403, code: 'disposable_email' },
+    { status: 403, code: 'email_required' },
+    { status: 400, code: 'invalid_email' },
+  ])('preserves registration email rejection $status/$code without re-login', async ({ status, code }) => {
     const onUnauthorized = vi.fn(() => Promise.resolve())
-    const api = await makeClient(onUnauthorized, 403, {
-      message: 'Email verification required',
-      code: 'email_verification_required',
-    })
+    const api = await makeClient(onUnauthorized, status, { message: 'Account creation refused', code })
 
-    // Imported after makeClient's vi.resetModules() so these are the same class
-    // objects the freshly-imported apiClient constructs.
-    const { EmailVerificationRequiredError } = await import('./errors')
+    const error = await api.organizationsApi.listOrganizations().catch((caught: unknown) => caught)
 
-    await expect(api.organizationsApi.listOrganizations()).rejects.toBeInstanceOf(EmailVerificationRequiredError)
+    expect(error).toMatchObject({ code, message: 'Account creation refused' })
     expect(onUnauthorized).not.toHaveBeenCalled()
     expect(window.sessionStorage.getItem('boxlite.reauth-attempted')).toBeNull()
   })
@@ -84,11 +122,14 @@ describe('ApiClient 401 -> bounded re-login recovery', () => {
     const onUnauthorized = vi.fn(() => Promise.resolve())
     const api = await makeClient(onUnauthorized, 403, { message: 'Forbidden' })
 
-    const { BoxliteError, EmailVerificationRequiredError } = await import('./errors')
+    // Imported after makeClient's vi.resetModules() so these are the same class
+    // objects the freshly-imported apiClient constructs.
+    const { BoxliteError, RegistrationEmailError } = await import('./errors')
 
     const error = await api.organizationsApi.listOrganizations().catch((e: unknown) => e)
     expect(error).toBeInstanceOf(BoxliteError)
-    expect(error).not.toBeInstanceOf(EmailVerificationRequiredError)
+    expect(error).not.toBeInstanceOf(RegistrationEmailError)
+    expect(onUnauthorized).not.toHaveBeenCalled()
   })
 
   // The catalog's delete refusal is only useful for the box ids in its message;

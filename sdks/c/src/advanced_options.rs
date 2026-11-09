@@ -6,6 +6,7 @@
 //! sandbox with `boxlite_advanced_options_set_security_enabled`, then apply it
 //! to a `CBoxliteOptions` via `boxlite_options_set_advanced`.
 
+use boxlite::experimental::custom_kernel::KernelOptions;
 use std::os::raw::{c_char, c_int};
 
 use boxlite::runtime::advanced_options::{
@@ -15,6 +16,41 @@ use boxlite::runtime::advanced_options::{
 use crate::CAdvancedBoxOptions;
 use crate::error::{BoxliteErrorCode, FFIError, null_pointer_error, write_error};
 use crate::util::c_str_to_string;
+
+/// Set an absolute host kernel path (RC). The runtime must enable custom-kernel.
+/// Copies the path; invalid input leaves the previous option unchanged.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_advanced_options_set_kernel_path(
+    opts: *mut CAdvancedBoxOptions,
+    path: *const c_char,
+    out_error: *mut FFIError,
+) -> BoxliteErrorCode {
+    let result = (|| {
+        let handle = unsafe { opts.as_mut() }.ok_or_else(|| null_pointer_error("opts"))?;
+        if path.is_null() {
+            return Err(null_pointer_error("path"));
+        }
+        let path = unsafe { c_str_to_string(path) }.map_err(|_| {
+            boxlite::BoxliteError::InvalidArgument("path is not valid UTF-8".into())
+        })?;
+        let kernel = KernelOptions::new(path);
+        if !kernel.path.is_absolute() || !kernel.path.is_file() {
+            return Err(boxlite::BoxliteError::Config(
+                "custom kernel must be an absolute regular file".into(),
+            ));
+        }
+        handle.options.kernel = Some(kernel);
+        Ok(())
+    })();
+    match result {
+        Ok(()) => BoxliteErrorCode::Ok,
+        Err(error) => {
+            let code = crate::error::error_to_code(&error);
+            unsafe { write_error(out_error, error) };
+            code
+        }
+    }
+}
 
 /// Opaque handle wrapping an `AdvancedBoxOptions`. Allocated via
 /// `boxlite_advanced_options_new`, freed via `boxlite_advanced_options_free`.
@@ -112,6 +148,30 @@ pub unsafe extern "C" fn boxlite_advanced_options_set_capabilities_drop(
 }
 
 const INVALID_CAPABILITY_INPUT: &str = "<invalid C capability input>";
+
+/// Enable full capabilities and writable kernel mounts inside the guest only.
+/// Runner sandbox security is unchanged. Returns InvalidArgument for a null
+/// handle or a conflicting explicit capability policy.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_advanced_options_set_privileged(
+    opts: *mut CAdvancedBoxOptions,
+    enabled: c_int,
+) -> BoxliteErrorCode {
+    let Some(handle) = (unsafe { opts.as_mut() }) else {
+        return BoxliteErrorCode::InvalidArgument;
+    };
+    if enabled != 0
+        && handle.options.capabilities().is_some_and(|caps| {
+            !caps.drop.is_empty()
+                || caps.add.len() != 1
+                || !matches!(caps.add[0].to_ascii_uppercase().as_str(), "ALL" | "CAP_ALL")
+        })
+    {
+        return BoxliteErrorCode::InvalidArgument;
+    }
+    handle.options.set_privileged(enabled != 0);
+    BoxliteErrorCode::Ok
+}
 
 fn set_capability_list(
     handle: *mut CAdvancedBoxOptions,

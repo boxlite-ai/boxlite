@@ -237,8 +237,10 @@ impl ChipsetBuilder {
 
     /// Adds the device `ctor` constructs, under `name`, with the resources
     /// it claims. The constructor only claims resources and builds state: a
-    /// device that needs a thread starts it after [`build`](Self::build).
-    /// Fails only when the constructor does; conflicts wait for `build`.
+    /// device that needs a thread starts it after [`build`](Self::build), and
+    /// a virtio device's events run on the worker thread, which starts at
+    /// its first DRIVER_OK. Fails only when the constructor does; conflicts
+    /// wait for `build`.
     pub(crate) fn add<D, F>(&mut self, name: &'static str, ctor: F) -> Result<()>
     where
         D: BusDevice + 'static,

@@ -208,6 +208,22 @@ impl VirtQueues {
         self.queues.get(index).map(|queue| queue.max_size())
     }
 
+    /// The control areas of every ready queue, including event fields even
+    /// without EVENT_IDX. Devices snapshot these before destructive I/O.
+    pub(crate) fn control_ranges(&self) -> impl Iterator<Item = (GuestAddress, usize)> + '_ {
+        self.queues
+            .iter()
+            .filter(|queue| queue.ready())
+            .flat_map(|queue| {
+                let size = usize::from(queue.size());
+                [
+                    (GuestAddress(queue.desc_table()), 16 * size),
+                    (GuestAddress(queue.avail_ring()), 6 + 2 * size),
+                    (GuestAddress(queue.used_ring()), 6 + 8 * size),
+                ]
+            })
+    }
+
     /// Drains every chain the driver made available and reports whether the
     /// guest should be interrupted for chains completed synchronously.
     ///
@@ -225,7 +241,8 @@ impl VirtQueues {
     ///
     /// The drain consumes every available chain; a device that needs to stop
     /// early and put a chain back (rate limiting or backpressure) must not use
-    /// it.
+    /// it. A slow callback therefore delays every device sharing the worker
+    /// thread for as long as the driver keeps refilling the ring.
     ///
     /// The stored `indirect` flag is the negotiated `VIRTIO_F_INDIRECT_DESC`
     /// state. When it is false, a chain containing an indirect descriptor is a
@@ -346,7 +363,7 @@ fn defer(deferred: &mut Vec<u16>, size: u16, head: u16) -> Result<(), DeviceErro
 
 /// Adds one used entry without resolving the notification decision.
 ///
-/// [`VirtQueues::drain`] resolves the decision once per batch;
+/// [`VirtQueues::drain`] resolves the decision for its single admitted chain;
 /// [`VirtQueues::complete`] resolves it per deferred chain.
 fn add_used(
     queue: &mut Queue,

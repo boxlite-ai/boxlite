@@ -71,6 +71,49 @@ func main() {
 }
 ```
 
+### Live Execution Discovery and Recovery
+
+`box.Executions().List(ctx)` returns `[]ExecutionInfo` from the live guest,
+including its main process (`IsMainSession`). Fields are `ExecutionID` (canonical guest
+ID), `Argv`, `StartedAt` (Unix milliseconds), `TTY`, and `IsMainSession`.
+Completed executions disappear. Listing never boots the box; a stopped or
+not-yet-started box returns an empty slice, and a paused box returns an
+invalid-state error.
+
+`box.Executions().Get(ctx, id)` recovers a control-only `*Execution`: `ID()`,
+`Wait`, `Kill`, `Signal`, and `ResizeTTY` work without claiming stdout/stderr.
+It has no stdin or output sinks, and `Close` only releases the handle.
+
+`box.Executions().Attach(ctx, id, opts)` opens live stdin/output streams with the
+same `Stdout`, `Stderr`, `OnStdout`, and `OnStderr` sink options as
+`StartExecution`. An existing reader causes a synchronous conflict rather than
+stealing output. Launch options do not apply to attachment. After the original
+reader disconnects, a fresh client can discover and attach by ID. Attachment
+does not boot the box. It includes available buffered output, without guaranteeing
+a complete historical log. Closing an attached handle releases its reader without
+killing the guest process.
+
+```go
+executions, err := box.Executions().List(ctx)
+if err != nil {
+	log.Fatal(err)
+}
+for _, info := range executions {
+	if info.IsMainSession {
+		continue
+	}
+	control, err := box.Executions().Get(ctx, info.ExecutionID)
+	if err != nil {
+		log.Fatal(err)
+	}
+	err = control.Signal(ctx, 15)
+	control.Close()
+	if err != nil {
+		log.Fatal(err)
+	}
+}
+```
+
 ### Archive Export and Import
 
 ```go
@@ -259,10 +302,35 @@ See [private tunnel usage](../../docs/concepts/networking.md#private-cloud-tunne
 This differs from `WithPort`, which creates a persistent,
 local-only host listener that accepts repeated connections.
 
+## Domains
+
+On a hosted runtime the organization can route a name of its own
+(`demo.apps.example`) to a box port; see
+[Domains](../../docs/concepts/networking.md#domains).
+
+- `rt.Domains() (*Domains, error)` returns the handle; a local runtime returns
+  an `ErrUnsupported` error. Release it with `Close()`.
+- `domains.Bind(ctx, "demo.apps.example", boxlite.DomainTarget{Type: boxlite.DomainTargetBox, Box: "web-a", Port: 3000}) (*Domain, error)`
+  requires an owned full hostname; request new names in Dashboard > Domains first. `Box` takes an
+  id or name.
+- `domains.List(ctx) (*DomainList, error)` returns every held full `Hostname`
+  (`Target` nil while unbound) and the allowance.
+- `domains.Unbind(ctx, "demo.apps.example") error` requires the full hostname and stops routing it; the organization
+  keeps the name.
+
+`Domain` has `Hostname`, `URL` and `Target`; there is no short `Name`.
+`DomainTargetApp` with `App` reserves an App reference; servers currently reject
+App binding with `app_target_not_supported`.
+
+Each call is one blocking request, like `Network.Tunnel`: `ctx` is checked
+before and after waiting for another call on the same handle. Cancellation
+observed after that wait prevents the request; it does not interrupt a request
+already in flight.
+
 ## Guest SSH
 
 `box.SSH()` configures, observes, and disables the box's guest SSH listener.
-SSH starts disabled; the SDK is not an SSH client.
+SSH defaults to disabled when no state is saved; the SDK is not an SSH client.
 
 ```go
 hostKey, err := os.ReadFile("host_ed25519") // unencrypted OpenSSH private key
@@ -286,6 +354,10 @@ fmt.Println(current.Enabled)
 disabled, err := box.SSH().Disable(ctx)
 if err != nil { log.Fatal(err) }
 fmt.Println(disabled.Enabled, disabled.Generation) // false, generation kept
+
+enabled, err := box.SSH().Enable(ctx) // reuse saved configuration
+if err != nil { log.Fatal(err) }
+fmt.Println(enabled.Enabled) // true
 ```
 
 `SSH` has no `Close`: it refers to its `Box` and shares the box's and
@@ -293,10 +365,12 @@ runtime's lifetime.
 
 - **Lifecycle:** `Configure` replaces the whole configuration, restarts the
   listener, and may start the box. With `WithCmd` or `WithEntrypoint`, call
-  `box.Start` first or `Configure` returns `ErrInvalidState`. `Status` and
-  `Disable` never start the box; a box that is not running reports disabled
-  with generation zero. `Disable` is safe to repeat and keeps the generation.
-- **Keys:** the runtime parses and validates keys and never persists them. A
+  `box.Start` first or `Configure` returns `ErrInvalidState`. `Status`, `Enable` and
+  `Disable` never start the box. `Enable` requires a running box and saved
+  configuration, works locally and over REST, and preserves healthy connections. On an idle local box, `Status` reports disabled
+  with generation zero, and `Disable` returns `ErrInvalidState`. On a running
+  box, `Disable` is safe to repeat and keeps the generation.
+- **Keys:** the guest validates keys and stores them on the container disk. A
   rejected configuration returns `ErrInvalidArgument` without echoing key
   material. `%v`, `%+v`, `%s`, and `%#v` redact keys and CA values; JSON
   encoding of these types does not.
@@ -308,7 +382,7 @@ runtime's lifetime.
   with `WithPort(boxlite.PortSpec{Guest: 2222})` on a local runtime, or a
   [service tunnel](#service-tunnels) such as `network.Tunnel(ctx, &net.TCPAddr{Port: 2222}, boxlite.DefaultTunnelOptions())`.
 - **Native library:** SSH needs a `boxlite.h` and native library that export
-  `boxlite_box_ssh_configure`, `_status`, and `_disable`. `cmd/setup` fetches
+  `boxlite_box_ssh_configure`, `_enable`, `_status`, and `_disable`. `cmd/setup` fetches
   the pair matching your module version; an older library fails to link.
 
 See the [SSH guide](../../docs/guides/ssh.md) for listener behavior,

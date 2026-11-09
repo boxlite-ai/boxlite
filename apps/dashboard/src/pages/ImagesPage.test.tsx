@@ -77,4 +77,12 @@ describe('the images page', () => {
 
     expect(mocks.navigate).toHaveBeenCalledWith('/dashboard/images/registries?connect=ghcr.io')
   })
+  it('preserves the registry query when following the image guide', async () => {
+    await renderPage('images', '/dashboard/images?connect=ghcr.io')
+    await act(async () => document.querySelector<HTMLButtonElement>('[aria-controls="image-add-guide"]')?.click())
+    expect(document.querySelector('#image-add-guide')?.hasAttribute('hidden')).toBe(false)
+    expect(document.querySelector('#image-add-guide a')?.getAttribute('href')).toBe(
+      '/dashboard/images/registries?connect=ghcr.io',
+    )
+  })
 })

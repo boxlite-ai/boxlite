@@ -25,6 +25,7 @@ COPY make/ make/
 COPY scripts/ scripts/
 COPY src/ src/
 COPY sdks/ sdks/
+COPY apps/e2e/sdks/rust/ apps/e2e/sdks/rust/
 COPY apps/go.work apps/go.work.sum apps/
 COPY apps/runner/ apps/runner/
 COPY apps/libs/common-go/ apps/libs/common-go/

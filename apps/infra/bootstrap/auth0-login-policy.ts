@@ -125,6 +125,12 @@ export interface Auth0LoginPolicyOptions {
   tenant: string
   clientId: string
   connectionName: string
+  /**
+   * The BoxLite API's audience (`OIDC_AUDIENCE`). The API does not check email
+   * verification itself, so the Action denies an unverified database user any
+   * token for it, whatever the client or database connection.
+   */
+  apiAudience?: string
   apply: boolean
   allowTestEmailProvider: boolean
   /** Overwrite a login policy Action this tool cannot show it generated. */
@@ -146,6 +152,19 @@ export interface Auth0LoginPolicyOptions {
    */
   accountLinkSecret?: string
   /**
+   * The MCP endpoint's resource URL (`MCP_RESOURCE_URL`). Logins asking for a
+   * token for it get the dashboard's email verification and account link, since
+   * MCP clients sign in under their own client ids. Unset leaves them ungated, and
+   * an Action that gates them is refused unless `disableMcpLogin` turns that off.
+   */
+  mcpResourceUrl?: string
+  /**
+   * Stop gating MCP logins on a tenant whose Action gates them. Without this, an
+   * apply lacking `--mcp-resource-url` refuses such an Action rather than silently
+   * letting MCP logins skip verification and the account link.
+   */
+  disableMcpLogin?: boolean
+  /**
    * Turn the account link off on a tenant whose Action runs it. Without this,
    * an apply lacking `--account-link-api-origin` refuses such an Action rather
    * than silently leaving every later login unlinked.
@@ -164,34 +183,52 @@ export function parseAuth0LoginPolicyOptions(
       tenant: { type: 'string' },
       'client-id': { type: 'string' },
       connection: { type: 'string' },
+      'api-audience': { type: 'string' },
       apply: { type: 'boolean', default: false },
       'allow-test-email-provider': { type: 'boolean', default: false },
       'replace-action': { type: 'boolean', default: false },
       'replace-link-form': { type: 'boolean', default: false },
       'account-link-api-origin': { type: 'string' },
       'disable-account-link': { type: 'boolean', default: false },
+      'mcp-resource-url': { type: 'string' },
+      'disable-mcp-login': { type: 'boolean', default: false },
     },
   })
   if (values['disable-account-link'] && values['account-link-api-origin'] !== undefined) {
     throw new Error('--disable-account-link and --account-link-api-origin cannot be combined')
   }
+  if (values['disable-mcp-login'] && values['mcp-resource-url'] !== undefined) {
+    throw new Error('--disable-mcp-login and --mcp-resource-url cannot be combined')
+  }
 
   const tenant = requireExactValue('--tenant', values.tenant)
   const clientId = requireExactValue('--client-id', values['client-id'])
   const connectionName = requireExactValue('--connection', values.connection)
+  const apiAudience = requireExactValue('--api-audience', values['api-audience'])
   if (tenant.includes('/') || !tenant.includes('.')) throw new Error('--tenant must be an exact Auth0 tenant hostname')
 
   return {
     tenant,
     clientId,
     connectionName,
+    apiAudience,
     apply: values.apply ?? false,
     allowTestEmailProvider: values['allow-test-email-provider'] ?? false,
     replaceAction: values['replace-action'] ?? false,
     replaceLinkForm: values['replace-link-form'] ?? false,
     ...accountLinkOptions(values['account-link-api-origin'], environment[ACCOUNT_LINK_SECRET_ENV]),
     disableAccountLink: values['disable-account-link'] ?? false,
+    ...mcpResourceOption(values['mcp-resource-url']),
+    disableMcpLogin: values['disable-mcp-login'] ?? false,
   }
+}
+
+/** `--mcp-resource-url`: the exact `https` URL the MCP endpoint publishes as its resource. */
+function mcpResourceOption(value: string | undefined): Pick<Auth0LoginPolicyOptions, 'mcpResourceUrl'> {
+  if (value === undefined) return {}
+  const url = new URL(value)
+  if (url.protocol !== 'https:' || url.href !== value) throw new Error('--mcp-resource-url must be an exact https URL')
+  return { mcpResourceUrl: value }
 }
 
 function accountLinkOptions(
@@ -410,6 +447,10 @@ export function hydrateLoginPolicyAction(
     accountLinkApiOrigin?: string
     accountLinkFormId?: string
     tenant?: string
+    // The MCP endpoint's resource URL; its logins get the dashboard's checks.
+    mcpResourceUrl?: string
+    // The BoxLite API's audience; any token for it needs a verified database user.
+    apiAudience?: string
   },
 ): string {
   const replacements: Record<string, string> = {
@@ -419,9 +460,11 @@ export function hydrateLoginPolicyAction(
     __ACCOUNT_LINK_API_ORIGIN_JSON__: JSON.stringify(values.accountLinkApiOrigin ?? ''),
     __ACCOUNT_LINK_FORM_ID_JSON__: JSON.stringify(values.accountLinkFormId ?? ''),
     __AUTH0_DOMAIN_JSON__: JSON.stringify(values.tenant ?? ''),
+    __MCP_RESOURCE_URL_JSON__: JSON.stringify(values.mcpResourceUrl ?? ''),
+    __API_AUDIENCE_JSON__: JSON.stringify(values.apiAudience ?? ''),
   }
   const hydrated = source.replace(
-    /__(?:BOXLITE_CLIENT_ID|BOXLITE_DB_CONNECTION|EMAIL_VERIFICATION_FORM_ID|ACCOUNT_LINK_API_ORIGIN|ACCOUNT_LINK_FORM_ID|AUTH0_DOMAIN)_JSON__/g,
+    /__(?:BOXLITE_CLIENT_ID|BOXLITE_DB_CONNECTION|EMAIL_VERIFICATION_FORM_ID|ACCOUNT_LINK_API_ORIGIN|ACCOUNT_LINK_FORM_ID|AUTH0_DOMAIN|MCP_RESOURCE_URL|API_AUDIENCE)_JSON__/g,
     (placeholder) => replacements[placeholder],
   )
   const unresolved = hydrated.match(/__[A-Z_]+_JSON__/)
@@ -437,6 +480,27 @@ function stampActionCode(code: string): string {
 function carriesOwnStamp(code: string): boolean {
   const at = code.lastIndexOf(ACTION_STAMP_PREFIX)
   return at > 0 && stampActionCode(code.slice(0, at)) === code
+}
+
+/**
+ * Every item of a paged Management API list, 100 per page (the API maximum), up to
+ * 1,000. `key` names the array when the response is the `include_totals` object.
+ */
+export function readAllPages(
+  client: Auth0ManagementClient,
+  path: string,
+  key: string,
+  filters: Record<string, string> = {},
+): JsonObject[] {
+  const resources: JsonObject[] = []
+  for (let page = 0; page < 10; page += 1) {
+    const response = client.request('get', path, { query: { ...filters, per_page: '100', page: String(page) } })
+    const batch = collection(response, key)
+    resources.push(...batch)
+    const total = objectOrNull(response)?.total
+    if (batch.length < 100 || (typeof total === 'number' && resources.length >= total)) return resources
+  }
+  throw new Error(`Auth0 ${path} discovery exceeded 1,000 resources`)
 }
 
 export interface Auth0ManagementClient {
@@ -861,17 +925,7 @@ export class Auth0LoginPolicyConfigurator {
   }
 
   private readAllResources(path: string, key: string): JsonObject[] {
-    const resources: JsonObject[] = []
-    for (let page = 0; page < 10; page += 1) {
-      const response = this.client.request('get', path, {
-        query: { per_page: '100', page: String(page) },
-      })
-      const batch = collection(response, key)
-      resources.push(...batch)
-      const total = objectOrNull(response)?.total
-      if (batch.length < 100 || (typeof total === 'number' && resources.length >= total)) return resources
-    }
-    throw new Error(`Auth0 ${path} discovery exceeded 1,000 resources`)
+    return readAllPages(this.client, path, key)
   }
 
   private readClientConnections(clientId: string = this.options.clientId): JsonObject[] {
@@ -918,6 +972,18 @@ export class Auth0LoginPolicyConfigurator {
     throw new Error(`database user preflight exceeded Auth0's 1,000-user search window for '${connectionName}'`)
   }
 
+  /** A mistyped audience would gate an API nobody calls and leave the real one open. */
+  private assertApiAudienceServed(): void {
+    const audience = this.options.apiAudience
+    if (audience === undefined) return
+    const api = objectOrNull(
+      this.client.request('get', `resource-servers/${encodeURIComponent(audience)}`, { allowNotFound: true }),
+    )
+    if (api?.identifier !== audience) {
+      throw new Error(`--api-audience '${audience}' names no Auth0 API on ${this.options.tenant}`)
+    }
+  }
+
   private assertProductionEmailReady(state: PolicyState): void {
     assertEmailDeliveryReady(
       emailDeliveryReadiness(
@@ -930,6 +996,7 @@ export class Auth0LoginPolicyConfigurator {
   }
 
   private assertStateAdoptable(state: PolicyState): void {
+    this.assertApiAudienceServed()
     if (state.managementClient) this.assertManagementClientCompatible(state.managementClient)
     if (this.options.accountLinkApiOrigin && state.linkClient) this.assertLinkClientCompatible(state.linkClient)
     if (this.options.accountLinkApiOrigin && state.linkForm && !this.options.replaceLinkForm) {
@@ -943,6 +1010,11 @@ export class Auth0LoginPolicyConfigurator {
     ) {
       throw new Error(
         `Auth0 Action '${RESOURCE_NAMES.action}' runs the account link; pass --account-link-api-origin to keep the link, or --disable-account-link to turn it off`,
+      )
+    }
+    if (state.action && gatesMcpLogins(state.action) && !this.options.mcpResourceUrl && !this.options.disableMcpLogin) {
+      throw new Error(
+        `Auth0 Action '${RESOURCE_NAMES.action}' gates MCP logins; pass --mcp-resource-url to keep that, or --disable-mcp-login to stop it`,
       )
     }
     if (state.vaultConnection) {
@@ -1399,6 +1471,8 @@ export class Auth0LoginPolicyConfigurator {
         accountLinkApiOrigin: this.options.accountLinkApiOrigin,
         accountLinkFormId: linkFormId,
         tenant: this.options.tenant,
+        mcpResourceUrl: this.options.mcpResourceUrl,
+        apiAudience: this.options.apiAudience,
       }),
       runtime: 'node22',
     }
@@ -1699,6 +1773,59 @@ function bindingsSnapshot(bindings: JsonObject[]): JsonObject[] {
 /** Whether the Action the tenant runs names a link Form, the account link's switch. */
 function runsAccountLink(action: JsonObject): boolean {
   return /const ACCOUNT_LINK_FORM_ID = "[^"]+"/.test(String(action.deployed_version?.code ?? action.code ?? ''))
+}
+
+/** The deployed login Action, the only email-verification gate, as configure-mcp checks it. */
+export const LOGIN_POLICY_ACTION_NAME = RESOURCE_NAMES.action
+
+/**
+ * Refuses an `--api-audience` other than the one the stage's API validates
+ * tokens against (`OIDC_AUDIENCE`, or the API's `OID_AUDIENCE` fallback):
+ * another real API on the tenant would pass the existence check and leave this
+ * stage's API ungated.
+ */
+export function assertStageApiAudience(apiAudience: string, environment: NodeJS.ProcessEnv = process.env): void {
+  const stageAudience = (environment.OIDC_AUDIENCE || environment.OID_AUDIENCE || '').trim()
+  if (!stageAudience) {
+    throw new Error('OIDC_AUDIENCE is unset: load the stage deployment .env or export it, so --api-audience can be checked')
+  }
+  if (stageAudience !== apiAudience) {
+    throw new Error(`--api-audience '${apiAudience}' differs from this stage's OIDC_AUDIENCE '${stageAudience}'`)
+  }
+}
+
+/**
+ * Whether the deployed Action version is the login policy `template` hydrated for
+ * exactly this API audience and MCP resource. Every byte outside the placeholder
+ * values must match the template, so an Action edited in Auth0, even one
+ * re-stamped by hand, cannot pass with its verification gate removed.
+ */
+export function deployedActionGatesBoxLite(
+  action: JsonObject,
+  template: string,
+  apiAudience: string,
+  mcpResourceUrl: string,
+): boolean {
+  const code = String(action.deployed_version?.code ?? '')
+  if (!carriesOwnStamp(code)) return false
+  const body = code.slice(0, code.lastIndexOf(ACTION_STAMP_PREFIX))
+  const names: string[] = []
+  const source = (template.endsWith('\n') ? template : `${template}\n`)
+    .split(/(__[A-Z0-9_]+_JSON__)/)
+    .map((part, index) => {
+      if (index % 2 === 0) return part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+      names.push(part)
+      return '("(?:[^"\\\\]|\\\\.)*")'
+    })
+    .join('')
+  const match = new RegExp(`^${source}$`).exec(body)
+  if (!match) return false
+  const value = (name: string) => JSON.parse(match[names.indexOf(name) + 1])
+  return value('__API_AUDIENCE_JSON__') === apiAudience && value('__MCP_RESOURCE_URL_JSON__') === mcpResourceUrl
+}
+
+function gatesMcpLogins(action: JsonObject): boolean {
+  return /const MCP_RESOURCE_URL = "[^"]+"/.test(String(action.deployed_version?.code ?? action.code ?? ''))
 }
 
 function secretNames(action: JsonObject): string[] {

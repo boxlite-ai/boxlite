@@ -5,6 +5,8 @@
  */
 
 import { onboardingHandlers } from './onboarding-handlers'
+import { domainHandlers } from './domain-handlers'
+import { sshHandlers } from './ssh-handlers'
 import {
   OrganizationEmail,
   OrganizationPlan,
@@ -16,7 +18,7 @@ import {
   WalletTransaction,
 } from '@/billing-api'
 import { Invoice, PaginatedInvoices } from '@/billing-api/types/Invoice'
-import { PaymentUrl, SignupCreditDelivery } from '@/billing-api/types/OrganizationWallet'
+import { PaymentUrl } from '@/billing-api/types/OrganizationWallet'
 import { Plan } from '@/billing-api/types/Plan'
 import {
   BoxProgressPhase,
@@ -45,7 +47,7 @@ import {
   newestFirst,
 } from './fixtures'
 
-const BILLING_API_URL = 'http://localhost:3000/api/billing'
+const BILLING_API_URL = `${window.location.origin}/api/billing`
 const API_URL = import.meta.env.VITE_API_URL
 
 // Quickstart's agent handoff waits for a box created after it handed the key
@@ -67,16 +69,6 @@ function quickstartHandoffDemoBox() {
   }
 }
 
-// Every signup credit reads as delivered. To watch the Wallet tab's pending
-// notice come and go, localStorage['signup-credit-pending'] = '1' answers
-// false for six seconds from the first read.
-let signupCreditFirstReadAt: number | undefined
-function signupCreditDelivered() {
-  if (globalThis.localStorage?.getItem('signup-credit-pending') !== '1') return true
-  signupCreditFirstReadAt ??= Date.now()
-  return Date.now() - signupCreditFirstReadAt >= 6_000
-}
-
 /** Boxes that block an image's removal: every one not destroyed, as the API counts them. */
 function boxesReferencing(imageName: string) {
   return MOCK_BOXES.filter(
@@ -95,6 +87,8 @@ function boxesPullingThrough(credential: { registryHost: string; repositoryPrefi
 }
 
 export const handlers = [
+  ...sshHandlers,
+  ...domainHandlers(),
   ...onboardingHandlers(API_URL),
   // Core dashboard surface — fully self-contained so `start:mock` needs no
   // backend and no login (see MockAuthProvider for the fake session).
@@ -299,7 +293,7 @@ export const handlers = [
       return HttpResponse.json(
         {
           statusCode: 409,
-          message: `A credential for ${body.registryHost}/${repositoryPrefix} already exists; remove it before adding another`,
+          message: `A credential for ${body.registryHost}/${repositoryPrefix} already exists; update it to replace the login`,
           error: 'Conflict',
         },
         { status: 409 },
@@ -316,6 +310,19 @@ export const handlers = [
     }
     MOCK_REGISTRY_CREDENTIALS.unshift(created)
     return HttpResponse.json(created, { status: 201 })
+  }),
+  http.put(`${API_URL}/images/registries/:id`, async ({ params, request }) => {
+    const credential = MOCK_REGISTRY_CREDENTIALS.find((item) => item.id === params.id)
+    if (!credential) return new HttpResponse(null, { status: 404 })
+    const body = (await request.json()) as { username: string; password: string }
+    if (!body.username || !body.password || Object.keys(body).some((key) => !['username', 'password'].includes(key))) {
+      return HttpResponse.json(
+        { message: 'A username and password are required; scope cannot change' },
+        { status: 400 },
+      )
+    }
+    credential.username = body.username
+    return HttpResponse.json(credential)
   }),
   http.delete(`${API_URL}/images/registries/:id`, ({ params }) => {
     const index = MOCK_REGISTRY_CREDENTIALS.findIndex((c) => c.id === params.id)
@@ -944,7 +951,4 @@ export const handlers = [
       url: `https://checkout.stripe.com/pay/cs_test_${Date.now()}`,
     })
   }),
-  http.get(`${BILLING_API_URL}/organization/:organizationId/coupon/register`, () =>
-    HttpResponse.json<SignupCreditDelivery>({ delivered: signupCreditDelivered() }),
-  ),
 ]

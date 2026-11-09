@@ -31,7 +31,7 @@ fn bare<H: boxlite_hypervisor::Vm + 'static>(
         config,
         host_vm,
         |_, _| Ok(BootRegisters::default()),
-        |_| Ok(()),
+        |_, _| Ok(()),
     )
 }
 
@@ -42,6 +42,7 @@ fn config(vcpu_count: u8, memory_mib: u32) -> VmConfig {
         kernel: "vmlinux".into(),
         cmdline: "console=ttyS0".into(),
         initramfs: None,
+        disks: Vec::new(),
     }
 }
 
@@ -141,7 +142,7 @@ fn a_chipset_conflict_fails_before_any_ram_is_registered() {
         config(1, 16),
         || Ok(backend),
         |_, _| Ok(BootRegisters::default()),
-        |chipset| {
+        |chipset, _| {
             for name in ["first", "second"] {
                 chipset.add(name, |resources| {
                     resources.mmio(0xd000_0000, 0x1000);
@@ -536,7 +537,7 @@ mod lifecycle {
             config(2, 16),
             || Ok(backend),
             |_, _| Ok(BootRegisters::default()),
-            |chipset| {
+            |chipset, _| {
                 chipset.add("panics", |resources| {
                     resources.mmio(DEVICE, 1);
                     Ok(Panics)
@@ -605,7 +606,7 @@ mod lifecycle {
             config(1, 16),
             || Ok(backend),
             |_, _| Ok(BootRegisters::default()),
-            |chipset| {
+            |chipset, _| {
                 chipset.add("console", |resources| {
                     resources.mmio(DEVICE, 1);
                     Ok(ConsolePort(writer))
@@ -666,6 +667,271 @@ mod lifecycle {
             "{error:?}"
         );
     }
+
+    mod virtio {
+        use std::{
+            sync::{
+                Arc, Mutex,
+                atomic::{AtomicUsize, Ordering},
+            },
+            thread,
+            time::{Duration, Instant},
+        };
+
+        use super::{super::*, SlowSink, run};
+        use crate::{
+            VmExit,
+            chipset::ChipsetBuilder,
+            events::Event,
+            mock_vm::Step,
+            virtio::{
+                ActivationContext, DeviceContext, DeviceError, DeviceEvent, DeviceSpec,
+                FeatureError, SnapshotSupport, VirtioDevice, VirtioInterrupt, WorkerContext,
+                mmio::{self, Slot},
+                worker::{SlotId, VirtioWorkers, WorkerRuntime},
+            },
+        };
+
+        const BASE: u64 = 0xd000_0000;
+        const GSI: u32 = 5;
+
+        const SPEC: DeviceSpec = DeviceSpec {
+            device_id: 1,
+            name: "reset-on-kick",
+            features: 0,
+            config_len: 0,
+            queue_max: &[8],
+            snapshot: SnapshotSupport::Unsupported,
+        };
+
+        /// A device that resets the guest on its first queue notification,
+        /// from the worker thread, and then runs `then` there.
+        struct ResetOnKick {
+            ctx: Option<ActivationContext>,
+            then: Box<dyn FnMut() + Send>,
+        }
+
+        impl ResetOnKick {
+            fn shared(then: Box<dyn FnMut() + Send>) -> Arc<Mutex<dyn VirtioDevice>> {
+                Arc::new(Mutex::new(Self { ctx: None, then }))
+            }
+        }
+
+        impl VirtioDevice for ResetOnKick {
+            fn spec(&self) -> &DeviceSpec {
+                &SPEC
+            }
+
+            fn set_features(&mut self, _negotiated: u64) -> Result<(), FeatureError> {
+                Ok(())
+            }
+
+            fn read_config(&mut self, _offset: u64, _data: &mut [u8]) -> Result<(), DeviceError> {
+                Ok(())
+            }
+
+            fn write_config(&mut self, _offset: u64, _data: &[u8]) -> Result<(), DeviceError> {
+                Ok(())
+            }
+
+            fn activate(&mut self, ctx: ActivationContext) -> Result<(), DeviceError> {
+                self.ctx = Some(ctx);
+                Ok(())
+            }
+
+            fn reset(&mut self) -> Result<(), DeviceError> {
+                self.ctx = None;
+                Ok(())
+            }
+
+            fn on_event(&mut self, event: DeviceEvent) -> Result<(), DeviceError> {
+                if event == DeviceEvent::QueueKick(0)
+                    && let Some(ctx) = &self.ctx
+                {
+                    ctx.sender.send(Event::GuestReset);
+                    (self.then)();
+                }
+                Ok(())
+            }
+        }
+
+        /// The 4-byte writes a virtio-mmio driver makes to bring the device at
+        /// `BASE` up with every queue unready, then to notify queue 0.
+        fn driver() -> Vec<Step> {
+            [
+                (0x070, 1),
+                (0x070, 3),
+                (0x024, 1),
+                (0x020, 1),
+                (0x070, 0xb),
+                (0x070, 0xf),
+                (0x050, 0),
+            ]
+            .into_iter()
+            .map(|(offset, value)| Step::Write32 {
+                addr: BASE + offset,
+                value,
+            })
+            .collect()
+        }
+
+        /// Adds `device` behind a virtio-mmio transport at `BASE` on `GSI`.
+        fn add(
+            chipset: &mut ChipsetBuilder,
+            ctx: DeviceContext<'_>,
+            device: Arc<Mutex<dyn VirtioDevice>>,
+        ) -> crate::Result<()> {
+            mmio::add_device(
+                chipset,
+                &ctx,
+                "virtio",
+                Slot {
+                    base: BASE,
+                    gsi: GSI,
+                },
+                device,
+            )
+        }
+
+        /// Waits until `condition` holds, failing the test after ten seconds.
+        fn wait_until(mut condition: impl FnMut() -> bool) {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while !condition() {
+                assert!(Instant::now() < deadline, "the condition never held");
+                thread::sleep(Duration::from_millis(1));
+            }
+        }
+
+        #[test]
+        fn a_virtio_transport_runs_on_the_workers_until_guest_reset() {
+            let mut memory = None;
+            let vm = Vm::with_backend(
+                config(1, 16),
+                || Ok(MockVm::with_scripts(vec![driver()])),
+                |_, _| Ok(BootRegisters::default()),
+                |chipset, ctx| {
+                    memory = Some(Arc::downgrade(ctx.memory));
+                    add(chipset, ctx, ResetOnKick::shared(Box::new(|| {})))
+                },
+            )
+            .unwrap();
+
+            let (exit, vm) = run(vm);
+
+            assert_eq!(exit.unwrap(), VmExit::GuestReset);
+            drop(vm);
+            assert!(
+                memory.unwrap().upgrade().is_none(),
+                "the guest memory outlived the VM"
+            );
+        }
+
+        #[test]
+        fn run_shuts_the_workers_down_before_the_console_finishes() {
+            use crate::devices::console::ConsoleWorker;
+
+            let sink = SlowSink::default();
+            let (mut writer, worker) = ConsoleWorker::spawn(Box::new(sink.clone()), 64).unwrap();
+            let backend = MockVm::with_scripts(vec![driver()]);
+            let log = backend.log();
+            // The device writes only once its vCPU is gone, after `run` has
+            // stopped waiting for events.
+            let then = Box::new(move || {
+                wait_until(|| log.lock().unwrap().contains(&Call::DropVcpu { id: 0 }));
+                std::io::Write::write_all(&mut writer, b"late").unwrap();
+            });
+            let mut vm = Vm::with_backend(
+                config(1, 16),
+                || Ok(backend),
+                |_, _| Ok(BootRegisters::default()),
+                |chipset, ctx| add(chipset, ctx, ResetOnKick::shared(then)),
+            )
+            .unwrap();
+            vm.console = Mutex::new(Some(worker));
+
+            let (exit, mut vm) = run(vm);
+
+            assert_eq!(exit.unwrap(), VmExit::GuestReset);
+            assert_eq!(*sink.0.lock().unwrap(), b"late");
+            let console = vm.console.get_mut().unwrap();
+            assert_eq!(console.as_ref().unwrap().dropped_bytes(), 0);
+        }
+
+        /// A runtime that never stops, as when a device event never returns.
+        #[derive(Default)]
+        struct StuckRuntime {
+            shutdowns: AtomicUsize,
+        }
+
+        impl WorkerRuntime for StuckRuntime {
+            fn add(
+                &self,
+                _name: &'static str,
+                _device: Arc<Mutex<dyn VirtioDevice>>,
+                _interrupt: Arc<dyn VirtioInterrupt>,
+            ) -> SlotId {
+                SlotId(0)
+            }
+
+            fn prepare(&self, _slot: SlotId) -> Result<WorkerContext, DeviceError> {
+                Err(DeviceError::Fatal("stuck"))
+            }
+
+            fn start(&self, _slot: SlotId) -> Result<(), DeviceError> {
+                Err(DeviceError::Fatal("stuck"))
+            }
+
+            fn kick(&self, _slot: SlotId, _index: u16) {}
+
+            fn stop(&self, _slot: SlotId) -> Result<(), DeviceError> {
+                Err(DeviceError::Fatal("stuck"))
+            }
+
+            fn cancel_prepare(&self, _slot: SlotId) {}
+
+            fn shutdown(&self) -> io::Result<()> {
+                self.shutdowns.fetch_add(1, Ordering::SeqCst);
+                Err(io::Error::from(io::ErrorKind::TimedOut))
+            }
+        }
+
+        /// A clean exit becomes the workers' failure; an error exit keeps
+        /// its error. Either way the RAM stays registered.
+        #[test]
+        fn workers_that_do_not_stop_fail_a_clean_run_and_keep_ram_mapped() {
+            for (step, clean) in [(Step::Shutdown, true), (Step::Fail, false)] {
+                let backend = MockVm::with_scripts(vec![vec![step]]);
+                let log = backend.log();
+                let mut vm = bare(config(1, 16), || Ok(backend)).unwrap();
+                let runtime = Arc::new(StuckRuntime::default());
+                vm.workers = VirtioWorkers::with_runtime(runtime.clone());
+
+                let (exit, vm) = run(vm);
+
+                let error = exit.unwrap_err();
+                if clean {
+                    assert!(
+                        matches!(&error, Error::VirtioWorker(source)
+                            if source.kind() == io::ErrorKind::TimedOut),
+                        "{error:?}"
+                    );
+                } else {
+                    assert!(
+                        matches!(error, Error::Hypervisor(HypervisorError::RunVcpu { .. })),
+                        "{error:?}"
+                    );
+                }
+                drop(vm);
+                assert_eq!(runtime.shutdowns.load(Ordering::SeqCst), 2);
+                let calls = log.lock().unwrap().clone();
+                assert!(calls.iter().any(|call| matches!(call, Call::Map { .. })));
+                assert!(
+                    !calls.iter().any(|call| matches!(call, Call::Unmap { .. })),
+                    "{calls:?}"
+                );
+            }
+        }
+    }
 }
 
 #[test]
@@ -693,12 +959,16 @@ fn lifecycle_errors_describe_themselves() {
         ),
         (Error::VcpuPanicked { vcpu: 2 }, "vCPU 2 panicked"),
         (Error::AlreadyRan, "the VM has already run"),
+        (Error::VirtioWorker(io()), "the virtio workers failed"),
     ];
     for (error, message) in cases {
         assert_eq!(error.to_string(), message);
         let has_io_cause = matches!(
             error,
-            Error::EventLoop(_) | Error::SpawnConsole(_) | Error::SpawnVcpu { .. }
+            Error::EventLoop(_)
+                | Error::SpawnConsole(_)
+                | Error::SpawnVcpu { .. }
+                | Error::VirtioWorker(_)
         );
         assert_eq!(error.source().is_some(), has_io_cause, "{error:?}");
     }
@@ -756,7 +1026,7 @@ fn a_kvm_vm_runs_until_its_guest_resets() {
         config(2, 2),
         boxlite_hypervisor::KvmVm::new,
         |ram, _| Ok(flat_guest::load(ram.memory(), &program)),
-        |chipset| {
+        |chipset, _| {
             chipset.add("i8042", |resources| {
                 resources.pio(0x64, 1);
                 Ok(Reset(resources.event_sender()))

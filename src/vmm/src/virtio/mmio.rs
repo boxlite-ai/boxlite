@@ -17,10 +17,13 @@
 //! queue-configuration write, as Firecracker does. QueueNotify, InterruptACK
 //! and Status stay live, and Status=0 is the only queue-reconfiguration path.
 //!
-//! The transport never calls the worker while holding the device lock. A
-//! device failure updates the shared status and raises the configuration
-//! interrupt, or sends [`Event::DeviceFailed`] to the run thread without
-//! stopping the worker synchronously.
+//! The transport drives the device's slot in the virtio workers through
+//! [`WorkerControl`]: it prepares a generation before activation, starts it
+//! after, kicks it on QueueNotify and stops it before Status=0 resets the
+//! device. It never calls the workers while holding the device lock. A device
+//! failure updates the shared status and raises the configuration interrupt,
+//! or sends [`Event::DeviceFailed`] to the run thread without stopping the
+//! worker slot synchronously.
 
 use std::sync::{Arc, Mutex};
 
@@ -28,12 +31,14 @@ use virtio_queue::{Queue, QueueT};
 use vm_memory::GuestAddress;
 
 use super::{
-    ActivationContext, DeviceError, DeviceSpec, EventRegistrar, MAX_CONFIG_LEN, MAX_QUEUES,
-    VirtioDevice, VirtioInterrupt, Waker, WorkerControl,
+    ActivationContext, DeviceContext, DeviceError, DeviceSpec, MAX_CONFIG_LEN, MAX_QUEUES,
+    NEEDS_RESET, VirtioDevice, VirtioInterrupt, WorkerContext, WorkerControl,
+    interrupt::MmioInterrupt,
     queue::{VIRTIO_F_EVENT_IDX, VIRTIO_F_INDIRECT_DESC, VirtQueues},
 };
 use crate::{
     bus::BusDevice,
+    chipset::ChipsetBuilder,
     error::{Error, Result},
     events::{Event, EventSender},
     memory::GuestMemoryMmap,
@@ -41,6 +46,114 @@ use crate::{
 
 /// The MMIO window length a transport claims.
 pub(crate) const MMIO_WINDOW_LEN: u64 = 0x1000;
+/// Where the virtio-mmio windows start; slot `i` is `i` windows later.
+const WINDOW_START: u64 = 0xd000_0000;
+/// The interrupt lines the slots use, in order: the legacy range above COM1
+/// and below the MSI space, as Firecracker and libkrun allocate it.
+const FIRST_GSI: u32 = 5;
+const LAST_GSI: u32 = 23;
+
+/// One virtio-mmio device's window and interrupt line.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Slot {
+    /// The window base.
+    pub(crate) base: u64,
+    /// The interrupt line.
+    pub(crate) gsi: u32,
+}
+
+impl Slot {
+    /// The `virtio_mmio.device=` argument that makes the kernel probe this
+    /// slot.
+    pub(crate) fn cmdline_arg(&self) -> String {
+        format!("virtio_mmio.device=4K@{:#x}:{}", self.base, self.gsi)
+    }
+}
+
+/// Hands out the slots of one VM in order, so every virtio-mmio device gets
+/// a distinct window and line, and the command line names the same values.
+#[derive(Debug, Default)]
+pub(crate) struct Slots {
+    taken: u32,
+}
+
+impl Slots {
+    /// How many slots a VM has.
+    pub(crate) const CAPACITY: u32 = LAST_GSI - FIRST_GSI + 1;
+
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+
+    /// The next free slot.
+    pub(crate) fn take(&mut self) -> Result<Slot> {
+        if self.taken >= Self::CAPACITY {
+            return Err(Error::VirtioSlotsExhausted);
+        }
+        let index = self.taken;
+        self.taken += 1;
+        Ok(Slot {
+            base: WINDOW_START + u64::from(index) * MMIO_WINDOW_LEN,
+            gsi: FIRST_GSI + index,
+        })
+    }
+}
+
+/// Appends each slot's argument to `cmdline`, which must leave room for them
+/// under `MAX_CMDLINE_BYTES`: the kernel probes a virtio-mmio device only
+/// when the command line names it, and copies at most that many bytes.
+pub(crate) fn announce(cmdline: &mut String, slots: &[Slot]) -> Result<()> {
+    for slot in slots {
+        let argument = slot.cmdline_arg();
+        if cmdline.len() + argument.len() + usize::from(!cmdline.is_empty())
+            >= crate::config::MAX_CMDLINE_BYTES
+        {
+            return Err(Error::InvalidCommandLine(
+                "leaves no room for the virtio device arguments",
+            ));
+        }
+        if !cmdline.is_empty() {
+            cmdline.push(' ');
+        }
+        cmdline.push_str(&argument);
+    }
+    Ok(())
+}
+
+/// Adds `device` behind a virtio-mmio transport in `slot` under the chipset
+/// name `name`, run by the VM's workers.
+#[cfg_attr(
+    not(any(test, all(target_os = "linux", target_arch = "x86_64"))),
+    expect(
+        dead_code,
+        reason = "Only the Linux x86_64 Vm::new attaches a virtio device yet."
+    )
+)]
+pub(crate) fn add_device(
+    chipset: &mut ChipsetBuilder,
+    ctx: &DeviceContext<'_>,
+    name: &'static str,
+    slot: Slot,
+    device: Arc<Mutex<dyn VirtioDevice>>,
+) -> Result<()> {
+    chipset.add(name, |resources| {
+        resources.mmio(slot.base, MMIO_WINDOW_LEN);
+        let interrupt = Arc::new(MmioInterrupt::new(resources.line(slot.gsi)));
+        let worker = ctx.workers.add(
+            Arc::clone(&device),
+            Arc::clone(&interrupt) as Arc<dyn VirtioInterrupt>,
+        );
+        MmioTransport::new(
+            device,
+            interrupt,
+            MmioResources {
+                memory: Arc::clone(ctx.memory),
+                sender: resources.event_sender(),
+                worker,
+            },
+        )
+    })
+}
 
 /// The driver acknowledged the device.
 const ACKNOWLEDGE: u8 = 0x1;
@@ -50,15 +163,13 @@ const DRIVER: u8 = 0x2;
 const DRIVER_OK: u8 = 0x4;
 /// The driver accepted the device features.
 const FEATURES_OK: u8 = 0x8;
-/// The device needs a reset.
-const NEEDS_RESET: u8 = 0x40;
 /// The driver failed the device.
 const FAILED: u8 = 0x80;
 /// The status bits a driver may set.
 const DRIVER_STATUS_BITS: u8 = ACKNOWLEDGE | DRIVER | DRIVER_OK | FEATURES_OK | FAILED;
 
 /// `VIRTIO_F_VERSION_1`: the device uses the modern virtio layout.
-const VIRTIO_F_VERSION_1: u64 = 1 << 32;
+pub(crate) const VIRTIO_F_VERSION_1: u64 = 1 << 32;
 /// `VIRTIO_F_RING_PACKED`: packed virtqueues are not implemented.
 const VIRTIO_F_RING_PACKED: u64 = 1 << 34;
 /// `VIRTIO_F_NOTIFICATION_DATA`: the transport does not decode packed
@@ -90,17 +201,13 @@ const VENDOR_ID: u32 = 0;
 /// A device method result.
 type DeviceResult<T> = std::result::Result<T, DeviceError>;
 
-/// The resources a transport shares with its device and worker.
+/// The resources a transport shares with its device and the workers.
 pub(crate) struct MmioResources {
     /// The guest memory the queues address.
     pub(crate) memory: Arc<GuestMemoryMmap>,
-    /// The worker's backend-source registrar.
-    pub(crate) events: Arc<dyn EventRegistrar>,
-    /// The worker's poller waker.
-    pub(crate) waker: Waker,
     /// The run thread's event sender.
     pub(crate) sender: EventSender,
-    /// Starts and stops the worker.
+    /// The device's slot in the virtio workers.
     pub(crate) worker: Arc<dyn WorkerControl>,
 }
 
@@ -124,8 +231,6 @@ pub(crate) struct MmioTransport {
     device: Arc<Mutex<dyn VirtioDevice>>,
     interrupt: Arc<super::interrupt::MmioInterrupt>,
     memory: Arc<GuestMemoryMmap>,
-    events: Arc<dyn EventRegistrar>,
-    waker: Waker,
     sender: EventSender,
     worker: Arc<dyn WorkerControl>,
     spec: DeviceSpec,
@@ -180,8 +285,6 @@ impl MmioTransport {
             device,
             interrupt,
             memory: resources.memory,
-            events: resources.events,
-            waker: resources.waker,
             sender: resources.sender,
             worker: resources.worker,
             spec,
@@ -343,15 +446,15 @@ impl MmioTransport {
         }
     }
 
-    /// Wakes the worker for a queue notification.
+    /// Kicks the device's worker slot for a queue notification.
     fn notify(&mut self, value: u32) {
         if !self.active || self.status() & (FAILED | NEEDS_RESET) != 0 {
             tracing::debug!(value, "ignoring a queue notification before activation");
             return;
         }
-        let index = (value & 0xffff) as usize;
-        if index < self.queues.len() {
-            (self.waker)();
+        let index = (value & 0xffff) as u16;
+        if usize::from(index) < self.queues.len() {
+            self.worker.kick(index);
         } else {
             tracing::debug!(index, "ignoring an invalid queue notification");
         }
@@ -382,7 +485,7 @@ impl MmioTransport {
         let new = current | bits;
 
         if bits & FAILED != 0 {
-            self.interrupt.set_device_status(new);
+            self.interrupt.update_device_status(bits, 0);
             if self.active {
                 match self.worker.stop() {
                     Ok(()) => self.active = false,
@@ -409,12 +512,23 @@ impl MmioTransport {
                 self.need_reset("driver status");
                 return;
             }
-            match self.activate() {
+            let worker = match self.worker.prepare() {
+                Ok(worker) => worker,
+                Err(error) => {
+                    self.interrupt
+                        .set_device_status((new & !DRIVER_OK) | NEEDS_RESET);
+                    self.interrupt.raise_config();
+                    self.report_worker_failure(error);
+                    return;
+                }
+            };
+            match self.activate(worker) {
                 Ok(()) => {
                     self.interrupt.set_device_status(new);
                     match self.worker.start() {
                         Ok(()) => self.active = true,
                         Err(error) => {
+                            self.worker.cancel_prepare();
                             self.interrupt
                                 .set_device_status(self.status() | NEEDS_RESET);
                             self.interrupt.raise_config();
@@ -423,6 +537,7 @@ impl MmioTransport {
                     }
                 }
                 Err(error) => {
+                    self.worker.cancel_prepare();
                     let rollback = self
                         .device
                         .lock()
@@ -443,7 +558,10 @@ impl MmioTransport {
             return;
         }
 
-        self.interrupt.set_device_status(new);
+        // A worker may set NEEDS_RESET while the driver writes, so OR the
+        // driver's bits and leave the register alone when it did.
+        self.interrupt
+            .update_device_status(bits, FAILED | NEEDS_RESET);
     }
 
     /// Applies the accepted features to the device exactly once.
@@ -478,8 +596,9 @@ impl MmioTransport {
         }
     }
 
-    /// Builds the dense queue vector and activates the device.
-    fn activate(&mut self) -> DeviceResult<()> {
+    /// Builds the dense queue vector and activates the device with the
+    /// prepared `worker` generation.
+    fn activate(&mut self, worker: WorkerContext) -> DeviceResult<()> {
         let mut queues = Vec::with_capacity(self.queues.len());
         for (slot, &max_size) in self.spec.queue_max.iter().enumerate() {
             let config = self.queues[slot];
@@ -520,8 +639,8 @@ impl MmioTransport {
             memory: Arc::clone(&self.memory),
             queues,
             interrupt,
-            events: Arc::clone(&self.events),
-            waker: Arc::clone(&self.waker),
+            events: worker.events,
+            waker: worker.waker,
             sender: self.sender.clone(),
         };
         self.device
@@ -561,8 +680,7 @@ impl MmioTransport {
 
     /// Sets DEVICE_NEEDS_RESET and raises the configuration interrupt.
     fn need_reset(&self, reason: &'static str) {
-        let status = self.status() | NEEDS_RESET;
-        self.interrupt.set_device_status(status);
+        self.interrupt.set_needs_reset();
         self.interrupt.raise_config();
         tracing::warn!(
             device = self.spec.name,

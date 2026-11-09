@@ -45,7 +45,9 @@ from ._agents import SyncAgent, SyncAgents, SyncAgentTurn
 from ._box import SyncBox
 from ._boxlite import SyncBoxlite
 from ._codebox import SyncCodeBox
+from ._domains import SyncDomainHandle
 from ._execution import SyncExecStderr, SyncExecStdout, SyncExecution
+from ._executions import SyncExecutions
 from ._images import SyncImageHandle
 from ._network import SyncNetworkHandle, SyncTunnelForwarder
 from ._registries import SyncRegistryHandle
@@ -65,6 +67,7 @@ __all__ = [  # noqa: RUF022 - grouped by API area, not alphabetical
     "SyncContextManager",
     # Native API mirrors
     "SyncBox",
+    "SyncDomainHandle",
     "SyncImageHandle",
     "SyncNetworkHandle",
     "SyncSshHandle",
@@ -73,6 +76,7 @@ __all__ = [  # noqa: RUF022 - grouped by API area, not alphabetical
     "SyncExecution",
     "SyncExecStdout",
     "SyncExecStderr",
+    "SyncExecutions",
     # Convenience wrappers
     "SyncSimpleBox",
     "SyncCodeBox",

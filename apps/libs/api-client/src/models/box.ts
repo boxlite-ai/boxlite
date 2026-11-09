@@ -83,6 +83,10 @@ export interface Box {
      */
     'disk': number;
     /**
+     * Persisted guest privilege mode; absent when an older server does not report it
+     */
+    'privileged'?: boolean;
+    /**
      * The state of the box
      */
     'state'?: BoxState;

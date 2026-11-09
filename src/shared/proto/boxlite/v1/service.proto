@@ -22,6 +22,11 @@ service Container {
   // code die with the VM. The host sequences the two: for an ordinary boot it
   // calls Start right after Init; for a foreground `run` it attaches in between.
   rpc Start(ContainerStartRequest) returns (ContainerStartResponse);
+
+  // Bind a folder of the container's share into the running container,
+  // read-only, without restarting it. The mount joins the container's own
+  // mount namespace, so every process in it sees the folder.
+  rpc Mount(ContainerMountRequest) returns (ContainerMountResponse);
 }
 
 // Guest agent management
@@ -47,25 +52,20 @@ service Guest {
   rpc Thaw(ThawRequest) returns (ThawResponse);
 }
 
-// In-memory SSH control; requires successful Guest.Init.
+// Persistent SSH desired state and live listener control.
 service Ssh {
-  // After Guest.Init, validate configuration and fully restart SSH, even when
-  // unchanged. Disconnect existing clients and wait for SSH execution and
-  // forwarding cleanup before binding. Invalid configuration preserves the
-  // current service; a bind failure leaves SSH disabled.
-  rpc Configure(SshConfigureRequest) returns (SshConfigureResponse);
-  // Return current listener state and public host identity, without secrets.
-  rpc Status(SshStatusRequest) returns (SshStatusResponse);
-  // Idempotently stop SSH, disconnect clients, and wait for SSH task cleanup.
-  // Configure and Disable return DeadlineExceeded if draining exceeds ten
-  // seconds; pending cleanup remains tracked for the next Configure or Disable.
-  rpc Disable(SshDisableRequest) returns (SshDisableResponse);
+  // Apply supplied fields; absent fields retain their current desired values.
+  // With neither field supplied, query live status without initialization or writes.
+  rpc Control(SshControlRequest) returns (SshControlResponse);
 }
 
 // Command execution
 service Execution {
   // Start execution immediately.
   rpc Exec(ExecRequest) returns (ExecResponse);
+
+  // Snapshot of live registered sessions, including the container init.
+  rpc ListExecutions(ListExecutionsRequest) returns (ListExecutionsResponse);
 
   // Attach to stdout/stderr (output only).
   rpc Attach(AttachRequest) returns (stream ExecOutput);
@@ -82,6 +82,21 @@ service Execution {
   // Resize TTY window (PTY executions only)
   rpc ResizeTty(ResizeTtyRequest) returns (ResizeTtyResponse);
 }
+
+// Metadata captured at spawn, not reconstructed from a process listing.
+message ExecutionInfo {
+  reserved 3;
+  reserved "pid";
+
+  string execution_id = 1;
+  repeated string argv = 2;
+  uint64 started_at = 4; // Unix epoch milliseconds
+  bool tty = 5;
+  bool is_main_session = 6;
+}
+
+message ListExecutionsRequest {}
+message ListExecutionsResponse { repeated ExecutionInfo executions = 1; }
 
 // File transfer between host and container rootfs
 service Files {
@@ -223,24 +238,23 @@ message ThawResponse {
 // SSH runtime configuration
 // ============================================================================
 
-message SshConfigureRequest {
+message SshControlRequest {
   // Do not reinterpret legacy string fields as a nested configuration.
   reserved 1, 2, 3;
   reserved "listen_address", "ca_public_key", "principal";
 
+  // Complete replacement when supplied; absent retains the saved configuration.
   SshConfig config = 4;
+  // Absent retains the saved switch; false stops SSH without clearing credentials.
+  optional bool enable = 5;
 }
-message SshConfigureResponse { SshStatus status = 1; }
-message SshStatusRequest {}
-message SshStatusResponse { SshStatus status = 1; }
-message SshDisableRequest {}
-message SshDisableResponse { SshStatus status = 1; }
+message SshControlResponse { SshStatus status = 1; }
 message SshStatus {
   // Whether the SSH listener is running.
   bool enabled = 1;
   // Actual bound address, including the selected port; empty when disabled.
   string listen_address = 2;
-  // Successful listener starts in this VM; initially zero, retained on Disable.
+  // Successful listener starts in this VM; initially zero, retained when disabled.
   uint64 generation = 3;
   // SHA-256 fingerprint of the host public key; empty when disabled.
   string host_key_fingerprint = 4;
@@ -307,6 +321,25 @@ message ContainerInitRequest {
 message ContainerStartRequest {
   string container_id = 1;
 }
+
+// A share folder to mount in a running container. Source and destination
+// follow the OCI runtime spec Mount fields. Errors are gRPC statuses:
+// INVALID_ARGUMENT (a bad source or destination, or a writable mount),
+// NOT_FOUND (no such container), FAILED_PRECONDITION (a container that is not
+// running, or a destination with entries), INTERNAL (any other failure).
+message ContainerMountRequest {
+  string container_id = 1;
+  // Folder name in this container's share, one path component, never a path:
+  // /run/boxlite/shared/containers/{container_id}/volumes/{source}
+  string source = 2;
+  // Absolute path inside the container. Missing directories are created; one
+  // that has entries is refused, so no image content is hidden.
+  string destination = 3;
+  // Must be true: writable mounts are refused.
+  bool read_only = 4;
+}
+
+message ContainerMountResponse {}
 
 message ContainerStartResponse {
   oneof result {

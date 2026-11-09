@@ -154,7 +154,8 @@ class ContainerCapabilities(BaseModel):
 class CreateBoxAdvancedOptions(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    capabilities: ContainerCapabilities = Field(default_factory=ContainerCapabilities)
+    capabilities: Optional[ContainerCapabilities] = None
+    privileged: bool = False
 
 
 class CreateBoxRequest(BaseModel):
@@ -352,6 +353,8 @@ def box_info_to_dict(info) -> dict:
     # the field's presence is what says the main command has exited.
     if info.state.exit_code is not None:
         box["exit_code"] = info.state.exit_code
+    if info.privileged is not None:
+        box["privileged"] = info.privileged
     return box
 
 
@@ -382,14 +385,15 @@ def build_box_options(req: CreateBoxRequest) -> boxlite.BoxOptions:
         kwargs["cmd"] = req.cmd
     if req.user is not None:
         kwargs["user"] = req.user
-    if req.advanced is not None and (
-        req.advanced.capabilities.add or req.advanced.capabilities.drop
-    ):
+    if req.advanced is not None:
         kwargs["advanced"] = boxlite.AdvancedBoxOptions(
+            privileged=req.advanced.privileged,
             capabilities=boxlite.ContainerCapabilities(
                 add=req.advanced.capabilities.add,
                 drop=req.advanced.capabilities.drop,
             )
+            if req.advanced.capabilities is not None
+            else None,
         )
     if req.secrets:
         kwargs["secrets"] = [
@@ -495,15 +499,70 @@ async def get_box_or_404(box_id: str):
     return box_handle
 
 
-def get_active_execution_or_404(exec_id: str) -> ActiveExecution:
+def execution_not_found(exec_id: str) -> HTTPException:
+    return HTTPException(
+        status_code=404,
+        detail=error_envelope(
+            f"execution not found: {exec_id}", "NotFoundError", "not_found"
+        ),
+    )
+
+
+async def watch_execution(active: ActiveExecution) -> None:
+    """Record a session's terminal status without blocking the request path."""
+    try:
+        result = await active.the_execution.wait()
+        active.exit_code = result.exit_code
+        active.error_message = result.error_message
+        active.status = "completed" if result.exit_code is not None else "killed"
+    except Exception as err:
+        active.status = "killed"
+        active.error_message = str(err)
+
+
+async def get_active_execution_or_recover(
+    box_id: str, exec_id: str
+) -> ActiveExecution:
+    """Resolve an execution from the local registry or the guest.
+
+    The local map only holds handles this server started or recovered. The
+    guest registry is authoritative, so a miss there falls through to it: the
+    main command and sessions started before a server restart are live but have
+    no local handle.
+    """
     active = state.active_executions.get(exec_id)
-    if active is None:
-        raise HTTPException(
-            status_code=404,
-            detail=error_envelope(
-                f"execution not found: {exec_id}", "NotFoundError", "not_found"
-            ),
-        )
+    if active is not None and active.box_id == box_id:
+        return active
+
+    box_handle = await get_box_or_404(box_id)
+    canonical = box_handle.id
+    if active is not None and active.box_id == canonical:
+        return active
+    if active is not None:
+        # The id belongs to another box; do not leak it through this route.
+        raise execution_not_found(exec_id)
+
+    sessions = await box_handle.executions().list()
+    info = next((s for s in sessions if s.execution_id == exec_id), None)
+    if info is None:
+        raise execution_not_found(exec_id)
+
+    # Control-only: status/signal/resize do not claim the output reader.
+    execution = await box_handle.executions().get(exec_id)
+    active = ActiveExecution(
+        the_execution=execution,
+        box_id=canonical,
+        stdout=None,
+        stderr=None,
+        stdin=None,
+        started_at=datetime.fromtimestamp(
+            info.started_at / 1000, tz=timezone.utc
+        ),
+    )
+    existing = state.active_executions.setdefault(exec_id, active)
+    if existing is not active:
+        return existing
+    asyncio.create_task(watch_execution(active))
     return active
 
 
@@ -569,6 +628,7 @@ async def get_config():
         "overrides": {},
         "capabilities": {
             "linux_capabilities_enabled": True,
+            "privileged_enabled": True,
             "max_cpus": 16,
             "max_memory_mib": 16384,
             "max_disk_size_gb": 100,
@@ -902,27 +962,14 @@ async def start_execution(
     # Take streams immediately (can only be called once)
     active = ActiveExecution(
         the_execution=execution,
-        box_id=box_id,
+        # Canonical id, so a later request by name and by id agree on ownership.
+        box_id=box_handle.id,
         stdout=execution.stdout(),
         stderr=execution.stderr(),
         stdin=execution.stdin(),
     )
     state.active_executions[exec_id] = active
-
-    # Background task: wait for completion and update status
-    async def wait_for_completion():
-        try:
-            result = await execution.wait()
-            active.exit_code = result.exit_code
-            active.error_message = result.error_message
-            active.status = (
-                "completed" if result.exit_code is not None else "killed"
-            )
-        except Exception as e:
-            active.status = "killed"
-            active.error_message = str(e)
-
-    asyncio.create_task(wait_for_completion())
+    asyncio.create_task(watch_execution(active))
 
     return JSONResponse(
         status_code=201,
@@ -933,6 +980,28 @@ async def start_execution(
     )
 
 
+@app.get("/v1/{prefix}/boxes/{box_id}/executions")
+async def list_executions(
+    prefix: str,
+    box_id: str,
+    _auth: dict = Depends(require_auth),
+):
+    box_handle = await get_box_or_404(box_id)
+    executions = await box_handle.executions().list()
+    return {
+        "executions": [
+            {
+                "execution_id": info.execution_id,
+                "argv": info.argv,
+                "started_at": info.started_at,
+                "tty": info.tty,
+                "is_main_session": info.is_main_session,
+            }
+            for info in executions
+        ]
+    }
+
+
 @app.get("/v1/{prefix}/boxes/{box_id}/executions/{exec_id}")
 async def get_execution(
     prefix: str,
@@ -940,7 +1009,7 @@ async def get_execution(
     exec_id: str,
     _auth: dict = Depends(require_auth),
 ):
-    active = get_active_execution_or_404(exec_id)
+    active = await get_active_execution_or_recover(box_id, exec_id)
     elapsed = (datetime.now(timezone.utc) - active.started_at).total_seconds()
     return {
         "execution_id": exec_id,
@@ -963,7 +1032,7 @@ async def signal_execution(
     req: SignalRequest,
     _auth: dict = Depends(require_auth),
 ):
-    active = get_active_execution_or_404(exec_id)
+    active = await get_active_execution_or_recover(box_id, exec_id)
     if active.status != "running":
         return error_response(
             409, "execution is not running", "InvalidStateError", "invalid_state"
@@ -986,7 +1055,7 @@ async def resize_execution_tty(
     req: ResizeRequest,
     _auth: dict = Depends(require_auth),
 ):
-    active = get_active_execution_or_404(exec_id)
+    active = await get_active_execution_or_recover(box_id, exec_id)
     if active.status != "running":
         return error_response(
             409, "execution is not running", "InvalidStateError", "invalid_state"

@@ -7,6 +7,10 @@
 import type { AuditLogsQueryParams } from './useAuditLogsQuery'
 
 export const queryKeys = {
+  domains: {
+    all: ['domains'] as const,
+    list: (organizationId: string) => [...queryKeys.domains.all, organizationId, 'list'] as const,
+  },
   config: {
     all: ['config'] as const,
   },
@@ -38,7 +42,6 @@ export const queryKeys = {
 
     plan: (organizationId: string) => [...queryKeys.organization.all, organizationId, 'plan'] as const,
     wallet: (organizationId: string) => [...queryKeys.organization.all, organizationId, 'wallet'] as const,
-    signupCredit: (organizationId: string) => [...queryKeys.organization.all, organizationId, 'signup-credit'] as const,
   },
   user: {
     all: ['users'] as const,
