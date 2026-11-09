@@ -91,7 +91,6 @@ pub(crate) struct ServerConfig {
 pub(crate) struct ServerCapabilities {
     pub privileged_enabled: Option<bool>,
     pub linux_capabilities_enabled: Option<bool>,
-    pub cpu_limit_enabled: Option<bool>,
     pub snapshots_enabled: Option<bool>,
     pub clone_enabled: Option<bool>,
     pub export_enabled: Option<bool>,

@@ -58,8 +58,6 @@ func TestCPULimitCreateAndInformation(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Type", "application/json")
 				switch {
-				case r.URL.Path == "/v1/config":
-					fmt.Fprint(w, `{"capabilities":{"cpu_limit_enabled":true}}`)
 				case r.Method == "POST" && r.URL.Path == "/v1/boxes":
 					var body map[string]any
 					if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -78,6 +76,7 @@ func TestCPULimitCreateAndInformation(t *testing.T) {
 				case r.Method == "GET" && (r.URL.Path == "/v1/boxes/named" || r.URL.Path == "/v1/boxes/limited"):
 					fmt.Fprint(w, response)
 				default:
+					t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
 					http.NotFound(w, r)
 				}
 			}))

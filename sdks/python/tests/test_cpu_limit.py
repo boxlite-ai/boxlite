@@ -42,17 +42,8 @@ async def test_cpu_limit_requests_and_info(kwargs):
                     self.headers.get("Content-Type"),
                 )
             )
-            value = (
-                {
-                    "capabilities": {
-                        "cpu_limit_enabled": True,
-                    }
-                }
-                if self.path == "/v1/config"
-                else reply
-            )
-            payload = json.dumps(value).encode()
-            self.send_response(200)
+            payload = json.dumps(reply).encode()
+            self.send_response(404 if self.path == "/v1/config" else 200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(payload)))
             self.end_headers()
@@ -75,8 +66,6 @@ async def test_cpu_limit_requests_and_info(kwargs):
         assert info.cpu_limit == kwargs.get("cpu_limit")
         assert info.cpus == 2
         expected = [("POST", "/v1/boxes"), ("GET", "/v1/boxes/cpu-limited")]
-        if kwargs.get("cpu_limit") is not None:
-            expected.insert(0, ("GET", "/v1/config"))
         assert [(method, path) for method, path, _, _ in requests] == expected
         _, _, body, content_type = next(r for r in requests if r[0] == "POST")
         assert content_type == "application/json"
@@ -101,3 +90,48 @@ def test_cpu_limit_simple_wrappers_preserve_positional_arguments():
     for options in [async_box._box_options, sync_box._box_opts]:
         assert options.cpus == 2 and options.memory_mib == 512
         assert options.cpu_limit == 0.125
+
+
+@pytest.mark.asyncio
+async def test_cpu_limit_unsupported_error_names_rejected_field():
+    import boxlite
+
+    requests = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def answer(self):
+            body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
+            requests.append(
+                (self.command, self.path, json.loads(body) if body else None)
+            )
+            status, value = 400, {"message": "property cpu_limit should not exist"}
+            payload = json.dumps(value).encode()
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+        do_GET = do_POST = answer
+
+        def log_message(self, *_):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        runtime = boxlite.Boxlite.rest(
+            boxlite.BoxliteRestOptions(url=f"http://127.0.0.1:{server.server_port}")
+        )
+        with pytest.raises(
+            boxlite.UnsupportedError, match="cpu_limit.*should not exist"
+        ):
+            await runtime.create(boxlite.BoxOptions("alpine", cpu_limit=0.125))
+        assert len(requests) == 1
+        assert requests[0][:2] == ("POST", "/v1/boxes")
+        assert requests[0][2]["cpu_limit"] == 0.125
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)

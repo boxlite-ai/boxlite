@@ -193,7 +193,7 @@ Accepts `0.01` through resolved `cpus`, in `0.001` increments; the default `None
 
 Requires Linux, enabled jailer, and cgroup v2 CPU enforcement; explicit macOS local limits return `Unsupported`.
 The value persists across supported lifecycle operations and cannot be changed after creation.
-See [CPU time limits](../guides/resource-limits.md#creation-only-cpu-time-limit-linux) for SDK mappings, REST capability checks, and rootless requirements.
+See [CPU time limits](../guides/resource-limits.md#creation-only-cpu-time-limit-linux) for SDK mappings, REST field rejection, and rootless requirements.
 
 ### `memory_mib: int`
 
