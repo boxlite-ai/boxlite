@@ -22,6 +22,7 @@ import { LogoutController } from './logout.controller'
 import { AccountLinkController } from './account-link.controller'
 import { AccountLinkService } from './account-link.service'
 import { McpDelegation } from './mcp-delegation'
+import { AuditModule } from '../audit/audit.module'
 @Module({
   imports: [
     PassportModule.register({
@@ -34,6 +35,7 @@ import { McpDelegation } from './mcp-delegation'
     ApiKeyModule,
     BoxModule,
     RegionModule,
+    AuditModule,
   ],
   controllers: [LogoutController, AccountLinkController],
   providers: [

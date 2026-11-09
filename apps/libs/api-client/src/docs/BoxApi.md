@@ -11,7 +11,6 @@ All URIs are relative to *http://localhost:3000*
 |[**getBoxTraceSpans**](#getboxtracespans) | **GET** /box/{boxId}/telemetry/traces/{traceId} | Get trace spans|
 |[**getBoxTraces**](#getboxtraces) | **GET** /box/{boxId}/telemetry/traces | Get box traces|
 |[**getBoxesForRunner**](#getboxesforrunner) | **GET** /box/for-runner | Get boxes for the authenticated runner|
-|[**getToolboxProxyUrl**](#gettoolboxproxyurl) | **GET** /box/{boxId}/toolbox-proxy-url | Get toolbox proxy URL for a box|
 |[**listBoxes**](#listboxes) | **GET** /box | List all boxes|
 |[**listBoxesPaginated**](#listboxespaginated) | **GET** /box/paginated | List all boxes paginated|
 |[**recoverBox**](#recoverbox) | **POST** /box/{boxIdOrName}/recover | Recover box from error state|
@@ -445,59 +444,6 @@ const { status, data } = await apiInstance.getBoxesForRunner(
 | Status code | Description | Response headers |
 |-------------|-------------|------------------|
 |**200** | List of boxes for the authenticated runner |  -  |
-
-[[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
-
-# **getToolboxProxyUrl**
-> ToolboxProxyUrl getToolboxProxyUrl()
-
-
-### Example
-
-```typescript
-import {
-    BoxApi,
-    Configuration
-} from './api';
-
-const configuration = new Configuration();
-const apiInstance = new BoxApi(configuration);
-
-let boxId: string; //ID of the box
-let xBoxLiteOrganizationID: string; //Use with JWT to specify the organization ID (optional) (default to undefined)
-
-const { status, data } = await apiInstance.getToolboxProxyUrl(
-    boxId,
-    xBoxLiteOrganizationID
-);
-```
-
-### Parameters
-
-|Name | Type | Description  | Notes|
-|------------- | ------------- | ------------- | -------------|
-| **boxId** | [**string**] | ID of the box | |
-| **xBoxLiteOrganizationID** | [**string**] | Use with JWT to specify the organization ID | (optional) defaults to undefined|
-
-
-### Return type
-
-**ToolboxProxyUrl**
-
-### Authorization
-
-[bearer](../README.md#bearer), [oauth2](../README.md#oauth2)
-
-### HTTP request headers
-
- - **Content-Type**: Not defined
- - **Accept**: application/json
-
-
-### HTTP response details
-| Status code | Description | Response headers |
-|-------------|-------------|------------------|
-|**200** | Toolbox proxy URL for the specified box |  -  |
 
 [[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
 

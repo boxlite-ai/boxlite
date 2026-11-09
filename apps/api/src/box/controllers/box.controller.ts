@@ -1,3 +1,4 @@
+import { Request } from 'express'
 /*
  * Copyright 2025 Daytona Platforms Inc.
  * Modified by BoxLite AI, 2025-2026
@@ -6,6 +7,7 @@
 
 import {
   Controller,
+  Req,
   Get,
   Post,
   Body,
@@ -48,7 +50,7 @@ import { OrganizationResourcePermission } from '../../organization/enums/organiz
 import { OrganizationResourceActionGuard } from '../../organization/guards/organization-resource-action.guard'
 import { BadRequestError } from '../../exceptions/bad-request.exception'
 import { BoxStateUpdatedEvent } from '../events/box-state-updated.event'
-import { Audit, TypedRequest } from '../../audit/decorators/audit.decorator'
+import { Audit, AUDIT_TARGET_ID, TypedRequest } from '../../audit/decorators/audit.decorator'
 import { AuditAction } from '../../audit/enums/audit-action.enum'
 import { AuditTarget } from '../../audit/enums/audit-target.enum'
 // import { UpdateBoxNetworkSettingsDto } from '../dto/update-box-network-settings.dto'
@@ -58,7 +60,6 @@ import { OrGuard } from '../../auth/or.guard'
 import { AuthenticatedRateLimitGuard } from '../../common/guards/authenticated-rate-limit.guard'
 import { SkipThrottle } from '@nestjs/throttler'
 import { ThrottlerScope } from '../../common/decorators/throttler-scope.decorator'
-import { ToolboxProxyUrlDto } from '../dto/toolbox-proxy-url.dto'
 import { AttachTicketDto, CreateAttachTicketDto } from '../dto/attach-ticket.dto'
 import { ATTACH_TICKET_TTL_SECONDS, AttachTicketService } from '../services/attach-ticket.service'
 import { InjectRedis } from '@nestjs-modules/ioredis'
@@ -540,29 +541,8 @@ export class BoxController {
   //     networkSettings.outboundAllowNet,
   //     authContext.organizationId,
   //   )
-  //   return BoxDto.fromBox(box, '')
+  //   return BoxDto.fromBox(box)
   // }
-
-  @Get(':boxId/toolbox-proxy-url')
-  @ApiOperation({
-    summary: 'Get toolbox proxy URL for a box',
-    operationId: 'getToolboxProxyUrl',
-  })
-  @ApiParam({
-    name: 'boxId',
-    description: 'ID of the box',
-    type: 'string',
-  })
-  @ApiResponse({
-    status: 200,
-    description: 'Toolbox proxy URL for the specified box',
-    type: ToolboxProxyUrlDto,
-  })
-  @UseGuards(BoxAccessGuard)
-  async getToolboxProxyUrl(@Param('boxId') boxId: string): Promise<ToolboxProxyUrlDto> {
-    const url = await this.boxService.getToolboxProxyUrl(boxId)
-    return new ToolboxProxyUrlDto(url)
-  }
 
   // A browser cannot set `Authorization` on a WebSocket, so the dashboard trades
   // its bearer here for a ticket the `/v1` attach upgrade accepts as `?ticket=`
@@ -586,12 +566,20 @@ export class BoxController {
   })
   @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
   @UseGuards(BoxAccessGuard)
+  @Audit({
+    action: AuditAction.ISSUE_ATTACH_TICKET,
+    targetType: AuditTarget.BOX,
+    targetIdFromRequest: (req) => req.params.boxIdOrName,
+    requestMetadata: { executionId: (req) => req.body?.executionId },
+  })
   async createAttachTicket(
     @AuthContext() authContext: OrganizationAuthContext,
     @Param('boxIdOrName') boxIdOrName: string,
     @Body() dto: CreateAttachTicketDto,
+    @Req() request?: Request,
   ): Promise<AttachTicketDto> {
     const box = await this.boxService.findOneByIdOrName(boxIdOrName, authContext.organizationId)
+    if (request) request[AUDIT_TARGET_ID] = box.id
     const ticket = await this.attachTickets.issue({
       userId: authContext.userId,
       organizationId: authContext.organizationId,

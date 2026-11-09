@@ -56,10 +56,6 @@ export interface BoxliteConfiguration {
      */
     'proxyTemplateUrl': string;
     /**
-     * Toolbox template URL
-     */
-    'proxyToolboxUrl': string;
-    /**
      * Dashboard URL
      */
     'dashboardUrl': string;

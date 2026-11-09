@@ -145,7 +145,7 @@ organization boundaries.
 </details>
 
 <details>
-<summary><b>Users and authentication</b> · 12 routes</summary>
+<summary><b>Users and authentication</b> · 11 routes</summary>
 
 | Method   | Path                                                     | What it does                                   |
 | -------- | -------------------------------------------------------- | ---------------------------------------------- |
@@ -157,7 +157,6 @@ organization boundaries.
 | `GET`    | `/users/account-providers`                           | Lists account providers available for linking. |
 | `POST`   | `/users/linked-accounts`                             | Links an external account to the user.         |
 | `DELETE` | `/users/linked-accounts/{provider}/{providerUserId}` | Unlinks an external account.                   |
-| `POST`   | `/users/mfa/sms/enroll`                              | Enrolls the user in SMS MFA.                   |
 | `GET`    | `/auth/end-session`                                  | Starts OIDC RP-initiated logout.               |
 | `POST`   | `/auth/link/adopt`                                   | Moves a linked account's data for the Action.  |
 | `GET`    | `/auth/link/status`                                  | Tells the Action whether BoxLite knows a user. |
@@ -216,7 +215,7 @@ organization boundaries.
 </details>
 
 <details>
-<summary><b>Boxes and preview access</b> · 19 routes</summary>
+<summary><b>Boxes and preview access</b> · 18 routes</summary>
 
 | Method | Path                                                                    | What it does                                          |
 | ------ | ----------------------------------------------------------------------- | ----------------------------------------------------- |
@@ -230,7 +229,6 @@ organization boundaries.
 | `POST` | `/box/{boxId}/last-activity`                                        | Records the box's latest activity time.               |
 | `POST` | `/box/{boxIdOrName}/autostop/{interval}`                            | Sets the box auto-stop interval.                      |
 | `POST` | `/box/{boxIdOrName}/autodelete/{interval}`                          | Sets the box auto-delete interval.                    |
-| `GET`  | `/box/{boxId}/toolbox-proxy-url`                                    | Returns the box toolbox proxy URL.                    |
 | `POST` | `/box/{boxIdOrName}/attach-tickets`                                 | Issues a 30-second, single-use ticket for one `/v1` attach upgrade. |
 | `GET`  | `/preview/{boxId}/inbound`                                          | Reports a box's inbound mode (`enabled` or `disabled`) to the proxy. |
 | `GET`  | `/preview/{boxId}/tunnels/{port}`                                   | Checks an active public tunnel for the proxy.          |

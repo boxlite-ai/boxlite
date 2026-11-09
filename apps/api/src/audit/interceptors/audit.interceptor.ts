@@ -18,16 +18,15 @@ import {
 import { Reflector } from '@nestjs/core'
 import { Request, Response } from 'express'
 import { Observable, Subscriber, firstValueFrom } from 'rxjs'
-import { AUDIT_CONTEXT_KEY, AuditContext, AuditTargetId } from '../decorators/audit.decorator'
+import { AUDIT_CONTEXT_KEY, AUDIT_TARGET_ID, AuditContext, AuditTargetId } from '../decorators/audit.decorator'
 import { AuditLog, AuditLogMetadata } from '../entities/audit-log.entity'
-import { AuditAction } from '../enums/audit-action.enum'
 import { AuditService } from '../services/audit.service'
 import { AuthContextType, isAuthContext } from '../../common/interfaces/auth-context.interface'
 import { CustomHeaders } from '../../common/constants/header.constants'
-import { TypedConfigService } from '../../config/typed-config.service'
 
 type RequestWithUser = Request & {
   user?: AuthContextType
+  [AUDIT_TARGET_ID]?: string
 }
 
 @Injectable()
@@ -37,7 +36,6 @@ export class AuditInterceptor implements NestInterceptor {
   constructor(
     private readonly reflector: Reflector,
     private readonly auditService: AuditService,
-    private readonly configService: TypedConfigService,
   ) {}
 
   intercept(context: ExecutionContext, next: CallHandler): Observable<any> {
@@ -47,12 +45,7 @@ export class AuditInterceptor implements NestInterceptor {
     const auditContext = this.reflector.get<AuditContext>(AUDIT_CONTEXT_KEY, context.getHandler())
 
     // Non-audited request
-    if (!auditContext) {
-      return next.handle()
-    }
-
-    // Toolbox requests are not audited by default
-    if (this.isToolboxAction(auditContext.action) && !this.configService.get('audit.toolboxRequestsEnabled')) {
+    if (!auditContext || (auditContext.methods && !auditContext.methods.includes(request.method))) {
       return next.handle()
     }
 
@@ -90,13 +83,24 @@ export class AuditInterceptor implements NestInterceptor {
         metadata: this.resolveRequestMetadata(auditContext, request),
       })
 
+      const completeResponse =
+        auditContext.completion === 'response'
+          ? this.observeResponse(auditContext, auditLog, request, response)
+          : undefined
       try {
+        // A client can disconnect while the initial audit insert is pending.
+        if (completeResponse && response.destroyed) {
+          completeResponse(0, 'Response closed before completion.')
+          observer.next(undefined)
+          observer.complete()
+          return
+        }
         const result = await firstValueFrom(next.handle())
 
         const organizationId = this.resolveOrganizationId(request, result)
         const targetId = this.resolveTargetId(auditContext, request, result)
         const statusCode = response.statusCode || HttpStatus.NO_CONTENT
-        await this.recordHandlerSuccess(auditLog, organizationId, targetId, statusCode)
+        if (!completeResponse) await this.recordHandlerSuccess(auditLog, organizationId, targetId, statusCode)
 
         observer.next(result)
         observer.complete()
@@ -104,7 +108,11 @@ export class AuditInterceptor implements NestInterceptor {
         const errorMessage =
           handlerError instanceof HttpException ? handlerError.message : 'An unexpected error occurred.'
         const statusCode = this.resolveErrorStatusCode(handlerError)
-        await this.recordHandlerError(auditLog, errorMessage, statusCode)
+        if (completeResponse) {
+          completeResponse(statusCode, 'Request failed.')
+        } else {
+          await this.recordHandlerError(auditLog, errorMessage, statusCode, request[AUDIT_TARGET_ID])
+        }
 
         observer.error(handlerError)
       }
@@ -112,6 +120,37 @@ export class AuditInterceptor implements NestInterceptor {
       this.logger.error('Failed to create audit log:', createLogError)
       observer.error(new InternalServerErrorException())
     }
+  }
+
+  private observeResponse(context: AuditContext, log: AuditLog, request: RequestWithUser, response: Response) {
+    let completed = false
+    const finish = () => complete(response.statusCode)
+    const close = () =>
+      complete(
+        response.writableFinished ? response.statusCode : 0,
+        response.writableFinished ? undefined : 'Response closed before completion.',
+      )
+    const error = () => complete(0, 'Response failed before completion.')
+    const complete = (statusCode: number, errorMessage?: string) => {
+      if (completed) return
+      // Claim completion and detach before the asynchronous database write.
+      completed = true
+      response.off('finish', finish)
+      response.off('close', close)
+      response.off('error', error)
+      void this.auditService
+        .updateLog(log.id, {
+          statusCode,
+          errorMessage,
+          targetId: this.resolveTargetId(context, request),
+          organizationId: this.resolveOrganizationId(request),
+        })
+        .catch(() => this.logger.error(`Failed to record response result for audit ${log.id}`))
+    }
+    response.once('finish', finish)
+    response.once('close', close)
+    response.once('error', error)
+    return complete
   }
 
   private resolveOrganizationId(request: RequestWithUser, result?: any): string | null {
@@ -139,6 +178,7 @@ export class AuditInterceptor implements NestInterceptor {
    * Prioritizes resolving the ID from the response object as the request may not include a unique resource identifier (e.g. delete box by name).
    */
   private resolveTargetId(auditContext: AuditContext, request: RequestWithUser, result?: any): string | null {
+    if (request[AUDIT_TARGET_ID]) return request[AUDIT_TARGET_ID]
     if (auditContext.targetIdFromResult && result) {
       const targetId = this.normalizeTargetId(auditContext.targetIdFromResult(result))
       if (targetId) {
@@ -183,10 +223,6 @@ export class AuditInterceptor implements NestInterceptor {
     return Object.keys(resolvedMetadata).length > 0 ? resolvedMetadata : null
   }
 
-  private isToolboxAction(action: AuditAction): boolean {
-    return action.startsWith('toolbox_')
-  }
-
   private async recordHandlerSuccess(
     auditLog: AuditLog,
     organizationId: string | null,
@@ -204,11 +240,17 @@ export class AuditInterceptor implements NestInterceptor {
     }
   }
 
-  private async recordHandlerError(auditLog: AuditLog, errorMessage: string, statusCode: number): Promise<void> {
+  private async recordHandlerError(
+    auditLog: AuditLog,
+    errorMessage: string,
+    statusCode: number,
+    targetId?: string,
+  ): Promise<void> {
     try {
       await this.auditService.updateLog(auditLog.id, {
         errorMessage,
         statusCode,
+        ...(targetId ? { targetId } : {}),
       })
     } catch (error) {
       this.logger.error('Failed to record handler error:', error)

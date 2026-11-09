@@ -1,3 +1,6 @@
+import { Audit } from '../audit/decorators/audit.decorator'
+import { AuditAction } from '../audit/enums/audit-action.enum'
+import { AuditTarget } from '../audit/enums/audit-target.enum'
 import { Body, Controller, Delete, Get, HttpCode, Param, Post, Query, UseGuards } from '@nestjs/common'
 import { ApiExcludeController } from '@nestjs/swagger'
 import { CombinedAuthGuard } from '../auth/combined-auth.guard'
@@ -32,6 +35,7 @@ export class BoxliteVolumeController {
 
   @Post()
   @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_VOLUMES])
+  @Audit({ action: AuditAction.CREATE, targetType: AuditTarget.VOLUME, targetIdFromResult: (result) => result.id })
   async create(
     @AuthContext() authContext: OrganizationAuthContext,
     @Body() dto?: CreateVolumeDto,
@@ -59,6 +63,11 @@ export class BoxliteVolumeController {
   @HttpCode(204)
   @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.DELETE_VOLUMES])
   @UseGuards(VolumeAccessGuard)
+  @Audit({
+    action: AuditAction.DELETE,
+    targetType: AuditTarget.VOLUME,
+    targetIdFromRequest: (req) => req.params.volumeId,
+  })
   async remove(@Param('volumeId') volumeId: string, @Query('force') force?: string): Promise<void> {
     await this.volumeService.delete(volumeId, force === 'true')
   }

@@ -35,8 +35,6 @@ type BoxliteConfiguration struct {
 	PylonAppId *string `json:"pylonAppId,omitempty"`
 	// Proxy template URL
 	ProxyTemplateUrl string `json:"proxyTemplateUrl"`
-	// Toolbox template URL
-	ProxyToolboxUrl string `json:"proxyToolboxUrl"`
 	// Dashboard URL
 	DashboardUrl string `json:"dashboardUrl"`
 	// Whether maintenance mode is enabled
@@ -58,14 +56,13 @@ type _BoxliteConfiguration BoxliteConfiguration
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewBoxliteConfiguration(version string, oidc OidcConfig, linkedAccountsEnabled bool, announcements map[string]Announcement, proxyTemplateUrl string, proxyToolboxUrl string, dashboardUrl string, maintananceMode bool, environment string) *BoxliteConfiguration {
+func NewBoxliteConfiguration(version string, oidc OidcConfig, linkedAccountsEnabled bool, announcements map[string]Announcement, proxyTemplateUrl string, dashboardUrl string, maintananceMode bool, environment string) *BoxliteConfiguration {
 	this := BoxliteConfiguration{}
 	this.Version = version
 	this.Oidc = oidc
 	this.LinkedAccountsEnabled = linkedAccountsEnabled
 	this.Announcements = announcements
 	this.ProxyTemplateUrl = proxyTemplateUrl
-	this.ProxyToolboxUrl = proxyToolboxUrl
 	this.DashboardUrl = dashboardUrl
 	this.MaintananceMode = maintananceMode
 	this.Environment = environment
@@ -264,30 +261,6 @@ func (o *BoxliteConfiguration) SetProxyTemplateUrl(v string) {
 	o.ProxyTemplateUrl = v
 }
 
-// GetProxyToolboxUrl returns the ProxyToolboxUrl field value
-func (o *BoxliteConfiguration) GetProxyToolboxUrl() string {
-	if o == nil {
-		var ret string
-		return ret
-	}
-
-	return o.ProxyToolboxUrl
-}
-
-// GetProxyToolboxUrlOk returns a tuple with the ProxyToolboxUrl field value
-// and a boolean to check if the value has been set.
-func (o *BoxliteConfiguration) GetProxyToolboxUrlOk() (*string, bool) {
-	if o == nil {
-		return nil, false
-	}
-	return &o.ProxyToolboxUrl, true
-}
-
-// SetProxyToolboxUrl sets field value
-func (o *BoxliteConfiguration) SetProxyToolboxUrl(v string) {
-	o.ProxyToolboxUrl = v
-}
-
 // GetDashboardUrl returns the DashboardUrl field value
 func (o *BoxliteConfiguration) GetDashboardUrl() string {
 	if o == nil {
@@ -477,7 +450,6 @@ func (o BoxliteConfiguration) ToMap() (map[string]interface{}, error) {
 		toSerialize["pylonAppId"] = o.PylonAppId
 	}
 	toSerialize["proxyTemplateUrl"] = o.ProxyTemplateUrl
-	toSerialize["proxyToolboxUrl"] = o.ProxyToolboxUrl
 	toSerialize["dashboardUrl"] = o.DashboardUrl
 	toSerialize["maintananceMode"] = o.MaintananceMode
 	toSerialize["environment"] = o.Environment
@@ -508,7 +480,6 @@ func (o *BoxliteConfiguration) UnmarshalJSON(data []byte) (err error) {
 		"linkedAccountsEnabled",
 		"announcements",
 		"proxyTemplateUrl",
-		"proxyToolboxUrl",
 		"dashboardUrl",
 		"maintananceMode",
 		"environment",
@@ -548,7 +519,6 @@ func (o *BoxliteConfiguration) UnmarshalJSON(data []byte) (err error) {
 		delete(additionalProperties, "announcements")
 		delete(additionalProperties, "pylonAppId")
 		delete(additionalProperties, "proxyTemplateUrl")
-		delete(additionalProperties, "proxyToolboxUrl")
 		delete(additionalProperties, "dashboardUrl")
 		delete(additionalProperties, "maintananceMode")
 		delete(additionalProperties, "environment")

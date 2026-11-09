@@ -73,7 +73,7 @@ export class AuditService implements OnApplicationBootstrap {
       throw new NotFoundException(`Audit log with ID ${id} not found`)
     }
 
-    if (updateDto.statusCode) {
+    if (updateDto.statusCode !== undefined) {
       auditLog.statusCode = updateDto.statusCode
     }
 
@@ -153,22 +153,38 @@ export class AuditService implements OnApplicationBootstrap {
   @WithInstrumentation()
   @LogExecution('resolve-dangling-audit-logs')
   async resolveDanglingLogs() {
-    const danglingLogs = await this.auditLogRepository.find({
-      where: {
-        statusCode: IsNull(),
-        createdAt: LessThan(new Date(Date.now() - 30 * 60 * 1000)),
-      },
-    })
-
-    for (const log of danglingLogs) {
-      // set status code to unknown
-      log.statusCode = 0
-      await this.auditLogRepository.save(log)
-      if (this.configService.get('audit.consoleLogEnabled')) {
-        this.logger.log(`AUDIT_ENTRY: ${JSON.stringify(log)}`)
+    const started = Date.now()
+    const cutoff = new Date(started - 30 * 60 * 1000)
+    const consoleEnabled = this.configService.get('audit.consoleLogEnabled')
+    let total = 0
+    // Four 5-second statement budgets stay below the usual 30-second lease.
+    // Row locks and the NULL predicate remain authoritative if the lease expires.
+    for (let batch = 0; batch < 4; batch++) {
+      const logs: AuditLog[] = await this.auditLogRepository.manager.transaction(async (manager) => {
+        await manager.query("SET LOCAL statement_timeout = '5s'")
+        await manager.query("SET LOCAL lock_timeout = '1s'")
+        // Dedicated NULL -> unknown transition: raw SQL deliberately avoids the
+        // per-entity subscriber while enforcing its immutability rule in SQL.
+        return manager.query(
+          `WITH pending AS (
+          SELECT id FROM audit_log
+          WHERE "statusCode" IS NULL AND "createdAt" < $1
+          ORDER BY "createdAt" LIMIT 500 FOR UPDATE SKIP LOCKED
+        ), updated AS (
+          UPDATE audit_log AS log SET "statusCode" = 0
+          FROM pending WHERE log.id = pending.id AND log."statusCode" IS NULL
+          RETURNING ${consoleEnabled ? 'log.*' : 'log.id'}
+        ) SELECT * FROM updated`,
+          [cutoff],
+        )
+      })
+      total += logs.length
+      if (consoleEnabled) {
+        for (const log of logs) this.logger.log(`AUDIT_ENTRY: ${JSON.stringify(log)}`)
       }
+      if (logs.length < 500) break
     }
-    this.logger.debug(`Resolved ${danglingLogs.length} dangling audit logs`)
+    this.logger.debug(`Resolved ${total} dangling audit logs in ${Date.now() - started}ms`)
   }
 
   @Cron(CronExpression.EVERY_SECOND, {

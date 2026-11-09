@@ -5,7 +5,6 @@
  */
 import {
   Injectable,
-  Logger,
   NotFoundException,
   ConflictException,
   BadRequestException,
@@ -28,14 +27,9 @@ import { RegionEvents } from '../constants/region-events.constant'
 import { RegionCreatedEvent } from '../events/region-created.event'
 import { RegionDeletedEvent } from '../events/region-deleted.event'
 import { UpdateRegionDto } from '../dto/update-region.dto'
-import { InjectRedis } from '@nestjs-modules/ioredis'
-import { Redis } from 'ioredis'
-import { toolboxProxyUrlCacheKey } from '../../box/utils/box-lookup-cache.util'
 
 @Injectable()
 export class RegionService {
-  private readonly logger = new Logger(RegionService.name)
-
   constructor(
     @InjectRepository(Region)
     private readonly regionRepository: Repository<Region>,
@@ -43,7 +37,6 @@ export class RegionService {
     private readonly runnerRepository: Repository<Runner>,
     private readonly dataSource: DataSource,
     private readonly eventEmitter: EventEmitter2,
-    @InjectRedis() private readonly redis: Redis,
     private readonly configService: TypedConfigService,
   ) {}
 
@@ -240,10 +233,6 @@ export class RegionService {
       await this.eventEmitter.emitAsync(RegionEvents.DELETED, new RegionDeletedEvent(em, region))
       await em.remove(region)
     })
-
-    this.redis.del(toolboxProxyUrlCacheKey(id)).catch((err) => {
-      this.logger.warn(`Failed to invalidate toolbox proxy URL cache for region ${id}: ${err.message}`)
-    })
   }
 
   async update(regionId: string, updateRegion: UpdateRegionDto): Promise<void> {
@@ -256,17 +245,10 @@ export class RegionService {
     await this.dataSource.transaction(async (em) => {
       if (updateRegion.proxyUrl !== undefined) {
         region.proxyUrl = updateRegion.proxyUrl ?? null
-        region.toolboxProxyUrl = updateRegion.proxyUrl ?? null
       }
 
       await em.save(region)
     })
-
-    if (updateRegion.proxyUrl !== undefined) {
-      this.redis.del(toolboxProxyUrlCacheKey(regionId)).catch((err) => {
-        this.logger.warn(`Failed to invalidate toolbox proxy URL cache for region ${regionId}: ${err.message}`)
-      })
-    }
   }
 
   /**

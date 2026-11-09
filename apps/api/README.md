@@ -469,3 +469,41 @@ R2 reuses successful `user.login` records from `LoginEventRecorder`, with the us
 first API use of each newly issued token, including refreshed tokens. R2 therefore treats a
 qualifying token-use record as return activity; it does not require a new interactive login.
 No additional event or issuer-claim configuration is required. Redis/log failures can omit records.
+
+## Mutation auditing
+
+Business writes use `@Audit` to insert a pending `audit_log` row before the handler runs.
+If insertion fails, the mutation is refused. Completion failures leave a pending row
+for reconciliation; audit status is the HTTP outcome, not an execution's exit code.
+
+The portable REST aliases share auditing for volume creation/deletion, image deletion,
+domain claim/bind/unbind, execution start/signal/termination, file upload, SSH
+configuration/enable/disable, and tunnel creation/revocation. Organization experimental
+configuration and attach-ticket issuance are audited too. Resource names resolved by
+handlers become canonical target IDs without another lookup.
+
+Proxy operations use response completion: `finish` records the response status;
+`close` before completion or a response error records unknown (`0`). Completion is
+claimed once before persisting, and its listeners are removed. A client disconnect
+while the initial insert is pending prevents forwarding once that insert returns.
+`finish` confirms server-side transmission, not client receipt.
+
+Audit metadata excludes command arguments, file contents, SSH secrets, tunnel tokens,
+attach tickets, and raw configuration bodies. Terminal resize, file download, metrics,
+runner/box/job callbacks, preview readiness and access exchanges, and onboarding helpers
+receive no new audit. WebSocket attach and webhook portal access remain unchanged.
+MCP calls inherit the target REST operation's audit without a second MCP record.
+
+Account-link adoption audits only after signature and identity validation. It records
+the primary/secondary IDs and the local ownership migration result, without an arbitrary
+organization association. Local success does not claim that subsequent Auth0 linking
+succeeded. Retry attempts are recorded even when adoption is already complete.
+
+The obsolete Toolbox URL endpoint, DTO/configuration fields and SMS MFA enrollment
+endpoint are removed from the API and generated clients. Existing Auth0 management
+operations and v1 execution/file/attach routes remain available.
+
+Run `make test:apps:api TEST_FILES='audit-refine.spec|audit-special-writes.spec|audit-backfill.integration.spec|1794196800000'`;
+set the normal `DB_*` variables to include PostgreSQL concurrency and migration tests.
+See the [audit schema](../../docs/contributing/architecture/platform/schema.md#audit_log)
+for backfill limits, index deployment and rollback order.

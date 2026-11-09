@@ -122,7 +122,6 @@ export * from './save-onboarding-dto';
 export * from './save-prompt-draft-dto';
 export * from './send-webhook-dto';
 export * from './storage-access-dto';
-export * from './toolbox-proxy-url';
 export * from './trace-span';
 export * from './trace-summary';
 export * from './update-box-state-dto';

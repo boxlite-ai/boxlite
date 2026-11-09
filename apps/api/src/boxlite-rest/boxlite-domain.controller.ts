@@ -3,6 +3,9 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { Audit } from '../audit/decorators/audit.decorator'
+import { AuditAction } from '../audit/enums/audit-action.enum'
+import { AuditTarget } from '../audit/enums/audit-target.enum'
 import {
   BadRequestException,
   Body,
@@ -77,6 +80,11 @@ export class BoxliteDomainController {
 
   @Post()
   @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
+  @Audit({
+    action: AuditAction.CREATE,
+    targetType: AuditTarget.DOMAIN,
+    targetIdFromResult: (result) => result.hostname,
+  })
   async claim(@AuthContext() authContext: OrganizationAuthContext, @Body() input: ClaimDomainDto): Promise<RestDomain> {
     return this.domainService.claim(authContext.organizationId, input.name)
   }
@@ -90,6 +98,12 @@ export class BoxliteDomainController {
    */
   @Put(':domain/target')
   @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
+  @Audit({
+    action: AuditAction.UPDATE,
+    targetType: AuditTarget.DOMAIN,
+    targetIdFromRequest: (req) => req.params.domain,
+    targetIdFromResult: (result) => result.hostname,
+  })
   async bind(
     @AuthContext() authContext: OrganizationAuthContext,
     @Param('domain') domain: string,
@@ -117,6 +131,11 @@ export class BoxliteDomainController {
   @Delete(':domain/target')
   @RequiredOrganizationResourcePermissions([OrganizationResourcePermission.WRITE_BOXES])
   @HttpCode(HttpStatus.NO_CONTENT)
+  @Audit({
+    action: AuditAction.DELETE,
+    targetType: AuditTarget.DOMAIN,
+    targetIdFromRequest: (req) => req.params.domain,
+  })
   async unbind(@AuthContext() authContext: OrganizationAuthContext, @Param('domain') domain: string): Promise<void> {
     await this.domainService.unbind(authContext.organizationId, domain)
   }

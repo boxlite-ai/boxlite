@@ -34,10 +34,6 @@ describe('BoxService DTO conversion', () => {
       boxActivityService,
       boxExitCodeService,
       imagePreparationService,
-      resolveToolboxProxyUrl: jest.fn().mockResolvedValue('https://proxy.test/toolbox'),
-      resolveToolboxProxyUrls: jest.fn(
-        async (regionIds: string[]) => new Map(regionIds.map((id) => [id, `https://${id}.test/toolbox`])),
-      ),
     })
     return service
   }
@@ -49,7 +45,6 @@ describe('BoxService DTO conversion', () => {
     const dto = await service.toBoxDto(box)
 
     expect(dto.id).toBe(box.id)
-    expect(dto.toolboxProxyUrl).toBe('https://proxy.test/toolbox')
     expect(dto.lastActivityAt).toBeUndefined()
   })
 
@@ -60,7 +55,6 @@ describe('BoxService DTO conversion', () => {
     const dtos = await service.toBoxDtos(boxes)
 
     expect(dtos.map((dto) => dto.id)).toEqual(boxes.map((box) => box.id))
-    expect(dtos.map((dto) => dto.toolboxProxyUrl)).toEqual(['https://us.test/toolbox', 'https://eu.test/toolbox'])
     expect(dtos.map((dto) => dto.lastActivityAt)).toEqual([undefined, undefined])
   })
 
@@ -107,14 +101,6 @@ describe('BoxService DTO conversion', () => {
 
     expect(waitingDto.progress?.phase).toBe(BoxProgressPhase.PREPARING_IMAGE)
     expect(cachedDto.progress).toBeUndefined()
-  })
-
-  it('still fails the conversion when the toolbox proxy URL cannot be resolved', async () => {
-    const box = new Box('us', 'data-loader')
-    const service = createService({ getLastActivityAt: jest.fn().mockResolvedValue(null) })
-    ;(service as any).resolveToolboxProxyUrl = jest.fn().mockRejectedValue(new Error('region lookup failed'))
-
-    await expect(service.toBoxDto(box)).rejects.toThrow('region lookup failed')
   })
 
   // toBoxDto is on the event path: NotificationService converts through it for

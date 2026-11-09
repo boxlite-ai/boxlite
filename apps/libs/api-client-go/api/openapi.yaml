@@ -1651,26 +1651,6 @@ paths:
       summary: Unlink account
       tags:
       - users
-  /users/mfa/sms/enroll:
-    post:
-      operationId: enrollInSmsMfa
-      parameters: []
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                type: string
-          description: SMS MFA enrollment URL
-      security:
-      - bearer: []
-      - oauth2:
-        - openid
-        - profile
-        - email
-      summary: Enroll in SMS MFA
-      tags:
-      - users
   /users/{id}:
     get:
       operationId: getUser
@@ -2358,42 +2338,6 @@ paths:
         - profile
         - email
       summary: Set box auto-delete interval
-      tags:
-      - box
-  /box/{boxId}/toolbox-proxy-url:
-    get:
-      operationId: getToolboxProxyUrl
-      parameters:
-      - description: Use with JWT to specify the organization ID
-        explode: false
-        in: header
-        name: X-BoxLite-Organization-ID
-        required: false
-        schema:
-          type: string
-        style: simple
-      - description: ID of the box
-        explode: false
-        in: path
-        name: boxId
-        required: true
-        schema:
-          type: string
-        style: simple
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ToolboxProxyUrl"
-          description: Toolbox proxy URL for the specified box
-      security:
-      - bearer: []
-      - oauth2:
-        - openid
-        - profile
-        - email
-      summary: Get toolbox proxy URL for a box
       tags:
       - box
   /box/{boxIdOrName}/attach-tickets:
@@ -3635,6 +3579,150 @@ paths:
       summary: Delete an image alias
       tags:
       - images
+  /audit:
+    get:
+      operationId: getAllAuditLogs
+      parameters:
+      - description: Page number of the results
+        explode: true
+        in: query
+        name: page
+        required: false
+        schema:
+          default: 1
+          minimum: 1
+          type: number
+        style: form
+      - description: Number of results per page
+        explode: true
+        in: query
+        name: limit
+        required: false
+        schema:
+          default: 100
+          maximum: 200
+          minimum: 1
+          type: number
+        style: form
+      - description: From date (ISO 8601 format)
+        explode: true
+        in: query
+        name: from
+        required: false
+        schema:
+          format: date-time
+          type: string
+        style: form
+      - description: To date (ISO 8601 format)
+        explode: true
+        in: query
+        name: to
+        required: false
+        schema:
+          format: date-time
+          type: string
+        style: form
+      - description: "Token for cursor-based pagination. When provided, takes precedence\
+          \ over page parameter."
+        explode: true
+        in: query
+        name: nextToken
+        required: false
+        schema:
+          type: string
+        style: form
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PaginatedAuditLogs"
+          description: Paginated list of all audit logs
+      security:
+      - bearer: []
+      - oauth2:
+        - openid
+        - profile
+        - email
+      summary: Get all audit logs
+      tags:
+      - audit
+  /audit/organizations/{organizationId}:
+    get:
+      operationId: getOrganizationAuditLogs
+      parameters:
+      - description: Organization ID
+        explode: false
+        in: path
+        name: organizationId
+        required: true
+        schema:
+          type: string
+        style: simple
+      - description: Page number of the results
+        explode: true
+        in: query
+        name: page
+        required: false
+        schema:
+          default: 1
+          minimum: 1
+          type: number
+        style: form
+      - description: Number of results per page
+        explode: true
+        in: query
+        name: limit
+        required: false
+        schema:
+          default: 100
+          maximum: 200
+          minimum: 1
+          type: number
+        style: form
+      - description: From date (ISO 8601 format)
+        explode: true
+        in: query
+        name: from
+        required: false
+        schema:
+          format: date-time
+          type: string
+        style: form
+      - description: To date (ISO 8601 format)
+        explode: true
+        in: query
+        name: to
+        required: false
+        schema:
+          format: date-time
+          type: string
+        style: form
+      - description: "Token for cursor-based pagination. When provided, takes precedence\
+          \ over page parameter."
+        explode: true
+        in: query
+        name: nextToken
+        required: false
+        schema:
+          type: string
+        style: form
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PaginatedAuditLogs"
+          description: Paginated list of organization audit logs
+      security:
+      - bearer: []
+      - oauth2:
+        - openid
+        - profile
+        - email
+      summary: Get audit logs for organization
+      tags:
+      - audit
   /admin/runners:
     get:
       operationId: adminListRunners
@@ -4550,150 +4638,6 @@ paths:
       summary: Get temporary storage access for pushing objects
       tags:
       - object-storage
-  /audit:
-    get:
-      operationId: getAllAuditLogs
-      parameters:
-      - description: Page number of the results
-        explode: true
-        in: query
-        name: page
-        required: false
-        schema:
-          default: 1
-          minimum: 1
-          type: number
-        style: form
-      - description: Number of results per page
-        explode: true
-        in: query
-        name: limit
-        required: false
-        schema:
-          default: 100
-          maximum: 200
-          minimum: 1
-          type: number
-        style: form
-      - description: From date (ISO 8601 format)
-        explode: true
-        in: query
-        name: from
-        required: false
-        schema:
-          format: date-time
-          type: string
-        style: form
-      - description: To date (ISO 8601 format)
-        explode: true
-        in: query
-        name: to
-        required: false
-        schema:
-          format: date-time
-          type: string
-        style: form
-      - description: "Token for cursor-based pagination. When provided, takes precedence\
-          \ over page parameter."
-        explode: true
-        in: query
-        name: nextToken
-        required: false
-        schema:
-          type: string
-        style: form
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/PaginatedAuditLogs"
-          description: Paginated list of all audit logs
-      security:
-      - bearer: []
-      - oauth2:
-        - openid
-        - profile
-        - email
-      summary: Get all audit logs
-      tags:
-      - audit
-  /audit/organizations/{organizationId}:
-    get:
-      operationId: getOrganizationAuditLogs
-      parameters:
-      - description: Organization ID
-        explode: false
-        in: path
-        name: organizationId
-        required: true
-        schema:
-          type: string
-        style: simple
-      - description: Page number of the results
-        explode: true
-        in: query
-        name: page
-        required: false
-        schema:
-          default: 1
-          minimum: 1
-          type: number
-        style: form
-      - description: Number of results per page
-        explode: true
-        in: query
-        name: limit
-        required: false
-        schema:
-          default: 100
-          maximum: 200
-          minimum: 1
-          type: number
-        style: form
-      - description: From date (ISO 8601 format)
-        explode: true
-        in: query
-        name: from
-        required: false
-        schema:
-          format: date-time
-          type: string
-        style: form
-      - description: To date (ISO 8601 format)
-        explode: true
-        in: query
-        name: to
-        required: false
-        schema:
-          format: date-time
-          type: string
-        style: form
-      - description: "Token for cursor-based pagination. When provided, takes precedence\
-          \ over page parameter."
-        explode: true
-        in: query
-        name: nextToken
-        required: false
-        schema:
-          type: string
-        style: form
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/PaginatedAuditLogs"
-          description: Paginated list of organization audit logs
-      security:
-      - bearer: []
-      - oauth2:
-        - openid
-        - profile
-        - email
-      summary: Get audit logs for organization
-      tags:
-      - audit
   /health:
     get:
       operationId: HealthController_live
@@ -5093,7 +5037,6 @@ components:
             learnMoreUrl: https://example.com
         pylonAppId: pylon-app-123
         proxyTemplateUrl: "https://{{PORT}}-{{boxId}}.proxy.example.com"
-        proxyToolboxUrl: https://proxy.example.com/toolbox
         dashboardUrl: https://dashboard.example.com
         maintananceMode: false
         environment: production
@@ -5134,10 +5077,6 @@ components:
           description: Proxy template URL
           example: "https://{{PORT}}-{{boxId}}.proxy.example.com"
           type: string
-        proxyToolboxUrl:
-          description: Toolbox template URL
-          example: https://proxy.example.com/toolbox
-          type: string
         dashboardUrl:
           description: Dashboard URL
           example: https://dashboard.example.com
@@ -5170,7 +5109,6 @@ components:
       - maintananceMode
       - oidc
       - proxyTemplateUrl
-      - proxyToolboxUrl
       - version
       type: object
     CreateApiKey:
@@ -6613,7 +6551,6 @@ components:
         class: small
         daemonVersion: 1.0.0
         runnerId: runner123
-        toolboxProxyUrl: https://proxy.app.boxlite.io/toolbox
         progress: ""
       properties:
         id:
@@ -6753,10 +6690,6 @@ components:
           description: The runner ID of the box
           example: runner123
           type: string
-        toolboxProxyUrl:
-          description: The toolbox proxy URL for the box
-          example: https://proxy.app.boxlite.io/toolbox
-          type: string
         progress:
           allOf:
           - $ref: "#/components/schemas/BoxProgress"
@@ -6774,7 +6707,6 @@ components:
       - name
       - organizationId
       - target
-      - toolboxProxyUrl
       - user
       type: object
     PaginatedBoxes:
@@ -6817,7 +6749,6 @@ components:
           class: small
           daemonVersion: 1.0.0
           runnerId: runner123
-          toolboxProxyUrl: https://proxy.app.boxlite.io/toolbox
           progress: ""
         - id: aB3cD4eF5gH6
           organizationId: organization123
@@ -6856,7 +6787,6 @@ components:
           class: small
           daemonVersion: 1.0.0
           runnerId: runner123
-          toolboxProxyUrl: https://proxy.app.boxlite.io/toolbox
           progress: ""
         total: 0.8008281904610115
         page: 6.027456183070403
@@ -6940,17 +6870,6 @@ components:
           type: integer
       required:
       - state
-      type: object
-    ToolboxProxyUrl:
-      example:
-        url: https://proxy.app.boxlite.io/toolbox
-      properties:
-        url:
-          description: The toolbox proxy URL for the box
-          example: https://proxy.app.boxlite.io/toolbox
-          type: string
-      required:
-      - url
       type: object
     CreateAttachTicket:
       example:
@@ -8450,6 +8369,118 @@ components:
       required:
       - alias
       - versionId
+      type: object
+    AuditLog:
+      example:
+        id: id
+        actorId: actorId
+        actorEmail: actorEmail
+        organizationId: organizationId
+        action: action
+        targetType: targetType
+        targetId: targetId
+        statusCode: 0.8008281904610115
+        errorMessage: errorMessage
+        ipAddress: ipAddress
+        userAgent: userAgent
+        source: source
+        metadata:
+          key: ""
+        createdAt: 2000-01-23T04:56:07.000+00:00
+      properties:
+        id:
+          type: string
+        actorId:
+          type: string
+        actorEmail:
+          type: string
+        organizationId:
+          type: string
+        action:
+          type: string
+        targetType:
+          type: string
+        targetId:
+          type: string
+        statusCode:
+          type: number
+        errorMessage:
+          type: string
+        ipAddress:
+          type: string
+        userAgent:
+          type: string
+        source:
+          type: string
+        metadata:
+          additionalProperties: true
+          type: object
+        createdAt:
+          format: date-time
+          type: string
+      required:
+      - action
+      - actorEmail
+      - actorId
+      - createdAt
+      - id
+      type: object
+    PaginatedAuditLogs:
+      example:
+        items:
+        - id: id
+          actorId: actorId
+          actorEmail: actorEmail
+          organizationId: organizationId
+          action: action
+          targetType: targetType
+          targetId: targetId
+          statusCode: 0.8008281904610115
+          errorMessage: errorMessage
+          ipAddress: ipAddress
+          userAgent: userAgent
+          source: source
+          metadata:
+            key: ""
+          createdAt: 2000-01-23T04:56:07.000+00:00
+        - id: id
+          actorId: actorId
+          actorEmail: actorEmail
+          organizationId: organizationId
+          action: action
+          targetType: targetType
+          targetId: targetId
+          statusCode: 0.8008281904610115
+          errorMessage: errorMessage
+          ipAddress: ipAddress
+          userAgent: userAgent
+          source: source
+          metadata:
+            key: ""
+          createdAt: 2000-01-23T04:56:07.000+00:00
+        total: 6.027456183070403
+        page: 1.4658129805029452
+        totalPages: 5.962133916683182
+        nextToken: nextToken
+      properties:
+        items:
+          items:
+            $ref: "#/components/schemas/AuditLog"
+          type: array
+        total:
+          type: number
+        page:
+          type: number
+        totalPages:
+          type: number
+        nextToken:
+          description: Token for next page in cursor-based pagination
+          type: string
+      required:
+      - items
+      - page
+      - total
+      - totalPages
       type: object
     AdminCreateRunner:
       example:
@@ -10009,118 +10040,6 @@ components:
       - secret
       - sessionToken
       - storageUrl
-      type: object
-    AuditLog:
-      example:
-        id: id
-        actorId: actorId
-        actorEmail: actorEmail
-        organizationId: organizationId
-        action: action
-        targetType: targetType
-        targetId: targetId
-        statusCode: 0.8008281904610115
-        errorMessage: errorMessage
-        ipAddress: ipAddress
-        userAgent: userAgent
-        source: source
-        metadata:
-          key: ""
-        createdAt: 2000-01-23T04:56:07.000+00:00
-      properties:
-        id:
-          type: string
-        actorId:
-          type: string
-        actorEmail:
-          type: string
-        organizationId:
-          type: string
-        action:
-          type: string
-        targetType:
-          type: string
-        targetId:
-          type: string
-        statusCode:
-          type: number
-        errorMessage:
-          type: string
-        ipAddress:
-          type: string
-        userAgent:
-          type: string
-        source:
-          type: string
-        metadata:
-          additionalProperties: true
-          type: object
-        createdAt:
-          format: date-time
-          type: string
-      required:
-      - action
-      - actorEmail
-      - actorId
-      - createdAt
-      - id
-      type: object
-    PaginatedAuditLogs:
-      example:
-        items:
-        - id: id
-          actorId: actorId
-          actorEmail: actorEmail
-          organizationId: organizationId
-          action: action
-          targetType: targetType
-          targetId: targetId
-          statusCode: 0.8008281904610115
-          errorMessage: errorMessage
-          ipAddress: ipAddress
-          userAgent: userAgent
-          source: source
-          metadata:
-            key: ""
-          createdAt: 2000-01-23T04:56:07.000+00:00
-        - id: id
-          actorId: actorId
-          actorEmail: actorEmail
-          organizationId: organizationId
-          action: action
-          targetType: targetType
-          targetId: targetId
-          statusCode: 0.8008281904610115
-          errorMessage: errorMessage
-          ipAddress: ipAddress
-          userAgent: userAgent
-          source: source
-          metadata:
-            key: ""
-          createdAt: 2000-01-23T04:56:07.000+00:00
-        total: 6.027456183070403
-        page: 1.4658129805029452
-        totalPages: 5.962133916683182
-        nextToken: nextToken
-      properties:
-        items:
-          items:
-            $ref: "#/components/schemas/AuditLog"
-          type: array
-        total:
-          type: number
-        page:
-          type: number
-        totalPages:
-          type: number
-        nextToken:
-          description: Token for next page in cursor-based pagination
-          type: string
-      required:
-      - items
-      - page
-      - total
-      - totalPages
       type: object
     LogEntry:
       example:

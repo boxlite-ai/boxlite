@@ -325,12 +325,6 @@ export class BoxDto {
   @IsOptional()
   runnerId?: string
 
-  @ApiProperty({
-    description: 'The toolbox proxy URL for the box',
-    example: 'https://proxy.app.boxlite.io/toolbox',
-  })
-  toolboxProxyUrl: string
-
   @ApiPropertyOptional({
     description:
       'What a box still being created is waiting on. Absent once it has started, and absent while it is being created from an image that has already been pulled',
@@ -357,7 +351,7 @@ export class BoxDto {
   // The three arrive as one object because each is optional: as trailing
   // positional arguments, a caller wanting only the last spells the others as
   // `undefined`, and two of them are one slip from trading places.
-  static fromBox(box: Box, toolboxProxyUrl: string, reads: BoxDtoReads = {}): BoxDto {
+  static fromBox(box: Box, reads: BoxDtoReads = {}): BoxDto {
     const { lastActivityAt, exitCode, preparingImage = false } = reads
     // Read once: the state this payload reports and the state the progress
     // field is gated on are the same claim, and deriving it twice is what
@@ -400,7 +394,6 @@ export class BoxDto {
       lastActivityAt: lastActivityAt ? new Date(lastActivityAt).toISOString() : undefined,
       daemonVersion: box.daemonVersion,
       runnerId: box.runnerId,
-      toolboxProxyUrl,
       // Only while the box reads as being created. A started box is not
       // waiting on anything, so reporting what it once waited on would be a
       // field that never clears.

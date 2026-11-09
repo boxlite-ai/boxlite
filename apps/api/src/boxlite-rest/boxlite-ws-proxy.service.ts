@@ -151,7 +151,7 @@ export class BoxliteWsProxyService {
       if (box.autoResume) {
         await this.autoResume.ensureReady(box.id, auth.organization)
       }
-      // Mirror legacy toolbox path — opening a WS attach is user activity,
+      // Opening a WS attach is user activity,
       // so the autostop cron does not reap a session that's still connected.
       // Best-effort: do not fail the upgrade if this errors.
       this.boxService

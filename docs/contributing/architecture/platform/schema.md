@@ -343,7 +343,10 @@ because TypeORM clears its primary columns during removal.
 
 ### `audit_log`
 
-Append-only action record. The target is a polymorphic, untyped string pair —
+Action record inserted before a mutation, then completed with its result. A null status
+means pending; zero means unknown, including an interrupted response or a request
+unresolved after 30 minutes. Nonzero completed statuses are immutable through the
+entity subscriber. The target is a polymorphic, untyped string pair —
 deliberately not a foreign key, so an entry survives deletion of what it
 describes.
 
@@ -364,7 +367,20 @@ describes.
 | `metadata` | `jsonb` | nullable |
 | `createdAt` | `timestamptz` | |
 
-**Indexes:** `(createdAt)` · `(organizationId, createdAt)`.
+**Indexes:** `(createdAt)` · `(organizationId, createdAt)` ·
+`idx_audit_log_pending_created_at` on `(createdAt) WHERE "statusCode" IS NULL`.
+
+The pending index is built concurrently before deployment. Every minute the resolver
+claims at most four batches of 500 expired pending rows with `FOR UPDATE SKIP LOCKED`.
+Each batch atomically changes only null statuses to zero, with a five-second statement
+budget and one-second lock timeout; remaining or locked rows are eligible next run.
+The cutoff has no lower time bound, so downtime cannot strand old pending records.
+This dedicated SQL transition preserves final statuses without the ORM subscriber;
+ordinary per-record updates still use that subscriber.
+
+After old API instances exit, the post-deploy migration removes `region.toolboxProxyUrl`.
+Rollback restores a nullable column, not deleted historical values; restore it before
+running an old API. The partial audit index can remain during application rollback.
 
 ### `webhook_initialization`
 
@@ -567,7 +583,6 @@ and the entity repeats them as a `@BeforeInsert`/`@BeforeUpdate` guard.
 | `regionType` | `enum` | `shared` \| `dedicated` \| `custom` |
 | `enforceQuotas` | `boolean` | default `true` |
 | `proxyUrl` | `character varying` | nullable |
-| `toolboxProxyUrl` | `character varying` | nullable; defaults to `proxyUrl` |
 | `proxyApiKeyHash` | `character varying` | nullable |
 | `createdAt` / `updatedAt` | `timestamptz` | |
 

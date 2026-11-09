@@ -17,6 +17,8 @@ export type AuditTargetId = string | string[] | null | undefined
 
 export interface AuditContext {
   action: AuditAction
+  methods?: readonly string[]
+  completion?: 'response'
   targetType?: AuditTarget
   targetIdFromRequest?: (req: Request) => AuditTargetId
   targetIdFromResult?: (result: any) => AuditTargetId
@@ -24,5 +26,7 @@ export interface AuditContext {
 }
 
 export const AUDIT_CONTEXT_KEY = 'audit_context'
+// Set only after the handler resolves the authorized resource, never from headers/body.
+export const AUDIT_TARGET_ID = Symbol('audit_target_id')
 
 export const Audit = (context: AuditContext) => SetMetadata(AUDIT_CONTEXT_KEY, context)

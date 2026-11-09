@@ -69,7 +69,6 @@ export function buildMockConfig(billingApiUrl: string): BoxliteConfiguration {
     linkedAccountsEnabled: false,
     announcements: {},
     proxyTemplateUrl: 'https://mock.local',
-    proxyToolboxUrl: 'https://mock.local',
     dashboardUrl: 'http://localhost:3000',
     maintananceMode: false,
     environment: 'mock',
@@ -136,7 +135,6 @@ export function buildBox(overrides: Partial<Box> & Pick<Box, 'id' | 'name' | 'st
     createdAt: now,
     updatedAt: now,
     class: BoxClassEnum.SMALL,
-    toolboxProxyUrl: 'https://mock.local',
     ...overrides,
   }
 }

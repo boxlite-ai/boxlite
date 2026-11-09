@@ -12,7 +12,6 @@ Name | Type | Description | Notes
 **announcements** | [**{ [key: string]: Announcement; }**](Announcement.md) | System announcements | [default to undefined]
 **pylonAppId** | **string** | Pylon application ID | [optional] [default to undefined]
 **proxyTemplateUrl** | **string** | Proxy template URL | [default to undefined]
-**proxyToolboxUrl** | **string** | Toolbox template URL | [default to undefined]
 **dashboardUrl** | **string** | Dashboard URL | [default to undefined]
 **maintananceMode** | **boolean** | Whether maintenance mode is enabled | [default to undefined]
 **environment** | **string** | Current environment | [default to undefined]
@@ -33,7 +32,6 @@ const instance: BoxliteConfiguration = {
     announcements,
     pylonAppId,
     proxyTemplateUrl,
-    proxyToolboxUrl,
     dashboardUrl,
     maintananceMode,
     environment,

@@ -600,6 +600,12 @@ export class OrganizationController {
   @RequiredOrganizationMemberRole(OrganizationMemberRole.OWNER)
   @UseGuards(AuthGuard('jwt'), OrganizationActionGuard)
   @RequireFlagsEnabled({ flags: [{ flagKey: 'organization_experiments', defaultValue: true }] })
+  @Audit({
+    action: AuditAction.UPDATE,
+    targetType: AuditTarget.ORGANIZATION,
+    targetIdFromRequest: (req) => req.params.organizationId,
+    requestMetadata: { configuration: () => 'experimental', cleared: (req) => req.body === null },
+  })
   async updateExperimentalConfig(
     @Param('organizationId') organizationId: string,
     @Body() experimentalConfig: Record<string, any> | null,

@@ -5,7 +5,6 @@ All URIs are relative to *http://localhost:3000*
 |Method | HTTP request | Description|
 |------------- | ------------- | -------------|
 |[**createUser**](#createuser) | **POST** /users | Create user|
-|[**enrollInSmsMfa**](#enrollinsmsmfa) | **POST** /users/mfa/sms/enroll | Enroll in SMS MFA|
 |[**getAuthenticatedUser**](#getauthenticateduser) | **GET** /users/me | Get authenticated user|
 |[**getAvailableAccountProviders**](#getavailableaccountproviders) | **GET** /users/account-providers | Get available account providers|
 |[**getUser**](#getuser) | **GET** /users/{id} | Get user by ID|
@@ -62,49 +61,6 @@ void (empty response body)
 | Status code | Description | Response headers |
 |-------------|-------------|------------------|
 |**201** |  |  -  |
-
-[[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
-
-# **enrollInSmsMfa**
-> string enrollInSmsMfa()
-
-
-### Example
-
-```typescript
-import {
-    UsersApi,
-    Configuration
-} from './api';
-
-const configuration = new Configuration();
-const apiInstance = new UsersApi(configuration);
-
-const { status, data } = await apiInstance.enrollInSmsMfa();
-```
-
-### Parameters
-This endpoint does not have any parameters.
-
-
-### Return type
-
-**string**
-
-### Authorization
-
-[bearer](../README.md#bearer), [oauth2](../README.md#oauth2)
-
-### HTTP request headers
-
- - **Content-Type**: Not defined
- - **Accept**: application/json
-
-
-### HTTP response details
-| Status code | Description | Response headers |
-|-------------|-------------|------------------|
-|**200** | SMS MFA enrollment URL |  -  |
 
 [[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
 
