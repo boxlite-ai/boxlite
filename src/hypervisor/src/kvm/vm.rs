@@ -328,6 +328,7 @@ mod tests {
 
         let vm = KvmVm::new().unwrap();
         let mut vcpu = vm.create_vcpu(0).unwrap();
+        // KVM validates long-mode registers against the guest CPUID.
         vcpu.set_cpu_features(vm.supported_cpuid(), &[]).unwrap();
         let code = X86Segment {
             limit: u32::MAX,
