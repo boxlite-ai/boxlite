@@ -21,6 +21,7 @@ import { RegionModule } from '../region/region.module'
 import { LogoutController } from './logout.controller'
 import { AccountLinkController } from './account-link.controller'
 import { AccountLinkService } from './account-link.service'
+import { McpDelegation } from './mcp-delegation'
 @Module({
   imports: [
     PassportModule.register({
@@ -76,8 +77,9 @@ import { AccountLinkService } from './account-link.service'
     },
     FailedAuthTrackerService,
     LoginEventRecorder,
+    McpDelegation,
   ],
-  exports: [PassportModule, JwtStrategy, ApiKeyStrategy, FailedAuthTrackerService],
+  exports: [PassportModule, JwtStrategy, ApiKeyStrategy, FailedAuthTrackerService, McpDelegation],
 })
 export class AuthModule {}
 

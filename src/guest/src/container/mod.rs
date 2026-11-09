@@ -70,6 +70,8 @@ mod lifecycle;
 #[cfg(target_os = "linux")]
 mod mount_override;
 #[cfg(target_os = "linux")]
+mod pty;
+#[cfg(target_os = "linux")]
 mod spec;
 #[cfg(target_os = "linux")]
 mod start;

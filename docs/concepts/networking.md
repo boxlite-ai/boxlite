@@ -157,7 +157,7 @@ The target contract also reserves `{"type":"app","app":"<app reference>"}`.
 REST and SDKs can represent it, but binding an App currently returns
 `400 app_target_not_supported`: the App resource, ownership validation and routing
 are not implemented. Existing Box bindings and tunnel authorization are unchanged.
-See the [target storage contract](../../apps/SCHEMA.md#domain). Removing `name` and
+See the [target storage contract](../contributing/architecture/platform/schema.md#domain). Removing `name` and
 extending the C target structure changes the unmerged domain API/ABI; rebuild
 C consumers and update SDK callers together.
 

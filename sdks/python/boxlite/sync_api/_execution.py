@@ -189,7 +189,10 @@ class SyncExecution:
         Get synchronous stdin writer.
 
         Returns:
-            SyncExecStdin writer, or None if stdin is not available.
+            SyncExecStdin writer.
+
+        Raises:
+            RuntimeError: The native execution has no available stdin stream.
 
         Usage:
             stdin = execution.stdin()
@@ -207,7 +210,10 @@ class SyncExecution:
         Get synchronous stdout iterator.
 
         Returns:
-            SyncExecStdout iterator, or None if stdout is not available.
+            SyncExecStdout iterator.
+
+        Raises:
+            RuntimeError: The native execution has no available stdout stream.
 
         Usage:
             stdout = execution.stdout()
@@ -225,7 +231,10 @@ class SyncExecution:
         Get synchronous stderr iterator.
 
         Returns:
-            SyncExecStderr iterator, or None if stderr is not available.
+            SyncExecStderr iterator.
+
+        Raises:
+            RuntimeError: The native execution has no available stderr stream.
 
         Usage:
             stderr = execution.stderr()

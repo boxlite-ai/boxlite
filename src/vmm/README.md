@@ -46,17 +46,21 @@ boxlite-vmm
 The x86_64 KVM boot and lifecycle are in place. The virtio common
 infrastructure (`virtio`) is in place for M2: the device contract, queue
 adapter, MMIO transport, interrupt handle and the shared virtio workers are
-tested with test devices, and `Vm` owns them. The first production device
-(`virtio::blk`, composed by `devices::add_all`) is tested with a real kernel.
-The output-only virtio console device is implemented and tested against real
-guest RAM and split virtqueues, but it is not wired into `Vm` yet; neither is
-the reporting balloon, so `Vm` composes only the block device for now. Linux
-arm64 and macOS arm64 remain required M2 qualification gates, blocked by their
-boot dependencies (#1698/#2103); unit tests or x86_64 evidence do not qualify
-those platforms or complete M2. The BoxLite engine adapter, engine selection
-and `native` feature wiring are separate M2 work.
-Neither new crate depends on `boxlite-shared`, and both are unpublished while
-their interfaces are being established.
+tested with test devices, and `Vm` owns them. `devices::add_all` composes one
+`virtio::blk` device per disk and then the reporting balloon, and both are
+tested with a real kernel. The output-only virtio console device is implemented
+and tested against real guest RAM and split virtqueues, but it is not wired
+into `Vm` yet. Linux arm64 and macOS arm64 remain required M2 qualification
+gates, blocked by their boot dependencies; unit tests or x86_64 evidence do not
+qualify those platforms or complete M2. The BoxLite engine adapter
+(`src/boxlite/src/vmm/native/`, behind the runtime's `native` feature)
+builds a `VmConfig` from the box specification and runs `Vm`; the pinned kernel
+also mounts an ext4 root disk and devtmpfs for a disk-root boot, so a box boots
+to `boxlite-guest` as PID 1. The vsock and virtio-fs devices and the virtio-net
+wiring follow in M2.
+Neither new crate depends on `boxlite-shared`; the release workflow publishes
+`boxlite-hypervisor`, then `boxlite-vmm`, before `boxlite`, now that the engine
+adapter depends on `boxlite-vmm`.
 
 ## Virtio network device
 
@@ -282,15 +286,17 @@ reboot=k` turns a panic, and the restart, into the i8042 reset.
 ## Vsock building blocks
 
 The Unix-only `virtio::vsock` module provides the wire codec, captured writable
-guest buffers and registered Unix socket sources. The connection state machine,
-backend routing, device facade and snapshots are subsequent layers of the
-[vsock design](https://github.com/boxlite-ai/boxlite/issues/2312).
-There is no attached vsock device at this layer.
+guest buffers, registered Unix socket sources, stream connections and explicit
+Unix backend routing behind `Vsock`, a stream-only virtio device.
+The [vsock design](https://github.com/boxlite-ai/boxlite/issues/2312) covers this
+contract; `Vm::new` does not attach it and native-engine integration remains
+outside this layer.
 
 The codec uses explicit little-endian fields and rejects truncated packets or
 payloads above 64 KiB. A captured buffer owns checked descriptor metadata and
-uses the chain's total capacity: a 4096-byte chain writes a 44-byte header and
-up to 4052 stream bytes. The caller retains any unsent tail. Header-only buffers
+provides checked scatter writes. The device's receive stage owns fragmentation
+and delivery accounting: a 4096-byte chain writes a 44-byte header and
+up to 4052 stream bytes, retaining any unsent tail. Header-only buffers
 can carry controls; data returns zero bytes, while shorter headers require reset.
 Callers own nonblocking standard-library Unix streams and listeners directly.
 `Registration::stream` and `Registration::listener` clone a handle for the poller;
@@ -301,11 +307,138 @@ registration deregisters and closes only the polling copy, leaving caller I/O
 usable. Closing the caller's socket first is safe too; the polling copy keeps it
 open until deregistration. Failed registration leaves the original socket intact.
 Callers must set accepted streams nonblocking before worker use. This ownership
-change has no measured throughput claim.
+change has no measured throughput claim. Direct std I/O with duplicated mio
+polling handles relies on the Unix epoll/kqueue implementation; dependency
+upgrades must rerun readiness and production-worker continuation tests.
+
+Each connection owns its nonblocking stream and drops its registration before
+the stream. Guest requests receive a RESPONSE when the host socket connects;
+host-initiated flows wait for RESPONSE before exchanging bytes. Unexpected
+handshakes and operations reset only that flow.
+
+While awaiting RESPONSE, a host closing both socket directions cancels the flow,
+discards its queued packets and emits RST, even when unread host bytes remain.
+The connection checks closure using a zero-timeout `poll` inside the existing
+readiness callback. Separate read/write entries distinguish macOS's directional
+hangups; both must report `POLLHUP`. The probe consumes no bytes and preserves
+half-close. Worker dispatch and public event contracts are unchanged. Established
+streams retain the ordered EOF handling below. Cleanup resumes listeners stalled
+at the connection cap; output backpressure still waits for RX capacity. Live hosts
+with unanswered handshakes have no timeout.
+
+Pending guest writes are bounded at 64 KiB. Partial writes retain the tail,
+WouldBlock retains all pending bytes, and only successful writes advance
+`fwd_cnt`. Each turn performs at most one write and one read of up to 4 KiB,
+reporting whether runnable work may remain. The caller preserves outgoing
+packet order and leaves capacity for up to two output packets per turn.
+
+Host data reserves guest credit before entering the outgoing queue. Call
+`delivered` only for payload actually copied into guest buffers; acknowledgments
+beyond that count are rejected, including acknowledgments for retained RX tails.
+Counters wrap at 32 bits. At zero credit, a one-byte lookahead detects an empty
+socket's EOF without sending uncredited data. If it reads data, that byte waits
+for credit and precedes subsequent reads; EOF behind data waits too.
+Credit requests are coalesced until credit returns.
+
+Guest SEND shutdown drains pending writes before closing the host write half;
+guest RECEIVE stops host reads while allowing guest writes. Host EOF emits
+SHUTDOWN/SEND after queued data and leaves guest writes usable. Both guest
+shutdown flags produce RST once pending writes drain.
+
+The backend connects guest requests only to configured paths and accepts host
+connections only from caller-provided listeners. Mappings retain their original
+listeners across backend teardown. The backend shares immutable `Arc<Mappings>`
+and owns registrations for duplicated polling handles; I/O uses concrete std
+sockets without a mutex. Host accepts receive monotonically increasing ports from
+`1 << 30`, skipping configured connect ports; ports are not reused before reset.
+Exhausting the range closes new accepts. Non-transient listener errors remain
+fatal; descriptor-exhaustion retry scheduling is not implemented here.
+
+Limits are 128 live connections and 256 outgoing packets. Callers check
+`can_receive` before consuming a non-RST guest packet and call `drive` when output
+space returns. A TX-head RST is processed even when output is full: it closes
+that flow and discards its queued output without generating a reply. RST does
+not overtake earlier TX packets; REQUEST and SHUTDOWN still wait for capacity.
+A deque rotates flows after each bounded I/O turn, so output pressure
+does not repeatedly favor one flow. Routing scans at most 128 entries; this
+removes the separate sorted map, copied key list and cursor. A reset removes
+that flow's queued packets; RECEIVE shutdown discards its queued data.
+
+Like virtio-net, each device callback has an explicit I/O budget. TX and RX each
+process at most 256 heads; listener scanning attempts at most 256 accepts. The
+128-connection limit and one read/write per connection bound stream data I/O to
+256 calls per callback. Partial listener scans retain their position and whether
+an earlier accept succeeded or was interrupted. Reaching the end schedules another
+sweep only when a retry is needed; readiness arriving mid-sweep also requests a
+full recheck, including when output pressure delays acceptance. A complete empty
+sweep stops. Capacity stalls
+wait for external progress. Budget continuations yield through a private readiness source,
+so the callback does not drain a continuously refilled socket indefinitely.
+
+The device advertises ID 19, an eight-byte read-only CID and three queues with
+maximum size 256: RX, TX and events. It requires all three queues ready and
+successful feature negotiation. It accepts no device-specific feature bits;
+the MMIO transport supplies VERSION_1. Explicit mappings reject duplicate or
+reserved ports, invalid CIDs and invalid Unix pathnames before activation.
+
+Each callback captures RX descriptor metadata and copies TX packets before
+completing any head. No borrowed chain survives intake. TX storage is bounded
+by 256 packets of at most 64 KiB payload; RX retains at most 256 heads.
+Deferred completions use the queue facade's notification decision exactly once.
+The current virtio-queue dependency does not implement the optional legacy
+`NO_INTERRUPT` hint; this device does not offer EVENT_IDX.
+The event queue remains untouched because migration events are unsupported.
+
+```text
+queue/source → process: collect → transmit → backend.drive → receive
+                       → signal private source when work can resume
+```
+
+RX delivery fragments packets at the buffer boundary. For example, a 4096-byte
+payload and 4096-byte RX chain produce 4052 payload bytes, then a 44-byte tail
+in the next chain. Each header and used length describes only that fragment;
+the tail stays ahead of later data and shutdown. Only copied payload advances
+delivered credit. Header-only RX completes with zero bytes when data waits.
+
+Vsock owns a nonblocking Unix socket pair for continuation, with its reader
+registered through the existing `Registration` interface. Scheduling writes one
+byte only when no request is pending; its `BackendReady` callback consumes that
+byte. Requests made during a callback arrive on a later poll, letting other slots
+run. The registration stays fixed for the activation, avoiding per-round SourceId
+allocation. This costs two socket endpoints and one polling duplicate. Private
+callbacks do not trigger listener rescans. The common poller `Waker` remains
+unchanged and is not used to request device callbacks.
+
+Activation rolls back partial registrations on failure and signals the private
+source for the first scan; prepared readiness is retained until worker start.
+Reset closes the notification pair and streams, discards
+deferred work and requires feature negotiation again, while retaining mappings.
+Stopping the worker generation precedes reset, so callbacks cannot write old
+guest buffers after reset. Replenished RX resumes output and deferred TX;
+WouldBlock, missing credit and full output do not continually self-schedule.
+
+Like virtio-net, snapshots advertise `Unsupported`: active and inactive
+`save_state` reject snapshots, and `quiesce`/`restore_state` remain unsupported.
+There is no serialization, RestoreContext extension or active-VM restore.
 
 `make test:unit:vmm FILTER=vsock` checks encoding, packet bounds, guest-memory
 scatter delivery, real Unix stream/listener readiness, and registration cleanup
-in either ownership order, including rejected registrations.
+in either ownership order, including rejected registrations. Connection tests
+also cover both handshakes, actual partial writes and WouldBlock, credit stalls,
+partial delivery acknowledgments, counter wraparound, half-close and zero-credit
+EOF ordering. Backend tests cover explicit mappings, host accepts, limits,
+fairness after output pressure, budgeted listener scans and retries across empty
+scan segments, isolated resets and registration rollback.
+Device tests cover 4096/61/45-byte RX chains, deferred TX/RX ownership,
+and REQUEST/SHUTDOWN TX completion withheld at full output capacity, then
+resumed in order exactly once after RX replenishment. RST tests cover immediate
+TX-head completion at capacity, socket and registration cleanup, isolated output
+discard, and resumption of following TX without RX replenishment. They also cover
+malformed chains, activation rollback and Unsupported snapshots. MMIO tests use
+the production shared worker, including a host burst and EOF without new kicks
+or writes. Vsock tests also check private notification coalescing, preparation
+and reset cleanup. These are local
+socket and guest-memory tests; real-guest qualification remains separate.
 
 ## Lifecycle
 
@@ -514,7 +647,8 @@ replace the shared one without changing the transport, the devices or `Vm`.
 `devices::add_all` is the one place that names device types. `Vm::new` calls it
 through `Vm::with_devices`; the helper adds the legacy platform devices, then
 each configured device type in slot order, and finally announces every slot on
-the kernel command line.
+the front of the kernel command line, which is always before any `--` that
+starts the init arguments, so the caller's text is never parsed.
 
 - **One line per device.** `add_slot_device` takes the next `Slot`, runs the
   device's attach function, and records the slot for `announce`. Adding a
@@ -543,7 +677,7 @@ took, and then announces that slot on the kernel command line.
   19 slots in all (the legacy range above COM1 and below the MSI space, as
   Firecracker and libkrun allocate it). `Slot::cmdline_arg` renders the
   `virtio_mmio.device=4K@<base>:<gsi>` argument the kernel probes, and
-  `announce` appends one per slot under the command-line budget, so the
+  `announce` puts one per slot at the front under the command-line budget, so the
   chipset claim and the kernel's view come from the same value. Disks take
   slots in `VmConfig::disks` order, so disk 0 is `/dev/vda`, disk 1 is
   `/dev/vdb`, and so on.

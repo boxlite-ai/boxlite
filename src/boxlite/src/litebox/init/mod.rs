@@ -31,7 +31,7 @@
 //!   3. PortPublish          (reconcile publication after a core crash)
 //! ```
 //!
-//! `CleanupGuard` provides RAII cleanup on failure.
+//! `CleanupGuard` cleans up failed starts; reconnect failures leave the live VM intact.
 
 mod tasks;
 mod types;
@@ -216,9 +216,9 @@ impl BoxBuilder {
 
     /// Build and initialize LiveState.
     ///
-    /// Executes all initialization stages with automatic cleanup on failure.
-    /// Returns (LiveState, CleanupGuard) - caller must disarm guard after all
-    /// operations succeed (including DB persist).
+    /// Failed starts clean up automatically. Reattaching to a Running box leaves
+    /// its VM and persisted state intact if reconnecting fails. The caller must
+    /// disarm the returned guard after a successful start and DB persist.
     pub(crate) async fn build(self) -> BoxliteResult<BuiltBox> {
         use std::time::Instant;
 
@@ -241,15 +241,17 @@ impl BoxBuilder {
             skip_guest_wait,
             state.resolved_image.clone(),
         );
+        if status == BoxStatus::Running {
+            // Adoption borrows an existing VM; a reconnect failure must not stop it
+            // or replace its Running state with an initialization failure.
+            ctx.guard.disarm();
+        }
         ctx.outbound_policy = state.outbound_policy.clone();
         let ctx = Arc::new(Mutex::new(ctx));
         let ctx_for_cleanup = Arc::clone(&ctx);
 
-        // Note: Guard stays armed until caller disarms it after DB persist succeeds.
-        // On any error path inside `inner`, we capture the error onto the guard
-        // so `CleanupGuard::drop` can persist it as `BoxState::Failed` with
-        // `error_reason`. This matches Daytona/Kata/containerd/Docker semantics
-        // of "preserve the record on init failure".
+        // New and restarted VMs stay guarded through the caller's DB persist.
+        // Capture initialization errors so cleanup preserves their cause.
         let inner = async move {
             let plan = get_execution_plan(status)?;
             let pipeline = PipelineBuilder::from_plan(plan);
@@ -267,8 +269,8 @@ impl BoxBuilder {
 
             metrics.log_init_stages();
 
-            // Note: Guard is NOT disarmed here. Caller is responsible for disarming
-            // after all operations succeed (including DB persist).
+            // Start guards remain armed through the caller's DB persist;
+            // the Running adoption guard was disarmed before pipeline work.
 
             // Get guest_session from GuestConnectTask
             let guest_session = ctx.guest_session.take().ok_or_else(|| {
@@ -299,7 +301,7 @@ impl BoxBuilder {
             let bind_mount = ctx.bind_mount.take();
 
             // Take the guard out of context, replacing with a disarmed placeholder.
-            // The caller is responsible for disarming the returned guard after all
+            // For starts, the caller disarms the returned guard after all
             // operations succeed (including DB persist).
             let mut placeholder =
                 types::CleanupGuard::new(ctx.runtime.clone(), ctx.config.id.clone());
@@ -335,8 +337,7 @@ impl BoxBuilder {
         match inner.await {
             Ok(parts) => Ok(parts),
             Err(e) => {
-                // Capture the cause onto the still-armed guard inside ctx so
-                // its Drop can mark the box `Failed` with this reason.
+                // Armed start guards persist the initialization failure cause.
                 ctx_for_cleanup.lock().await.guard.set_last_error(&e);
                 Err(e)
             }
@@ -461,6 +462,23 @@ mod plan_tests {
         );
 
         let enabled = ExperimentalFeatures::parse("nested-virtualization").unwrap();
+        validate_persisted_options(&enabled, &options).unwrap();
+    }
+
+    #[test]
+    fn persisted_engine_choice_uses_injected_feature_state() {
+        let mut advanced = crate::runtime::advanced_options::AdvancedBoxOptions::default();
+        advanced.engine = Some(crate::vmm::VmmKind::Native);
+        let options = crate::BoxOptions {
+            advanced,
+            ..Default::default()
+        };
+
+        let error = validate_persisted_options(&ExperimentalFeatures::default(), &options)
+            .expect_err("a persisted engine choice must be disabled by default");
+        assert!(error.to_string().contains("ExperimentalFeature::NativeVmm"));
+
+        let enabled = ExperimentalFeatures::parse("native-vmm").unwrap();
         validate_persisted_options(&enabled, &options).unwrap();
     }
 }

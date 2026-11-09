@@ -54,8 +54,13 @@ export class AllExceptionsFilter implements ExceptionFilter {
     // publishes, and a caller that parses one should not need a second parser.
     let progress: Record<string, unknown> | undefined
 
-    // If the exception is a NotFoundException and the request path is not an API request, serve the dashboard index.html file
-    if (exception instanceof NotFoundException && !request.path.startsWith('/api/') && !isAdminApi) {
+    // A NotFoundException outside the API serves the dashboard, which routes on
+    // the client. `/.well-known/` documents are machine-read (RFC 9728 metadata,
+    // for one), so a missing one stays a 404 rather than a 200 HTML page. Express
+    // routes ignore case, so the check does too.
+    const path = request.path.toLowerCase()
+    const servesDashboard = !path.startsWith('/api/') && !path.startsWith('/.well-known/')
+    if (exception instanceof NotFoundException && servesDashboard && !isAdminApi) {
       const response = ctx.getResponse()
       response.sendFile(join(__dirname, '..', 'dashboard', 'index.html'))
       return

@@ -2,6 +2,7 @@ PHONY_TARGETS += test test\:unit\:cli test\:unit\:vmm test\:unit\:guest test\:gu
 PHONY_TARGETS += test\:integration\:vmm\:kvm test\:integration\:vmm\:elf test\:integration\:vmm\:linux _ensure-kvm _ensure-vmm-kernel test\:vmm\:boot
 PHONY_TARGETS += test\:integration\:vmm\:hvf _ensure-hvf
 PHONY_TARGETS += test\:apps\:runner
+PHONY_TARGETS += test\:apps\:infra-local
 PHONY_TARGETS += test\:apps\:proxy test\:apps\:dashboard
 PHONY_TARGETS += test\:apps\:mdeploy test\:e2e\:drivers
 PHONY_TARGETS += _local-registry
@@ -45,7 +46,7 @@ GOTEST_FILTER    = $(if $(FILTER),-run '$(FILTER)',)
 # targets so coverage measures exactly what the unit suite runs. Test builds
 # still get boxlite's default features back through the boxlite-test-utils
 # dev-dependency, so they need the vendored submodules or BOXLITE_DEPS_STUB=1.
-RUST_UNIT_CORE_ARGS   = -p boxlite --no-default-features --lib
+RUST_UNIT_CORE_ARGS   = -p boxlite --no-default-features --features native --lib
 RUST_UNIT_SHARED_ARGS = -p boxlite-shared --lib
 RUST_UNIT_REST_ARGS   = -p boxlite --no-default-features --features rest --lib
 RUST_UNIT_VMM_ARGS    = -p boxlite-hypervisor -p boxlite-vmm --lib
@@ -327,6 +328,14 @@ test\:integration\:vmm\:linux: _ensure-kvm _ensure-vmm-kernel $(VMM_BALLOON_INIT
 	@cargo test -p boxlite-vmm --lib --no-run
 	@timeout $(VMM_BOOT_TESTS_TIMEOUT) cargo test -p boxlite-vmm --lib boot::tests:: -- --ignored --test-threads=1 --nocapture
 
+# Boot the real kernel through the native engine inside boxlite-shim: the M1 initramfs to its marker,
+# a typed Unsupported failure into the exit file, and an alpine box through the runtime up to
+# boxlite-guest as PID 1 on the ext4 root (the first-box progress test).
+test\:integration\:vmm\:native: _ensure-kvm _ensure-vmm-kernel $(if $(SETUP_DONE),,runtime\:debug)
+	@cargo test -p boxlite --features native --lib --no-run
+	@timeout 300s cargo test -p boxlite --features native --lib vmm::native::tests:: -- --ignored --test-threads=1
+	@timeout 600s cargo test -p boxlite --features krun,gvproxy,native --test native_vmm -- --ignored --test-threads=1
+
 # A host without Hypervisor.framework must fail HVF qualification, not report skipped tests as a pass.
 _ensure-hvf:
 	@test "$$(uname -s -m)" = "Darwin arm64" || { echo "macOS arm64 is required" >&2; exit 1; }
@@ -432,10 +441,10 @@ test\:warm-cache\:rust: $(if $(SETUP_DONE),,runtime\:debug)
 test\:integration\:rust: $(if $(SETUP_DONE),,runtime\:debug test\:warm-cache\:rust)
 	@echo "🧪 Running Rust integration tests (requires VM)..."
 	@if command -v cargo-nextest >/dev/null 2>&1; then \
-		cargo nextest run -p boxlite --features krun,gvproxy --test '*' --no-fail-fast --profile vm \
+		cargo nextest run -p boxlite --features krun,gvproxy,native --test '*' --no-fail-fast --profile vm \
 			$(NEXTEST_FILTER); \
 	else \
-		cargo test -p boxlite --features krun,gvproxy --test '*' --no-fail-fast -- --test-threads=1 --nocapture \
+		cargo test -p boxlite --features krun,gvproxy,native --test '*' --no-fail-fast -- --test-threads=1 --nocapture \
 			$(CARGOTEST_FILTER); \
 	fi
 
@@ -446,10 +455,10 @@ test\:integration\:agents: $(if $(SETUP_DONE),,runtime\:debug)
 		echo "❌ Set BOXLITE_TEST_OPENCODE_BINARY to the OpenCode 2.2.2 glibc Linux binary"; exit 1; }
 	@echo "🧪 Running OpenCode agent tests (requires VM)..."
 	@if command -v cargo-nextest >/dev/null 2>&1; then \
-		cargo nextest run -p boxlite --features krun,gvproxy --test agents_opencode --run-ignored only \
+		cargo nextest run -p boxlite --features krun,gvproxy,test-support,native --test agents_opencode --run-ignored only \
 			--no-fail-fast --profile vm $(NEXTEST_FILTER); \
 	else \
-		cargo test -p boxlite --features krun,gvproxy --test agents_opencode --no-fail-fast -- \
+		cargo test -p boxlite --features krun,gvproxy,test-support,native --test agents_opencode --no-fail-fast -- \
 			--ignored --test-threads=1 --nocapture $(CARGOTEST_FILTER); \
 	fi
 
@@ -627,6 +636,9 @@ _ensure-infra-deps:
 # Type-check first: the suite runs under `tsx --test`, which strips types without checking them, so
 # a signature change that no longer compiles still leaves every test green. tsconfig.tooling.json
 # is the subset that checks without `sst install`; test:apps:infra-config below covers the rest.
+test\:apps\:infra-local:
+	@$(MAKE) -C apps/infra-local test
+
 test\:apps\:infra: _ensure-infra-deps
 	@echo "🧪 Type-checking infrastructure scripts..."
 	@cd apps/infra && npm run --silent typecheck:tooling

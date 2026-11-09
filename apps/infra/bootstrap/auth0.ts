@@ -58,10 +58,11 @@ export function spaApplicationArgs({
 }
 
 // The API identifier becomes OIDC_AUDIENCE verbatim; it is an opaque
-// identifier to Auth0, not a URL it ever dereferences.
-export function customApiArgs({ stackDomain, name = 'boxlite-api' }: any) {
-  requireHostname('stackDomain', stackDomain)
-  return ['apis', 'create', '--name', name, '--identifier', `https://${stackDomain}/api`, '--json']
+// identifier to Auth0, not a URL it ever dereferences. It names the host the
+// API answers on, with no path, as clients call it: `https://api.<domain>/v1/...`.
+export function customApiArgs({ apiHost, name = 'boxlite-api' }: any) {
+  requireHostname('apiHost', apiHost)
+  return ['apis', 'create', '--name', name, '--identifier', `https://${apiHost}`, '--json']
 }
 
 /*

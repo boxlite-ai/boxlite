@@ -10,6 +10,8 @@ How the code fits together.
 
 - [Architecture](architecture/README.md): components, the VMM abstraction, host-guest RPC,
   concurrency, and error handling.
+- [Hosted platform](architecture/platform/README.md): how the `apps/` services fit together,
+  their interfaces, and their data model.
 - [VMM design](architecture/vmm/README.md): BoxLite's own VMM, which is replacing libkrun, with
   background on [Hypervisor.framework](architecture/vmm/hvf.md), [KVM](architecture/vmm/kvm.md),
   the [Windows Hypervisor Platform](architecture/vmm/whp.md), and
@@ -33,6 +35,7 @@ How to build, test, and change the code.
 
 Dated root-cause analyses and design studies, newest first.
 
+- 2026-11-06 · [Registration email policy](investigations/2026-11-06-registration-email-policy.md): disposable-domain rejection at platform account creation with existing-user access preserved.
 - 2026-11-04 · [CLI-managed SSH setup](investigations/ssh-quick-configuration.md): managed SSH credentials and the printed SSH connection command.
 - 2026-11-02 · [VMM virtio-net device](investigations/2026-11-02-vmm-virtio-net.md): guest queue framing, gvproxy stream backpressure, event contracts and device-only qualification.
 - 2026-10-28 · [Agent REST API design](investigations/2026-10-28-agent-rest-api-design.md): nine HTTP operations for agents, turns and interaction, with snapshot, retry and event-recovery contracts.

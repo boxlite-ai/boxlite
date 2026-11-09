@@ -21,6 +21,8 @@ The BoxLite CLI (`boxlite`) lets you create, run, and manage BoxLite boxes from 
 - **Inspect** — Show detailed box info (JSON, YAML, or Go template)
 - **Exec** — Run commands in a running or safely resumable box
 - **Images** — Pull and list OCI images
+
+- **Executions** — List live guest processes with `boxlite top BOX`; reattach with `boxlite attach BOX EXECUTION_ID`, or recover control with `boxlite kill BOX EXECUTION_ID` / `boxlite signal BOX EXECUTION_ID SIGNAL`.
 - **Copy** — Copy files between host and box (`boxlite cp`)
 - **Output formats** — Table, JSON, or YAML for list/images
 - **Shell completion** — Bash, Zsh, Fish
@@ -729,7 +731,7 @@ Then reload your shell or source the file.
 | `BOXLITE_SERVE_API_KEY` | Expected bearer key for `serve`; equivalent to `serve --api-key`. |
 | `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_AUDIENCE` | OIDC login fallbacks after flags and server discovery. |
 | `BOXLITE_LOG_FILE` | Explicit JSON log-file path for any command; `serve` otherwise defaults to `<BOXLITE_HOME>/logs/serve.log`. |
-| `BOXLITE_EXPERIMENTAL` | Comma-separated RC features: `custom-kernel`, `nested-virtualization`. |
+| `BOXLITE_EXPERIMENTAL` | Comma-separated RC features: `custom-kernel`, `nested-virtualization`, `native-vmm`. |
 | `BOXLITE_RECONNECT_GRACE` | `serve` reconnect grace (default `5m`). |
 | `BOXLITE_SHUTDOWN_GRACE` | `serve` shutdown-stage grace (default `30s`). |
 | `BOXLITE_MAX_SESSION_LIFETIME` | `serve` session hard cap (default `24h`). |

@@ -635,6 +635,10 @@
         "comment": "libkrun: thread-group signal delivery"
       },
       {
+        "syscall": "rt_sigtimedwait",
+        "comment": "native engine: a vCPU thread drains its kick signal with sigtimedwait after KVM_RUN returns (src/hypervisor/src/kvm/kick.rs); the vmm filter covers every thread."
+      },
+      {
         "syscall": "nanosleep",
         "comment": "libkrun: sleep operations"
       },

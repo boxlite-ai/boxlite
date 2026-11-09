@@ -31,12 +31,10 @@ def _detect_repo_root() -> Path:
 
 
 def _default_state_root() -> Path:
-    """Repo-scoped root for ALL generated local-stack state: <repo>/.apps-local/.
+    """Repo-scoped data, binaries and logs: <repo>/.apps-local/.
 
-    One gitignored dir holds the data volumes, the L1 SDK home, the runner
-    home, the native binaries, and the L2 logs — discoverable footprint,
-    per-checkout isolation, and deliberately NOT under cargo's target/ so a
-    `cargo clean` can never delete a live Postgres volume.
+    Socket-bearing SDK homes use worktree_home() separately. Data stays
+    outside cargo's target/ so cleaning build outputs cannot delete Postgres.
     """
     return _detect_repo_root() / ".apps-local"
 
@@ -86,7 +84,7 @@ class InfraConfig:
     # Each value is also the literal host port in the matching
     # ServiceSpec.ports in services.py — that literal is what the box actually
     # binds. These named fields exist only so generated configs (the Caddyfile,
-    # the minio-init URL, dex_issuer) and the integration tests can reference
+    # the S3 bootstrap URL, dex_issuer) and the integration tests can reference
     # the same number by name. Changing one of these alone will NOT move the
     # bound port; update the services.py literal too. Ports with no such
     # consumer (postgres, redis, caddy-https, otel-grpc) are left as bare

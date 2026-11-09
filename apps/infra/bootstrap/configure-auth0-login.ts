@@ -5,9 +5,11 @@ import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+import { loadDeploymentEnvironment } from '../deployment/environment.js'
 import {
   Auth0CliManagementClient,
   Auth0LoginPolicyConfigurator,
+  assertStageApiAudience,
   missingLoginPolicyScopes,
   parseAuth0LoginPolicyOptions,
 } from './auth0-login-policy.js'
@@ -41,6 +43,9 @@ try {
     )
   } else {
     const options = parseAuth0LoginPolicyOptions(process.argv.slice(2))
+    // The stage's .env names the audience its API validates; an exported value wins.
+    loadDeploymentEnvironment()
+    assertStageApiAudience(options.apiAudience ?? '')
     // Checked here rather than in the configurator: the session belongs to the
     // CLI client this entrypoint chose. Apply only — preview writes nothing, so
     // a scope it lacks costs a failed read, not a half-applied tenant.

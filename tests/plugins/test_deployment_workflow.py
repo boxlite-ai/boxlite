@@ -87,11 +87,11 @@ class DeploymentBoundaryTests(unittest.TestCase):
 
     def test_explicit_home_and_api_survive_every_cli_operation(self):
         _, calls, _ = self.run_deployment('success', home='/isolated/boxlite-home',
-                                          api_url='https://app.boxlite.ai/api')
+                                          api_url='https://api.boxlite.ai')
         for argv in calls:
             self.assertIn('--home', argv)
             self.assertEqual(argv[argv.index('--home') + 1], '/isolated/boxlite-home')
-            self.assertEqual(argv[argv.index('--url') + 1], 'https://app.boxlite.ai/api')
+            self.assertEqual(argv[argv.index('--url') + 1], 'https://api.boxlite.ai')
             self.assertEqual(argv[argv.index('--profile') + 1], 'selected')
 
     def test_archive_operations_have_longer_deadlines_without_shortening_restart(self):

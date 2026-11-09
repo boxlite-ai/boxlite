@@ -802,14 +802,12 @@ async fn attach_refuses_a_stopped_box() {
     let _ = runtime.shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT)).await;
 }
 
-/// `attach(Some(id))` — reattaching to an exec by id — is REST-only.
+/// `attach(Some(id))` on the local backend only addresses a running box.
 ///
-/// The single `attach(execution_id)` folds in what used to be `attach_exec`. A
-/// local, in-process exec keeps the `Execution` it was created with and never
-/// drops its stream, so there is nothing to reattach to by id: the local backend
-/// supports the main session (`None`) only and refuses the `Some(id)` arm.
+/// A configured box has no live guest session to attach to, and the explicit
+/// ID path must reject it without selecting the create/restart pipeline.
 #[tokio::test]
-async fn attach_by_exec_id_is_unsupported_on_the_local_backend() {
+async fn attach_by_exec_id_on_a_configured_box_does_not_boot() {
     let home = boxlite_test_utils::home::PerTestBoxHome::new();
     let runtime = boxlite::BoxliteRuntime::new(boxlite::runtime::options::BoxliteOptions {
         home_dir: home.path.clone(),
@@ -818,9 +816,6 @@ async fn attach_by_exec_id_is_unsupported_on_the_local_backend() {
     })
     .expect("create runtime");
 
-    // Never started: the `Some(id)` arm is refused before any box state matters,
-    // so no VM is booted (and the box name holds neither "local" nor "reattach",
-    // keeping the message assertion honest).
     let handle = runtime
         .create(
             main_command_opts(&["sh", "-c", "sleep 30"], false),
@@ -829,16 +824,24 @@ async fn attach_by_exec_id_is_unsupported_on_the_local_backend() {
         .await
         .expect("create box");
 
-    let msg = match handle
+    let error = match handle
         .attach(AttachOptions::execution("some-exec-id"))
         .await
     {
-        Ok(_) => panic!("local attach(Some(id)) must be Unsupported, not succeed"),
-        Err(e) => e.to_string(),
+        Ok(_) => panic!("a configured box must not accept an execution attach"),
+        Err(e) => e,
     };
     assert!(
-        msg.contains("local") && msg.contains("reattach"),
-        "the error must explain local reattach is unsupported, got: {msg}"
+        matches!(
+            &error,
+            boxlite::BoxliteError::InvalidState(message)
+                if message.contains(boxlite::BoxStatus::Configured.as_str())
+        ),
+        "the error must be InvalidState naming the box state, got: {error}"
+    );
+    assert_eq!(
+        handle.info().await.expect("box info").status,
+        boxlite::BoxStatus::Configured
     );
 
     let _ = runtime.remove(handle.id().as_str(), true).await;

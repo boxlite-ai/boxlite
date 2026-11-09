@@ -253,6 +253,7 @@ export function buildApi(input: ApiInputs) {
         ...(process.env.OIDC_POST_LOGOUT_REDIRECT_ALLOWLIST && {
           OIDC_POST_LOGOUT_REDIRECT_ALLOWLIST: process.env.OIDC_POST_LOGOUT_REDIRECT_ALLOWLIST,
         }),
+        ...(process.env.MCP_RESOURCE_URL && { MCP_RESOURCE_URL: process.env.MCP_RESOURCE_URL }),
 
         // S3 (API mints STS creds for per-box buckets). No S3_ACCESS_KEY /
         // S3_SECRET_KEY: the API uses the SDK default chain (task role) and

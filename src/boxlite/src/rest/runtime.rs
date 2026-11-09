@@ -274,6 +274,13 @@ impl BoxOptions {
             ));
         }
 
+        if self.advanced.engine.is_some() {
+            return Err(BoxliteError::Unsupported(
+                "engine selection (advanced.engine) is only supported by the local runtime"
+                    .to_string(),
+            ));
+        }
+
         // Mounts. `BoxOptions::sanitize` is local-only, so
         // `VolumeSpec::validate` — the "exactly one origin" invariant that C and
         // Go callers can violate by setting the fields directly — has no other
@@ -964,6 +971,26 @@ mod tests {
             .await
             .err()
             .expect("REST nested virtualization must be rejected before network I/O");
+
+        assert!(matches!(error, BoxliteError::Unsupported(_)));
+        assert!(error.to_string().contains("local runtime"));
+    }
+
+    #[tokio::test]
+    async fn create_rejects_engine_selection_in_rest_mode() {
+        let options = BoxliteRestOptions::new("http://localhost:1");
+        let runtime = RestRuntime::new(&options).expect("failed to create REST runtime");
+        let mut advanced = crate::runtime::advanced_options::AdvancedBoxOptions::default();
+        advanced.engine = Some(crate::vmm::VmmKind::Native);
+        let box_options = BoxOptions {
+            advanced,
+            ..Default::default()
+        };
+
+        let error = RuntimeBackend::create(&runtime, box_options, None)
+            .await
+            .err()
+            .expect("REST engine selection must be rejected before network I/O");
 
         assert!(matches!(error, BoxliteError::Unsupported(_)));
         assert!(error.to_string().contains("local runtime"));
