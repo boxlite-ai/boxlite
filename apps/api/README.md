@@ -59,6 +59,15 @@ Deploy the API after upgrading the package to apply the new list.
 Run `make test:apps:api TEST_FILES='user.service.registration-email|jwt.strategy'` for the registration checks,
 and `make build:apps:api` to validate the production bundle and dependency imports.
 
+## User creation transactions
+
+User creation inserts a new row and reads database defaults in the same transaction
+that emits the creation event and creates the default organization and owner. An
+organization failure rolls back the user. Creating a duplicate user ID returns
+`409 user_already_exists` without replacing data; other database errors retain their
+original behavior. Concurrent attempts can commit only one user and default organization.
+
+
 ## Box startup timeouts
 
 REST creation persists the Box before waiting up to 30 seconds for `STARTED`.

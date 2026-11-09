@@ -4,12 +4,10 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common'
-import { isDisposableEmail } from '@visulima/disposable-email-domains/edge'
-import { isEmail } from 'class-validator'
+import { Injectable, NotFoundException } from '@nestjs/common'
 import { InjectRepository } from '@nestjs/typeorm'
 import { User, UserSSHKeyPair } from './user.entity'
-import { DataSource, ILike, In, Repository } from 'typeorm'
+import { DataSource, ILike, In, QueryFailedError, Repository } from 'typeorm'
 import { CreateUserDto } from './dto/create-user.dto'
 import * as crypto from 'crypto'
 import { EventEmitter2 } from '@nestjs/event-emitter'
@@ -20,10 +18,8 @@ import { UserDeletedEvent } from './events/user-deleted.event'
 import { UserEmailVerifiedEvent } from './events/user-email-verified.event'
 import { recordOutcomes } from '../common/utils/business-event.util'
 import { Context } from '../common/context/context'
-import { EmailUtils } from '../common/utils/email.util'
-import { DisposableEmailException } from '../exceptions/disposable-email.exception'
-
-const PG_UNIQUE_VIOLATION = '23505'
+import { normalizeRegistrationEmail } from './registration-email'
+import { UserAlreadyExistsException } from './user-already-exists.exception'
 
 @Injectable()
 export class UserService {
@@ -36,15 +32,7 @@ export class UserService {
 
   /** Records the user.registration events of the new user, started by ctx. */
   async create(createUserDto: CreateUserDto, ctx: Context): Promise<User> {
-    const email = createUserDto.email ? EmailUtils.normalize(createUserDto.email) : undefined
-    if (email !== undefined) {
-      if (!isEmail(email)) {
-        throw new BadRequestException({ message: 'Invalid email address', code: 'invalid_email' })
-      }
-      if (isDisposableEmail(email)) {
-        throw new DisposableEmailException()
-      }
-    }
+    const email = createUserDto.email ? normalizeRegistrationEmail(createUserDto.email) : undefined
 
     const defaultOrganizationDefaultRegionId =
       createUserDto.defaultOrganizationDefaultRegionId ?? createUserDto.personalOrganizationDefaultRegionId
@@ -68,13 +56,26 @@ export class UserService {
       { name: 'user.registration', correlationId: createUserDto.id, ctx },
       () =>
         this.dataSource.transaction(async (em) => {
-          user = await em.save(user)
+          try {
+            await em.insert(User, user)
+          } catch (error) {
+            if (
+              error instanceof QueryFailedError &&
+              error.driverError.code === '23505' &&
+              error.driverError.constraint === 'user_id_pk'
+            ) {
+              throw new UserAlreadyExistsException(error)
+            }
+            throw error
+          }
+          // Event handlers need the persisted defaults, including role and emailVerified.
+          user = await em.findOneByOrFail(User, { id: user.id })
           await this.eventEmitter.emitAsync(
             UserEvents.CREATED,
             new UserCreatedEvent(em, user, defaultOrganizationDefaultRegionId),
           )
         }),
-      (error) => ((error as { code?: string })?.code === PG_UNIQUE_VIOLATION ? 'user_conflict' : 'internal'),
+      (error) => (error instanceof UserAlreadyExistsException ? 'user_conflict' : 'internal'),
     )
 
     return user

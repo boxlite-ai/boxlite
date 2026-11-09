@@ -7,13 +7,16 @@ import { Logger } from '@nestjs/common'
 import { UserService } from './user.service'
 import { Context } from '../common/context/context'
 import { PlatformReason } from '../common/context/platform-reason.enum'
+import { QueryFailedError } from 'typeorm'
+import { User } from './user.entity'
 
 describe('UserService registration events', () => {
   // Every [message, attributes] the service logged, at info or error level, in order.
   let logged: [string, Record<string, string>][]
 
-  function makeService(transaction: jest.Mock) {
+  function makeService(transaction: jest.Mock, eventFailure?: Error) {
     const eventEmitter = { emitAsync: jest.fn().mockResolvedValue([]) }
+    if (eventFailure) eventEmitter.emitAsync.mockRejectedValue(eventFailure)
     const service = new UserService({} as never, eventEmitter as never, { transaction } as never)
     jest.spyOn(service as never, 'generatePrivateKey').mockResolvedValue({
       privateKey: 'private-key',
@@ -22,7 +25,18 @@ describe('UserService registration events', () => {
     return service
   }
 
-  const committingTransaction = () => jest.fn(async (callback) => callback({ save: jest.fn(async (entity) => entity) }))
+  function committingTransaction(insertFailure?: Error) {
+    let insertedUser: User
+    return jest.fn(async (callback) =>
+      callback({
+        insert: jest.fn(async (_entity, user: User) => {
+          if (insertFailure) throw insertFailure
+          insertedUser = user
+        }),
+        findOneByOrFail: jest.fn(async () => insertedUser),
+      }),
+    )
+  }
 
   beforeEach(() => {
     logged = []
@@ -46,13 +60,40 @@ describe('UserService registration events', () => {
   })
 
   it('records a conflict as user_conflict instead of success, and rethrows', async () => {
-    const conflict = Object.assign(new Error('duplicate key value violates unique constraint'), { code: '23505' })
-    const service = makeService(jest.fn().mockRejectedValue(conflict))
+    const conflict = new QueryFailedError(
+      'INSERT INTO "user"',
+      [],
+      Object.assign(new Error('duplicate key value violates unique constraint'), {
+        code: '23505',
+        constraint: 'user_id_pk',
+      }),
+    )
+    const service = makeService(committingTransaction(conflict))
 
-    await expect(service.create({ id: 'user-1', name: 'User One' } as never, Context.admin())).rejects.toBe(conflict)
+    await expect(service.create({ id: 'user-1', name: 'User One' } as never, Context.admin())).rejects.toMatchObject({
+      status: 409,
+      response: { code: 'user_already_exists' },
+      cause: conflict,
+    })
 
     expect(logged.map(([message]) => message)).toEqual(['user.registration requested', 'user.registration exception'])
     expect(logged[1][1]).toEqual(expect.objectContaining({ 'actor.kind': 'admin', 'exception.type': 'user_conflict' }))
+  })
+
+  it('preserves an organization uniqueness failure and records it as internal', async () => {
+    const failure = new QueryFailedError(
+      'INSERT INTO "organization_user"',
+      [],
+      Object.assign(new Error('duplicate key value violates unique constraint'), {
+        code: '23505',
+        constraint: 'organization_user_default_user_unique',
+      }),
+    )
+    const service = makeService(committingTransaction(), failure)
+
+    await expect(service.create({ id: 'user-1', name: 'User One' }, Context.user())).rejects.toBe(failure)
+
+    expect(logged[1][1]).toEqual(expect.objectContaining({ 'exception.type': 'internal' }))
   })
 
   it('records any other failure as internal', async () => {
