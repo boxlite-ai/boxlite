@@ -1,4 +1,5 @@
 /* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
+import { inspectJournal } from '@boxlite-ai/ci-listener/testing'
 import { testCapacity } from '@boxlite-ai/ci-listener/testing'
 import { randomUUID } from 'node:crypto'
 import { mkdtempSync, rmSync } from 'node:fs'
@@ -140,7 +141,7 @@ describe('Standalone BoxLite execution boundary', () => {
   })
   const launch = () => ({ name, image: 'runner-test', cpus: 2, memoryMiB: 2048, entrypoint: ['bash', '-c', 'run'] })
   const advance = async (change: Parameters<ExecutionJournal['advance']>[3]) => {
-    const row = [...(await journal.load(lease)).allocations.values()][0]
+    const row = [...(await inspectJournal(state, lease)).allocations.values()][0]
     return journal.advance(lease, row.record.key, row.record.version, change)
   }
   const create = async () => {
@@ -332,7 +333,7 @@ describe('Standalone BoxLite execution boundary', () => {
       .create({ ...launch(), name: reserved.value.name })
     expect(result.box_id).toBe('original-box')
     expect(gateway.http.principal.sub).toBe(actor)
-    expect((await ledger.load(owner)).scopes.get(target)?.scope.actor).toBe(actor)
+    expect((await ledger.scope(owner, target)).scope.actor).toBe(actor)
   })
   it('refuses a changed REST ledger ID at the actual stop boundary', async () => {
     await create()
@@ -371,7 +372,7 @@ describe('Standalone BoxLite execution boundary', () => {
     expect(outcome).toBeInstanceOf(BoxLiteRequestError)
     expect(outcome).toMatchObject({ status: 408, uncertain: true })
     expect(box?.name).toBe(name)
-    expect((await journal.load(lease)).allocations.size).toBe(1)
+    expect((await inspectJournal(state, lease)).allocations.size).toBe(1)
     await expect(worker.get(name)).rejects.toThrow('not durably known')
     expect(posts()).toHaveLength(1)
   })

@@ -1,4 +1,5 @@
 /* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
+import { inspectJournal } from '@boxlite-ai/ci-listener/testing'
 import { randomUUID } from 'node:crypto'
 import { BadRequestException, ConflictException, ForbiddenException, NotFoundException } from '@nestjs/common'
 import { DataSource } from 'typeorm'
@@ -224,7 +225,9 @@ integration('CI account settings (real Postgres)', () => {
       box: { phase: 'absent', id: box },
       effect: { kind: 'runner-remove', id: randomUUID() },
     })
-    const expected = (await journal.load(lease)).workers.filter((worker) => worker.organization === org).length
+    const expected = (await inspectJournal(native.state, lease)).workers.filter(
+      (worker) => worker.organization === org,
+    ).length
     expect(expected).toBe(2)
     await settings.update(actor, 1)
     await db.query("UPDATE ci_installation_binding SET state='disabled',generation=generation+1")
@@ -237,14 +240,14 @@ integration('CI account settings (real Postgres)', () => {
       "UPDATE ci_listener_state SET payload=jsonb_set(payload,'{until}','0'),lease_until=clock_timestamp()-interval '1 second' WHERE namespace=$1 AND record_key='@owner'",
       [native.namespace],
     )
-    await expect(journal.load(lease)).rejects.toBeInstanceOf(LeaseLost)
+    await expect(inspectJournal(native.state, lease)).rejects.toBeInstanceOf(LeaseLost)
     const ownerRow = () =>
       db.query("SELECT * FROM ci_listener_state WHERE namespace=$1 AND record_key='@owner'", [native.namespace])
     const before = await ownerRow()
     expect(await settings.capacity(org)).toMatchObject({ used: expected, effective_limit: 1 })
     expect(await ownerRow()).toEqual(before)
   })
-  it('does not turn missing or invalid active allocation references into zero occupancy', async () => {
+  it('reads maintained occupancy and rejects missing or invalid usage counters', async () => {
     await connect()
     const journal = new ExecutionJournal(native.state),
       lease = (await native.state.acquire('test-reader', 30000))!
@@ -261,17 +264,19 @@ integration('CI account settings (real Postgres)', () => {
       "UPDATE ci_listener_state SET payload=jsonb_set(payload,'{box,phase}','\"invalid\"') WHERE namespace=$1 AND record_key=$2",
       [native.namespace, allocation.record.key],
     )
-    await expect(settings.capacity(org)).rejects.toBeInstanceOf(StateCorrupt)
-    await db.query('DELETE FROM ci_listener_state WHERE namespace=$1 AND record_key=$2', [
+    // Aggregate reads do not enumerate worker history; accessed workers still validate themselves.
+    await expect(settings.capacity(org)).resolves.toMatchObject({ used: 1 })
+    await expect(journal.allocation(lease, allocation.record.key)).rejects.toBeInstanceOf(StateCorrupt)
+    const [usage] = await native.state.scan(lease, { prefix: 'usage/organization/' })
+    await db.query('UPDATE ci_listener_state SET payload=$3 WHERE namespace=$1 AND record_key=$2', [
       native.namespace,
-      allocation.record.key,
+      usage.key,
+      JSON.stringify({ used: -1 }),
     ])
     await expect(settings.capacity(org)).rejects.toBeInstanceOf(StateCorrupt)
-    await db.query(
-      "UPDATE ci_listener_state SET payload=jsonb_set(payload,'{active}','[null]') WHERE namespace=$1 AND record_key=$2",
-      [native.namespace, key],
-    )
+    await db.query('DELETE FROM ci_listener_state WHERE namespace=$1 AND record_key=$2', [native.namespace, usage.key])
     await expect(settings.capacity(org)).rejects.toBeInstanceOf(StateCorrupt)
+    await expect(journal.define(lease, scope())).rejects.toBeInstanceOf(StateCorrupt)
   })
   it('preserves zero and an unlimited Commerce response rather than substituting one', async () => {
     commerce.resolveMaxCreatedBoxes.mockResolvedValue(0)
@@ -570,7 +575,7 @@ integration('CI account settings (real Postgres)', () => {
     await expect(journal.reserve(lease, key, { repository: 30, run: 40, job: 50 }, budget)).rejects.toBeInstanceOf(
       StateConflict,
     )
-    expect((await journal.load(lease)).allocations.size).toBe(0)
+    expect((await inspectJournal(native.state, lease)).allocations.size).toBe(0)
   })
   it('rejects capacity lookup after owner revocation or an original binding identity change', async () => {
     await connect()
@@ -581,7 +586,7 @@ integration('CI account settings (real Postgres)', () => {
     await expect(resolve({ ...scope(), generation: 2 })).rejects.toBeInstanceOf(ForbiddenException)
     await db.query('DELETE FROM organization_user WHERE "organizationId"=$1', [org])
     await expect(resolve(scope())).rejects.toBeInstanceOf(ForbiddenException)
-    expect((await native.state.read(['catalog/scopes']))[0].payload).toEqual({ keys: [] })
+    expect(await native.state.scan(lease, { prefix: 'scope/' })).toEqual([])
   })
   it('rejects a stale scheduling lease and a missing permanent policy', async () => {
     await connect()
@@ -605,7 +610,7 @@ integration('CI account settings (real Postgres)', () => {
     commerce.resolveMaxCreatedBoxes.mockRejectedValueOnce(Error('Commerce unavailable'))
     await expect(settings.resolve(request)).rejects.toThrow('Commerce unavailable')
     await expect(settings.resolve({ ...request, signal: AbortSignal.abort() })).rejects.toThrow()
-    expect((await new ExecutionJournal(native.state).load(lease)).allocations.size).toBe(0)
+    expect((await inspectJournal(native.state, lease)).allocations.size).toBe(0)
   })
   it('enforces the hosted account total across installations while leaving another account independent', async () => {
     await connect()
@@ -654,7 +659,7 @@ integration('CI account settings (real Postgres)', () => {
     }
     expect(await reserve(await makeScope(11, org, 'owner', 21, 'other'))).toBeUndefined()
     expect(await reserve(await makeScope(12, otherOrg, 'other-owner', 22, 'third'))).toBeDefined()
-    expect((await journal.load(lease)).workers).toHaveLength(2)
+    expect((await inspectJournal(native.state, lease)).workers).toHaveLength(2)
   })
   it('keeps Personal and Organization Apps under one native namespace and one account quota', async () => {
     await connect()
@@ -699,7 +704,7 @@ integration('CI account settings (real Postgres)', () => {
     expect(await reserve(scope(), first, 30)).toBeDefined()
     expect(await reserve(organization, second, 31)).toBeUndefined()
     expect((await settings.get(actor)).connections).toHaveLength(2)
-    expect((await journal.load(lease)).workers).toHaveLength(1)
+    expect((await inspectJournal(native.state, lease)).workers).toHaveLength(1)
   })
   it('waits when ordinary created Boxes occupy Commerce capacity, and resumes after one is removed', async () => {
     await connect()

@@ -108,7 +108,7 @@ export class CiNativeHost implements ListenerHost {
     signal.throwIfAborted()
     return this.store.transaction(async (tx, state) => {
       await this.store.root(state)
-      await new ExecutionJournal(state).load(lease)
+      await new ExecutionJournal(state).check(lease)
       if (installation === undefined) return true
       const [row]: Binding[] = await tx.query(
         `SELECT * FROM ci_installation_binding
@@ -131,7 +131,7 @@ export class CiNativeHost implements ListenerHost {
   private async index(lease: ExecutionLease, signal: AbortSignal): Promise<DirectoryBinding[]> {
     await this.store.transaction(async (_tx, state) => {
       await this.store.root(state)
-      await new ExecutionJournal(state).load(lease)
+      await new ExecutionJournal(state).check(lease)
     })
     const rows: Binding[] = await this.db.query(
       `SELECT * FROM ci_installation_binding
@@ -169,7 +169,7 @@ export class CiNativeHost implements ListenerHost {
       this.pending.delete(id)
     }
     await this.store.transaction(async (tx, state) => {
-      await new ExecutionJournal(state).load(lease)
+      await new ExecutionJournal(state).check(lease)
       await this.store.root(state)
       await this.store.admit(tx, original, client)
     })
@@ -224,7 +224,7 @@ export class CiNativeHost implements ListenerHost {
         await this.store.applications(state).define(lease, scope, client)
       })
     await this.store.transaction(async (tx, state) => {
-      await new ExecutionJournal(state).load(lease)
+      await new ExecutionJournal(state).check(lease)
       await this.store.root(state)
       await this.store.admit(tx, original, client)
       await tx.query(

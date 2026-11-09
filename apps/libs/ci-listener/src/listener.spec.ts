@@ -1,4 +1,5 @@
 /* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
+import { inspectJournal } from '../tests/journal'
 import { testCapacity } from '../tests/capacity'
 import { createHmac, generateKeyPairSync, randomUUID } from 'node:crypto'
 import { mkdtempSync, rmSync } from 'node:fs'
@@ -153,6 +154,18 @@ describe('CI shared Listener orchestration', () => {
     }
   }
   const ingressRows = () => state.recover(lease, 1000, ['notice/', 'wake/', 'receipt/'])
+  it('continues valid scope admission when another discovered definition is invalid', async () => {
+    const discover = jest.mocked(host.discover).getMockImplementation()!
+    jest.mocked(host.discover).mockImplementation(async (...args) => ({
+      ...(await discover(...args)),
+      scopes: [{ ...scope, binding: 'invalid-binding', actor: '' }, scope],
+    }))
+    await listener.receive(notification())
+    await runUntil(delivered.promise)
+    expect(backend.workers.create).toHaveBeenCalledTimes(1)
+    expect(host.report).toHaveBeenCalledWith(expect.any(Error), 'scope-definition')
+    expect((await inspectJournal(state, lease)).scopes.size).toBe(1)
+  })
   it('retries a transient journal initialization failure before scheduling', async () => {
     await listener.receive(notification())
     const initialize = jest.spyOn(state, 'initialize').mockRejectedValueOnce(new Error('initialization unavailable'))
@@ -221,7 +234,7 @@ describe('CI shared Listener orchestration', () => {
   it('drives a durable queued notice through journaled Box boot and one JIT delivery', async () => {
     await listener.receive(notification())
     await runUntil(delivered.promise)
-    const snapshot = await new ExecutionJournal(state).load(lease),
+    const snapshot = await inspectJournal(state, lease),
       allocation = [...snapshot.allocations.values()][0]
     expect(allocation.value).toMatchObject({
       delivery: 'done',
@@ -231,7 +244,7 @@ describe('CI shared Listener orchestration', () => {
     expect(backend.workers.create).toHaveBeenCalledTimes(1)
     expect(backend.workers.deliverJit).toHaveBeenCalledTimes(1)
     expect(backend.close).toHaveBeenCalledTimes(1)
-    expect(JSON.stringify(snapshot.index)).not.toContain('c2VjcmV0')
+    expect(JSON.stringify(snapshot.usage)).not.toContain('c2VjcmV0')
     expect(host.report).not.toHaveBeenCalled()
   })
   it('creation refusal boundary: keeps the queued notice and logs the original rejected operation', async () => {
@@ -241,14 +254,14 @@ describe('CI shared Listener orchestration', () => {
     })
     Object.assign(host, { observe })
     jest.mocked(backend.workers.create).mockImplementationOnce(async (launch) => {
-      const rows = await new ExecutionJournal(state).load(lease)
+      const rows = await inspectJournal(state, lease)
       const row = [...rows.allocations.values()].find((item) => item.value.name === launch.name)!
       throw new ConfirmedWorkerCreationRejected(row.value.effect!.id)
     })
     await listener.receive(notification())
     await runUntil(observed.promise)
     expect((await ingressRows()).some((row) => row.key === 'notice/1/55')).toBe(true)
-    expect((await new ExecutionJournal(state).load(lease)).allocations.size).toBe(0)
+    expect((await inspectJournal(state, lease)).allocations.size).toBe(0)
     expect(backend.workers.create).toHaveBeenCalledTimes(1)
     expect(backend.workers.deliverJit).not.toHaveBeenCalled()
     expect(observe).toHaveBeenCalledWith(
@@ -269,7 +282,7 @@ describe('CI shared Listener orchestration', () => {
       .mocked(host.discover)
       .mockImplementation(async (...args) => ({ ...(await discover(...args)), scopes: [scope, other] }))
     const resolve = jest.fn(async (request: CapacityRequest) => ({
-      limits: [{ maximum: request.repository === 21 ? 0 : 1, includes: () => true }],
+      limits: [{ maximum: request.repository === 21 ? 0 : 1, domain: 'global' as const }],
     }))
     listener = new Listener({
       state,
@@ -288,7 +301,7 @@ describe('CI shared Listener orchestration', () => {
       job: { repository: 22, run: 33, job: 56 },
       lease,
     })
-    const snapshot = await new ExecutionJournal(state).load(lease)
+    const snapshot = await inspectJournal(state, lease)
     expect([...snapshot.allocations.values()].map((row) => row.value.job.repository)).toEqual([22])
     expect(backend.workers.create).toHaveBeenCalledTimes(1)
   })
@@ -388,7 +401,7 @@ describe('CI shared Listener orchestration', () => {
     jest.mocked(host.report).mockImplementation(() => failed.resolve())
     await runUntil(failed.promise)
     expect(host.discover).not.toHaveBeenCalled()
-    expect(host.backend).not.toHaveBeenCalled()
+    expect(backend.workers.create).not.toHaveBeenCalled()
   })
   it('admits known work while App delivery recovery is still waiting for HTTP', async () => {
     let release!: () => void
@@ -405,7 +418,7 @@ describe('CI shared Listener orchestration', () => {
       state,
       app: () => app,
       authorize: async (current) => {
-        await new ExecutionJournal(state).load(current)
+        await inspectJournal(state, current)
         return true
       },
       report: () => {},
@@ -434,7 +447,7 @@ describe('CI shared Listener orchestration', () => {
       return rows
     })
     await runUntil(observed.promise)
-    expect((await new ExecutionJournal(state).load(lease)).allocations.size).toBe(1)
+    expect((await inspectJournal(state, lease)).allocations.size).toBe(1)
     expect(backend.workers.create).toHaveBeenCalledTimes(1)
     expect((await ingressRows()).some((row) => row.key === 'notice/1/56')).toBe(true)
     expect(jest.mocked(backend.job).mock.calls.map(([notice]) => notice.job)).not.toContain(56)
@@ -504,7 +517,7 @@ describe('CI shared Listener orchestration', () => {
       await runUntil(observed.promise)
       expect(jest.mocked(backend.queued).mock.calls.map(([repository]) => repository)).toEqual(available ? [22] : [])
       expect(
-        (await journal.load(lease)).workers.filter((worker) => worker.organization === scope.organization),
+        (await inspectJournal(state, lease)).workers.filter((worker) => worker.organization === scope.organization),
       ).toHaveLength(1)
     },
   )
@@ -551,7 +564,7 @@ describe('CI shared Listener orchestration', () => {
     await runUntil(delivered.promise)
     expect(failedBackend.workers.create).toHaveBeenCalledTimes(1)
     expect(backend.workers.create).toHaveBeenCalledTimes(1)
-    expect((await new ExecutionJournal(state).load(lease)).allocations.size).toBe(2)
+    expect((await inspectJournal(state, lease)).allocations.size).toBe(2)
   })
   it('retains failed shutdown handles and refuses another session before retiring them', async () => {
     await listener.receive(notification())
@@ -672,6 +685,6 @@ describe('CI shared Listener orchestration', () => {
     expect(events).toContainEqual(
       expect.objectContaining({ event: 'ci-worker-released', boxPhase: 'absent', runnerPhase: 'absent' }),
     )
-    expect((await new ExecutionJournal(state).load(lease)).allocations.size).toBe(0)
+    expect((await inspectJournal(state, lease)).allocations.size).toBe(0)
   })
 })

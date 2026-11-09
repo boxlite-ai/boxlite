@@ -1,4 +1,5 @@
 /* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
+import { inspectJournal } from '../../tests/journal'
 import { testCapacity } from '../../tests/capacity'
 import { createHmac, generateKeyPairSync, randomUUID } from 'node:crypto'
 import { mkdtempSync, rmSync } from 'node:fs'
@@ -83,7 +84,7 @@ for (const backend of ['sqlite', 'postgres'] as const) {
         app: () => app,
         authorize: async (current, installation, signal) => {
           signal.throwIfAborted()
-          await new ExecutionJournal(state).load(current)
+          await new ExecutionJournal(state).check(current)
           return rootAllowed && (installation === undefined || allowed.has(installation))
         },
         report,
@@ -208,7 +209,7 @@ for (const backend of ['sqlite', 'postgres'] as const) {
         app: () => app,
         prefix: 'replay-other/',
         authorize: async (current) => {
-          await new ExecutionJournal(state).load(current)
+          await new ExecutionJournal(state).check(current)
           return true
         },
         report,
@@ -431,7 +432,7 @@ for (const backend of ['sqlite', 'postgres'] as const) {
       await until(async () => !(await entry()))
       expect(await state.read([allocation.record.key])).toEqual([before])
       expect(await state.read(['notice/1/155'])).toHaveLength(1)
-      expect((await journal.load(lease)).allocations.size).toBe(1)
+      expect((await inspectJournal(state, lease)).allocations.size).toBe(1)
       expect(report.mock.calls.some(([, op]) => op === 'replay-expired/' + guid1)).toBe(true)
     })
     it('rejects unsupported persisted metadata instead of replacing it with defaults', async () => {

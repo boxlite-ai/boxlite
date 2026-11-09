@@ -1,4 +1,5 @@
 /* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
+import { inspectJournal } from '@boxlite-ai/ci-listener/testing'
 import { testCapacity } from '@boxlite-ai/ci-listener/testing'
 import { createHash, generateKeyPairSync, randomUUID } from 'node:crypto'
 import { DataSource } from 'typeorm'
@@ -426,7 +427,7 @@ integration('CI native host (Postgres binding and shared inbox)', () => {
     event.hint.job = null
     expect(await host.accept(event)).toBe('stored')
     expect(await store.state.read(['wake/10/0'])).toHaveLength(1)
-    expect((await new ExecutionJournal(store.state).load(lease)).scopes.size).toBe(0)
+    expect((await inspectJournal(store.state, lease)).scopes.size).toBe(0)
   })
   it('discovers two personal repositories under the original connected BoxLite identity', async () => {
     const { scopes } = await discover()
@@ -435,7 +436,7 @@ integration('CI native host (Postgres binding and shared inbox)', () => {
       Array(2).fill({ binding, actor, organization: org }),
     )
     expect(scopes.map((s) => (s.runners.kind === 'repository' ? s.runners.repository.id : 0))).toEqual([30, 40])
-    expect((await new ExecutionJournal(store.state).load(lease)).scopes.size).toBe(2)
+    expect((await inspectJournal(store.state, lease)).scopes.size).toBe(2)
     expect((await db.query('SELECT state FROM ci_installation_binding'))[0].state).toBe('ready')
     expect(requests.filter((r) => r.path === '/installation/token' && r.method === 'DELETE')).toHaveLength(1)
   })
@@ -457,7 +458,7 @@ integration('CI native host (Postgres binding and shared inbox)', () => {
         .filter((s) => s.installation.id === 11)
         .every((s) => s.organization === otherOrg && s.binding === otherBinding),
     ).toBe(true)
-    expect((await new ExecutionJournal(store.state).load(lease)).scopes.size).toBe(4)
+    expect((await inspectJournal(store.state, lease)).scopes.size).toBe(4)
   })
   it('does not publish readiness if binding authority is revoked during GitHub inventory', async () => {
     beforeRepositories = async () => {

@@ -13,8 +13,6 @@ import {
   CapacityProvider,
   CapacityRequest,
   decodeScope,
-  decodeAllocation,
-  scopeKey,
   ExecutionJournal,
   ListenerState,
   StateCorrupt,
@@ -166,12 +164,12 @@ export class CiSettingsService implements CapacityProvider {
       return { available: false, used: 0, max_concurrent_jobs: null, commerce_limit: null, effective_limit: null }
     const commerce = await this.commerce.resolveMaxCreatedBoxes(organization)
     return this.native.transaction(async (tx, state) => {
-      // Dashboard reads must neither borrow the leader lease nor mix graph versions.
+      // Dashboard reads must neither borrow the leader lease nor mix counter and policy versions.
       await tx.query('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY')
       await this.initialized(state)
       const [record] = await state.read([keyFor(organization)])
       const configured = record ? this.policy(record, organization) : null
-      const used = await this.occupied(tx, state, organization)
+      const used = await new ExecutionJournal(state).used(organization)
       if (!record) {
         const [binding] = await tx.query(
           `SELECT id FROM ci_installation_binding WHERE organization_id=$1 AND app_client_id=ANY($2::text[]) LIMIT 1`,
@@ -187,57 +185,6 @@ export class CiSettingsService implements CapacityProvider {
         effective_limit: effective(configured, commerce),
       }
     })
-  }
-
-  private async occupied(tx: EntityManager, state: ListenerState, organization: string): Promise<number> {
-    const [catalog] = await state.read(['catalog/scopes'])
-    const keys = object(catalog?.payload) ? catalog.payload.keys : undefined
-    if (
-      catalog?.schema !== 1 ||
-      !Array.isArray(keys) ||
-      keys.length > 10000 ||
-      keys.some((key) => typeof key !== 'string' || !/^scope\/[a-f0-9]{64}$/.test(key)) ||
-      new Set(keys).size !== keys.length
-    )
-      throw new StateCorrupt()
-    const rows = await tx.query(
-      `SELECT refs.key AS scope_key,s.schema_version AS scope_schema,s.payload AS scope_payload,
-        active.key AS worker_key,w.schema_version AS worker_schema,w.payload AS worker_payload
-      FROM unnest($2::text[]) AS refs(key)
-      LEFT JOIN ci_listener_state s ON s.namespace=$1 AND s.record_key=refs.key
-      LEFT JOIN LATERAL jsonb_array_elements_text(s.payload->'active') AS active(key) ON true
-      LEFT JOIN ci_listener_state w ON w.namespace=$1 AND w.record_key=active.key
-      WHERE s.payload->'scope'->>'organization'=$3 OR s.payload->'scope'->>'organization' IS NULL LIMIT 100001`,
-      [this.native.namespace, keys, organization],
-    )
-    if (rows.length > 100000) throw new StateCorrupt()
-    const scopes = new Set<string>(),
-      workers = new Set<string>()
-    let used = 0
-    for (const row of rows) {
-      if (!scopes.has(row.scope_key)) {
-        const payload = row.scope_payload
-        if (
-          row.scope_schema !== 1 ||
-          !object(payload) ||
-          !Array.isArray(payload.active) ||
-          payload.active.length > 10000 ||
-          payload.active.some((key) => typeof key !== 'string' || !/^worker\/[a-f0-9]{32}$/.test(key)) ||
-          new Set(payload.active).size !== payload.active.length ||
-          scopeKey(decodeScope(payload.scope)) !== row.scope_key
-        )
-          throw new StateCorrupt()
-        scopes.add(row.scope_key)
-      }
-      if (row.worker_key === null) continue
-      if (row.worker_schema !== 1 || workers.has(row.worker_key)) throw new StateCorrupt()
-      const allocation = decodeAllocation(row.worker_payload)
-      if (allocation.scope !== row.scope_key || row.worker_key !== 'worker/' + allocation.name.slice(7))
-        throw new StateCorrupt()
-      workers.add(row.worker_key)
-      if (allocation.box.phase !== 'absent') used++
-    }
-    return used
   }
 
   async updateConnection(actor: CiActor, id: string, allowPublic: boolean): Promise<void> {
@@ -305,7 +252,7 @@ export class CiSettingsService implements CapacityProvider {
     const commerce = await this.commerce.resolveMaxCreatedBoxes(original.organization)
     signal.throwIfAborted()
     return this.native.transaction(async (tx, state) => {
-      await new ExecutionJournal(state).load(owner)
+      await new ExecutionJournal(state).check(owner)
       await this.native.admit(tx, original)
       const marker = await this.initialized(state)
       const [record] = await state.read([keyFor(original.organization)])
@@ -322,7 +269,7 @@ export class CiSettingsService implements CapacityProvider {
       }
       signal.throwIfAborted()
       return {
-        limits: [{ maximum: limit, includes: (worker) => worker.organization === original.organization }],
+        limits: [{ maximum: limit, domain: 'organization' }],
         checks: [record, marker].map((row) => ({ key: row.key, version: row.version })),
       }
     })

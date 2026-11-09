@@ -57,8 +57,8 @@ export class GitHubExecutionBackend implements PoolBackend {
         const originalLaunch = { ...launch, entrypoint: [...launch.entrypoint] }
         let effect: string | undefined
         if (host.rejectUndispatchedCreate) {
-          const snapshot = await this.journal.load(this.lease)
-          const row = [...snapshot.allocations.values()].find((item) => item.value.name === originalLaunch.name)
+          if (!/^ci-jit-[a-f0-9]{32}$/.test(originalLaunch.name)) throw new Error('Original CI worker required')
+          const row = await this.journal.allocation(this.lease, 'worker/' + originalLaunch.name.slice(7))
           if (
             !row ||
             row.value.scope !== scopeKey(this.scope) ||
@@ -97,8 +97,8 @@ export class GitHubExecutionBackend implements PoolBackend {
   private async check(operation: 'admission' | 'cleanup', signal?: AbortSignal): Promise<void> {
     signal?.throwIfAborted()
     await this.host.authorize(decodeScope(this.scope), operation, signal)
-    // Recheck the lease and allocation graph after the asynchronous host check.
-    await this.journal.load(this.lease)
+    // Authorization can wait across lease expiry; recheck the original scope afterward.
+    await this.journal.scope(this.lease, scopeKey(this.scope))
     signal?.throwIfAborted()
   }
   admit(signal?: AbortSignal): Promise<void> {
@@ -157,7 +157,7 @@ export class GitHubExecutionBackend implements PoolBackend {
       const registry = new GitHubRunners(borrow.credential, this.scope.runners, this.labels, async (effect) => {
         await this.check(effect.kind === 'register' ? 'admission' : 'cleanup', signal)
         await beforeMutation({ ...effect })
-        await this.journal.load(this.lease)
+        await this.journal.check(this.lease)
       })
       return { registry, close: () => borrow.close() }
     } catch (error) {

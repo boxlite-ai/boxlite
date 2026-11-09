@@ -83,9 +83,8 @@ export class CiNativeWorkers {
     const inspect = async (tx: EntityManager, state: ListenerState, name: string, effect?: Effect) => {
       if (!/^ci-jit-[a-f0-9]{32}$/.test(name)) throw new ForbiddenException('Original CI worker required')
       await this.store.applications(state).initialize(lease)
-      const snapshot = await new ExecutionJournal(state).load(lease)
       await this.store.root(state)
-      const allocation = snapshot.allocations.get('worker/' + name.slice(7))
+      const allocation = await new ExecutionJournal(state).allocation(lease, 'worker/' + name.slice(7))
       if (!allocation || allocation.value.name !== name || allocation.value.scope !== originalScope)
         throw new ForbiddenException('Original CI allocation is unavailable')
       if (effect && allocation.value.effect?.kind !== effect)

@@ -1,4 +1,5 @@
 /* Copyright 2026 BoxLite AI · SPDX-License-Identifier: AGPL-3.0 */
+import { inspectJournal } from '../../tests/journal'
 import { testCapacity } from '../../tests/capacity'
 import { randomUUID } from 'node:crypto'
 import { mkdtempSync, rmSync } from 'node:fs'
@@ -51,7 +52,7 @@ describe('CI shared worker lifecycle', () => {
     busyRunner: boolean,
     closeFailures: number
   let events: unknown[], observe: jest.Mock
-  const rows = async () => journal.load(lease)
+  const rows = async () => inspectJournal(state, lease)
   const allocation = async () => [...(await rows()).allocations.values()][0]
   const byName = async (name: string) =>
     [...(await rows()).allocations.values()].find((row) => row.value.name === name)!
@@ -248,7 +249,9 @@ describe('CI shared worker lifecycle', () => {
     const two = testCapacity({ account: 2, tenant: 2 })
     await pool.tick(lease, two, demand)
     await pool.tick(lease, two, { ...demand, job: 56 })
-    const [first, second] = [...(await rows()).allocations.values()]
+    const allocations = [...(await rows()).allocations.values()]
+    const first = allocations.find((row) => row.value.job.job === demand.job)!
+    const second = allocations.find((row) => row.value.job.job === 56)!
     boxes.delete(first.value.name)
     boxes.get(second.value.name)!.status = 'stopped'
     busyRunner = true
@@ -361,11 +364,73 @@ describe('CI shared worker lifecycle', () => {
     expect((await rows()).allocations.size).toBe(0)
     expect(events).toContainEqual(expect.objectContaining({ event: 'ci-worker-released', boxId: first.value.box.id }))
   })
+  it('rejects a recovery round that omits a counted active worker', async () => {
+    const capacity = testCapacity({ account: 2, tenant: 2 })
+    const original = (await journal.reserve(lease, key, demand, capacity))!
+    const [membership] = await state.read(['active-worker/' + key.slice(6) + '/' + original.record.key.slice(7)])
+    await state.commit(lease, [{ key: membership.key, expected: membership.version }])
+    await expect(pool.tick(lease, capacity, { ...demand, job: 999 })).rejects.toBeInstanceOf(StateCorrupt)
+    expect(backend.workers.create).not.toHaveBeenCalled()
+  })
+  it('restarts paged recovery after a lease change instead of carrying readiness forward', async () => {
+    const capacity = testCapacity({ account: 100, tenant: 100 })
+    for (let job = 100; job < 133; job++) await journal.reserve(lease, key, { ...demand, job }, capacity)
+    await pool.tick(lease, capacity)
+    await pool.tick(lease, capacity)
+    await db.transaction(lease.namespace, async (tx) => {
+      const owner = (await tx.get('@owner'))!
+      await tx.put(
+        { ...owner, version: randomUUID(), payload: { ...(owner.payload as object), until: 0 } },
+        owner.version,
+      )
+    })
+    lease = (await state.acquire(randomUUID(), 300000))!
+    await pool.tick(lease, capacity, { ...demand, job: 999 })
+    expect([...(await rows()).allocations.values()].some((row) => row.value.job.job === 999)).toBe(false)
+    await pool.tick(lease, capacity, { ...demand, job: 999 })
+    expect([...(await rows()).allocations.values()].some((row) => row.value.job.job === 999)).toBe(true)
+  })
+  it('withholds admission when recovery membership changes between pages', async () => {
+    const capacity = testCapacity({ account: 100, tenant: 100 })
+    for (let job = 100; job < 133; job++) await journal.reserve(lease, key, { ...demand, job }, capacity)
+    await pool.tick(lease, capacity, { ...demand, job: 999 })
+    expect([...(await rows()).allocations.values()].some((row) => row.value.job.job === 999)).toBe(false)
+    await journal.reserve(lease, key, { ...demand, job: 700 }, capacity)
+    await pool.tick(lease, capacity, { ...demand, job: 999 })
+    expect([...(await rows()).allocations.values()].some((row) => row.value.job.job === 999)).toBe(false)
+    await pool.tick(lease, capacity, { ...demand, job: 999 })
+    await pool.tick(lease, capacity, { ...demand, job: 999 })
+    expect([...(await rows()).allocations.values()].filter((row) => row.value.job.job === 999)).toHaveLength(1)
+  })
+  it('keeps later-page failures blocked across cursor wraps until an entirely clean round', async () => {
+    const capacity = testCapacity({ account: 100, tenant: 100 })
+    for (let job = 100; job < 133; job++) await journal.reserve(lease, key, { ...demand, job }, capacity)
+    const tail = [...(await rows()).allocations.values()].at(-1)!
+    const get = jest.mocked(backend.workers.get).getMockImplementation()!
+    jest.mocked(backend.workers.get).mockImplementation(async (name) => {
+      if (name === tail.value.name) throw new Error('tail lookup failed')
+      return get(name)
+    })
+    const hasDemand = async () => [...(await rows()).allocations.values()].some((row) => row.value.job.job === 999)
+    for (let round = 0; round < 2; round++) {
+      await pool.tick(lease, capacity, { ...demand, job: 999 })
+      expect(await hasDemand()).toBe(false)
+      await expect(pool.tick(lease, capacity, { ...demand, job: 999 })).rejects.toThrow('tail lookup failed')
+      expect(await hasDemand()).toBe(false)
+    }
+    jest.mocked(backend.workers.get).mockImplementation(get)
+    await pool.tick(lease, capacity, { ...demand, job: 999 })
+    expect(await hasDemand()).toBe(false)
+    await pool.tick(lease, capacity, { ...demand, job: 999 })
+    expect(await hasDemand()).toBe(true)
+  })
   it('keeps quota and blocks admission on lookup failure but still reconciles other workers', async () => {
     const two = testCapacity({ account: 2, tenant: 2 })
     await pool.tick(lease, two, demand)
     await pool.tick(lease, two, { ...demand, job: 56 })
-    const [first, second] = [...(await rows()).allocations.values()]
+    const allocations = [...(await rows()).allocations.values()]
+    const first = allocations.find((row) => row.value.job.job === demand.job)!
+    const second = allocations.find((row) => row.value.job.job === 56)!
     boxes.get(second.value.name)!.status = 'stopped'
     const get = jest.mocked(backend.workers.get).getMockImplementation()!
     jest.mocked(backend.workers.get).mockImplementation(async (name) => {

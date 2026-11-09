@@ -6,6 +6,6 @@ export class EnvironmentCapacity implements CapacityProvider {
     if (!Number.isSafeInteger(maximum) || maximum < 0) throw new Error('Invalid CI_WORKER_MAX')
   }
   async resolve(_request: CapacityRequest): Promise<CapacityPolicy> {
-    return { limits: [{ maximum: this.maximum, includes: () => true }] }
+    return { limits: [{ maximum: this.maximum, domain: 'global' }] }
   }
 }

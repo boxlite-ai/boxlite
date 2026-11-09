@@ -68,6 +68,7 @@ exit 1`
 /** One scope supplies ephemeral runner capacity; a triggering job is not a runner assignment. */
 export class WorkerPool {
   private busy = false
+  private recovery = { lease: '', after: '', version: '', seen: 0, failed: false, ready: false }
   private readonly settings: PoolSettings
   private readonly jit = new Map<string, JitRegistration>()
   private readonly sessions = new Set<RunnerSession>()
@@ -101,43 +102,84 @@ export class WorkerPool {
     this.busy = true
     try {
       signal?.throwIfAborted()
-      const snapshot = await this.journal.load(lease),
-        scope = snapshot.scopes.get(this.scopeKey)
-      if (!scope) throw new Error('Original CI execution scope unavailable')
-      if (!scope.active.length && !demand) return
+      const identity = JSON.stringify(lease)
+      if (this.recovery.lease !== identity)
+        this.recovery = { lease: identity, after: '', version: '', seen: 0, failed: false, ready: false }
+      const scope = await this.journal.scope(lease, this.scopeKey)
+      if (this.recovery.version !== scope.activity.version) this.recovery.ready = false
+      if (!scope.active && !demand) {
+        this.recovery = {
+          lease: identity,
+          after: '',
+          version: scope.activity.version,
+          seen: 0,
+          failed: false,
+          ready: true,
+        }
+        return
+      }
       await this.close()
       const backend = await this.backend(scope.scope, lease)
       const failures: unknown[] = []
-      for (const key of scope.active) {
-        try {
-          await this.reconcile(lease, snapshot.allocations.get(key)!, backend, scope.scope, signal)
-        } catch (error) {
-          if (
-            error instanceof LeaseLost ||
-            error instanceof StateCorrupt ||
-            error instanceof StateConflict ||
-            signal?.aborted ||
-            this.sessions.size
-          )
-            throw error
-          const current = (await this.journal.load(lease)).allocations.get(key)
-          if (!current) throw error
-          this.event(scope.scope, current, 'ci-worker-recovery-deferred', 'warn', {
-            errorType: error instanceof Error ? error.constructor.name : 'Unknown',
-          })
-          // Only a confirmed-absent Box's registration debt may coexist with
-          // fresh admission. Other failures retain capacity and block this scope.
-          if (current.value.box.phase !== 'absent') failures.push(error)
+      // Only a completed clean round grants a single admission attempt. Starting
+      // another round expires that permit; page rotation alone cannot clear debt.
+      if (!demand || !this.recovery.ready) {
+        this.recovery.ready = false
+        if (!this.recovery.after) {
+          this.recovery.failed = false
+          this.recovery.seen = 0
+          this.recovery.version = scope.activity.version
         }
+        if (scope.activity.version !== this.recovery.version) this.recovery.failed = true
+        const page = await this.journal.workers(lease, this.scopeKey, this.recovery.after)
+        for (const row of page.rows) {
+          const key = row.record.key
+          try {
+            await this.reconcile(lease, row, backend, scope.scope, signal)
+          } catch (error) {
+            if (
+              error instanceof LeaseLost ||
+              error instanceof StateCorrupt ||
+              error instanceof StateConflict ||
+              signal?.aborted ||
+              this.sessions.size
+            )
+              throw error
+            const current = await this.journal.allocation(lease, key)
+            if (!current) throw error
+            this.event(scope.scope, current, 'ci-worker-recovery-deferred', 'warn', {
+              errorType: error instanceof Error ? error.constructor.name : 'Unknown',
+            })
+            // Only a confirmed-absent Box's registration debt may coexist with
+            // fresh admission. Other failures retain capacity and block this scope.
+            if (current.value.box.phase !== 'absent') {
+              this.recovery.failed = true
+              failures.push(error)
+            }
+          }
+        }
+        this.recovery.seen += page.rows.length
+        this.recovery.after = page.after
+        // Membership can change while a page awaits external effects, including
+        // our own final releases. A new clean round must cover that membership.
+        const current = await this.journal.scope(lease, this.scopeKey)
+        if (current.activity.version !== this.recovery.version) this.recovery.failed = true
+        if (!page.after && current.activity.version === this.recovery.version && this.recovery.seen !== current.active)
+          throw new StateCorrupt()
+        this.recovery.ready = !page.after && !this.recovery.failed
       }
       if (failures.length) throw failures[0]
-      if (demand) {
+      if (demand && this.recovery.ready) {
+        this.recovery.ready = false
         await backend.admit(signal)
         const current = await backend.job(demand, signal)
         if (current.repository !== demand.repository || current.run !== demand.run || current.job !== demand.job)
           throw new Error('Original job identity changed at admission')
         if (!jobMatches(current, this.settings.labels)) return
-        const allocation = await this.journal.reserve(lease, this.scopeKey, demand, policy)
+        const allocation = await this.journal.reserve(lease, this.scopeKey, demand, {
+          ...policy,
+          checks: [...(policy.checks ?? []), { key: scope.activity.key, version: this.recovery.version }],
+        })
         if (allocation) await this.reconcile(lease, allocation, backend, scope.scope, signal)
       }
     } finally {
