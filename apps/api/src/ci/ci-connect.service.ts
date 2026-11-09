@@ -5,6 +5,7 @@ import {
   Injectable,
   InternalServerErrorException,
   NotFoundException,
+  ServiceUnavailableException,
 } from '@nestjs/common'
 import { createHash, randomUUID } from 'node:crypto'
 import type { GitHubAccount } from '@boxlite-ai/ci-listener'
@@ -650,6 +651,10 @@ export class CiConnectService {
       }
       await this.assertCurrentAuthority(tx, actor)
       await this.settings.ensure(tx, attempt.organization_id)
+      // Serialize new and reactivated bindings across tenants before admission.
+      await this.query(tx, 'SELECT pg_advisory_xact_lock(hashtextextended($1,0))', [
+        this.native.namespace + ':bindings',
+      ])
       await this.query(
         tx,
         `INSERT INTO ci_installation_binding
@@ -685,12 +690,26 @@ export class CiConnectService {
         await this.query(
           tx,
           `UPDATE ci_installation_binding SET state='provisioning',generation=generation+1,
-          actor_id=$2,allow_public=$3 WHERE id=$1`,
-          [binding.id, attempt.user_id, attempt.allow_public],
+          actor_id=$2,allow_public=$3,account_login=$4 WHERE id=$1`,
+          [binding.id, attempt.user_id, attempt.allow_public, verified.accountLogin],
         )
       } else if (!selection && binding.allow_public !== attempt.allow_public) {
         throw new ConflictException('Installation is already bound with a different owner or policy')
       }
+      if (binding.state !== 'disabled' && binding.account_login !== verified.accountLogin) {
+        await this.query(
+          tx,
+          `UPDATE ci_installation_binding SET account_login=$2,state='provisioning',generation=generation+1 WHERE id=$1`,
+          [binding.id, verified.accountLogin],
+        )
+      }
+      const [{ count }] = await this.query(
+        tx,
+        `SELECT count(*)::int AS count FROM ci_installation_binding WHERE github_host='github.com'
+        AND app_client_id=ANY($1::text[]) AND follow_installation=true AND state IN ('provisioning','ready')`,
+        [this.native.apps],
+      )
+      if (count > 10000) throw new ServiceUnavailableException('CI binding capacity exceeded')
       await this.native.wakeInventory(tx, clientId, verified)
       // now() is transaction-start time. Row-lock waits can cross any deadline,
       // so the final write is the authorization decision's clock-time boundary.

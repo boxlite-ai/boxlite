@@ -136,6 +136,19 @@ describe('CI shared GitHub JIT runners', () => {
     await expect(registry(orgScope).create(name)).rejects.toThrow('authorization changed')
     expect(journal).not.toHaveBeenCalled()
   })
+  it('denies private-only group admission when public repositories are enabled', async () => {
+    await expect(registry({ ...orgScope, allowPublic: true }).create(name)).rejects.toThrow(
+      'selected-repository policy',
+    )
+    expect(journal).not.toHaveBeenCalled()
+    expect(calls.every((call) => call.method === 'GET')).toBe(true)
+  })
+  it('accepts a group whose public policy matches the enabled connection', async () => {
+    const previous = reply
+    reply = (url, method) =>
+      url.pathname.endsWith('/runner-groups/4') ? { ...group, allows_public_repositories: true } : previous(url, method)
+    expect((await registry({ ...orgScope, allowPublic: true }).create(name)).id).toBe(91)
+  })
   it('requires opt-in for a public repository', async () => {
     const scope: RunnerScope = { kind: 'repository', repository: { ...repository, private: false }, allowPublic: false }
     reply = () => ({ ...repository, private: false })

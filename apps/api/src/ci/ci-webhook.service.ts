@@ -46,7 +46,8 @@ export class CiWebhookService {
     event: string,
     kind: 'User' | 'Organization' = 'User',
   ): Promise<void> {
-    if (!Buffer.isBuffer(raw) || raw.length > 1_048_576) throw new BadRequestException('Raw webhook body required')
+    if (!Buffer.isBuffer(raw) || Buffer.byteLength(raw) > 1_048_576)
+      throw new BadRequestException('Raw webhook body required')
     if (!/^sha256=[a-f0-9]{64}$/.test(signature)) throw new UnauthorizedException('Invalid webhook signature')
     const app = this.apps.forType(kind)
     const secret = app.secret()

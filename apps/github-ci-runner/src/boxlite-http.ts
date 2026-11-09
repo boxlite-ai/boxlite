@@ -79,10 +79,8 @@ export class BoxLiteHttp {
         : payload === undefined
           ? undefined
           : JSON.stringify(payload)
-    let status: number | undefined,
-      attempted = false
+    let status: number | undefined
     try {
-      attempted = true
       const response = await fetch(
         this.root + (scoped ? '/' + encodeURIComponent(this.principal.path_prefix) : '') + route,
         {
@@ -131,8 +129,7 @@ export class BoxLiteHttp {
     } catch {
       throw new BoxLiteRequestError(
         status,
-        attempted &&
-          method !== 'GET' &&
+        method !== 'GET' &&
           (status === undefined || status === 408 || status >= 500 || (status >= 200 && status < 300)),
       )
     }

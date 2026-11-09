@@ -220,7 +220,7 @@ integration('CI account settings (real Postgres)', () => {
     await journal.reserve(lease, foreignKey, { repository: 31, run: 40, job: 53 }, foreignPolicy)
     expect(await settings.capacity(org)).toMatchObject({ used: 3 })
     expect(await settings.capacity(otherOrg)).toMatchObject({ used: 1 })
-    cleanup = await journal.advance(lease, cleanup.record.key, cleanup.record.version, {
+    await journal.advance(lease, cleanup.record.key, cleanup.record.version, {
       box: { phase: 'absent', id: box },
       effect: { kind: 'runner-remove', id: randomUUID() },
     })

@@ -7,7 +7,6 @@ import {
   ExecutionJournal,
   ExecutionLease,
   ExecutionScope,
-  GitHubAppSource,
   GitHubExecutionBackend,
   InstallationCatalog,
   InstallationDirectory,

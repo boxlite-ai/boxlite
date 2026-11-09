@@ -90,7 +90,8 @@ export function verifyWebhook(
   secret: Buffer,
 ): VerifiedWebhook | null {
   const { raw, signature, event } = input
-  if (!Buffer.isBuffer(raw) || raw.length > 1_048_576) throw new WebhookError(400, 'Raw webhook body required')
+  if (!Buffer.isBuffer(raw) || Buffer.byteLength(raw) > 1_048_576)
+    throw new WebhookError(400, 'Raw webhook body required')
   if (secret.length < 32 || secret.length > 256) throw new Error('Invalid webhook secret configuration')
   if (
     !/^sha256=[a-f0-9]{64}$/.test(signature) ||

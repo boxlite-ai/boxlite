@@ -136,6 +136,8 @@ help:
 	@echo "    make coverage:python:integration - Collect Python unit and VM integration coverage"
 	@echo "    make coverage:node:integration   - Collect Node.js unit and VM integration coverage"
 	@echo "    make coverage:api          - Collect API coverage (TEST_FILES=<pattern>; integrations need Postgres/Redis and DB_HOST/REDIS_HOST)"
+	@echo "    make coverage:ci-listener  - Collect shared CI Listener coverage (optional local Postgres)"
+	@echo "    make coverage:github-ci-runner - Collect standalone CI Listener coverage"
 	@echo "    make coverage:integration  - Generate coverage for Rust integration tests"
 	@echo ""
 	@echo "  Local Development:"

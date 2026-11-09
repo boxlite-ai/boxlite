@@ -45,6 +45,7 @@ export class CiListenerService implements OnModuleInit, OnModuleDestroy {
   }
   async receive(notification: VerifiedWebhook, application: string = this.store.app): Promise<'stored' | 'duplicate'> {
     if (!this.controller) throw new ServiceUnavailableException('Hosted CI Listener is not configured')
+    if (this.failure) throw new ServiceUnavailableException('Hosted CI Listener has stopped')
     const verified = { ...notification, application }
     return this.controller.receive(verified)
   }
