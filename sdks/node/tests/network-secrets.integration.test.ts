@@ -119,7 +119,9 @@ describe("SimpleBox network and secrets", { timeout: 180_000 }, () => {
 
       expect(result.exitCode).toBe(0);
       // This echo host returns the injected header, so the value is expected there.
-      expect(result.stdout).toContain("authorization=Bearer super-secret-value");
+      expect(result.stdout).toContain(
+        "authorization=Bearer super-secret-value",
+      );
       expect(result.stdout).toContain("probe=<BOXLITE_SECRET:testkey>");
     } finally {
       await box.stop();
